@@ -2,7 +2,7 @@
 // DXpedition chase-star to arbitrary operator-defined targets: a specific call, a
 // wildcard/prefix (VP8*, *ABC), or a whole DXCC entity, optionally gated by CQ-only
 // and a minimum SNR. A match fires the loudest alert tier (it's what the operator asked
-// to be told about), reusing the existing alert dedupe/toast plumbing.
+// to be told about); the station raises it, from the copy App sends it (`setWatchList`).
 //
 // The same list MARKS the station afterwards (maintainer, 2026-09-23): the Call Roster, the
 // Stations list and Spots put a WATCH tile on every row it names. All three ask ONE matcher
@@ -34,7 +34,7 @@ export interface WatchFilter {
   label?: string
   /** #390 — the operator's own note on the entry: why it is on the list and when it can come off
    *  ("Samoa DXp 9/27-10/3"). Shown and edited in the Settings manager, and nowhere else. Nothing
-   *  matches or gates on it, and the station is never sent it (App sends kind and value alone).
+   *  matches or gates on it, and the station is never sent it (App sends every other field).
    *  Absent when there is none, never an empty string. */
   notes?: string
 }
@@ -42,7 +42,7 @@ export interface WatchFilter {
 const STORAGE_KEY = 'nexus.watchlist'
 /** Dispatched by every writer of the list after it saves — the Settings manager
  *  (`WatchlistPanel`) and the one-time fold of the retired wanted list (`features/watchlistFold`);
- *  App (its alert path, and the copy it sends the station for the Needed board), `useWatchMatch`
+ *  App (the copy it sends the station, for its alerts and the Needed board), `useWatchMatch`
  *  and the manager itself re-read the list on it. */
 export const WATCHLIST_CHANGED = 'nexus:watchlist-changed'
 

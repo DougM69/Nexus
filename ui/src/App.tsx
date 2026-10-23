@@ -57,7 +57,7 @@ import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
-import { doubleBeep, processDecodes, txEarcon } from './alerts'
+import { doubleBeep, processDecodes, txEarcon, type NeededAlert } from './alerts'
 import { openingToastSpec } from './openingAlert'
 import { announce } from './announce'
 import { Announcer } from './components/Announcer'
@@ -84,7 +84,6 @@ import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall, ownScreen, workTier, pskSubmode, workHintView, WORK_SECTION, spotNeed, type OwnScreen } from './features/needs'
-import { useAlertGeoScope } from './features/alertGeoScope'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, JTTY_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
@@ -162,7 +161,6 @@ import {
   useSingleRadio,
   resendChat,
   type RadioLaunchInfo,
-  getOtaMapSpots,
   focusWindow,
 } from './api'
 import {
@@ -176,7 +174,6 @@ import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { processFlare, effectiveXray } from './flareAlert'
-import { processPotaAlert } from './features/potaAlert'
 import { processStorm, processStormForecast } from './stormAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
@@ -224,6 +221,7 @@ import { UpdateBanner } from './components/UpdateBanner'
 import { ClientBanner } from './components/ClientBanner'
 import { useSelfUpdate } from './useSelfUpdate'
 import { usePounce, type PounceAlert } from './usePounce'
+import { useStationAlerts } from './useStationAlerts'
 import { RevealNudge } from './components/RevealNudge'
 import { SetupWizard, type WizardDraft } from './components/SetupWizard'
 import { GettingStartedGuide } from './components/GettingStartedGuide'
@@ -1258,7 +1256,6 @@ function App() {
   )
   // The operator's GEOGRAPHIC alert scope (#174), resolved to cty.dat entity names. Null until
   // they tick something, and the decode alerter treats null as "alert on everything".
-  const alertGeoScope = useAlertGeoScope(settings?.alertContinents, settings?.alertEntities)
   // The Needed board's feed — band scopes honoured, mode-feature gate neutral (see boardNeeds).
   const boardAlerts = useMemo(() => boardNeeds(needAlerts, needScopes), [needAlerts, needScopes])
   const visibleAlerts = useMemo(
@@ -1318,29 +1315,9 @@ function App() {
   }, [settings?.operatingMode])
   // Ding/dong when the dial crosses your TX privileges (default on).
   useBandEdgeTones(snap?.radio.txAllowed, settings?.bandEdgeTones ?? true)
-  // Audible new-POTA-activation alert (opt-in, potaAlert.ts owns the dedup/priming): a poll of
-  // its own so the alert reaches the operator whether or not the map's pop-out is open — today
-  // MapView is the ONLY caller of get_ota_map_spots, and that poll dies with the pop-out.
-  // Gated on the setting itself (not just the alert inside it): an operator with this off pays
-  // no interval and no IPC, same politeness rule the map's own Parks layer follows — the backend
-  // serves both from one 120 s cache (OTA_MAP_TTL_SECS), so this poll costs nothing extra to run
-  // alongside the map or the POTA/SOTA board.
-  useEffect(() => {
-    if (!settings?.potaNewActivationAlert) return
-    let live = true
-    const load = () =>
-      getOtaMapSpots()
-        .then((spots) => live && processPotaAlert(spots))
-        .catch(() => {})
-    load()
-    const id = setInterval(load, 120_000)
-    return () => {
-      live = false
-      clearInterval(id)
-    }
-  }, [settings?.potaNewActivationAlert])
-  // User watch list (localStorage) — fed to the decode alerter. Re-synced when the manager
-  // edits it (it dispatches `nexus:watchlist-changed`), so alerts pick up changes live.
+  // User watch list (localStorage) — sent to the station, whose alerts and Needed board read it.
+  // Re-synced when the manager edits it (it dispatches `nexus:watchlist-changed`), so the station
+  // picks up changes live.
   const [watchlist, setWatchlist] = useState<WatchFilter[]>(() => loadWatchlist())
   useEffect(() => {
     const resync = () => setWatchlist(loadWatchlist())
@@ -1353,13 +1330,13 @@ function App() {
     void foldRetiredWantedList()
   }, [])
   // The station puts the watch list's stations first on the Needed board (operator, 2026-09-24:
-  // "watched counts as needed") — so it is sent the list on
-  // launch and after every edit, and the board is read again. One send at a time, in order: the
-  // station keeps whichever list reaches it last, so an earlier send finishing late would restore
-  // an entry the operator has just removed.
+  // "watched counts as needed") and raises its alerts, gates and label with them — so it is sent
+  // the list on launch and after every edit, and the board is read again. One send at a time, in
+  // order: the station keeps whichever list reaches it last, so an earlier send finishing late
+  // would restore an entry the operator has just removed.
   const watchSent = useRef<Promise<unknown>>(Promise.resolve())
   useEffect(() => {
-    const entries = watchlist.map(({ kind, value }) => ({ kind, value }))
+    const entries = watchlist.map(({ id, kind, value, cqOnly, minSnr, label }) => ({ id, kind, value, cqOnly, minSnr, label }))
     watchSent.current = watchSent.current.then(() => setWatchList(entries)).then(refreshNeeds, () => {})
   }, [watchlist, refreshNeeds])
   const [onboardDismissed, setOnboardDismissed] = useState<boolean>(
@@ -1580,41 +1557,31 @@ function App() {
   // it is why Work started the QSO but left the markers behind while the other two panes
   // moved them: one gesture, three behaviours in one cockpit (#183, against 1.7.0–1.9.0).
   // An adapter is what made the drop possible, so the fix is to not have one.
-  // Fire decode alerts (beep + toast) whenever the decode feed changes, gated by the
-  // user's alert settings. processDecodes dedups internally. The third arg makes each
-  // alert toast click-to-work — working the station is what you almost always want next
-  // (someone calling you, a new DXCC/grid, a CQ). Placed AFTER handleCall so it's in scope.
-  // The QSO context keeps popups quiet while actively working someone / running CQ.
-  useEffect(() => {
-    if (!snap || !settings) return
-    const dxcall = snap.fieldDay?.dxcall ?? snap.qso?.dxcall ?? null
-    // Keep the chase-alert suppression in sync (the prop poller reads the ref).
-    qsoPartnerRef.current = dxcall
-    // Latest tier for the rail's Digital button (preserve FT4 across nav).
-    tierRef.current = snap.link.tier
-    processDecodes(
-      snap.recentDecodes,
-      settings,
-      (d) => {
+  // The station's decode alerts (someone calling you, a new DXCC/grid, a watch-list station, a CQ,
+  // a park on the air): the station decides them and raises each once; this window shows them. The
+  // toast's button works the station — what you almost always want next — exactly as double-
+  // clicking its decode row does. Placed AFTER handleCall so it's in scope.
+  useStationAlerts(
+    useCallback(
+      (a: NeededAlert) => {
         // Pass the decode's TIER — without it an FT1/Tempo decode alert ran the FT8
         // call sequence (the "Work on FT1 wrongly switches to FT8" bug); handleCall
         // routes chat tiers to the Tempo conversation instead.
-        if (d.from) handleCall(d.from, undefined, d.message, d.snr, d.freqHz, d.tier)
+        if (a.call && a.work) handleCall(a.call, undefined, a.work.message, a.work.snr, a.work.freqHz, a.work.tier)
       },
-      // Field Day runs its own sequencer (snap.qso is null there) — its state
-      // strings (CallingCq/AwaitExchange/AwaitConfirm/Done) gate identically.
-      {
-        state: snap.fieldDay?.state ?? snap.qso?.state ?? null,
-        dxcall,
-      },
-      watchlist,
-      // Current dial for the per-alert band scopes (grid alerts default to VHF+ only).
-      snap.radio.dialMhz > 0 ? snap.radio.dialMhz : undefined,
-      // The operator's geographic scope (#174) — null while nothing is ticked, which is the
-      // shipped default and leaves every alert exactly as it was.
-      alertGeoScope,
-    )
-  }, [snap, settings, handleCall, watchlist, alertGeoScope])
+      [handleCall],
+    ),
+  )
+  // The eyes-free cues of each new look at the decode window (the decode tick, the spoken batch
+  // summary), and the refs the rest of the app reads off the snapshot.
+  useEffect(() => {
+    if (!snap || !settings) return
+    // Keep the chase-alert suppression in sync (the prop poller reads the ref).
+    qsoPartnerRef.current = snap.fieldDay?.dxcall ?? snap.qso?.dxcall ?? null
+    // Latest tier for the rail's Digital button (preserve FT4 across nav).
+    tierRef.current = snap.link.tier
+    processDecodes(snap.recentDecodes, settings)
+  }, [snap, settings])
 
   // Bumps when a QSO is logged AND "Clear DX call after logging" is on — the
   // cockpit watches it and wipes its DX Call/Grid fields (stock WSJT-X option).

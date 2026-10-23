@@ -5,24 +5,27 @@
 //! new grid (a rare one loudly), a watch-list station, an opted-in CQ, and a park newly on the air.
 //! A computer driving the station and a phone must hear the same alerts, so the decision belongs
 //! here, beside the decodes it reads: [`NeededAlerts::decide`] and [`FreshParks::tick`] are the
-//! screen's two functions in Rust, rule for rule, with the same dedups, band scopes, watch-list tier
-//! and partner rules. Each alert carries what its toast says and [`Presentation`] how it sounds and
-//! shows, so a screen or a push renders it without deciding anything.
+//! screen's two former functions in Rust, rule for rule, with the same dedups, band scopes,
+//! watch-list tier and partner rules. Each alert carries what its toast says and what its button
+//! works, and [`Presentation`] how it sounds and shows, so a screen or a push renders it without
+//! deciding anything.
 //!
-//! Not yet wired: the screen still decides, and nothing here is raised. The station does not hold
-//! what the screen decides from: the watch list's alert gates (CQ only, a minimum SNR, a label —
-//! `crate::watchlist` holds identity alone) and the geographic scope resolved to entity names. Both
-//! halves are held to one table of cases, `tests/fixtures/needed-alerts.json`, captured from the
-//! screen, which the desktop's `alerts.agreement.test.ts` reads too.
+//! The station raises them (`Engine::needed_alerts`, on each look at the decode window, and the
+//! parks on the OTA poll), as the `alert` event every window and a computer driving the station
+//! hear; the screen only shows them. The decision reads the watch list the desktop sends, its gates
+//! with it (`crate::watchlist`), and the geographic scope resolved to entity names
+//! ([`scoped_entities`]). Both ends are held to one table of cases,
+//! `tests/fixtures/needed-alerts.json`, captured from the screen's decision before it moved here:
+//! this side decides it, the desktop's `alerts.agreement.test.ts` shows it.
 //!
 //! Left on the screen by design: the decode tick and the spoken batch summary (eyes-free cues for
-//! the window that hears them, not alerts about a station) and the toast's click-to-work.
+//! the window that hears them, not alerts about a station) and the toast's click-to-work itself.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::dto::{DecodeRow, GridRarity};
+use crate::dto::{DecodeRow, GridRarity, Tier};
 use crate::settings::Settings;
 use crate::watchlist::{watched, WatchEntry, WatchKind};
 
@@ -67,6 +70,30 @@ pub struct NeededAlert {
     pub tier: Option<GridRarity>,
     /// The watch entry's label, for a watch-list alert.
     pub watch: Option<String>,
+    /// What the toast's button works: the decode, as double-clicking its row hands it over.
+    /// `None` for a station not parsed, whose toast has no button.
+    pub work: Option<Work>,
+}
+
+/// The decode an alert's button works, beside the alert's `call`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Work {
+    pub message: String,
+    pub snr: i32,
+    pub freq_hz: f32,
+    pub tier: Tier,
+}
+
+impl Work {
+    fn of(d: &DecodeRow) -> Option<Self> {
+        d.from.as_ref().map(|_| Self {
+            message: d.message.clone(),
+            snr: d.snr,
+            freq_hz: d.freq_hz,
+            tier: d.tier,
+        })
+    }
 }
 
 /// How an alert of one kind sounds and shows on the desktop.
@@ -140,44 +167,64 @@ pub struct QsoContext {
     pub dxcall: Option<String>,
 }
 
-/// A watch-list entry as the alert reads it: what names a station, and the alert's own gates.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WatchAlert {
-    pub id: String,
-    #[serde(flatten)]
-    pub entry: WatchEntry,
-    #[serde(default)]
-    pub cq_only: bool,
-    #[serde(default)]
-    pub min_snr: Option<f64>,
-    #[serde(default)]
-    pub label: Option<String>,
+/// The desktop's `watchLabel`: the operator's label for the entry, else the entry itself.
+pub fn watch_label(entry: &WatchEntry) -> String {
+    match entry.label.as_deref().map(str::trim) {
+        Some(label) if !label.is_empty() => label.to_string(),
+        _ => match entry.kind {
+            WatchKind::Dxcc => entry.value.clone(),
+            WatchKind::Grid => format!("grid {}", entry.value.to_uppercase()),
+            WatchKind::Call => entry.value.to_uppercase(),
+        },
+    }
 }
 
-impl WatchAlert {
-    /// The desktop's `watchLabel`: the operator's label, else the entry itself.
-    pub fn label(&self) -> String {
-        match self.label.as_deref().map(str::trim) {
-            Some(label) if !label.is_empty() => label.to_string(),
-            _ => match self.entry.kind {
-                WatchKind::Dxcc => self.entry.value.clone(),
-                WatchKind::Grid => format!("grid {}", self.entry.value.to_uppercase()),
-                WatchKind::Call => self.entry.value.to_uppercase(),
-            },
-        }
-    }
+/// Whether an entry's alert gates (CQ only, a minimum SNR) let this decode through.
+fn watch_admits(entry: &WatchEntry, d: &DecodeRow) -> bool {
+    (!entry.cq_only || d.is_cq) && entry.min_snr.is_none_or(|min| f64::from(d.snr) >= min)
+}
 
-    fn admits(&self, d: &DecodeRow) -> bool {
-        (!self.cq_only || d.is_cq) && self.min_snr.is_none_or(|min| f64::from(d.snr) >= min)
+/// cty.dat's six continent codes, the only ones a scope honours: a code nothing offers a box for
+/// would filter rows with nothing on screen to account for them.
+const CONTINENT_CODES: [&str; 6] = ["NA", "SA", "EU", "AF", "AS", "OC"];
+
+/// The operator's geographic scope (`alertContinents`, `alertEntities`) as the entity NAMES it
+/// admits, the decode rows' own vocabulary — the desktop's `scopedEntities`, with `table` the
+/// country file's entity → continent pairs. The two halves union: a decode has one entity, so
+/// "Europe" and "Japan" both ticked must admit both. Every ambiguity resolves toward alerting: an
+/// unknown continent code is dropped, and a scope that admits no entity at all is no scope
+/// (`None`), because a filter that fails closed silences the radio with nothing on screen to say
+/// why.
+pub fn scoped_entities<'a>(
+    continents: &[String],
+    entities: &[String],
+    table: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Option<HashSet<String>> {
+    let codes: Vec<&str> = continents
+        .iter()
+        .map(String::as_str)
+        .filter(|c| CONTINENT_CODES.contains(c))
+        .collect();
+    let mut out: HashSet<String> = entities.iter().filter(|e| !e.is_empty()).cloned().collect();
+    if codes.is_empty() && out.is_empty() {
+        return None;
     }
+    if !codes.is_empty() {
+        out.extend(
+            table
+                .into_iter()
+                .filter(|(_, cont)| codes.contains(cont))
+                .map(|(entity, _)| entity.to_string()),
+        );
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// What a look at the decode window is decided under.
 pub struct Scene<'a> {
     pub switches: &'a Switches,
     pub qso: &'a QsoContext,
-    pub watch: &'a [WatchAlert],
+    pub watch: &'a [WatchEntry],
     /// The dial in MHz; `None` when not known (every scope but `off` then admits).
     pub dial_mhz: Option<f64>,
     /// The entities the operator narrowed the new ones to; `None` for no scope.
@@ -296,9 +343,9 @@ impl NeededAlerts {
             if !is_partner {
                 let hit = call.filter(|c| !c.is_empty()).and_then(|c| {
                     scene.watch.iter().find(|w| {
-                        w.admits(d)
+                        watch_admits(w, d)
                             && watched(
-                                std::slice::from_ref(&w.entry),
+                                std::slice::from_ref(*w),
                                 c,
                                 d.country.as_deref(),
                                 d.grid.as_deref(),
@@ -315,7 +362,8 @@ impl NeededAlerts {
                             entity: non_empty(&d.country),
                             grid: None,
                             tier: None,
-                            watch: Some(hit.label()),
+                            watch: Some(watch_label(hit)),
+                            work: Work::of(d),
                         });
                     }
                     continue;
@@ -390,6 +438,7 @@ impl NeededAlerts {
                     grid: None,
                     tier: None,
                     watch: None,
+                    work: Work::of(d),
                 },
                 NeededKind::NewGrid if rare_grid => NeededAlert {
                     kind: NeededKind::RareGrid,
@@ -402,6 +451,7 @@ impl NeededAlerts {
                         GridRarity::Rare
                     }),
                     watch: None,
+                    work: Work::of(d),
                 },
                 _ => NeededAlert {
                     kind,
@@ -410,6 +460,7 @@ impl NeededAlerts {
                     grid: None,
                     tier: None,
                     watch: None,
+                    work: Work::of(d),
                 },
             });
         }

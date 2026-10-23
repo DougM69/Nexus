@@ -79,6 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus was last in Tempo it starts in FT8/FT4 instead.
 
 ### Changed
+- **The station decides every decode alert, so every screen hears the same ones.** Someone calling you, a new DXCC
+  entity or grid (a rare grid loudly), a watch-list station, an opted-in CQ and a park newly on the air are now
+  decided once, at the station, from your alert settings, your watch list (its CQ-only, minimum SNR and label with
+  it) and your area filter. The desktop and a computer driving the station both show what it raises, with the same
+  sounds, pop-ups and Work button as before. The new-park beep no longer needs the main window to be polling.
 - **FT8: the full decode starts from the audio the early decode has already cleared, as in WSJT-X, and still finds
   every station the old way found (needs a check on the air).** At 13.5 seconds into the period Nexus now takes the
   stations the early decode found at 11.8 seconds out of the audio, as WSJT-X does, and the full decode at 14.4

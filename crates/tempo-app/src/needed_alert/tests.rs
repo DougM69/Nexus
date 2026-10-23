@@ -10,7 +10,7 @@ struct Step {
     #[serde(default)]
     qso: QsoContext,
     #[serde(default)]
-    watchlist: Vec<WatchAlert>,
+    watchlist: Vec<WatchEntry>,
     dial_mhz: Option<f64>,
     geo_scope: Option<HashSet<String>>,
     decodes: Vec<serde_json::Map<String, Value>>,
@@ -62,6 +62,8 @@ fn laid_over(
 fn written(alert: &NeededAlert) -> Value {
     let shown = alert.kind.presentation();
     let mut value = serde_json::to_value(alert).unwrap();
+    // The button's decode is held to the table on its own (`every_alert_works_the_decode_it_is_about`).
+    value.as_object_mut().unwrap().remove("work");
     value["tone"] = shown.toast.into();
     value["ms"] = shown.ms.into();
     value["prominent"] = shown.prominent.into();
@@ -233,4 +235,95 @@ fn the_settings_and_their_band_scopes_read_as_the_screen_reads_them() {
             "{scope:?} {dial:?}"
         );
     }
+}
+
+/// ★ An alert's button works the decode it is about, as double-clicking its row does — its
+/// message, SNR, offset and mode — and a station not parsed has none. CONTROL: two decodes of one
+/// look each carry their own.
+#[test]
+fn every_alert_works_the_decode_it_is_about() {
+    let switches = Switches {
+        alert_cq: true,
+        ..Switches::default()
+    };
+    let qso = QsoContext::default();
+    let scene = Scene {
+        switches: &switches,
+        qso: &qso,
+        watch: &[],
+        dial_mhz: None,
+        geo_scope: None,
+        now_ms: 0,
+    };
+    let mut one = row("K1ABC", "CQ K1ABC FN42");
+    one.snr = -7;
+    one.freq_hz = 1234.0;
+    let mut two = row("JA1XYZ", "CQ JA1XYZ PM95");
+    two.tier = Tier::Ft4;
+    let mut nobody = row("", "CQ <...> FN42");
+    nobody.from = None;
+    let alerts = NeededAlerts::new().decide(&[one, two, nobody], &scene);
+    let works: Vec<_> = alerts.iter().map(|a| a.work.clone()).collect();
+    assert_eq!(
+        works,
+        vec![
+            Some(Work {
+                message: "CQ K1ABC FN42".into(),
+                snr: -7,
+                freq_hz: 1234.0,
+                tier: Tier::Ft8
+            }),
+            Some(Work {
+                message: "CQ JA1XYZ PM95".into(),
+                snr: -10,
+                freq_hz: 1500.0,
+                tier: Tier::Ft4
+            }),
+            None,
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(&alerts[0]).unwrap()["work"],
+        json!({"message": "CQ K1ABC FN42", "snr": -7, "freqHz": 1234.0, "tier": "FT8"})
+    );
+}
+
+/// ★ The geographic scope resolves as the desktop's `scopedEntities` did: continents expand through
+/// the country file's table and union with the entities picked; an unknown code is dropped; and a
+/// scope that admits nothing is no scope at all. CONTROL: an empty scope is `None`, a picked entity
+/// alone is itself.
+#[test]
+fn the_geographic_scope_resolves_to_entity_names_and_never_fails_closed() {
+    let table = [
+        ("France", "EU"),
+        ("Germany", "EU"),
+        ("Japan", "AS"),
+        ("United States", "NA"),
+    ];
+    let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let set = |v: &[&str]| Some(v.iter().map(|s| s.to_string()).collect::<HashSet<_>>());
+    assert_eq!(scoped_entities(&[], &[], table), None);
+    assert_eq!(scoped_entities(&[], &names(&[""]), table), None);
+    assert_eq!(
+        scoped_entities(&[], &names(&["Japan"]), table),
+        set(&["Japan"])
+    );
+    assert_eq!(
+        scoped_entities(&names(&["EU"]), &names(&["Japan"]), table),
+        set(&["France", "Germany", "Japan"])
+    );
+    assert_eq!(
+        scoped_entities(&names(&["EU", "XX"]), &[], table),
+        set(&["France", "Germany"])
+    );
+    assert_eq!(
+        scoped_entities(&names(&["XX"]), &[], table),
+        None,
+        "an unknown code alone"
+    );
+    assert_eq!(
+        scoped_entities(&names(&["AF"]), &[], table),
+        None,
+        "a continent nothing is on"
+    );
 }

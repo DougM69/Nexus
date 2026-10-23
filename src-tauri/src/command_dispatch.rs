@@ -70,8 +70,8 @@
 //!   copy is checked on its own list too.
 //! - **The one mixed store**, `ui-state.json`, splits by key: the station's data ([`STATION_KEYS`])
 //!   lives at the shack, every other key on the computer the operator sits at.
-//! - **Events.** An alert (`crate::alert`, Pounce's today) is the one event the shack sends on, and
-//!   the only one the other computer takes ([`FORWARDED_EVENTS`]).
+//! - **Events.** An alert (`crate::alert`: Pounce's, the decode alerts, new parks) is the one event
+//!   the shack sends on, and the only one the other computer takes ([`FORWARDED_EVENTS`]).
 //!
 //! The operator's other rulings of 2026-10-07 live in the table and in [`argument_refusal`]: a whole
 //! Settings save from afar saves every field, as the stream window's does; a settings restore, a

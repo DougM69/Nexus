@@ -93,7 +93,7 @@ import type {
   StreetUnfinished,
   StreetUpdate,
 } from './features/streetMaps'
-import type { WatchKind } from './watchlist'
+import type { WatchFilter } from './watchlist'
 import { finishLogStats, type LogStatCounts } from './features/logStats'
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
@@ -1544,11 +1544,13 @@ export async function retireWantedCalls(): Promise<void> {
   await invoke<void>('retire_wanted_calls')
 }
 
-/** Send the station the watch list — whole, identity only — so the Needed board puts its stations
- *  first, for this window and every Remote browser (operator, 2026-09-24: "watched counts as
- *  needed"). The main window sends it on launch and after every edit; `false` when refused (any
- *  other window). */
-export async function setWatchList(entries: { kind: WatchKind; value: string }[]): Promise<boolean> {
+/** Send the station the watch list — whole, each entry with its alert gates and label but never
+ *  its note — so the Needed board puts its stations first, for this window and every Remote browser
+ *  (operator, 2026-09-24: "watched counts as needed"), and the station raises its alerts. The main
+ *  window sends it on launch and after every edit; `false` when refused (any other window). */
+export async function setWatchList(
+  entries: Pick<WatchFilter, 'id' | 'kind' | 'value' | 'cqOnly' | 'minSnr' | 'label'>[],
+): Promise<boolean> {
   return invoke<boolean>('set_watch_list', { entries })
 }
 

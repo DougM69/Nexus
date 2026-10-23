@@ -2216,6 +2216,37 @@ fn the_alert_is_the_one_event_that_crosses_and_both_screens_use_its_name() {
         include_str!("../../../ui/src/usePounce.ts").contains("listen<RaisedAlert>('alert'"),
         "the screen listens for it by this name"
     );
+    // The station's decode alerts and its new parks are raised the same way, and heard by name.
+    let lib = include_str!("../lib.rs");
+    assert!(
+        lib.contains(r#"app.emit(alert::EVENT, &alert::raised("needed", one))"#),
+        "the needed-station alerts"
+    );
+    assert!(
+        lib.contains(r#"alert::raised("parks", "#),
+        "the parks newly on the air"
+    );
+    assert!(
+        include_str!("../../../ui/src/useStationAlerts.ts").contains("listen<RaisedAlert>('alert'"),
+        "the screen listens for them by this name"
+    );
+}
+
+/// The station decides the needed-station alerts on each look at the decode window it serves,
+/// under the Engine lock, and raises them after the lock is released, so no window's listener ever
+/// runs under it.
+#[test]
+fn every_snapshot_served_decides_the_needed_alerts_and_raises_them_unlocked() {
+    let lib = include_str!("../lib.rs");
+    let start = lib.find("async fn get_snapshot(").expect("get_snapshot");
+    let body = &lib[start..start + lib[start..].find("\n}\n").expect("its end")];
+    let at = |what: &str| {
+        body.find(what)
+            .unwrap_or_else(|| panic!("{what} in get_snapshot"))
+    };
+    assert!(at("let snap = eng.snapshot();") < at("eng.needed_alerts(&snap,"));
+    assert!(at("eng.needed_alerts(&snap,") < at("drop(eng);"));
+    assert!(at("drop(eng);") < at("raise_needed(&app, &needed);"));
 }
 
 #[test]

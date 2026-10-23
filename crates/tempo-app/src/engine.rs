@@ -3726,9 +3726,13 @@ pub struct Engine {
     /// `halt_tx` moves it — see there for why.
     remote_transmit_stand_down: crate::remote_control::Revocation,
     /// The operator's watch list, as the desktop's main window last sent it — what the Needed
-    /// board puts first ([`crate::watchlist`]). Not a setting: the list is the desktop's, kept in
-    /// its ui-state.json, and sent again on every launch and after every edit. Empty until then.
+    /// board puts first ([`crate::watchlist`]) and the watch-list alert reads, gates and all. Not
+    /// a setting: the list is the desktop's, kept in its ui-state.json, and sent again on every
+    /// launch and after every edit. Empty until then.
     watch_list: Vec<crate::watchlist::WatchEntry>,
+    /// The needed-station alerts' memory across looks at the decode window
+    /// ([`Engine::needed_alerts`]): what has been seen and announced, so each is raised once.
+    needed_alerts: crate::needed_alert::NeededAlerts,
     remote_amp_command: Option<crate::remote_control::amplifier::Request>,
     remote_radio_command: Option<remote_radio::Request>,
     remote_radio_selection: Option<remote_selection::Request>,
@@ -6441,6 +6445,7 @@ impl Engine {
             remote_actuation: Default::default(),
             remote_transmit_stand_down: Default::default(),
             watch_list: Vec::new(),
+            needed_alerts: crate::needed_alert::NeededAlerts::new(),
             remote_amp_command: None,
             remote_radio_command: None,
             remote_radio_selection: None,
@@ -15717,6 +15722,40 @@ impl Engine {
     /// Remote browser's, which read this same engine.
     pub fn watch_list(&self) -> &[crate::watchlist::WatchEntry] {
         &self.watch_list
+    }
+
+    /// The needed-station alerts one look at the decode window raises ([`crate::needed_alert`]):
+    /// `snap` is the snapshot just taken, read as the desktop's screen read the one it was served —
+    /// its decodes, the Field Day sequencer's state and partner before the QSO's, and the dial
+    /// (`None` when not known). The settings' switches and band scopes, and the watch list, are
+    /// this engine's; `geo_scope` is the operator's area filter resolved to entity names
+    /// ([`crate::needed_alert::scoped_entities`]). Every look may be asked for, by every window
+    /// and feed that takes a snapshot: each alert is raised once, on the first look that sees it.
+    pub fn needed_alerts(
+        &mut self,
+        snap: &AppSnapshot,
+        geo_scope: Option<&std::collections::HashSet<String>>,
+        now_ms: i64,
+    ) -> Vec<crate::needed_alert::NeededAlert> {
+        use crate::needed_alert::{QsoContext, Scene, Switches};
+        let fd = snap.field_day.as_ref();
+        let qso = snap.qso.as_ref();
+        let context = QsoContext {
+            state: fd.map(|f| &f.state).or(qso.map(|q| &q.state)).cloned(),
+            dxcall: fd
+                .and_then(|f| f.dxcall.clone())
+                .or_else(|| qso.and_then(|q| q.dxcall.clone())),
+        };
+        let switches = Switches::of(&self.settings);
+        let scene = Scene {
+            switches: &switches,
+            qso: &context,
+            watch: &self.watch_list,
+            dial_mhz: (snap.radio.dial_mhz > 0.0).then_some(snap.radio.dial_mhz),
+            geo_scope,
+            now_ms,
+        };
+        self.needed_alerts.decide(&snap.recent_decodes, &scene)
     }
 
     /// The generation a browser is shown as its `transmitEpoch`, and the one a start from a
@@ -39237,16 +39276,64 @@ mod tests {
             e.watch_list().is_empty(),
             "nothing until the desktop sends it"
         );
-        let list = vec![WatchEntry {
-            kind: WatchKind::Call,
-            value: "VP8*".into(),
-        }];
+        let list = vec![WatchEntry::naming(WatchKind::Call, "VP8*")];
         e.set_watch_list(list.clone());
         e.apply_settings(e.settings().clone());
         e.apply_restored_settings(e.settings().clone());
         assert_eq!(e.watch_list(), list.as_slice());
         e.set_watch_list(Vec::new());
         assert!(e.watch_list().is_empty(), "a later list replaces it whole");
+    }
+
+    /// ★ The station decides the needed-station alerts from the snapshot it serves, once: a
+    /// station calling the operator is raised on the first look and never on the next, however
+    /// many windows and feeds take one; and the watch list's alert gates are the engine's own copy.
+    /// CONTROL: with the switch off nothing is raised, and a watched call is raised as the watch
+    /// tier only while its CQ-only gate admits the decode.
+    #[test]
+    fn the_station_raises_each_needed_alert_once_from_the_snapshot_it_serves() {
+        use crate::needed_alert::NeededKind;
+        use crate::watchlist::{WatchEntry, WatchKind};
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.alert_new = false;
+        e.settings.alert_my_call = false;
+        e.last_decodes = vec![dec_snr("KD9TAW K1ABC FN42", -9)];
+        let snap = e.snapshot();
+        assert!(snap.recent_decodes[0].directed_to_me);
+        assert_eq!(e.needed_alerts(&snap, None, 1_000), vec![], "switched off");
+
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.alert_new = false;
+        e.settings.alert_my_call = true;
+        e.last_decodes = vec![dec_snr("KD9TAW K1ABC FN42", -9)];
+        let snap = e.snapshot();
+        let raised = e.needed_alerts(&snap, None, 1_000);
+        assert_eq!(raised.len(), 1, "{raised:?}");
+        assert_eq!(raised[0].kind, NeededKind::MyCall);
+        assert_eq!(raised[0].call.as_deref(), Some("K1ABC"));
+        assert_eq!(
+            e.needed_alerts(&e.snapshot(), None, 1_300),
+            vec![],
+            "the next look"
+        );
+
+        e.set_watch_list(vec![WatchEntry {
+            id: "w1".into(),
+            cq_only: true,
+            label: Some("Bouvet DXp".into()),
+            ..WatchEntry::naming(WatchKind::Call, "3Y0*")
+        }]);
+        e.last_decodes = vec![dec_snr("W1AW 3Y0J -12", -12)];
+        assert_eq!(
+            e.needed_alerts(&e.snapshot(), None, 2_000),
+            vec![],
+            "not a CQ"
+        );
+        e.last_decodes = vec![dec_snr("CQ 3Y0J JD15", -12)];
+        let raised = e.needed_alerts(&e.snapshot(), None, 3_000);
+        assert_eq!(raised.len(), 1, "{raised:?}");
+        assert_eq!(raised[0].kind, NeededKind::Watch);
+        assert_eq!(raised[0].watch.as_deref(), Some("Bouvet DXp"));
     }
 
     /// The retired list's one writer does empty it — the positive control for the form test
