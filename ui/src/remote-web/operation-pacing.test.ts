@@ -19,7 +19,7 @@ function connected() {
   }
   let leaseUntil = 0
   const client = new OperationClient(wire => relay.receiveBrowser(sessionId, JSON.parse(wire), Date.now()), true,
-    Date.now, undefined, 4)
+    Date.now, 4)
   relay.sync({ supported: true, operationVersion: 4, peer: {
     close: () => { throw Error('station closed') },
     send: raw => {

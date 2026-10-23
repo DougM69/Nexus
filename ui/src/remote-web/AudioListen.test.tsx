@@ -28,7 +28,7 @@ function fixture(options: { capabilities?: ControlCapability[]; supported?: bool
   vi.useFakeTimers()
   const sent: { request: { type: string; requestId: string } }[] = []
   let now = 1000
-  const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, undefined, 4)
+  const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, 4)
   clients.push(client)
   const phase = options.phase ?? 'controlling'
   const state: OperationState = {

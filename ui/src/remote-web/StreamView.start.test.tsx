@@ -27,7 +27,7 @@ function fixture() {
   vi.useFakeTimers()
   let now = 1000
   const sent: { request: { type: string; requestId: string; stationBootId?: string } }[] = []
-  const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, undefined, 4)
+  const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, 4)
   clients.push(client)
   const h = harness()
   let revision = 1

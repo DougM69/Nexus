@@ -1,4 +1,3 @@
-import { pendingLogStorage } from './operation-storage'
 import { OperationClient } from './operation-client'
 import { OPERATION_EXPORT_RESPONSE_BYTES, OPERATION_REQUEST_BYTES } from './operation-protocol'
 import { advertisedOperationVersion, parseOperationVersion } from './operation-version'
@@ -271,7 +270,7 @@ export class HostedConnection {
       const lane = this.device && !(value.request?.type === 'stopTransmit' || value.request?.type === 'state') ? OPERATION_LANE : null
       if(!this.applicationMode||this.socket?.readyState!==WebSocket.OPEN||this.socket.bufferedAmount+new TextEncoder().encode(message).length+(lane?LANE_PROOF_BYTES:0)>OPERATION_REQUEST_BYTES)throw new RemoteError(503)
       this.lane(this.socket, message, value, lane)
-    },applicationMode&&client.operationVersion>=1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId),parseOperationVersion(client.operationVersion)??1)
+    },applicationMode&&client.operationVersion>=1,()=>performance.now(),parseOperationVersion(client.operationVersion)??1)
     this.audio = new AudioLink(message => {
       const text = JSON.stringify(message)
       // Its own budget, deliberately small: a listen request is ~130 bytes and this is
