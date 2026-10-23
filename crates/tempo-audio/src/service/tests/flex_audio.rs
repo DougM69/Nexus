@@ -1753,6 +1753,15 @@ fn rng(seed: u64) -> impl FnMut() -> f64 {
 /// so this one keys at the boundary tick without waiting on a decode, in both routes alike (the
 /// DAX route's receive ring holds audio, the sound card route's does not; an early-decode boundary
 /// keys in the same tick through the same `key_boundary_tx`).
+///
+/// ⚠️ THE CLOCK WAITS SHORT OF THE BOUNDARY WHILE THE DECODER IS BUSY WITH AN EARLIER PASS. Every
+/// decode in this test binary waits for one process-wide modem lock, so another test's decode can
+/// hold this scene's early pass past the boundary. The loop then takes its busy-decoder path, which
+/// commits the over against a fresh read of the REAL clock (`commit_tx`'s slot check), periods
+/// behind this virtual one: the over is dropped as one whose slot has gone, nothing keys and nothing
+/// is refused, and the scene measures the test's clock instead of the route. Held 1 ms short of the
+/// boundary until the decoder is free or runs the period's own full pass, the boundary is the one a
+/// decoder that keeps up gives, under any load. The returned boundary instant moves with the wait.
 fn one_over(
     s: &mut FlexScene,
     boundary: f64,
@@ -1769,15 +1778,32 @@ fn one_over(
     }
     s.state.prev_slot_was_tx = true;
     let plays = s.backend.played.lock().unwrap().len();
-    let w0 = Instant::now();
-    let at_boundary = w0 + Duration::from_secs_f64(pre / 1000.0);
+    let period = s.engine.lock().unwrap().active_slot_secs() * 1000.0;
+    let ended = (boundary / period) as u64 - 1;
+    let mut w0 = Instant::now();
     let start_v = boundary - pre;
+    let mut crossed = false;
+    let give_up = Instant::now() + Duration::from_secs(60);
     let mut keyed = None;
     loop {
-        let v = start_v + w0.elapsed().as_secs_f64() * 1000.0;
+        let mut v = start_v + w0.elapsed().as_secs_f64() * 1000.0;
+        if !crossed
+            && v >= boundary
+            && s.state.decode_in_flight
+            && s.state.full_done_slot != Some(ended)
+        {
+            assert!(
+                Instant::now() < give_up,
+                "the decoder was busy for a minute before the boundary"
+            );
+            v = boundary - 1.0;
+            w0 = Instant::now() - Duration::from_secs_f64((v - start_v) / 1000.0);
+        }
+        crossed |= v >= boundary;
         during(s, v - boundary);
         let t = Instant::now();
         s.step(v);
+        let at_boundary = w0 + Duration::from_secs_f64(pre / 1000.0);
         if keyed.is_none() && s.backend.played.lock().unwrap().len() > plays {
             keyed = Some(t);
             if stop_at_key {

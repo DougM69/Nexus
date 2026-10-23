@@ -1,5 +1,5 @@
 //! Local approval and the Remote background task. Engine access is restricted to
-//! bounded observation, the stream, the lease and Stop, and the separately approved FT gestures.
+//! bounded observation, the stream, the lease and Stop.
 /// The station's account: binding it to its owner by a sign-in at the shack, the issuer's keys,
 /// and the checks a listed device's proof must pass.
 pub(crate) mod account;
