@@ -5,6 +5,24 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **A computer no longer takes the station's internet key on Nexus Remote's word alone.** Before, when you
+  added the internet road to a station paired with a code (its owner not yet signed in at the station) or to a
+  station you were invited to, the computer kept the station key the service listed without checking it. Now:
+  - **At home**, linking a station paired with a code asks the station itself for its key over your network,
+    before anything is added. If the service named a different key, you are told so and nothing is added.
+  - **Away from the station, or as an invited guest**, the station's row shows **This station's key for the
+    internet road** in the same eight groups the station shows under Remote access. The internet road carries
+    nothing until you compare the two and press **It matches**. **It doesn't match** forgets the station.
+  - The station's **Approve** question for a computer now shows **This station's key** too, so both keys are
+    read out in the same call.
+  - Every internet road's row now shows the station's key. A computer that already has an internet road checks it
+    quietly the next time it reaches the station on your network; if the station names another key, that road is
+    turned off and says why. Nothing else changes for roads that already work, and nothing has to be paired again.
+  - Your radio was never reachable this way: the station only ever lets in a computer you approved there.
+
 ## [1.20.0] — 2026-10-22
 
 ### Added

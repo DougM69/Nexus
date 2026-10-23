@@ -545,6 +545,12 @@ enum FromPage {
         #[serde(rename = "stationId")]
         station_id: Option<String>,
     },
+    /// The operator compared the station's key with the station's own screen and it matches: its
+    /// internet road is no longer held.
+    KeyMatches {
+        #[serde(rename = "stationId")]
+        station_id: String,
+    },
     /// The address Operate tries first for a station, changed, or cleared with none.
     KeepAddress {
         #[serde(rename = "stationId")]
@@ -592,7 +598,9 @@ async fn store<T: Send + 'static>(
 /// The stations, as the page shows them, which of them have the internet road (each with this
 /// computer's key for it as the station shows it, `internet::shown_key`: its public half only), for
 /// each added with the account until when it admits this computer on its network, and those kept by
-/// their service id until this computer first reaches them there.
+/// their service id until this computer first reaches them there. And for every internet road, the
+/// station's key it is pinned to, as the station shows its own (`remote_service::fingerprint`), and
+/// why it is held, when it is (`Stations::road_held`).
 async fn stations(reach: &Reach) -> String {
     listed(reach).await.to_string()
 }
@@ -612,10 +620,25 @@ async fn listed(reach: &Reach) -> serde_json::Value {
             .iter()
             .filter_map(|station| Some((station.id.clone(), kept.signed(&station.id)?)))
             .collect();
-        Ok((list, internet, signed, kept.list_away()?))
+        let away = kept.list_away()?;
+        let mut keys = Vec::new();
+        for id in list.iter().map(|s| &s.id).chain(away.iter().map(|a| &a.id)) {
+            let Some(road) = kept.internet(id)? else {
+                continue;
+            };
+            let Some(key) = crate::remote_service::fingerprint(&road.station_key) else {
+                continue;
+            };
+            let mut shown = json!({"id":id,"key":key});
+            if let Some(why) = kept.road_held(id)? {
+                shown["held"] = json!(why);
+            }
+            keys.push(shown);
+        }
+        Ok((list, internet, signed, away, keys))
     });
     match listed.await {
-        Ok((list, internet, signed, away)) => {
+        Ok((list, internet, signed, away, keys)) => {
             let now = (reach.now_s)();
             let account: Vec<serde_json::Value> = signed
                 .into_iter()
@@ -626,7 +649,7 @@ async fn listed(reach: &Reach) -> serde_json::Value {
                 })
                 .collect();
             json!({"type":"stations","stations":list,"internet":internet,"account":account,
-                "away":away,"computer":reach.name})
+                "away":away,"stationKeys":keys,"computer":reach.name})
         }
         Err(reason) => {
             json!({"type":"stations","stations":[],"computer":reach.name,"error":reason})
@@ -802,6 +825,13 @@ async fn page(
                             told["forgetUnreached"] = json!(reason);
                         }
                         told.to_string()
+                    }
+                    FromPage::KeyMatches { station_id } => {
+                        let kept = reach.stations.clone();
+                        match store(move || kept.confirm_road(&station_id)).await {
+                            Ok(()) => listed(&reach).await.to_string(),
+                            Err(reason) => json!({"type":"connectRefused","reason":reason}).to_string(),
+                        }
                     }
                     FromPage::KeepAddress { station_id, address } => {
                         let typed = match address.as_deref().map(Typed::read) {

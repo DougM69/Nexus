@@ -27,6 +27,13 @@
 //! roads (audio and Stop) beside it; the pipe lives a minute unless renewed, so it is renewed every
 //! [`RENEW_EVERY`] while the link lives.
 //!
+//! ## Held roads
+//!
+//! A road whose station key this computer has not heard from the station itself, nor seen bound to
+//! its own account's sign-in, is held (`Stations::road_held`): client mode opens nothing for it, not
+//! a request to the service, until the operator confirms the key; and one the station disowned on
+//! its own network stays off (`stationKeyUnconfirmed`, `stationKeyDisagrees`).
+//!
 //! ## Refusals
 //!
 //! The service names what it refused; only the names below are taken from it ([`named`]), as the
@@ -389,6 +396,9 @@ pub(crate) fn lasting(reason: &str) -> bool {
             | "stationUnavailable"
             | "internetNotReady"
             | "accessDenied"
+            // Held until the operator checks the station's key, or for good (`Stations::road_held`).
+            | "stationKeyUnconfirmed"
+            | "stationKeyDisagrees"
     )
 }
 
@@ -455,10 +465,26 @@ pub(crate) struct Roads {
 
 impl Roads {
     pub(crate) fn new(stations: Arc<Stations>) -> Result<Self, &'static str> {
+        Self::at(stations, crate::remote_service::REMOTE_ORIGIN)
+    }
+
+    /// The same, with the Remote service at `origin` (a test's stand-in).
+    pub(crate) fn at(stations: Arc<Stations>, origin: &str) -> Result<Self, &'static str> {
         Ok(Self {
             stations,
-            service: Service::new(crate::remote_service::REMOTE_ORIGIN)?,
+            service: Service::new(origin)?,
         })
+    }
+
+    /// The road kept for the station paired here as `id`, unless it is held, read off the async
+    /// threads.
+    async fn unheld(stations: Arc<Stations>, id: String) -> Result<InternetRoad, &'static str> {
+        tokio::task::spawn_blocking(move || match stations.road_held(&id)? {
+            Some(why) => Err(why),
+            None => stations.internet(&id)?.ok_or("unknownStation"),
+        })
+        .await
+        .unwrap_or(Err("storeUnavailable"))
     }
 
     /// The road kept for the station paired here as `id`, read off the async threads.
@@ -481,8 +507,9 @@ impl crate::client_mode::Afar for Roads {
         headset: Option<Arc<dyn tempo_client::audio_road::Headset>>,
     ) -> Pin<Box<dyn Future<Output = Result<tempo_client::link::Link, &'static str>> + Send>> {
         let (stations, service) = (Arc::clone(&self.stations), self.service.clone());
+        // A held road opens nothing: not a request to the service, let alone the pipe.
         Box::pin(async move {
-            let road = Self::road(stations, id).await?;
+            let road = Self::unheld(stations, id).await?;
             open(&service, &road, headset).await
         })
     }
@@ -493,6 +520,15 @@ impl crate::client_mode::Afar for Roads {
             let road = Self::road(stations, id).await?;
             service.renew(&road).await
         })
+    }
+
+    fn heard_key(&self, id: &str, key: &str) {
+        if let Ok(true) = self.stations.disown_road(id, key) {
+            tempo_core::applog::warn(
+                "client",
+                "the station named another key for the internet road than the one kept here: that road is off",
+            );
+        }
     }
 }
 

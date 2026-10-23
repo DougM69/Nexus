@@ -139,7 +139,8 @@ use tempo_stream::protocol;
 
 use crate::remote_service::lan::{valid_name, NAME_CHARS};
 use crate::remote_service::vault::{
-    AwayStation, InternetRoad, PairedStation, PairedStations, StagedKeys, StationVault,
+    AwayStation, HeldRoad, HeldRoads, InternetRoad, PairedStation, PairedStations, StagedKeys,
+    StationVault,
 };
 
 /// The most stations this computer keeps a pairing with, those kept by their service id included.
@@ -755,6 +756,19 @@ impl Stations {
             .ok_or("unknownStation")?;
         ids[place] = record.station_id.clone();
         let list = PairedStations { stations: ids };
+        // A hold on the road moves with it, written first: the road is never kept unheld under
+        // its new id.
+        let mut held = self.held_list()?;
+        if let Some(moved) = held.roads.iter().find(|h| h.station_id == away).cloned() {
+            held.roads.retain(|h| h.station_id != record.station_id);
+            held.roads.push(HeldRoad {
+                station_id: record.station_id.clone(),
+                ..moved
+            });
+            self.vault
+                .save_held_roads(&held)
+                .map_err(|_| "storeUnavailable")?;
+        }
         self.vault
             .save_paired_station(record)
             .map_err(|_| "storeUnavailable")?;
@@ -772,6 +786,111 @@ impl Stations {
         let _ = self.vault.remove_away_station(away);
         let _ = self.vault.remove_internet_road(away);
         Ok(())
+    }
+
+    /// Why the internet road kept for station `id` is held, if it is: `stationKeyUnconfirmed` until
+    /// the operator confirms the station's key against the station's own screen, or
+    /// `stationKeyDisagrees` for good once the station named another key on its own network. A hold
+    /// counts only for the station key it was written for: a road added again with another key is
+    /// not held by it. No road, no hold.
+    pub(crate) fn road_held(&self, id: &str) -> Result<Option<&'static str>, &'static str> {
+        let Some(road) = self.internet(id)? else {
+            return Ok(None);
+        };
+        let pinned = crate::remote_service::fingerprint(&road.station_key);
+        Ok(self
+            .held_list()?
+            .roads
+            .iter()
+            .find(|held| held.station_id == id && Some(&held.shown) == pinned.as_ref())
+            .map(|held| {
+                if held.disowned {
+                    "stationKeyDisagrees"
+                } else {
+                    "stationKeyUnconfirmed"
+                }
+            }))
+    }
+
+    /// The held roads as the store holds them: none when the entry is missing or does not read.
+    fn held_list(&self) -> Result<HeldRoads, &'static str> {
+        Ok(self
+            .vault
+            .held_roads()
+            .map_err(|_| "storeUnavailable")?
+            .unwrap_or_default())
+    }
+
+    /// Write the held roads with station `id`'s replaced by `held` (or dropped, with none), keeping
+    /// only those of stations still on this computer besides it.
+    fn write_held(&self, id: &str, held: Option<HeldRoad>) -> Result<(), &'static str> {
+        let ids = self.ids()?;
+        let mut list = self.held_list()?;
+        list.roads
+            .retain(|kept| kept.station_id != id && ids.contains(&kept.station_id));
+        list.roads.extend(held);
+        if !fits(&list) {
+            return Err("stationsFull");
+        }
+        self.vault
+            .save_held_roads(&list)
+            .map_err(|_| "storeUnavailable")
+    }
+
+    /// Hold the internet road about to be kept for station `id`, pinned to `station_key`, until the
+    /// operator confirms that key. Written BEFORE the road, so no road is ever kept unheld that
+    /// should be held: a hold for a road not yet kept holds nothing.
+    pub(crate) fn hold_road(&self, id: &str, station_key: &str) -> Result<(), &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        let shown = crate::remote_service::fingerprint(station_key).ok_or("notStation")?;
+        self.write_held(
+            id,
+            Some(HeldRoad {
+                station_id: id.to_string(),
+                shown,
+                disowned: false,
+            }),
+        )
+    }
+
+    /// Station `id` named `said` as its key for the internet road, on its own network: a road kept
+    /// for it pinned to another key is held for good (`stationKeyDisagrees`). Whether it was.
+    pub(crate) fn disown_road(&self, id: &str, said: &str) -> Result<bool, &'static str> {
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        let Some(road) = self.internet(id)? else {
+            return Ok(false);
+        };
+        if road.station_key == said {
+            return Ok(false);
+        }
+        let shown = crate::remote_service::fingerprint(&road.station_key).ok_or("notStation")?;
+        self.write_held(
+            id,
+            Some(HeldRoad {
+                station_id: id.to_string(),
+                shown,
+                disowned: true,
+            }),
+        )?;
+        Ok(true)
+    }
+
+    /// The operator compared the station's key and pressed It matches: the road kept for station
+    /// `id` is no longer held. Never one the station disowned (`stationKeyDisagrees`).
+    pub(crate) fn confirm_road(&self, id: &str) -> Result<(), &'static str> {
+        if self.road_held(id)? == Some("stationKeyDisagrees") {
+            return Err("stationKeyDisagrees");
+        }
+        let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+        if !self
+            .held_list()?
+            .roads
+            .iter()
+            .any(|held| held.station_id == id)
+        {
+            return Ok(());
+        }
+        self.write_held(id, None)
     }
 
     /// Forget station `id` on this computer: its internet road and its record (or, for one kept by
@@ -798,6 +917,8 @@ impl Stations {
         self.vault
             .save_paired_stations(&PairedStations { stations: ids })
             .map_err(|_| "storeUnavailable")?;
+        // Its hold goes with it; one the store will not let go of holds no road.
+        let _ = self.write_held(id, None);
         // Forgotten all the same when a file will not take it: the station is listed nowhere.
         let mut file = self.typed_file();
         if file.remove(id).is_some() {

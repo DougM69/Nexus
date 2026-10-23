@@ -21,6 +21,8 @@ mod drops;
 /// A computer enrolling by its own sign-in to the station's account.
 mod enrol;
 mod hostile;
+/// The station's key for the internet road, said by the station on this network's road.
+mod identity;
 mod link;
 /// A computer signing in with the station's account (`crate::lan_client::account`).
 mod signing;
@@ -245,6 +247,8 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         #[cfg(feature = "radio")]
         audio_road: None,
         internet: None,
+        // No pairing with the service: its `opened` names no key.
+        station_key: Arc::new(|| None),
     };
     Shack {
         shared,
@@ -1368,6 +1372,7 @@ fn switch_with(
             firewall,
             dispatcher: s.shared.dispatcher.clone(),
             commands: s.shared.commands.clone(),
+            station_key: s.shared.station_key.clone(),
         },
     )
 }

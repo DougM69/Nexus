@@ -71,6 +71,14 @@
 //! that network, which its sign-in named. Handled as the others, its own entry so no older Nexus
 //! reads it, and read past a field it does not know. Its internet road is the station's road entry
 //! under the same id, and its id is on the list with the rest.
+//!
+//! A last entry holds the internet roads this computer keeps held: each road's station id and the
+//! fingerprint of the station key it was pinned to, either until the operator confirms that key
+//! against the station's own screen, or for good, the station having named another key on its own
+//! network (`crate::lan_client::Stations::road_held`). It is its OWN entry, not a field on the
+//! road's, because [`InternetRoad`] is `deny_unknown_fields`: a field there would make an older Nexus
+//! read the road as none. It holds no secret. One that is missing or does not read holds nothing,
+//! so an older Nexus, which never reads it, simply drives each road as it always did.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -90,6 +98,8 @@ const INTERNET_ROAD: &str = "lan-internet-";
 const STAGED_KEYS: &str = "lan-account-staged";
 /// A station signed in to but not yet reached on its network: this, then the service's id for it.
 const AWAY_STATION: &str = "lan-away-";
+/// The internet roads this computer keeps held.
+const HELD_ROADS: &str = "lan-held-roads";
 const ACCOUNT_OWNER: &str = "account-owner";
 const ACCOUNT_KEYS: &str = "account-keys";
 const ACCOUNT_DEVICES: &str = "account-devices";
@@ -249,6 +259,27 @@ pub struct AwayStation {
     pub pkcs8: String,
 }
 
+/// The internet roads this computer keeps held (see the header). Read past a field it does not know.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HeldRoads {
+    pub roads: Vec<HeldRoad>,
+}
+
+/// One held road: the id it is kept under on this computer, the fingerprint (SHA-256 of the SPKI,
+/// lowercase hex) of the station key it was pinned to, which binds the hold to that pin alone, and
+/// whether the station named another key on its own network (held for good, until the road is
+/// added again) rather than waiting for the operator's check. One-letter names, so every station's
+/// fits one entry.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HeldRoad {
+    #[serde(rename = "s")]
+    pub station_id: String,
+    #[serde(rename = "k")]
+    pub shown: String,
+    #[serde(rename = "d", default, skip_serializing_if = "not")]
+    pub disowned: bool,
+}
+
 /// The computer's side of Remote over this network: its entries, kept apart from the shack's and
 /// from [`Vault`]'s, so no test of either reaches them, nor they it.
 pub trait StationVault: Send + Sync {
@@ -270,6 +301,9 @@ pub trait StationVault: Send + Sync {
     fn away_station(&self, id: &str) -> Result<Option<AwayStation>, &'static str>;
     fn save_away_station(&self, station: &AwayStation) -> Result<(), &'static str>;
     fn remove_away_station(&self, id: &str) -> Result<(), &'static str>;
+    /// The internet roads kept held, if any are.
+    fn held_roads(&self) -> Result<Option<HeldRoads>, &'static str>;
+    fn save_held_roads(&self, held: &HeldRoads) -> Result<(), &'static str>;
 }
 
 /// Remote over this network's two entries, kept apart from [`Vault`]'s: a test of the hosted
@@ -656,6 +690,20 @@ impl StationVault for SystemVault {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err("credentialStoreUnavailable"),
         }
+    }
+    fn held_roads(&self) -> Result<Option<HeldRoads>, &'static str> {
+        match entry(HELD_ROADS)?.get_password() {
+            // Unreadable holds nothing (see the header).
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_held_roads(&self, held: &HeldRoads) -> Result<(), &'static str> {
+        let value = serde_json::to_string(held).map_err(|_| "credentialStoreUnavailable")?;
+        entry(HELD_ROADS)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
     }
 }
 

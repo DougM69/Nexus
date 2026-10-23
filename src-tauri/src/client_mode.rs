@@ -446,6 +446,10 @@ pub(crate) trait Afar: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<Link, &'static str>> + Send>>;
     /// The pipe's minute renewed, or why not.
     fn renew(&self, id: String) -> Pin<Box<dyn Future<Output = Result<(), &'static str>> + Send>>;
+    /// The station paired here as `id` named `key` as its key for the internet road, on this
+    /// network's road, which is pinned to its key here: a road kept for it pinned to another key is
+    /// turned off. The store can block, so it is told off the async threads.
+    fn heard_key(&self, id: &str, key: &str);
 }
 
 /// The internet road's clocks. A test shortens them.
@@ -1698,6 +1702,18 @@ impl Client {
                     let internet = at.is_none();
                     if let Some(at) = at {
                         self.at(at.to_string());
+                    }
+                    // On this network's road, pinned to the station's key here, the station names
+                    // its key for the internet road: a road kept for it pinned to another is
+                    // turned off.
+                    if let (true, Some(key), Some(afar)) = (
+                        !internet,
+                        link.station_key.clone(),
+                        self.afar.get().cloned(),
+                    ) {
+                        let id = self.station_id.clone();
+                        let _ =
+                            tokio::task::spawn_blocking(move || afar.heard_key(&id, &key)).await;
                     }
                     // Operate opened where the operator typed: kept with the station, so the next
                     // launch tries it first. A store that will not keep it changes nothing now.

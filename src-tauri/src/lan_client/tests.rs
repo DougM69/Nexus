@@ -141,6 +141,15 @@ impl StationVault for StationStore {
             .remove(&format!("lan-away-{id}"));
         Ok(())
     }
+    fn held_roads(&self) -> Result<Option<HeldRoads>, &'static str> {
+        self.get("lan-held-roads")
+    }
+    fn save_held_roads(&self, held: &HeldRoads) -> Result<(), &'static str> {
+        self.put(
+            "lan-held-roads".into(),
+            serde_json::to_string(held).unwrap(),
+        )
+    }
 }
 
 fn id(n: u8) -> String {
@@ -2131,4 +2140,241 @@ async fn a_road_opened_while_the_link_is_blocked_reaches_nothing() {
             "CONTROL ({under:?}): the port is reached"
         );
     }
+}
+
+// ----- The station's key for the internet road, held until it is checked -----
+
+/// ★ A road held until the operator checks the station's key is held in an entry of its own, so it
+/// survives a restart (a new `Stations` over the same store), while the road's own entry keeps the
+/// exact shape a 1.20.0 Nexus reads, which knows nothing of holds. The hold carries the key's
+/// fingerprint, never a key. It is bound to the station key it was written for: a road added again
+/// with another key is not held by it. One the station disowned stays held past It matches. A store
+/// that will not answer holds the road (it is never read as free). CONTROL, the downgrade shape: an
+/// entry that does not read (a newer build's, or damaged) holds nothing.
+#[test]
+fn a_held_road_survives_restart_and_reads_as_not_held_when_its_entry_is_unknown() {
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    stations
+        .keep(&record(STATION, &["192.168.1.20:42075"]))
+        .unwrap();
+    let road = road_to(AWAY);
+    stations.hold_road(STATION, &road.station_key).unwrap();
+    stations.keep_internet(STATION, &road).unwrap();
+    assert_eq!(
+        stations.road_held(STATION),
+        Ok(Some("stationKeyUnconfirmed"))
+    );
+    let restarted = Stations::new(Arc::new(store.clone()));
+    assert_eq!(
+        restarted.road_held(STATION),
+        Ok(Some("stationKeyUnconfirmed")),
+        "lost on a restart"
+    );
+    let kept = store.raw(&format!("lan-internet-{STATION}")).unwrap();
+    serde_json::from_str::<InternetRoad>(&kept).expect("the road as 1.20.0 reads it");
+    let held = store.raw("lan-held-roads").unwrap();
+    assert!(
+        !held.contains(&road.station_key) && !held.contains(&road.pkcs8),
+        "a key in the hold: {held}"
+    );
+    store.locked.store(true, Ordering::SeqCst);
+    assert_eq!(restarted.road_held(STATION), Err("storeUnavailable"));
+    store.locked.store(false, Ordering::SeqCst);
+    // It matches: free, after a restart too.
+    restarted.confirm_road(STATION).unwrap();
+    assert_eq!(
+        Stations::new(Arc::new(store.clone())).road_held(STATION),
+        Ok(None)
+    );
+    // Held again, then the entry in a shape this build does not read, or not JSON at all.
+    for unknown in [r#"{"held":[{"s":"x"}]}"#, "not json"] {
+        stations.hold_road(STATION, &road.station_key).unwrap();
+        assert_eq!(
+            stations.road_held(STATION),
+            Ok(Some("stationKeyUnconfirmed"))
+        );
+        store
+            .entries
+            .lock()
+            .unwrap()
+            .insert("lan-held-roads".into(), unknown.into());
+        assert_eq!(stations.road_held(STATION), Ok(None), "{unknown}");
+    }
+    // A hold for another station key holds nothing; nor does one for a road added again since.
+    let other = road_to(AWAY);
+    stations.hold_road(STATION, &other.station_key).unwrap();
+    assert_eq!(stations.road_held(STATION), Ok(None));
+    stations.hold_road(STATION, &road.station_key).unwrap();
+    stations.keep_internet(STATION, &other).unwrap();
+    assert_eq!(stations.road_held(STATION), Ok(None), "a road added again");
+    // Disowned by the station: held for good, It matches or not.
+    assert_eq!(stations.disown_road(STATION, &road.station_key), Ok(true));
+    assert_eq!(stations.road_held(STATION), Ok(Some("stationKeyDisagrees")));
+    assert_eq!(stations.confirm_road(STATION), Err("stationKeyDisagrees"));
+    assert_eq!(
+        Stations::new(Arc::new(store.clone())).road_held(STATION),
+        Ok(Some("stationKeyDisagrees"))
+    );
+    // Forgotten: nothing held is left behind.
+    stations.forget(STATION).unwrap();
+    assert!(!store
+        .raw("lan-held-roads")
+        .is_some_and(|held| held.contains(STATION)));
+}
+
+/// The stand-in service's end of Forget, as the app's: `internet::Service::forget` at `origin`.
+fn forgetting_at(origin: &str) -> internet::ForgetInternet {
+    let service = internet::Service::new(origin).unwrap();
+    Arc::new(move |road: InternetRoad| {
+        let service = service.clone();
+        Box::pin(async move { service.forget(&road).await })
+    })
+}
+
+/// Signed in, from elsewhere, to the station the stand-in service lists with `role`: the
+/// computer's stations after it, and the stand-in.
+async fn signed_in_away(
+    role: &str,
+) -> (
+    crate::lan_client::account::tests::Cloud,
+    crate::lan_client::account::tests::Scratch,
+    StationStore,
+    Arc<Stations>,
+) {
+    use crate::lan_client::account::tests::{
+        answering, env, finding, fixture_key, no_pick, row, signing_in, stations, trusting, Cloud,
+        Scratch,
+    };
+    let (cloud, scratch, store) = (
+        Cloud::start().await,
+        Scratch::new(),
+        StationStore::default(),
+    );
+    let (lan_key, _) = ComputerKey::generate().unwrap();
+    // A proof the issuer signed, for keys only the service vouches for.
+    cloud.lists(json!([row(
+        &fixture_key("station"),
+        lan_key.public_key(),
+        Some("p"),
+        role
+    )]));
+    let kept = stations(&store, &scratch.0);
+    let env = env(&cloud, kept.clone(), finding(Vec::new()).0, trusting);
+    let (signed, _) = signing_in(&env, &cloud, None, no_pick(), answering(Vec::new()).0).await;
+    assert!(signed.as_ref().is_ok_and(|s| s.away), "{role}: {signed:?}");
+    (cloud, scratch, store, kept)
+}
+
+/// ★ An invited station (the account's proof is someone else's, so nothing here binds the station's
+/// key to anyone this computer knows), found nowhere on this network: its road is kept HELD. Client
+/// mode opens nothing for it (`stationKeyUnconfirmed`, which asking again does not change), so not
+/// one request reaches the service, let alone a pipe. The page shows the station's key in the
+/// station's own form and the hold. It doesn't match (Forget): the road is ended at the service and
+/// nothing is kept. CONTROL: It matches frees the road, and client mode then asks the service.
+#[tokio::test]
+async fn an_invited_station_away_is_held_and_nothing_crosses_the_pipe_until_confirmed() {
+    use crate::client_mode::Afar;
+    use crate::lan_client::account::tests::{device_at, fixture_key, SERVICE_STATION};
+    for matches in [false, true] {
+        let (cloud, _scratch, store, kept) = signed_in_away("operate").await;
+        assert_eq!(
+            kept.road_held(SERVICE_STATION),
+            Ok(Some("stationKeyUnconfirmed"))
+        );
+        let roads = internet::Roads::at(kept.clone(), &cloud.at).unwrap();
+        let before = cloud.seen.lock().unwrap().requests.len();
+        let opened = roads.open(SERVICE_STATION.into(), None).await;
+        assert_eq!(opened.err(), Some("stationKeyUnconfirmed"));
+        assert!(internet::lasting("stationKeyUnconfirmed"));
+        assert_eq!(
+            cloud.seen.lock().unwrap().requests.len(),
+            before,
+            "the service asked for a held road"
+        );
+        let origin = Origin::start(Reach {
+            stations: kept.clone(),
+            forget_internet: forgetting_at(&cloud.at),
+            ..reach(store.clone())
+        })
+        .unwrap();
+        let mut socket = page_socket(&origin).await;
+        let told = said(&mut socket, json!({"type":"stations"})).await;
+        let shown = crate::remote_service::fingerprint(&fixture_key("station")).unwrap();
+        assert_eq!(
+            told["stationKeys"],
+            json!([{"id":SERVICE_STATION,"key":shown,"held":"stationKeyUnconfirmed"}]),
+            "{told}"
+        );
+        if matches {
+            let told = said(
+                &mut socket,
+                json!({"type":"keyMatches","stationId":SERVICE_STATION}),
+            )
+            .await;
+            assert_eq!(
+                told["stationKeys"],
+                json!([{"id":SERVICE_STATION,"key":shown}]),
+                "{told}"
+            );
+            assert_eq!(kept.road_held(SERVICE_STATION), Ok(None));
+            let opened = roads.open(SERVICE_STATION.into(), None).await;
+            assert_ne!(opened.err(), Some("stationKeyUnconfirmed"));
+            assert!(cloud.seen.lock().unwrap().requests.len() > before);
+        } else {
+            let told = said(
+                &mut socket,
+                json!({"type":"forget","stationId":SERVICE_STATION}),
+            )
+            .await;
+            assert_eq!(told["away"], json!([]), "{told}");
+            assert_eq!(cloud.seen.lock().unwrap().forgotten, vec![device_at(0)]);
+            assert!(kept.away(SERVICE_STATION).unwrap().is_none());
+            assert!(kept.internet(SERVICE_STATION).unwrap().is_none());
+            assert_eq!(kept.road_held(SERVICE_STATION), Ok(None));
+            assert!(!store
+                .raw("lan-held-roads")
+                .is_some_and(|held| held.contains(SERVICE_STATION)));
+        }
+    }
+}
+
+/// ★ Positive control for the hold: a station whose proof is the account's own sign-in (the owner,
+/// checked against this sign-in's subject) is bound to the person signing in, so its road is never
+/// held, and client mode goes straight to the service for it.
+#[tokio::test]
+async fn an_owner_proven_station_is_never_held() {
+    use crate::client_mode::Afar;
+    use crate::lan_client::account::tests::SERVICE_STATION;
+    let (cloud, _scratch, _store, kept) = signed_in_away("owner").await;
+    assert_eq!(kept.road_held(SERVICE_STATION), Ok(None));
+    let roads = internet::Roads::at(kept.clone(), &cloud.at).unwrap();
+    let before = cloud.seen.lock().unwrap().requests.len();
+    let opened = roads.open(SERVICE_STATION.into(), None).await;
+    assert_ne!(opened.err(), Some("stationKeyUnconfirmed"));
+    assert!(cloud.seen.lock().unwrap().requests.len() > before);
+}
+
+/// ★ A station kept by its service id whose road is held, first reached on its network, is kept in
+/// its place by the id its network gave it: the hold goes with the road, never left behind under the
+/// old id with the road free under the new one.
+#[test]
+fn a_hold_moves_with_a_station_first_reached_on_its_network() {
+    let (dir, _) = typed_file("fold-held");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json"));
+    let away = away_record(AWAY, "Shack");
+    let road = road_to(AWAY);
+    stations.hold_road(AWAY, &road.station_key).unwrap();
+    stations.keep_away(&away, &road).unwrap();
+    assert_eq!(stations.road_held(AWAY), Ok(Some("stationKeyUnconfirmed")));
+    let mut here = record(STATION, &["192.168.1.20:42075"]);
+    here.station_key = away.station_key.clone();
+    stations.fold(AWAY, &here, 1_800_000_000).unwrap();
+    assert_eq!(
+        stations.road_held(STATION),
+        Ok(Some("stationKeyUnconfirmed")),
+        "the road went free with the move"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

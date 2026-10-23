@@ -96,6 +96,8 @@ function reasonLine(status: ClientStatus): string {
     case 'tryLater': return t('client.reason.tryLater')
     case 'accessDenied': return t('client.reason.accessDenied')
     case 'pipeClosed': return t('client.reason.pipeClosed')
+    case 'stationKeyUnconfirmed': return t('client.reason.stationKeyUnconfirmed')
+    case 'stationKeyDisagrees': return t('client.reason.stationKeyDisagrees')
     default: return t('client.reason.unknown')
   }
 }

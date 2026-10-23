@@ -116,6 +116,10 @@ export function RemoteApprovalPrompt() {
   >
     {/* The key again, large, for comparing group by group with the browser's screen. */}
     <p className="remote-approval-key"><code>{fingerprint}</code></p>
+    {/* A computer compares this station's key too, in the same call: its window shows the key it was
+        given for this station, and holds the internet road until the operator says they match. */}
+    {device && isNative(device) && status?.stationKey
+      && <p>{t('remote.thisStationKey', { key: shortFingerprint(status.stationKey) })}</p>}
     {failed && <p role="alert">{t('remote.requestFailed')}</p>}
     <div className="confirm-actions">
       <button type="button" className="settings-refresh" autoFocus disabled={busy} onClick={() => void answer(false)}>{t('remote.approval.deny')}</button>

@@ -141,3 +141,14 @@ it('finds its socket beside the page, the launch secret in the path and nothing 
   expect(socketUrl(`http://127.0.0.1:42076/${secret}/lan.html?lang=de#x`)).toBe(`ws://127.0.0.1:42076/${secret}/socket`)
   expect(socketUrl(`http://127.0.0.1:49152/${secret}/`)).toBe(`ws://127.0.0.1:49152/${secret}/socket`)
 })
+
+it('reads the station’s key for each internet road, and why a road is held, strictly', () => {
+  const key = { id: STATION.id, key: 'ab'.repeat(32) }
+  expect(readTold({ type: 'stations', stations: [STATION], stationKeys: [key, { ...key, id: AWAY.id, held: 'stationKeyUnconfirmed' }], computer: 'X' }))
+    .toMatchObject({ stationKeys: [{ ...key, held: null }, { ...key, id: AWAY.id, held: 'stationKeyUnconfirmed' }] })
+  expect(readTold({ type: 'stations', stations: [], stationKeys: [{ ...key, held: 'stationKeyDisagrees' }], computer: 'X' }))
+    .toMatchObject({ stationKeys: [{ held: 'stationKeyDisagrees' }] })
+  for (const bad of [{ ...key, held: 'later' }, { ...key, key: KEY }, { ...key, extra: 1 }, { id: 'x', key: key.key }]) {
+    expect(() => readTold({ type: 'stations', stations: [], stationKeys: [bad], computer: 'X' }), JSON.stringify(bad)).toThrow()
+  }
+})

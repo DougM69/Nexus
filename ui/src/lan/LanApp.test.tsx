@@ -670,3 +670,54 @@ describe('a station signed in to from elsewhere', () => {
     expect(screen.getByText(EN['lanWindow.none'])).toBeTruthy()
   })
 })
+
+describe('the station’s key for each internet road', () => {
+  const AWAY = '20000000-0000-4000-8000-0000000000a1'
+  const KEY = '0123456789abcdef'.repeat(4)
+  const station = { id: STATION, addresses: ['192.168.1.20:42075'], key: '5966'.repeat(16) }
+  const away = [{ id: AWAY, name: 'Shack', key: 'fedcba9876543210'.repeat(4) }]
+  const told = (held?: string) => socket.tell({ type: 'stations', computer: 'DEN-PC', stations: [station],
+    internet: [{ id: STATION, key: ROAD_KEY }], account: [], away,
+    stationKeys: [{ id: STATION, key: KEY }, { id: AWAY, key: KEY, ...(held ? { held } : {}) }] })
+  const line = EN['lanWindow.internet.stationKey'].replace('{{key}}', shortFingerprint(KEY))
+
+  it('shows on every road’s row, in the eight groups the station shows, and asks nothing of a road not held', () => {
+    page()
+    told()
+    expect(screen.getAllByText(line)).toHaveLength(2)
+    expect(shortFingerprint(KEY).split(' ')).toHaveLength(8)
+    expect(screen.queryByRole('button', { name: EN['lanWindow.internet.keyMatches'] })).toBeNull()
+  })
+
+  it('held, asks for the check: It matches frees the road', () => {
+    page()
+    told('stationKeyUnconfirmed')
+    expect(screen.getByText(EN['lanWindow.internet.held'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.keyMatches'] }))
+    expect(last(socket.sent)).toEqual({ type: 'keyMatches', stationId: AWAY })
+  })
+
+  it('held, It doesn’t match forgets the station, asked first as Forget is', () => {
+    page()
+    told('stationKeyUnconfirmed')
+    const sent = socket.sent.length
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.keyDiffers'] }))
+    expect(socket.sent.length, 'forgotten without asking').toBe(sent)
+    expect(screen.getByText(EN['lanWindow.forgetConfirm'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.forgetYes'] }))
+    expect(last(socket.sent)).toEqual({ type: 'forget', stationId: AWAY })
+  })
+
+  it('disowned by the station on its network, says the road is off and offers no It matches', () => {
+    page()
+    told('stationKeyDisagrees')
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.internet.keyDisagrees'])
+    expect(screen.queryByRole('button', { name: EN['lanWindow.internet.keyMatches'] })).toBeNull()
+  })
+
+  it('a link the service listed another key for is said as such', () => {
+    page()
+    socket.tell({ type: 'signInRefused', reason: 'stationKeyDisagrees' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.internet.reason.stationKeyDisagrees'])
+  })
+})

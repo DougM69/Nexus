@@ -146,6 +146,8 @@ pub use book::Book;
 pub(crate) use book::{device_id, tunnel_device_id, valid_name, NAME_CHARS};
 /// Who may hold a session on a listener: the LAN's paired computers, or the room's tunnel's own.
 pub(crate) use channel::Roster;
+/// Where a connection reads this station's key for the internet road, its public half alone.
+pub(crate) use channel::StationKeyOf;
 
 /// The LAN protocol, stream and operation versions this build speaks, in the order a hello names
 /// them: the shack's own, and the ones its paired computers' window says.
@@ -345,6 +347,8 @@ pub(super) struct Deps {
     pub dispatcher: crate::command_dispatch::Dispatcher<crate::command_dispatch::ShackStores>,
     /// How the lane runs a call, and the events it may forward.
     pub commands: commands::Commands,
+    /// This station's key for the internet road, its public half, as each `opened` names it.
+    pub station_key: channel::StationKeyOf,
 }
 
 struct State {
@@ -856,6 +860,8 @@ impl Tunnel {
     ) -> Option<Self> {
         // No pairing window ever opens here.
         let tls = tls::server(&identity, roster.paired.clone(), Arc::new(|| false)).ok()?;
+        // The room's TLS proves the station's key itself, so its `opened` restates the pin.
+        let station_key = identity.public_key().to_string();
         let powers = road_powers(
             &deps.authority,
             &deps.engine,
@@ -893,6 +899,7 @@ impl Tunnel {
                     bind,
                     stun,
                 }),
+                station_key: Arc::new(move || Some(station_key.clone())),
             },
         })
     }
@@ -1032,6 +1039,7 @@ impl Listener {
             audio_road: audio.as_ref().map(audio_road::Running::road),
             // This listener's roads are the LAN's: a computer reaching it is on its subnet.
             internet: None,
+            station_key: deps.station_key.clone(),
         };
         let (stop, stopped) = watch::channel(false);
         #[cfg(test)]

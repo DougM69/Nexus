@@ -27,7 +27,9 @@
 //!    other build is refused, saying which side to update, and the connection closes before a call
 //!    runs. A window's session never opens it. On it go the calls, routed by class, and their
 //!    answers, the pushed feeds and the events. One writer writes everything on the connection
-//!    (`super::outbox`), a Stop and its answer ahead of all else.
+//!    (`super::outbox`), a Stop and its answer ahead of all else. Its `opened` names this station's
+//!    key for the internet road (public half only) when the station has one, so a computer hears it
+//!    from the station on a link already pinned to it, never from the service alone.
 //! 6. **Internet roads**, in place of the LAN's: an `open` may ask for them on a connection whose
 //!    welcome named no road of the LAN's, where the listener offers them (`InternetRoads`). Each
 //!    is a socket, ICE and thread of its own at the shack (`super::stop_road`,
@@ -126,7 +128,15 @@ pub(super) struct Shared {
     /// welcome named no road of the LAN's. `None` on the LAN's own listener, where every road is
     /// the LAN's.
     pub internet: Option<InternetRoads>,
+    /// This station's key for the internet road, the public half only (SPKI, lowercase hex, as the
+    /// service lists it), read when an `open` is answered; `None` while the station has no pairing
+    /// with the service. Its `opened` names it, so a computer learns it over a link already pinned.
+    pub station_key: StationKeyOf,
 }
+
+/// Where a connection reads this station's key for the internet road: the public half alone. The
+/// signer that holds the private half never reaches a channel.
+pub(crate) type StationKeyOf = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
 /// Who may hold a session on this channel, by the SHA-256 of the key its TLS proved: that
 /// computer's device id, or `None`. And what tells a session its computer was removed, so it ends
@@ -844,6 +854,13 @@ async fn session<S>(
                         let mut opened = json!({"type":"opened"});
                         if let Some(net) = &internet {
                             opened["roads"] = net.named();
+                        }
+                        // This station's key for the internet road, on a link already pinned to
+                        // this station: what lets a computer pin it without taking the service's
+                        // word for it. Never in the welcome, which a computer of another build
+                        // reads whole and exactly.
+                        if let Some(key) = (shared.station_key)() {
+                            opened["stationKey"] = key.into();
                         }
                         if outbox.text(opened.to_string()).is_err() { break StreamReason::ConnectionFailed }
                     }
