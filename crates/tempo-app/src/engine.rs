@@ -68561,6 +68561,48 @@ mod tests {
     }
 
     #[test]
+    fn an_unanswered_call_the_watchdog_ended_reads_as_stalled() {
+        // The operator calls a station that never comes back. Since the call cap stopped
+        // covering `AwaitReport` the calls go on until the wall-clock watchdog disarms TX —
+        // and the strip then said "TX off" beside "AwaitReport", with no "Stalled" anywhere,
+        // where it used to say Stalled. What the operator is told is the subject here; the
+        // sequencing (keep calling, the watchdog ends it) is not.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+
+        let mut sent = 0;
+        for slot in 1..12 {
+            if !e.poll_tx(slot).is_empty() {
+                sent += 1;
+            }
+        }
+        let q = e.snapshot().qso.expect("a directed call is a QSO");
+        assert_eq!(q.state, "AwaitReport");
+        assert!(
+            sent >= 5,
+            "precondition: the unanswered call keeps calling ({sent} overs)"
+        );
+        assert!(!q.stalled, "precondition: still calling is not stalled");
+
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        for slot in 12..16 {
+            assert!(e.poll_tx(slot).is_empty(), "the watchdog limit is exceeded");
+        }
+        assert!(!e.tx_enabled(), "precondition: the watchdog disarmed TX");
+
+        let q = e.snapshot().qso.expect("the QSO stays put after the trip");
+        assert_eq!(q.state, "AwaitReport");
+        assert!(
+            q.stalled,
+            "the call was given up with no answer: the snapshot must say stalled"
+        );
+    }
+
+    #[test]
     fn a_tripped_watchdog_survives_a_decode_that_would_otherwise_re_arm_the_station() {
         // WHY THE `sequence_advanced` RESET NEEDS NO CHANGE, written down so the next reader
         // does not "fix" it too. Once the watchdog has tripped, `tx_enabled` is false, and
