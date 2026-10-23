@@ -2,7 +2,8 @@
 //! output or CAT: asserted on the keying seam's own records (a logging rigctld's command log, the
 //! mock card's samples and flushes) against a control run that never asked. With TX on, what the
 //! loop plays reads back as sent, chained segments ride one key, and every stop, and a licence gate
-//! closing, cuts it within a tick.
+//! closing, cuts it within a tick. Each test holds the remote-selection tests' lock: its sends
+//! render under the process-wide modem mutex, which those tests need free.
 
 use super::*;
 
@@ -93,6 +94,7 @@ fn read_back(played: &[f32]) -> Vec<String> {
 /// and plays.
 #[test]
 fn with_tx_off_nothing_reaches_ptt_audio_or_cat() {
+    let _modem = super::remote_radio::selection::selection_test_lock();
     let run = |attempt: bool, on: bool| {
         let (engine, mut state, mut backend, mut rig, log) = jtty_scene(on);
         let mut t = 100.0;
@@ -153,6 +155,7 @@ fn with_tx_off_nothing_reaches_ptt_audio_or_cat() {
 /// what is queued, and the loop flushes and unkeys.
 #[test]
 fn a_licence_gate_closing_stops_what_the_loop_is_feeding() {
+    let _modem = super::remote_radio::selection::selection_test_lock();
     let (engine, mut state, mut backend, mut rig, log) = jtty_scene(true);
     jtty_tx::send_text(&engine, "CQ CQ CQ DE W9XYZ W9XYZ W9XYZ K", "").unwrap();
     let mut t = 100.0;
@@ -182,6 +185,7 @@ fn a_licence_gate_closing_stops_what_the_loop_is_feeding() {
 /// reads back as the three messages, in order.
 #[test]
 fn what_the_loop_plays_reads_back_as_sent_on_one_key() {
+    let _modem = super::remote_radio::selection::selection_test_lock();
     let (engine, mut state, mut backend, mut rig, log) = jtty_scene(true);
     jtty_tx::send_text(&engine, "CQ CQ CQ DE W9XYZ W9XYZ K", "").unwrap();
     jtty_tx::send_fkey(&engine, 2, "W1AW").unwrap();
@@ -237,6 +241,7 @@ fn what_the_loop_plays_reads_back_as_sent_on_one_key() {
 /// after.
 #[test]
 fn every_stop_cuts_jtty_on_the_next_tick() {
+    let _modem = super::remote_radio::selection::selection_test_lock();
     for stop in ["halt", "tx off", "psk screen", "ft8 screen", "handoff"] {
         let (engine, mut state, mut backend, mut rig, log) = jtty_scene(true);
         jtty_tx::send_text(&engine, "CQ CQ CQ DE W9XYZ W9XYZ W9XYZ W9XYZ PSE K", "").unwrap();
@@ -282,6 +287,7 @@ fn every_stop_cuts_jtty_on_the_next_tick() {
 /// than two frames and the tail away (`keyboard::JTTY`), and past it the transmitter is unkeyed.
 #[test]
 fn a_wedged_loop_unkeys_a_live_jtty_session() {
+    let _modem = super::remote_radio::selection::selection_test_lock();
     let (engine, mut state, mut backend, mut rig, log) = jtty_scene(true);
     jtty_tx::live_start(&engine, "HELLO ", "").unwrap();
     let mut t = 100.0;
@@ -317,6 +323,7 @@ fn a_wedged_loop_unkeys_a_live_jtty_session() {
 /// screen says so on the return. The control: staying on the PSK screen, it keys.
 #[test]
 fn a_psk_over_typed_ahead_never_keys_from_the_jtty_screen() {
+    let _modem = super::remote_radio::selection::selection_test_lock();
     for open_jtty in [true, false] {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         {
@@ -360,6 +367,7 @@ fn a_psk_over_typed_ahead_never_keys_from_the_jtty_screen() {
 #[test]
 #[ignore]
 fn dump_what_the_loop_plays_for_the_lab() {
+    let _modem = super::remote_radio::selection::selection_test_lock();
     let Ok(dir) = std::env::var("JTTY_LAB_DIR") else {
         return;
     };
