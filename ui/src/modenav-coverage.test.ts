@@ -10,10 +10,10 @@ import { ITEMS } from './components/ModeNav'
 //
 // Some non-core section views are rendered by DEDICATED buttons rather than the
 // generic ITEMS array (Phone + CW get their own operating-group buttons; RTTY +
-// SSTV are Digital-group sub-buttons), so they are reachable without an ITEMS
-// entry. Core sections (operate/chat/connect/needed/logbook/settings) are
-// excluded by the non-core filter below.
-const DEDICATED_BUTTON_VIEWS: FeatureId[] = ['phone', 'cw', 'rtty', 'psk', 'sstv', 'aprs', 'js8']
+// SSTV are Digital-group sub-buttons, and so is Tempo, whose view is 'chat' and which
+// can be switched off in Features), so they are reachable without an ITEMS entry. Core
+// sections (operate/connect/needed/logbook/settings) are excluded by the non-core filter below.
+const DEDICATED_BUTTON_VIEWS: FeatureId[] = ['phone', 'cw', 'rtty', 'psk', 'sstv', 'aprs', 'js8', 'chat']
 
 describe('ModeNav rail covers every opt-in section', () => {
   it('every enable-able (non-core) section view has a way into it from the rail', () => {
