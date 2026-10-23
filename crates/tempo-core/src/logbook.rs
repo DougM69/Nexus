@@ -318,8 +318,8 @@ pub fn fill_extra(r: &mut QsoRecord, name: &str, value: String) -> bool {
 ///
 /// App-private: it rides the operator's own log (`log.adi`, the store, an export they re-import)
 /// so the distinction survives a restart, and is withheld from everything Nexus sends off the
-/// machine ([`Audience::Outbound`]). An edit that changes the grid takes the grid off the list
-/// ([`edited`]): the operator has said what it is.
+/// machine ([`Audience::Outbound`]). An edit that changes the grid or the state takes it off the
+/// list ([`edited`]): the operator has said what it is.
 pub const SELF_FILLED_FIELD: &str = "APP_NEXUS_SELF_FILLED";
 
 /// The fields [`SELF_FILLED_FIELD`] names on this record.
@@ -2892,11 +2892,15 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
             rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
         }
     }
-    // A grid Nexus filled in itself that the operator has now changed is the operator's grid: it
-    // goes to LoTW like one they typed ([`SELF_FILLED_FIELD`]).
+    // A grid or state Nexus filled in itself that the operator has now changed is the operator's:
+    // it goes to LoTW like one they typed ([`SELF_FILLED_FIELD`]).
     let grid_of = |g: &Option<String>| g.as_deref().map(|g| g.trim().to_ascii_uppercase());
     if grid_of(&rec.my_grid) != grid_of(&old.my_grid) {
         unmark_self_filled(&mut rec, "MY_GRIDSQUARE");
+    }
+    let state_of = |r: &QsoRecord| extra_value(r, "MY_STATE").map(str::to_ascii_uppercase);
+    if state_of(&rec) != state_of(old) {
+        unmark_self_filled(&mut rec, "MY_STATE");
     }
     // The same resurrection, for a park. A side's OTHER programme's reference rides
     // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
@@ -7173,6 +7177,40 @@ mod tests {
         let r = &lb.records()[0];
         assert_eq!(self_filled(r), ["MY_STATE"]);
         assert!(adif_record(&without_self_filled(r)).contains("<MY_GRIDSQUARE:4>EN61"));
+    }
+
+    /// The same for a state Nexus filled: an edit that CHANGES it makes it the operator's, and it
+    /// goes to LoTW; one that keeps it, in another case, leaves the mark.
+    #[test]
+    fn an_edit_of_a_self_filled_state_makes_it_the_operators() {
+        let mut lb = Logbook::new();
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.my_grid = Some("EN52XA".into());
+        mark_self_filled(&mut r, "MY_GRIDSQUARE");
+        assert!(fill_extra(&mut r, "MY_STATE", "WI".into()));
+        mark_self_filled(&mut r, "MY_STATE");
+        lb.add(r);
+
+        let mut same = lb.records()[0].as_ref().clone();
+        set_extra(&mut same, "MY_STATE", Some("wi".into()));
+        assert!(lb.update_record(0, same));
+        assert_eq!(
+            self_filled(&lb.records()[0]),
+            ["MY_GRIDSQUARE", "MY_STATE"],
+            "the same state, in another case, is still Nexus's"
+        );
+
+        let mut moved = lb.records()[0].as_ref().clone();
+        set_extra(&mut moved, "MY_STATE", Some("IL".into()));
+        assert!(lb.update_record(0, moved));
+        let r = &lb.records()[0];
+        assert_eq!(self_filled(r), ["MY_GRIDSQUARE"]);
+        let lotw = adif_record(&without_self_filled(r));
+        assert!(lotw.contains("<MY_STATE:2>IL"), "{lotw}");
+        assert!(
+            !lotw.contains("MY_GRIDSQUARE"),
+            "the grid stays Nexus's: {lotw}"
+        );
     }
 
     /// The cost ruling, pinned: the contest block costs ONE POINTER on a record that
