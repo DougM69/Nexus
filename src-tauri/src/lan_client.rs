@@ -26,6 +26,11 @@
 //!   it on its network for thirty days. Not a secret either: a file of its own ([`signed_path`]).
 //!   Pairing with a code drops it ([`Stations::drop_signed`]): the station then admits this
 //!   computer until it is removed there.
+//! - **Which stations were paired with a code** ([`Stations::code_paired`]): each one's id and its
+//!   LAN key's fingerprint, in one credential entry of its own, written when a code pairing is kept
+//!   ([`Stations::keep_coded`]) and dropped when the station is linked to the account or forgotten.
+//!   Never read from the signed file, which is a plain file: a station it does not name is not
+//!   taken as paired with a code.
 //! - **The keys for the next station signed in to** ([`Stations::staged`]): made before that
 //!   sign-in, and kept in the credential store until a station is kept with them.
 //! - **A station signed in to from elsewhere** ([`Stations::keep_away`]): one this computer signed
@@ -139,8 +144,8 @@ use tempo_stream::protocol;
 
 use crate::remote_service::lan::{valid_name, NAME_CHARS};
 use crate::remote_service::vault::{
-    AwayStation, HeldRoad, HeldRoads, InternetRoad, PairedStation, PairedStations, StagedKeys,
-    StationVault,
+    AwayStation, CodePaired, CodePairing, HeldRoad, HeldRoads, InternetRoad, PairedStation,
+    PairedStations, StagedKeys, StationVault,
 };
 
 /// The most stations this computer keeps a pairing with, those kept by their service id included.
@@ -532,6 +537,8 @@ impl Stations {
         if !ids.iter().any(|kept| kept == id) {
             return Err("unknownStation");
         }
+        // Admitted on a sign-in from now on, not on a code: it reads so before the line is written.
+        self.unmark(id)?;
         let mut file = self.signed_file();
         file.insert(id.to_string(), issued_at);
         file.retain(|kept, _| ids.contains(kept));
@@ -758,6 +765,8 @@ impl Stations {
         let list = PairedStations { stations: ids };
         // A hold on the road moves with it, written first: the road is never kept unheld under
         // its new id.
+        // Kept on a sign-in, never as one paired with a code, whatever an entry left behind says.
+        self.unmark(&record.station_id)?;
         let mut held = self.held_list()?;
         if let Some(moved) = held.roads.iter().find(|h| h.station_id == away).cloned() {
             held.roads.retain(|h| h.station_id != record.station_id);
@@ -853,6 +862,69 @@ impl Stations {
         )
     }
 
+    /// Keep a station just paired here with a code: its record ([`Self::keep`]), then the entry
+    /// that says it was paired with a code, bound to the station's key the code pinned
+    /// ([`Self::code_paired`]). The pairing stands if the store will not take that entry: the
+    /// station then reads as not paired with a code, which keeps a held road held until the
+    /// operator checks it. Paired at the station, which takes this computer until it is removed
+    /// there: no day to sign in again by stays with it. The pairing stands if the file will not
+    /// take that; the row then keeps its day, as before.
+    pub(crate) fn keep_coded(&self, record: &PairedStation) -> Result<(), &'static str> {
+        self.keep(record)?;
+        if let Some(shown) = crate::remote_service::fingerprint(&record.station_key) {
+            let _writing = self.writing.lock().map_err(|_| "storeUnavailable")?;
+            let _ = self.write_coded(
+                &record.station_id,
+                Some(CodePairing {
+                    station_id: record.station_id.clone(),
+                    shown,
+                }),
+            );
+        }
+        let _ = self.drop_signed(&record.station_id);
+        Ok(())
+    }
+
+    /// The stations paired here with a code as the store lists them: none when the entry is
+    /// missing or does not read.
+    fn coded_list(&self) -> Result<CodePaired, &'static str> {
+        Ok(self
+            .vault
+            .code_paired()
+            .map_err(|_| "storeUnavailable")?
+            .unwrap_or_default())
+    }
+
+    /// Write the stations paired with a code with station `id`'s replaced by `paired` (or dropped,
+    /// with none), keeping only those of stations still on this computer besides it.
+    fn write_coded(&self, id: &str, paired: Option<CodePairing>) -> Result<(), &'static str> {
+        let ids = self.ids()?;
+        let mut list = self.coded_list()?;
+        list.stations
+            .retain(|kept| kept.station_id != id && ids.contains(&kept.station_id));
+        list.stations.extend(paired);
+        if !fits(&list) {
+            return Err("stationsFull");
+        }
+        self.vault
+            .save_code_paired(&list)
+            .map_err(|_| "storeUnavailable")
+    }
+
+    /// Station `id` is no longer one paired here with a code: its entry goes. Nothing written when
+    /// it has none.
+    fn unmark(&self, id: &str) -> Result<(), &'static str> {
+        if !self
+            .coded_list()?
+            .stations
+            .iter()
+            .any(|kept| kept.station_id == id)
+        {
+            return Ok(());
+        }
+        self.write_coded(id, None)
+    }
+
     /// Station `id` named `said` as its key for the internet road, on its own network: a road kept
     /// for it pinned to another key is held for good (`stationKeyDisagrees`). Whether it was. The
     /// same key frees a road held until the operator checks it, when the station is paired here
@@ -903,11 +975,25 @@ impl Stations {
         self.write_held(id, None)
     }
 
-    /// Whether station `id` is paired here with a code: its record on its network, and no sign-in
-    /// time (`drop_signed`). Its network's road is then pinned by the code, not by a key the service
-    /// listed.
+    /// Whether station `id` is paired here with a code: its record on its network, the credential
+    /// store's entry that says it was paired with a code ([`Self::keep_coded`]) for that record's
+    /// key, and no sign-in time. Its network's road is then pinned by the code, not by a key the
+    /// service listed. Never on the sign-in file's word alone, which is a plain file: a station with
+    /// no such entry (a guest whose line is lost, or one paired before the entry was kept) is not
+    /// paired with a code, so its held road stays held until the operator checks it.
     pub(crate) fn code_paired(&self, id: &str) -> Result<bool, &'static str> {
-        Ok(self.get(id)?.is_some() && self.signed(id).is_none())
+        let Some(record) = self.get(id)? else {
+            return Ok(false);
+        };
+        let Some(pinned) = crate::remote_service::fingerprint(&record.station_key) else {
+            return Ok(false);
+        };
+        Ok(self
+            .coded_list()?
+            .stations
+            .iter()
+            .any(|kept| kept.station_id == id && kept.shown == pinned)
+            && self.signed(id).is_none())
     }
 
     /// Drop the internet road kept for station `id`, and its hold, leaving its pairing on its
@@ -953,6 +1039,9 @@ impl Stations {
             .map_err(|_| "storeUnavailable")?;
         // Its hold goes with it; one the store will not let go of holds no road.
         let _ = self.write_held(id, None);
+        // As does its entry as paired with a code; one left behind is dropped when the station is
+        // next kept on a sign-in.
+        let _ = self.unmark(id);
         // Forgotten all the same when a file will not take it: the station is listed nowhere.
         let mut file = self.typed_file();
         if file.remove(id).is_some() {

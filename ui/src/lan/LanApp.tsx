@@ -234,6 +234,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           setComputer(told.computer)
           setStoreFailed(told.error !== null)
           if (told.forgetUnreached !== null) setSaid({ text: t('lanWindow.internet.forgetUnreached'), alert: true })
+          if (told.dropUnreached !== undefined) setSaid({ text: t('lanWindow.internet.dropRoadUnreached'), alert: true })
           return
         case 'found':
           setFound({ shacks: told.shacks, available: told.available })
@@ -370,12 +371,13 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const pairReady = !busy && phase === 'open' && address.trim() !== '' && codeShaped(code) && shownName.trim() !== ''
   // A station's internet road, by the station's key it is pinned to, in the eight groups the station
   // shows as "This station's key"; while the road is held, the check that frees it, and It doesn't
-  // match (asked first, as Forget is): for a station paired here with a code, its internet road goes
-  // and the pairing stays; any other is forgotten.
+  // match (asked first, as Forget is): for a station Nexus says is paired here with a code, its
+  // internet road goes and the pairing stays, and the station's own network checks the key too; any
+  // other is forgotten.
   const roadKey = (id: string) => {
     const road = stationKeys.find(kept => kept.id === id)
     if (!road) return null
-    const codePaired = stations.some(station => station.id === id) && !account.some(signed => signed.stationId === id)
+    const codePaired = road.codePaired
     return <>
       <p className="remote-site-status">{t('lanWindow.internet.stationKey', { key: shortFingerprint(road.key) })}</p>
       {road.held === 'stationKeyUnconfirmed' && forgetting !== id && operating !== id && (dropping === id ? <>
@@ -386,7 +388,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           <button type="button" className="remote-button remote-button--quiet" onClick={() => setDropping(null)}>{t('lanWindow.keep')}</button>
         </div>
       </> : <>
-        <p className="remote-warning">{t('lanWindow.internet.held')}</p>
+        <p className="remote-warning">{codePaired ? t('lanWindow.internet.heldCodePaired') : t('lanWindow.internet.held')}</p>
         <div className="remote-actions">
           <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'}
             onClick={() => { setSaid(null); say({ type: 'keyMatches', stationId: id }) }}>{t('lanWindow.internet.keyMatches')}</button>

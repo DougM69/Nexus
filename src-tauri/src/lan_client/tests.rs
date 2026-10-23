@@ -150,6 +150,15 @@ impl StationVault for StationStore {
             serde_json::to_string(held).unwrap(),
         )
     }
+    fn code_paired(&self) -> Result<Option<CodePaired>, &'static str> {
+        self.get("lan-code-paired")
+    }
+    fn save_code_paired(&self, paired: &CodePaired) -> Result<(), &'static str> {
+        self.put(
+            "lan-code-paired".into(),
+            serde_json::to_string(paired).unwrap(),
+        )
+    }
 }
 
 fn id(n: u8) -> String {
@@ -2392,9 +2401,12 @@ async fn it_doesnt_match_drops_only_the_internet_road_of_a_code_paired_station()
         let stations = Arc::new(
             Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json")),
         );
-        stations
-            .keep(&record(STATION, &["192.168.1.20:42075"]))
-            .unwrap();
+        let kept = record(STATION, &["192.168.1.20:42075"]);
+        if code_paired {
+            stations.keep_coded(&kept).unwrap();
+        } else {
+            stations.keep(&kept).unwrap();
+        }
         let road = road_to(STATION);
         stations.hold_road(STATION, &road.station_key).unwrap();
         stations.keep_internet(STATION, &road).unwrap();
@@ -2472,9 +2484,12 @@ fn a_held_road_is_freed_when_the_code_paired_station_names_the_same_key() {
         let stations = Arc::new(
             Stations::new(Arc::new(store.clone())).signed_in(dir.join("lan-account.json")),
         );
-        stations
-            .keep(&record(STATION, &["192.168.1.20:42075"]))
-            .unwrap();
+        let kept = record(STATION, &["192.168.1.20:42075"]);
+        if case == "guest" {
+            stations.keep(&kept).unwrap();
+        } else {
+            stations.keep_coded(&kept).unwrap();
+        }
         let road = road_to(STATION);
         stations.hold_road(STATION, &road.station_key).unwrap();
         stations.keep_internet(STATION, &road).unwrap();
@@ -2506,4 +2521,242 @@ fn a_held_road_is_freed_when_the_code_paired_station_names_the_same_key() {
         );
         let _ = std::fs::remove_dir_all(dir);
     }
+}
+
+/// ★ Whether a station is paired here with a code is read from the credential store alone, never
+/// from the sign-in file beside it, which is a plain file: a guest whose sign-in line is lost (the
+/// file deleted or damaged), a station linked to the account and then losing its line the same way,
+/// and a pairing kept before the store recorded code pairings are NOT read as paired with a code.
+/// Each one's held road stays held when the station names the same key on its network, the page is
+/// not told to offer the road-only removal, and It doesn't match forgets it, as Forget does.
+/// CONTROL: a real code pairing still frees its road on the same key, and It doesn't match keeps
+/// its pairing, saying so when Nexus Remote could not be told.
+#[tokio::test]
+async fn code_pairing_is_read_from_the_store_and_a_lost_sign_in_file_fails_closed() {
+    use crate::client_mode::Afar;
+    for case in [
+        "coded",
+        "guest-deleted",
+        "guest-damaged",
+        "linked-deleted",
+        "unmarked",
+    ] {
+        let (dir, _) = typed_file("coded-mark");
+        let signed = dir.join("lan-account.json");
+        let store = StationStore::default();
+        let stations = Arc::new(Stations::new(Arc::new(store.clone())).signed_in(signed.clone()));
+        let kept = record(STATION, &["192.168.1.20:42075"]);
+        if case == "coded" || case == "linked-deleted" {
+            stations.keep_coded(&kept).unwrap();
+        } else {
+            stations.keep(&kept).unwrap();
+        }
+        let road = road_to(STATION);
+        stations.hold_road(STATION, &road.station_key).unwrap();
+        stations.keep_internet(STATION, &road).unwrap();
+        if case != "coded" && case != "unmarked" {
+            stations.keep_signed(STATION, 1_800_000_000).unwrap();
+        }
+        match case {
+            "guest-deleted" | "linked-deleted" => std::fs::remove_file(&signed).unwrap(),
+            "guest-damaged" => std::fs::write(&signed, "{not json").unwrap(),
+            _ => {}
+        }
+        let coded = case == "coded";
+        assert_eq!(stations.code_paired(STATION), Ok(coded), "{case}");
+        let origin = Origin::start(Reach {
+            stations: stations.clone(),
+            forget_internet: Arc::new(|_| Box::pin(async { Err("serviceUnavailable") })),
+            ..reach(store.clone())
+        })
+        .unwrap();
+        let mut socket = page_socket(&origin).await;
+        let listed = said(&mut socket, json!({"type":"stations"})).await;
+        assert_eq!(
+            listed["stationKeys"][0]["codePaired"],
+            if coded { json!(true) } else { Value::Null },
+            "{case}: {listed}"
+        );
+        let roads = internet::Roads::new(stations.clone()).unwrap();
+        roads.heard_key(STATION, &road.station_key);
+        assert_eq!(
+            stations.road_held(STATION),
+            Ok((!coded).then_some("stationKeyUnconfirmed")),
+            "{case}: the hold"
+        );
+        let answer = said(
+            &mut socket,
+            json!({"type":"keyDiffers","stationId":STATION}),
+        )
+        .await;
+        assert!(stations.internet(STATION).unwrap().is_none(), "{case}");
+        if coded {
+            assert!(stations.get(STATION).unwrap().is_some(), "the pairing went");
+            assert_eq!(answer["dropUnreached"], "serviceUnavailable", "{answer}");
+            assert_eq!(answer["forgetUnreached"], Value::Null, "{answer}");
+        } else {
+            assert!(
+                stations.get(STATION).unwrap().is_none(),
+                "{case}: kept as if paired with a code"
+            );
+            assert_eq!(answer["stations"], json!([]), "{case}: {answer}");
+            assert_eq!(answer["forgetUnreached"], "serviceUnavailable", "{answer}");
+            assert_eq!(answer["dropUnreached"], Value::Null, "{answer}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// The credential store's entry that says a station was paired here with a code: it names the
+/// station's id and its LAN key's fingerprint, and no key. It counts only for the key it names, and
+/// only while no sign-in line says otherwise; it goes when the station is linked to the account or
+/// forgotten. CONTROL: a code pairing whose entry the store would not take is kept all the same, and
+/// reads as not paired with a code (its held road stays held).
+#[test]
+fn the_code_pairing_entry_counts_only_for_its_key_and_goes_with_a_sign_in_or_forget() {
+    let (dir, _) = typed_file("coded-entry");
+    let signed = dir.join("lan-account.json");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(signed.clone());
+    let kept = record(STATION, &["192.168.1.20:42075"]);
+    stations.keep_coded(&kept).unwrap();
+    assert_eq!(stations.code_paired(STATION), Ok(true));
+    let raw = store.raw("lan-code-paired").unwrap();
+    assert!(raw.contains(STATION), "{raw}");
+    assert!(!raw.contains(&kept.station_key) && !raw.contains(&kept.pkcs8));
+    // A sign-in line beside the entry: not paired with a code.
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&signed, format!("{{\"{STATION}\":1800000000}}")).unwrap();
+    assert_eq!(stations.code_paired(STATION), Ok(false), "a sign-in line");
+    std::fs::remove_file(&signed).unwrap();
+    // An entry for another key under the same id counts for nothing.
+    let entry = store.raw("lan-code-paired").unwrap();
+    let other =
+        crate::remote_service::fingerprint(&record(STATION, &["10.0.0.1"]).station_key).unwrap();
+    let pinned = crate::remote_service::fingerprint(&kept.station_key).unwrap();
+    store
+        .entries
+        .lock()
+        .unwrap()
+        .insert("lan-code-paired".into(), entry.replace(&pinned, &other));
+    assert_eq!(stations.code_paired(STATION), Ok(false), "another key");
+    store
+        .entries
+        .lock()
+        .unwrap()
+        .insert("lan-code-paired".into(), entry);
+    assert_eq!(stations.code_paired(STATION), Ok(true));
+    // Linked to the account: the entry goes with the sign-in line's write.
+    stations.keep_signed(STATION, 1_800_000_000).unwrap();
+    assert!(!store.raw("lan-code-paired").unwrap().contains(STATION));
+    std::fs::remove_file(&signed).unwrap();
+    assert_eq!(
+        stations.code_paired(STATION),
+        Ok(false),
+        "linked, line lost"
+    );
+    // Paired with the code again, then forgotten: the entry goes too.
+    stations.keep_coded(&kept).unwrap();
+    assert_eq!(stations.code_paired(STATION), Ok(true));
+    stations.forget(STATION).unwrap();
+    assert!(!store.raw("lan-code-paired").unwrap().contains(STATION));
+    // A store that refuses the entry: the pairing is kept, not as paired with a code.
+    let full = Stations::new(Arc::new(RefusesCoded(store.clone())));
+    full.keep_coded(&kept).unwrap();
+    assert!(full.get(STATION).unwrap().is_some());
+    assert_eq!(full.code_paired(STATION), Ok(false), "no entry kept");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The in-memory store, refusing the code pairing entry alone.
+struct RefusesCoded(StationStore);
+
+impl StationVault for RefusesCoded {
+    fn paired_stations(&self) -> Result<Option<PairedStations>, &'static str> {
+        self.0.paired_stations()
+    }
+    fn save_paired_stations(&self, list: &PairedStations) -> Result<(), &'static str> {
+        self.0.save_paired_stations(list)
+    }
+    fn paired_station(&self, id: &str) -> Result<Option<PairedStation>, &'static str> {
+        self.0.paired_station(id)
+    }
+    fn save_paired_station(&self, station: &PairedStation) -> Result<(), &'static str> {
+        self.0.save_paired_station(station)
+    }
+    fn remove_paired_station(&self, id: &str) -> Result<(), &'static str> {
+        self.0.remove_paired_station(id)
+    }
+    fn internet_road(&self, id: &str) -> Result<Option<InternetRoad>, &'static str> {
+        self.0.internet_road(id)
+    }
+    fn save_internet_road(&self, id: &str, road: &InternetRoad) -> Result<(), &'static str> {
+        self.0.save_internet_road(id, road)
+    }
+    fn remove_internet_road(&self, id: &str) -> Result<(), &'static str> {
+        self.0.remove_internet_road(id)
+    }
+    fn staged_keys(&self) -> Result<Option<StagedKeys>, &'static str> {
+        self.0.staged_keys()
+    }
+    fn save_staged_keys(&self, keys: &StagedKeys) -> Result<(), &'static str> {
+        self.0.save_staged_keys(keys)
+    }
+    fn remove_staged_keys(&self) -> Result<(), &'static str> {
+        self.0.remove_staged_keys()
+    }
+    fn away_station(&self, id: &str) -> Result<Option<AwayStation>, &'static str> {
+        self.0.away_station(id)
+    }
+    fn save_away_station(&self, station: &AwayStation) -> Result<(), &'static str> {
+        self.0.save_away_station(station)
+    }
+    fn remove_away_station(&self, id: &str) -> Result<(), &'static str> {
+        self.0.remove_away_station(id)
+    }
+    fn held_roads(&self) -> Result<Option<HeldRoads>, &'static str> {
+        self.0.held_roads()
+    }
+    fn save_held_roads(&self, held: &HeldRoads) -> Result<(), &'static str> {
+        self.0.save_held_roads(held)
+    }
+    fn code_paired(&self) -> Result<Option<CodePaired>, &'static str> {
+        self.0.code_paired()
+    }
+    fn save_code_paired(&self, _: &CodePaired) -> Result<(), &'static str> {
+        Err("credentialStoreUnavailable")
+    }
+}
+
+/// A station first reached on its network after a sign-in from elsewhere is kept on that sign-in,
+/// never as one paired with a code: an entry left behind under the id its network gave it (a
+/// forget whose write the store refused) goes with the fold, so losing the sign-in file later does
+/// not make it read as paired with a code.
+#[test]
+fn a_station_folded_in_is_never_read_as_paired_with_a_code() {
+    let (dir, _) = typed_file("fold-coded");
+    let signed = dir.join("lan-account.json");
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone())).signed_in(signed.clone());
+    let away = away_record(AWAY, "Shack");
+    stations.keep_away(&away, &road_to(AWAY)).unwrap();
+    let lan = id(0x0a);
+    let pinned = crate::remote_service::fingerprint(&away.station_key).unwrap();
+    store.entries.lock().unwrap().insert(
+        "lan-code-paired".into(),
+        json!({"stations":[{"s":lan,"k":pinned}]}).to_string(),
+    );
+    let reached = PairedStation {
+        station_id: lan.clone(),
+        device_id: DEVICE.into(),
+        station_key: away.station_key.clone(),
+        pkcs8: away.pkcs8.clone(),
+        addresses: vec!["192.168.1.20:42075".into()],
+    };
+    stations.fold(AWAY, &reached, 1_800_000_000).unwrap();
+    std::fs::remove_file(&signed).unwrap();
+    assert!(stations.get(&lan).unwrap().is_some(), "the control: kept");
+    assert_eq!(stations.code_paired(&lan), Ok(false));
+    assert!(!store.raw("lan-code-paired").unwrap().contains(&lan));
+    let _ = std::fs::remove_dir_all(dir);
 }

@@ -711,7 +711,9 @@ describe('the station’s key for each internet road', () => {
   it('held, on a station paired here with a code, It doesn’t match removes the internet road alone, asked first', () => {
     page()
     socket.tell({ type: 'stations', computer: 'DEN-PC', stations: [station], internet: [{ id: STATION, key: ROAD_KEY }],
-      account: [], away: [], stationKeys: [{ id: STATION, key: KEY, held: 'stationKeyUnconfirmed' }] })
+      account: [], away: [], stationKeys: [{ id: STATION, key: KEY, held: 'stationKeyUnconfirmed', codePaired: true }] })
+    expect(screen.getByText(EN['lanWindow.internet.heldCodePaired'])).toBeTruthy()
+    expect(screen.queryByText(EN['lanWindow.internet.held'])).toBeNull()
     const sent = socket.sent.length
     fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.keyDiffers'] }))
     expect(socket.sent.length, 'removed without asking').toBe(sent)
@@ -719,6 +721,25 @@ describe('the station’s key for each internet road', () => {
     expect(screen.queryByText(EN['lanWindow.forgetConfirm'])).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.dropRoadYes'] }))
     expect(last(socket.sent)).toEqual({ type: 'keyDiffers', stationId: STATION })
+  })
+
+  it('held, on a station Nexus does not name as paired with a code, It doesn’t match forgets it, with no sign-in line either', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC', stations: [station], internet: [{ id: STATION, key: ROAD_KEY }],
+      account: [], away: [], stationKeys: [{ id: STATION, key: KEY, held: 'stationKeyUnconfirmed' }] })
+    expect(screen.getByText(EN['lanWindow.internet.held'])).toBeTruthy()
+    expect(screen.queryByText(EN['lanWindow.internet.heldCodePaired'])).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.internet.keyDiffers'] }))
+    expect(screen.queryByText(EN['lanWindow.internet.dropRoadConfirm'])).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.forgetYes'] }))
+    expect(last(socket.sent)).toEqual({ type: 'forget', stationId: STATION })
+  })
+
+  it('says, after the internet road alone was removed, that the pairing here was kept and Nexus Remote could not be told', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC', stations: [station], internet: [], account: [], away: [], dropUnreached: 'serviceUnavailable' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.internet.dropRoadUnreached'])
+    expect(EN['lanWindow.internet.dropRoadUnreached']).not.toContain('Forgotten')
   })
 
   it('held, on a station added with the account as a guest, It doesn’t match forgets the station', () => {

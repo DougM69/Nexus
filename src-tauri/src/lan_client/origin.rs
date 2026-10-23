@@ -640,6 +640,10 @@ async fn listed(reach: &Reach) -> serde_json::Value {
             if let Some(why) = kept.road_held(id)? {
                 shown["held"] = json!(why);
             }
+            // Whether It doesn't match drops this road alone, keeping the pairing.
+            if kept.code_paired(id)? {
+                shown["codePaired"] = json!(true);
+            }
             keys.push(shown);
         }
         Ok((list, internet, signed, away, keys))
@@ -700,15 +704,7 @@ async fn pair(
     let record = pairing::pair(at, code, name, &known).await?;
     let view = StationView::of(&record).ok_or("notStation")?;
     let kept = reach.stations.clone();
-    store(move || {
-        kept.keep(&record)?;
-        // Paired at the station, which takes this computer until it is removed there: no day to
-        // sign in again by stays with it. The pairing stands if the file will not take that; the
-        // row then keeps its day, as before.
-        let _ = kept.drop_signed(&record.station_id);
-        Ok(())
-    })
-    .await?;
+    store(move || kept.keep_coded(&record)).await?;
     Ok(view)
 }
 
@@ -964,7 +960,12 @@ async fn forget(reach: &Reach, id: String, road_only: bool) -> String {
     .await;
     let mut told = listed(reach).await;
     if let Some(reason) = unreached {
-        told["forgetUnreached"] = json!(reason);
+        let said = if road_only {
+            "dropUnreached"
+        } else {
+            "forgetUnreached"
+        };
+        told[said] = json!(reason);
     }
     told.to_string()
 }

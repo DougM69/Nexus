@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **It doesn't match**, for a station paired with a code, removes only its internet road: the pairing on your
     network stays, so you can still operate at home and add the internet road again later. For a station you
     were invited to, it forgets the station.
+  - Both of those apply only to a station paired with a code on this version or later, which the computer now
+    records in its credential store when the pairing is made. A station paired with a code on an earlier version
+    is treated like an invited one: its hold clears only with **It matches**, and **It doesn't match** forgets it,
+    so you pair it again with a code.
   - The station's **Approve** question for a computer now shows **This station's key** too, so both keys are
     read out in the same call.
   - Every internet road's row now shows the station's key. A computer that already has an internet road checks it

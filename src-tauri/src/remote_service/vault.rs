@@ -79,6 +79,13 @@
 //! road's, because [`InternetRoad`] is `deny_unknown_fields`: a field there would make an older Nexus
 //! read the road as none. It holds no secret. One that is missing or does not read holds nothing,
 //! so an older Nexus, which never reads it, simply drives each road as it always did.
+//!
+//! And one more lists the stations this computer paired with a code, each by its id and the
+//! fingerprint of the station's LAN key that pairing pinned (`crate::lan_client::Stations::code_paired`):
+//! written when a code pairing is kept, and dropped when the station is linked to the account or
+//! forgotten. Its own entry, not a field on the station's, for the same reason as the held roads'
+//! ([`PairedStation`] is `deny_unknown_fields`). It holds no secret. One that is missing or does not
+//! read names no station, so a station reads as paired with a code only while this entry says so.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -100,6 +107,8 @@ const STAGED_KEYS: &str = "lan-account-staged";
 const AWAY_STATION: &str = "lan-away-";
 /// The internet roads this computer keeps held.
 const HELD_ROADS: &str = "lan-held-roads";
+/// The stations this computer paired with a code.
+const CODE_PAIRED: &str = "lan-code-paired";
 const ACCOUNT_OWNER: &str = "account-owner";
 const ACCOUNT_KEYS: &str = "account-keys";
 const ACCOUNT_DEVICES: &str = "account-devices";
@@ -280,6 +289,24 @@ pub struct HeldRoad {
     pub disowned: bool,
 }
 
+/// The stations this computer paired with a code (see the header). Read past a field it does not
+/// know.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CodePaired {
+    pub stations: Vec<CodePairing>,
+}
+
+/// One station paired with a code: the id it is kept under on this computer, and the fingerprint
+/// (SHA-256 of the SPKI, lowercase hex) of the station's LAN key the code pinned, which binds the
+/// entry to that key alone. One-letter names, as a held road's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodePairing {
+    #[serde(rename = "s")]
+    pub station_id: String,
+    #[serde(rename = "k")]
+    pub shown: String,
+}
+
 /// The computer's side of Remote over this network: its entries, kept apart from the shack's and
 /// from [`Vault`]'s, so no test of either reaches them, nor they it.
 pub trait StationVault: Send + Sync {
@@ -304,6 +331,9 @@ pub trait StationVault: Send + Sync {
     /// The internet roads kept held, if any are.
     fn held_roads(&self) -> Result<Option<HeldRoads>, &'static str>;
     fn save_held_roads(&self, held: &HeldRoads) -> Result<(), &'static str>;
+    /// The stations paired here with a code, if any are listed.
+    fn code_paired(&self) -> Result<Option<CodePaired>, &'static str>;
+    fn save_code_paired(&self, paired: &CodePaired) -> Result<(), &'static str>;
 }
 
 /// Remote over this network's two entries, kept apart from [`Vault`]'s: a test of the hosted
@@ -702,6 +732,20 @@ impl StationVault for SystemVault {
     fn save_held_roads(&self, held: &HeldRoads) -> Result<(), &'static str> {
         let value = serde_json::to_string(held).map_err(|_| "credentialStoreUnavailable")?;
         entry(HELD_ROADS)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn code_paired(&self) -> Result<Option<CodePaired>, &'static str> {
+        match entry(CODE_PAIRED)?.get_password() {
+            // Unreadable names no station (see the header).
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_code_paired(&self, paired: &CodePaired) -> Result<(), &'static str> {
+        let value = serde_json::to_string(paired).map_err(|_| "credentialStoreUnavailable")?;
+        entry(CODE_PAIRED)?
             .set_password(&value)
             .map_err(|_| "credentialStoreUnavailable")
     }
