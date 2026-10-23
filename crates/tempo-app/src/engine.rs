@@ -2022,6 +2022,9 @@ pub struct DecodeJob {
     /// next period's early-pass moment ([`DecodeJob::with_rescue_give_up_at`]); `None` runs it to
     /// its end.
     rescue_give_up_at: Option<Instant>,
+    /// The engine's decode epoch as it is now ([`Engine::live_decode_epoch`]), read while the pass
+    /// runs: a pass whose result will be dropped as stale gives its rescue up.
+    live_epoch: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl DecodeJob {
@@ -2155,6 +2158,9 @@ struct JobSink<'a> {
     epoch: u64,
     give_up_at: Option<Instant>,
     rescue_give_up_at: Option<Instant>,
+    live_epoch: Arc<std::sync::atomic::AtomicU64>,
+    /// Whether the result is shown should the epoch move: it carries what it was heard on.
+    shown_late: bool,
 }
 
 impl modes::DecodeSink for JobSink<'_> {
@@ -2172,8 +2178,16 @@ impl modes::DecodeSink for JobSink<'_> {
     }
     fn give_up_rescue(&mut self) -> bool {
         self.progress.candidate();
-        self.rescue_give_up_at
-            .is_some_and(|at| Instant::now() >= at)
+        // A period nobody will see — built in a decode context a band, mode or tier change has
+        // since left, and not one shown under what it was heard on — is dropped when it lands, so
+        // its rescue only keeps the decoder from the new context. One that will be shown late
+        // keeps its rescue, as WSJT-X shows the whole period.
+        let dropped = !self.shown_late
+            && self.live_epoch.load(std::sync::atomic::Ordering::Relaxed) != self.epoch;
+        dropped
+            || self
+                .rescue_give_up_at
+                .is_some_and(|at| Instant::now() >= at)
     }
 }
 
@@ -2417,6 +2431,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         ctx,
         give_up_at,
         rescue_give_up_at,
+        live_epoch,
     } = job;
     let mut sink = JobSink {
         progress,
@@ -2425,6 +2440,8 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         epoch,
         give_up_at,
         rescue_give_up_at,
+        live_epoch,
+        shown_late: heard_on.is_some(),
     };
     // Hold the decoder lock across the ENTIRE decode: this is the single lock that
     // serializes the a7 table, the packjt77 hash table and the FT1 IR-HARQ buffers
@@ -3200,6 +3217,9 @@ pub struct Engine {
     /// [`clear_decode_context`]: Engine::clear_decode_context
     /// [`apply_decode_result`]: Engine::apply_decode_result
     decode_epoch: u64,
+    /// [`decode_epoch`](Self::decode_epoch), shared with the decodes in flight, which read it
+    /// while they run ([`DecodeJob::live_epoch`]).
+    live_decode_epoch: Arc<std::sync::atomic::AtomicU64>,
     /// The decode epoch the IN-PROGRESS slot capture began under (#103). The epoch
     /// guard above only catches jobs already in flight when the context switches; a
     /// mid-slot band change leaves the capture ring holding the OLD band's air, and
@@ -6313,6 +6333,7 @@ impl Engine {
             next_source: NextSource::default(),
             source_label: default_source_label,
             decode_epoch: 0,
+            live_decode_epoch: Arc::default(),
             capture_epoch: 0,
             late: None,
             late_early_seen: None,
@@ -17521,6 +17542,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // worker (built in the OLD context) lands stale and is dropped — its slot
         // indices / AP context are meaningless after the switch.
         self.decode_epoch = self.decode_epoch.wrapping_add(1);
+        self.live_decode_epoch
+            .store(self.decode_epoch, std::sync::atomic::Ordering::Relaxed);
         // The over owed to a partner the run has already left (#170, #153) is owed on THIS
         // band, in THIS mode. Slot indices from the old context are meaningless for its
         // deadline, and answering a station worked before the switch on the tier or band we
@@ -28313,6 +28336,7 @@ contact yourself."
                 ctx: None,
                 give_up_at: None,
                 rescue_give_up_at: None,
+                live_epoch: self.live_decode_epoch.clone(),
             };
         }
         if self.app.tier() == Tier::TempoDeep {
@@ -28341,6 +28365,7 @@ contact yourself."
                 ctx: None,
                 give_up_at: None,
                 rescue_give_up_at: None,
+                live_epoch: self.live_decode_epoch.clone(),
             };
         }
         // Native tiers (FT1/FT8/FT4) decode through the active SignalSource with
@@ -28481,6 +28506,7 @@ contact yourself."
             ctx: None,
             give_up_at: None,
             rescue_give_up_at: None,
+            live_epoch: self.live_decode_epoch.clone(),
         }
     }
 

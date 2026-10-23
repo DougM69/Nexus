@@ -188,3 +188,60 @@ fn a_slow_computer_gives_the_rescue_up_at_its_moment() {
         "given up within a candidate of its deadline: {took:?} against {budget:?}"
     );
 }
+
+/// The period's early pass and 47 step, then its full pass with no rescue deadline on a decoder
+/// at full speed, a band change made before the full pass was built (`before`: its capture was
+/// cut in two) or while it runs (`during`): (candidates asked, the full pass's result).
+fn full_pass_across_a_change(before: bool, during: bool) -> (usize, DecodeResult) {
+    let mut e = station();
+    let early = run_decode_job(e.build_decode_job(period(41 * 3456), 9, DecodePass::Early));
+    assert_eq!(
+        early.decodes().len(),
+        1,
+        "premise: the early pass decodes the CQ"
+    );
+    run_decode_job(e.build_decode_job(period(47 * 3456), 9, DecodePass::Residual));
+    if before {
+        e.set_frequency(7.074, "40m", "USB");
+    }
+    let job = e.build_decode_job(period(50 * 3456), 9, DecodePass::Boundary);
+    if during {
+        e.set_frequency(7.074, "40m", "USB");
+    }
+    let mut asked = Slow {
+        asked: 0,
+        delay: Duration::ZERO,
+    };
+    let result = run_decode_job_streaming(job, &mut asked);
+    (asked.asked, result)
+}
+
+/// ⭐ A PERIOD NOBODY WILL SEE GETS NO RESCUE. A full pass whose capture a band change cut in two
+/// is dropped when it lands, so its rescue never starts and the decoder is free for the new band;
+/// a change made while the period decodes leaves it shown under what it was heard on, as WSJT-X
+/// shows it, so its rescue still runs.
+#[test]
+fn a_band_change_gives_up_the_rescue_of_a_period_that_will_not_be_shown() {
+    let (whole, _) = full_pass_across_a_change(false, false);
+    let (_, alone, _) = full_pass_by(Some(Duration::ZERO), Duration::ZERO);
+    assert!(
+        whole > alone + 10,
+        "premise: the rescue tries the band's candidates: {whole} asked, against {alone} without it"
+    );
+    let (cut, _) = full_pass_across_a_change(true, false);
+    assert_eq!(
+        cut, alone,
+        "a capture cut in two by the change: the rescue never starts"
+    );
+    let (both, _) = full_pass_across_a_change(true, true);
+    assert_eq!(both, alone, "nor after a second change");
+    let (shown, result) = full_pass_across_a_change(false, true);
+    assert_eq!(
+        shown, whole,
+        "a period heard whole before the change: the rescue runs"
+    );
+    assert!(
+        result.heard_on.is_some(),
+        "and that period is shown under what it was heard on"
+    );
+}
