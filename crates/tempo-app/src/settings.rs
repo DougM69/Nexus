@@ -3222,9 +3222,10 @@ pub struct Settings {
     /// there is no migration and nothing to lose.
     ///
     /// The vocabulary is deliberately the one the Spots "Spotted from" chips and Band Activity's
-    /// hide-by-continent already speak, so the product has ONE way to name a place. The UI-side
-    /// predicate is `ui/src/features/dxccGeo.ts`; a row carries an entity NAME and never a
-    /// continent, so a code here is expanded through `dxcc_entity_continents`.
+    /// hide-by-continent already speak, so the product has ONE way to name a place. A row carries
+    /// an entity NAME and never a continent, so a code here is expanded through the country file's
+    /// continent table (`crate::needed_alert::scoped_entities`, where the station decides the
+    /// alerts).
     #[serde(default)]
     pub alert_continents: Vec<String>,
     /// Geographic scope for decode alerts — cty.dat ENTITY NAMES, the twin of
@@ -3235,7 +3236,8 @@ pub struct Settings {
     /// entity, so requiring both would be unsatisfiable — ticking Europe and Japan would silence
     /// the radio. Empty = no entity scope; both empty = everything alerts.
     ///
-    /// Someone CALLING YOU and a watch-list hit are exempt from both lists — see `alerts.ts`.
+    /// Someone CALLING YOU and a watch-list hit are exempt from both lists — see
+    /// `crate::needed_alert`.
     #[serde(default)]
     pub alert_entities: Vec<String>,
     /// Band scope for the rare/ultra 💎 grid alerts — separate from plain grids

@@ -1,22 +1,27 @@
-// ONE DECISION, TWO LANGUAGES: which decodes are worth interrupting the operator for.
+// ONE DECISION, SHOWN AS IT WAS MADE: which decodes are worth interrupting the operator for.
 //
-// Today the screen decides (`processDecodes`, here). The station is to decide instead, once, so a
-// computer driving it and a phone hear the same alerts the desktop does: `NeededAlerts`
-// (crates/tempo-app/src/needed_alert.rs) is that decision in Rust. Both are held to one table of
-// cases that lives with the Rust crate (crates/tempo-app/tests/fixtures/needed-alerts.json): runs of
-// decode batches, each with the settings, QSO, watch list, dial and geographic scope it arrives
-// under, and the alerts it raises — which toast, its words' parts, how long, how loud, and every
-// tone in the order it sounds. The expected values were captured from this function as it stood
-// before the Rust port, and each half has a test that walks every case.
+// The station decides (`NeededAlerts`, crates/tempo-app/src/needed_alert.rs) and raises each alert
+// as the `alert` event; this screen only shows it (`showRaisedAlert` → `showNeededAlert`). Both
+// halves are held to one table of cases that lives with the Rust crate
+// (crates/tempo-app/tests/fixtures/needed-alerts.json): runs of decode batches, each with the
+// settings, QSO, watch list, dial and geographic scope it arrives under, and the alerts it raises —
+// which toast, its words' parts, how long, how loud, and every tone in the order it sounds. The
+// expected values were captured from the screen's own decision before it moved to the station,
+// together with every case its tests held it to.
+//
+// End to end, decodes in → alerts shown: the station's test walks each step's decodes through
+// the decision and must raise exactly the step's alerts, as the event carries them (`kind`,
+// `call`, `entity`, `grid`, `tier`, `watch`); this test raises those, step by step, to the
+// window as the event, and the window must show exactly the step's toasts and sound its tones —
+// each alert once.
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { __resetAlertsForTest, processDecodes, type QsoContext } from './alerts'
-import { processPotaAlert, resetPotaAlertsForTest } from './features/potaAlert'
+import type { NeededAlert, QsoContext } from './alerts'
+import { __resetStationAlertsForTest, showRaisedAlert } from './useStationAlerts'
 import { pushToast } from './toast'
-import type { DecodeRow, OtaMapSpot, Settings } from './types'
 import type { WatchFilter } from './watchlist'
 
 vi.mock('./toast', () => ({ pushToast: vi.fn() }))
@@ -110,33 +115,37 @@ function alertOf(call: unknown[]): Record<string, unknown> {
   }
 }
 
-/** The table run through the screen's functions: each step's alerts and tones, each tick's tones. */
+/** An alert as the station raises it: the table's alert, its presentation left to the screen. */
+function raisedOf(alert: Record<string, unknown>): NeededAlert {
+  const { kind, call, entity, grid, tier, watch } = alert as unknown as NeededAlert
+  const work = call ? { message: `CQ ${call}`, snr: -10, freqHz: 1500, tier: 'FT8' as const } : null
+  return { kind, call, entity, grid, tier, watch, work }
+}
+
+let nextId = 1
+/** Raise one alert to the window, as the event carries it. */
+function raise(kind: string, alert: unknown, id = nextId++): void {
+  showRaisedAlert({ v: 1, id, kind, atMs: 0, alert }, () => {})
+}
+
+/** The table's alerts raised to the window, step by step: each step's toasts and tones, and each
+ *  POTA tick's tones (the station raises one `parks` alert for a tick that found a new park). */
 function observe(): Table {
+  __resetStationAlertsForTest()
   const scenarios = table.scenarios.map((scenario) => {
-    __resetAlertsForTest()
     const steps = scenario.steps.map((step) => {
-      vi.setSystemTime(step.atMs)
       toasts.mockClear()
       tones.length = 0
-      processDecodes(
-        step.decodes.map((d) => ({ ...table.baseDecode, ...d }) as unknown as DecodeRow),
-        { ...table.baseSettings, ...step.settings } as unknown as Settings,
-        () => {},
-        step.qso ?? { state: null, dxcall: null },
-        step.watchlist ?? [],
-        step.dialMhz,
-        step.geoScope ? new Set(step.geoScope) : null,
-      )
+      for (const alert of step.alerts) raise('needed', raisedOf(alert))
       vi.runAllTimers()
       return { ...step, alerts: toasts.mock.calls.map(alertOf), sounds: [...tones] }
     })
     return { ...scenario, steps }
   })
   const pota = table.pota.map((run) => {
-    resetPotaAlertsForTest()
     const ticks = run.ticks.map((tick) => {
       tones.length = 0
-      processPotaAlert(tick.refs.map((reference) => ({ reference }) as OtaMapSpot))
+      if (tick.sounds.length > 0) raise('parks', { references: tick.refs })
       vi.runAllTimers()
       return { ...tick, sounds: [...tones] }
     })
@@ -152,7 +161,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('the screen and the station raise the same needed-station alerts', () => {
+describe('the screen shows exactly the needed-station alerts the station raises', () => {
   it('the shared table is there, and raises every kind', () => {
     const kinds = new Set(table.scenarios.flatMap((s) => s.steps.flatMap((st) => st.alerts.map((a) => a.kind))))
     expect([...kinds].sort()).toEqual(['cq', 'myCall', 'newDxcc', 'newGrid', 'rareGrid', 'watch'])
@@ -162,7 +171,7 @@ describe('the screen and the station raise the same needed-station alerts', () =
     expect(table.pota.some((p) => p.ticks.some((t) => t.sounds.length === 0))).toBe(true)
   })
 
-  it('the desktop agrees with the table on every step', () => {
+  it('the desktop shows every step of the table as the table writes it', () => {
     const seen = observe()
     for (const [i, scenario] of table.scenarios.entries())
       for (const [j, step] of scenario.steps.entries())

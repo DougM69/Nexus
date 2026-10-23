@@ -460,9 +460,9 @@ pub fn join_ui_state(
 // --- Events --------------------------------------------------------------------------------------
 
 /// The shack's events that another computer is sent, and the only ones it takes in: the alert
-/// (`crate::alert`), made once where it is raised (the pounce detector's today), the app's one push
-/// (everything else polls), so both computers' screens hear it under the same id. Any other event
-/// stays where it was raised.
+/// (`crate::alert`), made once where it is raised (the pounce detector's, the decode alerts', the
+/// new parks'), the app's one push (everything else polls), so both computers' screens hear it under
+/// the same id. Any other event stays where it was raised.
 pub const FORWARDED_EVENTS: &[&str] = &[crate::alert::EVENT];
 
 /// Whether the event `name` crosses between the two computers.

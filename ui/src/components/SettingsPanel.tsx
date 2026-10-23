@@ -10870,7 +10870,7 @@ export function SettingsPanel({
               </div>
 
               {/* The decode alert for a new DXCC, a new grid or a rare grid: its sound and its
-                  pop-up (`processDecodes`, alerts.ts), on the band the radio is on. Its own
+                  pop-up (decided at the station, `needed_alert.rs`), on the band the radio is on. Its own
                   switch, and `alertNew` is the only key it writes. */}
               <div className="settings-field">
                 <label className="settings-toggle">

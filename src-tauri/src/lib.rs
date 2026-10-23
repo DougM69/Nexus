@@ -831,6 +831,14 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// Current Unix time in milliseconds.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// How long ago a roster entry was actually decoded, in seconds — or `None` when
 /// it cannot be aged, or is too stale to feed the propagation engine at all.
 ///
@@ -7063,11 +7071,20 @@ async fn sync_shared_log(engine: &SharedEngine) -> Result<bool, String> {
 }
 
 /// Full UI snapshot (`AppSnapshot`) — the UI renders all three zones from this.
+///
+/// Each look at the decode window is also where the station decides the needed-station alerts
+/// (`Engine::needed_alerts`): every window's poll and every feed a computer driving the station
+/// watches comes through here, so the alerts are decided at the pace the desktop's screen decided
+/// them, whichever screen is looking, and each is raised once, after the lock is released, as the
+/// `alert` event every window and that computer hear.
 #[tauri::command]
-async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+async fn get_snapshot(
+    app: tauri::AppHandle,
+    state: State<'_, SharedEngine>,
+) -> Result<AppSnapshot, String> {
     // Drain any buffered ALL.TXT decode lines (the engine is I/O-free) and snapshot,
     // then release the lock before the file append so the UI poll never waits on disk.
-    with_engine(&state, |mut eng| {
+    with_engine(&state, move |mut eng| {
         let all_txt = eng.take_all_txt_pending();
         // JS8's DIRECTED.TXT, written beside ALL.TXT under the same switch, the same way.
         let directed_txt = eng.take_js8_directed_pending();
@@ -7082,15 +7099,69 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
         // the log several times a second, and before the snapshot that reports it. No I/O.
         eng.log_resend_due();
         let snap = eng.snapshot();
+        let scope = alert_geo_scope(eng.settings());
+        let needed = eng.needed_alerts(&snap, scope.as_ref(), now_ms());
         drop(eng);
         flush_all_txt(&all_txt);
         flush_directed_txt(&directed_txt);
         for line in unconfirmed_auto_log_lines(&auto_logged) {
             conn_log("Logbook", "error", line);
         }
+        raise_needed(&app, &needed);
         snap
     })
     .await
+}
+
+/// The operator's area filter for the needed-station alerts (`alertContinents`,
+/// `alertEntities`) as the entity names it admits, by the country file's continent table; `None`
+/// for no filter, the default.
+fn alert_geo_scope(settings: &Settings) -> Option<std::collections::HashSet<String>> {
+    if settings.alert_continents.is_empty() && settings.alert_entities.is_empty() {
+        return None;
+    }
+    tempo_app::needed_alert::scoped_entities(
+        &settings.alert_continents,
+        &settings.alert_entities,
+        propagation::dxcc::entity_continents(),
+    )
+}
+
+/// Raise each needed-station alert (`alert::raised`, kind `needed`) to every window, and so to a
+/// computer driving the station, which takes the `alert` event in.
+fn raise_needed(app: &tauri::AppHandle, needed: &[tempo_app::needed_alert::NeededAlert]) {
+    use tauri::Emitter;
+    for one in needed {
+        let _ = app.emit(alert::EVENT, &alert::raised("needed", one));
+    }
+}
+
+#[cfg(test)]
+mod alert_geo_scope_tests {
+    use super::*;
+
+    /// ★ The area filter resolves through the same country file table the desktop's continent
+    /// boxes were expanded through (`dxcc_entity_continents`): every European entity for "EU", a
+    /// picked entity besides; no filter, or one that names nothing, is no filter. CONTROL: Japan is
+    /// outside Europe until it is picked.
+    #[test]
+    fn the_area_filter_is_the_entities_its_continents_and_picks_name() {
+        let mut settings = Settings::default();
+        assert_eq!(alert_geo_scope(&settings), None, "the default");
+        settings.alert_continents = vec!["EU".into()];
+        let europe = alert_geo_scope(&settings).expect("Europe");
+        let table = dxcc_entity_continents();
+        let eu: Vec<_> = table.iter().filter(|(_, c)| c == "EU").collect();
+        assert!(eu.len() > 40, "{}", eu.len());
+        assert!(eu.iter().all(|(name, _)| europe.contains(name)));
+        assert_eq!(europe.len(), eu.len());
+        assert!(europe.contains("France") && !europe.contains("Japan"));
+        settings.alert_entities = vec!["Japan".into()];
+        assert!(alert_geo_scope(&settings).unwrap().contains("Japan"));
+        settings.alert_continents = vec!["XX".into()];
+        settings.alert_entities = Vec::new();
+        assert_eq!(alert_geo_scope(&settings), None, "a code that is not one");
+    }
 }
 
 /// Queue an outbound free-text message to `peer` (auto-chunked + presence-gated
@@ -31708,25 +31779,11 @@ async fn get_ota_map_spots(
     ota_cache: State<'_, SharedOtaSpots>,
 ) -> Result<Vec<OtaMapSpot>, String> {
     let now = now_unix();
-    let cached = ota_cache.lock().ok().and_then(|c| {
-        c.get("POTA")
-            .filter(|(stamp, _)| now.saturating_sub(*stamp) <= OTA_MAP_TTL_SECS)
-            .map(|(_, v)| v.clone())
-    });
-    let spots = match cached {
-        Some(v) => v,
-        None => {
-            // Blocking HTTP: on the blocking pool (see `get_aurora`).
-            let fresh =
-                tauri::async_runtime::spawn_blocking(propagation::live::pota::fetch_pota_spots)
-                    .await
-                    .map_err(|e| e.to_string())??;
-            if let Ok(mut c) = ota_cache.lock() {
-                c.insert("POTA".into(), (now, fresh.clone()));
-            }
-            fresh
-        }
-    };
+    let cache = ota_cache.inner().clone();
+    // Blocking HTTP when the cache is stale: on the blocking pool (see `get_aurora`).
+    let spots = tauri::async_runtime::spawn_blocking(move || pota_spots(&cache, now))
+        .await
+        .map_err(|e| e.to_string())??;
     let worked: std::collections::HashSet<String> = {
         let eng = engine_lock(&state);
         spots
@@ -31757,6 +31814,59 @@ async fn get_ota_map_spots(
             })
         })
         .collect())
+}
+
+/// The POTA activator spots: the shared cache's while they are fresh (`OTA_MAP_TTL_SECS`), else
+/// fetched — blocking HTTP — and cached for every reader.
+fn pota_spots(ota_cache: &SharedOtaSpots, now: i64) -> Result<Vec<propagation::OtaSpot>, String> {
+    let cached = ota_cache.lock().ok().and_then(|c| {
+        c.get("POTA")
+            .filter(|(stamp, _)| now.saturating_sub(*stamp) <= OTA_MAP_TTL_SECS)
+            .map(|(_, v)| v.clone())
+    });
+    if let Some(spots) = cached {
+        return Ok(spots);
+    }
+    let fresh = propagation::live::pota::fetch_pota_spots()?;
+    if let Ok(mut c) = ota_cache.lock() {
+        c.insert("POTA".into(), (now, fresh.clone()));
+    }
+    Ok(fresh)
+}
+
+/// How often the station looks for parks newly on the air while the new-activation alert is on —
+/// the activator map's own pace, which the shared cache serves.
+const FRESH_PARKS_EVERY: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The new-activation alert, at the station (`potaNewActivationAlert`): while it is on, a look at
+/// the parks on the map (`get_ota_map_spots`'s) every [`FRESH_PARKS_EVERY`], the first at once,
+/// raising the parks newly spotted since the last look (`needed_alert::FreshParks`, which primes
+/// silently on the first) as one `alert` of kind `parks` to every window. Off, nothing is fetched,
+/// and the memory is kept, so turning it back on resumes the diff and looks at once. A failed fetch
+/// is no look.
+fn watch_fresh_parks(engine: SharedEngine, ota: SharedOtaSpots, app: tauri::AppHandle) {
+    use tauri::Emitter;
+    let mut parks = tempo_app::needed_alert::FreshParks::new();
+    let mut looked: Option<std::time::Instant> = None;
+    loop {
+        let on = tempo_app::engine::engine_lock_result(&engine)
+            .map(|e| e.settings().pota_new_activation_alert)
+            .unwrap_or(false);
+        if !on {
+            looked = None;
+        } else if looked.is_none_or(|at| at.elapsed() >= FRESH_PARKS_EVERY) {
+            looked = Some(std::time::Instant::now());
+            if let Ok(spots) = pota_spots(&ota, now_unix()) {
+                let placed = spots.iter().filter(|sp| place_ota(sp).is_some());
+                let fresh = parks.tick(placed.map(|sp| sp.reference.as_str()));
+                if !fresh.is_empty() {
+                    let raised = alert::raised("parks", serde_json::json!({ "references": fresh }));
+                    let _ = app.emit(alert::EVENT, &raised);
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 }
 
 /// One-click hunt: remember the activator + park so the next QSO logged with
@@ -38205,6 +38315,21 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
                 "pounce detector not started (receiver already claimed by a prior build attempt)",
             );
         }
+    }
+    // The new-activation alert's look at the parks on the air, at the station, so every window and a
+    // computer driving it hear one alert (`watch_fresh_parks`). Once a run: a setup retried after
+    // this point must not start a second, which would raise every park twice.
+    {
+        static STARTED: std::sync::Once = std::sync::Once::new();
+        STARTED.call_once(|| {
+            let eng = handle.state::<SharedEngine>().inner().clone();
+            let ota = d.ota_spots.clone();
+            let app = handle.clone();
+            std::thread::Builder::new()
+                .name("nexus-fresh-parks".into())
+                .spawn(move || watch_fresh_parks(eng, ota, app))
+                .expect("spawn the new-activation alert");
+        });
     }
     // Nexus's needed spots for a TCI radio's own panadapter: read from the Needed board's list
     // while the radio in use has its "Spots on the SDR panadapter" on (`tci_spots`).
@@ -50661,10 +50786,7 @@ mod tests {
             engine_lock(&self.engine).set_watch_list(
                 entries
                     .iter()
-                    .map(|(kind, value)| tempo_app::watchlist::WatchEntry {
-                        kind: *kind,
-                        value: (*value).into(),
-                    })
+                    .map(|(kind, value)| tempo_app::watchlist::WatchEntry::naming(*kind, *value))
                     .collect(),
             );
             self

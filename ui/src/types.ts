@@ -5167,7 +5167,8 @@ export interface Settings {
   /** Alert when any station is calling CQ. */
   alertCq: boolean
   /** The decode alert for a new DXCC, a new grid or a rare grid 💎: its sound and its pop-up
-   *  (`processDecodes`, alerts.ts). Its own switch in Settings; the boards never read it. */
+   *  (decided at the station, `needed_alert.rs`). Its own switch in Settings; the boards never
+   *  read it. */
   alertNew: boolean
   /** Show the worked-but-unconfirmed "Confirm" tier (LoTW confirmation opportunities)
    *  on the Needed board and the decode/roster chips. Ships ON; this is the opt-out. */
@@ -5175,8 +5176,8 @@ export interface Settings {
   /** WSJT-X's "dB reports to comments": the logged QSO's COMMENT carries
    *  "<mode>  Sent: <rpt>  Rcvd: <rpt>". Opt-in, exactly as WSJT-X ships it. */
   logReportsToComments?: boolean
-  /** Beep when a park is freshly spotted on the air (App's own poll of
-   *  get_ota_map_spots, gated on this — see potaAlert.ts). Off by default. */
+  /** Beep when a park is freshly spotted on the air (the station's own look at the parks on
+   *  the map, gated on this — `watch_fresh_parks`). Off by default. */
   potaNewActivationAlert?: boolean
   /** #391: pop-up notifications in the bottom-right corner. Ships ON; `false` takes the
    *  confirmations and the alerts out of the corner (`popsUpWhenOff` in toast.ts says what stays).
