@@ -62,8 +62,8 @@ import {
 import { BOX_IDS, CW_PANEL_IDS, CW_PANELS, boxEntries, isBoxId, type BoxId, type CwPanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { LogEntry } from './LogEntry'
-import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
-import { RecentQsosFrame, withRecent } from './RecentQsosPane'
+import { CallStatsFrame, useStatsRoom, withStatsRoom } from './CallStatsPane'
+import { RecentQsosFrame } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { SpotDialog } from './SpotDialog'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
@@ -744,7 +744,7 @@ export function CwCockpit({
   const cueHere = (snap.aiCw?.enabled ?? false) && !unassisted && (!panels || panels.stateOf('decode') !== 'removed')
   const host = panels
     ? panelHost(withStatsRoom(panels, statsRoom), {
-        menu: withRecent(withStats(CW_MENU)),
+        menu: CW_MENU,
         side: [],
         main: 'decode',
         labels,
@@ -1447,9 +1447,9 @@ export function CwCockpit({
   const hasNeededPane = neededBoard != null && shown('needed')
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
-  const hasStatsPane = host != null && shown('stats') && statsHere()
+  const hasStatsPane = host != null && shown('stats')
   // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
-  const hasRecentPane = host != null && shown('recent') && statsHere()
+  const hasRecentPane = host != null && shown('recent')
   // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
   // ANY of them can — each group is still gated on its own ⊞ id inside it.
   const hasRigCtlPane = hasScopeCtlPane || hasDspPane || hasRxDspPane || hasSubRow

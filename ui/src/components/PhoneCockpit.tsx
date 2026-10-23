@@ -70,8 +70,8 @@ import { SMeter } from './SMeter'
 import { SubReceiverStrip, MainReceiverPlate, subScopeMarker } from './SubReceiverStrip'
 import { WheelRange } from './WheelRange'
 import { LogEntry } from './LogEntry'
-import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
-import { RecentQsosFrame, withRecent } from './RecentQsosPane'
+import { CallStatsFrame, useStatsRoom, withStatsRoom } from './CallStatsPane'
+import { RecentQsosFrame } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import {
   setPtt,
@@ -1490,7 +1490,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const statsRoom = useStatsRoom()
   const host = panels
     ? panelHost(withStatsRoom(panels, statsRoom), {
-        menu: withRecent(withStats(PHONE_MENU)),
+        menu: PHONE_MENU,
         side: [],
         main: 'bandActivity',
         labels,
@@ -1554,9 +1554,9 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const hasNeededPane = neededBoard != null && shown('needed')
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
-  const hasStatsPane = host != null && shown('stats') && statsHere()
+  const hasStatsPane = host != null && shown('stats')
   // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
-  const hasRecentPane = host != null && shown('recent') && statsHere()
+  const hasRecentPane = host != null && shown('recent')
   // Everything the LEADING column can hold below the 3-col tier. The keyer used to make
   // this unconditionally true; now that it has a ⊞ entry, a rig with no DSP and no native
   // scope can have the operator untick its way to an empty leading track — a `minmax(0,1fr)`

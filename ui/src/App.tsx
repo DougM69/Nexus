@@ -1931,7 +1931,7 @@ function App() {
   // WSJT-X Tx-slot click (Tx1–Tx5 buttons / Alt+N): force the row's text as the
   // next transmission to the DX. The backend starts/retargets the QSO + arms TX;
   // applying the returned snapshot makes the Tx panel's "next" dot land at once.
-  const handleOverrideTx = useCallback((call: string, grid: string | null, text: string, expectedQso?: AppSnapshot['qso']) => {
+  const handleOverrideTx = useCallback((call: string, grid: string | null, text: string) => {
     // Same own-call guard as handleCall — the engine no-ops on a self-target
     // but returns a normal snapshot, which read as silent success here.
     const me = mycallRef.current.trim().toUpperCase()
@@ -1940,7 +1940,7 @@ function App() {
       return
     }
     void withErrorToast(
-      () => apiOverrideNextTx(call, grid, text, expectedQso),
+      () => apiOverrideNextTx(call, grid, text),
       t('shell.overrideTx.failed', { call }),
     ).then((s) => {
       if (s) setSnap(s)
@@ -1948,24 +1948,24 @@ function App() {
   }, [])
 
   const handleSetTxEven = useCallback((even: boolean) => {
-    void withErrorToast(() => apiSetTxEven(even, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.txPeriod.failed')).then((s) => {
+    void withErrorToast(() => apiSetTxEven(even), t('shell.txPeriod.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [snap])
+  }, [])
 
   const handleSetTxCycleAuto = useCallback((auto: boolean) => {
-    void withErrorToast(() => apiSetTxCycleAuto(auto, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.cycleMode.failed')).then(
+    void withErrorToast(() => apiSetTxCycleAuto(auto), t('shell.cycleMode.failed')).then(
       (s) => {
         if (s) setSnap(s)
       },
     )
-  }, [snap])
+  }, [])
 
   const handleSetHoldTxFreq = useCallback((on: boolean) => {
-    void withErrorToast(() => apiSetHoldTxFreq(on, snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined), t('shell.holdTx.failed')).then((s) => {
+    void withErrorToast(() => apiSetHoldTxFreq(on), t('shell.holdTx.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [snap])
+  }, [])
 
   // Waterfall click: left-click sets RX only; shift/right-click sets TX;
   // Ctrl/Command sets both. Hold Tx belongs to decode/QSO selection, not this click.
@@ -2463,8 +2463,8 @@ function App() {
       .catch(() => {})
   }, [])
 
-  const handleSetMode = useCallback((mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null) => {
-    return withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
+  const handleSetMode = useCallback((mode: ModeRequest) => {
+    return withErrorToast(() => apiSetMode(mode), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
       // A contest that starts about to send the DX exchange from a US or Canadian call says so,
       // loudly and once, as it starts (the strip keeps saying it). Never a refusal.
@@ -2473,21 +2473,21 @@ function App() {
     })
   }, [])
 
-  const handleQsoResend = useCallback((expectedQso?: import('./types').QsoStatus | null) => {
-    void withErrorToast(() => apiQsoResend(expectedQso), t('shell.resend.qso.failed')).then((s) => {
+  const handleQsoResend = useCallback(() => {
+    void withErrorToast(() => apiQsoResend(), t('shell.resend.qso.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
-  const handleQsoFreetext = useCallback((text: string, expectedQso?: import('./types').QsoStatus | null) => {
-    return withErrorToast(() => apiQsoFreetext(text, expectedQso), t('shell.freetext.failed')).then((s) => {
+  const handleQsoFreetext = useCallback((text: string) => {
+    return withErrorToast(() => apiQsoFreetext(text), t('shell.freetext.failed')).then((s) => {
       if (s) setSnap(s)
       return !!s
     })
   }, [])
 
   const handleLogCurrent = useCallback(() => {
-    void withErrorToast(() => apiLogCurrentQso({ expectedKey: snap?.currentQsoLogKey, expectedTier: snap?.link.tier, expectedQso: snap?.qso }), t('shell.log.failed')).then((r) => {
+    void withErrorToast(() => apiLogCurrentQso(), t('shell.log.failed')).then((r) => {
       if (r) {
         setSnap(r.snapshot)
         // The engine's verdict, not the call returning (#100): every false is a deliberate
@@ -2503,7 +2503,7 @@ function App() {
         }
       }
     })
-  }, [refreshNeeds, snap?.currentQsoLogKey, snap?.link.tier, snap?.qso])
+  }, [refreshNeeds])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Settings are pure UI

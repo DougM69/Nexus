@@ -994,18 +994,6 @@ describe('the Stats pane beside the log form', () => {
     expect(document.querySelector('[data-pane="stats"]')).toBeNull()
     expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
   })
-
-  it('the hosted page leaves it out', async () => {
-    const { installApplicationTransport } = await import('../applicationTransport')
-    const off = installApplicationTransport({ kind: 'remote', invoke: async () => null as never })
-    try {
-      renderCockpit({ panels: fakePanels() })
-      expect(document.querySelector('[data-pane="stats"]')).toBeNull()
-      expect(document.querySelector('[data-pane="log"]'), 'control: the log column rendered').not.toBeNull()
-    } finally {
-      off()
-    }
-  })
 })
 
 // ON WHERE THERE IS ROOM (the ruling): with the record saying nothing, the pane stands on a window with room for it
@@ -1111,19 +1099,5 @@ describe('the Recent contacts pane under the log form', () => {
     renderCockpit({ panels: fakePanels(['recent']) })
     expect(document.querySelector('[data-pane="recent"]')).toBeNull()
     expect(document.querySelector('[data-pane="log"]'), 'control: the log rendered').not.toBeNull()
-  })
-})
-
-describe('the Recent contacts pane on the hosted page', () => {
-  it('is left out, as the Stats pane is: that page edits no contact', async () => {
-    const { installApplicationTransport } = await import('../applicationTransport')
-    const off = installApplicationTransport({ kind: 'remote', invoke: async () => null as never })
-    try {
-      renderCockpit({ panels: fakePanels() })
-      expect(document.querySelector('[data-pane="recent"]')).toBeNull()
-      expect(document.querySelector('[data-pane="log"]'), 'control: the log column rendered').not.toBeNull()
-    } finally {
-      off()
-    }
   })
 })

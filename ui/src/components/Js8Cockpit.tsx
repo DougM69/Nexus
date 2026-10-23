@@ -25,8 +25,8 @@ import { BOX_IDS, JS8_PANEL_IDS, JS8_PANELS, boxEntries, isBoxId, type BoxId, ty
 import { regionGroups, type PaneDrop } from '../features/panelPlace'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
-import { CallStatsFrame, statsHere, useStatsRoom, withStats, withStatsRoom } from './CallStatsPane'
-import { RecentQsosFrame, withRecent } from './RecentQsosPane'
+import { CallStatsFrame, useStatsRoom, withStatsRoom } from './CallStatsPane'
+import { RecentQsosFrame } from './RecentQsosPane'
 import { RotorStrip } from './RotorStrip'
 import { Js8HbButton, Js8HbNetChip, js8HbAckRateBlockedNote, js8HbAckSuppressedTitle, js8HbShown } from './Js8Heartbeat'
 import { Js8WaterfallControls, js8CentreFilterItem } from './Js8WaterfallControls'
@@ -290,7 +290,7 @@ export function Js8Cockpit({
   const statsRoom = useStatsRoom()
   const host = panels
     ? panelHost(withStatsRoom(panels, statsRoom), {
-        menu: withRecent(withStats(JS8_MENU)),
+        menu: JS8_MENU,
         side: ['stations', 'inbox'],
         main: 'activity',
         labels,
@@ -844,8 +844,8 @@ export function Js8Cockpit({
       ? entries[id] != null
       : shown(id) &&
         (id !== 'log' || snap != null) &&
-        (id !== 'stats' || (snap != null && shown('log') && statsHere())) &&
-        (id !== 'recent' || (snap != null && shown('log') && statsHere()))
+        (id !== 'stats' || (snap != null && shown('log'))) &&
+        (id !== 'recent' || (snap != null && shown('log')))
   const placed3 = regionGroups(JS8_PANELS.arrange!, place, 3, paneShown)
   // The DASHBOARD RAIL'S boxes, on a window too small for the rail (the operator's "They move into the
   // columns"), stand at the foot of the leading column, where JS8's own boxes stand until placed.

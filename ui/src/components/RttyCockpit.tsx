@@ -16,8 +16,8 @@ import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
 import { LogEntry } from './LogEntry'
-import { CallStatsFrame, statsHere, withStats } from './CallStatsPane'
-import { RecentQsosFrame, withRecent } from './RecentQsosPane'
+import { CallStatsFrame } from './CallStatsPane'
+import { RecentQsosFrame } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -344,7 +344,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
   // a real stop (see the pane comment below). What is pinned is this cockpit's stop-line census.
   const host = panels
-    ? panelHost(panels, { menu: withRecent(withStats(RTTY_PANEL_IDS)), side: [], main: 'stream', labels: rttyPanelLabels(), shipsHidden: RTTY_PANELS.defaultRemoved })
+    ? panelHost(panels, { menu: RTTY_PANEL_IDS, side: [], main: 'stream', labels: rttyPanelLabels(), shipsHidden: RTTY_PANELS.defaultRemoved })
     : null
   // No panel record (a render without a host): every pane at its vocabulary's default — shown,
   // except the RF scope pane, which ships hidden (`defaultRemoved`).
@@ -1504,7 +1504,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           {/* THE RECENT CONTACTS PANE (RecentQsosPane), inside the log strip's frame under the form: the
               last few contacts, a row a click into the Logbook's editor. It takes only the room the form
               leaves. No stop control, nothing sent. */}
-          {shown('recent') && statsHere() && (
+          {shown('recent') && (
             <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
           )}
         </CockpitPaneFrame>
@@ -1515,7 +1515,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           it ships hidden here, where the two are already short of room at the supported floor
           (PskCockpit's measured table, which this shell shares), one tick away in ⊞ Panels. No
           stop control, nothing sent. */}
-      {snap && shown('stats') && statsHere() && (
+      {snap && shown('stats') && (
         <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={RTTY} logTick={snap.logTick} />
       )}
 

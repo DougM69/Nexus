@@ -67,7 +67,7 @@ import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
-import { CallStatsFrame, statsHere, withStats } from './CallStatsPane'
+import { CallStatsFrame } from './CallStatsPane'
 import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
@@ -587,10 +587,10 @@ export function OperateCockpit({
       setSkipTx1(v)
       setSkipTx1Cmd(v).catch(() => {})
     } else if (ftRuntime && snap.remoteFtRuntime) {
-      void setSkipTx1Cmd(v, { expectedTier: tier, expected: snap.remoteFtRuntime })
+      void setSkipTx1Cmd(v)
         .catch(() => pushToast(t('remote.controlRequestFailed'), 'error'))
     }
-  }, [control, ftRuntime, snap, tier])
+  }, [control, ftRuntime, snap])
   const recording = snap.radio.qsoRecording
   const toggleRecord = () => {
     if (recBusy) return
@@ -724,7 +724,7 @@ export function OperateCockpit({
   // THE STATS PANE (CallStatsPane) stands under the card, about the same station, in the station's own
   // window. Unlike the card it always has something to say (its own empty line), so a ticked one counts
   // for the rail whether or not a station is selected.
-  const statsSide: readonly OperatePanelId[] = statsHere() ? ['stats'] : []
+  const statsSide: readonly OperatePanelId[] = ['stats']
   const sidePanels: readonly OperatePanelId[] = shownRecallCall
     ? [...SIDE_PANELS[layoutMode], 'recall', ...statsSide]
     : [...SIDE_PANELS[layoutMode], ...statsSide]
@@ -749,7 +749,7 @@ export function OperateCockpit({
   const entries = boxes && active ? boxEntries(OPERATE_PANELS, panels.layout, stateOf, boxes.rail?.shows) : {}
   const labels = { ...panelLabels(), ...boxLabels(entries) }
   const panelSpec: PanelHostSpec<OperatePanelId> = {
-    menu: withStats(LAYOUT_PANELS[layoutMode]),
+    menu: LAYOUT_PANELS[layoutMode],
     side: sidePanels,
     main: layoutMode === 'roster' ? 'callRoster' : 'bandActivity',
     labels,
@@ -793,11 +793,11 @@ export function OperateCockpit({
   // What stands on screen in an arranged column: a pane the ⊞ menu shows (the card only while it is about
   // a station), and a box only where the window lends it one.
   const arrangedOn = (id: OperatePanelId): boolean =>
-    isBoxId(id) ? entries[id] != null : id === 'recall' ? cardOn : id === 'stats' ? shown(id) && statsHere() : shown(id)
+    isBoxId(id) ? entries[id] != null : id === 'recall' ? cardOn : shown(id)
   // What ⊞ Arrange lists and steps past: the same, but the card whether or not a station is selected, so
   // the operator can place it before it has anything to show.
   const arrangeListed = (id: OperatePanelId): boolean =>
-    isBoxId(id) ? entries[id] != null : id === 'stats' ? shown(id) && statsHere() : shown(id)
+    isBoxId(id) ? entries[id] != null : shown(id)
   const arrangedCols = placedColumns(arrangeSpec, place)
   const arrangedShown = columnsOf(arrangeSpec).filter((c) => arrangedCols[c].some(arrangedOn) || (c === foldCol && folded.length > 0))
   // The populated-column count and whether the rail stands, from whichever branch draws the region: the
@@ -1294,7 +1294,7 @@ export function OperateCockpit({
   // THE STATS PANE under the card: what the log holds for the station the card is about — the one the
   // operator clicked, else the one the sequencer is working (`recallCall`), on this band in this mode.
   const statsFrame =
-    shown('stats') && statsHere() ? (
+    shown('stats') ? (
       <CallStatsFrame
         close={closeProps('stats')}
         call={shownRecallCall}

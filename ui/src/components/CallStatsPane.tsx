@@ -32,7 +32,6 @@
 // the mode classes' short forms are invariant tokens (INVARIANT, below), as the Awards view's are.
 import { useEffect, useState } from 'react'
 import { getCallStats } from '../api'
-import { remoteApplicationTransport } from '../applicationTransport'
 import type { CallStats, QslChannels, StatsGrid, StatsSlot } from '../types'
 import { t } from '../i18n'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -67,19 +66,6 @@ export function withStatsRoom<P extends string>(panels: PanelLayoutApi<P>, room:
     ...panels,
     stateOf: (id) => (id === 'stats' && panels.layout.state[id] == null && room ? 'docked' : panels.stateOf(id)),
   }
-}
-
-/** Whether this window shows the Stats pane: the station's own. A browser on Nexus Remote reads the
- *  station through a transport that does not carry the pane's question, so a cockpit there leaves
- *  the pane out rather than drawing a box that can only say so. */
-export function statsHere(): boolean {
-  return remoteApplicationTransport() == null
-}
-
-/** A cockpit's ⊞ Panels list, the Stats entry kept only where the pane can be drawn (`statsHere`): a
- *  tick that could show nothing is not offered. */
-export function withStats<P extends string>(menu: readonly P[]): readonly P[] {
-  return statsHere() ? menu : menu.filter((id) => id !== 'stats')
 }
 
 /** The pane as every cockpit draws it under its `stats` id: a content-height frame (a grid cannot

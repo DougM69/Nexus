@@ -17,8 +17,8 @@ import { panelHost } from '../features/panelHost'
 import { PSK_PANEL_IDS, PSK_PANELS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
 import { LogEntry } from './LogEntry'
-import { CallStatsFrame, statsHere, withStats } from './CallStatsPane'
-import { RecentQsosFrame, withRecent } from './RecentQsosPane'
+import { CallStatsFrame } from './CallStatsPane'
+import { RecentQsosFrame } from './RecentQsosPane'
 import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -163,7 +163,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const control = useStationControl(), receiverControl = useStationCapability('decoder'), rotatorControl = useStationCapability('rotator')
   const dataAvailable = useStationData()
   const host = panels
-    ? panelHost(panels, { menu: withRecent(withStats(PSK_PANEL_IDS)), side: [], main: 'stream', labels: pskPanelLabels(), shipsHidden: PSK_PANELS.defaultRemoved })
+    ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels(), shipsHidden: PSK_PANELS.defaultRemoved })
     : null
   // No panel record (a render without a host): every pane at its vocabulary's default — shown,
   // except the RF scope pane, which ships hidden (`defaultRemoved`).
@@ -1019,7 +1019,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           {/* THE RECENT CONTACTS PANE (RecentQsosPane), inside the log strip's frame under the form: the
               last few contacts, a row a click into the Logbook's editor. It takes only the room the form
               leaves. No stop control, nothing sent. */}
-          {shown('recent') && statsHere() && (
+          {shown('recent') && (
             <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
           )}
         </CockpitPaneFrame>
@@ -1029,7 +1029,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           there. A third frame, content-height, so it takes from the two above only what it shows;
           it ships hidden here, where the two are already short of room at the supported floor
           (the measured table above), one tick away in ⊞ Panels. No stop control, nothing sent. */}
-      {snap && shown('stats') && statsHere() && (
+      {snap && shown('stats') && (
         <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={mode.name} logTick={snap.logTick} />
       )}
 
