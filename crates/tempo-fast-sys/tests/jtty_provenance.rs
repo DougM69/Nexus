@@ -6,8 +6,8 @@
 //! in this tree. The JTTY directories hold nothing else. NOTICE names the tag, the commit and
 //! every modem file; the vendor README lists every file vendored and, separately, what was not
 //! taken, and both lists must agree with the table; the README credit names the directory. While
-//! the tag is a WSJT-X pre-release, NOTICE and the credit say that Nexus does not release JTTY
-//! before WSJT-X does, and once it is not, they must stop saying so.
+//! the tag is a WSJT-X pre-release, NOTICE and the credit say that it is one, and once it is not,
+//! they must stop saying so.
 //!
 //! Re-taking the files (at the WSJT-X general release that carries JTTY) is one commit that
 //! changes the files, [`UPSTREAM_TAG`], [`UPSTREAM_COMMIT`], every blob id, NOTICE and both
@@ -210,8 +210,7 @@ const README_HEADING: &str = "## License & credits";
 /// The directory NOTICE and the README credit name.
 const DIR: &str = "libtempo/vendor/wsjtx/lib/jtty/";
 /// What NOTICE's entry says while the tag is a pre-release, and stops saying once it is not.
-const PRE_RELEASE: &str =
-    "Nexus does not offer JTTY in a release until a WSJT-X general release carries it";
+const PRE_RELEASE: &str = "No WSJT-X general release carries JTTY yet";
 /// NOTICE's disclaimer.
 const NOT_ENDORSED: &str = "not endorsed by nor affiliated with the WSJT Development";
 
@@ -437,12 +436,12 @@ fn check(w: &World) -> Vec<String> {
             }
             match (pre_release, text.contains(PRE_RELEASE)) {
                 (true, false) => problems.push(format!(
-                    "{} is a pre-release, but NOTICE's entry does not say Nexus waits for a \
-                     general release",
+                    "{} is a pre-release, but NOTICE's entry does not say no general release \
+                     carries JTTY yet",
                     w.tag
                 )),
                 (false, true) => problems.push(format!(
-                    "{} is a general release, but NOTICE's entry still says Nexus waits for one",
+                    "{} is a general release, but NOTICE's entry still says none carries JTTY",
                     w.tag
                 )),
                 _ => {}
@@ -801,7 +800,7 @@ fn the_checker_fires_on_each_kind_of_gap() {
     w.notice = w.notice.replace("affiliated with", "x");
     assert!(fires(&check(&w), "NOTICE's entry lacks the disclaimer"));
     let mut w = world();
-    w.notice = w.notice.replace("general release carries it", "x");
+    w.notice = w.notice.replace("general release carries JTTY", "x");
     assert!(fires(
         &check(&w),
         "v3.3.0-beta1 is a pre-release, but NOTICE's entry does not say"

@@ -263,9 +263,8 @@ copies already vendored for the other modes, from WSJT-X 3.0.2. At `57ba9337` up
 copies are the same, except that `twkfreq` gained a fast path for a constant frequency and
 `packjt77` was rewritten; Nexus keeps its own modified `packjt77` (see the WSJT-X entry above).
 
-**`v3.3.0-beta1` is a WSJT-X pre-release.** Nexus does not offer JTTY in a release until a
-WSJT-X general release carries it. The files are then taken again from that release, and this
-entry, `libtempo/vendor/wsjtx/README.md` and the test that holds the files to their upstream
+**`v3.3.0-beta1` is a WSJT-X pre-release.** No WSJT-X general release carries JTTY yet. When
+one does, the files are taken again from that release, and this entry, `libtempo/vendor/wsjtx/README.md` and the test that holds the files to their upstream
 commit (`crates/tempo-fast-sys/tests/jtty_provenance.rs`) name the new tag and commit.
 
 Nexus is not endorsed by nor affiliated with the WSJT Development Team. The team asserts

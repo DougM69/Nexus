@@ -74,9 +74,8 @@ its git blob id at that commit, holds the two lists below to its table, and fail
 else appears in those directories.
 
 **`v3.3.0-beta1` is a WSJT-X pre-release.** JTTY first appeared in WSJT-X 3.2.0-rc1
-(2026-09-23), and no WSJT-X general release carries it yet. Nexus does not offer JTTY in a
-release until one does; the files are then taken again from that release (see *Re-taking the
-files* below).
+(2026-09-23), and no WSJT-X general release carries it yet. When one does, the files are taken
+again from that release (see *Re-taking the files* below).
 
 Licence: like the rest of WSJT-X's `lib/`, these files carry no per-file copyright or licence
 header. WSJT-X licenses its source under the GNU GPL, version 3 (its `COPYING`, its README, and
