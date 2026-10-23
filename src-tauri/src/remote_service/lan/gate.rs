@@ -221,7 +221,8 @@ impl Gate {
     }
 
     /// A handshake from `source` failed: it never proved a paired key, spoke another protocol, or
-    /// ran out of time or was cut. Enough of them in a minute and the address is ignored.
+    /// ran out of time. Enough of them in a minute and the address is ignored. A handshake cut to
+    /// make room ([`Ticket::cut`]) is not one: newer arrivals cut it, not its address.
     pub fn failed(&self, source: IpAddr, now: Instant) {
         let Ok(mut state) = self.state.lock() else {
             return;

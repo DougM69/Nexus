@@ -1072,7 +1072,7 @@ async fn slow_handshakes(
 /// sending nothing; then the paired computer connects and is welcomed, while every one of them is
 /// still inside its deadline; then twenty-four more arrive, and its session goes on answering.
 /// CONTROL: each address reached the gate, the flood's handshakes were cut (their tasks ended long
-/// before their deadline) and each one cut was counted against its address.
+/// before their deadline), and no cut was counted against its address.
 #[tokio::test]
 async fn slow_handshakes_from_many_addresses_never_keep_a_paired_computer_out() {
     use super::gate::HANDSHAKES;
@@ -1103,8 +1103,8 @@ async fn slow_handshakes_from_many_addresses_never_keep_a_paired_computer_out() 
         s.shared
             .gate
             .failures(Ipv4Addr::new(192, 168, 1, 100).into())
-            == 1,
-        "CONTROL: a handshake cut was not counted"
+            == 0,
+        "a handshake cut to make room was counted against its address"
     );
 
     let _more = slow_handshakes(&s, 150, 24, &stop).await;
@@ -1120,6 +1120,47 @@ async fn slow_handshakes_from_many_addresses_never_keep_a_paired_computer_out() 
     })
     .await;
     assert_eq!(answered, Ok(true), "the open session stopped answering");
+}
+
+/// ⛔ A handshake cut to make room is never held against its address: from the paired computer's
+/// own address, a connection still in its handshake is cut by a flood from other addresses, again
+/// and again, more times than the failures that get an address ignored; once the flood ends, the
+/// paired computer connects from that address and is welcomed. CONTROL: each of its handshakes
+/// was cut (its task ended inside the deadline), and none was counted.
+#[tokio::test]
+async fn a_handshake_cut_by_a_flood_never_locks_its_address_out() {
+    use super::gate::HANDSHAKES;
+    let s = shack(home());
+    let (_stop, stop) = watch::channel(false);
+    let peer: IpAddr = PEER.parse::<std::net::SocketAddr>().unwrap().ip();
+    for round in 0..FAILURES_BEFORE_IGNORED + 1 {
+        let (station, computer) = pair().await;
+        let mine = tokio::spawn(channel::connection(
+            station,
+            PEER.parse().unwrap(),
+            s.shared.clone(),
+            stop.clone(),
+        ));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while s.shared.gate.arrivals(peer) <= round {
+            assert!(
+                Instant::now() < deadline,
+                "round {round}: never reached the gate"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let flood = slow_handshakes(&s, 100 + round * HANDSHAKES, HANDSHAKES, &stop).await;
+        tokio::time::timeout(Duration::from_secs(2), mine)
+            .await
+            .unwrap_or_else(|_| panic!("CONTROL, round {round}: not cut"))
+            .unwrap();
+        drop(computer);
+        drop(flood);
+    }
+    assert_eq!(s.shared.gate.failures(peer), 0, "a cut counted against it");
+    let (_task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
+    let mut socket = socket.expect("the paired computer locked out by cuts");
+    assert_eq!(hello(&mut socket, VERSIONS).await["type"], "welcome");
 }
 
 /// ★ Versions, as ruled on 2026-10-04: the hello must carry the station's own versions. A computer

@@ -6,9 +6,9 @@
 //!    or over the caps ([`super::gate`]), is dropped as it arrives.
 //! 2. **The handshake, inside one deadline** ([`HANDSHAKE`]): TLS 1.3 with the computer's key held
 //!    to the paired keys ([`super::tls`]), the WebSocket upgrade, and the hello. A computer that
-//!    does not finish in time, proves no paired key, or is cut by newer handshakes at the gate,
-//!    counts against its address there; one that finishes then takes a session's place. A
-//!    refused key reads its refusal and then an orderly close ([`drain`]).
+//!    does not finish in time, or proves no paired key, counts against its address at the gate; one
+//!    cut there to make room for newer handshakes does not. One that finishes then takes a
+//!    session's place. A refused key reads its refusal and then an orderly close ([`drain`]).
 //! 3. **The hello.** The LAN protocol, stream and operation versions must be the shack's own; a
 //!    mismatch is refused saying which side to update (as ruled on 2026-10-04). Then the shack
 //!    stamps the session: a session id of its own making, and the device the key belongs to.
@@ -454,7 +454,10 @@ pub(super) async fn connection<S>(
     // it: a handshake holds a handshake's place, never a session's.
     let handshake = tokio::select! {
         done = tokio::time::timeout(shared.handshake, handshake(stream, &shared)) => done.ok(),
-        () = ticket.cut() => None,
+        // ⛔ Cut to make room: newer arrivals did it, not this address, so it is never counted
+        // against it. Counted, a flood could cut a paired computer's handshakes until its own
+        // address was ignored.
+        () = ticket.cut() => return,
     };
     match handshake {
         // Refused for its version, and told which side to update: not counted.
