@@ -8682,6 +8682,10 @@ select optgroup {
   outline: none;
   border-color: var(--accent);
 }
+/* The comment is free text, so it takes the whole row under the four short fields. */
+.logconfirm-grid .logconfirm-comment {
+  grid-column: 1 / -1;
+}
 .logconfirm-actions {
   display: flex;
   justify-content: flex-end;

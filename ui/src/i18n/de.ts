@@ -2812,6 +2812,7 @@ export const DE: PartialCatalog = {
   "logPrompt.grid.label": "Locator",
   "logPrompt.rstSent.label": "RST gesendet",
   "logPrompt.rstRcvd.label": "RST empfangen",
+  "logPrompt.comment.label": "Kommentar",
   "logPrompt.waiting": {
     "one": "{{count}} weiterer Kontakt wartet hinter diesem",
     "other": "{{count}} weitere Kontakte warten hinter diesem"

@@ -2815,6 +2815,7 @@ export const ES: PartialCatalog = {
   "logPrompt.grid.label": "Locator",
   "logPrompt.log": "Anotar QSO",
   "logPrompt.rstRcvd.label": "RST rec.",
+  "logPrompt.comment.label": "Comentario",
   "logPrompt.rstSent.label": "RST env.",
   "logPrompt.title": "¿Anotar este QSO?",
   "logbook.column.actions": "Editar / eliminar",

@@ -2038,6 +2038,8 @@ export const EN = {
   // RST is the signal-report format's name — it stays as it is inside the label.
   'logPrompt.rstSent.label': 'RST sent',
   'logPrompt.rstRcvd.label': 'RST rcvd',
+  // The contact's COMMENT (ADIF COMMENT), the Logbook editor's word for the same field.
+  'logPrompt.comment.label': 'Comment',
   'logPrompt.waiting': {
     one: '{{count}} more contact is waiting behind this one',
     other: '{{count}} more contacts are waiting behind this one',

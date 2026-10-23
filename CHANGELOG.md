@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus fetched, and nothing when that reading is more than 3 hours old.
 - **Each contact logs the worked station's continent and the distance to it** (ADIF CONT, and
   DISTANCE in km from your grid to theirs when both are known).
+- **A Comment box in the Log this QSO? pop-up.** With logging set to ask first, the pop-up that
+  shows a finished FT contact now has a Comment box under the call, grid and reports. What you type
+  there is logged as the contact's comment (ADIF COMMENT), so a note no longer means editing the
+  contact on QRZ afterwards. The box opens with the comment the contact already has, such as the
+  dB reports when you log those to comments; leave it alone and that is logged as before.
 
 ### Changed
 - **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the
