@@ -166,6 +166,8 @@ Fourteen panels tear off into their own OS window — see
 ### System
 - **[Repeaters](program.md)** — the radio-programming workbench: the repeaters
   around a location become a channel list, and the list becomes a CHIRP CSV.
+- **[Remote](remote.md)** — operate the station from a web browser or a second
+  Windows PC, on the shack's own network or over the internet (Beta).
 - **[Settings reference](settings-reference.md)** — a walk through every Settings
   tab, field by field.
 
