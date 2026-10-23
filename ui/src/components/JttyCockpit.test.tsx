@@ -18,6 +18,7 @@ import { StationControlContext } from '../stationAccess'
 import type { AppSnapshot, JttyLine, JttyState } from '../types'
 import * as api from '../api'
 import { t } from '../i18n'
+import { pushToast } from '../toast'
 
 vi.setConfig({ testTimeout: 15_000 })
 
@@ -256,34 +257,34 @@ describe('the JTTY cockpit drives the engine’s receive controls, and nothing t
     expect(m('jttySetBand')).toHaveBeenLastCalledWith(1012, 1613)
   })
 
-  it('the transmitter switched off: the dock is its compose row alone, saying why, and nothing in the cockpit can send', async () => {
-    for (const s of [state(), state({ tx: txState({ switchedOn: false, refusal: 'JTTY transmit is not switched on in this build' }) })]) {
+  it('the whole transmitter is on screen, even for a state with no transmitter in it; the engine says why it refuses a send, and the text stays to send again', async () => {
+    for (const s of [state(), state({ tx: txState({ refusal: 'TX is off — enable TX first' }) })]) {
       await mount(s)
-      expect(compose().disabled).toBe(true)
-      expect(compose().placeholder).toBe(t('jtty.compose.off'))
-      expect((screen.getByRole('button', { name: t('jtty.compose.send.label') }) as HTMLButtonElement).disabled).toBe(true)
-      expect((screen.getByRole('button', { name: /^esc\s*stop$/i }) as HTMLButtonElement).disabled, 'Esc/Stop, nothing going').toBe(true)
       for (const key of ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8']) {
-        expect(screen.queryByRole('button', { name: new RegExp(`^${key}`) }), key).toBeNull()
-        fireEvent.keyDown(window, { key })
+        expect(screen.getByRole('button', { name: new RegExp(`^${key}`) }), key).toBeTruthy()
       }
-      expect(screen.queryByRole('button', { name: new RegExp(`^TX\\s*${t('jtty.live.on.label')}$`) }), 'Live').toBeNull()
-      expect(screen.queryByRole('textbox', { name: t('jtty.hisCall.aria') }), 'the Call box').toBeNull()
-      expect(screen.queryByRole('spinbutton', { name: t('jtty.serial.aria') }), 'the serial').toBeNull()
-      expect(document.querySelector('.cockpit-txdock [role="status"]'), 'a line under the dock').toBeNull()
-      for (const k of Object.keys(api) as (keyof typeof api)[]) {
-        if (/send|fkey|live|signoff|^psk|^rtty|^js8|setPtt|setTxEnabled|startCq|callStation/i.test(String(k)) && typeof api[k] === 'function') {
-          expect(m(k), `${String(k)} was called`).not.toHaveBeenCalled()
-        }
-      }
+      expect(liveKey(), 'Live').toBeTruthy()
+      expect(screen.getByRole('textbox', { name: t('jtty.hisCall.aria') }), 'the Call box').toBeTruthy()
+      expect(screen.getByRole('spinbutton', { name: t('jtty.serial.aria') }), 'the serial').toBeTruthy()
+      expect(compose().disabled).toBe(false)
+      expect(compose().placeholder).toBe(t('jtty.compose.placeholder'))
       cleanup()
     }
+    await mount(state({ tx: txState({ refusal: 'TX is off — enable TX first' }) }))
+    expect(document.querySelector('.cockpit-txdock [role="status"]')?.textContent).toBe('TX is off — enable TX first')
+    m('jttySend').mockRejectedValue('TX is off — enable TX first')
+    fireEvent.change(compose(), { target: { value: 'CQ TEST' } })
+    fireEvent.keyDown(compose(), { key: 'Enter' })
+    await flush()
+    expect(m('jttySend')).toHaveBeenCalledWith('CQ TEST', '')
+    expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith('TX is off — enable TX first', 'error')
+    expect(compose().value, 'the refused text stays in the box').toBe('CQ TEST')
   })
 })
 
 /** A transmitter state, as the engine reports it. */
 function txState(over: Partial<NonNullable<JttyState['tx']>> = {}): NonNullable<JttyState['tx']> {
-  return { switchedOn: true, refusal: null, txHz: 1500, serial: 1, sending: false, live: false, left: 0, pending: '', notice: null, ...over }
+  return { refusal: null, txHz: 1500, serial: 1, sending: false, live: false, left: 0, pending: '', notice: null, ...over }
 }
 
 const sent = (consumed: number, text: string, s: JttyState) => ({ consumed, sent: text, state: s })

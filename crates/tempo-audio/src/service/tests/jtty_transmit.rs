@@ -1,10 +1,8 @@
-//! JTTY's transmitter at the radio loop — ⛔ SWITCHED OFF in every build
-//! (`tempo_app::engine::jtty_tx::SWITCHED_ON`). With the switch off nothing of JTTY's reaches PTT,
-//! the audio output or CAT: asserted on the keying seam's own records (a logging rigctld's
-//! command log, the mock card's samples and flushes) against a control run that never asked.
-//! Everything else runs the transmitter through the test door (`jtty-tx-test`, test builds only):
-//! what the loop plays reads back as sent, chained segments ride one key, and every stop cuts it
-//! within a tick.
+//! JTTY's transmitter at the radio loop. With TX off nothing of JTTY's reaches PTT, the audio
+//! output or CAT: asserted on the keying seam's own records (a logging rigctld's command log, the
+//! mock card's samples and flushes) against a control run that never asked. With TX on, what the
+//! loop plays reads back as sent, chained segments ride one key, and every stop, and a licence gate
+//! closing, cuts it within a tick.
 
 use super::*;
 
@@ -17,16 +15,14 @@ type Scene = (
     Arc<Mutex<Vec<String>>>,
 );
 
-/// The JTTY screen on 20 m, TX armed, W9XYZ; the rig a logging rigctld; the switch's test door
-/// as `on` says.
-fn jtty_scene(on: bool) -> Scene {
+/// The JTTY screen on 20 m, W9XYZ, TX as `tx_on` says; the rig a logging rigctld.
+fn jtty_scene(tx_on: bool) -> Scene {
     let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
     {
         let mut e = engine.lock().unwrap();
         e.set_operating_mode("jtty", false);
         e.set_frequency(14.090, "20m", "USB");
-        e.switch_jtty_tx_on_for_tests(on);
-        e.set_tx_enabled(true);
+        e.set_tx_enabled(tx_on);
     }
     let (addr, log) = mock_rigctld_on(14_090_000, false);
     let rig = Rig::rigctld(&addr);
@@ -90,13 +86,13 @@ fn read_back(played: &[f32]) -> Vec<String> {
         .collect()
 }
 
-/// ⛔ THE SWITCH, AT THE KEYING SEAM. Every way to send JTTY is tried with the switch off, each
-/// refused with the switch's words, and the loop runs on for six seconds: no PTT command reaches
+/// ⛔ THE TX-ENABLE LATCH, AT THE KEYING SEAM. Every way to send JTTY is tried with TX off, each
+/// refused with the latch's words, and the loop runs on for six seconds: no PTT command reaches
 /// the rig, no sample reaches the card, no flush, and the CAT conversation is the one a loop that
-/// was never asked has, command for command. The control: the same scene with the test door
-/// open keys (`T 1`) and plays.
+/// was never asked has, command for command. The control: the same scene with TX on keys (`T 1`)
+/// and plays.
 #[test]
-fn with_the_switch_off_nothing_reaches_ptt_audio_or_cat() {
+fn with_tx_off_nothing_reaches_ptt_audio_or_cat() {
     let run = |attempt: bool, on: bool| {
         let (engine, mut state, mut backend, mut rig, log) = jtty_scene(on);
         let mut t = 100.0;
@@ -115,7 +111,7 @@ fn with_the_switch_off_nothing_reaches_ptt_audio_or_cat() {
                 if on {
                     let _ = r;
                 } else {
-                    assert_eq!(r, Err(jtty_tx::SWITCHED_OFF.to_string()));
+                    assert!(r.unwrap_err().starts_with("TX is off"));
                 }
             }
         }
@@ -146,22 +142,23 @@ fn with_the_switch_off_nothing_reaches_ptt_audio_or_cat() {
         asked, never,
         "the refused sends changed what the loop said to the rig"
     );
-    // The control: with the door open the same tries key and play.
+    // The control: with TX on the same tries key and play.
     let (open, played, _, _) = run(true, true);
     assert!(open.iter().any(|c| c == "T 1"), "control: keyed, {open:?}");
     assert!(played > 0, "control: played");
 }
 
-/// ⛔ …and a switch that goes off with JTTY on the air stops it on the next tick: the engine reads
-/// the switch again before every frame, drops what is queued, and the loop flushes and unkeys.
+/// ⛔ …and a licence gate that closes with JTTY on the air stops it on the next tick (here the class
+/// changes to one with no 20 m data): the engine reads every gate again before every frame, drops
+/// what is queued, and the loop flushes and unkeys.
 #[test]
-fn the_switch_going_off_stops_what_the_loop_is_feeding() {
+fn a_licence_gate_closing_stops_what_the_loop_is_feeding() {
     let (engine, mut state, mut backend, mut rig, log) = jtty_scene(true);
     jtty_tx::send_text(&engine, "CQ CQ CQ DE W9XYZ W9XYZ W9XYZ K", "").unwrap();
     let mut t = 100.0;
     step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1_000.0);
     assert_eq!(keys(&log), 1, "premise: keyed");
-    engine.lock().unwrap().switch_jtty_tx_on_for_tests(false);
+    engine.lock().unwrap().set_license_class("technician");
     let (played, flushed) = (backend.played.len(), backend.flush_calls);
     tick(&engine, &mut state, &mut backend, &mut rig, t);
     assert!(
@@ -174,7 +171,7 @@ fn the_switch_going_off_stops_what_the_loop_is_feeding() {
     assert_eq!(
         backend.played.len(),
         played,
-        "fed on after the switch went off"
+        "fed on after the licence gate closed"
     );
     assert_eq!(keys(&log), 1, "keyed again");
 }
@@ -356,7 +353,7 @@ fn a_psk_over_typed_ahead_never_keys_from_the_jtty_screen() {
 
 /// LAB SUPPORT, run by hand: `cargo test -p tempo-audio --features device,serial --lib --
 /// --ignored dump_what_the_loop_plays_for_the_lab` with `JTTY_LAB_DIR` set. What the loop plays
-/// for each scene below, through the test door, written as a 12 kHz 16-bit WAV (a second of
+/// for each scene below, written as a 12 kHz 16-bit WAV (a second of
 /// silence before, three after) for the parity lab to decode with stock WSJT-X `rjtty` and with
 /// Nexus's own decoder: the transmitter's real output, not a re-encoding of it. Without the
 /// variable it writes nothing.

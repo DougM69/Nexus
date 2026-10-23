@@ -114,7 +114,7 @@ mod held_form_tests;
 /// JS8's send mechanics: the TX offset moved while a message goes out.
 #[cfg(test)]
 mod js8_send_tests;
-/// JTTY transmit: built, and switched off in every build (`jtty_tx::SWITCHED_ON`).
+/// JTTY transmit, behind every transmit guard.
 pub mod jtty_tx;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
@@ -9751,11 +9751,7 @@ impl Engine {
                 | OperatingMode::Rtty
                 | OperatingMode::Keyboard
         ) {
-            // ⛔ …and NOT INTO JTTY while its transmitter is switched off (`jtty_tx::SWITCHED_ON`):
-            // whether opening JTTY arms TX as opening PSK does is the operator's to decide with
-            // the transmitter's sign-off. Until then entry leaves the latch as it was.
-            let jtty_off = self.jtty_section() && !self.jtty_tx_switched_on();
-            if arm_manual && !self.tx_stop_hold && !self.tx_watchdog && !jtty_off {
+            if arm_manual && !self.tx_stop_hold && !self.tx_watchdog {
                 self.set_tx_enabled(true);
             }
         } else if left_a_manual_mode {

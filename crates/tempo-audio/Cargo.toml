@@ -184,8 +184,6 @@ tungstenite = { version = "=0.30.0", default-features = false, features = ["hand
 # ships (a release build will not compile with it).
 tempo-net = { path = "../tempo-net", features = ["icom-sim", "flex-unbenched"] }
 # TEST-ONLY: tempo-app's `test-util` hooks for this crate's tests: the radio loop's test of a TCI
-# program's 10-minute ceiling ages the over with `Engine::age_tci_over_for_test`; and the door past
-# JTTY's transmit switch (`tempo_app::engine::jtty_tx::SWITCHED_ON`), which the radio loop's JTTY
-# tests open to run the transmitter that is off in every build that ships. Not a new dependency:
-# tempo-app is already one, and a dev-dependency's feature is never on in a shipped build.
-tempo-app = { path = "../tempo-app", features = ["test-util", "jtty-tx-test"] }
+# program's 10-minute ceiling ages the over with `Engine::age_tci_over_for_test`. Not a new
+# dependency: tempo-app is already one, and a dev-dependency's feature is never on in a shipped build.
+tempo-app = { path = "../tempo-app", features = ["test-util"] }

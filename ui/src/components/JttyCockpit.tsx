@@ -156,9 +156,8 @@ function JttyPaneLines({
  * (operator ruling 2026-10-08: "Keyboard modem + own cockpit"). The engine decodes (auto-armed on
  * entry), this shows WSJT-X's All Decodes and QSO Frequency panes, sets Rx / Tx / F Tol and hands
  * the waterfall's range to the decoder. The dock is WSJT-X's transmitter — the compose bar and
- * Send, F1–F8, the Call and serial, live entry — and it is ⛔ SWITCHED OFF in every build (the
- * engine's `jtty_tx::SWITCHED_ON`): while the engine says so, every sender is drawn disabled with
- * the engine's reason, and the engine refuses a send that arrives anyway.
+ * Send, F1–F8, the Call and serial, live entry. The ENGINE is the authority on every send: it checks
+ * every TX gate and says why a send was refused (a toast, and the line under the dock).
  *
  * A call is clickable only where the engine lists it in `confirmedCalls` — decoded in two separate
  * messages a short time apart — and a click only fills the log strip's Call, which is what looks it
@@ -284,13 +283,10 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       .catch(() => {})
   }
 
-  // ---- THE TRANSMITTER (the dock). ⛔ SWITCHED OFF in every build: `tx.switchedOn` is the
-  // engine's constant, and while it is false every sender below is disabled with its reason. The
-  // ENGINE is the authority on every send — it re-checks the switch and every TX gate and says why
-  // a send was refused (a toast). ----
+  // ---- THE TRANSMITTER (the dock). The ENGINE is the authority on every send — it checks every TX
+  // gate and says why a send was refused (a toast). ----
   const tx = jtty?.tx
-  const txOn = tx?.switchedOn === true
-  const canSend = control && txOn
+  const canSend = control
   const live = tx?.live === true
   // On the air, queued, or in a live session: the Esc/Stop key's predicate (PSK's `sending ||
   // latched`), live from the instant a session starts, before its first frame.
@@ -415,10 +411,9 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [active, control])
-  // The line under the dock while transmit is on: the transmitter's notice, else why a send would
-  // be refused right now (the engine's words), else how to send. Switched off there is no line:
-  // the compose box says why.
-  const dockHint = txOn ? (tx?.notice ?? tx?.refusal ?? t('jtty.compose.hint')) : null
+  // The line under the dock: the transmitter's notice, else why a send would be refused right now
+  // (the engine's words), else how to send.
+  const dockHint = tx?.notice ?? tx?.refusal ?? t('jtty.compose.hint')
 
   const lines = jtty?.lines ?? []
   const allLines = useMemo(() => jttyAllPane(lines), [lines])
@@ -765,80 +760,75 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           ))}
       </div>
 
-      {/* THE TX DOCK — WSJT-X's transmitter. ⛔ SWITCHED OFF in every build, and then it is ONE row:
-          the compose box (disabled, saying so), Send and Esc/Stop — the receive-only screen's own
-          height, so the log strip keeps the room it was measured with. When the engine reports
-          transmit on, RTTY's measured dock shape grows above that row (`.rtty-dock-keys`): the eight
-          F-keys and the fixed row (the Call box, the serial number and Live), with a line under it
-          for what the transmitter did or would refuse. No ⊞ id; Stop TX, Tune and the latch are up in the TX
-          strip, and Esc/Stop here, at the end of the compose row in both states, is on the stop
-          line too (THE STOP LINE). */}
+      {/* THE TX DOCK — WSJT-X's transmitter, in RTTY's measured dock shape (`.rtty-dock-keys`): the
+          eight F-keys and the fixed row (the Call box, the serial number and Live), the compose row
+          (the compose box, Send and Esc/Stop), and a line under it for what the transmitter did or
+          would refuse. No ⊞ id; Stop TX, Tune and the latch are up in the TX strip, and Esc/Stop
+          here, at the end of the compose row, is on the stop line too (THE STOP LINE). */}
       <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
-        {txOn && (
-          <div className="rtty-dock-keys jtty-dock-keys">
-            <div className="cw-macros rtty-macros jtty-macros" role="group" aria-label={t('jtty.macros.aria')}>
-              {FKEY_TEMPLATES.map((template, i) => (
-                <button
-                  key={FKEY_NAMES[i]}
-                  type="button"
-                  className="cw-macro"
-                  disabled={!canSend}
-                  onClick={() => sendFkey(i + 1)}
-                  title={t('jtty.fkey.title', { key: FKEY_NAMES[i], template })}
-                >
-                  <span className="cw-macro-key">{FKEY_NAMES[i]}</span>
-                  <span className="cw-macro-label">{template}</span>
-                </button>
-              ))}
-            </div>
-            <div className="rtty-dock-row jtty-dock-row">
-              <input
-                disabled={!control}
-                className="settings-input rtty-hiscall"
-                value={hisCall}
-                onChange={(e) => setHisCall(e.target.value.toUpperCase())}
-                placeholder={t('jtty.hisCall.placeholder')}
-                aria-label={t('jtty.hisCall.aria')}
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <label className="jtty-serial" title={t('jtty.serial.title')}>
-                <span>{SERIAL_LABEL}</span>
-                <input
-                  className="settings-input jtty-serial-input"
-                  type="number"
-                  min={SERIAL_MIN}
-                  max={SERIAL_MAX}
-                  step={1}
-                  disabled={!control}
-                  aria-label={t('jtty.serial.aria')}
-                  value={serialDraft ?? String(serial)}
-                  onFocus={() => setSerialDraft(String(serial))}
-                  onChange={(e) => setSerialDraft(e.target.value)}
-                  onBlur={commitSerial}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      commitSerial()
-                    }
-                  }}
-                />
-              </label>
-              {/* A SENDER, not a stop: clicking it off signs off and lets what is queued go out. */}
+        <div className="rtty-dock-keys jtty-dock-keys">
+          <div className="cw-macros rtty-macros jtty-macros" role="group" aria-label={t('jtty.macros.aria')}>
+            {FKEY_TEMPLATES.map((template, i) => (
               <button
-                disabled={!canSend}
+                key={FKEY_NAMES[i]}
                 type="button"
-                className={`cw-macro rtty-tx-latch jtty-live${live ? ' on' : ''}`}
-                aria-pressed={live}
-                onClick={toggleLive}
-                title={live ? t('jtty.live.off.title') : t('jtty.live.on.title')}
+                className="cw-macro"
+                disabled={!canSend}
+                onClick={() => sendFkey(i + 1)}
+                title={t('jtty.fkey.title', { key: FKEY_NAMES[i], template })}
               >
-                <span className="cw-macro-key">{LIVE_KEY}</span>
-                <span className="cw-macro-label">{live ? t('jtty.live.off.label') : t('jtty.live.on.label')}</span>
+                <span className="cw-macro-key">{FKEY_NAMES[i]}</span>
+                <span className="cw-macro-label">{template}</span>
               </button>
-            </div>
+            ))}
           </div>
-        )}
+          <div className="rtty-dock-row jtty-dock-row">
+            <input
+              disabled={!control}
+              className="settings-input rtty-hiscall"
+              value={hisCall}
+              onChange={(e) => setHisCall(e.target.value.toUpperCase())}
+              placeholder={t('jtty.hisCall.placeholder')}
+              aria-label={t('jtty.hisCall.aria')}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <label className="jtty-serial" title={t('jtty.serial.title')}>
+              <span>{SERIAL_LABEL}</span>
+              <input
+                className="settings-input jtty-serial-input"
+                type="number"
+                min={SERIAL_MIN}
+                max={SERIAL_MAX}
+                step={1}
+                disabled={!control}
+                aria-label={t('jtty.serial.aria')}
+                value={serialDraft ?? String(serial)}
+                onFocus={() => setSerialDraft(String(serial))}
+                onChange={(e) => setSerialDraft(e.target.value)}
+                onBlur={commitSerial}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    commitSerial()
+                  }
+                }}
+              />
+            </label>
+            {/* A SENDER, not a stop: clicking it off signs off and lets what is queued go out. */}
+            <button
+              disabled={!canSend}
+              type="button"
+              className={`cw-macro rtty-tx-latch jtty-live${live ? ' on' : ''}`}
+              aria-pressed={live}
+              onClick={toggleLive}
+              title={live ? t('jtty.live.off.title') : t('jtty.live.on.title')}
+            >
+              <span className="cw-macro-key">{LIVE_KEY}</span>
+              <span className="cw-macro-label">{live ? t('jtty.live.off.label') : t('jtty.live.on.label')}</span>
+            </button>
+          </div>
+        </div>
         <div className="cw-send">
           {committed && (
             <span className="jtty-committed" title={t('jtty.compose.committed.title')}>
@@ -856,7 +846,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               if (live) commitLive(true)
               else sendTyped()
             }}
-            placeholder={!txOn ? t('jtty.compose.off') : live ? t('jtty.compose.placeholder.live') : t('jtty.compose.placeholder')}
+            placeholder={live ? t('jtty.compose.placeholder.live') : t('jtty.compose.placeholder')}
             aria-label={t('jtty.compose.aria')}
             autoComplete="off"
             spellCheck={false}

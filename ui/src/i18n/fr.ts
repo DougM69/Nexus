@@ -4804,7 +4804,6 @@ export const FR: PartialCatalog = {
   "jtty.compose.aria": "Message JTTY",
   "jtty.compose.send.label": "Envoyer",
   "jtty.compose.placeholder.live": "En direct : ce que vous tapez part au fil de la frappe",
-  "jtty.compose.off": "L'émission JTTY n'est pas activée dans cette version.",
   "jtty.compose.hint": "Entrée envoie. En direct garde l'émetteur en marche pendant la frappe ; Échap arrête.",
   "jtty.compose.committed.title": "Déjà envoyé dans cette émission",
   "jtty.compose.send.title": "Envoyer le message et le clore (Send de WSJT-X)",

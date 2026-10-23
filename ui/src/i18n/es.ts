@@ -4804,7 +4804,6 @@ export const ES: PartialCatalog = {
   "jtty.compose.aria": "Mensaje JTTY",
   "jtty.compose.send.label": "Enviar",
   "jtty.compose.placeholder.live": "En directo: lo que escribes sale mientras lo escribes",
-  "jtty.compose.off": "La transmisión JTTY no está activada en esta versión.",
   "jtty.compose.hint": "Intro envía. En directo mantiene el transmisor mientras escribes; Esc detiene.",
   "jtty.compose.committed.title": "Ya enviado en esta transmisión",
   "jtty.compose.send.title": "Enviar el mensaje y cerrarlo (Send de WSJT-X)",

@@ -7140,7 +7140,6 @@ export const DE: PartialCatalog = {
   "jtty.compose.aria": "JTTY-Nachricht",
   "jtty.compose.send.label": "Senden",
   "jtty.compose.placeholder.live": "Live: Die Eingabe geht beim Tippen auf Sendung",
-  "jtty.compose.off": "JTTY-Senden ist in dieser Version nicht eingeschaltet.",
   "jtty.compose.hint": "Enter sendet. Live hält den Sender beim Tippen auf Sendung; Esc stoppt.",
   "jtty.compose.committed.title": "In dieser Aussendung bereits gesendet",
   "jtty.compose.send.title": "Die Nachricht senden und abschließen (Send in WSJT-X)",

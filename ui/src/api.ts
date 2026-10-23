@@ -3630,8 +3630,7 @@ export async function pskStop(): Promise<PskState> {
 }
 
 // ---- JTTY (WSJT-X's keyboard mode). Every command answers the whole JttyState (a send, with what
-// it did). The transmit commands are SWITCHED OFF in every build (the engine's
-// `jtty_tx::SWITCHED_ON`): each answers "JTTY transmit is not switched on in this build". ----
+// it did). The engine checks every TX gate on each transmit command and refuses with its reason. ----
 
 /** Live JTTY state (poll while the JTTY cockpit is visible). */
 export async function getJttyState(): Promise<JttyState> {

@@ -134,13 +134,14 @@ fn a_replayed_stop_after_a_new_remote_arm_still_stops_it() {
 
 // ── Stop anything (operator decision 2026-09-14) ────────────────────────────────────────────────
 // A browser holding station control stops ANY transmission at the station, however it started: a
-// keyed mic, a tune carrier, the CW keyer, the voice keyer, RTTY, PSK, SSTV or FT. The station runs
+// keyed mic, a tune carrier, the CW keyer, the voice keyer, RTTY, PSK, JTTY, SSTV or FT. The station runs
 // every local stop verb (`transmit_stop::stop_station`). A browser without station control is
 // refused and changes nothing. This replaces
 // `transmit_stop_cannot_stop_a_new_local_transmission`, which pinned the opposite rule.
 
-pub(crate) const LOCAL_TRANSMISSIONS: [&str; 8] =
-    ["ptt", "tune", "cw", "voice", "rtty", "psk", "sstv", "ft"];
+pub(crate) const LOCAL_TRANSMISSIONS: [&str; 9] = [
+    "ptt", "tune", "cw", "voice", "rtty", "psk", "jtty", "sstv", "ft",
+];
 
 /// A controlling v4 browser, and nothing keyed.
 fn controlling() -> (Fixture, Instant, Value) {
@@ -186,6 +187,14 @@ pub(crate) fn key_locally(e: &mut tempo_app::engine::Engine, kind: &str) {
             e.set_tx_enabled(true);
             e.psk_send_text("CQ TEST").unwrap();
         }
+        "jtty" => {
+            e.set_operating_mode("jtty", false);
+            e.set_frequency(14.090, "20m", "USB");
+            e.set_tx_enabled(true);
+            let plan = e.jtty_plan_send("CQ TEST", "").unwrap();
+            let rendered = tempo_app::engine::jtty_tx::render(&plan).unwrap();
+            e.jtty_commit(plan, rendered).unwrap();
+        }
         "sstv" => {
             e.set_operating_mode("phone", false);
             e.set_tx_enabled(true);
@@ -219,6 +228,7 @@ pub(crate) fn assert_stopped(e: &mut tempo_app::engine::Engine, kind: &str) {
         "voice" => assert!(e.take_voice_abort(), "{kind}: playback is flushed"),
         "rtty" => assert!(e.take_rtty_abort(), "{kind}: the over is aborted"),
         "psk" => assert!(e.take_psk_abort(), "{kind}: the over is aborted"),
+        "jtty" => assert!(e.take_jtty_abort(), "{kind}: what is on the air is cut"),
         "sstv" => assert!(e.take_sstv_abort(), "{kind}: the image is aborted"),
         _ => {}
     }

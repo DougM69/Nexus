@@ -1,15 +1,8 @@
-//! JTTY transmit — WSJT-X's keyboard mode, sent. BUILT, AND SWITCHED OFF IN EVERY BUILD.
+//! JTTY transmit — WSJT-X's keyboard mode, sent.
 //!
-//! ⛔ [`SWITCHED_ON`] is `false`, and nothing can make it otherwise: it is a constant, not a
-//! setting, a control, a file or a command. It is read where every send is planned
-//! ([`Engine::jtty_tx_gate`], before any other gate) and again where the radio loop asks for
-//! audio ([`Engine::poll_jtty`], before every frame), so every JTTY send is refused with
-//! [`SWITCHED_OFF`] and nothing of JTTY's reaches PTT, the audio output or CAT. The transmitter
-//! comes back to the operator for sign-off and a dummy-load bench before the constant changes.
-//! Tests turn it on through a door that exists only in a test build
-//! ([`Engine::switch_jtty_tx_on_for_tests`]; the `jtty-tx-test` feature carries the same door to
-//! tempo-audio's tests, and a release build refuses to compile with it): the shape of the Flex
-//! client's `BENCHED` admission list, with one kind.
+//! ⛔ Every send passes every transmit guard: [`Engine::jtty_tx_gate`] where it is planned, and
+//! [`Engine::poll_jtty`] again before every frame the radio loop is handed, so a guard that goes
+//! down with JTTY on the air drops what is queued and cuts it.
 //!
 //! THE SHAPE: WSJT-X 3.3.0-beta1's transmitter (`widgets/mainwindow_jtty.cpp`,
 //! `widgets/JttyMessages.hpp`, `widgets/JttyLiveEntry.hpp`), on Nexus's keyboard machinery.
@@ -49,23 +42,7 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use super::{engine_lock, now_unix_millis, now_unix_secs, Engine, TxOwner};
-
-/// Whether JTTY transmit is switched on in this build. ⛔ `false`: see the module header. It
-/// becomes `true` only by an edit to this line, after the operator's sign-off and bench.
-pub const SWITCHED_ON: bool = false;
-
-/// What every refused send says while [`SWITCHED_ON`] is `false`.
-pub const SWITCHED_OFF: &str = "JTTY transmit is not switched on in this build";
-
-// The door past [`SWITCHED_ON`] (`Engine::switch_jtty_tx_on_for_tests`) is test support: this
-// crate's tests, and tempo-audio's through the `jtty-tx-test` feature. A release build never
-// carries it.
-#[cfg(all(feature = "jtty-tx-test", not(debug_assertions)))]
-compile_error!(
-    "`jtty-tx-test` opens the door past JTTY's transmit switch: test support, never in a \
-     release build"
-);
+use super::{engine_lock, now_unix_millis, now_unix_secs, Engine, Mode, TxOwner};
 
 /// WSJT-X's JTTY Tx offset: 1500 Hz, set again whenever JTTY is selected
 /// (`on_actionJTTY_triggered`), and its spin box's range (`TxFreqSpinBox_2`).
@@ -128,10 +105,6 @@ const WATCHDOG_TRIPPED: &str = "JTTY stopped by the TX watchdog: nothing was typ
      its whole limit. Turn TX on again to carry on.";
 const STOPPED_FOR_PREP: &str =
     "JTTY was stopped while the message was being prepared; nothing was sent.";
-
-/// The exchange profile a send is packed for (WSJT-X's special operating activity). Stage 6
-/// brings Field Day and RTTY Roundup; until then every send is packed with none.
-const PROFILE: jtty::Profile = jtty::Profile::Unknown;
 
 /// One segment ready for the transmitter: its audio, made at the Tx offset it was sent at.
 #[derive(Debug, Clone)]
@@ -200,9 +173,6 @@ pub struct JttyTx {
     notice: Option<String>,
     /// Bumped by every stop, drop and Tx change: a send planned before one is not committed.
     pub(super) gen: u64,
-    /// The door past [`SWITCHED_ON`], for tests only.
-    #[cfg(any(test, feature = "jtty-tx-test"))]
-    test_switch: bool,
 }
 
 impl JttyTx {
@@ -223,8 +193,6 @@ impl JttyTx {
             keyed_since_ms: None,
             notice: None,
             gen: 0,
-            #[cfg(any(test, feature = "jtty-tx-test"))]
-            test_switch: false,
         }
     }
 
@@ -295,6 +263,8 @@ pub enum JttyCommit {
 pub struct JttyPlan {
     gen: u64,
     tx_hz: f32,
+    /// The exchange profile the text is packed for, the one in force when the send was made.
+    profile: jtty::Profile,
     what: Planned,
     /// Start the live session when this commits.
     start_live: bool,
@@ -402,19 +372,93 @@ fn snr_text(snr: i32) -> String {
     format!("{snr:+03}")
 }
 
-/// Who a send is from and to: what WSJT-X's macros read (`Jtty::NativeMacroContext`), with no
-/// exchange profile until stage 6.
+/// Who a send is from and to: what WSJT-X's macros read (`Jtty::NativeMacroContext`).
 #[derive(Debug, Clone)]
 struct MacroContext {
     my_call: String,
     his_call: String,
     serial: u32,
+    /// The exchange profile, and the exchange it sends (Field Day's class and section; empty
+    /// with no profile): [`Engine::jtty_exchange`].
+    profile: jtty::Profile,
+    exchange: String,
     grid: String,
     snr: i32,
 }
 
+/// `Jtty::nativeExchangeFieldText`, what `%E` reads: the serial with no exchange profile, else the
+/// exchange.
+fn exchange_text(ctx: &MacroContext) -> String {
+    match ctx.profile {
+        jtty::Profile::Unknown => serial_text(ctx.serial),
+        _ => ctx.exchange.clone(),
+    }
+}
+
+/// `Jtty::isCanonicalBase36Token`: two or three letters or digits, upper case, three not starting
+/// with 0.
+fn is_canonical_token(t: &str) -> bool {
+    (t.len() == 2 || (t.len() == 3 && !t.starts_with('0')))
+        && t.bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase())
+}
+
+/// `Jtty::nativeExchange`: the exchange as one atom, and the text it reads as. With no profile,
+/// the serial and its report; in Field Day, the class and section (`COUNTCLASS SECTION`, the
+/// count 1 to 32, the class A to F). WSJT-X's reason when the exchange will not fit the atom.
+fn native_exchange(ctx: &MacroContext) -> Result<(jtty::AtomDescriptor, String), String> {
+    if ctx.profile != jtty::Profile::FieldDay {
+        return Ok((
+            serial_atom(ctx.serial),
+            format!("599 {}", serial_text(ctx.serial)),
+        ));
+    }
+    let fields: Vec<&str> = ctx.exchange.split(' ').collect();
+    let [count_class, section] = fields[..] else {
+        return Err("the Field Day exchange must be COUNTCLASS SECTION".to_string());
+    };
+    let Some(class) = count_class
+        .chars()
+        .last()
+        .filter(|_| count_class.len() >= 2)
+    else {
+        return Err("the Field Day exchange must be COUNTCLASS SECTION".to_string());
+    };
+    let count_text = &count_class[..count_class.len() - class.len_utf8()];
+    let count = count_text
+        .parse::<i32>()
+        .ok()
+        .filter(|n| count_text.bytes().all(|b| b.is_ascii_digit()) && (1..=32).contains(n))
+        .ok_or("the Field Day transmitter count must be between 1 and 32")?;
+    if !('A'..='F').contains(&class) {
+        return Err("the Field Day class must be A through F".to_string());
+    }
+    if !is_canonical_token(section) {
+        return Err("the Field Day section must be a canonical 2-3 character code".to_string());
+    }
+    let atom = jtty::atom(3, 1, (class as u8 - b'A') as i8, count, section)
+        .expect("a section is at most three characters");
+    Ok((atom, format!("{count}{class} {section}")))
+}
+
+/// `Jtty::normalizedFieldDayExchange`: upper case, single spaces, and a space put between the
+/// class and the section when the two were written together (`3AWI`).
+fn normalized_field_day_exchange(value: &str) -> String {
+    let mut exchange = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    exchange.make_ascii_uppercase();
+    if exchange.contains(' ') {
+        return exchange;
+    }
+    let digits = exchange.bytes().take_while(u8::is_ascii_digit).count();
+    let b = exchange.as_bytes();
+    if digits > 0 && digits + 1 < b.len() && (b'A'..=b'F').contains(&b[digits]) {
+        exchange.insert(digits + 1, ' ');
+    }
+    exchange
+}
+
 /// `Jtty::expandLiteralMacro`, the expansion WSJT-X gives typed text: `%M` my call, `%H` and
-/// `%Q` the DX call, `%N` and (with no exchange profile) `%E` the serial, `%G` my grid's first
+/// `%Q` the DX call, `%N` the serial, `%E` the exchange ([`exchange_text`]), `%G` my grid's first
 /// four characters, `%R` the DX's SNR. Case-sensitive, as Qt's `replace` is.
 fn expand_literal(text: &str, ctx: &MacroContext) -> String {
     let grid: String = ctx.grid.trim().to_uppercase().chars().take(4).collect();
@@ -422,7 +466,7 @@ fn expand_literal(text: &str, ctx: &MacroContext) -> String {
         .replace("%H", &ctx.his_call)
         .replace("%Q", &ctx.his_call)
         .replace("%N", &serial_text(ctx.serial))
-        .replace("%E", &serial_text(ctx.serial))
+        .replace("%E", &exchange_text(ctx))
         .replace("%G", &grid)
         .replace("%R", &snr_text(ctx.snr))
 }
@@ -481,9 +525,10 @@ fn serial_atom(serial: u32) -> jtty::AtomDescriptor {
     jtty::atom(1, 0, 1, serial as i32, "").expect("no text")
 }
 
-/// F-key `n` (1..=8) compiled as WSJT-X compiles its Contest template for no exchange profile
-/// (`Jtty::compileNativeMacro`): the atoms and the text they read as. A call the template needs
-/// that is not a native one REFUSES the key — never literal text in its place.
+/// F-key `n` (1..=8) compiled as WSJT-X compiles its Contest template (`Jtty::compileNativeMacro`):
+/// the atoms and the text they read as, the exchange in the context's profile
+/// ([`native_exchange`]). A call the template needs that is not a native one, or an exchange the
+/// atom cannot carry, REFUSES the key — never literal text in its place.
 fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>, String), String> {
     let my = ctx.my_call.trim().to_uppercase();
     let his = ctx.his_call.trim().to_uppercase();
@@ -512,7 +557,8 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
             ))
         }
     };
-    let exchange = format!("599 {}", serial_text(ctx.serial));
+    let exchange =
+        || native_exchange(ctx).map_err(|why| format!("F{n} cannot send {why}. Nothing was sent."));
     Ok(match n {
         1 => {
             need_my()?;
@@ -520,10 +566,8 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
         }
         2 => {
             need_his()?;
-            (
-                vec![call_atom(CALL, &his), serial_atom(ctx.serial)],
-                format!("{his} {exchange}"),
-            )
+            let (atom, text) = exchange()?;
+            (vec![call_atom(CALL, &his), atom], format!("{his} {text}"))
         }
         3 => {
             need_his()?;
@@ -543,16 +587,20 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
         }
         6 => {
             need_his()?;
+            let (atom, text) = exchange()?;
             (
-                vec![call_atom(TU_NOW_CALL, &his), serial_atom(ctx.serial)],
-                format!("TU NOW {his} {exchange}"),
+                vec![call_atom(TU_NOW_CALL, &his), atom],
+                format!("TU NOW {his} {text}"),
             )
         }
         7 => {
             need_his()?;
             (vec![call_atom(CALL_AGN, &his)], format!("{his} AGN?"))
         }
-        8 => (vec![serial_atom(ctx.serial)], exchange),
+        8 => {
+            let (atom, text) = exchange()?;
+            (vec![atom], text)
+        }
         _ => return Err(format!("There is no F{n}: JTTY has F1 to F8.")),
     })
 }
@@ -560,8 +608,13 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
 /// Render `text` as WSJT-X's `execute_jtty_tx` does: line by line, each line in segments of at
 /// most 80 characters (a shorter one wherever 80 will not encode), end-of-message on the last
 /// segment of each line that ends a message — every line but the last, and the last when `last`.
-fn render_text(text: &str, last: bool, tx_hz: f32) -> Result<Vec<JttySegment>, String> {
-    let encode = |t: &str, final_: bool| jtty::encode_segment(t, PROFILE, final_);
+fn render_text(
+    text: &str,
+    last: bool,
+    tx_hz: f32,
+    profile: jtty::Profile,
+) -> Result<Vec<JttySegment>, String> {
+    let encode = |t: &str, final_: bool| jtty::encode_segment(t, profile, final_);
     let lines: Vec<&str> = text.split('\n').collect();
     let mut out: Vec<JttySegment> = Vec::new();
     for (li, line) in lines.iter().enumerate() {
@@ -636,10 +689,15 @@ fn segment(
 /// takes `MODEM_LOCK`, which a decode may hold for seconds).
 pub fn render(plan: &JttyPlan) -> Result<JttyRendered, String> {
     let segments = match &plan.what {
-        Planned::Text { text, last } => render_text(text, *last, plan.tx_hz)?,
+        Planned::Text { text, last } => render_text(text, *last, plan.tx_hz, plan.profile)?,
         Planned::Atoms { atoms, text } => {
-            let tones = jtty::encode_atoms(atoms).map_err(|e| {
-                format!("JTTY could not encode the F-key's message ({e:?}). Nothing was sent.")
+            let tones = jtty::encode_atoms(atoms).map_err(|e| match e {
+                jtty::AtomError::UnknownSection => "The Field Day section is not in the ARRL/RAC \
+                    table JTTY's exchange carries. Nothing was sent."
+                    .to_string(),
+                e => {
+                    format!("JTTY could not encode the F-key's message ({e:?}). Nothing was sent.")
+                }
             })?;
             let pcm = jtty::gen_wave(&tones, plan.tx_hz)
                 .ok_or_else(|| "JTTY could not make the waveform. Nothing was sent.".to_string())?;
@@ -655,7 +713,7 @@ pub fn render(plan: &JttyPlan) -> Result<JttyRendered, String> {
         Planned::Nothing => Vec::new(),
     };
     let filler = if plan.start_live {
-        let encoded = jtty::encode_segment(FILLER, PROFILE, false)
+        let encoded = jtty::encode_segment(FILLER, plan.profile, false)
             .map_err(|_| "JTTY could not encode its filler.".to_string())?;
         Some(segment(encoded, false, true, plan.tx_hz)?)
     } else {
@@ -669,28 +727,9 @@ pub fn render(plan: &JttyPlan) -> Result<JttyRendered, String> {
 // ---------------------------------------------------------------------------------------------
 
 impl Engine {
-    /// Whether JTTY transmit is switched on: [`SWITCHED_ON`], or a test's door.
-    pub fn jtty_tx_switched_on(&self) -> bool {
-        #[cfg(any(test, feature = "jtty-tx-test"))]
-        if self.jtty_tx.test_switch {
-            return true;
-        }
-        SWITCHED_ON
-    }
-
-    /// TEST SUPPORT ONLY — the door past [`SWITCHED_ON`]. Compiled only into this crate's tests
-    /// and builds with `jtty-tx-test`, which a release build refuses.
-    #[cfg(any(test, feature = "jtty-tx-test"))]
-    pub fn switch_jtty_tx_on_for_tests(&mut self, on: bool) {
-        self.jtty_tx.test_switch = on;
-    }
-
     /// Every reason a JTTY send would be refused, checked before anything is encoded so the
-    /// operator learns why. The switch first: with it off nothing else is even asked.
+    /// operator learns why.
     pub(super) fn jtty_tx_gate(&self) -> Result<(), String> {
-        if !self.jtty_tx_switched_on() {
-            return Err(SWITCHED_OFF.to_string());
-        }
         if !self.jtty_section() {
             return Err("Not in the JTTY section — open the JTTY screen first".to_string());
         }
@@ -721,13 +760,39 @@ impl Engine {
         Ok(())
     }
 
+    /// The exchange profile JTTY packs for, and the exchange it sends, as WSJT-X takes them from
+    /// its special operating activity (`jttyExchangeProfile`, `jttyNativeMacroContext`): Field Day,
+    /// with the class and section, while ARRL Field Day is the contest running; none otherwise.
+    /// Winter Field Day has none, as in WSJT-X (which has no activity for it): JTTY's class/section
+    /// atom carries the classes A to F, and its H, I, O and M go as text. Nexus runs no contest
+    /// WSJT-X's RTTY Roundup activity is for, so that profile never applies.
+    pub(super) fn jtty_exchange(&self) -> (jtty::Profile, String) {
+        use tempo_core::fieldday::FtMessages;
+        let field_day = match &self.mode {
+            Mode::FieldDay { station, .. } if self.settings.fd_active => {
+                FtMessages::of_contest(&station.log.session.event_id) == FtMessages::FieldDay
+            }
+            _ => false,
+        };
+        match self.contest_sent_exchange().filter(|_| field_day) {
+            Some(exchange) => (
+                jtty::Profile::FieldDay,
+                normalized_field_day_exchange(&exchange),
+            ),
+            None => (jtty::Profile::Unknown, String::new()),
+        }
+    }
+
     /// What the macros read. `%R` sends WSJT-X's -10 until the cockpit can say which line the DX
     /// call came from (WSJT-X takes the SNR of the decoded word the operator picked).
     fn jtty_macro_context(&self, his_call: &str) -> MacroContext {
+        let (profile, exchange) = self.jtty_exchange();
         MacroContext {
             my_call: self.settings.mycall.trim().to_uppercase(),
             his_call: his_call.trim().to_uppercase(),
             serial: self.jtty_tx.serial,
+            profile,
+            exchange,
             grid: self.settings.mygrid.clone(),
             snr: -10,
         }
@@ -737,6 +802,7 @@ impl Engine {
         JttyPlan {
             gen: self.jtty_tx.gen,
             tx_hz: self.jtty_tx.tx_hz,
+            profile: self.jtty_exchange().0,
             what,
             start_live: false,
             end_live: false,
@@ -1105,7 +1171,7 @@ impl Engine {
     }
 
     /// ⚠️ THE RADIO LOOP'S ONE PATH TO JTTY AUDIO, every tick: every gate re-checked while
-    /// anything is queued or on the air, the switch first; a gate down drops it all and cuts it.
+    /// anything is queued or on the air; a gate down drops it all and cuts it.
     /// With `want` (the loop has less than a frame queued ahead), the next frame — the segment
     /// being fed, the next one queued, or, in a live session with nothing typed waiting, the
     /// filler. `ahead_ms` is how much audio the loop already has queued: a segment's first frame
@@ -1113,11 +1179,6 @@ impl Engine {
     pub fn poll_jtty(&mut self, want: bool, ahead_ms: f64) -> JttyTick {
         use crate::keyboard::{KbDrop, KbGates, KbTick, KeyboardLatch};
         if !self.jtty_tx.active() {
-            return JttyTick::Idle;
-        }
-        // The switch, again, before every frame: nothing queued can reach the air with it off.
-        if !self.jtty_tx_switched_on() {
-            self.jtty_drop(SWITCHED_OFF);
             return JttyTick::Idle;
         }
         if self.clock_repair_holds_tx() {
@@ -1287,7 +1348,6 @@ impl Engine {
     pub(super) fn jtty_tx_state(&self) -> crate::dto::JttyTxState {
         let (left, pending) = self.jtty_tx.pending();
         crate::dto::JttyTxState {
-            switched_on: self.jtty_tx_switched_on(),
             refusal: self.jtty_tx_gate().err(),
             tx_hz: self.jtty_tx.tx_hz,
             serial: self.jtty_tx.serial,
@@ -1364,12 +1424,11 @@ mod tests {
     use super::*;
     use crate::engine::jtty_rx::JttyDriver;
 
-    /// An engine on the JTTY screen, 20 m, TX armed, W9XYZ; the test door as `on` says.
-    fn jtty_engine(on: bool) -> Mutex<Engine> {
+    /// An engine on the JTTY screen, 20 m, TX armed, W9XYZ.
+    fn jtty_engine() -> Mutex<Engine> {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.set_operating_mode("jtty", false);
         e.set_frequency(14.090, "20m", "USB");
-        e.switch_jtty_tx_on_for_tests(on);
         e.set_tx_enabled(true);
         Mutex::new(e)
     }
@@ -1410,6 +1469,7 @@ mod tests {
         pcm.extend(vec![0.0f32; 36_000]);
         let rx = Mutex::new(Engine::new("K1ABC", "FN42", 0));
         engine_lock(&rx).set_jtty_armed(true);
+        let _contexts = crate::engine::jtty_rx::receive_contexts();
         let mut driver = JttyDriver::default();
         let t0 = 1_700_000_000_000i64;
         for (i, chunk) in pcm.chunks(1200).enumerate() {
@@ -1440,29 +1500,29 @@ mod tests {
             .collect()
     }
 
-    /// ⛔ THE SWITCH. Off, every way to send is refused with the switch's own words — before any
-    /// other gate, so even TX off says it — and nothing is queued, owned or handed to the loop.
-    /// The positive control: the same engine with the test door open sends.
+    /// ⛔ THE TX-ENABLE LATCH. Off, every way to send is refused with the latch's own words, and
+    /// nothing is queued, owned or handed to the loop. The positive control: the same engine with
+    /// TX on sends.
     #[test]
-    fn with_the_switch_off_every_send_is_refused_and_nothing_reaches_the_loop() {
-        // A const block: switching it on fails this test's build until the test is rewritten for it.
-        const {
-            assert!(!SWITCHED_ON, "JTTY transmit must be off in every build");
-        }
-        let e = jtty_engine(false);
-        let off = Err(SWITCHED_OFF.to_string());
-        assert_eq!(send_text(&e, "CQ W9XYZ", "").map(|_| ()), off);
+    fn with_tx_off_every_send_is_refused_and_nothing_reaches_the_loop() {
+        let e = jtty_engine();
+        engine_lock(&e).set_tx_enabled(false);
+        let refused = |r: Result<JttySent, String>, what: &str| {
+            let why = r.map(|_| ()).unwrap_err();
+            assert!(why.starts_with("TX is off"), "{what}: {why}");
+        };
+        refused(send_text(&e, "CQ W9XYZ", ""), "Send");
         for n in 1..=8 {
-            assert_eq!(send_fkey(&e, n, "W1AW").map(|_| ()), off, "F{n}");
+            refused(send_fkey(&e, n, "W1AW"), &format!("F{n}"));
         }
-        assert_eq!(live_start(&e, "HELLO ", "").map(|_| ()), off);
+        refused(live_start(&e, "HELLO ", ""), "Live");
         for how in [JttyCommit::Advance, JttyCommit::Flush] {
-            assert_eq!(
-                live_commit(&e, "A B C D E F G H I ", "", how).map(|_| ()),
-                off
+            refused(
+                live_commit(&e, "A B C D E F G H I ", "", how),
+                "a live commit",
             );
         }
-        assert_eq!(sign_off(&e, "", "").map(|_| ()), off);
+        refused(sign_off(&e, "", ""), "Sign off");
         {
             let mut g = engine_lock(&e);
             assert_eq!(g.tx_owner(), None, "nothing owns the transmitter");
@@ -1473,39 +1533,48 @@ mod tests {
             );
             assert!(!g.take_jtty_abort());
             let st = g.jtty_tx_state();
-            assert!(!st.switched_on);
-            assert_eq!(st.refusal.as_deref(), Some(SWITCHED_OFF));
+            assert!(st.refusal.as_deref().unwrap().starts_with("TX is off"));
             assert_eq!((st.left, st.live, st.sending), (0, false, false));
-            // The switch is asked first: with TX off as well, it is still the switch that says no.
-            g.set_tx_enabled(false);
-            assert_eq!(g.jtty_tx_gate(), off);
         }
-        // Control: the door open, the same send goes.
-        let on = jtty_engine(true);
-        assert!(send_text(&on, "CQ W9XYZ", "").is_ok());
-        assert_eq!(engine_lock(&on).tx_owner(), Some(TxOwner::Jtty));
+        // Control: TX on, the same send goes.
+        engine_lock(&e).set_tx_enabled(true);
+        assert!(send_text(&e, "CQ W9XYZ", "").is_ok());
+        assert_eq!(engine_lock(&e).tx_owner(), Some(TxOwner::Jtty));
         assert!(matches!(
-            engine_lock(&on).poll_jtty(true, 0.0),
+            engine_lock(&e).poll_jtty(true, 0.0),
             JttyTick::Frame(_)
         ));
     }
 
-    /// ⛔ …AND AGAIN BEFORE EVERY FRAME. Whatever is queued when the switch is off is dropped at the
-    /// loop's hand-out, never keyed: the gate a send passed is not the only one.
+    /// ⛔ …AND THE GATES AGAIN BEFORE EVERY FRAME. A gate that goes down with JTTY on the air drops
+    /// everything queued and cuts it at the loop's next hand-out, however it went down: the latch
+    /// falling without TX Off's own stop, or the licence gate closing (here a class change that
+    /// takes 20 m data away). The gate a send passed is not the only one.
     #[test]
-    fn the_switch_is_read_again_before_every_frame() {
-        let e = jtty_engine(true);
-        send_text(&e, "CQ CQ DE W9XYZ W9XYZ K", "").unwrap();
-        let mut g = engine_lock(&e);
-        assert!(
-            matches!(g.poll_jtty(true, 0.0), JttyTick::Frame(_)),
-            "control"
-        );
-        g.switch_jtty_tx_on_for_tests(false);
-        assert_eq!(g.poll_jtty(true, 0.0), JttyTick::Idle);
-        assert!(g.take_jtty_abort(), "what was on the air is cut");
-        assert_eq!(g.tx_owner(), None, "and nothing is left queued");
-        assert_eq!(g.jtty_tx_state().notice.as_deref(), Some(SWITCHED_OFF));
+    fn the_gates_are_read_again_before_every_frame() {
+        type Down = fn(&mut Engine);
+        let downs: [(&str, Down, &str); 2] = [
+            ("the latch", |g| g.tx_enabled = false, REFUSED_TX_OFF),
+            (
+                "the licence",
+                |g| g.set_license_class("technician"),
+                REFUSED_PRIVILEGES,
+            ),
+        ];
+        for (what, down, why) in downs {
+            let e = jtty_engine();
+            send_text(&e, "CQ CQ DE W9XYZ W9XYZ K", "").unwrap();
+            let mut g = engine_lock(&e);
+            assert!(
+                matches!(g.poll_jtty(true, 0.0), JttyTick::Frame(_)),
+                "{what}: control"
+            );
+            down(&mut g);
+            assert_eq!(g.poll_jtty(true, 0.0), JttyTick::Idle, "{what}");
+            assert!(g.take_jtty_abort(), "{what}: what was on the air is cut");
+            assert_eq!(g.tx_owner(), None, "{what}: and nothing is left queued");
+            assert_eq!(g.jtty_tx_state().notice.as_deref(), Some(why), "{what}");
+        }
     }
 
     /// WSJT-X'S SEGMENTS (`execute_jtty_tx`): a line longer than the encoder's 80 characters is
@@ -1518,7 +1587,7 @@ mod tests {
     /// and stock `rjtty` alike — measured in the lab, so it is not asserted here.)
     #[test]
     fn a_long_line_goes_out_in_wsjtx_segments() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         engine_lock(&e).settings.write_all_txt = true;
         let first = "CQ CQ CQ DE W9XYZ W9XYZ W9XYZ PSE K THIS IS A LONGER LINE THAN EIGHTY CHARS \
                      SO IT SPLITS";
@@ -1567,7 +1636,7 @@ mod tests {
     /// app's own receive path, is the two messages that were typed, in order.
     #[test]
     fn a_send_reads_back_as_typed() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         send_text(&e, "CQ CQ CQ DE W9XYZ W9XYZ K\nqrz? 73", "").unwrap();
         let heard = receive(&drain(&e));
         assert_eq!(
@@ -1581,7 +1650,7 @@ mod tests {
     /// reads is in that order.
     #[test]
     fn queued_sends_chain_in_order() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         send_text(&e, "CQ W9XYZ", "").unwrap();
         send_fkey(&e, 2, "W1AW").unwrap();
         send_text(&e, "QRZ?", "").unwrap();
@@ -1600,7 +1669,7 @@ mod tests {
     /// not a standard call REFUSES the key: never sent as literal text instead.
     #[test]
     fn the_f_keys_are_wsjtxs_contest_templates() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         let want = [
             (1, "CQ W9XYZ CQ", 1),
             (2, "W1AW 599 007", 2),
@@ -1648,7 +1717,7 @@ mod tests {
     /// after any other. Settings keeps it.
     #[test]
     fn the_serial_moves_on_after_a_tu_message() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         send_fkey(&e, 2, "W1AW").unwrap();
         drain(&e);
         assert_eq!(engine_lock(&e).jtty_serial(), 1, "F2 keeps it");
@@ -1674,13 +1743,96 @@ mod tests {
         assert_eq!(engine_lock(&e).jtty_serial(), 3, "only at the start");
     }
 
+    /// The JTTY screen in a contest session: `event` ("" is ARRL Field Day), class `class`,
+    /// section WI, TX armed.
+    fn jtty_in_contest(event: &str, class: &str) -> Mutex<Engine> {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = event.into();
+        s.fd_class = class.into();
+        s.fd_section = "WI".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-run").unwrap();
+        e.set_operating_mode("jtty", false);
+        e.set_frequency(14.090, "20m", "USB");
+        e.set_tx_enabled(true);
+        Mutex::new(e)
+    }
+
+    /// THE EXCHANGE PROFILE, as WSJT-X takes it from its special operating activity
+    /// (`jttyExchangeProfile`): in ARRL Field Day the exchange is the class and section, and the
+    /// F-keys send it as JTTY's class/section atom (`nativeExchange`), which a receiver reads back
+    /// as typed; `%E` in typed text is the same words. Outside a contest it is the serial, as
+    /// before.
+    #[test]
+    fn arrl_field_day_sends_its_class_and_section() {
+        let e = jtty_in_contest("arrlfd", "3A");
+        assert_eq!(
+            engine_lock(&e).jtty_exchange(),
+            (jtty::Profile::FieldDay, "3A WI".to_string())
+        );
+        send_fkey(&e, 2, "W1AW").unwrap();
+        assert_eq!(complete(&receive(&drain(&e))), ["W1AW 3A WI"]);
+        assert_eq!(sent_lines(&e), ["W1AW 3A WI"]);
+        send_fkey(&e, 6, "W1AW").unwrap();
+        send_fkey(&e, 8, "").unwrap();
+        assert_eq!(
+            complete(&receive(&drain(&e))),
+            ["TU NOW W1AW 3A WI", "3A WI"]
+        );
+        let typed = send_text(&e, "W1AW %E", "").unwrap();
+        assert_eq!(typed.sent, "W1AW 3A WI");
+        // The blank event is a fresh install's contest, ARRL Field Day.
+        let e = jtty_in_contest("", "1D");
+        assert_eq!(
+            engine_lock(&e).jtty_exchange(),
+            (jtty::Profile::FieldDay, "1D WI".to_string())
+        );
+        // Control: no contest running, the serial.
+        let e = jtty_engine();
+        assert_eq!(
+            engine_lock(&e).jtty_exchange(),
+            (jtty::Profile::Unknown, String::new())
+        );
+        assert_eq!(send_text(&e, "W1AW %E", "").unwrap().sent, "W1AW 001");
+    }
+
+    /// WINTER FIELD DAY HAS NO PROFILE (WSJT-X has no activity for it, and JTTY's class/section
+    /// atom carries the classes A to F only, where Winter Field Day's are H, I, O and M): `%E` is
+    /// the serial, and an exchange typed out goes as text, which a receiver reads back as typed.
+    #[test]
+    fn winter_field_day_exchanges_go_as_text() {
+        let e = jtty_in_contest("wfd", "1O");
+        assert_eq!(
+            engine_lock(&e).jtty_exchange(),
+            (jtty::Profile::Unknown, String::new())
+        );
+        send_text(&e, "W1AW 1O WI", "").unwrap();
+        assert_eq!(complete(&receive(&drain(&e))), ["W1AW 1O WI"]);
+    }
+
+    /// A Field Day exchange the class/section atom cannot carry refuses the F-key with WSJT-X's
+    /// reason, and nothing is sent.
+    #[test]
+    fn a_field_day_exchange_the_atom_cannot_carry_refuses_the_key() {
+        let e = jtty_in_contest("arrlfd", "40A");
+        let err = send_fkey(&e, 2, "W1AW").unwrap_err();
+        assert!(err.contains("between 1 and 32"), "{err}");
+        assert_eq!(
+            engine_lock(&e).tx_owner(),
+            None,
+            "a refused key queued nothing"
+        );
+    }
+
     /// LIVE ENTRY: starting it keys nothing on its own; a commit goes out with the message
     /// left open; when it has gone the FILLER holds the transmitter, and goes on doing so; the
     /// sign-off ends the message and the session, and the transmitter then runs dry. Our receiver
     /// reads ONE message, the filler gone from it, and the window shows no filler line.
     #[test]
     fn live_entry_holds_the_carrier_with_the_filler_and_signs_off() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         live_start(&e, "", "").unwrap();
         assert!(engine_lock(&e).jtty_live());
         assert_eq!(
@@ -1693,7 +1845,7 @@ mod tests {
         assert_eq!(done.consumed, 12);
         let mut air = frames(&e, 3); // "HELLO THERE" is three frames
         let filler_frames = {
-            let f = jtty::encode_segment(FILLER, PROFILE, false).unwrap();
+            let f = jtty::encode_segment(FILLER, jtty::Profile::Unknown, false).unwrap();
             f.frames()
         };
         // Nothing typed waiting: the filler, and again, for as long as the session runs.
@@ -1727,7 +1879,7 @@ mod tests {
     /// (`execute_jtty_tx`: every line but the last ends its message).
     #[test]
     fn a_line_break_ends_a_message_even_in_a_live_commit() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         live_start(&e, "", "").unwrap();
         live_commit(&e, "LINE ONE\nLINE TWO", "", JttyCommit::Flush).unwrap();
         let segs: Vec<(String, bool)> = engine_lock(&e)
@@ -1749,7 +1901,7 @@ mod tests {
     /// three held back, then those five; after a pause, all of it, the word in progress too.
     #[test]
     fn live_commits_hold_back_an_atom_in_progress() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         live_start(&e, "", "").unwrap();
         let seven = "ONE TWO THREE FOUR FIVE SIX SEVEN ";
         let done = live_commit(&e, seven, "", JttyCommit::Advance).unwrap();
@@ -1779,7 +1931,7 @@ mod tests {
     #[test]
     fn every_stop_drops_the_queue_and_cuts_the_air() {
         for stop in ["stop", "halt", "tx off"] {
-            let e = jtty_engine(true);
+            let e = jtty_engine();
             live_start(&e, "", "").unwrap();
             live_commit(&e, "CQ CQ DE W9XYZ ", "", JttyCommit::Flush).unwrap();
             send_text(&e, "AND MORE", "").unwrap();
@@ -1804,7 +1956,7 @@ mod tests {
             }
         }
         // A stop with nothing going arms nothing (a one-shot cut must not catch a later over).
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         engine_lock(&e).jtty_stop();
         assert!(!engine_lock(&e).take_jtty_abort());
     }
@@ -1814,7 +1966,7 @@ mod tests {
     #[test]
     fn the_watchdog_trips_what_is_left_running() {
         for live in [true, false] {
-            let e = jtty_engine(true);
+            let e = jtty_engine();
             engine_lock(&e).settings.tx_watchdog_min = 1;
             if live {
                 live_start(&e, "HI ", "").unwrap();
@@ -1843,7 +1995,7 @@ mod tests {
     /// THE CEILING: a live session ends at ten minutes however much is typed into it.
     #[test]
     fn the_ceiling_ends_a_live_session() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         live_start(&e, "HI ", "").unwrap();
         frames(&e, 1);
         let mut g = engine_lock(&e);
@@ -1866,7 +2018,7 @@ mod tests {
     #[test]
     fn leaving_the_jtty_screen_stops_it() {
         for to in ["keyboard", "digital", "phone"] {
-            let e = jtty_engine(true);
+            let e = jtty_engine();
             send_text(&e, "CQ CQ DE W9XYZ", "").unwrap();
             frames(&e, 1);
             engine_lock(&e).set_operating_mode("jtty", false);
@@ -1925,25 +2077,21 @@ mod tests {
         assert!(e.psk_send_text("CQ").is_ok());
     }
 
-    /// While JTTY transmit is switched off, opening JTTY does NOT arm TX (the operator decides
-    /// whether it should, with the transmitter's sign-off). The control: opening PSK does.
+    /// Opening JTTY arms TX as opening PSK does — the Keyboard section's one rule — and sends
+    /// nothing: every send is still the operator's own Send, F-key or Live. Behind a stop it arms
+    /// nothing either ("Stop holds"): after Stop TX the latch stays off until the operator's own act.
     #[test]
-    fn opening_jtty_does_not_arm_tx_while_transmit_is_off() {
+    fn opening_jtty_arms_tx_as_psk_does_but_never_behind_a_stop() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         assert!(!e.tx_enabled(), "launch: disarmed");
         e.set_operating_mode("jtty", false);
-        assert!(
-            !e.tx_enabled(),
-            "JTTY entry armed TX with its transmitter switched off"
-        );
+        assert!(e.tx_enabled(), "JTTY entry arms, as PSK's does");
+        assert!(!e.jtty_tx_active(), "and sends nothing");
+        e.halt_tx();
+        assert!(!e.tx_enabled(), "premise: Stop TX disarmed");
         e.set_operating_mode("keyboard", false);
-        assert!(e.tx_enabled(), "control: PSK entry arms, as it always has");
-        // With the test door open (a build where JTTY transmits), entry arms as PSK's does
-        // today: what the operator's answer decides.
-        let mut e = Engine::new("W9XYZ", "EN37", 0);
-        e.switch_jtty_tx_on_for_tests(true);
         e.set_operating_mode("jtty", false);
-        assert!(e.tx_enabled());
+        assert!(!e.tx_enabled(), "a stop holds across entry");
     }
 
     /// THE TX OFFSET: the licence gate judges JTTY's ACTUAL emission — its four tones from the Tx
@@ -1975,7 +2123,7 @@ mod tests {
     /// with Rx), holds its range, and cannot move while anything is queued or on the air.
     #[test]
     fn the_tx_offset_is_wsjtxs_and_holds_still_while_transmitting() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         let mut g = engine_lock(&e);
         g.set_jtty_tx(1800.0).unwrap();
         assert!(g.set_jtty_tx(199.0).is_err() && g.set_jtty_tx(5001.0).is_err());
@@ -1996,7 +2144,7 @@ mod tests {
     /// the operator stopped JTTY while it was being prepared.
     #[test]
     fn a_send_planned_before_a_stop_is_not_committed() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         let plan = engine_lock(&e).jtty_plan_send("CQ W9XYZ", "").unwrap();
         let rendered = render(&plan).unwrap();
         engine_lock(&e).jtty_stop();
@@ -2015,7 +2163,7 @@ mod tests {
     /// anything is added: a send that would leave more queued than the limit is refused whole.
     #[test]
     fn the_queue_must_fit_the_watchdog() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         engine_lock(&e).settings.tx_watchdog_min = 1;
         let long = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ".repeat(4);
         let err = send_text(&e, &long, "").unwrap_err();
@@ -2027,10 +2175,10 @@ mod tests {
         );
     }
 
-    /// The gates a send passes, each refusing with its reason once the switch is on.
+    /// The gates a send passes, each refusing with its reason.
     #[test]
     fn the_gates_refuse_with_their_reasons() {
-        let e = jtty_engine(true);
+        let e = jtty_engine();
         engine_lock(&e).set_tx_enabled(false);
         assert!(send_text(&e, "CQ", "")
             .unwrap_err()

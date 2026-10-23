@@ -1972,15 +1972,13 @@ export interface JttyState {
   /** Why receiving stopped or restarted, to show the operator; null when there is nothing. */
   notice: string | null
   /** The transmitter (`tempo_app::dto::JttyTxState`). The engine always sends it; a state without
-   *  it (an older fixture) reads as switched off. */
+   *  it (an older fixture) reads as nothing going. */
   tx?: JttyTxState
 }
 
-/** What JTTY's transmitter is doing. ⛔ `switchedOn` is false in every build today: the dock is
- *  drawn, and every send is refused. */
+/** What JTTY's transmitter is doing. */
 export interface JttyTxState {
-  switchedOn: boolean
-  /** Why a send would be refused right now (the switch's reason first); null when it would go. */
+  /** Why a send would be refused right now (the engine's words); null when it would go. */
   refusal: string | null
   /** The Tx frequency, Hz. */
   txHz: number

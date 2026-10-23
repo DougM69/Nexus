@@ -772,10 +772,7 @@ pub struct JttyState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JttyTxState {
-    /// JTTY transmit is switched on in this build. `false` in every build today
-    /// (`engine::jtty_tx::SWITCHED_ON`): the dock is drawn but every send is refused.
-    pub switched_on: bool,
-    /// Why a send would be refused right now (the switch's reason first), or `None`.
+    /// Why a send would be refused right now, or `None`.
     pub refusal: Option<String>,
     /// The Tx offset, Hz (WSJT-X's Tx spin box for JTTY).
     pub tx_hz: f32,

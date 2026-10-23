@@ -10545,7 +10545,6 @@ export const EN = {
   'jtty.compose.aria': 'JTTY message',
   'jtty.compose.send.label': 'Send',
   'jtty.compose.placeholder.live': 'Live: what you type goes out as you type it',
-  'jtty.compose.off': 'JTTY transmit is not switched on in this build.',
   'jtty.compose.hint': 'Enter sends. Live keeps the transmitter up while you type; Esc stops.',
   'jtty.compose.committed.title': 'Already sent in this transmission',
   'jtty.compose.send.title': "Send the message, ending it (WSJT-X's Send)",

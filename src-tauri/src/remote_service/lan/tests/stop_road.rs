@@ -1291,6 +1291,7 @@ fn cockpit_stop(kind: &str) -> Vec<&'static str> {
         "voice" => Some("stop_voice"),
         "rtty" => Some("rtty_stop"),
         "psk" => Some("psk_stop"),
+        "jtty" => Some("jtty_stop"),
         "sstv" => Some("sstv_stop"),
         _ => None,
     };
@@ -1319,6 +1320,7 @@ fn each_road_alone_stops_each_kind_of_over() {
                         "stop_voice" => e.stop_voice(),
                         "rtty_stop" => e.rtty_stop(),
                         "psk_stop" => e.psk_stop(),
+                        "jtty_stop" => e.jtty_stop(),
                         "sstv_stop" => e.sstv_stop(),
                         _ => {}
                     }

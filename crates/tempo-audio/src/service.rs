@@ -11676,10 +11676,7 @@ impl RadioLoop {
             }
         }
 
-        // JTTY (WSJT-X's keyboard mode). ⛔ SWITCHED OFF in every build
-        // (`tempo_app::engine::jtty_tx::SWITCHED_ON`): the engine refuses every send, hands this
-        // block nothing, and reads the switch again before every frame it would hand out. Built for
-        // the operator's sign-off and bench. The engine renders each segment's audio OFF this loop
+        // JTTY (WSJT-X's keyboard mode). The engine renders each segment's audio OFF this loop
         // (the modem lock a decode can hold for seconds never stalls the unkey path) and hands it
         // out a frame at a time; this keeps between one and two frames queued
         // (`keyboard::JTTY`), so a loop that stops ticking unkeys within them and the tail. Every

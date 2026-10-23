@@ -6682,7 +6682,6 @@ export const JA: PartialCatalog = {
   "jtty.compose.aria": "JTTY メッセージ",
   "jtty.compose.send.label": "送信",
   "jtty.compose.placeholder.live": "ライブ：入力した内容が入力中に送信されます",
-  "jtty.compose.off": "このビルドでは JTTY の送信は有効になっていません。",
   "jtty.compose.hint": "Enter で送信。ライブは入力中も送信を続けます。Esc で停止。",
   "jtty.compose.committed.title": "この送信で送信済み",
   "jtty.compose.send.title": "メッセージを送信して終了（WSJT-X の Send）",

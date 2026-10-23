@@ -2848,8 +2848,8 @@ function App() {
   // one of them is on show, on the shared listener the cockpits' own Esc rides too (useEscStop:
   // capture phase, never preventDefault, stop authority only). So on the same press a menu or dialog
   // still closes, Satellites still closes the bird detail, and the voice keyer still stops itself.
-  // JTTY TOO: its TX strip's Stop TX is the plain halt (it transmits nothing of its own yet), so App
-  // binds its Esc here, as Phone's and SSTV's.
+  // JTTY TOO: its TX strip's Stop TX is the plain halt, which also drops JTTY's queue and cuts what
+  // is on the air, so App binds its Esc here, as Phone's and SSTV's.
   // CONNECT TOO (the operator's ruling 2026-10-01: "remove all radio control from connect, reclaim that space"): the
   // top bar is not drawn on Connect, so its Stop TX went with it; without this nothing there could cut an over that Operate's
   // background sequence is still keying. 'connect' is in ESC_HALT_VIEWS, so it is this same call, stop authority included.
