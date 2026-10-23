@@ -4,14 +4,15 @@
 //! [`Engine::poll_jtty`] again before every frame the radio loop is handed, so a guard that goes
 //! down with JTTY on the air drops what is queued and cuts it.
 //!
-//! THE SHAPE: WSJT-X 3.3.0-beta1's transmitter (`widgets/mainwindow_jtty.cpp`,
-//! `widgets/JttyMessages.hpp`, `widgets/JttyLiveEntry.hpp`), on Nexus's keyboard machinery.
+//! THE SHAPE: WSJT-X 3.3.0-beta4's transmitter (`widgets/mainwindow_jtty.cpp`,
+//! `lib/jtty/JttyTransmit.cpp`, `widgets/JttyMessages.hpp`, `widgets/JttyLiveEntry.hpp`), on
+//! Nexus's keyboard machinery.
 //! - **A send** is text the operator typed, or an F-key. Text is prepared as WSJT-X prepares it
 //!   ([`crate::keyboard::kb_filter`] over [`crate::keyboard::JTTY`]), split at line breaks and
-//!   then into segments of at most 80 characters at spaces (`nextTransmitTextSegment`, a shorter
-//!   one when 80 will not encode), and each segment is encoded with end-of-message only where
-//!   WSJT-X sets it: on the last segment of a line that ends the message, or that a line break
-//!   ends (`execute_jtty_tx`). The F-keys are WSJT-X's eight Contest templates, compiled as
+//!   then into segments of at most 80 characters at spaces (`nextTransmitTextSegment`), and each
+//!   segment is encoded with end-of-message only where WSJT-X sets it: on the last segment of a
+//!   line that ends the message, or that a line break ends (`Jtty::encodeTransmitText`). A
+//!   segment that will not encode refuses the whole send; nothing of it is sent. The F-keys are WSJT-X's eight Contest templates, compiled as
 //!   WSJT-X compiles them into call and exchange atoms (`Jtty::compileNativeMacro`): a call that
 //!   is not a standard one REFUSES the key, it is never sent as literal text.
 //! - **The queue** chains segments with no gap and no spacing frame; the Tx offset and the
@@ -101,6 +102,10 @@ const REFUSED_LOOP: &str = "JTTY stopped: the radio was busy (switching, or held
      what was still queued was dropped. Send it again when you are ready.";
 const REFUSED_CLOCK: &str = "JTTY stopped: a clock repair started, so what was still queued was \
      dropped. Send it again when the repair has finished.";
+/// WSJT-X 3.3.0-beta4's words when a segment will not encode (`execute_jtty_tx`,
+/// `widgets/mainwindow_jtty.cpp` 413-416): the whole send is refused.
+const REFUSED_TOO_LONG: &str = "JTTY text not sent: a line does not fit in one message once \
+     encoded; shorten it and send again.";
 const WATCHDOG_TRIPPED: &str = "JTTY stopped by the TX watchdog: nothing was typed or sent for \
      its whole limit. Turn TX on again to carry on.";
 const STOPPED_FOR_PREP: &str =
@@ -605,9 +610,11 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
     })
 }
 
-/// Render `text` as WSJT-X's `execute_jtty_tx` does: line by line, each line in segments of at
-/// most 80 characters (a shorter one wherever 80 will not encode), end-of-message on the last
-/// segment of each line that ends a message — every line but the last, and the last when `last`.
+/// Render `text` as WSJT-X's `Jtty::encodeTransmitText` does: line by line, each line in segments
+/// of at most 80 characters, end-of-message on the last segment of each line that ends a message —
+/// every line but the last, and the last when `last`. A segment that will not encode refuses the
+/// whole send, with no shorter retry (WSJT-X 3.3.0-beta4, `lib/jtty/JttyTransmit.cpp` 154-226;
+/// its 3.3.0-beta1 retried the segment shorter until it encoded).
 fn render_text(
     text: &str,
     last: bool,
@@ -623,23 +630,12 @@ fn render_text(
         let mut texts: Vec<String> = Vec::new();
         let mut offset = 0;
         while offset < chars.len() {
-            let (mut len, mut source) = next_segment(&chars, offset, SEGMENT_CHARS);
+            let (len, source) = next_segment(&chars, offset, SEGMENT_CHARS);
             if source.trim().is_empty() {
                 offset += len;
                 continue;
             }
-            let encoded = loop {
-                match encode(&source, false) {
-                    Ok(e) => break e,
-                    Err(_) if len <= 1 => {
-                        return Err(format!(
-                            "JTTY could not encode \"{}\". Nothing was sent.",
-                            source.trim()
-                        ))
-                    }
-                    Err(_) => (len, source) = next_segment(&chars, offset, len - 1),
-                }
-            };
+            let encoded = encode(&source, false).map_err(|_| REFUSED_TOO_LONG.to_string())?;
             texts.push(source.clone());
             out.push(segment(encoded, false, false, tx_hz)?);
             offset += len;
@@ -650,12 +646,7 @@ fn render_text(
         let line_ends = li + 1 < lines.len() || last;
         if line_ends {
             let source = texts.last().expect("a segment was made");
-            let encoded = encode(source, true).map_err(|_| {
-                format!(
-                    "JTTY could not encode \"{}\". Nothing was sent.",
-                    source.trim()
-                )
-            })?;
+            let encoded = encode(source, true).map_err(|_| REFUSED_TOO_LONG.to_string())?;
             let n = out.len() - 1;
             out[n] = segment(encoded, true, false, tx_hz)?;
         }
@@ -1630,6 +1621,47 @@ mod tests {
             txt[2].ends_with(" Tx JTTY     0  0.0 1500 TU 73"),
             "{txt:?}"
         );
+    }
+
+    /// A LINE THAT WILL NOT ENCODE REFUSES THE WHOLE SEND, as WSJT-X 3.3.0-beta4 refuses it: no
+    /// shorter retry, nothing queued, nothing keyed, and the operator is told why. Under RTTY
+    /// Roundup's profile each `599 1` packs as `599 001`, so these thirteen (77 characters typed)
+    /// overflow the encoder's 80 while ten of them fit: the line the old retry sent in two
+    /// pieces. The control: a line that fits, under the same profile, sends.
+    #[test]
+    fn a_line_that_will_not_encode_refuses_the_whole_send() {
+        let roundup = |text: &'static str| {
+            move |g: &mut Engine| {
+                let mut plan = g.jtty_plan_send(text, "")?;
+                plan.profile = jtty::Profile::RttyRoundup;
+                Ok(plan)
+            }
+        };
+        let e = jtty_engine();
+        let why = run(
+            &e,
+            roundup(
+                "599 1 599 1 599 1 599 1 599 1 599 1 599 1 599 1 599 1 599 1 599 1 599 1 599 1",
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(why, REFUSED_TOO_LONG);
+        {
+            let mut g = engine_lock(&e);
+            assert_eq!(g.jtty_tx.queue.len(), 0, "nothing queued");
+            assert_eq!(g.tx_owner(), None, "nothing owns the transmitter");
+            assert_eq!(g.poll_jtty(true, 0.0), JttyTick::Idle, "nothing keyed");
+        }
+        // Control: a line that fits, under the same profile, goes.
+        run(&e, roundup("599 1 599 2")).unwrap();
+        let segs: Vec<String> = engine_lock(&e)
+            .jtty_tx
+            .queue
+            .iter()
+            .map(|s| s.text.clone())
+            .collect();
+        assert_eq!(segs, vec!["599 001 599 002".to_string()]);
+        assert_eq!(engine_lock(&e).tx_owner(), Some(TxOwner::Jtty));
     }
 
     /// ENCODE → OUR OWN RECEIVE: what the transmitter puts out for a two-line send, read by the

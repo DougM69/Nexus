@@ -40,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   form, and %E in typed text is your class and section, as in WSJT-X. Winter Field Day allows JTTY for 2027; its
   classes do not fit that form, so a Winter Field Day exchange goes as typed text, which a WSJT-X station reads the
   same way.
+- **JTTY: a line that will not fit in one message is not sent at all, as in WSJT-X 3.3.0-beta4.** If any part of
+  what you Send will not fit in one message once it is encoded, nothing of the send goes out, your text stays in the
+  box, and a message says why: "JTTY text not sent: a line does not fit in one message once encoded; shorten it and
+  send again."
+  Nexus used to send such a line in shorter pieces, as the earlier WSJT-X test release did.
 - **Log space weather on each contact (off by default).** Settings ▸ Logging & Connectors ▸
   Integrations & Feeds ▸ Propagation has a new switch. On, every contact you log carries the
   planetary K index, A index and solar flux (ADIF K_INDEX, A_INDEX, SFI) from the latest reading
