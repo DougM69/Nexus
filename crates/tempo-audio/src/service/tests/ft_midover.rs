@@ -570,6 +570,8 @@ pub(super) struct HeldWorker {
     results: std::sync::mpsc::Sender<WorkerOut>,
     /// The decodes the pass found, not yet handed to the loop.
     found: std::cell::RefCell<Vec<StreamedDecode>>,
+    /// The last decoded job's pass and rescue deadline ([`DecodeJob::rescue_give_up_at`]).
+    pub(super) last_job: std::cell::Cell<Option<(DecodePass, Option<std::time::Instant>)>>,
 }
 
 impl HeldWorker {
@@ -585,6 +587,7 @@ impl HeldWorker {
             jobs,
             results,
             found: Default::default(),
+            last_job: Default::default(),
         }
     }
 
@@ -593,6 +596,7 @@ impl HeldWorker {
     pub(super) fn decode(&self) -> DecodeResult {
         let job = self.jobs.try_recv().expect("the loop dispatched a decode");
         assert!(self.jobs.try_recv().is_err(), "one decode at a time");
+        self.note(&job);
         let mut results = Vec::new();
         run_worker_job(job, &mut |out| match out {
             WorkerOut::Found(d) => self.found.borrow_mut().push(d),
@@ -606,6 +610,7 @@ impl HeldWorker {
     pub(super) fn try_decode(&self) -> Option<DecodeResult> {
         let job = self.jobs.try_recv().ok()?;
         assert!(self.jobs.try_recv().is_err(), "one decode at a time");
+        self.note(&job);
         let mut results = Vec::new();
         run_worker_job(job, &mut |out| match out {
             WorkerOut::Found(d) => self.found.borrow_mut().push(d),
@@ -613,6 +618,12 @@ impl HeldWorker {
         });
         assert_eq!(results.len(), 1, "a slot decode yields one result");
         Some(results.remove(0))
+    }
+
+    fn note(&self, job: &WorkerJob) {
+        if let WorkerJob::Slot(j) = job {
+            self.last_job.set(Some((j.pass(), j.rescue_give_up_at())));
+        }
     }
 
     /// The messages the pass found and has not handed to the loop yet, in the order it found them.

@@ -80,6 +80,10 @@ fn hidden_reply_period(ahead: [f64; 3], early_lands_at: f64) -> (Scene, Vec<Stri
     let (b, r, s) = (&mut backend, &mut rig, &mut station);
     tick(&mut state, &engine, b, r, s, 15_000.0 + 11_820.0);
     let early = worker.decode();
+    assert!(
+        matches!(worker.last_job.get(), Some((DecodePass::Early, None))),
+        "the early pass has no rescue"
+    );
     assert_eq!(
         early
             .decodes()
@@ -121,8 +125,21 @@ fn hidden_reply_period(ahead: [f64; 3], early_lands_at: f64) -> (Scene, Vec<Stri
     // The full pass.
     feed_to(&mut backend, 14_420.0 + ahead[2]);
     let (b, r, s) = (&mut backend, &mut rig, &mut station);
+    let dispatched = std::time::Instant::now();
     tick(&mut state, &engine, b, r, s, 15_000.0 + 14_420.0);
+    let ticked = std::time::Instant::now();
     let full = worker.decode();
+    // Its rescue gives up at the next period's early-pass moment, 11.808 s into it: 12.388 s after
+    // this tick, 14.42 s into this period.
+    let Some((DecodePass::Boundary, Some(rescue_at))) = worker.last_job.get() else {
+        panic!("the full pass carries its rescue's deadline");
+    };
+    let left = std::time::Duration::from_millis(15_000 + 11_808 - 14_420);
+    assert!(
+        rescue_at >= dispatched + left && rescue_at <= ticked + left,
+        "the rescue gives up 12.388 s after the full pass's tick: {:?} after it",
+        rescue_at - dispatched
+    );
     let found = worker.found_messages();
     worker.land(full);
     tick(&mut state, &engine, b, r, s, 15_000.0 + 14_440.0);

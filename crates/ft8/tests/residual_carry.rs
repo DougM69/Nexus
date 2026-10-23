@@ -134,6 +134,8 @@ fn pass_counted(
                     at.push(tried);
                 }
                 Progress::Candidate => tried += 1,
+                // The full pass from the residual alone: the rescue after it is tested below.
+                Progress::Rescue => return true,
             }
             false
         },

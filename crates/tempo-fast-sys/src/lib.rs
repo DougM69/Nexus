@@ -841,6 +841,9 @@ extern "C" {
     /// replayed as AP hypotheses. Mirrors [`ft1_harq_reset`].
     pub fn ft8_a7_reset();
 
+    /// How many decodes the slot decoded last has saved into the a7 table. Read only.
+    pub fn ft8_a7_saved() -> c_int;
+
     // ---- FT4: native decode of the standard WSJT-X FT4 mode (7.5 s T/R) ------
 
     /// Encode a message into 103 FT4 channel tones {0..3}. `nsym_out` = 103, or -1.

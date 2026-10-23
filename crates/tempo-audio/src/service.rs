@@ -14226,6 +14226,18 @@ impl RadioLoop {
                             std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0),
                         );
                     }
+                    // The rescue pass after an FT8 full pass from the early pass's residual (the
+                    // full pass once more on the raw audio, for the few decodes the residual
+                    // loses) is the period's lowest-value work: it gives up at the next period's
+                    // early-pass moment, 11.808 s into it, so a slow computer never runs it into
+                    // that period's decoding. Given up before it starts, the full pass's result
+                    // stands alone.
+                    if tier_now == Tier::Ft8 && pass == DecodePass::Boundary {
+                        let left_ms = (slot_ms + 41.0 * HSYM_MS - elapsed_ms).max(0.0);
+                        job = job.with_rescue_give_up_at(
+                            std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0),
+                        );
+                    }
                     self.decode.dispatch(WorkerJob::Slot(job));
                     self.decode_in_flight = true;
                 }

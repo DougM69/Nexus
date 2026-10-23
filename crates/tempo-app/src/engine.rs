@@ -2010,6 +2010,12 @@ pub struct DecodeJob {
     /// at WSJT-X's 13.4 s into the period ([`DecodeJob::with_give_up_at`]); `None`, every other
     /// pass, runs to its end.
     give_up_at: Option<Instant>,
+    /// When FT8's rescue pass after a full pass from the early pass's residual gives up
+    /// ([`modes::DecodeSink::give_up_rescue`]): past it the rescue is not started, or stops at its
+    /// next sync candidate with what it found. The radio loop sets it on the FT8 full pass, at the
+    /// next period's early-pass moment ([`DecodeJob::with_rescue_give_up_at`]); `None` runs it to
+    /// its end.
+    rescue_give_up_at: Option<Instant>,
 }
 
 impl DecodeJob {
@@ -2029,6 +2035,19 @@ impl DecodeJob {
     pub fn with_give_up_at(mut self, at: Instant) -> Self {
         self.give_up_at = Some(at);
         self
+    }
+
+    /// Give FT8's rescue pass up at `at` (see [`DecodeJob::rescue_give_up_at`]): the FT8 full
+    /// pass, at the next period's early-pass moment, so a slow computer never runs the rescue into
+    /// the next period's decoding; given up before it starts, the full pass's result stands alone.
+    pub fn with_rescue_give_up_at(mut self, at: Instant) -> Self {
+        self.rescue_give_up_at = Some(at);
+        self
+    }
+
+    /// When FT8's rescue pass gives up ([`DecodeJob::with_rescue_give_up_at`]), if it does.
+    pub fn rescue_give_up_at(&self) -> Option<Instant> {
+        self.rescue_give_up_at
     }
 
     /// Which pass this job is.
@@ -2129,6 +2148,7 @@ struct JobSink<'a> {
     slot: u64,
     epoch: u64,
     give_up_at: Option<Instant>,
+    rescue_give_up_at: Option<Instant>,
 }
 
 impl modes::DecodeSink for JobSink<'_> {
@@ -2143,6 +2163,11 @@ impl modes::DecodeSink for JobSink<'_> {
     fn give_up(&mut self) -> bool {
         self.progress.candidate();
         self.give_up_at.is_some_and(|at| Instant::now() >= at)
+    }
+    fn give_up_rescue(&mut self) -> bool {
+        self.progress.candidate();
+        self.rescue_give_up_at
+            .is_some_and(|at| Instant::now() >= at)
     }
 }
 
@@ -2385,6 +2410,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         heard_on,
         ctx,
         give_up_at,
+        rescue_give_up_at,
     } = job;
     let mut sink = JobSink {
         progress,
@@ -2392,6 +2418,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         slot,
         epoch,
         give_up_at,
+        rescue_give_up_at,
     };
     // Hold the decoder lock across the ENTIRE decode: this is the single lock that
     // serializes the a7 table, the packjt77 hash table and the FT1 IR-HARQ buffers
@@ -28052,6 +28079,7 @@ contact yourself."
                 heard_on: None,
                 ctx: None,
                 give_up_at: None,
+                rescue_give_up_at: None,
             };
         }
         if self.app.tier() == Tier::TempoDeep {
@@ -28079,6 +28107,7 @@ contact yourself."
                 heard_on: None,
                 ctx: None,
                 give_up_at: None,
+                rescue_give_up_at: None,
             };
         }
         // Native tiers (FT1/FT8/FT4) decode through the active SignalSource with
@@ -28218,6 +28247,7 @@ contact yourself."
             // `DecodeJob::with_ctx`. `None` keeps the shipped path byte-identical.
             ctx: None,
             give_up_at: None,
+            rescue_give_up_at: None,
         }
     }
 

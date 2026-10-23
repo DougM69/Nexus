@@ -913,6 +913,7 @@ impl Mode for Ft8Mode {
                     false
                 }
                 ft8::Progress::Candidate => sink.give_up(),
+                ft8::Progress::Rescue => sink.give_up_rescue(),
             },
         )
         .into_iter()
@@ -961,6 +962,7 @@ impl Mode for Ft8Mode {
                     false
                 }
                 ft8::Progress::Candidate => sink.give_up(),
+                ft8::Progress::Rescue => sink.give_up_rescue(),
             },
             &mut carry.ft8,
         )

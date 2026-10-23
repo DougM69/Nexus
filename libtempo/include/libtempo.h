@@ -320,6 +320,12 @@ typedef struct {
  * subtracted, and dedupes against them without handing them to `cb` (ft8_decode.f90:121,
  * :152-162); the early records open `out`. Anything else is ft8_decode_frame_cb. The caller must
  * only carry a residual made from the same first 47*3456 samples as `iwave`.
+ *
+ * la7final 2 is the rescue pass after it: the raw audio again, `early` holding the 1..200
+ * (<= max_out) records already reported and `early_subs`/`resid` NULL. They open `out`, are
+ * deduped against, never handed to `cb` and never saved into the a7 table again (one found again
+ * gives its entry this pass's dt and frequency); new decodes are saved once and the a7 replay
+ * runs. Without such records, 2 is 1.
  */
 int ft8_decode_frame_dp(const int16_t *iwave /*[FT8_NMAX]*/,
                         int nfa, int nfb, int ndepth,
@@ -350,6 +356,9 @@ int ft8_subtract_early(const int16_t *iwave /*[FT8_NMAX]*/, int ndepth, int near
  * as AP hypotheses against the new band's audio. Mirrors ft1_harq_reset.
  */
 void ft8_a7_reset(void);
+
+/* How many decodes the slot decoded last has saved into the a7 table. Read only. */
+int ft8_a7_saved(void);
 
 /*===========================================================================
  * FT4: native decode/encode of the standard WSJT-X FT4 mode (7.5 s T/R,

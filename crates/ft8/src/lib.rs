@@ -259,6 +259,10 @@ pub enum Progress<'a> {
     /// with what it has found: no further candidate, pass or a7 replay. WSJT-X asks its early
     /// pass's give-up at exactly this point (`ft8_decode.f90:240-242`).
     Candidate,
+    /// [`decode_frame_carry`]'s rescue pass, after a full pass from the residual: asked before it
+    /// starts and after each of its sync candidates. Answering `true` gives the rescue up there,
+    /// keeping what it found; before it starts, the pass's result is the full pass's alone.
+    Rescue,
 }
 
 /// [`decode_frame_a7`], telling `progress` of each decode the moment the pass accepts it, as
@@ -379,7 +383,7 @@ fn decode_frame_impl(
         ap,
         ap_cq_only,
         progress,
-        None,
+        Carried::None,
         false,
     )
     .0
@@ -388,9 +392,21 @@ fn decode_frame_impl(
     .collect()
 }
 
+/// What a pass is handed from the period's earlier passes ([`decode_records`]).
+#[derive(Clone, Copy)]
+enum Carried<'a> {
+    /// Nothing: the raw audio.
+    None,
+    /// The early pass's decodes and the 47 step's residual: the full pass starts from it.
+    Residual(&'a Early, &'a Residual),
+    /// The rescue pass: the raw audio, and the records the period's passes already reported,
+    /// which it dedupes against, never hands on and never saves into the a7 table again.
+    Reported(&'a [tempo_fast_sys::Ft8DecodeT]),
+}
+
 /// The one call into the modem's decode (`ft8_decode_frame_dp`): the records it wrote, and, when
-/// `want_subs`, what the full pass needs to subtract each one ([`Carry`]). `carried` is the early
-/// pass's decodes and the 47 step's residual, for a full pass that starts from it.
+/// `want_subs`, what the full pass needs to subtract each one ([`Carry`]). `carried` is what the
+/// period's earlier passes hand this one ([`Carried`]).
 #[allow(clippy::too_many_arguments)]
 fn decode_records(
     iwave: &[i16],
@@ -408,7 +424,7 @@ fn decode_records(
     ap: bool,
     ap_cq_only: bool,
     progress: Option<&mut dyn FnMut(Progress<'_>) -> bool>,
-    carried: Option<(&Early, &Residual)>,
+    carried: Carried<'_>,
     want_subs: bool,
 ) -> (
     Vec<tempo_fast_sys::Ft8DecodeT>,
@@ -434,13 +450,25 @@ fn decode_records(
     // mainwindow.cpp:1678). The wrapper treats anything but 41 as 50.
     let nzhsym = if partial { 41 } else { 50 };
     let (nearly, early, early_subs, resid) = match carried {
-        Some((e, r)) => (
+        Carried::Residual(e, r) => (
             e.records.len() as i32,
             e.records.as_ptr(),
             e.subs.as_ptr(),
             r.dd1.as_ptr(),
         ),
-        None => (0, std::ptr::null(), std::ptr::null(), std::ptr::null()),
+        Carried::Reported(records) => (
+            records.len() as i32,
+            records.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+        ),
+        Carried::None => (0, std::ptr::null(), std::ptr::null(), std::ptr::null()),
+    };
+    // The modem's rescue mode (`ft8_cabi.f90`, la7final 2): the a7 replay runs, and only decodes
+    // new to the period are saved.
+    let la7final = match carried {
+        Carried::Reported(_) if a7_final => 2,
+        _ => a7_final as i32,
     };
 
     let mut stream = progress.map(|progress| Stream {
@@ -459,8 +487,8 @@ fn decode_records(
         // SAFETY: every pointer is to a live buffer of the length the modem reads: `iwave` holds
         // NMAX samples (asserted), `out` and `subs` MAX_DECODES records (or `subs` is null), the
         // carried early records and subs `nearly` each and the residual NMAX samples (`Carry`
-        // builds them so), and `user` is the `Stream` `on_progress` reads, alive until the modem
-        // returns.
+        // builds them so), or the `nearly` reported records with null subs and residual, and
+        // `user` is the `Stream` `on_progress` reads, alive until the modem returns.
         unsafe {
             tempo_fast_sys::ft8_decode_frame_dp(
                 iwave.as_ptr(),
@@ -474,7 +502,7 @@ fn decode_records(
                 nftx,
                 nzhsym,
                 nutc,
-                a7_final as i32,
+                la7final,
                 ap as i32,
                 ap_cq_only as i32,
                 out.as_mut_ptr(),
@@ -596,6 +624,15 @@ impl Carry {
 /// own order (the RX frequency's first). Without such a residual the full pass is exactly
 /// [`decode_frame_a7_streaming`]'s. Any other pass is too, and leaves `carry` alone.
 ///
+/// A full pass that started from the residual is followed by a rescue pass, unless the full pass
+/// was given up or `progress` answers `true` to [`Progress::Rescue`] before it starts: the full
+/// pass once more on the raw audio, as it ran before the carry, handing on only the messages the
+/// period's passes have not reported, which follow them in the returned list. Subtracting the
+/// early decodes at the 47 step damages a few signals under or beside them that the raw search
+/// finds; the rescue keeps every decode the raw full pass finds, at the cost of a second full
+/// pass. It saves only its new decodes into the a7 table, and runs the a7 replay. It asks
+/// [`Progress::Rescue`] after each sync candidate, never [`Progress::Candidate`].
+///
 /// # Panics
 /// Panics if `iwave.len() < NMAX`, or if `progress` panicked.
 #[allow(clippy::too_many_arguments)]
@@ -635,7 +672,7 @@ pub fn decode_frame_carry(
             ap,
             ap_cq_only,
             Some(progress),
-            None,
+            Carried::None,
             true,
         );
         let decodes = records.iter().map(from_record).collect();
@@ -657,11 +694,13 @@ pub fn decode_frame_carry(
         CarryState::Residual(e, r)
             if iwave.len() >= NMAX && iwave[..RESIDUAL_SAMPLES] == r.audio[..] =>
         {
-            Some((e, r))
+            Carried::Residual(e, r)
         }
-        _ => None,
+        _ => Carried::None,
     };
-    decode_records(
+    let from_residual = matches!(carried, Carried::Residual(..));
+    let mut given_up = false;
+    let (records, _) = decode_records(
         iwave,
         nfa,
         nfb,
@@ -676,14 +715,44 @@ pub fn decode_frame_carry(
         partial,
         ap,
         ap_cq_only,
-        Some(progress),
+        Some(&mut |p: Progress<'_>| {
+            let candidate = matches!(p, Progress::Candidate);
+            let stop = progress(p);
+            given_up |= candidate && stop;
+            stop
+        }),
         carried,
         false,
-    )
-    .0
-    .iter()
-    .map(from_record)
-    .collect()
+    );
+    let mut decodes: Vec<Decode> = records.iter().map(from_record).collect();
+    if !from_residual || given_up || records.is_empty() || progress(Progress::Rescue) {
+        return decodes;
+    }
+    // The rescue: the raw audio, deduped against what the period has reported.
+    let (rescued, _) = decode_records(
+        iwave,
+        nfa,
+        nfb,
+        ndepth,
+        mycall,
+        hiscall,
+        nqso_progress,
+        nfqso,
+        nftx,
+        nutc,
+        a7_final,
+        partial,
+        ap,
+        ap_cq_only,
+        Some(&mut |p: Progress<'_>| match p {
+            Progress::Candidate => progress(Progress::Rescue),
+            p => progress(p),
+        }),
+        Carried::Reported(&records),
+        false,
+    );
+    decodes.extend(rescued.iter().skip(records.len()).map(from_record));
+    decodes
 }
 
 /// WSJT-X's 47 step (`lib/ft8_decode.f90:124-149`, run at 47 x 3456 samples, 13.536 s): subtract
@@ -804,6 +873,14 @@ fn from_record(r: &tempo_fast_sys::Ft8DecodeT) -> Decode {
 /// probed with stale prior-cycle hypotheses. Mirrors `tempo_fast::harq_reset`.
 pub fn a7_reset() {
     A7ResetGuard(modem_lock()).reset();
+}
+
+/// How many decodes the slot decoded last has saved into the a7 table: each station once, however
+/// many passes decoded it.
+pub fn a7_saved() -> usize {
+    let _guard = modem_lock();
+    // SAFETY: reads one integer of the modem's table, under the modem lock.
+    unsafe { tempo_fast_sys::ft8_a7_saved() }.max(0) as usize
 }
 
 /// Exclusive permission to reset FT8's prior-cycle decode table. This holds the
@@ -1060,6 +1137,7 @@ mod tests {
                 match p {
                     Progress::Found(d) => found.push(d.clone()),
                     Progress::Candidate => candidates += 1,
+                    Progress::Rescue => {}
                 }
                 false
             },
@@ -1147,6 +1225,7 @@ mod tests {
                     candidates += 1;
                     true
                 }
+                Progress::Rescue => false,
             },
         );
         assert_eq!(candidates, 1, "asked once, then stopped");
@@ -1204,7 +1283,7 @@ mod tests {
                 false,
                 &mut |p| match p {
                     Progress::Found(_) => panic!("the caller's bug"),
-                    Progress::Candidate => false,
+                    Progress::Candidate | Progress::Rescue => false,
                 },
             )
         });

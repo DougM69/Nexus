@@ -103,6 +103,13 @@ pub trait DecodeSink {
     fn give_up(&mut self) -> bool {
         false
     }
+    /// Asked before FT8's rescue pass starts and after each of its sync candidates (the full pass
+    /// once more on the raw audio, after a full pass from the early pass's residual): `true` gives
+    /// the rescue up there, keeping what it found; before it starts, the period's result is the
+    /// full pass's alone.
+    fn give_up_rescue(&mut self) -> bool {
+        false
+    }
 }
 
 /// A source of [`Decode`]s, driven once per slot boundary by the engine.
@@ -270,6 +277,9 @@ impl SignalSource for NativeSource {
             }
             fn give_up(&mut self) -> bool {
                 self.sink.give_up()
+            }
+            fn give_up_rescue(&mut self) -> bool {
+                self.sink.give_up_rescue()
             }
         }
         let kind = self.mode.kind();
