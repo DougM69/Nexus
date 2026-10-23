@@ -42,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start is more than 3 hours before you log it (typed in afterwards with its own UTC time, or
   added in the Logbook) gets no grid, state, operator, rig or power from your current settings,
   since they may not be what you used then; fill them in yourself if you want them. Anything you
-  enter on the contact is kept, and contacts you log as you make them are unchanged.
+  enter on the contact is kept, and contacts you log as you make them are unchanged. A contact
+  waiting for your confirm (Prompt before logging) keeps the station details from the moment it
+  was made, however late you confirm it and whatever you changed in Settings meanwhile.
 - **A TCI radio's contacts name the radio.** The rig logged for a contact made on a TCI radio is
   the radio the SDR program reports, such as SunSDR2DX, instead of "TCI".
 - **Your station power is logged on every contact.** The watts in Settings ▸ Station power go on

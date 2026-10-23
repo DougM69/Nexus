@@ -13003,7 +13003,12 @@ impl Engine {
     /// ruling is that no contact is lost, and a queue this deep means nobody is at the radio to
     /// answer the popup. The one the popup is showing is never the one taken: the operator is
     /// looking at it. [`PENDING_LOG_QUEUE_CAP`] is about an hour of unattended FT8 completions.
-    pub(crate) fn hold_pending_log(&mut self, held: HeldQso) {
+    pub(crate) fn hold_pending_log(&mut self, mut held: HeldQso) {
+        // The station it was made with, captured now, while the contact is the one just made: the
+        // confirm can come hours later, after Settings changed, and must log these, not the
+        // station at the confirm or nothing ([`Self::stamp_station_now`]). A contact restored from
+        // the journal already carries what its hold captured.
+        self.stamp_station_now(&mut held.record);
         if self.pending_logs.is_empty() {
             self.replace_pending_log(Some(held));
             self.persist_pending_qso();
@@ -15556,6 +15561,87 @@ impl Engine {
         self.log_qso_inner(rec, true, StateSource::Operator, Vec::new())
     }
 
+    /// ⚠️ **The station as it is NOW** — the operator at the key, the radio, the power, the grid
+    /// and the state — stamped on `rec` only when it started within
+    /// [`STATION_FIELDS_MAX_AGE_SECS`]. One typed in afterwards for an earlier time (a hand-entered
+    /// UTC time, the Logbook's own add) may have been made on another radio, at another power,
+    /// from another place, and today's values written on it would be wrong with nothing to say
+    /// so; it is left for the operator to fill. Its station call is stamped regardless, by the
+    /// funnel: the uploads sign by it. A field the record arrived with is kept either way.
+    ///
+    /// Called by the log funnel, and when a finished contact is held for the operator's confirm
+    /// ([`Self::hold_pending_log`]): the confirm may come hours later, and the contact then logs
+    /// the station it was made with, not the one at the confirm.
+    fn stamp_station_now(&self, rec: &mut QsoRecord) {
+        if now_unix_secs().saturating_sub(rec.when_unix) > STATION_FIELDS_MAX_AGE_SECS {
+            return;
+        }
+        // WHO WAS AT THE KEY (#25). `QsoRecord::operator` has existed since the logbook was
+        // written, is exported as ADIF `OPERATOR`, is parsed on import, and was never once
+        // filled in — plumbed end to end and permanently empty, because nothing above the
+        // record had an operator concept to fill it from.
+        //
+        // `fd_operator` IS that concept and already exists; it was only ever read on the
+        // N3FJP push, so the operator at the key reached a contest logger's network feed and
+        // never the operator's own log. Reading it here is what makes it general: Field Day
+        // rotates ops, and so does a two-person POTA activation, which is the report behind
+        // this (#25 — POTA requires each operator to submit their own log, and today the
+        // choice is losing the second op's credit or hand-editing the ADIF afterwards).
+        //
+        // With nobody named, the operator is the station: `OPERATOR` is the station call
+        // stamped by the log funnel before this, as the "Operator at the key" box's own hint promises ("leave blank
+        // if that is you") and as a logger's My Station profile fills it. Every contact then says
+        // who made it, and a multi-op log is still told apart by the name typed in the box.
+        //
+        // A record that arrives carrying its own operator — an imported multi-op log, or a
+        // row the operator repaired by hand — is left alone. Same rule as `country` below.
+        if rec.operator.is_none() {
+            let op = self.settings.fd_operator.trim();
+            rec.operator = if op.is_empty() {
+                rec.station_callsign.clone()
+            } else {
+                Some(op.to_ascii_uppercase())
+            };
+        }
+        // #239: WHICH RIG MADE IT — the active radio, stamped at this funnel on the same terms as
+        // STATION_CALLSIGN: a record arriving with its own rig keeps it ([`Self::log_rig_now`]).
+        if rec.my_rig.is_none() {
+            rec.my_rig = self.log_rig_now();
+        }
+        // THE POWER IT WAS MADE AT (ADIF `TX_PWR`), on the same terms
+        // ([`Self::log_power_now`]).
+        if rec.tx_power.is_none() {
+            rec.tx_power = self.log_power_now();
+        }
+        // WHERE IT WAS MADE FROM (ADIF `MY_GRIDSQUARE`): the grid in Settings ▸ Station, which is
+        // the grid Nexus sends on the air and a GPS feeder keeps current. A record arriving with
+        // its own — WSJT-X's over UDP, an import, the Logbook form's — keeps it.
+        //
+        // ⭐ AND IT IS MARKED AS NEXUS'S OWN ([`tempo_core::logbook::SELF_FILLED_FIELD`]), because
+        // the LoTW upload must leave it out. With a named TQSL Station Location, TQSL (`-a compliant`)
+        // checks every `MY_*` field a record carries against that location and silently skips a
+        // contact that disagrees — the reason #239 left this unstamped. Unmarked, a grid typed in
+        // Settings that is not the certificate's location would lose LoTW contacts without a
+        // word; marked, LoTW gets exactly what it got before, and every other service gets the
+        // grid. One somebody else put on the record carries no mark and goes to LoTW as always.
+        if rec.my_grid.is_none() && !rec.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE") {
+            if let Some(grid) = self.log_grid_now() {
+                rec.my_grid = Some(grid);
+                tempo_core::logbook::mark_self_filled(rec, "MY_GRIDSQUARE");
+            }
+        }
+        // YOUR STATE (ADIF `MY_STATE`), from Settings ▸ Station ▸ State, on an everyday contact
+        // — marked as Nexus's own and kept out of LoTW for the grid's reason above. Never on a
+        // park or summit contact: that one was made away from home, and its `MY_STATE` is the
+        // park's or nothing (the funnel's activation fill). A record carrying its own keeps it.
+        if rec.ota.my_ref.is_none() && self.station.activation.is_none() {
+            let st = self.settings.op_state.trim().to_ascii_uppercase();
+            if !st.is_empty() && tempo_core::logbook::fill_extra(rec, "MY_STATE", st) {
+                tempo_core::logbook::mark_self_filled(rec, "MY_STATE");
+            }
+        }
+    }
+
     fn log_qso_inner(
         &mut self,
         mut rec: QsoRecord,
@@ -15694,68 +15780,9 @@ impl Engine {
         if rec.station_callsign.is_none() {
             rec.station_callsign = self.station_callsign_now();
         }
-        // ⚠️ THE FIELDS BELOW DESCRIBE THE STATION NOW — the operator at the key, the radio, the
-        // power, the grid and the state — so they go only on a contact that started within
-        // [`STATION_FIELDS_MAX_AGE_SECS`]. One typed in afterwards for an earlier time (a hand-entered
-        // UTC time, the Logbook's own add) may have been made on another radio, at another power,
-        // from another place, and today's values written on it would be wrong with nothing to say
-        // so; it is left for the operator to fill. The call it was logged under is still stamped
-        // above: the uploads sign by it. A field the record arrived with is kept either way.
-        let live = now_unix_secs().saturating_sub(rec.when_unix) <= STATION_FIELDS_MAX_AGE_SECS;
-        // WHO WAS AT THE KEY (#25). `QsoRecord::operator` has existed since the logbook was
-        // written, is exported as ADIF `OPERATOR`, is parsed on import, and was never once
-        // filled in — plumbed end to end and permanently empty, because nothing above the
-        // record had an operator concept to fill it from.
-        //
-        // `fd_operator` IS that concept and already exists; it was only ever read on the
-        // N3FJP push, so the operator at the key reached a contest logger's network feed and
-        // never the operator's own log. Reading it here is what makes it general: Field Day
-        // rotates ops, and so does a two-person POTA activation, which is the report behind
-        // this (#25 — POTA requires each operator to submit their own log, and today the
-        // choice is losing the second op's credit or hand-editing the ADIF afterwards).
-        //
-        // With nobody named, the operator is the station: `OPERATOR` is the station call
-        // stamped just above, as the "Operator at the key" box's own hint promises ("leave blank
-        // if that is you") and as a logger's My Station profile fills it. Every contact then says
-        // who made it, and a multi-op log is still told apart by the name typed in the box.
-        //
-        // A record that arrives carrying its own operator — an imported multi-op log, or a
-        // row the operator repaired by hand — is left alone. Same rule as `country` below.
-        if live && rec.operator.is_none() {
-            let op = self.settings.fd_operator.trim();
-            rec.operator = if op.is_empty() {
-                rec.station_callsign.clone()
-            } else {
-                Some(op.to_ascii_uppercase())
-            };
-        }
-        // #239: WHICH RIG MADE IT — the active radio, stamped at this funnel on the same terms as
-        // STATION_CALLSIGN: a record arriving with its own rig keeps it ([`Self::log_rig_now`]).
-        if live && rec.my_rig.is_none() {
-            rec.my_rig = self.log_rig_now();
-        }
-        // THE POWER IT WAS MADE AT (ADIF `TX_PWR`), on the same terms
-        // ([`Self::log_power_now`]).
-        if live && rec.tx_power.is_none() {
-            rec.tx_power = self.log_power_now();
-        }
-        // WHERE IT WAS MADE FROM (ADIF `MY_GRIDSQUARE`): the grid in Settings ▸ Station, which is
-        // the grid Nexus sends on the air and a GPS feeder keeps current. A record arriving with
-        // its own — WSJT-X's over UDP, an import, the Logbook form's — keeps it.
-        //
-        // ⭐ AND IT IS MARKED AS NEXUS'S OWN ([`tempo_core::logbook::SELF_FILLED_FIELD`]), because
-        // the LoTW upload must leave it out. With a named TQSL Station Location, TQSL (`-a compliant`)
-        // checks every `MY_*` field a record carries against that location and silently skips a
-        // contact that disagrees — the reason #239 left this unstamped. Unmarked, a grid typed in
-        // Settings that is not the certificate's location would lose LoTW contacts without a
-        // word; marked, LoTW gets exactly what it got before, and every other service gets the
-        // grid. One somebody else put on the record carries no mark and goes to LoTW as always.
-        if live && rec.my_grid.is_none() && !rec.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE") {
-            if let Some(grid) = self.log_grid_now() {
-                rec.my_grid = Some(grid);
-                tempo_core::logbook::mark_self_filled(&mut rec, "MY_GRIDSQUARE");
-            }
-        }
+        // The station as it is now — operator, radio, power, grid, state — on a contact made now
+        // ([`Self::stamp_station_now`]).
+        self.stamp_station_now(&mut rec);
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs. One that arrives
         // with a DXCC number takes the number's name (`StationCore::country_for`).
@@ -15843,16 +15870,6 @@ impl Engine {
                     }
                 }
                 None => {}
-            }
-        }
-        // YOUR STATE (ADIF `MY_STATE`), from Settings ▸ Station ▸ State, on an everyday contact
-        // — marked as Nexus's own and kept out of LoTW for the grid's reason above. Never on a
-        // park or summit contact: that one was made away from home, and its `MY_STATE` is the
-        // park's or nothing (the activation fill above). A record carrying its own keeps it.
-        if live && rec.ota.my_ref.is_none() {
-            let st = self.settings.op_state.trim().to_ascii_uppercase();
-            if !st.is_empty() && tempo_core::logbook::fill_extra(&mut rec, "MY_STATE", st) {
-                tempo_core::logbook::mark_self_filled(&mut rec, "MY_STATE");
             }
         }
         // WHERE THEY ARE: the worked station's continent (ADIF `CONT`), from the country
@@ -45099,6 +45116,58 @@ mod tests {
         );
         // Which call it was logged under is still the station's: every upload signs by it.
         assert_eq!(of("K1OLD").station_callsign.as_deref(), Some("K2DEF"));
+    }
+
+    /// A contact held for the operator's confirm takes the station as it was when it was HELD —
+    /// the contact's own moment — and logs that however late it is confirmed: four hours later,
+    /// after a restart and with every setting changed since, it carries the operator, radio,
+    /// power, grid and state it was made with, not none (the late-contact rule) and not today's.
+    #[test]
+    fn a_held_contact_confirmed_hours_later_logs_the_station_it_was_made_with() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.settings.rig_model_name = "Icom IC-705".into();
+        e.settings.station_power_w = Some(100.0);
+        e.settings.op_state = "NY".into();
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
+        // Four hours go by while it waits: its start is four hours back by the confirm.
+        for held in e.pending_logs.iter_mut() {
+            held.record.when_unix -= 4 * 3600;
+            held.record.time_off_unix = held.record.time_off_unix.map(|t| t - 4 * 3600);
+        }
+        let journal = remote_logging::pending_qso_queue_json(&e.pending_logs).unwrap();
+        let mut later = Engine::new("K2DEF", "EM10", 0);
+        later.settings.prompt_to_log = true;
+        later.settings.rig_model_name = "Elecraft KX3".into();
+        later.settings.station_power_w = Some(5.0);
+        later.settings.op_state = "TX".into();
+        later.settings.fd_operator = "K9OP".into();
+        later.load_pending_qso_json(&journal);
+        let sent = later.snapshot().pending_log.expect("the hold comes back");
+        assert!(confirm_held(&mut later, sent.into()));
+        let r = QsoRecord::clone(&later.stored_log()[0]);
+        assert_eq!(
+            (
+                r.operator.as_deref(),
+                r.my_rig.as_deref(),
+                r.tx_power,
+                r.my_grid.as_deref(),
+                tempo_core::logbook::extra_field(&r, "MY_STATE"),
+            ),
+            (
+                Some("K2DEF"),
+                Some("Icom IC-705"),
+                Some(100.0),
+                Some("FN31"),
+                Some("NY")
+            )
+        );
+        assert_eq!(
+            tempo_core::logbook::self_filled(&r),
+            ["MY_GRIDSQUARE", "MY_STATE"],
+            "still Nexus's own, so LoTW still leaves them out"
+        );
     }
 
     /// A TCI radio's model name is the protocol's, "TCI". Its contacts carry the radio the
