@@ -101,6 +101,8 @@ const MIGRATED = [
   // the three stops a transmission; PskCockpit.tsx stays on PARTIAL for its stop controls.
   'components/MacroEditor.tsx',
   'components/PskMacroEditor.tsx',
+  // JTTY's cockpit (receive): every string through `t()`, its tokens held as named constants.
+  'components/JttyCockpit.tsx',
   'features/pskMacros.ts',
   // CW's half of the same surface: its keys and their editor, captioned from CW's own catalog
   // keys. It stops nothing; CwCockpit.tsx's Esc and Stop TX are the stops.

@@ -23,6 +23,7 @@ const EXPECTED_SECTIONS: FeatureId[] = [
   'sstv',
   'aprs',
   'js8',
+  'jtty',
   'connect',
   'needed',
   'spots',

@@ -125,6 +125,9 @@ Fourteen panels tear off into their own OS window — see
   conversations, and messages that queue until the other station is actually heard.
 - **[PSK](psk.md)** — PSK31 and QPSK31 keyboard ragchewing at 31.25 baud: click a
   warble on the waterfall and it prints, type into a live transmission, four macros.
+- **[JTTY](jtty.md)** — WSJT-X's keyboard mode: WSJT-X's two decode panes, its Rx, Tx and
+  F Tol, F1–F8 contest messages and live typing, and calls you can look up once two separate
+  messages have confirmed them.
 - **[SSTV](sstv.md)** — receive-first slow-scan; pictures decode themselves into
   a local gallery, and transmit is always an explicit **Send**.
 - **[APRS](aprs.md)** — a 2 m AFSK-1200 packet monitor with its own map, plus

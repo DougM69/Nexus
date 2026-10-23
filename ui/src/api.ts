@@ -50,6 +50,8 @@ import type {
   Js8Filter,
   Js8Freq,
   Js8State,
+  JttySent,
+  JttyState,
   Js8Typeahead,
   Js8InboxState,
   Js8Switch,
@@ -2384,12 +2386,14 @@ export async function pickBand(band: string, mode?: string): Promise<AppSnapshot
  * clicks an actual operating-section tab — then the rig QSYs to that mode's home frequency
  * on the current band (phone segment / CW segment / FT8 watering hole). Pass false for
  * incidental nav and the Needed click (which sets the spot's exact frequency itself).
+ * "keyboard" and "jtty" are the one Keyboard section with PSK or JTTY as its modem, which
+ * picks the band plan the section's entry lands on.
  * `keepDial`: the Phone tab pressed on the SSTV screen. With `followFreq` the engine keeps the
  * dial where Phone may transmit there and homes it where it may not; without, nothing homes.
  * Either way an FM channel the SSTV screen holds stays FM in Phone. Sent only when true, so every
  * other entry's wire is unchanged. */
 export async function setOperatingMode(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'jtty',
   followFreq: boolean,
   keepDial = false,
 ): Promise<AppSnapshot> {
@@ -2405,7 +2409,7 @@ export async function setOperatingMode(
  * the snapshot's `workView`: 'keyboard' is PSK's, and 'js8' is Digital named for the JS8 screen
  * (`WORK_SECTION`, features/needs.ts). */
 export async function workSpot(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'js8',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'js8' | 'jtty',
   freqMhz: number,
   band: string,
   call?: string,
@@ -3629,6 +3633,84 @@ export async function pskType(text: string): Promise<PskState> {
 /** Stop PSK now: abort the over in progress, drop the queue, unkey. */
 export async function pskStop(): Promise<PskState> {
   return invoke<PskState>('psk_stop')
+}
+
+// ---- JTTY (WSJT-X's keyboard mode). Every command answers the whole JttyState (a send, with what
+// it did). The engine checks every TX gate on each transmit command and refuses with its reason. ----
+
+/** Live JTTY state (poll while the JTTY cockpit is visible). */
+export async function getJttyState(): Promise<JttyState> {
+  return invoke<JttyState>('get_jtty_state')
+}
+
+/** Arm or stop the JTTY decoder by an explicit operator act (session-only; a stop is remembered,
+ * so entering the view does not restart it behind the operator). */
+export async function jttyArm(on: boolean): Promise<JttyState> {
+  return invoke<JttyState>('jtty_arm', { on })
+}
+
+/** Arm the decoder because the operator ENTERED the JTTY view. Receive-only; the engine owns the
+ * policy (only upgrades from off, honours the session stop and the Settings opt-out). */
+export async function jttyAutoArm(): Promise<JttyState> {
+  return invoke<JttyState>('jtty_auto_arm')
+}
+
+/** WSJT-X's Rx frequency and F Tol: the audio channel always searched. F Tol is kept between
+ * sessions, as WSJT-X keeps it; Rx is not. */
+export async function jttySetRx(rxHz: number, ftolHz: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_rx', { rxHz, ftolHz })
+}
+
+/** The JTTY waterfall's visible range: WSJT-X searches its fixed channels inside it. */
+export async function jttySetBand(lowHz: number, highHz: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_band', { lowHz, highHz })
+}
+
+/** Empty the JTTY receive window (WSJT-X's Erase). */
+export async function jttyClear(): Promise<JttyState> {
+  return invoke<JttyState>('jtty_clear')
+}
+
+/** Send typed text (WSJT-X's Send): all of it, its macros expanded, ending the message (and a live
+ * session). `hisCall` is the dock's Call (`%H`). */
+export async function jttySend(text: string, hisCall: string): Promise<JttySent> {
+  return invoke<JttySent>('jtty_send', { text, hisCall })
+}
+
+/** F-key `n` (1–8): WSJT-X's Contest template, compiled into JTTY's atoms. */
+export async function jttyFkey(n: number, hisCall: string): Promise<JttySent> {
+  return invoke<JttySent>('jtty_fkey', { n, hisCall })
+}
+
+/** Start live entry with what is typed so far (WSJT-X's Alt+J). */
+export async function jttyLiveStart(typed: string, hisCall: string): Promise<JttySent> {
+  return invoke<JttySent>('jtty_live_start', { typed, hisCall })
+}
+
+/** Commit live typing: `flush` after a pause (all of it), otherwise once five words are complete
+ * beyond the three WSJT-X holds back. */
+export async function jttyLiveCommit(typed: string, hisCall: string, flush: boolean): Promise<JttySent> {
+  return invoke<JttySent>('jtty_live_commit', { typed, hisCall, flush })
+}
+
+/** Sign off (WSJT-X's Alt+K): `DE <my call> K` after what is typed; the session ends. */
+export async function jttySignOff(typed: string, hisCall: string): Promise<JttySent> {
+  return invoke<JttySent>('jtty_sign_off', { typed, hisCall })
+}
+
+/** Stop JTTY now: everything queued dropped, a live session ended, what is on the air cut. */
+export async function jttyStop(): Promise<JttyState> {
+  return invoke<JttyState>('jtty_stop')
+}
+
+/** JTTY's Tx frequency (Hz): refused while JTTY transmits. */
+export async function jttySetTx(txHz: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_tx', { txHz })
+}
+
+/** The JTTY contest serial number (`%E`, `%N`), kept in Settings as WSJT-X keeps it. */
+export async function jttySetSerial(serial: number): Promise<JttyState> {
+  return invoke<JttyState>('jtty_set_serial', { serial })
 }
 
 // ---- JS8 (interfaces.md §3.6 — every command answers the whole Js8State, the PSK shape) ----

@@ -9595,6 +9595,28 @@ export function SettingsPanel({
               </label>
               <span className="settings-hint">{t('settings.psk.rxAutoArm.hint')}</span>
             </div>
+            {/* JTTY — WSJT-X's keyboard mode, the Keyboard section's other modem, so its one
+                setting lives in this section (the Digital tab is at its section ceiling). Its F Tol
+                is kept too, but by the JTTY cockpit, its one writer — never by this form. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.jtty.title')}</span>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.jtty.rxAutoArm.label')}</span>
+                  <button disabled={locked('jttyRxAutoArm')}
+                    type="button"
+                    role="switch"
+                    // `!== false`, as PSK's: the default is ON, so an absent key reads as on.
+                    aria-checked={form.jttyRxAutoArm !== false}
+                    className={`toggle${form.jttyRxAutoArm !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('jttyRxAutoArm', form.jttyRxAutoArm === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.jtty.rxAutoArm.hint')}</span>
+              </div>
+            </div>
           </fieldset>
           )}
 

@@ -241,6 +241,10 @@ interface Props {
   /** The strip's own box, for the divider under it to measure and size (PaneSeam's strip kind:
    *  JS8's waterfall height, layout L2). Omitted ⇒ no ref. */
   stripRef?: Ref<HTMLDivElement>
+  /** Told the audio window the strip shows (Hz), when it mounts and whenever it moves — a zoom
+   *  pick, or the RX marker paging a zoomed view. JTTY's decoder searches its fixed channels
+   *  only inside the range WSJT-X's wide graph shows, so its cockpit hands this on. */
+  onViewChange?: (loHz: number, hiHz: number) => void
   /** A control of the host's own in the header row, after the hint (JS8's decode-filter plate,
    *  which opens its waterfall controls). Display and receive only: it hosts no stop control and
    *  no sender. Omitted ⇒ the header as before. */
@@ -340,6 +344,7 @@ export function Waterfall({
   fixedWindow,
   keyed = false,
   stripRef,
+  onViewChange,
   headerExtra,
   spanChoices,
   contrastCurve,
@@ -433,6 +438,12 @@ export function Waterfall({
     if (laid.hidden > 0) laid = lay(tagBox.w - TAG_COUNT_PX * tagBox.scale)
     return { lane: new Map(inView.map((tag, i) => [tag.key, laid.lane[i]])), hidden: laid.hidden }
   }, [tags, tagLanes, tagBox, view.lo, view.hi])
+  // The window, told to whoever asked (`onViewChange`) — on the edges, never on a fresh callback.
+  const onViewChangeRef = useRef(onViewChange)
+  onViewChangeRef.current = onViewChange
+  useEffect(() => {
+    onViewChangeRef.current?.(view.lo, view.hi)
+  }, [view.lo, view.hi])
   // refs so the animation loop always reads current props without re-subscribing
   const txRef = useRef(transmitting)
   const txBlanksRef = useRef(txBlanks)

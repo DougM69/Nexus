@@ -65,6 +65,43 @@ pub fn classify_tqsl_exit(code: i32, stderr: &str) -> Option<UploadOutcome> {
     }
 }
 
+/// Modes no TQSL configuration knows yet, as the MODE a contact goes out under. TQSL run with
+/// `-a compliant` skips such a record silently and exits 9, which [`classify_tqsl_exit`] must
+/// read as Rejected for the WHOLE batch (it cannot tell which record went); so a contact under
+/// one of these is held back from the batch instead, left unsent, and the upload says so.
+///
+/// JTTY: WSJT-X's keyboard mode, written bare as WSJT-X writes it (operator ruling,
+/// 2026-10-08). It is in neither the ADIF 3.1.7 mode enumeration nor TQSL's configuration (the
+/// 11.8 configuration was checked). Take it out of this list when TQSL's configuration carries
+/// the mode; until then a JTTY contact reaches LoTW only from a log that files it under MFSK.
+const TQSL_UNKNOWN_MODES: [&str; 1] = ["JTTY"];
+
+/// Whether TQSL would drop `r`: it goes out under a bare MODE TQSL does not know
+/// ([`TQSL_UNKNOWN_MODES`]). A JTTY contact read as `MODE=MFSK SUBMODE=JTTY` goes back out under
+/// MFSK, which TQSL places, so it is not one.
+pub fn tqsl_drops(r: &crate::logbook::QsoRecord) -> bool {
+    crate::logbook::adif_mode(r).is_some_and(|m| {
+        TQSL_UNKNOWN_MODES
+            .iter()
+            .any(|u| m.trim().eq_ignore_ascii_case(u))
+    })
+}
+
+/// What the connection log says when an upload holds back `n` contacts TQSL would drop
+/// ([`tqsl_drops`]).
+pub fn held_sentence(n: usize) -> String {
+    if n == 1 {
+        "1 JTTY contact was not sent: TQSL does not know the JTTY mode yet and would drop it, so \
+         it was held back. It stays marked as not uploaded to LoTW."
+            .to_string()
+    } else {
+        format!(
+            "{n} JTTY contacts were not sent: TQSL does not know the JTTY mode yet and would drop \
+             them, so they were held back. They stay marked as not uploaded to LoTW."
+        )
+    }
+}
+
 /// Did TQSL report dropping records, rather than finding them already uploaded? Distinguishes
 /// "nothing to do" from "nothing survived validation" on exit 8, and is deliberately broad:
 /// a false Rejected costs one harmless re-offer that LoTW dedupes, a false Duplicate loses
@@ -358,6 +395,45 @@ mod tests {
         assert_eq!(sanitize_detail("   ").map(|s| s.len()), None);
         let long = "x ".repeat(300);
         assert!(sanitize_detail(&long).unwrap().chars().count() <= 200);
+    }
+
+    /// TQSL drops a bare JTTY (no configuration it ships knows the mode yet), so the upload
+    /// holds such a contact back rather than let TQSL lose it. Filed under MFSK, as another
+    /// logger may file it, it goes; and so does every mode TQSL knows.
+    #[test]
+    fn tqsl_drops_a_bare_jtty_and_nothing_else() {
+        let row = |mode: &str| {
+            crate::logbook::parse_adif(&format!(
+                "<EOH><CALL:5>C56YK<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m{mode}<EOR>"
+            ))
+            .remove(0)
+        };
+        assert!(tqsl_drops(&row("<MODE:4>JTTY")));
+        assert!(tqsl_drops(&row("<MODE:4>jtty")));
+        for kept in [
+            "<MODE:4>MFSK<SUBMODE:4>JTTY",
+            "<MODE:3>FT8",
+            "<MODE:4>MFSK<SUBMODE:3>FT4",
+            "<MODE:4>RTTY",
+            "<MODE:3>PSK<SUBMODE:5>PSK31",
+            "<MODE:4>MFSK<SUBMODE:9>TEMPOFAST",
+        ] {
+            assert!(!tqsl_drops(&row(kept)), "{kept}");
+        }
+    }
+
+    #[test]
+    fn the_held_sentence_says_how_many_and_why() {
+        assert_eq!(
+            held_sentence(1),
+            "1 JTTY contact was not sent: TQSL does not know the JTTY mode yet and would drop it, \
+             so it was held back. It stays marked as not uploaded to LoTW."
+        );
+        assert_eq!(
+            held_sentence(3),
+            "3 JTTY contacts were not sent: TQSL does not know the JTTY mode yet and would drop \
+             them, so they were held back. They stay marked as not uploaded to LoTW."
+        );
     }
 
     #[test]

@@ -974,6 +974,27 @@ fn own_decode_heards(
         .collect()
 }
 
+/// This radio's confirmed JTTY stations ([`tempo_app::engine::Engine::jtty_heard`]) as the Needed
+/// board's heard records: each on the band of the frequency it was heard on and at that exact
+/// frequency (a click goes there), in mode JTTY, with the locator its message carried, if any,
+/// for a grid need and the state hint. A station heard off the band table is left out.
+fn jtty_heards(heard: &[tempo_app::dto::JttyHeard]) -> Vec<propagation::Heard> {
+    heard
+        .iter()
+        .filter(|h| !h.band.is_empty())
+        .map(|h| propagation::Heard {
+            call: h.call.clone(),
+            band: h.band.clone(),
+            mode: "JTTY".to_string(),
+            freq_mhz: Some(h.freq_hz as f64 / 1e6),
+            admitted_at: Some(h.at_utc_ms / 1000),
+            evidence: Some("decoded by YOUR radio in JTTY, in two separate messages".to_string()),
+            grid: h.grid.clone(),
+            us_state: us_state_hint(&h.call, h.grid.as_deref()),
+        })
+        .collect()
+}
+
 /// A plausibly-real operator callsign — checked by SHAPE, not a denylist. Network
 /// features that log in to public services (DX cluster / RBN, PSK Reporter MQTT)
 /// gate on this so they never key an unset/garbage call on a public service.
@@ -3456,6 +3477,67 @@ mod lotw_batch_tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// TQSL drops a contact whose mode it does not know yet — a JTTY contact, written bare as
+    /// WSJT-X writes it — and the batch then exits 9 and is read as rejected for every contact in
+    /// it. So the JTTY contact never reaches TQSL: the others are signed and stamped, it stays
+    /// unstamped (still owed to LoTW), the report counts it and the connection log says why. A
+    /// batch of nothing else runs no TQSL at all.
+    #[test]
+    fn a_jtty_contact_is_held_back_from_tqsl_and_the_log_says_so() {
+        let (dir, engine, ids) = station("lotw-jtty", 3);
+        let mut jtty = QsoRecord::clone(&engine.lock().unwrap().stored_log()[1]);
+        jtty.mode = "JTTY".into();
+        let edit = tempo_core::logbook::LogOp::Edit {
+            id: ids[1],
+            rec: Box::new(jtty),
+        };
+        assert!(
+            super::durable_command_tests::by_command(&engine, ids[1], edit).0,
+            "premise: one contact is a JTTY contact"
+        );
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, args| {
+            let batch = std::fs::read_to_string(args.last().expect("the batch file"))
+                .expect("TQSL can read it");
+            assert!(
+                !batch.to_ascii_uppercase().contains("<MODE:4>JTTY"),
+                "TQSL is never handed the JTTY contact: {batch}"
+            );
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str(), report.held_mode),
+            (2, "pending", 1)
+        );
+        let pending = Some(Some(UploadOutcome::Pending));
+        for (held, what) in outcomes(&dir, &engine, &ids)
+            .iter()
+            .zip(["read", "database"])
+        {
+            assert_eq!(
+                held,
+                &vec![pending, Some(None), pending],
+                "{what}: the JTTY contact is unstamped, the others are marked"
+            );
+        }
+        assert!(
+            get_connection_log()
+                .iter()
+                .any(|e| e.connector == "LoTW"
+                    && e.message == tempo_core::lotw_upload::held_sentence(1)),
+            "the connection log says why"
+        );
+        let report = lotw_upload_batch_with(&engine, LotwPick::Ids(vec![ids[1]]), true, |_, _| {
+            panic!("TQSL ran for a batch of nothing it could take")
+        })
+        .expect("the upload ran");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str(), report.held_mode),
+            (0, "none", 1)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// A contact CORRECTED while TQSL signs is not the contact TQSL signed: LoTW holds the old
     /// version. Marked sent, the correction would never be uploaded. So it is left unmarked —
     /// offered again with the next upload, as it now stands — and the connection log says why.
@@ -4125,6 +4207,7 @@ mod logbook_startup_tests {
             "spawn_ai_cw(",
             "spawn_rtty_rx(",
             "spawn_psk_rx(",
+            "spawn_jtty_rx(",
             "spawn_aprs_rx(",
             "spawn_sstv_rx(",
             "send_main_window_to_the_app(&handle)",
@@ -18117,6 +18200,238 @@ async fn get_psk_state(state: State<'_, SharedEngine>) -> Result<PskStateDto, St
     with_engine(&state, |eng| psk_state_dto(&eng)).await
 }
 
+// ---- JTTY receive (WSJT-X's keyboard mode; `tempo_app::engine::jtty_rx`). RECEIVE ONLY: no
+// command here can key anything. Every command answers the whole `JttyState`, the DTO serialised
+// directly (the JS8 shape). ----
+
+/// The live JTTY state (poll while the JTTY cockpit is visible). The JTTY serial number moves on
+/// by itself after a "TU " message goes out, so a changed one is handed to the settings writer
+/// here, as WSJT-X keeps it (`SerialNumberJTTY`).
+#[tauri::command]
+async fn get_jtty_state(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::JttyState, String> {
+    with_engine(&state, |eng| {
+        let serial = eng.settings().jtty_serial;
+        if JTTY_SERIAL_KEPT.swap(serial, std::sync::atomic::Ordering::Relaxed) != serial {
+            persist_settings(eng.settings().clone(), |e| {
+                eprintln!("tempo: failed to persist the JTTY serial number: {e}")
+            });
+        }
+        eng.jtty_state()
+    })
+    .await
+}
+
+/// The JTTY serial number last handed to the settings writer (see `get_jtty_state`). 0 is no
+/// serial (they start at 1), so the first poll writes once.
+static JTTY_SERIAL_KEPT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Arm/disarm the JTTY decoder by an EXPLICIT operator act (session-only, never persisted, so the
+/// app never launches armed). A stop is remembered for the session: `jtty_auto_arm` will not
+/// restart the decoder behind the operator.
+#[tauri::command(async)]
+fn jtty_arm(state: State<'_, SharedEngine>, on: bool) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_jtty_armed(on);
+    Ok(eng.jtty_state())
+}
+
+/// Arm the decoder because the operator ENTERED the JTTY view. Receive-only by construction: only
+/// upgrades from off, and refuses once the operator has stopped it this session.
+#[tauri::command(async)]
+fn jtty_auto_arm(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.jtty_auto_arm();
+    Ok(eng.jtty_state())
+}
+
+/// WSJT-X's Rx frequency and F Tol for JTTY: the audio channel always searched. Takes effect at
+/// the next search without restarting the reception. F Tol is saved, as WSJT-X keeps
+/// `JTTY_FTol` between sessions; the Rx frequency is not.
+#[tauri::command(async)]
+fn jtty_set_rx(
+    state: State<'_, SharedEngine>,
+    rx_hz: f32,
+    ftol_hz: f32,
+) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    let kept = eng.settings().jtty_ftol_hz;
+    eng.set_jtty_rx(rx_hz, ftol_hz)?;
+    if eng.settings().jtty_ftol_hz != kept {
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: failed to persist the JTTY F Tol: {e}")
+        });
+    }
+    Ok(eng.jtty_state())
+}
+
+/// The JTTY waterfall's range: the fixed 1200-1500 and 1500-1800 Hz channels are searched where
+/// they fall inside it, as WSJT-X searches them inside its wide graph.
+#[tauri::command(async)]
+fn jtty_set_band(
+    state: State<'_, SharedEngine>,
+    low_hz: i32,
+    high_hz: i32,
+) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_jtty_band(low_hz, high_hz)?;
+    Ok(eng.jtty_state())
+}
+
+/// Empty the JTTY receive window (WSJT-X's Erase); what has been heard stays heard.
+#[tauri::command(async)]
+fn jtty_clear(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.jtty_clear();
+    Ok(eng.jtty_state())
+}
+
+// ---- JTTY transmit (`tempo_app::engine::jtty_tx`). ⛔ SWITCHED OFF in every build: every send
+// command answers the engine's refusal, "JTTY transmit is not switched on in this build", and
+// nothing reaches the radio. A send is planned under the engine lock, rendered with it released
+// (the modem lock, which a decode can hold for seconds) and committed under it again: on the
+// blocking pool, never on a runtime worker. Stop is never refused. ----
+
+/// What a JTTY send did, for the compose bar: how much of the typed text it took (UTF-16 units)
+/// and what goes in its place, and the state after it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JttySentDto {
+    consumed: usize,
+    sent: String,
+    state: tempo_app::dto::JttyState,
+}
+
+/// Run one JTTY send on the blocking pool and answer the state after it.
+async fn jtty_send_with(
+    engine: &SharedEngine,
+    send: impl FnOnce(
+            &std::sync::Mutex<tempo_app::engine::Engine>,
+        ) -> Result<tempo_app::engine::jtty_tx::JttySent, String>
+        + Send
+        + 'static,
+) -> Result<JttySentDto, String> {
+    let engine = Arc::clone(engine);
+    tauri::async_runtime::spawn_blocking(move || {
+        let done = send(&engine)?;
+        Ok(JttySentDto {
+            consumed: done.consumed,
+            sent: done.sent,
+            state: engine_lock(&engine).jtty_state(),
+        })
+    })
+    .await
+    .map_err(|e| format!("engine task failed: {e}"))?
+}
+
+/// Send typed text (WSJT-X's Send): all of it, the macros in it expanded, ending the message (and
+/// a live session, if one runs). `his_call` is the log strip's Call (`%H`).
+#[tauri::command]
+async fn jtty_send(
+    state: State<'_, SharedEngine>,
+    text: String,
+    his_call: String,
+) -> Result<JttySentDto, String> {
+    jtty_send_with(&state, move |e| {
+        tempo_app::engine::jtty_tx::send_text(e, &text, &his_call)
+    })
+    .await
+}
+
+/// F-key `n` (1..8): WSJT-X's Contest template, compiled into JTTY's atoms.
+#[tauri::command]
+async fn jtty_fkey(
+    state: State<'_, SharedEngine>,
+    n: u8,
+    his_call: String,
+) -> Result<JttySentDto, String> {
+    jtty_send_with(&state, move |e| {
+        tempo_app::engine::jtty_tx::send_fkey(e, n, &his_call)
+    })
+    .await
+}
+
+/// Start live entry with what is typed so far (WSJT-X's Alt+J).
+#[tauri::command]
+async fn jtty_live_start(
+    state: State<'_, SharedEngine>,
+    typed: String,
+    his_call: String,
+) -> Result<JttySentDto, String> {
+    jtty_send_with(&state, move |e| {
+        tempo_app::engine::jtty_tx::live_start(e, &typed, &his_call)
+    })
+    .await
+}
+
+/// Commit live typing: `flush` after a pause (everything typed), otherwise only once five words
+/// are complete beyond the three held back.
+#[tauri::command]
+async fn jtty_live_commit(
+    state: State<'_, SharedEngine>,
+    typed: String,
+    his_call: String,
+    flush: bool,
+) -> Result<JttySentDto, String> {
+    let how = if flush {
+        tempo_app::engine::jtty_tx::JttyCommit::Flush
+    } else {
+        tempo_app::engine::jtty_tx::JttyCommit::Advance
+    };
+    jtty_send_with(&state, move |e| {
+        tempo_app::engine::jtty_tx::live_commit(e, &typed, &his_call, how)
+    })
+    .await
+}
+
+/// Sign off (WSJT-X's Alt+K): `DE <my call> K` after what is typed, and the session ends.
+#[tauri::command]
+async fn jtty_sign_off(
+    state: State<'_, SharedEngine>,
+    typed: String,
+    his_call: String,
+) -> Result<JttySentDto, String> {
+    jtty_send_with(&state, move |e| {
+        tempo_app::engine::jtty_tx::sign_off(e, &typed, &his_call)
+    })
+    .await
+}
+
+/// Stop JTTY now: everything queued dropped, a live session ended, what is on the air cut. Never
+/// refused.
+#[tauri::command(async)]
+fn jtty_stop(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.jtty_stop();
+    Ok(eng.jtty_state())
+}
+
+/// JTTY's Tx frequency (WSJT-X's Tx spin box for JTTY): refused while JTTY transmits.
+#[tauri::command(async)]
+fn jtty_set_tx(
+    state: State<'_, SharedEngine>,
+    tx_hz: f32,
+) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_jtty_tx(tx_hz)?;
+    Ok(eng.jtty_state())
+}
+
+/// The JTTY contest serial number (`%E`, `%N`); kept in Settings, as WSJT-X keeps it.
+#[tauri::command(async)]
+fn jtty_set_serial(
+    state: State<'_, SharedEngine>,
+    serial: u32,
+) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_jtty_serial(serial)?;
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist the JTTY serial number: {e}")
+    });
+    Ok(eng.jtty_state())
+}
+
 // ---- JS8 (the `engine::js8` adapter; every command answers the whole Js8State — the PSK
 // shape — and the DTO is `tempo_app::dto::Js8State` serialised directly, no copy here) ----
 
@@ -19920,19 +20235,26 @@ fn get_licensed_band_plan(
     use tempo_app::settings::OperatingMode;
     let eng = engine_lock(&state);
     let class = eng.settings().license_class;
-    // RTTY / SSTV / PSK / JS8: fixed standard watering-hole channels (like WSJT-X's
+    // RTTY / SSTV / PSK / JS8 / JTTY: fixed standard watering-hole channels (like WSJT-X's
     // per-mode dials), license-filtered per band — a Technician sees only the
     // bands their class can key there (RTTY, PSK and JS8 ride data privileges, SSTV
     // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan),
     // or the operator's own (bandplan::js8_plan_from). RTTY's rows come at the dial this
     // station's keying backend tunes for them (Engine::rtty_channel_plan).
     let lower = mode.to_ascii_lowercase();
-    if lower == "rtty" || lower == "sstv" || lower == "psk" || lower == "js8" {
+    if lower == "rtty" || lower == "sstv" || lower == "psk" || lower == "js8" || lower == "jtty" {
         let (plan, priv_mode) = if lower == "rtty" {
             (eng.rtty_channel_plan(), OperatingMode::Digital)
         } else if lower == "psk" {
             (
                 tempo_app::bandplan::psk_band_plan(),
+                OperatingMode::Keyboard,
+            )
+        } else if lower == "jtty" {
+            // WSJT-X's JTTY frequency list as it is; a keyboard mode, so the Keyboard section's
+            // data privileges mark it.
+            (
+                tempo_app::bandplan::jtty_band_plan(),
                 OperatingMode::Keyboard,
             )
         } else if lower == "js8" {
@@ -24423,6 +24745,9 @@ fn read_need_alerts(
     // License class for the privilege gate below — a station on a frequency the operator may not
     // transmit to is not a "need". Open (non-US) short-circuits tx_allowed to true, so no gate.
     let license_class = eng.settings().license_class;
+    // This radio's JTTY decoder: only the stations it has decoded in two separate messages a
+    // short time apart (`tempo_app::engine::jtty_rx`), for as long as the radio's other decodes.
+    let jtty_heard = eng.jtty_heard(now_unix() * 1000, OWN_DECODE_MAX_AGE_SECS * 1000);
     drop(eng); // nothing below needs the engine — don't hold the hot lock
     let needs = needs_finish(needs, needs_kept)?;
     let hunted = log_folds::hunted_today(&hunted_rows, now_unix())?;
@@ -24443,6 +24768,7 @@ fn read_need_alerts(
         &tier_mode,
         OWN_DECODE_MAX_AGE_SECS,
     );
+    heard.extend(jtty_heards(&jtty_heard));
     // The real value (empirical evidence, not a model): two complementary signals
     // over the PSK Reporter firehose + near-region feed —
     //   1. heard_near_me: a receiver NEAR YOU is hearing the DX (their signal
@@ -27523,6 +27849,21 @@ fn lotw_upload_batch_with(
     .into_iter()
     .filter(|r| r.time_known)
     .collect();
+    // A contact TQSL would drop (its mode is one TQSL does not know yet: a JTTY contact, written
+    // bare as WSJT-X writes it) is held back here, at the same choke point: sent, it would vanish
+    // inside TQSL and make the whole batch read as rejected. Held, it stays unsent and unstamped,
+    // and the connection log says why.
+    let (held, batch): (Vec<_>, Vec<_>) = batch
+        .into_iter()
+        .partition(tempo_core::lotw_upload::tqsl_drops);
+    if !held.is_empty() {
+        conn_log(
+            "LoTW",
+            "info",
+            tempo_core::lotw_upload::held_sentence(held.len()),
+        );
+    }
+    let held_mode = held.len();
     if batch.is_empty() {
         return Ok(UploadReportDto {
             dispatched: 0,
@@ -27530,6 +27871,7 @@ fn lotw_upload_batch_with(
             detail: None,
             skipped_edited: 0,
             skipped_deleted: 0,
+            held_mode,
         });
     }
     let adif = tempo_app::station::lotw_batch_adif(&batch, adif_location, &call, &grid);
@@ -27588,6 +27930,7 @@ fn lotw_upload_batch_with(
             detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
             skipped_edited: 0,
             skipped_deleted: 0,
+            held_mode,
         }),
         Some(outcome) => {
             // By id, planned with the Engine lock released (SPEC-2 v3 C19): each contact read off
@@ -27676,6 +28019,7 @@ fn lotw_upload_batch_with(
                 // count that does not clear otherwise reads as an upload that failed.
                 skipped_edited: done.changed,
                 skipped_deleted: done.gone,
+                held_mode,
             })
         }
     }
@@ -29965,6 +30309,7 @@ fn eqsl_answered(
                 detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
                 skipped_edited: 0,
                 skipped_deleted: 0,
+                held_mode: 0,
             },
             None,
         )),
@@ -30004,6 +30349,7 @@ fn eqsl_answered(
                     detail: detail.map(|d| d.sentence().to_string()),
                     skipped_edited: 0,
                     skipped_deleted: 0,
+                    held_mode: 0,
                 },
                 detail,
             ))
@@ -37940,6 +38286,7 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
         tempo_audio::rttyrx::spawn_rtty_rx(handle.state::<SharedEngine>().inner().clone());
         tempo_audio::amppoll::spawn_amp_poll(handle.state::<SharedEngine>().inner().clone());
         tempo_audio::pskrx::spawn_psk_rx(handle.state::<SharedEngine>().inner().clone());
+        tempo_audio::jttyrx::spawn_jtty_rx(handle.state::<SharedEngine>().inner().clone());
         tempo_audio::aprsrx::spawn_aprs_rx(handle.state::<SharedEngine>().inner().clone());
         tempo_audio::sstvrx::spawn_sstv_rx(
             handle.state::<SharedEngine>().inner().clone(),
@@ -38239,6 +38586,20 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         psk_arm,
         psk_auto_arm,
         get_psk_state,
+        get_jtty_state,
+        jtty_arm,
+        jtty_auto_arm,
+        jtty_set_rx,
+        jtty_set_band,
+        jtty_clear,
+        jtty_send,
+        jtty_fkey,
+        jtty_live_start,
+        jtty_live_commit,
+        jtty_sign_off,
+        jtty_stop,
+        jtty_set_tx,
+        jtty_set_serial,
         js8_enter,
         get_js8_state,
         js8_locator_refusal,
@@ -43450,17 +43811,17 @@ mod tests {
     use super::{
         assistance_posture_changed, b64_decode, b64_encode, callbook_candidates, catalog_marks,
         cluster_spot_heards, dxped_page_url, engine_lock, install_block_reason,
-        is_complete_lotw_body, iso_from_stamp, iss_pass_from_tles, load_tle_snapshot_from,
-        migrate_sstv_gallery_between, own_decode_heards, parse_sstv_mode, profile_dir_name,
-        qso_is_sat, reconcile_gallery, rect_lands_on_work_area, redact_for_backup, resolve_bird,
-        resolve_birds, roster_local_spots, roster_spot_age_secs, run_sat_track, sanitize_profile,
-        sat_excluded, set_operator_qth, spotter_evidence_rank, spotter_evidence_rank_at,
-        tle_absorb_foreign, tle_act_gate, tle_extend_aliases, tle_merge_imports,
-        tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path,
-        tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in, AssistanceEvent,
-        AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun, SatnogsFetchState,
-        SharedEngine, TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS,
-        TLE_FETCHING, TLE_STALE_LINE_DAYS,
+        is_complete_lotw_body, iso_from_stamp, iss_pass_from_tles, jtty_heards,
+        load_tle_snapshot_from, migrate_sstv_gallery_between, own_decode_heards, parse_sstv_mode,
+        profile_dir_name, qso_is_sat, reconcile_gallery, rect_lands_on_work_area,
+        redact_for_backup, resolve_bird, resolve_birds, roster_local_spots, roster_spot_age_secs,
+        run_sat_track, sanitize_profile, sat_excluded, set_operator_qth, spotter_evidence_rank,
+        spotter_evidence_rank_at, tle_absorb_foreign, tle_act_gate, tle_extend_aliases,
+        tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor,
+        tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
+        AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun,
+        SatnogsFetchState, SharedEngine, TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN,
+        TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -43973,6 +44334,61 @@ mod tests {
         );
     }
 
+    /// This radio's confirmed JTTY stations reach the Needed board as heard in mode JTTY, on the
+    /// band and at the exact frequency each was heard on (a click goes there), with the locator
+    /// its message carried; one off the band table is left out.
+    #[test]
+    fn confirmed_jtty_stations_reach_the_board_on_their_own_band_and_frequency() {
+        let h =
+            |call: &str, freq_hz: u64, band: &str, grid: Option<&str>| tempo_app::dto::JttyHeard {
+                call: call.into(),
+                freq_hz,
+                band: band.into(),
+                snr: -9,
+                grid: grid.map(str::to_string),
+                at_utc_ms: 1_780_000_000_500,
+            };
+        let heard = jtty_heards(&[
+            h("K1ABC", 14_091_500, "20m", Some("FN42")),
+            h("W1AW", 7_079_480, "40m", None),
+            h("VE3XYZ", 5_000_000, "", None),
+        ]);
+        let rows: Vec<_> = heard
+            .iter()
+            .map(|x| {
+                (
+                    x.call.as_str(),
+                    x.band.as_str(),
+                    x.mode.as_str(),
+                    x.freq_mhz,
+                    x.grid.as_deref(),
+                    x.admitted_at,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "K1ABC",
+                    "20m",
+                    "JTTY",
+                    Some(14.0915),
+                    Some("FN42"),
+                    Some(1_780_000_000)
+                ),
+                (
+                    "W1AW",
+                    "40m",
+                    "JTTY",
+                    Some(7.07948),
+                    None,
+                    Some(1_780_000_000)
+                ),
+            ]
+        );
+    }
+
     /// REGRESSION (operator 2026-08-05, "I would want spots to show up for almost
     /// all those spotted in the US"): the Needed board's HF locality gate, exercised
     /// through the buffer that feeds it — because the two halves only work together.
@@ -44413,12 +44829,13 @@ mod tests {
     /// #335: the engine-locking commands the UI POLLS — every one it asks at 2 s or faster, plus
     /// the propagation and need-alert polls. Each must reach the engine through `with_engine`,
     /// on the blocking pool, and never wait for the lock on a runtime worker.
-    const POLLED_ENGINE_COMMANDS: [&str; 20] = [
+    const POLLED_ENGINE_COMMANDS: [&str; 21] = [
         "get_snapshot",
         "cw_decode",
         "get_rtty_state",
         "get_rtty_scope",
         "get_psk_state",
+        "get_jtty_state",
         "get_js8_state",
         "get_sstv_state",
         "get_settings",

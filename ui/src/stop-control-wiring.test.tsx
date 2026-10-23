@@ -218,6 +218,8 @@ const cwDecodeResult = {
   workedCall: null as string | null,
 }
 const sstvState = { sending: true, rxLine: 0, txLine: 0 }
+// JTTY's receive state, whole: the cockpit reads its lines and Rx/F Tol on every render.
+const jttyState = { armed: true, rxHz: 1500, ftolHz: 20, lowHz: 200, highHz: 3000, lines: [], heard: [], notice: null }
 const js8State = {
   speed: 'normal',
   rxSpeeds: 15,
@@ -251,6 +253,7 @@ function respond(cmd: string, args?: Record<string, unknown>): unknown {
   }
   if (/^(get_rtty_state|rtty_)/.test(cmd)) return rttyState
   if (/^(get_psk_state|psk_)/.test(cmd)) return pskState
+  if (/^(get_jtty_state|jtty_)/.test(cmd)) return jttyState
   if (/^(get_sstv_state|sstv_)/.test(cmd)) return sstvState
   if (/^(get_js8_state|js8_)/.test(cmd)) return js8State
   if (/^(cw_decode|get_cw_state)$/.test(cmd)) return cwDecodeResult
@@ -863,6 +866,8 @@ const ESC_SCREENS: EscScreen[] = [
   // The halt first, then the voice keyer's own stop (its listener, unchanged, ignores Esc in a field).
   { view: 'phone', area: 'dx', drawn: () => shown('.ph-ptt'), esc: ['halt_tx', 'stop_voice'] },
   { view: 'sstv', area: 'dx', drawn: () => shown('.sstv-tx-bar'), esc: ['halt_tx'] },
+  // JTTY transmits nothing of its own yet: its TX strip's Stop TX is the halt, and App binds Esc to it.
+  { view: 'jtty', area: 'dx', drawn: () => shown('main.jtty-cockpit'), esc: ['halt_tx'] },
   { view: 'aprs', area: 'dx', drawn: () => shown('main.aprs-cockpit'), esc: ['halt_tx'] },
   { view: 'sats', area: 'dx', drawn: () => shown('.sats-view'), esc: ['halt_tx'] },
   // Connect draws no top bar, so no Stop TX of its own: App's halt is its stop.
@@ -941,6 +946,7 @@ describe('a menu or panel that Esc closes still closes, and the halt is sent on 
     ['cw (the reference)', 'cw', ['stop_cw', 'halt_tx']],
     ['rtty', 'rtty', ['rtty_stop', 'halt_tx']],
     ['psk', 'psk', ['psk_stop', 'halt_tx']],
+    ['jtty', 'jtty', ['halt_tx']],
     ['js8', 'js8', ['halt_tx']],
     ['phone', 'phone', ['halt_tx', 'stop_voice']],
     ['sstv', 'sstv', ['halt_tx']],
@@ -1236,7 +1242,7 @@ describe('every command this file sends exists in the Rust command surface', () 
 // the mark. The CSS half (no rule in either sheet hides the cluster at any size) is
 // TopBar.small.test.tsx; the geometry is the real-browser sweep's.
 describe("the top bar's Stop TX on every screen without a cockpit", () => {
-  const COCKPITS: View[] = ['operate', 'chat', 'phone', 'cw', 'rtty', 'psk', 'sstv', 'aprs', 'js8', 'sats']
+  const COCKPITS: View[] = ['operate', 'chat', 'phone', 'cw', 'rtty', 'psk', 'jtty', 'sstv', 'aprs', 'js8', 'sats']
   const BAR_STOP = sectionFeatures()
     .map((f) => f.id as View)
     // Conditions (code id 'connect') draws no top bar since 2026-10-01 — the operator's ruled exception, held in "Connect — no radio

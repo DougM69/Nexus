@@ -48,6 +48,10 @@
       "label": "JS8"
     },
     {
+      "id": "jtty",
+      "label": "JTTY"
+    },
+    {
       "id": "logbook",
       "label": "Logbook"
     },

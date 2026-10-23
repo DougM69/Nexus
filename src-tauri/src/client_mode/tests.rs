@@ -1643,7 +1643,7 @@ fn only_a_stop_press_takes_the_road() {
         .filter(|(_, class)| *class == Class::StopsTx)
         .map(|(cmd, _)| cmd)
         .collect();
-    assert_eq!(stops.len(), 8);
+    assert_eq!(stops.len(), 9);
     for cmd in &stops {
         assert!(ask(&screens.main, cmd, json!({})).is_ok(), "{cmd}");
     }

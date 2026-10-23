@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use tempo_app::engine::jtty_tx::{self, JttyTick};
 use tempo_app::engine::{
     engine_lock, run_decode_job_streaming, run_js8_multi_job, DecodeApplied, DecodeJob, DecodePass,
     DecodeProgress, DecodeResult, Engine, Js8MultiJob, Js8Speed, PskStreamTick, RttyStreamTick,
@@ -3816,6 +3817,9 @@ struct RadioLoop {
     /// The live continuous-TX PSK stream, `None` when nothing is latched. See
     /// [`PskTxStream`].
     psk_stream: Option<PskTxStream>,
+    /// Unix-ms until which the JTTY audio already played is still going out — PSK's pacing role
+    /// for JTTY's frames (switched off in every build: see `jtty_tx`).
+    jtty_busy_until: f64,
     /// The SSTV image currently streaming to the rig (pre-encoded 12 kHz PCM + a feed
     /// cursor + timing), fed to the output ring in chunked look-ahead slices so a
     /// multi-minute image never dumps into the unbounded ring at once. `None` = no
@@ -4554,6 +4558,7 @@ impl RadioLoop {
             rtty_stream: None,
             psk_busy_until: 0.0,
             psk_stream: None,
+            jtty_busy_until: 0.0,
             #[cfg(feature = "serial")]
             rtty_keyer: None,
             sstv_feed: None,
@@ -6948,9 +6953,10 @@ impl RadioLoop {
         // drops the engine's latch across a handoff; this drops the generator with it, so a
         // resumed chunk can never splice the old radio's carrier onto the new one.
         self.rtty_stream = None;
-        // PSK's latched stream, for the identical reason.
+        // PSK's latched stream, for the identical reason, and JTTY's pacing with it.
         self.psk_busy_until = 0.0;
         self.psk_stream = None;
+        self.jtty_busy_until = 0.0;
         self.slot_tx_until_ms = 0.0; // the other radio's over is not ours to protect
         self.last_fm = None;
         self.fm_push_misses = 0;
@@ -11690,6 +11696,65 @@ impl RadioLoop {
             }
         }
 
+        // JTTY (WSJT-X's keyboard mode). The engine renders each segment's audio OFF this loop
+        // (the modem lock a decode can hold for seconds never stalls the unkey path) and hands it
+        // out a frame at a time; this keeps between one and two frames queued
+        // (`keyboard::JTTY`), so a loop that stops ticking unkeys within them and the tail. Every
+        // gate is re-checked on every tick while anything of JTTY's is going (`Engine::poll_jtty`),
+        // `may_key` is the one gate it cannot see, and the abort/`tx_until_ms` machinery unkeys as
+        // PSK's does. Queued segments chain with no gap: PTT stays up across them.
+        {
+            let ahead_ms = (self.jtty_busy_until - now).max(0.0);
+            let want = ahead_ms < keyboard::JTTY.stream_ahead_ms(jtty_tx::JTTY_BAUD);
+            let (abort, tick) = {
+                let mut eng = engine_lock(engine);
+                eng.set_jtty_sending(now < self.jtty_busy_until);
+                let tick = if self.may_key() {
+                    eng.poll_jtty(want, ahead_ms)
+                } else {
+                    eng.jtty_cannot_key();
+                    JttyTick::Idle
+                };
+                // AFTER the poll, so a cut it armed is taken on this same tick.
+                (eng.take_jtty_abort(), tick)
+            };
+            if abort {
+                // Only while JTTY audio is actually going (`jtty_busy_until` is the evidence), so
+                // a cut can never take an FT8 slot over riding the same PTT and ring.
+                if now < self.jtty_busy_until {
+                    backend.flush_output();
+                    let _ = rig.ptt(false);
+                    self.tx_until_ms = None;
+                }
+                self.jtty_busy_until = 0.0;
+                engine_lock(engine).set_jtty_sending(false);
+            }
+            if let JttyTick::Frame(buf) = tick {
+                // Assert the rig and key once per transmission, and again after an unkey ran
+                // underneath us; frames after the first chain onto the keyed transmitter.
+                let mut key = KeyUp::Keyed;
+                if self.tx_until_ms.is_none() || now >= self.jtty_busy_until {
+                    self.ensure_commanded(rig); // read-only launch: assert before key
+                    self.publish_tx_intent_now(); // before keying
+                    key = self.key_over(rig, false);
+                }
+                // A frame the rig would not key is not played (`key_over`), and a JTTY message
+                // cannot go on after a hole: the engine drops what it has going.
+                if key.sends() {
+                    backend.play(&buf);
+                    self.jtty_busy_until = self.jtty_busy_until.max(now) + buf.len() as f64 / 12.0;
+                    let until = self.jtty_busy_until + crate::slot::TX_TAIL_MS;
+                    self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    engine_lock(engine).set_jtty_sending(true);
+                } else {
+                    engine_lock(engine).jtty_key_refused();
+                }
+                if let KeyUp::Refused(why) = &key {
+                    note_refused_key("JTTY not keyed", why);
+                }
+            }
+        }
+
         // APRS beacon: an explicit one-shot position beacon. The engine already rendered the
         // AFSK-1200 audio (12 kHz mono); key PTT, play it, and drop PTT via `tx_until_ms` — the
         // same seam the voice/CW soundcard keyer uses. The `tx_until_ms` guard covers the
@@ -13187,6 +13252,10 @@ impl RadioLoop {
         // taps (CW/RTTY/APRS/SSTV/QSO) deliberately stay: the loop already holds this lock, so
         // they cost nothing here, and moving them would risk dropping audio under contention.
         eng.feed_rx_audio(&captured);
+        // JTTY's PSK Reporter spots join the batch the flush below sends ([`jtty_psk_reports`]).
+        station
+            .psk_spots
+            .extend(jtty_psk_reports(&mut eng, sinks.psk.is_some()));
 
         // --- Tune carrier: hold PTT + a steady f0 sine while the operator holds
         // "tune", with a safety auto-release. Normal slot TX is suppressed. ---
@@ -13583,7 +13652,7 @@ impl RadioLoop {
                         // here: replays must never double-spot. Not New: WSJT-X replays each
                         // old decode "with the 'New' field set to false"
                         // (`Network/NetworkMessage.hpp` 221-226; `postDecode (false, …)`).
-                        if let Some(server) = sinks.wsjtx {
+                        if let Some(server) = sinks.wsjtx.filter(|_| udp_decodes_allowed(&eng)) {
                             let tier = tier_mode(eng.tier());
                             for (start, d) in eng.band_activity() {
                                 let _ = server.send_decode(&WsjtxDecode {
@@ -15380,15 +15449,34 @@ fn wsjtx_status(
     let tier = eng.tier();
     let (sub_mode, freq_tol, tr_period) =
         wsjtx_mode_fields(tier, eng.settings(), eng.active_slot_secs());
-    WsjtxStatusOwned {
-        dial_freq,
-        mode: tier_mode(tier),
-        tx: eng.wsjtx_tx_status(),
-        decoding,
+    let mut tx = eng.wsjtx_tx_status();
+    // In the JTTY section the Status names JTTY, as WSJT-X's does (its mode and TX mode are both
+    // `m_mode`), and its RX offset is the JTTY Rx frequency: WSJT-X keeps its two Rx spin boxes in
+    // step, and the Status reads the first. Its TX offset is JTTY's own Tx (WSJT-X's Status reads
+    // its JTTY Tx spin box), and its `m_transmitting` is its JTTY transmission too.
+    let (mode, rx_df, tx_df) = if eng.jtty_section() {
+        tx.transmitting |= eng.jtty_sending();
+        (
+            "JTTY",
+            eng.jtty_rx_hz().max(0.0) as u32,
+            eng.jtty_tx_hz().max(0.0) as u32,
+        )
+    } else {
         // REAL audio offsets (GridTracker/JTAlert show these) —
         // hardcoded 1500s confused every cooperating logger.
-        rx_df: eng.rx_offset_hz().max(0.0) as u32,
-        tx_df: eng.tx_offset_hz().max(0.0) as u32,
+        (
+            tier_mode(tier),
+            eng.rx_offset_hz().max(0.0) as u32,
+            eng.tx_offset_hz().max(0.0) as u32,
+        )
+    };
+    WsjtxStatusOwned {
+        dial_freq,
+        mode,
+        tx,
+        decoding,
+        rx_df,
+        tx_df,
         de_call: de_call.to_string(),
         de_grid: de_grid.to_string(),
         sub_mode,
@@ -15528,6 +15616,15 @@ fn js8_due_speeds(
     due
 }
 
+/// Whether FT decodes may go out as WSJT-X UDP Decode datagrams now. Not in the JTTY section:
+/// WSJT-X sends no Decode in JTTY (its JTTY receive path never calls the message client, and its
+/// FT decoder is not running), and its Status says JTTY there. Nexus's FT decoder keeps running
+/// under the Keyboard section, so its lines are held off the wire there rather than sent beside a
+/// Status that names another mode. PSK Reporter still hears them: they were decoded.
+fn udp_decodes_allowed(eng: &Engine) -> bool {
+    !eng.jtty_section()
+}
+
 fn emit_rx_decodes(
     sinks: &Sinks,
     eng: &Engine,
@@ -15542,13 +15639,14 @@ fn emit_rx_decodes(
     let tier = tier_mode(eng.tier());
     let ms_mid = udp_decode_time_ms(eng, now);
     let now_secs = (now / 1000.0) as u32;
+    let wsjtx = sinks.wsjtx.filter(|_| udp_decodes_allowed(eng));
     let me = (
         eng.settings().mycall.as_str(),
         eng.settings().mygrid.as_str(),
     );
     // ON-AIR text only — never the hound-rewritten internal form.
     for d in eng.wire_decodes() {
-        if let Some(server) = sinks.wsjtx {
+        if let Some(server) = wsjtx {
             let _ = server.send_decode(&build_decode(
                 &d.message,
                 d.snr,
@@ -15717,6 +15815,28 @@ fn is_spot_locator(s: &str) -> bool {
         _ => false,
     };
     shape && !b[..4].eq_ignore_ascii_case(b"RR73")
+}
+
+/// JTTY's PSK Reporter spots, taken from the engine every tick (`tempo_app::engine::jtty_rx`
+/// queues only calls decoded in two separate messages), as the loop's batch entries in mode
+/// "JTTY", the mode string WSJT-X reports. With uploading off they are taken and dropped, so the
+/// queue cannot grow.
+fn jtty_psk_reports(eng: &mut Engine, uploading: bool) -> Vec<Spot> {
+    let spots = eng.take_jtty_spots();
+    if !uploading {
+        return Vec::new();
+    }
+    spots
+        .into_iter()
+        .map(|s| Spot {
+            call: s.call,
+            freq_hz: s.freq_hz,
+            snr: s.snr,
+            mode: "JTTY".to_string(),
+            grid: String::new(),
+            time_secs: s.time_secs,
+        })
+        .collect()
 }
 
 /// Generate `n` samples of a unit-amplitude sine at `freq` Hz, continuing from
@@ -17924,6 +18044,8 @@ mod tests {
     mod js8_frames;
     mod js8_retune;
     mod js8_tx_delay;
+    mod jtty_status;
+    mod jtty_transmit;
     mod omnirig_coverage;
     mod readback_coverage;
     mod receive_source;
@@ -42415,6 +42537,56 @@ mod tests {
             "(reporter held, upload applied): inside Winter Field Day's window, an hour before \
              it, at its end, with the master switch off, inside ARRL Field Day's window; then \
              (held during the event, held after it, the switch)"
+        );
+    }
+
+    /// JTTY's spots reach PSK Reporter's batch from the engine's queue, in mode JTTY with the
+    /// sender, RF frequency, SNR and start the receive side gave them, and are taken once. While
+    /// uploading is off they are still taken, and dropped, so the queue cannot grow.
+    #[test]
+    fn jtty_spots_join_the_psk_reporter_batch_as_mode_jtty() {
+        use tempo_app::engine::jtty_rx::{JttyTerminal, JttyUpdate};
+        let queued = || {
+            let mut e = Engine::with_settings(tempo_app::settings::Settings {
+                mycall: "KD9TAW".into(),
+                dial_mhz: 14.090,
+                pskreporter: true,
+                ..tempo_app::settings::Settings::default()
+            });
+            e.set_jtty_armed(true);
+            e.feed_rx_audio(&[0.0; 1200]);
+            let session = e.take_jtty_audio()[0].session;
+            let cq = |id: i64, start_s: f64| JttyUpdate {
+                message_id: id,
+                text: "CQ W1AW CQ".into(),
+                freq_hz: 1500.0,
+                start_s,
+                latest_s: start_s,
+                terminal: JttyTerminal::Complete,
+                snr_db: -7,
+            };
+            e.apply_jtty_updates(session, &[cq(1, 2.0), cq(2, 12.0)]);
+            e
+        };
+        let mut e = queued();
+        let got = jtty_psk_reports(&mut e, true);
+        assert_eq!(
+            got.iter()
+                .map(|s| (s.call.as_str(), s.freq_hz, s.snr, s.mode.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("W1AW", 14_091_500, -7, "JTTY"); 2]
+        );
+        assert_eq!(
+            got[1].time_secs - got[0].time_secs,
+            10,
+            "each at its message's start"
+        );
+        assert!(jtty_psk_reports(&mut e, true).is_empty(), "taken once");
+        let mut off = queued();
+        assert!(jtty_psk_reports(&mut off, false).is_empty());
+        assert!(
+            off.take_jtty_spots().is_empty(),
+            "taken, and dropped, while uploading is off"
         );
     }
 

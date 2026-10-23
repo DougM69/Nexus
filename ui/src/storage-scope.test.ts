@@ -95,6 +95,10 @@ export const PER_SURFACE = [
   // Band Activity's newest-on-top order (#276) — the same class as the chips above it: a
   // statement about what THIS pane shows, so a torn-off Operate window may read the other way.
   'nexus.decodes.newestTop',
+  // JTTY's two display options (WSJT-X's Lower case and Include Time), the same class: a
+  // statement about what THIS window's panes show.
+  'nexus.jtty.includeTime',
+  'nexus.jtty.lowerCase',
   'nexus.logbook.globespin',
   'nexus.operate.layout',
   // Which side Operate's rail stands on (layout L5): a layout choice of THIS window, like the
@@ -139,6 +143,8 @@ export const PER_SURFACE = [
   'nexus.split.operate.tx',
   'nexus.split.phone.scope',
   // RTTY's and PSK's waterfall heights (layout L6), the same kind; and SSTV's picture stage.
+  // JTTY's waterfall rides PSK's strip rule, under a key of its own.
+  'nexus.split.jtty.waterfall',
   'nexus.split.psk.waterfall',
   'nexus.split.rtty.waterfall',
   'nexus.split.sstv.stage',
@@ -464,6 +470,7 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.js8.waterfall',
     'nexus.split.rtty.waterfall',
     'nexus.split.psk.waterfall',
+    'nexus.split.jtty.waterfall',
     'nexus.split.sstv.stage',
     'nexus.split.operate.tx',
     'nexus.split.connect.strip',
@@ -667,6 +674,7 @@ describe('call sites agree with the classification', () => {
       ['components/Js8Cockpit.tsx', 'nexus.split.js8.waterfall'],
       ['components/RttyCockpit.tsx', 'nexus.split.rtty.waterfall'],
       ['components/PskCockpit.tsx', 'nexus.split.psk.waterfall'],
+      ['components/JttyCockpit.tsx', 'nexus.split.jtty.waterfall'],
       ['components/SstvView.tsx', 'nexus.split.sstv.stage'],
       ['components/OperateCockpit.tsx', 'nexus.split.operate.tx'],
       ['components/ConnectView.tsx', 'nexus.split.connect.strip'],

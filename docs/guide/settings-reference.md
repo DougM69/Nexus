@@ -1367,6 +1367,19 @@ the mode transmits.)
   remembered for the rest of the session either way. **This arms the receiver
   only** — transmit is never armed for you.
 
+**JTTY**, the WSJT-X keyboard mode, is the Keyboard section's other modem, so its one
+setting is here too.
+
+- **Start receiving when JTTY opens** — on by default, as for PSK: entering the JTTY
+  screen arms its decoder. Turn it off to arm by hand (the Arm RX button in the All
+  decodes pane). Stopping the receiver yourself is remembered for the rest of the
+  session. **This arms the receiver only**; this build of the JTTY screen does not
+  transmit.
+
+JTTY's F Tol is set on the JTTY screen and kept between sessions, as WSJT-X keeps it.
+Its Rx frequency goes back to 1500 Hz each time JTTY is opened from another mode, as
+in WSJT-X.
+
 ![The PSK group with a single control: "Start receiving when PSK opens", switched on.](../img/manual/settings-psk.webp)
 
 *The whole of the PSK tab in Nexus 1.10.3 — one receive control. Transmitting is

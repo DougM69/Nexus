@@ -213,6 +213,7 @@ impl Authority {
 ///   · Operate and JS8 Stop TX, and the Phone and SSTV header Stop TX → `halt_tx`
 ///   · CW Stop TX (and Esc) → `stop_cw` + `halt_tx`
 ///   · RTTY Stop TX → `rtty_stop` + `halt_tx`; PSK Stop TX → `psk_stop` + `halt_tx`
+///   · JTTY's dock Esc/Stop → `jtty_stop`; its Stop TX → `halt_tx`
 ///   · SSTV's send-bar Stop → `sstv_stop`; the Phone voice keyer's ■ Stop → `stop_voice`
 ///
 /// The station does not know which cockpit the browser is showing, so it runs the union, `halt_tx`
@@ -293,6 +294,7 @@ pub(super) fn stop(e: &mut tempo_app::engine::Engine) -> Option<String> {
     e.stop_cw();
     e.rtty_stop();
     e.psk_stop();
+    e.jtty_stop();
     e.sstv_stop();
     e.stop_voice();
     e.halt_tx();

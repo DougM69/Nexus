@@ -12,7 +12,7 @@ mod fm;
 mod fm_receiver;
 mod level;
 mod phone_mode;
-mod selection;
+pub(super) mod selection;
 mod spot;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);

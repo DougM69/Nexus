@@ -1425,6 +1425,14 @@ export const EN = {
     one: ' {{count}} was deleted from the log.',
     other: ' {{count}} were deleted from the log.',
   },
+  // Contacts held back from a LoTW upload because TQSL does not know their mode yet (a JTTY
+  // contact, written bare as WSJT-X writes it): the station's own sentence, for the screen. JTTY,
+  // TQSL and LoTW are names.
+  'logbook.lotw.held': {
+    one: '{{count}} JTTY contact was not sent: TQSL does not know the JTTY mode yet and would drop it, so it was held back. It stays marked as not uploaded to LoTW.',
+    other:
+      '{{count}} JTTY contacts were not sent: TQSL does not know the JTTY mode yet and would drop them, so they were held back. They stay marked as not uploaded to LoTW.',
+  },
 
   // ⚠️ `{{formatted}}` is a QSO COUNT the call site has already grouped for display
   // ("1,234"). It is a count of contacts, not a technical quantity — no dial, no report, no
@@ -8110,6 +8118,11 @@ export const EN = {
   'settings.psk.rxAutoArm.label': 'Start receiving when PSK opens',
   'settings.psk.rxAutoArm.hint':
     'The PSK screen starts the decoder as soon as you open it — click a trace on the waterfall and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). Stopping the receiver yourself is already remembered for the rest of the session. This arms the RECEIVER only — transmitting is never armed for you.',
+  // JTTY is the Keyboard section's other modem, so its one setting sits in this section.
+  'settings.jtty.title': 'JTTY',
+  'settings.jtty.rxAutoArm.label': 'Start receiving when JTTY opens',
+  'settings.jtty.rxAutoArm.hint':
+    'The JTTY screen starts its decoder as soon as you open it. Turn this off to arm the receiver by hand (the Arm RX button in the All decodes pane). Stopping the receiver yourself is already remembered for the rest of the session. This arms the RECEIVER only — transmitting is never armed for you.',
 
   // ── Settings ▸ JS8 ──────────────────────────────────────────────────────────────────
   // Speed names (Slow/Normal/Fast/JS8 40/JS8 60, and the aliases Turbo/Ultra) and the command words
@@ -10530,6 +10543,67 @@ export const EN = {
   'psk.drive.title':
     "PSK31 is an amplitude-shaped mode: if the rig's ALC is compressing, the signal splatters into the neighbors (IMD). Nexus keys at a modest drive by default — set TX audio / power so the rig's ALC meter barely moves.",
 
+  // ── JTTY ▸ the cockpit (receive) ────────────────────────────────────────────────────────
+  // JTTY, WSJT-X, Rx, F Tol, Hz and the decoded lines are tokens and stay in the code. The two
+  // panes carry WSJT-X's own names for them (All Decodes, QSO Frequency).
+  'jtty.panel.waterfall': 'Waterfall',
+  'jtty.pane.all.title': 'All decodes',
+  'jtty.pane.rx.title': 'QSO frequency',
+  'jtty.pane.log.title': 'Log',
+  'jtty.pane.all.hint':
+    'Every JTTY message decoded, in the order it started. A call becomes clickable once it has been heard in two separate messages.',
+  'jtty.pane.rx.hint': 'The messages first heard within F Tol of Rx.',
+  'jtty.header.mode.title':
+    'JTTY, the WSJT-X keyboard mode. This build receives it; transmitting comes in a later build.',
+  'jtty.header.band.title': "Showing the rig's current band",
+  'jtty.rx.group.aria': 'JTTY receive frequency',
+  'jtty.rx.title':
+    'The audio frequency the decoder always searches, F Tol either side of it. A click on the waterfall sets it too. It goes back to 1500 Hz each time JTTY is opened from another mode, as in WSJT-X.',
+  'jtty.rx.aria': 'Rx frequency in Hz',
+  'jtty.ftol.title': 'How far either side of Rx the decoder always searches. Kept between sessions, as in WSJT-X.',
+  'jtty.ftol.aria': 'F Tol in Hz',
+  'jtty.waterfall.hint': 'click sets Rx, Shift+click Tx',
+  'jtty.waterfall.splitter.label': 'waterfall height',
+  'jtty.arm.on.label': 'RX armed',
+  'jtty.arm.off.label': 'Arm RX',
+  'jtty.arm.on.title':
+    'RX armed — decoding the receive audio (RX only, never keys the rig). Click to stop; stopping is remembered for this session.',
+  'jtty.arm.off.title': 'Arm RX — start decoding JTTY from the receive audio (RX only, never keys the rig)',
+  'jtty.arm.failed': 'Could not switch the JTTY decoder',
+  'jtty.lowerCase.label': 'Lower case',
+  'jtty.lowerCase.title': "Show received messages in lower case (WSJT-X's Lower case option)",
+  'jtty.includeTime.label': 'Include time',
+  'jtty.includeTime.title': "Put the UTC time each message started in front of it (WSJT-X's Include Time option)",
+  'jtty.erase.label': 'Erase',
+  'jtty.erase.title': 'Clear both panes. Stations already heard stay heard.',
+  'jtty.all.listening': 'listening… JTTY messages print here as they decode',
+  'jtty.all.idle': 'Arm RX to decode JTTY from the receive audio',
+  'jtty.rx.empty': 'Nothing heard near Rx yet. Click a signal on the waterfall to move Rx onto it.',
+  'jtty.call.title': '{{call}}, heard in two separate messages: click to put it in the log line and look it up',
+  'jtty.compose.placeholder': 'Type a message; Enter sends it',
+  'jtty.compose.aria': 'JTTY message',
+  'jtty.compose.send.label': 'Send',
+  'jtty.compose.placeholder.live': 'Live: what you type goes out as you type it',
+  'jtty.compose.hint': 'Enter sends. Live keeps the transmitter up while you type; Esc stops.',
+  'jtty.compose.committed.title': 'Already sent in this transmission',
+  'jtty.compose.send.title': "Send the message, ending it (WSJT-X's Send)",
+  'jtty.compose.send.left': 'Send ({{n}} left)',
+  'jtty.compose.pending.title': 'Still to go:\n{{text}}',
+  'jtty.tx.title': 'Where JTTY transmits: its lowest tone, the others above it. Back to 1500 Hz whenever JTTY is opened, as in WSJT-X, and it cannot move while JTTY is transmitting. Shift+click the waterfall to set it.',
+  'jtty.tx.aria': 'Tx frequency in Hz',
+  'jtty.macros.aria': 'JTTY messages F1 to F8',
+  'jtty.fkey.title': "{{key}} sends {{template}}: WSJT-X's message, with %M your call, %H the Call box and %E the serial",
+  'jtty.hisCall.placeholder': 'Call',
+  'jtty.hisCall.aria': "The other station's call (%H)",
+  'jtty.serial.title': 'Contest serial number (%E). It moves on after a message starting TU, as in WSJT-X.',
+  'jtty.serial.aria': 'Serial number',
+  'jtty.live.on.label': 'Live',
+  'jtty.live.on.title': "Start a live transmission: what you type goes out as you type it, and filler holds the transmitter between (WSJT-X's Alt+J)",
+  'jtty.live.off.label': 'Sign off',
+  'jtty.live.off.title': "Sign off: DE and your call go out, then the transmitter is let go once everything has gone (WSJT-X's Alt+K). Esc stops at once.",
+  'jtty.stop.label': 'Stop',
+  'jtty.stop.title': 'Stop JTTY: cut the transmission, drop what is queued and end a live session',
+
   // ── JS8 ▸ the ⊞ panel labels (the pane heads reuse them) ───────────────────────────────
   'js8.panel.scope': 'Waterfall',
   'js8.panel.activity': 'RX',
@@ -12152,6 +12226,8 @@ export const EN = {
   'nav.digital.rtty.title': 'RTTY — Baudot teletype (45.45 baud): streaming decode + F-key macros',
   'nav.digital.psk.title':
     'PSK31 — narrow-band keyboard mode: click a trace on the waterfall, read the ragchew (receive)',
+  'nav.digital.jtty.title':
+    'JTTY — the WSJT-X keyboard mode: RTTY-style keyboard and contest text with weak-signal decoding (receive)',
   'nav.digital.sstv.title': 'SSTV — slow-scan TV: received images decode into the gallery',
   'nav.digital.aprs.title':
     'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon',
@@ -13018,6 +13094,8 @@ export const EN = {
     'RTTY operating — 45.45 baud Baudot: streaming decode, F-key macros, FSK/AFSK keying.',
   'features.psk.oneLine':
     'PSK31 — narrow-band keyboard mode: click a trace, read the ragchew (receive).',
+  'features.jtty.oneLine':
+    'JTTY — the WSJT-X keyboard mode: RTTY-style keyboard and contest text with weak-signal decoding (receive).',
   'features.sstv.oneLine':
     'SSTV — slow-scan images auto-decode into a gallery (Martin/Scottie/Robot/PD).',
   'features.aprs.oneLine':

@@ -114,6 +114,8 @@ mod held_form_tests;
 /// JS8's send mechanics: the TX offset moved while a message goes out.
 #[cfg(test)]
 mod js8_send_tests;
+/// JTTY transmit, behind every transmit guard.
+pub mod jtty_tx;
 /// The journals when the file there cannot be read: kept, never written over.
 #[cfg(test)]
 mod kept_files_tests;
@@ -1218,6 +1220,10 @@ pub mod js8;
 /// (`crates/tempo-app/src/js8_freq.rs`) — a CHILD of this module, as `js8` is.
 #[path = "js8_freq.rs"]
 pub mod js8_freq;
+/// JTTY receive (`crates/tempo-app/src/jtty_rx.rs`) — a CHILD of this module, as `js8` is, so
+/// it reaches the engine's private fields with no visibility widening. RECEIVE ONLY.
+#[path = "jtty_rx.rs"]
+pub mod jtty_rx;
 
 /// JS8's internet links (`crates/tempo-app/src/js8_links.rs`): PSK Reporter and JS8NET spots, the
 /// @APRSIS gateway, the never-spot list and the inbound APRS-IS relay. A child of this module for
@@ -4522,6 +4528,13 @@ pub struct Engine {
     /// Whether the PSK demodulator's quality squelch currently reads a signal
     /// (the cockpit's carrier indicator).
     psk_signal: bool,
+    /// JTTY receive (WSJT-X's keyboard mode): the armed decoder's tap, its receptions, the
+    /// receive window and the two-decode rule's state. Session-only; RECEIVE ONLY — nothing in
+    /// it can key the rig (see [`jtty_rx`]).
+    jtty: jtty_rx::JttyRx,
+    /// JTTY transmit: its queue, live entry, Tx offset and serial. SWITCHED OFF in every build
+    /// (see [`jtty_tx`]): every send is refused and nothing of it reaches the radio loop.
+    jtty_tx: jtty_tx::JttyTx,
     /// One-shot: drop + rebuild the RX demodulator (the cockpit's Re-acquire —
     /// fresh AFC pull from the netted center).
     psk_afc_reset: bool,
@@ -5863,6 +5876,8 @@ pub enum TxOwner {
     Psk,
     /// An SSTV image is in flight.
     Sstv,
+    /// JTTY has something queued or on the air, or a live session is up.
+    Jtty,
     /// A program on Nexus's TCI server holds a key: an over of its audio, armed or keyed, or the
     /// radio's microphone (`engine/tci.rs`).
     Tci,
@@ -5881,6 +5896,7 @@ impl TxOwner {
             TxOwner::Rtty => "RTTY is transmitting — stop it first",
             TxOwner::Psk => "PSK is transmitting — stop it first",
             TxOwner::Sstv => "An SSTV image is transmitting — stop it first",
+            TxOwner::Jtty => "JTTY is transmitting — stop it first",
             TxOwner::Tci => "A program on TCI is transmitting — stop it first",
         }
         .to_string()
@@ -6260,6 +6276,10 @@ impl Engine {
             hb_rate_limit: false,
             avoid_allcall: false,
         };
+        // The saved JTTY F Tol (WSJT-X keeps it between sessions; the Rx frequency it does not),
+        // and the serial number, which it keeps too.
+        let jtty_ftol_hz = settings.jtty_ftol_hz;
+        let jtty_serial = settings.jtty_serial;
         Self {
             app,
             station: {
@@ -6625,6 +6645,8 @@ impl Engine {
             psk_chars: VecDeque::new(),
             psk_afc_hz: 0.0,
             psk_signal: false,
+            jtty: jtty_rx::JttyRx::with_ftol(jtty_ftol_hz),
+            jtty_tx: jtty_tx::JttyTx::with_serial(jtty_serial),
             psk_afc_reset: false,
             psk_center: None,
             psk_mode: tempo_core::psk::PskModeKind::Bpsk31,
@@ -6933,6 +6955,8 @@ impl Engine {
         // and the radio loop then re-commanded the STALE mode on the next tick (mode-matrix
         // audit, 2026-08-10). Same pattern as source/radios/rules/sat-consent.
         let live_op_mode = self.settings.operating_mode;
+        // …and the Keyboard section's modem, which is written with it (`set_operating_mode`).
+        let live_keyboard_modem = self.settings.keyboard_modem;
         // Blocked calls are LIVE state with ONE writer (`set_blocked_calls` — the
         // Alt-double-click gesture and the Settings editor both go through it), so a
         // stale form save can't silently un-block or re-block a call mid-QSO.
@@ -7077,6 +7101,7 @@ impl Engine {
             self.settings.sat_uplink_radios = live_sat_uplink_radios;
         }
         self.settings.operating_mode = live_op_mode;
+        self.settings.keyboard_modem = live_keyboard_modem;
         if keep_live_roster {
             self.settings.blocked_calls = live_blocked;
         }
@@ -7196,14 +7221,22 @@ impl Engine {
         // fine all along). Same carve-out as the roster directly below, for the same reason: a
         // stale panel must not revert what the operator just did. A RESTORE still takes all
         // three from the bundle — there the incoming settings are the whole truth.
+        //
+        // JTTY's F Tol is the same kind of control (the JTTY cockpit's), so it takes the same
+        // carve-out: a form save keeps the decoder's live value, a restore hands it the bundle's.
+        // The JTTY serial number too: the cockpit sets it and a sent "TU " moves it on.
         if keep_live_roster {
             self.settings.tx_offset_hz = self.tx_offset_hz;
             self.settings.rx_offset_hz = self.rx_offset_hz;
             self.settings.hold_tx_freq = self.hold_tx_freq;
+            self.settings.jtty_ftol_hz = self.jtty_ftol_setting();
+            self.settings.jtty_serial = self.jtty_serial();
         } else {
             self.tx_offset_hz = self.settings.tx_offset_hz;
             self.rx_offset_hz = self.settings.rx_offset_hz;
             self.hold_tx_freq = self.settings.hold_tx_freq;
+            self.adopt_jtty_ftol(self.settings.jtty_ftol_hz);
+            self.adopt_jtty_serial(self.settings.jtty_serial);
         }
         // A settings save reconciles the operating mode with the Field Day
         // master switch `fd_active`, which is authoritative over whether the
@@ -9215,7 +9248,11 @@ impl Engine {
         match origin {
             DialOrigin::Operator | DialOrigin::OperatorKnob => {
                 self.machinery_park = None;
-                self.dial_residency = Some(DialResidency {
+                // JTTY keeps no dial memory: an entry or a band pick lands on WSJT-X's JTTY
+                // frequency (`jtty_channel`). So a JTTY dial is never a residency, and never
+                // banked into the (band, Keyboard) cell, which is PSK's: both modems are the
+                // Keyboard section.
+                self.dial_residency = (!self.jtty_section()).then(|| DialResidency {
                     band: self.settings.band.clone(),
                     mode: self.settings.operating_mode,
                     dial_mhz: self.settings.dial_mhz,
@@ -9354,6 +9391,45 @@ impl Engine {
         }
     }
 
+    /// The operator is in the PSK section: the Keyboard section with PSK as its modem
+    /// ([`crate::settings::KeyboardModem`]). PSK's gates and its queue's hand-out ask this, so
+    /// nothing of PSK's keys while JTTY is the modem.
+    fn psk_section(&self) -> bool {
+        self.settings.operating_mode == crate::settings::OperatingMode::Keyboard
+            && self.settings.keyboard_modem == crate::settings::KeyboardModem::Psk
+    }
+
+    /// The operator is in the JTTY section: the Keyboard section with JTTY as its modem
+    /// ([`crate::settings::KeyboardModem`]).
+    pub fn jtty_section(&self) -> bool {
+        self.settings.operating_mode == crate::settings::OperatingMode::Keyboard
+            && self.settings.keyboard_modem == crate::settings::KeyboardModem::Jtty
+    }
+
+    /// JTTY's dial and sideband for `band`: WSJT-X's JTTY frequency there
+    /// ([`crate::bandplan::jtty_band_plan`]), where the operator's class may run data. It is where
+    /// a JTTY section entry and a JTTY band pick by name land, every time: WSJT-X goes to its
+    /// frequency list on a band or mode change, so JTTY keeps no dial memory of its own. `None` =
+    /// no channel or no privilege there, and the dial stays put.
+    ///
+    /// The emission is judged where WSJT-X puts JTTY's transmit offset whenever JTTY is selected,
+    /// 1500 Hz above the dial (USB), through the same model `tx_allowed` uses: the PSK rule's
+    /// one-point judgement, at JTTY's point rather than PSK's netted centre.
+    pub(super) fn jtty_channel(&self, band: &str) -> Option<(f64, String)> {
+        const JTTY_TX_OFFSET_MHZ: f64 = 1500.0 / 1_000_000.0;
+        crate::bandplan::jtty_band_plan()
+            .into_iter()
+            .find(|c| c.band == band)
+            .filter(|c| {
+                crate::privileges::tx_allowed(
+                    self.settings.license_class,
+                    c.dial_mhz + JTTY_TX_OFFSET_MHZ,
+                    crate::settings::OperatingMode::Keyboard,
+                )
+            })
+            .map(|c| (c.dial_mhz, c.mode))
+    }
+
     /// Band pick by NAME — the CW/Phone cockpit band dropdowns (`BandPicker`), and the only
     /// caller. Land on the operator's last dial for (band, mode) THIS SESSION, else the
     /// default the dropdown has always used. This verb exists because the dropdown used to
@@ -9375,13 +9451,16 @@ impl Engine {
     fn pick_band_with_reset(&mut self, band: &str, mode: Option<&str>, reset: impl FnMut()) {
         use crate::settings::OperatingMode;
         let band = crate::bandplan::canonical_band(band);
-        let om = match mode.map(str::to_ascii_lowercase).as_deref() {
-            Some("phone") => OperatingMode::Phone,
-            Some("cw") => OperatingMode::Cw,
-            Some("rtty") => OperatingMode::Rtty,
-            Some("keyboard") | Some("psk") => OperatingMode::Keyboard,
-            Some(_) => OperatingMode::Digital,
-            None => self.settings.operating_mode,
+        // `jtty`: the Keyboard section with JTTY as its modem, whose pick lands on WSJT-X's JTTY
+        // frequency for the band and is remembered nowhere (`jtty_channel`).
+        let (om, jtty) = match mode.map(str::to_ascii_lowercase).as_deref() {
+            Some("phone") => (OperatingMode::Phone, false),
+            Some("cw") => (OperatingMode::Cw, false),
+            Some("rtty") => (OperatingMode::Rtty, false),
+            Some("keyboard") | Some("psk") => (OperatingMode::Keyboard, false),
+            Some("jtty") => (OperatingMode::Keyboard, true),
+            Some(_) => (OperatingMode::Digital, false),
+            None => (self.settings.operating_mode, self.jtty_section()),
         };
         // A band pick is a leave-event for the cell it is about to READ, including — especially
         // — when that cell is the one the operator is sitting in. `set_frequency` banks on a
@@ -9392,14 +9471,22 @@ impl Engine {
         // it just happens a moment earlier, into the same cell (the residency carries its own
         // band, so nothing is misattributed).
         self.bank_dial_memory();
-        if let Some((dial, sideband)) = self.prepare_band_pick(&band, om) {
+        let target = if jtty {
+            self.jtty_channel(&band)
+        } else {
+            self.prepare_band_pick(&band, om)
+        };
+        if let Some((dial, sideband)) = target {
             // Arms the retune, and opens the residency this pick should be remembered by.
             self.tune_dial_with_reset(dial, &band, &sideband, DialOrigin::Operator, reset);
             // Record it in the cell the recall READ. `set_frequency` opens the residency with
             // `settings.operating_mode`, which is exactly the value that may still lag `om`
             // during cockpit entry — the race `mode` is passed to dodge. One mode decides both
-            // halves, or the pick banks a Phone dial into the CW cell.
-            if let Some(r) = self.dial_residency.as_mut() {
+            // halves, or the pick banks a Phone dial into the CW cell. A JTTY pick is remembered
+            // nowhere, whatever section the entry race has the engine in.
+            if jtty {
+                self.dial_residency = None;
+            } else if let Some(r) = self.dial_residency.as_mut() {
                 r.mode = om;
             }
         }
@@ -9556,7 +9643,18 @@ impl Engine {
         // flight is left as a section change has always left it: nothing here arms an abort for a
         // one-shot over (the latches above cut only a LATCHED stream), so it finishes where TX
         // stays armed, and the loop's TX-off cut ends it where the disarm below lowers the latch.
-        self.drop_queued_overs_on_leaving(om);
+        // Inside the Keyboard section the modem matters as well: PSK and JTTY are one section, so
+        // going from one to the other LEAVES the screen the operator was on.
+        let to_modem = entry.modem.unwrap_or(self.settings.keyboard_modem);
+        self.drop_queued_overs_on_leaving(om, to_modem);
+        // …and JTTY STOPS when its screen is left, what is on the air included: WSJT-X stops its
+        // transmitter on a mode change (`noteTxModeChange` → `stopTx`), and a live session has no
+        // end of its own to wait for.
+        let to_jtty =
+            om == OperatingMode::Keyboard && to_modem == crate::settings::KeyboardModem::Jtty;
+        if self.jtty_section() && !to_jtty {
+            self.jtty_left();
+        }
         // The other half of the context pair (see the tier line): which section the operator is
         // in decides what every transmit, CAT and audio line beneath it means. Logged only when
         // it CHANGES — this method is re-asserted on every view entry, and a line per re-assert
@@ -9567,6 +9665,20 @@ impl Engine {
                 &format!("section {:?} → {:?}", self.settings.operating_mode, om),
             );
         }
+        // …and, inside the Keyboard section, which modem: PSK and JTTY are one section.
+        if let Some(modem) = entry
+            .modem
+            .filter(|m| om == OperatingMode::Keyboard && *m != self.settings.keyboard_modem)
+        {
+            tempo_core::applog::info(
+                "mode",
+                &format!(
+                    "keyboard modem {:?} → {:?}",
+                    self.settings.keyboard_modem, modem
+                ),
+            );
+        }
+        let was_jtty = self.jtty_section();
         let left_a_manual_mode = matches!(
             self.settings.operating_mode,
             OperatingMode::Phone
@@ -9575,6 +9687,18 @@ impl Engine {
                 | OperatingMode::Keyboard
         );
         self.settings.operating_mode = om;
+        // The Keyboard section's modem is named by the entry ("keyboard" is PSK, "jtty" JTTY);
+        // every other section leaves it as it was.
+        if let Some(modem) = entry.modem {
+            self.settings.keyboard_modem = modem;
+        }
+        // Selecting JTTY sets its Rx frequency back to 1500 Hz, as WSJT-X does every time JTTY is
+        // selected (`on_actionJTTY_triggered`); F Tol is kept, as WSJT-X keeps `JTTY_FTol`. A
+        // view re-asserting the JTTY section is not a selection, so Rx stays where it was then.
+        if self.jtty_section() && !was_jtty {
+            self.jtty_selected();
+            self.jtty_tx_selected();
+        }
         // SAFETY re-clamp: entering a mode with a lower power ceiling (SSB → FT8) must bring the
         // rig DOWN to the cap now, not wait for the operator to touch the power slider. If a cap
         // exists for the new mode, command at most the cap — carrying the current level when it's
@@ -9730,7 +9854,11 @@ impl Engine {
     /// QSO ends with the screen, with a line of its own ([`RTTY_AUTO_LEFT`]; nothing was refused,
     /// so the refusal line would mislead): left running, its next over would be queued while the
     /// operator is away and key on the return.
-    fn drop_queued_overs_on_leaving(&mut self, to: crate::settings::OperatingMode) {
+    fn drop_queued_overs_on_leaving(
+        &mut self,
+        to: crate::settings::OperatingMode,
+        to_modem: crate::settings::KeyboardModem,
+    ) {
         use crate::settings::OperatingMode;
         let from = self.settings.operating_mode;
         if from == OperatingMode::Rtty && to != OperatingMode::Rtty {
@@ -9755,10 +9883,12 @@ impl Engine {
                 self.rtty_keyer_error = Some(RTTY_AUTO_LEFT.to_string());
             }
         }
-        if from == OperatingMode::Keyboard
-            && to != OperatingMode::Keyboard
-            && !self.psk_queue.is_empty()
-        {
+        // The PSK screen is left for anywhere but PSK, the JTTY screen included: PSK and JTTY are
+        // one section, and a PSK over still queued when JTTY opens would key from a screen that
+        // shows nothing of it.
+        let to_psk =
+            to == OperatingMode::Keyboard && to_modem == crate::settings::KeyboardModem::Psk;
+        if from == OperatingMode::Keyboard && !to_psk && !self.psk_queue.is_empty() {
             tempo_core::applog::info("tx", "PSK not keyed: the PSK section was left (dropped)");
             self.psk_queue.clear();
             self.psk_keyer_error = Some(PSK_LEFT_SECTION.to_string());
@@ -18562,6 +18692,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.psk_queue.clear();
         self.psk_abort = true;
         self.drop_psk_latch();
+        // …and JTTY: queue, live session and the cut (WSJT-X's Halt Tx cancels them all).
+        self.jtty_stop();
         self.aprs_tx_queue.clear(); // drop any queued APRS beacon so Stop TX cancels it
         self.voice_tx = None; // drop any queued voice-keyer audio too
         self.voice_dax = None;
@@ -19194,6 +19326,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.psk_queue.clear();
             self.psk_abort = true;
             self.drop_psk_latch();
+            // …and JTTY's, which has the same latched shape in its live entry.
+            self.jtty_stop();
             // The microphone over joins RTTY and SSTV (the audio design's M10): it is latched,
             // with no end of its own, so TX Off ends it in flight rather than letting it run.
             self.drop_mic_latch();
@@ -21276,6 +21410,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 self.psk_audio.drain(0..drop);
             }
         }
+        // JTTY's tap keeps each reception's samples contiguous on its own timeline instead of
+        // dropping the oldest (`jtty_rx`); disarmed it is one branch.
+        self.jtty_feed(samples, now_unix_millis() as i64);
         if self.aprs_arm.is_armed() {
             self.aprs_audio.extend_from_slice(samples);
             if self.aprs_audio.len() > RX_TAP_CAP {
@@ -22491,6 +22628,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(TxOwner::Psk)
         } else if self.sstv_tx.is_some() || self.sstv_sending {
             Some(TxOwner::Sstv)
+        } else if self.jtty_tx_active() {
+            // A live session owns the transmitter from the instant it is started, as a latched
+            // RTTY or PSK stream does.
+            Some(TxOwner::Jtty)
         } else {
             None
         }
@@ -22916,6 +23057,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.settings.operating_mode != OperatingMode::Keyboard {
             return Err("Not in the PSK section — enter the PSK cockpit first".to_string());
         }
+        // PSK and JTTY are one section: while JTTY is its modem, PSK sends nothing.
+        if !self.psk_section() {
+            return Err("JTTY is the keyboard modem — open the PSK screen to send PSK".to_string());
+        }
         if self.clock_repair_holds_tx() {
             return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
         }
@@ -22967,11 +23112,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// TX watchdog trips BEFORE handing a message out, exactly as
     /// [`Self::poll_rtty_one`] does.
     pub fn poll_psk_one(&mut self) -> Option<String> {
-        use crate::settings::OperatingMode;
         if self.psk_queue.is_empty() {
             return None;
         }
-        let in_section = self.settings.operating_mode == OperatingMode::Keyboard;
+        let in_section = self.psk_section();
         let refused = if self.clock_repair_holds_tx() {
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
         } else if !self.tx_enabled {
@@ -23104,7 +23248,6 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// a held PTT (silence loses the far end's sync and reads as a dropout).
     pub fn poll_psk_stream(&mut self, max_chars: usize) -> PskStreamTick {
         use crate::keyboard::{KbDrop, KbGates};
-        use crate::settings::OperatingMode;
         if !self.psk_streaming() {
             return PskStreamTick::Idle;
         }
@@ -23112,7 +23255,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             tx_enabled: self.tx_enabled,
             tx_allowed: self.tx_allowed(),
             tuning: self.tuning,
-            in_section: self.settings.operating_mode == OperatingMode::Keyboard,
+            in_section: self.psk_section(),
             now_ms: now_unix_millis(),
             now_secs: now_unix_secs(),
             watchdog_limit_secs: self.settings.tx_watchdog_min as u64 * 60,
@@ -23154,18 +23297,33 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.psk_keyer_error = e;
     }
 
-    /// May the operator's class key the PSK31 EMISSION at `dial`? USB always
-    /// (the Keyboard section's convention), signal ~60 Hz wide at the tuned
-    /// audio offset above the dial — judge that one emission point through
-    /// the same model `tx_allowed` uses.
+    /// May the operator's class key the Keyboard section's EMISSION at `dial`? USB always (the
+    /// section's convention): the WHOLE of [`Self::keyboard_span_hz`] inside ONE privileged data
+    /// range ([`crate::privileges::tx_span_allowed`], the data-frame rule FT8, JS8 and RTTY are
+    /// judged by): PSK31's narrow signal at the tuned audio offset (one point), or JTTY's four
+    /// tones from its Tx offset up.
     fn psk_emission_ok(&self, dial: f64) -> bool {
-        use crate::settings::OperatingMode;
-        let off = self.psk_center_hz() as f64 / 1_000_000.0;
-        crate::privileges::tx_allowed(
+        let (lo, hi) = self.keyboard_span_hz();
+        crate::privileges::tx_span_allowed(
             self.settings.license_class,
-            dial + off,
-            OperatingMode::Keyboard,
+            dial + lo / 1_000_000.0,
+            dial + hi / 1_000_000.0,
+            crate::settings::OperatingMode::Keyboard,
         )
+    }
+
+    /// Where the Keyboard section's signal sits above the dial, lowest and highest edge (Hz):
+    /// PSK31's at its netted centre, or, while JTTY is the modem, JTTY's from the ACTUAL Tx offset
+    /// up its four tones ([`jtty_tx::JTTY_SPAN_HZ`]) — never PSK's centre, which JTTY does not
+    /// transmit on.
+    fn keyboard_span_hz(&self) -> (f64, f64) {
+        if self.jtty_section() {
+            let lo = self.jtty_tx_hz() as f64;
+            (lo, lo + jtty_tx::JTTY_SPAN_HZ as f64)
+        } else {
+            let c = self.psk_center_hz() as f64;
+            (c, c)
+        }
     }
 
     // ----- RTTY transmit — operator-initiated, mirroring the CW send path. -----
@@ -25595,25 +25753,28 @@ contact yourself."
         )
     }
 
-    /// May the operator's class key a KEYBOARD-mode (PSK31) emission from the transmit dial
-    /// `dial`, with the transmitting VFO commanded `word`? The narrow signal sits at the netted
-    /// PSK centre, on the side the WORD names — where [`Self::psk_emission_ok`] judges it above
-    /// the dial always, by the section's USB convention.
+    /// May the operator's class key a KEYBOARD-mode emission (PSK31's, or JTTY's while it is the
+    /// modem) from the transmit dial `dial`, with the transmitting VFO commanded `word`? The span
+    /// [`Self::keyboard_span_hz`] sits on the side the WORD names — where
+    /// [`Self::psk_emission_ok`] judges it above the dial always, by the section's USB
+    /// convention. The whole span must lie in one privileged range, as there.
     ///
     /// A word that names no side adds nothing, so, like [`Self::digital_emission_allowed`], this
     /// can only ever refuse more than the gate did before it knew the commanded word.
     fn keyboard_emission_allowed(&self, dial: f64, word: &str) -> bool {
-        let off = self.psk_center_hz() as f64 / 1_000_000.0;
-        let allow = |f: f64| {
-            crate::privileges::tx_allowed(
+        let (lo, hi) = self.keyboard_span_hz();
+        let (lo, hi) = (lo / 1_000_000.0, hi / 1_000_000.0);
+        let span = |a: f64, b: f64| {
+            crate::privileges::tx_span_allowed(
                 self.settings.license_class,
-                f,
+                a,
+                b,
                 crate::settings::OperatingMode::Keyboard,
             )
         };
         match Self::side_is_lsb(word) {
-            Some(false) => allow(dial + off),
-            Some(true) => allow(dial - off),
+            Some(false) => span(dial + lo, dial + hi),
+            Some(true) => span(dial - hi, dial - lo),
             None => true,
         }
     }
@@ -32941,6 +33102,8 @@ mod tests {
         killed(|e| e.set_tx_enabled(false));
         // 4. Leaving the section.
         killed(|e| e.set_operating_mode("phone", false));
+        // …or staying in it while JTTY becomes the modem: PSK must not key from the JTTY screen.
+        killed(|e| e.set_operating_mode("jtty", false));
         // 5. A tune carrier taking the transmitter — the PER-TICK predicate.
         killed(|e| {
             e.set_tune(true);

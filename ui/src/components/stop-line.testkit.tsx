@@ -14,6 +14,7 @@ import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
 import { RttyCockpit } from './RttyCockpit'
 import { PskCockpit } from './PskCockpit'
+import { JttyCockpit } from './JttyCockpit'
 import { Js8Cockpit } from './Js8Cockpit'
 import { SstvView } from './SstvView'
 import { OperateCockpit } from './OperateCockpit'
@@ -25,6 +26,7 @@ import {
   CW_PANEL_IDS,
   RTTY_PANEL_IDS,
   PSK_PANEL_IDS,
+  JTTY_PANEL_IDS,
   JS8_PANEL_IDS,
   SSTV_PANEL_IDS,
 } from '../features/panelState'
@@ -283,6 +285,27 @@ export const psk: Case<(typeof PSK_PANEL_IDS)[number]> = {
   render: (panels) => render(<PskCockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
 }
 
+export const jtty: Case<(typeof JTTY_PANEL_IDS)[number]> = {
+  cockpit: 'JTTY',
+  view: 'jtty',
+  ids: JTTY_PANEL_IDS,
+  // The TX strip's Stop TX (→ halt_tx, which stops JTTY too), Tune (the carrier it started) and
+  // the TX-enable latch, a stop here as in PSK — TX Off stops JTTY, and drops PSK's queue and arms
+  // its abort, which ends a PSK over still on the air from the PSK cockpit, the same Keyboard
+  // section; and the dock's Esc/Stop (→ jtty_stop), PSK's shape and predicate, labelled by its
+  // content spans with no whitespace, hence \s*. The dock's Live key is a SENDER, not a stop (the
+  // RTTY "TX" ruling), and must never be added here. Esc is App-bound, keyboard-only and
+  // census-only.
+  stopControls: [
+    ['Stop TX', /^stop tx$/i],
+    ['Stop (JTTY abort)', /^esc\s*stop$/i],
+    ['Tune', /^tune$|^tuning…$/i],
+    TX_LATCH,
+  ],
+  // onSetTxEnabled exactly as App passes it (the .jtty-host block).
+  render: (panels) => render(<JttyCockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
+}
+
 export const js8: Case<(typeof JS8_PANEL_IDS)[number]> = {
   cockpit: 'JS8',
   view: 'js8',
@@ -484,12 +507,12 @@ const operateSnap = {
 export const operateClassic = operateCase('classic')
 export const operateRoster = operateCase('roster')
 
-export const CASES: Array<Case<any>> = [phone, cw, rtty, psk, js8, sstv, phoneDual, cwDual, operateClassic, operateRoster]
+export const CASES: Array<Case<any>> = [phone, cw, rtty, psk, jtty, js8, sstv, phoneDual, cwDual, operateClassic, operateRoster]
 
 /** Each case by the name it is exported under: how stop-line.test.tsx reads which case a sweep file sweeps
  *  (its coverage checks), so a file that sweeps the wrong cockpit, or none, is red there. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const CASE_BY_NAME: Readonly<Record<string, Case<any>>> = { phone, cw, rtty, psk, js8, sstv, phoneDual, cwDual, operateClassic, operateRoster }
+export const CASE_BY_NAME: Readonly<Record<string, Case<any>>> = { phone, cw, rtty, psk, jtty, js8, sstv, phoneDual, cwDual, operateClassic, operateRoster }
 
 export async function settle() {
   await act(async () => {

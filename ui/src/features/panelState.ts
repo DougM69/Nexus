@@ -1463,6 +1463,28 @@ export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
   defaultRemoved: [RF_SCOPE_PANEL_ID, RECENT_PANEL_ID, STATS_PANEL_ID],
 }
 
+/** JTTY cockpit's removable panels (WSJT-X's keyboard mode, the Keyboard section's other modem).
+ *  PSK's region-less shape: `scope` is the band waterfall (see SCOPE_PANEL_ID), `all` WSJT-X's
+ *  All Decodes pane, `rx` its QSO Frequency pane (the messages first heard within F Tol of Rx).
+ *  The CockpitHeader, the TX strip, the log strip and the TX dock are not panels.
+ *
+ *  THE STOP LINE holds here by the TX strip alone, because this build of the cockpit transmits
+ *  nothing of its own: the census — every holder OUTSIDE every ⊞-removable pane, none with an id
+ *  in this vocabulary — is Stop TX (TX strip → halt_tx, never disabled), Tune (TX strip; the
+ *  carrier it started), the TX-enable latch (TX strip; `set_tx_enabled(false)` drops PSK's queue
+ *  and arms `psk_abort`, the stop for a PSK over still on the air after the operator moved here
+ *  from the PSK cockpit, the same section) and Esc (bound only while JTTY is the visible view → the same halt; keyboard-only ⇒
+ *  census-only). No pane hosts a stop or a sender, and no hide ends anything in flight, so no
+ *  entry carries a note. Swept in stop-line.test.tsx's JTTY case, rendered with App's props. */
+export const JTTY_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'all', 'rx'] as const
+export type JttyPanelId = (typeof JTTY_PANEL_IDS)[number]
+
+export const JTTY_PANELS: PanelVocabulary<JttyPanelId> = {
+  view: 'jtty',
+  panelIds: JTTY_PANEL_IDS,
+  defaultRemoved: [RF_SCOPE_PANEL_ID],
+}
+
 /** JS8 cockpit's removable panels (the JS8 programme, 2026-09). CW's region shape:
  *  `scope` is the band waterfall (see SCOPE_PANEL_ID), `activity` every decoded frame at
  *  every enabled speed, `offsets` the same decodes collapsed to one row per frequency offset,
@@ -1570,6 +1592,7 @@ export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
   CW_PANELS,
   RTTY_PANELS,
   PSK_PANELS,
+  JTTY_PANELS,
   JS8_PANELS,
   CONNECT_PANELS,
   DASH_PANELS,

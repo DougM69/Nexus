@@ -5799,8 +5799,9 @@ mod tests {
         assert!(wfd.mode_banned(" ft8 "), "case-insensitive + trimmed");
         // …while RTTY and SSTV are explicitly legal Digital, and the classic
         // mode classes are untouched. A legacy row with no recorded actual
-        // mode is never flagged.
-        for m in ["RTTY", "SSTV", "CW", "SSB", ""] {
+        // mode is never flagged. JTTY is not a WSJT mode on the sponsor's list:
+        // "it's allowed for WFD 2027" (winterfieldday.org, 2026-10-04).
+        for m in ["RTTY", "SSTV", "JTTY", "CW", "SSB", ""] {
             assert!(!wfd.mode_banned(m), "{m:?} is not banned at WFD");
         }
         // ARRL FD bans nothing.

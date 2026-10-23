@@ -118,6 +118,10 @@ pub fn band_plan() -> Vec<BandChannel> {
         ch("80m", "HF", 3.5935, "USB", "80 m", "above the PSK31/RTTY hole 3.580–3.590 (~5 kHz) and below the 3.600 data edge; clear of FT8/FT4 3.573/3.575"),
         ch("40m", "HF", 7.0430, "USB", "40 m", "in the notch between QRP CW 7.040 (~4.5 kHz below emission) and FT4 7.0475 (~3 kHz above); IARU NB segment"),
         ch("30m", "HF", 10.1425, "USB", "30 m", "data half, ~3 kHz above FT4 10.140 / PSK 10.141, ~6 kHz below the 10.150 edge; secondary band — tread lightly"),
+        // ⚠️ JTTY (WSJT-X's keyboard mode) calls on 14.090 and 21.090 ([`jtty_band_plan`]), so its
+        // passband now covers this channel's and the 15 m one's: the ".09 shoulder" became a shared
+        // calling frequency. Left where they are by the operator's ruling (2026-10-08), to revisit
+        // once JTTY's real occupancy is seen; moving them is a Tempo protocol change.
         ch("20m", "HF", 14.0905, "USB", "20 m", "the .09 shoulder: ~9 kHz above the 14.074–14.083 cluster, ~3.6 kHz below WSPR 14.0956"),
         ch("17m", "HF", 18.0955, "USB", "17 m", "cramped band — in the only notch (~3 kHz below FT8 18.100, ~1 kHz above QRP CW 18.096), clear of the FT4/JS8/WSPR pileup at 18.104+; DX1 (50 Hz) only"),
         ch("15m", "HF", 21.0905, "USB", "15 m", "~14 kHz above JS8 21.078, ~2.6 kHz below WSPR 21.0946; FT4 is far away at 21.140"),
@@ -423,6 +427,31 @@ pub fn ft2_band_plan() -> Vec<BandChannel> {
         ch("70cm", "UHF", 432.177000, "USB", "70cm · FT2", n),
         // :367
         ch("23cm", "UHF", 1296.177000, "USB", "23cm · FT2", n),
+    ]
+}
+
+/// **JTTY** (WSJT-X's keyboard mode): WSJT-X's own frequency list, taken as it is (operator ruling,
+/// 2026-10-08) — the eleven `Modes::JTTY` rows of `models/FrequencyList.cpp` at WSJT-X
+/// 3.3.0-beta1, one worldwide table with no region split. Interoperating with WSJT-X's stations is
+/// the point of the mode, so no dial here moves for any other reason. Dials are USB (the Keyboard
+/// section's PKTUSB); the signal sits at the audio offset above the dial, about 125 Hz wide.
+///
+/// Where the table meets Nexus's other plans: 40 m is JS8's dial, 30 m FT4's, 17 m FT4's and
+/// JS8's, 12 m the RTTY/PSK31 spot, and on 20 m and 15 m the passband covers Tempo's own channels
+/// (see [`band_plan`]).
+pub fn jtty_band_plan() -> Vec<BandChannel> {
+    vec![
+        ch("160m", "HF", 1.839, "USB", "160 m · JTTY", "WSJT-X's JTTY dial, shared with JT9's (now quiet) and FST4's"),
+        ch("80m", "HF", 3.572, "USB", "80 m · JTTY", "WSJT-X's JTTY dial, on JT9's; 1 kHz below FT8 3.573"),
+        ch("40m", "HF", 7.078, "USB", "40 m · JTTY", "WSJT-X's JTTY dial, on JT9's; the same dial as JS8 7.078"),
+        ch("30m", "HF", 10.140, "USB", "30 m · JTTY", "WSJT-X's JTTY dial, the RTTY spot (the 10.150 band edge leaves no room above); the same dial as FT4"),
+        ch("20m", "HF", 14.090, "USB", "20 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above the RTTY spot; Tempo's 20 m channel (14.0905) shares this passband"),
+        ch("17m", "HF", 18.104, "USB", "17 m · JTTY", "WSJT-X's JTTY dial, on JT9's: off FT8 18.100 and clear of the 18.110 beacon; the same dial as FT4 and JS8"),
+        ch("15m", "HF", 21.090, "USB", "15 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above the RTTY spot; Tempo's 15 m channel (21.0905) shares this passband"),
+        ch("12m", "HF", 24.920, "USB", "12 m · JTTY", "WSJT-X's JTTY dial, the RTTY spot (the US narrow data segment 24.920–24.925 leaves no room above)"),
+        ch("10m", "HF", 28.090, "USB", "10 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above the RTTY spot — Technician-accessible"),
+        ch("6m", "VHF", 50.160, "USB", "6 m · JTTY", "WSJT-X's JTTY dial — Tech-OK"),
+        ch("2m", "VHF", 144.160, "USB", "2 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above MSK144 144.150"),
     ]
 }
 
@@ -870,7 +899,7 @@ mod tests {
     /// and `Tier::ALL` is asserted complete against that match below. That is a
     /// real guarantee.
     ///
-    /// `rtty_band_plan`, `sstv_band_plan` and `psk_band_plan` are appended BY
+    /// `rtty_band_plan`, `sstv_band_plan`, `psk_band_plan` and `jtty_band_plan` are appended BY
     /// NAME because no tier reaches them — RTTY, SSTV and the Keyboard Modes
     /// are sections, not tiers. So a plan added for some future section IS
     /// guarded only if somebody adds it here, exactly as the whole list used
@@ -885,6 +914,7 @@ mod tests {
         plans.push(rtty_band_plan());
         plans.push(sstv_band_plan());
         plans.push(psk_band_plan());
+        plans.push(jtty_band_plan());
         plans.into_iter().flatten().collect()
     }
 
@@ -1006,6 +1036,46 @@ mod tests {
             ["1.25cm", "13cm", "23cm", "33cm", "3cm", "6cm", "70cm", "9cm"],
             "the centimetre channels Nexus ships"
         );
+    }
+
+    /// The JTTY plan IS WSJT-X's frequency list (`models/FrequencyList.cpp`, the `Modes::JTTY`
+    /// rows at 3.3.0-beta1), dial for dial, all USB, every band once, every dial inside its band.
+    #[test]
+    fn the_jtty_plan_is_wsjtxs_frequency_list() {
+        let plan = jtty_band_plan();
+        let rows: Vec<(&str, f64, &str)> = plan
+            .iter()
+            .map(|c| (c.band.as_str(), c.dial_mhz, c.mode.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("160m", 1.839, "USB"),
+                ("80m", 3.572, "USB"),
+                ("40m", 7.078, "USB"),
+                ("30m", 10.140, "USB"),
+                ("20m", 14.090, "USB"),
+                ("17m", 18.104, "USB"),
+                ("15m", 21.090, "USB"),
+                ("12m", 24.920, "USB"),
+                ("10m", 28.090, "USB"),
+                ("6m", 50.160, "USB"),
+                ("2m", 144.160, "USB"),
+            ]
+        );
+        for c in &plan {
+            assert_eq!(
+                band_for_dial(c.dial_mhz),
+                Some(c.band.as_str()),
+                "{}",
+                c.label
+            );
+            assert!(
+                !c.note.is_empty() && c.label.ends_with("· JTTY"),
+                "{}",
+                c.label
+            );
+        }
     }
 
     /// The Keyboard Modes (PSK31) plan against the privilege model — the
