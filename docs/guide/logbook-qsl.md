@@ -47,6 +47,32 @@ each contact, plus the name, QTH, state, power and operator the compact table
 leaves out. The wider table scrolls sideways. It stays off until you turn it on,
 and Nexus remembers your choice on this computer.
 
+**What each contact records.** Besides the call, band, mode and reports, a contact you log
+carries:
+
+- **When it started and ended.** A contact from the Phone, CW, RTTY, PSK or Satellites
+  entry strip starts when its call was entered and ends when you press Log, as a JS8
+  contact does.
+- **Your side of it**: the operator (**Operator at the key**, or your station call when that
+  is blank; ADIF OPERATOR), your grid (MY_GRIDSQUARE) and, on everyday contacts, your
+  **State** (MY_STATE), all from [Settings ▸ Station](settings-reference.md#operator--radio);
+  the rig (the active radio); and your **Station power** (TX_PWR) from
+  [Settings ▸ Digital](settings-reference.md#digital-ft8ft4) ▸ Station Housekeeping, or no
+  power when that is blank. A park or summit activation logs the park's state, never your
+  home one. Your LoTW uploads leave out a grid or state Nexus filled in itself, so TQSL keeps
+  signing from your Station Location.
+- **The worked station's continent** (CONT) and **the distance to it** in km (DISTANCE) when
+  both grids are known.
+- **Space weather**, if you turn on **Log space weather on each contact** in
+  [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
+  ▸ Propagation: the K index,
+  A index and solar flux (K_INDEX, A_INDEX, SFI), and nothing when the latest reading is more
+  than 3 hours old.
+
+A field the contact already carries (from WSJT-X, an import or what you typed) is kept. A
+contact whose start is more than 3 hours before you log it gets no operator, rig, power, grid
+or state from your current settings, since they may not be what you used then.
+
 <!-- TODO: capture screenshot — the QSL column tooltip explaining L / C / E / Q eligibility -->
 
 ## Core workflows
@@ -60,9 +86,10 @@ contacts. Edit any field inline; the store round-trips to ADIF, so an export
 re-imports without loss.
 
 The form also takes **My grid** and **Rig**, your side of the contact (ADIF
-MY_GRIDSQUARE and MY_RIG). Rig fills itself from the active radio when a contact
-is logged. My grid does not fill itself: enter it for contacts made away from
-home. When you edit an existing contact, the form adds **QSL sent** (not sent,
+MY_GRIDSQUARE and MY_RIG). Left blank, Rig fills itself from the active radio and
+My grid from [Settings ▸ Station](settings-reference.md#operator--radio), as on any contact you log as you make it (see
+below). A contact whose time is more than 3 hours ago gets neither, so enter them
+for contacts made on another radio or away from home. When you edit an existing contact, the form adds **QSL sent** (not sent,
 bureau, direct or electronic) and **Card received**, the same marks as the row's
 QSL menu. LoTW and eQSL confirmations still come only from those services.
 

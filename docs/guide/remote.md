@@ -193,6 +193,21 @@ access** there and pair again, then compare the new key everywhere.
   it on again, with the TX switch off.
 - **Everyone, until you say otherwise:** **End remote control**.
 
+### Download your data or delete your account
+
+Sign in on the Nexus Remote page. The **Your account** card has two buttons:
+
+- **Download my data** saves a copy of what Nexus Remote holds about your account as a JSON
+  file: your trial and plan, your stations, their devices and your invitations.
+- **Delete account** asks you to type DELETE, then removes the account, your stations with their
+  devices and the invitations made there, and your devices at other people's stations. Every one
+  of them is disconnected at once, and people you invited lose access. A paid plan is cancelled
+  first, at once and without a refund for the rest of the period; if it cannot be cancelled,
+  nothing is deleted. Nexus at your shack keeps working.
+
+What is kept after a delete is what stops a second free trial (fingerprints of your address,
+callsign and shack computer, and your trial dates) and the billing records the law requires.
+
 ## What needs the internet, and what is free
 
 | | On the shack's own network | Over the internet |

@@ -85,22 +85,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Download my data, and Delete account, which deletes only after you type DELETE. A paid plan is cancelled first, and
   nothing is deleted if it cannot be. Your stations, devices and invitations go; the sign-in record is removed on
   request.
-- **JTTY, WSJT-X's new keyboard mode, to receive and to send (needs a bench check on the air).** A JTTY screen
-  sits under Digital, beside PSK. It has WSJT-X's eleven JTTY frequencies (20 m at 14.090), its Rx, Tx and F Tol
-  boxes, its All decodes and QSO frequency panes, and a waterfall with Rx and Tx cursors. Nexus decodes JTTY as
-  WSJT-X does, and sends what WSJT-X sends: text you type and Send; WSJT-X's F1–F8 contest messages, with a Call
-  box and a serial number; and Live, which keeps the transmitter up while you type and sends your words as you go.
-  Every send needs TX On and your license class across the whole signal, and the TX watchdog runs for JTTY,
-  though WSJT-X's does not. Stop TX, Esc and the dock's Esc/Stop cut it at once, and leaving the JTTY screen
-  stops it. Opening JTTY turns TX on as opening PSK does, but not after a Stop. A call becomes clickable, is
-  spotted to PSK Reporter and reaches the Needed board only once it has been decoded in two separate messages. JTTY
-  comes from the WSJT-X 3.3.0-beta1 test release and no WSJT-X general release has it yet, so the other station
-  needs a WSJT-X 3.2 or 3.3 test release. Not yet tried on the air: a bench check should confirm keying, power and
-  ALC at your data power, and that a WSJT-X station copies what Nexus sends.
-- **Tempo can come off the left-hand menu.** Settings ▸ Appearance ▸ Features now has a switch for
-  **Chat** (Tempo's TempoFast/TempoDeep chat) under Operate, like the ones for RTTY, SSTV and the
-  other modes. It is on, as before, unless you turn it off; off, Tempo leaves the menu, and if
-  Nexus was last in Tempo it starts in FT8/FT4 instead.
 
 ### Changed
 - **The station decides every decode alert, so every screen hears the same ones.** Someone calling you, a new DXCC
