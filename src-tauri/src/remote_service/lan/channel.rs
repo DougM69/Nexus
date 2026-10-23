@@ -830,8 +830,11 @@ async fn session<S>(
                         if lane.is_some() || run == 0 { break StreamReason::StreamClosed }
                         let profile = Profile::named(&profile);
                         let refused = match profile {
-                            // A kind of client this build does not serve; a later shack may.
+                            // A kind of client this build does not know; a later shack may.
                             None => Some("updateStation"),
+                            // A phone, known and refused by name: a later shack serves it, so the
+                            // phone is told to update the station, as for a kind not known.
+                            Some(profile) if !profile.served() => Some("updateStation"),
                             Some(_) => wire::refusal(End::Shack, shared.build, (&app, &contract)),
                         };
                         let (Some(profile), None) = (profile, refused) else {

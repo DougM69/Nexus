@@ -210,8 +210,9 @@ fn refused(id: u64, code: &str) -> Value {
 /// ★ The same build at both ends (ruled 2026-10-05): the welcome names the shack's build, and the
 /// lane opens only for that app and contract. A newer app is told to update the station, an older
 /// one the computer, another build of the same version is `otherBuild`, and a kind of client this
-/// build does not serve (a phone) is told to update the station. A call sent straight behind a
-/// refused open never runs, and the connection closes. CONTROL: this build opens.
+/// build does not serve (a phone, known by name, or a kind it does not know) is told to update the
+/// station. A call sent straight behind a refused open never runs, and the connection closes.
+/// CONTROL: this build opens.
 #[tokio::test]
 async fn the_lane_opens_only_on_the_same_build_and_says_which_side_to_update() {
     let app = App::new();
@@ -223,6 +224,7 @@ async fn the_lane_opens_only_on_the_same_build_and_says_which_side_to_update() {
         ("desktop", "0.0.1", wire::contract(), "updateComputer"),
         ("desktop", wire::APP, another.as_str(), "otherBuild"),
         ("mobile", wire::APP, wire::contract(), "updateStation"),
+        ("tablet", wire::APP, wire::contract(), "updateStation"),
     ] {
         let (task, socket) = dial(&s, &s.computer.key, PEER, stop.clone()).await;
         let mut socket = socket.unwrap();

@@ -2632,7 +2632,8 @@ fn every_refusal_reads_back_from_its_code() {
 }
 
 /// ★ The one profile this build serves is the desktop's (the mobile addendum's hook: a phone is a
-/// later build's). CONTROL: a phone's name is none of this build's.
+/// later build's). A phone is known by name and admitted nothing: a call the desktop runs is
+/// refused it, whatever its class. CONTROL: the same call from the desktop runs.
 #[test]
 fn the_desktop_is_the_only_profile_served() {
     assert_eq!(Profile::named("desktop"), Some(Profile::Desktop));
@@ -2640,7 +2641,26 @@ fn the_desktop_is_the_only_profile_served() {
         Profile::named(Profile::Desktop.name()),
         Some(Profile::Desktop)
     );
-    assert_eq!(Profile::named("mobile"), None);
+    assert_eq!(Profile::named("mobile"), Some(Profile::Mobile));
+    assert!(!Profile::Mobile.served());
+    let shack = shack();
+    let phone = Caller {
+        profile: Profile::Mobile,
+        ..caller(2, true)
+    };
+    for (id, name) in ["get_snapshot", "get_band_plan"].into_iter().enumerate() {
+        let id = id as u64 + 1;
+        assert_eq!(
+            kind(&shack.admit(&phone, call(id, name, json!({})))),
+            refused(Refusal::Unclassed),
+            "{name} from a phone"
+        );
+        assert_eq!(
+            kind(&shack.admit(&controller(), call(id, name, json!({})))),
+            "run",
+            "{name} from the desktop"
+        );
+    }
 }
 
 // --- The shack's own handler, on Tauri's own dispatch --------------------------------------------
