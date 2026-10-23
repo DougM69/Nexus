@@ -23,7 +23,7 @@ it.each(OPERATION_VERSIONS)('the lease and the operation lane\'s Stop leave the 
   let n = 0
   vi.spyOn(crypto, 'randomUUID').mockImplementation(() => `20000000-0000-4000-8000-${String(++n).padStart(12, '0')}` as `${string}-${string}-${string}-${string}-${string}`)
   const wire: string[] = []
-  const c = new OperationClient(text => wire.push(text), true, () => Date.now(), undefined, version)
+  const c = new OperationClient(text => wire.push(text), true, () => Date.now(), version)
   const last = () => JSON.parse(wire[wire.length - 1]!) as { request: { requestId: string } }
   const answer = (value: unknown) => c.receive({ type: 'operationResponse', requestId: last().request.requestId, value })
   const lane = version >= 2 ? `"operationVersion":${version},` : ''

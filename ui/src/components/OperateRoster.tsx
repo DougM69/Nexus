@@ -185,7 +185,7 @@ export function OperateRoster({
 }: Props) {
   const control = useStationControl()
   // A public spot of another station posts from the station's own cluster login, so it rides
-  // STATION CONTROL rather than the logging grant; a browser without it sees the button dead.
+  // STATION CONTROL; a browser without it sees the button dead.
   const spotControl = control
   const callControl = useStationCapability('ftCall')
   // QTH magnetic declination (WMM) — the Brg column's tooltip shows the compass

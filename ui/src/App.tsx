@@ -2218,9 +2218,8 @@ function App() {
       // hours (HUNT_TTL_SECS), and only that view could end it. A row with no log line to fill
       // (FT8/FT4 logs from the engine, RTTY's cockpit takes no handoff, a switched-off cockpit is
       // never opened) still tags the hunt before the QSY, the map's setHuntTarget-then-QSY order:
-      // that is the only way its park reaches the contact. Native only: a browser's hunt is a
-      // station change under the logging grant (RemoteOta's own path), not this command, and a
-      // browser's Work never carried a park.
+      // that is the only way its park reaches the contact. Native only: a browser's Work never
+      // carried a park.
       //
       // AFTER that bail-out, never before it. `workTarget` is null only when the row has no
       // frequency of its own, no mode default AND no band-plan channel — and `handleQsy` reads
@@ -3582,8 +3581,8 @@ function App() {
           // The Spots, POTA/SOTA and Needed boxes are the boards themselves: the Spots view's own
           // `spotsBoard` and feed, the POTA/SOTA view's own hunt wiring and the Needed view's own
           // `neededBoard`, handed over whole so a Work or a HUNT from a box is the view's act. A
-          // browser's POTA/SOTA board is RemoteOta, a different surface, so a browser's box gets no
-          // hunt wiring (its one line); and the Needed box is the desktop's for now (2026-10-07).
+          // browser's box gets no hunt wiring (its one line); and the Needed box is the desktop's
+          // for now (2026-10-07).
           spotsFeed={{ rows: allSpots, board: spotsBoard }}
           otaBoard={{ snap, onHunt: handleHuntSpot, onSnap: setSnap }}
           neededBoard={neededBoard}
