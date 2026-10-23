@@ -37,6 +37,10 @@ const INVITES_PER_DAY = 20
 const INVITES_PER_STATION = 20
 /** Checkouts and portal pages an account may open a minute: each one is a call to the payment provider. */
 const BILLING_PER_MINUTE = 10
+/** Account deletions and copies an account may ask for in ten minutes. */
+const ACCOUNT_DATA_PER_TEN_MINUTES = 5
+/** A subscription in these states has ended and can charge nothing more; any other can. */
+const SUBSCRIPTION_ENDED = ['canceled', 'incomplete_expired']
 /** The billing Worker's refusals the page can name. Anything else it answers is `serviceUnavailable`. */
 const BILLING_REFUSALS = new Set(['invalidRequest', 'accountNotFound', 'accessDenied', 'alreadySubscribed', 'noSubscription', 'serviceUnavailable'])
 
@@ -496,6 +500,20 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       ? billingAnswer(await env.BILLING.checkout(identity.accountId, input.plan as 'monthly' | 'annual'), 'https://checkout.stripe.com/')
       : billingAnswer(await env.BILLING.portal(identity.accountId), 'https://billing.stripe.com/')
   }
+  // THE ACCOUNT ITSELF: a copy of what the service holds about it, and deleting it. Above the entitlement,
+  // as `session` is: an account whose access has ended, or been switched off, may still take its copy and go.
+  // Deleting needs the word the page has the operator type, so no stray request deletes anything.
+  if (path === 'account/export' || path === 'account/delete') {
+    const input = await body(request, path === 'account/delete' ? ['confirm'] : [])
+    requireValue(path === 'account/export' || input.confirm === 'DELETE', 'invalidRequest', 400)
+    await rate(env, `${path}:${identity.accountId}`, now, ACCOUNT_DATA_PER_TEN_MINUTES, 600000)
+    if (path === 'account/export') return json(await accountCopy(env, identity.accountId, now))
+    const left = await deleteAccount(env, identity.accountId, now)
+    // This browser's credential for each station it held one at goes with them.
+    const headers = new Headers()
+    for (const stationId of left) headers.append('set-cookie', cookie(stationId, '', 0))
+    return json({ ok: true }, 200, headers)
+  }
   // THE ACCOUNT'S DEVICES, on the page: every device of every station the account owns, and its own
   // devices at stations it was invited to, each removable here. Above the entitlement, as `revoke` is:
   // removing a device is never something an account has to pay for.
@@ -708,6 +726,97 @@ async function revokeStation(env: RemoteEnv, stationId: string, now: number): Pr
     env.DB.prepare('DELETE FROM tickets WHERE station_id=?').bind(stationId),
   ])
   await sync(env, await station(env, stationId), now)
+}
+
+/** What the service holds about an account, for the account to keep: its trial, its plan and the checkouts
+ *  and refused payment events of it, whether trial markers were spent by it and when, its stations, every
+ *  device of its stations and its own devices elsewhere, and the invitations it made and holds. Names,
+ *  labels, roles and dates only: never a credential, proof, key, address fingerprint or marker value. */
+async function accountCopy(env: RemoteEnv, accountId: string, now: number): Promise<unknown> {
+  const all = async (sql: string, ...values: unknown[]) => (await env.DB.prepare(sql).bind(...values).all()).results
+  const trial = await env.DB.prepare(`SELECT enabled=1 AS enabled, started_at AS startedAt, expires_at AS expiresAt, source
+    FROM trials WHERE account_id=?`).bind(accountId).first<{ enabled: number }>()
+  const subscription = await env.DB.prepare(`SELECT status, plan, period_end AS periodEnd, cancel_at_period_end=1 AS cancelAtPeriodEnd,
+    first_refund_at AS firstRefundAt, customer_id AS customerId, subscription_id AS subscriptionId FROM subscriptions WHERE account_id=?`)
+    .bind(accountId).first<{ cancelAtPeriodEnd: number }>()
+  const stations = await all('SELECT id, name, enabled=1 AS enabled FROM stations WHERE account_id=? ORDER BY id', accountId)
+  const devices = await all(`SELECT d.id, d.station_id AS stationId, d.name, COALESCE(d.kind,'browser') AS kind, d.platform,
+    COALESCE(d.role,'operate') AS role, COALESCE(d.added_by,'shack') AS addedBy, d.approved=1 AS approved, d.approved_at AS approvedAt,
+    d.expires_at AS expiresAt, d.revoked_at AS revokedAt, d.account_id=? AS yours
+    FROM devices d JOIN stations s ON s.id=d.station_id WHERE d.account_id=? OR s.account_id=? ORDER BY d.station_id, d.id`, accountId, accountId, accountId)
+  const truth = (row: Record<string, unknown>, ...keys: string[]) => ({ ...row, ...Object.fromEntries(keys.map(key => [key, row[key] === 1])) })
+  return {
+    exportedAt: now, accountId,
+    trial: trial && truth(trial, 'enabled'),
+    subscription: subscription && truth(subscription, 'cancelAtPeriodEnd'),
+    checkouts: await all('SELECT id, created_at AS createdAt FROM checkout_sessions WHERE account_id=? ORDER BY created_at', accountId),
+    refusedPaymentEvents: await all('SELECT event_id AS eventId, type, reason, at FROM billing_refusals WHERE account_id=? ORDER BY at', accountId),
+    markers: (await all(`SELECT kind, proven=1 AS proven, method, created_at AS createdAt, first_refund_at AS firstRefundAt
+      FROM trial_markers WHERE account_id=? ORDER BY kind, created_at`, accountId)).map(row => truth(row, 'proven')),
+    stations: stations.map(row => truth(row, 'enabled')),
+    devices: devices.map(row => truth(row, 'approved', 'yours')),
+    invitationsMade: await all(`SELECT i.id, i.station_id AS stationId, i.role, i.created_at AS createdAt, i.removed_at AS removedAt
+      FROM invites i JOIN stations s ON s.id=i.station_id WHERE s.account_id=? ORDER BY i.created_at`, accountId),
+    invitationsReceived: await all(`SELECT i.station_id AS stationId, i.role, i.created_at AS createdAt, i.removed_at AS removedAt
+      FROM invites i JOIN accounts a ON a.mailbox_hash=i.mailbox_hash JOIN stations s ON s.id=i.station_id
+      WHERE a.id=? AND s.account_id<>a.id ORDER BY i.created_at`, accountId),
+  }
+}
+
+/** Delete an account. Returns every station this account held a device or station at, whose browser
+ *  credential the caller may clear.
+ *
+ *  ⚠️ THE ORDER IS THE PROPERTY: nothing that can still charge may outlive the account. So the live
+ *  subscription is ended FIRST, through the billing Worker, and nothing is touched unless it answers that
+ *  the payment provider shows nothing left to charge (`{ cancelled }`). Any other answer, a throw, or, with
+ *  billing off, a subscription that has not ended (nobody here can end it) refuses `subscriptionNotCancelled`
+ *  with the account exactly as it was. Never move the cancel below the first write.
+ *
+ *  Then every session is cut while the rows that name it still exist: each station the account owns is
+ *  revoked and its room told, and its own devices at other people's stations are removed and those rooms
+ *  told. Then, in one batch, its stations go with everything of them (devices, anyone's tickets there, the
+ *  invitations made there, notices), and its own devices, tickets, challenges, pairing requests and notices.
+ *  A person invited to its stations loses that access; the invitations other people made to it are theirs
+ *  and stay, though no sign-in reaches this account again.
+ *
+ *  What is kept is what stops a second free trial, and the billing record: an account that ever held a trial,
+ *  a plan, a checkout or a trial marker keeps its row, with its two address fingerprints, under a subject no
+ *  sign-in can present (`deleted:<id>`) and with no notice address; its trial row, ended now; its trial
+ *  markers; and its subscription, checkouts and refused events. Signing in again makes a new, empty account,
+ *  which the same address cannot start a second trial on. An account that held none of those goes entirely.
+ *  Deleting again finds nothing of the old account and changes nothing kept. */
+async function deleteAccount(env: RemoteEnv, accountId: string, now: number): Promise<string[]> {
+  const subscription = await env.DB.prepare('SELECT status FROM subscriptions WHERE account_id=?').bind(accountId).first<{ status: string }>()
+  if (env.BILLING) {
+    const answer = await env.BILLING.cancel(accountId).catch(() => null) as { cancelled?: unknown } | null
+    requireValue(typeof answer?.cancelled === 'boolean', 'subscriptionNotCancelled', 503)
+  } else {
+    requireValue(!subscription || SUBSCRIPTION_ENDED.includes(subscription.status), 'subscriptionNotCancelled', 503)
+  }
+  const owned = (await env.DB.prepare('SELECT id FROM stations WHERE account_id=?').bind(accountId).all<{ id: string }>()).results.map(row => row.id)
+  for (const stationId of owned) await revokeStation(env, stationId, now)
+  const elsewhere = await env.DB.prepare(`UPDATE devices SET approved=0,generation=generation+1,expires_at=?,proof=NULL
+    WHERE account_id=? AND station_id NOT IN (SELECT id FROM stations WHERE account_id=?) RETURNING station_id`)
+    .bind(now, accountId, accountId).all<{ station_id: string }>()
+  const guestAt = [...new Set(elsewhere.results.map(row => row.station_id))]
+  for (const stationId of guestAt) await bumpPolicy(env, stationId, now)
+  const mine = 'SELECT id FROM stations WHERE account_id=?'
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM tickets WHERE account_id=? OR station_id IN (${mine}) OR device_id IN (SELECT id FROM devices WHERE account_id=?)`)
+      .bind(accountId, accountId, accountId),
+    env.DB.prepare('DELETE FROM challenges WHERE account_id=?').bind(accountId),
+    env.DB.prepare(`DELETE FROM notices WHERE account_id=? OR station_id IN (${mine})`).bind(accountId, accountId),
+    env.DB.prepare(`DELETE FROM invites WHERE station_id IN (${mine})`).bind(accountId),
+    env.DB.prepare(`DELETE FROM devices WHERE account_id=? OR station_id IN (${mine})`).bind(accountId, accountId),
+    env.DB.prepare('DELETE FROM enrollments WHERE account_id=?').bind(accountId),
+    env.DB.prepare('DELETE FROM stations WHERE account_id=?').bind(accountId),
+    env.DB.prepare('UPDATE trials SET expires_at=MIN(expires_at, ?) WHERE account_id=?').bind(now, accountId),
+    env.DB.prepare(`DELETE FROM accounts WHERE id=? AND NOT EXISTS(SELECT 1 FROM trials WHERE account_id=?)
+      AND NOT EXISTS(SELECT 1 FROM subscriptions WHERE account_id=?) AND NOT EXISTS(SELECT 1 FROM checkout_sessions WHERE account_id=?)
+      AND NOT EXISTS(SELECT 1 FROM trial_markers WHERE account_id=?)`).bind(accountId, accountId, accountId, accountId, accountId),
+    env.DB.prepare("UPDATE accounts SET subject='deleted:' || id, notice_address=NULL WHERE id=?").bind(accountId),
+  ])
+  return [...owned, ...guestAt]
 }
 
 /** A station's devices changed: its policy version moves, and its room hears of it. */

@@ -353,5 +353,8 @@ Each row also names its private billing Worker (`billing.service`). The relay bi
 that Worker's `BillingService` entrypoint, only once that row's `billing.deployed` is true, and the upload
 check then demands exactly that binding and entrypoint. Until then `/api/remote/billing/checkout` and
 `/api/remote/billing/portal` answer `billingNotAvailable`, `config` says `billing: false`, and the page shows
-no Subscribe or Manage button. The relay's no-logs rule covers Logpush and Tail Workers as well as Workers Logs: an upload
+no Subscribe or Manage button. Account deletion (`/api/remote/account/delete`) works either way: with the
+binding it asks the billing Worker's `cancel` first and deletes nothing unless that answers `{ cancelled }`;
+without it, an account whose subscription has not ended is refused `subscriptionNotCancelled`, because
+nothing here can end it. The relay's no-logs rule covers Logpush and Tail Workers as well as Workers Logs: an upload
 with any of them on fails its own verification.

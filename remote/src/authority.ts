@@ -38,10 +38,14 @@ export interface RemoteEnv {
    *  and the page shows no Subscribe or Manage button. */
   BILLING?: BillingService
 }
-/** The billing Worker's RPC methods, as that Worker defines them: each answers `{ url }` or `{ error, status }`. */
+/** The billing Worker's RPC methods, as that Worker defines them: each answers `{ url }` (`cancel`:
+ *  `{ cancelled }`) or `{ error, status }`. */
 export interface BillingService {
   checkout(accountId: string, plan: 'monthly' | 'annual'): Promise<unknown>
   portal(accountId: string): Promise<unknown>
+  /** Ends the account's live subscription at once, and closes its checkouts that could still be paid,
+   *  answering `{ cancelled }` only once the payment provider shows nothing left that can charge. */
+  cancel(accountId: string): Promise<unknown>
 }
 
 export class Refusal extends Error {
