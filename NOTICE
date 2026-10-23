@@ -212,8 +212,8 @@ and not re-vendored. Decodium's `normalizebmet` was deliberately not vendored
 
 ### JTTY — the keyboard-mode modem core, from WSJT-X
 License: **GNU GPL, version 3** (GPLv3), like the rest of WSJT-X.
-<https://github.com/WSJTX/wsjtx>, taken at the tag `v3.3.0-beta1`, commit `57ba9337`
-(`57ba9337fa020065dc0ceee2c4ef85e433ea32d4`, 2026-10-07).
+<https://github.com/WSJTX/wsjtx>, taken at the tag `v3.3.0-beta4`, commit `0f7d5928`
+(`0f7d5928449ec747c3d1f6da1306f8c94404c3a9`, 2026-10-21).
 
 JTTY is WSJT-X's keyboard mode for RTTY-style contest exchanges and conversation. Its modem
 sources are vendored at `libtempo/vendor/wsjtx/lib/jtty/`, byte for byte as upstream has them
@@ -259,11 +259,11 @@ interoperability code.
 
 The routines these files call from the rest of WSJT-X (`pack28` and `unpack28` from
 `packjt77`, `chkcall`, `four2a`, `twkfreq`, `db`, `gfsk_pulse` and the `fftw3` module) are the
-copies already vendored for the other modes, from WSJT-X 3.0.2. At `57ba9337` upstream's
+copies already vendored for the other modes, from WSJT-X 3.0.2. At `0f7d5928` upstream's
 copies are the same, except that `twkfreq` gained a fast path for a constant frequency and
 `packjt77` was rewritten; Nexus keeps its own modified `packjt77` (see the WSJT-X entry above).
 
-**`v3.3.0-beta1` is a WSJT-X pre-release.** No WSJT-X general release carries JTTY yet. When
+**`v3.3.0-beta4` is a WSJT-X pre-release.** No WSJT-X general release carries JTTY yet. When
 one does, the files are taken again from that release, and this entry, `libtempo/vendor/wsjtx/README.md` and the test that holds the files to their upstream
 commit (`crates/tempo-fast-sys/tests/jtty_provenance.rs`) name the new tag and commit.
 

@@ -12040,7 +12040,8 @@ reason = "implicit real*4, SAVE-only at :10. Written hmod=1.0 (a literal) once i
 
 # ---------------------------------------------------------------------------
 # GROUP O — JTTY (WSJT-X's keyboard mode, vendored 2026-10-08 from WSJT-X
-# 3.3.0-beta1: lib/jtty/ plus lib/77bit/packjt77_grammar.f90)
+# 3.3.0-beta1 and taken again 2026-10-23 at 3.3.0-beta4: lib/jtty/ plus
+# lib/77bit/packjt77_grammar.f90)
 #
 # The files are upstream's byte for byte (crates/tempo-fast-sys/tests/
 # jtty_provenance.rs holds them to their blob ids), so every line number below
@@ -12079,7 +12080,7 @@ file = "jtty/jtty_fec_mod.f90"
 line = 12
 class = 4
 size_bytes = 52
-reason = "integer is13(13), the 13-symbol 4-FSK sync sequence, a module variable initialised at :12 and never assigned anywhere in the tree. Every use is a read: gen_syncwave.f90:17, genjtty.f90:78, jtty_decode.f90:163/:170, jtty_mdecode.f90:710/:995/:1002/:1140. nm puts it in .data (52 B). Writable storage that nothing writes: class 4."
+reason = "integer is13(13), the 13-symbol 4-FSK sync sequence, a module variable initialised at :12 and never assigned anywhere in the tree. Every use is a read: gen_syncwave.f90:17, genjtty.f90:78, jtty_decode.f90:163/:170, jtty_mdecode.f90:735/:1020/:1027/:1165. nm puts it in .data (52 B). Writable storage that nothing writes: class 4."
 
 [[symbol]]
 name = "JTTY_RESERVED_BIT"
@@ -12159,7 +12160,7 @@ file = "jtty/tbcc.f90"
 line = 23
 class = 2
 size_bytes = 4
-reason = "integer memory_nu, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:480), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
+reason = "integer memory_nu, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:505), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
 
 [[symbol]]
 name = "num_states"
@@ -12167,7 +12168,7 @@ file = "jtty/tbcc.f90"
 line = 23
 class = 2
 size_bytes = 4
-reason = "integer num_states, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:480), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
+reason = "integer num_states, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:505), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
 
 [[symbol]]
 name = "g0_poly"
@@ -12175,7 +12176,7 @@ file = "jtty/tbcc.f90"
 line = 23
 class = 2
 size_bytes = 4
-reason = "integer g0_poly, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:480), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
+reason = "integer g0_poly, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:505), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
 
 [[symbol]]
 name = "g1_poly"
@@ -12183,7 +12184,7 @@ file = "jtty/tbcc.f90"
 line = 23
 class = 2
 size_bytes = 4
-reason = "integer g1_poly, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:480), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
+reason = "integer g1_poly, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:505), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
 
 [[symbol]]
 name = "reg_mask"
@@ -12191,7 +12192,7 @@ file = "jtty/tbcc.f90"
 line = 23
 class = 2
 size_bytes = 4
-reason = "integer reg_mask, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:480), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
+reason = "integer reg_mask, module scope (:23). Written only by tbcc_init(nu) (:51-54), as a pure function of nu, and read only where no code profile is passed (resolve_code_definition's else branch, :307-311). Every libtempo caller passes JTTY_TBCC_PROFILE_1167_1545_80F (genjtty.f90:76, jtty_mdecode.f90:505), so the modem never reads it, and nothing in libtempo calls tbcc_init: only upstream's unit tests (test_tbcc, test_jtty_block_pow) and simulators do. Init-once, chain-independent: class 2."
 
 [[symbol]]
 name = "incoming_tones"
@@ -12770,6 +12771,14 @@ size_bytes = 0
 reason = "PARAMETER (`integer, parameter :: JTTY_ENCODE_UNKNOWN_SECTION=...` at :45). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
+name = "JTTY_ENCODE_UNENCODABLE"
+file = "jtty/jtty_source_codec.f90"
+line = 45
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`integer(c_int), parameter :: ...,JTTY_ENCODE_UNENCODABLE=3` at :45). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
 name = "JTTY_CONTROL_AGN"
 file = "jtty/jtty_source_codec.f90"
 line = 46
@@ -13130,124 +13139,132 @@ size_bytes = 0
 reason = "PARAMETER (`MAX_RETRO_STEPS, a PARAMETER of module jtty_mdec` at :54). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
-name = "FRAME_HISTORY_TIME_TOLERANCE"
+name = "MAX_DISPLAY_GAPS"
 file = "jtty/jtty_mdecode.f90"
 line = 55
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`FRAME_HISTORY_TIME_TOLERANCE, a PARAMETER of module jtty_mdec` at :55). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`MAX_DISPLAY_GAPS, a PARAMETER of module jtty_mdec` at :55). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
-name = "FRAME_HISTORY_FREQ_TOLERANCE"
+name = "FRAME_HISTORY_TIME_TOLERANCE"
 file = "jtty/jtty_mdecode.f90"
 line = 56
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`FRAME_HISTORY_FREQ_TOLERANCE, a PARAMETER of module jtty_mdec` at :56). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`FRAME_HISTORY_TIME_TOLERANCE, a PARAMETER of module jtty_mdec` at :56). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
-name = "NEAR_SIMULTANEOUS_FREQ_TOLERANCE"
+name = "FRAME_HISTORY_FREQ_TOLERANCE"
 file = "jtty/jtty_mdecode.f90"
 line = 57
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`NEAR_SIMULTANEOUS_FREQ_TOLERANCE, a PARAMETER of module jtty_mdec` at :57). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`FRAME_HISTORY_FREQ_TOLERANCE, a PARAMETER of module jtty_mdec` at :57). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
-name = "CONTINUATION_TIME_TOLERANCE"
+name = "NEAR_SIMULTANEOUS_FREQ_TOLERANCE"
 file = "jtty/jtty_mdecode.f90"
 line = 58
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`CONTINUATION_TIME_TOLERANCE, a PARAMETER of module jtty_mdec` at :58). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`NEAR_SIMULTANEOUS_FREQ_TOLERANCE, a PARAMETER of module jtty_mdec` at :58). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+
+[[symbol]]
+name = "CONTINUATION_TIME_TOLERANCE"
+file = "jtty/jtty_mdecode.f90"
+line = 59
+class = 4
+size_bytes = 0
+reason = "PARAMETER (`CONTINUATION_TIME_TOLERANCE, a PARAMETER of module jtty_mdec` at :59). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
 name = "SNR_LEAKAGE_K"
 file = "jtty/jtty_mdecode.f90"
-line = 60
+line = 61
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`SNR_LEAKAGE_K, a PARAMETER of module jtty_mdec` at :60). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`SNR_LEAKAGE_K, a PARAMETER of module jtty_mdec` at :61). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
 name = "SNR_FLOOR_DB"
 file = "jtty/jtty_mdecode.f90"
-line = 61
+line = 62
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`SNR_FLOOR_DB, a PARAMETER of module jtty_mdec` at :61). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`SNR_FLOOR_DB, a PARAMETER of module jtty_mdec` at :62). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
 name = "MAX_SUBTRACTED"
 file = "jtty/jtty_mdecode.f90"
-line = 80
+line = 81
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`MAX_SUBTRACTED, a PARAMETER of module jtty_mdec` at :80). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`MAX_SUBTRACTED, a PARAMETER of module jtty_mdec` at :81). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
 name = "MIN_SYNC_FFT_ORDER"
 file = "jtty/jtty_mdecode.f90"
-line = 102
+line = 103
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`MIN_SYNC_FFT_ORDER, a PARAMETER of module jtty_mdec` at :102). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`MIN_SYNC_FFT_ORDER, a PARAMETER of module jtty_mdec` at :103). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
 name = "MAX_SYNC_FFT_ORDER"
 file = "jtty/jtty_mdecode.f90"
-line = 102
+line = 103
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`MAX_SYNC_FFT_ORDER, a PARAMETER of module jtty_mdec` at :102). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`MAX_SYNC_FFT_ORDER, a PARAMETER of module jtty_mdec` at :103). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
 name = "UPDATE_GROWING"
 file = "jtty/jtty_mdecode.f90"
-line = 68
+line = 69
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`integer, parameter :: UPDATE_GROWING=0, UPDATE_COMPLETE=1` at :68). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`integer, parameter :: UPDATE_GROWING=0, UPDATE_COMPLETE=1` at :69). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
 name = "UPDATE_COMPLETE"
 file = "jtty/jtty_mdecode.f90"
-line = 68
+line = 69
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`integer, parameter :: UPDATE_GROWING=0, UPDATE_COMPLETE=1` at :68). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`integer, parameter :: UPDATE_GROWING=0, UPDATE_COMPLETE=1` at :69). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
 name = "UPDATE_EXPIRED"
 file = "jtty/jtty_mdecode.f90"
-line = 69
+line = 70
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`integer, parameter :: UPDATE_EXPIRED=2, UPDATE_RECEPTION_ENDED=3` at :69). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`integer, parameter :: UPDATE_EXPIRED=2, UPDATE_RECEPTION_ENDED=3` at :70). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
 name = "UPDATE_RECEPTION_ENDED"
 file = "jtty/jtty_mdecode.f90"
-line = 69
+line = 70
 class = 4
 size_bytes = 0
-reason = "PARAMETER (`integer, parameter :: UPDATE_EXPIRED=2, UPDATE_RECEPTION_ENDED=3` at :69). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
+reason = "PARAMETER (`integer, parameter :: UPDATE_EXPIRED=2, UPDATE_RECEPTION_ENDED=3` at :70). A named constant: no storage, never an lvalue, the same value in every chain. Class 4, 0 bytes."
 
 [[symbol]]
 name = "0_int64"
 file = "jtty/jtty_mdecode.f90"
-line = 70
+line = 71
 class = 4
 size_bytes = 0
-reason = "SCANNER ARTIFACT, not a symbol: `0_int64` is the kind-suffixed literal initialising sample_origin (:70) and first_search_sample (:71). names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+reason = "SCANNER ARTIFACT, not a symbol: `0_int64` is the kind-suffixed literal initialising sample_origin (:71) and first_search_sample (:72). names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
 
 [[symbol]]
 name = "0_real64"
 file = "jtty/jtty_mdecode.f90"
-line = 83
+line = 84
 class = 4
 size_bytes = 0
-reason = "SCANNER ARTIFACT, not a symbol: `0_real64` is the fraction of the literal `0.0_real64` initialising interferer_tsync (:83) and subtracted_tsync (:87). names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+reason = "SCANNER ARTIFACT, not a symbol: `0_real64` is the fraction of the literal `0.0_real64` initialising interferer_tsync (:84) and subtracted_tsync (:88). names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
 
 [[symbol]]
 name = "MAX_FRAMES"
@@ -13260,15 +13277,15 @@ reason = "SCANNER ARTIFACT, not a symbol: `MAX_FRAMES` is jtty_mod's PARAMETER (
 [[symbol]]
 name = "1_int64"
 file = "jtty/jtty_mdecode.f90"
-line = 67
+line = 68
 class = 4
 size_bytes = 0
-reason = "SCANNER ARTIFACT, not a symbol: `1_int64` is the kind-suffixed literal initialising next_message_id (:67). names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
+reason = "SCANNER ARTIFACT, not a symbol: `1_int64` is the kind-suffixed literal initialising next_message_id (:68). names_in_decl takes every identifier-shaped token after `::` (the types.f90 REAL32 row describes the mechanism). No storage. Class 4, 0 bytes."
 
 [[symbol]]
 name = "active_messages"
 file = "jtty/jtty_mdecode.f90"
-line = 73
+line = 74
 class = 1
 size_bytes = 3840
 reason = "type(message_assembly) active_messages(30): the messages being assembled frame by frame, with their text so far. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
@@ -13276,7 +13293,7 @@ reason = "type(message_assembly) active_messages(30): the messages being assembl
 [[symbol]]
 name = "recent_frames"
 file = "jtty/jtty_mdecode.f90"
-line = 74
+line = 75
 class = 1
 size_bytes = 7680
 reason = "type(frame_fingerprint) recent_frames(480): the (f1, tsync) of recently decoded frames, the duplicate filter. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
@@ -13284,23 +13301,23 @@ reason = "type(frame_fingerprint) recent_frames(480): the (f1, tsync) of recentl
 [[symbol]]
 name = "pending_updates"
 file = "jtty/jtty_mdecode.f90"
-line = 75
+line = 76
 class = 1
 size_bytes = 64
-reason = "type(message_update), allocatable pending_updates(:): the queue jtty_rx_take_updates drains (64 B descriptor, heap grows by doubling, :333-344). Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
+reason = "type(message_update), allocatable pending_updates(:): the queue jtty_rx_take_updates drains (64 B descriptor, heap grows by doubling, :358-369). Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
 
 [[symbol]]
 name = "ndecodes"
 file = "jtty/jtty_mdecode.f90"
-line = 62
+line = 63
 class = 1
 size_bytes = 4
-reason = "integer ndecodes: frames decoded since the stream began, reset only at a stream start (:644-647). Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
+reason = "integer ndecodes: frames decoded since the stream began, reset only at a stream start (:669-672). Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
 
 [[symbol]]
 name = "nactive"
 file = "jtty/jtty_mdecode.f90"
-line = 63
+line = 64
 class = 1
 size_bytes = 4
 reason = "integer nactive: how many active_messages are live. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
@@ -13308,7 +13325,7 @@ reason = "integer nactive: how many active_messages are live. Carries one recept
 [[symbol]]
 name = "nrecent"
 file = "jtty/jtty_mdecode.f90"
-line = 64
+line = 65
 class = 1
 size_bytes = 4
 reason = "integer nrecent: how many recent_frames are live. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
@@ -13316,7 +13333,7 @@ reason = "integer nrecent: how many recent_frames are live. Carries one receptio
 [[symbol]]
 name = "npending"
 file = "jtty/jtty_mdecode.f90"
-line = 65
+line = 66
 class = 1
 size_bytes = 4
 reason = "integer npending: queued updates. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
@@ -13324,7 +13341,7 @@ reason = "integer npending: queued updates. Carries one reception's state from c
 [[symbol]]
 name = "pending_first"
 file = "jtty/jtty_mdecode.f90"
-line = 66
+line = 67
 class = 1
 size_bytes = 4
 reason = "integer pending_first: the queue head. Carries one reception's state from call to call: per-chain, class 1. Swapped per handle by jtty_receive_context's exchange_state (jtty_receive_context.f90:50-81) on entry to and exit from every jtty_rx_process and jtty_rx_end, so through the handle API each reception keeps its own copy and the live one is borrowed only for the length of a call. Through rjtty_sub/jtty_mdecode_step (upstream's tests, not Nexus's receive path) it is one process-global stream."
@@ -13332,290 +13349,290 @@ reason = "integer pending_first: the queue head. Carries one reception's state f
 [[symbol]]
 name = "next_message_id"
 file = "jtty/jtty_mdecode.f90"
-line = 67
+line = 68
 class = 3
 size_bytes = 8
-reason = "integer(int64), initialised 1 (:67): the message-id allocator, read and incremented once per new message by start_message (:377, :388). NOT in exchange_state's list, deliberately: it is process-wide so that ids stay unique across handles, and it must not be swapped per chain (each chain would then reissue ids from the same start). Its content is not chain data. Read-modify-write, so it needs serialised calls, which the modem lock provides; the class-3 shape (shareable if calls serialise) is the right guidance, though it is a counter rather than scratch."
+reason = "integer(int64), initialised 1 (:68): the message-id allocator, read and incremented once per new message by start_message (:402, :413). NOT in exchange_state's list, deliberately: it is process-wide so that ids stay unique across handles, and it must not be swapped per chain (each chain would then reissue ids from the same start). Its content is not chain data. Read-modify-write, so it needs serialised calls, which the modem lock provides; the class-3 shape (shareable if calls serialise) is the right guidance, though it is a counter rather than scratch."
 
 [[symbol]]
 name = "sample_origin"
 file = "jtty/jtty_mdecode.f90"
-line = 70
+line = 71
 class = 3
 size_bytes = 8
-reason = "sample_origin (:70): the per-call sample origin of the decode. jtty_rx_process saves it, sets it for the handle before any decode (jtty_receive_context.f90:168-173) and restores it afterwards (:231-233); rjtty_sub's path leaves the defaults. Written before read on every call: class 3."
+reason = "sample_origin (:71): the per-call sample origin of the decode. jtty_rx_process saves it, sets it for the handle before any decode (jtty_receive_context.f90:168-173) and restores it afterwards (:231-233); rjtty_sub's path leaves the defaults. Written before read on every call: class 3."
 
 [[symbol]]
 name = "first_search_sample"
 file = "jtty/jtty_mdecode.f90"
-line = 71
+line = 72
 class = 3
 size_bytes = 8
-reason = "first_search_sample (:71): the per-call sample origin of the decode. jtty_rx_process saves it, sets it for the handle before any decode (jtty_receive_context.f90:168-173) and restores it afterwards (:231-233); rjtty_sub's path leaves the defaults. Written before read on every call: class 3."
+reason = "first_search_sample (:72): the per-call sample origin of the decode. jtty_rx_process saves it, sets it for the handle before any decode (jtty_receive_context.f90:168-173) and restores it afterwards (:231-233); rjtty_sub's path leaves the defaults. Written before read on every call: class 3."
 
 [[symbol]]
 name = "explicit_receive_context"
 file = "jtty/jtty_mdecode.f90"
-line = 72
+line = 73
 class = 3
 size_bytes = 4
-reason = "explicit_receive_context (:72): the per-call sample origin of the decode. jtty_rx_process saves it, sets it for the handle before any decode (jtty_receive_context.f90:168-173) and restores it afterwards (:231-233); rjtty_sub's path leaves the defaults. Written before read on every call: class 3."
+reason = "explicit_receive_context (:73): the per-call sample origin of the decode. jtty_rx_process saves it, sets it for the handle before any decode (jtty_receive_context.f90:168-173) and restores it afterwards (:231-233); rjtty_sub's path leaves the defaults. Written before read on every call: class 3."
 
 [[symbol]]
 name = "interferer_pending"
 file = "jtty/jtty_mdecode.f90"
-line = 81
+line = 82
 class = 3
 size_bytes = 4
-reason = "interferer_pending (:81), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1245 and :1265-1268), and jtty_mdecode copies it and clears interferer_pending as its first statements (:635-639), before any early return. Written before read on every call: class 3."
+reason = "interferer_pending (:82), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1270 and :1290-1293), and jtty_mdecode copies it and clears interferer_pending as its first statements (:660-664), before any early return. Written before read on every call: class 3."
 
 [[symbol]]
 name = "interferer_f1"
 file = "jtty/jtty_mdecode.f90"
-line = 82
+line = 83
 class = 3
 size_bytes = 4
-reason = "interferer_f1 (:82), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1245 and :1265-1268), and jtty_mdecode copies it and clears interferer_pending as its first statements (:635-639), before any early return. Written before read on every call: class 3."
+reason = "interferer_f1 (:83), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1270 and :1290-1293), and jtty_mdecode copies it and clears interferer_pending as its first statements (:660-664), before any early return. Written before read on every call: class 3."
 
 [[symbol]]
 name = "interferer_tsync"
 file = "jtty/jtty_mdecode.f90"
-line = 83
+line = 84
 class = 3
 size_bytes = 8
-reason = "interferer_tsync (:83), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1245 and :1265-1268), and jtty_mdecode copies it and clears interferer_pending as its first statements (:635-639), before any early return. Written before read on every call: class 3."
+reason = "interferer_tsync (:84), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1270 and :1290-1293), and jtty_mdecode copies it and clears interferer_pending as its first statements (:660-664), before any early return. Written before read on every call: class 3."
 
 [[symbol]]
 name = "interferer_payload"
 file = "jtty/jtty_mdecode.f90"
-line = 84
+line = 85
 class = 3
 size_bytes = 136
-reason = "interferer_payload (:84), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1245 and :1265-1268), and jtty_mdecode copies it and clears interferer_pending as its first statements (:635-639), before any early return. Written before read on every call: class 3."
+reason = "interferer_payload (:85), the retro re-sweep request. Every caller writes it immediately before calling jtty_mdecode (jtty_receive_context.f90:199-202 and :213; jtty_mdecode_step :1270 and :1290-1293), and jtty_mdecode copies it and clears interferer_pending as its first statements (:660-664), before any early return. Written before read on every call: class 3."
 
 [[symbol]]
 name = "nsubtracted"
 file = "jtty/jtty_mdecode.f90"
-line = 85
+line = 86
 class = 3
 size_bytes = 4
-reason = "integer nsubtracted (:85): this call's subtraction count. Reset to 0 at the top of every jtty_mdecode (:640), incremented as signals are subtracted, read by the caller after the call (jtty_receive_context.f90:217; jtty_mdecode_step :1251). Class 3."
+reason = "integer nsubtracted (:86): this call's subtraction count. Reset to 0 at the top of every jtty_mdecode (:665), incremented as signals are subtracted, read by the caller after the call (jtty_receive_context.f90:217; jtty_mdecode_step :1276). Class 3."
 
 [[symbol]]
 name = "subtracted_f1"
 file = "jtty/jtty_mdecode.f90"
-line = 86
+line = 87
 class = 3
 size_bytes = 64
-reason = "subtracted_f1 (:86): this call's subtracted signals, written for 1..nsubtracted during the call and read by the caller only over 1..nsubtracted (jtty_receive_context.f90:217-224; jtty_mdecode_step :1251-1256). Entries past nsubtracted are stale and never read. Class 3."
+reason = "subtracted_f1 (:87): this call's subtracted signals, written for 1..nsubtracted during the call and read by the caller only over 1..nsubtracted (jtty_receive_context.f90:217-224; jtty_mdecode_step :1276-1281). Entries past nsubtracted are stale and never read. Class 3."
 
 [[symbol]]
 name = "subtracted_tsync"
 file = "jtty/jtty_mdecode.f90"
-line = 87
+line = 88
 class = 3
 size_bytes = 128
-reason = "subtracted_tsync (:87): this call's subtracted signals, written for 1..nsubtracted during the call and read by the caller only over 1..nsubtracted (jtty_receive_context.f90:217-224; jtty_mdecode_step :1251-1256). Entries past nsubtracted are stale and never read. Class 3."
+reason = "subtracted_tsync (:88): this call's subtracted signals, written for 1..nsubtracted during the call and read by the caller only over 1..nsubtracted (jtty_receive_context.f90:217-224; jtty_mdecode_step :1276-1281). Entries past nsubtracted are stale and never read. Class 3."
 
 [[symbol]]
 name = "subtracted_payload"
 file = "jtty/jtty_mdecode.f90"
-line = 88
+line = 89
 class = 3
 size_bytes = 2176
-reason = "subtracted_payload (:88): this call's subtracted signals, written for 1..nsubtracted during the call and read by the caller only over 1..nsubtracted (jtty_receive_context.f90:217-224; jtty_mdecode_step :1251-1256). Entries past nsubtracted are stale and never read. Class 3."
+reason = "subtracted_payload (:89): this call's subtracted signals, written for 1..nsubtracted during the call and read by the caller only over 1..nsubtracted (jtty_receive_context.f90:217-224; jtty_mdecode_step :1276-1281). Entries past nsubtracted are stale and never read. Class 3."
 
 [[symbol]]
 name = "sync_chirp_weights"
 file = "jtty/jtty_mdecode.f90"
-line = 89
+line = 90
 class = 2
 size_bytes = 64
-reason = "complex, allocatable (:89), 64 B descriptor: the chirp-z sync weights. Rebuilt in build_s0 (:792-822) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:223-234). Class 2."
+reason = "complex, allocatable (:90), 64 B descriptor: the chirp-z sync weights. Rebuilt in build_s0 (:817-847) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:224-235). Class 2."
 
 [[symbol]]
 name = "sync_chirp_kernel"
 file = "jtty/jtty_mdecode.f90"
-line = 89
+line = 90
 class = 2
 size_bytes = 64
-reason = "complex, allocatable (:89), 64 B descriptor: the transformed chirp kernel. Rebuilt in build_s0 (:792-822) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:223-234). Class 2."
+reason = "complex, allocatable (:90), 64 B descriptor: the transformed chirp kernel. Rebuilt in build_s0 (:817-847) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:224-235). Class 2."
 
 [[symbol]]
 name = "sync_chirp_samples"
 file = "jtty/jtty_mdecode.f90"
-line = 90
+line = 91
 class = 2
 size_bytes = 4
-reason = "integer, initialised 0 (:90): part of the chirp cache key. Guard and data share a class. Rebuilt in build_s0 (:792-822) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:223-234). Class 2."
+reason = "integer, initialised 0 (:91): part of the chirp cache key. Guard and data share a class. Rebuilt in build_s0 (:817-847) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:224-235). Class 2."
 
 [[symbol]]
 name = "sync_chirp_first_bin"
 file = "jtty/jtty_mdecode.f90"
-line = 90
+line = 91
 class = 2
 size_bytes = 4
-reason = "integer, initialised -1 (:90): part of the chirp cache key. Guard and data share a class. Rebuilt in build_s0 (:792-822) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:223-234). Class 2."
+reason = "integer, initialised -1 (:91): part of the chirp cache key. Guard and data share a class. Rebuilt in build_s0 (:817-847) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:224-235). Class 2."
 
 [[symbol]]
 name = "sync_chirp_output_count"
 file = "jtty/jtty_mdecode.f90"
-line = 91
+line = 92
 class = 2
 size_bytes = 4
-reason = "integer, initialised 0 (:91): part of the chirp cache key. Guard and data share a class. Rebuilt in build_s0 (:792-822) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:223-234). Class 2."
+reason = "integer, initialised 0 (:92): part of the chirp cache key. Guard and data share a class. Rebuilt in build_s0 (:817-847) whenever (NSYNC_SYM*nss, first_output_bin, output_count) differs from (sync_chirp_samples, sync_chirp_first_bin, sync_chirp_output_count); the content is a function of that key (csync follows nss, nfft is 8192), so a chain whose search window differs rebuilds it, and one whose window matches may share it. Freed by jtty_release_fft_resources (:224-235). Class 2."
 
 [[symbol]]
 name = "sync_fft_caches"
 file = "jtty/jtty_mdecode.f90"
-line = 103
+line = 104
 class = 2
 size_bytes = 696
-reason = "type(sync_fft_cache) sync_fft_caches(11:13) (:103), 696 B: one FFTW forward/backward plan pair and its aligned buffers per FFT order. Created once per order by ensure_sync_fft_cache (:165-219), destroyed only by jtty_release_fft_resources (:223-234). The plans depend on nfft alone; the buffers are refilled before every execute (build_s0 :805-878). A chain-independent plan cache: class 2. FFTW planning is not thread-safe; upstream wraps it in !$omp critical(fftw), Nexus runs it under the modem lock."
+reason = "type(sync_fft_cache) sync_fft_caches(11:13) (:104), 696 B: one FFTW forward/backward plan pair and its aligned buffers per FFT order. Created once per order by ensure_sync_fft_cache (:166-220), destroyed only by jtty_release_fft_resources (:224-235). The plans depend on nfft alone; the buffers are refilled before every execute (build_s0 :830-903). A chain-independent plan cache: class 2. FFTW planning is not thread-safe; upstream wraps it in !$omp critical(fftw), Nexus runs it under the modem lock."
 
 [[symbol]]
 name = "nsps0"
 file = "jtty/jtty_mdecode.f90"
-line = 583
+line = 608
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save, initialised -999 (:583): the rebuild key, set at :655. Guard and data share a class. Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save, initialised -999 (:608): the rebuild key, set at :680. Guard and data share a class. Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "ntstep"
 file = "jtty/jtty_mdecode.f90"
-line = 576
+line = 601
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the quarter-frame step at 6000 Sa/s (:661). Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the quarter-frame step at 6000 Sa/s (:686). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "nframe6"
 file = "jtty/jtty_mdecode.f90"
-line = 582
+line = 607
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the frame length at 6000 Sa/s (:660). Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the frame length at 6000 Sa/s (:685). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "nss"
 file = "jtty/jtty_mdecode.f90"
-line = 585
+line = 610
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the samples per symbol at 6000 Sa/s (:656). Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the samples per symbol at 6000 Sa/s (:681). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "nfft"
 file = "jtty/jtty_mdecode.f90"
-line = 585
+line = 610
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the sync-search FFT size, 8192 (:657). Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the sync-search FFT size, 8192 (:682). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "nh2"
 file = "jtty/jtty_mdecode.f90"
-line = 585
+line = 610
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the half of nfft (:659). Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the half of nfft (:684). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "baud"
 file = "jtty/jtty_mdecode.f90"
-line = 603
+line = 628
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the 6000/nss (:682). Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the 6000/nss (:707). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "dt"
 file = "jtty/jtty_mdecode.f90"
-line = 603
+line = 628
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the 1/6000 (:683). Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the 1/6000 (:708). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "df2"
 file = "jtty/jtty_mdecode.f90"
-line = 603
+line = 628
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the 6000/nfft (:658). Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. SAVEd scalar, the 6000/nfft (:683). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "ntgrid"
 file = "jtty/jtty_mdecode.f90"
-line = 576
+line = 601
 class = 2
 size_bytes = 0
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save (:576), ntstep/12 (:662), read only in the same block to size s0/mask0 (:675-679); gfortran keeps it in a register and emits no storage (nm shows none). Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save (:601), ntstep/12 (:687), read only in the same block to size s0/mask0 (:700-704); gfortran keeps it in a register and emits no storage (nm shows none). Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "csync"
 file = "jtty/jtty_mdecode.f90"
-line = 612
+line = 637
 class = 2
 size_bytes = 64
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:612), 64 B descriptor: the sync waveform at 6000 Sa/s, regenerated by gen_syncwave at :684. Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:637), 64 B descriptor: the sync waveform at 6000 Sa/s, regenerated by gen_syncwave at :709. Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "ctones"
 file = "jtty/jtty_mdecode.f90"
-line = 613
+line = 638
 class = 2
 size_bytes = 88
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:613), 88 B descriptor: the four tone references, refilled at :686-693. Set in the `nsps.ne.nsps0` rebuild block (:654-694) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:638), 88 B descriptor: the four tone references, refilled at :711-718. Set in the `nsps.ne.nsps0` rebuild block (:679-719) from nsps alone, so a handle with another nsps rebuilds it and one with the same nsps shares it. Class 2."
 
 [[symbol]]
 name = "payload_correlator"
 file = "jtty/jtty_mdecode.f90"
-line = 584
+line = 609
 class = 2
 size_bytes = 184
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. type(jtty_payload_correlator), save (:584): the payload tone references, rebuilt by jtty_payload_correlator_prepare (:696; jtty_payload_correlators.f90:20-46) only when samples_per_symbol changes. A cache keyed on nss: class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. type(jtty_payload_correlator), save (:609): the payload tone references, rebuilt by jtty_payload_correlator_prepare (:721; jtty_payload_correlators.f90:20-46) only when samples_per_symbol changes. A cache keyed on nss: class 2."
 
 [[symbol]]
 name = "c0"
 file = "jtty/jtty_mdecode.f90"
-line = 610
+line = 635
 class = 3
 size_bytes = 64
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:610), 64 B descriptor (allocated in the rebuild block): the analytic signal of this call's chunk, written in full by ana64a at :699 (ana64a.f90:11-17 assigns every element) and then edited in place by subtraction. The shared DSP scratch the spec names. Written before read within every call: class 3, shareable only because calls serialise under the modem lock."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:635), 64 B descriptor (allocated in the rebuild block): the analytic signal of this call's chunk, written in full by ana64a at :724 (ana64a.f90:11-17 assigns every element) and then edited in place by subtraction. The shared DSP scratch the spec names. Written before read within every call: class 3, shareable only because calls serialise under the modem lock."
 
 [[symbol]]
 name = "c1"
 file = "jtty/jtty_mdecode.f90"
-line = 611
+line = 636
 class = 3
 size_bytes = 64
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:611), 64 B descriptor (allocated in the rebuild block): the frequency-shifted candidate signal, written by twkfreq/jtty_peakup (:967, :979, :1041) before each read. The shared DSP scratch the spec names. Written before read within every call: class 3, shareable only because calls serialise under the modem lock."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:636), 64 B descriptor (allocated in the rebuild block): the frequency-shifted candidate signal, written by twkfreq/jtty_peakup (:992, :1004, :1066) before each read. The shared DSP scratch the spec names. Written before read within every call: class 3, shareable only because calls serialise under the modem lock."
 
 [[symbol]]
 name = "c"
 file = "jtty/jtty_mdecode.f90"
-line = 609
+line = 634
 class = 3
 size_bytes = 64
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:609), 64 B descriptor (allocated in the rebuild block): the sync-search FFT buffer, filled at :883 before each transform. The shared DSP scratch the spec names. Written before read within every call: class 3, shareable only because calls serialise under the modem lock."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:634), 64 B descriptor (allocated in the rebuild block): the sync-search FFT buffer, filled at :908 before each transform. The shared DSP scratch the spec names. Written before read within every call: class 3, shareable only because calls serialise under the modem lock."
 
 [[symbol]]
 name = "s0"
 file = "jtty/jtty_mdecode.f90"
-line = 599
+line = 624
 class = 3
 size_bytes = 88
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. allocatable, save (:599), 88 B descriptor: the sync-search surface and its mask over (nh2, ntgrid). s0_valid is cleared at the start of every call (:738) and build_s0 rebuilds the surface before each use (:746, :756). build_s0 writes only the searched span, and upstream's comment at :724 says bins outside it may stay stale; every channel reads inside that span, so a stale bin is never read. Class 3, under serialised calls."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. allocatable, save (:624), 88 B descriptor: the sync-search surface and its mask over (nh2, ntgrid). s0_valid is cleared at the start of every call (:763) and build_s0 rebuilds the surface before each use (:771, :781). build_s0 writes only the searched span, and upstream's comment at :749 says bins outside it may stay stale; every channel reads inside that span, so a stale bin is never read. Class 3, under serialised calls."
 
 [[symbol]]
 name = "mask0"
 file = "jtty/jtty_mdecode.f90"
-line = 600
+line = 625
 class = 3
 size_bytes = 88
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. allocatable, save (:600), 88 B descriptor: the sync-search surface and its mask over (nh2, ntgrid). s0_valid is cleared at the start of every call (:738) and build_s0 rebuilds the surface before each use (:746, :756). build_s0 writes only the searched span, and upstream's comment at :724 says bins outside it may stay stale; every channel reads inside that span, so a stale bin is never read. Class 3, under serialised calls."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. allocatable, save (:625), 88 B descriptor: the sync-search surface and its mask over (nh2, ntgrid). s0_valid is cleared at the start of every call (:763) and build_s0 rebuilds the surface before each use (:771, :781). build_s0 writes only the searched span, and upstream's comment at :749 says bins outside it may stay stale; every channel reads inside that span, so a stale bin is never read. Class 3, under serialised calls."
 
 [[symbol]]
 name = "nsps0"
@@ -13703,7 +13720,7 @@ file = "jtty/subtract_jtty.f90"
 line = 38
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save, initialised -1 (:38): the rebuild key. Guard and data share a class. Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:713, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save, initialised -1 (:38): the rebuild key. Guard and data share a class. Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:738, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
 
 [[symbol]]
 name = "nfft_save"
@@ -13711,7 +13728,7 @@ file = "jtty/subtract_jtty.f90"
 line = 38
 class = 2
 size_bytes = 4
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save, initialised -1 (:38): the rebuild key. Guard and data share a class. Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:713, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. integer, save, initialised -1 (:38): the rebuild key. Guard and data share a class. Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:738, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
 
 [[symbol]]
 name = "window"
@@ -13719,7 +13736,7 @@ file = "jtty/subtract_jtty.f90"
 line = 40
 class = 2
 size_bytes = 64
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. real, allocatable, save (:40): the cos^2 smoothing window. Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:713, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. real, allocatable, save (:40): the cos^2 smoothing window. Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:738, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
 
 [[symbol]]
 name = "cw"
@@ -13727,7 +13744,7 @@ file = "jtty/subtract_jtty.f90"
 line = 39
 class = 2
 size_bytes = 64
-reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:39): the transformed low-pass filter built from window (:63-68). Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:713, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
+reason = "NOT REPORTED BY THE GATE: an attribute-form `, save ::` declaration inside a subprogram is invisible to manifest_gate.rs (it matches `save`/`data`/`common` statements and module-scope declarations only); found with nm -S on the built object. complex, allocatable, save (:39): the transformed low-pass filter built from window (:63-68). Rebuilt when (nframe, nfft) differs from (nframe_save, nfft_save) (:53-71). Both callers pass nsym_total = 59 (jtty_mdecode.f90:738, :1142), so nframe = 59*nss fixes nss and the filter width nfilt = 2*nss. A cache keyed on the frame shape: class 2."
 
 [[symbol]]
 name = "cref"

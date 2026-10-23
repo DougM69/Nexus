@@ -66,14 +66,14 @@ upstream's. Same license terms as the rest of the tree (GPL-3.0-only, no per-fil
 
 `lib/jtty/`, `lib/77bit/packjt77_grammar.f90`, `tests/unit/jtty/` and `tests/fixtures/jtty/`
 hold WSJT-X's JTTY modem and upstream's own tests for it, taken from
-<https://github.com/WSJTX/wsjtx> at the tag `v3.3.0-beta1`, commit
-`57ba9337fa020065dc0ceee2c4ef85e433ea32d4` (2026-10-07). Every file is upstream's file at that
+<https://github.com/WSJTX/wsjtx> at the tag `v3.3.0-beta4`, commit
+`0f7d5928449ec747c3d1f6da1306f8c94404c3a9` (2026-10-21). Every file is upstream's file at that
 commit, byte for byte: Nexus adds no header and changes nothing, so none of them carries a
 `MODIFIED FOR NEXUS` note. `crates/tempo-fast-sys/tests/jtty_provenance.rs` holds each file to
 its git blob id at that commit, holds the two lists below to its table, and fails if anything
 else appears in those directories.
 
-**`v3.3.0-beta1` is a WSJT-X pre-release.** JTTY first appeared in WSJT-X 3.2.0-rc1
+**`v3.3.0-beta4` is a WSJT-X pre-release.** JTTY first appeared in WSJT-X 3.2.0-rc1
 (2026-09-23), and no WSJT-X general release carries it yet. When one does, the files are taken
 again from that release (see *Re-taking the files* below).
 
@@ -87,14 +87,14 @@ on 2026-07-09 when upstream restructured its 77-bit packer.
 
 ### Vendored
 
-The modem, compiled into `libtempo` (20 files, 7,070 lines):
+The modem, compiled into `libtempo` (20 files, 7,261 lines):
 
 | File | Lines | What it is |
 |---|---:|---|
 | `lib/jtty/jtty_source_codec.f90` | 474 | the 34-bit atom grammar: call actions, structured exchanges, text |
 | `lib/jtty/jtty_mod.f90` | 454 | message normalisation and packing a message into frames |
-| `lib/jtty/genjtty.f90` | 175 | message to channel tones; the entries upstream's transmitter calls |
-| `lib/77bit/packjt77_grammar.f90` | 1621 | the 77-bit grammar tables, including the ARRL and RAC section list |
+| `lib/jtty/genjtty.f90` | 262 | message to channel tones; the entries upstream's transmitter calls |
+| `lib/77bit/packjt77_grammar.f90` | 1629 | the 77-bit grammar tables, including the ARRL and RAC section list |
 | `lib/jtty/tbcc.f90` | 422 | the tail-biting convolutional code: encoding, CRC-12, decoding |
 | `lib/jtty/jtty_fec_mod.f90` | 19 | the sync sequence and the code the mode uses |
 | `lib/jtty/jtty_tbcc_code_profile.f90` | 106 | the convolutional code's description |
@@ -102,8 +102,8 @@ The modem, compiled into `libtempo` (20 files, 7,070 lines):
 | `lib/jtty/jtty_tbcc_list_decoder.f90` | 1168 | the list decoder |
 | `lib/jtty/gen_jttywave.f90` | 110 | the 4-GFSK waveform |
 | `lib/jtty/gen_syncwave.f90` | 26 | the sync waveform |
-| `lib/jtty/jtty_mdecode.f90` | 1277 | the multi-signal decoder and message assembly |
-| `lib/jtty/jtty_receive_context.f90` | 297 | the streaming receive interface (`jtty_rx_*`) |
+| `lib/jtty/jtty_mdecode.f90` | 1302 | the multi-signal decoder and message assembly |
+| `lib/jtty/jtty_receive_context.f90` | 368 | the streaming receive interface (`jtty_rx_*`) |
 | `lib/jtty/subtract_jtty.f90` | 99 | subtracts a decoded signal |
 | `lib/jtty/jtty_peakup.f90` | 146 | fine time and frequency |
 | `lib/jtty/jtty_payload_correlators.f90` | 108 | payload correlation |
@@ -162,10 +162,10 @@ Upstream's tests, not compiled into `libtempo` (20 files, 3,542 lines): the Fort
 
 ### Lineage
 
-The JTTY files are from `v3.3.0-beta1`; everything they call from the rest of WSJT-X is a copy
+The JTTY files are from `v3.3.0-beta4`; everything they call from the rest of WSJT-X is a copy
 already here, from WSJT-X 3.0.2: `pack28` and `unpack28` from `lib/77bit/packjt77.f90`, and
 `lib/chkcall.f90`, `lib/four2a.f90`, `lib/twkfreq.f90`, `lib/db.f90`, `lib/ft2/gfsk_pulse.f90`
-and `lib/fftw3mod.f90`. At `57ba9337` upstream's copies of these are byte-identical
+and `lib/fftw3mod.f90`. At `0f7d5928` upstream's copies of these are byte-identical
 (`gfsk_pulse.f90` has moved to `lib/gfsk_pulse.f90`), except two: `twkfreq.f90` gained a fast
 path for a constant frequency (upstream commit `32c04bc8`, 2026-09-04), and `packjt77.f90` was
 rewritten. Nexus keeps its own modified 3.0.2 `packjt77.f90`; the JTTY files build against it

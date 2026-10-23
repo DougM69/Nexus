@@ -5,7 +5,7 @@ contest text, sent in 1.9-second frames of 4-tone FSK about 127 Hz wide, with er
 that copies far below where RTTY gives up. There are no time slots; a station starts sending
 whenever it likes, and the text prints as each frame decodes.
 
-JTTY comes from the WSJT-X 3.3.0-beta1 test release, and no WSJT-X general release has it yet:
+JTTY comes from the WSJT-X 3.3.0-beta4 test release, and no WSJT-X general release has it yet:
 the station you work needs a WSJT-X 3.2 or 3.3 test release. Nexus's JTTY transmitter has not yet
 been tried on the air; check keying, power and ALC on a dummy load before you use it.
 
