@@ -41,10 +41,12 @@ fn holding_the_link_stops(r: &mut Roadside, held: Gate) -> Arc<Mutex<Vec<String>
     let (engine, record) = (r.s.shared.engine.clone(), ran.clone());
     r.s.shared.commands = crate::remote_service::lan::commands::Commands::new(Arc::new(
         move |cmd: String, args: Value, answer: crate::command_dispatch::Answer| {
-            if matches!(
-                cmd.as_str(),
-                "get_snapshot" | "get_meters" | "get_spectrum_row"
-            ) {
+            // Every feed's poll, read from the feeds' own table so a feed added later is left out
+            // too: the RTTY scope's was recorded as a press once it came.
+            if tempo_client::wire::FEEDS
+                .iter()
+                .any(|feed| feed.command == cmd)
+            {
                 return answer(Ok(json!({})));
             }
             record.lock().unwrap().push(cmd.clone());

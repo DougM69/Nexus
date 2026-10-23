@@ -353,3 +353,58 @@ fn an_over_started_from_afar_ends_by_either_road_alone_and_by_presence() {
         }
     });
 }
+
+/// The operator's licence at the shack.
+fn licensed(e: &mut tempo_app::engine::Engine, class: tempo_app::settings::LicenseClass) {
+    let mut settings = e.settings().clone();
+    settings.license_class = class;
+    e.apply_settings(settings);
+}
+
+/// ⛔ A start from afar outside the operator's licence is refused as the shack's own is: with a
+/// Technician licence on 20 m, the tune carrier pressed on the shack's own screen stays down, and
+/// pressed from afar, its call answered and run by the shack's own handler, it stays down too.
+/// CONTROL: with an Extra licence on the same dial the same press from afar keys the carrier, and
+/// the refused press reached the handler, so it was the licence that refused it, not the lane.
+#[test]
+fn a_start_from_afar_outside_the_licence_is_refused_as_at_the_shack() {
+    use tempo_app::settings::LicenseClass;
+    let _alone = alone();
+    on_a_runtime(2, async {
+        let app = App::new();
+        let mut r = roadside(&app);
+        let (_handlers, got) = the_apps_handlers(&mut r);
+        {
+            let mut e = r.s.shared.engine.lock().unwrap();
+            set_up_at_the_shack(&mut e, "tune");
+            e.set_frequency(14.074, "20m", "USB");
+            licensed(&mut e, LicenseClass::Technician);
+            assert!(!e.tx_allowed(), "premise: outside the licence");
+            e.set_tune(true);
+            assert!(!e.tuning(), "premise: the shack's own tune refused");
+        }
+        let mut seat = seated(&r).await;
+        seat.renewed().await;
+        let said = seat.call(1, "set_tune", json!({"on": true})).await;
+        assert!(said.get("refused").is_none(), "the lane refused it: {said}");
+        assert!(
+            got.lock().unwrap().iter().any(|(cmd, _)| cmd == "set_tune"),
+            "CONTROL: the press reached the shack's handler"
+        );
+        assert!(
+            !r.s.shared.engine.lock().unwrap().tuning(),
+            "a tune from afar keyed outside the licence"
+        );
+
+        licensed(&mut r.s.shared.engine.lock().unwrap(), LicenseClass::Extra);
+        assert!(r.s.shared.engine.lock().unwrap().tx_allowed());
+        seat.renewed().await;
+        let said = seat.call(2, "set_tune", json!({"on": true})).await;
+        assert!(said.get("refused").is_none(), "{said}");
+        assert!(
+            r.s.shared.engine.lock().unwrap().tuning(),
+            "CONTROL: inside the licence the same press keys: {said}"
+        );
+        r.s.shared.engine.lock().unwrap().set_tune(false);
+    });
+}

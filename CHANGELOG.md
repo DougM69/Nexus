@@ -178,6 +178,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     quietly the next time it reaches the station on your network; if the station names another key, that road is
     turned off and says why. Nothing else changes for roads that already work, and nothing has to be paired again.
   - Your radio was never reachable this way: the station only ever lets in a computer you approved there.
+- **The station itself now ends a press from a second computer after 3 minutes.** Phone's Lock from another
+  computer had a 3-minute limit, but only that computer kept it: if it failed to let go, the station's own limit
+  was the 10-minute microphone ceiling. Now the station ends any one press from afar 3 minutes after it began, by
+  its own clock, whatever the other computer does. Answering **Still talking?** there still keeps the Lock on for
+  another 3 minutes, with no break in the audio. A PTT held from afar for more than 3 minutes now ends too; press
+  it again to go on. Lock at the station's own screen is unchanged.
+- **A machine on your network can no longer keep your second computer out of Nexus Remote.** A device opening
+  many slow connections from many addresses could take all four of the station's connection places, so a
+  computer you paired could not connect, or reconnect after a Wi-Fi drop. Connections still being set up no longer
+  take those places, and when too many are waiting the oldest is dropped. An open session and Stop were never
+  affected.
 
 ## [1.20.0] — 2026-10-22
 

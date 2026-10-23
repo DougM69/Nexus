@@ -15,7 +15,8 @@
 //!   headset's microphone, resampled to 48 kHz and cut into 20 ms frames, each encoded
 //!   (`MicEncoder`: voice, 32 kbit/s constant, no DTX, no FEC) and sent at once, one a datagram,
 //!   numbered from the press's start on the capture's own clock, so the station places each frame
-//!   on the over's clock by its number. ⛔ NOTHING IS EVER QUEUED: a frame that cannot go now, or
+//!   on the over's clock by its number. A press that went on from the one speaking (an answered
+//!   Lock, [`OnAir::went_on_from`]) carries on its numbers, its encoder and its clock. ⛔ NOTHING IS EVER QUEUED: a frame that cannot go now, or
 //!   that is already later than the station's lead-in could still play ([`LATE`]), is dropped and
 //!   its number skipped, so after a stall the station plays a hole where the stall was, never a
 //!   burst. The press is client mode's, a held press on Stop's road (src-tauri's `client_mode`), and
@@ -529,16 +530,23 @@ fn serve(shared: &Arc<Shared>, mut receive: Opener) {
                 listened = Some(now);
             }
         }
-        // The microphone, only while a press is live: a new press starts on fresh audio.
+        // The microphone, only while a press is live: a new press starts on fresh audio, and a
+        // press that went on from the one speaking (an answered Lock) carries its audio on.
         #[cfg(any(test, feature = "test-util"))]
         let _sending = lock(&shared.on_air.sender);
         match shared.on_air.press() {
             Some(press) => {
                 shared.headset.want_input();
                 if speaking.as_ref().is_none_or(|s| s.press != press) {
-                    let _ = rings.take_mic();
-                    speaking = Speaking::new(press);
-                    no_word_for = None;
+                    let from = shared.on_air.went_on_from();
+                    match speaking.as_mut().filter(|s| Some(s.press) == from) {
+                        Some(going_on) => going_on.press = press,
+                        None => {
+                            let _ = rings.take_mic();
+                            speaking = Speaking::new(press);
+                            no_word_for = None;
+                        }
+                    }
                 }
                 if let Some(speaking) = speaking.as_mut() {
                     speaking.pass(shared);
@@ -933,6 +941,44 @@ mod tests {
         }
         assert!(after.is_empty(), "the microphone went on after the press");
         assert!(headset.inputs.load(Ordering::SeqCst) > 0);
+    }
+
+    /// ★ A press that went on from the one speaking (an answered Lock) carries the microphone on:
+    /// its frames go under the new press, numbered on from the old press's last, so the station
+    /// places them on the same over's clock. CONTROL: the old press's frames were numbered from 1,
+    /// and a press begun afresh after it starts again at frame 1.
+    #[test]
+    fn a_press_that_goes_on_carries_the_microphone_on() {
+        let (_road, mut station, headset, on_air) = road();
+        let speaking = speak(&headset.rings);
+        on_air.pressing(Some(3));
+        let before = mics(&station.heard(Duration::from_millis(400)));
+        assert!(on_air.renew(3, 4));
+        let after = mics(&station.heard(Duration::from_millis(400)));
+        on_air.pressing(Some(9));
+        let fresh = mics(&station.heard(Duration::from_millis(300)));
+        speaking.store(false, Ordering::SeqCst);
+        let numbers = |sent: &[(u64, u32, Vec<u8>, Instant)], press: u64| -> Vec<u32> {
+            sent.iter()
+                .filter(|(p, ..)| *p == press)
+                .map(|(_, n, ..)| *n)
+                .collect()
+        };
+        let old: Vec<u32> = [numbers(&before, 3), numbers(&after, 3)].concat();
+        assert_eq!(old.first(), Some(&1), "CONTROL: {old:?}");
+        let renewed = numbers(&after, 4);
+        assert!(renewed.len() > 10, "{renewed:?}");
+        assert_eq!(
+            renewed[0],
+            old.last().unwrap() + 1,
+            "numbered on: {old:?} then {renewed:?}"
+        );
+        assert!(renewed.windows(2).all(|w| w[1] == w[0] + 1), "{renewed:?}");
+        assert_eq!(
+            numbers(&fresh, 9).first(),
+            Some(&1),
+            "CONTROL: a fresh press"
+        );
     }
 
     /// ★ No burst after a stall: with the sender held while 300 ms of the microphone come in, the

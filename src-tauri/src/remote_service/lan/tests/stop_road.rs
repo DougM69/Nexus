@@ -22,7 +22,7 @@
 use super::super::audio_road::{self, AudioRoad};
 use super::super::datagram::{End, Keys, Tag, AUDIO_LABEL, AUDIO_MAX, EXPORTED, STOP_LABEL};
 use super::super::stop_road::{
-    Down, Hears, Powers, Running, StateClock, StopRoad, Up, AFTERLIFE, ANSWERED, FRESH,
+    Down, Hears, Powers, Running, StateClock, StopRoad, Up, AFTERLIFE, ANSWERED, FRESH, PRESS_CAP,
 };
 use super::super::wire;
 use super::commands::App;
@@ -142,6 +142,15 @@ impl Roadside {
 }
 
 fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
+    roadside_limited(app, afterlife, PRESS_CAP, hears)
+}
+
+/// The same, each press from afar held at most `cap`.
+fn roadside_capped(app: &App, cap: Duration) -> Roadside {
+    roadside_limited(app, AFTERLIFE, cap, Hears::Loopback)
+}
+
+fn roadside_limited(app: &App, afterlife: Duration, cap: Duration, hears: Hears) -> Roadside {
     let mut s = super::commands::running(app);
     let (ptt, mic) = (PttHold::default(), MicFeed::default());
     {
@@ -164,7 +173,7 @@ fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
         },
     };
     let at = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
-    let road = StopRoad::start_with(at, hears, powers, afterlife).unwrap();
+    let road = StopRoad::start_with(at, hears, powers, afterlife, cap).unwrap();
     s.shared.stop_road = Some(road.road());
     // The audio road, as the listener makes it: the station's one encoder over a feed of the
     // test's own, the audio lane's admission from the shack's own authority.
@@ -1038,6 +1047,48 @@ fn a_datagram_that_does_not_verify_is_dropped_unread() {
     });
 }
 
+/// ★ A datagram that verifies under the road's keys but carries a body the format does not write is
+/// read as nothing and changes nothing: a Stop's body a byte short and a byte long, a hold that names
+/// no Stops, a heartbeat whose lease the station could not have issued, and kinds the road does not
+/// take. None is answered, and the local transmission stays on the air. CONTROL: a well-formed
+/// Stop under the same keys, after them all, is taken.
+#[test]
+fn a_datagram_that_verifies_but_is_malformed_changes_nothing() {
+    let _alone = alone();
+    on_a_runtime(0, async {
+        let app = App::new();
+        let r = roadside(&app);
+        let mut seat = seated(&r).await;
+        key_the_mic(&r.s);
+        let lease = seat.lease();
+        let sealed = |kind: u8, body: &[u8]| seat.road.keys.send.seal(kind, body).unwrap();
+        for (what, datagram) in [
+            ("a Stop a byte short", sealed(1, &[0, 0, 0, 0, 0, 0, 1])),
+            (
+                "a Stop a byte long",
+                sealed(1, &[0, 0, 0, 0, 0, 0, 0, 1, 0]),
+            ),
+            ("a hold that names no Stops", sealed(2, &1u64.to_be_bytes())),
+            (
+                "a heartbeat under a lease never issued",
+                sealed(
+                    4,
+                    &[format!("g{}", &lease[1..]).as_bytes(), &1u64.to_be_bytes()].concat(),
+                ),
+            ),
+            ("kind 0", sealed(0, &1u64.to_be_bytes())),
+            ("kind 5", sealed(5, &1u64.to_be_bytes())),
+        ] {
+            seat.road.send(&datagram).await;
+            assert_eq!(seat.road.heard(NOTHING).await, None, "{what}");
+            assert!(keyed(&r.s), "{what} stops nothing");
+        }
+        seat.road.say(&Up::Stop { stop: 1 }).await;
+        assert!(seat.road.stopped(1, Duration::from_secs(2)).await.is_some());
+        assert!(came_to_a_stop(&r.s).await);
+    });
+}
+
 // ----- Stop never waits -----
 
 /// ★ Its own socket, port, thread and keys. The audio road's real socket flooded at a hundred
@@ -1774,6 +1825,81 @@ async fn a_held_press_arms_the_microphone_only_under_the_stream_rules() {
     assert!(ticks.iter().any(|&(_, on)| on), "on the air");
 }
 
+/// ⛔ A held press from afar outside the operator's licence is refused as the shack's own PTT is:
+/// in Phone on 20 m with a Technician licence, the shack's own PTT does not key, and a press from
+/// afar, held and spoken into under live presence and fresh state, is said refused, never arms the
+/// microphone over, and none of its frames is taken. CONTROL: with an Extra licence on the same
+/// dial, the same press keys by its voice and its frames are taken.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_held_press_from_afar_outside_the_licence_is_refused_as_at_the_shack() {
+    use tempo_app::settings::LicenseClass;
+    let licensed = |r: &Roadside, class| {
+        let mut e = r.s.shared.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.license_class = class;
+        e.apply_settings(settings);
+    };
+    let app = App::new();
+    let r = roadside(&app);
+    let mut seat = seated(&r).await;
+    {
+        let mut e = r.s.shared.engine.lock().unwrap();
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    licensed(&r, LicenseClass::Technician);
+    {
+        let mut e = r.s.shared.engine.lock().unwrap();
+        assert!(
+            e.tx_enabled() && !e.tx_allowed(),
+            "premise: armed, outside the licence"
+        );
+        e.set_ptt(true);
+        assert!(!e.manual_ptt(), "premise: the shack's own PTT refused");
+    }
+    let mut encoder = MicEncoder::new().unwrap();
+    for (press, class) in [(1, LicenseClass::Technician), (2, LicenseClass::Extra)] {
+        licensed(&r, class);
+        seat.renewed().await;
+        let taken = r.counts().mic_taken.load(Ordering::SeqCst);
+        let radio = radio_loop(
+            r.s.shared.engine.clone(),
+            Over::Voice,
+            Arc::default(),
+            Instant::now() + Duration::from_millis(900),
+        );
+        speak(&seat, &mut encoder, press, 1, 30, |_| true).await;
+        let keyed = r.s.shared.engine.lock().unwrap().mic_keyed();
+        seat.road.say(&Up::Release { press }).await;
+        let said = seat.road_says(Duration::from_millis(300)).await;
+        let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+            .await
+            .unwrap();
+        let taken = r.counts().mic_taken.load(Ordering::SeqCst) - taken;
+        if class == LicenseClass::Technician {
+            assert!(
+                said.contains(&Down::Press {
+                    press,
+                    keyed: false,
+                    end: Some(HoldEnd::Refused)
+                }),
+                "outside the licence, said refused: {said:?}"
+            );
+            assert!(
+                !ticks.iter().any(|&(_, on)| on),
+                "on the air outside the licence"
+            );
+            assert!(!keyed && taken == 0, "keyed {keyed}, {taken} frames taken");
+        } else {
+            assert!(
+                keyed && taken > 0,
+                "CONTROL: keyed {keyed}, {taken} frames taken"
+            );
+            assert!(ticks.iter().any(|&(_, on)| on), "CONTROL: on the air");
+        }
+    }
+}
+
 /// ★ The held press ends 200 ms after its last re-assertion. A press from afar, keyed and
 /// spoken into, whose holds stop while its voice goes on: the over comes off the air no sooner than
 /// 200 ms after the last hold and within a tick past it, the road says the press lapsed, and the
@@ -1838,6 +1964,98 @@ async fn the_held_press_ends_200_ms_after_its_last_reassertion() {
         r.counts().mic_refused.load(Ordering::SeqCst) > 0,
         "the frames after it refused"
     );
+}
+
+/// The shack's radio loop on a thread of its own until `done`: each tick, when, and whether the
+/// microphone over was armed or keyed. It goes on ticking after an over ends, so a press that keyed
+/// again would be seen.
+fn ticking(r: &Roadside, done: Arc<AtomicBool>) -> std::thread::JoinHandle<Vec<(Instant, bool)>> {
+    let engine = r.s.shared.engine.clone();
+    std::thread::spawn(move || {
+        let mut ticks = Vec::new();
+        while !done.load(Ordering::SeqCst) {
+            let now = Instant::now();
+            let mut e = engine.lock().unwrap();
+            e.poll_remote_transmit(now);
+            e.poll_mic(now, TICK.as_millis() as f64, 1);
+            ticks.push((now, e.mic_armed() || e.mic_keyed()));
+            drop(e);
+            std::thread::sleep(TICK);
+        }
+        ticks
+    })
+}
+
+/// ⛔ A press from afar ends at its cap on the station's own clock, though its computer never lets
+/// go: held and spoken into well past the cap (a second and a half here; Phone's Lock cap, three
+/// minutes, in a build), the over comes off the air no sooner than the cap after the press's first
+/// hold and within a hold and a tick past it; the road says the press was let go, every hold after
+/// it is answered so, and nothing keys again while the holds go on. CONTROL: the over was on the
+/// air by its voice within half a second of the first hold, and stayed on until the cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_press_from_afar_ends_at_its_cap_though_its_computer_holds_on() {
+    const CAP: Duration = Duration::from_millis(1500);
+    assert_eq!(PRESS_CAP, Duration::from_secs(180), "the product's cap");
+    let app = App::new();
+    let r = roadside_capped(&app, CAP);
+    let mut seat = seated(&r).await;
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
+    seat.renewed().await;
+    let done = Arc::new(AtomicBool::new(false));
+    let radio = ticking(&r, done.clone());
+    let mut encoder = MicEncoder::new().unwrap();
+    // Held and spoken into for two and a half seconds.
+    let holds = speak(&seat, &mut encoder, 9, 1, 125, |_| true).await;
+    let said = seat.road_says(Duration::from_millis(300)).await;
+    done.store(true, Ordering::SeqCst);
+    let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+        .await
+        .unwrap();
+    let first = holds[0];
+    let on = ticks
+        .iter()
+        .position(|&(_, on)| on)
+        .expect("premise: never on the air");
+    let off = on
+        + ticks[on..]
+            .iter()
+            .position(|&(_, on)| !on)
+            .expect("still on the air past the cap");
+    let off_at = ticks[off].0;
+    eprintln!(
+        "measured: the press came off the air {:?} after its first hold; the cap is {CAP:?}",
+        off_at.saturating_duration_since(first)
+    );
+    assert!(
+        ticks[on].0 < first + Duration::from_millis(500),
+        "CONTROL: keyed {:?} after its first hold",
+        ticks[on].0.saturating_duration_since(first)
+    );
+    assert!(off_at >= first + CAP, "ended before the cap");
+    assert!(
+        off_at < first + CAP + Duration::from_millis(100) + TICK + Duration::from_millis(100),
+        "ended {:?} after its first hold",
+        off_at.saturating_duration_since(first)
+    );
+    assert!(
+        !ticks[off..].iter().any(|&(_, on)| on),
+        "keyed again while its computer held on"
+    );
+    let ended = Down::Press {
+        press: 9,
+        keyed: false,
+        end: Some(HoldEnd::Released),
+    };
+    let presses = presses(&said);
+    assert!(
+        presses.last() == Some(&&ended) && presses.iter().filter(|&&d| *d == ended).count() >= 5,
+        "the holds after the cap answered with its end: {said:?}"
+    );
+    assert!(!r.ptt.keyed());
 }
 
 /// ★ Each press's reports go back by the road that made it, and the stream's page is told only its
@@ -1993,7 +2211,11 @@ fn the_overs_state_crosses_the_road_with_its_holes() {
         None,
         "a body without the holes"
     );
-    assert!(super::super::stop_road::contract_text().contains(" format 3 "));
+    assert_eq!(
+        widest.body(),
+        [0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255],
+        "the bytes the frozen format writes"
+    );
 }
 
 /// ★ A hold crosses the road with the Stops its press began under (the road's format 3), and a
