@@ -334,9 +334,11 @@ export function ModeNav({
           <div className="mode-nav-group" role="group" aria-label={t('nav.digital.group.aria')}>
             <span className="mode-nav-group-label">{t('nav.digital.group.label')}</span>
             {DIGITAL_SUBS.filter(
-              // FT + Tempo are core (always shown); RTTY/SSTV hide when disabled
-              // in Settings ▸ Features (their DigitalMode doubles as FeatureId).
-              (s) => s.mode === 'digital' || s.mode === 'tempo' || enabled[s.mode] !== false,
+              // FT is core (always shown); the rest hide when disabled in Settings ▸
+              // Features. Their DigitalMode doubles as FeatureId, except Tempo's, which
+              // is the `chat` section (#402).
+              (s) =>
+                s.mode === 'digital' || enabled[s.mode === 'tempo' ? 'chat' : s.mode] !== false,
             ).map((s) => {
               const Icon = s.icon
               const active = s.active(view, tier)

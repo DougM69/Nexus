@@ -325,7 +325,10 @@ export const FEATURES: FeatureDef[] = [
     labelKey: 'features.chat.label',
     kind: 'section',
     category: 'Operate',
-    core: true, // the spine of the MSG area — the original Tempo TempoFast/TempoDeep chat, always available
+    // The MSG area — the original Tempo TempoFast/TempoDeep chat. On by default and for every
+    // profile (all five intents), and it has a switch like the other modes (#402): off takes its
+    // rail item away and a remembered Tempo mode opens on FT (`coerceArea`).
+    core: false,
     dependsOn: [],
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
     view: 'chat',
