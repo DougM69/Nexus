@@ -1763,6 +1763,9 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const sentOperations=operationWire.filter(v=>v.direction==='out')
         assert.ok(sentOperations.some(v=>v.type==='acquire')&&sentOperations.some(v=>v.type==='release'),'premise: the page took and released control')
         assert.deepEqual(sentOperations.filter(v=>v.signed!==!['state','stopTransmit'].includes(v.type)).map(v=>v.type),[],'a proof on every request but state and Stop, and none on those')
+        // The wire count above is the page's frame as Chrome sent it, before the relay hands it to the
+        // stand-in station, so the station's own lease is what has to be waited for.
+        for(let i=0;i<30&&loggingLease!==null;i++)await sleep(100)
         assert.equal(loggingLease,null,'the station holds no lease for this browser')
         assert.equal(await evaluate(`document.querySelector('.remote-stream-placeholder')?.textContent.includes('Nobody answered “Still there?”, so the stream ended.')`),true,'the page says why it ended')
         // A REAL STATION'S ANSWER. The stand-in above answers with Chrome's own SDP; the shack answers with
