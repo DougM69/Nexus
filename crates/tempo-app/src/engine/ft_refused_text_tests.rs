@@ -1,6 +1,6 @@
 //! ⛔ FT8/FT4 NEVER KEY AN OVER THE ENCODER REFUSES, on every path that can queue an operator's
 //! text: the typed free-text box, a clicked Tx row (Tx 5 as typed, or filled from a macro), the
-//! same click during an over, the contest's Operate screen, the Remote client's free text and row,
+//! same click during an over, the contest's Operate screen, the Remote client's free text,
 //! and the keying point itself for anything that reaches it anyway.
 //!
 //! The texts are the ones the packer has no frame for (`modes::wsjt77::Refusal`). Typed `TNX 73`
@@ -343,30 +343,20 @@ fn answering_from_afar(tier: Tier, cq: &str, authority: &TransmitAuthority) -> E
     e
 }
 
-/// The Remote client's free text and its clicked row, working W9XYZ/M: refused as the native ones
-/// are (`InvalidAction`), nothing queued, and the reply keys. Controls: `73` and the row `TNX 73`.
+/// The Remote client's free text, working W9XYZ/M: refused as the native one is
+/// (`InvalidAction`), nothing queued, and the reply keys. Control: `73`.
 #[test]
-fn the_remote_clients_free_text_and_row_never_queue_text_the_encoder_refuses() {
+fn the_remote_clients_free_text_never_queues_text_the_encoder_refuses() {
     for tier in [Tier::Ft8, Tier::Ft4] {
         let what = tier_name(tier);
         let free_text = |text: &str| FtExchangeChange::FreeText { text: text.into() };
-        for (change, row) in [
-            (Some(free_text("TNX 73")), None),
-            (Some(free_text("TNX")), None),
-            (None, Some("W9XYZ/M K1ABC TNX")),
-        ] {
+        for text in ["TNX 73", "TNX"] {
             let authority = TransmitAuthority::default();
             let mut e = answering_from_afar(tier, "CQ W9XYZ/M", &authority);
             let queued = tx_now(&e).expect("premise: the reply is queued");
             let context = FtExchangeContext::from(&e.snapshot().qso.expect("a QSO"));
             let permit = remote_permit(&authority);
-            let answer = match (&change, row) {
-                (Some(change), _) => e.change_remote_ft_exchange(permit, &context, change),
-                (None, Some(row)) => {
-                    e.set_remote_ft_message(permit, &context, "W9XYZ/M", None, row)
-                }
-                (None, None) => unreachable!(),
-            };
+            let answer = e.change_remote_ft_exchange(permit, &context, &free_text(text));
             assert_eq!(
                 (answer, tx_now(&e), next_over(&mut e, 4)),
                 (
@@ -374,8 +364,7 @@ fn the_remote_clients_free_text_and_row_never_queue_text_the_encoder_refuses() {
                     Some(queued.clone()),
                     Some((queued, true))
                 ),
-                "{what}: Remote {:?}",
-                row.unwrap_or("free text")
+                "{what}: Remote free text {text:?}"
             );
         }
 
@@ -388,22 +377,6 @@ fn the_remote_clients_free_text_and_row_never_queue_text_the_encoder_refuses() {
             next_over(&mut e, 4),
             Some(("W9XYZ/M <K1ABC> 73".to_string(), true)),
             "CONTROL {what}: Remote 73"
-        );
-        let authority = TransmitAuthority::default();
-        let mut e = answering_from_afar(tier, "CQ W9XYZ/M", &authority);
-        let context = FtExchangeContext::from(&e.snapshot().qso.expect("a QSO"));
-        e.set_remote_ft_message(
-            remote_permit(&authority),
-            &context,
-            "W9XYZ/M",
-            None,
-            "TNX 73",
-        )
-        .expect("CONTROL: Remote row TNX 73");
-        assert_eq!(
-            next_over(&mut e, 4),
-            Some(("TNX 73".to_string(), true)),
-            "CONTROL {what}: Remote row"
         );
     }
 }

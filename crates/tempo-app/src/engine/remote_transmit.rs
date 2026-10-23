@@ -53,40 +53,6 @@ pub enum FtExchangeChange {
 }
 
 impl Engine {
-    pub fn set_remote_ft_message(
-        &mut self,
-        permit: TransmitPermit,
-        expected: &FtExchangeContext,
-        call: &str,
-        grid: Option<&str>,
-        text: &str,
-    ) -> Result<(), Reason> {
-        self.prepare_remote_ft(&permit)?;
-        let current = self.snapshot().qso.ok_or(Reason::UnsupportedAction)?;
-        if FtExchangeContext::from(&current) != *expected {
-            return Err(Reason::ContextChanged);
-        }
-        if call.len() > 32
-            || !tempo_core::message::is_callsign(call)
-            || grid.is_some_and(|g| g.len() > 16 || !g.bytes().all(|b| b.is_ascii_alphanumeric()))
-            || text.trim().is_empty()
-            || text.len() > 128
-            || !text.bytes().all(|b| (b' '..=b'~').contains(&b))
-        {
-            return Err(Reason::InvalidAction);
-        }
-        self.structured_tx_ready(true)
-            .map_err(|_| Reason::InvalidAction)?;
-        self.override_next_tx_checked(call, grid, text)
-            .map_err(|_| Reason::InvalidAction)?;
-        if !permit.valid(Instant::now()) {
-            self.halt_tx();
-            return Err(Reason::AuthorityExpired);
-        }
-        self.remote_transmit = Some(permit);
-        Ok(())
-    }
-
     pub fn change_remote_ft_exchange(
         &mut self,
         permit: TransmitPermit,
@@ -362,28 +328,6 @@ impl Engine {
         Ok(())
     }
 
-    pub fn set_remote_ft_tx_enabled(
-        &mut self,
-        permit: TransmitPermit,
-        on: bool,
-    ) -> Result<(), Reason> {
-        if on {
-            self.prepare_remote_ft_start(&permit)?;
-            self.set_tx_enabled(true);
-            self.remote_transmit = Some(permit);
-            if self.poll_remote_transmit(Instant::now()) {
-                return Err(Reason::AuthorityExpired);
-            }
-        } else {
-            // TX Off must work during our pending retune or current FT over.
-            // Native semantics finish that over; they do not invoke Stop TX.
-            // It is the operator's TX Off, so it holds as the desktop's does.
-            self.require_remote_ft_owner(&permit)?;
-            self.set_tx_enabled_by_operator(false);
-        }
-        Ok(())
-    }
-
     pub fn stop_remote_ft(&mut self, permit: &TransmitPermit) -> Result<(), Reason> {
         // Stop needs ownership, not a fresh CAT reading or an idle transmitter.
         // It must never stop a later native transmission after local takeover.
@@ -459,85 +403,6 @@ mod tests {
     }
 
     #[test]
-    fn remote_message_choices_match_native_targeting_and_manual_arming() {
-        for tier in [Tier::Ft8, Tier::Ft4] {
-            for auto_arm in [false, true] {
-                for text in [
-                    "W1AW KD9TAW EN52",
-                    "W1AW KD9TAW -12",
-                    "W1AW KD9TAW R-12",
-                    "W1AW KD9TAW RR73",
-                    "TNX 73",
-                ] {
-                    let mut native = station(tier);
-                    let mut remote = station(tier);
-                    let authority = TransmitAuthority::default();
-                    let permit = || authority.permit(unexpired_deadline()).unwrap();
-                    native.start_cq(None).unwrap();
-                    remote.start_remote_ft_cq(permit(), None).unwrap();
-                    native.set_tx_enabled(false);
-                    remote.set_remote_ft_tx_enabled(permit(), false).unwrap();
-                    native.take_immediate_retune();
-                    remote.take_immediate_retune();
-                    native.settings.double_click_sets_tx = auto_arm;
-                    remote.settings.double_click_sets_tx = auto_arm;
-                    let context = FtExchangeContext::from(&remote.snapshot().qso.unwrap());
-                    native.override_next_tx("W1AW", Some("FN31"), text);
-                    remote
-                        .set_remote_ft_message(permit(), &context, "W1AW", Some("FN31"), text)
-                        .unwrap();
-                    assert_eq!(remote.snapshot().qso, native.snapshot().qso);
-                    assert_eq!(remote.settings, native.settings);
-                    assert_eq!(remote.tx_enabled(), auto_arm);
-                    assert_eq!(remote.tx_enabled(), native.tx_enabled());
-                    assert_eq!(remote.tx_even(), native.tx_even());
-                    assert_eq!(remote.immediate_tx, native.immediate_tx);
-                    assert_eq!(remote.take_slot_tx_abort(), native.take_slot_tx_abort());
-                    authority.revoke();
-                    assert!(remote.poll_remote_transmit(Instant::now()));
-                    assert!(!remote.tx_enabled());
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn remote_message_refuses_changed_exchange_and_invalid_or_self_targets() {
-        let mut engine = station(Tier::Ft8);
-        let authority = TransmitAuthority::default();
-        let permit = || authority.permit(unexpired_deadline()).unwrap();
-        engine.start_remote_ft_cq(permit(), None).unwrap();
-        engine.take_immediate_retune();
-        let context = FtExchangeContext::from(&engine.snapshot().qso.unwrap());
-        let before = engine.snapshot().qso;
-        for (call, text) in [
-            ("KD9TAW", "TNX 73"),
-            ("NOT A CALL", "TNX 73"),
-            ("W1AW", ""),
-            ("W1AW", "TNX\n73"),
-        ] {
-            assert_eq!(
-                engine.set_remote_ft_message(permit(), &context, call, None, text),
-                Err(Reason::InvalidAction)
-            );
-            assert_eq!(engine.snapshot().qso, before);
-        }
-        engine.qso_freetext("LOCAL EDIT");
-        let changed = engine.snapshot().qso;
-        assert_eq!(
-            engine.set_remote_ft_message(permit(), &context, "W1AW", None, "TNX 73"),
-            Err(Reason::ContextChanged)
-        );
-        assert_eq!(engine.snapshot().qso, changed);
-        let expired = permit();
-        authority.revoke();
-        assert_eq!(
-            engine.set_remote_ft_message(expired, &context, "W1AW", None, "TNX 73"),
-            Err(Reason::AuthorityExpired)
-        );
-    }
-
-    #[test]
     fn remote_exchange_controls_match_native_without_arming_or_changing_settings() {
         for tier in [Tier::Ft8, Tier::Ft4] {
             for armed in [false, true] {
@@ -556,7 +421,7 @@ mod tests {
                     remote.start_remote_ft_cq(permit(), None).unwrap();
                     if !armed {
                         native.set_tx_enabled(false);
-                        remote.set_remote_ft_tx_enabled(permit(), false).unwrap();
+                        remote.set_tx_enabled_by_operator(false);
                     }
                     native.take_immediate_retune();
                     remote.take_immediate_retune();
@@ -700,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_ft_tx_off_and_stop_preserve_the_native_distinction() {
+    fn remote_ft_stop_matches_the_native_stop() {
         for tier in [Tier::Ft8, Tier::Ft4] {
             let mut native = station(tier);
             let mut remote = station(tier);
@@ -708,19 +573,8 @@ mod tests {
             let permit = || authority.permit(unexpired_deadline()).unwrap();
             native.start_cq(None).unwrap();
             remote.start_remote_ft_cq(permit(), None).unwrap();
-            native.set_tx_enabled(false);
-            remote.set_remote_ft_tx_enabled(permit(), false).unwrap();
-            assert!(!native.take_slot_tx_abort());
-            assert!(
-                !remote.take_slot_tx_abort(),
-                "TX Off lets the current FT over finish"
-            );
-            assert_eq!(remote.settings, native.settings);
-            assert_eq!(remote.snapshot().qso, native.snapshot().qso);
             native.take_immediate_retune();
             remote.take_immediate_retune();
-            native.set_tx_enabled(true);
-            remote.set_remote_ft_tx_enabled(permit(), true).unwrap();
             native.halt_tx();
             remote.stop_remote_ft(&permit()).unwrap();
             assert!(remote.take_slot_tx_abort());
@@ -947,10 +801,6 @@ mod tests {
         assert!(remote.tx_enabled());
         remote.set_tx_enabled(true);
         assert_eq!(remote.stop_remote_ft(&permit), Err(Reason::StationBusy));
-        assert_eq!(
-            remote.set_remote_ft_tx_enabled(permit, false),
-            Err(Reason::StationBusy)
-        );
         assert!(remote.tx_enabled());
     }
 
@@ -973,17 +823,13 @@ mod tests {
 
     /// While a clock repair holds transmit ([`Engine::hold_tx_for_clock_repair`]), every Remote
     /// FT start is answered busy and changes nothing, rather than Ok over an arm the station
-    /// refuses. Once the repair has ended, TX On goes through (the control).
+    /// refuses. Once the repair has ended, a CQ goes through (the control).
     #[test]
     fn remote_ft_starts_are_busy_while_a_clock_repair_holds_transmit() {
         let mut engine = station(Tier::Ft8);
         let authority = TransmitAuthority::default();
         let permit = || authority.permit(unexpired_deadline()).unwrap();
         engine.hold_tx_for_clock_repair(Instant::now() + Duration::from_secs(600));
-        assert_eq!(
-            engine.set_remote_ft_tx_enabled(permit(), true),
-            Err(Reason::StationBusy)
-        );
         assert_eq!(
             engine.start_remote_ft_cq(permit(), None),
             Err(Reason::StationBusy)
@@ -996,10 +842,7 @@ mod tests {
         assert!(!engine.remote_ft_tx_owned(), "nothing bound to the browser");
 
         engine.end_clock_repair_hold();
-        assert_eq!(engine.set_remote_ft_tx_enabled(permit(), true), Ok(()));
-        assert!(
-            engine.tx_enabled(),
-            "control: TX On once the repair has ended"
-        );
+        assert_eq!(engine.start_remote_ft_cq(permit(), None), Ok(()));
+        assert!(engine.tx_enabled(), "control: CQ once the repair has ended");
     }
 }
