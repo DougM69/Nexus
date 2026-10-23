@@ -6669,6 +6669,8 @@ export const EN = {
   'settings.radios.makeActive.action': 'Make active',
   'settings.radios.makeActive.title':
     'Make this your operating radio (swaps rigs; drops any carrier first).',
+  'settings.radios.makeActive.title.disabled':
+    'This radio is disabled — enable it first, then make it active.',
   'settings.radios.remove.action': 'Remove',
   'settings.radios.remove.title': 'Remove this radio from the roster',
   'settings.radios.remove.title.blocked':
@@ -13108,7 +13110,7 @@ export const EN = {
   'features.settings.oneLine': 'Operator, rig, network, and feature configuration.',
   'features.nowBar.label': 'Now Bar',
   'features.nowBar.oneLine': 'The persistent at-a-glance status strip (UTC, band, state, alerts).',
-  'features.chat.label': 'Chat',
+  'features.chat.label': 'Tempo',
   'features.chat.oneLine': 'Free-form QSO text (TempoFast/TempoDeep).',
   'features.fieldDay.label': 'Contest',
   'features.fieldDay.oneLine': 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',

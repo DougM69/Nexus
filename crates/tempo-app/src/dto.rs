@@ -951,7 +951,8 @@ pub enum SourceKind {
     Companion,
 }
 
-/// A compact per-radio summary for the multi-radio switcher (dual-radio). One per configured radio;
+/// A compact per-radio summary for the multi-radio switcher (dual-radio). One per enabled radio
+/// (the active radio always, even if its profile is disabled);
 /// the ACTIVE radio carries live state, the others their last-known band/frequency (they're not
 /// connected in the active-only model). Absent/1-element ⇒ the UI renders single-radio, unchanged.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
