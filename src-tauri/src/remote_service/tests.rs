@@ -674,7 +674,10 @@ fn a_retired_operation_is_refused_by_name_and_the_station_stays_connected() {
                     }
                 }
             }
-            let _ = tokio::time::timeout(Duration::from_secs(30), socket.next()).await;
+            // Hold the socket until the station closes it. The station's first heartbeat Ping can
+            // come after the last answer on a busy machine, and ending at it dropped the socket
+            // without a close, which the station reads as `invalidResponse` and reconnects.
+            while let Ok(Some(Ok(_))) = tokio::time::timeout(Duration::from_secs(30), socket.next()).await {}
         });
         let binding = Binding { origin: origin.clone(), station_id: STATION.into(), account_id: ACCOUNT.into() };
         let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
