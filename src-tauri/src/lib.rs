@@ -18394,11 +18394,11 @@ fn jtty_clear(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyStat
     Ok(eng.jtty_state())
 }
 
-// ---- JTTY transmit (`tempo_app::engine::jtty_tx`). ⛔ SWITCHED OFF in every build: every send
-// command answers the engine's refusal, "JTTY transmit is not switched on in this build", and
-// nothing reaches the radio. A send is planned under the engine lock, rendered with it released
-// (the modem lock, which a decode can hold for seconds) and committed under it again: on the
-// blocking pool, never on a runtime worker. Stop is never refused. ----
+// ---- JTTY transmit (`tempo_app::engine::jtty_tx`). Every send passes the engine's JTTY TX gate
+// (`Engine::jtty_tx_gate`: the JTTY screen, clock repair, TX on, the connection, a callsign, the
+// licence, the transmitter's owner) before anything reaches the radio. A send is planned under
+// the engine lock, rendered with it released (the modem lock, which a decode can hold for
+// seconds) and committed under it again: on the blocking pool, never on a runtime worker. Stop is never refused. ----
 
 /// What a JTTY send did, for the compose bar: how much of the typed text it took (UTF-16 units)
 /// and what goes in its place, and the state after it.

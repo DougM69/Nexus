@@ -4556,8 +4556,8 @@ pub struct Engine {
     /// receive window and the two-decode rule's state. Session-only; RECEIVE ONLY — nothing in
     /// it can key the rig (see [`jtty_rx`]).
     jtty: jtty_rx::JttyRx,
-    /// JTTY transmit: its queue, live entry, Tx offset and serial. SWITCHED OFF in every build
-    /// (see [`jtty_tx`]): every send is refused and nothing of it reaches the radio loop.
+    /// JTTY transmit: its queue, live entry, Tx offset and serial. Every send passes
+    /// `jtty_tx_gate` (see [`jtty_tx`]) before anything of it reaches the radio loop.
     jtty_tx: jtty_tx::JttyTx,
     /// One-shot: drop + rebuild the RX demodulator (the cockpit's Re-acquire —
     /// fresh AFC pull from the netted center).

@@ -5,8 +5,8 @@
 // heard within F Tol of Rx, and what this station sent), WSJT-X's two display options (lower case,
 // the start time in front), the engine's notice, and sends the receive controls the engine owns
 // (auto-arm on entry, Arm, Erase, Rx and F Tol, the waterfall's range). The dock is WSJT-X's
-// transmitter, SWITCHED OFF in every build: drawn disabled with the reason while the engine says
-// it is off, and wired to the engine's send commands (tested here with a state saying it is on).
+// transmitter, wired to the engine's send commands; the engine's JTTY TX gate decides whether a
+// send goes out, and its refusal is shown to the operator.
 //
 // The log strip is a stub here that shows what the cockpit hands it; the lookup it then makes is
 // JttyCockpit.lookup.test.tsx's, with the real strip.
