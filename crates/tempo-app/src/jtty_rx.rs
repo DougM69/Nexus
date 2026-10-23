@@ -873,6 +873,15 @@ impl Engine {
     }
 }
 
+/// TEST SUPPORT: hold this while a test holds a receive context. The modem has eight for the whole
+/// process (`MAX_CONTEXTS`), the test harness runs tests side by side, and a test that finds them
+/// all taken decodes nothing: the decoding tests run one at a time.
+#[cfg(test)]
+pub(crate) fn receive_contexts() -> std::sync::MutexGuard<'static, ()> {
+    static CONTEXTS: Mutex<()> = Mutex::new(());
+    CONTEXTS.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// The decode thread's half: one [`jtty::Live`] reception, fed from [`Engine::take_jtty_audio`]
 /// and pumped OFF the engine lock. Owned by the thread (tempo-audio `jttyrx`), which calls
 /// [`tick`](Self::tick) every ~100 ms; a test drives it the same way.
@@ -1591,6 +1600,7 @@ mod tests {
         setup(&mut e);
         let engine = Mutex::new(e);
         engine_lock(&engine).set_jtty_armed(true);
+        let _contexts = receive_contexts();
         let mut driver = JttyDriver::default();
         for (k, piece) in audio.chunks(1200).enumerate() {
             engine_lock(&engine).jtty_feed(piece, T0_MS + 100 * k as i64);
@@ -1680,6 +1690,7 @@ mod tests {
     fn the_reception_ends_while_jtty_transmits() {
         // Three frames of a message from 2 s; 5 s of it is two frames in.
         let audio = captured(5.0, &[("CQ CQ DE W1AW W1AW K", 1500.0, 2.0)], 3);
+        let _contexts = receive_contexts();
         for keyed in [false, true] {
             let engine = Mutex::new(rx_engine());
             engine_lock(&engine).set_jtty_armed(true);
@@ -1743,6 +1754,7 @@ mod tests {
         );
         let e = receive_live(&audio);
         let pcm = tempo_core::channel::capture_to_i16(&audio);
+        let _contexts = receive_contexts();
         let mut rx = jtty::Receiver::new().expect("a receive context");
         rx.begin(1, 0, 0);
         rx.process(&pcm, 0, pcm.len() as i64, u32::MAX, e.jtty.band())
