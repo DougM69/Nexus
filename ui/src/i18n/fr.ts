@@ -1665,7 +1665,7 @@ export const FR: PartialCatalog = {
   "features.category.operate": "Trafic",
   "features.category.propagation": "Propagation",
   "features.category.system": "Système",
-  "features.chat.label": "Chat",
+  "features.chat.label": "Tempo",
   "features.chat.oneLine": "Texte libre en QSO (TempoFast/TempoDeep).",
   "features.connect.label": "Conditions",
   "features.connect.windowTitle": "Conditions (anciennement Connect)",

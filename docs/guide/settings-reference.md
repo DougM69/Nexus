@@ -2814,7 +2814,7 @@ sections cannot be turned off.*
   switch beside real ones just reads as broken.
 - **Optional features**, grouped by category in this order: Operate, DX & Awards,
   Propagation, POTA/SOTA, Logging, System. Each row is a toggle with
-  a one-line "why you'd want it". **Chat** (under Operate) is Tempo's TempoFast/TempoDeep
+  a one-line "why you'd want it". **Tempo** (under Operate) is the TempoFast/TempoDeep
   chat: off takes Tempo off the left-hand menu. Enabling a feature pulls in anything it depends
   on, and the hint names what else it will turn on.
 - **Contest mode** is not here: it is at the top of the **Contest** screen and in

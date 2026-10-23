@@ -12,6 +12,11 @@ import { coerceEnabled, defaultState, normalizeState, toggleFeature } from './st
 import { PROFILES, resolveEnabled, type ProfileId } from './profiles'
 import { coerceArea } from './bootView'
 import { t } from '../i18n'
+import { EN } from '../i18n/en'
+import { DE } from '../i18n/de'
+import { ES } from '../i18n/es'
+import { FR } from '../i18n/fr'
+import { JA } from '../i18n/ja'
 
 afterEach(cleanup)
 
@@ -60,5 +65,12 @@ describe('Tempo is an optional section (#402)', () => {
     expect(coerceArea('msg', false)).toBe('dx')
     expect(coerceArea('msg', true)).toBe('msg')
     expect(coerceArea('dx', false)).toBe('dx')
+  })
+})
+
+describe("Tempo's Features row carries the rail's name", () => {
+  it('is labelled Tempo in every catalog, the mode name the rail shows', () => {
+    const labels = [EN, DE, ES, FR, JA].map((c) => c['features.chat.label'])
+    expect(labels).toEqual(['Tempo', 'Tempo', 'Tempo', 'Tempo', 'Tempo'])
   })
 })

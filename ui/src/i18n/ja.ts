@@ -8277,7 +8277,7 @@ export const JA: PartialCatalog = {
   "features.settings.oneLine": "オペレーター、無線機、ネットワーク、機能の設定。",
   "features.nowBar.label": "Nowバー",
   "features.nowBar.oneLine": "常時表示のステータスストリップ(UTC、バンド、状態、アラート)。",
-  "features.chat.label": "チャット",
+  "features.chat.label": "Tempo",
   "features.chat.oneLine": "自由文のQSOテキスト(TempoFast/TempoDeep)。",
   "features.fieldDay.label": "コンテスト",
   "features.fieldDay.oneLine": "コンテストレート用ワークスペース(ナンバー、デュープ、スコア、Cabrillo)。",

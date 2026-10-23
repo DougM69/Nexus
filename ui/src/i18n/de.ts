@@ -8232,7 +8232,7 @@ export const DE: PartialCatalog = {
   "features.settings.oneLine": "Operator, Funkgerät, Netzwerk und Funktionen einrichten.",
   "features.nowBar.label": "Jetzt-Leiste",
   "features.nowBar.oneLine": "Der ständig sichtbare Statusstreifen auf einen Blick (UTC, Band, Zustand, Alarme).",
-  "features.chat.label": "Chat",
+  "features.chat.label": "Tempo",
   "features.chat.oneLine": "Freier QSO-Text (TempoFast/TempoDeep).",
   "features.fieldDay.label": "Contest",
   "features.fieldDay.oneLine": "Arbeitsbereich für Contest-Rate (Kontrollaustausch, Dupes, Punkte, Cabrillo).",

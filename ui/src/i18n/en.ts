@@ -13110,7 +13110,7 @@ export const EN = {
   'features.settings.oneLine': 'Operator, rig, network, and feature configuration.',
   'features.nowBar.label': 'Now Bar',
   'features.nowBar.oneLine': 'The persistent at-a-glance status strip (UTC, band, state, alerts).',
-  'features.chat.label': 'Chat',
+  'features.chat.label': 'Tempo',
   'features.chat.oneLine': 'Free-form QSO text (TempoFast/TempoDeep).',
   'features.fieldDay.label': 'Contest',
   'features.fieldDay.oneLine': 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',

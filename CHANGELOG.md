@@ -78,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on another band on screen so you can work it for a new band. The Rx Frequency pane follows the
   same choice.
 - **Tempo can come off the left-hand menu.** Settings ▸ Appearance ▸ Features now has a switch for
-  **Chat** (Tempo's TempoFast/TempoDeep chat) under Operate, like the ones for RTTY, SSTV and the
+  **Tempo** (the TempoFast/TempoDeep chat) under Operate, like the ones for RTTY, SSTV and the
   other modes. It is on, as before, unless you turn it off; off, Tempo leaves the menu, and if
   Nexus was last in Tempo it starts in FT8/FT4 instead.
 
