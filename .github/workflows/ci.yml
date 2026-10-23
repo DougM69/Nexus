@@ -438,7 +438,7 @@ jobs:
       # filters are every test the feature adds (`cargo test ... -- --list` with and without it
       # differ by exactly these five, and by the no-switch guard the step above runs).
       - name: cargo test src-tauri --features radio,bench-road-switch (the road switch's tests)
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio,bench-road-switch -- road_switch stop_road::bench:: a_road_opened_while_the_link_is_blocked
+        run: 'cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio,bench-road-switch -- road_switch stop_road::bench:: a_road_opened_while_the_link_is_blocked'
 
       - name: Set up Node.js for the native Remote integration
         uses: actions/setup-node@v7
