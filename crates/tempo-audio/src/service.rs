@@ -13825,6 +13825,8 @@ impl RadioLoop {
                         .map(|w| trim_samples < w.len())
                         .unwrap_or(false);
                     if trimmable {
+                        // The RX dial, before Split Operation moves it, for `boundary_keyed`.
+                        let dial_hz = eng.settings().dial_hz();
                         self.fake_it_write_back_before_key(rig, now);
                         // Split Operation: the engine reduced this over's audio —
                         // move the TX dial before the carrier keys (same as the
@@ -13898,6 +13900,18 @@ impl RadioLoop {
                             self.slot_tx_until_ms = self.tx_until_ms.unwrap_or(0.0);
                             self.last_slot = Some(slot_now); // slot handled; skip the boundary
                             self.prev_slot_was_tx = true;
+                            // This slot's TX decision is made, as `key_boundary_tx` records its
+                            // own. A call made in the other station's period keys here, on the
+                            // first tick of ours, while the FT8/FT4 full pass of the period just
+                            // heard may still be decoding; when that pass drains in this slot,
+                            // `finish_boundary` must see the slot keyed and run its housekeeping
+                            // only. Unrecorded, it planned the over again and keyed and played it
+                            // a second time ~2 s into the period (a second own row and Tx line).
+                            self.boundary_keyed = Some(KeyedBoundary {
+                                slot: slot_now,
+                                tx_this_slot: true,
+                                dial_hz,
+                            });
                         } else {
                             self.explain_flex_refusal(&mut eng, asked);
                         }
@@ -29905,6 +29919,86 @@ mod tests {
         assert!(
             state.full_pass_frame.is_none(),
             "finished as its own boundary's housekeeping, not parked for a boundary already past"
+        );
+    }
+
+    /// A station double-clicked in the receive period, before this station's own period: the call
+    /// asks for the snappy first over, which waits for the right parity and keys on the first tick
+    /// of the next period, ahead of that boundary's own TX decision. The full pass of the period
+    /// just heard (dispatched at 14.40 s) is still decoding then, and when it drains, that is the
+    /// boundary's housekeeping only: the over already went out. One over, one `mine` row in the
+    /// Rx Frequency pane, one wave on the air — never the same message planned, recorded and
+    /// handed to the sound card again ~2 s into the period.
+    #[test]
+    fn a_call_made_before_the_slot_keys_one_over_when_the_full_pass_drains_after_it() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        tick(&mut state, &engine, b, r, s, 15_020.0); // slot 1: theirs
+        {
+            // The double-click on the Call Roster, 5 s into their period: call + grid only.
+            let mut e = engine.lock().unwrap();
+            e.call_station_ctx("K1ABC", Some("FN42"), None, None, None)
+                .unwrap();
+            e.set_tx_even(true);
+            assert!(
+                e.peek_immediate_tx(),
+                "scene: the call asks for the snappy over"
+            );
+        }
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+        tick(&mut state, &engine, b, r, s, 20_000.0);
+        assert!(!r.keyed, "odd slot: not ours, the request waits");
+
+        // Slot 1's first 14.4 s on the band; its full pass dispatches at 14.40 s.
+        b.queue_capture(wsjt_slot_audio(ModeKind::Ft8, "CQ K1ABC FN42", 172_800));
+        state.early_done_slot = Some(1);
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(
+            state.decode_in_flight && state.full_done_slot == Some(1),
+            "scene: the full pass is running"
+        );
+
+        // Slot 2, ours: the call keys at once, the full pass still decoding.
+        tick(&mut state, &engine, b, r, s, 30_000.0);
+        assert!(r.keyed, "the call keyed at the start of our period");
+        assert!(
+            state.decode_in_flight,
+            "scene: the full pass is still decoding at the key"
+        );
+        let played_at_key = b.played.len();
+        assert!(
+            played_at_key > 0,
+            "scene: the over was handed to the sound card"
+        );
+        b.tx_unplayed = played_at_key; // the card has only begun the over
+
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 30_001.0, 45_000.0),
+            "the full pass drained"
+        );
+        let mine: Vec<String> = engine
+            .lock()
+            .unwrap()
+            .snapshot()
+            .recent_decodes
+            .into_iter()
+            .filter(|d| d.from.as_deref() == Some("W9XYZ"))
+            .map(|d| d.message)
+            .collect();
+        // One comparison, so a red names both ways the drain sent the over again: the own rows,
+        // and the samples handed to the sound card after the key (a slot over is played only once
+        // the transmitter is keyed for it).
+        assert_eq!(
+            (mine, b.played.len() - played_at_key),
+            (vec!["K1ABC W9XYZ EN37".to_string()], 0),
+            "one over: the drain recorded, keyed and played no second one"
         );
     }
 
