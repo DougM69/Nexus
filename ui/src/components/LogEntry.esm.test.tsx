@@ -146,7 +146,7 @@ function Strip({
   )
 }
 
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const boxes = () => [...document.querySelectorAll<HTMLInputElement>('.le-fd-input-code')]
 const qthBox = () => boxes()[1]
 const line = () => document.querySelector('.le-fd-esm-line')?.textContent ?? null

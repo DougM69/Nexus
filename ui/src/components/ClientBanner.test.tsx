@@ -396,6 +396,15 @@ describe('over the internet road', () => {
       cleanup()
     }
   })
+
+  it('says a road held for the station’s key, or turned off for another one, in its own words', async () => {
+    for (const reason of ['stationKeyUnconfirmed', 'stationKeyDisagrees'] as const) {
+      mockStatus.mockResolvedValue({ station: AT, phase: 'refused', reason })
+      await shown()
+      expect(screen.getByRole('status').textContent, reason).toContain(EN[`client.reason.${reason}`])
+      cleanup()
+    }
+  })
 })
 
 

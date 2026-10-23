@@ -36,18 +36,24 @@ Your operator identity, license privileges, and default frequency.
 - **Callsign** — "Your station callsign (required)." Everything keys off this.
 - **Grid** — "Maidenhead locator. All 6 characters — 4 measures every distance
   and bearing from the middle of a ~100-mile square." Drives satellite passes,
-  propagation anchoring, and distance math.
+  propagation anchoring, and distance math. Every contact you log carries it as
+  your grid (ADIF `MY_GRIDSQUARE`) unless the contact arrived with one of its own
+  (WSJT-X's, or one typed in the Logbook). Your LoTW uploads leave a grid Nexus
+  filled in itself out, so TQSL keeps signing from your Station Location; every
+  other service receives it.
 - **Operator name** — "Used by the CW `{NAME}` macro and logging."
 - **Operator at the key** — for multi-operator only: the callsign of whoever is
   actually running the station, when that is not the station call. It is stamped
   on every contact you log (ADIF `OPERATOR`), so a shared activation can be split
   per operator afterwards — POTA and Field Day both want each operator to submit
-  their own. Blank means single-op and nothing is stamped. Change it when you swap
-  seats. It is the same setting as **Operator at the key** under
+  their own. Blank means single-op: your station call is logged as the operator.
+  Change it when you swap seats. It is the same setting as **Operator at the key** under
   [Who's who at this event](#whos-who-at-this-event); editing either one moves
   both.
 - **State** — your US state or province for everyday contacts: the CW `{MYSTATE}`
-  macro and the QTH an RTTY ragchew sends. A contest has a box of its own,
+  macro, the QTH an RTTY ragchew sends, and your state on each contact you log
+  (ADIF `MY_STATE`). A park or summit activation logs the park's state instead,
+  never this one, and LoTW uploads leave it out as they do the grid. A contest has a box of its own,
   **State or province** under [Your station data](#your-station-data) on the
   Contesting tab, because a contest entry can be somewhere else: a portable or mobile
   entry types where it is operating there, and this one stays as it is.
@@ -84,13 +90,11 @@ browser, sign in, enter the code and choose **Attach this station**. Back here,
 compare the account ID on both screens and choose **Approve this account pairing** —
 that starts the account's 14-day trial, turns Remote on, and approves the browser you
 paired from. A browser streaming this station uses Nexus as you would here, transmit
-included, with this approval alone: leave **Also allow FT8/FT4 transmit from the Remote page**
-(under **Advanced**) unticked. It was for the Remote page's own FT8/FT4 controls, which the
-page no longer has. Any other browser asks with the Remote site's **Stream** button,
-and Nexus asks you wherever you are in it: **Let Chrome on Windows stream this station?**,
-with the browser's key. Approve it only if the key matches the one the browser shows.
-**Approve** there is **Approve browser** without the transmit tick; **Deny** refuses the
-request, and Escape closes the question and answers nothing.
+included, with this approval alone. Any other browser asks with the Remote site's **Stream**
+button, and Nexus asks you wherever you are in it: **Let Chrome on Windows stream this
+station?**, with the browser's key. Approve it only if the key matches the one the browser
+shows. **Approve** there is **Approve browser**; **Deny** refuses the request, and Escape
+closes the question and answers nothing.
 
 **Turn on Remote** opens an outbound encrypted connection. No port
 forwarding is required. Pairing stays in the operating system's credential store, and
@@ -106,29 +110,21 @@ say yes.
 
 **What a browser may do** is decided here at the station. Approving a browser gives it
 station controls, which is all a stream needs: with streaming on, they let a browser stream
-this window and use Nexus as you would here, transmit included. Approving also gives it
-remote logging, and FT8/FT4 transmit when the approval's transmit box is ticked; nothing on
-the Remote page uses either now (below). All of it is kept when Nexus restarts, until you
-revoke it, for as long as that browser stays approved: a browser whose approval was revoked,
-or given again, starts with nothing kept. The switches under each approved browser, under
-**Advanced**, limit it, or give a permission back. Without station controls a browser cannot
-stream this station.
+this window and use Nexus as you would here, transmit included. They are kept when Nexus
+restarts, until you revoke them, for as long as that browser stays approved: a browser whose
+approval was revoked, or given again, starts with nothing kept. The switch under each
+approved browser, under **Advanced**, limits it, or gives station controls back. Without station
+controls a browser cannot stream this station.
 
 - **Allow station controls** — tuning, band and mode changes, receiver filters and
   DSP, RF power and mic gain, decoder settings, the amplifier, and which radio is
   active. One browser holds control at a time. Revoking them also ends that browser's stream.
-- **Allow remote logging** — was for the Remote page's own Log QSO form, which the page no
-  longer has. A browser streaming this station logs with Nexus's own log form, as you would
-  here, and does not need it.
-- **Allow FT8/FT4 transmission from the Remote page** — was for the Remote page's own FT8/FT4
-  controls, which the page no longer has. A browser streaming this station does not need
-  it: through the stream it transmits as you would here, in any mode.
+  A browser streaming this station logs with Nexus's own log form, as you would here.
 
 **Stream this station from my browser** is off by default, and on Windows only for
 now. With it on, a browser approved for station controls, while it holds control, can be
 shown this Nexus window and operate it as you would here, transmit included, and hear the
-station's receive audio. It needs no FT8/FT4 transmit permission for that. Only this
-window is sent: a dialog that opens outside it, such as a file picker, is not, and a
+station's receive audio. Only this window is sent: a dialog that opens outside it, such as a file picker, is not, and a
 minimized window sends nothing. The browser's clicks and keys reach Nexus only, never
 anything else on this computer. While a browser is attached, every transmission at the
 station stops within five seconds if its connection drops, and within seven if its picture
@@ -631,6 +627,31 @@ from the labels. (The search still knows it — look for "monitor" and you will 
 - **Headphones or speakers** — and "must NOT be the rig's TX output
   device": playing the received band into the transmitter would put it back on the air.
 - **Listening level** — playback volume, with no effect on transmit.
+
+### Scope source
+
+Where the RF scope's picture comes from. **The radio** (as it comes) is the radio's own
+panadapter — Flex, Icom CI-V, the FT-710's, a TCI program's — or the sound card's audio where the
+radio has none. **SDRconnect (SDRplay)** draws an SDRplay RSP receiver instead, through SDRplay's
+own SDRconnect program over its WebSocket API: the receiver's whole span, each station at its own
+frequency, with the dial, the passband and spots drawn on it as usual.
+
+- SDRconnect is a separate, free, closed-source program from SDRplay. Install it, turn its
+  WebSocket API on, and leave it running (with its window, or headless). Nexus ships nothing of
+  SDRplay's and loads none of its code. It serves every RSP except the original RSP1.
+- **SDRconnect computer** and **WebSocket API port** — 127.0.0.1 and 5454 unless SDRconnect runs
+  elsewhere or you moved its port.
+- **Follow the dial** — the receiver's centre is set from the rig's dial: on every change (*Keep
+  the dial in the centre*), or only when the dial nears the edge of the span (*Retune only when
+  the dial nears the edge*), which moves SDRconnect's own display far less. A retune in
+  SDRconnect's window is drawn where it went; Nexus retunes again only when the dial moves.
+- Pick the receiver, and an RSPduo's tuner mode, in SDRconnect. Nexus uses the primary tuner.
+- Receive only: Nexus never transmits through SDRconnect and sends it no CAT. Clicking a spot on
+  the scope tunes the rig through Nexus's normal CAT path.
+- When SDRconnect is not running, sends no IQ, or sends IQ at a rate other than the one it
+  reports, the scope's status line says which, and Nexus keeps trying.
+- **Feed the receiver from the rig's RX OUT, or from a splitter with transmit protection** —
+  never a plain T-piece on the transmit line. An RSP takes at most 0 dBm; 100 W is +50 dBm.
 
 ### Satellite Doppler
 
@@ -1149,10 +1170,12 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   set the machine's clock instead. Turn the check off for fully-offline operation
   (no network calls) — the last measurement then keeps steering until it ages
   out, and the bar says when it has.
-- **Station power (W)** — "Your transmit power in watts — unlocks the Journey
-  miles-per-watt & QRP feats." It also feeds the P.533 link budget. Leave blank
-  if unknown. This is what you actually run, for the record — it commands
-  nothing; the rig's power lives on the cockpit **Pwr** slider.
+- **Station power (W)** — "Your transmit power in watts — logged on every
+  contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt &
+  QRP feats." It also feeds the P.533 link budget. Leave blank if unknown, and
+  contacts are logged with no power. This is what you actually run, for the
+  record — it commands nothing; the rig's power lives on the cockpit **Pwr**
+  slider.
 
 Units used to be the last field in this row; it is now on the Station tab under
 [Operator & Radio](#operator--radio).
@@ -1886,6 +1909,10 @@ Nexus connects to all of them and merges what they report.*
 - **Near-region opening watch** — "Watch VHF/10 m activity near your QTH (not
   just your own contacts) so openings flag 'open around you' before you've worked
   anyone." Takes effect on restart.
+- **Log space weather on each contact** — off by default. On, every contact you
+  log carries the planetary K index, A index and solar flux (ADIF `K_INDEX`,
+  `A_INDEX`, `SFI`) from the latest reading Nexus fetched from NOAA SWPC, and
+  nothing when that reading is more than 3 hours old.
 - **Prediction engine** — Modelled (fast heuristic) or ITU-R P.533 (full
   physics). "P.533 is the real circuit-reliability method (validated against the
   ITU reference; ~0.1 s per prediction, uses your station power). **Live spots

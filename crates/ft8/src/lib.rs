@@ -112,6 +112,9 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
 /// `ap_cq_only` restricts AP to the CQ hypothesis (`lapcqonly`, iaptype 1);
 /// ignored while `ap` is `false`. `(true, false)` is stock WSJT-X behaviour.
 ///
+/// A frame under 0.5 LSB rms decodes nothing and leaves the modem untouched, as in WSJT-X
+/// (`decoder.f90:92-93`); every entry below shares that floor.
+///
 /// This is the a7-inert legacy entry: it delegates to [`decode_frame_a7`] with a constant
 /// `nutc = 0` AND `a7_final = false`. Callers that thread real slot time (the engine) use
 /// [`decode_frame_a7`] to get WSJT-X's iaptype=7 recovery. It also pins the two
@@ -416,6 +419,9 @@ fn decode_records(
         "decode_frame needs at least {NMAX} samples, got {}",
         iwave.len()
     );
+    if below_level_floor(iwave) {
+        return (Vec::new(), Vec::new());
+    }
     let myc = std::ffi::CString::new(mycall).unwrap_or_default();
     let hisc = std::ffi::CString::new(hiscall).unwrap_or_default();
     let mut out = vec![tempo_fast_sys::Ft8DecodeT::default(); MAX_DECODES];
@@ -754,6 +760,30 @@ fn effective_depth(ndepth: i32) -> i32 {
     } else {
         ndepth
     }
+}
+
+/// WSJT-X's level floor: a frame under half an LSB rms is not decoded at all. WSJT-X 3.0.2,
+/// `lib/decoder.f90:92-93`, at the top of `multimode_decoder`, before any decoder runs:
+///
+/// ```text
+/// rms=sqrt(dot_product(float(id2(1:180000)),float(id2(1:180000)))/180000.0)
+/// if(rms.lt.0.5) go to 800
+/// ```
+///
+/// `id2` is the period's 12 kHz int16 audio, the frame each pass hands the decoder, as `iwave` is
+/// here, and label 800 is past every decoder call: no pass, no a7 replay, no a7 bookkeeping. Same
+/// samples (the first [`NMAX`]), same scale, same threshold. The sum is exact here; upstream's
+/// single-precision one is exact below 2^24, far above the threshold's 45000, so the two agree on
+/// every frame.
+///
+/// Without it a near-silent period (a muted rig, a dead cable) after a busy one gave the a7 replay
+/// stations to "hear": its metrics are normalised, so one stray LSB scores like a signal.
+fn below_level_floor(iwave: &[i16]) -> bool {
+    let sum_sq: f64 = iwave[..NMAX]
+        .iter()
+        .map(|&s| f64::from(s) * f64::from(s))
+        .sum();
+    (sum_sq / NMAX as f64).sqrt() < 0.5
 }
 
 /// One modem record as a [`Decode`].

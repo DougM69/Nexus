@@ -226,7 +226,7 @@ async function pollsSettle() {
   }
 }
 const inWindow = (w: Win) => within(screen.getByTestId(w))
-const callIn = (w: Win) => inWindow(w).getByPlaceholderText('W1AW') as HTMLInputElement
+const callIn = (w: Win) => inWindow(w).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const rstIn = (w: Win) => inWindow(w).getByLabelText('RST') as HTMLInputElement
 const qthIn = (w: Win) => inWindow(w).getByLabelText('County / State') as HTMLInputElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })

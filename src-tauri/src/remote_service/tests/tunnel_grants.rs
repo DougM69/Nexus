@@ -33,7 +33,7 @@ async fn approved_computer(service: &Service, cloud: &FakeCloud, key: &DeviceKey
 /// ★ A computer approved here for the room's tunnel holds station control while hosted Remote is
 /// on, as a LAN computer does, under its own name and never the service's id: it can take the
 /// lease. Turn off takes it away, and Turn on gives it back with no approval again. It holds
-/// nothing on the relay's lanes (the page's FT8/FT4 transmit stays a browser's tick).
+/// nothing on the relay's lanes.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_tunnel_computer_holds_station_control_whenever_remote_is_on() {
     let cloud = fake_cloud().await;
@@ -51,11 +51,6 @@ async fn a_tunnel_computer_holds_station_control_whenever_remote_is_on() {
     assert!(
         !status.station_permissions.contains(&COMPUTER.to_string()),
         "held under the service's id"
-    );
-    assert!(
-        !status.transmit_permissions.contains(&named)
-            && !status.logging_permissions.contains(&named),
-        "a computer holds nothing on the relay's lanes"
     );
 
     service.action(Action::Disable {}).await.unwrap();
@@ -138,7 +133,6 @@ async fn a_tunnel_computer_removed_or_never_approved_here_holds_nothing() {
         .action(Action::Device {
             device_id: COMPUTER.into(),
             approve: false,
-            transmit: false,
             key: None,
             kind: None,
         })
@@ -199,7 +193,6 @@ async fn removing_a_tunnel_computer_ends_the_lease_it_holds() {
         .action(Action::Device {
             device_id: COMPUTER.into(),
             approve: false,
-            transmit: false,
             key: None,
             kind: None,
         })
@@ -214,7 +207,7 @@ async fn removing_a_tunnel_computer_ends_the_lease_it_holds() {
 /// ★ End remote control drops everyone, browser, tunnel computer and LAN computer alike: hosted
 /// Remote goes off (and stays off across a restart), Remote over this network ends, and nobody
 /// holds anything. Turning Remote on again gives every approved device back what it had with no
-/// approval again: the browser its control, logging and transmit tick, the tunnel computer its
+/// approval again: the browser its control, the tunnel computer its
 /// control; the LAN computer comes back with its own switch, as before. The TX-enable latch is off
 /// throughout.
 #[tokio::test(flavor = "multi_thread")]
@@ -241,10 +234,9 @@ async fn end_remote_control_drops_everyone_and_holds_until_remote_is_turned_on_a
     service.action(Action::Enable {}).await.unwrap();
     pending_browser(&cloud);
     service.action(Action::Refresh {}).await.unwrap();
-    let granted = approve(&service, true).await;
-    assert_eq!(
-        granted.transmit_permissions,
-        [BROWSER],
+    let granted = approve(&service).await;
+    assert!(
+        granted.station_permissions.contains(&BROWSER.to_string()),
         "premise: the browser"
     );
     // The computer beside the browser in the service's list.
@@ -268,11 +260,7 @@ async fn end_remote_control_drops_everyone_and_holds_until_remote_is_turned_on_a
         "controlling",
         "premise: the LAN computer"
     );
-    let browser_held = |s: &Status| {
-        s.station_permissions.contains(&BROWSER.to_string())
-            && s.logging_permissions.contains(&BROWSER.to_string())
-            && s.transmit_permissions.contains(&BROWSER.to_string())
-    };
+    let browser_held = |s: &Status| s.station_permissions.contains(&BROWSER.to_string());
     assert!(
         browser_held(&service.status().unwrap()),
         "premise: the browser's grants"
@@ -281,9 +269,7 @@ async fn end_remote_control_drops_everyone_and_holds_until_remote_is_turned_on_a
     let ended = service.action(Action::TakeOverLogging {}).await.unwrap();
     assert!(!on(&ended), "End remote control left hosted Remote on");
     assert!(
-        ended.station_permissions.is_empty()
-            && ended.logging_permissions.is_empty()
-            && ended.transmit_permissions.is_empty(),
+        ended.station_permissions.is_empty(),
         "End remote control left a grant: {}",
         serde_json::to_string(&ended).unwrap()
     );

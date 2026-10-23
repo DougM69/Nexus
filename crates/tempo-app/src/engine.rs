@@ -170,6 +170,12 @@ mod tx_alarms;
 mod tx_frame_width_tests;
 #[cfg(test)]
 mod tx_gate_table;
+/// A logger's UDP FreeText goes into Tx 5, and with "send" out as Tx 5.
+#[cfg(test)]
+mod udp_free_text_tests;
+/// What a logger's UDP Replay re-sends: Band Activity's decodes, as they went out.
+#[cfg(test)]
+mod udp_replay_tests;
 /// A spot worked from afar arms nothing at the shack, and its hint says where it came from.
 #[cfg(test)]
 mod work_from_afar_tests;
@@ -273,6 +279,9 @@ struct FeedRows {
     /// When the RF scope pane last read the RF slot — its standing request for the radio's own
     /// panadapter. See [`SpectrumFeed::rf_frame_after`]: it rides the read and expires on its own.
     rf_req: Option<Instant>,
+    /// The one source the operator picked for the RF slot, when they picked one over the radio's
+    /// own: see [`SpectrumFeed::claim_rf`].
+    rf_owner: Option<&'static str>,
 }
 
 impl FeedRows {
@@ -552,16 +561,50 @@ impl SpectrumFeed {
     }
     /// [`Self::publish_rf`] with what the producer knows about the row: what its values mean,
     /// and which receiver's span it is. One call is one frame — the feed stamps the next `seq`.
+    ///
+    /// While another source owns the slot ([`Self::claim_rf`]) a row from any other source is
+    /// dropped: the radio's own panadapter keeps streaming, but the operator chose to see the other.
     pub fn publish_rf_frame(&self, row: Spectrum, scale: SpectrumScale, slice: Option<u8>) {
         if let Ok(mut g) = self.rows.lock() {
+            if g.rf_owner.is_some_and(|owner| owner != row.source) {
+                return;
+            }
             let frame = g.stamp(row, scale, slice);
             g.rf = Some((frame, Instant::now()));
         }
     }
     /// Drop the native row so the audio FFT takes over immediately (DATA mode / scope off).
+    /// Not while another source owns the slot ([`Self::claim_rf`]): the row there is not the
+    /// caller's to drop.
     pub fn clear_rf(&self) {
         if let Ok(mut g) = self.rows.lock() {
-            g.rf = None;
+            if g.rf_owner.is_none() {
+                g.rf = None;
+            }
+        }
+    }
+    /// Give the RF slot to one source (`Some(label)`, the label its rows carry) or back to
+    /// whichever publishes (`None`): the operator's "Scope source" when it is not the radio. The
+    /// slot is emptied whenever its owner changes, so a row from before is never shown as the new
+    /// source's.
+    pub fn claim_rf(&self, owner: Option<&'static str>) {
+        if let Ok(mut g) = self.rows.lock() {
+            if g.rf_owner != owner {
+                g.rf_owner = owner;
+                g.rf = None;
+            }
+        }
+    }
+    /// Drop the RF row if it is `source`'s: the owner's own [`Self::clear_rf`], which no other
+    /// source's rows can be caught by.
+    pub fn clear_rf_of(&self, source: &str) {
+        if let Ok(mut g) = self.rows.lock() {
+            if g.rf
+                .as_ref()
+                .is_some_and(|(frame, _)| frame.source == source)
+            {
+                g.rf = None;
+            }
         }
     }
     /// The row to display. This precedence is moved VERBATIM from the old
@@ -1719,6 +1762,18 @@ const AB_NO_DRIVABLE_MAPPING: &str =
 /// keeps the newest audio past that, so a longer message would lose its start and go out with dead
 /// air at its end. The client's queue is checked against it where it is defined.
 pub const FLEX_VOICE_MAX_SAMPLES: usize = 20 * 12_000;
+/// The decodes Band Activity keeps, and so the most a logger's Replay re-sends: the pane's own
+/// store (`MAX_HISTORY`, `ui/src/decodeHistory.ts`).
+const BAND_ACTIVITY_DEPTH: usize = 3000;
+/// A logger's free text refused while TX is off ([`Engine::udp_free_text`]).
+const UDP_FREE_TEXT_TX_OFF: &str =
+    "TX is off: turn TX on in Nexus before sending a logger's free text";
+/// A logger's "send" with no text: Tx 5 as it stands, which the station does not hold.
+const UDP_FREE_TEXT_EMPTY: &str = "a logger asked to send Tx 5 as it stands, which Nexus cannot \
+    do: it sends a logger's free text only with the text";
+/// A logger's free text on the contest screen, which sends its own exchange.
+const UDP_FREE_TEXT_CONTEST: &str = "the contest screen sends its own exchange: a logger's free \
+    text goes out from Tx 5 on the FT8/FT4 screen";
 /// What [`Engine::send_voice`] answers for a message longer than that.
 const FLEX_VOICE_TOO_LONG: &str = "The voice keyer can't play this message through the Flex \
      native client: it is longer than 20 seconds, the most the client's DAX carries, so its start \
@@ -3005,6 +3060,25 @@ pub enum VoiceMemCmd {
     Stop,
 }
 
+/// One space-weather reading as a logged contact carries it (ADIF `K_INDEX`, `A_INDEX`, `SFI`,
+/// each a whole number), and when Nexus fetched it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SpaceWeatherReading {
+    k_index: u32,
+    a_index: u32,
+    sfi: u32,
+    at_unix: u64,
+}
+
+/// How old a space-weather reading may be and still go on a contact: three hours, the span of
+/// one planetary K index.
+const SPACE_WEATHER_MAX_AGE_SECS: u64 = 3 * 3600;
+
+/// How long before now a contact may have started and still take the station's fields as they
+/// are now (grid, state, operator, rig, power): the space-weather span. One that started earlier
+/// was typed in afterwards, and today's values may not be what it was made with.
+const STATION_FIELDS_MAX_AGE_SECS: u64 = SPACE_WEATHER_MAX_AGE_SECS;
+
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
@@ -3453,6 +3527,12 @@ pub struct Engine {
     /// and the sequencer silently fell back to Tx1 (the "sent my grid instead of a
     /// report" on-air bug). Also the source for answer parity.
     decode_history: std::collections::VecDeque<(u64, modes::Decode)>,
+    /// What Band Activity holds, oldest first, for a logger's UDP Replay: each decode as its UDP
+    /// Decode went out (the on-air text, `last_wire_decodes`) with the start of the period it was
+    /// heard in. WSJT-X replays every decode still in its Band Activity window (`replayDecodes`,
+    /// `widgets/mainwindow.cpp:13374-13396`), so this empties when that pane does: the operator's
+    /// Erase of it, a logger's Clear of it, and a band or mode change (`clear_decode_context`).
+    band_activity: std::collections::VecDeque<(u64, modes::Decode)>,
     /// Messages already folded for an upcoming boundary slot — by its EARLY decode pass, and as
     /// each was streamed from a running pass ([`Engine::apply_streamed_decode`]) — so a later fold
     /// of the same slot ingests only what is new (no double rows / double observe).
@@ -3535,10 +3615,14 @@ pub struct Engine {
     highlights: std::collections::HashMap<String, (u64, Option<String>, Option<String>)>,
     /// Monotonic insertion counter for the highlight FIFO above.
     highlight_seq: u64,
-    /// Bumped by an inbound UDP Clear (type 3) — the UI watches it and erases
-    /// the matching pane(s). Visual-only: the engine's decode context (answer
-    /// parity, history) is NOT a window and stays intact.
+    /// Bumped by an inbound UDP Clear (type 3) of Band Activity — the UI watches it and erases
+    /// that pane. Visual-only: the engine's decode context (answer parity, history) is NOT a
+    /// window and stays intact.
     clear_tick: u32,
+    /// The last FreeText a logger sent, as Tx 5 took it ([`Engine::udp_free_text`]).
+    udp_free_text: Option<crate::dto::UdpFreeText>,
+    /// The same, for a Clear of Rx Frequency: the UI erases that pane.
+    rx_freq_clear_tick: u32,
     /// Bumped every time a contact reaches the log — through ANY path, so a
     /// backend auto-log (the FT8/RTTY sequencer completing a QSO on its own)
     /// increments it just like a manual log does. The UI watches it to fire the
@@ -3564,6 +3648,13 @@ pub struct Engine {
     /// by `a_field_day_contact_never_enters_the_general_upload_queue`. That is what keeps this
     /// from emitting a second datagram per FD contact.
     pending_udp_qsos: std::collections::VecDeque<QsoRecord>,
+    /// The latest space weather Nexus fetched (`note_space_weather`, from the shell's
+    /// propagation poll), for the opt-in K_INDEX / A_INDEX / SFI on each logged contact
+    /// ([`Settings::log_space_weather`]). `None` until a fetch has answered.
+    space_weather: Option<SpaceWeatherReading>,
+    /// The radio name the active radio's TCI server reported (`device:`), for `MY_RIG`: a TCI
+    /// radio's model name is the protocol's, "TCI". `None` when no TCI session has said.
+    tci_device: Option<String>,
     /// QSOs awaiting the HRD Logbook datagram (F4MQS: HRD closed at log time lost the
     /// contact silently). The shell worker drains this each tick — connect-and-send so a
     /// closed HRD is DETECTABLE on localhost (ICMP unreachable → ConnectionRefused), sets
@@ -6258,6 +6349,7 @@ impl Engine {
             route_intent: None,
             route_target: None,
             decode_history: std::collections::VecDeque::new(),
+            band_activity: std::collections::VecDeque::new(),
             early_seen: None,
             shown_pass: None,
             held_pass: None,
@@ -6284,9 +6376,13 @@ impl Engine {
             highlights: std::collections::HashMap::new(),
             highlight_seq: 0,
             clear_tick: 0,
+            udp_free_text: None,
+            rx_freq_clear_tick: 0,
             logged_tick: 0,
             pending_udp_clear: None,
             pending_udp_qsos: std::collections::VecDeque::new(),
+            space_weather: None,
+            tci_device: None,
             hrd_pending: std::collections::VecDeque::new(),
             hrd_link_up: None,
             cq_dir: None,
@@ -7615,6 +7711,9 @@ impl Engine {
         // the call on the air.
         let operator = self.fd_row_operator();
         let on_air_call = self.fd_row_call();
+        // …and the radio, the power and the grid, which a radio switch or a Save changes the
+        // same way.
+        let (rig, tx_power, grid) = self.fd_row_kit();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
             station.log.dial_khz = dial_khz;
@@ -7622,6 +7721,9 @@ impl Engine {
             station.log.on_air_rx_hz = on_air_rx_mhz.map(hz).filter(|v| *v > 0);
             station.log.operator = operator;
             station.log.on_air_call = on_air_call;
+            station.log.rig = rig;
+            station.log.tx_power = tx_power;
+            station.log.grid = grid;
         }
     }
 
@@ -7631,6 +7733,21 @@ impl Engine {
     /// chose would be indistinguishable from one somebody did.
     fn fd_row_operator(&self) -> String {
         self.settings.fd_operator.trim().to_ascii_uppercase()
+    }
+
+    /// The radio, the power and the grid a contest row records (`LoggedQso::rig`,
+    /// `LoggedQso::tx_power`, `LoggedQso::grid`): the general log's own answers
+    /// ([`Self::log_rig_now`], [`Self::log_power_now`], [`Self::log_grid_now`]), as the text the
+    /// row keeps, `""` for none — so a contest contact merged into the Logbook names the same
+    /// radio, power and grid an ordinary contact logged at that moment would.
+    fn fd_row_kit(&self) -> (String, String, String) {
+        (
+            self.log_rig_now().unwrap_or_default(),
+            self.log_power_now()
+                .map(|w| w.to_string())
+                .unwrap_or_default(),
+            self.log_grid_now().unwrap_or_default(),
+        )
     }
 
     /// The call a contest row is logged on (`LoggedQso::on_air_call`): Settings' "Callsign on the
@@ -12973,7 +13090,12 @@ impl Engine {
     /// ruling is that no contact is lost, and a queue this deep means nobody is at the radio to
     /// answer the popup. The one the popup is showing is never the one taken: the operator is
     /// looking at it. [`PENDING_LOG_QUEUE_CAP`] is about an hour of unattended FT8 completions.
-    pub(crate) fn hold_pending_log(&mut self, held: HeldQso) {
+    pub(crate) fn hold_pending_log(&mut self, mut held: HeldQso) {
+        // The station it was made with, captured now, while the contact is the one just made: the
+        // confirm can come hours later, after Settings changed, and must log these, not the
+        // station at the confirm or nothing ([`Self::stamp_station_now`]). A contact restored from
+        // the journal already carries what its hold captured.
+        self.stamp_station_now(&mut held.record);
         if self.pending_logs.is_empty() {
             self.replace_pending_log(Some(held));
             self.persist_pending_qso();
@@ -15302,6 +15424,79 @@ impl Engine {
         (!call.is_empty()).then(|| call.to_ascii_uppercase())
     }
 
+    /// The rig to stamp on a contact (ADIF `MY_RIG`): the active radio's model, or nothing when
+    /// none is configured — "No rig" is spelled "None / VOX" by `Settings::default` (and "None"
+    /// elsewhere), so the test is the prefix, and a station with no rig stamps nothing rather
+    /// than the words.
+    ///
+    /// ⚠️ A TCI radio's model is the protocol's own name, "TCI", which says nothing about the
+    /// radio. Its contacts take the radio name the SDR program's TCI server reported
+    /// ([`Self::set_tci_device`]), and nothing until it has reported one.
+    ///
+    /// Shared by the log funnel and the contest rows (`FieldDayLog::rig`), so a contact logged
+    /// in a contest and one logged outside it name the same radio.
+    fn log_rig_now(&self) -> Option<String> {
+        if crate::settings::rig_conn_is_tci(&self.settings.rig_conn) {
+            return self.tci_device.clone();
+        }
+        let rig = self.settings.rig_model_name.trim();
+        (!rig.is_empty() && !rig.to_ascii_lowercase().starts_with("none")).then(|| rig.to_string())
+    }
+
+    /// The power to stamp on a contact (ADIF `TX_PWR`): the watts the operator gave Settings ▸
+    /// Station power — what WSJT-X logs, from the Tx power its Log QSO dialog keeps between
+    /// contacts — and nothing when none is set. Never derived from the rig's power slider: that
+    /// is a fraction of a rated output nobody may have entered.
+    fn log_power_now(&self) -> Option<f64> {
+        self.settings
+            .station_power_w
+            .filter(|w| w.is_finite() && *w > 0.0)
+    }
+
+    /// The grid to stamp on a contact (ADIF `MY_GRIDSQUARE`): Settings ▸ Station's grid,
+    /// uppercase, which is the grid Nexus sends on the air and a GPS feeder keeps current; nothing
+    /// when it is not a grid. Shared by the log funnel and the contest rows (`FieldDayLog::grid`).
+    fn log_grid_now(&self) -> Option<String> {
+        let grid = self.settings.mygrid.trim().to_ascii_uppercase();
+        tempo_core::message::is_valid_grid(&grid).then_some(grid)
+    }
+
+    /// The radio name the active radio's TCI server reported (`device:`), or `None` when its
+    /// session is gone or never said. Called by the radio loop when it changes; read for `MY_RIG`
+    /// ([`Self::log_rig_now`]).
+    pub fn set_tci_device(&mut self, device: Option<String>) {
+        let device = device
+            .map(|d| d.trim().to_string())
+            .filter(|d| !d.is_empty());
+        if device != self.tci_device {
+            self.tci_device = device;
+            // The running contest log stamps its rows from the same answer.
+            self.sync_fd_band();
+        }
+    }
+
+    /// The space weather Nexus just fetched — planetary K, A and the 10.7 cm solar flux — and
+    /// when (`at_unix`). Called by the shell's propagation poll, only for a reading SWPC actually
+    /// answered; kept for the opt-in K_INDEX / A_INDEX / SFI on each logged contact.
+    pub fn note_space_weather(&mut self, kp: f32, a_index: f32, sfi: f32, at_unix: u64) {
+        let whole = |v: f32| (v.is_finite() && v >= 0.0).then(|| v.round() as u32);
+        if let (Some(k_index), Some(a_index), Some(sfi)) = (whole(kp), whole(a_index), whole(sfi)) {
+            self.space_weather = Some(SpaceWeatherReading {
+                k_index,
+                a_index,
+                sfi,
+                at_unix,
+            });
+        }
+    }
+
+    /// The latest space weather if it describes a contact made at `when`: fetched no more than
+    /// [`SPACE_WEATHER_MAX_AGE_SECS`] either side of it.
+    fn space_weather_at(&self, when: u64) -> Option<SpaceWeatherReading> {
+        self.space_weather
+            .filter(|wx| when.abs_diff(wx.at_unix) <= SPACE_WEATHER_MAX_AGE_SECS)
+    }
+
     pub fn log_qso(&mut self, rec: QsoRecord) {
         let _ = self.log_qso_inner(rec, false, StateSource::Operator, Vec::new());
     }
@@ -15453,6 +15648,87 @@ impl Engine {
         self.log_qso_inner(rec, true, StateSource::Operator, Vec::new())
     }
 
+    /// ⚠️ **The station as it is NOW** — the operator at the key, the radio, the power, the grid
+    /// and the state — stamped on `rec` only when it started within
+    /// [`STATION_FIELDS_MAX_AGE_SECS`]. One typed in afterwards for an earlier time (a hand-entered
+    /// UTC time, the Logbook's own add) may have been made on another radio, at another power,
+    /// from another place, and today's values written on it would be wrong with nothing to say
+    /// so; it is left for the operator to fill. Its station call is stamped regardless, by the
+    /// funnel: the uploads sign by it. A field the record arrived with is kept either way.
+    ///
+    /// Called by the log funnel, and when a finished contact is held for the operator's confirm
+    /// ([`Self::hold_pending_log`]): the confirm may come hours later, and the contact then logs
+    /// the station it was made with, not the one at the confirm.
+    fn stamp_station_now(&self, rec: &mut QsoRecord) {
+        if now_unix_secs().saturating_sub(rec.when_unix) > STATION_FIELDS_MAX_AGE_SECS {
+            return;
+        }
+        // WHO WAS AT THE KEY (#25). `QsoRecord::operator` has existed since the logbook was
+        // written, is exported as ADIF `OPERATOR`, is parsed on import, and was never once
+        // filled in — plumbed end to end and permanently empty, because nothing above the
+        // record had an operator concept to fill it from.
+        //
+        // `fd_operator` IS that concept and already exists; it was only ever read on the
+        // N3FJP push, so the operator at the key reached a contest logger's network feed and
+        // never the operator's own log. Reading it here is what makes it general: Field Day
+        // rotates ops, and so does a two-person POTA activation, which is the report behind
+        // this (#25 — POTA requires each operator to submit their own log, and today the
+        // choice is losing the second op's credit or hand-editing the ADIF afterwards).
+        //
+        // With nobody named, the operator is the station: `OPERATOR` is the station call
+        // stamped by the log funnel before this, as the "Operator at the key" box's own hint promises ("leave blank
+        // if that is you") and as a logger's My Station profile fills it. Every contact then says
+        // who made it, and a multi-op log is still told apart by the name typed in the box.
+        //
+        // A record that arrives carrying its own operator — an imported multi-op log, or a
+        // row the operator repaired by hand — is left alone. Same rule as `country` below.
+        if rec.operator.is_none() {
+            let op = self.settings.fd_operator.trim();
+            rec.operator = if op.is_empty() {
+                rec.station_callsign.clone()
+            } else {
+                Some(op.to_ascii_uppercase())
+            };
+        }
+        // #239: WHICH RIG MADE IT — the active radio, stamped at this funnel on the same terms as
+        // STATION_CALLSIGN: a record arriving with its own rig keeps it ([`Self::log_rig_now`]).
+        if rec.my_rig.is_none() {
+            rec.my_rig = self.log_rig_now();
+        }
+        // THE POWER IT WAS MADE AT (ADIF `TX_PWR`), on the same terms
+        // ([`Self::log_power_now`]).
+        if rec.tx_power.is_none() {
+            rec.tx_power = self.log_power_now();
+        }
+        // WHERE IT WAS MADE FROM (ADIF `MY_GRIDSQUARE`): the grid in Settings ▸ Station, which is
+        // the grid Nexus sends on the air and a GPS feeder keeps current. A record arriving with
+        // its own — WSJT-X's over UDP, an import, the Logbook form's — keeps it.
+        //
+        // ⭐ AND IT IS MARKED AS NEXUS'S OWN ([`tempo_core::logbook::SELF_FILLED_FIELD`]), because
+        // the LoTW upload must leave it out. With a named TQSL Station Location, TQSL (`-a compliant`)
+        // checks every `MY_*` field a record carries against that location and silently skips a
+        // contact that disagrees — the reason #239 left this unstamped. Unmarked, a grid typed in
+        // Settings that is not the certificate's location would lose LoTW contacts without a
+        // word; marked, LoTW gets exactly what it got before, and every other service gets the
+        // grid. One somebody else put on the record carries no mark and goes to LoTW as always.
+        if rec.my_grid.is_none() && !rec.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE") {
+            if let Some(grid) = self.log_grid_now() {
+                rec.my_grid = Some(grid);
+                tempo_core::logbook::mark_self_filled(rec, "MY_GRIDSQUARE");
+            }
+        }
+        // YOUR STATE (ADIF `MY_STATE`), from Settings ▸ Station ▸ State, on an everyday contact
+        // — marked as Nexus's own and kept out of LoTW for the grid's reason above. Never on a
+        // park or summit contact: that one was made away from home, and its `MY_STATE` is the
+        // park's or nothing (the funnel's activation fill). A record carrying its own keeps it.
+        if rec.ota.my_ref.is_none() && self.station.activation.is_none() {
+            let st = self.settings.op_state.trim().to_ascii_uppercase();
+            if !st.is_empty() && tempo_core::logbook::fill_extra(rec, "MY_STATE", st) {
+                tempo_core::logbook::mark_self_filled(rec, "MY_STATE");
+            }
+        }
+    }
+
     fn log_qso_inner(
         &mut self,
         mut rec: QsoRecord,
@@ -15563,33 +15839,6 @@ impl Engine {
         if is_dup {
             return LogWriteOutcome::Duplicate;
         }
-        // WHO WAS AT THE KEY (#25). `QsoRecord::operator` has existed since the logbook was
-        // written, is exported as ADIF `OPERATOR`, is parsed on import, and was never once
-        // filled in — plumbed end to end and permanently empty, because nothing above the
-        // record had an operator concept to fill it from.
-        //
-        // `fd_operator` IS that concept and already exists; it was only ever read on the
-        // N3FJP push, so the operator at the key reached a contest logger's network feed and
-        // never the operator's own log. Reading it here is what makes it general: Field Day
-        // rotates ops, and so does a two-person POTA activation, which is the report behind
-        // this (#25 — POTA requires each operator to submit their own log, and today the
-        // choice is losing the second op's credit or hand-editing the ADIF afterwards).
-        //
-        // ⚠️ Empty stays EMPTY, deliberately — not defaulted to `mycall`. For the single-op
-        // station that is every other operator, `OPERATOR` equal to `STATION_CALLSIGN` is
-        // noise in every exported record, and worse it would make a field that means "someone
-        // chose this" indistinguishable from one nothing ever set. STATION_CALLSIGN is the
-        // station's call, stamped immediately below; this is the person, and it is present
-        // only when a person was actually named.
-        //
-        // A record that arrives carrying its own operator — an imported multi-op log, or a
-        // row the operator repaired by hand — is left alone. Same rule as `country` below.
-        if rec.operator.is_none() {
-            let op = self.settings.fd_operator.trim();
-            if !op.is_empty() {
-                rec.operator = Some(op.to_ascii_uppercase());
-            }
-        }
         // WHICH STATION MADE IT. `station_callsign` has been modelled, parsed on import,
         // emitted on write and carried through the DTO since the logbook was written — and was
         // hardcoded `None` at every construction site, so neither the on-disk log nor any
@@ -15614,21 +15863,13 @@ impl Engine {
         // confirm) stamp it at contact time instead, and this fill leaves theirs alone.
         //
         // A record arriving with its own station call — an imported club log, or a row the
-        // operator repaired by hand — is left alone. Same rule as `operator` above.
+        // operator repaired by hand — is left alone. Same rule as `operator` below.
         if rec.station_callsign.is_none() {
             rec.station_callsign = self.station_callsign_now();
         }
-        // #239: WHICH RIG MADE IT — the active radio's model, stamped at this funnel on the same
-        // terms as STATION_CALLSIGN: a record arriving with its own rig keeps it, and a station
-        // with no rig configured stamps nothing rather than the words. "No rig" is spelled
-        // "None / VOX" by `Settings::default` (and "None" elsewhere), so the test is the prefix.
-        // The operator's OWN GRID is deliberately not stamped here — see `QsoRecord::my_grid`.
-        if rec.my_rig.is_none() {
-            let rig = self.settings.rig_model_name.trim();
-            if !rig.is_empty() && !rig.to_ascii_lowercase().starts_with("none") {
-                rec.my_rig = Some(rig.to_string());
-            }
-        }
+        // The station as it is now — operator, radio, power, grid, state — on a contact made now
+        // ([`Self::stamp_station_now`]).
+        self.stamp_station_now(&mut rec);
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs. One that arrives
         // with a DXCC number takes the number's name (`StationCore::country_for`).
@@ -15716,6 +15957,39 @@ impl Engine {
                     }
                 }
                 None => {}
+            }
+        }
+        // WHERE THEY ARE: the worked station's continent (ADIF `CONT`), from the country
+        // file's answer for the call — the same reading a contest row records — and the distance
+        // to them (`DISTANCE`, km), from this record's own grid to theirs when both are known.
+        // Never their zones or DXCC number from a prefix: CQZ feeds WAZ, and a prefix-level guess
+        // would count as if the station had said it. Each only where the record has none.
+        if let Some(place) = tempo_core::contest::resolve_call(&rec.call) {
+            tempo_core::logbook::fill_extra(&mut rec, "CONT", place.continent.to_string());
+        }
+        let km = rec
+            .my_grid
+            .as_deref()
+            .and_then(maidenhead_center)
+            .zip(rec.grid.as_deref().and_then(maidenhead_center))
+            .map(|(me, them)| haversine_km(me, them).round() as u64);
+        if let Some(km) = km {
+            tempo_core::logbook::fill_extra(&mut rec, "DISTANCE", km.to_string());
+        }
+        // THE SPACE WEATHER (ADIF `K_INDEX`, `A_INDEX`, `SFI`), only when the operator asked for
+        // it ([`Settings::log_space_weather`]) and only from a reading Nexus actually fetched
+        // within three hours of the contact's start ([`Self::space_weather_at`]) — never the
+        // propagation model's stand-in values, and never today's numbers on a contact typed in
+        // from yesterday.
+        if self.settings.log_space_weather {
+            if let Some(wx) = self.space_weather_at(rec.when_unix) {
+                for (tag, value) in [
+                    ("K_INDEX", wx.k_index),
+                    ("A_INDEX", wx.a_index),
+                    ("SFI", wx.sfi),
+                ] {
+                    tempo_core::logbook::fill_extra(&mut rec, tag, value.to_string());
+                }
             }
         }
         // THE APPEND (SPEC-2 v3 C19): the station mints the row's id, the hot index takes the
@@ -16253,6 +16527,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     // …and who is at the key, by the same funnel, and the call on the air.
                     st.log.operator = self.fd_row_operator();
                     st.log.on_air_call = self.fd_row_call();
+                    (st.log.rig, st.log.tx_power, st.log.grid) = self.fd_row_kit();
                     st
                 }),
                 running: true,
@@ -16264,6 +16539,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st.log.operator = self.fd_row_operator();
                     st.log.on_air_call = self.fd_row_call();
+                    (st.log.rig, st.log.tx_power, st.log.grid) = self.fd_row_kit();
                     st
                 }),
                 running: false,
@@ -17018,6 +17294,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// where stale rows would answer a station that isn't in this activity.
     fn clear_decode_context(&mut self) {
         self.decode_history.clear();
+        self.band_activity.clear();
         self.last_decode_slot = None;
         // Kept aside for the period still decoding, if one is (`fold_late`).
         self.late_early_seen = self.early_seen.take();
@@ -17561,18 +17838,89 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
-    /// A logger's WSJT-X FreeText with "send" set (JTAlert, GridTracker). In WSJT-X it sets Tx5
-    /// and selects it as the next message (`on_txb5_clicked`), which goes out only if TX is
-    /// already enabled. So here the text is queued only while the operator has TX armed (a stop
-    /// and a watchdog trip both disarm), and this never arms TX, never restarts the watchdog
-    /// clock and never clears a stop: another program does not decide that the station transmits.
-    pub fn udp_free_text(&mut self, text: &str) -> Result<(), String> {
-        if !self.tx_enabled {
-            return Err(
-                "TX is off: turn TX on in Nexus before sending a logger's free text".into(),
-            );
+    /// A logger's WSJT-X FreeText (JTAlert, GridTracker), taken as WSJT-X 3.0.2 takes it
+    /// (`widgets/mainwindow.cpp:692-709`): its text goes into Tx 5 whether or not it is sent
+    /// (`ui->tx5->setCurrentText`), an empty text without "send" clears Tx 5, and "send" makes Tx 5
+    /// the next over (`ui->txb5->click ()`; `on_txb5_clicked`, 8797-8803, which also switches an
+    /// over on the air, `if(m_transmitting) m_restart=true`), as the operator's own click on Tx 5
+    /// does. WSJT-X does this only with its Tx panel showing (`tabWidget` index 0): here Tx 5 is the
+    /// FT screen's, so the contest screen shows the text but sends its own exchange, and Chat,
+    /// which has no Tx 5, sends it as a chat broadcast, on a chat tier only.
+    ///
+    /// ⛔ Another program does not decide that the station transmits: the over is queued only
+    /// while the operator has TX on (a stop and a watchdog trip both turn it off), and this never
+    /// arms TX, never restarts the watchdog clock (WSJT-X's `tx_watchdog (false)` does) and never
+    /// clears a stop. Nor is an over the encoder refuses queued. Each refusal is the `Err`, and
+    /// the cockpit shows it with the text.
+    pub fn udp_free_text(&mut self, text: &str, send: bool) -> Result<(), String> {
+        let text = text.trim();
+        if matches!(self.mode, Mode::Chat) {
+            if !send || text.is_empty() {
+                return Ok(());
+            }
+            if !self.app.tier().is_chat() {
+                return Err("a logger's free text goes out from Tx 5 on the FT8/FT4 screen".into());
+            }
+            if !self.tx_enabled {
+                return Err(UDP_FREE_TEXT_TX_OFF.into());
+            }
+            self.queue_broadcast(text);
+            return Ok(());
         }
-        self.queue_broadcast(text);
+        if text.len() > 128 || !text.bytes().all(|b| (b' '..=b'~').contains(&b)) {
+            return Err("a logger's free text must be plain text of at most 128 characters".into());
+        }
+        let text = text.to_uppercase();
+        let refused = if send {
+            self.send_udp_tx5(&text).err()
+        } else {
+            None
+        };
+        let seq = self
+            .udp_free_text
+            .as_ref()
+            .map_or(0, |u| u.seq)
+            .wrapping_add(1);
+        self.udp_free_text = Some(crate::dto::UdpFreeText {
+            seq,
+            fill: (!send || !text.is_empty()).then_some(text),
+            refused: refused.clone(),
+        });
+        refused.map_or(Ok(()), Err)
+    }
+
+    /// [`Self::udp_free_text`]'s "send": Tx 5 holding `text` is the next over.
+    fn send_udp_tx5(&mut self, text: &str) -> Result<(), String> {
+        if text.is_empty() {
+            return Err(UDP_FREE_TEXT_EMPTY.into());
+        }
+        let mycall = &self.settings.mycall;
+        let (row, on_air) = match &self.mode {
+            Mode::Qso { station, .. } => {
+                let row = station.tx_row(text);
+                let on_air = match &station.dxcall {
+                    Some(dx) => QsoStation::on_air_form(mycall, dx, row.clone()),
+                    None => row.clone(),
+                };
+                (row, on_air)
+            }
+            _ => return Err(UDP_FREE_TEXT_CONTEST.into()),
+        };
+        if !self.tx_enabled {
+            return Err(UDP_FREE_TEXT_TX_OFF.into());
+        }
+        if self.tier_is_rx_only(self.app.tier()) {
+            return Err("transmit unavailable for this tier".into());
+        }
+        if let Some(why) = self.ft_refusal(&on_air.to_text()) {
+            return Err(why);
+        }
+        if let Mode::Qso { station, .. } = &mut self.mode {
+            station.override_next(row);
+        }
+        // As a click on Tx 5: this period when it still fits, and the rest of an over on the air.
+        self.immediate_tx = true;
+        self.ft_restart = true;
         Ok(())
     }
 
@@ -25331,15 +25679,29 @@ contact yourself."
         }
     }
 
-    /// Inbound UDP Clear (type 3): bump the visual clear tick for the UI.
-    pub fn apply_udp_clear(&mut self) {
-        self.clear_tick = self.clear_tick.wrapping_add(1);
+    /// Inbound UDP Clear (type 3): bump the clear tick of each pane the window names, as WSJT-X
+    /// erases its windows (`++window; if (window & 1)` Band Activity, `if (window & 2)` Rx
+    /// Frequency; `widgets/mainwindow.cpp:667-674`): 0 Band Activity, 1 Rx Frequency, 2 both.
+    /// A Clear of Band Activity also empties what a Replay re-sends.
+    pub fn apply_udp_clear(&mut self, window: u8) {
+        let window = window.wrapping_add(1);
+        if window & 1 != 0 {
+            self.clear_tick = self.clear_tick.wrapping_add(1);
+            self.band_activity.clear();
+        }
+        if window & 2 != 0 {
+            self.rx_freq_clear_tick = self.rx_freq_clear_tick.wrapping_add(1);
+        }
     }
 
     /// The operator hit Erase: queue an outbound UDP Clear so cooperating apps
-    /// mirror it. `window`: 0 = Band Activity, 1 = Rx Frequency, 2 = both.
+    /// mirror it. `window`: 0 = Band Activity, 1 = Rx Frequency, 2 = both. Band Activity erased
+    /// holds nothing for a Replay.
     pub fn notify_erase(&mut self, window: u8) {
         self.pending_udp_clear = Some(window.min(2));
+        if window != 1 {
+            self.band_activity.clear();
+        }
     }
 
     /// Consume the queued outbound Clear (radio loop).
@@ -26602,6 +26964,8 @@ contact yourself."
             })
             .collect();
         s.clear_tick = self.clear_tick;
+        s.udp_free_text = self.udp_free_text.clone();
+        s.rx_freq_clear_tick = self.rx_freq_clear_tick;
         s.logged_tick = self.logged_tick;
         s.work_tick = self.work_tick;
         s.work_view = self.work_view.clone();
@@ -28201,6 +28565,7 @@ contact yourself."
             self.persist_pending_msgs();
         }
         self.last_wire_decodes = fresh.clone();
+        self.note_band_activity(slot);
         self.last_decodes = fresh;
         n
     }
@@ -28472,6 +28837,7 @@ contact yourself."
             self.js8_ingest(&decodes, slot);
         }
         self.last_wire_decodes = wire_copy.unwrap_or_else(|| decodes.clone());
+        self.note_band_activity(slot);
         if continues {
             self.last_decodes.extend(decodes);
         } else {
@@ -29444,7 +29810,26 @@ contact yourself."
         })
     }
 
-    /// Every decode of the CURRENT period (for UDP Replay) — the early pass +
+    /// Every decode Band Activity holds, oldest first, with the UTC second its period started:
+    /// what a logger's UDP Replay re-sends, as WSJT-X's `replayDecodes` re-sends its window.
+    pub fn band_activity(&self) -> impl Iterator<Item = (u64, &modes::Decode)> + '_ {
+        self.band_activity.iter().map(|(start, d)| (*start, d))
+    }
+
+    /// Keep the decodes just folded at `slot`, as their UDP Decodes go out
+    /// (`last_wire_decodes`), for [`Self::band_activity`].
+    fn note_band_activity(&mut self, slot: u64) {
+        let start =
+            crate::alltxt::period_start_unix(slot.saturating_sub(1), self.active_slot_secs());
+        for d in &self.last_wire_decodes {
+            self.band_activity.push_back((start, d.clone()));
+        }
+        while self.band_activity.len() > BAND_ACTIVITY_DEPTH {
+            self.band_activity.pop_front();
+        }
+    }
+
+    /// Every decode of the CURRENT period (for "save decoded periods") — the early pass +
     /// boundary stragglers reassembled from history; `last_decodes` alone holds
     /// only the most recent ingest's batch.
     pub fn current_period_decodes(&self) -> Vec<modes::Decode> {
@@ -29483,6 +29868,27 @@ contact yourself."
             mode: None,
         };
         self.ingest_decodes_for_test(&[d], slot);
+    }
+
+    /// Test hook for the radio loop's tests (the `test-util` feature, never in a shipped build):
+    /// fold `message`, decoded at the boundary of `slot`, through the live decode's own fold
+    /// ([`Self::fold_decodes`]), without running a decoder, which would hold the process-wide modem
+    /// lock other tests wait on.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn fold_heard_for_test(&mut self, message: &str, slot: u64) -> usize {
+        let d = modes::Decode {
+            message: message.into(),
+            sync: 1.0,
+            snr: -10,
+            dt: 0.1,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            raw: None,
+            mode: None,
+        };
+        self.fold_decodes(None, vec![d], slot, false)
     }
 
     #[cfg(any(test, feature = "test-util"))]
@@ -33513,8 +33919,12 @@ mod tests {
         // modelled columns of their own (asserted directly above) and `adif_record`
         // writes each from there, so a second copy here would emit `<RST_RCVD>`,
         // `<NAME>` and `<QTH>` TWICE in every exported record.
+        // (The funnel's own mark of the grid it filled is the one other thing there.)
         assert!(
-            log[0].extra.is_empty(),
+            log[0]
+                .extra
+                .iter()
+                .all(|(k, _)| k == tempo_core::logbook::SELF_FILLED_FIELD),
             "a modelled slot was duplicated into `extra`: {:?}",
             log[0].extra
         );
@@ -33678,7 +34088,11 @@ mod tests {
         // station's (`ARRL_SECT`, never `MY_ARRL_SECT`), his class is `CLASS`.
         // Sorted, as a re-read of the exported file gives them back.
         assert_eq!(
-            rec.extra,
+            rec.extra
+                .iter()
+                .filter(|(k, _)| k != tempo_core::logbook::SELF_FILLED_FIELD)
+                .cloned()
+                .collect::<Vec<_>>(),
             vec![
                 ("ARRL_SECT".to_string(), "EMA".to_string()),
                 ("CLASS".to_string(), "2A".to_string()),
@@ -44668,11 +45082,13 @@ mod tests {
         );
     }
 
-    /// #239: a logged contact carries the rig that made it — the active radio, stamped at the log
-    /// funnel like STATION_CALLSIGN — and never an own-grid invented from the setting: that one is
-    /// left for the operator (the LoTW batch hands each record's own fields to TQSL).
+    /// #239: a logged contact carries the rig that made it — the active radio, stamped at
+    /// the log funnel like STATION_CALLSIGN — and the grid it was made from, from Settings, marked
+    /// as Nexus's own so the LoTW upload leaves it out and TQSL signs from the Station Location as
+    /// it did before. A grid that arrived on the record (WSJT-X's, the Logbook form's) is not
+    /// marked, and goes to LoTW as it always did.
     #[test]
-    fn a_logged_contact_carries_the_rig_but_not_an_invented_grid() {
+    fn a_logged_contact_carries_the_rig_and_the_settings_grid_which_lotw_never_sees() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.settings.rig_model_name = "Icom IC-705".into();
         let rec = e.qso_record("W9XYZ".into(), None, None);
@@ -44680,28 +45096,316 @@ mod tests {
         let log = e.stored_log();
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].my_rig.as_deref(), Some("Icom IC-705"));
-        assert_eq!(
-            log[0].my_grid, None,
-            "own grid is never stamped from the setting"
-        );
+        assert_eq!(log[0].my_grid.as_deref(), Some("FN31"));
+        assert_eq!(tempo_core::logbook::self_filled(&log[0]), ["MY_GRIDSQUARE"]);
+        let sent = tempo_core::logbook::adif_record(&log[0]);
+        assert!(sent.contains("<MY_GRIDSQUARE:4>FN31"), "{sent}");
+        assert!(!sent.contains("SELF_FILLED"), "{sent}");
 
-        // A record that arrives with its own rig keeps it.
+        // A record that arrives with its own rig and grid keeps them, unmarked.
         let mut own = e.qso_record("K9AAA".into(), None, None);
         own.my_rig = Some("FT-991A".into());
+        own.my_grid = Some("EM10".into());
         e.log_qso(own);
         // No rig configured stamps nothing rather than the words. The real default is
-        // "None / VOX" (Settings::default), not a bare "None".
+        // "None / VOX" (Settings::default), not a bare "None". No grid stamps no grid.
         e.settings.rig_model_name = "None / VOX".into();
+        e.settings.mygrid = String::new();
         let bare = e.qso_record("N0CALL".into(), None, None);
         e.log_qso(bare);
         let log = e.stored_log();
-        let rig = |call: &str| {
-            log.iter()
-                .find(|r| r.call == call)
-                .and_then(|r| r.my_rig.clone())
+        let of = |call: &str| QsoRecord::clone(log.iter().find(|r| r.call == call).unwrap());
+        assert_eq!(of("K9AAA").my_rig.as_deref(), Some("FT-991A"));
+        assert_eq!(of("K9AAA").my_grid.as_deref(), Some("EM10"));
+        assert!(tempo_core::logbook::self_filled(&of("K9AAA")).is_empty());
+        assert_eq!(of("N0CALL").my_rig, None);
+        assert_eq!(of("N0CALL").my_grid, None);
+
+        // THE LoTW UPLOAD, both modes: the filled grid is not sent; the arrived one is.
+        let batch = [of("W9XYZ"), of("K9AAA")];
+        let named = crate::station::lotw_batch_adif(&batch, false, "K2DEF", "FN31");
+        assert_eq!(named.matches("<MY_GRIDSQUARE:").count(), 1, "{named}");
+        assert!(named.contains("<MY_GRIDSQUARE:4>EM10"), "{named}");
+        let located = crate::station::lotw_batch_adif(&batch, true, "K2DEF", "EN52");
+        assert!(
+            located.contains("<MY_GRIDSQUARE:4>EN52") && located.contains("<MY_GRIDSQUARE:4>EM10"),
+            "ADIF-location mode stamps the live grid as it always did: {located}"
+        );
+        assert!(!located.contains("FN31"), "{located}");
+    }
+
+    /// A logged contact carries the station's power (ADIF `TX_PWR`) — the watts the
+    /// operator gave Settings ▸ Station power, which is what WSJT-X logs too (its Log QSO
+    /// dialog's Tx power, typed by the operator and kept between contacts). Stamped at the log
+    /// funnel on MY_RIG's terms: a record's own power wins, and none set stamps nothing.
+    #[test]
+    fn a_logged_contact_carries_the_station_power_the_operator_set() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let unset = e.qso_record("N0CALL".into(), None, None);
+        e.log_qso(unset);
+        e.settings.station_power_w = Some(100.0);
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+        let mut own = e.qso_record("K9AAA".into(), None, None);
+        own.tx_power = Some(5.0);
+        e.log_qso(own);
+        // A zero is the field's "not a power" — never stamped as 0 W on the air.
+        e.settings.station_power_w = Some(0.0);
+        let zero = e.qso_record("K1ZRO".into(), None, None);
+        e.log_qso(zero);
+        let log = e.stored_log();
+        let power = |call: &str| log.iter().find(|r| r.call == call).and_then(|r| r.tx_power);
+        assert_eq!(power("W9XYZ"), Some(100.0));
+        assert_eq!(power("K9AAA"), Some(5.0), "the record's own power wins");
+        assert_eq!(power("N0CALL"), None, "no power set stamps nothing");
+        assert_eq!(power("K1ZRO"), None);
+        assert!(
+            tempo_core::logbook::adif_record(log.iter().find(|r| r.call == "W9XYZ").unwrap())
+                .contains("<TX_PWR:3>100"),
+            "and the ADIF every upload sends carries it"
+        );
+    }
+
+    /// An everyday contact carries your state from Settings ▸ Station ▸ State (ADIF
+    /// `MY_STATE`), marked as Nexus's own so the LoTW batch leaves it out; a park contact never
+    /// takes your home state, placed or not; and a record with its own keeps it.
+    #[test]
+    fn an_everyday_contact_carries_your_state_and_a_park_contact_never_your_home_one() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        e.settings.op_state = "wi".into();
+        let rec = e.qso_record("W1ABC".into(), None, Some(-5));
+        e.log_qso(rec);
+        let mut own = e.qso_record("W1OWN".into(), None, Some(-5));
+        own.extra = vec![("MY_STATE".into(), "SD".into())];
+        e.log_qso(own);
+        e.set_activation("POTA", "US-9999", Vec::new()).unwrap();
+        let park = e.qso_record("W1PRK".into(), None, Some(-5));
+        e.log_qso(park);
+        let log = e.stored_log();
+        let of = |call: &str| QsoRecord::clone(log.iter().find(|r| r.call == call).unwrap());
+        let state =
+            |r: &QsoRecord| tempo_core::logbook::extra_field(r, "MY_STATE").map(str::to_string);
+        assert_eq!(state(&of("W1ABC")).as_deref(), Some("WI"));
+        assert_eq!(
+            tempo_core::logbook::self_filled(&of("W1ABC")),
+            ["MY_GRIDSQUARE", "MY_STATE"]
+        );
+        assert_eq!(state(&of("W1OWN")).as_deref(), Some("SD"));
+        assert!(!tempo_core::logbook::self_filled(&of("W1OWN")).contains(&"MY_STATE"));
+        assert_eq!(
+            state(&of("W1PRK")),
+            None,
+            "a park nothing placed: not your home"
+        );
+        let lotw = crate::station::lotw_batch_adif(&[of("W1ABC")], false, "K9AAA", "EN52");
+        assert!(!lotw.contains("MY_STATE"), "{lotw}");
+        assert!(tempo_core::logbook::adif_record(&of("W1ABC")).contains("<MY_STATE:2>WI"));
+    }
+
+    /// A contact carries the distance to the worked station (ADIF `DISTANCE`, km) from the
+    /// record's own grid to theirs — FN31 to EN52, square centre to square centre, 1325 km — and
+    /// none when either grid is unknown, or when the record already says.
+    #[test]
+    fn a_contact_carries_the_distance_from_your_grid_to_theirs() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let rec = e.qso_record("W9XYZ".into(), Some("EN52".into()), None);
+        e.log_qso(rec);
+        let none = e.qso_record("K9NOG".into(), None, None);
+        e.log_qso(none);
+        let mut said = e.qso_record("K9SAY".into(), Some("EN52".into()), None);
+        said.extra = vec![("DISTANCE".into(), "1300".into())];
+        e.log_qso(said);
+        e.settings.mygrid = String::new();
+        let blind = e.qso_record("K9BLD".into(), Some("EN52".into()), None);
+        e.log_qso(blind);
+        let log = e.stored_log();
+        let km = |call: &str| {
+            let r = log.iter().find(|r| r.call == call).unwrap();
+            tempo_core::logbook::extra_field(r, "DISTANCE").map(str::to_string)
         };
-        assert_eq!(rig("K9AAA").as_deref(), Some("FT-991A"));
-        assert_eq!(rig("N0CALL"), None);
+        assert_eq!(km("W9XYZ").as_deref(), Some("1325"));
+        assert_eq!(km("K9NOG"), None, "their grid unknown");
+        assert_eq!(
+            km("K9SAY").as_deref(),
+            Some("1300"),
+            "the record's own wins"
+        );
+        assert_eq!(km("K9BLD"), None, "your grid unknown");
+        let r = log.iter().find(|r| r.call == "W9XYZ").unwrap();
+        let out = tempo_core::logbook::adif_record_own_log(r);
+        assert!(out.contains("<DISTANCE:4>1325"), "{out}");
+        let back = &tempo_core::logbook::parse_adif(&out)[0];
+        assert_eq!(
+            tempo_core::logbook::extra_field(back, "DISTANCE"),
+            Some("1325")
+        );
+    }
+
+    /// K_INDEX, A_INDEX and SFI go on a contact only when the operator turned the setting
+    /// on, and only from a reading Nexus fetched no more than three hours earlier — never the
+    /// propagation model's stand-ins, never a stale number.
+    #[test]
+    fn space_weather_is_logged_only_when_asked_and_only_while_fresh() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let now = now_unix_secs();
+        e.note_space_weather(2.67, 7.0, 148.6, now - 60);
+        let off = e.qso_record("K1OFF".into(), None, None);
+        e.log_qso(off);
+        e.settings.log_space_weather = true;
+        let on = e.qso_record("K1ON".into(), None, None);
+        e.log_qso(on);
+        // A contact typed in from yesterday takes none of today's numbers.
+        let mut earlier = e.qso_record("K1YDA".into(), None, None);
+        earlier.when_unix = now - 86_400;
+        e.log_qso(earlier);
+        e.note_space_weather(4.0, 20.0, 160.0, now - SPACE_WEATHER_MAX_AGE_SECS - 60);
+        let stale = e.qso_record("K1OLD".into(), None, None);
+        e.log_qso(stale);
+        let log = e.stored_log();
+        let wx = |call: &str| {
+            let r = log.iter().find(|r| r.call == call).unwrap();
+            ["K_INDEX", "A_INDEX", "SFI"]
+                .map(|t| tempo_core::logbook::extra_field(r, t).map(str::to_string))
+        };
+        assert_eq!(wx("K1OFF"), [None, None, None], "off by default");
+        assert_eq!(
+            wx("K1ON"),
+            [Some("3".into()), Some("7".into()), Some("149".into())]
+        );
+        assert_eq!(wx("K1OLD"), [None, None, None], "older than three hours");
+        assert_eq!(wx("K1YDA"), [None, None, None], "a contact from yesterday");
+        let r = log.iter().find(|r| r.call == "K1ON").unwrap();
+        let back =
+            &tempo_core::logbook::parse_adif(&tempo_core::logbook::adif_record_own_log(r))[0];
+        assert_eq!(tempo_core::logbook::extra_field(back, "SFI"), Some("149"));
+        assert_eq!(tempo_core::logbook::extra_field(back, "K_INDEX"), Some("3"));
+        assert_eq!(tempo_core::logbook::extra_field(back, "A_INDEX"), Some("7"));
+    }
+
+    /// A contact logged now for a time more than three hours ago — typed in afterwards — is
+    /// given none of the station's fields as they are NOW: no grid, state, operator, rig or
+    /// power, the space-weather rule. Nexus cannot know what they were then, and the operator
+    /// can fill them. A contact that started within three hours is live and gets them all, and
+    /// a field the record arrived with is kept either way. Both sides of the boundary, by value.
+    #[test]
+    fn a_contact_from_more_than_three_hours_ago_takes_none_of_todays_station_fields() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.rig_model_name = "Icom IC-705".into();
+        e.settings.station_power_w = Some(100.0);
+        e.settings.op_state = "NY".into();
+        let now = now_unix_secs();
+        let mut live = e.qso_record("K1NOW".into(), None, None);
+        live.when_unix = now - STATION_FIELDS_MAX_AGE_SECS + 60;
+        e.log_qso(live);
+        let mut late = e.qso_record("K1OLD".into(), None, None);
+        late.when_unix = now - STATION_FIELDS_MAX_AGE_SECS - 60;
+        e.log_qso(late);
+        let mut typed = e.qso_record("K1TYP".into(), None, None);
+        typed.when_unix = now - 86_400;
+        typed.my_rig = Some("FT-817".into());
+        typed.tx_power = Some(5.0);
+        e.log_qso(typed);
+        let log = e.stored_log();
+        let of = |call: &str| QsoRecord::clone(log.iter().find(|r| r.call == call).unwrap());
+        let fields = |r: &QsoRecord| {
+            (
+                r.my_grid.clone(),
+                tempo_core::logbook::extra_field(r, "MY_STATE").map(str::to_string),
+                r.operator.clone(),
+                r.my_rig.clone(),
+                r.tx_power,
+            )
+        };
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(
+            fields(&of("K1NOW")),
+            (
+                s("FN31"),
+                s("NY"),
+                s("K2DEF"),
+                s("Icom IC-705"),
+                Some(100.0)
+            )
+        );
+        assert_eq!(fields(&of("K1OLD")), (None, None, None, None, None));
+        assert!(tempo_core::logbook::self_filled(&of("K1OLD")).is_empty());
+        assert_eq!(
+            fields(&of("K1TYP")),
+            (None, None, None, s("FT-817"), Some(5.0)),
+            "what the record arrived with is kept"
+        );
+        // Which call it was logged under is still the station's: every upload signs by it.
+        assert_eq!(of("K1OLD").station_callsign.as_deref(), Some("K2DEF"));
+    }
+
+    /// A contact held for the operator's confirm takes the station as it was when it was HELD —
+    /// the contact's own moment — and logs that however late it is confirmed: four hours later,
+    /// after a restart and with every setting changed since, it carries the operator, radio,
+    /// power, grid and state it was made with, not none (the late-contact rule) and not today's.
+    #[test]
+    fn a_held_contact_confirmed_hours_later_logs_the_station_it_was_made_with() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.settings.rig_model_name = "Icom IC-705".into();
+        e.settings.station_power_w = Some(100.0);
+        e.settings.op_state = "NY".into();
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
+        // Four hours go by while it waits: its start is four hours back by the confirm.
+        for held in e.pending_logs.iter_mut() {
+            held.record.when_unix -= 4 * 3600;
+            held.record.time_off_unix = held.record.time_off_unix.map(|t| t - 4 * 3600);
+        }
+        let journal = remote_logging::pending_qso_queue_json(&e.pending_logs).unwrap();
+        let mut later = Engine::new("K2DEF", "EM10", 0);
+        later.settings.prompt_to_log = true;
+        later.settings.rig_model_name = "Elecraft KX3".into();
+        later.settings.station_power_w = Some(5.0);
+        later.settings.op_state = "TX".into();
+        later.settings.fd_operator = "K9OP".into();
+        later.load_pending_qso_json(&journal);
+        let sent = later.snapshot().pending_log.expect("the hold comes back");
+        assert!(confirm_held(&mut later, sent.into()));
+        let r = QsoRecord::clone(&later.stored_log()[0]);
+        assert_eq!(
+            (
+                r.operator.as_deref(),
+                r.my_rig.as_deref(),
+                r.tx_power,
+                r.my_grid.as_deref(),
+                tempo_core::logbook::extra_field(&r, "MY_STATE"),
+            ),
+            (
+                Some("K2DEF"),
+                Some("Icom IC-705"),
+                Some(100.0),
+                Some("FN31"),
+                Some("NY")
+            )
+        );
+        assert_eq!(
+            tempo_core::logbook::self_filled(&r),
+            ["MY_GRIDSQUARE", "MY_STATE"],
+            "still Nexus's own, so LoTW still leaves them out"
+        );
+    }
+
+    /// A TCI radio's model name is the protocol's, "TCI". Its contacts carry the radio the
+    /// SDR program's TCI server named, and nothing — never "TCI" — before it has named one.
+    #[test]
+    fn a_tci_radio_logs_the_device_its_server_names_never_tci() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.rig_conn = "TCI".into();
+        e.settings.rig_model_name = "TCI".into();
+        let before = e.qso_record("K1BEF".into(), None, None);
+        e.log_qso(before);
+        e.set_tci_device(Some("SunSDR2DX".into()));
+        let after = e.qso_record("K1AFT".into(), None, None);
+        e.log_qso(after);
+        let log = e.stored_log();
+        let rig = |call: &str| log.iter().find(|r| r.call == call).unwrap().my_rig.clone();
+        assert_eq!(rig("K1BEF"), None);
+        assert_eq!(rig("K1AFT").as_deref(), Some("SunSDR2DX"));
     }
 
     /// THE FIELD REPORT (2026-09-22, FTDX10 on macOS): the logbook's RIG column read "CP2105
@@ -45605,19 +46309,20 @@ mod tests {
         );
     }
 
-    /// The negative twin, and the one that matters for everyone who is NOT running multi-op:
-    /// with no operator set the field stays empty rather than being defaulted to the station
-    /// call. `OPERATOR` equal to `STATION_CALLSIGN` in every record is noise, and it would make
-    /// "someone chose this" indistinguishable from "nothing ever set it".
+    /// The single-op twin: with nobody named at the key, the operator is the station — `OPERATOR`
+    /// is the station call, on the record and in every ADIF it goes out in, as a logger's My
+    /// Station profile fills it and as the box's own hint ("leave blank if that is you") says.
     #[test]
-    fn log_qso_invents_no_operator_for_a_single_op_station() {
+    fn with_nobody_named_the_operator_is_the_station_call() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         assert!(e.settings().fd_operator.is_empty());
 
         let rec = e.qso_record("W9XYZ".into(), None, None);
         e.log_qso(rec);
 
-        assert_eq!(e.stored_log()[0].operator, None);
+        let r = &e.stored_log()[0];
+        assert_eq!(r.operator.as_deref(), Some("K2DEF"));
+        assert!(tempo_core::logbook::adif_record(r).contains("<OPERATOR:5>K2DEF"));
     }
 
     /// An imported multi-op log, or a row repaired by hand, already knows who worked it. The
@@ -56601,6 +57306,49 @@ mod tests {
             vec![0.8],
             "the native row is shown as the rig sent it, not power-averaged on its dB axis"
         );
+    }
+
+    /// The operator's chosen scope source owns the RF slot: the radio's own panadapter keeps
+    /// publishing (and clearing) and is neither shown nor able to wipe the chosen source's row,
+    /// and handing the slot back lets the radio's rows through again.
+    #[test]
+    fn a_claimed_rf_slot_shows_only_its_owners_rows() {
+        let feed = SpectrumFeed::default();
+        let row = |source: &str, v: f32| Spectrum {
+            row: vec![v],
+            lo_hz: 14_000_000.0,
+            hi_hz: 14_350_000.0,
+            source: source.into(),
+        };
+        feed.publish_rf(row("civ", 0.1));
+        feed.claim_rf(Some("sdrconnect"));
+        assert!(
+            feed.row().is_none(),
+            "the radio's row from before the claim is not shown as the new source's"
+        );
+        feed.publish_rf(row("sdrconnect", 0.5));
+        feed.publish_rf(row("civ", 0.9));
+        assert_eq!(feed.row().expect("published").source, "sdrconnect");
+        assert_eq!(feed.row().expect("published").row, vec![0.5]);
+        feed.clear_rf();
+        assert_eq!(
+            feed.row().map(|r| r.source),
+            Some("sdrconnect".to_string()),
+            "another source's clear does not wipe the owner's row"
+        );
+        feed.clear_rf_of("civ");
+        assert!(
+            feed.row().is_some(),
+            "a clear of another source's row is a no-op"
+        );
+        feed.clear_rf_of("sdrconnect");
+        assert!(
+            feed.row().is_none(),
+            "the owner's own clear empties the slot"
+        );
+        feed.claim_rf(None);
+        feed.publish_rf(row("civ", 0.3));
+        assert_eq!(feed.row().expect("published").source, "civ");
     }
 
     /// Nobody reading the audio slot (a native panadapter is driving the display, or no

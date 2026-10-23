@@ -180,9 +180,10 @@ interface Props {
    */
   onErase?: () => void
   /**
-   * Bumped by an inbound UDP Clear (snap.clearTick). When the value CHANGES
-   * (skipping mount), the pane wipes its history — same as Erase, but does NOT
-   * invoke onErase (avoids echoing back to the logger).
+   * Bumped by an inbound UDP Clear of this pane (snap.clearTick for Band Activity,
+   * snap.rxFreqClearTick for Rx Frequency). When the value CHANGES (skipping mount),
+   * the pane wipes its history — same as Erase, but does NOT invoke onErase (avoids
+   * echoing back to the logger).
    */
   clearTick?: number
   /** Externally-owned rolling history. The cockpit passes one per pane role so the

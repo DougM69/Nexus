@@ -190,6 +190,7 @@
   "radioPegged": false,
   "radios": [],
   "recentDecodes": [],
+  "rxFreqClearTick": null,
   "stations": [],
   "uploadNote": null,
   "uploadOk": false,

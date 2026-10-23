@@ -63,7 +63,7 @@ const fd = (log: FieldDayQso[], extra: Partial<FieldDayStatus> = {}): FieldDaySt
     ...extra,
   }) as unknown as FieldDayStatus
 
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const badge = () => document.querySelector('.le-fd-field-call .le-fd-dupe') as HTMLElement
 const toasts = (kind: string) =>
   pushToast.mock.calls.filter(([, k]) => (k ?? 'error') === kind).map(([text]) => text)

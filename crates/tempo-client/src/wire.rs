@@ -75,6 +75,14 @@ pub const OUTCOMES: usize = 64;
 pub const ANSWER_TOO_LARGE: &str = "answerTooLarge";
 /// Messages one end may be putting together at once.
 const STREAMS: usize = 16;
+/// How many messages of the largest size ([`Assembly`]'s limit) one end may hold half-sent at once,
+/// all of its streams together, as a sender of this protocol interleaves its big messages a frame
+/// a turn (`crate::outbox`). At the shack: the calls that reach [`CALL_BYTES`] are two, an ADIF
+/// import and a voice message's `.wav`, each as big as the operator's file; every other call is far
+/// smaller (an SSTV picture, PD-290's 800 x 616 as base64, is 1,971,200 bytes). So two of the
+/// largest, not [`STREAMS`] of them: 16 streams of 16 MiB each let one paired computer hold 256 MiB
+/// at the shack. At the computer, the same for answers: two whole logbooks.
+const AT_ONCE: usize = 2;
 /// The most one feed's value may be once inflated.
 pub const FEED_BYTES: usize = 4 * 1024 * 1024;
 
@@ -174,11 +182,14 @@ pub fn fits(whole: &Whole) -> bool {
 }
 
 /// The pieces one end is putting back together. Anything a sender of this protocol never sends
-/// (a piece of no kind, a message over the limit, too many at once, a message whose pieces
-/// disagree on its kind, text that is not UTF-8) is refused, and the connection ends.
+/// (a piece of no kind, a message over the limit, too many at once, more than [`AT_ONCE`] messages
+/// of the limit held in all, a message whose pieces disagree on its kind, text that is not UTF-8)
+/// is refused, and the connection ends.
 pub struct Assembly {
     open: std::collections::HashMap<u32, (bool, Vec<u8>)>,
     limit: usize,
+    /// The bytes held in messages not yet whole, every stream's together.
+    held: usize,
 }
 
 impl Assembly {
@@ -187,7 +198,14 @@ impl Assembly {
         Self {
             open: Default::default(),
             limit,
+            held: 0,
         }
+    }
+
+    /// The bytes held in messages not yet whole.
+    #[cfg(test)]
+    fn held(&self) -> usize {
+        self.held
     }
 
     /// One piece frame, its kind byte included: the whole message when this was its last piece.
@@ -206,14 +224,16 @@ impl Assembly {
         }
         let (kind, bytes) = self.open.entry(stream).or_insert((binary, Vec::new()));
         let held: usize = bytes.len() + part.len();
-        if *kind != binary || held > self.limit {
+        if *kind != binary || held > self.limit || self.held + part.len() > AT_ONCE * self.limit {
             return Err(());
         }
         bytes.extend_from_slice(part);
+        self.held += part.len();
         if flags & LAST == 0 {
             return Ok(None);
         }
         let (binary, bytes) = self.open.remove(&stream).ok_or(())?;
+        self.held -= bytes.len();
         if binary {
             Ok(Some(Whole::Binary(bytes)))
         } else {
@@ -526,6 +546,50 @@ mod tests {
             Err(()),
             "not a piece"
         );
+    }
+
+    /// ★ What one end holds in messages not yet whole is bounded across all of them: a
+    /// sender that leaves message after message unfinished is refused once the bytes held pass
+    /// [`AT_ONCE`] messages of the limit, and the connection ends, where before every stream could
+    /// hold the limit. A finished message gives its room back. CONTROL: [`AT_ONCE`] messages of the
+    /// limit each, half-sent at once, are taken, as a real sender's interleaved big calls are.
+    #[test]
+    fn messages_not_yet_whole_hold_at_most_the_budget_together() {
+        let piece = |stream: u32, flags: u8, bytes: &[u8]| {
+            let mut frame = vec![KIND_PIECE];
+            frame.extend_from_slice(&stream.to_le_bytes());
+            frame.push(flags);
+            frame.extend_from_slice(bytes);
+            frame
+        };
+        // The flood: every stream filled to the limit, none finished.
+        let mut pieces = Assembly::new(10);
+        let taken = (0..STREAMS as u32)
+            .take_while(|stream| pieces.piece(&piece(*stream, 0, &[b'x'; 10])).is_ok())
+            .count();
+        assert_eq!(taken, AT_ONCE, "streams taken at the limit each");
+        assert_eq!(pieces.held(), AT_ONCE * 10);
+        // One byte past the budget, on a stream already open, is refused too.
+        let mut pieces = Assembly::new(10);
+        assert_eq!(pieces.piece(&piece(1, 0, &[b'x'; 10])), Ok(None));
+        assert_eq!(pieces.piece(&piece(2, 0, &[b'x'; 9])), Ok(None));
+        assert_eq!(
+            pieces.piece(&piece(2, 0, b"x")),
+            Ok(None),
+            "exactly the budget"
+        );
+        assert_eq!(pieces.piece(&piece(3, 0, b"x")), Err(()), "a byte past it");
+        // A finished message gives its room back.
+        let mut pieces = Assembly::new(10);
+        assert_eq!(pieces.piece(&piece(1, 0, &[b'x'; 10])), Ok(None));
+        assert_eq!(pieces.piece(&piece(2, 0, &[b'x'; 10])), Ok(None));
+        assert_eq!(
+            pieces.piece(&piece(1, LAST, b"")),
+            Ok(Some(Whole::Text("x".repeat(10))))
+        );
+        assert_eq!(pieces.held(), 10);
+        assert_eq!(pieces.piece(&piece(3, 0, &[b'x'; 10])), Ok(None));
+        assert_eq!(pieces.held(), 20);
     }
 
     /// ★ A feed's deflate stream: each value comes back exactly, in order, through one inflate

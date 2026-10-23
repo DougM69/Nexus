@@ -387,8 +387,14 @@ pub(crate) fn env(cloud: &Cloud, stations: Arc<Stations>, find: Find, trust: Tru
         lookup: Arc::new(|_, _| Vec::new()),
         name: "Den PC".into(),
         trust,
+        hear: nowhere,
         now_s: fixture_now,
     }
+}
+
+/// A station heard nowhere on this network: its key for the internet road is not heard here.
+pub(crate) fn nowhere<'a>(_: &'a PairedStation, _: Vec<std::net::SocketAddrV4>) -> Heard<'a> {
+    Box::pin(async { Err("unreachable") })
 }
 
 /// A store for this computer's stations, with the signed file in a scratch directory of its own.

@@ -22,11 +22,11 @@ import sys
 from collections import Counter, defaultdict
 
 # ── What the kit shipped, so a missing row can be detected without a second file ───────────
-EXPECTED_ROWS = 7348
-EXPECTED_KEYS_SHA = '9b434ddc4ccbd2607e8563c89374a563cdca3810f1035210f202e68b8aae4ed3'
-EXPECTED_ENGLISH_SHA = 'c78a80517a1df7e611b64204a66f076803c621ad9cba464b11e334c3992792c6'
-EXPECTED_DNT_SHA = 'c97317cbebfc31c7d0da1ea8d2928d029ad4664dcb12e332aa6dcfd8b34a3cd6'
-EXPECTED_TIERS = {1: 748, 2: 320, 3: 1055, 4: 500, 5: 3284, 6: 1441}
+EXPECTED_ROWS = 7336
+EXPECTED_KEYS_SHA = 'c082c680976766616dd87192bb536baad46f501693b75fac0cbad04b3b6d1872'
+EXPECTED_ENGLISH_SHA = '93e0a81e64b2c90ee037b013c507bbfaf007a159c0b4626454f35ca2ce8ca03b'
+EXPECTED_DNT_SHA = 'f63f08a11c791668818a632e677bb1fac8b26f1e5f5c5e667b2aa5a798aaead0'
+EXPECTED_TIERS = {1: 746, 2: 320, 3: 1048, 4: 500, 5: 3284, 6: 1438}
 COLUMNS = ['priority', 'key', 'english', 'portuguese', 'do_not_translate', 'notes']
 
 RE_PLACEHOLDER = re.compile(r'\{\{(\w+)\}\}')
@@ -323,7 +323,7 @@ def main(argv):
 
     print()
     print('No problems found. Every slot, marker and technical term survived. Thank you — send it '
-          'to kd9taw@protonmail.com whenever you are ready.')
+          'to contact@hamradiotools.io whenever you are ready.')
     return 0
 
 

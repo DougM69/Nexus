@@ -107,7 +107,7 @@ it('shows a device added by signing in as asking, with Approve, until it is appr
   expect(screen.queryByText(EN['remote.native.computerKeyNotPinned']), 'never approved here').toBeNull()
   expect(screen.getAllByText(EN['remote.account.addedByAccount']).length).toBe(2)
   fireEvent.click(screen.getAllByRole('button', { name: EN['remote.approve'] })[1])
-  await waitFor(() => expect(actions).toEqual([{ type: 'device', deviceId: computer, approve: true, transmit: false, key, kind: 'computer' }]))
+  await waitFor(() => expect(actions).toEqual([{ type: 'device', deviceId: computer, approve: true, key, kind: 'computer' }]))
 })
 
 // Someone invited to operate holds what the owner's own other computer holds. The form says so where Operate is offered,

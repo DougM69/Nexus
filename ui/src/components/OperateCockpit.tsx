@@ -935,6 +935,18 @@ export function OperateCockpit({
     tx5Edited.current = true
     setTx5(v)
   }
+  // A logger's UDP FreeText (JTAlert, GridTracker) sets Tx5 as WSJT-X's does, and says why its
+  // over did not go out. Each one once, by its seq; one sent before this cockpit mounted is past.
+  const udpFreeText = snap.udpFreeText
+  const udpFreeTextSeen = useRef(udpFreeText?.seq)
+  useEffect(() => {
+    if (!udpFreeText || udpFreeText.seq === udpFreeTextSeen.current) return
+    udpFreeTextSeen.current = udpFreeText.seq
+    if (udpFreeText.fill != null) handleTx5(udpFreeText.fill)
+    if (udpFreeText.refused) {
+      pushToast(t('operate.tx.tx5.loggerRefused', { reason: udpFreeText.refused }), 'error')
+    }
+  }, [udpFreeText?.seq])
   const handleTx6 = (v: string) => {
     tx6Edited.current = true
     setTx6(v)
@@ -1194,7 +1206,6 @@ export function OperateCockpit({
     ignoredCalls: ignored,
     onToggleIgnore: handleToggleIgnore,
     highlights: highlightMap,
-    clearTick: snap.clearTick ?? 0,
   }
 
   // Active special-op badge shown next to the TX indicator.
@@ -1327,6 +1338,7 @@ export function OperateCockpit({
             {...decodeClickProps}
             partnerCall={partnerCall}
             onErase={() => notifyErase(0)}
+            clearTick={snap.clearTick ?? 0}
             {...(layoutMode === 'roster' ? { title: t('operate.decodes.title') } : {})}
           />,
         )
@@ -1352,6 +1364,7 @@ export function OperateCockpit({
             {...decodeClickProps}
             partnerCall={partnerCall}
             onErase={() => notifyErase(1)}
+            clearTick={snap.rxFreqClearTick ?? 0}
             lockedFilter="rx"
             hideExcludedCountries={false}
             compact
@@ -2136,6 +2149,7 @@ export function OperateCockpit({
                         {...decodeClickProps}
                     partnerCall={partnerCall}
                         onErase={() => notifyErase(0)}
+                        clearTick={snap.clearTick ?? 0}
                         title={t('operate.decodes.title')}
                       />
                     </div>
@@ -2172,6 +2186,7 @@ export function OperateCockpit({
                         {...decodeClickProps}
                     partnerCall={partnerCall}
                         onErase={() => notifyErase(1)}
+                        clearTick={snap.rxFreqClearTick ?? 0}
                         lockedFilter="rx"
                         // This pane is situational awareness, not a chase list: a station
                         // from an excluded country sitting on OUR frequency is exactly what
@@ -2221,6 +2236,7 @@ export function OperateCockpit({
                     {...decodeClickProps}
                     partnerCall={partnerCall}
                     onErase={() => notifyErase(0)}
+                    clearTick={snap.clearTick ?? 0}
                   />
                 </div>
               )}
@@ -2251,6 +2267,7 @@ export function OperateCockpit({
                         {...decodeClickProps}
                     partnerCall={partnerCall}
                         onErase={() => notifyErase(1)}
+                        clearTick={snap.rxFreqClearTick ?? 0}
                         lockedFilter="rx"
                         // This pane is situational awareness, not a chase list: a station
                         // from an excluded country sitting on OUR frequency is exactly what

@@ -245,7 +245,7 @@ describe('whose draft it is', () => {
   it('a contest strip keeps nothing, not even a station clicked to work: its contact is the session’s', async () => {
     // A click-to-work makes the call the operator's (settled), so this is the contest guard alone.
     const view = render(strip({ fieldDay, fdMode: 'PH', pendingWork: { call: 'EA8XX', ts: 1 } }))
-    await waitFor(() => expect((screen.getByPlaceholderText('W1AW') as HTMLInputElement).value).toBe('EA8XX'))
+    await waitFor(() => expect((screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement).value).toBe('EA8XX'))
     view.unmount()
     render(strip())
     expect(call().value, 'a contest strip’s call came back into the ordinary strip').toBe('')
@@ -256,7 +256,7 @@ describe('whose draft it is', () => {
     type(call(), 'EA8XX')
     view.unmount()
     render(strip({ fieldDay, fdMode: 'PH' }))
-    expect((screen.getByPlaceholderText('W1AW') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement).value).toBe('')
   })
 
   it('with the other-radio override open nothing is kept; closed again, the contact is', async () => {

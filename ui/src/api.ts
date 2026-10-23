@@ -2272,10 +2272,18 @@ export async function shackFileRead(
   return invoke('shack_file_read', { folder, name, offset })
 }
 
-/** One piece of a station file, written into THIS computer's Downloads folder at `offset`;
- *  returns the full saved path. */
-export async function shackFileSave(filename: string, base64: string, offset: number): Promise<string> {
-  return invoke<string>('shack_file_save', { filename, base64, offset })
+/** Where a saved piece went: the file's name in THIS computer's Downloads folder, which the later
+ *  pieces of the same save name, and its full path. */
+export interface ShackSaved {
+  name: string
+  path: string
+}
+
+/** One piece of a station file, written into THIS computer's Downloads folder at `offset`. The
+ *  piece at offset 0 starts a new file, under the next free name (`name (1).ext`) when one of that
+ *  name is there already; each later piece names the file it started. */
+export async function shackFileSave(filename: string, base64: string, offset: number): Promise<ShackSaved> {
+  return invoke<ShackSaved>('shack_file_save', { filename, base64, offset })
 }
 
 /** One received SSTV picture from the station, whole (base64), by its gallery path. */

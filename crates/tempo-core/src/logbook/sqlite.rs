@@ -2664,6 +2664,51 @@ mod tests {
         (expected, actual, records.len())
     }
 
+    /// Every field the log funnel now fills — the own-station fields and which of them
+    /// Nexus filled itself, the worked station's continent and distance, the space weather —
+    /// survives the store, the app-private mark included (the operator's own log keeps it;
+    /// `round_trip` above compares what goes to the services, which withholds it).
+    #[test]
+    fn the_logged_place_and_space_weather_fields_round_trip_through_the_store() {
+        let own = "<CALL:6>JA1XYZ<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261022<TIME_ON:6>120000\
+                   <OPERATOR:5>K2DEF<MY_GRIDSQUARE:4>FN31<MY_STATE:2>WI<CONT:2>AS<DISTANCE:5>10893\
+                   <K_INDEX:1>3<A_INDEX:1>7<SFI:3>149\
+                   <APP_NEXUS_SELF_FILLED:22>MY_GRIDSQUARE,MY_STATE<EOR>";
+        let mut records = parse_adif(own);
+        records[0].id = Some(RecordId::Provisional {
+            hash: 1,
+            ordinal: 0,
+        });
+        let mut db = LogDb::open_in_memory().expect("open");
+        db.insert_all(records.iter().map(|r| (r, Resolved::default())))
+            .expect("insert");
+        let back = db.load_all().expect("load");
+        assert_eq!(
+            crate::logbook::adif_record_own_log(&back[0]),
+            crate::logbook::adif_record_own_log(&records[0])
+        );
+        assert_eq!(
+            crate::logbook::self_filled(&back[0]),
+            ["MY_GRIDSQUARE", "MY_STATE"]
+        );
+        for (tag, value) in [
+            ("MY_STATE", "WI"),
+            ("CONT", "AS"),
+            ("DISTANCE", "10893"),
+            ("K_INDEX", "3"),
+            ("A_INDEX", "7"),
+            ("SFI", "149"),
+        ] {
+            assert_eq!(
+                crate::logbook::extra_field(&back[0], tag),
+                Some(value),
+                "{tag}"
+            );
+        }
+        assert_eq!(back[0].my_grid.as_deref(), Some("FN31"));
+        assert_eq!(back[0].operator.as_deref(), Some("K2DEF"));
+    }
+
     /// What the stored fixture actually contains, so the proof below cannot pass vacuously.
     ///
     /// ⚠️ A byte-identical round trip over a fixture that never populated `qso_extra` would be

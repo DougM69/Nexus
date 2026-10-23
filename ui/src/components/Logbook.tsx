@@ -1,6 +1,6 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog (`i18n/en.ts`); a hardcoded one fails CI. What does NOT come from
-// the catalog: LOG_EXAMPLES and the four service/Q-code labels below, and every value the table
+// the catalog: the four service/Q-code labels below, and every value the table
 // prints — callsign, band, mode, frequency, RST, park reference, QSL letters. Those are wire
 // formats, identical in every language. See the invariant-token rule in `i18n/index.ts`.
 
@@ -163,26 +163,6 @@ function saveMoreColumns(on: boolean): void {
     /* unavailable — the choice still holds for this session */
   }
 }
-
-/**
- * The invariant example values the hand-log form shows in empty fields, gathered so the guard can
- * prove they never became catalog entries. Callsign, grid, band, mode, signal reports, a state
- * code, a power in watts and two POTA references: every one a wire format, so every one the same
- * characters in every language. The two placeholders that are HUMAN prose (a first name, a town)
- * are catalog entries instead.
- */
-const LOG_EXAMPLES = {
-  call: 'W1AW',
-  grid: 'FN31',
-  band: '20m',
-  mode: 'TempoFast',
-  rstSent: '59 / 599 / -09',
-  rstRcvd: '59 / 599 / -11',
-  state: 'WI',
-  txPower: '100',
-  parkTheirRef: 'US-1234',
-  parkMyRef: 'US-5678',
-} as const
 
 /**
  * Contacts POTA requires before a park-day counts as an activation: "A successful activation
@@ -2182,7 +2162,6 @@ export function Logbook({
                   className="settings-input"
                   value={draft.call}
                   onChange={(e) => setField('call', e.target.value)}
-                  placeholder={LOG_EXAMPLES.call}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -2199,11 +2178,11 @@ export function Logbook({
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.grid.label')}</span>
-              <input className="settings-input" value={draft.grid} onChange={(e) => setField('grid', e.target.value)} placeholder={LOG_EXAMPLES.grid} autoComplete="off" spellCheck={false} />
+              <input className="settings-input" value={draft.grid} onChange={(e) => setField('grid', e.target.value)} autoComplete="off" spellCheck={false} />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.band.label')}</span>
-              <input className="settings-input" value={draft.band} onChange={(e) => setField('band', e.target.value)} placeholder={LOG_EXAMPLES.band} autoComplete="off" />
+              <input className="settings-input" value={draft.band} onChange={(e) => setField('band', e.target.value)} autoComplete="off" />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.freq.label')}</span>
@@ -2211,15 +2190,15 @@ export function Logbook({
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.mode.label')}</span>
-              <input className="settings-input" value={draft.mode} onChange={(e) => setField('mode', e.target.value)} placeholder={LOG_EXAMPLES.mode} autoComplete="off" />
+              <input className="settings-input" value={draft.mode} onChange={(e) => setField('mode', e.target.value)} autoComplete="off" />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.rstSent.label')}</span>
-              <input className="settings-input" value={draft.rstSent} onChange={(e) => setField('rstSent', e.target.value)} placeholder={LOG_EXAMPLES.rstSent} autoComplete="off" />
+              <input className="settings-input" value={draft.rstSent} onChange={(e) => setField('rstSent', e.target.value)} autoComplete="off" />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.rstRcvd.label')}</span>
-              <input className="settings-input" value={draft.rstRcvd} onChange={(e) => setField('rstRcvd', e.target.value)} placeholder={LOG_EXAMPLES.rstRcvd} autoComplete="off" />
+              <input className="settings-input" value={draft.rstRcvd} onChange={(e) => setField('rstRcvd', e.target.value)} autoComplete="off" />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.date.label')}</span>
@@ -2274,7 +2253,6 @@ export function Logbook({
                 className="settings-input"
                 value={draft.state}
                 onChange={(e) => setField('state', e.target.value)}
-                placeholder={LOG_EXAMPLES.state}
                 maxLength={2}
                 autoComplete="off"
                 title={t('logbook.field.state.title')}
@@ -2288,7 +2266,6 @@ export function Logbook({
                 min="0"
                 value={draft.txPower}
                 onChange={(e) => setField('txPower', e.target.value)}
-                placeholder={LOG_EXAMPLES.txPower}
                 autoComplete="off"
               />
             </label>}
@@ -2298,7 +2275,6 @@ export function Logbook({
                 className="settings-input"
                 value={draft.parkTheirRef}
                 onChange={(e) => setField('parkTheirRef', e.target.value)}
-                placeholder={LOG_EXAMPLES.parkTheirRef}
                 autoComplete="off"
                 title={t('logbook.field.parkTheirs.title')}
               />
@@ -2309,18 +2285,17 @@ export function Logbook({
                 className="settings-input"
                 value={draft.parkMyRef}
                 onChange={(e) => setField('parkMyRef', e.target.value)}
-                placeholder={LOG_EXAMPLES.parkMyRef}
                 autoComplete="off"
                 title={t('logbook.field.parkMine.title')}
               />
             </label>}
             <label className="logbook-field">
               <span>{t('logbook.field.name.label')}</span>
-              <input className="settings-input" value={draft.name} onChange={(e) => setField('name', e.target.value)} placeholder={t('logbook.field.name.placeholder')} autoComplete="off" />
+              <input className="settings-input" value={draft.name} onChange={(e) => setField('name', e.target.value)} autoComplete="off" />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.qth.label')}</span>
-              <input className="settings-input" value={draft.qth} onChange={(e) => setField('qth', e.target.value)} placeholder={t('logbook.field.qth.placeholder')} autoComplete="off" />
+              <input className="settings-input" value={draft.qth} onChange={(e) => setField('qth', e.target.value)} autoComplete="off" />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.comment.label')}</span>

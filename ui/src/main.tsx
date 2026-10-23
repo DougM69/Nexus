@@ -73,7 +73,7 @@ if (isTauri()) {
 const reload = { label: t('crash.reload'), onClick: () => window.location.reload() }
 
 // The product name, not prose: it is the same six characters in every language, and a catalog
-// entry for it is an invitation to "localise" a brand. Same escape hatch as STATION_EXAMPLES.
+// entry for it is an invitation to "localise" a brand. Same escape hatch as GUIDE_EXAMPLES.
 const APP_NAME = 'Nexus'
 
 const tree = (

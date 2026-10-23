@@ -629,7 +629,7 @@ export const baudForRotator = (modelNum: number, currentBaud: number): number | 
  * (`tempo_audio::pstrotator`), because Hamlib's backend garbles the bearing and has no stop. The
  * port box takes the program's address, 12000 on this machine by default ("UDP Control" in its
  * Setup), and its replies come back on that port + 1, which Nexus must be able to listen on.
- * Not prose, like `ROTATOR_EXAMPLES`.
+ * Not prose: the address is the program's own default, a token.
  */
 const PSTROTATOR = { model: 3, address: '127.0.0.1:12000', reply: '12001' } as const
 
@@ -716,6 +716,11 @@ type WorkingFrequency = NonNullable<Settings['workingFrequencies']>[number]
 
 /** The worldwide 60 m FT8 dial (#175) — `bandplan::SIXTY_M_FT8_WORLDWIDE_MHZ` on the Rust side, which
  *  the band button tunes for a non-US callsign. Shown beside the US row below. */
+// SDRconnect as SDRplay ships it: on this computer, its WebSocket API on 5454. The same values as
+// the backend's `default_sdrconnect_host` / `SDRCONNECT_DEFAULT_PORT` (settings.rs).
+const SDRCONNECT_DEFAULT_HOST = '127.0.0.1'
+const SDRCONNECT_DEFAULT_PORT = 5454
+
 const SIXTY_M_FT8_WORLDWIDE_MHZ = 5.357
 
 /** The stock WSJT-X working-frequency table, shown read-only for reference.
@@ -934,70 +939,20 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
 }
 
 /**
- * The example network addresses the Logging & Connectors fields show INSIDE a placeholder.
- *
- * Invariant tokens, gathered rather than inlined for the reason `STATION_EXAMPLES` states: a
- * bare address in a `placeholder=` is the moment someone has to decide which category the
- * value is in, and an address a translator "localises" connects to nothing. The prose beside
- * them — "(empty = off)" — is a catalog entry that interpolates one of these.
- */
-const LOGGER_EXAMPLES = {
-  dxkeeperHost: '127.0.0.1',
-  n3fjpHost: '192.168.1.10',
-  n1mmAddr: '127.0.0.1:12060',
-  clusterNode: 've7cc.net:23',
-} as const
-
-/**
- * The club-call example on Settings ▸ Contesting ▸ Who's who at this event. A callsign, so it
- * is invariant — the same characters in every language, and a "localised" one is not a call.
- */
-const FD_WHO_EXAMPLES = {
-  clubCall: 'W9ABC',
-} as const
-
-/**
- * The Confirmations placeholders that are TOKENS rather than prose — same rule as
- * `LOGGER_EXAMPLES`, one category up: a "localised" `rbuapp_` prefix matches no token
- * RepeaterBook issues, and a translated example hostname resolves nowhere. The station-profile
- * placeholder is the bare number `1` and stays inline, as every number alone does. `lanRanges`
- * is the address ranges the plain-http note names (#378): addresses, written as an operator types
- * them, interpolated into the prose rather than left in it.
+ * The Confirmations placeholders that are TOKENS rather than prose: a "localised" `rbuapp_`
+ * prefix matches no token RepeaterBook issues. `lanRanges` is the address ranges the plain-http
+ * note names (#378): addresses, written as an operator types them, interpolated into the prose
+ * rather than left in it.
  */
 const CONFIRMATION_EXAMPLES = {
   rbToken: 'rbuapp_…',
-  cloudlogUrl: 'https://log.example.com',
   lanRanges: '192.168.x.x, 10.x.x.x, 172.16–31.x.x, 127.x.x.x',
-} as const
-
-/**
- * The serial-device names the Rig & CAT port fields show INSIDE a placeholder, one per
- * platform — same rule as `LOGGER_EXAMPLES`. A device name is whatever the OS enumerated, so a
- * "localised" `COM16` or `/dev/cu.usbserial-1420` names no port on any machine; the prose
- * around them ("Select or type, e.g. …") is a catalog entry that interpolates one of these.
- * The setup wizard's PTT Serial Port field reads them too.
- */
-export const RIG_EXAMPLES = {
-  macSerialPort: '/dev/cu.usbserial-1420',
-  serialPort: 'COM16',
-} as const
-
-/**
- * The rotator's own device and address examples — the same rule as `RIG_EXAMPLES` one section
- * down the tab. A controller's serial device is whatever the OS enumerated and `127.0.0.1:4533`
- * is rotctld's default address; a "localised" one reaches nothing. The prose around them
- * ("host:port — e.g. …") is a catalog entry that interpolates one of these.
- */
-const ROTATOR_EXAMPLES = {
-  macPort: '/dev/cu.usbserial-1420',
-  port: 'COM7 / /dev/ttyUSB1',
-  host: '127.0.0.1:4533',
 } as const
 
 /**
  * Amplifier family tokens and their names.
  *
- * Same category as `ROTATOR_EXAMPLES`: NOT prose. The values are the exact strings Rust stores
+ * NOT prose. The values are the exact strings Rust stores
  * in `amp_model` ('' | 'spe' | 'kpa') and the labels are manufacturers' product names, which are
  * the same in every language — a translated "SPE Expert 1.3K-FA" names no amplifier anyone owns.
  * The one word that IS prose, "no amplifier", goes through the catalog.
@@ -1007,17 +962,10 @@ const AMP_FAMILIES = [
   { value: 'kpa', label: 'Elecraft KPA500 / KPA1500' },
 ] as const
 
-/** Serial-device examples for the amplifier port. Device paths, never translated. */
-const AMP_EXAMPLES = {
-  macPort: '/dev/cu.usbserial-1410',
-  port: 'COM8 / /dev/ttyUSB2',
-  netHost: '192.168.1.50',
-} as const
-
 /**
  * OmniRig's two rig slots, named the way OmniRig's own window names them.
  *
- * Same category as `RIG_EXAMPLES`: this is not prose, it is the string an operator reads in
+ * Same category as `AMP_FAMILIES`: this is not prose, it is the string an operator reads in
  * ANOTHER program's interface and has to match this picker against. A translated "RIG 1" names
  * nothing in OmniRig, so the label the panel shows is also the label OmniRig shows. Indexed by
  * the stored slot number, which is the `value` beside it.
@@ -1040,18 +988,6 @@ const MACRO_SET_QSO = 'QSO'
 const MACRO_SET_CQ = 'CQ'
 
 /**
- * The keying-interface port examples the CW and RTTY placeholders show — same rule as
- * `RIG_EXAMPLES` above. A COM number is whatever the OS enumerated, so a "localised" one names
- * no port; the prose around it ("… — the keying interface") is a catalog entry that
- * interpolates one of these.
- */
-const KEYING_EXAMPLES = {
-  winkeyerPort: 'COM6',
-  cwKeyPort: 'COM7',
-  rttyFskPort: 'COM8',
-} as const
-
-/**
  * The RTTY Auto-call timing bounds and the values the controls ship carrying (#304).
  *
  * ⚠️ **A SECOND COPY OF A NUMBER THE ENGINE ALSO HOLDS**, and the reason it is exported is that
@@ -1071,13 +1007,12 @@ export const RTTY_AUTO_REPEATS_DEFAULT = 3
 /**
  * APRS's own wire formats, shown as examples or written into a frame.
  *
- * `ssid` and `watchCalls` are callsigns, `path` is a digipeater path the packet carries
- * verbatim, and `isHost` is a hostname — all four are matched literally by something outside
- * this program, so all four stay here and are interpolated into the prose beside them.
+ * `ssid` is a callsign, `path` is a digipeater path the packet carries verbatim, and `isHost`
+ * is a hostname — all three are matched literally by something outside this program, so all
+ * three stay here and are interpolated into the prose beside them.
  */
 const APRS_EXAMPLES = {
   ssid: 'KD9TAW-9',
-  watchCalls: 'W9XYZ-9, KD9ABC',
   path: 'WIDE1-1, WIDE2-1',
   isHost: 'rotate.aprs2.net',
 } as const
@@ -1877,6 +1812,9 @@ export function SettingsPanel({
   const [tciFinding, setTciFinding] = useState(false)
   const [tciFindNote, setTciFindNote] = useState('')
   const onTci = form?.rigConn === 'tci'
+  // The scope source as the backend reads it (`ScopeSource::from_setting`): any word but
+  // `sdrconnect` is the radio's own.
+  const scopeFromSdrconnect = (form?.scopeSource ?? '').trim().toLowerCase() === 'sdrconnect'
   useEffect(() => {
     setTciFindNote('')
   }, [onTci, editingRadioId])
@@ -5531,7 +5469,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={newProfileName}
-                    placeholder={t('settings.profiles.save.placeholder')}
                     onChange={(e) => setNewProfileName(e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
@@ -5610,9 +5547,7 @@ export function SettingsPanel({
                     className="settings-input"
                     list="serial-port-list"
                     value={form.pttSerialPort}
-                    placeholder={t('settings.rigControl.pttPort.placeholder', {
-                      example: IS_MAC ? RIG_EXAMPLES.macSerialPort : RIG_EXAMPLES.serialPort,
-                    })}
+                    placeholder={t('settings.rigControl.pttPort.placeholder')}
                     onChange={(e) => update('pttSerialPort', e.target.value)}
                   />
                   {setAtStation('pttSerialPort')}
@@ -5876,8 +5811,7 @@ export function SettingsPanel({
                   >
                     {/* ⚠️ NOT PROSE. These are the labels OmniRig's OWN window puts on its two
                         slots; they are how the operator matches this picker to that window, so
-                        they read the same in every language (RIG_EXAMPLES, beside the device
-                        names, for the same reason). */}
+                        they read the same in every language. */}
                     <option value="1">{OMNIRIG_SLOTS[1]}</option>
                     <option value="2">{OMNIRIG_SLOTS[2]}</option>
                   </select>
@@ -5897,7 +5831,6 @@ export function SettingsPanel({
                       type="text"
                       inputMode="decimal"
                       value={form.icomLanHost ?? ''}
-                      placeholder="192.168.1.50"
                       onChange={(e) => update('icomLanHost', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -6114,7 +6047,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={form.rigAddr}
-                    placeholder="127.0.0.1:5002"
                     onChange={(e) => update('rigAddr', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
@@ -6195,9 +6127,7 @@ export function SettingsPanel({
                     className="settings-input"
                     list="serial-port-list"
                     value={form.serialPort}
-                    placeholder={t('settings.rigControl.serialPort.placeholder', {
-                      example: IS_MAC ? RIG_EXAMPLES.macSerialPort : RIG_EXAMPLES.serialPort,
-                    })}
+                    placeholder={t('settings.rigControl.serialPort.placeholder')}
                     onChange={(e) => update('serialPort', e.target.value)}
                   />
                   {/* Shared by the CAT + PTT port inputs. The label text shows the USB product
@@ -6668,7 +6598,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={form.flexRadioIp}
-                    placeholder="e.g. 192.168.1.50"
                     onChange={(e) => update('flexRadioIp', e.target.value)}
                     autoComplete="off"
                   />
@@ -7010,6 +6939,76 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
+          {/* ---- Scope source: the radio's own panadapter, or an SDRplay receiver through
+              SDRconnect. The station's, not a radio's: the SDR follows whichever radio is in use.
+              Receive only — nothing here reaches the transmitter or the rig's CAT. ---- */}
+          <fieldset className="settings-section" id="settings-scope-source">
+            <legend>{t('settings.scopeSource.legend')}</legend>
+            <p className="settings-note">{t('settings.scopeSource.note')}</p>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.scopeSource.source.label')}</span>
+                <select disabled={remote}
+                  className="settings-input"
+                  value={scopeFromSdrconnect ? 'sdrconnect' : 'radio'}
+                  onChange={(e) => update('scopeSource', e.target.value)}
+                >
+                  <option value="radio">{t('settings.scopeSource.source.radio')}</option>
+                  <option value="sdrconnect">{t('settings.scopeSource.source.sdrconnect')}</option>
+                </select>
+                <span className="settings-hint">{t('settings.scopeSource.source.hint')}</span>
+              </label>
+              {scopeFromSdrconnect && (
+                <>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.scopeSource.host.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="text"
+                      value={form.sdrconnectHost ?? SDRCONNECT_DEFAULT_HOST}
+                      placeholder={SDRCONNECT_DEFAULT_HOST}
+                      onChange={(e) => update('sdrconnectHost', e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <span className="settings-hint">{t('settings.scopeSource.host.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.scopeSource.port.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="number"
+                      inputMode="numeric"
+                      min="1"
+                      max="65535"
+                      value={String(form.sdrconnectPort ?? SDRCONNECT_DEFAULT_PORT)}
+                      placeholder={String(SDRCONNECT_DEFAULT_PORT)}
+                      onChange={(e) => updateNum('sdrconnectPort', Number(e.target.value))}
+                      autoComplete="off"
+                    />
+                    <span className="settings-hint">{t('settings.scopeSource.port.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.scopeSource.follow.label')}</span>
+                    <select disabled={remote}
+                      className="settings-input"
+                      value={(form.sdrconnectFollow ?? '').trim().toLowerCase() === 'scroll' ? 'scroll' : 'centre'}
+                      onChange={(e) => update('sdrconnectFollow', e.target.value)}
+                    >
+                      <option value="centre">{t('settings.scopeSource.follow.centre')}</option>
+                      <option value="scroll">{t('settings.scopeSource.follow.scroll')}</option>
+                    </select>
+                    <span className="settings-hint">{t('settings.scopeSource.follow.hint')}</span>
+                  </label>
+                  {/* Across the whole row: the one line here about the operator's hardware. */}
+                  <p className="settings-note" data-sdrconnect-rf-safety>
+                    {t('settings.scopeSource.rfSafety')}
+                  </p>
+                </>
+              )}
+            </div>
+          </fieldset>
+
           {/* ---- Satellite Doppler + rotator manners (Phase 1 sat station) ---- */}
           <fieldset className="settings-section" id="settings-satellite-doppler">
             <legend>{t('settings.satelliteDoppler.legend')}</legend>
@@ -7339,11 +7338,7 @@ export function SettingsPanel({
                       type="text"
                       value={form.rotatorPort ?? ''}
                       placeholder={
-                        (form.rotatorModel ?? 0) === PSTROTATOR.model
-                          ? PSTROTATOR.address
-                          : IS_MAC
-                            ? ROTATOR_EXAMPLES.macPort
-                            : ROTATOR_EXAMPLES.port
+                        (form.rotatorModel ?? 0) === PSTROTATOR.model ? PSTROTATOR.address : undefined
                       }
                       onChange={(e) => update('rotatorPort', e.target.value)}
                       autoComplete="off"
@@ -7417,9 +7412,7 @@ export function SettingsPanel({
                   className="settings-input"
                   type="text"
                   value={form.rotatorHost}
-                  placeholder={t('settings.rotator.external.placeholder', {
-                    example: ROTATOR_EXAMPLES.host,
-                  })}
+                  placeholder={t('settings.rotator.external.placeholder')}
                   onChange={(e) => update('rotatorHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
@@ -7641,7 +7634,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={splitAmpAddress(form.ampPort ?? '').host}
-                    placeholder={AMP_EXAMPLES.netHost}
                     onChange={(e) =>
                       update('ampPort', joinAmpAddress(e.target.value, splitAmpAddress(form.ampPort ?? '').port))
                     }
@@ -7676,7 +7668,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={form.ampPort ?? ''}
-                    placeholder={IS_MAC ? AMP_EXAMPLES.macPort : AMP_EXAMPLES.port}
                     onChange={(e) => update('ampPort', e.target.value)}
                     autoComplete="off"
                     aria-label={t('settings.amplifier.port.label')}
@@ -8236,7 +8227,7 @@ export function SettingsPanel({
                       className="settings-input"
                       type="text"
                       value={blockedText ?? (form.blockedCalls ?? []).join(' ')}
-                      placeholder="none — e.g. PD2BS K1ABC"
+                      placeholder="none"
                       onChange={(e) => setBlockedText(e.target.value)}
                       onBlur={() => {
                         if (blockedText == null) return
@@ -8714,7 +8705,6 @@ export function SettingsPanel({
                     step="1"
                     inputMode="decimal"
                     value={form.stationPowerW ?? ''}
-                    placeholder="e.g. 100"
                     onChange={(e) => {
                       markDirty()
                       const raw = e.target.value.trim()
@@ -9210,9 +9200,7 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={form.winkeyerPort}
-                    placeholder={t('settings.cw.winkeyerPort.placeholder', {
-                      example: KEYING_EXAMPLES.winkeyerPort,
-                    })}
+                    placeholder={t('settings.cw.winkeyerPort.placeholder')}
                     onChange={(e) => update('winkeyerPort', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
@@ -9229,9 +9217,7 @@ export function SettingsPanel({
                       className="settings-input"
                       type="text"
                       value={form.cwKeyPort ?? ''}
-                      placeholder={t('settings.cw.keyPort.placeholder', {
-                        example: KEYING_EXAMPLES.cwKeyPort,
-                      })}
+                      placeholder={t('settings.cw.keyPort.placeholder')}
                       onChange={(e) => update('cwKeyPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -9437,9 +9423,7 @@ export function SettingsPanel({
                       className="settings-input"
                       type="text"
                       value={form.rttyFskPort ?? ''}
-                      placeholder={t('settings.rtty.fskPort.placeholder', {
-                        example: KEYING_EXAMPLES.rttyFskPort,
-                      })}
+                      placeholder={t('settings.rtty.fskPort.placeholder')}
                       onChange={(e) => update('rttyFskPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -10321,7 +10305,6 @@ export function SettingsPanel({
                           .filter(Boolean),
                       )
                     }
-                    placeholder={APRS_EXAMPLES.watchCalls}
                     spellCheck={false}
                     disabled={remote || (!form.aprsIsEnabled)}
                   />
@@ -11400,7 +11383,6 @@ export function SettingsPanel({
                   onHostsChange={mutateClusterHosts}
                   standings={clusterNodes}
                   disabled={remote}
-                  placeholder={LOGGER_EXAMPLES.clusterNode}
                 />
                 <label className="settings-field">
                   <span className="settings-label">
@@ -11410,7 +11392,6 @@ export function SettingsPanel({
                     className="settings-input"
                     value={form.clusterSsid ?? ''}
                     onChange={(e) => update('clusterSsid', e.target.value)}
-                    placeholder="2"
                     inputMode="numeric"
                     spellCheck={false}
                   />
@@ -11443,6 +11424,26 @@ export function SettingsPanel({
                   </label>
                   <span className="settings-hint">
                     {t('settings.integrations.openingWatch.hint')}
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">
+                      {t('settings.integrations.logSpaceWeather.label')}
+                    </span>
+                    <button disabled={remote}
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.logSpaceWeather}
+                      className={`toggle${form.logSpaceWeather ? ' on' : ''}`}
+                      onClick={() => updateBool('logSpaceWeather', !form.logSpaceWeather)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    {t('settings.integrations.logSpaceWeather.hint')}
                   </span>
                 </div>
 
@@ -11519,9 +11520,7 @@ export function SettingsPanel({
                   className="settings-input"
                   type="text"
                   value={form.dxkeeperHost ?? ''}
-                  placeholder={t('settings.dxkeeper.host.placeholder', {
-                    example: LOGGER_EXAMPLES.dxkeeperHost,
-                  })}
+                  placeholder={t('settings.dxkeeper.host.placeholder')}
                   onChange={(e) => update('dxkeeperHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
@@ -11591,9 +11590,7 @@ export function SettingsPanel({
                   className="settings-input"
                   type="text"
                   value={form.n3fjpHost ?? ''}
-                  placeholder={t('settings.n3fjp.host.placeholder', {
-                    example: LOGGER_EXAMPLES.n3fjpHost,
-                  })}
+                  placeholder={t('settings.n3fjp.host.placeholder')}
                   onChange={(e) => update('n3fjpHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
@@ -11706,9 +11703,7 @@ export function SettingsPanel({
                   className="settings-input"
                   type="text"
                   value={form.n1mmAddr ?? ''}
-                  placeholder={t('settings.n1mm.addr.placeholder', {
-                    example: LOGGER_EXAMPLES.n1mmAddr,
-                  })}
+                  placeholder={t('settings.n1mm.addr.placeholder')}
                   onChange={(e) => update('n1mmAddr', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
@@ -12177,7 +12172,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={form.eqslQthNickname ?? ''}
-                    placeholder={t('settings.confirmations.eqsl.qthNickname.placeholder')}
                     onChange={(e) => update('eqslQthNickname', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
@@ -12824,7 +12818,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={form.cloudlogUrl ?? ''}
-                    placeholder={CONFIRMATION_EXAMPLES.cloudlogUrl}
                     onChange={(e) => update('cloudlogUrl', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
@@ -12853,7 +12846,6 @@ export function SettingsPanel({
                     type="text"
                     inputMode="numeric"
                     value={form.cloudlogStationId ?? ''}
-                    placeholder="1"
                     onChange={(e) => update('cloudlogStationId', e.target.value)}
                     autoComplete="off"
                   />
@@ -13227,7 +13219,6 @@ export function SettingsPanel({
                     className="settings-input mono"
                     type="text"
                     value={form.contestQthCounty ?? ''}
-                    placeholder="FRAN"
                     onChange={(e) => update('contestQthCounty', e.target.value.toUpperCase())}
                     autoComplete="off"
                     spellCheck={false}
@@ -13242,7 +13233,6 @@ export function SettingsPanel({
                     className="settings-input mono"
                     type="text"
                     value={form.contestQthState ?? ''}
-                    placeholder="WI"
                     onChange={(e) => update('contestQthState', e.target.value.toUpperCase())}
                     autoComplete="off"
                     spellCheck={false}
@@ -13262,7 +13252,6 @@ export function SettingsPanel({
                     inputMode="numeric"
                     maxLength={2}
                     value={form.contestCheck ?? ''}
-                    placeholder="74"
                     onChange={(e) => update('contestCheck', e.target.value.replace(/\D/g, ''))}
                     autoComplete="off"
                     spellCheck={false}
@@ -13279,7 +13268,6 @@ export function SettingsPanel({
                     min={0}
                     max={40}
                     value={form.contestCqZone || ''}
-                    placeholder="4"
                     onChange={(e) => update('contestCqZone', clampZone(e.target.value, 40))}
                     autoComplete="off"
                   />
@@ -13295,7 +13283,6 @@ export function SettingsPanel({
                     min={0}
                     max={90}
                     value={form.contestItuZone || ''}
-                    placeholder="8"
                     onChange={(e) => update('contestItuZone', clampZone(e.target.value, 90))}
                     autoComplete="off"
                   />
@@ -13313,7 +13300,6 @@ export function SettingsPanel({
                     className="settings-input mono"
                     type="text"
                     value={form.contestPower ?? ''}
-                    placeholder="KW"
                     onChange={(e) => update('contestPower', e.target.value.toUpperCase())}
                     autoComplete="off"
                     spellCheck={false}
@@ -14030,7 +14016,6 @@ export function SettingsPanel({
                   className="settings-input mono"
                   type="text"
                   value={form.fdClass}
-                  placeholder={(form.fdEvent ?? 'arrlfd') === 'wfd' ? '2O' : '1D'}
                   onChange={(e) => update('fdClass', e.target.value.toUpperCase())}
                   autoComplete="off"
                   spellCheck={false}
@@ -14048,7 +14033,6 @@ export function SettingsPanel({
                   className={`settings-input mono${fdSectionInvalid ? ' invalid' : ''}`}
                   type="text"
                   value={form.fdSection}
-                  placeholder="WI"
                   list="fd-section-list"
                   aria-invalid={fdSectionInvalid}
                   onChange={(e) => update('fdSection', e.target.value.toUpperCase())}
@@ -14130,7 +14114,6 @@ export function SettingsPanel({
                   className="settings-input"
                   value={form.mycall}
                   onChange={(e) => update('mycall', e.target.value)}
-                  placeholder={FD_WHO_EXAMPLES.clubCall}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -14147,7 +14130,6 @@ export function SettingsPanel({
                     setFdJoinNote(null)
                     update('fdPositionName', e.target.value)
                   }}
-                  placeholder={t('settings.fdWho.position.placeholder')}
                 />
                 <span className="settings-hint">{t('settings.fdWho.position.hint')}</span>
               </label>
@@ -14264,7 +14246,6 @@ export function SettingsPanel({
                   className="settings-input"
                   value={form.fdEventName ?? ''}
                   onChange={(e) => update('fdEventName', e.target.value)}
-                  placeholder={t('settings.fdClub.eventName.placeholder')}
                 />
                 <span className="settings-hint">{t('settings.fdClub.eventName.hint')}</span>
               </div>
@@ -14293,7 +14274,6 @@ export function SettingsPanel({
                   className="settings-input mono"
                   value={form.fdJoinAddr ?? ''}
                   onChange={(e) => update('fdJoinAddr', e.target.value)}
-                  placeholder="192.168.1.10:42073"
                   disabled={locked('fdJoinAddr') || (!!form.fdHostEnable)}
                 />
                 {setAtStation('fdJoinAddr')}

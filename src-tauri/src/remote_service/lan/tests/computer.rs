@@ -1148,6 +1148,11 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
         assert_eq!(paired["station"]["addresses"][0], at.to_string());
         assert_eq!(paired["station"]["key"], json!(lan.status().key.unwrap()));
         assert!(store.raw(&format!("lan-station-{STATION}")).is_some());
+        assert_eq!(
+            Stations::new(Arc::new(store.clone())).code_paired(STATION),
+            Ok(true),
+            "kept as paired with a code"
+        );
 
         let connect = json!({"type":"connect","stationId":STATION});
         page.send(Message::Text(connect.to_string().into()))

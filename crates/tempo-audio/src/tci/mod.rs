@@ -571,6 +571,13 @@ impl TciDaemon {
         self.conn().snapshot()
     }
 
+    /// The radio the server named (`device:`), once it has: what a contact made on this radio
+    /// logs as its rig (`MY_RIG`), where the radio's model only says "TCI".
+    pub fn device(&self) -> Option<String> {
+        self.conn()
+            .read(|s| s.model.device.known().map(|d| d.as_str().to_string()))
+    }
+
     /// Who answered, in the words Test CAT shows: the program and the radio as the server named
     /// them, and the transceiver, counted from 1 as Settings counts it.
     pub fn status(&self) -> String {

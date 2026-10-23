@@ -62,6 +62,22 @@
 //! at the shack is listed with no proof: then, as "Add the internet road" did, the internet road
 //! alone is registered, for the station the operator picks, and waits for Approve at the station.
 //!
+//! ## The station's key, never on the service's word alone
+//!
+//! A station's own proof binds its key for the internet road to the person who signed in at the
+//! shack, and this computer checks that person against its own sign-in only for the account's own
+//! stations. So the key the service lists is pinned without more only there. For a station paired
+//! here with a code whose owner has not signed in at the shack, the station is asked for its key
+//! first, on this network's road, pinned by the code ([`hear`]): the same key, and the road is
+//! registered and kept; another key, and nothing is registered (`stationKeyDisagrees`); found nowhere
+//! here, the road is registered and kept HELD (`Stations::hold_road`): client mode opens nothing for
+//! it until the operator compares the station's key with the station's own screen and says it
+//! matches, or until the station names that same key on this network's road, at the next Operate
+//! there. It doesn't match then drops the internet road alone: the code pairing stays. A road to a
+//! station the account was invited to is kept held the same way, on its network or not: the proof
+//! there is someone else's, which nothing here binds to anyone, and its network's key came from the
+//! same listing, so only the operator's check frees it, and It doesn't match forgets the station.
+//!
 //! A station added with the account and then paired again here with a code is one of these from
 //! then on: the pairing drops its sign-in time (`Stations::drop_signed`), since the station keeps
 //! this computer until it is removed there, so signing in from its row links it the same way.
@@ -122,6 +138,16 @@ pub(crate) type Ask = Arc<
 /// How a listed station's proof is checked: `tempo_client::account::listed_station` ([`Env::new`]).
 pub(crate) type Trust = fn(&Value, &KeySet, &Tenant, &str, u64) -> Result<Listed, &'static str>;
 
+/// What a station paired here says its key for the internet road is, asked on this network at each
+/// of the addresses given in turn, on the road pinned to the key this computer holds for it
+/// ([`hear`] in the app): the key, none from a station with no pairing with the service, or why
+/// nothing was heard.
+pub(crate) type Hear = for<'a> fn(&'a PairedStation, Vec<SocketAddrV4>) -> Heard<'a>;
+
+/// What [`Hear`] gives, in time.
+pub(crate) type Heard<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<String>, &'static str>> + Send + 'a>>;
+
 /// What signing in reaches: this computer's stations, the account (this build's tenant, the issuer's
 /// keys and the service's audience), the service's device routes, the station's network, and the
 /// clock proofs are read by.
@@ -134,6 +160,7 @@ pub(crate) struct Env {
     /// This computer's name, as the station and the service show it.
     pub(crate) name: String,
     pub(crate) trust: Trust,
+    pub(crate) hear: Hear,
     pub(crate) now_s: fn() -> u64,
 }
 
@@ -155,9 +182,24 @@ impl Env {
             lookup,
             name,
             trust: proofs::listed_station,
+            hear,
             now_s,
         })
     }
+}
+
+/// The station's key for the internet road as it says it on this network: the command link opened
+/// to `record` at each of `order` in turn, as Operate opens it (TLS pinned to the station's key on
+/// this network, the hello, the same build, the `open`), the key its `opened` names read, and the
+/// link closed. Nothing is asked of the station but that.
+pub(crate) fn hear<'a>(record: &'a PairedStation, order: Vec<SocketAddrV4>) -> Heard<'a> {
+    Box::pin(async move {
+        let run = super::link::run_id();
+        let (link, _) = super::link::Link::connect_at(record, &order, run, None).await?;
+        let said = (link.ids.station == record.station_id).then(|| link.station_key.clone());
+        link.close();
+        said.ok_or("notThisStation")
+    })
 }
 
 /// Seconds since 1970, by this computer's clock.
@@ -432,7 +474,11 @@ async fn add(
                 pkcs8: staged.road,
             };
             let key = internet::shown_key(&internet).ok_or("notStation")?;
+            let guest = !station.own;
             store(env, move |stations| {
+                if guest {
+                    stations.hold_road(&kept.station_id, &internet.station_key)?;
+                }
                 stations.keep_away(&kept, &internet)?;
                 stations.drop_staged()
             })
@@ -462,8 +508,12 @@ async fn add(
     let key = internet::shown_key(&internet).ok_or("notStation")?;
     let issued_at = proven.own.issued_at;
     let id = lan_id.clone();
+    let guest = !station.own;
     store(env, move |stations| {
         stations.keep(&record)?;
+        if guest {
+            stations.hold_road(&id, &internet.station_key)?;
+        }
         stations.keep_internet(&id, &internet)?;
         stations.keep_signed(&id, issued_at)?;
         stations.drop_staged()
@@ -496,7 +546,8 @@ async fn link(
     let station = trusted
         .into_iter()
         .find(|station| station.lan_key == record.station_key);
-    let (internet, approved, issued_at) = match station {
+    // Whether the road is kept held until the operator checks the station's key (see the header).
+    let (internet, approved, issued_at, held) = match station {
         Some(station) if station.role != Role::Operate => return Err("listenOnly"),
         Some(station) => {
             let (device, approved) = env
@@ -531,19 +582,32 @@ async fn link(
                 station_key: station.station_key,
                 pkcs8: road_pkcs8,
             };
-            (internet, approved, Some(proven.own.issued_at))
+            (internet, approved, Some(proven.own.issued_at), !station.own)
         }
         // Its owner has not signed in at the shack: the internet road alone, as before.
         None if road.is_some() => return Err("stationNotProven"),
         None => {
             let station = internet::chosen(&session, choose).await?;
             let station_id = station["id"].as_str().ok_or("invalidResponse")?;
-            // The station key the service lists, pinned from now on: without one the station has
-            // not yet said it to the service, and the road could prove nothing.
+            // The station key the service lists: without one the station has not yet said it to
+            // the service, and the road could prove nothing.
             let station_key = station["stationKey"]
                 .as_str()
                 .filter(|key| tempo_stream::protocol::device_key(key))
                 .ok_or("stationKeyMissing")?;
+            // Pinned only once the station itself says it, on this network's road (pinned by the
+            // code), before anything is registered; found nowhere here, held until the operator
+            // checks it against the station's screen.
+            let order = order(env, &record).await;
+            let held = match (env.hear)(&record, order).await {
+                Ok(Some(said)) if said == station_key => false,
+                Ok(Some(_)) => {
+                    let _ = store(env, |stations| stations.drop_staged()).await;
+                    return Err("stationKeyDisagrees");
+                }
+                Ok(None) => return Err("internetNotReady"),
+                Err(_) => true,
+            };
             let (device, approved) = env
                 .service
                 .register(&proven.access, station_id, &road_key, None, &env.name)
@@ -554,12 +618,15 @@ async fn link(
                 station_key: station_key.to_string(),
                 pkcs8: road_pkcs8,
             };
-            (internet, approved, None)
+            (internet, approved, None, held)
         }
     };
     let key = internet::shown_key(&internet).ok_or("notStation")?;
     let kept = id.clone();
     store(env, move |stations| {
+        if held {
+            stations.hold_road(&kept, &internet.station_key)?;
+        }
         stations.keep_internet(&kept, &internet)?;
         if let Some(issued_at) = issued_at {
             stations.keep_signed(&kept, issued_at)?;

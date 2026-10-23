@@ -4640,6 +4640,16 @@ export interface Settings {
   /** Programs' spots on the band map, and a click on a spot told back to them. On by default; a
    *  spot or a click never transmits. */
   tciServerSpots?: boolean
+  /** Where the RF scope's picture comes from: `radio` (the radio's own panadapter, the default) or
+   *  `sdrconnect` (an SDRplay receiver through SDRplay's SDRconnect). Any other word reads as
+   *  `radio`. The station's, like the TCI server's. */
+  scopeSource?: string
+  /** The computer SDRconnect runs on (default 127.0.0.1). */
+  sdrconnectHost?: string
+  /** SDRconnect's WebSocket API port (default 5454). */
+  sdrconnectPort?: number
+  /** How the SDR's centre follows the rig's dial: `centre` (default) or `scroll`. */
+  sdrconnectFollow?: string
   /** The rig's serial HANDSHAKE as the operator DECLARES it (`cat_serial_handshake`):
    *  `auto` | `none` | `hardware` | `xonxoff`. `auto` (the default) is today's behaviour to the
    *  byte — Nexus infers it exactly as before. Anything else REPLACES that inference.
@@ -4715,6 +4725,9 @@ export interface Settings {
   /** Station transmit power in WATTS (RF out) — unlocks the Journey miles-per-watt
    * + QRP feats. `null` until set (those feats stay gated). */
   stationPowerW?: number | null
+  /** Log the space weather on each contact (ADIF K_INDEX, A_INDEX, SFI) from a reading no more
+   *  than 3 h old. Off by default. */
+  logSpaceWeather?: boolean
   /** Display units: 'auto' (OS locale) | 'metric' | 'imperial'. Display-only (F4MQS). */
   units?: string
   /** Per-mode RF-power CEILING (0.0–1.0 fraction of the rig's max) — a SAFETY cap for
@@ -5421,8 +5434,14 @@ export interface AppSnapshot {
   lateDecodes?: LateDecodes
   /** UDP callsign highlights for the decode panes. */
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
-  /** Bumped by an inbound UDP Clear — panes erase on change. */
+  /** Bumped by an inbound UDP Clear of Band Activity — that pane erases on change. */
   clearTick?: number
+  /** The last FreeText a logger sent (JTAlert, GridTracker), as Tx5 took it: Tx5 shows `fill`
+   *  (empty clears it; null leaves it), `refused` says why its over was not sent. `seq` grows by
+   *  one per FreeText, so the cockpit applies each once. Absent until a logger sends one. */
+  udpFreeText?: { seq: number; fill?: string | null; refused?: string | null }
+  /** Bumped by an inbound UDP Clear of Rx Frequency — that pane erases on change. */
+  rxFreqClearTick?: number
   /** Bumped every time a QSO is logged, by any path (backend auto-log included).
    * App fires the "clear DX call after logging" wipe on change. */
   loggedTick?: number

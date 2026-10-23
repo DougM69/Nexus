@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // The question at the shack (the operator, 2026-10-02, "Nexus asks you, with the key": "When a browser
 // asks to stream, Nexus at the shack pops up "Let Chrome on Windows stream this station? Key XXXX XXXX"
-// with Approve / Deny ... No hunting through Settings."). Approve is Settings' approve with its transmit
-// tick off, and the pop-up must never approve by default or on Enter alone.
+// with Approve / Deny ... No hunting through Settings."). Approve is Settings' approve, and the pop-up
+// must never approve by default or on Enter alone.
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { APPROVAL_ARM_MS, APPROVAL_POLL_MS, RemoteApprovalPrompt } from './RemoteApprovalPrompt'
@@ -49,7 +49,7 @@ const dialog = () => screen.queryByRole('dialog')
 const approve = () => screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement
 const deny = () => screen.getByRole('button', { name: 'Deny' }) as HTMLButtonElement
 
-it('a browser asking to stream: the shack asks with its name and the key the site shows, and Approve is Settings\' approve with transmit off', async () => {
+it('a browser asking to stream: the shack asks with its name and the key the site shows, and Approve is Settings\' approve', async () => {
   const device = asking()
   status = station([device])
   render(<RemoteApprovalPrompt />)
@@ -65,7 +65,7 @@ it('a browser asking to stream: the shack asks with its name and the key the sit
   await wait(APPROVAL_ARM_MS)
   fireEvent.click(approve())
   await flush()
-  expect(actions).toEqual([{ type: 'device', deviceId: device.id, approve: true, transmit: false, key: KEY, kind: 'browser' }])
+  expect(actions).toEqual([{ type: 'device', deviceId: device.id, approve: true, key: KEY, kind: 'browser' }])
   expect(dialog(), 'answered: it goes').toBeNull()
 })
 
@@ -147,7 +147,7 @@ it('asks about nothing it should not: a pinned browser, a request with no key to
   expect(dialog()).toBeTruthy()
 })
 
-it('a computer running Nexus asking to connect: the shack names it as one, with its platform and its key in eight groups, and Approve pins that key with transmit never ticked', async () => {
+it('a computer running Nexus asking to connect: the shack names it as one, with its platform and its key in eight groups, and Approve pins that key', async () => {
   const device = asking({ name: 'Shack laptop', kind: 'computer', platform: 'macos' })
   status = station([device])
   render(<RemoteApprovalPrompt />)
@@ -161,7 +161,7 @@ it('a computer running Nexus asking to connect: the shack names it as one, with 
   fireEvent.click(approve())
   await flush()
   // The kind it was shown as goes with the press, as its key does: the shack grants and pins as shown.
-  expect(actions).toEqual([{ type: 'device', deviceId: device.id, approve: true, transmit: false, key: KEY, kind: 'computer' }])
+  expect(actions).toEqual([{ type: 'device', deviceId: device.id, approve: true, key: KEY, kind: 'computer' }])
   expect(dialog(), 'answered: it goes').toBeNull()
 })
 
@@ -194,7 +194,7 @@ it('a device added by signing in, waiting for Approve here, is asked as a new on
   await wait(APPROVAL_ARM_MS)
   fireEvent.click(approve())
   await flush()
-  expect(actions).toEqual([{ type: 'device', deviceId: computer.id, approve: true, transmit: false, key: KEY, kind: 'computer' }])
+  expect(actions).toEqual([{ type: 'device', deviceId: computer.id, approve: true, key: KEY, kind: 'computer' }])
   cleanup(); actions.length = 0
   const browser = asking({ approved: 1, addedBy: 'account' })
   status = station([browser], { account: { signingIn: false, added: [], unconfirmed: { [browser.id]: 'approveAtStation' }, removals: [], people: [] } })
@@ -202,4 +202,18 @@ it('a device added by signing in, waiting for Approve here, is asked as a new on
   await flush()
   expect(dialog()?.textContent).toMatch(/A browser signed in to your Remote account asks to stream this station/)
   expect(dialog()?.textContent, 'never approved here').not.toMatch(/approved before/)
+})
+
+it('a computer asking: the question shows this station\'s key too, read out in the same call; a browser\'s does not', async () => {
+  const stationKey = '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0'
+  const shown = 'This station’s key: 0F1E 2D3C 4B5A 6978 8796 A5B4 C3D2 E1F0'
+  status = station([asking({ name: 'Shack laptop', kind: 'computer', platform: 'windows' })], { stationKey })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  expect(screen.getByRole('dialog').textContent).toContain(shown)
+  cleanup()
+  status = station([asking()], { stationKey })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  expect(screen.getByRole('dialog').textContent).not.toContain(shown)
 })

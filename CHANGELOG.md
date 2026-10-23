@@ -8,6 +8,180 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **An SDRplay receiver as the scope's source, through SDRconnect (needs a bench check).** Settings ▸ Radio has a
+  new **Scope source** section: **The radio** (as before, and as it comes) or **SDRconnect (SDRplay)**. With an
+  SDRplay RSP fed from the rig's RX OUT (or a splitter with transmit protection) and SDRplay's own SDRconnect
+  program running with its WebSocket API on, the RF scope pane and the Phone and CW scopes draw the receiver's whole
+  span, each station at its own frequency, with the dial, the passband and spots on it as usual. The receiver's
+  centre follows the rig's dial, on every change or only when the dial nears the edge of the span. Nexus only reads
+  the receiver's IQ and sets its centre frequency: it never transmits through SDRconnect and sends it no CAT.
+  SDRconnect is a separate, free, closed-source program from SDRplay that you install; Nexus ships and loads nothing
+  of SDRplay's. When SDRconnect is not running, sends no IQ, or sends IQ at a rate other than the one it reports,
+  the scope's status line says which and Nexus keeps trying. Built and tested against the published SDRconnect
+  WebSocket API 1.0.3 only: it has not yet been run with a real RSP and SDRconnect, so treat it as untested on real
+  hardware until a bench check confirms the IQ rate, where a carrier is drawn, retuning while the knob turns, and
+  whether RX OUT stays quiet while you transmit.
+- **Log space weather on each contact (off by default).** Settings ▸ Logging & Connectors ▸
+  Integrations & Feeds ▸ Propagation has a new switch. On, every contact you log carries the
+  planetary K index, A index and solar flux (ADIF K_INDEX, A_INDEX, SFI) from the latest reading
+  Nexus fetched, and nothing when that reading is more than 3 hours old.
+- **Each contact logs the worked station's continent and the distance to it** (ADIF CONT, and
+  DISTANCE in km from your grid to theirs when both are known).
+
+### Changed
+- **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the
+  Logbook's add-a-contact form used to show a sample in grey, such as W1AW in Call, 1D and WI in Field Day's Class
+  and Section, a county in a QSO party's county box, and FN31, 20m and a park reference in the Logbook form. A
+  sample like that could read as a value already filled in. Those boxes are now blank. Hints that are words or
+  formats stay, such as Call, Name, RST, MHz and the UTC date format. The park box now reads "Park (reference or
+  name)", and the CQ WW zone box still shows the zone the country file gives for the call typed.
+- **No other screen shows made-up example values in an empty box either.** Settings (Station's callsign, grid,
+  name and state, the Field Day class and section, Your station data, the club event boxes, the port and address
+  boxes, Blocked callsigns, Station power), the setup wizard, the POTA/SOTA activation box, Repeaters' place box,
+  APRS's watched calls, the hide-calls filter, the watch list and the spot comment no longer show a sample such as
+  KD9TAW, WI, 1D, K-1234, COM16 or 192.168.1.50. Words that say what goes in a box stay ("Select or type",
+  "empty = off", "host:port"), and so does a box's real default, such as the rigctld port 4534 or the APRS-IS
+  server.
+- **FT8/FT4: the test of what Nexus refuses to send names the refused messages.** The build's test that compares
+  every FT8 and FT4 over against WSJT-X's own encoder took the list of messages Nexus refuses to send from the very
+  check it was there to test, so that check refusing a message Nexus should send would still have passed. The test
+  now names the refused messages, and such a mistake fails the build. Nothing you see on the air or on screen
+  changes.
+
+### Removed
+- **Nexus Remote: the old Remote page's FT8/FT4 transmit permission.** The page that used it is gone, so the
+  station no longer takes FT8/FT4 or held-contact commands from a browser, and Settings ▸ Remote access no
+  longer offers **Also allow FT8/FT4 transmit from the Remote page** or the switch to allow or revoke it. A
+  browser streaming the station is unchanged: it operates Nexus as you would at the shack, transmit included,
+  and its Stop TX works as before. A browser you approved with that permission keeps its station controls
+  after you update; only the old permission is dropped.
+- **Nexus Remote: the remote logging permission.** It was for the old Remote page's Log QSO form, which is
+  gone; all it still did was let a browser take control without station controls. Settings ▸ Remote access no
+  longer shows **Allow remote logging** or **Revoke logging permission**, approving a browser gives it station
+  controls only, and a browser now needs station controls to take control. **End remote control** works as
+  before. A browser streaming the station logs with Nexus's own log form, as you would at the shack. A browser
+  that had only remote logging left after an update has nothing; approve it again or allow its station
+  controls to give it control.
+
+### Fixed
+- **WSJT-X UDP: a logger's Replay gets back everything Band Activity holds.** When JTAlert, GridTracker or a
+  logger asks Nexus to replay the decodes, as it does when it starts while Nexus is running, Nexus sent only the
+  last period's. It now sends every decode Band Activity still holds, oldest first, each with the start of the
+  period it was heard in and marked not new, as WSJT-X does. Once you erase Band Activity, a logger clears it or a
+  band or mode change wipes it, a Replay sends only what has been heard since; a logger's Clear of Rx Frequency
+  alone leaves it. NEEDS-BENCH: Nexus decoding FT8 with its UDP feed on for a few minutes, then start GridTracker
+  or JTAlert: the decodes of all those periods come back with their own times and no new alerts. Erase Band
+  Activity and restart the program: nothing comes back until the next period is decoded.
+- **WSJT-X UDP: a logger's free text goes into Tx 5, and out as Tx 5, as in WSJT-X.** Free text from JTAlert,
+  GridTracker or a logger became a chat broadcast, which the FT8 and FT4 screen never sent (and on FT8 in Chat a
+  piece of it could go out reading as another station's call). Now the text goes into Tx 5. When the program asks
+  for it to be sent, it is your next over, as when you click Tx 5, and an over on the air switches to it, as in
+  WSJT-X; an empty text that is not sent clears Tx 5. It goes out only while TX is on, and it never turns TX on or
+  restarts the TX watchdog. When it does not go out, Tx 5 still shows it and Nexus says why: TX is off, it is
+  text FT8 or FT4 cannot encode (as for the free text you type), the contest screen sends its own exchange, or
+  the program asked to send Tx 5 without its text. Chat sends it as a chat broadcast, as before, on the Tempo
+  tiers only. NEEDS-BENCH: FT8 into a dummy load with TX on and the UDP feed on, and WSJT-X's message_aggregator
+  example (or GridTracker) connected: type `TNX 73` in its free-text box and Tx 5 follows each key; press Enter
+  and the next over is `TNX 73`, which a WSJT-X station decodes; press Enter during an over and the rest of it
+  switches. With TX off, Enter fills Tx 5, says TX is off and nothing keys. Enter on `W9XYZ K1ABC TNX 73`
+  says FT8 cannot encode it and nothing keys. Repeat on FT4, and once on the contest screen (the run goes on).
+- **Nexus Remote: Save to this computer saves only the station's own kinds of file.** The second PC saves a
+  recording (.wav), an SSTV picture (.png or .bmp) or ALL.TXT, and nothing else. Any other file is refused with a
+  message that names it, and nothing is written to the Downloads folder.
+- **FT8/FT4: a logging program's Clear of Rx Frequency clears only that pane.** When a program connected over the
+  WSJT-X UDP link asks to clear the Rx Frequency window, Nexus now empties only its Rx Frequency pane, and a clear of
+  Band Activity empties only Band Activity, as WSJT-X does. Before, any clear from such a program emptied both decode
+  panes.
+- **FT-991, FT-710 and FTDX10: the ALC meter works again behind your own older rigctld.** Since 1.19.0 Nexus reads
+  these radios' ALC with a raw `RM4;` through rigctld. A rigctld from Hamlib before 4.6 (Hamlib 4.5.5, for example,
+  which many Linux distributions still ship) never answers that raw read, so a radio reached over Network through
+  such a rigctld showed ALC as "not reported" after the first few reads. When the raw read never answers, Nexus now
+  reads ALC the way 1.18.0 did, through Hamlib, for the rest of the session. This changes the CAT reads made while
+  transmitting, so it needs a check on an FT-991 behind its own rigctld.
+- **Remote: a paired computer can no longer make the station hold hundreds of megabytes in unfinished calls.** A
+  call too big for one message is sent in pieces, and the station limited each call to 16 MiB but let a computer
+  leave 16 of them unfinished at once, about 256 MiB a connection. The station now holds at most two calls of the
+  largest size unfinished on a connection, 32 MiB, and closes a connection that sends more. A large ADIF import, a
+  voice message and an SSTV picture from the other computer go through as before.
+- **Remote: a flood of Stops or call-outcome questions from a paired computer no longer slows the station.** Each
+  Stop on the command link started a thread of its own, so thousands of Stops a second could crowd the station's
+  screen and radio loop out. Each kind of Stop now runs on one thread: the first runs at once, a different kind of
+  Stop still runs at once beside it, and Stops of the same kind that arrive while one is running are run once more
+  as soon as it finishes, so a Stop is never lost or held back. At most eight runs of one kind, each with
+  different arguments, wait at once; a Stop past them is answered busy, so varying the arguments no longer makes
+  the waiting list or the work grow. Every Stop still ends the computer's transmit permission the moment it arrives. Questions about what became of earlier calls are answered one after another on
+  one thread.
+- **Phone, CW, RTTY, PSK and Satellites contacts now log when they started and ended.** A contact
+  logged from the entry strip starts when its call was entered, typed or clicked in, and ends when
+  you press Log, as a JS8 contact already did; until now both were the moment you pressed Log. A
+  contact typed in under "Logged on another radio" with its own UTC time starts and ends at the
+  time you typed.
+- **Every contact names its operator.** With Operator at the key left blank, your station call is
+  logged as the operator (ADIF OPERATOR), as the box's hint always said. The N3FJP push now sends
+  the contact's own operator instead of always your station call.
+- **Your grid and state are logged on each contact.** New contacts carry your grid from Settings ▸
+  Station (ADIF MY_GRIDSQUARE) and, on everyday contacts, your State (MY_STATE); a park or summit
+  activation still logs the park's state, never your home one. QRZ, Club Log, eQSL, HRDLog,
+  Cloudlog/Wavelog and the ADIF export receive them. Your LoTW uploads leave out a grid or state
+  Nexus filled in itself, so TQSL keeps signing from your Station Location exactly as before; a
+  grid that came with the contact (from WSJT-X, typed in the Logbook, or imported) goes to LoTW as
+  it always did.
+- **Contest and Field Day contacts keep their radio, power and grid, and gain an end time, in the
+  Logbook.** Each contest contact records the radio, station power and grid in use when it was
+  logged, keeps them across a restart, and carries them, with its time as its end time, when the
+  contest is merged into the Logbook. As on everyday contacts, your LoTW uploads leave that grid
+  out; in a VHF contest the grid you sent in the exchange is the one logged.
+- **A contact logged for an earlier time is not given today's station details.** A contact whose
+  start is more than 3 hours before you log it (typed in afterwards with its own UTC time, or
+  added in the Logbook) gets no grid, state, operator, rig or power from your current settings,
+  since they may not be what you used then; fill them in yourself if you want them. Anything you
+  enter on the contact is kept, and contacts you log as you make them are unchanged. A contact
+  waiting for your confirm (Prompt before logging) keeps the station details from the moment it
+  was made, however late you confirm it and whatever you changed in Settings meanwhile.
+- **A TCI radio's contacts name the radio.** The rig logged for a contact made on a TCI radio is
+  the radio the SDR program reports, such as SunSDR2DX, instead of "TCI".
+- **Your station power is logged on every contact.** The watts in Settings ▸ Station power go on
+  each new contact as its power (ADIF TX_PWR), and out with it to QRZ, Club Log, eQSL, HRDLog,
+  Cloudlog/Wavelog and the WSJT-X UDP messages your logger reads. Leave it blank and contacts
+  are logged without a power, as before. A contact that already carries a power keeps it.
+- **A contest's contacts keep their operator and station call in the Logbook.** Merging a
+  contest into the Logbook dropped the "Operator at the key" each contact was logged with, and
+  stamped the station call in use at the merge rather than the one the contact was made on.
+- **The WSJT-X QSOLogged message carries the contact's power** in its Tx power field, so N1MM,
+  HRD and Log4OM receive it.
+- **Linux: the PC .deb and AppImage run on Ubuntu 22.04, Mint 21, and Debian 12.** They were built on Ubuntu
+  24.04, which made glibc 2.39 the minimum, so on Debian 12 (bookworm), Ubuntu 22.04 and Mint 21.x the package
+  installed and then the app did not start, and an installed Nexus could not take an update without upgrading
+  the whole distro. Both files are now built inside an Ubuntu 22.04 container and need glibc 2.35
+  (`ldd --version` shows yours). The Raspberry Pi packages are unchanged.
+
+### Security
+- **A computer no longer takes the station's internet key on Nexus Remote's word alone.** Before, when you
+  added the internet road to a station paired with a code (its owner not yet signed in at the station) or to a
+  station you were invited to, the computer kept the station key the service listed without checking it. Now:
+  - **At home**, linking a station paired with a code asks the station itself for its key over your network,
+    before anything is added. If the service named a different key, you are told so and nothing is added.
+  - **Away from the station, or as an invited guest**, the station's row shows **This station's key for the
+    internet road** in the same eight groups the station shows under Remote access. The internet road carries
+    nothing until you compare the two and press **It matches**. For a station paired with a code, the hold also
+    clears by itself the next time you Operate it on your network and the station names the same key.
+  - **It doesn't match**, for a station paired with a code, removes only its internet road: the pairing on your
+    network stays, so you can still operate at home and add the internet road again later. For a station you
+    were invited to, it forgets the station.
+  - Both of those apply only to a station paired with a code on this version or later, which the computer now
+    records in its credential store when the pairing is made. A station paired with a code on an earlier version
+    is treated like an invited one: its hold clears only with **It matches**, and **It doesn't match** forgets it,
+    so you pair it again with a code.
+  - The station's **Approve** question for a computer now shows **This station's key** too, so both keys are
+    read out in the same call.
+  - Every internet road's row now shows the station's key. A computer that already has an internet road checks it
+    quietly the next time it reaches the station on your network; if the station names another key, that road is
+    turned off and says why. Nothing else changes for roads that already work, and nothing has to be paired again.
+  - Your radio was never reachable this way: the station only ever lets in a computer you approved there.
+
+## [1.20.0] — 2026-10-22
+
+### Added
 - **TCI connection (Beta): Nexus can talk to an SDR program's own TCI server.** In Settings ▸ Radio ▸ Rig & CAT,
   Connection has a new choice, **TCI (SDR program) — Beta**, for ExpertSDR3 (SunSDR), Thetis 2.10.3.14 and later,
   and piHPSDR. You set the program's address and TCI port; there is no Rig Model, rigctld or virtual COM port to set
@@ -29,9 +203,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the program transmits its own input, which you route from Nexus with a virtual audio cable. CW goes out over
   TCI with the Soundcard keyer; through the program's own keyer it is not ready yet. Every Nexus transmit safeguard
   applies as on any other connection. Programs that use the radio through **Share by TCI** are not changed by this:
-  they still may not send FT8, FT4 or the other slot-timed modes. NEEDS-BENCH: FT8 and FT4 through a real SDR
-  program into a dummy load, with Audio over TCI on and then off: the overs' timing at a second receiver, the
-  mid-over switch, and Stop TX part way through an over; and CW on the Soundcard keyer.
+  they still may not send FT8, FT4 or the other slot-timed modes.
 - **TCI (Beta): Nexus's needed spots on the SDR program's own panadapter.** On a TCI radio, **Spots on the SDR
   panadapter** (Settings ▸ Radio ▸ Rig & CAT, off as it comes) now puts the stations on the Needed board that have
   a frequency (cluster and skimmer spots, and your own decodes) on the SDR program's panadapter, each in the colour
@@ -45,9 +217,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows, its own cluster and skimmer spots too, so there Nexus takes off only its own, one by one, sends the
   colours the way AetherSDR draws them, and puts each spot up again before AetherSDR's 30 minutes for it are over.
   In an unassisted contest entry the Needed board has no cluster spots, so the panadapter has none either.
-  piHPSDR's TCI has no spots. NEEDS-BENCH: on ExpertSDR3, on Thetis and on AetherSDR in front of a Flex, the spots
-  and their colours on the panadapter, a click tuning Nexus (and whether the program tunes itself too), and the
-  spots gone when Nexus closes.
+  piHPSDR's TCI has no spots.
 - **Share by TCI: programs on this computer can use the radio through Nexus.** Settings ▸ Radio ▸ Transmit limits
   & sharing has a new switch, **Share by TCI**, below **Share this radio with other programs**. It is off as it
   comes. Turned on and saved, it makes Nexus a TCI server on this computer: WSJT-X, JTDX, MSHV, Log4OM and other
@@ -68,9 +238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receiver, each station at its own frequency and the dial where it is. If the program stops sending it, the scope
   says so rather than holding an old picture. A program whose TCI has no panadapter (piHPSDR's) leaves the scope as
   it was, and Nexus's log says why. Turning the switch off, or changing to another radio, stops it. It is a stream
-  of its own: receive audio and keying over TCI work as before. NEEDS-BENCH: ExpertSDR3 and Thetis on their radios,
-  a known carrier (a beacon or a signal generator) drawn at its frequency, against the dial and the program's own
-  panadapter, in USB and in LSB.
+  of its own: receive audio and keying over TCI work as before.
 - **Share by TCI: a program's own transmit audio (Beta).** With **Programs on TCI may transmit** on, a program on
   this computer can now put its own audio on the air through Nexus while Nexus is on the Phone screen, a logger's
   voice macro for one. Nexus keys the radio when the program's first audio arrives and plays that audio and nothing
@@ -90,9 +258,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for a mode only when it differs from Nexus's: with their Radio mode at USB while Nexus is already in USB, they ask
   for nothing and are refused too. Last refused then says to set the program's Radio mode or to use Nexus for FT8,
   and that some programs ask for their mode only when it differs from Nexus's.
-  NEEDS-BENCH: a program's voice audio through Share by
-  TCI into a dummy load, on a sound-card radio and on a Flex: the key on its first audio, its tail on its release,
-  and each stop; and WSJT-X, JTDX and MSHV refused with their Radio mode at None and at Data/Pkt.
 - **Share by TCI: spots from programs on Nexus's band map (Beta).** With **Spots from programs** on, as it comes,
   the spots a program on this computer sends over TCI (a logger's cluster spots, Log4OM's for one, or a skimmer's)
   show on the band map and on the Phone and CW screens' band activity, beside the cluster's and kept apart from
@@ -104,8 +269,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of these spots tunes Nexus there and does nothing else: it never changes the screen, turns TX on or starts a
   contact, and while anything is on the air it changes nothing. Every click on a spot in Nexus, a cluster spot
   worked as much as a program's spot tuned, is passed back to the programs as an SDR program passes it on, so a
-  logger can pick up the station. A spot or a click never transmits. NEEDS-BENCH: Log4OM 2 connected by TCI, its
-  cluster spots on Nexus's band map, and a click on one in Nexus selecting that station in Log4OM.
+  logger can pick up the station. A spot or a click never transmits.
 - **Every contest log numbers its contacts 1, 2, 3…** The contest screen's log and the logger window's last
   contacts show each contact's number in a first column, in every contest. In a contest that sends a serial
   (Sweepstakes, CQ WPX) the number is the serial that contact was sent; in every other contest it counts the
@@ -245,7 +409,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   acknowledgement. When PstRotatorAz does not answer, the compass shows "—" instead of the target or 0°. Nexus
   listens for PstRotatorAz's replies on its UDP Control Port + 1 (12001 by default); if another program holds that
   port, the Connections log names it and says how to move PstRotatorAz to another port. A station already set up
-  with this entry keeps its settings. Nobody has tried this against a real PstRotatorAz yet (NEEDS-BENCH).
+  with this entry keeps its settings.
 - **Contest statistics per operator.** In a multi-operator contest the Contest screen's score area now has an
   Operators section: each operator's QSOs, points and the multipliers they worked first, with their share of the
   total, their rate over the last 10 and 60 minutes, their best clock hour, and a band × mode table. Dupes, banned
@@ -284,9 +448,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and unchanged) or USB. On USB, Nexus puts the rig in its upper data mode (DATA-U, USB-D or DIGU) and swaps the AFSK
   tones itself, so mark stays high on the air and the decoder still copies. Reverse now only flips the sense for a
   station sending upside down; its help text no longer tells you to use it for USB. True FSK is unchanged.
-  NEEDS-BENCH: an AFSK RTTY QSO on USB, checked on a second receiver or a skimmer for mark high on RF.
 - **Yaesu FT-1000 and FT-1000D in the rig list.** Both now appear in the default list beside the FT-1000MP and
-  use their own Hamlib driver (the FT-1000 driver is marked Beta by Hamlib). NEEDS-BENCH: an FT-1000 or FT-1000D on CAT.
+  use their own Hamlib driver (the FT-1000 driver is marked Beta by Hamlib).
 - **Nexus Remote: operate the shack from a second Windows PC with Nexus on it (Beta).** On your own
   network, choose **Operate from this computer** beside your shack in **Stations on this network**: the second PC shows
   the full Nexus screens for the shack's radio, plays its receive audio and sends your microphone, and Phone PTT, CW
@@ -294,7 +457,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at the shack. Stop works from the second PC on its own road, and the shack unkeys within about 5 s if the network or
   the second PC drops. Passwords and remote-access settings stay at the shack, both PCs must run the same version, and
   there is no paddle from afar. It is in the regular Windows installer, a Beta like the rest of Nexus Remote, and
-  needs no special build. NEEDS-BENCH: two Windows PCs on one network, the radio into a dummy load.
+  needs no special build.
 - **Nexus Remote: operate from the second PC over the internet too (Beta).** For a shack paired with a code, press
   **Sign in…** on its row in **Stations on this network** and sign in to Nexus Remote in your web browser; a shack
   added by signing in has the internet road from the start. Either way, approve the PC at the shack under Remote
@@ -305,8 +468,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   network that blocks it (some hotels and offices) you can still watch, tune and log, and transmitting is off. After 15
   minutes with no click, key or PTT, Nexus asks "Still there?" and ends the internet link a minute later if nobody
   answers. Receive audio waits 120 ms before playing over the internet (60 ms on your own network) to ride out the
-  internet's jitter. NEEDS-BENCH: the shack on one network and the second PC on another (a phone hotspot), the radio
-  into a dummy load.
+  internet's jitter.
 - **Nexus Remote: add your station to a second PC by signing in, with no code (Beta).** In **Stations on
   this network** on the second PC, press **Sign in…** and sign in to Nexus Remote in your web browser with the account
   your station is linked to, or one its owner invited to operate it. The station is then on that PC on its own
@@ -324,8 +486,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station takes a PC on its own network for 30 days from that PC's sign-in, with the internet up or down. In the last
   week the PC's row in Stations on this network says by what day to sign in again and offers **Sign in again**, and
   **Operate from this computer** signs in again by itself, opening the browser while you operate, so the link is
-  never dropped for it. NEEDS-BENCH: a second PC on the shack's network, signed in, then the internet off; a phone
-  hotspot.
+  never dropped for it.
 - **Nexus Remote: signing in shares less about you.** The Remote web page's sign-in no longer asks your account for
   your name, nickname or picture, and neither does any sign-in in Nexus. The shack's own sign-in (Settings → Station →
   Remote access → Sign in to Nexus Remote) does not ask for your email address either: Nexus Remote passes that
@@ -338,8 +499,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is added over the internet, waiting until you approve the PC at the shack under Remote access. **Operate from this
   computer** then drives it over the internet road (part of Nexus Remote's paid service). The first time that PC is on the station's own network, press **Sign in…** on the station's
   row there once: the station is then on the PC on its network too, with the same keys and no second device at
-  Nexus Remote, and from then on it signs in again every 30 days as any other. NEEDS-BENCH: a laptop on a phone hotspot
-  that has never been on the shack's network, then the same laptop at home.
+  Nexus Remote, and from then on it signs in again every 30 days as any other.
 - **Nexus Remote: a signed-in PC paired again with a code stays on the station's network (Beta).** A PC added by
   signing in is taken on the station's own network for 30 days from its sign-in, and to stay longer it signs in
   again, which needs Nexus Remote. Pairing it again with a code ends the 30 days: it then stays until you remove it
@@ -349,11 +509,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you to sign in again by a date, and **Operate from this computer** no longer signs in again by itself. Remove such
   a PC at the shack: removing it on the Nexus Remote web page no longer takes it off the station's network. If the
   shack cannot save the change, it refuses the pairing ("The station could not keep the pairing.") and the PC keeps
-  its 30 days. NEEDS-BENCH: a second PC on the shack's network.
+  its 30 days.
 - **Nexus Remote from a second PC: every JS8 switch, and satellite tracks that end when the second PC goes.** HB, Relay,
   HB ACK and HB NET now turn on from the second PC, as Auto-reply already did, and Stop or a dropped second PC still ends
   every JS8 transmission. A satellite track started from the second PC stops, and hands the radio's dial back, within
-  seconds of that PC dropping, as a transmission does; a track started at the shack runs on. NEEDS-BENCH.
+  seconds of that PC dropping, as a transmission does; a track started at the shack runs on.
 - **Nexus Remote from a second PC: APRS, SSTV and Chat transmit too.** From the second PC you can now send an APRS
   beacon or message, arm APRS Monitor (which lets automatic acks go out), send an SSTV picture, and in Chat send a
   message or broadcast, resend one, run CQ and turn on the presence beacon, and a CQ run started from the Operate mode
@@ -362,35 +522,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drops, or when its permission to transmit is withdrawn, and a Chat message it queued is dropped (shown as not sent,
   ready to resend), so nothing it left keys later; APRS keeps receiving. A settings save from the second PC cannot turn
   on the presence beacon, JS8's automatic replies, relay, heartbeat acks or APRS-IS relay, or a WSPR beacon, and a
-  stale Settings save at the shack no longer turns the beacon or those JS8 switches back. NEEDS-BENCH: two PCs, the
-  radio into a dummy load.
+  stale Settings save at the shack no longer turns the beacon or those JS8 switches back.
 - **Nexus Remote: Tune, ATU, RTTY and PSK now work from the second PC (Beta).** Tune, the radio's own
   tuner (ATU), RTTY and PSK sends, continuous TX with typing, and RTTY Auto's CQ and answer now work from the second PC
   as at the shack. Every transmit check at the shack still applies, including the tune carrier's time limit and
   continuous TX's own limit. Stop on either road ends each of them, and so does losing the second PC for about 5 s:
-  continuous TX and an RTTY Auto run end too, and nothing keys again until you start it again. NEEDS-BENCH: two PCs,
-  the radio into a dummy load.
+  continuous TX and an RTTY Auto run end too, and nothing keys again until you start it again.
 - **Nexus Remote: take control from a second PC.** When another PC is operating the shack, the banner now offers **Take
   control**. Confirm it and anything the other PC is transmitting stops at once, a satellite track ends, and this PC
   starts with TX off; the other PC's banner says it lost control and offers to take it back the same way. The shack's
-  own screen and every Stop still work as before. NEEDS-BENCH: two client PCs and the shack, the radio into a dummy load.
+  own screen and every Stop still work as before.
 - **Nexus Remote: the shack's recordings, ALL.TXT and SSTV pictures reach the second PC.** The SSTV gallery and its
   picture viewer now show the shack's pictures on the second PC (they were blank), and **Save a copy** saves the
   shack's picture there. Where the shack shows **Reveal in folder** for ALL.TXT, the QSO recordings and the SSTV
   gallery, the second PC shows **Save to this computer**, which copies the shack's file into its Downloads folder. Only
-  those three folders can be read from afar. NEEDS-BENCH: two PCs, a received picture and a recording at the shack.
+  those three folders can be read from afar.
 - **Elecraft KPA1500 over the network.** In Settings ▸ Radio ▸ Amplifier, a KPA1500 can now be reached by its IP
   address instead of a USB cable: pick **Network (KPA1500)** under Connection and type the address from the
   amplifier's NET IP ADDRESS menu (port 1500). Nexus uses the amplifier's UDP server, which any number of programs can
   share, so Elecraft's KPA1500 Remote keeps working alongside. Readings, Operate/Standby and the band buttons work as
   they do over USB, with the same refusals while you transmit; an amplifier that stops answering shows "Not
-  answering". NEEDS-BENCH: a KPA1500 on the LAN with KPA1500 Remote connected at the same time; readings, Operate,
-  Standby and a band step from Nexus; then unplug its network cable and plug it back in.
+  answering".
 - **RTTY screen: the waterfall shades the mark and space tones, and Auto-tune nets onto a signal.** A band now fills
   the waterfall between mark and space where the decoder is listening, and follows the AFC. It turns red while you
   transmit. **Auto-tune**, in the waterfall's header, finds the nearest signal near the current tones whose two tones
   sit at your shift, passing over single carriers and signals at another shift, and nets onto it. Netting moves your
-  transmit tones too, so Auto-tune is off while you transmit. NEEDS-BENCH: a real RTTY signal off the air.
+  transmit tones too, so Auto-tune is off while you transmit.
 
 - **Contest logger window: drag it small and keep it in front.** The contest logger window (the contest screen's
   **⧉ Logger window**) now drags down to 420×320, small enough to drop in a corner beside another program; its call,
@@ -401,8 +558,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was pinned. **⧉ Pop out entry** on the Contest screen's entry opens the same window with the entry alone (the
   call, the exchange, the dupe warning and Log, without the last contacts or the rest of the contest screen); it
   shares the contact with your entry, and Enter in either logs it once. **Entry only** on that window's bar switches
-  between the entry alone and the whole window. NEEDS-BENCH: Windows, the window pinned over a full-screen program and reopened after a monitor is
-  unplugged.
+  between the entry alone and the whole window.
 - **Spots pops out into its own window.** **⧉ Pop out** in the Spots header opens the board in a window of its own,
   for a second monitor, as the Needed board's does. It is the whole board: the search, the filters, Hide worked and
   Spot me. Clicking a row tunes the radio to the spot and the main window opens the matching screen, as from the
@@ -447,47 +603,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the old message to the end of the over and the right one an over later. It now switches the rest of the over to the
   new message, as WSJT-X does: the over keeps its start and end, and ALL.TXT gets a second Tx line for it. Programs
   that listen on the WSJT-X UDP feed (GridTracker, JTAlert) are told the new message as the over switches. A Tx button
-  clicked during an over switches it the same way. NEEDS-BENCH: FT8 and FT4 into a dummy load, then on the air with
-  a weak station.
+  clicked during an over switches it the same way.
 - **Flex native audio (Beta): the late-reply switch works on DAX too.** With Nexus's own Flex client sending the
   over over DAX, a reply decoded after the over has started now switches the rest of it to the new message, as on a
   sound card. Nexus sends the radio only the audio that is due, so the part not yet sent is replaced; the over keeps
-  its start, its end and its PTT, and Stop TX still cuts it at once. NEEDS-BENCH: a Flex, FT8 and FT4 into a dummy
-  load with a second receiver.
+  its start, its end and its PTT, and Stop TX still cuts it at once.
 - **FT8/FT4: an RR73 answering your report is answered with 73, as in WSJT-X.** When the station you sent
   your report to rogers it with RR73 (or RRR) without sending its own R-report first, Nexus kept sending the report.
   It now sends 73 and the QSO is complete, as WSJT-X does; if the RR73 is decoded while the report is already on the
   air, the rest of that over becomes the 73. A bare 73, an RR73 from another station, or one sent to another
-  station changes nothing. NEEDS-BENCH: FT8 and FT4, a second station that answers your report with RR73.
+  station changes nothing.
 - **FT8/FT4: which late replies change the over on the air, as in WSJT-X.** Once an over carries your RR73 or
   73, no reply changes it any more: WSJT-X turns Enable Tx off as it sends one, so a reply decoded then cannot move
   it. A CQ run that logs the contact and goes back to CQ, or gives up on a caller who went quiet, now lets the over
   on the air finish: before, the rest of your RR73 or report could become the CQ. If you close with RRR and your
   partner's 73 arrives while the RRR is on the air, the contact is over, so the rest of that over is your CQ, as
   WSJT-X does it: a 73 answering your RRR moves WSJT-X on to its CQ message (Tx6) and turns its Enable Tx off. TX
-  turns off after that over with "Disable Tx after sending 73"; either way nothing is sent after it. NEEDS-BENCH:
-  FT8 and FT4, Call CQ and a station you work by double-click.
+  turns off after that over with "Disable Tx after sending 73"; either way nothing is sent after it.
 - **Contest FT8/FT4: a late reply changes the over on the air inside a contact.** In the Contest screen's Running
   and S&P, a reply decoded after your over has started now switches the rest of that over to your next message, as
   WSJT-X does: your exchange becomes the RR73 when the runner's rogered exchange arrives, and the rogered exchange
   becomes the 73 when the caller's RR73 arrives. It never starts a contact: a CQ on the air is never switched to an
-  answer, and an over to one station never becomes a call to another. NEEDS-BENCH: FT8 and FT4, a second station in
-  the same contest.
+  answer, and an over to one station never becomes a call to another.
 - **FT8/FT4: an RR73 answering your RRR is answered with 73, as in WSJT-X.** If you close with RRR (Settings: RRR
   instead of RR73) and your partner answers it with RR73 or RRR, Nexus now sends 73, once, and the QSO is complete;
   before, it closed without one. If the RR73 is decoded while your RRR is already on the air, the rest of that over
   becomes the 73, and "Disable Tx after sending 73" turns TX off after it as usual. The contact is logged once. After
   your RR73 nothing changes: your partner's 73, RR73 or RRR gets no reply. A Hound never sends the 73: by Fox/Hound
   mode's own rules the Fox's RR73 ends a Hound's contact and the Hound sends nothing more, as in WSJT-X, since a 73
-  would only add noise where the Fox transmits. NEEDS-BENCH: FT8 and FT4, a second station that answers your RRR
-  with RR73.
+  would only add noise where the Fox transmits.
 - **FT8/FT4 Call CQ: a caller's RR73 to your RRR gets one 73, then the run calls CQ.** With "Roger with RRR (not
   RR73)" on, a Call CQ run now answers the caller's RR73 (or RRR) to your RRR with 73, once, as WSJT-X does, and
   then calls CQ again. Before, the run went back to CQ without a reply, and when that RR73 was decoded while your
   RRR was on the air, the rest of the RRR became the CQ. If the RR73 is decoded late, while the next over is
   already on the air, the rest of that over becomes the 73. TX stays on, the contact is logged once, and a repeat
-  of the caller's RR73 gets nothing more. Only the caller's own RR73 or RRR to you counts. NEEDS-BENCH: FT8 and
-  FT4, a second station that answers your RRR with RR73.
+  of the caller's RR73 gets nothing more. Only the caller's own RR73 or RRR to you counts.
 - **Contest entry: the sample text in empty boxes is quieter.** The grey examples ("W1AW", "599", a county) are now
   in normal weight instead of bold, and a shade darker in the dark themes, so they no longer read like something
   typed in. They stay readable in every theme.
@@ -511,7 +661,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FT8, FT4 and FST4: when the other station repeats its report or grid, your repeated reply carries the new
   signal report, as WSJT-X 3.0 does.** Heard at +20 and then again at +27, Nexus now sends R+27 the second time
   instead of R+20, and logs +27 as the report sent. Nothing else about the sequence or its timing changes; other modes
-  keep the report fixed, as WSJT-X does. NEEDS-BENCH on the air.
+  keep the report fixed, as WSJT-X does.
 - **Phone voice keyer: a slot's Record, Import and Delete buttons now sit on the left of the slot, away from Play, and
   Delete can be undone.** They used to sit right under Play, where Delete was easy to hit by mistake. After Delete the
   slot reads empty and "Deleted F1 (CQ)" offers Undo for about 8 seconds; Undo brings back the same recording under the
@@ -550,6 +700,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your browser; the watch-and-control workspace it replaced is gone from the page.
 
 ### Fixed
+- **FT8: a period with almost no receive audio is not decoded, as in WSJT-X.** When a whole period's receive audio
+  is under half a bit (0.5 LSB rms), as with the rig's audio muted, the input turned right down or the cable pulled,
+  WSJT-X does not decode it at all. Nexus did, and after a busy period its a7 decoder could "hear" that period's
+  stations again in a few stray bits of noise. In a QSO such a line could read as your partner's RR73 or R-report:
+  Nexus then sent the next message and logged a contact that was never finished. Such a period now gives no line
+  in Band Activity, ALL.TXT, the WSJT-X UDP feed or PSK Reporter, and the QSO repeats its last message as WSJT-X
+  does. Receive audio at any working level decodes exactly as before.
 - **Band Activity and Rx Frequency: a line's time is the start of the period it was heard in, as in WSJT-X and
   ALL.TXT.** The time was when the line reached the list, so a line the full decode found at :34 read :34 under the
   :15 period's separator. It now reads :15; hold the pointer over the time to see when the line arrived. A line
@@ -647,8 +804,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own over under that program's key: two signals from one transmitter. Nexus now sends nothing while the other program
   holds the key. Your CQ or QSO stays armed and stays where it was, and its message goes out in your first period after
   the program lets go. Stop TX still drops the other program's key and stops everything. JS8 and Nexus's other timed
-  modes wait the same way. NEEDS-BENCH: WSJT-X on the CAT broker holding PTT through a Nexus FT8 CQ's period, into a
-  dummy load first.
+  modes wait the same way.
 - **Mac: an IC-7300's sound card opens again.** macOS names that radio's USB sound card "USB Audio CODEC" with a space
   at the end. Nexus listed and saved the name with the space, then dropped it when opening the device, so the radio
   you chose never matched: there was no receive audio, the error said "USB Audio CODEC" is not available, and Nexus
@@ -666,9 +822,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it reads, or whose computer drops what it has not read when a reset comes, then never read Nexus's last commands:
   the transmitter's stop, the panadapter's stop, and the stop Nexus sends again when the program has not confirmed the
   transmitter went off. Nexus now reads on for up to 0.2 s after its close, until the program answers it, so the
-  connection ends cleanly and the program has read everything sent before. NEEDS-BENCH: ExpertSDR3 and Thetis with
-  Audio over TCI and the panadapter on: change the radio's Connection and save, then quit Nexus; the program shows a
-  clean disconnect and stops sending to Nexus.
+  connection ends cleanly and the program has read everything sent before.
 - **TCI (Beta): a stop can no longer wait behind an SDR program that sends or reads slowly.** Nexus read each message
   from the program until it was whole, so a program sending one a byte at a time, the bytes under 20 ms apart, held
   Nexus in that one read. Stop, and Nexus's own checks that end an over the program is not taking Nexus's audio for or
@@ -705,8 +859,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it opened it, though nothing had been pressed to transmit. With TX on, the station's own PTT and a program keying
   the radio over the CAT share could transmit with nobody asking. The station's window now opens the screen and
   leaves TX as the second PC left it, off until you turn it on. A spot worked at the station turns TX on as it always
-  has, and Stop TX still holds TX off everywhere. NEEDS-BENCH: two Windows PCs on one network, the radio into a dummy
-  load.
+  has, and Stop TX still holds TX off everywhere.
 - **Programs that listen to Nexus the way they listen to WSJT-X now see what you are transmitting.** GridTracker, JTAlert
   and the like got your decodes but not your TX message, and were always told TX was off. Nexus now reports the message
   on the air, whether TX is enabled, the report you are sending, the station's grid and a tripped TX watchdog, as
@@ -719,14 +872,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused as "not a callsign or @group JS8 can address". It now goes out as JS8Call sends it, a message or a command
   alike: a directed frame to W1AW with JS8Call's portable flag set, the same frame byte for byte. Other suffixes are
   unchanged: W1AW/M, W1AW/1 or W1AW/QRP goes as a compound call, as JS8Call sends one, and a call JS8Call cannot send
-  to is still refused. NEEDS-BENCH: a JS8Call station receiving a message sent to its /P call.
+  to is still refused.
 - **FT8 and FT4: a weak reply that arrives late in the period now counts for your next over.** Nexus now
   decodes at the same moments as WSJT-X. FT8's full decode runs 14.4 seconds into the period instead of after the
   period ends, and FT4's one decode runs at 6.05 seconds instead of at 5.5 and again at 7.5. A weak RR73 or report
   that only the full decode finds is then known before your next over starts, so Nexus answers it instead of
   sending its last message again. If that decode is still running when your over starts, its result still counts
-  as soon as it is done. The early FT8 decode at 11.8 seconds is unchanged. NEEDS-BENCH: an FT8 and an FT4 QSO
-  with a weak station, into a dummy load first.
+  as soon as it is done. The early FT8 decode at 11.8 seconds is unchanged.
 - **FT8 and FT4: each decode counts the moment it is found, as in WSJT-X.** Nexus handed a decode pass's results
   to the QSO sequencer and the decode list only when the whole pass had finished. It now hands each decode on as soon
   as it is found, and your RX frequency is looked at first, as in WSJT-X. A weak reply on your frequency is then in
@@ -735,17 +887,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and to loggers and PSK Reporter, which now also get each one as it is found. A CQ run whose best-caller choice is
   strongest, farthest or CQ callers first still compares all the answers a pass brings before it picks one. The
   early FT8 decode at 11.8 seconds now stops at 13.4 seconds if it is still running, as WSJT-X's does, so a slow
-  computer no longer loses that period's full decode to it. NEEDS-BENCH: FT8 and FT4 QSOs with weak stations, into
-  a dummy load first.
-- **FT8: the full decode starts from the audio the early decode has already cleared, as in WSJT-X.** At 13.5
-  seconds into the period Nexus now takes the stations the early decode found at 11.8 seconds out of the audio, as
-  WSJT-X does, and the full decode at 14.4 seconds searches what is left. It no longer finds those stations again
-  first: what they hid comes out in its first search, and only new decodes reach the decode list and the QSO
-  sequencer. On a busy band this is what puts a weak reply on your frequency in the decision for your next over:
-  with 80 stations in the period it arrives about 14.6 seconds into the period instead of 15.1, after your over had
-  started. On busy test recordings the full decode finds about 3 % more stations; like WSJT-X's, it also misses a
-  few that the old way found, about 4 in 1000. FT4 has no early decode, in WSJT-X or in Nexus, and is unchanged.
-  NEEDS-BENCH: FT8 QSOs with weak stations on a busy band, into a dummy load first.
+  computer no longer loses that period's full decode to it.
 - **The diagnostic log now says when a period's decode was dropped.** When the decoder is still busy as a period
   ends, Nexus skips that period's decode, and it said so only on a console that Windows never shows. The line, with
   how many periods have been dropped so far, now goes to the diagnostic log too, so a computer too slow for the
@@ -781,43 +923,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that station had confirmed; its own RR73 then got no 73. Now, as in WSJT-X, another station's confirmation is
   ignored: nothing is logged or sent to it, and your caller keeps getting your R and exchange until its own RR73
   logs the contact, with your 73 in ARRL Field Day on FT8 and FT4 as before. The ARRL VHF contests and the
-  contests with the standard messages already worked this way. NEEDS-BENCH: ARRL Field Day on FT8 and FT4, a
-  station that calls you and a second station that sends you RR73.
+  contests with the standard messages already worked this way.
 - **Field Day S&P: only the station you called completes the contact.** In the Contest screen's S&P on Field
   Day's messages (ARRL Field Day, Winter Field Day, and FT1, DX1 or FT2 in any contest), once you had answered a
   station's CQ, a rogered exchange sent to you by a different station logged that station and sent it your RR73,
   and the station you had called then never got its RR73 or a place in your log. Now, as in WSJT-X, that exchange
   is ignored: nothing is logged or sent to it, and your exchange keeps going to the station you called until its
   own rogered exchange logs the contact and gets your RR73. The ARRL VHF contests and the contests with the
-  standard messages already worked this way. NEEDS-BENCH: ARRL Field Day on FT8 and FT4, a station whose CQ you
-  answer and a second station that sends you a rogered exchange.
+  standard messages already worked this way.
 - **Field Day: a station signing W9XYZ/M is logged as W9XYZ/M, not `<W9XYZ/M>`.** In the Contest screen on Field
   Day's messages (ARRL Field Day, Winter Field Day, and FT1, DX1 or FT2 in any contest), a station whose call ends
   in a suffix such as /M, /4 or /QRP sends its exchange with its call in angle brackets, and a contact with it went
   into your contest log that way: in the ADIF and Cabrillo files you export, and in the dupe check, so S&P answered
   that station's next CQ and worked it again. The call is now logged without the brackets, as the ARRL VHF contests
   and the contests with the standard messages already log it and as WSJT-X does, so that station's next CQ is a dupe
-  like any other. What you send on the air during the contact is unchanged. NEEDS-BENCH: ARRL Field Day on FT8, S&P
-  on a station signing /M or /QRP.
+  like any other. What you send on the air during the contact is unchanged.
 - **Field Day: your RR73 and 73 to a station signing W9XYZ/M are the ones WSJT-X sends.** In the Contest screen on
   Field Day's messages, closing a contact with a station whose call has a suffix such as /M, /4 or /QRP, or a prefix
   such as PJ4/, sent `<W9XYZ/M> K1ABC RR73`, a different message from the one WSJT-X sends. Nexus now sends WSJT-X's,
   `W9XYZ/M <K1ABC> RR73` and `W9XYZ/M <K1ABC> 73`: that station's call in full and yours in angle brackets, the same
   message bit for bit. Your exchange and your roger to that station are unchanged, and so is everything when your
-  own call has a suffix or a prefix. NEEDS-BENCH: ARRL Field Day on FT8, S&P and Running with a station signing /M
-  or /QRP that runs WSJT-X.
+  own call has a suffix or a prefix.
 - **Field Day: when you run, a station signing W9XYZ/M can now close the contact.** In the Contest screen on Field
   Day's messages, a station whose call has a suffix such as /M, /4 or /QRP and runs WSJT-X sends its RR73 or 73 with
   your call in angle brackets and its own in full, `<K1ABC> W9XYZ/M RR73`. Your run did not take that as sent to you:
   it sent the station your roger and exchange again, and the contact was never logged. It now takes it as WSJT-X does,
   logs the station as W9XYZ/M and, in ARRL Field Day on FT8 and FT4, answers with WSJT-X's 73 before calling CQ again.
-  NEEDS-BENCH: ARRL Field Day on FT8, Running, with a station signing /M or /QRP that runs WSJT-X calling you.
 - **Field Day: a call shown as `<...>` is no longer answered or logged.** In the Contest screen on Field Day's
   messages, a station whose call has a suffix or a prefix shows as `<...>` until Nexus has heard that call in full.
   When you ran, Nexus answered such a caller's exchange, addressed to `<...>`, and logged the contact with the call
   `...`; in S&P it answered a CQ from `<...>`. Nexus now passes such a message by, as WSJT-X does in Field Day. Once
-  the station has sent its call in full (in a CQ, for example), its next message is worked as usual. NEEDS-BENCH:
-  ARRL Field Day on FT8, Running, called by a station signing /M or /QRP whose call Nexus has not heard in full.
+  the station has sent its call in full (in a CQ, for example), its next message is worked as usual.
 - **ARRL VHF contests and contests with the standard messages: your 73 to a station signing W9XYZ/M no longer
   goes out with another station's call.** In the Contest screen, closing a contact with a station whose call has a
   suffix such as /M, /4 or /QRP, or a prefix such as PJ4/, your 73 read `W9XYZ/M K1ABC 73`, which goes on the air
@@ -825,15 +961,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard messages your RR73 to such a station read `<W9XYZ/M> K1ABC RR73`, a different message from the one
   WSJT-X sends. Nexus now sends WSJT-X's, `W9XYZ/M <K1ABC> 73` and `W9XYZ/M <K1ABC> RR73`, the same message bit for
   bit, as it already does in Field Day. Your grid, report and roger are unchanged, and so is everything when your
-  own call has a suffix or a prefix. NEEDS-BENCH: an ARRL VHF contest on FT8, Running, called by a station signing
-  /M or /QRP that runs WSJT-X.
+  own call has a suffix or a prefix.
 - **Contests: double-clicking a CQ from `<...>` no longer answers it.** With the contest switch on, a station whose
   call has a suffix or a prefix can show as `<...>` until Nexus has decoded its call in full. Double-clicking its
   CQ, or a logger's Reply to it, switched to the contest's S&P, turned TX on, moved RX and TX onto the station and
   sent your exchange or grid to `<...>`, a call no one could read. It now does none of that and says why, as WSJT-X
-  answers no `<...>`. Once the station's call shows in full, a double-click works it as usual. NEEDS-BENCH: ARRL
-  Field Day on FT8, a station signing /M or /QRP whose call Nexus has not decoded in full calling `CQ FD` with its
-  call hashed.
+  answers no `<...>`. Once the station's call shows in full, a double-click works it as usual.
 - **FT8/FT4: your RR73 and 73 to a station signing W9XYZ/M are the ones WSJT-X sends.** Outside a contest, closing
   a contact with a station whose call has a suffix such as /M, /4 or /QRP, or a prefix such as PJ4/, sent
   `<W9XYZ/M> K1ABC RR73` and `<W9XYZ/M> K1ABC 73`: the right two calls, but a different message from the one WSJT-X
@@ -841,40 +974,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `W9XYZ/M <K1ABC> 73`: that station's call in full and yours in angle brackets, the same message bit for bit, and
   the Tx panel's Tx4 and Tx5 show them that way. This holds when your own call ends in /P or /R too. Your grid,
   report and roger are unchanged, and so is everything when your own call has another suffix or a prefix.
-  NEEDS-BENCH: FT8 and FT4, a station signing /M or /QRP that runs WSJT-X, answering its CQ and answered by it, with
-  RR73 and with RRR.
 - **ARRL VHF contests and contests with the standard messages: S&P no longer answers a CQ from `<...>`.** With TX
   on in the Contest screen's S&P, a station whose call has a suffix or a prefix can show as `CQ TEST <...> EN37`
   until Nexus has decoded its call in full. S&P answered that CQ, sending your grid to `<...>`, a call no one could
   read. It now passes such a CQ by, as Field Day's S&P already did and as WSJT-X answers no `<...>`, and answers the
-  station's next CQ once its call shows. NEEDS-BENCH: an ARRL VHF contest on FT8, S&P with TX on, a station signing
-  /M or /QRP whose call Nexus has not decoded in full calling `CQ TEST` with its call hashed.
+  station's next CQ once its call shows.
 - **FT8/FT4: double-clicking a CQ from `<...>` no longer answers it outside a contest either.** A station whose
   call has a suffix or a prefix can show as `<...>` until Nexus has decoded its call in full. Double-clicking its
-  CQ with the contest switch off, a logger's Reply to it, or working it from the Remote page turned TX on, moved RX
+  CQ with the contest switch off, or a logger's Reply to it, turned TX on, moved RX
   and TX onto the station and sent your grid to `<...>`, a call no one could read. It now does none of that and says
   why, as it already did with the contest switch on and as WSJT-X answers no `<...>`. Once the station's call shows
-  in full, a double-click works it as usual. NEEDS-BENCH: FT8, a station signing /M or /QRP whose call Nexus has not
-  decoded in full calling CQ with its call hashed.
+  in full, a double-click works it as usual.
 - **Contests with the standard messages: when you run, a station signing W9XYZ/M that runs WSJT-X now gets an
   answer.** Such a station calls you with your call in angle brackets, its own in full and no grid,
   `<K1ABC> W9XYZ/M`. Your run did not answer it and kept calling CQ, unless that station had Skip Tx1 on. It now
   answers with your report, `<W9XYZ/M> K1ABC -12`, as WSJT-X does, and the contact goes on as usual and is logged as
   W9XYZ/M, with no grid. A first call from `<...>`, or one where both calls have a suffix or a prefix, is still not
-  answered; the ARRL VHF contests and Field Day are unchanged. NEEDS-BENCH: a state QSO party (or another contest
-  with the standard messages) on FT8, Running, called by a station signing /M or /QRP that runs WSJT-X with no
-  Special Operating Activity and Skip Tx1 off.
+  answered; the ARRL VHF contests and Field Day are unchanged.
 - **FT8/FT4: a caller shown as `<...>` is no longer answered.** A station whose call has a suffix or a prefix
   can show as `<...>` until Nexus has decoded its call in full. When you called CQ, outside a contest or Running in
   an ARRL VHF contest or a contest with the standard messages, and such a station called you with its grid or its
   report, Nexus answered it, sending your report or roger to `<...>`, a call no one could read; a best-caller choice
   could even pick it over a station whose call shows. Double-clicking any other message from `<...>`, a logger's
-  Reply to one, working one from the Remote page, or clicking `<...>` in a list started a contact with `<...>` too.
+  Reply to one, or clicking `<...>` in a list started a contact with `<...>` too.
   Nexus now passes such a caller by and answers the next station that called you in the same period, or calls CQ
   again; a click on `<...>` changes nothing and says why. WSJT-X answers no `<...>`. Once the station's call shows
-  in full, it is answered and worked as usual. Field Day already passed such a caller by. NEEDS-BENCH: FT8, Call CQ
-  and then an ARRL VHF contest's Running, called by a station signing /M that runs WSJT-X, whose call Nexus has not
-  decoded in full.
+  in full, it is answered and worked as usual. Field Day already passed such a caller by.
 - **FT8/FT4: typing 73 to a station signing W9XYZ/M no longer sends it to W9XYZ.** In a contact with a station
   whose call has a suffix such as /M or /QRP, a prefix such as PJ4/, or a shape such as YW18FIFA, the free text you
   type for the next message (`73`, `RR73`, `RRR` or a report) went out as `W9XYZ/M K1ABC 73`, which goes on the air
@@ -882,14 +1007,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own call when it has a suffix or a prefix. Nexus now sends the message WSJT-X sends for the two calls, such as
   `W9XYZ/M <K1ABC> 73` (your call in angle brackets) or `<W9XYZ> K1ABC/QRP 73`, the same message bit for bit and
   the same one Nexus's own 73 is. Other free text, and contacts where both calls are plain or both have a suffix or
-  a prefix, go out as before. NEEDS-BENCH: FT8, working a station signing /M that runs WSJT-X, type 73 as the next
-  message: WSJT-X shows `W9XYZ/M <you> 73` and logs.
+  a prefix, go out as before.
 - **FT8/FT4: clicking the Tx3 row sends what the row shows.** With your call ending in /P or /R and a station
   signing W9XYZ/M or PJ4/W9XYZ, no report can ride your roger, so the Tx panel's Tx3 shows `<W9XYZ/M> K1ABC/P RRR`.
   Clicked, it went out as `W9XYZ/M <K1ABC/P> RRR`, the Tx4 message. It now goes out as the row shows it, as WSJT-X
-  sends what its Tx3 box holds; the automatic sequence already sent it that way. NEEDS-BENCH: FT8, your call with
-  /P, working a station signing /M that runs WSJT-X, click Tx3: WSJT-X decodes its own call in angle brackets,
-  your call in full and RRR.
+  sends what its Tx3 box holds; the automatic sequence already sent it that way.
 - **FT8/FT4: free text that FT8 cannot send no longer keys a steady tone.** Nexus puts both calls in front of the
   free text you type for the next message, so `TNX 73` becomes `W9XYZ K1ABC TNX 73`: a message FT8's encoder cannot
   build. Nexus transmitted it anyway: on FT8, one steady tone for 13 seconds; on FT4 nothing went out, though Band
@@ -897,14 +1019,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`<...>`). Now such a message is never transmitted, whether it comes from the free-text box, a Tx row (Tx 5 as
   typed or filled from a macro), a click during an over, the contest screen or Remote, and Nexus says why: after
   two calls only a report, R-report, RRR, RR73 or 73 fits, and free text on its own, as in Tx 5, holds 13
-  characters. The message you had queued stays queued. Text FT8 can send goes out as before. NEEDS-BENCH: FT8 into
-  a dummy load, working a WSJT-X station signing W9XYZ/M: type `TNX 73` in the free-text box; the reason shows,
-  nothing keys and your queued message goes out; then put `TNX 73` in Tx 5 and click it: WSJT-X decodes `TNX 73`.
+  characters. The message you had queued stays queued. Text FT8 can send goes out as before.
 - **WSJT-X UDP: a Replay no longer marks old decodes as new.** When a logger such as JTAlert or GridTracker asks
   Nexus to replay the decodes, Nexus sent them marked New, as if just heard, so a program could alert on them again.
-  They now go out marked not new, as WSJT-X sends them. Decodes as they are heard are still New. NEEDS-BENCH:
-  GridTracker or JTAlert on Nexus's UDP port, restarted while Nexus decodes: the period's decodes come back without
-  new alerts.
+  They now go out marked not new, as WSJT-X sends them. Decodes as they are heard are still New.
 - **Nexus names itself to QRZ.** QRZ asks every program that talks to it to say what it is, and may limit one that
   does not. Callbook lookups and Logbook uploads now say `Nexus/` and the version you run. Your callsign is not sent
   in it.
@@ -978,8 +1096,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   radio happened to report itself keyed), and the meter strip showed the last word of every send, and any one-word
   send, as off the air. The meters are now read for every word Nexus sends, on every keyer, and blank when it
   ends or Stop TX cuts it. The high-SWR cutoff, if switched on, now also sees the last word. The 150 ms meter
-  cadence is unchanged. NEEDS-BENCH: send CW with the radio's own keyer and with a WinKeyer and watch Po, ALC and
-  SWR move.
+  cadence is unchanged.
 - **CW now owns the transmitter until its last word ends.** Nexus counted CW as transmitting only while words were
   still waiting to go, so during the last word of every send (and all of a one-word send, such as the CW ID after
   an FT 73) another program's PTT over the CAT broker, the radio's ATU tune-up, a voice message on a Flex, an
@@ -993,14 +1110,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sending — stop it first"); a voice message queued just before CW started is dropped, not played later. Stopping a
   tune, letting go of PTT and stopping a voice message always work, and Stop TX still ends everything at once. An
   FT slot that starts while CW is sending is skipped, as one is while tuning: the QSO stays where it was and the
-  next free slot sends the same message. NEEDS-BENCH: press Tune, PTT and a voice-keyer F-key during a CW send on
-  the radio's keyer and on a WinKeyer.
+  next free slot sends the same message.
 - **IC-7300, IC-705, IC-905 and IC-7300MK2: scope span, reference level and Center/Fixed now work.** With Native Icom
   CI-V on, these radios refused every scope span button ("SCOPE SPAN REFUSED … did not answer when asked whether its
   scope is in Center mode"), and the reference level and Center/Fixed controls did nothing, whatever the scope was set
   to. Nexus left one byte out of those commands that Icom's own command tables show for these models. The IC-9700,
-  IC-7610 and IC-7760 send exactly what they sent before. NEEDS-BENCH: on an IC-7300, set each span from ±2.5 to
-  ±500 kHz, change the reference level, and switch Center/Fixed.
+  IC-7610 and IC-7760 send exactly what they sent before.
 - **Contest contacts no longer upload to QRZ, ClubLog and the other logging services while the contest runs.** With
   contest mode on, a contact logged anywhere but the contest entry strip (the everyday log form, the Logbook, a screen
   that had left the contest) went to every logging service the moment it was logged. It now waits: the contest's
@@ -1012,12 +1127,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version the shack runs, and that installing here now ends remote operation until the shack runs the same version.
   Update the shack first, or both together. **Install anyway** works only once you tick the warning, and after
   **Leave** the update installs as usual. When the shack does refuse a different version, the banner now names both
-  versions and says which side to update. NEEDS-BENCH: two PCs, one of them a version behind.
+  versions and says which side to update.
 - **FT-1000 and FT-1000D owners: clicking a spot tunes the radio.** With neither radio in the rig list, the nearest
   choice was the FT-1000MP, and its driver reads these radios' frequency in the wrong format. Nexus sent the spot's
   frequency, read back a wrong one and followed it, so the dial never settled on the spot. Choose FT-1000 or FT-1000D
-  in your radio settings instead of FT-1000MP. An FT-1000MP itself was not affected. NEEDS-BENCH: an FT-1000 or
-  FT-1000D on CAT, clicking a cluster spot.
+  in your radio settings instead of FT-1000MP. An FT-1000MP itself was not affected.
 - **Fetch LoTW works on a large account the first time.** The first download (and the one after Download
   everything again) asked LoTW for every confirmation at once, which LoTW could not finish on a big account: it
   answered "503", and every retry asked for everything again. Nexus now asks a year of contacts at a time, newest
@@ -1045,7 +1159,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection (IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2) the SWR figure comes through the same calibrated
   scale as an Icom on USB with Native Icom CI-V, so it now reads as a trusted number and the high-SWR cutoff can be
   turned on. An IC-7300MK2 on USB still shows "SWR?": Nexus drives it through Hamlib there, not through its own CI-V
-  scale. Not yet checked against a known load on the network connection (NEEDS-BENCH).
+  scale.
 - **FT screen: the transmit meters no longer stretch and shrink at the start of an over.** The meters beside the
   Tx messages used to appear one at a time as the radio reported them, so SWR alone spread across the whole space and
   then shrank as ALC, power and compression arrived. From the moment the radio keys, SWR, ALC, PO and COMP now each
@@ -1061,7 +1175,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Elecraft KPA1500 set to 57600, 115200 or 230400 baud now connects.** Nexus tried only the KPA500's four speeds
   (4800 to 38400), so a KPA1500 set to one of its three faster ones showed "Not answering" even when it was cabled
   correctly. All seven speeds Elecraft documents are now tried. A KPA500 is asked at its four speeds first, in the
-  same order as before. NEEDS-BENCH: a KPA1500 set to 230400, then 57600, on its USB port.
+  same order as before.
 - **RTTY screen: a click on the waterfall no longer moves your transmit tones during an over.** Netting moves the
   AFSK transmit tones as well as the decoder, so a click while transmitting slid the signal you were sending to
   wherever you clicked. While an over is on the air or queued, continuous TX is on or Tune is keyed, a click now does
@@ -1091,9 +1205,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stopped answering, with commands piled up ahead of that one, the wait ran out (1.3 s on USB, 4.1 s on the network
   connection) and the connection closed without the command ever being sent, so a radio that was transmitting stayed
   on the air. The transmit-off command is now always sent once as the connection closes, and nothing else is sent
-  then. NEEDS-BENCH: an Icom on Native Icom CI-V into a dummy load, Nexus quit while Tune is keyed: the radio returns
-  to receive at once. With the CI-V diagnostic log on, each close (USB, and the Icom network connection) shows one
-  transmit-off and nothing after it.
+  then.
 - **CW sent through the radio's own keyer no longer passes a `;` to Kenwood, Yaesu and Elecraft radios, where it would
   be read as a radio command.** With the CAT keyer (Settings ▸ CW ▸ Keyer backend: CAT), a word holding a `;`, a
   control character or a character Nexus has no Morse for (an apostrophe, `"`, an accented letter) is no longer
@@ -1101,14 +1213,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keys, and Enter Sends Message logs nothing. Typed CW, F-key macros, Enter Sends Message and CW sent from a computer
   driving the station all keep to this, by the same rule that TCI programs' CW already kept. A callbook name or
   state that `{HISNAME}` and `{HISSTATE}` key keeps only the characters the keyer can send, so the rest of it still
-  goes out. The WinKeyer, the serial key line and the soundcard keyer key exactly as before. NEEDS-BENCH: on a
-  Kenwood or Elecraft and on an FTDX10, each on the CAT keyer into a dummy load, an F-key macro `CQ TEST;X` keys
-  nothing, shows the warning and leaves the dial where it was; `CQ TEST K` keys in full.
+  goes out. The WinKeyer, the serial key line and the soundcard keyer key exactly as before.
 - **Turning off Remote over this network takes effect at once, however slow the disk.** Turning it off in Settings ▸
   Station ▸ Remote access, or pressing **End remote control**, saved the setting before it closed the station's port,
   ended the other computers' sessions and took back their control of the station. While the disk was busy, or
   something held the settings file open, those computers stayed connected and anything they had on the air kept going
   until the save finished. Now the port closes and the sessions end first, and the setting is saved after.
+- **Nexus Remote: Save to this computer never replaces a file already in the second PC's Downloads folder.** A
+  station file whose name is taken there, such as ALL.TXT saved a second time, is saved as `ALL (1).TXT`, then
+  `ALL (2).TXT`, the way a browser names a download, and the file that was there keeps every byte. The message
+  after the save names the file it went to.
 
 ### Security
 - **Nexus Remote: a config profile saved from a computer driving the station no longer carries the settings set at the
@@ -1146,6 +1260,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command line and ends a connection that runs past it; nothing in an over-long line reaches the rotator, and rotator
   programs, whose commands are short, are unaffected. The link is new since 1.19.0, so no earlier release is affected,
   and the port is reachable only from this computer.
+- **The PstRotatorAz link's rotator port now hangs up on a web page.** A page open in a browser on this computer can
+  send a request to the port Nexus answers rotator commands on. Nothing in such a request moved the antenna, but only
+  because of where a browser's request happens to put a blank line. The port now ends the connection at the request's
+  first line and answers it nothing, as the radio-sharing port does; rotator programs are unaffected.
 
 ## [1.19.0] — 2026-10-16
 

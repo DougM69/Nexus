@@ -213,6 +213,7 @@
       "workedBand": false
     }
   ],
+  "rxFreqClearTick": null,
   "stations": [
     {
       "call": "N7GHI",

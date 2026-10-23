@@ -1168,9 +1168,18 @@ const N_TX_METERS: usize = TX_METERS.len();
 /// wire, and placed on the radio's own bar instead of Hamlib's quarter of it. `None` is a missed
 /// read on either path, so the three-strikes ladder treats both alike, and `deadline_ms` bounds
 /// both. A read: nothing is set on the radio.
-fn read_tx_meter(rig: &mut Rig, meter: &str, model: u32, deadline_ms: Option<u64>) -> Option<f32> {
+///
+/// `raw_alc` false reads that ALC with `l ALC` after all: the link never answered the raw read
+/// ([`RadioLoop::tx_alc_raw`]).
+fn read_tx_meter(
+    rig: &mut Rig,
+    meter: &str,
+    model: u32,
+    raw_alc: bool,
+    deadline_ms: Option<u64>,
+) -> Option<f32> {
     match crate::rigmodels::raw_alc_query(model) {
-        Some(query) if meter == "ALC" => rig
+        Some(query) if meter == "ALC" && raw_alc => rig
             .send_raw_within(query, deadline_ms)
             .and_then(|reply| crate::rigmodels::alc_bar_from_rm4(&reply)),
         _ => rig.read_meter_f32_within(meter, deadline_ms),
@@ -3946,6 +3955,13 @@ struct RadioLoop {
     /// `(rig_model, is_network, flex_radio_ip)` — the ADDRESS is part of the key, see
     /// `reconcile_spectrum_source`.
     spectrum_src_key: Option<(u32, bool, String)>,
+    /// The SDRconnect scope source, while the operator's scope source is SDRconnect: the host and
+    /// port it was started for, and the scope (`crate::sdrconnect`). Reconciled each step by
+    /// `reconcile_sdrconnect`; an address change stops it and starts another.
+    sdrconnect: Option<(String, u16, crate::sdrconnect::SdrconnectScope)>,
+    /// The sentence the SDRconnect scope last put on the scope's status line, so it is written
+    /// only when it changes and cleared only when it is this source's.
+    sdrconnect_said: Option<String>,
     /// FORK-LOCAL: the FT-710's own RF spectrum, read off its internal FT4222 USB→SPI bridge.
     /// Same lifecycle as `spectrum_src` above — held beside a KEY so a rig switch stops this
     /// reader before the new radio's starts, which is what keeps a scope from streaming the
@@ -4002,6 +4018,9 @@ struct RadioLoop {
     /// ([`RadioLoop::reconcile_tci_audio`]): the session it comes from, the receive tap's ring it
     /// feeds, and the receive floor's clocks.
     tci_rx: Option<TciRx>,
+    /// The radio name the active radio's TCI server reported, as last handed to the engine
+    /// ([`RadioLoop::note_tci_device`]), so the engine is told only when it changes.
+    tci_device: Option<String>,
     /// The session whose receive audio starved (the receive floor fired): not taken again until
     /// the TCI client is another session (a reconnect, a saved change, a switch).
     tci_rx_failed: Option<std::sync::Weak<crate::tci::audio::Receive>>,
@@ -4372,6 +4391,16 @@ struct RadioLoop {
     /// backoff applied when it fails again — `func_retry_at`/`func_retry_backoff`'s pair.
     tx_meter_retry_at: [u32; N_TX_METERS],
     tx_meter_retry_backoff: [u32; N_TX_METERS],
+    /// Has this link answered the raw ALC read ([`crate::rigmodels::raw_alc_query`])? `None` not
+    /// yet, `Some(true)` it has, `Some(false)` it never did and ALC is read with Hamlib's `l ALC`.
+    ///
+    /// ⚠️ A RIGCTLD BEFORE HAMLIB 4.6 NEVER ANSWERS IT. Its `w` waits for a CR or LF that a Yaesu
+    /// never sends and prints nothing (measured, Hamlib 4.5.5 `rigctld -m 1035`), so an FT-991
+    /// behind the operator's own rigctld lost its ALC meter in 1.19.0: three misses and ⊘, where
+    /// 1.18.0's `l ALC` read it. So when the ladder gives the raw read up on a link where it never
+    /// answered, the meter falls back to `l ALC` instead of being parked. Only on an over's read:
+    /// a tune-up's 120 ms deadline can miss a slow radio that does answer. Reset with the ladder.
+    tx_alc_raw: Option<bool>,
     /// Whether we last surfaced the "monitor refused — would transmit into the TX
     /// device" note on the audio-error line, so we clear only our OWN message.
     /// The monitor block currently OWNS the audio-error line (it wrote either
@@ -4572,12 +4601,15 @@ impl RadioLoop {
             audio_rebuild_floor: 0.0,
             spectrum_src: None,
             spectrum_src_key: None,
+            sdrconnect: None,
+            sdrconnect_said: None,
             dax_started: None,
             dax_last_audio: None,
             dax_tee_id: None,
             flex_client_audio: false,
             flex_client_audio_failed: false,
             tci_rx: None,
+            tci_device: None,
             tci_rx_failed: None,
             flex_mic_off_pushed: None,
             flex_radio_has_mic_pushed: None,
@@ -4668,6 +4700,7 @@ impl RadioLoop {
             tx_meter_misses: [0; N_TX_METERS],
             tx_meter_retry_at: [0; N_TX_METERS],
             tx_meter_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS],
+            tx_alc_raw: None,
 
             clock_offset_ms: 0,
             clock_jump: tempo_app::clocksync::ClockJumpDetector::new(),
@@ -5572,6 +5605,55 @@ impl RadioLoop {
         }
     }
 
+    /// The SDRconnect scope source, every step: started while the operator's scope source is
+    /// SDRconnect (its RF slot then takes no other source's rows), stopped when it is the radio
+    /// again, restarted on an address change; told the dial and whether the station is on the air;
+    /// and its trouble said on the scope's status line. One engine lock; nothing here waits on
+    /// SDRconnect.
+    fn reconcile_sdrconnect(&mut self, engine: &Arc<Mutex<Engine>>) {
+        use crate::sdrconnect::{Follow, SdrconnectScope};
+        let (target, dial_hz, follow, on_air) = {
+            let e = engine_lock(engine);
+            let s = e.settings();
+            let dial_hz = (s.dial_mhz * 1_000_000.0).round();
+            let dial_hz = if dial_hz.is_finite() && dial_hz > 0.0 {
+                dial_hz as u64
+            } else {
+                0
+            };
+            (
+                s.sdrconnect_target(),
+                dial_hz,
+                Follow::from_setting(&s.sdrconnect_follow),
+                e.on_air(),
+            )
+        };
+        let same = match (&self.sdrconnect, &target) {
+            (Some((host, port, _)), Some((h, p))) => host == h && port == p,
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            // The old one first: its drop hands the RF slot back before the new one takes it.
+            self.sdrconnect = None;
+            if let Some((host, port)) = target {
+                self.sdrconnect = SdrconnectScope::start(&host, port, &self.spectrum_feed)
+                    .map(|scope| (host, port, scope));
+            }
+        }
+        let said = self.sdrconnect.as_ref().and_then(|(host, port, scope)| {
+            scope.want(dial_hz, follow, on_air);
+            scope.status().state.problem(&format!("{host}:{port}"))
+        });
+        if said != self.sdrconnect_said {
+            // Over a sentence of ours, or to say one; never clearing another source's.
+            if said.is_some() || self.sdrconnect_said.is_some() {
+                engine_lock(engine).set_scope_error(said.clone());
+            }
+            self.sdrconnect_said = said;
+        }
+    }
+
     /// Native audio through Nexus's own Flex client (Beta): tell the client, every tick (an atomic
     /// store), whether the operator's `flex_native_audio` is on for the radio it serves, and keep
     /// the receive floor's clock with the source. No client, no lock.
@@ -5701,6 +5783,25 @@ impl RadioLoop {
             let mut eng = engine_lock(engine);
             eng.halt_tx();
             eng.set_cat_status(self.cat_ok, format!("TCI: {why}."));
+        }
+    }
+
+    /// The radio the active radio's TCI server named, handed to the engine when it changes: a
+    /// contact made on a TCI radio logs it as its rig (`MY_RIG`), where the radio's model only
+    /// says "TCI". `None` once no TCI session serves the active radio. Not on a switch the
+    /// handoff has not seen: `rigctld_proc` is then the radio being left.
+    fn note_tci_device(&mut self, engine: &Arc<Mutex<Engine>>) {
+        if self.switch_unhanded {
+            return;
+        }
+        let device = self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::tci)
+            .and_then(crate::tci::TciDaemon::device);
+        if device != self.tci_device {
+            self.tci_device = device.clone();
+            engine_lock(engine).set_tci_device(device);
         }
     }
 
@@ -6919,6 +7020,7 @@ impl RadioLoop {
         self.tx_meter_misses = [0; N_TX_METERS];
         self.tx_meter_retry_at = [0; N_TX_METERS];
         self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
+        self.tx_alc_raw = None;
         // The audio device must be (re)opened for the new radio even if its device name matches
         // (e.g. both "system default") — force it, since `audio_differs` alone would skip an
         // empty-vs-empty compare and leave the OLD radio's sound-card stream running.
@@ -8173,6 +8275,9 @@ impl RadioLoop {
             // capability — cheap (a key compare) unless it just gained/lost/changed a native scope.
             let (scope_model, scope_net) = (self.applied.rig_model, self.applied.is_network());
             self.reconcile_spectrum_source(engine, scope_model, scope_net);
+            // The operator's other scope source, SDRconnect, when chosen: it takes the RF slot from
+            // the radio's own panadapter (`crate::sdrconnect`).
+            self.reconcile_sdrconnect(engine);
             // The TCI radio's own panadapter (its IQ): renewed for the active radio's client every
             // tick, so a client a switch left behind lapses by itself (`crate::tci::iq`). Not on a
             // switch the handoff has not seen (W0): `rigctld_proc` is the radio being left.
@@ -8186,6 +8291,7 @@ impl RadioLoop {
             );
             self.reconcile_flex_client_audio(engine);
             self.take_tci_halts(engine);
+            self.note_tci_device(engine);
             self.reconcile_tci_audio(engine, &*backend);
             // Nexus's spots on the TCI radio's own panadapter, and the clicks on them: renewed for
             // the active radio's client every tick, so a client a switch left behind lapses by
@@ -8748,6 +8854,7 @@ impl RadioLoop {
                     self.tx_meter_misses = [0; N_TX_METERS];
                     self.tx_meter_retry_at = [0; N_TX_METERS];
                     self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
+                    self.tx_alc_raw = None;
                     // The level give-ups are a rate limit, not a verdict: a write refused while
                     // the link was half-open must be retried once the link is proven alive.
                     self.rf_power_giveup = None;
@@ -8893,6 +9000,7 @@ impl RadioLoop {
                             self.tx_meter_misses = [0; N_TX_METERS];
                             self.tx_meter_retry_at = [0; N_TX_METERS];
                             self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
+                            self.tx_alc_raw = None;
                             self.agc_giveup = None; // the refusal may have been the dead link
                             self.rf_power_giveup = None; // …and so may these three have been
                             self.mic_gain_giveup = None;
@@ -12733,14 +12841,32 @@ impl RadioLoop {
                     // keep their cadence and a rig that answers none of them is simply left
                     // alone while it transmits. See `tx_meter_supported`.
                     let mut reading = None;
+                    let model = self.applied.rig_model;
+                    let raw_alc = self.tx_alc_raw != Some(false);
                     if self.tx_meter_supported[i] != Some(false) {
-                        reading =
-                            read_tx_meter(rig, TX_METERS[i], self.applied.rig_model, deadline);
+                        reading = read_tx_meter(rig, TX_METERS[i], model, raw_alc, deadline);
                         note_ext_read(
                             &mut self.tx_meter_supported[i],
                             &mut self.tx_meter_misses[i],
                             reading.is_some(),
                         );
+                        if TX_METERS[i] == "ALC"
+                            && raw_alc
+                            && crate::rigmodels::raw_alc_query(model).is_some()
+                        {
+                            if reading.is_some() {
+                                self.tx_alc_raw = Some(true);
+                            } else if self.tx_meter_supported[i] == Some(false)
+                                && self.tx_alc_raw.is_none()
+                                && deadline.is_none()
+                            {
+                                // Never answered on this link: `l ALC` gets its own three
+                                // strikes instead of the meter being parked. See `tx_alc_raw`.
+                                self.tx_alc_raw = Some(false);
+                                self.tx_meter_supported[i] = None;
+                                self.tx_meter_misses[i] = 0;
+                            }
+                        }
                         if self.tx_meter_supported[i] == Some(false) {
                             // Just gave up: arm the re-probe and double the wait for the one
                             // after (capped) — the funcs' ladder, verbatim.
@@ -12772,10 +12898,11 @@ impl RadioLoop {
                         eng.observe_rig_tx_meters(swr, alc, po, comp);
                         // The ALC reading carries where this radio's own ALC zone ends on its
                         // bar, for the bar's colours (display only).
+                        // `l ALC` is Hamlib's scale, whose 1.0 is the zone's top: no zone of its own.
                         if alc.is_some() {
-                            eng.observe_rig_tx_alc_zone(crate::rigmodels::alc_zone_top(
-                                self.applied.rig_model,
-                            ));
+                            eng.observe_rig_tx_alc_zone(
+                                crate::rigmodels::alc_zone_top(model).filter(|_| raw_alc),
+                            );
                         }
                         // NOTIFY, NEVER ACT (the project's alerts rule). This raises a status
                         // line into the same lane as the foreign-key notice above and does
@@ -12989,6 +13116,9 @@ impl RadioLoop {
             };
             for q in &logged_qsos {
                 let time_on = q.when_unix as i64;
+                // Spelled as the ADIF writer spells `TX_PWR`, so the two messages of one contact
+                // agree; `""` when none was recorded, as WSJT-X sends an empty Tx power box.
+                let tx_power = q.tx_power.map(|p| format!("{p}")).unwrap_or_default();
                 send_logged_contact(
                     server,
                     &WsjtxQso {
@@ -13002,7 +13132,7 @@ impl RadioLoop {
                         mode: &q.mode,
                         report_sent: q.rst_sent.as_deref().unwrap_or(""),
                         report_recvd: q.rst_rcvd.as_deref().unwrap_or(""),
-                        tx_power: "",
+                        tx_power: &tx_power,
                         comments: q.comment.as_deref().unwrap_or(""),
                         name: q.name.as_deref().unwrap_or(""),
                         time_on,
@@ -13424,6 +13554,9 @@ impl RadioLoop {
         // and every Tauri command queued behind it — for as long as it kept
         // sending. The overflow is not dropped, just deferred one 20 ms tick.
         if let Some(server) = sinks.wsjtx {
+            // One Replay per tick: it re-sends all of Band Activity (thousands of datagrams on a
+            // busy band) with the engine lock held, so a burst of them is answered once.
+            let mut replayed = false;
             for inb in server.drain(tempo_net::server::INBOUND_PER_TICK) {
                 match inb {
                     WsjtxInbound::HaltTx { .. } => {
@@ -13437,24 +13570,22 @@ impl RadioLoop {
                             eng.halt_tx_for_failed_unkey(&why);
                         }
                     }
-                    WsjtxInbound::Clear { .. } => {
-                        // Visual clear only — the engine's decode context (answer
+                    WsjtxInbound::Clear { window, .. } => {
+                        // The panes' clear — the engine's decode context (answer
                         // parity / history) is not a window and stays intact.
-                        eng.apply_udp_clear();
+                        eng.apply_udp_clear(window);
                     }
-                    WsjtxInbound::Replay { .. } => {
-                        // A consumer that just connected wants the WHOLE current
-                        // period back — `last_decodes` alone holds only the most
-                        // recent ingest (post-early-pass it's just the boundary
-                        // stragglers). NO PSK spots here: replays must never
-                        // double-spot. Not New: WSJT-X replays each old decode "with the
-                        // 'New' field set to false" (`Network/NetworkMessage.hpp` 221-226;
-                        // `replayDecodes` → `postDecode (false, …)`, mainwindow.cpp
-                        // 13374-13396).
+                    WsjtxInbound::Replay { .. } if !replayed => {
+                        replayed = true;
+                        // A consumer that just connected wants every decode Band Activity
+                        // holds, as WSJT-X re-sends its window (`replayDecodes`, mainwindow.cpp
+                        // 13374-13396), each stamped with its own period's start. NO PSK spots
+                        // here: replays must never double-spot. Not New: WSJT-X replays each
+                        // old decode "with the 'New' field set to false"
+                        // (`Network/NetworkMessage.hpp` 221-226; `postDecode (false, …)`).
                         if let Some(server) = sinks.wsjtx {
                             let tier = tier_mode(eng.tier());
-                            let ms_mid = udp_decode_time_ms(&eng, now);
-                            for d in eng.current_period_decodes() {
+                            for (start, d) in eng.band_activity() {
                                 let _ = server.send_decode(&WsjtxDecode {
                                     new: false,
                                     ..build_decode(
@@ -13463,13 +13594,14 @@ impl RadioLoop {
                                         d.dt,
                                         d.freq,
                                         tier,
-                                        ms_mid,
+                                        (start * 1000 % 86_400_000) as u32,
                                         d.qual < 0.17,
                                     )
                                 });
                             }
                         }
                     }
+                    WsjtxInbound::Replay { .. } => {}
                     WsjtxInbound::Location { location, .. } => {
                         eng.apply_udp_location(&location);
                     }
@@ -13477,11 +13609,8 @@ impl RadioLoop {
                         eng.set_highlight(&call, bg, fg);
                     }
                     WsjtxInbound::FreeText { text, send, .. } => {
-                        let t = text.trim();
-                        if send && !t.is_empty() {
-                            if let Err(reason) = eng.udp_free_text(t) {
-                                crate::civ::diag::note(&format!("UDP FreeText refused: {reason}"));
-                            }
+                        if let Err(reason) = eng.udp_free_text(&text, send) {
+                            crate::civ::diag::note(&format!("UDP FreeText refused: {reason}"));
                         }
                     }
                     WsjtxInbound::Reply {
@@ -17789,6 +17918,7 @@ mod tests {
     mod refused_key;
     mod remote_radio;
     mod rf_pane;
+    mod sdrconnect_scope;
     mod split_overs;
     mod tci;
     mod tci_cw;
@@ -19279,6 +19409,73 @@ mod tests {
             }
             other => panic!("expected LoggedAdif, got {other:?}"),
         }
+    }
+
+    /// The contact's transmit power rides the QSOLogged datagram's own `Tx power` field,
+    /// as WSJT-X fills it from its Log QSO dialog. The record carried it and the datagram said
+    /// `""` — N1MM, HRD and Log4OM log from this message, so the power never reached them.
+    #[test]
+    fn a_logged_contacts_power_rides_the_qso_logged_datagram() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let logged = |adif: &str| tempo_core::logbook::parse_adif(adif).remove(0);
+        {
+            let mut e = engine.lock().unwrap();
+            e.log_qso(logged(
+                "<CALL:4>W1AW<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260910<TIME_ON:6>120000\
+                 <TX_PWR:2>50<EOR>",
+            ));
+            e.log_qso(logged(
+                "<CALL:5>K1ABC<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260910<TIME_ON:6>121000<EOR>",
+            ));
+        }
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let mut powers = Vec::new();
+        let mut buf = [0u8; 4096];
+        while let Ok((n, _)) = listener.recv_from(&mut buf) {
+            if let Some(WsjtxInbound::QsoLogged { qso, .. }) =
+                tempo_net::wsjtx::parse_inbound(&buf[..n])
+            {
+                powers.push((qso.dx_call, qso.tx_power));
+            }
+        }
+        assert_eq!(
+            powers,
+            vec![
+                ("W1AW".to_string(), "50".to_string()),
+                ("K1ABC".to_string(), String::new()),
+            ],
+            "the recorded power, and nothing where none was recorded"
+        );
     }
 
     #[test]
@@ -29501,6 +29698,85 @@ mod tests {
         assert!(
             state.full_pass_frame.is_none(),
             "finished as its own boundary's housekeeping, not parked for a boundary already past"
+        );
+    }
+
+    /// `k` samples of one LSB, each + or -, at seeded places in `len` samples of silence: a receive
+    /// path gone dead (a muted rig, a pulled cable) but for the odd stray bit.
+    fn lsb_clicks(seed: u64, k: usize, len: usize) -> Vec<f32> {
+        let mut x = vec![0f32; len];
+        let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        for _ in 0..k {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            let lsb: f32 = if (s >> 33) & 1 == 0 { 1.0 } else { -1.0 };
+            x[(s % len as u64) as usize] = lsb / 32767.0;
+        }
+        x
+    }
+
+    /// FT8 in a QSO, the partner's period near-silent: three stray LSBs, 0.004 LSB rms. WSJT-X
+    /// decodes nothing under 0.5 LSB rms (`lib/decoder.f90:92-93`), so nothing moves the QSO: the
+    /// R-report goes out again and no contact is logged. Before that floor the full pass's a7
+    /// replay found "W9XYZ K1ABC RR73" in this audio, and the boundary keyed the 73 and logged a
+    /// contact the partner never finished. The early and the full pass each take their part of
+    /// the period, as the loop does.
+    #[test]
+    fn ft8_a_near_silent_period_moves_no_qso() {
+        use tempo_core::modes::ModeKind;
+        let engine = wsjt_engine(Tier::Ft8);
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let mut station = StationSinks::new();
+        let (b, r, s) = (&mut backend, &mut rig, &mut station);
+
+        tick(&mut state, &engine, b, r, s, 100.0); // slot 0: nothing queued yet
+        awaiting_rr73(&engine, ModeKind::Ft8);
+        // On the band a while: past WSJT-X's a7 hide after the tier change.
+        engine.lock().unwrap().age_a7_hide(Duration::from_secs(60));
+        let logged = engine.lock().unwrap().snapshot().logged_tick;
+        tick(&mut state, &engine, b, r, s, 15_020.0); // slot 1: theirs
+
+        let quiet = lsb_clicks(156, 3, 172_800);
+        let early = 41 * 3456;
+        b.queue_capture(quiet[..early].to_vec());
+        tick(&mut state, &engine, b, r, s, 26_807.0);
+        tick(&mut state, &engine, b, r, s, 26_808.0);
+        assert!(
+            state.decode_in_flight && state.early_done_slot == Some(1),
+            "the early pass dispatches at 11.808 s"
+        );
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 26_809.0, 29_000.0),
+            "the early pass drained"
+        );
+        b.queue_capture(quiet[early..].to_vec());
+        tick(&mut state, &engine, b, r, s, 29_399.0);
+        tick(&mut state, &engine, b, r, s, 29_400.0);
+        assert!(
+            state.decode_in_flight && state.full_done_slot == Some(1),
+            "the full pass dispatches at 14.40 s"
+        );
+        assert!(
+            drain_decode(&mut state, &engine, b, r, s, 29_401.0, 29_990.0),
+            "the full pass drained before the boundary"
+        );
+
+        tick(&mut state, &engine, b, r, s, 30_020.0); // slot 2: ours
+        assert!(rig.keyed, "keyed at the boundary");
+        assert_eq!(
+            wsjt_messages_played(ModeKind::Ft8, &backend.played),
+            vec!["K1ABC W9XYZ R-10".to_string()],
+            "nothing was heard: the R-report again, not a 73"
+        );
+        let snap = engine.lock().unwrap().snapshot();
+        assert_eq!(snap.logged_tick, logged, "no contact logged");
+        assert_eq!(
+            snap.qso.and_then(|q| q.tx_now).as_deref(),
+            Some("K1ABC W9XYZ R-10"),
+            "still waiting for the RR73"
         );
     }
 

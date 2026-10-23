@@ -713,7 +713,7 @@ fn the_scan_sees_the_raw_locks_inside_the_guard_constructors() {
         "crates/tempo-app/src/engine.rs",
         "crates/tempo-audio/src/service.rs",
         "src-tauri/src/lib.rs",
-        "src-tauri/src/remote_service/operations/logging.rs",
+        "src-tauri/src/remote_service/operations/transmit_stop.rs",
     ] {
         assert!(
             files.iter().any(|(p, _)| p == must),

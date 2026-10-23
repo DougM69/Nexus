@@ -7445,6 +7445,15 @@ async fn get_propagation(
     // trend and regenerate the insight feed with it (overwriting the engine layer's
     // threshold-only insights). me_ll drives the representative MUF + greyline test.
     let me_ll = propagation::geo::maidenhead_to_latlon(&mygrid);
+    // A reading SWPC actually answered, for the opt-in space weather on each logged contact —
+    // never the model's stand-in values a failed fetch leaves in the snapshot.
+    if fetched_fresh && snap.space_wx.fetched {
+        let (kp, a_index, sfi, at) = (wx.kp, wx.a_index, wx.sfi, now.max(0) as u64);
+        let _ = with_engine(&state, move |mut eng| {
+            eng.note_space_weather(kp, a_index, sfi, at)
+        })
+        .await;
+    }
     if fetched_fresh {
         if let Ok(mut h) = wx_history.lock() {
             let muf = me_ll
@@ -30046,6 +30055,28 @@ fn n3fjp_mode(mode: &str) -> String {
 
 /// Forward ONE general (non-Field-Day) logged QSO to N3FJP ACLog over TCP ADDDIRECT. Uses the
 /// same `n3fjp_host`/`n3fjp_port` as the Field-Day push; N3FJP's EXCLUDEDUPES dedupes any overlap.
+/// Who N3FJP's ACLog is told worked a contact: the record's own `OPERATOR` — the operator at the
+/// key when one was named, the station call otherwise, as the log funnel stamps it — and the
+/// station call for a record that carries none (one logged before the stamp).
+fn n3fjp_operator(record_operator: Option<&str>, mycall: &str) -> String {
+    record_operator
+        .map(str::trim)
+        .filter(|o| !o.is_empty())
+        .unwrap_or(mycall)
+        .to_string()
+}
+
+#[cfg(test)]
+mod n3fjp_operator_tests {
+    /// A contact a second operator logged goes to ACLog under that operator, not the station.
+    #[test]
+    fn the_push_names_the_records_operator_and_the_station_without_one() {
+        assert_eq!(super::n3fjp_operator(Some("K9OP"), "W9XYZ"), "K9OP");
+        assert_eq!(super::n3fjp_operator(None, "W9XYZ"), "W9XYZ");
+        assert_eq!(super::n3fjp_operator(Some("  "), "W9XYZ"), "W9XYZ");
+    }
+}
+
 fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), String> {
     let (host, port, mycall) = {
         let eng = engine_lock(engine);
@@ -30067,7 +30098,7 @@ fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), Str
         mode: n3fjp_mode(&dto.mode),
         freq_mhz: dto.freq_mhz,
         when_unix: dto.when_unix,
-        operator: mycall,
+        operator: n3fjp_operator(dto.operator.as_deref(), &mycall),
         // General-logging extras (#106): a plain (non-contest) QSO carries reports,
         // a name and power, and the push was dropping all of them on the ACLog side.
         rst_sent: dto.rst_sent.clone(),
@@ -40776,12 +40807,16 @@ mod tests {
                 assert!(body.contains(call), "{command} must go through {call}");
             }
         }
-        // The Remote dispatcher's log actions. The POSITIVE CONTROL: they do reach the log, so a
-        // check that read nothing could not pass for one that read it.
-        let remote = include_str!("remote_service/operations/logging.rs");
+        // The Remote dispatcher. The POSITIVE CONTROL: it does reach the engine, so a check that
+        // read nothing could not pass for one that read it.
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+        ]
+        .concat();
         assert!(
-            remote.contains("log_current_qso_for_sync"),
-            "the control: Remote's own append is there"
+            remote.contains(".poll_remote_transmit("),
+            "the control: the dispatcher's own engine call is there"
         );
         for name in [
             "contest_removal",
@@ -40837,11 +40872,15 @@ mod tests {
                 );
             }
         }
-        // POSITIVE CONTROL: Remote's log actions reach the log.
-        let remote = include_str!("remote_service/operations/logging.rs");
+        // POSITIVE CONTROL: the Remote dispatcher reaches the engine.
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+        ]
+        .concat();
         assert!(
-            remote.contains("log_current_qso_for_sync"),
-            "the control: Remote's own append is there"
+            remote.contains(".poll_remote_transmit("),
+            "the control: the dispatcher's own engine call is there"
         );
         assert!(
             !remote.contains("contest_unmerged"),
@@ -40878,11 +40917,11 @@ mod tests {
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
-            include_str!("remote_service/operations/logging.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("log_current_qso_for_sync") && remote.contains("execute_transmit"),
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(
@@ -40928,11 +40967,11 @@ mod tests {
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
-            include_str!("remote_service/operations/logging.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("log_current_qso_for_sync") && remote.contains("execute_transmit"),
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(
@@ -40970,11 +41009,11 @@ mod tests {
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
-            include_str!("remote_service/operations/logging.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("log_current_qso_for_sync") && remote.contains("execute_transmit"),
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(

@@ -15,6 +15,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
+import { t } from '../i18n'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
@@ -174,10 +175,9 @@ describe('the contest picker', () => {
     // CLASS and SECTION are Field Day's own exchange. A Tennessee QSO Party operator
     // sends a county, from Station data — prompting for a Field Day class here would be
     // asking for a value nothing transmits.
-    expect(screen.queryByPlaceholderText('1D')).toBeNull()
-    // The ARRL/RAC section input, found by ITS OWN datalist rather than by the `WI`
-    // placeholder — Station data's state box carries the same placeholder and is
-    // exactly the control a QSO party operator does fill in.
+    expect(screen.queryByText('FD Class', { selector: '.settings-label' })).toBeNull()
+    // The ARRL/RAC section input, found by ITS OWN datalist rather than by a caption —
+    // Station data's state box is exactly the control a QSO party operator does fill in.
     expect(document.querySelector('#fd-section-list')).toBeNull()
     // The power multiplier is ARRL Field Day's alone: no other contest's score reads it.
     expect(screen.queryByRole('group', { name: 'Field Day power multiplier' })).toBeNull()
@@ -188,7 +188,7 @@ describe('the contest picker', () => {
     )
     renderPanel()
     await openContesting()
-    expect(await screen.findByPlaceholderText('1D')).not.toBeNull()
+    expect(await screen.findByText('FD Class', { selector: '.settings-label' })).not.toBeNull()
     expect(document.querySelector('#fd-section-list')).not.toBeNull()
     expect(screen.getByRole('group', { name: 'Field Day power multiplier' })).not.toBeNull()
   })
@@ -199,7 +199,9 @@ describe('the contest picker', () => {
     )
     renderPanel()
     await openContesting()
-    expect(await screen.findByPlaceholderText('2O')).not.toBeNull()
+    expect(
+      await screen.findByText(t('settings.fieldDay.category.label'), { selector: '.settings-label' }),
+    ).not.toBeNull()
     expect(screen.queryByRole('group', { name: 'Field Day power multiplier' })).toBeNull()
   })
 

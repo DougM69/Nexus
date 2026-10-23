@@ -60,9 +60,9 @@ function renderFd() {
   )
 }
 
-const call = () => screen.getByPlaceholderText('W1AW')
-const klass = () => screen.getByPlaceholderText('1D')
-const section = () => screen.getByPlaceholderText('WI')
+const call = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })
+const klass = () => screen.getByLabelText(/^Class/)
+const section = () => screen.getByLabelText(/^Section/)
 const logBtn = () => screen.getByRole('button', { name: /log fd/i }) as HTMLButtonElement
 
 beforeEach(() => {
@@ -280,6 +280,60 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
     expect(rec.mode).toBe('SSB')
     expect(rec.whenUnix).toBeGreaterThanOrEqual(before)
     expect(rec.whenUnix).toBeLessThanOrEqual(after)
+  })
+
+  // A user's report: "isn't logging an end time for SSB". A contact logged live ends when it is
+  // logged, and the record says so as TIME_OFF, as an FT contact's does. One typed in with its
+  // own UTC time starts and ends at the time typed: TIME_ON = TIME_OFF.
+  it('a live contact carries its end time; one with a hand-entered time ends at that time', () => {
+    renderStd()
+    const before = Math.floor(Date.now() / 1000)
+    fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'w1aw' } })
+    fireEvent.click(logBtn())
+    const after = Math.floor(Date.now() / 1000)
+    const live = mockedLogQso.mock.calls[0][0]
+    expect(live.timeOffUnix).toBeGreaterThanOrEqual(before)
+    expect(live.timeOffUnix).toBeLessThanOrEqual(after)
+    expect(live.timeOffUnix).toBeGreaterThanOrEqual(live.whenUnix)
+
+    fireEvent.click(overrideToggle())
+    fireEvent.change(screen.getByLabelText('Date (UTC)'), { target: { value: '2026-03-15' } })
+    fireEvent.change(screen.getByLabelText('Time (UTC)'), { target: { value: '14:30' } })
+    fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'k9xyz' } })
+    fireEvent.click(logBtn())
+    const typed = mockedLogQso.mock.calls[1][0]
+    expect(typed.whenUnix).toBe(Math.floor(Date.UTC(2026, 2, 15, 14, 30, 0) / 1000))
+    expect(typed.timeOffUnix).toBe(Math.floor(Date.UTC(2026, 2, 15, 14, 30, 0) / 1000))
+  })
+
+  it('a live contact starts when its call was entered and ends when it is logged', () => {
+    const now = vi.spyOn(Date, 'now')
+    try {
+      const t0 = 1_790_000_000
+      renderStd()
+      // Typed a key at a time: the first keystroke is the start.
+      now.mockReturnValue(t0 * 1000)
+      fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'w1' } })
+      now.mockReturnValue((t0 + 5) * 1000)
+      fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'w1aw' } })
+      now.mockReturnValue((t0 + 90) * 1000)
+      fireEvent.click(logBtn())
+      const first = mockedLogQso.mock.calls[0][0]
+      expect(first.whenUnix).toBe(t0)
+      expect(first.timeOffUnix).toBe(t0 + 90)
+
+      // Another call over the one in the box is another contact, with its own start.
+      fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'k9xyz' } })
+      now.mockReturnValue((t0 + 200) * 1000)
+      fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'n0ab' } })
+      now.mockReturnValue((t0 + 260) * 1000)
+      fireEvent.click(logBtn())
+      const second = mockedLogQso.mock.calls[1][0]
+      expect(second.whenUnix).toBe(t0 + 200)
+      expect(second.timeOffUnix).toBe(t0 + 260)
+    } finally {
+      now.mockRestore()
+    }
   })
 
   it('BLOCKS logging a mismatched record when the override is open but the freq is invalid', () => {

@@ -105,23 +105,15 @@ export const EN = {
   "remote.supportDetails": "Support details",
   "remote.signOut": "Sign out",
   "remote.notConfigured": "The Remote service has not been configured yet.",
-  "remote.loggingLocalHint": "Approving a browser also lets it log contacts. To limit a browser, revoke logging here. Logging never grants radio or transmit control.",
-  "remote.loggingTakeOver": "End remote logging: everyone off until Remote is turned on again",
   "remote.controlRequestFailed": "The command was not confirmed. Check station control permission and the current readings.",
   "remote.controlLocalHint": "Approving a browser gives it station controls: supported receiver, radio and amplifier controls, and Stop TX, which stops any transmission at the station. With streaming on, they also let it stream this window and use Nexus as you would here, transmit included. To limit a browser, revoke them here, which also ends its stream.",
   // remote parity batch 1
   "remote.b1.rotatorPointing": "Pointing the rotator at {{call}}.",
-  "remote.transmitAllow": "Allow FT8/FT4 transmission from the Remote page",
-  "remote.transmitRevoke": "Revoke FT8/FT4 transmission from the Remote page",
-  "remote.transmitLocalHint": "FT8/FT4 transmit from the Remote page also needs station controls. Once allowed, it stays allowed across restarts until you revoke it here, and revoking it stops that browser’s FT8/FT4 transmission from the page at once. Nothing transmits from the page until the browser presses TX On. A streaming browser doesn’t need it: through the stream it transmits as you would here.",
   "remote.controlAllow": "Allow station controls",
   "remote.controlRevoke": "Revoke station controls",
   "remote.controlActive": "Station control active",
   "amp.strip.statusUnknown": "Amplifier status unavailable",
   "remote.controlTakeOver": "End remote control: everyone off until Remote is turned on again",
-  "remote.loggingAllow": "Allow remote logging",
-  "remote.loggingRevoke": "Revoke logging permission",
-  "remote.loggingController": "This browser controls remote logging.",
   // remote parity batch 2
   "remote.requestFailed": "The request could not be completed. Check the connection and your service access, then try again.",
   "remote.accountMatch": "Match this account ID on both screens:",
@@ -207,6 +199,7 @@ export const EN = {
   'remote.stationFiles.saving': 'Saving… {{pct}}%',
   'remote.stationFiles.save.done': 'Saved to {{path}}',
   'remote.stationFiles.save.failed': 'Could not save the station’s file to this computer',
+  'remote.stationFiles.save.notShared': '{{name}} is not a recording, an SSTV picture or ALL.TXT',
   'remote.stationFiles.list.label': 'Save to this computer…',
   'remote.stationFiles.list.title.recordings': 'Recordings at the station',
   'remote.stationFiles.list.title.sstv': 'SSTV pictures at the station',
@@ -362,7 +355,7 @@ export const EN = {
   "remote.codeExpires": "This code expires after ten minutes.",
   "remote.approvePairing": "Approve this account pairing",
   "remote.cancelPairing": "Cancel pairing",
-  "remote.restartHint": "Remote stays on when Nexus restarts: if it was on when Nexus closed, it turns itself back on and reconnects. Approved browsers keep what you allowed, FT8/FT4 transmit included. Transmit is always off after a restart until the browser turns it on again. Turn off Remote only disconnects: turning it back on restores what each approved browser had.",
+  "remote.restartHint": "Remote stays on when Nexus restarts: if it was on when Nexus closed, it turns itself back on and reconnects. Approved browsers keep what you allowed. Turn off Remote only disconnects: turning it back on restores what each approved browser had.",
   "remote.disable": "Turn off Remote",
   "remote.enable": "Turn on Remote",
   "remote.autostartOffer": "Remote can only come back after this computer restarts if Nexus starts too. Start Nexus when you sign in to this computer?",
@@ -375,7 +368,6 @@ export const EN = {
   "remote.noBrowsers": "No current browser requests or approvals",
   "remote.revokeBrowser": "Revoke browser approval",
   "remote.approveBrowser": "Approve browser",
-  "remote.approveTransmit": "Also allow FT8/FT4 transmit from the Remote page",
   "remote.browserApprovedUntil": "Approved until {{until}} UTC.",
   "remote.browserApprovedUntilRemoved": "Approved until you remove it.",
   "remote.browserRenewsUntil": "Approved until {{until}} UTC. Using the station from this browser keeps it approved, up to {{limit}} UTC.",
@@ -572,6 +564,15 @@ export const EN = {
   // to approve this computer ("Approve it only if this key matches the one Nexus shows on that computer").
   "lanWindow.internet.waiting": "Internet road added. Approve this computer at the station, under Remote access, before you use it, and only if the station shows this computer’s key: {{key}}.",
   "lanWindow.internet.computerKey": "This computer’s key for the internet road: {{key}}",
+  "lanWindow.internet.stationKey": "This station’s key for the internet road: {{key}}",
+  "lanWindow.internet.held": "Check this key before the internet road carries anything. At the station, under Remote access, “This station’s key” must show the same groups. Until you say it matches, Operate from this computer does not use the internet road.",
+  "lanWindow.internet.heldCodePaired": "Check this key before the internet road carries anything. At the station, under Remote access, “This station’s key” must show the same groups. Until you say it matches, Operate from this computer does not use the internet road. Operating from this computer on the station’s own network checks it too: when the station shows this same key there, the internet road comes on by itself.",
+  "lanWindow.internet.keyMatches": "It matches",
+  "lanWindow.internet.keyDiffers": "It doesn’t match",
+  "lanWindow.internet.keyDisagrees": "The service gave a different key for this station than the station itself. This internet road is off. Forget the station here and add it again.",
+  "lanWindow.internet.dropRoadConfirm": "Remove this station’s internet road? Its pairing on this network stays, so Operate from this computer still works here. To add the internet road again later, use “Sign in…” on this row.",
+  "lanWindow.internet.dropRoadYes": "Remove the internet road",
+  "lanWindow.internet.reason.stationKeyDisagrees": "The service gave a different key for this station than the station itself. Nothing was added.",
   "lanWindow.internet.reason.internetNotIncluded": "The internet road is part of Nexus Remote’s paid service, and your account does not include it now. Operating on this network stays free.",
   "lanWindow.internet.reason.internetNotReady": "Nexus Remote does not take sign-ins from Nexus yet. Try again after an update.",
   "lanWindow.internet.reason.signInPortBusy": "Another program is using port 42078, which Nexus signs in through. Close it, then try again.",
@@ -583,6 +584,7 @@ export const EN = {
   "lanWindow.internet.chooseTitle": "Which station is this?",
   "lanWindow.internet.choose": "Your Nexus Remote account has more than one station. Pick the one you paired with here.",
   "lanWindow.internet.forgetUnreached": "Forgotten on this computer, but Nexus Remote could not be told. At the station, remove this computer under Remote access ▸ Your computers.",
+  "lanWindow.internet.dropRoadUnreached": "The internet road was removed on this computer and the pairing on this network was kept, but Nexus Remote could not be told. At the station, remove this computer under Remote access ▸ Your computers.",
   "lanWindow.internet.reason.deviceLimit": "The station has eight devices already. Remove one at the station, then try again.",
   "lanWindow.internet.reason.stationUnavailable": "Your Remote account has no station that can take this computer. Check that the station is linked to your account.",
   "lanWindow.internet.reason.updateStation": "The station has not given Nexus Remote its key yet. Turn Remote on at the station, then try again.",
@@ -646,6 +648,8 @@ export const EN = {
   "client.reason.idle": "Nobody answered “Still there?”, so the internet link ended.",
   "client.reason.internetNotIncluded": "The internet road is part of Nexus Remote’s paid service, and your account does not include it now. Operating on the station’s own network stays free.",
   "client.reason.notApprovedThere": "The station has not approved this computer for the internet road, or removed it. Approve it there, or add the road again.",
+  "client.reason.stationKeyUnconfirmed": "The internet road waits until you check the station’s key. In Stations on this network, compare it with the station’s screen.",
+  "client.reason.stationKeyDisagrees": "The service gave a different key for this station than the station itself, so its internet road is off.",
   "client.reason.waitingApproval": "This computer waits for approval at the station, under Remote access.",
   "client.reason.internetNotReady": "Nexus Remote cannot take this computer yet.",
   "client.reason.stationUnavailable": "Nexus Remote no longer has this station on your account.",
@@ -726,11 +730,9 @@ export const EN = {
 
   'settings.station.grid.label': 'Grid',
   'settings.station.grid.hint':
-    'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square.',
+    'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square. Logged on each contact as your grid; your LoTW uploads keep using your TQSL Station Location.',
 
   'settings.station.opName.label': 'Operator name',
-  // Prose, not a token: a locale should offer a first name its operators recognise.
-  'settings.station.opName.placeholder': 'Alex',
   // ⚠️ `{NAME}` is a CW macro token matched literally by the expander — it must survive
   // translation unchanged. It is safe here only because interpolation is `{{double}}`.
   'settings.station.opName.hint': 'Used by the CW {NAME} macro and logging.',
@@ -739,12 +741,12 @@ export const EN = {
   'settings.station.fdOperator.placeholder': 'leave blank if that is you',
   // ⚠️ `OPERATOR` is the ADIF field name — a wire identifier. Keep it verbatim.
   'settings.station.fdOperator.hint':
-    'Only for multi-operator: the callsign of whoever is operating, when that is not the station call. Stamped on every contact you log (ADIF OPERATOR) so a shared activation can be split per operator — POTA and Field Day both want each operator to submit their own. Blank means single-op and nothing is stamped. Change it when you swap seats.',
+    'Only for multi-operator: the callsign of whoever is operating, when that is not the station call. Stamped on every contact you log (ADIF OPERATOR) so a shared activation can be split per operator — POTA and Field Day both want each operator to submit their own. Blank means single-op: your station call is logged as the operator. Change it when you swap seats.',
 
   'settings.station.opState.label': 'State',
   // ⚠️ `{MYSTATE}` — CW macro token, as above.
   'settings.station.opState.hint':
-    'Your US state or province, for everyday contacts — the CW {MYSTATE} macro and the QTH an RTTY ragchew sends. A contest uses its own box, Contesting ▸ Your station data ▸ State or province, so a portable or mobile entry can differ from this one.',
+    'Your US state or province, for everyday contacts — the CW {MYSTATE} macro, the QTH an RTTY ragchew sends, and your state on each contact you log (not a park or summit activation, which logs the park\'s). A contest uses its own box, Contesting ▸ Your station data ▸ State or province, so a portable or mobile entry can differ from this one.',
 
   'settings.station.licenseClass.label': 'License Class',
   // The <option> VALUES ('technician' … 'open') are persisted tokens and stay in the code.
@@ -1105,7 +1107,7 @@ export const EN = {
   // squares, band names (20m), mode names (FT8), frequencies, RST reports, POTA/SOTA
   // references, QSL letters (L/C/E) and the Q-codes and service names printed as button
   // labels (QRZ, eQSL, CL, HL, QSL▸). Those live in `components/Logbook.tsx` as named
-  // constants — LOG_EXAMPLES and the labels beside it. What IS here is the prose around
+  // constants. What IS here is the prose around
   // them, and the ADIF field names quoted inside that prose (SIG_INFO, MY_SIG_INFO) are
   // wire identifiers that must survive translation verbatim, exactly as `ADIF OPERATOR`
   // does in `settings.station.fdOperator.hint`.
@@ -1466,8 +1468,7 @@ export const EN = {
     other: 'Purged {{count}} contacts from the log',
   },
 
-  // The hand-log form. Every placeholder that is a pure token (W1AW, FN31, 20m, US-1234…)
-  // is in LOG_EXAMPLES, not here; the three that are human prose are.
+  // The hand-log form. Its boxes show no sample values; the hints that are words are here.
   'logbook.form.open': 'Log QSO',
   'logbook.form.close': 'Close',
   'logbook.field.call.label': 'Call',
@@ -1498,11 +1499,7 @@ export const EN = {
   'logbook.field.parkMine.title':
     'POTA reference of YOUR own activation for this contact (ADIF MY_SIG_INFO). Defaults to POTA.',
   'logbook.field.name.label': 'Name',
-  // Prose, not a token: a locale should offer a first name its operators recognise.
-  'logbook.field.name.placeholder': 'Jim',
   'logbook.field.qth.label': 'QTH',
-  // Also prose — QTH is free text, so the example is a place a reader recognises.
-  'logbook.field.qth.placeholder': 'Dayton, OH',
   'logbook.column.notes': 'Notes',
   'qso.detail.title': 'Contact with {{call}}',
   'qso.detail.section.contact': 'Station worked',
@@ -1812,8 +1809,8 @@ export const EN = {
   'logEntry.park.program.title': 'On-the-air program for the park/summit you worked',
   // `{{example}}` is a park/summit REFERENCE from the call site — a wire format, never
   // localised. The prose around it is the part a translator owns.
-  'logEntry.park.ref.placeholderPota': 'Park ({{example}} or name)',
-  'logEntry.park.ref.placeholderSota': 'Summit ({{example}})',
+  'logEntry.park.ref.placeholderPota': 'Park (reference or name)',
+  'logEntry.park.ref.placeholderSota': 'Summit (reference)',
   'logEntry.park.ref.title':
     'Park/summit reference of the station you worked — logged to ADIF (POTA→SIG_INFO, SOTA→SOTA_REF)',
   'logEntry.park.live.label': 'live',
@@ -3440,9 +3437,6 @@ export const EN = {
   'spots.post.call.label': 'Callsign',
   'spots.post.freq.label': 'Frequency (MHz)',
   'spots.post.comment.label': 'Comment',
-  // An example cluster comment. The mode name, the split offset and the report are tokens a
-  // translator leaves; the word between them is theirs.
-  'spots.post.comment.placeholder': 'e.g. FT8 up 2 · loud · 599',
   'spots.post.cancel': 'Cancel',
   'spots.post.submit': 'Spot',
   'spots.post.busy': 'Spotting…',
@@ -3539,9 +3533,8 @@ export const EN = {
   'pounce.dismiss.aria': 'Dismiss alert',
 
   // ── The watch list ("alert me loudly when THIS shows up") ───────────────────────────
-  // ⚠️ The prefixes, grid squares and entity names in the examples are TOKENS supplied by
-  // the component (WATCH_EXAMPLES); the ones quoted inside the hint stay in the sentence,
-  // as `ADIF OPERATOR` does elsewhere. `DXCC` is a programme name, not a word.
+  // ⚠️ The prefixes and grid squares quoted inside the hint stay in the sentence, as
+  // `ADIF OPERATOR` does elsewhere. `DXCC` is a programme name, not a word.
   'watchlist.hint':
     "Get a loud alert when a matching station is decoded — a callsign or prefix (wildcards: <code>VP8*</code>, <code>*ABC</code>), a whole DXCC entity, or a grid square (<code>FN31</code>, <code>EM7*</code>). A grid you name here alerts on every band — the HF grid-quiet default doesn't apply to squares you asked for.",
   'watchlist.item.kind.call': 'CALL',
@@ -3559,9 +3552,6 @@ export const EN = {
   'watchlist.add.kind.dxcc': 'DXCC entity',
   'watchlist.add.kind.grid': 'Grid square',
   'watchlist.add.value.aria': 'Watch value',
-  'watchlist.add.value.placeholder.call': 'e.g. {{first}}  or  {{second}}',
-  'watchlist.add.value.placeholder.grid': 'e.g. {{first}}  or  {{second}}',
-  'watchlist.add.value.placeholder.dxcc': 'e.g. {{entity}}',
   'watchlist.add.cqOnly.label': 'CQ only',
   'watchlist.add.cqOnly.title': 'Only alert on a CQ call',
   'watchlist.add.notes.aria': 'Notes for the new entry',
@@ -3587,12 +3577,11 @@ export const EN = {
   // ── The two display filters (hide calls / hide countries) ───────────────────────────
   // Both say the same thing about themselves and say it differently, which is why they do
   // not share keys: one is about callsigns you are tired of seeing, the other about whole
-  // entities. `{{examples}}` is a space-separated list of prefixes from the component.
+  // entities.
   'hideCalls.chip.label': 'Hide calls',
   'hideCalls.chip.title':
     'Hide callsigns (or VP8*-style prefixes) from this pane — a display filter only; decoding, logging, alerts and the auto-responder are untouched',
   'hideCalls.head': 'Hide these callsigns',
-  'hideCalls.placeholder': 'e.g. {{examples}}',
   'hideCalls.note':
     'Space-separated. A trailing <code>*</code> is a prefix ("VP8*" hides every VP8). A view filter only — the stations you are working and those calling you always show. To stop your auto-CQ from answering a call, Alt-double-click it instead.',
 
@@ -3783,7 +3772,7 @@ export const EN = {
   'settings.alerts.geo.hint':
     'Leave every box clear to be alerted about the whole world — that is the default and what this panel has always done. Tick one or more and the new-one, new-grid and CQ alerts are kept to those continents. Someone calling YOU, and anything on your watch list, always alerts wherever they are.',
   'settings.alerts.geo.entities.label': 'Add a country',
-  'settings.alerts.geo.entities.placeholder': 'type to search, e.g. France',
+  'settings.alerts.geo.entities.placeholder': 'type to search',
   'settings.alerts.geo.entities.aria': 'Matching DXCC entities',
   'settings.alerts.geo.entities.hint':
     'Countries added here alert as well as the continents ticked above, so you can follow all of Europe plus Japan. Untick one to drop it. Names are the DXCC list\u2019s own, so Germany appears as Fed. Rep. of Germany.',
@@ -4910,7 +4899,6 @@ export const EN = {
     'The call that goes on the air and onto every contact you log — at a club event that is the club\'s call, the same one at every position on site.',
 
   'settings.fdWho.position.label': 'Position name',
-  'settings.fdWho.position.placeholder': 'CW tent',
   'settings.fdWho.position.hint':
     'Which tent, trailer or table this station is — it names you on the club band board so everyone can see which position is on which band, and it never goes on the air.',
 
@@ -4952,7 +4940,6 @@ export const EN = {
   'settings.fdClub.host.aria.enable': 'Enable club event hosting',
   'settings.fdClub.host.aria.disable': 'Disable club event hosting',
   'settings.fdClub.eventName.label': 'Event name',
-  'settings.fdClub.eventName.placeholder': 'W9ABC Field Day',
   'settings.fdClub.eventName.hint': 'Shown to joining positions and in discovery.',
   'settings.fdClub.hostPort.label': 'Host port',
   'settings.fdClub.hostPort.hint': 'TCP port for the club sync (default 42073).',
@@ -5894,8 +5881,8 @@ export const EN = {
   'program.origin.station.label': 'My station {{grid}}',
   'program.origin.station.title': 'Your station grid from Settings',
   // ONE box takes a grid or a city (a locator is the place as typed; anything else is a town to look
-  // up). {{grid}} is an example locator, a token.
-  'program.origin.place.placeholder': 'Grid or city: {{grid}}, Gatlinburg TN',
+  // up).
+  'program.origin.place.placeholder': 'Grid or city',
   'program.origin.place.aria': 'Where to search: a grid square or a city',
   'program.route.to.place.aria': 'Where the route ends: a grid square or a city',
   // A HUMAN example, not a technical one: a locale should offer a place its operators know.
@@ -6726,7 +6713,6 @@ export const EN = {
     'Apply this profile — merged onto your current settings. Your callsign, license class, radio roster and sync history never come from a profile, and anything the profile predates keeps its current value.',
   'settings.profiles.delete.action': 'Delete',
   'settings.profiles.save.label': 'Save current as',
-  'settings.profiles.save.placeholder': 'e.g. Portable VHF',
   'settings.profiles.save.action': 'Save',
   'settings.profiles.save.hint': 'Snapshots the current settings under a name.',
 
@@ -6763,9 +6749,7 @@ export const EN = {
   'settings.rigControl.txAudio.hint':
     'Which of the radio’s audio inputs transmits when Nexus keys it over CAT. <b>Front/Mic</b> is how Nexus has always keyed the radio. <b>Rear/Data</b> keys its data input instead: choose it if your sound card reaches the radio through its rear DATA or ACC jack (where a SignaLink plugs in) or its own USB audio, and the radio sends no audio from Nexus although it does on VOX. The Phone cockpit’s PTT is not affected and keys the radio as it always has. <b>Per radio.</b>',
   'settings.rigControl.pttPort.label': 'PTT Serial Port',
-  // `{{example}}` is the platform's own device-name example, supplied by the panel as an
-  // invariant token (RIG_EXAMPLES) — a "localised" COM16 names no port on any machine.
-  'settings.rigControl.pttPort.placeholder': 'e.g. {{example}} — blank = use the CAT port',
+  'settings.rigControl.pttPort.placeholder': 'blank = use the CAT port',
   'settings.rigControl.pttPort.hint':
     'COM port your RTS/DTR keying line is on — e.g. an SO2R controller (u2R/MK2R) that routes PTT on its own port, separate from CAT. Leave blank if keying shares the CAT port, which is how a single-cable interface like a Digirig Mobile is wired; CAT keeps working either way. <b>Per radio</b>: each rig on an SO2R box has its own keying port, and this one follows the radio you switch to.',
   'settings.rigControl.catRts.label': 'Interface keys RTS on the CAT port',
@@ -6933,7 +6917,7 @@ export const EN = {
   // because what it says is a different answer, not a different ending; the Xiegu COM-number
   // clause is the one genuinely optional half and is interpolated whole.
   'settings.rigControl.serialPort.label': 'Serial Port',
-  'settings.rigControl.serialPort.placeholder': 'Select or type, e.g. {{example}}',
+  'settings.rigControl.serialPort.placeholder': 'Select or type',
   'settings.rigControl.serialPort.refresh.action': 'Refresh',
   'settings.rigControl.serialPort.refresh.title': 'Re-scan serial ports',
   'settings.rigControl.serialPort.autoTest.action': 'Auto-test',
@@ -7128,6 +7112,40 @@ export const EN = {
   'settings.headphoneMonitor.level.hint':
     'Headphone listening volume (does not affect TX).',
 
+  // ── Settings ▸ Radio ▸ Scope source ─────────────────────────────────────────────────
+  // SDRconnect, SDRplay, RSP, RSP1, RX OUT, CAT, WebSocket API, 127.0.0.1, 5454, 0 dBm, 100 W and
+  // +50 dBm are names and quantities: never translated, never locale-formatted.
+  'settings.scopeSource.legend':
+    "Scope source",
+  'settings.scopeSource.note':
+    "Where the RF scope's picture comes from: the radio's own panadapter (or the sound card's audio where the radio has none), or an SDRplay RSP receiver through SDRconnect. SDRconnect is SDRplay's own program, free and closed-source, which you install and run beside Nexus with its WebSocket API turned on; it serves every RSP except the original RSP1.",
+  'settings.scopeSource.source.label':
+    "Draw the scope from",
+  'settings.scopeSource.source.radio':
+    "The radio",
+  'settings.scopeSource.source.sdrconnect':
+    "SDRconnect (SDRplay)",
+  'settings.scopeSource.source.hint':
+    "SDRconnect draws the receiver's whole span with each station at its own frequency, centred on the rig's dial. Receive only: Nexus never transmits through it and sends it no CAT.",
+  'settings.scopeSource.host.label':
+    "SDRconnect computer",
+  'settings.scopeSource.host.hint':
+    "127.0.0.1 is this computer. Put the name or address of another computer if SDRconnect runs there.",
+  'settings.scopeSource.port.label':
+    "WebSocket API port",
+  'settings.scopeSource.port.hint':
+    "SDRconnect's WebSocket API port: 5454 unless you moved it in SDRconnect.",
+  'settings.scopeSource.follow.label':
+    "Follow the dial",
+  'settings.scopeSource.follow.centre':
+    "Keep the dial in the centre",
+  'settings.scopeSource.follow.scroll':
+    "Retune only when the dial nears the edge",
+  'settings.scopeSource.follow.hint':
+    "How the receiver's centre follows the rig's dial. Retuning only near the edge moves SDRconnect's own display far less.",
+  'settings.scopeSource.rfSafety':
+    "Feed the receiver from the rig's RX OUT, or from a splitter with transmit protection, never from a plain T-piece on the transmit line: an RSP takes at most 0 dBm, and 100 W is +50 dBm.",
+
   // ── Settings ▸ Radio ▸ Satellite Doppler ────────────────────────────────────────────
   // ⚠️ The MAPPING LABELS are not here — they live in `features/satVfo.ts` beside the wire
   // value each one stores, because the Satellites readiness rail shows the same list and two
@@ -7267,8 +7285,7 @@ export const EN = {
   'settings.rotator.port.hint.pstRotator':
     'PstRotatorAz: enter {{address}} as the port (its UDP Control Port), and turn on UDP Control in its Setup (the baud is not used). Nexus listens for its replies on that port + 1, {{reply}}, so no other program may use it.',
   'settings.rotator.external.label': 'External rotctld (advanced)',
-  // `{{example}}` is a host:port the panel supplies as an invariant token.
-  'settings.rotator.external.placeholder': 'host:port — e.g. {{example}}',
+  'settings.rotator.external.placeholder': 'host:port',
   'settings.rotator.external.aria': 'External rotctld address (advanced)',
   'settings.rotator.external.hint':
     'Point Nexus at a rotctld you run yourself (or one on another machine). It OVERRIDES the model and port above and stops the integrated daemon. Needs the port — a bare host name is not an address.',
@@ -7769,7 +7786,7 @@ export const EN = {
     'Measure your PC clock against public NTP servers and CORRECT for it: TempoFast/TempoDeep are slot-timed to UTC, and Nexus shifts its own transmit and decode windows by the measured offset so they land on the true UTC grid even when the clock is off. The top bar shows what is being applied. Turn off for fully-offline operation (no network calls) — the last measurement then keeps steering until it ages out.',
   'settings.digital.stationPower.label': 'Station power (W)',
   'settings.digital.stationPower.hint':
-    'Your transmit power in watts — unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',
+    'Your transmit power in watts — logged on every contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',
   // The units preference. The <option> VALUES ('auto', 'metric', 'imperial') are persisted
   // tokens and stay in the component; km, °C, mi and °F are unit symbols inside these labels.
   'settings.digital.units.label': 'Units',
@@ -7966,11 +7983,11 @@ export const EN = {
   'settings.cw.reverse.hint':
     "Put your radio in its <b>reverse</b> CW mode (CW-R / CW-L) instead of its normal CW, on <b>every band</b>. Off by default, so Nexus asks for plain CW and your radio stays where its own menu puts it. This changes only the pitch you hear on a signal — CW and CW-R transmit identically, and the station you work cannot tell — so it is a personal preference, not a band rule. Which sideband it actually selects depends on the radio: on a Yaesu it is CW-L, while on an Icom it follows that rig's own <b>CW Normal Side</b> menu. The Soundcard keyer ignores this, because it never puts the rig in CW at all.",
   'settings.cw.winkeyerPort.label': 'WinKeyer port',
-  'settings.cw.winkeyerPort.placeholder': '{{example}} — K1EL WinKeyer serial port',
+  'settings.cw.winkeyerPort.placeholder': 'K1EL WinKeyer serial port',
   'settings.cw.winkeyerPort.hint':
     "The serial port your WinKey presents. 1200 baud. A WinKey micro inside a multi-function interface (Timewave Navigator, microHAM) counts — use that device's CW/WinKey port, not its CAT port.",
   'settings.cw.keyPort.label': 'Keyline serial port',
-  'settings.cw.keyPort.placeholder': '{{example}} — the keying interface (separate from CAT)',
+  'settings.cw.keyPort.placeholder': 'the keying interface (separate from CAT)',
   'settings.cw.keyPort.hint':
     "The USB-to-serial into your keying interface (Buxcomm, a homebrew DTR cable, …) that plugs into the rig's KEY jack. Must be a SEPARATE port from CAT. Set the rig to CW and its key-jack to straight-key / bug. An interface with a WinKey chip in it — Timewave Navigator, microHAM, a K1EL WinKeyer — does <b>not</b> key on DTR: pick the WinKeyer backend above instead and give it that device's CW port.",
   'settings.cw.keyLine.label': 'Keying line',
@@ -8028,7 +8045,7 @@ export const EN = {
   'settings.rtty.afskSideband.hint':
     'The sideband the rig runs AFSK on. LSB is the RTTY convention. On USB, Nexus puts the rig in its upper data mode (DATA-U / USB-D / DIGU) and swaps the tones itself, so mark stays high on the air and the decoder still copies — leave Reverse off.',
   'settings.rtty.fskPort.label': 'FSK serial port',
-  'settings.rtty.fskPort.placeholder': "{{example}} — e.g. the FTDX10's USB Enhanced COM",
+  'settings.rtty.fskPort.placeholder': "e.g. the FTDX10's USB Enhanced COM",
   'settings.rtty.fskPort.hint':
     "The port whose control line feeds the rig's FSK input. Empty = the CAT serial port.",
   'settings.rtty.fskLine.label': 'FSK data line',
@@ -8563,6 +8580,10 @@ export const EN = {
   'settings.integrations.openingWatch.label': 'Near-region opening watch',
   'settings.integrations.openingWatch.hint':
     'Watch VHF/10 m activity near your QTH (not just your own contacts) so openings flag "open around you" before you\'ve worked anyone. Takes effect on restart.',
+  'settings.integrations.logSpaceWeather.label': 'Log space weather on each contact',
+  // ⚠️ `K_INDEX`, `A_INDEX`, `SFI` are ADIF field names — wire identifiers. Keep them verbatim.
+  'settings.integrations.logSpaceWeather.hint':
+    'Adds the planetary K index, A index and solar flux to every contact you log (ADIF K_INDEX, A_INDEX, SFI), from the latest reading Nexus fetched. Nothing is added when that reading is more than 3 hours old.',
   // ⚠️ `ITU-R P.533` is the recommendation's number — the same token the propagation panes
   // keep as a constant (ENGINE_P533). The <option> values ('heuristic', 'p533') are persisted
   // and stay in the panel.
@@ -8591,8 +8612,7 @@ export const EN = {
   'settings.dxkeeper.note':
     'Pushes each logged QSO into <b>DXKeeper</b> over its TCP Network Service. Enable it in DXKeeper under <em>Configuration ▸ Defaults ▸ Network Service</em> first.',
   'settings.dxkeeper.host.label': 'DXKeeper host',
-  // `{{example}}` is an IP address the panel supplies as an invariant token (LOGGER_EXAMPLES).
-  'settings.dxkeeper.host.placeholder': '{{example}} (empty = off)',
+  'settings.dxkeeper.host.placeholder': 'empty = off',
   'settings.dxkeeper.host.hint': 'Usually 127.0.0.1 — same PC. Leave blank to disable.',
   // `{{port}}` is base + 1, computed and interpolated invariantly.
   'settings.dxkeeper.basePort.hint':
@@ -8610,7 +8630,7 @@ export const EN = {
   'settings.n3fjp.note':
     "Each contact you log in Contest mode reaches the club's master N3FJP log the moment you log it. Nexus fills in the form of the <b>N3FJP Field Day Contest Log</b> (call, band, mode, class and section), so at Field Day the whole club's score updates in real time. CQ WPX, CQ WW RTTY and the ARRL VHF contests carry their exchange too; a QSO party, Sweepstakes or CQ WW CW/SSB contact reaches N3FJP without its exchange. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
   'settings.n3fjp.host.label': 'N3FJP host',
-  'settings.n3fjp.host.placeholder': '{{example}} (empty = off)',
+  'settings.n3fjp.host.placeholder': 'empty = off',
   'settings.n3fjp.host.hint':
     'IP or hostname of the master log computer. Leave blank to disable.',
   'settings.n3fjp.port.label': 'N3FJP port',
@@ -8636,7 +8656,7 @@ export const EN = {
   // is written to settings, not an example, and never came near this file.
   'settings.n1mm.legend': 'N1MM+ Integration',
   'settings.n1mm.addr.label': 'N1MM contact broadcast address',
-  'settings.n1mm.addr.placeholder': '{{example}} (empty = off)',
+  'settings.n1mm.addr.placeholder': 'empty = off',
   'settings.n1mm.addr.hint':
     'Where the N1MM contact packets go (host:port, UDP). Name the port — consumers stack on one host, and 12060 is often already taken by another logger. Leave blank to disable.',
   // The state sentence that follows the hint — one whole sentence per state, because what it
@@ -8709,8 +8729,8 @@ export const EN = {
   // ⚠️ WHAT STAYED IN THE PANEL, and it is nearly all names. The featgroup titles (`LoTW`,
   // `eQSL`, `QRZ`, `HamQTH`, `ClubLog`, `HRDLog`, `RepeaterBook`, `Cloudlog / Wavelog`) are the
   // services' own names and nothing else, so they never came here — a translated service name
-  // names no service. The token-shaped placeholders (`rbuapp_…`, the example Cloudlog URL, the
-  // profile id `1`) are invariant values in `CONFIRMATION_EXAMPLES`.
+  // names no service. The token-shaped placeholder (`rbuapp_…`) is an invariant value in
+  // `CONFIRMATION_EXAMPLES`.
   //
   // ⚠️ WHAT IS VERBATIM INSIDE THESE SENTENCES, for the same reason the DXKeeper hints keep
   // `Base Port`: each one NAMES SOMETHING THE OPERATOR MUST FIND SOMEWHERE ELSE, spelled the way
@@ -8787,7 +8807,6 @@ export const EN = {
   'settings.confirmations.eqsl.username.hint':
     'Your eQSL.cc login (often your callsign). Save settings to apply.',
   'settings.confirmations.eqsl.qthNickname.label': 'QTH Nickname',
-  'settings.confirmations.eqsl.qthNickname.placeholder': 'e.g. Home',
   'settings.confirmations.eqsl.qthNickname.hint':
     'Only needed when your callsign has more than one QTH profile at eQSL — those accounts can\u2019t sign in without it. Leave empty otherwise.',
   'settings.confirmations.eqsl.password.label': 'eQSL password',
@@ -10170,6 +10189,7 @@ export const EN = {
   'operate.tx.next.title': 'Queued as the next transmission',
   'operate.tx.tx5.placeholder': 'Free text',
   'operate.tx.tx5.aria': 'Tx5 free text',
+  'operate.tx.tx5.loggerRefused': "A logger's free text did not go out: {{reason}}",
   'operate.tx.tx6.placeholder': 'CQ call',
   'operate.tx.tx6.aria': 'Tx6 Call CQ (edit for a directed CQ)',
   // The directed-CQ tokens are what goes on the air; they stay as written.

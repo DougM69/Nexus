@@ -792,7 +792,12 @@ mod tests {
         assert_eq!(saved.time_off_unix, original.time_off_unix);
         assert_eq!(saved.when_unix, original.when_unix);
         assert_eq!(saved.ota, original.ota);
-        assert_eq!(saved.extra, original.extra);
+        // What the held record carried is kept; the log funnel adds its own fills beside it.
+        assert!(
+            original.extra.iter().all(|kv| saved.extra.contains(kv)),
+            "{:?}",
+            saved.extra
+        );
         assert_eq!(saved.grid.as_deref(), Some("EN38"));
         assert_eq!(saved.rst_rcvd.as_deref(), Some("-09"));
         assert_eq!(fixture.engine.station.pending_uploads.len(), 1);

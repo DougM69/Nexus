@@ -500,6 +500,16 @@ fn record_for(
             .collect(),
         qid: id.qid.clone(),
     };
+    // The grid stamped on the row at log time, unless the exchange itself sent one (a VHF
+    // contest's `GRID`, a rover's grid at that moment): that is written as `MY_GRIDSQUARE`
+    // from the contest's own columns, and wins.
+    let my_grid = Some(q.grid.clone()).filter(|g| {
+        !g.trim().is_empty() && !contest.adif.iter().any(|(t, _)| t == "MY_GRIDSQUARE")
+    });
+    let station_callsign = [&q.on_air_call, &log.mycall]
+        .into_iter()
+        .find(|c| !c.trim().is_empty())
+        .cloned();
     let mut rec = QsoRecord {
         id: None,
         call: q.call.clone(),
@@ -557,12 +567,21 @@ fn record_for(
         qth: None,
         comment: None,
         notes: None,
-        tx_power: None,
+        // The power stamped on the row at log time, as the general log writes it; a row from
+        // before it was recorded carries none.
+        tx_power: q
+            .tx_power
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|w| w.is_finite() && *w > 0.0),
         when_unix: q.when_unix,
         // A legacy row with no stamp keeps the placeholder rather than a fabricated
         // midnight — the same rule the ADIF importer applies.
         time_known: q.when_unix > 0,
-        time_off_unix: None,
+        // A contest row records one moment, the one it was logged at, which is when the
+        // contact ended: it is the row's end time as well as its start.
+        time_off_unix: (q.when_unix > 0).then_some(q.when_unix),
         confirmed: false,
         award_confirmed: false,
         qsl_rcvd: QslRcvd::default(),
@@ -591,13 +610,33 @@ fn record_for(
             .and_then(|s| s.name.as_ref())
             .map(|_| "SAT".to_string()),
         sat_name: q.sat.as_ref().and_then(|s| s.name.clone()),
-        operator: None,
-        my_grid: None,
-        my_rig: None,
-        station_callsign: Some(log.mycall.clone()).filter(|c| !c.trim().is_empty()),
-        extra: Vec::new(),
+        // ⭐ WHO WAS AT THE KEY, AND THE CALL IT WENT OUT UNDER — both stamped on the row at log
+        // time and both dropped here until now: `OPERATOR` was hardcoded `None` and
+        // `STATION_CALLSIGN` was the session's call, which after a call change and a restart is
+        // not the call the contact was made on. An empty stamp is "nobody named" / "not
+        // recorded" (a row from before `on_air_call`), and then the station call goes on: with
+        // nobody named the operator is the station, as the general log's own funnel writes it.
+        operator: Some(q.operator.clone())
+            .filter(|o| !o.trim().is_empty())
+            .or_else(|| station_callsign.clone()),
+        my_grid,
+        // The radio stamped on the row at log time — the general log's own answer then.
+        my_rig: Some(q.rig.clone()).filter(|r| !r.trim().is_empty()),
+        station_callsign,
+        // The worked station's continent, from the country file's reading the row made at log
+        // time (ADIF `CONT`), as an ordinary contact carries it.
+        extra: q
+            .continent
+            .iter()
+            .map(|c| ("CONT".to_string(), c.clone()))
+            .collect(),
         contest: Some(Box::new(contest)),
     };
+    // Settings' grid is Nexus's own fill, as the general log marks it, so the LoTW upload leaves
+    // it out and TQSL signs from the Station Location as it did before.
+    if rec.my_grid.is_some() {
+        crate::logbook::mark_self_filled(&mut rec, "MY_GRIDSQUARE");
+    }
     // Into the lifetime log in its one form: a phone row worked on a sideband is SSB, with the
     // sideband as its SUBMODE ([`crate::logbook::canonical`]).
     crate::logbook::canonical::contact(&mut rec);
@@ -1028,6 +1067,173 @@ mod tests {
     }
 
     /// ⭐ §3.2 — merging twice writes nothing the second time.
+    /// ⭐ **WHO WAS AT THE KEY, AND THE CALL IT WENT OUT UNDER, SURVIVE THE MERGE**.
+    ///
+    /// Each contest row is stamped at log time with the operator setting
+    /// ([`LoggedQso::operator`]) and the call on the air ([`LoggedQso::on_air_call`]), and the
+    /// merge wrote `OPERATOR` as nothing and `STATION_CALLSIGN` as the session's call — so a
+    /// club's rotation of operators reached the Cabrillo and never the Logbook, and a contact
+    /// merged after the call was changed and Nexus restarted was signed under the new call.
+    /// Read back through the file too: the Logbook is what reaches every upload.
+    #[test]
+    fn a_merged_row_keeps_its_operator_and_the_call_it_was_logged_on() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        log.operator = "K9OP".into();
+        log.on_air_call = "K9OLD".into();
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_583_500));
+        // Nobody named, and a row from before the call on the air was recorded: both keep
+        // what the merge always wrote.
+        log.operator = String::new();
+        log.on_air_call = String::new();
+        assert!(log.log_mode_at("W1AW", "1D", "CT", "PH", 0, 1_782_583_800));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 2);
+        let path = scratch_adi();
+        lb.save(&path).expect("write log.adi");
+        let reborn = Logbook::load(&path);
+        let _ = std::fs::remove_file(&path);
+        let by = |call: &str| {
+            reborn
+                .records()
+                .iter()
+                .find(|r| r.call == call)
+                .cloned()
+                .expect("merged")
+        };
+        let named = by("K1ABC");
+        assert_eq!(named.operator.as_deref(), Some("K9OP"));
+        assert_eq!(named.station_callsign.as_deref(), Some("K9OLD"));
+        let plain = by("W1AW");
+        assert_eq!(
+            plain.operator.as_deref(),
+            Some("W9XYZ"),
+            "nobody named: the operator is the station, never \"\""
+        );
+        assert_eq!(plain.station_callsign.as_deref(), Some("W9XYZ"));
+    }
+
+    /// **A merged contact carries the radio and the power it was made with, and an end
+    /// time** — the row's own `MY_RIG` and `TX_PWR`, stamped at log time, and `TIME_OFF` = the
+    /// moment it was logged, the one moment a contest row records — plus the continent its call
+    /// resolved to. Read back through the file, which is what reaches every upload. A row from
+    /// before the stamps carries no rig and no power.
+    #[test]
+    fn a_merged_row_carries_its_radio_power_and_end_time() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        log.rig = "Icom IC-7300".into();
+        log.tx_power = "100".into();
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_583_500));
+        log.rig = String::new();
+        log.tx_power = String::new();
+        assert!(log.log_mode_at("W1AW", "1D", "CT", "PH", 0, 1_782_583_800));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 2);
+        let path = scratch_adi();
+        lb.save(&path).expect("write log.adi");
+        let reborn = Logbook::load(&path);
+        let _ = std::fs::remove_file(&path);
+        let by = |call: &str| {
+            reborn
+                .records()
+                .iter()
+                .find(|r| r.call == call)
+                .cloned()
+                .expect("merged")
+        };
+        let kit = by("K1ABC");
+        assert_eq!(kit.my_rig.as_deref(), Some("Icom IC-7300"));
+        assert_eq!(kit.tx_power, Some(100.0));
+        assert_eq!(kit.time_off_unix, Some(1_782_583_500));
+        let none = by("W1AW");
+        assert_eq!(none.my_rig, None);
+        assert_eq!(none.tx_power, None);
+        assert_eq!(none.time_off_unix, Some(1_782_583_800));
+    }
+
+    /// **A merged contact carries the grid it was made from, marked as Nexus's own** — the
+    /// row's grid stamped at log time becomes `MY_GRIDSQUARE`, which every service is sent and
+    /// the LoTW upload leaves out ([`crate::logbook::without_self_filled`]), so TQSL signs it
+    /// from the Station Location as before. Read back through the file, which is what reaches
+    /// every upload. A row with none gets none.
+    #[test]
+    fn a_merged_row_carries_its_grid_which_lotw_never_sees() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        log.grid = "EN52".into();
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_583_500));
+        log.grid = String::new();
+        assert!(log.log_mode_at("W1AW", "1D", "CT", "PH", 0, 1_782_583_800));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 2);
+        let path = scratch_adi();
+        lb.save(&path).expect("write log.adi");
+        let reborn = Logbook::load(&path);
+        let _ = std::fs::remove_file(&path);
+        let by = |call: &str| {
+            reborn
+                .records()
+                .iter()
+                .find(|r| r.call == call)
+                .cloned()
+                .expect("merged")
+        };
+        let placed = by("K1ABC");
+        assert_eq!(placed.my_grid.as_deref(), Some("EN52"));
+        assert_eq!(crate::logbook::self_filled(&placed), ["MY_GRIDSQUARE"]);
+        let sent = crate::logbook::adif_record(&placed);
+        assert!(sent.contains("<MY_GRIDSQUARE:4>EN52"), "{sent}");
+        assert!(!sent.contains("SELF_FILLED"), "{sent}");
+        let lotw = crate::logbook::without_self_filled(&placed);
+        assert_eq!(lotw.my_grid, None);
+        assert!(
+            !crate::logbook::adif_record(&lotw).contains("MY_GRIDSQUARE"),
+            "the LoTW copy"
+        );
+        let none = by("W1AW");
+        assert_eq!(none.my_grid, None);
+        assert!(crate::logbook::self_filled(&none).is_empty());
+    }
+
+    /// A VHF contest's row SENDS its grid, and the exchange's `MY_GRIDSQUARE` is the one the
+    /// merged contact keeps — a rover's grid at that moment — written once, never doubled by
+    /// the Settings grid stamped on the row.
+    #[test]
+    fn a_vhf_rows_sent_grid_wins_over_the_stamped_one() {
+        let rs = crate::fd_rules::ruleset_by_id("arrlvhf_jan", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let data = crate::contest::StationData {
+            mycall: "W9XYZ".into(),
+            mygrid: "EN52".into(),
+            ..Default::default()
+        };
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        let mut log = FieldDayLog::new("W9XYZ", session, "6m");
+        log.session
+            .move_to(&[("GRID", "EN53")])
+            .expect("a rover moves");
+        log.grid = "EN52".into();
+        let rx = [("GRID".to_string(), "FN31".to_string())];
+        assert!(log.log_fields_at("K1ABC", &rx, "PH", "", 0, 1_782_583_500));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 1);
+        let r = &lb.records()[0];
+        let out = crate::logbook::adif_record(r);
+        assert_eq!(out.matches("<MY_GRIDSQUARE:").count(), 1, "{out}");
+        assert!(out.contains("<MY_GRIDSQUARE:4>EN53"), "{out}");
+        assert!(crate::logbook::self_filled(r).is_empty());
+    }
+
     #[test]
     fn a_second_merge_writes_nothing() {
         let log = fd_log();

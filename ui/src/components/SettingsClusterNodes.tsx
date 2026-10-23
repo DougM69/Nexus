@@ -101,8 +101,6 @@ export interface SettingsClusterNodesProps {
   /** Each node's standing; null until `get_cluster_nodes` has answered. */
   standings: ClusterNodes | null
   disabled: boolean
-  /** The example node address shown in an empty row — an invariant token, not prose. */
-  placeholder: string
 }
 
 export function SettingsClusterNodes({
@@ -112,7 +110,6 @@ export function SettingsClusterNodes({
   onHostsChange,
   standings,
   disabled,
-  placeholder,
 }: SettingsClusterNodesProps) {
   const nodes = standings?.nodes ?? []
   const builtIn = nodes.filter((n) => n.callsign)
@@ -185,7 +182,6 @@ export function SettingsClusterNodes({
                   className="settings-input"
                   value={host}
                   onChange={(e) => onHostsChange((hs) => hs.map((h, j) => (j === i ? e.target.value : h)))}
-                  placeholder={placeholder}
                   spellCheck={false}
                 />
                 <Standing node={standingOf(host)} auto={false} />

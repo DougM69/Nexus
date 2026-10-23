@@ -1122,6 +1122,12 @@ impl<S: Stores> Dispatcher<S> {
         self.outcomes_at(caller, ids, Instant::now())
     }
 
+    /// The journals held, as a burst of admissions holds them: a test's stand-in.
+    #[cfg(test)]
+    pub(crate) fn hold_journals(&self) -> impl Sized + '_ {
+        lock(&self.inner.journals)
+    }
+
     fn outcomes_at(&self, caller: &CallerKey, ids: &[u64], now: Instant) -> Vec<Outcome> {
         let mut journals = lock(&self.inner.journals);
         match journals.get_mut(caller) {
