@@ -452,6 +452,20 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       assert.equal(await evaluate(keptKey),signer.publicKey,'S3-L1: Accept kept the listed key')
     }
     for(const [w,h] of [[360,740],[390,844],[844,390],[1024,768],[1280,800],[1366,768],[3440,1440]])for(const theme of ['dark','light'])await geometry(w,h,1,theme)
+    // Your account: Delete account opened and its word typed, at a phone's size and a desktop's. Real clicks
+    // reach the summary and the box; the delete button is hit-tested where it lies and never pressed.
+    const deleteSummary=`[...document.querySelectorAll('summary')].find(e=>e.textContent==='Delete account')`
+    await click(deleteSummary)
+    await click(`document.querySelector('.remote-account-data input')`)
+    await browser.call('Input.insertText',{text:'DELETE'},session)
+    await until(`!${button('Delete my account')}.disabled`)
+    for(const [w,h] of [[360,740],[1280,800]]){
+      await geometry(w,h,1,'dark')
+      const reach=await evaluate(`(()=>{const e=${button('Delete my account')};e.scrollIntoView({block:'center',behavior:'instant'});const r=e.getBoundingClientRect();return {inside:r.top>=0&&r.left>=0&&r.bottom<=innerHeight&&r.right<=innerWidth,hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})()`)
+      assert.ok(reach.inside&&reach.hit,'Delete my account must be on screen and on top: '+JSON.stringify({w,h,reach}))
+    }
+    await click(deleteSummary)
+    await geometry(3440,1440,1,'light')
     if(artifacts){await mkdir(artifacts,{recursive:true});await geometry(390,844);const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-account.png'),Buffer.from(shot.data,'base64'))}
     const fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-monitor/fixtures.v2.json',import.meta.url),'utf8')).spe
     let sequence=0

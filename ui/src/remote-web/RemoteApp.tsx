@@ -37,6 +37,8 @@ const BETA_CHANNEL = 'https://discord.gg/mCCBaRKj3'
 // payment provider's 48 hours, plus the five minutes the billing service allows for the time between. With
 // less, the plan starts and the first payment is taken at once, and Subscribe says so before the press.
 const TRIAL_KEPT_MS = 48 * 3600000 + 300000
+// The word typed to delete the account, the same in every language, as the service asks for it.
+const DELETE_WORD = 'DELETE'
 // Browser approval lifetime: warn this long before the end that using this browser cannot move.
 const APPROVAL_WARNING_MS = 7 * 86400000
 // The service names what it refused. Anything that is not a refusal - a dropped connection, a
@@ -59,6 +61,8 @@ export function RemoteApp() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [code, setCode] = useState('')
+  // What has been typed into Delete account's confirmation box.
+  const [deleteWord, setDeleteWord] = useState('')
   // Keyed by station id: two cards must not share one edit box, and opening one must not put the
   // other into edit mode. null means nobody is renaming.
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
@@ -186,6 +190,28 @@ export function RemoteApp() {
   })
   const keyChanged = (stationId: string) => !!stationKeys[stationId] && stationKeys[stationId].keptPrint !== stationKeys[stationId].print
   const leave = () => { connection?.stop(); setConnection(null) }
+  // The account's copy, as a file the browser saves.
+  const downloadCopy = () => void act(async () => {
+    if (!client) return
+    const url = URL.createObjectURL(new Blob([JSON.stringify(await client.post('account/export'), null, 2)], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url; link.download = 'nexus-remote-account.json'
+    document.body.append(link); link.click(); link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  })
+  // Gone for good: the service cancels any subscription first and refuses, deleting nothing, if it cannot.
+  // Then this browser forgets the station keys it kept, and signs out.
+  const deleteAccount = () => {
+    if (deleteWord !== DELETE_WORD) return
+    void act(async () => {
+      if (!client) return
+      await client.post('account/delete', { confirm: DELETE_WORD })
+      const stations = session?.stations ?? []
+      connection?.stop(); setConnection(null); setSession(null); setDeleteWord('')
+      await Promise.all(stations.map(station => forgetStationKey(station.id).catch(() => {})))
+      await client.signOut()
+    })
+  }
   const signOutOfSession = () => { connection?.stop(); setConnection(null); setSession(null); void client?.signOut() }
   // Opened from the card's Stream or Listen, which IS the operator asking: the view starts once, on
   // its own, as soon as the station can be asked (the press is consumed there; a stream that ends
@@ -269,6 +295,7 @@ export function RemoteApp() {
     : code === 'alreadySubscribed' ? t('remote.billing.alreadySubscribed')
     : code === 'noSubscription' ? t('remote.billing.noSubscription')
     : code === 'billingNotAvailable' ? t('remote.billing.notAvailable')
+    : code === 'subscriptionNotCancelled' ? t('remote.account.cancelFailed')
     : t('remote.requestFailed')
   // A sign-up that worked but whose address is not confirmed yet. Auth0 keeps its session through
   // the deny, so "continue" is one plain login and "use a different account" has to sign out of it.
@@ -471,6 +498,25 @@ export function RemoteApp() {
         </section>}
         {/* At the limit the pairing card used to vanish with no word about why. */}
         {canPair && !session.pending && session.stations.length >= 2 && <p role="status">{t('remote.stationLimitReached')}</p>}
+        <section className="rm-card remote-section remote-account-data">
+          <h2>{t('remote.account.title')}</h2>
+          <p>{t('remote.account.exportHint')}</p>
+          <div className="remote-actions">
+            <button className="remote-button" disabled={busy} onClick={downloadCopy}>{t('remote.account.export')}</button>
+          </div>
+          {/* The confirmation is typed into the page, never a browser dialog. A live subscription ends with
+              the account, at once and with no refund of the unused part: said before the press. */}
+          <details><summary>{t('remote.account.delete')}</summary>
+            <p>{t('remote.account.deleteWhat')}</p>
+            <p>{t('remote.account.deleteKept')}</p>
+            {subscribed && <p className="rm-warning">{t('remote.account.deleteSubscription')}</p>}
+            <form onSubmit={event => { event.preventDefault(); deleteAccount() }}>
+              <label>{t('remote.account.deleteConfirm', { word: DELETE_WORD })}<input autoComplete="off" spellCheck={false} value={deleteWord}
+                onChange={event => setDeleteWord(event.target.value)} /></label>
+              <button className="remote-button" disabled={busy || deleteWord !== DELETE_WORD}>{t('remote.account.deleteButton')}</button>
+            </form>
+          </details>
+        </section>
       </>}
     </div>
     <footer className="remote-site-footer"><Wordmark /><a href="/remote-licenses.txt">{t('remote.licenses')}</a></footer>
