@@ -10052,6 +10052,12 @@ export const EN = {
     'Hide stations you have already worked (B4) from whichever filter is active — CQ-only minus B4, and friends',
   'operate.decodes.hideB4.title.idle':
     'The B4 chip shows worked stations — the hide switch is idle there',
+  // #409: the menu beside −B4. B4 is the log shorthand for "worked before" and stays as it is.
+  'operate.decodes.hideB4Scope.aria': 'Which worked stations −B4 hides',
+  'operate.decodes.hideB4Scope.title':
+    'Any band: −B4 hides every station you have worked before. This band: it hides only those worked on this band, so a station worked on another band stays for a new band slot.',
+  'operate.decodes.hideB4Scope.any': 'Any band',
+  'operate.decodes.hideB4Scope.band': 'This band',
   'operate.decodes.newestTop.label': 'Newest on top',
   'operate.decodes.newestTop.title': 'Draw the newest decodes at the top and follow them there. Off is the WSJT-X order, with the newest at the bottom.',
   'operate.decodes.newestTop.title.idle': 'Newest on top works in Time order',

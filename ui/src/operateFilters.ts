@@ -41,6 +41,7 @@ export const DEFAULT_ROSTER_FILTERS: RosterFilters = { neededOnly: false, hideWo
 export const ROSTER_FILTER_KEY = 'nexus.roster.filters'
 export const DECODE_FILTER_KEY = 'nexus.decodes.filter'
 export const DECODE_HIDE_B4_KEY = 'nexus.decodes.hideB4'
+export const DECODE_HIDE_B4_SCOPE_KEY = 'nexus.decodes.hideB4Scope'
 export const DECODE_HIDE_BLOCKED_KEY = 'nexus.decodes.hideBlocked'
 export const DECODE_HIDE_CONFIRMED_KEY = 'nexus.decodes.hideConfirmed'
 export const DECODE_NEWEST_TOP_KEY = 'nexus.decodes.newestTop'
@@ -76,6 +77,28 @@ export function saveDecodeHideB4(on: boolean): void {
   surfaceSet(DECODE_HIDE_B4_KEY, on ? '1' : '0')
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent<boolean>(DECODE_HIDE_B4_EVENT, { detail: on }))
+  }
+}
+
+/** #409: which worked stations −B4 hides. `'any'` (the default, and −B4 as it always was) is
+ *  "worked before" on any band; `'band'` is worked on THIS band only (`workedBand`, which also
+ *  takes the mode when B4 matches by mode), so a station worked only elsewhere stays on screen
+ *  for a new band slot. Anything else stored reads as `'any'`. */
+export type DecodeHideB4Scope = 'any' | 'band'
+
+export function loadDecodeHideB4Scope(): DecodeHideB4Scope {
+  return surfaceGet(DECODE_HIDE_B4_SCOPE_KEY) === 'band' ? 'band' : 'any'
+}
+
+/** Same-window change signal for the scope, carrying it in `detail` — −B4's own #268 shape, for
+ *  the same reason: the Rx Frequency pane applies −B4 too, and must not keep the scope it read at
+ *  mount. */
+export const DECODE_HIDE_B4_SCOPE_EVENT = 'nexus-decodes-hideb4scope-changed'
+
+export function saveDecodeHideB4Scope(scope: DecodeHideB4Scope): void {
+  surfaceSet(DECODE_HIDE_B4_SCOPE_KEY, scope)
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent<DecodeHideB4Scope>(DECODE_HIDE_B4_SCOPE_EVENT, { detail: scope }))
   }
 }
 

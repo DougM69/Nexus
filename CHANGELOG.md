@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Alerts has a new **Keep pop-ups up for at least** menu: each pop-up's own time (as before, and
   as it comes), 10, 20, 30 or 60 seconds. It only makes a pop-up stay longer: an error still
   stays at least 12 seconds, and one that stays until you close it still does.
+- **−B4 can hide only the stations you have worked on this band.** A small menu beside Band
+  Activity's −B4 chip picks what it hides: **Any band** (every station worked before, as −B4
+  always did, and still the default) or **This band**, which keeps a station you have worked only
+  on another band on screen so you can work it for a new band. The Rx Frequency pane follows the
+  same choice.
 
 ### Changed
 - **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the
