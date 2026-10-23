@@ -36,6 +36,7 @@ import { hasOverridingNeed, isHiddenByCountry, useCountryExclude } from '../feat
 import { CountryHiddenChip } from './CountryExclude'
 import { RarityChip } from './RarityChip'
 import { WatchTile } from './WatchTile'
+import { WorkedWindowSelect, workedWithin } from './WorkedWindowSelect'
 import { useWatchMatch, watchLabel } from '../watchlist'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { useStationControl, useStationCapability } from '../stationAccess'
@@ -330,8 +331,15 @@ export function OperateRoster({
     // ever, not per band and emphatically not per park (dto.rs) — which is why it could never
     // have answered this on its own. A bare LoTW confirmation on a station already worked on
     // this band is NOT one (#350): that was the station just worked, back on the list. A
-    // watched station IS one, even just worked — the operator asked to see it.
-    if (hideWorked) f = f.filter((x) => !x.s.worked || x.stillNeeded)
+    // watched station IS one, even just worked — the operator asked to see it. #324 — with a
+    // window chosen, a station last worked before it shows again: a special-event call (13
+    // Colonies, Route 66) is on the air all week, and the Spots panel's windows are the ones
+    // offered. No window is any time, as Hide worked always was here.
+    const workedWindow = filters.workedWindow
+    if (hideWorked)
+      f = f.filter(
+        (x) => !x.s.worked || x.stillNeeded || (workedWindow != null && !workedWithin(x.s, workedWindow)),
+      )
     // Hide blocked (opt-in; default they render dimmed). The station being WORKED or
     // selected always stays — hiding your live QSO partner mid-exchange is the same
     // self-own the country exclusion guards against.
@@ -409,6 +417,7 @@ export function OperateRoster({
     sort,
     neededOnly,
     hideWorked,
+    filters.workedWindow,
     filters.hideBlocked,
     filters.maxDistanceKm,
     hideCalls.entries,
@@ -486,6 +495,12 @@ export function OperateRoster({
             onChange={(e) => setFilter({ hideWorked: e.target.checked })}
           /> {t('operate.roster.filter.hideWorked')}
         </label>
+        <WorkedWindowSelect
+          className="or-worked-window"
+          value={filters.workedWindow ?? null}
+          onChange={(w) => setFilter({ workedWindow: w ?? undefined })}
+          anyTime
+        />
           <label className="or-filter" title={t('operate.roster.filter.hideBlocked.title')}>
             <input
               type="checkbox"

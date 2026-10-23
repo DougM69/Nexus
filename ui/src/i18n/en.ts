@@ -3398,6 +3398,7 @@ export const EN = {
     'Hides stations you logged within this window, on any band or mode. Anything you still need here always shows.',
   'spots.filter.workedWindow.aria': 'Worked within',
   'spots.filter.workedWindow.title': 'How far back “worked” reaches',
+  'spots.filter.workedWindow.any': 'Any time',
   'spots.filter.workedWindow.utcDay': 'Until 0000Z',
   'spots.filter.workedWindow.hour1': '1 h',
   'spots.filter.workedWindow.hours4': '4 h',

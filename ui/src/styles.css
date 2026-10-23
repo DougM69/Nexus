@@ -21334,8 +21334,10 @@ button.cq-skiptx1.on {
 }
 /* #386 — the distance cap, a compact picker among the filters, in Band Activity's sort picker's
    look (`.od-sort select`). The `select` base rule owns the arrow (background-image and
-   padding-right, both !important); this sets the face, the ink and the box. */
-.or-distance {
+   padding-right, both !important); this sets the face, the ink and the box. #324's worked window
+   beside Hide worked wears the same face. */
+.or-distance,
+.or-worked-window {
   background: var(--bg-elev);
   color: var(--text);
   border: 1px solid var(--border);

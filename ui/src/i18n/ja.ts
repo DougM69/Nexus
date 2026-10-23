@@ -2296,6 +2296,7 @@ export const JA: PartialCatalog = {
   "spots.filter.worked.title": "この期間内にログした局を、バンドやモードに関係なく隠します。ここでまだ必要な局は常に表示されます。",
   "spots.filter.workedWindow.aria": "交信済みの範囲",
   "spots.filter.workedWindow.title": "「交信済み」をどこまで遡るか",
+  "spots.filter.workedWindow.any": "期間なし",
   "spots.filter.workedWindow.utcDay": "0000Zまで",
   "spots.filter.workedWindow.hour1": "1 時間",
   "spots.filter.workedWindow.hours4": "4 時間",

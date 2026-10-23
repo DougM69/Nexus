@@ -4344,6 +4344,7 @@ export const DE: PartialCatalog = {
   "spots.filter.worked.title": "Blendet Stationen aus, die Sie innerhalb dieses Zeitraums geloggt haben — auf jedem Band und in jeder Betriebsart. Was Sie hier noch brauchen, bleibt immer sichtbar.",
   "spots.filter.workedWindow.aria": "Gearbeitet innerhalb",
   "spots.filter.workedWindow.title": "Wie weit „gearbeitet“ zurückreicht",
+  "spots.filter.workedWindow.any": "Jederzeit",
   "spots.filter.workedWindow.utcDay": "Bis 0000Z",
   "spots.filter.workedWindow.hour1": "1 h",
   "spots.filter.workedWindow.hours4": "4 h",

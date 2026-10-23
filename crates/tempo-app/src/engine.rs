@@ -26278,6 +26278,7 @@ contact yourself."
         // log changes, so no snapshot sweeps the log for them — not even the first after a
         // logged contact, which used to rebuild both.
         let hot = self.station.hot();
+        let now = now_unix_secs() as i64;
         for st in &mut s.stations {
             let up = st.call.to_ascii_uppercase();
             match &session_b4 {
@@ -26289,6 +26290,12 @@ contact yourself."
                     st.worked = hot.worked_call(&up);
                     st.worked_band = hot.worked_call_band(&up, &cur_band_key, fold_mode);
                 }
+            }
+            // How long ago, for the roster's timed Hide worked: the spot row's rule, a contact
+            // stamped ahead of this clock reading as "just now".
+            if let Some(last) = hot.last_worked(&up).and_then(|t| i64::try_from(t).ok()) {
+                st.worked_ago_secs = Some(now.saturating_sub(last).max(0));
+                st.worked_today_utc = last >= now - now.rem_euclid(86_400);
             }
             if let Some(resolve) = &self.station.dxcc_resolve {
                 st.country = resolve(&st.call);
@@ -38344,6 +38351,47 @@ mod tests {
             "a snapshot after an upload stamp swept the log {sweeps} times — a stamp moves no \
              key, so the worked-before sets must have stood"
         );
+    }
+
+    /// The roster carries how long ago each station was worked, as a spot row does, so the Call
+    /// Roster's Hide worked can reach back an hour, a day or a week: the latest contact with the
+    /// station, matched on the base call, and whether it fell on today's UTC day.
+    #[test]
+    fn roster_rows_carry_how_long_ago_the_station_was_worked() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let now = now_unix_secs() as i64;
+        let at = |call: &str, secs_ago: i64| QsoRecord {
+            when_unix: (now - secs_ago) as u64,
+            ..qrec(call, "20m")
+        };
+        e.log_qso(at("W1AAA/P", 9_000));
+        e.log_qso(at("W1AAA", 7_200)); // the later of two wins
+        e.log_qso(at("W2BBB", 8 * 86_400));
+        let rows: Vec<modes::Decode> = ["W1AAA", "W2BBB", "W3CCC"]
+            .iter()
+            .map(|c| dec_snr(&format!("CQ {c} FN31"), -8))
+            .collect();
+        e.ingest_decodes_for_test(&rows, 2);
+        let snap = e.snapshot();
+        let st = |call: &str| {
+            snap.stations
+                .iter()
+                .find(|s| s.call == call)
+                .expect("a roster row")
+                .clone()
+        };
+        let w1 = st("W1AAA");
+        let ago = w1.worked_ago_secs.expect("W1AAA was worked");
+        assert!((7_200..7_260).contains(&ago), "the later contact: {ago}");
+        let midnight = now - now.rem_euclid(86_400);
+        assert_eq!(w1.worked_today_utc, now - 7_200 >= midnight);
+        let w2 = st("W2BBB");
+        assert!(w2.worked_ago_secs.is_some_and(|a| a >= 8 * 86_400));
+        assert!(!w2.worked_today_utc, "eight days ago is not today");
+        let w3 = st("W3CCC");
+        assert_eq!(w3.worked_ago_secs, None, "control: never worked");
+        assert!(!w3.worked_today_utc);
     }
 
     /// The B4 sets are kept against the log's revision, so EVERY kind of change must reach the

@@ -7729,6 +7729,7 @@ export const ES: PartialCatalog = {
   "spots.filter.worked.title": "Oculta las estaciones que registraste dentro de esta ventana, en cualquier banda o modo. Lo que aún necesitas aquí siempre se muestra.",
   "spots.filter.workedWindow.aria": "Trabajada dentro de",
   "spots.filter.workedWindow.title": "Hasta dónde llega «trabajada»",
+  "spots.filter.workedWindow.any": "En cualquier momento",
   "spots.filter.workedWindow.utcDay": "Hasta 0000Z",
   "spots.filter.workedWindow.hour1": "1 h",
   "spots.filter.workedWindow.hours4": "4 h",

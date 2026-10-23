@@ -1106,6 +1106,12 @@ export interface Station {
   /** Worked before ON THE CURRENT BAND (and mode when b4MatchMode is set) — WSJT-X's
    * stronger CallBand scope, shown as the solid B4 chip; call-anywhere is the hollow one. */
   workedBand?: boolean
+  /** Seconds since your most recent QSO with this station, any band or mode (base call), as on a
+   *  spot row — for the roster's timed Hide worked. Null/absent = never worked, or an older
+   *  station that does not send it. */
+  workedAgoSecs?: number | null
+  /** That QSO fell on today's UTC day, by the station's clock. */
+  workedTodayUtc?: boolean
   /** DXCC entity name (country), resolved from the callsign. */
   country?: string | null
   /** Tier/protocol last heard on — 'TempoFast' = Tempo, 'FT8'/'FT4' = digital ops. The Tempo

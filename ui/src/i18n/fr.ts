@@ -7729,6 +7729,7 @@ export const FR: PartialCatalog = {
   "spots.filter.worked.title": "Masque les stations que vous avez enregistrées dans cette fenêtre, sur toutes les bandes et tous les modes. Ce dont vous avez encore besoin ici reste toujours affiché.",
   "spots.filter.workedWindow.aria": "Contactée depuis moins de",
   "spots.filter.workedWindow.title": "Jusqu’où remonte « contactée »",
+  "spots.filter.workedWindow.any": "N'importe quand",
   "spots.filter.workedWindow.utcDay": "Jusqu’à 0000Z",
   "spots.filter.workedWindow.hour1": "1 h",
   "spots.filter.workedWindow.hours4": "4 h",
