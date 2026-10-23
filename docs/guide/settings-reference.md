@@ -295,6 +295,14 @@ Run more than one rig. Always shown — with one radio it is just a card and an
   **Editing** badge; **Make active** swaps rigs (dropping any carrier first);
   **Remove** deletes a non-active radio. The card's meta line shows model,
   port/address, audio device, and rigctld port.
+- **Disable** / **Enable** — with two or more radios, each card has a **Disable** button. A
+  disabled radio keeps its whole setup, but Nexus stops watching it and lets go of its CAT
+  port, so another program on the same computer can use that rig. The card shows a
+  **Disabled** badge, auto band-routing skips the radio, and its pill leaves the header's radio
+  switcher. It can't be made active until you enable it, here or from Nexus Remote: **Make
+  active** is greyed out. **Enable** opens its CAT port again and brings the pill back. The
+  radio you are operating can't be disabled (its **Disable** is greyed out): make another radio
+  active first.
 - **Covers bands** — band chips per radio for auto band-routing. None = covers
   all. Appears once you have two radios.
 - **+ Add radio** — the discovery affordance. "Run two rigs at once — e.g. an HF
@@ -646,6 +654,9 @@ frequency, with the dial, the passband and spots drawn on it as usual.
   the dial nears the edge*), which moves SDRconnect's own display far less. A retune in
   SDRconnect's window is drawn where it went; Nexus retunes again only when the dial moves.
 - Pick the receiver, and an RSPduo's tuner mode, in SDRconnect. Nexus uses the primary tuner.
+- The scope source is one choice for the whole station, not one per radio. With two radios the
+  receiver's centre follows whichever radio is active, but the receiver still hears only the rig
+  whose RX OUT feeds it.
 - Receive only: Nexus never transmits through SDRconnect and sends it no CAT. Clicking a spot on
   the scope tunes the rig through Nexus's normal CAT path.
 - When SDRconnect is not running, sends no IQ, or sends IQ at a rate other than the one it
@@ -1057,7 +1068,8 @@ the radio.
 - **Transmit period — Tx 1st (even)** — "On = transmit in the even/1st T/R slots;
   off = odd/2nd. The two stations in a QSO must pick **opposite** periods." Also
   on the top bar.
-- **Tx Watchdog (min)** — "Auto-halt TX after this many minutes (0 = off)."
+- **Tx Watchdog (min)** — "Auto-halt TX after this many minutes (0 = off)." When it ends an
+  FT8/FT4 call, the QSO strip shows **TX watchdog stopped the call** in red.
 - **Disable TX after sending 73** — "After your final 73 goes out, Enable TX
   drops — working the next station is a deliberate arm (WSJT-X default). A CQ run
   is unaffected: it returns to CQ."
@@ -1768,6 +1780,10 @@ a new one is genuinely an event.
   calling you, a band opening, space weather, a DXpedition you chase coming on) stop popping up.
   Their sounds are unchanged. Errors, notices about transmitting, the radio or the log, and any
   message with a button (an alarm's Stop, an Undo, an update's Download) still pop up.
+- **Keep pop-ups up for at least** — **Each pop-up's own time** (the default), or 10, 20, 30 or
+  60 seconds. Most pop-ups go after 4 seconds and errors after 12. The choice only makes a pop-up
+  stay longer, so pick a longer time if you look away and miss them. A pop-up that stays until
+  you close it still does.
 - **My call** — "Beep + flash when someone directs a call at you."
 - **CQ calls** — "Alert on any decoded CQ. Off by default — CQs are constant."
 - **New DXCC and grid alerts** — the sound and the pop-up when you decode a new
