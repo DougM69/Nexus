@@ -1399,7 +1399,7 @@ fn admitted_as_a_stop_whatever_else(cmd: &str, args: &[Value]) {
 #[test]
 fn every_stop_is_admitted_whatever_else() {
     let stops = of_class(Class::StopsTx);
-    assert_eq!(stops.len(), 8, "the table's own count: {stops:?}");
+    assert_eq!(stops.len(), 9, "the table's own count: {stops:?}");
     for name in stops {
         assert_eq!(route(name, &json!({})), Route::Shack, "{name}");
         // A stop takes no arguments the dispatcher reads, so even malformed ones do not refuse it.
@@ -2369,6 +2369,11 @@ const NO_OFF_HALF: &[(&str, &str)] = &[
     (
         "js8_answer_reply",
         "Its No declines a reply that only a Yes would queue: nothing is on the air to stop.",
+    ),
+    (
+        "jtty_live_commit",
+        "Its `flush` says whether everything typed goes now or only the words already complete, \
+         not a switch: a live session is stopped by `jtty_stop`.",
     ),
     (
         "send_cw",
