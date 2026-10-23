@@ -22,7 +22,7 @@
 use super::super::audio_road::{self, AudioRoad};
 use super::super::datagram::{End, Keys, Tag, AUDIO_LABEL, AUDIO_MAX, EXPORTED, STOP_LABEL};
 use super::super::stop_road::{
-    Down, Hears, Powers, Running, StateClock, StopRoad, Up, AFTERLIFE, ANSWERED, FRESH,
+    Down, Hears, Powers, Running, StateClock, StopRoad, Up, AFTERLIFE, ANSWERED, FRESH, PRESS_CAP,
 };
 use super::super::wire;
 use super::commands::App;
@@ -142,6 +142,15 @@ impl Roadside {
 }
 
 fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
+    roadside_limited(app, afterlife, PRESS_CAP, hears)
+}
+
+/// The same, each press from afar held at most `cap`.
+fn roadside_capped(app: &App, cap: Duration) -> Roadside {
+    roadside_limited(app, AFTERLIFE, cap, Hears::Loopback)
+}
+
+fn roadside_limited(app: &App, afterlife: Duration, cap: Duration, hears: Hears) -> Roadside {
     let mut s = super::commands::running(app);
     let (ptt, mic) = (PttHold::default(), MicFeed::default());
     {
@@ -164,7 +173,7 @@ fn roadside_with(app: &App, afterlife: Duration, hears: Hears) -> Roadside {
         },
     };
     let at = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
-    let road = StopRoad::start_with(at, hears, powers, afterlife).unwrap();
+    let road = StopRoad::start_with(at, hears, powers, afterlife, cap).unwrap();
     s.shared.stop_road = Some(road.road());
     // The audio road, as the listener makes it: the station's one encoder over a feed of the
     // test's own, the audio lane's admission from the shack's own authority.
@@ -1955,6 +1964,98 @@ async fn the_held_press_ends_200_ms_after_its_last_reassertion() {
         r.counts().mic_refused.load(Ordering::SeqCst) > 0,
         "the frames after it refused"
     );
+}
+
+/// The shack's radio loop on a thread of its own until `done`: each tick, when, and whether the
+/// microphone over was armed or keyed. It goes on ticking after an over ends, so a press that keyed
+/// again would be seen.
+fn ticking(r: &Roadside, done: Arc<AtomicBool>) -> std::thread::JoinHandle<Vec<(Instant, bool)>> {
+    let engine = r.s.shared.engine.clone();
+    std::thread::spawn(move || {
+        let mut ticks = Vec::new();
+        while !done.load(Ordering::SeqCst) {
+            let now = Instant::now();
+            let mut e = engine.lock().unwrap();
+            e.poll_remote_transmit(now);
+            e.poll_mic(now, TICK.as_millis() as f64, 1);
+            ticks.push((now, e.mic_armed() || e.mic_keyed()));
+            drop(e);
+            std::thread::sleep(TICK);
+        }
+        ticks
+    })
+}
+
+/// ⛔ A press from afar ends at its cap on the station's own clock, though its computer never lets
+/// go: held and spoken into well past the cap (a second and a half here; Phone's Lock cap, three
+/// minutes, in a build), the over comes off the air no sooner than the cap after the press's first
+/// hold and within a hold and a tick past it; the road says the press was let go, every hold after
+/// it is answered so, and nothing keys again while the holds go on. CONTROL: the over was on the
+/// air by its voice within half a second of the first hold, and stayed on until the cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_press_from_afar_ends_at_its_cap_though_its_computer_holds_on() {
+    const CAP: Duration = Duration::from_millis(1500);
+    assert_eq!(PRESS_CAP, Duration::from_secs(180), "the product's cap");
+    let app = App::new();
+    let r = roadside_capped(&app, CAP);
+    let mut seat = seated(&r).await;
+    r.s.shared
+        .engine
+        .lock()
+        .unwrap()
+        .set_operating_mode("phone", false);
+    seat.renewed().await;
+    let done = Arc::new(AtomicBool::new(false));
+    let radio = ticking(&r, done.clone());
+    let mut encoder = MicEncoder::new().unwrap();
+    // Held and spoken into for two and a half seconds.
+    let holds = speak(&seat, &mut encoder, 9, 1, 125, |_| true).await;
+    let said = seat.road_says(Duration::from_millis(300)).await;
+    done.store(true, Ordering::SeqCst);
+    let ticks = tokio::task::spawn_blocking(move || radio.join().unwrap())
+        .await
+        .unwrap();
+    let first = holds[0];
+    let on = ticks
+        .iter()
+        .position(|&(_, on)| on)
+        .expect("premise: never on the air");
+    let off = on
+        + ticks[on..]
+            .iter()
+            .position(|&(_, on)| !on)
+            .expect("still on the air past the cap");
+    let off_at = ticks[off].0;
+    eprintln!(
+        "measured: the press came off the air {:?} after its first hold; the cap is {CAP:?}",
+        off_at.saturating_duration_since(first)
+    );
+    assert!(
+        ticks[on].0 < first + Duration::from_millis(500),
+        "CONTROL: keyed {:?} after its first hold",
+        ticks[on].0.saturating_duration_since(first)
+    );
+    assert!(off_at >= first + CAP, "ended before the cap");
+    assert!(
+        off_at < first + CAP + Duration::from_millis(100) + TICK + Duration::from_millis(100),
+        "ended {:?} after its first hold",
+        off_at.saturating_duration_since(first)
+    );
+    assert!(
+        !ticks[off..].iter().any(|&(_, on)| on),
+        "keyed again while its computer held on"
+    );
+    let ended = Down::Press {
+        press: 9,
+        keyed: false,
+        end: Some(HoldEnd::Released),
+    };
+    let presses = presses(&said);
+    assert!(
+        presses.last() == Some(&&ended) && presses.iter().filter(|&&d| *d == ended).count() >= 5,
+        "the holds after the cap answered with its end: {said:?}"
+    );
+    assert!(!r.ptt.keyed());
 }
 
 /// ★ Each press's reports go back by the road that made it, and the stream's page is told only its

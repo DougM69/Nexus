@@ -1062,7 +1062,8 @@ impl Client {
     /// ⛔ A LOCK ENDS AT ITS CAP. Held by the Lock, a press is let go on its road and ends once its
     /// cap has passed since it began or since the operator last answered "Still talking?", whatever
     /// re-asserts it after: no finger bounds it, so the cap does. An answer moves the count on only
-    /// while the cap has not passed.
+    /// while the cap has not passed, and the Lock goes on under a new press, since the station ends
+    /// any one press from afar at the same cap on its own clock.
     fn press(&self, locking: Option<bool>) -> Result<Value, String> {
         let now = Instant::now();
         // A held PTT is the operator at work, for as long as the screen re-asserts it.
@@ -1093,6 +1094,13 @@ impl Client {
                         let since = locked.get_or_insert(now);
                         if answered {
                             *since = now;
+                            // The station holds one press for at most the cap on its own clock, so
+                            // the Lock goes on under a new press: the key handed straight over
+                            // there, the microphone carried on here.
+                            let renewed = self.next_press.fetch_add(1, Ordering::SeqCst);
+                            if road.renew(*press, renewed, self.stops.load(Ordering::SeqCst)) {
+                                *press = renewed;
+                            }
                         }
                     }
                     return Ok(self.held_answer(locking, *locked, timing, now));
