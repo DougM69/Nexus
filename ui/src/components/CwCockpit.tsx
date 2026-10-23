@@ -1,4 +1,3 @@
-import { useStationCapability, useStationControl } from '../stationAccess'
 import { useEscStop } from '../useEscStop'
 // ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): every
 // operator-visible string in it is in the catalog under `cw.*`. Nothing was deferred —
@@ -43,7 +42,7 @@ import type { MacroEditorFocus } from './MacroEditor'
 import { macroEditChordKey, type MacroKey, type MacroSlot } from '../features/macroSets'
 import { cwStoredBuiltIn, withCwEntry, type CwProfile } from '../features/cwMacros'
 import { PaneCloseButton } from './panes/PaneCloseButton'
-import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
+import { MemoryStrip } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import type { Memory } from '../features/memories'
 import { PaneSeam } from './PaneSeam'
@@ -103,7 +102,6 @@ import { patchSettings } from '../settings/patch'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
 import { pollSingleFlight } from '../singleFlight'
-import { latestOnly } from '../latestOnly'
 import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
@@ -474,15 +472,6 @@ export function CwCockpit({
   neededBoard,
   boxes,
 }: Props) {
-  const frequencyControl = useStationCapability('frequency')
-  const control = useStationControl(), receiverControl = useStationCapability('decoder'), aiCwControl = useStationCapability('aiCw'), rotatorControl = useStationCapability('rotator')
-  // A browser moves the rig scope with the station's rigScope hint; the station judges the family.
-  const rigScope = useStationCapability('rigScope')
-  const scopeControl = control || rigScope
-  const scopeFailed = (): void => { pushToast(t('remote.controlRequestFailed'), 'error') }
-  // One remote reference change at a time: a drag sends its newest value, never every step.
-  const [sendScopeRef] = useState(() => latestOnly((tenths: number) => setScopeRef(tenths), scopeFailed))
-  const [sendFlexRef] = useState(() => latestOnly((dbm: number) => setFlexPanRef(dbm), scopeFailed))
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -508,7 +497,6 @@ export function CwCockpit({
   const [recBusy, setRecBusy] = useState(false)
   const recording = snap.radio.qsoRecording
   const toggleRecord = () => {
-    if (!control) return
     if (recBusy) return
     setRecBusy(true)
     const fn = recording ? stopQsoRecording : startQsoRecording
@@ -548,7 +536,7 @@ export function CwCockpit({
   // policy is applied separately by the engine).
   const onScopeTune = useScopeTune({
     sideband: snap.radio.sideband || 'USB',
-    enabled: control && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
+    enabled: catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
     onSnap,
   })
   // RX filter width (CW wants a NARROW filter — default 500 Hz, 50-Hz steps, 50–2000 Hz span).
@@ -583,7 +571,7 @@ export function CwCockpit({
   }, [snap.radio.nrLevel])
   const shownNr = nr
   const changeNr = (pct: number) => {
-    if (control) setNr(pct)
+    setNr(pct)
     void setNrLevel(pct / 100).catch(error => pushToast(String(error), 'error'))
   }
   // AGC speed — the chip lights on the click (snap.radio.agc is the rig READ-BACK and lags a
@@ -593,9 +581,9 @@ export function CwCockpit({
   // remembered mirror would light Mid forever on a radio that is still on Fast.
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
-    control && agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
+    agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
   const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
-    if (control) setAgcPick(sp)
+    setAgcPick(sp)
     void setAgc(sp)
       .then((s) => s && onSnap?.(s))
       .catch(() => {})
@@ -659,9 +647,7 @@ export function CwCockpit({
       : `· ${t('cw.scope.audio.sub')}`
   const [flexRefDbm, setFlexRefDbm] = useState(-80)
   const changeFlexRef = (dbm: number) => {
-    if (!scopeControl) return
     setFlexRefDbm(dbm)
-    if (!control) return sendFlexRef(dbm)
     void setFlexPanRef(dbm)
       .then((s) => onSnap?.(s))
       .catch(() => {})
@@ -669,10 +655,8 @@ export function CwCockpit({
   const [rfSpan, setRfSpan] = useState<(typeof RF_SPANS)[number]>(RF_SPANS[0])
   const [scopeRefTenths, setScopeRefTenths] = useState(0)
   const changeScopeRef = (tenths: number) => {
-    if (!scopeControl) return
     setScopeRefTenths(tenths)
-    if (control) void setScopeRef(tenths)
-    else sendScopeRef(tenths)
+    void setScopeRef(tenths)
   }
   // Live single-signal CW decode of the receive audio at the marker pitch — poll the
   // engine ~1.4 Hz (the decode reads a multi-second ring, so faster adds no detail).
@@ -680,7 +664,6 @@ export function CwCockpit({
   // replaced by the next pass. For the eye only — the chips, the report and name the log takes
   // and the screen reader's log all come from the confirmed `text`.
   const [decoded, setDecoded] = useState<{ text: string; pending: string; wpm: number }>({ text: '', pending: '', wpm: 0 })
-  const [decodeAvailable, setDecodeAvailable] = useState(control)
   // Decode transcript: bottom-pinned via the shared discipline. The old
   // unconditional `scrollTop = scrollHeight` on every reveal tick (the 50 ms
   // typewriter) made scroll-back physically impossible while copy was flowing —
@@ -812,7 +795,7 @@ export function CwCockpit({
         setActiveProfile(s.macros?.activeCwProfile ?? 0)
       })
       .catch(() => {})
-    if (control) void getCatCwUnprovenRigModels()
+    void getCatCwUnprovenRigModels()
       .then((m) => {
         if (alive && Array.isArray(m)) setCatCwUnproven(m)
       })
@@ -820,7 +803,7 @@ export function CwCockpit({
     return () => {
       alive = false
     }
-  }, [active, control])
+  }, [active])
   const profileMacros = profiles[activeProfile]?.macros
   // Typed as CwMacro[] so the row renderer reads ONE shape: a profile macro's label is the
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
@@ -841,7 +824,6 @@ export function CwCockpit({
   // field changed since the view opened back to what it was, the dial the operator had tuned
   // to among them (and the radio loop then retuned the rig there).
   const switchProfile = (i: number) => {
-    if (!control) return
     setEditing(null)
     setActiveProfile(i)
     void patchSettings((s) => ({ macros: { ...s.macros, activeCwProfile: i } }))
@@ -854,7 +836,6 @@ export function CwCockpit({
   // call). Refetched from the backend when the worked station changes — cheap, once per QSO.
   const [previews, setPreviews] = useState<Record<string, string>>({})
   useEffect(() => {
-    if (!control) return
     let alive = true
     Promise.all(
       macros.map((m) =>
@@ -875,7 +856,6 @@ export function CwCockpit({
       cwDecode(sensitivityRef.current)
         .then((d) => {
           if (owns()) {
-            setDecodeAvailable(true)
             setDecoded({ text: d.text, pending: d.pending ?? '', wpm: d.wpm })
             setSent(d.sent)
             setKeyerError(d.keyerError)
@@ -890,20 +870,13 @@ export function CwCockpit({
             setTurn(d.turn ?? null)
           }
         })
-        .catch(() => {
-          if (owns() && !control) {
-            setDecodeAvailable(false); setDecoded({ text: '', pending: '', wpm: 0 }); setSent([]); setCand([]); setKeyerError(null)
-            setUnassisted(false)
-            setGuide({ workedCall: null, rst: null, name: null })
-            setTurn(null)
-          }
-        })
+        .catch(() => {})
     // Poll the decoded transcript often — the Rust streaming decoder updates every ~20 ms, so a
     // slow poll is pure display lag (the "desktop lags the web decoder" report). 200 ms ≈ 5 Hz
     // keeps copy near real-time without hammering the command channel. Single-flight (#335):
     // `cw_decode` takes the engine mutex, so a tick skips while the last read is still out.
     return pollSingleFlight('cw decode', 200, tick)
-  }, [active, control])
+  }, [active])
   // Initialize the keyer toggle from the engine's ACTUAL setting (the snapshot is the source
   // of truth) — not a hard-coded 'cat'. A stale local default showed CAT while the backend was
   // on Soundcard, so CW silently went to USB (Soundcard keying = rig in a DATA submode) with no clue why.
@@ -921,7 +894,7 @@ export function CwCockpit({
   // Held, like tuning, while anything transmits — the rig's own PTT included.
   const soundcardKeyer = keyer === 'soundcard'
   const passbandEditable =
-    control && catOk && (filterHz ?? 0) > 0 && !soundcardKeyer &&
+    catOk && (filterHz ?? 0) > 0 && !soundcardKeyer &&
     !(snap.radio.rigMode ?? '').toUpperCase().startsWith('PKT')
   const onScopePassband = useScopePassband({
     enabled: passbandEditable && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.rigKeyed !== true,
@@ -1019,7 +992,6 @@ export function CwCockpit({
     setCallNow('')
   }
   const commitHisCall = async (raw?: string) => {
-    if (!control) return
     hisCallEditing.current = false
     const call = callsignChars(raw ?? hisCallRef.current.draft)
     // A guess sent is the call from then on; an empty field stays the decoder's.
@@ -1036,7 +1008,6 @@ export function CwCockpit({
   // whatever pitch the operator runs (it used to be a fixed 300–1100, centered on 600 only).
   const cwView = cwScopeWindow(pitch, filterHz)
   const changePitch = (v: number) => {
-    if (!control) return
     const p = Math.max(300, Math.min(1200, Math.round(v)))
     setPitch(p)
     void setCwKeyer(keyer, p).then((s) => s && onSnap?.(s))
@@ -1049,7 +1020,6 @@ export function CwCockpit({
   // own stored speed. SF ticket #2.
   const wpmCommit = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const changeWpm = (w: number, persist = true) => {
-    if (!control) return
     const v = Math.max(WPM_MIN, Math.min(WPM_MAX, Math.round(w)))
     setWpm(v)
     void setCwWpm(v, false)
@@ -1082,7 +1052,7 @@ export function CwCockpit({
   speedMatchRef.current = { on: speedMatchOn, roles }
   const esm = useEsmHost({
     cockpit: 'cw',
-    on: !!esmSetting?.on && !!fieldDay && control,
+    on: !!esmSetting?.on && !!fieldDay,
     callOnce: !!esmSetting?.callOnce,
     roles,
     slots: macros,
@@ -1113,7 +1083,6 @@ export function CwCockpit({
   // It answers whether the line went to `send_cw` (true) or was refused here (false), for the
   // macro editor's Send once, which keeps the operator's draft open when the send was refused.
   const send = (line: string, key: string | null = null): boolean => {
-    if (!control) return false
     if (!line.trim()) return false
     // The engine blocks keying outside privileges anyway; surface why up front.
     if (!snapRef.current.radio.txAllowed) {
@@ -1142,12 +1111,10 @@ export function CwCockpit({
     return sent
   }
   const sendTyped = () => {
-    if (!control) return
     send(text)
     setText('')
   }
   const abort = () => {
-    if (!control) return
     // Stop the CW keyer AND drop any tune carrier / stray PTT — a true stop-everything (Esc).
     void stopCw()
     void haltTx()
@@ -1194,7 +1161,6 @@ export function CwCockpit({
   /** The same key as its editor opens it: its own label, never the F-key name standing in for one. */
   const editorSlotOf = (m: CwMacro): MacroSlot => ({ ...slotOf(m), label: m.labelKey ? t(m.labelKey) : (m.label ?? '') })
   const openEditor = (key: string, focus: MacroEditorFocus = 'title') => {
-    if (!control) return
     // Layout units (`offsetLeft`, against the dock — the key's nearest positioned ancestor), so
     // the app's zoom cancels out; the editor clamps itself against the dock's right edge.
     const el = dockRef.current?.querySelector<HTMLElement>(`[data-cw-macro="${key}"]`)
@@ -1213,7 +1179,6 @@ export function CwCockpit({
     }
   }
   const writeKey = async (key: string, entry: { label: string; text: string }) => {
-    if (!control) return
     setSavingMacros(true)
     const out: { saved: { profiles: CwProfile[]; active: number } | null } = { saved: null }
     const after = await withErrorToast(
@@ -1274,7 +1239,7 @@ export function CwCockpit({
   // only when ("Your turn · Enter") and lights none.
   const cueShown = cueHere && shown('turnCue')
   const cue = cueShown ? turn : null
-  const esmRunning = !!esmSetting?.on && !!fieldDay && control
+  const esmRunning = !!esmSetting?.on && !!fieldDay
   const cueLamp = cue
     ? turnLamp(cue, cueKeys(cue.role, { slots: macros, contest: !!fieldDay, roles, lastKey: lastKeyRef.current }), esmRunning)
     : null
@@ -1298,15 +1263,10 @@ export function CwCockpit({
     if (say && announceVerbosity !== 'off' && (say.at === 'needed' || announceVerbosity === 'all')) announce(say.text)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cue?.state, cue?.hint, cue?.over, keyedNow])
-  // An editor is operator state for THIS station: a lost control hand closes it.
-  useEffect(() => {
-    if (!control) setEditing(null)
-  }, [control])
   // Commit a typed dial from the shared header readout — same CAT path as the
   // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
   // never flips the mode); rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
-    if (!frequencyControl) return
     // An EMPTY band label is not a refusal: listening off the ham bands is first-class (operator,
     // 2026-08-13), so a typed WWV/shortwave/inter-band frequency tunes there. This used to toast
     // "outside the band plan" and discard the entry.
@@ -1316,7 +1276,6 @@ export function CwCockpit({
       .catch(() => {})
   }
   const changeKeyer = (k: 'cat' | 'soundcard' | 'winkeyer' | 'serial') => {
-    if (!control) return
     setKeyer(k)
     void setCwKeyer(k).then((s) => s && onSnap?.(s))
   }
@@ -1324,7 +1283,6 @@ export function CwCockpit({
   // `!` token + logging use it), match our speed to theirs (unless WPM was set by hand), and
   // prefill the log with the read call/RST/name. Never transmits — the operator still keys.
   const workCall = (call: string) => {
-    if (!control) return
     // The pick replaces an edit in progress in either field, or the guess, rather than waiting
     // under it to be overwritten by that edit's commit at the next send.
     hisCallEditing.current = false
@@ -1343,7 +1301,7 @@ export function CwCockpit({
   // (NOT workCall) — don't speed-match to the old decoded WPM (a different signal). The log prefill
   // is handled separately by LogEntry.
   useEffect(() => {
-    if (control && pendingWork?.call) {
+    if (pendingWork?.call) {
       void selectPeer(pendingWork.call)
         .then((s) => s && onSnap?.(s))
         .catch(() => {})
@@ -1365,7 +1323,7 @@ export function CwCockpit({
   // `halt_tx`, so TX stays on and Enter Sends Message is not refused after a cancel). It still
   // stops the CW keyer (`stop_cw`) there, because the last word of an over is on the air with
   // nothing the snapshot shows; on an idle keyer that stop has nothing to cut.
-  useEscStop(control, () => {
+  useEscStop(true, () => {
     const k = editRef.current
     if (k.editorOpen && !k.live) {
       void stopCw()
@@ -1375,7 +1333,6 @@ export function CwCockpit({
   const stateRef = useRef({ wpm, text })
   stateRef.current = { wpm, text }
   useEffect(() => {
-    if (!control) return
     const onKey = (e: KeyboardEvent) => {
       const macro = macrosRef.current.find((m) => m.key === e.key)
       if (e.key === 'Escape') {
@@ -1567,7 +1524,6 @@ export function CwCockpit({
         <button
           type="button"
           className={`cw-pace${paceNow.fast ? ' fast' : ''}`}
-          disabled={!control}
           onClick={() => changeWpm(decoded.wpm, false)}
           title={t('cw.pace.title', { them: decoded.wpm })}
         >
@@ -1580,17 +1536,14 @@ export function CwCockpit({
           </span>
         )
       )}
-      <button disabled={!control && !aiCwControl}
+      <button
         type="button"
         role="switch"
         aria-checked={snap.aiCw?.enabled ?? false}
         className={`toggle${snap.aiCw?.enabled ? ' on' : ''}`}
         onClick={() => {
           const next = !(snap.aiCw?.enabled ?? false)
-          if (control) { void setAiCw(next); return }
-          if (!aiCwControl) return
-          // Remote shows the station's own later reading, never an optimistic flip.
-          void setAiCw(next).then((s) => s && onSnap?.(s)).catch(() => pushToast(t('remote.controlRequestFailed'), 'error'))
+          void setAiCw(next)
         }}
         title={snap.aiCw?.enabled ? t('cw.decode.ai.on.title') : t('cw.decode.ai.off.title')}
       >
@@ -1599,25 +1552,18 @@ export function CwCockpit({
       {snap.aiCw?.enabled && snap.aiCw.status && (
         <span className="cw-ai-status">{snap.aiCw.status}</span>
       )}
-      <button disabled={!receiverControl}
+      <button
         className="cw-decode-clear"
         onClick={() => {
-          if (!receiverControl) return
           const repin = () => {
             // A wipe re-pins both panes so the next copy stays visible.
             decodePin.repin()
             sentPin.repin()
           }
-          if (control) {
-            void cwClear()
-            setDecoded({ text: '', pending: '', wpm: 0 })
-            setSent([])
-            repin()
-          } else {
-            // Remote keeps the actual station transcript; a later sample may
-            // already contain new copy by the time completion reaches us.
-            void cwClear().then(repin).catch(() => {})
-          }
+          void cwClear()
+          setDecoded({ text: '', pending: '', wpm: 0 })
+          setSent([])
+          repin()
         }}
         title={t('cw.decode.clear.title')}
       >
@@ -1647,7 +1593,7 @@ export function CwCockpit({
                 </>
               ) : (
                 <span className="cw-decode-idle">
-                  {!decodeAvailable ? t('remote.cwUnavailable') : (snap.aiCw?.enabled && snap.aiCw.status) || t('cw.decode.listening')}
+                  {(snap.aiCw?.enabled && snap.aiCw.status) || t('cw.decode.listening')}
                 </span>
               )}
             </div>
@@ -1712,7 +1658,7 @@ export function CwCockpit({
             </span>
             <div className="ph-span">
               {RIG_SPANS.map((sp) => (
-                <button disabled={!scopeControl}
+                <button
                   key={sp.label}
                   type="button"
                   className="theme-chip"
@@ -1722,7 +1668,7 @@ export function CwCockpit({
                      explanation anywhere. The rig's OWN refusal arrives a tick later in
                      `radio.scopeSpanRefused` (the status lane); this catch is the nearer half,
                      the command itself failing. */
-                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(control ? () => {} : scopeFailed)}
+                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
                 >
                   {sp.label}
                 </button>
@@ -1730,18 +1676,17 @@ export function CwCockpit({
             </div>
             <label className="ph-rigscope-ref" title={t('cw.rigScope.ref.title')}>
               <span>{t('cw.scope.ref.label')}</span>
-              <input disabled={!scopeControl}
+              <input
                 type="range"
                 min={-200}
                 max={200}
                 step={5}
                 value={scopeRefTenths}
-                style={{ visibility: scopeControl ? undefined : 'hidden' }}
                 onChange={(e) => changeScopeRef(Number(e.target.value))}
                 aria-label={t('cw.rigScope.ref.aria')}
               />
               <span className="ph-power-val">
-                {scopeControl ? (scopeRefTenths / 10).toFixed(1) : '—'} {DB}
+                {(scopeRefTenths / 10).toFixed(1)} {DB}
               </span>
             </label>
           </div>
@@ -1755,12 +1700,12 @@ export function CwCockpit({
             </span>
             <div className="ph-span">
               {FLEX_SPANS.map((sp) => (
-                <button disabled={!scopeControl}
+                <button
                   key={sp.label}
                   type="button"
                   className="theme-chip"
                   title={t('cw.flexPan.span.title', { span: sp.label })}
-                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(control ? () => {} : scopeFailed)}
+                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
                 >
                   {sp.label}
                 </button>
@@ -1768,18 +1713,17 @@ export function CwCockpit({
             </div>
             <label className="ph-rigscope-ref" title={t('cw.flexPan.ref.title')}>
               <span>{t('cw.scope.ref.label')}</span>
-              <input disabled={!scopeControl}
+              <input
                 type="range"
                 min={-140}
                 max={-20}
                 step={5}
                 value={flexRefDbm}
-                style={{ visibility: scopeControl ? undefined : 'hidden' }}
                 onChange={(e) => changeFlexRef(Number(e.target.value))}
                 aria-label={t('cw.flexPan.ref.aria')}
               />
               <span className="ph-power-val">
-                {scopeControl ? flexRefDbm : '—'} {DBM}
+                {flexRefDbm} {DBM}
               </span>
             </label>
           </div>
@@ -1859,7 +1803,7 @@ export function CwCockpit({
           </div>
       )}
       </div>
-      {hasSubRow && <SubReceiverStrip radio={snap.radio} radioId={snap.activeRadioId} catOk={catOk} onSnap={onSnap} />}
+      {hasSubRow && <SubReceiverStrip radio={snap.radio} catOk={catOk} onSnap={onSnap} />}
     </CockpitPaneFrame>
   ) : null
 
@@ -1867,7 +1811,7 @@ export function CwCockpit({
   /* CW spot band-activity strip; ⧉ pops the vertical band map into its own window. */
   const bandPane = hasBandPane && onWorkSpot ? (
         <CockpitPaneFrame title={t('cw.pane.bandActivity.title')} paneId="bandActivity" fit="content" {...closeProps('bandActivity')}>
-          {control ? <BandStrip
+          <BandStrip
             band={snap.radio.band}
             dialMhz={snap.radio.dialMhz}
             txAllowed={snap.radio.txAllowed}
@@ -1886,7 +1830,7 @@ export function CwCockpit({
             stepHz={tuneStep}
             wheelSensitivity={wheelSensitivity}
             onSnap={onSnap}
-          /> : <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>}
+          />
         </CockpitPaneFrame>
   ) : null
 
@@ -1918,7 +1862,7 @@ export function CwCockpit({
               {cand
                 .filter((c) => c.call !== guide.workedCall)
                 .map((c) => (
-                  <button disabled={!control}
+                  <button
                     key={c.call}
                     type="button"
                     className={`cw-chip${c.best ? ' best' : ''}`}
@@ -1949,7 +1893,7 @@ export function CwCockpit({
       {/* compactRecall died here (2026-07-31) — same reasoning as PhoneCockpit's log pane: the
           pane grid made this pane's .pane-body the scroller, so the FULL recall card (photo /
           bearing / history) can no longer crush the cockpit the way it did pre-overhaul. */}
-      {control ? <LogEntry
+      <LogEntry
         onOpenLogbook={onOpenLogbook}
         onEntryCall={(c) => {
           setStatsCall(c)
@@ -1987,7 +1931,7 @@ export function CwCockpit({
         // it puts back reaches His Call through `onCallChange`, as a typed one does.
         draft="cw"
         onResumeContest={onResumeContest}
-      /> : null}
+      />
       {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
       {hasRecentPane && recentPane}
     </CockpitPaneFrame>
@@ -2029,16 +1973,12 @@ export function CwCockpit({
         {...closeProps('spots')}
       >
         <div className={feedWrap}>
-          {control ? (
-            <SpotsPanel
-              {...spotsBoard}
-              spots={spots ?? []}
-              pane={{ scope: CW_SPOTS_SCOPE, modes: CW_SPOT_MODES, band: snap.radio.band }}
-              fieldDay={fieldDay}
-            />
-          ) : (
-            <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>
-          )}
+          <SpotsPanel
+            {...spotsBoard}
+            spots={spots ?? []}
+            pane={{ scope: CW_SPOTS_SCOPE, modes: CW_SPOT_MODES, band: snap.radio.band }}
+            fieldDay={fieldDay}
+          />
         </div>
       </CockpitPaneFrame>
     ) : null
@@ -2053,9 +1993,7 @@ export function CwCockpit({
         {...closeProps('needed')}
       >
         <div className={feedWrap}>
-          {control && (
-            <NeededPanel {...neededBoard} pane={{ filterKey: CW_NEEDED_FILTERS, modes: CW_NEEDED_MODES }} />
-          )}
+          <NeededPanel {...neededBoard} pane={{ filterKey: CW_NEEDED_FILTERS, modes: CW_NEEDED_MODES }} />
         </div>
       </CockpitPaneFrame>
     ) : null
@@ -2128,7 +2066,6 @@ export function CwCockpit({
   const txStrip = (
     <CockpitTxStrip
       radio={snap.radio}
-      onSnap={onSnap}
       onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
       onAtuTune={() =>
         void atuTune()
@@ -2149,7 +2086,6 @@ export function CwCockpit({
           </span>
         }
         bandControl={<BandPicker snap={snap} mode="cw" onSnap={onSnap} />}
-        remoteFrequency
         onCommitDial={commitDial}
         actions={
           host && panels ? (
@@ -2200,7 +2136,7 @@ export function CwCockpit({
           title={IS_MAC ? t('cw.wpm.title.mac') : t('cw.wpm.title')}
         >
           <span>{t('cw.wpm.label')}</span>
-          <input disabled={!control}
+          <input
             type="range"
             min={WPM_MIN}
             max={WPM_MAX}
@@ -2227,7 +2163,7 @@ export function CwCockpit({
             the one that matters on the air (route audio to the rig, keep drive below ALC). */}
         <label className="cw-wpm" title={keyerHelpText[keyer]}>
           <span>{t('cw.keyer.label')}</span>
-          <select disabled={!control}
+          <select
             className="settings-input cw-keyer-select"
             value={keyer}
             onChange={(e) => changeKeyer(e.target.value as typeof keyer)}
@@ -2251,7 +2187,7 @@ export function CwCockpit({
         </label>
         <label className="cw-wpm" title={t('cw.pitch.title')}>
           <span>{t('cw.pitch.label')}</span>
-          <input disabled={!control}
+          <input
             type="number"
             className="settings-input cw-pitch"
             min={300}
@@ -2265,7 +2201,7 @@ export function CwCockpit({
         {profiles.length > 1 && (
           <label className="cw-wpm" title={t('cw.macroProfile.title')}>
             <span>{t('cw.macroProfile.label')}</span>
-            <select disabled={!control}
+            <select
               className="settings-input"
               value={activeProfile}
               onChange={(e) => switchProfile(Number(e.target.value))}
@@ -2304,18 +2240,18 @@ export function CwCockpit({
           </div>
         )}
         {onRecallMemory && (
-          control ? <MemoryStrip
+          <MemoryStrip
             dialMhz={snap.radio.dialMhz}
             mode="CW"
             onRecall={onRecallMemory}
             onManage={onOpenMemories}
-          /> : <MemoryStripUnavailable />
+          />
         )}
-        {control || rotatorControl ? <RotorStrip
+        <RotorStrip
           onOpenSettings={onOpenSettings}
           targetCall={guide.workedCall}
-          onPointAt={rotorPointAt(control)}
-        /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+          onPointAt={rotorPointAt()}
+        />
         {/* ⭐ A REAL SPLIT CONTROL, not a read-only plate. Until 2026-08-26 this header only
             DISPLAYED that split was on; there was no way to set it from the CW cockpit at all.
             A General working a DX in the Extra-only CW bottom — RX 14.015, TX 14.026, which is
@@ -2345,7 +2281,7 @@ export function CwCockpit({
           type="button"
           className={`ph-rec${recording ? ' on' : ''}`}
           onClick={toggleRecord}
-          disabled={!control || (recBusy)}
+          disabled={recBusy}
           aria-label={recording ? t('cw.record.stop.aria') : t('cw.record.start.aria')}
           title={recording ? t('cw.record.on.title') : t('cw.record.off.title')}
         >
@@ -2437,14 +2373,14 @@ export function CwCockpit({
           // rig has ten span rungs and three positions, and a chip row that long crowds the scope it
           // is supposed to serve.
           <div className="ph-span" role="group" aria-label={t('phone.scope.yaesu.aria')}>
-            <select disabled={!scopeControl}
+            <select
               className="theme-chip"
               aria-label={t('phone.scope.yaesu.span.aria')}
               title={t('phone.scope.yaesu.span.title')}
               value={yaesuSpanLabel}
               onChange={(e) => {
                 const sp = YAESU_SPANS.find((x) => x.label === e.target.value)
-                if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => (control ? pushToast(String(e), 'error') : scopeFailed()))
+                if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
               }}
             >
               {YAESU_SPANS.map((sp) => (
@@ -2454,14 +2390,14 @@ export function CwCockpit({
                 </option>
               ))}
             </select>
-            <select disabled={!scopeControl}
+            <select
               className="theme-chip"
               aria-label={t('phone.scope.yaesu.pos.aria')}
               title={t('phone.scope.yaesu.pos.title')}
               value={yaesuPosition}
               onChange={(e) => {
                 const pos = e.target.value as 'center' | 'cursor' | 'fix'
-                void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => (control ? pushToast(String(e), 'error') : scopeFailed()))
+                void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
               }}
             >
               <option value="center">{t('phone.scope.yaesu.pos.center')}</option>
@@ -2511,11 +2447,10 @@ export function CwCockpit({
           pitchHz={pitch}
           cwPitchRefDial={keyer !== 'soundcard'}
           traceHoldMs={TRACE_HOLD_MS.fast}
-          interactive={control && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+          interactive={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
           spots={scopeTags}
-          // A tag's click is Band Activity's own: QSY to the spot and prefill the log. The Remote
-          // page's scope is click-only, so its tags are display only.
-          onSpot={control ? onWorkSpot : undefined}
+          // A tag's click is Band Activity's own: QSY to the spot and prefill the log.
+          onSpot={onWorkSpot}
           privilegeMode={snap.radio.operatingMode}
         />
       </section>
@@ -2622,7 +2557,7 @@ export function CwCockpit({
           the TOP of the dock: the panel changes height on key-down, and growing the dock
           downward would shift the Send button under the operator's pointer mid-QSO. */}
       <div
-        className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}${control && editingMacro ? ' cockpit-txdock-editing' : ''}`}
+        className={`cockpit-txdock${editingMacro ? ' cockpit-txdock-editing' : ''}`}
         ref={dockRef}
       >
         {/* Transmit meters (SWR / ALC / Po / COMP) — only the meters the rig reports, and
@@ -2641,7 +2576,6 @@ export function CwCockpit({
             <CwMacroButton
               key={m.key}
               slot={slotOf(m)}
-              control={control}
               editing={editing === m.key}
               lit={esmLit.includes(m.key)}
               cue={cueOn(m.key)}
@@ -2655,7 +2589,7 @@ export function CwCockpit({
         {/* THE EDITOR — out of flow, standing on the dock's top edge over the key it edits, so
             it moves and covers no control in the dock; non-modal, so Stop TX in the TX strip
             stays one click away. Esc is decided by this cockpit's Esc above, never here. */}
-        {control && editingMacro && (
+        {editingMacro && (
           <CwMacroEditor
             key={editingMacro.key}
             slot={editorSlotOf(editingMacro)}
@@ -2676,7 +2610,7 @@ export function CwCockpit({
           {/* #286: His Call, on the send row so the dock does not grow a row. */}
           <label className="cw-hiscall" title={t('cw.hisCall.title')}>
             <span className="cw-hiscall-label">{t('cw.hisCall.label')}</span>
-            <input disabled={!control}
+            <input
               className="settings-input cw-hiscall-input"
               aria-label={t('cw.hisCall.label')}
               value={hisCallDraft}
@@ -2699,7 +2633,7 @@ export function CwCockpit({
               spellCheck={false}
             />
           </label>
-          <input disabled={!control}
+          <input
             className="settings-input cw-type"
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -2713,12 +2647,12 @@ export function CwCockpit({
             autoComplete="off"
             spellCheck={false}
           />
-          <button type="button" className="cw-send-btn" onClick={sendTyped} disabled={!control || (!text.trim())}>
+          <button type="button" className="cw-send-btn" onClick={sendTyped} disabled={!text.trim()}>
             {t('cw.compose.send.label')}
           </button>
           {/* ENTER SENDS MESSAGE's switch and plate, while a contest runs: last on the row, so
               what it says never moves Send or His Call. */}
-          {esmSetting && fieldDay && control && (
+          {esmSetting && fieldDay && (
             <EsmPlate
               on={esmSetting.on}
               onSwitch={esmSetting.onSwitch}
@@ -2728,7 +2662,7 @@ export function CwCockpit({
             />
           )}
           {/* CW SPEED MATCH's switch, beside ESM's while a contest runs. */}
-          {speedMatch && fieldDay && control && (
+          {speedMatch && fieldDay && (
             <button
               type="button"
               role="switch"

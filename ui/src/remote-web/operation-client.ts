@@ -25,7 +25,7 @@ export type OperationView = {
    * one. `stop_transmit` returns on acceptance, and when the station's Engine is held the halt runs
    * afterwards on its own thread, so between this and the transmitter actually going free the rig
    * is still on the air. The browser says "stop sent" here and "stopped" only once the station's
-   * own reading shows the transmitter free (`useStationStopProgress`). Cleared when a new Stop is
+   * own reading shows the transmitter free. Cleared when a new Stop is
    * sent, when one fails, and on disconnect; the relay's limit inside the second after an acceptance
    * is not a failure, and puts it back (`stopAcceptedAt`). */
   stopAccepted?: boolean

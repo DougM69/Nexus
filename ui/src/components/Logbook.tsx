@@ -16,8 +16,8 @@ import { GlobeGuard } from './GlobeGuard'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import { PaneSeam } from './PaneSeam'
 import { LOG_GLOBE_SPLIT_MAX, LOG_GLOBE_SPLIT_MIN } from '../features/paneSeam'
-import { emptyAnswer, rowKeyAt, type LogLocate, type LogPage, type LogQuestion } from '../features/logAnswers'
-import { DEFAULT_LOG_QUERY, defaultAsc, fmtUtc, logOrder, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
+import { emptyAnswer, type LogLocate, type LogPage, type LogQuestion } from '../features/logAnswers'
+import { DEFAULT_LOG_QUERY, defaultAsc, fmtUtc, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
 import { failureToShow, logSource, useLogAnswer, useLogAnswers, useLogPages, useLogStatus } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { sayExportLacks } from '../features/exportLacks'
@@ -284,7 +284,6 @@ const LOTW_BACKLOG = { kind: 'lotwBacklog' } as const satisfies LogQuestion
 /** How many contacts the log holds: the count badge, the purge warning, the exports' gates. */
 const LOG_SIZE = { kind: 'logSize' } as const satisfies LogQuestion
 
-import { useStationControl } from '../stationAccess'
 
 export function Logbook({
   defaultBand,
@@ -294,24 +293,20 @@ export function Logbook({
   onConsumeFocusCall,
   logTick,
 }: Props) {
-  const control = useStationControl()
   // The desktop asks `LogSource` for the pages of the list it shows (below, after the sort and
   // search state they are cut by). The source follows `logTick`, so the list moves when the log
   // changes under this view — a Remote browser's delete or edit, another instance's contact, a
   // connector stamp. The rows are addressed by key, so a stale list is refused rather than acted
-  // on; following the tick is what keeps that refusal rare. A Remote browser shows the page of
-  // rows the station sent (`observedLog`, below).
-  const [observedLog] = useState<LoggedQso[]>([])
+  // on; following the tick is what keeps that refusal rare.
   // The whole log's size, not the list's: the count badge, the purge warning, the exports and the
-  // globe key on it. A Remote browser counts the rows the station sent, as it always did. The
-  // engine's answer is `undefined` until it lands, and for as long as the engine refuses the
+  // globe key on it. The engine's answer is `undefined` until it lands, and for as long as the engine refuses the
   // question while a change is being saved (features/notAnswered): the gates count that as 0, with
   // nothing to export or purge yet, but only an ANSWERED 0 is an empty log.
-  const askedLogSize = useLogAnswer(control ? LOG_SIZE : null, logTick)
-  const logSize = control ? (askedLogSize ?? emptyAnswer(LOG_SIZE)) : observedLog.length
+  const askedLogSize = useLogAnswer(LOG_SIZE, logTick)
+  const logSize = askedLogSize ?? emptyAnswer(LOG_SIZE)
   // Where that count stands. One held from before the latest change is out of date until the fresh
   // one lands, and is shown as such: a held 0 never as a count or an empty log.
-  const sizeStatus = useLogStatus(control ? LOG_SIZE : null)
+  const sizeStatus = useLogStatus(LOG_SIZE)
   const sizeCurrent = sizeStatus === undefined || sizeStatus.state === 'current'
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
@@ -347,7 +342,7 @@ export function Logbook({
     // before the log has loaded, and the extra state update it lands shifts the first few
     // renders. That is what put the Purge button's disabled read on the wrong side of a
     // waitFor in Logbook.test.tsx — a real timing change, not a flaky test.
-    if (!control || logSize === 0) {
+    if (logSize === 0) {
       setOperators((prev) => (prev.length === 0 ? prev : []))
       return
     }
@@ -359,18 +354,17 @@ export function Logbook({
         ),
       )
       .catch(() => {}) // no bridge / older core — just don't offer the split
-  }, [logSize, control])
+  }, [logSize])
   // The satellites LoTW accepts, for the row's tag picker. A fixed backend table, so it is
   // fetched once rather than per log change — and it is a PICKER because TQSL matches
   // SAT_NAME against its own list and rejects anything else, which through the compliant
   // upload funnel takes the whole signed batch with it. A typed name is a permanent guess.
   const [satNames, setSatNames] = useState<string[]>([])
   useEffect(() => {
-    if (!control) return
     void lotwSatNames()
       .then(setSatNames)
       .catch(() => {}) // no bridge / older core — just don't offer the picker
-  }, [control])
+  }, [])
   // Activations present in the log: (your park) × (UTC day) × (the callsign you signed). Same
   // shape as the operator list above, and loaded the same way — a new activation can only first
   // appear when the log grows.
@@ -494,8 +488,8 @@ export function Logbook({
 
   // After this view's own write: bring the list up to date now, not on the next tick.
   const load = useCallback(() => {
-    if (control) logSource().refresh()
-  }, [control])
+    logSource().refresh()
+  }, [])
 
   // Import an external ADIF logbook → real "needs" + B4. Read the file in the
   // browser/WebView (no fs plugin), hand the text to the engine.
@@ -562,7 +556,7 @@ export function Logbook({
   // lotwBacklog), asked of the log — once per change to it, never once per render: this view
   // re-renders on every snapshot.
   const { unsent: unsentLotw, timeless: timelessLotw } =
-    useLogAnswer(control ? LOTW_BACKLOG : null, logTick) ?? emptyAnswer(LOTW_BACKLOG)
+    useLogAnswer(LOTW_BACKLOG, logTick) ?? emptyAnswer(LOTW_BACKLOG)
 
   // Sign + upload the unsent batch to LoTW via the operator's TQSL.
   const onUploadLotw = async () => {
@@ -676,7 +670,7 @@ export function Logbook({
   useEffect(() => () => void (alive.current = false), [])
   useEffect(() => {
     const id = focusCall?.editId
-    if (!focusCall || !id || !control) return
+    if (!focusCall || !id) return
     const call = focusCall.call
     handoff.current = focusCall.ts
     const ts = focusCall.ts
@@ -1001,15 +995,9 @@ export function Logbook({
     [sortKey, sortAsc, deferredSearch, needsConfirmOnly],
   )
   const queryKey = logQueryKey(query)
-  const firstPage = control ? ({ kind: 'page', query, offset: 0, limit: LOG_PAGE } as const) : null
+  const firstPage = { kind: 'page', query, offset: 0, limit: LOG_PAGE } as const
   const latestFirst = useLogAnswer(firstPage, logTick)
   const firstPageStatus = useLogStatus(firstPage)
-  // A Remote browser's rows are the page the station sent, searched and filtered there: they are
-  // only put in this view's order (newest first — the headers are off there), exactly as before.
-  const remoteOrder = useMemo(
-    () => (control ? [] : logOrder(observedLog, { ...query, search: '', needsConfirmOnly: false })),
-    [control, observedLog, query],
-  )
 
   // THE LIST ON SCREEN IS ONE ORDER, AND IT IS SWAPPED WHOLE (v2 R4, R5). The source may already
   // hold a newer order than the list shows — a contact was logged, a row deleted. The list keeps
@@ -1057,12 +1045,12 @@ export function Logbook({
   // "no contacts match" with it, and in a browser the scroll then fell back to the top of the pane,
   // the globe band in view and the search box pulled down the screen under the operator's typing.
   // A newer order of one list already waited this way (the swap, below).
-  const kept = control && onScreen === null && latestRev === null ? shown : null
+  const kept = onScreen === null && latestRev === null ? shown : null
   /** The query of the list ON SCREEN: the new one, or — while its first page is on its way — the old. */
   const listKey = kept ? kept.queryKey : queryKey
   const showingRev = kept ? kept.orderRev : (onScreen ?? latestRev)
   const pendingRev = onScreen !== null && latestRev !== null && latestRev > onScreen ? latestRev : null
-  const listTotal = control ? (showingRev === null ? 0 : (recall(showingRev, 0, listKey)?.total ?? 0)) : remoteOrder.length
+  const listTotal = showingRev === null ? 0 : (recall(showingRev, 0, listKey)?.total ?? 0)
   // WHAT THE LIST SAYS WHEN IT HAS NO ROWS — and a log that exists is never reported empty. "No
   // logged contacts yet." only on an answer that the LOG holds none: the engine's count of 0, or a
   // page the station sent for no search and no filter. A list that matched nothing says so. Until
@@ -1079,8 +1067,7 @@ export function Logbook({
   const listSays: 'failed' | 'reading' | 'empty' | 'noMatch' | null =
     readFailed !== null ? 'failed'
     : listTotal > 0 ? null
-    : control ? (askedLogSize === undefined || (askedLogSize === 0 && !sizeCurrent) || (askedLogSize > 0 && showingRev === null) ? 'reading' : askedLogSize === 0 ? 'empty' : 'noMatch')
-    : null
+    : askedLogSize === undefined || (askedLogSize === 0 && !sizeCurrent) || (askedLogSize > 0 && showingRev === null) ? 'reading' : askedLogSize === 0 ? 'empty' : 'noMatch'
 
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
@@ -1088,7 +1075,7 @@ export function Logbook({
   // D#278: the operator's own switch (Settings ▸ Appearance ▸ Map & globe). Off = no band at all,
   // and the table starts at the top.
   const [globeWanted] = useLogbookGlobe()
-  const globeShown = control && globeOk && globeWanted && logSize > 0
+  const globeShown = globeOk && globeWanted && logSize > 0
 
   // #162: rows whose Comment is opened to its full length, keyed like the row itself. The column
   // clips to one line; clicking the comment wraps it in place (the virtualizer measures the
@@ -1157,9 +1144,9 @@ export function Logbook({
   // the open row was drawn into a closed row's height. The first time a new list is drawn while a
   // row is open, the old list's heights are dropped and the rows drawn are measured, in the placing
   // effect below, before the paint. `drawnList` names the list on screen: the query's (once its
-  // first page is here), or the Remote page's rows.
-  const drawnList = control ? (showingRev === null ? null : listKey) : observedLog.length ? observedLog : null
-  const heightsFor = useRef<string | LoggedQso[] | null>(null)
+  // first page is here).
+  const drawnList = showingRev === null ? null : listKey
+  const heightsFor = useRef<string | null>(null)
 
   const virtualRows = rowVirtualizer.getVirtualItems()
   const held0 = anchor.current
@@ -1170,7 +1157,7 @@ export function Logbook({
   const located = useLogAnswers(
     locateKeys.map((key): LogQuestion => ({ kind: 'locate', query, id: key })),
     logTick,
-    control,
+    true,
   ) as readonly (LogLocate | undefined)[]
   const placeOf = new Map(locateKeys.map((key, k) => [key, located[k]] as const))
   // Where the list will stand in the pending order: `undefined` while that is not known yet;
@@ -1200,7 +1187,7 @@ export function Logbook({
   }
   // The pages the view shows — of the list on screen's own query only: while an old list is kept
   // (above), the new query is asked for its first page and nothing else.
-  const visibleOffsets = control && !kept ? [...new Set(virtualRows.map((v) => Math.floor(v.index / LOG_PAGE) * LOG_PAGE))] : []
+  const visibleOffsets = !kept ? [...new Set(virtualRows.map((v) => Math.floor(v.index / LOG_PAGE) * LOG_PAGE))] : []
   const pendingTotal = pendingRev === null ? 0 : (recall(pendingRev, 0)?.total ?? 0)
   const targetOffsets =
     target === undefined || pendingTotal === 0
@@ -1215,7 +1202,7 @@ export function Logbook({
             ),
           )
   const pages = useLogPages(
-    control ? query : null,
+    query,
     [...new Set([...visibleOffsets, ...targetOffsets])].filter((o) => o > 0),
     LOG_PAGE,
     logTick,
@@ -1229,10 +1216,6 @@ export function Logbook({
   /** The row drawn at `i`: the contact, its key in the list, and — on the desktop — the `RowRef` a
    *  change to it sends: its id and the edit key of the version this page read. */
   const rowAt = (i: number): { q: LoggedQso; key: string; ref: RowRef | null } | undefined => {
-    if (!control) {
-      const pos = remoteOrder[i]
-      return pos === undefined ? undefined : { q: observedLog[pos], key: rowKeyAt(observedLog, pos), ref: null }
-    }
     if (showingRev === null) return undefined
     const offset = Math.floor(i / LOG_PAGE) * LOG_PAGE
     const page = recall(showingRev, offset, listKey)
@@ -1247,7 +1230,6 @@ export function Logbook({
    *  one picked. A run is picked only once all of it has loaded — part of it would export less
    *  than the operator meant. */
   const pickRows = (index: number, run: boolean) => {
-    if (!control) return
     const anchor = pickAnchor.current
     if (run && anchor !== null) {
       const ids: string[] = []
@@ -1374,7 +1356,7 @@ export function Logbook({
       e.preventDefault()
       pickAnchor.current = null
       setPicked(new Set())
-    } else if (row && control && (e.key === 'Enter' || e.key === 'Delete')) {
+    } else if (row && (e.key === 'Enter' || e.key === 'Delete')) {
       e.preventDefault()
       if (e.key === 'Delete') {
         // The question takes the keyboard (a dialog puts it nowhere when it closes); the answer
@@ -1458,7 +1440,7 @@ export function Logbook({
       const el = scrollRef.current
       const rows = rowsWrapRef.current
       const sticky = el?.querySelector<HTMLElement>('.log-sticky')
-      if (replaced && control && el && rows && sticky) {
+      if (replaced && el && rows && sticky) {
         const top = Math.max(0, rows.offsetTop - sticky.offsetHeight)
         if (el.scrollTop > top) {
           el.scrollTop = top
@@ -1494,7 +1476,7 @@ export function Logbook({
     const p = placement.current
     placement.current = null
     const el = scrollRef.current
-    if (!p || !control || !el) return
+    if (!p || !el) return
     const start =
       rowVirtualizer.measurementsCache[p.index]?.start ?? p.index * ROW_ESTIMATE + rowVirtualizer.options.scrollMargin
     el.scrollTop = start - p.delta
@@ -1502,7 +1484,7 @@ export function Logbook({
   })
   useLayoutEffect(() => {
     const el = scrollRef.current
-    if (!control || !el) return
+    if (!el) return
     // Where each open row's height sits: its place among the rows drawn now (a row is measured
     // where it mounts; a swap moves the height with it). Closed rows are forgotten.
     const at = openAt.current.at
@@ -1533,7 +1515,7 @@ export function Logbook({
   // The swap: a new list is recorded as it is shown; a newer order within the list is swapped in
   // once `ready`, with its placement — a state change in a layout effect re-renders before paint.
   useLayoutEffect(() => {
-    if (!control || latestRev === null) return
+    if (latestRev === null) return
     if (onScreen === null) {
       setShown({ queryKey, orderRev: latestRev })
       return
@@ -1741,7 +1723,6 @@ export function Logbook({
       type="button"
       className={`log-cell log-th${sortKey === k ? ' sorted' : ''}`}
       role="columnheader"
-      disabled={!control}
       aria-sort={sortKey === k ? (sortAsc ? 'ascending' : 'descending') : 'none'}
       onClick={() => {
         if (sortKey === k) setSortAsc((v) => !v)
@@ -1761,14 +1742,14 @@ export function Logbook({
       <div className="panel-header log-header">
         <div className="log-title">
           <h2>{t('logbook.title')}</h2>
-          {(!control || (askedLogSize !== undefined && (sizeCurrent || askedLogSize > 0))) && (
+          {askedLogSize !== undefined && (sizeCurrent || askedLogSize > 0) && (
             <span className="count-badge" title={sizeCurrent ? undefined : t('logbook.count.stale')}>
               {logSize}
             </span>
           )}
-          <span className="log-sub">{control ? t('logbook.subtitle') : t('remote.collectionObserver')}</span>
+          <span className="log-sub">{t('logbook.subtitle')}</span>
         </div>
-        {control && <div className="log-actions">
+        <div className="log-actions">
           <input
             ref={fileRef}
             type="file"
@@ -2139,11 +2120,11 @@ export function Logbook({
           >
             {t('logbook.purge.label')}
           </button>
-        </div>}
+        </div>
       </div>
 
 
-      {control && showForm && (
+      {showForm && (
         <form
           className="logbook-form"
           onSubmit={submit}
@@ -2165,7 +2146,7 @@ export function Logbook({
                   autoComplete="off"
                   spellCheck={false}
                 />
-                {control && <button
+                <button
                   type="button"
                   className="settings-refresh"
                   onClick={onQrzLookup}
@@ -2173,7 +2154,7 @@ export function Logbook({
                   title={t('logbook.field.qrz.title')}
                 >
                   {qrzBusy ? '…' : QRZ_LABEL}
-                </button>}
+                </button>
               </div>
             </label>
             <label className="logbook-field">
@@ -2258,7 +2239,7 @@ export function Logbook({
                 title={t('logbook.field.state.title')}
               />
             </label>
-            {control && <label className="logbook-field">
+            <label className="logbook-field">
               <span>{t('logbook.field.txPower.label')}</span>
               <input
                 className="settings-input"
@@ -2268,7 +2249,7 @@ export function Logbook({
                 onChange={(e) => setField('txPower', e.target.value)}
                 autoComplete="off"
               />
-            </label>}
+            </label>
             <label className="logbook-field">
               <span>{t('logbook.field.parkTheirs.label')}</span>
               <input
@@ -2279,7 +2260,7 @@ export function Logbook({
                 title={t('logbook.field.parkTheirs.title')}
               />
             </label>
-            {control && <label className="logbook-field">
+            <label className="logbook-field">
               <span>{t('logbook.field.parkMine.label')}</span>
               <input
                 className="settings-input"
@@ -2288,7 +2269,7 @@ export function Logbook({
                 autoComplete="off"
                 title={t('logbook.field.parkMine.title')}
               />
-            </label>}
+            </label>
             <label className="logbook-field">
               <span>{t('logbook.field.name.label')}</span>
               <input className="settings-input" value={draft.name} onChange={(e) => setField('name', e.target.value)} autoComplete="off" />
@@ -2384,7 +2365,7 @@ export function Logbook({
       <div
         className={`log-table logbook-table${moreColumns ? ' wide' : ''}`}
         role="grid"
-        aria-multiselectable={control || undefined}
+        aria-multiselectable
         aria-rowcount={listTotal + 1}
         aria-describedby={keysId}
       >
@@ -2427,8 +2408,7 @@ export function Logbook({
           className="settings-input log-search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          maxLength={control ? undefined : 32}
-          placeholder={control ? t('logbook.search.placeholder') : t('remote.logSearch')}
+          placeholder={t('logbook.search.placeholder')}
           autoComplete="off"
           spellCheck={false}
         />
@@ -2580,7 +2560,7 @@ export function Logbook({
                     }}
                     title={t('logbook.row.view.title', { call: q.call })}
                     role="row"
-                    aria-selected={control ? isPicked : undefined}
+                    aria-selected={isPicked}
                     // The row's key is its id: unique per record — collision-proof even for two
                     // identical QSOs (double-clicked Log in the same second) — and it FOLLOWS the
                     // row when the list moves, so an open comment or the edit mark stays on it.
@@ -2624,7 +2604,7 @@ export function Logbook({
                     stays on the tooltip, and shows where neither names an entity. On the station
                     the cell is the picker that sets the number (LogCountryPicker). */}
                 <span className="log-cell log-country" title={q.country ?? ''}>
-                  {control && ref ? (
+                  {ref ? (
                     <LogCountryPicker q={q} onPick={(dxcc) => void onSetDxcc(q, ref, dxcc)} />
                   ) : (
                     (q.entity ?? q.country ?? '—')
@@ -2801,7 +2781,7 @@ export function Logbook({
                     <span className="log-note-private">{(q.notes ?? '').trim()}</span>
                   )}
                 </span>
-                <span className="log-cell log-rowactions">{control && <>
+                <span className="log-cell log-rowactions">
                   <button
                     type="button"
                     className="log-rowbtn"
@@ -2875,52 +2855,50 @@ export function Logbook({
                       to record could never be recorded. `q.qslSent?.sent` now hides only the
                       three SEND entries — you still cannot send twice — while the inbound
                       entries stay reachable for the life of the contact. */}
-                </>}{control && (
-                    <select
-                      className="log-rowbtn"
-                      style={{ fontSize: '0.85em' }}
-                      value=""
-                      onChange={(e) => {
-                        const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | 's' | ''
-                        // R/r/s are NOT ADIF letters — they are this menu's own entries for
-                        // the RECEIVED card (#152), which has no QSL_SENT_VIA code because it
-                        // is not a send at all, and for CLEARING the send (#180). Kept in the
-                        // same menu because an operator handling a card thinks about one row,
-                        // not two controls.
-                        if (v === 'R') void onMarkQslCard(q, ref, true)
-                        else if (v === 'r') void onMarkQslCard(q, ref, false)
-                        else if (v === 's') void onMarkQslSent(q, ref, null)
-                        else if (v) void onMarkQslSent(q, ref, v as 'B' | 'D' | 'E')
-                      }}
-                      title={t('logbook.row.qslSent.title', { call: q.call })}
-                      aria-label={t('logbook.row.qslSent.aria', { call: q.call })}
-                    >
-                      {/* The VALUES are the ADIF QSL_SENT_VIA letters; only the labels are prose. */}
-                      <option value="">{QSL_MENU_LABEL}</option>
-                      {/* Sending is once-only; the arrival below is not. */}
-                      {!q.qslSent?.sent && (
-                        <>
-                          <option value="B">{t('logbook.row.qslSent.bureau')}</option>
-                          <option value="D">{t('logbook.row.qslSent.direct')}</option>
-                          <option value="E">{t('logbook.row.qslSent.electronic')}</option>
-                        </>
-                      )}
-                      {/* ...and the way back out of it (#180). It has to be shown on exactly
-                          the condition that HIDES the three above: a clear that disappears
-                          once sent would be the same trap with an extra step in it. */}
-                      {q.qslSent?.sent && (
-                        <option value="s">{t('logbook.row.qslSent.clear')}</option>
-                      )}
-                      {/* INBOUND: the paper card that arrived. Nothing on the internet can
-                          report this, so the operator is the only source — and it is
-                          award-eligible (card OR LoTW), which is why its absence understated
-                          the awards view. The clear entry exists for a mis-tick. */}
-                      <option value="R">{t('logbook.row.qslRcvd.card')}</option>
-                      {q.qslRcvd?.card && (
-                        <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
-                      )}
-                    </select>
-                  )}
+                  <select
+                    className="log-rowbtn"
+                    style={{ fontSize: '0.85em' }}
+                    value=""
+                    onChange={(e) => {
+                      const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | 's' | ''
+                      // R/r/s are NOT ADIF letters — they are this menu's own entries for
+                      // the RECEIVED card (#152), which has no QSL_SENT_VIA code because it
+                      // is not a send at all, and for CLEARING the send (#180). Kept in the
+                      // same menu because an operator handling a card thinks about one row,
+                      // not two controls.
+                      if (v === 'R') void onMarkQslCard(q, ref, true)
+                      else if (v === 'r') void onMarkQslCard(q, ref, false)
+                      else if (v === 's') void onMarkQslSent(q, ref, null)
+                      else if (v) void onMarkQslSent(q, ref, v as 'B' | 'D' | 'E')
+                    }}
+                    title={t('logbook.row.qslSent.title', { call: q.call })}
+                    aria-label={t('logbook.row.qslSent.aria', { call: q.call })}
+                  >
+                    {/* The VALUES are the ADIF QSL_SENT_VIA letters; only the labels are prose. */}
+                    <option value="">{QSL_MENU_LABEL}</option>
+                    {/* Sending is once-only; the arrival below is not. */}
+                    {!q.qslSent?.sent && (
+                      <>
+                        <option value="B">{t('logbook.row.qslSent.bureau')}</option>
+                        <option value="D">{t('logbook.row.qslSent.direct')}</option>
+                        <option value="E">{t('logbook.row.qslSent.electronic')}</option>
+                      </>
+                    )}
+                    {/* ...and the way back out of it (#180). It has to be shown on exactly
+                        the condition that HIDES the three above: a clear that disappears
+                        once sent would be the same trap with an extra step in it. */}
+                    {q.qslSent?.sent && (
+                      <option value="s">{t('logbook.row.qslSent.clear')}</option>
+                    )}
+                    {/* INBOUND: the paper card that arrived. Nothing on the internet can
+                        report this, so the operator is the only source — and it is
+                        award-eligible (card OR LoTW), which is why its absence understated
+                        the awards view. The clear entry exists for a mis-tick. */}
+                    <option value="R">{t('logbook.row.qslRcvd.card')}</option>
+                    {q.qslRcvd?.card && (
+                      <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
+                    )}
+                  </select>
                   {/* SATELLITE TAG (PROP_MODE=SAT + SAT_NAME). The guide used to send an
                       operator who mis-tagged a contact out of the app — close Nexus, open
                       log.adi in a text editor — because the edit form carries neither field.
@@ -2929,11 +2907,9 @@ export function Logbook({
                       So the repair lives here, where choosing "Clear" is unmistakably a
                       decision and not a blank box submitted with everything else.
 
-                      ⚠️ Desktop only. There is no Remote capability for this change, so on an
-                      observing browser the control is simply absent rather than offered and
-                      refused — `control` is false there. Both halves of the pair move together
-                      in the backend: TQSL rejects a lone member and takes the batch with it. */}
-                  {control && satNames.length > 0 && (
+                      Both halves of the pair move together in the backend: TQSL rejects a lone
+                      member and takes the batch with it. */}
+                  {satNames.length > 0 && (
                     <select
                       className="log-rowbtn"
                       style={{ fontSize: '0.85em' }}
@@ -2962,7 +2938,7 @@ export function Logbook({
                         <option value="clear">{t('logbook.row.sat.clear')}</option>
                       )}
                     </select>
-                  )}{control && <>
+                  )}
                   <button
                     type="button"
                     className="log-rowbtn"
@@ -2981,7 +2957,7 @@ export function Logbook({
                   >
                     ✕
                   </button>
-                </>} </span>
+                </span>
               </div>
                 )
               })}

@@ -6,7 +6,6 @@
 // names and their ALL.TXT letters, the 32 directed-command texts, callsigns, grids, offsets in
 // Hz, SNR in dB, UTC stamps and the s/m/h age units.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { useStationCapability, useStationControl } from '../stationAccess'
 import { useEscStop } from '../useEscStop'
 import type { AppSnapshot, BandChannel, Js8InboxEntry, Js8InboxState, Js8Origin, Js8Speed, Js8State, Js8Switch, Js8Unarmed } from '../types'
 import { CockpitHeader } from './CockpitHeader'
@@ -276,10 +275,8 @@ export function Js8Cockpit({
   onSavedMessages,
   lists = JS8_LIST_DEFAULTS,
 }: Props) {
-  const canControl = useStationControl()
   // The call the Stats pane follows: the strip's call once it has stood (LogEntry `onEntryCall`).
   const [statsCall, setStatsCall] = useState('')
-  const rotatorControl = useStationCapability('rotator')
   // THE BOXES (2026-10-07): what each box on screen shows — none where the window lends them nothing
   // (Phone's rule), and none while this keep-alive cockpit is not the one on screen: a box's body polls
   // the Conditions feeds while it is mounted, and a hidden JS8 must not keep them asking.
@@ -399,12 +396,12 @@ export function Js8Cockpit({
       entered.current = false
       return
     }
-    if (!canControl || entered.current) return
+    if (entered.current) return
     entered.current = true
     void js8Enter()
       .then((s) => setJs8(s))
       .catch(() => {})
-  }, [active, canControl])
+  }, [active])
 
   // JS8 watering holes (JS8Call's FrequencyList, or the operator's own list from Settings),
   // license-filtered. Asked again each time JS8 comes on screen: the list may have been edited in
@@ -430,14 +427,12 @@ export function Js8Cockpit({
   }
 
   const commitDial = (mhz: number) => {
-    if (!canControl) return
     onSetFrequency?.(mhz, bandLabelForMhz(mhz), snap?.radio.sideband || 'USB')
   }
 
   // STOP TX → halt_tx: the universal stop (unkeys, arms slot_tx_abort, and — from B7 — empties
   // the JS8 queue, the HB schedule and the pending auto-reply).
   const stop = () => {
-    if (!canControl) return
     void haltTx()
       .then((s) => onSnap?.(s))
       .catch(() => {})
@@ -447,16 +442,16 @@ export function Js8Cockpit({
   // Stop TX from inside another section). The stop rides the shared capture listener
   // (useEscStop, operator 2026-10-01), so no control on the screen can swallow it; this listener
   // still cancels the key's default, as it always did.
-  useEscStop(active && canControl, stop)
+  useEscStop(active, stop)
   useEffect(() => {
-    if (!active || !canControl) return
+    if (!active) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, canControl])
+  }, [active])
 
   // --- The dock's addressee + composer. The ENGINE is the authority on every send. ---
   const [toCall, setToCall] = useState('')
@@ -481,7 +476,6 @@ export function Js8Cockpit({
   const takenRef = useRef<number | null>(null)
   const composerSync = useRef(async () => {})
   composerSync.current = async () => {
-    if (!canControl) return
     const taken = takenRef.current
     const offered = await js8Composer(textRef.current.trim() !== '', taken).catch(() => undefined)
     if (offered === undefined) return
@@ -504,14 +498,13 @@ export function Js8Cockpit({
   // this is the visible view; it keys nothing.
   const selectedTo = toCall.trim().toUpperCase()
   useEffect(() => {
-    if (!active || !canControl) return
+    if (!active) return
     void js8SelectCall(selectedTo || null).catch(() => {})
-  }, [selectedTo, active, canControl])
+  }, [selectedTo, active])
   const selectStation = (call: string) => setToCall(call.toUpperCase())
   /** A RECEIVE move only — the offset table's double-click, JS8Call's own behaviour on
    *  tableWidgetRXAll. The TX offset is untouched; nothing here keys. */
   const tuneRx = (hz: number) => {
-    if (!canControl) return
     void setRxOffset(hz)
       .then((sn) => onSnap?.(sn))
       .catch(() => {})
@@ -548,7 +541,6 @@ export function Js8Cockpit({
   /** Send the box: `box` its text and `cmd` its command (the one-click buttons hand over the box
    *  they have just put their words in, before React has rendered it). */
   const sendBox = (box: string, cmd: number | null) => {
-    if (!canControl) return
     // While the box's message goes out the box already feeds it (typeahead): nothing new is queued.
     if (typeahead.active) {
       typeahead.type(box)
@@ -576,7 +568,6 @@ export function Js8Cockpit({
   }
   const send = () => sendBox(text, cmdId)
   const toggleSwitch = (which: Js8Switch, on: boolean) => {
-    if (!canControl) return
     void withErrorToast(() => js8Arm(which, !on), t('js8.toast.arm.failed')).then((s) => {
       if (s) setJs8(s)
     })
@@ -585,13 +576,12 @@ export function Js8Cockpit({
   // was shown for, so a Yes can never reach a different one.
   const answerPending = (yes: boolean) => {
     const p = js8?.pendingReply
-    if (!canControl || !p) return
+    if (!p) return
     void withErrorToast(() => js8AnswerReply(yes, p.display, p.firesAtMs), t('js8.toast.answer.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
   const dropQueue = () => {
-    if (!canControl) return
     void withErrorToast(() => js8DropQueue(), t('js8.toast.drop.failed')).then((s) => {
       if (s) setJs8(s)
     })
@@ -606,7 +596,6 @@ export function Js8Cockpit({
     return `CQ CQ CQ ${grid4}`.trim()
   }
   const callCq = () => {
-    if (!canControl) return
     if (!compose.sendAtOnce) {
       setToCall('')
       fill(cqLine())
@@ -628,7 +617,6 @@ export function Js8Cockpit({
   // With the QSO pause on, turning it on clears the To box, as JS8Call's HB button clears its
   // selected call.
   const toggleHb = () => {
-    if (!canControl) return
     const on = js8?.hbOn !== true
     if (on && js8?.presence?.qsoPause) setToCall('')
     void withErrorToast(() => js8Arm('hb', on), t('js8.toast.arm.failed')).then((s) => {
@@ -637,7 +625,6 @@ export function Js8Cockpit({
   }
   // "Send heartbeat now" (JS8Call's HB menu): one heartbeat in the next period, the repeat as it is.
   const sendHbNow = () => {
-    if (!canControl) return
     if (refuseIfUnready()) return
     void withErrorToast(() => js8HeartbeatNow(), t('js8.toast.hb.failed')).then((s) => {
       if (s) setJs8(s)
@@ -649,7 +636,6 @@ export function Js8Cockpit({
   // a schedule instead of sending once. Session-only and never persisted; keys nothing on
   // its own — the TX latch is the first act and the engine re-reads it every slot.
   const toggleCqRepeat = () => {
-    if (!canControl) return
     const on = js8?.cqOn !== true
     // Turning it on clears the selected call, as JS8Call's checked CQ button does (mainwindow.cpp:4550).
     if (on) {
@@ -661,7 +647,6 @@ export function Js8Cockpit({
     })
   }
   const quickQuery = (call: string, cmd: number) => {
-    if (!canControl) return
     // JS8Call's Directed menu (buildQueryMenu.cpp:113-123): with "send at once" off, the ask goes in
     // the box, in place of what is there, for Send.
     if (!compose.sendAtOnce) {
@@ -681,7 +666,6 @@ export function Js8Cockpit({
   // whenever the JS8 gate refuses the locator (`locatorRefusal`), and the engine refuses such a
   // send whatever the button says.
   const sendMyGrid = (call: string) => {
-    if (!canControl) return
     const grid = (snapRef.current?.mygrid ?? '').trim().toUpperCase()
     if (!compose.sendAtOnce) {
       fill(`${JS8_GRID.label} ${grid}`, { to: call, clear: true })
@@ -731,7 +715,6 @@ export function Js8Cockpit({
   /** One button's words into the box, and with "send at once" on the box sent, to the To box's
    *  call or to everyone, as Send sends it. */
   const oneClick = (words: string, keepCmd = false) => {
-    if (!canControl) return
     const box = fill(words, { keepCmd })
     if (box === null || !compose.sendAtOnce) return
     sendBox(box, keepCmd ? cmdId : null)
@@ -779,7 +762,7 @@ export function Js8Cockpit({
   // "Save Current Message" (:4980-4989): the box's words, as typed, added to the saved messages.
   const saveCurrent = () => {
     const keep = text.trim().toUpperCase()
-    if (!canControl || keep === '') return
+    if (keep === '') return
     let saved: string[] = []
     void patchSettings((cur) => {
       saved = [...(cur.js8SavedMessages ?? JS8_DEFAULT_SAVED), keep]
@@ -792,15 +775,11 @@ export function Js8Cockpit({
       .catch(() => pushToast(t('js8.toast.savedMessage.failed'), 'error'))
   }
   const setSpeed = (idx: number) => {
-    if (!canControl) {
-      return
-    }
     void withErrorToast(() => js8SetSpeed(idx), t('js8.header.speed.failed')).then((s) => {
       if (s) setJs8(s)
     })
   }
   const markInbox = (id: number, state: Js8InboxState) => {
-    if (!canControl) return
     void withErrorToast(() => js8InboxMark(id, state), t('js8.inbox.failed')).then((s) => {
       if (s) setJs8(s)
     })
@@ -808,7 +787,6 @@ export function Js8Cockpit({
   /** Delete messages, several at once as JS8Call's Delete takes the rows picked (MessagePanel.cpp:
    *  194-232): one engine verb each, in turn. */
   const deleteInbox = (ids: readonly number[]) => {
-    if (!canControl) return
     void (async () => {
       for (const id of ids) {
         const s = await withErrorToast(() => js8InboxDelete(id), t('js8.inbox.failed'))
@@ -820,7 +798,6 @@ export function Js8Cockpit({
   // took out (Js8InboxDropped).
   const [storeFor, setStoreFor] = useState<string | null>(null)
   const clearDropped = () => {
-    if (!canControl) return
     void withErrorToast(() => js8InboxDroppedClear(), t('js8.inbox.failed')).then((s) => {
       if (s) setJs8(s)
     })
@@ -939,10 +916,10 @@ export function Js8Cockpit({
   // item only ever meets a good one or none, and is disabled for none (mainwindow.cpp:6657).
   // Nexus's Settings can hold a malformed one, which the JS8 gate refuses. "Send my grid" asks
   // that gate, its one rule, whenever the locator changes: disabled while it refuses, with its
-  // reason as the tooltip, and until it has answered. The Remote never asks (it cannot send).
+  // reason as the tooltip, and until it has answered.
   const [locatorRefusal, setLocatorRefusal] = useState<string | null | undefined>(undefined)
   useEffect(() => {
-    if (!active || !canControl) return
+    if (!active) return
     let live = true
     void js8LocatorRefusal()
       .then((reason) => {
@@ -954,7 +931,7 @@ export function Js8Cockpit({
     return () => {
       live = false
     }
-  }, [active, canControl, myGrid])
+  }, [active, myGrid])
 
   const sending = js8?.sending === true
   // JS8Call's `isMessageQueuedForTransmit()` (mainwindow.cpp:3264-3266): a message waiting to go, or
@@ -1195,7 +1172,6 @@ export function Js8Cockpit({
       type="button"
       className={`cw-macro rtty-arm js8-arm ${cls}${on ? ' on' : ''}${on && armed ? ' armed' : ''}`}
       aria-pressed={on}
-      disabled={!canControl}
       onClick={() => toggleSwitch(which, on)}
       // Every face carries the two-act note: an armed chip that has not fired reads as a bug
       // to a JS8Call operator, and the sentence that stops it is the one naming the latch.
@@ -1236,11 +1212,8 @@ export function Js8Cockpit({
   }
   const clears = (which: 'rx' | 'band' | 'call') => js8ClearEntries(() => clearList(which), clearAll)
   /** "Jump to …Hz": JS8Call's one offset is where it listens and sends, so both cursors move, as a
-   *  Ctrl-click on the waterfall moves them. The Remote observer moves RX alone, as its waterfall does. */
+   *  Ctrl-click on the waterfall moves them. */
   const jumpTo = (hz: number) => {
-    if (!canControl) {
-      return
-    }
     void setRxOffset(hz)
       .then((sn) => onSnap?.(sn))
       .then(() => setTxOffset(hz))
@@ -1252,9 +1225,7 @@ export function Js8Cockpit({
     speed,
     current: js8?.speed ?? null,
     offsetLocked: queued && !txOffsetWhileSending,
-    centreFilter: hz != null ? js8CentreFilterItem(js8?.controls?.filter, hz, setJs8, canControl) : null,
-    canJump: canControl,
-    canChangeSpeed: canControl,
+    centreFilter: hz != null ? js8CentreFilterItem(js8?.controls?.filter, hz, setJs8) : null,
     onJump: jumpTo,
     onSpeed: (sp) => setSpeed(JS8_SPEEDS[sp].idx),
   })
@@ -1313,10 +1284,10 @@ export function Js8Cockpit({
       pinned: pins.includes(call),
       onPin: () => togglePin(call),
       onAdd: () => setAdding(true),
-      canRemove: !group || (canControl && (call === ALLCALL ? lists.setAvoidAllcall : lists.setGroups) != null),
+      canRemove: !group || (call === ALLCALL ? lists.setAvoidAllcall : lists.setGroups) != null,
       onRemove: () => removeFromList(call),
       blocked,
-      canBlock: lists.setRxBlocklist != null && canControl,
+      canBlock: lists.setRxBlocklist != null,
       onBlock: () => block(call, !blocked),
       clears: clears('call'),
     })
@@ -1338,7 +1309,6 @@ export function Js8Cockpit({
    *  It goes in as every other fill does, so nothing goes in while a message of the box's is going
    *  out (JS8Call's `addMessageText` adds no text while one is queued). */
   const replyTo = (e: Js8InboxEntry) => {
-    if (!canControl) return
     fill(js8ReplyText(e), { to: '', clear: true, select: JS8_REPLY_PLACEHOLDER })
   }
 
@@ -1403,7 +1373,6 @@ export function Js8Cockpit({
             key={q.id}
             type="button"
             className="cw-macro js8-query"
-            disabled={!canControl}
             onClick={() => quickQuery(r.call, q.id)}
             title={t('js8.station.query.title', { cmd: q.label, call: r.call })}
           >
@@ -1413,7 +1382,7 @@ export function Js8Cockpit({
         <button
           type="button"
           className="cw-macro js8-query js8-send-grid"
-          disabled={!canControl || locatorRefusal !== null}
+          disabled={locatorRefusal !== null}
           onClick={() => sendMyGrid(r.call)}
           title={locatorRefusal ?? (ownGrid ? t('js8.station.sendGrid.title', { grid: ownGrid, call: r.call }) : undefined)}
         >
@@ -1422,7 +1391,6 @@ export function Js8Cockpit({
         <button
           type="button"
           className="cw-macro js8-query js8-store"
-          disabled={!canControl}
           onClick={() => setStoreFor(r.call)}
           title={t('js8.station.store.title', { call: r.call })}
         >
@@ -1477,12 +1445,11 @@ export function Js8Cockpit({
         inbox={js8?.inbox ?? []}
         call={inboxCall}
         onCall={setInboxCall}
-        canControl={canControl}
         onRead={(id) => markInbox(id, 'read')}
         onDelete={deleteInbox}
         onReply={replyTo}
         tooLong={js8?.inboxTooLong}
-        notes={<Js8InboxDropped drops={js8?.inboxDropped} canControl={canControl} onClear={clearDropped} />}
+        notes={<Js8InboxDropped drops={js8?.inboxDropped} onClear={clearDropped} />}
       />
     </CockpitPaneFrame>
   )
@@ -1507,7 +1474,7 @@ export function Js8Cockpit({
       weight={1.5}
       {...closeProps('log')}
     >
-      {!canControl ? null : <LogEntry
+      <LogEntry
         onOpenLogbook={onOpenLogbook}
         onEntryCall={(c) => {
           setStatsCall(c)
@@ -1533,7 +1500,7 @@ export function Js8Cockpit({
         active={active}
         fdMode="DIG"
         fdSubmode={JS8}
-      />}
+      />
       {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
       {recentPane}
     </CockpitPaneFrame>
@@ -1621,7 +1588,6 @@ export function Js8Cockpit({
             value: snap.radio.txLevel,
             unit: 'drive',
             onChange: (v: number) => {
-              if (!canControl) return
               void setTxLevel(v)
                 .then((s) => onSnap?.(s))
                 .catch(() => {})
@@ -1642,7 +1608,6 @@ export function Js8Cockpit({
                     type="button"
                     className={`rtty-arm js8-speed-chip${js8?.speed === s.key ? ' on' : ''}`}
                     aria-pressed={js8?.speed === s.key}
-                    disabled={!canControl}
                     onClick={() => setSpeed(s.idx)}
                     title={
                       s.alias
@@ -1681,7 +1646,7 @@ export function Js8Cockpit({
                 variant="compact"
                 showReadout={false}
                 showModeToggle={false}
-                onSet={(...args) => { if (canControl) onSetFrequency(...args) }}
+                onSet={onSetFrequency}
               />
             ) : (
               <span className="cockpit-ph-pill" title={t('js8.header.band.title')}>
@@ -1725,12 +1690,12 @@ export function Js8Cockpit({
               from, and not at the To box, which also takes group addresses (@ALLCALL) and calls
               nobody has heard. `active`, because this cockpit stays mounted while hidden. Its ■
               stops the rotator, never a transmission. */}
-          {canControl || rotatorControl ? <RotorStrip
+          <RotorStrip
             active={active}
             onOpenSettings={onOpenSettings}
             targetCall={selected?.call ?? null}
-            onPointAt={rotorPointAt(canControl)}
-          /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+            onPointAt={rotorPointAt()}
+          />
         </CockpitHeader>
       )}
 
@@ -1760,15 +1725,11 @@ export function Js8Cockpit({
               js8={js8}
               rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
               txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
-              canControl={canControl}
               active={active}
               onState={setJs8}
             />
           }
           onTune={(hz, target) => {
-            if (!canControl) {
-              return
-            }
             if (target !== 'tx')
               void setRxOffset(hz)
                 .then((s) => onSnap?.(s))
@@ -1800,12 +1761,11 @@ export function Js8Cockpit({
       {snap && (
         <CockpitTxStrip
           radio={snap.radio}
-          onSnap={onSnap}
           onStopTx={stop}
-          onSetTxEnabled={onSetTxEnabled ? (on) => { if (canControl) onSetTxEnabled(on) } : undefined}
-          onTune={(on) => { if (canControl) void setTune(on).then((s) => onSnap?.(s)) }}
+          onSetTxEnabled={onSetTxEnabled}
+          onTune={(on) => { void setTune(on).then((s) => onSnap?.(s)) }}
           onAtuTune={() =>
-            canControl && void atuTune()
+            void atuTune()
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }
@@ -1879,7 +1839,7 @@ export function Js8Cockpit({
           "armed" only when both agree), a cancel for a reply that has not fired, or Drop
           queue — a SENDER-class control (it empties the queue; a frame already keyed
           finishes) that must never enter the stop-line sweep. */}
-      <div className={`cockpit-txdock${canControl ? '' : ' remote-observer-dock'}${canControl && hbMenuOpen ? ' cockpit-txdock-editing' : ''}`}>
+      <div className={`cockpit-txdock${hbMenuOpen ? ' cockpit-txdock-editing' : ''}`}>
         <div className="js8-dock-row js8-compose-row" role="group" aria-label={t('js8.dock.aria')}>
           <input
             className="settings-input rtty-hiscall js8-to"
@@ -1929,7 +1889,7 @@ export function Js8Cockpit({
             }}
             toCall={toCall}
             pills={compose.pills}
-            suggest={compose.wordSuggestions && canControl}
+            suggest={compose.wordSuggestions}
             inputRef={composeRef}
             placeholder={t('js8.dock.compose.placeholder')}
             ariaLabel={t('js8.dock.compose.aria')}
@@ -1939,7 +1899,7 @@ export function Js8Cockpit({
           <span className={`js8-estimate${overCap ? ' over' : ''}`} title={t('js8.dock.estimate.title')}>
             {typeahead.active ? '' : estimateText}
           </span>
-          <button type="button" className="cw-send-btn js8-send" onClick={send} disabled={!canControl || !canSend}>
+          <button type="button" className="cw-send-btn js8-send" onClick={send} disabled={!canSend}>
             {t('js8.dock.send.label')}
           </button>
         </div>
@@ -1948,7 +1908,6 @@ export function Js8Cockpit({
           {/* JS8Call's one-click buttons by its compose box: REPLY, SNR, INFO, STATUS and the
               Saved menu (with "Restore previous message"). Senders, like Send: no ⊞ id, no stop. */}
           <Js8ComposeActions
-            canControl={canControl}
             busy={queued}
             toCall={toCall}
             heard={heardSelected() !== null}
@@ -1975,7 +1934,7 @@ export function Js8Cockpit({
               type="button"
               className={`cw-macro rtty-arm js8-arm js8-cq js8-cq-repeat${js8?.cqOn ? ' on' : ''}${js8?.cqOn && js8.armed.cq ? ' armed' : ''}`}
               aria-pressed={js8?.cqOn === true}
-              disabled={!canControl || queued} onClick={toggleCqRepeat}
+              disabled={queued} onClick={toggleCqRepeat}
               title={cqRepeatTitle}
             >
               <span className="cw-macro-label">{cqCount ? `${CQ} (${cqCount})` : CQ}</span>
@@ -1984,7 +1943,7 @@ export function Js8Cockpit({
             <button
               type="button"
               className="cw-macro js8-cq"
-              disabled={!canControl || queued}
+              disabled={queued}
               onClick={callCq}
               title={compose.sendAtOnce ? t('js8.dock.cq.send', { text: cqLine() }) : t('js8.dock.cq.fill', { text: cqLine() })}
             >
@@ -1995,7 +1954,6 @@ export function Js8Cockpit({
           {js8?.presence && (
             <Js8HbNetChip
               presence={js8.presence}
-              canControl={canControl}
               speed={JS8_SPEEDS[js8.speed].label}
               onToggle={(on) => toggleSwitch('hbnet', on)}
             />
@@ -2006,7 +1964,7 @@ export function Js8Cockpit({
               title={hbTitle}
               on={js8?.hbOn === true}
               armed={js8?.armed.hb === true}
-              canControl={canControl && !queued}
+              canControl={!queued}
               intervalMin={js8?.hbIntervalMin ?? 0}
               onToggle={toggleHb}
               onSendNow={sendHbNow}
@@ -2064,10 +2022,10 @@ export function Js8Cockpit({
                 ? t('js8.dock.confirm', { text: js8.pendingReply.display })
                 : t('js8.dock.pending.txOff', { to: js8.pendingReply.to, text: js8.pendingReply.display })}
             </span>
-            <button type="button" className="cw-macro js8-confirm-yes" disabled={!canControl} onClick={() => answerPending(true)} title={t('js8.dock.confirm.yes.title')}>
+            <button type="button" className="cw-macro js8-confirm-yes" onClick={() => answerPending(true)} title={t('js8.dock.confirm.yes.title')}>
               {t('js8.dock.confirm.yes.label')}
             </button>
-            <button type="button" className="cw-macro js8-confirm-no" disabled={!canControl} onClick={() => answerPending(false)} title={t('js8.dock.confirm.no.title')}>
+            <button type="button" className="cw-macro js8-confirm-no" onClick={() => answerPending(false)} title={t('js8.dock.confirm.no.title')}>
               {t('js8.dock.confirm.no.label', { secs: pendingSecs })}
             </button>
           </div>
@@ -2085,7 +2043,7 @@ export function Js8Cockpit({
                 {r.last && <span className="js8-chip">L</span>}
               </span>
             ))}
-            <button type="button" className="cw-macro js8-drop" disabled={!canControl} onClick={dropQueue} title={t('js8.dock.queue.drop.title')}>
+            <button type="button" className="cw-macro js8-drop" onClick={dropQueue} title={t('js8.dock.queue.drop.title')}>
               {t('js8.dock.queue.drop.label')}
             </button>
           </div>

@@ -5603,10 +5603,6 @@ export interface AppSnapshot {
   /** How many MORE completed contacts are queued behind the one the popup shows (operator
    *  ruling 2026-09-19: queue them, never replace). 0 or absent = this is the only one. */
   pendingLogsWaiting?: number
-  /** Remote snapshot identity for the CURRENT QSO; native calls do not require it. */
-  currentQsoLogKey?: string | null
-  remoteFtSettings?: import('./remote-web/station-operation').FtSettingsContext | null
-  remoteFtRuntime?: import('./remote-web/station-operation').FtRuntimeContext | null
   /** Last connector auto-upload outcome (QRZ/ClubLog/eQSL) from the backend
    * upload funnel; uploadTick bumps per outcome so the UI toasts it. */
   uploadNote?: string | null

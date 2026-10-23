@@ -1,5 +1,4 @@
 import type { Ref } from 'react'
-import { useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The six rows are
 // WSJT-X's Tx1–Tx6 slots: the row NAME (`Tx 3`), the generated message text, the DX call and
 // grid, and the 73/RR73 macro suggestions are tokens and stay in the code. What moved is the
@@ -90,8 +89,6 @@ export function TxPanel({
   grip,
   stripRef,
 }: Props) {
-  const messagesControl = useStationCapability('ftMessages')
-  const cqControl = useStationCapability('ftOperate')
   const canTx = dxCall.trim().length > 0
   const rows: { n: number; text: string }[] = [
     { n: 1, text: messages.tx1 },
@@ -214,7 +211,7 @@ export function TxPanel({
               <button
                 type="button"
                 className={`txp-btn${n === 6 ? ' txp-cq' : ''}`}
-                disabled={!(n === 6 ? cqControl : messagesControl) || disabled}
+                disabled={disabled}
                 onClick={() => onTx(n)}
                 title={
                   n === 6

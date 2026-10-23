@@ -9,7 +9,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, fireEvent, cleanup } from '@testing-library/react'
 import { BandStrip } from './BandStrip'
-import { StationControlContext } from '../stationAccess'
 import type { SpotRow } from '../types'
 
 const spot = (over: Partial<SpotRow>): SpotRow =>
@@ -90,18 +89,5 @@ describe("a program's spot on the band strip", () => {
     const { container } = render(<BandStrip {...base} onTciSpot={undefined} tciSpots={[PROGRAM]} />)
     fireEvent.click(flag(container, 'K1ABC')!)
     expect(base.onWorkSpot).not.toHaveBeenCalled()
-  })
-
-  it('from afar without control it is drawn and its click does nothing, as a cluster spot', () => {
-    const { container } = render(
-      <StationControlContext.Provider value={false}>
-        <BandStrip {...base} tciSpots={[PROGRAM]} />
-      </StationControlContext.Provider>,
-    )
-    const ours = flag(container, 'K1ABC')!
-    expect(ours.disabled).toBe(true)
-    fireEvent.click(ours)
-    expect(base.onTciSpot).not.toHaveBeenCalled()
-    expect(flag(container, 'W1AW')!.disabled, 'control: the cluster spot too').toBe(true)
   })
 })

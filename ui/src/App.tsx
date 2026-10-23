@@ -2480,9 +2480,8 @@ function App() {
   }, [])
 
   const handleQsoFreetext = useCallback((text: string) => {
-    return withErrorToast(() => apiQsoFreetext(text), t('shell.freetext.failed')).then((s) => {
+    void withErrorToast(() => apiQsoFreetext(text), t('shell.freetext.failed')).then((s) => {
       if (s) setSnap(s)
-      return !!s
     })
   }, [])
 
@@ -4157,7 +4156,6 @@ function App() {
                 txStrip={
                   <CockpitTxStrip
                     radio={snap.radio}
-                    onSnap={setSnap}
                     onSetTxEnabled={handleSetTxEnabled}
                     onTune={snap.radio.atu != null ? handleSetTune : undefined}
                     onAtuTune={handleAtuTune}

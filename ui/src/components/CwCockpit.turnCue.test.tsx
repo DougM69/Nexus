@@ -14,7 +14,6 @@ import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
 import type { AppSnapshot, CwDecodeResult, CwTurn, FieldDayStatus } from '../types'
 import type { CwPanelId, PanelLayoutApi } from '../features/panelState'
-import { StationControlContext } from '../stationAccess'
 import { EN } from '../i18n'
 
 vi.setConfig({ testTimeout: 15_000 })
@@ -208,14 +207,6 @@ describe('the turn cue on the CW screen', () => {
     await nextPoll()
     expect(lampEl()!.querySelector('.cw-turn-label')!.textContent).toBe('Your turn · Enter')
     expect(cued()).toEqual([])
-  })
-
-  it('a Remote observer sees it, read-only', async () => {
-    read = { turn: YOUR_TURN, wpm: 18 }
-    render(<StationControlContext.Provider value={false}>{cockpit()}</StationControlContext.Provider>)
-    await nextPoll()
-    expect(lampEl()!.querySelector('.cw-turn-label')!.textContent).toBe('Your turn · F2')
-    expect(pace()!.disabled, 'the pace hint is the station operator’s').toBe(true)
   })
 })
 

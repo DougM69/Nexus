@@ -39,7 +39,6 @@ import { WatchTile } from './WatchTile'
 import { WorkedWindowSelect, workedWithin } from './WorkedWindowSelect'
 import { useWatchMatch, watchLabel } from '../watchlist'
 import { PaneCloseButton } from './panes/PaneCloseButton'
-import { useStationControl, useStationCapability } from '../stationAccess'
 
 interface Props {
   /** THE PANE'S OWN ✕ (panelHost.closeProps) — the SAME setPanelState the ⊞ Panels tick
@@ -183,11 +182,6 @@ export function OperateRoster({
   sort: keptSort,
   onSort,
 }: Props) {
-  const control = useStationControl()
-  // A public spot of another station posts from the station's own cluster login, so it rides
-  // STATION CONTROL; a browser without it sees the button dead.
-  const spotControl = control
-  const callControl = useStationCapability('ftCall')
   // QTH magnetic declination (WMM) — the Brg column's tooltip shows the compass
   // heading a rotator zeroed on magnetic north needs.
   const units = useUnits()
@@ -432,7 +426,6 @@ export function OperateRoster({
   const roving = useRovingList(rows.length, (i, mods) => {
     const s = rows[i]?.s
     if (!s) return
-    if ((!control && mods.alt) || (!callControl && mods.shift)) return
     if (mods.alt) onToggleIgnore?.(s.call)
     else if (mods.shift) onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
     else onSelect(s.call)
@@ -540,8 +533,8 @@ export function OperateRoster({
           <button
             type="button"
             className="or-filter or-spot"
-            disabled={!spotControl || !selectedCall}
-            onClick={() => spotControl && selectedCall && onSpot(selectedCall)}
+            disabled={!selectedCall}
+            onClick={() => selectedCall && onSpot(selectedCall)}
             title={
               selectedCall
                 ? t('operate.roster.spot.title', { call: selectedCall })
@@ -625,13 +618,12 @@ export function OperateRoster({
                 }}
                 onDoubleClick={(e) => {
                   if (e.altKey) {
-                    if (onToggleIgnore) { if (control) onToggleIgnore(s.call); return }
-                    if (!control) return
+                    if (onToggleIgnore) { onToggleIgnore(s.call); return }
                   }
-                  if (callControl) onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
+                  onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
                 }}
                 title={
-                  !callControl ? s.call : ignoredRow
+                  ignoredRow
                     ? t('operate.row.ignored.title')
                     : t('operate.roster.row.work.title', { call: s.call })
                 }

@@ -9,7 +9,6 @@
 // symbol codes and their table, digipeater paths, the channel list and every dial reading,
 // dBFS levels, positions, grids, distances, bearings, speeds, the packet kind, and the
 // region names the channel list carries — all data, interpolated as values.
-import { useStationCapability, useStationControl } from '../stationAccess'
 import { MapView } from './MapView'
 import { AprsStationCard } from './AprsStationCard'
 import { AprsRailSeam } from './AprsRailSeam'
@@ -632,11 +631,6 @@ export function AprsCockpit({
    * where the rest of the APRS settings live without offering to open them. */
   onOpenSettings?: (target: string) => void
 }) {
-  const canControl = useStationControl(), receiverControl = useStationCapability('decoder')
-  // A browser may tune (never beacon or save) while the station advertises the APRS tune. Only an
-  // explicit pick or Re-tune uses it: the entry auto-tune below stays local-only.
-  const aprsTuning = useStationCapability('aprsTuning')
-  const tuneControl = canControl || aprsTuning
   // NO local `armed` state. Arming lives on the ENGINE and is session state that outlives this
   // component, so a local copy drifts: a remount came back up saying "Monitor" while the decoder
   // was still running, and its first click then sent arm(true) at an already-armed engine. The
@@ -848,7 +842,7 @@ export function AprsCockpit({
    * not take the operator's action with it.
    */
   const writeSettings = (patch: Partial<Settings>) => {
-    if (!canControl || !nativeSettings) return
+    if (!nativeSettings) return
     const next = { ...nativeSettings, ...patch }
     setSettingsState(next) // optimistic, so the control does not lag a round-trip
     setSavingInet(true)
@@ -920,7 +914,7 @@ export function AprsCockpit({
    * right now (an over in flight) must never look like a button that did nothing — the operator
    * pressed a control whose whole meaning is "move the radio". */
   const tuneToAprs = (mhz: number) => {
-    if (!tuneControl || !onTune) return
+    if (!onTune) return
     onTune(mhz)
     setStatus(
       radio?.transmitting
@@ -940,7 +934,6 @@ export function AprsCockpit({
   const armed = arm !== 'off'
 
   const toggleArm = () => {
-    if (!receiverControl) return
     // A plain start/stop toggle. Clicking it while armed ALWAYS stops — including when the
     // decoder was auto-armed on view entry. It deliberately does NOT "upgrade" an auto-arm to an
     // explicit one: the button reads "● Monitoring", so a click is the operator reaching for
@@ -960,7 +953,6 @@ export function AprsCockpit({
   }
 
   const sendBeacon = () => {
-    if (!canControl) return
     // THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse like the voice keyer"). With
     // Nexus's own Flex client and native audio on, FM takes the radio's own mic while a packet
     // goes out over DAX, so the radio would ignore the packet and the mic would carry the over.
@@ -998,7 +990,6 @@ export function AprsCockpit({
   }
 
   const sendMessage = () => {
-    if (!canControl) return
     // The radio has the mic: refused, as a beacon is (above), and what was typed stays.
     if (radio?.flexRadioHasMic) {
       setStatus(t('aprs.status.radioHasMic'))
@@ -1084,9 +1075,8 @@ export function AprsCockpit({
             <select
               className="np-chip aprs-freq"
               value={freq ?? ''}
-              disabled={!tuneControl || freq == null}
+              disabled={freq == null}
               onChange={(e) => {
-                if (!tuneControl) return
                 // Selecting a frequency retunes the rig immediately (band-picker behavior) — no
                 // separate Tune click needed. Switches to the 2 m radio + FM simplex via onTune.
                 // The SELECTION always sticks (it drives the health chip's "which channel do you
@@ -1115,7 +1105,7 @@ export function AprsCockpit({
               type="button"
               className="np-chip"
               // Also dead while the channel is still being read — there is nothing to re-tune TO.
-              disabled={!tuneControl || !canReachAprs || freq == null}
+              disabled={!canReachAprs || freq == null}
               onClick={() => freq != null && tuneToAprs(freq)}
               title={
                 freq == null
@@ -1144,7 +1134,6 @@ export function AprsCockpit({
           type="button"
           className={`np-chip${armed ? ' active' : ''}`}
           aria-pressed={armed}
-          disabled={!receiverControl}
           onClick={toggleArm}
           title={
             arm === 'explicit'
@@ -1184,7 +1173,6 @@ export function AprsCockpit({
           <button
             type="button"
             className="np-chip aprs-health-fix"
-            disabled={!tuneControl}
             onClick={() => tuneToAprs(freq)}
             title={t('aprs.tuneFix.title', { freq: freq.toFixed(3) })}
           >
@@ -1226,7 +1214,7 @@ export function AprsCockpit({
                   role="switch"
                   aria-checked={!!settings?.aprsIsEnabled}
                   className={`toggle${settings?.aprsIsEnabled ? ' on' : ''}`}
-                  disabled={!canControl || !settings || savingInet}
+                  disabled={!settings || savingInet}
                   onClick={() => writeSettings({ aprsIsEnabled: !settings?.aprsIsEnabled })}
                 >
                   <span className="toggle-knob" />
@@ -1241,7 +1229,7 @@ export function AprsCockpit({
                   max={5000}
                   className="settings-input"
                   value={settings?.aprsIsRadiusKm ?? 150}
-                  disabled={!canControl || !settings || savingInet}
+                  disabled={!settings || savingInet}
                   onChange={(e) => writeSettings({ aprsIsRadiusKm: Number(e.target.value) })}
                 />
               </label>
@@ -1253,7 +1241,7 @@ export function AprsCockpit({
                   className="settings-input"
                   spellCheck={false}
                   defaultValue={(settings?.aprsIsWatchCalls ?? []).join(', ')}
-                  disabled={!canControl || !settings || savingInet}
+                  disabled={!settings || savingInet}
                   // On blur, not per keystroke: each write reconnects the feed, so committing
                   // mid-callsign would drop the session on every character typed.
                   onBlur={(e) =>
@@ -1338,7 +1326,6 @@ export function AprsCockpit({
         <label>
           {t('aprs.beacon.symbol.label')}
           <select
-            disabled={!canControl}
             value={`${settings?.aprsSymbolTable ?? '/'}${settings?.aprsSymbolCode ?? '>'}`}
             onChange={(e) =>
               writeSettings({
@@ -1357,7 +1344,6 @@ export function AprsCockpit({
         <label className="aprs-beacon-comment">
           {t('aprs.beacon.comment.label')}
           <input
-            readOnly={!canControl}
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             onBlur={() => writeSettings({ aprsComment: comment })}
@@ -1367,7 +1353,6 @@ export function AprsCockpit({
         <label>
           {t('aprs.beacon.path.label')}
           <input
-            readOnly={!canControl}
             value={path}
             onChange={(e) => setPath(e.target.value)}
             onBlur={() =>
@@ -1381,7 +1366,7 @@ export function AprsCockpit({
             size={14}
           />
         </label>
-        <button type="button" className="np-chip aprs-beacon-send" disabled={!canControl} onClick={sendBeacon}>
+        <button type="button" className="np-chip aprs-beacon-send" onClick={sendBeacon}>
           {t('aprs.beacon.send')}
         </button>
         {status && <span className="aprs-status">{status}</span>}
@@ -1409,7 +1394,7 @@ export function AprsCockpit({
           />
         </label>
         <span className="aprs-msg-count">{msgText.length}/67</span>
-        <button type="button" className="np-chip aprs-beacon-send" disabled={!canControl} onClick={sendMessage}>
+        <button type="button" className="np-chip aprs-beacon-send" onClick={sendMessage}>
           {t('aprs.msg.send')}
         </button>
       </div>

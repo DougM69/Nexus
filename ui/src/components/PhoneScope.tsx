@@ -36,7 +36,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { getRfFrame, getScopeFrame } from '../api'
 import type { SpectrumFrameWire, SpotRow } from '../types'
-import { useStationControl } from '../stationAccess'
 import {
   applyGainZero,
   bakeLut,
@@ -341,11 +340,10 @@ export function PhoneScope({
   privilegeMode = null,
   ft = null,
 }: Props) {
-  const control = useStationControl()
   // The licence-class spans for the band edges: the gate's own table, for the live section.
   const privSpans = usePrivilegeSpans(privilegeMode, active)
   // The RF pane starts out saying the radio's scope is not there yet: it is only once a sweep lands.
-  const [scopeAvailable, setScopeAvailable] = useState(control && feed !== 'rf')
+  const [scopeAvailable, setScopeAvailable] = useState(feed !== 'rf')
   const rfOnly = feed === 'rf'
   // Master palette shared with the FT8 waterfall + all scopes ('auto' = theme-driven, and Amber
   // CRT at night — useNight.ts).
@@ -1209,7 +1207,7 @@ export function PhoneScope({
           ? await getRfFrame(lastSeq)
           : await getScopeFrame(viewLoRef.current, viewHiRef.current, scaleRef.current.window, lastSeq)
       } catch {
-        if ((!control || rfOnly) && latch.owns(myGen)) setScopeAvailable(false)
+        if (rfOnly && latch.owns(myGen)) setScopeAvailable(false)
         return
       }
       // Superseded while awaiting — the watchdog gave this call up. Drawing now would put a
@@ -1219,10 +1217,10 @@ export function PhoneScope({
         // An empty frame: the source went quiet — or, for the RF pane, no panadapter is streaming.
         // The RF pane says so on every window; the rig scope only on a remote one, as before.
         if (!wire.bins || wire.bins.length === 0) {
-          if (!control || rfOnly) setScopeAvailable(false)
+          if (rfOnly) setScopeAvailable(false)
           return
         }
-        if (!control || rfOnly) setScopeAvailable(true)
+        if (rfOnly) setScopeAvailable(true)
         accept(wire)
       } else if (newest) {
         // The source has not swept since the last row. The view still follows the dial and the
@@ -1934,7 +1932,7 @@ export function PhoneScope({
       {gear && (
         <div className="ph-scope-gear" id={gearId}>
           {/* No analysis window on the RF pane: its rows are the radio's own sweep, not an FFT here. */}
-          <ScaleStrip settings={scale} onChange={setScale} windowControl={!rfOnly} control={control} />
+          <ScaleStrip settings={scale} onChange={setScale} windowControl={!rfOnly} />
           <button
             type="button"
             className={`ph-scope-btn${rowCadence === 'sweep' ? ' on' : ''}`}

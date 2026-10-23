@@ -1,4 +1,3 @@
-import { useStationCapability, useStationControl } from '../stationAccess'
 // The "what's needed now" board: every needed station the engine sees
 // (from the log — new DXCC/ATNO, new band-slot, new mode, new zone, needs-confirm),
 // ranked by priority and boldly colored by the shared need palette. Single-click a
@@ -249,7 +248,6 @@ export interface NeededPanelProps {
    * the log. Omitted in the popped-out window (no cross-window nav) → those rows fall
    * back to a plain band QSY. */
   onWork?: (alert: NeedAlert) => void
-  canWork?: (alert: NeedAlert) => boolean
   /** Point the antenna rotator at this need's call (great-circle bearing). Omitted when
    * no rotator is configured → the ↗ button is hidden. */
   onPoint?: (call: string) => void
@@ -331,19 +329,14 @@ export function NeededPanel({
   onQsy,
   onSelect,
   onWork,
-  canWork,
   onPoint,
   onPopOut,
   phoneSource,
   onOpenSettings,
   pane,
 }: NeededPanelProps) {
-  const control = useStationControl()
   // An evidence line's distances ("heard by K9LC (EN52, 26 km)") in the operator's units.
   const units = useUnits()
-  // The rotator is steerable from a browser only while the station advertises it.
-  const rotatorCapability = useStationCapability('rotator')
-  const rotatorControl = control || rotatorCapability
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'priority',
     dir: 'desc',
@@ -474,7 +467,6 @@ export function NeededPanel({
     const a = rows[i]
     if (!a) return
     onSelect(a.call)
-    if (!control && !canWork?.(a)) return
     if (onWork) onWork(a)
     else onQsy(a)
   })
@@ -512,9 +504,9 @@ export function NeededPanel({
             {t('needed.countFiltered', { count: alerts.length })}
           </span>
         )}
-        {/* Not in a pane: a few inches of height, rows that say what a click does in their own
-            tooltip, and a host that shows the collection's status on Remote. */}
-        {!pane && <span className="np-hint">{control ? t('needed.hint') : t('remote.collectionObserver')}</span>}
+        {/* Not in a pane: a few inches of height, and rows that say what a click does in their
+            own tooltip. */}
+        {!pane && <span className="np-hint">{t('needed.hint')}</span>}
         {/* Filter toggle button */}
         <button
           type="button"
@@ -529,8 +521,8 @@ export function NeededPanel({
           </svg>{' '}
           {hasActiveFilters ? t('needed.filter.toggle.active') : t('needed.filter.toggle.idle')}
         </button>
-        {!pane && rotatorControl && onPoint && <RotatorWidget />}
-        {control && onPopOut && (
+        {!pane && onPoint && <RotatorWidget />}
+        {onPopOut && (
           <button
             type="button"
             className="np-popout"
@@ -540,7 +532,7 @@ export function NeededPanel({
             {t('needed.popOut.label')}
           </button>
         )}
-        {control && !pane && <label className="np-autopop" title={t('needed.autoPop.title')}>
+        {!pane && <label className="np-autopop" title={t('needed.autoPop.title')}>
           <input
             type="checkbox"
             checked={autopop}
@@ -698,14 +690,14 @@ export function NeededPanel({
           </div>
         ) : (
           rows.map((a, i) => {
-            const canQsy = control && knownBands.has(a.band)
+            const canQsy = knownBands.has(a.band)
             const isVoiceCw = a.mode === 'CW' || a.mode === 'Phone'
             // Every mode is click-to-work when the host wires onWork (main window):
             // the work path QSYs the rig AND opens the matching cockpit — a Digital
             // need must land in the FT8 cockpit, not just move the dial (the
             // "radio switched but the app didn't" bug). The pop-out has no onWork,
             // so its rows fall back to the QSY-only branch below.
-            const workable = (control || !!canWork?.(a)) && !!onWork
+            const workable = !!onWork
             const age = ageLabel(a.admittedAt)
             const evidence = a.evidence ? fmtKmTokens(a.evidence, units) : null
             const evidenceLine = evidence ? (age ? `${evidence} · ${age}` : evidence) : null
@@ -791,7 +783,7 @@ export function NeededPanel({
                     {a.call}
                   </button>
                   <RarityChip rarity={a.gridRarity} />
-                  {rotatorControl && onPoint && (
+                  {onPoint && (
                     <button
                       type="button"
                       className="np-point"

@@ -15,7 +15,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act } from '@testing-library/react'
 import type { ReactNode, Ref } from 'react'
 import { JttyCockpit } from './JttyCockpit'
-import { StationControlContext } from '../stationAccess'
 import type { AppSnapshot, JttyState } from '../types'
 import type { JttyPanelId, PanelLayoutApi } from '../features/panelState'
 import * as api from '../api'
@@ -103,9 +102,7 @@ async function mount(s: JttyState = jtty(), panels?: PanelLayoutApi<JttyPanelId>
   for (const k of ['getJttyState', 'jttyAutoArm', 'jttyArm', 'jttySetRx', 'jttySetBand', 'jttyClear'] as const) m(k).mockResolvedValue(s)
   m('getLicensedBandPlan').mockResolvedValue([])
   render(
-    <StationControlContext.Provider value={true}>
-      <JttyCockpit snap={snap} active onSetTxEnabled={() => {}} panels={panels} />
-    </StationControlContext.Provider>,
+    <JttyCockpit snap={snap} active onSetTxEnabled={() => {}} panels={panels} />,
   )
   await act(async () => {
     await Promise.resolve()
