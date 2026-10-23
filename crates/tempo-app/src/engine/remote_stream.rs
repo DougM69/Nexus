@@ -473,6 +473,22 @@ mod tests {
         stopped(&mut e, Kind::Tune);
     }
 
+    /// An FT over planned while presence was live is not committed once presence is revoked:
+    /// commit runs the same poll, so the radio loop never keys what the session's end stopped.
+    #[test]
+    fn a_revoked_presence_cannot_commit_a_previously_planned_ft_over() {
+        let (mut e, _transmit, presence, t0) = attached();
+        start(&mut e, Kind::Ft);
+        let slot = if e.tx_even() { 0 } else { 1 };
+        let plan = e
+            .plan_tx(slot)
+            .expect("positive control: native CQ plans an over");
+        presence.revoke();
+        assert!(e.commit_tx(&plan, vec![0.0; 120], slot).is_empty());
+        stopped(&mut e, Kind::Ft);
+        assert!(!e.remote_presence_live(t0));
+    }
+
     /// ⚠️ A lapse is never erased by a renewal that arrives before the poll: the lapse happened,
     /// and the stop it owes is carried out first. (Blind for five seconds, then the picture comes
     /// back a tick before the radio loop looks.)

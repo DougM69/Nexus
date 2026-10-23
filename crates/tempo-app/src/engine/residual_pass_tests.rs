@@ -111,16 +111,21 @@ fn the_47_step_decodes_nothing_and_the_full_pass_after_it_hands_on_no_early_deco
 }
 
 /// What the full pass is asked as it runs: one count per sync candidate, the full pass's and its
-/// rescue's alike, each made `delay` slower (a slow computer).
+/// rescue's alike, each taking `delay` (a slow computer). Its clock is the pass's: `delay` per
+/// candidate from `start`, so the give-up is decided by the candidates tried, not by how busy the
+/// machine running the test is.
 struct Slow {
     asked: usize,
     delay: Duration,
+    start: Instant,
 }
 impl DecodeProgress for Slow {
     fn found(&mut self, _: StreamedDecode) {}
     fn candidate(&mut self) {
         self.asked += 1;
-        std::thread::sleep(self.delay);
+    }
+    fn now(&self) -> Instant {
+        self.start + self.delay * self.asked as u32
     }
 }
 
@@ -141,9 +146,13 @@ fn full_pass_by(rescue_at: Option<Duration>, delay: Duration) -> (Vec<String>, u
     if let Some(at) = rescue_at {
         job = job.with_rescue_give_up_at(start + at);
     }
-    let mut slow = Slow { asked: 0, delay };
+    let mut slow = Slow {
+        asked: 0,
+        delay,
+        start,
+    };
     let result = run_decode_job_streaming(job, &mut slow);
-    let took = start.elapsed();
+    let took = slow.now() - start;
     let messages = result
         .decodes()
         .iter()
@@ -155,7 +164,8 @@ fn full_pass_by(rescue_at: Option<Duration>, delay: Duration) -> (Vec<String>, u
 /// ⭐ THE RESCUE GIVES UP AT ITS MOMENT on a slow computer. Past its deadline it never starts, and
 /// the full pass's result stands alone; a deadline met mid-rescue stops it at its next sync
 /// candidate, with the job done within one candidate of the deadline. Without a deadline the
-/// rescue runs to its end.
+/// rescue runs to its end. The pass's clock is the candidates' ([`Slow`]), so a busy test machine
+/// moves none of it.
 #[test]
 fn a_slow_computer_gives_the_rescue_up_at_its_moment() {
     let fast = Duration::ZERO;
@@ -171,7 +181,7 @@ fn a_slow_computer_gives_the_rescue_up_at_its_moment() {
          {alone_asked} asked, against {whole_asked} when it may run"
     );
     // The slow computer: 5 ms a candidate. The full pass alone takes `base`; the rescue may run
-    // 150 ms past it, a fraction of what it needs.
+    // 150 ms past it, 30 of its candidates, a fraction of what it needs.
     let delay = Duration::from_millis(5);
     let (_, slow_alone_asked, base) = full_pass_by(Some(Duration::ZERO), delay);
     assert_eq!(slow_alone_asked, alone_asked, "the same full pass, slower");
@@ -183,8 +193,13 @@ fn a_slow_computer_gives_the_rescue_up_at_its_moment() {
         "the rescue ran, and was given up: {cut_asked} candidates, against {alone_asked} without \
          it and {whole_asked} in all"
     );
+    assert_eq!(
+        cut_asked,
+        alone_asked + 30,
+        "given up at the first candidate past its deadline"
+    );
     assert!(
-        took < budget + Duration::from_millis(100),
+        took >= budget && took < budget + delay,
         "given up within a candidate of its deadline: {took:?} against {budget:?}"
     );
 }
@@ -211,6 +226,7 @@ fn full_pass_across_a_change(before: bool, during: bool) -> (usize, DecodeResult
     let mut asked = Slow {
         asked: 0,
         delay: Duration::ZERO,
+        start: Instant::now(),
     };
     let result = run_decode_job_streaming(job, &mut asked);
     (asked.asked, result)

@@ -1,6 +1,8 @@
 //! Exercise the real lease authority and Stop around native FT ownership.
 use super::*;
 
+/// A controlling browser's FT8 CQ on the air, as a streamed controller's Call CQ puts it there:
+/// the native verb, under the session's presence minted from the lease.
 fn armed() -> (Fixture, Instant, Value) {
     let f = Fixture::new();
     {
@@ -12,12 +14,15 @@ fn armed() -> (Fixture, Instant, Value) {
     }
     let now = Instant::now();
     let state = acquire_controls_version(&f, now, 3);
-    let permit = f.authority.transmit.permit(now + LEASE).unwrap();
-    f.engine
-        .lock()
-        .unwrap()
-        .start_remote_ft_cq(permit, None)
+    let presence = f
+        .authority
+        .stream_presence(SESSION, DEVICE, state["leaseId"].as_str().unwrap(), now)
         .unwrap();
+    {
+        let mut e = f.engine.lock().unwrap();
+        e.start_cq(None).unwrap();
+        assert!(e.hold_remote_presence(presence, now));
+    }
     (f, now, state)
 }
 
@@ -87,48 +92,57 @@ fn transmit_stop_does_not_wait_for_engine_or_a_pending_file_operation() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, now, state) = armed();
     let request = stop_request(&f, &state);
-    let mut engine = f.engine.lock().unwrap();
+    let engine = f.engine.lock().unwrap();
     let _pending_file_operation = f.authority.core.lock().unwrap();
     let result = f
         .authority
         .handle_version((f.connection, 4), SESSION, DEVICE, &request, &f.engine, now)
         .unwrap();
     assert_eq!(result, json!({"stop":"accepted"}));
-    assert!(engine.poll_remote_transmit(now));
+    assert!(
+        engine.tx_enabled(),
+        "the acceptance did not wait for the engine"
+    );
+    drop(engine);
+    drop(_pending_file_operation);
+    for _ in 0..200 {
+        if !f.engine.lock().unwrap().tx_enabled() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut engine = f.engine.lock().unwrap();
     assert!(!engine.tx_enabled());
     assert!(engine.take_slot_tx_abort());
 }
 
 /// Stop TX is never refused (operator ruling, 2026-10-03): the same Stop delivered again after a
-/// new remote CQ was armed stops that CQ too, although its token is from before the first Stop.
-/// Admission alone does it, before the engine is free: it retires the generation the CQ was armed
-/// under. This replaced `transmit_stop_rejects_a_replay_after_a_new_remote_arm`, which pinned the
+/// new CQ was armed stops that CQ too, although its token is from before the first Stop: the
+/// station runs its stop (`transmit_stop::stop_station`) for the replay as for the first. The
+/// CQ is the native Call CQ a streamed controller's click is. This replaced `transmit_stop_rejects_a_replay_after_a_new_remote_arm`, which pinned the
 /// opposite (the replay refused `staleContext` and the new CQ left armed).
 #[test]
 fn a_replayed_stop_after_a_new_remote_arm_still_stops_it() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, now, state) = armed();
     let request = stop_request(&f, &state);
-    f.authority
-        .stop_transmit(f.connection, SESSION, DEVICE, &request, now)
-        .unwrap();
+    assert_eq!(
+        stop_v4(&f, DEVICE, &request, now),
+        Ok(json!({"stop":"accepted"}))
+    );
     {
         let mut e = f.engine.lock().unwrap();
-        assert!(e.poll_remote_transmit(now));
+        assert!(!e.tx_enabled(), "the first Stop left the CQ armed");
         e.take_immediate_retune();
-        e.start_remote_ft_cq(f.authority.transmit.permit(now + LEASE).unwrap(), None)
-            .unwrap();
-        // Positive control: the new CQ is armed and its permit is live.
-        assert!(!e.poll_remote_transmit(now));
+        e.start_cq(None).unwrap();
+        // Positive control: the new CQ is armed.
         assert!(e.tx_enabled());
     }
     assert_eq!(
-        f.authority
-            .stop_transmit(f.connection, SESSION, DEVICE, &request, now),
-        Ok(())
+        stop_v4(&f, DEVICE, &request, now),
+        Ok(json!({"stop":"accepted"}))
     );
-    let mut e = f.engine.lock().unwrap();
-    assert!(e.poll_remote_transmit(now), "the new CQ's permit survived");
+    let e = f.engine.lock().unwrap();
     assert!(!e.tx_enabled(), "the new CQ is still armed");
 }
 

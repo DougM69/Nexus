@@ -689,87 +689,65 @@ fn band_selection_uses_the_actual_radio_owner_and_never_replays_the_native_pick(
     }
 }
 
+/// A streamed session's presence revoked while its FT over is on the air: the radio loop's next
+/// tick unkeys and flushes it. The over is the native Call CQ a streamed operator's click is.
 #[test]
-fn remote_ft_authority_loss_flushes_the_owned_over_but_not_a_native_rearm() {
+fn remote_presence_loss_flushes_the_over_on_the_air() {
     use tempo_app::remote_control::transmit::TransmitAuthority;
-    let mut native_writes = None;
-    for (remote, local_rearm) in [(false, true), (true, false), (true, true)] {
-        let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
-            if line == "T 1" {
-                state.keyed = true;
-                Some("RPRT 0\n".into())
-            } else {
-                None
-            }
-        });
-        let mut s = Station::configured(&peer, |settings| {
-            settings.mycall = "KD9TAW".into();
-            settings.mygrid = "EN52".into();
-        });
-        let authority = TransmitAuthority::default();
-        {
-            let mut e = engine_lock(&s.engine);
-            e.take_immediate_retune();
-            if remote {
-                e.start_remote_ft_cq(authority.permit(unexpired_deadline()).unwrap(), None)
-                    .unwrap();
-            } else {
-                e.start_cq(None).unwrap();
-            }
-            if local_rearm {
-                e.set_tx_enabled(true);
-            }
-            // Represent the already-asserted, currently playing FT over.
-            e.take_immediate_retune();
-            e.take_slot_tx_abort();
-            e.take_immediate_tx();
-            s.state.cur_tier = e.tier();
-            s.state.cur_slot_secs = e.active_slot_secs();
-            s.state.clock = SlotClock::with_period_secs(e.active_slot_secs());
-            s.state.last_slot = Some(s.state.clock.slot_index(100.0));
-        }
-        s.rig.ptt(true).unwrap();
-        s.state.tx_until_ms = Some(999_999.0);
-        s.state.slot_tx_until_ms = 999_000.0;
-        authority.revoke();
-        s.state
-            .step(
-                &s.engine,
-                &mut s.backend,
-                &mut s.rig,
-                &no_sinks(),
-                100.0,
-                &mut |_| panic!("this test must not stop TX through a device rebuild"),
-                &mut |_, _| panic!("this test must not stop TX through a radio rebuild"),
-                &mut StationSinks::new(),
-            )
-            .unwrap();
-        assert_eq!(s.rig.keyed, local_rearm);
-        assert_eq!(s.state.tx_until_ms.is_some(), local_rearm);
-        assert_eq!(engine_lock(&s.engine).tx_enabled(), local_rearm);
-        if local_rearm {
-            assert_eq!(s.backend.flush_calls, 0);
-            // Compare the real native loop: its ordinary PTT reconciliation
-            // can reassert an already-held key. Remote ownership must not
-            // change those writes or flush that native transmission.
-            let sent = writes(&peer);
-            if remote {
-                assert_eq!(Some(&sent), native_writes.as_ref());
-            } else {
-                assert!(!sent.is_empty());
-                assert!(sent.iter().all(|line| line == "T 1"));
-                native_writes = Some(sent);
-            }
+    let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
+        if line == "T 1" {
+            state.keyed = true;
+            Some("RPRT 0\n".into())
         } else {
-            assert!(s.backend.flush_calls > 0);
-            assert_eq!(writes(&peer), ["T 1", "T 0"]);
+            None
         }
-        assert!(s.backend.played.is_empty());
+    });
+    let mut s = Station::configured(&peer, |settings| {
+        settings.mycall = "KD9TAW".into();
+        settings.mygrid = "EN52".into();
+    });
+    let authority = TransmitAuthority::default();
+    {
+        let mut e = engine_lock(&s.engine);
+        e.take_immediate_retune();
+        e.start_cq(None).unwrap();
+        let now = Instant::now();
+        assert!(e.hold_remote_presence(authority.permit(unexpired_deadline()).unwrap(), now));
+        // Represent the already-asserted, currently playing FT over.
+        e.take_immediate_retune();
+        e.take_slot_tx_abort();
+        e.take_immediate_tx();
+        s.state.cur_tier = e.tier();
+        s.state.cur_slot_secs = e.active_slot_secs();
+        s.state.clock = SlotClock::with_period_secs(e.active_slot_secs());
+        s.state.last_slot = Some(s.state.clock.slot_index(100.0));
     }
+    s.rig.ptt(true).unwrap();
+    s.state.tx_until_ms = Some(999_999.0);
+    s.state.slot_tx_until_ms = 999_000.0;
+    authority.revoke();
+    s.state
+        .step(
+            &s.engine,
+            &mut s.backend,
+            &mut s.rig,
+            &no_sinks(),
+            100.0,
+            &mut |_| panic!("this test must not stop TX through a device rebuild"),
+            &mut |_, _| panic!("this test must not stop TX through a radio rebuild"),
+            &mut StationSinks::new(),
+        )
+        .unwrap();
+    assert!(!s.rig.keyed);
+    assert!(s.state.tx_until_ms.is_none());
+    assert!(!engine_lock(&s.engine).tx_enabled());
+    assert!(s.backend.flush_calls > 0);
+    assert_eq!(writes(&peer), ["T 1", "T 0"]);
+    assert!(s.backend.played.is_empty());
 }
 
 #[test]
-fn remote_ft_immediate_over_rechecks_authority_around_key_up() {
+fn remote_presence_immediate_over_rechecks_authority_around_key_up() {
     use tempo_app::remote_control::transmit::TransmitAuthority;
     for scene in ["valid", "beforeTick", "duringKey"] {
         let authority = Arc::new(TransmitAuthority::default());
@@ -793,8 +771,9 @@ fn remote_ft_immediate_over_rechecks_authority_around_key_up() {
             let mut e = engine_lock(&s.engine);
             e.set_tx_even(true);
             e.take_immediate_retune();
-            e.start_remote_ft_cq(authority.permit(unexpired_deadline()).unwrap(), None)
-                .unwrap();
+            e.start_cq(None).unwrap();
+            let now = Instant::now();
+            assert!(e.hold_remote_presence(authority.permit(unexpired_deadline()).unwrap(), now));
             e.take_immediate_retune();
             e.take_slot_tx_abort();
             s.state.cur_tier = e.tier();
@@ -837,9 +816,10 @@ fn remote_ft_immediate_over_rechecks_authority_around_key_up() {
     }
 }
 
+/// Remote's Stop ends an FT over with `halt_tx`, as every local stop does (`transmit_stop::stop`):
+/// the radio loop's next tick unkeys and flushes what is on the air.
 #[test]
-fn remote_ft_stop_cuts_the_owned_over() {
-    use tempo_app::remote_control::transmit::TransmitAuthority;
+fn remote_stops_halt_cuts_the_over_on_the_air() {
     let peer = retuning_peer(14_074_000, "PKTUSB", |line, state| {
         if line == "T 1" {
             state.keyed = true;
@@ -852,12 +832,10 @@ fn remote_ft_stop_cuts_the_owned_over() {
         settings.mycall = "KD9TAW".into();
         settings.mygrid = "EN52".into();
     });
-    let authority = TransmitAuthority::default();
-    let permit = authority.permit(unexpired_deadline()).unwrap();
     {
         let mut e = engine_lock(&s.engine);
         e.take_immediate_retune();
-        e.start_remote_ft_cq(permit.clone(), None).unwrap();
+        e.start_cq(None).unwrap();
         e.take_immediate_retune();
         e.take_slot_tx_abort();
         e.take_immediate_tx();
@@ -871,7 +849,7 @@ fn remote_ft_stop_cuts_the_owned_over() {
     s.state.slot_tx_until_ms = 14_000.0;
     {
         let mut e = engine_lock(&s.engine);
-        e.stop_remote_ft(&permit).unwrap();
+        e.halt_tx();
     }
     s.state
         .step(
