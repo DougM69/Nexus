@@ -16076,18 +16076,29 @@ mod rotctld_supervisor_tests {
     /// comes up on its own once the port is free.
     #[test]
     fn pstrotatoraz_gets_the_native_link_and_a_taken_reply_port_is_named() {
+        // Every port here is let go and bound again by the link, so each lies BELOW the kernel's
+        // ephemeral range: a port a `:0` bind took and let go is free for the next `:0` bind or
+        // connect anywhere in the test binary, and such a neighbour can take the reply port between
+        // its release and the link's re-start (`StartFailed`). Below the range only a bind that
+        // names the port can land there.
+        let below = || {
+            crate::lan_client::tests::listener_below_the_ephemeral_range(
+                std::net::Ipv4Addr::LOCALHOST,
+            )
+            .local_addr()
+            .expect("its address")
+            .port()
+        };
         // A fake PstRotatorAz, and the port it replies on (its own + 1) held by "a logger".
         let (pst, control, held) = (0..50)
             .find_map(|_| {
-                let pst = std::net::UdpSocket::bind("127.0.0.1:0").ok()?;
-                let control = pst.local_addr().ok()?.port();
+                let control = below();
+                let pst = std::net::UdpSocket::bind(("127.0.0.1", control)).ok()?;
                 let held = std::net::UdpSocket::bind(("0.0.0.0", control + 1)).ok()?;
                 Some((pst, control, held))
             })
-            .expect("a free UDP port pair");
-        let free = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-        let port = free.local_addr().expect("its port").port();
-        drop(free);
+            .expect("a free UDP port pair below the ephemeral range");
+        let port = below();
         let mut st = station(port, 3);
         st.rotator_port = format!("127.0.0.1:{control}");
         let mut owner = owner();
@@ -16105,9 +16116,20 @@ mod rotctld_supervisor_tests {
             "the Connections log names the taken reply port, and not as a Hamlib problem"
         );
 
-        // The other program lets go: same settings, and the link is up.
+        // The other program lets go: same settings, and the link is up. Asked again for up to 5 s:
+        // a rotctld another test here spawned while `held` was open keeps a copy of it until it
+        // execs (measured: the port came free 4-9 ms after the drop). A port never let go still
+        // fails.
         drop(held);
-        assert_eq!(sync_rotctld_owned(&mut owner, &st), RotctldSync::Started);
+        let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let restarted = loop {
+            let got = sync_rotctld_owned(&mut owner, &st);
+            if got == RotctldSync::Started || std::time::Instant::now() > give_up {
+                break got;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert_eq!(restarted, RotctldSync::Started);
         std::thread::spawn(move || {
             let mut buf = [0u8; 256];
             while let Ok((n, _)) = pst.recv_from(&mut buf) {
