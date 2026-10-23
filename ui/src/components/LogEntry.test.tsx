@@ -284,8 +284,8 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
 
   // A user's report: "isn't logging an end time for SSB". A contact logged live ends when it is
   // logged, and the record says so as TIME_OFF, as an FT contact's does. One typed in with its
-  // own UTC time is a contact from earlier: its end is not known, and none is written.
-  it('a live contact carries its end time; one with a hand-entered time carries none', () => {
+  // own UTC time starts and ends at the time typed: TIME_ON = TIME_OFF.
+  it('a live contact carries its end time; one with a hand-entered time ends at that time', () => {
     renderStd()
     const before = Math.floor(Date.now() / 1000)
     fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'w1aw' } })
@@ -303,7 +303,7 @@ describe('LogEntry standard variant — other-radio override (band/freq/mode/UTC
     fireEvent.click(logBtn())
     const typed = mockedLogQso.mock.calls[1][0]
     expect(typed.whenUnix).toBe(Math.floor(Date.UTC(2026, 2, 15, 14, 30, 0) / 1000))
-    expect(typed.timeOffUnix).toBeUndefined()
+    expect(typed.timeOffUnix).toBe(Math.floor(Date.UTC(2026, 2, 15, 14, 30, 0) / 1000))
   })
 
   it('a live contact starts when its call was entered and ends when it is logged', () => {

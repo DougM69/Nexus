@@ -1363,3 +1363,43 @@ fn a_contest_contact_reaches_the_logbook_with_its_own_radio_power_and_end_time()
         assert_eq!(r.operator.as_deref(), Some("W9XYZ"), "{call}: nobody named");
     }
 }
+
+/// **Each contest contact keeps the grid it was made from, through the journal and a restart,
+/// into the Logbook — marked as Nexus's own, so the LoTW upload leaves it out**, as an ordinary
+/// contact's Settings grid is. The operator moved between the two contacts; each merged copy
+/// names its own grid, every service is sent it, and the LoTW batch carries neither.
+#[test]
+fn a_contest_contact_reaches_the_logbook_with_its_grid_which_lotw_never_sees() {
+    let d = Dir::new("contest-merge-grid");
+    let mut s = field_day_settings();
+    s.mygrid = "en52".into();
+    let mut e = launch(&d, &s);
+    assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+    save(&mut e, |s| s.mygrid = "EN61ab".into());
+    assert!(e.fd_log_manual("W1AW", "1D", "CT", "CW").unwrap());
+    let s = quit(e);
+
+    let mut e = launch(&d, &s);
+    assert_eq!(
+        contest_calls(&e),
+        ["K1ABC", "W1AW"],
+        "PREMISE: both came back"
+    );
+    assert_eq!(merge(&mut e), (2, 0));
+    let copies = [copy_of(&e, "K1ABC"), copy_of(&e, "W1AW")];
+    let lotw = crate::station::lotw_batch_adif(&copies, false, "W9XYZ", "EN52");
+    assert!(
+        lotw.contains("<CALL:5>K1ABC") && lotw.contains("<CALL:4>W1AW"),
+        "the control: both contacts are in the batch: {lotw}"
+    );
+    assert!(!lotw.contains("MY_GRIDSQUARE"), "{lotw}");
+    for (r, grid) in copies.iter().zip(["EN52", "EN61AB"]) {
+        assert_eq!(r.my_grid.as_deref(), Some(grid), "{}", r.call);
+        assert_eq!(tempo_core::logbook::self_filled(r), ["MY_GRIDSQUARE"]);
+        let sent = tempo_core::logbook::adif_record(r);
+        assert!(
+            sent.contains(&format!("<MY_GRIDSQUARE:{}>{grid}", grid.len())),
+            "{sent}"
+        );
+    }
+}

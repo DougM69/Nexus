@@ -21,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Phone, CW, RTTY, PSK and Satellites contacts now log when they started and ended.** A contact
   logged from the entry strip starts when its call was entered, typed or clicked in, and ends when
   you press Log, as a JS8 contact already did; until now both were the moment you pressed Log. A
-  contact typed in under "Logged on another radio" with its own UTC time keeps that time and
-  carries no end time, because Nexus cannot know it.
+  contact typed in under "Logged on another radio" with its own UTC time starts and ends at the
+  time you typed.
 - **Every contact names its operator.** With Operator at the key left blank, your station call is
   logged as the operator (ADIF OPERATOR), as the box's hint always said. The N3FJP push now sends
   the contact's own operator instead of always your station call.
@@ -33,10 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus filled in itself, so TQSL keeps signing from your Station Location exactly as before; a
   grid that came with the contact (from WSJT-X, typed in the Logbook, or imported) goes to LoTW as
   it always did.
-- **Contest and Field Day contacts keep their radio and power, and gain an end time, in the
-  Logbook.** Each contest contact records the radio and station power in use when it was logged,
-  keeps them across a restart, and carries them, with its time as its end time, when the contest
-  is merged into the Logbook.
+- **Contest and Field Day contacts keep their radio, power and grid, and gain an end time, in the
+  Logbook.** Each contest contact records the radio, station power and grid in use when it was
+  logged, keeps them across a restart, and carries them, with its time as its end time, when the
+  contest is merged into the Logbook. As on everyday contacts, your LoTW uploads leave that grid
+  out; in a VHF contest the grid you sent in the exchange is the one logged.
+- **A contact logged for an earlier time is not given today's station details.** A contact whose
+  start is more than 3 hours before you log it (typed in afterwards with its own UTC time, or
+  added in the Logbook) gets no grid, state, operator, rig or power from your current settings,
+  since they may not be what you used then; fill them in yourself if you want them. Anything you
+  enter on the contact is kept, and contacts you log as you make them are unchanged.
 - **A TCI radio's contacts name the radio.** The rig logged for a contact made on a TCI radio is
   the radio the SDR program reports, such as SunSDR2DX, instead of "TCI".
 - **Your station power is logged on every contact.** The watts in Settings ▸ Station power go on

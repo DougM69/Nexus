@@ -343,6 +343,12 @@ pub struct LoggedQso {
     /// set. Text, not a number, because this row is compared for dupes and derives `Eq`.
     /// Journaled and merged as [`rig`](Self::rig) is.
     pub tx_power: String,
+    /// **The grid this contact was made from** (ADIF `MY_GRIDSQUARE`) — [`FieldDayLog::grid`] at
+    /// log time, Settings ▸ Station's grid; `""` when none was set, or a row logged before this
+    /// was recorded. Journaled under a private tag (`APP_NEXUS_MYGRID`: a VHF contest's own sent
+    /// `GRID` already writes `MY_GRIDSQUARE`, and that one wins) and carried into the Logbook by
+    /// the merge, marked as Nexus's own so the LoTW upload leaves it out.
+    pub grid: String,
 }
 
 impl LoggedQso {
@@ -979,6 +985,9 @@ pub struct FieldDayLog {
     /// The station power RIGHT NOW (ADIF `TX_PWR` text, `""` = none set), stamped and copied as
     /// [`rig`](Self::rig) is ([`LoggedQso::tx_power`]).
     pub tx_power: String,
+    /// The station grid RIGHT NOW (Settings ▸ Station, uppercase, `""` = none), stamped and
+    /// copied as [`rig`](Self::rig) is ([`LoggedQso::grid`]).
+    pub grid: String,
     /// The LIVE rows: what is scored, duped, exported, merged and synced.
     qsos: Vec<LoggedQso>,
     /// ⭐ **The contacts the operator took out of the live log — kept, never deleted**
@@ -1079,6 +1088,7 @@ impl FieldDayLog {
             on_air_call: String::new(),
             rig: String::new(),
             tx_power: String::new(),
+            grid: String::new(),
             qsos: Vec::new(),
             removed: Vec::new(),
             worked: HashSet::new(),
@@ -1879,6 +1889,7 @@ impl FieldDayLog {
             on_air_call: self.on_air_call.clone(),
             rig: self.rig.clone(),
             tx_power: self.tx_power.clone(),
+            grid: self.grid.clone(),
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -2518,6 +2529,11 @@ impl FieldDayLog {
             if journal && !q.tx_power.is_empty() {
                 s.push_str(&adif_field("TX_PWR", &q.tx_power));
             }
+            // …and the grid it was made from, under a private tag: a VHF contest's sent `GRID`
+            // already writes `MY_GRIDSQUARE` on this record.
+            if journal && !q.grid.is_empty() {
+                s.push_str(&adif_field("APP_NEXUS_MYGRID", &q.grid));
+            }
             // A contact the operator removed: kept, with when (`restore_row` reads it back).
             if let Some(at) = removed_unix {
                 s.push_str(&adif_field("APP_NEXUS_REMOVED", &at.to_string()));
@@ -3084,6 +3100,11 @@ impl FieldDayLog {
             tx_power: f
                 .get("TX_PWR")
                 .map(|p| p.trim().to_string())
+                .unwrap_or_default(),
+            // The grid, from the journal's `APP_NEXUS_MYGRID`: none on an older row.
+            grid: f
+                .get("APP_NEXUS_MYGRID")
+                .map(|g| g.trim().to_ascii_uppercase())
                 .unwrap_or_default(),
         };
         match removed_unix {
@@ -8099,6 +8120,54 @@ mod tests {
         let mut old = ilqp_from_kane();
         old.merge_adif(&older, 0);
         assert_eq!(kit(&old), owned([("K9AAA", "", ""), ("K9BBB", "", "")]));
+    }
+
+    /// **Each row keeps the grid it was made from**, stamped at log time from the log's RIGHT
+    /// NOW grid, through the journal and a restart, under a private tag no contest file writes;
+    /// and a journal written before it was recorded still reads, its rows carrying none.
+    #[test]
+    fn the_journal_keeps_the_grid_each_contact_was_made_from() {
+        let mut log = ilqp_from_kane();
+        log.grid = "EN52".into();
+        ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+        log.grid = "EN61AB".into();
+        ilqp_contact(&mut log, "K9BBB", "599", "WILL", "CW");
+        let journal = log.journal_adif();
+        assert!(
+            record_for(&journal, "K9AAA").contains("<APP_NEXUS_MYGRID:4>EN52 "),
+            "{journal}"
+        );
+        assert!(
+            record_for(&journal, "K9BBB").contains("<APP_NEXUS_MYGRID:6>EN61AB "),
+            "{journal}"
+        );
+        for export in [log.adif(), log.submission_adif()] {
+            assert!(
+                !export.contains("APP_NEXUS_MYGRID") && !export.contains("MY_GRIDSQUARE"),
+                "{export}"
+            );
+        }
+        let grids = |log: &FieldDayLog| -> Vec<(String, String)> {
+            log.qsos()
+                .iter()
+                .map(|q| (q.call.clone(), q.grid.clone()))
+                .collect()
+        };
+        let owned =
+            |rows: [(&str, &str); 2]| rows.map(|(a, b)| (a.to_string(), b.to_string())).to_vec();
+        let mut back = ilqp_from_kane();
+        back.merge_adif(&journal, 0);
+        assert_eq!(
+            grids(&back),
+            owned([("K9AAA", "EN52"), ("K9BBB", "EN61AB")])
+        );
+        let older = journal
+            .replace("<APP_NEXUS_MYGRID:4>EN52 ", "")
+            .replace("<APP_NEXUS_MYGRID:6>EN61AB ", "");
+        assert!(!older.contains("APP_NEXUS_MYGRID"), "the control: {older}");
+        let mut old = ilqp_from_kane();
+        old.merge_adif(&older, 0);
+        assert_eq!(grids(&old), owned([("K9AAA", ""), ("K9BBB", "")]));
     }
 }
 

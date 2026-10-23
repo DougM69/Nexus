@@ -3000,6 +3000,11 @@ struct SpaceWeatherReading {
 /// one planetary K index.
 const SPACE_WEATHER_MAX_AGE_SECS: u64 = 3 * 3600;
 
+/// How long before now a contact may have started and still take the station's fields as they
+/// are now (grid, state, operator, rig, power): the space-weather span. One that started earlier
+/// was typed in afterwards, and today's values may not be what it was made with.
+const STATION_FIELDS_MAX_AGE_SECS: u64 = SPACE_WEATHER_MAX_AGE_SECS;
+
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
@@ -7619,8 +7624,9 @@ impl Engine {
         // the call on the air.
         let operator = self.fd_row_operator();
         let on_air_call = self.fd_row_call();
-        // …and the radio and the power, which a radio switch or a Save changes the same way.
-        let (rig, tx_power) = self.fd_row_kit();
+        // …and the radio, the power and the grid, which a radio switch or a Save changes the
+        // same way.
+        let (rig, tx_power, grid) = self.fd_row_kit();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
             station.log.dial_khz = dial_khz;
@@ -7630,6 +7636,7 @@ impl Engine {
             station.log.on_air_call = on_air_call;
             station.log.rig = rig;
             station.log.tx_power = tx_power;
+            station.log.grid = grid;
         }
     }
 
@@ -7641,16 +7648,18 @@ impl Engine {
         self.settings.fd_operator.trim().to_ascii_uppercase()
     }
 
-    /// The radio and the power a contest row records (`LoggedQso::rig`, `LoggedQso::tx_power`):
-    /// the general log's own answers ([`Self::log_rig_now`], [`Self::log_power_now`]), as the
-    /// text the row keeps, `""` for none — so a contest contact merged into the Logbook names
-    /// the same radio and power an ordinary contact logged at that moment would.
-    fn fd_row_kit(&self) -> (String, String) {
+    /// The radio, the power and the grid a contest row records (`LoggedQso::rig`,
+    /// `LoggedQso::tx_power`, `LoggedQso::grid`): the general log's own answers
+    /// ([`Self::log_rig_now`], [`Self::log_power_now`], [`Self::log_grid_now`]), as the text the
+    /// row keeps, `""` for none — so a contest contact merged into the Logbook names the same
+    /// radio, power and grid an ordinary contact logged at that moment would.
+    fn fd_row_kit(&self) -> (String, String, String) {
         (
             self.log_rig_now().unwrap_or_default(),
             self.log_power_now()
                 .map(|w| w.to_string())
                 .unwrap_or_default(),
+            self.log_grid_now().unwrap_or_default(),
         )
     }
 
@@ -15352,6 +15361,14 @@ impl Engine {
             .filter(|w| w.is_finite() && *w > 0.0)
     }
 
+    /// The grid to stamp on a contact (ADIF `MY_GRIDSQUARE`): Settings ▸ Station's grid,
+    /// uppercase, which is the grid Nexus sends on the air and a GPS feeder keeps current; nothing
+    /// when it is not a grid. Shared by the log funnel and the contest rows (`FieldDayLog::grid`).
+    fn log_grid_now(&self) -> Option<String> {
+        let grid = self.settings.mygrid.trim().to_ascii_uppercase();
+        tempo_core::message::is_valid_grid(&grid).then_some(grid)
+    }
+
     /// The radio name the active radio's TCI server reported (`device:`), or `None` when its
     /// session is gone or never said. Called by the radio loop when it changes; read for `MY_RIG`
     /// ([`Self::log_rig_now`]).
@@ -15677,6 +15694,14 @@ impl Engine {
         if rec.station_callsign.is_none() {
             rec.station_callsign = self.station_callsign_now();
         }
+        // ⚠️ THE FIELDS BELOW DESCRIBE THE STATION NOW — the operator at the key, the radio, the
+        // power, the grid and the state — so they go only on a contact that started within
+        // [`STATION_FIELDS_MAX_AGE_SECS`]. One typed in afterwards for an earlier time (a hand-entered
+        // UTC time, the Logbook's own add) may have been made on another radio, at another power,
+        // from another place, and today's values written on it would be wrong with nothing to say
+        // so; it is left for the operator to fill. The call it was logged under is still stamped
+        // above: the uploads sign by it. A field the record arrived with is kept either way.
+        let live = now_unix_secs().saturating_sub(rec.when_unix) <= STATION_FIELDS_MAX_AGE_SECS;
         // WHO WAS AT THE KEY (#25). `QsoRecord::operator` has existed since the logbook was
         // written, is exported as ADIF `OPERATOR`, is parsed on import, and was never once
         // filled in — plumbed end to end and permanently empty, because nothing above the
@@ -15696,7 +15721,7 @@ impl Engine {
         //
         // A record that arrives carrying its own operator — an imported multi-op log, or a
         // row the operator repaired by hand — is left alone. Same rule as `country` below.
-        if rec.operator.is_none() {
+        if live && rec.operator.is_none() {
             let op = self.settings.fd_operator.trim();
             rec.operator = if op.is_empty() {
                 rec.station_callsign.clone()
@@ -15706,12 +15731,12 @@ impl Engine {
         }
         // #239: WHICH RIG MADE IT — the active radio, stamped at this funnel on the same terms as
         // STATION_CALLSIGN: a record arriving with its own rig keeps it ([`Self::log_rig_now`]).
-        if rec.my_rig.is_none() {
+        if live && rec.my_rig.is_none() {
             rec.my_rig = self.log_rig_now();
         }
         // THE POWER IT WAS MADE AT (ADIF `TX_PWR`), on the same terms
         // ([`Self::log_power_now`]).
-        if rec.tx_power.is_none() {
+        if live && rec.tx_power.is_none() {
             rec.tx_power = self.log_power_now();
         }
         // WHERE IT WAS MADE FROM (ADIF `MY_GRIDSQUARE`): the grid in Settings ▸ Station, which is
@@ -15725,10 +15750,9 @@ impl Engine {
         // Settings that is not the certificate's location would lose LoTW contacts without a
         // word; marked, LoTW gets exactly what it got before, and every other service gets the
         // grid. One somebody else put on the record carries no mark and goes to LoTW as always.
-        if rec.my_grid.is_none() && !rec.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE") {
-            let grid = self.settings.mygrid.trim();
-            if tempo_core::message::is_valid_grid(&grid.to_ascii_uppercase()) {
-                rec.my_grid = Some(grid.to_ascii_uppercase());
+        if live && rec.my_grid.is_none() && !rec.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE") {
+            if let Some(grid) = self.log_grid_now() {
+                rec.my_grid = Some(grid);
                 tempo_core::logbook::mark_self_filled(&mut rec, "MY_GRIDSQUARE");
             }
         }
@@ -15825,7 +15849,7 @@ impl Engine {
         // — marked as Nexus's own and kept out of LoTW for the grid's reason above. Never on a
         // park or summit contact: that one was made away from home, and its `MY_STATE` is the
         // park's or nothing (the activation fill above). A record carrying its own keeps it.
-        if rec.ota.my_ref.is_none() {
+        if live && rec.ota.my_ref.is_none() {
             let st = self.settings.op_state.trim().to_ascii_uppercase();
             if !st.is_empty() && tempo_core::logbook::fill_extra(&mut rec, "MY_STATE", st) {
                 tempo_core::logbook::mark_self_filled(&mut rec, "MY_STATE");
@@ -16399,7 +16423,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     // …and who is at the key, by the same funnel, and the call on the air.
                     st.log.operator = self.fd_row_operator();
                     st.log.on_air_call = self.fd_row_call();
-                    (st.log.rig, st.log.tx_power) = self.fd_row_kit();
+                    (st.log.rig, st.log.tx_power, st.log.grid) = self.fd_row_kit();
                     st
                 }),
                 running: true,
@@ -16411,7 +16435,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st.log.operator = self.fd_row_operator();
                     st.log.on_air_call = self.fd_row_call();
-                    (st.log.rig, st.log.tx_power) = self.fd_row_kit();
+                    (st.log.rig, st.log.tx_power, st.log.grid) = self.fd_row_kit();
                     st
                 }),
                 running: false,
@@ -45019,6 +45043,62 @@ mod tests {
         assert_eq!(tempo_core::logbook::extra_field(back, "SFI"), Some("149"));
         assert_eq!(tempo_core::logbook::extra_field(back, "K_INDEX"), Some("3"));
         assert_eq!(tempo_core::logbook::extra_field(back, "A_INDEX"), Some("7"));
+    }
+
+    /// A contact logged now for a time more than three hours ago — typed in afterwards — is
+    /// given none of the station's fields as they are NOW: no grid, state, operator, rig or
+    /// power, the space-weather rule. Nexus cannot know what they were then, and the operator
+    /// can fill them. A contact that started within three hours is live and gets them all, and
+    /// a field the record arrived with is kept either way. Both sides of the boundary, by value.
+    #[test]
+    fn a_contact_from_more_than_three_hours_ago_takes_none_of_todays_station_fields() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.rig_model_name = "Icom IC-705".into();
+        e.settings.station_power_w = Some(100.0);
+        e.settings.op_state = "NY".into();
+        let now = now_unix_secs();
+        let mut live = e.qso_record("K1NOW".into(), None, None);
+        live.when_unix = now - STATION_FIELDS_MAX_AGE_SECS + 60;
+        e.log_qso(live);
+        let mut late = e.qso_record("K1OLD".into(), None, None);
+        late.when_unix = now - STATION_FIELDS_MAX_AGE_SECS - 60;
+        e.log_qso(late);
+        let mut typed = e.qso_record("K1TYP".into(), None, None);
+        typed.when_unix = now - 86_400;
+        typed.my_rig = Some("FT-817".into());
+        typed.tx_power = Some(5.0);
+        e.log_qso(typed);
+        let log = e.stored_log();
+        let of = |call: &str| QsoRecord::clone(log.iter().find(|r| r.call == call).unwrap());
+        let fields = |r: &QsoRecord| {
+            (
+                r.my_grid.clone(),
+                tempo_core::logbook::extra_field(r, "MY_STATE").map(str::to_string),
+                r.operator.clone(),
+                r.my_rig.clone(),
+                r.tx_power,
+            )
+        };
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(
+            fields(&of("K1NOW")),
+            (
+                s("FN31"),
+                s("NY"),
+                s("K2DEF"),
+                s("Icom IC-705"),
+                Some(100.0)
+            )
+        );
+        assert_eq!(fields(&of("K1OLD")), (None, None, None, None, None));
+        assert!(tempo_core::logbook::self_filled(&of("K1OLD")).is_empty());
+        assert_eq!(
+            fields(&of("K1TYP")),
+            (None, None, None, s("FT-817"), Some(5.0)),
+            "what the record arrived with is kept"
+        );
+        // Which call it was logged under is still the station's: every upload signs by it.
+        assert_eq!(of("K1OLD").station_callsign.as_deref(), Some("K2DEF"));
     }
 
     /// A TCI radio's model name is the protocol's, "TCI". Its contacts carry the radio the

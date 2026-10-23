@@ -500,6 +500,12 @@ fn record_for(
             .collect(),
         qid: id.qid.clone(),
     };
+    // The grid stamped on the row at log time, unless the exchange itself sent one (a VHF
+    // contest's `GRID`, a rover's grid at that moment): that is written as `MY_GRIDSQUARE`
+    // from the contest's own columns, and wins.
+    let my_grid = Some(q.grid.clone()).filter(|g| {
+        !g.trim().is_empty() && !contest.adif.iter().any(|(t, _)| t == "MY_GRIDSQUARE")
+    });
     let station_callsign = [&q.on_air_call, &log.mycall]
         .into_iter()
         .find(|c| !c.trim().is_empty())
@@ -613,7 +619,7 @@ fn record_for(
         operator: Some(q.operator.clone())
             .filter(|o| !o.trim().is_empty())
             .or_else(|| station_callsign.clone()),
-        my_grid: None,
+        my_grid,
         // The radio stamped on the row at log time — the general log's own answer then.
         my_rig: Some(q.rig.clone()).filter(|r| !r.trim().is_empty()),
         station_callsign,
@@ -626,6 +632,11 @@ fn record_for(
             .collect(),
         contest: Some(Box::new(contest)),
     };
+    // Settings' grid is Nexus's own fill, as the general log marks it, so the LoTW upload leaves
+    // it out and TQSL signs from the Station Location as it did before.
+    if rec.my_grid.is_some() {
+        crate::logbook::mark_self_filled(&mut rec, "MY_GRIDSQUARE");
+    }
     // Into the lifetime log in its one form: a phone row worked on a sideband is SSB, with the
     // sideband as its SUBMODE ([`crate::logbook::canonical`]).
     crate::logbook::canonical::contact(&mut rec);
@@ -1145,6 +1156,82 @@ mod tests {
         assert_eq!(none.my_rig, None);
         assert_eq!(none.tx_power, None);
         assert_eq!(none.time_off_unix, Some(1_782_583_800));
+    }
+
+    /// **A merged contact carries the grid it was made from, marked as Nexus's own** — the
+    /// row's grid stamped at log time becomes `MY_GRIDSQUARE`, which every service is sent and
+    /// the LoTW upload leaves out ([`crate::logbook::without_self_filled`]), so TQSL signs it
+    /// from the Station Location as before. Read back through the file, which is what reaches
+    /// every upload. A row with none gets none.
+    #[test]
+    fn a_merged_row_carries_its_grid_which_lotw_never_sees() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        log.grid = "EN52".into();
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_583_500));
+        log.grid = String::new();
+        assert!(log.log_mode_at("W1AW", "1D", "CT", "PH", 0, 1_782_583_800));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 2);
+        let path = scratch_adi();
+        lb.save(&path).expect("write log.adi");
+        let reborn = Logbook::load(&path);
+        let _ = std::fs::remove_file(&path);
+        let by = |call: &str| {
+            reborn
+                .records()
+                .iter()
+                .find(|r| r.call == call)
+                .cloned()
+                .expect("merged")
+        };
+        let placed = by("K1ABC");
+        assert_eq!(placed.my_grid.as_deref(), Some("EN52"));
+        assert_eq!(crate::logbook::self_filled(&placed), ["MY_GRIDSQUARE"]);
+        let sent = crate::logbook::adif_record(&placed);
+        assert!(sent.contains("<MY_GRIDSQUARE:4>EN52"), "{sent}");
+        assert!(!sent.contains("SELF_FILLED"), "{sent}");
+        let lotw = crate::logbook::without_self_filled(&placed);
+        assert_eq!(lotw.my_grid, None);
+        assert!(
+            !crate::logbook::adif_record(&lotw).contains("MY_GRIDSQUARE"),
+            "the LoTW copy"
+        );
+        let none = by("W1AW");
+        assert_eq!(none.my_grid, None);
+        assert!(crate::logbook::self_filled(&none).is_empty());
+    }
+
+    /// A VHF contest's row SENDS its grid, and the exchange's `MY_GRIDSQUARE` is the one the
+    /// merged contact keeps — a rover's grid at that moment — written once, never doubled by
+    /// the Settings grid stamped on the row.
+    #[test]
+    fn a_vhf_rows_sent_grid_wins_over_the_stamped_one() {
+        let rs = crate::fd_rules::ruleset_by_id("arrlvhf_jan", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let data = crate::contest::StationData {
+            mycall: "W9XYZ".into(),
+            mygrid: "EN52".into(),
+            ..Default::default()
+        };
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        let mut log = FieldDayLog::new("W9XYZ", session, "6m");
+        log.session
+            .move_to(&[("GRID", "EN53")])
+            .expect("a rover moves");
+        log.grid = "EN52".into();
+        let rx = [("GRID".to_string(), "FN31".to_string())];
+        assert!(log.log_fields_at("K1ABC", &rx, "PH", "", 0, 1_782_583_500));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 1);
+        let r = &lb.records()[0];
+        let out = crate::logbook::adif_record(r);
+        assert_eq!(out.matches("<MY_GRIDSQUARE:").count(), 1, "{out}");
+        assert!(out.contains("<MY_GRIDSQUARE:4>EN53"), "{out}");
+        assert!(crate::logbook::self_filled(r).is_empty());
     }
 
     #[test]
