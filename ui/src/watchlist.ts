@@ -12,7 +12,6 @@
 // the matcher is pure so it's fully unit-tested.
 
 import { useEffect, useMemo, useState } from 'react'
-import type { DecodeRow } from './types'
 import { durableGet, durableSet } from './features/durableStore'
 
 export type WatchKind = 'call' | 'dxcc' | 'grid'
@@ -72,8 +71,8 @@ export interface WatchSubject {
 }
 
 /** Does this entry name this station — its call or prefix, its DXCC entity, or its grid? The
- *  IDENTITY half of every watch match, shared by the alert (`matchWatchlist`) and the lists
- *  (`watchedEntry`), so one entry cannot come to mean two things. `call` arrives uppercased. */
+ *  IDENTITY half of a watch match, which the lists ask (`watchedEntry`). `call` arrives
+ *  uppercased. */
 function entryNames(
   f: WatchFilter,
   call: string,
@@ -94,25 +93,13 @@ function entryNames(
   return false
 }
 
-/** Return the FIRST watch filter a decode matches, or null. Pure — no I/O. */
-export function matchWatchlist(d: DecodeRow, filters: WatchFilter[]): WatchFilter | null {
-  const call = (d.from ?? '').toUpperCase()
-  if (!call) return null
-  for (const f of filters) {
-    if (f.cqOnly && !d.isCq) continue
-    if (f.minSnr != null && d.snr < f.minSnr) continue
-    if (entryNames(f, call, d.country, d.grid)) return f
-  }
-  return null
-}
-
 /**
  * The entry that puts a station on the watch list, for the lists that MARK it (the Call Roster,
  * the Stations list, Spots): the FIRST entry that names it, or null.
  *
  * IDENTITY ONLY. `cqOnly` and `minSnr` are the alert's gates ("only alert on a CQ call", "only
- * alert when SNR ≥") and they stay in `matchWatchlist`. A station does not leave the watch list
- * when it answers somebody or fades a few dB. Gated here, a row would lose its tile — and drop
+ * alert when SNR ≥"), which the station applies when it raises the alert. A station does not
+ * leave the watch list when it answers somebody or fades a few dB. Gated here, a row would lose its tile — and drop
  * out of Needed only — every time the station stopped calling CQ, and a cluster spot, which
  * carries neither a CQ flag nor an SNR, could never agree with the roster about the same call.
  */

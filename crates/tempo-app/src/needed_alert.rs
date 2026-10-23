@@ -189,8 +189,8 @@ fn watch_admits(entry: &WatchEntry, d: &DecodeRow) -> bool {
 const CONTINENT_CODES: [&str; 6] = ["NA", "SA", "EU", "AF", "AS", "OC"];
 
 /// The operator's geographic scope (`alertContinents`, `alertEntities`) as the entity NAMES it
-/// admits, the decode rows' own vocabulary — the desktop's `scopedEntities`, with `table` the
-/// country file's entity → continent pairs. The two halves union: a decode has one entity, so
+/// admits, the decode rows' own vocabulary (the desktop's former `scopedEntities`), with `table`
+/// the country file's entity → continent pairs. The two halves union: a decode has one entity, so
 /// "Europe" and "Japan" both ticked must admit both. Every ambiguity resolves toward alerting: an
 /// unknown continent code is dropped, and a scope that admits no entity at all is no scope
 /// (`None`), because a filter that fails closed silences the radio with nothing on screen to say
