@@ -21,6 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WebSocket API 1.0.3 only: it has not yet been run with a real RSP and SDRconnect, so treat it as untested on real
   hardware until a bench check confirms the IQ rate, where a carrier is drawn, retuning while the knob turns, and
   whether RX OUT stays quiet while you transmit.
+- **JTTY, WSJT-X's new keyboard mode, to receive and to send (needs a bench check on the air).** A JTTY screen
+  sits under Digital, beside PSK. It has WSJT-X's eleven JTTY frequencies (20 m at 14.090), its Rx, Tx and F Tol
+  boxes, its All decodes and QSO frequency panes, and a waterfall with Rx and Tx cursors. Nexus decodes JTTY as
+  WSJT-X does, and sends what WSJT-X sends: text you type and Send; WSJT-X's F1–F8 contest messages, with a Call
+  box and a serial number; and Live, which keeps the transmitter up while you type and sends your words as you go.
+  Every send needs TX On and your license class across the whole signal, and the TX watchdog runs for JTTY,
+  though WSJT-X's does not. Stop TX, Esc and the dock's Esc/Stop cut it at once, and leaving the JTTY screen
+  stops it. Opening JTTY turns TX on as opening PSK does, but not after a Stop. A call becomes clickable, is
+  spotted to PSK Reporter and reaches the Needed board only once it has been decoded in two separate messages. JTTY
+  comes from the WSJT-X 3.3.0-beta1 test release and no WSJT-X general release has it yet, so the other station
+  needs a WSJT-X 3.2 or 3.3 test release. Not yet tried on the air: a bench check should confirm keying, power and
+  ALC at your data power, and that a WSJT-X station copies what Nexus sends.
+- **JTTY contacts log as JTTY, the way WSJT-X logs them.** TQSL does not know the JTTY mode yet and would drop
+  such a contact, so a LoTW upload holds JTTY contacts back, leaves them marked not uploaded, and says so. The
+  WSJT-X UDP Status names the mode JTTY, and no Decode messages go out for it, as from WSJT-X.
+- **JTTY in contests.** In ARRL Field Day, F2, F6 and F8 send your class and section in JTTY's compact exchange
+  form, and %E in typed text is your class and section, as in WSJT-X. Winter Field Day allows JTTY for 2027; its
+  classes do not fit that form, so a Winter Field Day exchange goes as typed text, which a WSJT-X station reads the
+  same way.
 - **Log space weather on each contact (off by default).** Settings ▸ Logging & Connectors ▸
   Integrations & Feeds ▸ Propagation has a new switch. On, every contact you log carries the
   planetary K index, A index and solar flux (ADIF K_INDEX, A_INDEX, SFI) from the latest reading
