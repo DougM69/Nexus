@@ -10751,6 +10751,29 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.alerts.popups.hint')}</span>
               </div>
 
+              {/* #321: how long a pop-up stays, at least. 0 (the default, and what an old settings
+                  file reads as) is each pop-up's own time; a value only lengthens (toast.ts). */}
+              <div className="settings-field">
+                <label className="settings-inline-label">
+                  <span className="settings-label">{t('settings.alerts.popupDwell.label')}</span>
+                  <select disabled={remote}
+                    className="settings-input"
+                    value={String(form.popupMinSecs ?? 0)}
+                    aria-label={t('settings.alerts.popupDwell.label')}
+                    onChange={(e) => updateNum('popupMinSecs', Number(e.target.value))}
+                  >
+                    {/* The <option> VALUES are the persisted seconds; only the labels are prose. */}
+                    <option value="0">{t('settings.alerts.popupDwell.own')}</option>
+                    {[10, 20, 30, 60].map((secs) => (
+                      <option key={secs} value={String(secs)}>
+                        {t('settings.alerts.popupDwell.secs', { secs })}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className="settings-hint">{t('settings.alerts.popupDwell.hint')}</span>
+              </div>
+
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.alerts.myCall.label')}</span>

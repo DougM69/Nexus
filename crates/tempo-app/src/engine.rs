@@ -17421,9 +17421,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// is the R2 ruling's other half: the popup's contact must never be logged onto whichever
     /// contact happens to be held now. Remote has always checked this (`matches_pending_log`).
     ///
-    /// #329: what is logged is the HELD record, with only the popup's four editable fields
-    /// taken from `rec` — the Remote confirm's rule (`confirm_pending_log_for_sync`). `rec`
-    /// arrives through the UI's `LoggedQso`, which carries neither TIME_OFF nor the split
+    /// #329: what is logged is the HELD record, with only the popup's editable fields taken
+    /// from `rec` — the Remote confirm's rule (`confirm_pending_log_for_sync`), whose four
+    /// fields the desktop popup extends with COMMENT (#371). `rec` arrives through the UI's `LoggedQso`, which carries neither TIME_OFF nor the split
     /// FREQ_RX, so logging it as sent dropped both from every confirmed contact.
     pub fn confirm_pending_log(&mut self, expected_key: &str, rec: QsoRecord) -> bool {
         if self.pending_qso_log_key().as_deref() != Some(expected_key) {
@@ -17437,6 +17437,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         held.grid = rec.grid;
         held.rst_sent = rec.rst_sent;
         held.rst_rcvd = rec.rst_rcvd;
+        // #371: the popup's Comments field. It shows the held COMMENT, so an untouched field
+        // sends back exactly that, and our own dB-reports comment still follows an edited
+        // report below; anything else in it is the operator's and is logged as typed.
+        held.comment = rec.comment;
         self.rederive_after_edits(&mut held, &was.record, was.grid_source);
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
@@ -54837,6 +54841,59 @@ mod tests {
             logged.comment.as_deref(),
             Some("FT8  Sent: -07  Rcvd: -15"),
             "the comment must say what the record says"
+        );
+    }
+
+    /// #371: a comment typed into the popup is logged as the contact's COMMENT and leaves in the
+    /// ADIF the same way, so a note no longer means editing the contact afterwards. It replaces
+    /// the comment the popup showed (here our own dB-reports one), and an edited report beside
+    /// it does not rebuild it: what the operator typed is never re-derived.
+    #[test]
+    fn a_comment_typed_into_the_popup_is_logged_and_exported() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.settings.log_reports_to_comments = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+
+        let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+        assert_eq!(
+            sent.comment.as_deref(),
+            Some("FT8  Sent: -07  Rcvd: -10"),
+            "precondition: the popup shows our generated comment"
+        );
+        sent.comment = Some("Nice signal, 5 W to a vertical".into());
+        sent.rst_rcvd = Some("-15".into());
+        assert!(confirm_held(&mut e, sent.into()));
+
+        let logged = &e.stored_log()[0];
+        assert_eq!(
+            logged.comment.as_deref(),
+            Some("Nice signal, 5 W to a vertical"),
+            "the typed comment is the contact's comment"
+        );
+        let adif = tempo_core::logbook::adif_record(logged);
+        let back = tempo_core::logbook::parse_adif(&adif);
+        assert_eq!(back.len(), 1, "one record in {adif}");
+        assert_eq!(
+            back[0].comment.as_deref(),
+            Some("Nice signal, 5 W to a vertical"),
+            "COMMENT survives the ADIF round trip: {adif}"
+        );
+    }
+
+    /// The same popup with the comment left as shown logs exactly what it held: the field
+    /// being there changes nothing for an operator who does not type in it.
+    #[test]
+    fn a_comment_left_as_shown_logs_the_held_comment() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.settings.log_reports_to_comments = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let sent = e.snapshot().pending_log.expect("shown for confirm");
+        assert!(confirm_held(&mut e, sent.into()));
+        assert_eq!(
+            e.stored_log()[0].comment.as_deref(),
+            Some("FT8  Sent: -07  Rcvd: -10")
         );
     }
 

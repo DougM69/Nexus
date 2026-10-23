@@ -52,7 +52,7 @@ import {
   setHoldTxFreq as apiSetHoldTxFreq,
   subscribeSnapshot,
 } from './api'
-import { withErrorToast, pushToast, dismissToast, setPopupNotifications } from './toast'
+import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
 import { t } from './i18n'
@@ -582,7 +582,8 @@ function App() {
     try {
       // coerceArea (test-pinned) also migrates the retired 'connect' area to
       // FT8/FT4 (Connect is now a global view).
-      return coerceArea(localStorage.getItem('nexus.workspace'))
+      // …and opens a remembered Tempo mode on FT while Tempo is switched off (#402).
+      return coerceArea(localStorage.getItem('nexus.workspace'), features.enabled.chat !== false)
     } catch {
       return 'dx' /* unreadable storage */
     }
@@ -599,6 +600,23 @@ function App() {
       area === 'msg' && v === 'operate' ? 'chat' : area === 'dx' && v === 'chat' ? 'operate' : v,
     )
   }, [snap, area])
+
+  // #402: Tempo switched off in Settings ▸ Features while it is the mode takes the station to FT8/FT4
+  // (as on the next start), without moving the operator off the screen they are on: its rail item is
+  // gone, so a Tempo mode would have no way back. The screen itself falls back by `effectiveView`.
+  const tempoOn = features.enabled.chat !== false
+  useEffect(() => {
+    if (tempoOn || area !== 'msg') return
+    setArea('dx')
+    try {
+      localStorage.setItem('nexus.workspace', 'dx')
+    } catch {
+      /* ignore */
+    }
+    void withErrorToast(() => apiSetArea('dx'), t('shell.error.switchMode')).then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [tempoOn, area])
 
   // Pop the Needed board out into its own window at launch — but honor the
   // operator's persisted choice (the board previously force-opened EVERY start
@@ -1201,6 +1219,10 @@ function App() {
   useEffect(() => {
     setPopupNotifications(settings?.popupNotifications !== false)
   }, [settings?.popupNotifications])
+  // #321: and how long they stay, at least. Absent is 0, each pop-up's own time.
+  useEffect(() => {
+    setPopupMinSeconds(settings?.popupMinSecs ?? 0)
+  }, [settings?.popupMinSecs])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
   // the master switch off), so the fetch just re-runs when the configured event changes —

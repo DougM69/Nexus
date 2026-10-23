@@ -8682,6 +8682,10 @@ select optgroup {
   outline: none;
   border-color: var(--accent);
 }
+/* The comment is free text, so it takes the whole row under the four short fields. */
+.logconfirm-grid .logconfirm-comment {
+  grid-column: 1 / -1;
+}
 .logconfirm-actions {
   display: flex;
   justify-content: flex-end;
@@ -21857,6 +21861,21 @@ button.cq-skiptx1.on {
   border-color: var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
+}
+/* Which worked stations −B4 hides (#409) — a chip-sized picker beside it, the Spots pane's
+   `.sp-worked-window` shape. The `select` base rule owns the arrow. */
+.od-b4-scope {
+  padding: 1px 6px;
+  font-size: 0.71rem;
+  font-weight: 600;
+  background-color: var(--bg-elev-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.od-b4-scope:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
 }
 .od-sort {
   display: flex;

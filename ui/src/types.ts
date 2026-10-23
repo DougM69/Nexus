@@ -5081,6 +5081,9 @@ export interface Settings {
    *  confirmations and the alerts out of the corner (`popsUpWhenOff` in toast.ts says what stays).
    *  Optional: a station without the field, or the Remote page, which is never sent it, is ON. */
   popupNotifications?: boolean
+  /** #321: the least time, in seconds, a pop-up stays before it goes by itself. 0 or absent
+   *  (an old station, the Remote page) leaves each pop-up its own time; see `setPopupMinSeconds`. */
+  popupMinSecs?: number
   /** Band scope for a new DXCC: 'off' | 'hf' | 'vhf' | 'all'. The Needed boards and the need icons
    *  follow it, and so does the alert while `alertNew` is on. */
   alertDxccBands: string

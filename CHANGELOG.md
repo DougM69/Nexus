@@ -40,6 +40,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they stack in up to three rows, a station calling you and then the strongest first, and a count says how many had
   no room. Clicking a label moves your RX offset there, as clicking the waterfall does. The **Calls** button in the
   waterfall's header turns the labels off.
+- **A Comment box in the Log this QSO? pop-up.** With logging set to ask first, the pop-up that
+  shows a finished FT contact now has a Comment box under the call, grid and reports. What you type
+  there is logged as the contact's comment (ADIF COMMENT), so a note no longer means editing the
+  contact on QRZ afterwards. The box opens with the comment the contact already has, such as the
+  dB reports when you log those to comments; leave it alone and that is logged as before.
+- **Choose how long the pop-ups in the bottom-right corner stay.** Settings ▸ Spots & Alerts ▸
+  Alerts has a new **Keep pop-ups up for at least** menu: each pop-up's own time (as before, and
+  as it comes), 10, 20, 30 or 60 seconds. It only makes a pop-up stay longer: an error still
+  stays at least 12 seconds, and one that stays until you close it still does.
+- **−B4 can hide only the stations you have worked on this band.** A small menu beside Band
+  Activity's −B4 chip picks what it hides: **Any band** (every station worked before, as −B4
+  always did, and still the default) or **This band**, which keeps a station you have worked only
+  on another band on screen so you can work it for a new band. The Rx Frequency pane follows the
+  same choice.
+- **Tempo can come off the left-hand menu.** Settings ▸ Appearance ▸ Features now has a switch for
+  **Chat** (Tempo's TempoFast/TempoDeep chat) under Operate, like the ones for RTTY, SSTV and the
+  other modes. It is on, as before, unless you turn it off; off, Tempo leaves the menu, and if
+  Nexus was last in Tempo it starts in FT8/FT4 instead.
 
 ### Changed
 - **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the

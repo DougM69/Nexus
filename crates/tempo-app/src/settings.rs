@@ -3140,6 +3140,12 @@ pub struct Settings {
     /// (`popsUpWhenOff`, ui/src/toast.ts). On by default, and a settings file from before the
     /// field loads it on, so the corner is as it always was until the operator turns it off.
     pub popup_notifications: bool,
+    /// How long, at least, a pop-up stays in the corner before it goes by itself, in seconds
+    /// (#321). 0 (the default, and what a file from before the field loads) leaves each pop-up
+    /// its own time, as it always was; a value only ever lengthens a pop-up, so an error keeps
+    /// its own longer floor and one that stays until dismissed still does (`pushToast`,
+    /// ui/src/toast.ts).
+    pub popup_min_secs: u32,
     /// Put the exchanged dB reports into the logged QSO's COMMENT field, WSJT-X's
     /// "dB reports to comments" (`dBtoComments`, default false there — logqso.cpp:143
     /// builds `"<mode>  Sent: <rpt>  Rcvd: <rpt>"`, two spaces, parts omitted when
@@ -5894,6 +5900,7 @@ impl Default for Settings {
             alert_new: true,
             pota_new_activation_alert: false,
             popup_notifications: true,
+            popup_min_secs: 0,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
             // Empty = every continent and every entity alerts, which is precisely the behaviour
@@ -12609,6 +12616,58 @@ mod tests {
         );
         // CONTROL: the scan finds only what is declared.
         assert!(!declares("popupNotificationss") && !declares("popups"));
+    }
+
+    /// #321's pop-up dwell — ships 0 ("as each pop-up sets it", the corner exactly as it was),
+    /// its exact wire key, an upgrader's file loading 0 through the real load path, a chosen
+    /// value surviving a save and a load, and the TS mirror read out of `types.ts` itself.
+    #[test]
+    fn popup_min_secs_ships_zero_wire_key_old_file_round_trip_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(s.popup_min_secs, 0, "ships 0 — today's dwell");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"popupMinSecs\":0"),
+            "missing wire key in {json}"
+        );
+
+        let dir = scratch_dir("popup-dwell");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            Settings::load(&path).popup_min_secs,
+            0,
+            "an old settings file changed the dwell"
+        );
+        let mut long = Settings::default();
+        long.popup_min_secs = 30;
+        long.save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).popup_min_secs,
+            30,
+            "30 s did not survive"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let declares = |key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        assert!(
+            declares("popupMinSecs"),
+            "ui/src/types.ts Settings is missing `popupMinSecs`"
+        );
+        // CONTROL: the scan finds only what is declared.
+        assert!(!declares("popupMinSecss") && !declares("popupMin"));
     }
 
     /// The tune carrier's own power level, on the exact wire key the UI hand-writes.

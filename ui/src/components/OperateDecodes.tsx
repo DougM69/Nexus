@@ -26,7 +26,7 @@ import {
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
-import { DECODE_HIDE_B4_EVENT, loadDecodeFilter, loadDecodeHideB4, loadDecodeHideBlocked, loadDecodeHideConfirmed, loadDecodeNewestTop, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideBlocked, saveDecodeHideConfirmed, saveDecodeNewestTop } from '../operateFilters'
+import { DECODE_HIDE_B4_EVENT, DECODE_HIDE_B4_SCOPE_EVENT, type DecodeHideB4Scope, loadDecodeFilter, loadDecodeHideB4, loadDecodeHideB4Scope, loadDecodeHideBlocked, loadDecodeHideConfirmed, loadDecodeNewestTop, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideB4Scope, saveDecodeHideBlocked, saveDecodeHideConfirmed, saveDecodeNewestTop } from '../operateFilters'
 import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { isCallHidden, useHideCalls } from '../features/hideCalls'
 import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
@@ -328,6 +328,31 @@ export function OperateDecodes({
     window.addEventListener(DECODE_HIDE_B4_EVENT, onChange)
     return () => window.removeEventListener(DECODE_HIDE_B4_EVENT, onChange)
   }, [])
+  // #409: which worked stations −B4 hides — any band (as it always was) or this band only. Shared
+  // by every mounted pane the same way −B4 itself is.
+  const [hideB4Scope, setHideB4Scope] = useState<DecodeHideB4Scope>(loadDecodeHideB4Scope)
+  useEffect(() => {
+    const onChange = (e: Event) =>
+      setHideB4Scope((e as CustomEvent<DecodeHideB4Scope>).detail === 'band' ? 'band' : 'any')
+    window.addEventListener(DECODE_HIDE_B4_SCOPE_EVENT, onChange)
+    return () => window.removeEventListener(DECODE_HIDE_B4_SCOPE_EVENT, onChange)
+  }, [])
+  // Beside the chip, as the Spots pane's Hide-worked window sits beside its chip. Idle while the
+  // B4 chip is lit, exactly like −B4.
+  const hideB4ScopeSelect = (
+    <select
+      className="od-b4-scope"
+      value={hideB4Scope}
+      disabled={filter === 'b4'}
+      onChange={(e) => saveDecodeHideB4Scope(e.target.value === 'band' ? 'band' : 'any')}
+      aria-label={t('operate.decodes.hideB4Scope.aria')}
+      title={t('operate.decodes.hideB4Scope.title')}
+    >
+      {/* The <option> VALUES are the persisted scope; only the labels are prose. */}
+      <option value="any">{t('operate.decodes.hideB4Scope.any')}</option>
+      <option value="band">{t('operate.decodes.hideB4Scope.band')}</option>
+    </select>
+  )
   const hideB4Chip = (
     <button
       type="button"
@@ -442,7 +467,7 @@ export function OperateDecodes({
           !(
             hideB4 &&
             filter !== 'b4' &&
-            d.worked &&
+            (hideB4Scope === 'band' ? d.workedBand === true : d.worked) &&
             !d.mine &&
             !d.directedToMe &&
             (partnerCall == null || d.from !== partnerCall)
@@ -626,6 +651,7 @@ export function OperateDecodes({
               {t('operate.decodes.hideConfirmed.label')}
             </button>
             {hideB4Chip}
+            {hideB4ScopeSelect}
             <button
               type="button"
               className={`od-chip od-newest${newestTop ? ' active' : ''}`}

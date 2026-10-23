@@ -110,6 +110,18 @@ export function setPopupNotifications(on: boolean): void {
   for (const fn of popupListeners) fn(shown)
 }
 
+/** #321: the least time a timed pop-up stays, in ms. 0 (the default) leaves each its own ttl, as
+ *  it always was. It only ever lengthens: a longer ttl, the error floor above and a sticky `0` all
+ *  stand. Read when a toast is raised, so one already up keeps its timer. Each window sets its own
+ *  from its settings, as it does the pop-up switch. */
+let popupMinMs = 0
+
+/** The pop-up dwell, in seconds (Settings ▸ Spots & Alerts ▸ Alerts). Anything not a positive
+ *  number is 0. */
+export function setPopupMinSeconds(secs: number): void {
+  popupMinMs = Number.isFinite(secs) && secs > 0 ? secs * 1000 : 0
+}
+
 export function pushToast(
   message: string,
   kind: ToastKind = 'error',
@@ -120,7 +132,7 @@ export function pushToast(
   toasts = [...toasts, { id, kind, message, ...opts }]
   emit()
   if (ttlMs > 0) {
-    const ttl = kind === 'error' ? Math.max(ttlMs, ERROR_MIN_TTL_MS) : ttlMs
+    const ttl = Math.max(kind === 'error' ? Math.max(ttlMs, ERROR_MIN_TTL_MS) : ttlMs, popupMinMs)
     window.setTimeout(() => dismissToast(id), ttl)
   }
   return id

@@ -89,6 +89,7 @@ export const PER_SURFACE = [
   // from both of the above.
   'nexus.cw.neededFilters',
   'nexus.decodes.hideB4',
+  'nexus.decodes.hideB4Scope',
   'nexus.decodes.hideBlocked',
   'nexus.decodes.hideConfirmed',
   // Band Activity's newest-on-top order (#276) — the same class as the chips above it: a

@@ -2796,12 +2796,13 @@ sections cannot be turned off.*
   toggleable below." Hand-toggling produces a seventh chip, **Custom**, and
   switching away from Custom asks first because it discards your hand-tuned set.
   A **Re-run setup…** link reopens the first-run wizard.
-- **Core — always on** — the spine (Operate, Logbook, Settings, Now Bar, Chat,
+- **Core — always on** — the spine (Operate, Logbook, Settings, Now Bar,
   Conditions, Needed) shows an "always on" badge instead of a toggle: a locked
   switch beside real ones just reads as broken.
 - **Optional features**, grouped by category in this order: Operate, DX & Awards,
   Propagation, POTA/SOTA, Logging, System. Each row is a toggle with
-  a one-line "why you'd want it". Enabling a feature pulls in anything it depends
+  a one-line "why you'd want it". **Chat** (under Operate) is Tempo's TempoFast/TempoDeep
+  chat: off takes Tempo off the left-hand menu. Enabling a feature pulls in anything it depends
   on, and the hint names what else it will turn on.
 - **Contest mode** is not here: it is at the top of the **Contest** screen and in
   [Contesting ▸ Contest](#contest).
