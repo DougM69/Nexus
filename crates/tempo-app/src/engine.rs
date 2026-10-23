@@ -13293,7 +13293,11 @@ impl Engine {
         // The station it was made with, captured now, while the contact is the one just made: the
         // confirm can come hours later, after Settings changed, and must log these, not the
         // station at the confirm or nothing ([`Self::stamp_station_now`]). A contact restored from
-        // the journal already carries what its hold captured.
+        // the journal already carries what its hold captured. The station call first, as the log
+        // funnel stamps it: with nobody at the key named, the operator is that call.
+        if held.record.station_callsign.is_none() {
+            held.record.station_callsign = self.station_callsign_now();
+        }
         self.stamp_station_now(&mut held.record);
         if self.pending_logs.is_empty() {
             self.replace_pending_log(Some(held));
@@ -45767,6 +45771,35 @@ mod tests {
             tempo_core::logbook::self_filled(&r),
             ["MY_GRIDSQUARE", "MY_STATE"],
             "still Nexus's own, so LoTW still leaves them out"
+        );
+    }
+
+    /// The same, for a held contact that arrives with no station call: the hold stamps the call
+    /// in force, so with "Operator at the key" blank the operator is that call, however late the
+    /// confirm. Every builder stamps the call itself; this holds the hold to it.
+    #[test]
+    fn a_held_contact_without_a_station_call_still_logs_its_operator_hours_later() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        let mut rec = e.qso_record("W9XYZ".into(), None, None);
+        rec.station_callsign = None;
+        e.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
+        for held in e.pending_logs.iter_mut() {
+            held.record.when_unix -= 4 * 3600;
+            held.record.time_off_unix = held.record.time_off_unix.map(|t| t - 4 * 3600);
+        }
+        let journal = remote_logging::pending_qso_queue_json(&e.pending_logs).unwrap();
+        let mut later = Engine::new("W6R", "EM10", 0);
+        later.settings.prompt_to_log = true;
+        later.settings.fd_operator = "K9OP".into();
+        later.load_pending_qso_json(&journal);
+        let sent = later.snapshot().pending_log.expect("the hold comes back");
+        assert!(confirm_held(&mut later, sent.into()));
+        let r = QsoRecord::clone(&later.stored_log()[0]);
+        assert_eq!(
+            (r.station_callsign.as_deref(), r.operator.as_deref()),
+            (Some("K2DEF"), Some("K2DEF")),
+            "the call and operator it was made with, not none and not the confirm's"
         );
     }
 
