@@ -300,6 +300,11 @@ pub struct HeldRoad {
     pub disowned: bool,
 }
 
+/// `disowned` is written only when true, so a hold that is merely waiting stays two fields.
+fn not(value: &bool) -> bool {
+    !*value
+}
+
 /// The stations this computer paired with a code (see the header). Read past a field it does not
 /// know.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
