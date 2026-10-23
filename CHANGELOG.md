@@ -264,6 +264,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CW: the cockpit no longer comes back on your old pitch.** After you changed the pitch in the CW cockpit,
   the radio kept the new one, but going to another page and back showed the pitch you had before, with the
   scope marker on it. The cockpit now shows the pitch you set.
+- **FT8/FT4: the strip says so when the TX watchdog stops a call.** Calling a station that never answers goes on
+  until the TX watchdog turns transmit off, and the strip then showed only "AwaitReport" beside TX off. It now
+  shows "TX watchdog stopped the call" in red in place of the state, and the window's taskbar button flashes
+  once (a dock bounce on macOS), as WSJT-X does. TX On calls again. How long Nexus calls is unchanged.
 
 ### Security
 - **A computer no longer takes the station's internet key on Nexus Remote's word alone.** Before, when you

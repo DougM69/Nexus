@@ -1330,6 +1330,12 @@ export async function focusWindow(): Promise<void> {
   return invoke<void>('focus_window')
 }
 
+/** Flash the calling window's taskbar button (a dock bounce on macOS) until the operator looks,
+ *  without taking focus. Rejects where there is no window to flash (a browser). */
+export async function requestWindowAttention(): Promise<void> {
+  return invoke<void>('request_window_attention')
+}
+
 /** Switch the Operate mode: 'dx' (FT8/FT4) or 'msg' (Tempo two-way calling).
  * Atomically sets the mode's tier + mode. Returns the fresh snapshot. */
 export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {

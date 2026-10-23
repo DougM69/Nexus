@@ -10,8 +10,9 @@ import { FtStopControl } from './FtStopControl'
 //
 // The readings are all data: the sequencer state, the DX call, the report, the message on the
 // air, the rig's mode and filter width, and every count.
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
+import { requestWindowAttention } from '../api'
 import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { modeMismatch } from './TopBar'
@@ -149,6 +150,8 @@ export function OperateQsoStrip({
   const state = qso?.state ?? 'Idle'
   const txNow = qso?.txNow ?? null
   const stalled = qso?.stalled ?? false
+  // The TX watchdog ended this call (WSJT-X: a red "Runaway Tx watchdog" and a window alert).
+  const watchdogStopped = qso?.watchdogStopped ?? false
   const txCount = qso?.txCount ?? 0
   const rpt = reportLabel(qso?.rxReport)
   const noTx = rxOnly ?? false
@@ -178,6 +181,17 @@ export function OperateQsoStrip({
   const onAir = radio ? isOnAir(radio) : false
   const filterHz = radio?.filterWidthHz ?? null
   const narrowFilter = filterHz != null && filterHz > 0 && filterHz < NARROW_FILTER_HZ
+
+  // Flash the window ONCE, on the snapshot that brings the trip, so an operator in another
+  // program learns the call stopped. Seeded with the value at mount: a trip already standing
+  // when this strip appeared is old news, and is on screen anyway.
+  const wasWatchdogStopped = useRef(watchdogStopped)
+  useEffect(() => {
+    if (watchdogStopped && !wasWatchdogStopped.current) {
+      void requestWindowAttention().catch(() => {})
+    }
+    wasWatchdogStopped.current = watchdogStopped
+  }, [watchdogStopped])
 
   const [free, setFree] = useState('')
   const sendFree = () => {
@@ -327,8 +341,12 @@ export function OperateQsoStrip({
       )}
       {/* role=status: the sequencer state is THE QSO progress signal — a
           screen reader hears "AwaitReport… RR73… Done" as the exchange runs. */}
-      <span className={`cq-state${running ? ' running' : ''}`} role="status">
-        {state}
+      <span
+        className={`cq-state${running ? ' running' : ''}${watchdogStopped ? ' watchdog' : ''}`}
+        role="status"
+        title={watchdogStopped ? t('operate.strip.state.watchdog.title') : undefined}
+      >
+        {watchdogStopped ? t('operate.strip.state.watchdog') : state}
       </span>
       {dxcall && <span className="cq-dx mono">{dxcall}</span>}
       {rpt && <span className="cq-rpt" title={t('operate.strip.report.title')}>{rpt}</span>}

@@ -754,6 +754,17 @@ pub fn focus_window(window: tauri::WebviewWindow) -> Result<(), String> {
     window.set_focus().map_err(|e| e.to_string())
 }
 
+/// Flash the calling window's taskbar button (macOS: bounce the dock icon once) until the operator
+/// looks at it, without taking the keyboard from whatever they are in. The FT8/FT4 strip asks this
+/// once when the TX watchdog stops a call, as WSJT-X alerts its window on the same trip. Nothing at
+/// the radio; no effect when the window already has focus.
+#[tauri::command]
+pub fn request_window_attention(window: tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .request_user_attention(Some(tauri::UserAttentionType::Informational))
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

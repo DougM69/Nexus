@@ -383,6 +383,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("repair_clock",                   RefusedHere, "Repairs the shack's clock through an administrator prompt that waits on the shack's own screen."),
     ("repeater_search",                RunsAtShack, "A repeater search from the shack."),
     ("repeater_tune",                  RunsAtShack, "Tunes the shack's rig to a repeater; keys nothing."),
+    ("request_window_attention",       RunsHere,    "A window on this computer."),
     ("resend_chat",                    StartsTx,    "Queues a chat message to transmit again."),
     ("reset_lotw_cursor",              RunsAtShack, "Empties the shack's LoTW sync cursor, so its next download asks for everything."),
     ("reset_settings",                RefusedHere, "Replaces the shack's whole configuration with factory defaults."),

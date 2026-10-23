@@ -5886,6 +5886,8 @@ export const DE: PartialCatalog = {
   "operate.strip.autoCq.title": "Auto-CQ läuft — ruft ununterbrochen CQ, arbeitet jede antwortende Station und kehrt danach für die nächste zu CQ zurück. Zum Beenden auf S&P klicken.",
   "operate.strip.report.title": "Empfangener Rapport über Ihr Signal",
   "operate.strip.now.stalled": "Hängt",
+  "operate.strip.state.watchdog": "TX-Watchdog hat den Anruf gestoppt",
+  "operate.strip.state.watchdog.title": "Der TX-Watchdog hat das Senden abgeschaltet, bevor dieser Anruf beantwortet wurde. Schalten Sie TX ein, um erneut zu rufen.",
   "operate.strip.now.rxOnly": "— nur Empfang, sendet nicht",
   "operate.strip.now.beacon": "— Bake: sendet nach Zeitplan",
   "operate.strip.now.listening": "— hört",

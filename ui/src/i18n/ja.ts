@@ -6310,6 +6310,8 @@ export const JA: PartialCatalog = {
   "operate.strip.autoCq.title": "自動 CQ 実行中 — CQ を出し続け、応答局と交信しては次の CQ に戻ります。停止するには S&P をクリックしてください。",
   "operate.strip.report.title": "自局の信号について受け取ったレポート",
   "operate.strip.now.stalled": "停滞",
+  "operate.strip.state.watchdog": "TXウォッチドッグが呼び出しを停止",
+  "operate.strip.state.watchdog.title": "この呼び出しに応答がないまま、TXウォッチドッグが送信をオフにしました。もう一度呼ぶにはTXをオンにしてください。",
   "operate.strip.now.rxOnly": "— 受信専用、送信しません",
   "operate.strip.now.beacon": "— ビーコン: スケジュールで送信",
   "operate.strip.now.listening": "— ワッチ中",
