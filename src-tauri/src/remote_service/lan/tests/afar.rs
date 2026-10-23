@@ -179,6 +179,8 @@ impl Afar for Service {
         let said = *self.renewal.lock().unwrap();
         Box::pin(async move { said })
     }
+
+    fn heard_key(&self, _: &str, _: &str) {}
 }
 
 /// The shack, running, with its tunnel taking this computer; client mode on this computer with its

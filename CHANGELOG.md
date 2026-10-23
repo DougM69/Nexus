@@ -142,6 +142,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the whole distro. Both files are now built inside an Ubuntu 22.04 container and need glibc 2.35
   (`ldd --version` shows yours). The Raspberry Pi packages are unchanged.
 
+### Security
+- **A computer no longer takes the station's internet key on Nexus Remote's word alone.** Before, when you
+  added the internet road to a station paired with a code (its owner not yet signed in at the station) or to a
+  station you were invited to, the computer kept the station key the service listed without checking it. Now:
+  - **At home**, linking a station paired with a code asks the station itself for its key over your network,
+    before anything is added. If the service named a different key, you are told so and nothing is added.
+  - **Away from the station, or as an invited guest**, the station's row shows **This station's key for the
+    internet road** in the same eight groups the station shows under Remote access. The internet road carries
+    nothing until you compare the two and press **It matches**. For a station paired with a code, the hold also
+    clears by itself the next time you Operate it on your network and the station names the same key.
+  - **It doesn't match**, for a station paired with a code, removes only its internet road: the pairing on your
+    network stays, so you can still operate at home and add the internet road again later. For a station you
+    were invited to, it forgets the station.
+  - Both of those apply only to a station paired with a code on this version or later, which the computer now
+    records in its credential store when the pairing is made. A station paired with a code on an earlier version
+    is treated like an invited one: its hold clears only with **It matches**, and **It doesn't match** forgets it,
+    so you pair it again with a code.
+  - The station's **Approve** question for a computer now shows **This station's key** too, so both keys are
+    read out in the same call.
+  - Every internet road's row now shows the station's key. A computer that already has an internet road checks it
+    quietly the next time it reaches the station on your network; if the station names another key, that road is
+    turned off and says why. Nothing else changes for roads that already work, and nothing has to be paired again.
+  - Your radio was never reachable this way: the station only ever lets in a computer you approved there.
+
 ## [1.20.0] — 2026-10-22
 
 ### Added

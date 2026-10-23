@@ -862,6 +862,15 @@ impl Service {
             commands,
         )
     }
+    /// This station's key for the internet road as it stands when asked: the public half of the
+    /// pairing's signing key, or none without a pairing. Only the public half leaves the lock.
+    fn station_key_of(&self) -> lan::StationKeyOf {
+        let control = self.control.clone();
+        Arc::new(move || {
+            let control = control.lock().ok()?;
+            Some(control.station_key.as_ref()?.public_key().to_string())
+        })
+    }
     /// Remote over this network, beside the relay's road and sharing its one authority: its switch
     /// kept at `path`, its key and paired computers in `book`, and a paired computer's calls run
     /// with `commands`.
@@ -907,6 +916,7 @@ impl Service {
                     firewall: lan::firewall_says(),
                     dispatcher,
                     commands,
+                    station_key: self.station_key_of(),
                 },
             ));
             if let Ok(mut control) = self.control.lock() {

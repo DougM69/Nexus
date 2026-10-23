@@ -960,3 +960,70 @@ async fn a_station_saying_another_stations_id_replaces_nothing() {
         "kept away as it was"
     );
 }
+
+/// ★ A station the account was invited to is bound to someone else's sign-in, which nothing on this
+/// computer checks, so its internet road is kept HELD even when the station is reached on its
+/// network: added there by a sign-in, and linked in place from a code pairing alike. CONTROL: the
+/// account's own station (its proof the signed-in person's) is kept free, both ways.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invited_stations_road_is_held_on_its_network_too() {
+    for (role, held) in [("operate", Some("stationKeyUnconfirmed")), ("owner", None)] {
+        // Added by a sign-in, found by name on this network.
+        let Some(station) = standing(LAN_STATION, None).await else {
+            return;
+        };
+        let (cloud, scratch, store) = (
+            Cloud::start().await,
+            Scratch::new(),
+            StationStore::default(),
+        );
+        let (signing_key, _) = ComputerKey::generate().unwrap();
+        cloud.lists(json!([row(
+            signing_key.public_key(),
+            &station.key,
+            Some("p"),
+            role
+        )]));
+        let kept = stations(&store, &scratch.0);
+        let (find, _) = finding(vec![advert(station.at, &station.key)]);
+        let added = env(&cloud, kept.clone(), find, trusting);
+        let (signed, _) =
+            signing_in(&added, &cloud, None, no_pick(), answering(Vec::new()).0).await;
+        assert!(
+            matches!(signed, Ok(Signed { away: false, .. })),
+            "{role}: {signed:?}"
+        );
+        assert_eq!(kept.road_held(LAN_STATION), Ok(held), "{role}: added");
+
+        // Linked in place from a code pairing.
+        let Some(station) = standing(LAN_STATION, None).await else {
+            return;
+        };
+        let (cloud, scratch, store) = (
+            Cloud::start().await,
+            Scratch::new(),
+            StationStore::default(),
+        );
+        let (signing_key, _) = ComputerKey::generate().unwrap();
+        cloud.lists(json!([row(
+            signing_key.public_key(),
+            &station.key,
+            Some("p"),
+            role
+        )]));
+        let kept = stations(&store, &scratch.0);
+        kept.keep(&code_paired(&station)).unwrap();
+        let linking = env(&cloud, kept.clone(), finding(Vec::new()).0, trusting);
+        let (signed, _) = signing_in(
+            &linking,
+            &cloud,
+            Some(LAN_STATION.into()),
+            no_pick(),
+            answering(Vec::new()).0,
+        )
+        .await;
+        assert!(signed.is_ok(), "{role}: {signed:?}");
+        assert_eq!(kept.road_held(LAN_STATION), Ok(held), "{role}: linked");
+        drop(scratch);
+    }
+}

@@ -20,6 +20,14 @@ export type LanChoice = { id: string; name: string }
  *  that road: its fingerprint (SHA-256 of the key, lowercase hex), the one the station shows when it
  *  asks to approve this computer. Never the private key. */
 export type LanInternet = { id: string; key: string }
+/** The station's key an internet road is pinned to, by the id the station is kept under here, as
+ *  the station shows its own ("This station's key"): its fingerprint (SHA-256 of the key, lowercase
+ *  hex). `held`: the road carries nothing until the operator checks that key against the station's
+ *  screen (`stationKeyUnconfirmed`), or for good, the station having named another key on its own
+ *  network (`stationKeyDisagrees`). `codePaired`: the station is paired here with a code, as the
+ *  credential store says (`Stations::code_paired`), so It doesn't match removes the internet road
+ *  alone and its own network can check the key. */
+export type LanStationKey = { id: string; key: string; held: 'stationKeyUnconfirmed' | 'stationKeyDisagrees' | null; codePaired: boolean }
 
 /** A station added with the account: until when it takes this computer on its network (seconds
  *  since 1970), and whether to sign in again for it now (`lan_client::account`). */
@@ -64,7 +72,7 @@ export const SIGN_IN_REASONS = ['signInPortBusy', 'signInTimedOut', 'signInRefus
   'stationUnavailable', 'stationKeyMissing', 'stationNotChosen', 'stationsFull', 'storeUnavailable', 'unknownStation',
   'alreadyHere', 'listenOnly', 'stationNotProven', 'stationProofFailed', 'notOnThisNetwork', 'notThisStation',
   'stationNotSignedIn', 'proofNotYours', 'proofRefused', 'pairingFull', 'stationCouldNotKeep', 'updateStation',
-  'updateComputer', 'keyChanged', 'notStation'] as const
+  'updateComputer', 'keyChanged', 'notStation', 'stationKeyDisagrees'] as const
 export type SignInReason = (typeof SIGN_IN_REASONS)[number]
 
 /** Why the station did not take this computer at the address last tried, while a sign-in asks where
@@ -80,8 +88,9 @@ export type Told =
   /** `internet`: the stations the internet road has been added to, each with this computer's key
    *  for it. `account`: the stations added with the account. `away`: the stations kept by their
    *  service id until this computer first reaches them on their network. `forgetUnreached`: after a
-   *  forget, why Nexus Remote could not be told to end this computer's approval there. */
-  | { type: 'stations'; stations: LanStation[]; internet: LanInternet[]; account: LanSigned[]; away: LanAway[]; computer: string; error: string | null; forgetUnreached: string | null }
+   *  forget, why Nexus Remote could not be told to end this computer's approval there.
+   *  `dropUnreached`: the same, after the internet road alone was removed and the pairing kept. */
+  | { type: 'stations'; stations: LanStation[]; internet: LanInternet[]; account: LanSigned[]; away: LanAway[]; stationKeys?: LanStationKey[]; computer: string; error: string | null; forgetUnreached: string | null; dropUnreached?: string }
   | { type: 'found'; shacks: LanFound[]; available: boolean }
   | { type: 'paired'; station: LanStation }
   | { type: 'pairRefused'; reason: PairReason }
@@ -143,6 +152,15 @@ function internetRoad(raw: unknown): LanInternet {
   const value = fields(raw, ['id', 'key'])
   return { id: text(value.id, UUID), key: text(value.key, HEX64) }
 }
+const HELD = ['stationKeyUnconfirmed', 'stationKeyDisagrees'] as const
+function stationKey(raw: unknown): LanStationKey {
+  const held = (raw as Fields | null)?.held !== undefined ? ['held'] : []
+  // Said only of a station paired here with a code (`Stations::code_paired`), and only as true.
+  const coded = (raw as Fields | null)?.codePaired !== undefined ? ['codePaired'] : []
+  const value = fields(raw, ['id', 'key', ...held, ...coded])
+  if (coded.length && value.codePaired !== true) throw Error('invalidLanMessage')
+  return { id: text(value.id, UUID), key: text(value.key, HEX64), held: held.length ? oneOf(HELD, value.held) : null, codePaired: coded.length > 0 }
+}
 function signed(raw: unknown): LanSigned {
   const value = fields(raw, ['stationId', 'until', 'renew'])
   if (typeof value.until !== 'number' || !Number.isInteger(value.until) || value.until < 0 || typeof value.renew !== 'boolean') throw Error('invalidLanMessage')
@@ -168,7 +186,7 @@ export function readTold(raw: unknown): Told {
   if ((STATION_MESSAGES as readonly unknown[]).includes(type)) return { type: 'station', message: raw as Fields }
   switch (type) {
     case 'stations': {
-      const optional = ['internet', 'account', 'away', 'error', 'forgetUnreached'].filter(key => (raw as Fields)[key] !== undefined)
+      const optional = ['internet', 'account', 'away', 'stationKeys', 'error', 'forgetUnreached', 'dropUnreached'].filter(key => (raw as Fields)[key] !== undefined)
       const value = fields(raw, ['type', 'stations', 'computer', ...optional])
       if (!Array.isArray(value.stations) || value.stations.length > 8) throw Error('invalidLanMessage')
       const internet = value.internet === undefined ? [] : value.internet
@@ -177,10 +195,14 @@ export function readTold(raw: unknown): Told {
       if (!Array.isArray(account) || account.length > 8) throw Error('invalidLanMessage')
       const kept = value.away === undefined ? [] : value.away
       if (!Array.isArray(kept) || kept.length > 8) throw Error('invalidLanMessage')
+      // Told by a Nexus that holds roads until their station's key is checked; left out otherwise.
+      const keys = value.stationKeys
+      if (keys !== undefined && (!Array.isArray(keys) || keys.length > 8)) throw Error('invalidLanMessage')
       return { type, stations: value.stations.map(station), internet: internet.map(internetRoad),
-        account: account.map(signed), away: kept.map(away), computer: text(value.computer, undefined, 64),
+        account: account.map(signed), away: kept.map(away), ...(Array.isArray(keys) ? { stationKeys: keys.map(stationKey) } : {}), computer: text(value.computer, undefined, 64),
         error: value.error === undefined ? null : text(value.error),
-        forgetUnreached: value.forgetUnreached === undefined ? null : text(value.forgetUnreached) }
+        forgetUnreached: value.forgetUnreached === undefined ? null : text(value.forgetUnreached),
+        ...(value.dropUnreached === undefined ? {} : { dropUnreached: text(value.dropUnreached) }) }
     }
     case 'found': {
       const value = fields(raw, ['type', 'shacks', 'available'])

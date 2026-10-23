@@ -203,3 +203,17 @@ it('a device added by signing in, waiting for Approve here, is asked as a new on
   expect(dialog()?.textContent).toMatch(/A browser signed in to your Remote account asks to stream this station/)
   expect(dialog()?.textContent, 'never approved here').not.toMatch(/approved before/)
 })
+
+it('a computer asking: the question shows this station\'s key too, read out in the same call; a browser\'s does not', async () => {
+  const stationKey = '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0'
+  const shown = 'This station’s key: 0F1E 2D3C 4B5A 6978 8796 A5B4 C3D2 E1F0'
+  status = station([asking({ name: 'Shack laptop', kind: 'computer', platform: 'windows' })], { stationKey })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  expect(screen.getByRole('dialog').textContent).toContain(shown)
+  cleanup()
+  status = station([asking()], { stationKey })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  expect(screen.getByRole('dialog').textContent).not.toContain(shown)
+})

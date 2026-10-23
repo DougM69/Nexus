@@ -467,6 +467,7 @@ fn lan_enrolled(
             firewall: firewall_says(),
             dispatcher: s.shared.dispatcher.clone(),
             commands: s.shared.commands.clone(),
+            station_key: s.shared.station_key.clone(),
         },
     )
 }

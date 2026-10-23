@@ -16,7 +16,7 @@ import type { StreamEnvironment } from '../remote-web/stream-link'
 // operator compares the two screens by eye.
 import { shortFingerprint } from '../remote-web/stream-protocol'
 import { LanConnection, lanStream } from './connection'
-import { codeShaped, readTold, socketUrl, type ClosedReason, type ConnectReason, type LanAway, type LanChoice, type LanFound, type LanInternet, type LanSigned, type LanStation, type PairReason, type SignInReason, type WhereReason } from './protocol'
+import { codeShaped, readTold, socketUrl, type ClosedReason, type ConnectReason, type LanAway, type LanChoice, type LanFound, type LanInternet, type LanSigned, type LanStation, type LanStationKey, type PairReason, type SignInReason, type WhereReason } from './protocol'
 import { lanFindLine, lanReachLine, lanUnreached } from '../remote-native/lanReach'
 import '../remote-monitor/monitor.css'
 import '../remote-web/remote.css'
@@ -102,6 +102,7 @@ function signInSentence(reason: SignInReason): string {
     case 'deviceLimit': return t('lanWindow.internet.reason.deviceLimit')
     case 'stationUnavailable': return t('lanWindow.internet.reason.stationUnavailable')
     case 'stationKeyMissing': return t('lanWindow.internet.reason.updateStation')
+    case 'stationKeyDisagrees': return t('lanWindow.internet.reason.stationKeyDisagrees')
     case 'stationNotChosen': return t('lanWindow.internet.reason.stationNotChosen')
     case 'stationsFull': return t('lanWindow.reason.stationsFull')
     case 'storeUnavailable': return t('lanWindow.reason.storeUnavailable')
@@ -164,6 +165,8 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const [stations, setStations] = useState<LanStation[]>([])
   const [internet, setInternet] = useState<LanInternet[]>([])
   const [account, setAccount] = useState<LanSigned[]>([])
+  // The station's key each internet road is pinned to, and whether the road is held.
+  const [stationKeys, setStationKeys] = useState<LanStationKey[]>([])
   // The stations signed in to from elsewhere: kept by their service id until a sign-in here, on
   // their network, adds them there.
   const [away, setAway] = useState<LanAway[]>([])
@@ -181,6 +184,8 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const [road, setRoad] = useState<Road | null>(null)
   const current = useRef<Road | null>(null)
   const [forgetting, setForgetting] = useState<string | null>(null)
+  // It doesn't match, asked first, for a station paired here with a code: its internet road alone goes.
+  const [dropping, setDropping] = useState<string | null>(null)
   // A sign-in under way: for a new station (null), or for the station on this computer this id names.
   const signingFor = useRef<string | null>(null)
   // The stations added with the account, as last told: a sign-in for one of them is a sign-in again.
@@ -225,9 +230,11 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           setInternet(told.internet)
           setAccount(told.account)
           setAway(told.away)
+          setStationKeys(told.stationKeys ?? [])
           setComputer(told.computer)
           setStoreFailed(told.error !== null)
           if (told.forgetUnreached !== null) setSaid({ text: t('lanWindow.internet.forgetUnreached'), alert: true })
+          if (told.dropUnreached !== undefined) setSaid({ text: t('lanWindow.internet.dropRoadUnreached'), alert: true })
           return
         case 'found':
           setFound({ shacks: told.shacks, available: told.available })
@@ -362,6 +369,36 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
 
   const shownName = name ?? computer
   const pairReady = !busy && phase === 'open' && address.trim() !== '' && codeShaped(code) && shownName.trim() !== ''
+  // A station's internet road, by the station's key it is pinned to, in the eight groups the station
+  // shows as "This station's key"; while the road is held, the check that frees it, and It doesn't
+  // match (asked first, as Forget is): for a station Nexus says is paired here with a code, its
+  // internet road goes and the pairing stays, and the station's own network checks the key too; any
+  // other is forgotten.
+  const roadKey = (id: string) => {
+    const road = stationKeys.find(kept => kept.id === id)
+    if (!road) return null
+    const codePaired = road.codePaired
+    return <>
+      <p className="remote-site-status">{t('lanWindow.internet.stationKey', { key: shortFingerprint(road.key) })}</p>
+      {road.held === 'stationKeyUnconfirmed' && forgetting !== id && operating !== id && (dropping === id ? <>
+        <p className="remote-warning">{t('lanWindow.internet.dropRoadConfirm')}</p>
+        <div className="remote-actions">
+          <button type="button" className="remote-button" disabled={!!busy}
+            onClick={() => { setDropping(null); setSaid(null); say({ type: 'keyDiffers', stationId: id }) }}>{t('lanWindow.internet.dropRoadYes')}</button>
+          <button type="button" className="remote-button remote-button--quiet" onClick={() => setDropping(null)}>{t('lanWindow.keep')}</button>
+        </div>
+      </> : <>
+        <p className="remote-warning">{codePaired ? t('lanWindow.internet.heldCodePaired') : t('lanWindow.internet.held')}</p>
+        <div className="remote-actions">
+          <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'}
+            onClick={() => { setSaid(null); say({ type: 'keyMatches', stationId: id }) }}>{t('lanWindow.internet.keyMatches')}</button>
+          <button type="button" className="remote-button remote-button--quiet" disabled={!!busy}
+            onClick={() => codePaired ? setDropping(id) : setForgetting(id)}>{t('lanWindow.internet.keyDiffers')}</button>
+        </div>
+      </>)}
+      {road.held === 'stationKeyDisagrees' && <p className="remote-warning" role="alert">{t('lanWindow.internet.keyDisagrees')}</p>}
+    </>
+  }
   return <div className="app remote-monitor-app remote-service-app remote-site">
     <header className="rm-header"><span className="remote-site-wordmark">
       <img className="remote-site-mark" src={nexusMark} alt="" width={28} height={28} />
@@ -415,6 +452,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           return <div key={station.id} className="remote-station lan-station">
           <p><strong>{t('lanWindow.stationAt', { address: station.addresses[0] })}</strong></p>
           <p className="remote-site-status">{t('lanWindow.stationKey', { key: shortFingerprint(station.key) })}</p>
+          {roadKey(station.id)}
           {forgetting === station.id ? <>
             <p className="remote-warning">{t('lanWindow.forgetConfirm')}</p>
             <div className="remote-actions">
@@ -517,6 +555,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
         {away.map(station => <div key={station.id} className="remote-station lan-station">
           {station.name && <p><strong>{station.name}</strong></p>}
           <p className="remote-site-status">{t('lanWindow.stationKey', { key: shortFingerprint(station.key) })}</p>
+          {roadKey(station.id)}
           {forgetting === station.id ? <>
             <p className="remote-warning">{t('lanWindow.forgetConfirm')}</p>
             <div className="remote-actions">
