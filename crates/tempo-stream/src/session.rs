@@ -16,7 +16,7 @@
 //!   [`Session::accept`] refuses [`Refusal::Unavailable`] before it reaches str0m's builder, which
 //!   would panic for want of a provider.
 //! - **VP8 out, Opus in, and nothing else.** The codec list is cleared to VP8 (the station's
-//!   picture) and Opus (the page's microphone, plan S6: an audio line the page sends and the
+//!   picture) and Opus (the page's microphone: an audio line the page sends and the
 //!   station receives). The microphone's packets are handed on as they arrived
 //!   ([`SessionEvent::Mic`]), undecoded and unjudged: what may reach a transmitter, and when, is
 //!   `tempo_app::mic`'s to decide, and the session keys nothing.
@@ -74,7 +74,7 @@
 //!   (`transport_feedback`); every current browser's does, and one that does not keeps the
 //!   fixed budget. With it on, str0m paces the picture's packets at about the estimate, and the
 //!   data channels (receive audio, `control`) go out ahead of them unpaced.
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use str0m::bwe::Bitrate;
@@ -136,8 +136,10 @@ const WSAEMSGSIZE: i32 = 10040;
 const WSAENETRESET: i32 = 10052;
 
 /// Does this error, from a receive on the session's socket, end the session? A receive that waited
-/// out its timeout does not, and neither does a report about one datagram, which leaves the socket
-/// unharmed. On an unconnected UDP socket Windows makes three such reports:
+/// out its timeout does not, nor one that was interrupted (Linux interrupts a receive that has a
+/// timeout whenever the process is stopped and continued), and neither does a report about one
+/// datagram, which leaves the socket unharmed. On an unconnected UDP socket Windows makes three
+/// such reports:
 /// - `ConnectionReset` (WSAECONNRESET) passes on an ICMP "port unreachable" for an EARLIER
 ///   datagram: ICE sends checks to every candidate the page offered, and a destination that refuses
 ///   one (a NAT with no mapping for the station yet, a router that will not loop a packet back to
@@ -152,10 +154,10 @@ const WSAENETRESET: i32 = 10052;
 ///
 /// Any other error is the socket's own, and ends the session.
 pub fn receive_ends_session(error: &std::io::Error) -> bool {
-    use std::io::ErrorKind::{ConnectionReset, TimedOut, WouldBlock};
+    use std::io::ErrorKind::{ConnectionReset, Interrupted, TimedOut, WouldBlock};
     let one_datagram = error.kind() == ConnectionReset
         || (cfg!(windows) && matches!(error.raw_os_error(), Some(WSAEMSGSIZE | WSAENETRESET)));
-    !matches!(error.kind(), WouldBlock | TimedOut) && !one_datagram
+    !matches!(error.kind(), WouldBlock | TimedOut | Interrupted) && !one_datagram
 }
 
 /// The most of the page's candidates one session tries, from its offer and its trickle together.
@@ -179,11 +181,7 @@ pub const CANDIDATES_IN_ALL: usize = 64;
 /// carrier-grade NAT, or IPv6's unique-local one, and never port 0. It is an allowlist: an address
 /// in none of those is refused, whatever it is (the module header names what that refuses).
 pub fn may_try(peer: SocketAddr) -> bool {
-    peer.port() != 0
-        && match peer.ip() {
-            IpAddr::V4(v4) => viewer_v4(v4),
-            IpAddr::V6(v6) => viewer_v6(v6),
-        }
+    peer.port() != 0 && reachable(peer.ip(), viewer_v4, true)
 }
 
 /// IPv4's unicast space, 1.0.0.0 to 223.255.255.255, less loopback (127/8: the station's own
@@ -191,33 +189,38 @@ pub fn may_try(peer: SocketAddr) -> bool {
 /// 169.254.169.254). Below it is "this network" (0/8, the unspecified address among it), above it
 /// multicast (224/4), the reserved 240/4 and broadcast. The private networks (RFC 1918) and the
 /// carrier-grade NAT's 100.64/10, where Tailscale numbers its machines, are in it.
-fn viewer_v4(ip: Ipv4Addr) -> bool {
+pub fn viewer_v4(ip: Ipv4Addr) -> bool {
     matches!(ip.octets()[0], 1..=223) && !ip.is_loopback() && !ip.is_link_local()
 }
 
-/// IPv6's global unicast space (2000::/3) and unique-local fc00::/7, and nothing else: not loopback
-/// or the unspecified address, multicast, link-local fe80::/10 or the old site-local fec0::/10. An
-/// address that carries an IPv4 one is that IPv4 address, held to IPv4's rule.
-fn viewer_v6(ip: Ipv6Addr) -> bool {
+/// [`may_try`]'s reading of an address, under an IPv4 rule of the caller's (the client core's
+/// internet roads hold it to a stricter one than a viewer's): an IPv4 address `v4` takes, or IPv6's
+/// global unicast space (2000::/3), and unique-local fc00::/7 when `unique_local`, and nothing else
+/// of IPv6: not loopback or the unspecified address, multicast, link-local fe80::/10 or the old
+/// site-local fec0::/10. An IPv6 address that carries an IPv4 one is that IPv4 address, held to `v4`.
+pub fn reachable(ip: IpAddr, v4: impl Fn(Ipv4Addr) -> bool, unique_local: bool) -> bool {
+    let ip = match ip {
+        IpAddr::V4(ip) => return v4(ip),
+        IpAddr::V6(ip) => ip,
+    };
     let o = ip.octets();
-    let v4 =
-        |a: usize, b: usize, c: usize, d: usize| viewer_v4(Ipv4Addr::new(o[a], o[b], o[c], o[d]));
+    let at = |a: usize, b: usize, c: usize, d: usize| v4(Ipv4Addr::new(o[a], o[b], o[c], o[d]));
     match ip.segments() {
         // IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (::/96, which holds `::` and `::1`).
-        [0, 0, 0, 0, 0, 0 | 0xffff, ..] => v4(12, 13, 14, 15),
+        [0, 0, 0, 0, 0, 0 | 0xffff, ..] => at(12, 13, 14, 15),
         // NAT64's well-known prefix, 64:ff9b::/96.
-        [0x64, 0xff9b, 0, 0, 0, 0, ..] => v4(12, 13, 14, 15),
+        [0x64, 0xff9b, 0, 0, 0, 0, ..] => at(12, 13, 14, 15),
         // NAT64's local-use prefix, 64:ff9b:1::/48 (RFC 8215). A network carves its own from it at
         // /48, /56, /64 or /96, and each puts the IPv4 address somewhere else (RFC 6052), so every
         // one of those readings must pass.
         [0x64, 0xff9b, 1, ..] => {
-            v4(6, 7, 9, 10) && v4(7, 9, 10, 11) && v4(9, 10, 11, 12) && v4(12, 13, 14, 15)
+            at(6, 7, 9, 10) && at(7, 9, 10, 11) && at(9, 10, 11, 12) && at(12, 13, 14, 15)
         }
         // 6to4, 2002::/16.
-        [0x2002, ..] => v4(2, 3, 4, 5),
+        [0x2002, ..] => at(2, 3, 4, 5),
         // Teredo, 2001::/32: its client's own address, which it carries inverted.
-        [0x2001, 0, ..] => viewer_v4(!Ipv4Addr::new(o[12], o[13], o[14], o[15])),
-        [first, ..] => first & 0xe000 == 0x2000 || first & 0xfe00 == 0xfc00,
+        [0x2001, 0, ..] => v4(!Ipv4Addr::new(o[12], o[13], o[14], o[15])),
+        [first, ..] => first & 0xe000 == 0x2000 || (unique_local && first & 0xfe00 == 0xfc00),
     }
 }
 
@@ -856,6 +859,19 @@ mod tests {
         )));
         assert!(!receive_ends_session(&Error::from(ErrorKind::WouldBlock)));
         assert!(!receive_ends_session(&Error::from(ErrorKind::TimedOut)));
+        assert!(receive_ends_session(&Error::from(ErrorKind::NetworkDown)));
+    }
+
+    /// A receive interrupted before anything arrived is not the end of the session: nothing
+    /// happened to the socket. Linux interrupts a receive that has a timeout, as every loop that
+    /// asks this sets one, whenever the process is stopped and continued (`signal(7)`). Measured
+    /// 2026-10-19: one 20 ms stop and continue ended the shack's Stop road and audio road threads
+    /// for good, so a Stop on that road was never taken again and presence could not be renewed.
+    /// CONTROL: a socket whose network is gone still ends it.
+    #[test]
+    fn an_interrupted_receive_is_not_the_end_of_the_session() {
+        use std::io::{Error, ErrorKind};
+        assert!(!receive_ends_session(&Error::from(ErrorKind::Interrupted)));
         assert!(receive_ends_session(&Error::from(ErrorKind::NetworkDown)));
     }
 

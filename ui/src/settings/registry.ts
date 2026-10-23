@@ -159,7 +159,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // The Icom network connection (Beta), under the words an operator brings from the radio's
       // own menus and from the programs that reach it over the network today.
       'icom network', 'lan', 'wi-fi', 'wifi', 'ip address', 'network control', 'network user',
-      'rs-ba1', 'wfview', 'vpn', 'ic-7760', 'ic-7300mk2'],
+      'rs-ba1', 'wfview', 'vpn', 'ic-7760', 'ic-7300mk2',
+      // The TCI connection (Beta), under the protocol's name and the programs and radios that
+      // serve it: an SDR owner searches for the program they run, or for the box in its settings.
+      'tci', 'tci server', 'find tci server', 'expertsdr', 'expertsdr3', 'sunsdr', 'thetis',
+      'pihpsdr', 'anan', 'hermes lite', 'sdr program', 'websocket', '50001', '40001'],
   },
   {
     id: 'rig-advanced',
@@ -181,7 +185,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // The #145 declarations. The words here are the SYMPTOM, not the setting name — an
       // operator whose rig keys the moment Nexus opens does not search for "handshake".
       'serial handshake', 'flow control', 'xonxoff', 'rts state', 'dtr state', 'keying line',
-      'keys at launch', 'transmits at startup', 'stuck ptt', 'stuck transmit'],
+      'keys at launch', 'transmits at startup', 'stuck ptt', 'stuck transmit',
+      // The Flex client's Beta setting for CW, Tune and the ATU, under the words for what it
+      // switches on: an operator looking for it asks how to get CW or the tuner through the client.
+      'flex cw', 'cwx', 'flex tune', 'flex atu'],
   },
   {
     id: 'audio',
@@ -204,6 +211,15 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // how they discover it is the receive side. Searching for the wrong word is not a wrong search.
     keywords: ['headphones', 'monitor', 'listen', 'receive audio', 'rx audio', 'speakers',
       'sidetone out', 'passthrough'],
+  },
+  {
+    id: 'scope-source',
+    label: 'Scope source',
+    tab: 'radio',
+    // An operator with an SDRplay receiver searches for the hardware or the program, not for
+    // "scope source".
+    keywords: ['sdrplay', 'sdrconnect', 'rsp', 'rspduo', 'rsp1a', 'rsp1b', 'rspdx', 'sdr',
+      'panadapter', 'rx out', 'external receiver', 'second receiver', 'waterfall source'],
   },
   {
     id: 'satellite-doppler',
@@ -239,7 +255,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // already contain — 'amp' alone is a substring of 'amplifier' and the registry guard
     // rejects a section whose every keyword is.
     keywords: ['linear', 'spe', 'expert', '1.3k-fa', '1.5k-fa', '2k-fa', 'elecraft',
-      'kpa500', 'kpa1500', 'swr', 'pa temp', 'watts out'],
+      'kpa500', 'kpa1500', 'swr', 'pa temp', 'watts out', 'network', 'ip address', 'udp'],
   },
   {
     id: 'transmit-limits',
@@ -255,7 +271,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // section's own SWR read-out, and one term cannot land the operator on two sections.
       'high swr', 'swr cutoff', 'stop on swr', 'antenna fault',
       // Parsec presence mode: the words an operator running the shack over Parsec reaches for.
-      'parsec', 'remote desktop', 'dropped session', 'lost connection', 'stuck ptt'],
+      'parsec', 'remote desktop', 'dropped session', 'lost connection', 'stuck ptt',
+      // "Share by TCI", under its own name and the programs that connect to it. Not the bare
+      // 'tci' or 'tci server': those are Rig & CAT's, for an SDR program's own server.
+      'share by tci', 'nexus tci server', 'programs on tci', 'tci client rx1', 'jtdx', 'mshv',
+      'log4om', 'macloggerdx', 'rf2k', 'tci keyer', 'tci spots'],
   },
 
   // ---- Modes -------------------------------------------------------------------
@@ -327,14 +347,16 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'sidetone', 'pitch', 'keyline', 'f-key', 'macro', 'iambic',
       // Reverse CW (2026-09-11). A findability entry as much as a keyword list: an operator
       // whose rig shows CW-R searches for what the RADIO says, not for what Nexus calls it.
-      'reverse', 'cw-r', 'cwr', 'cw-l', 'sideband'],
+      'reverse', 'cw-r', 'cwr', 'cw-l', 'sideband',
+      // CW speed match: answer a station at the speed the decoder measured for it.
+      'speed match', 'match speed'],
   },
   {
     id: 'rtty',
     label: 'RTTY',
     tab: 'digital',
     keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '170', 'reverse',
-      'mark', 'space', 'auto arm', 'start receiving', 'not decoding', 'macro',
+      'mark', 'space', 'sideband', 'usb', 'lsb', 'upside down', 'auto arm', 'start receiving', 'not decoding', 'macro',
       // #304 asked for a "timer" and neither the control nor this section is called one.
       // The rest are what the cadence is called out loud — the reporter wrote "cq, 15s rx,
       // cq", not "listen window".
@@ -355,9 +377,20 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'JS8',
     tab: 'digital',
     keywords: ['js8', 'js8call', 'heartbeat', 'hb', 'autoreply', 'relay', 'inbox',
-      'store and forward', 'slow', 'normal', 'fast', 'turbo', '7.078', '14.078',
+      'store and forward', 'slow', 'normal', 'fast', 'turbo', 'js8 40', 'js8 60', 'ultra', '7.078', '14.078',
+      'cq message', 'reply message', 'saved messages', 'macros', 'send at once', 'immediately transmit',
+      'pills', 'word suggestions', 'spellcheck',
       'idle watchdog', 'allcall', 'callsign aging', 'aging', 'confirmation', 'confirm', 'allow list', 'deny list',
-      'only autoreply', 'never autoreply', 'band activity aging', 'activity aging'],
+      'only autoreply', 'never autoreply', 'band activity aging', 'activity aging',
+      'heartbeat networking', 'hb net', 'qso pause', 'heartbeat acknowledgement', '55 minutes',
+      'outside 500', 'do not participate',
+      'hold ptt', 'ptt between frames', 'tx offset', 'offset while sending', 'tx delay', 'ptt delay',
+      'js8 frequencies', 'frequency list', 'calling frequencies', '1.8435', '5.363', 'last used frequency',
+      'band schedule', 'frequency schedule', 'switch bands', 'band hopping',
+      'spot', 'spotting', 'js8net', 'aprsis', 'aprs-is', 'never spot', 'aprs relay',
+      'rx block list', 'block list', 'hide callsigns', 'highlight', 'end of transmission', 'missing frame',
+      'js8 sounds', 'notifications',
+      'js8call api', 'api', 'tcp', 'udp', '2442', '2242', 'accept requests'],
   },
   {
     id: 'sstv',
@@ -435,9 +468,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'logging',
     keywords: ['wsjt-x', 'udp', 'gridtracker', 'jtalert', 'hrd', 'ham radio deluxe', 'psk',
       'pskreporter', 'cluster', 'rbn', 'reverse beacon', 'spot source', 'cluster node',
-      'dxspider', 'cc cluster', 'all.txt', 'wav',
+      'dxspider', 'cc cluster', 'all.txt', 'directed.txt', 'wav',
       'recording', 'propagation', 'diagnostic log', 'nexus-diag.log', 'log file', 'debug log',
-      'troubleshooting', 'bug report', 'crash'],
+      'troubleshooting', 'bug report', 'crash',
+      // Logging the space weather on each contact (K_INDEX / A_INDEX / SFI).
+      'space weather', 'k index', 'a index', 'sfi', 'solar flux'],
   },
   {
     id: 'antenna-gain',
@@ -512,7 +547,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     neededInHourOne: true,
     keywords: ['contest', 'field day', 'winter field day', 'arrl', 'wfd', 'event',
       'which contest', 'role', 'in state', 'out of state', 'contest mode', 'field day mode',
-      'start the contest', 'switch', 'rules', 'rules year', 'rules update', 'rules data'],
+      'start the contest', 'switch', 'rules', 'rules year', 'rules update', 'rules data',
+      'rst sent', 'snt', 'sent report'],
   },
   // The station data a SENT exchange needs (spec §3.4). It sits under the contest
   // picker because WHICH of these fields goes on the air is the contest's business —
@@ -629,6 +665,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // Field mode. #215's contrast words, and Night's (useNight.ts) for a dimmer screen after dark.
     // The ten built-in themes by name (features/skins.ts), and the words for wanting one. Never
     // bare 'amber' or 'green': Colours owns those, and an exact keyword outranks all but a label.
+    // Silver's names still lead here: its look is the Light card's now.
     id: 'theme',
     label: 'Theme',
     tab: 'appearance',
@@ -637,7 +674,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'night', 'night mode', 'dim', 'dimmer', 'dusk', 'after dark', 'dark adaptation', 'night vision',
       'themes', 'skin', 'skins', 'rig look', 'rig looks', 'lcd', 'vfd', 'amber lcd', 'green lcd',
       'blue vfd', 'silver', 'silver chassis', 'midnight', 'oled', 'true black', 'slate', 'lagoon',
-      'ember', 'sepia', 'nebula', 'paper', 'cream'],
+      'ember', 'sepia', 'nebula', 'paper', 'cream', 'bright'],
   },
   {
     // The colour roles (features/paletteRoles.ts): a few pre-checked presets for the accent, the
@@ -712,11 +749,20 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'reboot', 'log in', 'login', 'sign in', 'run at startup', 'remote'],
   },
   {
+    // Shown only while this computer drives a station over this network (client mode).
+    id: 'this-computer',
+    label: 'This computer',
+    tab: 'appearance',
+    keywords: ['audio', 'headset', 'headphones', 'speakers', 'microphone', 'mic', 'sound card',
+      'meter', 'test tone', 'volume', 'loudness', 'operate from this computer', 'remote audio',
+      'client mode'],
+  },
+  {
     id: 'accessibility',
     label: 'Accessibility & eyes-free',
     tab: 'appearance',
     keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
-      'eyes free', 'tick'],
+      'eyes free', 'tick', 'turn cue', 'chirp'],
   },
 
   // ---- Config ------------------------------------------------------------------

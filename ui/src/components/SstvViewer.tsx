@@ -33,6 +33,8 @@ import { closePanelWindow, getSstvState, revealSstvGallery, savePngToDownloads }
 import { pushToast, withErrorToast } from '../toast'
 import type { SstvGalleryEntry, SstvState } from '../types'
 import { assetUrl, fmtUtc, GalleryThumb, sstvDownloadName } from './SstvView'
+import { drivesAnotherStation } from '../features/durableStore'
+import { stationPictureBytes } from '../features/shackFiles'
 
 /** The panel slug — the window label, the `?panel=` route, and the key
  *  `open_panel_window` / `close_panel_window` size and address it by. */
@@ -156,12 +158,14 @@ export function SstvViewer() {
   const saveRef = useRef<string | null>(null)
   const onSave = () => {
     if (!entry || saving) return
+    // From afar the picture is on the station's disk: its bytes are asked of the station.
+    const driving = drivesAnotherStation()
     const src = assetUrl(entry.path)
-    if (!src) return
+    if (!src && !driving) return
     saveRef.current = entry.path
     setSaving(true)
     void withErrorToast(async () => {
-      const buf = await (await fetch(src)).arrayBuffer()
+      const buf = driving ? await stationPictureBytes(entry.path) : await (await fetch(src!)).arrayBuffer()
       const bytes = new Uint8Array(buf)
       let bin = ''
       for (const b of bytes) bin += String.fromCharCode(b)
@@ -226,15 +230,18 @@ export function SstvViewer() {
           <button type="button" className="cw-macro" disabled={saving} onClick={onSave}>
             {t('sstv.viewer.save.label')}
           </button>
-          <button
-            type="button"
-            className="cw-macro"
-            onClick={() =>
-              void withErrorToast(() => revealSstvGallery(), t('sstv.gallery.reveal.failed'))
-            }
-          >
-            {t('sstv.gallery.reveal.label')}
-          </button>
+          {/* Reveal opens the station's own file manager, so from afar only Save is offered. */}
+          {!drivesAnotherStation() && (
+            <button
+              type="button"
+              className="cw-macro"
+              onClick={() =>
+                void withErrorToast(() => revealSstvGallery(), t('sstv.gallery.reveal.failed'))
+              }
+            >
+              {t('sstv.gallery.reveal.label')}
+            </button>
+          )}
           {/* ⚠️ A REAL CLOSE, not a flag — see the #263 note at the top of this file. */}
           <button
             type="button"

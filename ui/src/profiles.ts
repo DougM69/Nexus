@@ -50,6 +50,11 @@ const NEVER_IMPORT: readonly string[] = [
   // the borrowed date, so they never come back on their own. Silent, and it costs award credit
   // the operator already earned.
   'lotwLastQsl',
+  // The mark that a LoTW download of every call on the account made that cursor. It belongs to
+  // the cursor beside it: imported onto an older build's cursor (a download of the Settings call
+  // alone made it), the next sync would ask from that cursor and skip, for good, every
+  // confirmation of the operator's other calls matched before it.
+  'lotwCursorEveryCall',
   // Not a sync cursor but the same hazard: importing a stale "last automatic upload"
   // stamp from another machine makes the next tick immediately due, so loading a profile
   // would fire an unattended TQSL run the operator did not ask for.
@@ -95,6 +100,10 @@ const NEVER_IMPORT: readonly string[] = [
   // profile carries the club's master-log address), and so does the WSJT-X UDP API (`wsjtxUdp`),
   // a feed other programs listen to rather than a push to one logger.
   'dxkeeperHost',
+  // What a read from a computer driving the station says about it, not a setting: a profile saved
+  // there carries them, and loaded at the station they would mark its own form "Set at the station".
+  'secretsSavedAtStation',
+  'stationOnlySettings',
 ]
 
 /** Merge a stored profile onto the CURRENT settings — the load contract.
@@ -134,13 +143,20 @@ function persist(profiles: Profile[]): Profile[] {
   return profiles
 }
 
-/** Save (upsert by name) a Settings snapshot under `name`. Empty name is a no-op. */
+/** Save (upsert by name) a Settings snapshot under `name`. Empty name is a no-op. A snapshot
+ *  read without the station's stored keys (from afar, or while a stream watches) leaves them out:
+ *  saved blank, loading the profile would blank the station's own, where left out each keeps its
+ *  current value. */
 export function saveProfile(name: string, settings: Settings): Profile[] {
   const trimmed = name.trim()
   if (!trimmed) return loadProfiles()
   const others = loadProfiles().filter((p) => p.name !== trimmed)
+  const snapshot: Partial<Settings> = { ...settings }
+  if (settings.secretsSavedAtStation) {
+    delete snapshot.clublogApiKey
+  }
   return persist(
-    [...others, { name: trimmed, settings, schema: PROFILE_SCHEMA }].sort((a, b) =>
+    [...others, { name: trimmed, settings: snapshot as Settings, schema: PROFILE_SCHEMA }].sort((a, b) =>
       a.name.localeCompare(b.name),
     ),
   )

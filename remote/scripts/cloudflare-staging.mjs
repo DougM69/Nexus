@@ -3,7 +3,7 @@
 import { appendFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
-import { databaseId, deployable, revision, identityFromEnv, secretSupplied, secretValue, secretVariable, stagingConfig, requireValue, requestJson, requestBytes, target } from './staging-common.mjs'
+import { databaseId, deployable, revision, settingsFromEnv, OPTIONAL_SECRETS, secretSupplied, secretValue, secretVariable, stagingConfig, requireValue, requestJson, requestBytes, target } from './staging-common.mjs'
 import { trialGrant } from './grant-trial.mjs'
 
 // The two fixed assets, plus one or more D1 migrations matched by PATTERN - deliberately not a
@@ -133,9 +133,15 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
     if (artifactDatabase !== undefined) requireValue(databaseId(artifactDatabase) === current.databaseId,
       'The artifact database does not match the staging account inventory')
     const liveSecretTypes = {}
-    if (required.length > 0 && current.workerExists) {
+    if (current.workerExists) {
       const settings = (await api(`/workers/scripts/${TARGET.name}/settings`, 'Worker configuration read')).result
       requireValue(Array.isArray(settings?.bindings), 'Worker configuration returned an unexpected shape')
+      // An optional secret the Worker already holds (put by hand, or by an earlier deploy) survives an
+      // upload that does not apply it, because --secrets-file is additive, and then fails the exact
+      // post-upload count with the Worker already live. Refused here instead, by name only.
+      const stranded = OPTIONAL_SECRETS.filter(name => !required.includes(name) && settings.bindings.some(binding => binding?.name === name))
+      requireValue(stranded.length === 0, `The Worker holds ${stranded.join(', ')} but ${stranded.map(secretVariable).join(', ')} is not set in this `
+        + 'GitHub environment; set it to the same value or remove it from the Worker, so nothing was migrated or uploaded')
       for (const name of required) {
         const found = settings.bindings.filter(binding => binding?.name === name)
         liveSecretTypes[name] = found.length === 0 ? 'absent' : found.length > 1 ? 'duplicated'
@@ -155,8 +161,9 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
     // 'extra-binding' fault asserts. What changed is that a DECLARED secret is now expected
     // rather than treated as an intruder - without this, setting ADMIN_SUBJECT made a successful
     // deploy fail its own verification, after the Worker was already live.
-    const required = requiredSecrets(config)
-    requireValue(Array.isArray(settings?.bindings) && settings.bindings.length === Object.keys(config.vars).length + 3 + required.length,
+    const required = requiredSecrets(config), services = config.services ?? []
+    requireValue(Array.isArray(settings?.bindings)
+      && settings.bindings.length === Object.keys(config.vars).length + 3 + required.length + services.length,
       'Uploaded Worker binding inventory differs from the artifact')
     const bindings = new Map(settings.bindings.map(binding => [binding.name, binding]))
     requireValue(bindings.size === settings.bindings.length && Object.entries(config.vars).every(([name, text]) =>
@@ -171,15 +178,21 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
       && bindings.get('STATIONS').class_name === 'StationRoom'
       && (!bindings.get('STATIONS').script_name || bindings.get('STATIONS').script_name === TARGET.name),
     'Uploaded Worker service bindings differ from the artifact')
+    // The billing Worker binding, exactly as the artifact declares it (none until the row says it is deployed).
+    requireValue(services.every(({ binding, service }) => bindings.get(binding)?.type === 'service'
+      && bindings.get(binding).service === service), 'Uploaded Worker billing binding differs from the artifact')
     // Observability is non-versioned. Read its dedicated endpoint; the combined
     // version settings response can omit it. Wrangler normalizes absent settings
     // to disabled, but explicit log/trace overrides must also remain disabled.
     const script = (await api(`/workers/scripts/${TARGET.name}/script-settings`, 'Worker script configuration read')).result
     requireValue(script && typeof script === 'object' && !Array.isArray(script), 'Worker script settings have an unexpected shape')
     const obs = script.observability
+    // Logpush and a Tail Worker are the other two ways a request's log leaves the relay; both stay off.
     const runtime = { dateMatches: settings.compatibility_date === config.compatibility_date,
       observabilityDisabled: (obs == null || typeof obs === 'object' && !Array.isArray(obs))
-        && [obs?.enabled, obs?.logs?.enabled, obs?.traces?.enabled].every(value => value === undefined || value === false) }
+        && [obs?.enabled, obs?.logs?.enabled, obs?.traces?.enabled].every(value => value === undefined || value === false),
+      logExportsDisabled: [undefined, null, false].includes(script.logpush)
+        && (script.tail_consumers == null || Array.isArray(script.tail_consumers) && script.tail_consumers.length === 0) }
     const content = await requestBytes(`${base}/workers/scripts/${TARGET.name}/content/v2`, {
       headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
     }, fetcher, 'Worker content read')
@@ -187,7 +200,7 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
     try { digest = await workerDigest(content, additional) }
     catch (error) { throw new Error(`${error.message}; runtime comparison: ${JSON.stringify(runtime)}`) }
     requireValue(digest === expectedHash, 'Uploaded Worker bytes differ from the artifact')
-    requireValue(runtime.dateMatches && runtime.observabilityDisabled,
+    requireValue(runtime.dateMatches && runtime.observabilityDisabled && runtime.logExportsDisabled,
       `Uploaded Worker runtime configuration differs from the artifact: ${JSON.stringify(runtime)}`)
     return { worker, result }
   }
@@ -259,6 +272,9 @@ export function cloudflare(env = process.env, fetcher = fetch, row = target(env)
   return { inspect, preflight, provision, confirmUpload, markUpload, attachDomain, recover, grantTrial }
 }
 
+// The operations the CLI below accepts; a workflow may run no other (staging.test.mjs).
+export const MODES = Object.freeze(['inspect', 'preflight', 'provision', 'resolve', 'recover', 'grant-trial'])
+
 // The stream's relay key, proved before any write (2026-10-03). GitHub never hands a secret back,
 // so a swapped or mistyped key id or token would otherwise surface only on the first stream that
 // needs the relay, as a `relayUnavailable` nobody sees. This mints ONE credential with the key, the
@@ -290,17 +306,18 @@ export async function relayKeyCheck(env = process.env, fetcher = fetch) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const mode = process.argv[2]
-    requireValue(process.argv.length === 3 && ['inspect', 'preflight', 'provision', 'resolve', 'recover', 'grant-trial'].includes(mode), 'Use inspect, preflight, provision, resolve, recover or grant-trial')
+    requireValue(process.argv.length === 3 && MODES.includes(mode), 'Use inspect, preflight, provision, resolve, recover or grant-trial')
     const api = cloudflare()
     let result
     if (mode === 'preflight') {
-      // Before the gates and before any write: the secrets the checked-in template requires. The
+      // Before the gates and before any write: the secrets the checked-in template requires, and the
+      // optional ones this environment supplies, which the artifact will declare. The
       // artifact's database is compared again, at migrate and at upload, once an artifact exists.
       // Then the relay key itself, which this step alone holds besides the upload: one minted
       // credential, reported as Cloudflare's status.
       const { readFile } = await import('node:fs/promises')
       const template = JSON.parse(await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8'))
-      result = await api.preflight(template.secrets?.required ?? [])
+      result = await api.preflight([...template.secrets?.required ?? [], ...OPTIONAL_SECRETS.filter(name => secretSupplied(process.env, name))])
       result = { ...result, relayKey: (await relayKeyCheck()).status }
     } else if (mode === 'recover') {
       const { readFile } = await import('node:fs/promises')
@@ -308,7 +325,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const sha = revision(process.env.REMOTE_RECOVERY_REVISION)
       await verifyPublicSource(sha)
       const template = JSON.parse(await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8'))
-      const config = stagingConfig(template, { ...identityFromEnv(), revision: sha,
+      const config = stagingConfig(template, { ...settingsFromEnv(), revision: sha,
         databaseId: process.env.REMOTE_RECOVERY_DATABASE_ID })
       let additional
       try { additional = JSON.parse(process.env.REMOTE_RECOVERY_ADDITIONAL_MODULES || '{}') }

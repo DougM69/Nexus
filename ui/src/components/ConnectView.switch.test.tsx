@@ -113,6 +113,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   __resetDurableForTest()
+  vi.mocked(uiStateLoad).mockImplementation(async () => ({}))
   window.history.replaceState(null, '', '/')
 })
 
@@ -166,18 +167,21 @@ describe('the one-time switch to Frame + bar', () => {
   })
 
   it('survives the profile round-trip: ui-state.json carries the record, so a reinstall or a restore never switches twice', async () => {
-    const files: Array<Record<string, string>> = []
+    // The profile's file as it stands: a flush reads it back first and writes its changes over it,
+    // so a later flush with nothing new writes the same record again, never an empty file.
+    let disk: Record<string, string> = {}
     vi.mocked(uiStateSave).mockImplementation(async (state) => {
-      files.push({ ...state })
+      disk = { ...state }
       return true
     })
+    vi.mocked(uiStateLoad).mockImplementation(async () => ({ ...disk }))
     await loadDurable()
     seedOwn()
     const first = await mount()
     expect(now(first.container)).toBe('Frame + bar (default)')
     first.unmount()
     await flushDurable()
-    const file = files[files.length - 1]
+    const file = disk
     expect(JSON.parse(file['nexus.connect.switch.main']).kept).toMatchObject({ slots: OWN_SLOTS })
 
     // A reinstall, or the backup restored on another computer: the browser's store is gone, and the profile's

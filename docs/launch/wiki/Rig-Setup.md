@@ -15,8 +15,9 @@ software guard in every TX path).
 > native-CI-V **Icom**, where the IC-9700's own spectrum scope streams into the
 > cockpit as a real panadapter (23 cm included). The IC-7300-class single-USB path
 > is supported. FlexRadio LAN discovery is verified on a FLEX-6400M over Hamlib
-> network CAT; the **native SmartSDR path** (panadapter, DAX audio, native meters)
-> ships opt-in and is not yet confirmed on hardware here. Xiegu and rotators are
+> network CAT; the **native SmartSDR path** (the Flex native client, panadapter, DAX
+> audio, native meters) ships opt-in and is not yet confirmed on hardware here, and
+> neither is the Icom network connection (LAN / Wi-Fi, Beta). Xiegu and rotators are
 > supported but not yet field-verified. 1.0 does not change what a field report is
 > worth — confirming your particular rig is still the most useful thing you can
 > send.
@@ -33,8 +34,9 @@ USB-serial driver, it shows the exact download link. Review what it filled, then
 opened, the model is right, and the rig answered.
 
 Everything comes down to one choice — the **Connection** dropdown: **Serial
-(USB / COM)** for nearly every rig, or **Network** for a FlexRadio or a remote
-`rigctld`.
+(USB / COM)** for nearly every rig, **Network** for a FlexRadio or a remote
+`rigctld`, **Icom network (LAN / Wi-Fi) — Beta** for the six Icoms with a network
+port, or **OmniRig** on Windows.
 
 ---
 
@@ -74,7 +76,10 @@ in the rig menu before sending macros. (Same on the **FT-991/991A** and similar 
 Icom rigs connect over **Serial** and speak CI-V. Modern Icoms report their model
 in the USB product string, so Detect usually identifies the exact radio in one
 scan. The IC-7300 (and 705 / 7610 / 905 / 9700) carry CAT and a USB Audio Codec
-over a single cable — the smoothest first-contact path in Nexus.
+over a single cable — the smoothest first-contact path in Nexus. The six with a
+network port built in (IC-7610, IC-9700, IC-705, IC-905, IC-7760 and IC-7300MK2) can
+also connect over your LAN or Wi-Fi with **Icom network (LAN / Wi-Fi) — Beta**:
+receive and control only, with no audio over it yet, so keep the USB cable for audio.
 
 **IC-9700 and 23 cm.** Fully supported including the **1296 MHz band** (FT8 at
 1296.174 MHz), so digital, phone, and CW all work up through 1.2 GHz. Paired with
@@ -110,8 +115,10 @@ real hardware — nothing auto-picks it. Use the SmartSDR CAT path (model 2036 a
 `127.0.0.1:5002`), which is the one that works.
 
 **Nexus's own native Flex path** is a separate thing from that Hamlib model, and
-it ships: Nexus speaks VITA-49 to the radio directly for the SmartSDR panadapter,
-DAX RX and TX audio, and the rig's native meters. What it buys you is a real RF
+it ships: the **Flex native client (Beta)** connects to the radio as a SmartSDR
+client of its own, and Nexus speaks VITA-49 to the radio directly for the SmartSDR
+panadapter, DAX RX and TX audio (through the client), and the rig's native meters.
+What it buys you is a real RF
 panadapter in the cockpit and audio that survives **Remote Desktop**, where the
 DAX sound devices are invisible to any app going through Windows. It is **opt-in
 and off by default**, and it is **not yet confirmed on hardware here** — if

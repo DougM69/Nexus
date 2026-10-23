@@ -360,6 +360,37 @@ it('releases at the shack whatever it pressed there when the picture loses focus
   expect(input.sent).toHaveLength(4)
 })
 
+it('over the picture, the browser keeps its own zoom: Ctrl +, - and 0 and Ctrl with the wheel are neither sent nor prevented', async () => {
+  const v = view(controlling)
+  fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+  await v.live()
+  const control = v.peer.channel('control')
+  const input = () => control.sent.filter(m => m.type === 'key' || m.type === 'wheel')
+  v.video.focus()
+  // Each is the browser's to act on: dispatchEvent says true when nothing prevented it.
+  const key = (type: 'keydown' | 'keyup', init: KeyboardEventInit) =>
+    v.video.dispatchEvent(new KeyboardEvent(type, { bubbles: true, cancelable: true, ...init }))
+  const wheel = (init: WheelEventInit) =>
+    v.video.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: 800, clientY: 550, deltaY: -120, ...init }))
+  const zoom = [
+    key('keydown', { key: '=', code: 'Equal', ctrlKey: true }), key('keyup', { key: '=', code: 'Equal', ctrlKey: true }),
+    key('keydown', { key: '-', code: 'Minus', ctrlKey: true }), key('keydown', { key: '0', code: 'Digit0', ctrlKey: true }),
+    key('keydown', { key: '+', code: 'NumpadAdd', ctrlKey: true }), key('keydown', { key: '=', code: 'Equal', metaKey: true }),
+    wheel({ ctrlKey: true }),
+  ]
+  // The wheel goes on the link's next ~60 Hz beat, so each look waits past one.
+  const beat = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  await beat()
+  expect(zoom, 'every one left to the browser').toEqual(zoom.map(() => true))
+  expect(input(), 'and none sent to the shack').toEqual([])
+  // CONTROLS: Ctrl with another key, and the wheel without Ctrl, are the shack's, and the page keeps them from the browser.
+  expect(key('keydown', { key: 'a', code: 'KeyA', ctrlKey: true }), 'Ctrl A prevented here').toBe(false)
+  expect(wheel({}), 'the wheel prevented here').toBe(false)
+  await beat()
+  expect(input().map(m => m.type === 'key' ? `key ${m.key} ${m.modifiers}` : `wheel ${m.type === 'wheel' && m.deltaY}`))
+    .toEqual(['key a 2', 'wheel -120'])
+})
+
 it('blind means no authority: a frozen picture sends no input, and lets go of what it held when it froze', async () => {
   const v = view(controlling)
   fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
@@ -633,6 +664,24 @@ it('A5: says in plain words why the station refused this browser\'s key, and wha
     fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
     await act(async () => { await Promise.resolve() })
     act(() => { v.link.receive(byName(SIGNAL.roomToBrowser, `refused: ${reason}`)) })
+    expect(v.link.getSnapshot()).toMatchObject({ phase: 'ended', reason })
+    expect(screen.getAllByText(new RegExp(words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length, reason).toBeGreaterThan(0)
+    cleanup()
+  }
+})
+
+// A LAN-only session (Remote on the shack's own network, free once internet use has ended): its two
+// refusals each say what the operator can do, the station's and the relay's alike.
+it('says in plain words why a LAN-only stream was refused, and what to do', async () => {
+  for (const [message, reason, words] of [
+    [byName(SIGNAL.roomToBrowser, 'refused: lanOnly'), 'lanOnly', 'Connect this device to the same network as the station, then start the stream again.'],
+    [byName(SIGNAL.roomToBrowserFromRelay, 'a LAN-only session\'s candidate that is not a private host one'), 'lanOnly', 'the stream works only on the shack\'s own network.'],
+    [byName(SIGNAL.roomToBrowserFromRelay, 'a LAN-only session to a station too old to hold it to the LAN'), 'updateStation', 'Streaming on the shack\'s own network needs a newer Nexus at the shack. Update Nexus there, then start the stream again.'],
+  ] as const) {
+    const v = view(controlling)
+    fireEvent.click(screen.getByRole('button', { name: 'Start the stream' }))
+    await act(async () => { await Promise.resolve() })
+    act(() => { v.link.receive(message) })
     expect(v.link.getSnapshot()).toMatchObject({ phase: 'ended', reason })
     expect(screen.getAllByText(new RegExp(words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length, reason).toBeGreaterThan(0)
     cleanup()

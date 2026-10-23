@@ -19,9 +19,11 @@ The rig generates the actual Morse. Nexus sends the character string to Hamlib v
 ### Serial keyline
 
 Nexus toggles **DTR or RTS** on a serial port into the rig's KEY jack; the rig is in CW and shapes
-the signal itself. This is the N1MM/fldigi method, and it is the clean answer for a rig that has no
-CAT CW keying. Set the keyline port and which line to use in **Settings ▸ CW**. The service holds
-the port open for the session (`crates/tempo-audio/src/service.rs:1515-1518`).
+the signal itself. This is the clean answer for a rig that has no
+CAT CW keying. Set the keyline port and which line to use in **Settings ▸ CW**. Nexus opens the
+port the first time it sends and keeps it open while the serial keyline is the keyer; changing the
+port or the line reopens it, and picking another keyer releases it. If the port cannot be opened,
+the CW cockpit shows the error the system gave.
 
 **When to use:** your rig has a key jack and no usable CAT keyer, and you want the rig's own
 timing and QSK rather than software-generated audio.
@@ -46,8 +48,11 @@ The back-end is switchable live mid-session; no restart is required.
 
 Entering the CW section commands the rig via CAT before any transmit:
 
-- **CAT and WinKeyer back-ends** → rig mode set to `CW`.
-- **Soundcard back-end** → rig mode set to `USB` (≥10 MHz) or `LSB` (<10 MHz).
+- **CAT, serial keyline and WinKeyer back-ends** → rig mode set to `CW`.
+- **Soundcard back-end** → rig mode set to the DATA submode `PKTUSB` (≥10 MHz) or `PKTLSB`
+  (<10 MHz), so the keyed tone reaches the transmitter from the sound card. With the radio's
+  **Data modes use plain SSB** setting on (an interface wired to the MIC socket), it is plain `USB`
+  or `LSB` instead.
 
 The mode is re-asserted on section entry even if the frequency has not changed. You do not need a separate mode button. TX is armed automatically on CW section entry (`tx_enabled = true`), consistent with a live-key rig, unless you stopped it: after Stop TX, Esc, TX Off or the watchdog, TX stays off, here and on every other screen, until you turn it back on yourself by sending with an F-key or typed text, or with TX On. The FT8 auto-sequencer never applies to CW.
 
@@ -122,11 +127,11 @@ on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:832`):
 
 **`F3` sends the report and `F4` ends the contact.**
 
-The contest sets and the Field Day set are laid out the way N1MM lays its keys out, one key per
+The contest sets and the Field Day set use the standard contest F-key layout, one key per
 step of a contact, and they are what [Enter Sends Message](Field-Day.md#enter-sends-message-esm)
 sends from: `F1` calls CQ, `F2` sends his call and your exchange, `F3` is TU, `F4` your call,
 `F5` his call alone, `F6` your exchange when you answer someone else's CQ, `F7` tells a dupe
-QSO B4 and `F8` asks for a repeat, the key N1MM's default message sets put AGN on. Your exchange goes once, and your call goes out on `F1`, `F3` and
+QSO B4 and `F8` asks for a repeat. Your exchange goes once, and your call goes out on `F1`, `F3` and
 `F4`.
 
 ### The Field Day set
@@ -211,6 +216,15 @@ active profile takes precedence over every built-in set above, Field Day include
 keeps which of its keys [Enter Sends Message](Field-Day.md#enter-sends-message-esm) sends for each
 step, mapped in Settings → Contesting ▸ Enter Sends Message.
 
+A key can also be changed where it is, in the cockpit: its **✎**, a right-click on it, or
+`Ctrl+Shift` with its F-key opens the macro editor RTTY and PSK use, and none of them sends.
+**Save** writes that one key into the ACTIVE profile (`cwProfiles[activeCwProfile]`), the list
+Settings → CW → Macros edits. A profile with no keys of its own first takes the eight the dock showed
+(the running contest's or Field Day's set during one, else the casual set), with that set's Enter
+Sends Message steps when it is one of the contest layouts, so Enter keeps sending the same keys.
+**Send once** sends the edited text through the key's own send path (the His call commit, the
+licence check, `send_cw` and every engine gate behind it) and saves nothing.
+
 **RST stays `5NN` regardless.** There is no per-QSO RST input, and a profile does not change that.
 
 ---
@@ -218,6 +232,59 @@ step, mapped in Settings → Contesting ▸ Enter Sends Message.
 ## Typed Text Input
 
 Type any free-form text in the text box and press `Enter` or click **Send**. The box clears after send. Both macros and typed text join the same queue and are sent in order.
+
+---
+
+## Turn Cue
+
+If you copy CW with the decoder rather than by ear, it is hard to hear when the other station has
+finished and it is your turn. The **turn cue** says so. It is a small lamp at the start of the send
+row, in front of His Call, and it lights the F-key that fits:
+
+| Lamp | What it means |
+|---|---|
+| `◌ Listening` | Nothing heard lately. |
+| `≋ W1ABC sending` | The other station is sending. |
+| `≋ W1ABC finishing…` | Their over has just ended on K, KN or a call. The key that fits gets a dashed outline. |
+| `▶ Your turn · F3` | Your turn to send. The key that fits glows: F2 to answer a CQ, F3 when a station has come back to you, F5 for your call once. With no key that fits (in a ragchew), it says `Your turn · type`. |
+| `▶ Probably you · F5 once` | The other station sent part of a call that matches yours, like `KD9?`. |
+| `⏸ Hold · W2XYZ` | Not your turn: the over was for another station. |
+| `⇡ UP · split off` | The DX listens above his frequency and your split is off. |
+| `? Not sure · F7` | A long silence, and nothing said whose turn it is. F7 (AGN) gets a dotted outline. |
+| `● You're sending` | You are keying. |
+| `◔ Listening for a reply` | Your over has ended. After a CQ or a call the ring empties while you wait, then the lamp says `No reply`. |
+| `✓ 73 · log it` | They are signing. F4 (73) glows. |
+
+**Your turn needs silence AND an end marker** — K, KN, BK, QRZ, AGN, a `?` after part of a call,
+UP, a CQ ending on the caller's call, or TU in a contest. Silence alone only gives `Not sure`. The
+lamp waits for what the decoder has actually heard, and it takes the turn back the moment the
+classic decoder hears keying again at your pitch. Your own over is never read as theirs: letters
+heard while you are keying (a radio that feeds its sidetone back) are ignored.
+
+When a DX station comes back to you in a pileup (`KD9TAW 5NN`), no key glows: F3 would send a whole
+ragchew reply. The lamp says `Your turn · send 5NN TU`. In a contest the keys are the contest set's
+(F4 your call, F6 your exchange, F3 TU), and with **Enter Sends Message** on, ESM lights its own
+keys and the lamp says `Your turn · Enter`.
+
+**It never transmits.** It only lights a key and says what fits. Every send is still your own key
+press, and nothing is held back: a key pressed while the lamp says the other station is sending
+still sends.
+
+**Pace.** With the turn cue on, the Decode pane's speed readout reads `them 18 · you 25 WPM`, with a `⇣`
+and an amber outline when you are 3 WPM or more faster. Click it to send at their speed for this
+contact; your saved speed does not change.
+
+**When it shows.** Only with the AI decoder on and the Decode pane shown, and never in an
+unassisted contest entry (no CW decoder output shows there). To hide it for good, untick
+**Turn Cue** in ⊞ Panels. A screen reader hears "Your turn" and "Hold" once per over through the
+announcements in **Settings → Appearance ▸ Accessibility & eyes-free** ("Not sure" and "No reply"
+only at the fullest setting). A sound is there too, off until you turn on **CW turn sound** in the
+same section: a short rising chirp, never while you transmit.
+
+**Timing.** The AI decoder's copy lands about a second after a letter is sent, so the cue comes about
+a second after the other station stops. That is in time for a ragchew or an answer to a CQ, tight
+for a contest's search and pounce, and too slow to win a pileup race. There its value is telling you
+when *not* to call.
 
 ---
 
@@ -299,7 +366,9 @@ If the rig has a split TX frequency set (`splitTxMhz` in the radio snapshot), a 
 
 | Setting | Default | Notes |
 |---|---|---|
-| `cw_keyer` | `cat` | `cat`, `soundcard`, or `winkeyer` |
+| `cw_keyer` | `cat` | `cat`, `serial`, `soundcard`, or `winkeyer` |
+| `cw_key_port` | *(empty)* | Serial port of the DTR/RTS keyline (e.g. `COM7`), separate from the CAT port; used when `cw_keyer` is `serial` |
+| `cw_key_line` | `dtr` | `dtr` or `rts`: the line that keys the rig on the serial keyline |
 | `winkeyer_port` | *(empty)* | Serial port of the K1EL WinKeyer (e.g. `COM6`); used when `cw_keyer` is `winkeyer` |
 | `cw_wpm` | `25` | Range 5–50; WPM_MIN=5, WPM_MAX=50 |
 | `cw_pitch_hz` | `600.0` | Range 300–1200, step 10; used as scope hairline and soundcard tone |
@@ -310,19 +379,28 @@ If the rig has a split TX frequency set (`splitTxMhz` in the radio snapshot), a 
 
 ## Limits / Not Yet
 
-- **No ESM auto-sequencer:** CW is manual-only. The FT8 seven-state sequencer is explicitly excluded from CW.
+- **No auto-sequencer:** every CW transmission starts with your own key press. In a contest,
+  [Enter Sends Message](Field-Day.md#enter-sends-message-esm) sends the contact's next message each
+  time you press Enter in the log strip (off until you turn it on), and never sends on its own. The
+  FT8 seven-state sequencer is not used for CW.
 - **No paddle/iambic input through the app:** the only input paths are F-key macros and typed text. For live paddle feel, connect paddles to the rig or to the WinKeyer directly.
 - **AI decoder (the default):** CW copy is powered by a neural-network decoder (the
   DeepCW model by e04, AGPL-3.0 — see NOTICE) reading the whole 400–1200 Hz window:
-  dramatically better weak-signal copy than pitch-tracking decoders, updating every few
-  seconds as a flowing transcript. The **Clear** button wipes it; the AI toggle in the
+  dramatically better weak-signal copy than pitch-tracking decoders, as a flowing transcript.
+  Letters land about a second after they are sent (a little later on a slow computer); the last
+  few, which the decoder may still correct, show at once in a dimmer color. The **Clear** button wipes it; the AI toggle in the
   DECODE header falls back to the classic pitch decoder (also used automatically if the
   model file is missing). Fused prosigns (<AR>, <BT>) aren't in the model's alphabet and
   can appear as letter fragments.
+- **Off in an unassisted contest entry:** with Settings → Contesting ▸ Unassisted entry on, neither
+  decoder runs (CQ WW counts a CW decoder as assistance): no copy, call chips, His Call guess or
+  speed, and the Decode pane says why.
 - **Not a full-band skimmer:** the decode follows the audio passband, not every signal on
   the band at once; the WPM readout is estimated by the classic decoder underneath.
-- **Macros not user-editable:** the 8 slots and their text are compiled in; no UI for custom macro text in this version.
-- **No contest exchange:** RST is hardcoded to 599, no serial-number field exists. This cockpit is casual/ragchew only.
+- **Turn cue limits:** it reads the one signal you are copying, about a second behind the air. A
+  run-together prosign the AI decoder prints as other letters is no end marker to it, so such an
+  over ends in `Not sure` rather than `Your turn`; and a second station inside the decoder's window
+  can hold `sending` up or look like the end of the over.
 - **CAT abort reliability:** `\stop_morse` varies by Hamlib version and rig manufacturer; older builds and some rigs may not halt mid-element.
 - **Soundcard PTT tail:** 250 ms, fixed; not configurable.
 - **Desktop-only:** Tauri v2; no web or mobile build.

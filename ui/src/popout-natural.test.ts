@@ -94,6 +94,7 @@ describe('pop-out natural footprints vs the windows Rust builds', () => {
       'operatemap',
       'pota',
       'sats',
+      'spots',
       'waterfall',
     ])
   })
@@ -136,6 +137,23 @@ describe('pop-out natural footprints vs the windows Rust builds', () => {
     expect(bad).toEqual([])
   })
 
+  it('the contest logger drags down to 420×320 and lays out whole there, in a 640×480 box', () => {
+    // The operator's ask: small enough to drop in a corner beside another program. Measured in Chrome
+    // (`scripts/browser-probe --desktop contestlog`): the call, the exchange boxes, Log, the dupe
+    // warning and the newest contact all on screen at the floor.
+    expect(sizeFor(MIN_INNER, 'contestlog')).toEqual([420, 320])
+    expect(naturalFor('contestlog')).toEqual({ w: 640, h: 480 })
+  })
+
+  it("the Spots window drags down to 490×360, where the board's nine columns still fit at the 65% floor", () => {
+    // Measured in Chrome (`scripts/browser-probe --desktop spots`): at 100% the columns fit from 739 px, and at
+    // 740 a busy day's filter bar, the head, the column headings and three rows fit from 434 px. At its
+    // smallest the window shows a 754×554 box at the 65% floor; it opens at 960×660, at 100%.
+    expect(sizeFor(MIN_INNER, 'spots')).toEqual([490, 360])
+    expect(sizeFor(DEFAULT_INNER, 'spots')).toEqual([960, 660])
+    expect(naturalFor('spots')).toEqual({ w: 740, h: 440 })
+  })
+
   it('every other pop-out opens at 100% — the behaviour the field report asked for', () => {
     const opened = Object.fromEntries(
       openableSlugs()
@@ -159,6 +177,7 @@ describe('pop-out natural footprints vs the windows Rust builds', () => {
       operatemap: 100,
       pota: 100,
       sats: 100,
+      spots: 100,
       waterfall: 100,
     })
   })

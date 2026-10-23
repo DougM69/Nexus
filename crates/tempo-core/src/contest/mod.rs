@@ -100,8 +100,8 @@ pub use session::{
 };
 
 pub use scoring::{
-    boards, BandPoints, BoardSpec, ModePoints, MultScope, MultSource, MultiplierRule, PointsRule,
-    PostMultiplier, RelationPoints, ScoreRow, Scoring,
+    boards, same_province_as, BandPoints, BoardSpec, ModePoints, MultScope, MultSource,
+    MultiplierRule, MultsWorked, PointsRule, PostMultiplier, RelationPoints, ScoreRow, Scoring,
 };
 
 pub use spec::{

@@ -8,12 +8,10 @@
 // deep-link anchor, the width guards and the registry guard all still find it.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST. Every operator-visible string here comes from the
-// catalog (`i18n/en.ts`); a hardcoded one fails CI. What does NOT come from the catalog is
-// listed in STATION_EXAMPLES and in the <option> values below — see the invariant-token rule
-// in `i18n/index.ts`. `KD9TAW` is a callsign, `EN52xa` is a grid, `WI` is a section/state
-// code; they are the same characters in every language, and a translator who "localises" one
-// has broken an example of a wire format.
+// catalog (`i18n/en.ts`); a hardcoded one fails CI. What does NOT come from the catalog is the
+// <option> values below — see the invariant-token rule in `i18n/index.ts`.
 
+import type { ReactNode } from 'react'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import type { BandChannel, Settings } from '../types'
@@ -21,51 +19,30 @@ import { FrequencyControl } from './FrequencyControl'
 
 type FieldKey = keyof Settings
 
-/**
- * The example shown in an empty field. The two cases are NOT interchangeable and the union
- * exists to make an author choose:
- *   `token` — a value from a technical namespace (callsign, grid, section code). Invariant.
- *   `prose` — a human example (a first name, an instruction). A catalog key.
- */
-type Example = { token: string } | { prose: MessageKey }
-
 interface StationField {
   key: FieldKey
   labelKey: MessageKey
   hintKey: MessageKey
-  example: Example
+  /** What an empty box says, when it says anything: words about what goes in it, never a
+   *  sample value — a sample in grey reads as a value already filled in. */
+  placeholderKey?: MessageKey
 }
-
-/**
- * The invariant example values this surface shows, gathered so the guard can prove they never
- * became catalog entries. Do not inline them — a bare string in a `placeholder=` is exactly
- * what the guard refuses, and rightly: it is the moment someone has to decide which category
- * the value is in.
- */
-export const STATION_EXAMPLES = {
-  callsign: 'KD9TAW',
-  grid: 'EN52xa',
-  state: 'WI',
-} as const
 
 const STATION_FIELDS: StationField[] = [
   {
     key: 'mycall',
     labelKey: 'settings.station.callsign.label',
     hintKey: 'settings.station.callsign.hint',
-    example: { token: STATION_EXAMPLES.callsign },
   },
   {
     key: 'mygrid',
     labelKey: 'settings.station.grid.label',
     hintKey: 'settings.station.grid.hint',
-    example: { token: STATION_EXAMPLES.grid },
   },
   {
     key: 'opName',
     labelKey: 'settings.station.opName.label',
     hintKey: 'settings.station.opName.hint',
-    example: { prose: 'settings.station.opName.placeholder' },
   },
   // #25 — who is AT THE KEY, as opposed to whose station it is. Two different questions, and
   // ADIF has two fields because the answers differ: STATION_CALLSIGN is the callsign above,
@@ -77,13 +54,12 @@ const STATION_FIELDS: StationField[] = [
     key: 'fdOperator',
     labelKey: 'settings.station.fdOperator.label',
     hintKey: 'settings.station.fdOperator.hint',
-    example: { prose: 'settings.station.fdOperator.placeholder' },
+    placeholderKey: 'settings.station.fdOperator.placeholder',
   },
   {
     key: 'opState',
     labelKey: 'settings.station.opState.label',
     hintKey: 'settings.station.opState.hint',
-    example: { token: STATION_EXAMPLES.state },
   },
 ]
 
@@ -94,8 +70,6 @@ const LICENSE_CLASSES: { value: string; labelKey: MessageKey }[] = [
   { value: 'extra', labelKey: 'settings.station.licenseClass.extra' },
   { value: 'open', labelKey: 'settings.station.licenseClass.open' },
 ]
-
-const placeholderFor = (e: Example): string => ('token' in e ? e.token : t(e.prose))
 
 interface Props {
   readOnly?: boolean
@@ -109,9 +83,13 @@ interface Props {
   /** Units is on the Remote allow-list even though the rest of this section is not, so a
    *  browser may still change it (#248 moved it here from Digital). Undefined off Remote. */
   unitsLocked?: boolean
+  /** From a computer driving the station: a setting the save from there keeps as the station has
+   *  it shows read-only, and `setAtStation` says so. Absent at the station. */
+  locked?: (key: FieldKey) => boolean
+  setAtStation?: (key: FieldKey) => ReactNode
 }
 
-export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked }: Props) {
+export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked, locked, setAtStation }: Props) {
   return (
     // The SECTION is never disabled; the groups inside it are. A form control inside a disabled
     // <fieldset> is disabled whatever its own `disabled` says, and a nested fieldset cannot take
@@ -132,7 +110,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
                 className={`settings-input${invalid && error ? ' invalid' : ''}`}
                 type="text"
                 value={String(value)}
-                placeholder={placeholderFor(f.example)}
+                placeholder={f.placeholderKey ? t(f.placeholderKey) : undefined}
                 onChange={(e) => onUpdate(f.key, e.target.value)}
                 aria-invalid={invalid && !!error}
                 autoComplete="off"
@@ -144,7 +122,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
         })}
         <label className="settings-field">
           <span className="settings-label">{t('settings.station.licenseClass.label')}</span>
-          <select
+          <select disabled={locked?.('licenseClass')} data-setting="licenseClass"
             className="settings-input"
             value={String(form.licenseClass ?? 'open')}
             onChange={(e) => onUpdate('licenseClass', e.target.value)}
@@ -155,6 +133,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
               </option>
             ))}
           </select>
+          {setAtStation?.('licenseClass')}
           <span className="settings-hint">{t('settings.station.licenseClass.hint')}</span>
         </label>
       </div>

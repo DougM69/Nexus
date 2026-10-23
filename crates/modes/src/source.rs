@@ -90,6 +90,21 @@ impl<'a> DecodeRequest<'a> {
     }
 }
 
+/// Where a decoder reports while its pass runs, as WSJT-X's decoders call back with each new
+/// decode (`ft8_decode.f90:233-238`, `ft4_decode.f90:456`) for jt9 to write and flush at once, so a
+/// decode reaches its reader the moment it is found instead of when the pass ends.
+pub trait DecodeSink {
+    /// A decode the pass has just accepted. It is also in the list the pass returns, in the same
+    /// place: the decodes come in the decoder's own order, the RX frequency's candidates first.
+    fn found(&mut self, d: &Decode);
+    /// Asked after each FT8 sync candidate is tried: `true` stops the pass there, with what it has
+    /// found (WSJT-X asks its early pass's give-up at exactly this point, `ft8_decode.f90:240-242`).
+    /// Never asked by FT4, which has no give-up.
+    fn give_up(&mut self) -> bool {
+        false
+    }
+}
+
 /// A source of [`Decode`]s, driven once per slot boundary by the engine.
 pub trait SignalSource: Send {
     /// Human-readable label for the UI (e.g. `"Native (FT8)"`, `"WSJT-X UDP"`).
@@ -113,6 +128,19 @@ pub trait SignalSource: Send {
     fn decode_a7(&mut self, req: &DecodeRequest, a7_final: bool) -> Vec<Decode> {
         let _ = a7_final;
         self.decode(req)
+    }
+
+    /// [`decode_a7`](SignalSource::decode_a7), telling `sink` of each decode the moment the
+    /// decoder finds it (a native FT8 or FT4 source). Every other source hands its decodes over
+    /// only in the returned list; this default tells `sink` nothing.
+    fn decode_streaming(
+        &mut self,
+        req: &DecodeRequest,
+        a7_final: bool,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        let _ = sink;
+        self.decode_a7(req, a7_final)
     }
 }
 
@@ -194,6 +222,52 @@ impl SignalSource for NativeSource {
             req.partial,
             req.ap,
             req.ap_cq_only,
+        );
+        for d in &mut decs {
+            d.mode = Some(kind);
+        }
+        decs
+    }
+
+    fn decode_streaming(
+        &mut self,
+        req: &DecodeRequest,
+        a7_final: bool,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        /// Tags each decode with the mode that found it before `sink` sees it, as the returned
+        /// list is tagged below.
+        struct Tagged<'a> {
+            kind: ModeKind,
+            sink: &'a mut dyn DecodeSink,
+        }
+        impl DecodeSink for Tagged<'_> {
+            fn found(&mut self, d: &Decode) {
+                let mut d = d.clone();
+                d.mode = Some(self.kind);
+                self.sink.found(&d);
+            }
+            fn give_up(&mut self) -> bool {
+                self.sink.give_up()
+            }
+        }
+        let kind = self.mode.kind();
+        let mut decs = self.mode.decode_frame_streaming(
+            req.iwave,
+            req.nfa,
+            req.nfb,
+            req.ndepth,
+            req.mycall,
+            req.hiscall,
+            req.nqso_progress,
+            req.nfqso,
+            req.nftx,
+            req.frame_time_ms,
+            a7_final,
+            req.partial,
+            req.ap,
+            req.ap_cq_only,
+            &mut Tagged { kind, sink },
         );
         for d in &mut decs {
             d.mode = Some(kind);

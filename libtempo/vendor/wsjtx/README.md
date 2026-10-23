@@ -45,6 +45,13 @@ fixture — that is the licence leak"). Upstream is now pinned by sha256 fingerp
 by reproducing what it says. If you add a WSJT-X-derived measurement anywhere, record the
 **fingerprint**, not the text.
 
+One deliberate exception lives outside this directory: `crates/modes/src/wsjt77/`, a Rust
+translation of the FT8/FT4 transmit encoder from the copies here (`lib/77bit/packjt77.f90`,
+`lib/ft8/genft8.f90`, `lib/ft4/genft4.f90`, `lib/ft8/encode174_91.f90`, `lib/crc14.cpp`,
+`lib/ft8/gen_ft8wave.f90`, `lib/ft4/gen_ft4wave.f90`, `lib/ft2/gfsk_pulse.f90`). It is WSJT-X
+expression under GPL-3.0-only like everything here; its files carry their own origin and
+licence headers, and NOTICE describes it.
+
 **`lib/ft2/` is the one directory here whose upstream is NOT WSJT-X itself** (added
 2026-08-16): its eleven mode files are vendored from **Decodium 3** (IU8LMC's GPL-3 fork of
 WSJT-X 3.0.0-rc1, <https://github.com/iu8lmc/decodium3-build>) — Decodium's FT2, the variant

@@ -55,9 +55,11 @@ FT surfaces use, so a signal drifting across the passband moves smoothly instead
 of in steps. Two named cursors replace the usual RX/TX markers — a green **M** at
 the mark tone and an orange **S** at the space tone, drawn from exactly the tone
 pair the demodulator built its filters from, so what you see and what you decode
-can never disagree. The hint above the canvas reads **click nets the decoder**:
-any click moves the decode centre to that audio frequency (clamped 300–3700 Hz)
-and drops the demodulator for a clean re-acquire. Palette, view span, the G/Z
+can never disagree. The hint above the canvas reads **click nets the decoder and
+your transmit tones**: any click moves the decode centre, and the AFSK tones you
+transmit, to that audio frequency (clamped 300–3700 Hz) and drops the demodulator
+for a clean re-acquire. While you transmit the click does nothing and the hint
+reads **tuning held while transmitting**. Palette, view span, the G/Z
 contrast knobs, the 3D stacked-spectrum toggle and pause-with-scrollback all work
 as they do elsewhere.
 
@@ -193,9 +195,17 @@ in, so you can read what will key before you click it. The tokens also expand in
 compose bar, where **Enter** sends.
 
 **To change a macro**, hover it (or tab to it) and click **✎**, or click an empty
-key. The editor opens over the dock with **Title**, **Message**, the tokens (click
-one to insert it), **Save**, **Cancel** and **Reset this button**. Save takes effect
-at once and is kept with that set — there is no separate Settings save. Titles and
+key. To change what a key sends on the fly, right-click it, or press **Ctrl+Shift**
+with its F-key (**Ctrl+Shift+F3** for F3, wherever the cursor is in the cockpit): the
+same editor opens with the cursor at the end of **Message**. None of these sends
+anything. The editor opens over the dock with **Title**, **Message**, the tokens (click
+one to insert it), **Save**, **Send once**, **Cancel** and **Reset this button**. Save takes effect
+at once and is kept with that set — there is no separate Settings save.
+**Send once** sends the message as it stands in the editor, one time, exactly as the
+key would send it: the tokens are filled in and every check the key gets applies (no
+call in Their call…, no contest for `{EXCH}`, outside your license, TX off). The key
+keeps the message it had. When the message goes, the editor closes; when the cockpit
+refuses it, a toast says why and the editor stays open with what you wrote. Titles and
 messages you write are shown as you wrote them, in any language; the built-in
 titles follow the app's language. A token Nexus does not know is flagged and cannot
 be saved (RTTY has no braces, so it would go out as a bare word), and a macro may
@@ -273,6 +283,50 @@ sequencers can never key together.
 signal. The faint run is the decoder's own per-character confidence — those are
 the characters to ask **AGN** about rather than the ones to write in the log.*
 
+### Tune with the tuning scope
+
+The square left of the decoded text is a **tuning scope**: the crossed-ellipse
+picture of a classic terminal unit. Two narrow filters sit on the mark and space
+tones the decoder is listening to, after the AFC's correction; the mark filter
+moves the trace left and right, the space filter up and down.
+
+- **A tuned signal draws a square "+"**: a flat ellipse along the M axis for the
+  mark tone and an upright one along the S axis for the space tone.
+- **A mistuned signal turns the cross.** It turns clockwise when the signal sits
+  higher than the decoder's tones and counter-clockwise when it sits lower, and
+  the arms get fatter as it moves further off.
+- **Noise draws a round blob** that fills the middle, with no arms.
+
+The line under the square says the same in words, for anyone who cannot use the
+picture: **Tuned**, **Signal 20 Hz high**, **Signal 20 Hz low**, or **No signal**.
+It changes at most once a second while only the number moves.
+
+To tune, click the signal on the waterfall first (step 3 above), then use
+**◀** and **▶** under the square to move the decoder 5 Hz at a time; hold one
+down to keep stepping. Move towards the words: **Signal 20 Hz high** wants ▶.
+The figure between the buttons is the mark tone in hertz.
+
+⚠️ **The nudges move your transmit tone as well.** In AFSK the transmitter
+follows the decoder's centre, exactly as a waterfall click does, so a nudge is
+also a change to where your own signal lands. That is why both buttons are
+greyed out while you transmit (an over, continuous TX or Tune): a held button
+cannot slide your tone in the middle of an over. Nexus also refuses any net while
+RTTY is transmitting, so a click on the waterfall mid-over does not move your
+tone either; net between overs.
+
+![The tuning scope beside the decoded text, showing a crossed-ellipse "+" with ◀ M 2125 ▶ and the words "Signal 18 Hz low" under it.](../img/manual/rtty-tuning-scope.webp)
+
+*The tuning scope in the Decoded Text pane, drawn from a test pattern rather
+than off the air, in a development build after Nexus 1.19.0.*
+
+The scope is a ⊞ Panels entry, **Tuning**, shown by default; hide it there or
+with its own ✕. With the decoded text hidden it stands on its own under the TX
+strip. The square takes the room it needs from the decoded text, the waterfall
+and the log strip (about 200 px on a large window); on a small one it is the
+largest that fits, about 100 px at 1024×768, and nothing has to scroll. It goes blank while you transmit and while the decoder is
+not armed. On a second computer driving the station with Nexus's own Remote
+client it works the same way, fed from the station.
+
 ### Send an over by hand
 
 1. Arm transmit with the header's **TX Off** latch, so it reads **TX On**.
@@ -288,7 +342,7 @@ the characters to ask **AGN** about rather than the ones to write in the log.*
 
 ### Key up and type
 
-The dock's **TX** button keys up and stays keyed, the way MMTTY does. It reads
+The dock's **TX** button keys up and stays keyed. It reads
 **Continuous** when it is off and **On air** while you are transmitting. Type
 and the characters go out as you type them; between keystrokes the air carries
 diddle — the LTRS idle every RTTY station sends — so the far end holds sync
@@ -394,6 +448,18 @@ pill shows which one is live.
 Either way the bit stream is identical — the same framed Baudot, 1 start bit,
 5 data bits, 1.5 stop bits, at true 45.45 baud never rounded to 45.
 
+### Choose the AFSK sideband
+
+AFSK runs on LSB by default, the RTTY convention MMTTY and N1MM use: mark on
+the lower audio tone, which lands higher on the air. If your station is set up
+for USB instead, set **AFSK sideband** to **USB** in
+[Settings ▸ Digital ▸ RTTY](settings-reference.md#rtty). Nexus then puts the
+rig in its upper data mode (DATA-U / USB-D / DIGU) on every band and swaps the
+tones itself, so mark still lands higher on the air and the decoder still
+copies. Leave **Reverse** off for this; Reverse is for copying a station that
+is sending upside down, and it inverts whichever sideband you picked. True FSK
+has no sideband choice: the rig's own RTTY mode sets the sense.
+
 ### Land here from the Needed board
 
 Click an RTTY row on the [Needed board](needed-dx.md) and Nexus QSYs to the
@@ -405,7 +471,8 @@ spot so you can work it from wherever you are.
 ## Honest limits
 
 - **F1–F8 are bound only while this cockpit is on screen**, and not while the
-  macro editor is open. Alt, Ctrl and Cmd with an F-key are left to your system.
+  macro editor is open. **Ctrl+Shift** with an F-key opens that key's editor; any
+  other Alt, Ctrl or Cmd with an F-key is left to your system.
 - **A contact you work by hand you also log by hand.** The **LOG** pane under the
   transcript is the strip for it — call, sent and received report, name, QTH,
   state, country, POTA reference and notes, with a **Log** button. A double-click

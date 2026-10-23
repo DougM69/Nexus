@@ -85,7 +85,7 @@ export const PER_SURFACE = [
   // under another name, for the same reason: what THIS board shows. Never that key — a chip in
   // the pane and one on the Needed view must not move each other.
   'nexus.phone.neededFilters',
-  // …and the CW cockpit's (plan H8: CW gains Phone's two feeds), for the same reason and apart
+  // …and the CW cockpit's (CW gains Phone's two feeds), for the same reason and apart
   // from both of the above.
   'nexus.cw.neededFilters',
   'nexus.decodes.hideB4',
@@ -119,11 +119,17 @@ export const PER_SURFACE = [
   'nexus.phonescope.rows',
   'nexus.phonescope.win',
   'nexus.roster.filters',
+  // The RTTY waterfall's speed: a look of THIS window's waterfall, like its span, flow and 3D.
+  'nexus.rtty.waterfall.speed',
   'nexus.sats.columns',
   'nexus.sats.favOnly',
   'nexus.spotlegend',
   // Connect's bottom strip height (layout L7): a % of THIS window's grid, like the strips below.
   'nexus.split.connect.strip',
+  // The Contest screen's log height and the last contacts' over it: a % of THIS window's screen, like
+  // the strips around them (the main window's Contest screen, its pop-out and the logger window differ).
+  'nexus.split.contest.log',
+  'nexus.split.contest.recent',
   'nexus.split.cw.scope',
   // JS8's waterfall height (layout L2): a % of THIS window's shell, like the three beside it.
   'nexus.split.js8.waterfall',
@@ -153,6 +159,15 @@ export const PER_SURFACE = [
 /** Keys that describe the STATION or the PERSON and must never be scoped. Listed rather
  *  than inferred so a failure names the key that leaked. */
 const SHARED = [
+  // Spot me's last comment for each mode on the Spots board (SpotsSpotMe): what the operator says about
+  // themselves on a mode, the same whichever window's board they spot from.
+  'nexus.spotMe.comments',
+  // The Spots view's filters on their way to the window its Pop out opens (SpotsPanel's hand-off): written by
+  // the main window, taken and deleted by that window. Per window, it would never reach the window it is for.
+  'nexus.spotsPopOut.filters',
+  // The contest logger window's layout (features/contestLoggerLayout): written by the main window to
+  // say which layout it opens that window in, read by that window. One window, so one key.
+  'nexus.contestLogger.layout',
   // Display units: one preference the whole station shares, like the country exclude.
   'nexus.units',
   // Logbook globe on/off (D#278): how this operator wants the Logbook to look, not a window
@@ -228,6 +243,11 @@ const SHARED = [
   // on the band right now — one click to remake, meaningless tomorrow — so it does not join the
   // watch list and the chase sets in DURABLE_KEYS (features/js8Pins).
   'nexus.js8.pins',
+  // The JS8 lists' view choices (columns, orders, labels, heartbeats shown) and what was cleared,
+  // removed or added (features/js8View). SHARED and not durable, for the pins' reason: how this
+  // operator draws the lists is about the operator, not a window, and it is one click to remake.
+  'nexus.js8.view',
+  'nexus.js8.lists',
   'nexus.memory.bank.v1',
   'nexus.memory.bank.v2',
   'nexus.needed.autopop',
@@ -274,6 +294,16 @@ const SHARED = [
   // is the whole mechanism, as the viewer's path above is: the window writes it and the main window's
   // `storage` listener reads its settings again. Per-surface, the main window would never hear it.
   'nexus.contestScreen.saved',
+  // The contest entry's call, for the band map window's right-click mark, and the "a marker changed"
+  // stamp the band map window hears as a `storage` event (features/freqMarkers.ts). SHARED on purpose:
+  // the entry and the band map are different windows, which is the whole reason for both keys.
+  'nexus.contest.entryCall',
+  // "Work this contest in CW / in Phone" from a contest window (features/contestWorkIn): the request the
+  // main window hears as a `storage` event, the whole mechanism between the two; and the hint beside the
+  // buttons, dismissed once for this computer whichever window showed it.
+  'nexus.contest.workIn',
+  'nexus.contest.workInHint',
+  'nexus.freqMarkers.changed',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',
   'nexus.waterfall.palette',
@@ -442,9 +472,11 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.operate.tx',
     'nexus.split.connect.strip',
     'nexus.split.logbook.globe',
+    'nexus.split.contest.log',
+    'nexus.split.contest.recent',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
-  // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345 and plan H8, and the
+  // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345, and the
   // Conditions and rail box's, connect/NeededBox).
   'components/NeededPanel.tsx:key': [
     'neededFilters',
@@ -644,6 +676,8 @@ describe('call sites agree with the classification', () => {
       ['components/OperateCockpit.tsx', 'nexus.split.operate.tx'],
       ['components/ConnectView.tsx', 'nexus.split.connect.strip'],
       ['components/Logbook.tsx', 'nexus.split.logbook.globe'],
+      ['components/ContestView.tsx', 'nexus.split.contest.log'],
+      ['components/ContestLogger.tsx', 'nexus.split.contest.recent'],
     ]) {
       expect(readFileSync(join(SRC, file), 'utf8')).toContain(`storageKey="${key}"`)
     }

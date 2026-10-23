@@ -11,8 +11,7 @@
 //! Two earlier attempts treated the symptom: 0.17.13 moved the row behind its own lock (that
 //! fixed READER contention — the wrong half), and 0.17.14 backed off the worst-offending CAT
 //! read's retry cadence (a frequency reducer that left every other blocking read exposed). The
-//! first-order fix is that the row must not be produced on the blocking thread at all. See
-//! `tasks/plan-spectrum-cat-split.md`.
+//! first-order fix is that the row must not be produced on the blocking thread at all.
 //!
 //! THE SPLIT THAT WAS CHOSEN, AND THE ONE THAT WAS NOT. Splitting the RADIO LOOP (moving CAT
 //! telemetry or the transmitter itself onto another thread) was designed and rejected: a
@@ -59,6 +58,14 @@ pub struct RxTap {
     card: Mutex<Option<RxSource>>,
     epoch_seq: AtomicU64,
     audio: Arc<ReceiveAudioFeed>,
+    /// A second bounded copy of the same audio, for the programs on this computer that connect to
+    /// Nexus's TCI server. A feed has one reader, and Remote Listen holds the first; with its own
+    /// the two never refuse or wait on each other. Same lifecycle as `audio`, and as idle: it
+    /// copies nothing while no program listens. While the Flex's DAX audio is the receive source
+    /// it carries that instead ([`Self::publish_dax`]).
+    tci_audio: Arc<ReceiveAudioFeed>,
+    /// The DAX source the TCI copy carries, while it carries one in the card's place.
+    dax: Mutex<Option<ReceiveSource>>,
 }
 
 impl RxTap {
@@ -92,6 +99,10 @@ impl RxTap {
             *g = Some(RxSource { ring, rate, epoch });
             self.audio
                 .replace_source_with_origin(Some(ReceiveSource { epoch, rate }), origin);
+            if !self.dax_holds_tci() {
+                self.tci_audio
+                    .replace_source(Some(ReceiveSource { epoch, rate }));
+            }
         }
     }
 
@@ -100,14 +111,66 @@ impl RxTap {
         if let Ok(mut g) = self.card.lock() {
             *g = None;
             self.audio.replace_source(None);
+            if !self.dax_holds_tci() {
+                self.tci_audio.replace_source(None);
+            }
         }
     }
 
-    /// Retire only the optional media copy before capture teardown. Display and
+    /// The Flex's DAX receive audio for the TCI copy, on every radio-loop tick. `Some` while Nexus's
+    /// own Flex client's native audio is the receive source: what the decoders take this tick, at
+    /// `rate`, with the RX gain applied (empty on a tick with none). That source then holds the
+    /// copy in the card's place, so programs on the TCI server hear the radio and not a sound card
+    /// the radio is not on. `None` gives the copy back to the card, as Remote Listen's copy has it
+    /// (retired with it, if it was). Remote Listen's copy and the waterfall stay the card's.
+    ///
+    /// The DAX source is a new one, with its own epoch, whenever the copy does not carry it: when
+    /// DAX becomes the source, and after a retire ended it (a radio switch, a capture's teardown),
+    /// so a reader of an earlier source never reads on into this one.
+    pub fn publish_dax(&self, rate: u32, audio: Option<&[f32]>) {
+        let Ok(mut dax) = self.dax.lock() else {
+            return;
+        };
+        let Some(samples) = audio else {
+            if dax.take().is_some() {
+                self.tci_audio.replace_source(self.audio.source());
+            }
+            return;
+        };
+        let source = match *dax {
+            Some(source) if self.tci_audio.source() == Some(source) => source,
+            _ => {
+                let epoch = self
+                    .epoch_seq
+                    .fetch_add(1, Ordering::AcqRel)
+                    .wrapping_add(1);
+                let source = ReceiveSource { epoch, rate };
+                self.tci_audio.replace_source(Some(source));
+                *dax = Some(source);
+                source
+            }
+        };
+        // In pieces of at most the radio loop's 20 ms tick: a tick the loop was held up for (a slow
+        // CAT read) would be one block past the feed's limit, which it drops whole.
+        let at = std::time::Instant::now();
+        for piece in samples.chunks((rate as usize / 50).max(1)) {
+            self.tci_audio.publish(source, at, piece);
+        }
+    }
+
+    /// Whether the Flex's DAX audio holds the TCI copy in the card's place.
+    fn dax_holds_tci(&self) -> bool {
+        self.dax.lock().map(|d| d.is_some()).unwrap_or(false)
+    }
+
+    /// Retire only the optional media copies before capture teardown. Display and
     /// decode consumers keep their established lifecycle. Publishing a newly
-    /// opened ring is the only way to make this media source available again.
+    /// opened ring is the only way to make these media sources available again,
+    /// but for the TCI copy while the Flex's DAX audio is the receive source: its
+    /// next tick is a new source ([`Self::publish_dax`]).
     pub fn retire_receive_audio(&self) {
         self.audio.replace_source(None);
+        self.tci_audio.replace_source(None);
     }
 
     /// The source to drain right now, if any.
@@ -122,15 +185,20 @@ impl RxTap {
         self.audio.clone()
     }
 
+    /// The TCI server's copy: the same audio as [`Self::receive_audio`], through its own feed and
+    /// its own single reader. Like that one it authorizes nothing by itself.
+    pub fn tci_audio(&self) -> Arc<ReceiveAudioFeed> {
+        self.tci_audio.clone()
+    }
+
     pub(crate) fn publish_audio(&self, source: &RxSource, samples: &[f32]) {
-        self.audio.publish(
-            ReceiveSource {
-                epoch: source.epoch,
-                rate: source.rate,
-            },
-            std::time::Instant::now(),
-            samples,
-        );
+        let source = ReceiveSource {
+            epoch: source.epoch,
+            rate: source.rate,
+        };
+        let at = std::time::Instant::now();
+        self.audio.publish(source, at, samples);
+        self.tci_audio.publish(source, at, samples);
     }
 }
 
@@ -173,6 +241,158 @@ mod tests {
         let new = feed.subscribe(feed.source().unwrap()).unwrap();
         drop(reader);
         assert!(new.read(std::time::Instant::now()).is_ok());
+    }
+
+    /// The TCI server's copy is a feed of its own beside Remote Listen's: both readers hold at
+    /// once (a feed takes one), both hear the same audio, and both end with the capture, by either
+    /// road it ends.
+    #[test]
+    fn the_tci_copy_is_a_second_reader_beside_remote_listens() {
+        use crate::receive_audio::{ReceiveAudioReader, ReceiveError};
+        let tap = RxTap::new();
+        let readers = |tap: &RxTap| {
+            let (remote, tci) = (tap.receive_audio(), tap.tci_audio());
+            let remote = remote.subscribe(remote.source().unwrap()).unwrap();
+            let source = tci.source().expect("the TCI copy has the capture's source");
+            let tci = tci
+                .subscribe(source)
+                .expect("the TCI copy has a reader of its own beside Remote Listen's");
+            (remote, tci)
+        };
+        let ended = |r: &ReceiveAudioReader| {
+            matches!(r.read(std::time::Instant::now()), Err(ReceiveError::Ended))
+        };
+        for retire in [false, true] {
+            tap.publish_card(Arc::new(SpscRing::new(4096)), 48_000);
+            let (remote, tci) = readers(&tap);
+            let display = tap.current().unwrap();
+            // A subscription discards the first batch it sees (receive_audio.rs).
+            tap.publish_audio(&display, &[0.1; 480]);
+            tap.publish_audio(&display, &[0.25; 480]);
+            let heard = |r: &ReceiveAudioReader| {
+                r.read(std::time::Instant::now())
+                    .unwrap()
+                    .map(|block| block.samples)
+            };
+            assert_eq!(heard(&remote), Some(vec![0.25; 480]), "Remote Listen");
+            assert_eq!(heard(&tci), Some(vec![0.25; 480]), "the TCI copy");
+            if retire {
+                tap.retire_receive_audio();
+            } else {
+                tap.clear_card();
+            }
+            assert!(
+                ended(&remote),
+                "retire {retire}: Remote Listen's reader ended"
+            );
+            assert!(ended(&tci), "retire {retire}: the TCI reader ended");
+        }
+    }
+
+    /// The TCI copy carries the Flex's DAX audio while it is the receive source, in the card's
+    /// place: a program's reader of the card ends when DAX takes the copy, a reader of the DAX
+    /// source hears the DAX audio and none of the card's, Remote Listen's copy stays the card's
+    /// throughout, and once DAX stops being the source the copy is the card's again.
+    #[test]
+    fn the_tci_copy_carries_the_flex_dax_audio_while_it_is_the_receive_source() {
+        use crate::receive_audio::ReceiveError;
+        let now = std::time::Instant::now;
+        let tap = RxTap::new();
+        tap.publish_card(Arc::new(SpscRing::new(4096)), 48_000);
+        let card = tap.current().unwrap();
+        let (remote, tci) = (tap.receive_audio(), tap.tci_audio());
+        let card_source = tci.source().expect("the card's source");
+        let card_reader = tci.subscribe(card_source).unwrap();
+        let remote_reader = remote.subscribe(remote.source().unwrap()).unwrap();
+
+        tap.publish_dax(12_000, Some(&[]));
+        assert!(
+            matches!(card_reader.read(now()), Err(ReceiveError::Ended)),
+            "a reader of the card's audio read on into the DAX's"
+        );
+        let dax = tci.source().expect("the DAX source");
+        assert_eq!(dax.rate, 12_000);
+        assert_ne!(dax, card_source);
+        let reader = tci.subscribe(dax).unwrap();
+        let mut heard = Vec::new();
+        for _ in 0..3 {
+            tap.publish_dax(12_000, Some(&[0.3; 240]));
+            tap.publish_audio(&card, &[0.1; 960]);
+            while let Ok(Some(block)) = reader.read(now()) {
+                heard.extend(block.samples);
+            }
+        }
+        // A subscription discards the first batch it sees (receive_audio.rs).
+        assert_eq!(heard, vec![0.3; 480], "the TCI copy");
+        let mut listened = Vec::new();
+        while let Ok(Some(block)) = remote_reader.read(now()) {
+            listened.extend(block.samples);
+        }
+        assert!(
+            !listened.is_empty() && listened.iter().all(|&x| x == 0.1),
+            "Remote Listen's copy left the card"
+        );
+
+        tap.publish_dax(12_000, None);
+        assert!(
+            matches!(reader.read(now()), Err(ReceiveError::Ended)),
+            "a reader of the DAX audio read on into the card's"
+        );
+        assert_eq!(tci.source(), remote.source(), "the card's again");
+        assert_eq!(tci.source(), Some(card_source));
+    }
+
+    /// A retire (a radio switch, a capture's teardown) ends a reader of the DAX copy, and the next
+    /// DAX tick is a new source, with its own epoch; a card published meanwhile does not take the
+    /// copy from DAX. DAX gone after a retire with no card published since, the copy stays retired.
+    #[test]
+    fn a_retire_under_the_dax_copy_ends_its_reader_and_the_next_tick_is_a_new_source() {
+        use crate::receive_audio::ReceiveError;
+        let tap = RxTap::new();
+        tap.publish_card(Arc::new(SpscRing::new(4096)), 48_000);
+        let tci = tap.tci_audio();
+        tap.publish_dax(12_000, Some(&[]));
+        let first = tci.source().unwrap();
+        let reader = tci.subscribe(first).unwrap();
+        tap.retire_receive_audio();
+        assert!(matches!(
+            reader.read(std::time::Instant::now()),
+            Err(ReceiveError::Ended)
+        ));
+        assert_eq!(tci.source(), None, "retired");
+        tap.publish_card(Arc::new(SpscRing::new(4096)), 44_100);
+        assert_eq!(tci.source(), None, "a card took the copy from DAX");
+        tap.publish_dax(12_000, Some(&[]));
+        let second = tci.source().expect("the next DAX tick's source");
+        assert_eq!(second.rate, 12_000);
+        assert_ne!(second, first, "the retired source came back");
+        // DAX ends: the copy is the card's published since.
+        tap.publish_dax(12_000, None);
+        assert_eq!(tci.source().map(|s| s.rate), Some(44_100));
+        // …and after a retire with no card since, it stays retired.
+        tap.publish_dax(12_000, Some(&[]));
+        tap.retire_receive_audio();
+        tap.publish_dax(12_000, None);
+        assert_eq!(tci.source(), None, "a retired copy came back");
+    }
+
+    /// A tick the radio loop was held up for (700 ms of DAX audio at once, a slow CAT read) reaches
+    /// the copy in pieces the feed takes, its newest 200 ms kept, rather than as one block past the
+    /// feed's limit, which it drops whole.
+    #[test]
+    fn a_held_up_dax_tick_reaches_the_tci_copy_in_pieces() {
+        let tap = RxTap::new();
+        let tci = tap.tci_audio();
+        tap.publish_dax(12_000, Some(&[]));
+        let reader = tci.subscribe(tci.source().unwrap()).unwrap();
+        tap.publish_dax(12_000, Some(&[0.0; 240])); // the batch a subscription discards
+        let held_up: Vec<f32> = (0..8_400).map(|i| i as f32 / 10_000.0).collect();
+        tap.publish_dax(12_000, Some(&held_up));
+        let mut heard = Vec::new();
+        while let Ok(Some(block)) = reader.read(std::time::Instant::now()) {
+            heard.extend(block.samples);
+        }
+        assert_eq!(heard, held_up[6_000..], "the newest 200 ms");
     }
 
     #[test]

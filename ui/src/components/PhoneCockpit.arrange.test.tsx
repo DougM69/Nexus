@@ -157,7 +157,8 @@ const shown = (id: PhonePanelId) => SHOWN.has(id)
 function expected(tracks: 1 | 2 | 3) {
   return regionGroups(PHONE_PANELS.arrange!, api!.layout.place, tracks, shown)
     .filter((g) => g.col === 'log' || tracks === 3 || g.ids.length > 0)
-    .map((g) => (g.col === 'log' ? [...g.ids, 'log'] : g.ids))
+    // The log form heads its column (2026-10-14): a pane placed there stands under it.
+    .map((g) => (g.col === 'log' ? ['log', ...g.ids] : g.ids))
 }
 const rendered = () => cols().map(framesIn)
 
@@ -171,9 +172,10 @@ describe('Phone renders the placement', () => {
     // Column 2 has nothing on screen left in it, so even a wide region is two tracks: a | log.
     await tier(1800)
     expect(region().getAttribute('data-cols')).toBe('2')
-    expect(rendered()).toEqual([['receiver', 'bandActivity', 'voiceKeyer'], ['transmitter', 'log']])
+    // The log form heads its column (2026-10-14): the transmitter, placed there, stands under it.
+    expect(rendered()).toEqual([['receiver', 'bandActivity', 'voiceKeyer'], ['log', 'transmitter']])
     await tier(1200)
-    expect(rendered()).toEqual([['receiver', 'bandActivity', 'voiceKeyer'], ['transmitter', 'log']])
+    expect(rendered()).toEqual([['receiver', 'bandActivity', 'voiceKeyer'], ['log', 'transmitter']])
   })
 
   it('a placement that keeps something in each column is three tracks wide, each pane where it was put', async () => {
@@ -184,10 +186,10 @@ describe('Phone renders the placement', () => {
     render(<Live />)
     await tier(1800)
     expect(region().getAttribute('data-cols')).toBe('3')
-    expect(rendered()).toEqual([['voiceKeyer', 'bandActivity'], ['transmitter'], ['receiver', 'log']])
+    expect(rendered()).toEqual([['voiceKeyer', 'bandActivity'], ['transmitter'], ['log', 'receiver']])
     // Two tracks: column 2 follows column 1.
     await tier(1200)
-    expect(rendered()).toEqual([['voiceKeyer', 'bandActivity', 'transmitter'], ['receiver', 'log']])
+    expect(rendered()).toEqual([['voiceKeyer', 'bandActivity', 'transmitter'], ['log', 'receiver']])
   })
 
   it('column 2 left empty by the operator gives its track back: two columns, not an empty third', async () => {
@@ -397,7 +399,7 @@ describe('THE FIBER-IDENTITY SWEEP, with the left side and the window crossing a
       const tracks = Number(region().getAttribute('data-cols')) as 1 | 2 | 3
       const want = regionGroups(PHONE_PANELS.arrange!, api!.layout.place, tracks, (x) => shownAll(x) && !onSide.includes(x))
         .filter((g) => g.col === 'log' || tracks === 3 || g.ids.length > 0)
-        .map((g) => (g.col === 'log' ? [...g.ids, 'log'] : g.ids))
+        .map((g) => (g.col === 'log' ? ['log', ...g.ids] : g.ids))
       expect(rendered(), `step ${step}: ${id} ${move} — the region is not the arrangement`).toEqual(want)
       expect(document.querySelector('[data-testid="log-stub"]')!.isSameNode(log0), `step ${step}: remounted the log form`).toBe(true)
       expect(document.querySelector('[data-testid="vk-stub"]')!.isSameNode(vk0), `step ${step}: remounted the voice keyer`).toBe(true)

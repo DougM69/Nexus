@@ -183,18 +183,18 @@ p > em:only-child{color:var(--ink-faint); font-size:8.6pt;}
 <td>UTC-aligned (<code>PERIOD_S = 4.0</code>)</td>
 </tr>
 <tr>
-<td>Pre-TX guard</td>
-<td><strong>200 ms</strong></td>
-<td>silence before the waveform (<code>PRE_TX_GUARD_MS = 200</code>)</td>
+<td>Lead-in</td>
+<td><strong>300 ms</strong></td>
+<td>silence before the waveform: the tones start 0.300 s into the slot (<code>FT1_LEAD_IN_SECS = 0.3</code>)</td>
 </tr>
 <tr>
 <td>Timing tolerance</td>
-<td><strong>±80 ms</strong></td>
-<td>slot-boundary alignment (<code>TIMING_TOLERANCE_MS = 80</code>)</td>
+<td><strong>0.3 s early, about 0.6 s late</strong></td>
+<td>how far a signal can stray from its slot timing and still be found: early is fixed by the lead-in, late by the end of the decoder's timing search</td>
 </tr>
 </tbody>
 </table>
-<p>The 3.536 s waveform inside a 4.0 s frame leaves roughly <strong>0.464 s</strong> for receive guard plus decoding. The three Costas sync arrays are interleaved with the data (beginning / middle / end style placement), which is what makes the time/frequency search in §5 tractable.</p>
+<p>The 3.536 s waveform inside a 4.0 s frame leaves <strong>0.464 s</strong> of silence: the 0.300 s lead-in before the tones and a 0.164 s quiet tail after them. The lead-in is the mode’s only tolerance for a signal that arrives early, because the decoder’s timing search starts at the frame’s first sample; the tail is what keeps the end of the over on the air when the sound card’s output runs behind. The three Costas sync arrays are interleaved with the data (beginning / middle / end style placement), which is what makes the time/frequency search in §5 tractable.</p>
 <h3>3.3 Occupied bandwidth</h3>
 <p>TempoFast's occupied bandwidth is <strong>not published as a constant in source</strong> — there is no authoritative figure in <code>ft1_params.f90</code> or the Rust modem. Calculated estimates <strong>range roughly 42–67 Hz depending on method</strong>. Treat TempoFast's occupied bandwidth as <em>designed to be narrow</em> and quote it as <strong>"not specified (est. ~42–67 Hz)"</strong> rather than as a hard spec. (Older design discussion floated larger round numbers; none is grounded in source and none should be cited.)</p>
 <h3>3.4 Coherent demodulation + turbo equalization</h3>
@@ -237,7 +237,7 @@ p > em:only-child{color:var(--ink-faint); font-size:8.6pt;}
 <p>Beyond the <strong>±3 downsampled-sample</strong> real-time tolerance, the exact frequency/time search tolerances are not specified here, and the A-priori (AP) decoding schedule is not detailed — treat these as implementation internals, not published specs.</p>
 </blockquote>
 <h3>5.1 The dt convention</h3>
-<p>TempoFast reports time offset using the WSJT-X convention: <strong>dt = t − 0.5</strong>, where <em>t</em> is arrival time into the frame. So <strong>dt ≈ −0.1 s means the signal arrived at 0.4 s</strong> into the cycle. This centers the nominal frame boundary at dt = 0 and matches what WSJT-X operators already expect.</p>
+<p>TempoFast reports time offset using the WSJT-X convention: <strong>dt = t − 0.5</strong>, where <em>t</em> is arrival time into the frame. TempoFast's tones start 0.3 s into the cycle, so <strong>a signal sent on time shows a dt of about −0.2 s</strong>, where an on-time FT8 signal shows about 0. The decoder searches from the frame's first sample to about 0.9 s in, so it finds a signal from 0.3 s early (dt −0.5) to about 0.6 s late (dt about +0.4).</p>
 <hr>
 <h2>6. The differentiator: incremental-redundancy HARQ (IR-HARQ)</h2>
 <p>This is the part that has no analog in FT8, FT4, or JS8.</p>

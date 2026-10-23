@@ -12,7 +12,7 @@
 //!
 //! | rigctld | Typed command or intent | Gate |
 //! |---|---|---|
-//! | `T 1` (any non-zero) | `TxStart::Key` → `xmit 1` | the core's admission, after every engine gate the loop ran; with native audio on, a digital over only while the radio takes its audio from Nexus's DAX; with it off, never while Nexus's own write still has the radio on DAX; a voice over never while that write has the radio on DAX in place of the mic, unless the stream's browser voice rides it |
+//! | `T 1` (any non-zero) | `TxStart::Key` → `xmit 1` | the core's admission, after every engine gate the loop ran; with native audio on, a digital over only while the radio takes its audio from Nexus's DAX; with it off, never while Nexus's own write still has the radio on DAX; a voice over never while that write has the radio on DAX in place of the mic, unless the stream's browser voice rides it; a voice-keyer message only while the radio takes its audio from Nexus's DAX |
 //! | `T 0` | everything of ours (`Connection::end_ours`): the open operation's own stop (`xmit 0`, `transmit tune 0`, `cwx clear`, or the ATU's `xmit 0` and `transmit tune 0`); with none open, every stop the radio's status shows an earlier session of ours may need | never gated; sent only for what is ours |
 //! | `U TUNER <n≠0>` | `TxStart::AtuStart` → `atu start` | admission (refuses today: no readback); then a tuner the radio reports fitted, XIT off; a refusal, the client's or the radio's, says why on the ATU line ([`super::FlexDaemon::radio_atu`]) |
 //! | `b <text>` | `TxStart::CwxSend` → `cwx send`, one word, with its keying time at the radio's speed | first, every character one Nexus can time; admission (refuses today: no readback); then the slice in CW, the radio's break-in on, Sync CWX off, XIT off; a refusal says why ([`super::FlexDaemon::key_refused_since`]) |
@@ -61,6 +61,17 @@
 //! Nexus's own write still has the radio on DAX in place of the mic
 //! ([`super::routing::Routing::leaves_voice_on_dax`]), with its own reason; not while the stream's
 //! browser voice is live with native audio on, which rides DAX.
+//!
+//! ## A voice-keyer message only on DAX
+//! The other way round again, for the voice keyer in Phone at the shack (operator ruling,
+//! 2026-10-12, "Change it now"): its message is Nexus's own audio, which reaches the radio only as
+//! DAX, while the radio keeps its mic between messages. The radio loop switches the radio to DAX
+//! for the message and keys it once the radio reports it, and marks that one key
+//! ([`super::FlexDaemon::set_voice_key`]). A marked `T 1` is refused, the digital over's way and
+//! with its cause, in whatever mode the slice reports, unless the radio reports `transmit dax=1`
+//! and Nexus's own transmit stream exists: the operator flipping SmartSDR's DAX button back
+//! between the loop's look and the key must not put the room on the air in the message's place.
+//! Its stop, `T 0`, is never marked.
 //!
 //! ## A CW word is timed at the radio's speed
 //! The radio's own keyer sends each word (`cwx send`) and keys and unkeys itself with its
@@ -256,9 +267,10 @@ impl FlexShim {
 
     /// Why a key must not go out on the audio route as it stands, if it must not: a digital
     /// over while the radio would take its audio from its mic input, or, with native audio off,
-    /// from a DAX nothing feeds, and a voice over while it would take its audio from DAX in place
-    /// of the mic (see the module header). In the shim's words, for the log and the refusal on
-    /// screen, and as a cause, for the UI's own.
+    /// from a DAX nothing feeds, a voice over while it would take its audio from DAX in place
+    /// of the mic, and a voice-keyer message while it would not take Nexus's DAX (see the module
+    /// header). In the shim's words, for the log and the refusal on screen, and as a cause, for
+    /// the UI's own.
     pub(crate) fn audio_refuses_key(&self) -> Option<(String, FlexAudioRefusal)> {
         let native = self.state.native_audio.load(Ordering::Relaxed);
         let conn = self.conn.upgrade()?;
@@ -271,7 +283,40 @@ impl FlexShim {
         let [slice] = snap.model.tx_slices()[..] else {
             return None;
         };
-        let mode = effective_mode(&snap.model, slice, &self.state)?;
+        let mode = effective_mode(&snap.model, slice, &self.state);
+        if self.state.voice_key.load(Ordering::SeqCst) {
+            // A voice-keyer message: Nexus's own audio, which only DAX carries, in whatever mode
+            // the slice reports. Native audio is not asked: the message is played to the DAX
+            // route or not at all.
+            let from_dax = snap.model.transmit.dax == Some(true);
+            if from_dax && snap.dax_tx_stream.is_some() {
+                return None;
+            }
+            let mode = mode.unwrap_or_default();
+            let why = format!(
+                "not keying the voice keyer's {}message: the radio takes its transmit audio \
+                 from {}{}",
+                if mode.is_empty() {
+                    String::new()
+                } else {
+                    format!("{mode} ")
+                },
+                if from_dax { "DAX" } else { "its mic input" },
+                if snap.dax_tx_stream.is_some() {
+                    ""
+                } else {
+                    " and Nexus's DAX transmit stream does not exist"
+                }
+            );
+            return Some((
+                why,
+                FlexAudioRefusal {
+                    mode,
+                    cause: FlexAudioCause::NotYetDax,
+                },
+            ));
+        }
+        let mode = mode?;
         let class = mode_class(&mode);
         if class == ModeClass::Phone {
             // The operator's mic carries a voice over, unless the browser voice rides DAX.
@@ -513,10 +558,12 @@ fn word_wpm(model: &StatusModel, state: &ClientState) -> u32 {
 /// The CW line's words for a word the client did not send: what kept it back, and what to do.
 pub(crate) fn cw_refusal_words(refusal: &Refusal) -> String {
     match refusal {
-        Refusal::NoReadback(_) => "CW not sent: the Flex native client does not send CW yet. For \
-                                   CW, turn the Flex native client off (SmartSDR CAT sends it), \
-                                   or use the WinKeyer or Soundcard keyer."
-            .to_string(),
+        Refusal::NoReadback(_) => format!(
+            "CW not sent: CW through the Flex native client is not bench-tested yet. To try it, \
+             turn on {}, or turn the Flex native client off (SmartSDR CAT sends CW), or use the \
+             WinKeyer or Soundcard keyer.",
+            super::BETA_SWITCH
+        ),
         Refusal::NotCw { mode } if mode.is_empty() => "CW not sent: the radio has not said which \
                                                         mode its transmit slice is in."
             .to_string(),

@@ -188,10 +188,9 @@ beforeEach(() => {
   roCallback = null
   localStorage.clear()
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
-  // `webglOk()` asks for a context; jsdom has none. And the globe only mounts once its box has
+  // jsdom has no canvas contexts. And the globe only mounts once its box has
   // a real size, which jsdom never lays out — give every element a 600×400 box.
-  // Any context method is a no-op that returns a gradient-shaped object (the sprite canvases);
-  // the probe's context has no extensions to hand it back with.
+  // Any context method is a no-op that returns a gradient-shaped object (the sprite canvases).
   const ctx = new Proxy({ getExtension: () => null } as Record<string | symbol, unknown>, {
     get: (t, k) => (k in t ? t[k] : () => ({ addColorStop() {} })),
   })

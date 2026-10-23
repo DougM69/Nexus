@@ -1438,6 +1438,10 @@ export interface RadioStatus {
    * txSwr = SWR ratio (1.0–6.0), txAlc = ALC 0–1, txPoW = output watts, txCompDb = COMP dB. */
   txSwr?: number | null
   txAlc?: number | null
+  /** Where the radio's own ALC zone ends on the `txAlc` bar: 0.5 on the FT-991A, FT-710 and
+   * FTDX10, whose bar is the radio's own and whose zone ends at half scale. Absent where 1.0 is
+   * the top of the zone. Display only: it moves the bar's colours, never the bar. */
+  txAlcZone?: number | null
   txPoW?: number | null
   txCompDb?: number | null
   /** Can Nexus put a NUMBER to this radio's SWR — i.e. may the high-SWR cutoff be offered?
@@ -1539,6 +1543,16 @@ export interface RadioStatus {
    *  has acknowledged one, else the operator's dial. Lets the lock NAME the frequency it is
    *  judging instead of saying "this frequency" about one you may not be transmitting on. */
   txEmissionMhz?: number | null
+  /** Upper sideband is the only phone the licence allows where this radio transmits (60 m, every
+   *  US class): the Phone cockpit greys its LSB, AM and FM picks. Absent when false. */
+  phoneUsbOnly?: boolean
+  /** The licence lock is the phone MODE alone: LSB, AM or FM on 60 m, where a USB pick would key.
+   *  Name that rule instead of the frequency. `txAllowed` is false with it. Absent when false. */
+  phoneModeRefused?: boolean
+  /** The rig is held on an FM channel at or above 29 MHz, so FM is commanded whatever the
+   *  section's own policy says: in Phone, the FM channel kept from the SSTV screen. The Phone
+   *  cockpit's AUTO reads FM from it. Absent when false. */
+  fmChannel?: boolean
   /** Whether a tune carrier is currently keyed. */
   tuning: boolean
   /** ⭐ WHO HOLDS THE TRANSMITTER, or null/undefined when nobody does — the engine's
@@ -1566,15 +1580,26 @@ export interface RadioStatus {
    *  takes it. Kept until TX is turned on again; absent otherwise, and from a station older than
    *  it. */
   slotUnkeyFailed?: SlotUnkeyFailed | null
-  /** A slot over (FT8, FT4, JS8 …) lost its audio part way through: Flex native DAX audio went off
-   *  under it, or its DAX transmit route went, so the station ended it there and halted transmit.
+  /** A slot over (FT8, FT4, JS8 …) lost its audio part way through: the route carrying it (Flex
+   *  native DAX audio, or Nexus's transmit audio over TCI) went, so the station ended it there and
+   *  halted transmit.
    *  Kept until TX is turned on again; absent otherwise, and from a station older than it. */
   slotAudioLost?: SlotAudioLost | null
+  /** The last FT8 or FT4 over the station dropped because the radio keyed it only after its period
+   *  had ended (a slow CAT link): it was unkeyed at once, nothing was sent, and TX was left on for
+   *  the next over, however many in a row, as WSJT-X does. Cleared by the next over the radio keys
+   *  in its period, or by turning TX on again, and absent while TX is off; absent otherwise, and
+   *  from a station older than it. */
+  slotOverDropped?: SlotOverDropped | null
   /** The operator's last PTT press did not key: right after the transmit slice left a digital mode,
    *  or native audio went off, the radio still took its transmit audio from the DAX Nexus set, not
    *  its mic, so Nexus's own Flex client kept the key off the air. Cleared by the next press that
    *  keys or fails for another reason; absent otherwise, and from a station older than it. */
   pttRefused?: PttRefused | null
+  /** The last voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone
+   *  at the shack with native audio on, where a message waits for the radio to take DAX). Cleared by
+   *  the next message the keyer accepts; absent otherwise, and from a station older than it. */
+  voiceDropped?: VoiceDropped | null
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
   decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
@@ -1618,6 +1643,9 @@ export interface RadioStatus {
    *  renders this INSTEAD of the address, because with the bind refused that address is one
    *  nothing is listening on. */
   catShareError?: string | null
+  /** "Share by TCI" as the station runs it: where programs connect, why it is not serving, and the
+   *  programs connected. Absent while the server is off (mirror of the Rust TciServerStatus). */
+  tciServer?: TciServerStatus | null
   /**
    * What is wrong with the RF SCOPE source, separate from `audioError` — different problem, different
    * cure, and both can be true at once.
@@ -1715,27 +1743,62 @@ export interface CatTestResult {
 /** A single-signal CW decode of the recent RX audio (live readout). */
 export interface CwDecodeResult {
   text: string
+  /** The AI decoder's unconfirmed tail: letters drawn dimmed after `text`, replaced or confirmed by
+   *  the next pass. Display only; never read as data. Absent from an older station. */
+  pending?: string
   wpm: number
   /** TX echo: recent expanded CW transmissions (oldest→newest) — what actually went out. */
   sent: string[]
   /** A CW-keyer failure to surface (e.g. the rig rejected CAT keying), else null. */
   keyerError: string | null
+  /** The operator's own paddle took over from Nexus's CW and the rest of the message was dropped
+   *  (Nexus's Flex client): an information line until the next send. Absent from an older station. */
+  paddleTookOver?: boolean
   /** CW copilot: ranked worked-station callsign candidates from the decode (click to confirm). */
   candidates: { call: string; best: boolean }[]
   /** RST they sent us, read from the decode (e.g. "599"), else null. */
   rst: string | null
   /** The other station's name, read from the decode (e.g. "BOB"), else null. */
   name: string | null
-  /** Guided QSO-state tag: "listening" | "cq" | "answered" | "report" | "73". */
-  state: string
-  /** Plain-English state, e.g. "W1ABC is calling CQ". */
-  headline: string
-  /** Guided instruction, e.g. "Press Answer (F2) to call them". */
-  prompt: string
-  /** Recommended action id to highlight: "F2" | "F3" | "log", or null. */
-  recommended: string | null
+  /** Whose turn it is and what fits, for the turn cue (`tempo_core::cw_turn`): null unless the
+   *  AI decoder is on and keeping up, and in an unassisted entry. Absent from an older station. */
+  turn?: CwTurn | null
   /** The operator-confirmed worked callsign (active peer), if any. */
   workedCall: string | null
+  /** An unassisted contest entry is declared at the station: no CW decoder runs, so every field the
+   *  decoder fills is empty, and the Decode pane says why. Absent from an older station. */
+  unassisted?: boolean
+}
+
+/** Where a CW contact stands, as the station reads it from the AI decoder's copy. */
+export type CwTurnState =
+  | 'idle'
+  | 'theySend'
+  | 'finishing'
+  | 'yourTurn'
+  | 'hold'
+  | 'unsure'
+  | 'youSend'
+  | 'listen'
+  | 'closing'
+
+/** The KIND of message that fits; the cockpit finds the key that sends it in the set in use. */
+export type CwTurnRole = 'cq' | 'answer' | 'reply' | 'myCall' | 'exchange' | 'tu' | 'close' | 'again' | 'repeat'
+
+/** What the lamp says beside the state. */
+export type CwTurnHint = 'type' | 'fiveNnTu' | 'partial' | 'splitOff' | 'noReply' | 'late'
+
+/** The CW turn read. It never sends: the cockpit lights a key, and the operator presses it. */
+export interface CwTurn {
+  state: CwTurnState
+  role: CwTurnRole | null
+  hint: CwTurnHint | null
+  /** The station the lamp names: the one sending, or the one the over was for. */
+  call: string | null
+  /** Which over: its first letter's stream time in ms. A turn is announced once per over. */
+  over: number | null
+  /** What the lamp counts down (seconds): our listening after a CQ or a call, or a race. */
+  window: { total: number; left: number } | null
 }
 
 /** One signal found by the wideband CW skimmer (audio pitch + text + WPM). */
@@ -1743,6 +1806,21 @@ export interface SkimHit {
   pitchHz: number
   text: string
   wpm: number
+}
+
+/** The RTTY tuning scope's newest frame (`get_rtty_scope`): the crossed-ellipse picture from a
+ * mark/space resonator pair on the decoder's AFC-corrected tones. */
+export interface RttyScope {
+  /** Armed and receiving; false while disarmed and while we transmit. */
+  live: boolean
+  /** Counts every point kept: a frame with the number last drawn is not new. */
+  seq: number
+  /** The frame's largest |x| or |y| in audio units — the drawing's auto-scale follows it. */
+  peak: number
+  /** Interleaved x (mark), y (space) pairs scaled so `peak` is ±127. */
+  xy: number[]
+  /** How far the signal sits from the decoder's tones (Hz, positive = higher); null with no signal. */
+  offsetHz: number | null
 }
 
 /** Live RTTY RX decoder state (poll get_rtty_state while the RTTY cockpit is
@@ -1930,25 +2008,49 @@ export interface JttySent {
 
 // ---- JS8 (the `get_js8_state` poll; mirrors tempo_app::dto::Js8State field for field) ----
 
-/** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). */
-export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo'
+/** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). `turbo` and `ultra` are
+ * the enum's names for what JS8Call 3.0 calls JS8 40 and JS8 60 (js8Vocab). */
+export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo' | 'ultra'
 /** Who originated a queued/pending frame (serde camelCase). A CQ the operator CLICKS is
- * `operator`; a CQ the repeat schedule produced is `cqRepeat`, an automatic origin. */
-export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay' | 'cqRepeat'
-/** The second act of the two-act rule: three persisted switches + the session-only HB. */
-export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb'
+ * `operator`; a CQ the repeat schedule produced is `cqRepeat`, an automatic origin. An APRS-IS
+ * message relayed to a heard station (`js8AprsRelay`) is `aprsRelay`, automatic as well. */
+export type Js8Origin =
+  | 'operator'
+  | 'heartbeat'
+  | 'hbAck'
+  | 'autoReply'
+  | 'relay'
+  | 'cqRepeat'
+  | 'aprsRelay'
+/** The second act of the two-act rule: three persisted switches + the session-only HB, and the
+ * persisted heartbeat networking (`hbnet`), which keys nothing by itself. */
+export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb' | 'hbnet'
 /** Inbox row state, lowercase on the wire. */
 export type Js8InboxState = 'unread' | 'read' | 'store' | 'delivered'
 
-/** Which automatic origins may key RIGHT NOW: `switch && txEnabled && !idleTripped`. Paint
+/** Which automatic origins may key RIGHT NOW: the switch on and the station's own answer that
+ * it would act (no idle trip, TX on, and what the origin needs besides its switch: HB and
+ * AUTOREPLY for HB ACK, AUTOREPLY for a relay, a schedule for HB and the repeating CQ). Paint
  * "armed" from THIS, never from the persisted switch alone. */
 export interface Js8Armed {
   autoreply: boolean
-  /** The repeating CQ — the session switch AND the TX latch AND no idle trip. */
+  /** The repeating CQ — the session switch AND the TX latch AND no idle trip AND a call scheduled. */
   cq: boolean
   relay: boolean
   hbAck: boolean
   hb: boolean
+}
+
+/** Why an automatic origin whose switch is on is not armed: the station's own reason. */
+export type Js8Unarmed = 'idle' | 'txOff' | 'needsHb' | 'needsAuto' | 'needsHbAndAuto' | 'unscheduled'
+
+/** Per origin, why it is not armed while its switch is on; null when it is armed or off. */
+export interface Js8NotArmed {
+  autoreply: Js8Unarmed | null
+  cq: Js8Unarmed | null
+  relay: Js8Unarmed | null
+  hbAck: Js8Unarmed | null
+  hb: Js8Unarmed | null
 }
 
 /** One activity-pane row: a decoded frame (or a reassembled multi-frame message). */
@@ -1971,6 +2073,16 @@ export interface Js8ActivityRow {
   complete: boolean
   /** Decode quality below JS8Call's 0.17 low-confidence threshold. */
   lowConf: boolean
+  /** Where the row stands in its message: the frame's i3 First/Last bits, or the reassembled line
+   *  of a multi-frame message. Absent from a station older than this key (on the Remote page). */
+  flags?: Js8RowFlags
+}
+/** JS8Call's `JS8CallFirst`/`JS8CallLast` bits of a frame row, or `assembled` for the reassembled
+ *  line of a multi-frame message (never a frame of its own). */
+export interface Js8RowFlags {
+  first: boolean
+  last: boolean
+  assembled: boolean
 }
 
 /** A heard station (the message layer's own row, serde camelCase). */
@@ -1984,6 +2096,12 @@ export interface Js8Heard {
   lastHb: boolean
   lastCq: boolean
   storedMsgs: number
+  /** JS8Call's `ackTimestamp` (★ "Hearing your station"): when this station last sent something
+   *  addressed to my call. Absent until it has, and from a station older than this key. */
+  ackMs?: number
+  /** JS8Call's `cqTimestamp` (☎ for five minutes): when this station last called CQ. Absent until
+   *  it has, and from a station older than this key. */
+  cqMs?: number
 }
 
 /** One inbox row. */
@@ -1998,6 +2116,27 @@ export interface Js8InboxEntry {
   atMs: number
   freqHz: number
   snrDb: number
+}
+
+/** Which cap took a message out of the inbox: the count (100 a half) or the bytes (64 KB). */
+export type Js8DropReason = 'count' | 'bytes'
+
+/** A message a cap took out of the inbox: when, why, and the row itself (its `state` says whose
+ * mail it was). Kept until the operator clears the notes. */
+export interface Js8InboxDrop {
+  atMs: number
+  why: Js8DropReason
+  entry: Js8InboxEntry
+}
+
+/** A held message too long to hand over at the current speed, which the station does not offer:
+ * its hand-over needs `frames`, one transmission at this speed holds `max`, and it goes at
+ * `fitsAt` (null: at no speed). */
+export interface Js8InboxTooLong {
+  id: number
+  frames: number
+  max: number
+  fitsAt: Js8Speed | null
 }
 
 /** One outbox row (empty in the receive-only build). */
@@ -2016,6 +2155,15 @@ export interface Js8ComposerPrefill {
   text: string
 }
 
+/** The compose box's typeahead, JS8Call's: what has gone of the operator's message going out and
+ * what is still to go, as its frames render, and whether the box may change it (not a MSG or relay).
+ * Native only, never part of Js8State. */
+export interface Js8Typeahead {
+  sent: string
+  unsent: string
+  locked: boolean
+}
+
 export interface Js8PendingReply {
   origin: Js8Origin
   to: string
@@ -2025,11 +2173,53 @@ export interface Js8PendingReply {
 
 /** The live JS8 state (poll ~500 ms while the cockpit is visible). Every field is engine
  * truth at poll time. */
+/** JS8Call's decode filter: on, the decoder searches only centre ± width/2 (Hz). */
+export interface Js8Filter {
+  enabled: boolean
+  centerHz: number
+  widthHz: number
+}
+
+/** One row of the operator's own JS8 frequency list: a dial (MHz) and its description. */
+export interface Js8Freq {
+  mhz: number
+  description: string
+}
+
+/** One row of JS8Call's Frequency Schedule: switch the dial to `mhz` while the UTC time of day is
+ *  inside [fromMin, untilMin] (minutes after 00:00 UTC; both ends count, and a window that ends
+ *  before it starts runs over midnight). */
+export interface Js8Hop {
+  mhz: number
+  fromMin: number
+  untilMin: number
+  description: string
+}
+
+/** A scheduled frequency change waiting out its notice. `firesAtMs` is 0 once "Change now" was
+ *  pressed; `held` = due, and waiting for a transmission or a message going out to end. */
+export interface Js8HopNotice {
+  mhz: number
+  firesAtMs: number
+  description: string
+  held: boolean
+}
+
+/** JS8Call's waterfall controls as stored, and the schedule's change waiting out its notice. */
+export interface Js8Controls {
+  filter: Js8Filter
+  qsyCenterHz: number
+  hop: Js8HopNotice | null
+}
+
 export interface Js8State {
   /** The TRANSMIT speed (= the slot clock). */
   speed: Js8Speed
-  /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8. */
+  /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8 · ultra 16. */
   rxSpeeds: number
+  /** JS8Call's waterfall controls and the band schedule's notice. Absent from a station older than
+   *  this key (on the Remote page). */
+  controls?: Js8Controls | null
   txEnabled: boolean
   sending: boolean
   hbOn: boolean
@@ -2046,16 +2236,49 @@ export interface Js8State {
   relay: boolean
   hbAck: boolean
   armed: Js8Armed
+  /** Why each switch that is on is not armed, named on its chip. Absent from an older station's
+   * sample on the Remote page: that station's `armed` is the switch with TX on and no idle trip. */
+  notArmed?: Js8NotArmed
   idleMinutes: number
   idleLimitMin: number
   idleTripped: boolean
   activity: Js8ActivityRow[]
   stations: Js8Heard[]
   inbox: Js8InboxEntry[]
+  /** What a cap took out of the inbox, oldest first, at most ten. Absent while there are none. */
+  inboxDropped?: Js8InboxDrop[]
+  /** Held messages too long to hand over at the current speed. Absent while there are none, and
+   * from a station older than this key. */
+  inboxTooLong?: Js8InboxTooLong[]
   queue: Js8QueueRow[]
   pendingReply: Js8PendingReply | null
   /** The last refused verb's reason, cleared by the next successful verb. */
   lastError: string | null
+  /** Heartbeat networking, the QSO pause and what holds an HB ACK back. A station older than this
+   * key sends none (on the Remote page), and the cockpit then shows the HB controls as before. */
+  presence?: Js8Presence
+}
+
+/** Why a heartbeat heard now would draw no acknowledgement although HB ACK is armed. */
+export type Js8HbAckSuppressed = 'speed' | 'arriving' | 'qsoPause'
+
+/** The desktop cockpit's view of heartbeat networking and presence (JS8Call 3.0.3). */
+export interface Js8Presence {
+  /** JS8Call's "Enable Heartbeat Networking": the HB button shows only with it on. */
+  hbNetworking: boolean
+  /** The TX speed sends heartbeats (Slow, Normal, Fast): false at Turbo, where JS8Call hides HB. */
+  hbSpeed: boolean
+  /** The QSO pause holds the HB repeat until the To box is cleared. */
+  hbPaused: boolean
+  /** Why an armed HB ACK would not answer a heartbeat heard now; null when it would. */
+  hbAckSuppressed: Js8HbAckSuppressed | null
+  /** Stations the 55-minute rule has stopped acknowledging, oldest first. */
+  hbAckRateBlocked: string[]
+  /** The QSO pause setting: turning the HB repeat on then clears the To box, as JS8Call clears
+   * its selected call. */
+  qsoPause: boolean
+  /** "Do not participate in the @ALLCALL group": @ALLCALL leaves the To box's list. */
+  avoidAllcall: boolean
 }
 
 /** One saved SSTV image in the local gallery (a BMP in the sstv-gallery folder
@@ -2445,9 +2668,10 @@ export interface UploadStatus {
   whenUnix: number
   /**
    * The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record" |
-   * "partial" | "unclassified" | "declared" — not prose. It rides `log.adi`, which is what
-   * TQSL signs and uploads to ARRL, so it is never the service's own words; anything else is
-   * dropped on the way back into Rust. Render it through a label of your own, not verbatim.
+   * "partial" | "unclassified" | "declared" | "account-dates" | "qth-nickname" — not prose. It
+   * rides `log.adi`, which is what TQSL signs and uploads to ARRL, so it is never the service's
+   * own words; anything else is dropped on the way back into Rust. Render it through a label of
+   * your own, not verbatim.
    */
   detail?: string | null
 }
@@ -2519,6 +2743,29 @@ export interface EntityNeed {
   entity: string
   /** Bands the entity is worked-but-unconfirmed on. */
   bands: string[]
+}
+
+/** A contact LoTW confirmed under another DXCC entity than the log records for it. The awards
+ * count it by LoTW's; the log keeps its own. An entity name is absent when the number is one the
+ * station's table does not know. */
+export interface DxccDisagreement {
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+  loggedDxcc: number
+  loggedEntity?: string | null
+  lotwDxcc: number
+  lotwEntity?: string | null
+}
+
+/** One DXCC entity a contact can be set to count toward (the station's `dxcc_entities`): its
+ * ARRL number, the name Nexus gives it — cty.dat's for a current entity, the ARRL's for a deleted
+ * one — and whether it is one of the deleted entities. */
+export interface DxccEntityOption {
+  code: number
+  name: string
+  deleted: boolean
 }
 
 /** A gamification milestone (unlocked, or locked-with-progress). */
@@ -2732,7 +2979,7 @@ export interface NeedAlert {
   stateFrom?: 'park' | 'license' | 'grid' | null
 }
 
-/** One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose).
+/** One raw cluster/RBN spot for the Spots panel (the firehose).
  *  NOT needs-gated — every recent spot; the panel filters client-side. */
 export interface SpotRow {
   call: string
@@ -2791,6 +3038,33 @@ export interface SpotRow {
    *  Decided there rather than in the browser so every window, and a Remote browser in another
    *  time zone, agree on when the day turns. */
   workedTodayUtc?: boolean
+  /** ⭐ While a contest runs: the multipliers working this station on this spot's band and mode
+   *  would add, by the contest's own scoring (`FieldDayLog::spot_mults`) — the rule id
+   *  (`county`, `country`) and the value. Absent outside a contest, for a station that adds
+   *  none, and from an older station. */
+  contestMults?: SpotContestMult[]
+  /** While a contest runs, for a station this log has never worked: the multipliers the
+   *  operator's call-history file PREDICTS it would add (the county the file says it sends,
+   *  counted by the same scoring). Never one `contestMults` lists. Absent with no file, no entry,
+   *  call history off, outside a contest, and from an older station. */
+  contestPredicted?: SpotPredictedMult[]
+  /** The program on Nexus's TCI server that sent this spot, by its connection's number (as Settings
+   *  ▸ Share by TCI lists it), when a program did (`getTciSpots`). ⛔ A click on such a spot only
+   *  tunes (`clickTciSpot`), never a Work. Absent on every cluster and skimmer spot. */
+  tci?: number | null
+}
+
+/** One multiplier the call history predicts for a spotted station (`SpotRow.contestPredicted`). */
+export interface SpotPredictedMult extends SpotContestMult {
+  /** Every county of a county-line entry, when the prediction came from one. */
+  countyLine?: string[]
+}
+
+/** One multiplier a spotted station would add (`SpotRow.contestMults`). Both are invariant
+ *  tokens: the rule id is the one the multiplier boards are headed with. */
+export interface SpotContestMult {
+  id: string
+  value: string
 }
 
 /** Kind of one-way transmission a spot's frequency identified — mirrors
@@ -3162,9 +3436,15 @@ export interface DiagnosticsReport {
 export interface AwardSummary {
   qsos: number
   confirmedQsos: number
-  /** Distinct DXCC entities worked / confirmed (100 confirmed = basic DXCC). */
+  /** Distinct CURRENT DXCC entities worked / confirmed (100 confirmed = basic DXCC). */
   dxccWorked: number
   dxccConfirmed: number
+  /** The same, the deleted entities included — LoTW's "total". Absent from a station older
+   * than the count by each record's own DXCC number. */
+  dxccWorkedTotal?: number
+  dxccConfirmedTotal?: number
+  /** Contacts LoTW confirmed under another DXCC entity than the log records, in log order. */
+  dxccDisagreements?: DxccDisagreement[]
   /** Distinct DXCC entities with ARRL credit granted (official standing). */
   dxccCredited: number
   /** Confirmed-but-not-credited entities (confirmed − credited) — ready to submit. */
@@ -3205,6 +3485,65 @@ export interface AwardSummary {
   /** WORK chase: entities worked on most award bands but missing a few — the
    * listed bands are ones to WORK (a new contact). Closest-to-complete first. */
   bandTargets: EntityNeed[]
+  /** DXCC, WAS and WAZ needed per band. Absent from a station older than the Stats pane. */
+  bandNeeds?: AwardBandNeeds
+}
+
+/** One band's chase for one award: never worked there, and worked there but not confirmed by
+ *  anything the award credits. Entities and states alphabetical, zones 1 to 40. */
+export interface BandNeed {
+  band: string
+  unworked: string[]
+  unconfirmed: string[]
+}
+
+/** The per-band chase (`AwardSummary.bandNeeds`). DXCC lists only the bands that earn DXCC credit
+ *  (not 60 m or 4 m); WAZ counts an Authenticity-Guaranteed eQSL as a confirmation. */
+export interface AwardBandNeeds {
+  dxcc: BandNeed[]
+  was: BandNeed[]
+  waz: BandNeed[]
+}
+
+/** Where one slot of a Stats pane grid stands for its award. */
+export type StatsSlot = 'unworked' | 'worked' | 'confirmed' | 'noCredit'
+
+/** The channels a confirmation came through. */
+export interface QslChannels {
+  card: boolean
+  lotw: boolean
+  eqsl: boolean
+  /** The eQSL came from an Authenticity-Guaranteed member (WAZ credits it). */
+  eqslAg: boolean
+  qrz: boolean
+}
+
+/** One award's grid in the Stats pane: a row per mode class, a slot per band. */
+export interface StatsGrid {
+  /** The entity's name, the state's postal code, or the zone's number. */
+  label: string
+  /** The entity's DXCC number (DXCC only). */
+  code: number | null
+  rows: StatsSlot[][]
+}
+
+/** What the log holds for the call typed in a log entry (`get_call_stats`). */
+export interface CallStats {
+  call: string
+  /** The grids' columns, 160 m to 2 m. */
+  bands: string[]
+  /** The grids' rows: CW, Phone, Digital. */
+  modes: string[]
+  newOne: boolean
+  newBand: boolean
+  newMode: boolean
+  dxcc: StatsGrid | null
+  /** The station is in the United States, Alaska or Hawaii, so it has a state for WAS. */
+  wasFamily: boolean
+  was: StatsGrid | null
+  waz: StatsGrid | null
+  countryQsl: QslChannels | null
+  callQsl: QslChannels
 }
 
 /** QSOs worked on one WAC continent, with the distinct-entity span. */
@@ -3238,6 +3577,20 @@ export interface GeoLogStats {
   byContinent: ContinentTally[]
   /** By CQ zone, ascending; only zones with a QSO. */
   byZone: ZoneTally[]
+}
+
+/** The Statistics view's timeline windows (`get_log_timeline`), each ending with the current UTC
+ * hour, day or month: 24 hourly, 30 daily or 12 monthly buckets. */
+export type TimelineRange = 'pastDay' | 'past30Days' | 'pastYear'
+
+/** Contacts per mode over a timeline window (`get_log_timeline`, counted where the log is). */
+export interface LogTimeline {
+  /** Each bucket's first instant (Unix seconds, UTC), oldest first, then the window's end — one
+   * more edge than buckets. A bucket holds the contacts from its first instant up to the next. */
+  edges: number[]
+  /** Each mode's contacts per bucket, labelled as the "By mode" card labels it, in first-seen
+   * order; a mode with no contact in the window is not here. */
+  modes: { label: string; counts: number[] }[]
 }
 
 /** Result of importing an external ADIF logbook (deduped merge). */
@@ -3339,6 +3692,15 @@ export interface FieldDayQso {
    *  under the ruleset's own key; a client-side guess got both the key and the semantics
    *  wrong. **Absent means false** — it is skipped on the wire for ordinary rows. */
   dupe?: boolean
+  /** ⭐ This row was worked in a mode the running contest BANS (FT8 at the Illinois QSO Party,
+   *  the WSJT modes at Winter Field Day): logged and in the files, and it counts for nothing,
+   *  so `qsoCount` leaves it out. The engine's answer from the row, never re-derived here.
+   *  **Absent means false**, as for `dupe`, and on a station older than the mark. */
+  banned?: boolean
+  /** ⭐ This contact's QSO number: 1, 2, 3… in every contest, the serial it was sent in a contest
+   *  that sends one, its place in the run otherwise. A removed contact's number stays spent, so
+   *  the numbers can have gaps. Absent on a station older than the field. */
+  nr?: number
 }
 
 /** ⭐ The running ruleset's DUPE RULE — what makes a contact count again.
@@ -3453,6 +3815,10 @@ export interface FieldDayStatus {
    *  advisory reads this list; the UI never re-derives what counts as
    *  assistance from raw toggles. */
   assistanceOn?: string[]
+  /** The entry strip's "RST sent" box: the report a CW or digital contact sends unless the
+   *  operator types another (`599`; a phone contact's is `59`). Present only while the box is
+   *  turned on in Settings (`contestRstSentBox`) and the contest sends a report. */
+  rstSentBox?: string
   /** Club-sync state (the Nexus↔Nexus event sync). Absent while neither
    *  hosting nor joined — a solo Field Day pays nothing for the feature. */
   club?: FdClubStatus | null
@@ -3484,6 +3850,10 @@ export interface FieldDayStatus {
    *  the export writes. Names, not prose: the Contest screen words each one. Absent when nothing
    *  is missing, for a contest whose requirements this build does not read, and on Remote. */
   cabrilloMissing?: string[]
+  /** This session sends a serial number (CQ WPX, Sweepstakes), so Clear test contacts starts the
+   *  serials again at 001 and says so. Absent for a contest that sends none (both Field Days, a QSO
+   *  party sending a county), from an older station, and on Remote. */
+  sendsSerial?: boolean
   /** ⭐ What `{EXCH}` keys right now: this session's sent exchange WITHOUT the signal
    *  report, as macro text — `'5'` in CQ WW CW, `'5 MA'` for a W/VE station in CQ WW
    *  RTTY, `'3A WI'` in Field Day. The CW keyer's `{EXCH}` is the same string.
@@ -3516,6 +3886,35 @@ export interface FieldDayStatus {
    *  contest's, and another running of this one's (a rehearsal before it). They stay in the
    *  journal, untouched. Absent when nothing was kept out, and from an older station. */
   keptOut?: { otherContest: number; otherRunning: number }
+  /** ⭐ The contest journal's last writes FAILED: the contacts since the last good one
+   *  (`lastSavedUnix`, Unix UTC; absent when none landed this run) are in memory only. The
+   *  Contest screen and the log strip say so in red. Absent when the last write was good, from
+   *  an older station, and on Remote. Worded by `features/contestUnsaved.ts`. */
+  unsaved?: { failedWrites: number; lastSavedUnix?: number }
+  /** Who is at the key now: the operator the next contact is stamped with, '' when nobody is
+   *  named. Absent from an older station. */
+  operatorNow?: string
+  /** ⭐ Per-operator statistics, best first (`FieldDayLog::operator_stats`): the contacts that
+   *  count, grouped by the operator stamped on each. Absent from an older station. */
+  operators?: FdOperatorStat[]
+}
+
+/** One operator's share of the contest log (FieldDayStatus.operators). */
+export interface FdOperatorStat {
+  /** The operator stamp; '' for the contacts that name nobody. */
+  operator: string
+  qsos: number
+  /** QSO points, before multipliers, power and bonuses. */
+  points: number
+  /** The multipliers this operator worked first. */
+  newMults: number
+  /** Contacts per hour over the last 10 minutes, and over the last hour. */
+  rate10: number
+  rate60: number
+  /** The best UTC clock hour: its start (Unix seconds) and its contacts; 0/0 with none. */
+  bestHourStartUnix: number
+  bestHourQsos: number
+  bandMode: { band: string; mode: string; qsos: number }[]
 }
 
 /** One exchange slot, as the entry strip renders a box for it.
@@ -3571,6 +3970,11 @@ export interface ContestBoard {
   scope: string
   /** The distinct values worked, sorted. */
   worked: string[]
+  /** ⭐ The distinct values the CLUB has worked, sorted — every position's contacts, this laptop's
+   *  included (the host's club log, or what the host sent a position). The board lights each and
+   *  marks this laptop's own (`worked`) apart. Absent without club sync, from a host older than the
+   *  list, and on Remote, which is sent nothing new: the board is then this laptop's own. */
+  club?: string[]
 }
 
 /** The per-session upload control: what the end-of-contest merge queues, and where.
@@ -3668,6 +4072,10 @@ export interface ClubLink {
   status?: 'connected' | 'reconnecting' | 'lost'
   /** Seconds since this laptop last heard its host, beside `status`. */
   heardSecs?: number
+  /** How many of this laptop's contacts the club's log does not take because they were logged on
+   *  another call than the club's: each stays in this laptop's own log, never sent, and the club
+   *  chip does not count it. Absent when there are none. */
+  otherCall?: number
 }
 
 /** The host's line: whether the club is open, where a position joins it, and who is in. */
@@ -3762,10 +4170,50 @@ export interface FdClubStatus {
    *  log, and the newest of them (at most 16), each with the position that sent it (its name
    *  and call) and the sentence saying why. Each stays in that position's own log. */
   keptOut?: { total: number; latest: { posName: string; call: string; reason: string }[] }
+  /** The HOST's alone: each position whose newest contact sent another county (or state,
+   *  province or section) than the club sends, named as its line on the board names it (its
+   *  name, else who is at it), with what it sent and what the club sends. A warning: its
+   *  contacts are still taken. Absent when there is none, and never on Remote. */
+  otherLocation?: { posName: string; operator: string; sent: string; club: string }[]
   /** This laptop's own club code, for its club line: what the host compares with the code on
    *  its turned-away list before it gives this laptop a position. Absent with no club key, and
    *  never on Remote. */
   clubCode?: string
+}
+
+/** The host's club log, as its own screen lists it (`fdClubLogNewest`, Rust `FdClubLogDto`): how
+ *  many contacts the club holds, and the newest of them, newest first. The HOST's alone, and its
+ *  own screens': nothing of it rides the snapshot, so Remote is sent none of it. */
+export interface FdClubLog {
+  /** Every contact in the club's log, duplicates included: the count the club line says. */
+  total: number
+  /** The newest of them, at most a hundred, newest first. */
+  rows: FdClubLogRow[]
+}
+
+/** One contact of the club log: the contest log table's columns, read as `FieldDayQso`'s are,
+ *  and the position that logged it. */
+export interface FdClubLogRow {
+  call: string
+  class: string
+  section: string
+  /** One value per received slot of the club's contest, in `FieldDayStatus.receives` order;
+   *  absent for Field Day, whose two ride `class` and `section`. */
+  rcvd?: string[]
+  band: string
+  /** Scoring class: 'DIG' | 'CW' | 'PH'. */
+  mode: string
+  submode: string
+  whenUnix: number
+  /** The position that logged it, by id: the key of its line on the host's board, never shown. */
+  posid: string
+  /** Its seq at that position: `(posid, seq)` is the row's identity in the club's log. Never shown. */
+  seq: number
+  /** …and by the name the host's board shows it under; empty for a position with none. */
+  posName: string
+  /** A later contact of a key the club already holds, by the earliest-wins dedupe the club's files
+   *  are written by. Absent means false. */
+  dupe?: boolean
 }
 
 /** One club event heard on the LAN (the "Find club events" scan). */
@@ -3894,6 +4342,13 @@ export interface Settings {
    * factory-default Icom's CW-R is the UPPER side), so no band rule in these words is right
    * for both brands. Optional here as older saved settings omit it. */
   cwReverse?: boolean
+  /** CW speed match: an answer to a station keys at the decoder's measured speed for it, held to
+   *  the min/max below; a CQ keys at the operator's own speed. OFF by default; the contest strip's
+   *  switch saves it alone (`setCwSpeedMatch`), Settings ▸ CW with the form. */
+  cwSpeedMatch?: boolean
+  /** The slowest / fastest speed (WPM) CW speed match keys an answer at. */
+  cwSpeedMatchMin?: number
+  cwSpeedMatchMax?: number
   /** Serial port for the K1EL WinKeyer (when the CW keyer backend is WinKeyer). */
   winkeyerPort: string
   /** Serial port for the DTR/RTS CW keyline (when cwKeyer === 'serial') — a SEPARATE port
@@ -3914,9 +4369,13 @@ export interface Settings {
   rttyBaud?: number
   /** RTTY mark/space shift in Hz (170 = the HF standard). TX + RX demod both. */
   rttyShiftHz?: number
-  /** Reverse the mark/space sense (TX tones + RX demod) — for running the
-   * opposite sideband (e.g. AFSK in USB/DATA-U). */
+  /** Reverse the mark/space sense (TX tones + RX demod) — for copying an
+   * upside-down station. The sideband is `rttyAfskSideband`'s job. */
   rttyReverse?: boolean
+  /** The sideband AFSK RTTY runs on: 'lsb' (the convention, default) or 'usb'.
+   * USB commands the upper DATA submode and swaps the tones itself, so mark
+   * stays high on RF. FSK ignores it. */
+  rttyAfskSideband?: string
   band: string
   dialMhz: number
   sideband: string
@@ -3952,11 +4411,29 @@ export interface Settings {
   /** JT65 submode 0/1/2 for A/B/C (tone spacing 1x/2x/4x). */
   jt65Submode: number
   /** JS8 TRANSMIT speed as an index: 0 Slow (30 s) | 1 Normal (15 s) | 2 Fast (10 s) |
-   * 3 Turbo (6 s). Receive decodes every speed in `js8RxSpeeds` regardless. */
+   * 3 Turbo / JS8 40 (6 s) | 4 Ultra / JS8 60 (4 s). Receive decodes every speed in
+   * `js8RxSpeeds` regardless. */
   js8Speed: number
-  /** Bitmask of speeds the receiver decodes: Slow 1 · Normal 2 · Fast 4 · Turbo 8.
-   * Default 15 (all four — JS8Call's SubModeMultiDecode). */
+  /** Bitmask of speeds the receiver decodes: Slow 1 · Normal 2 · Fast 4 · Turbo 8 · Ultra 16.
+   * Default 31 (all five — JS8Call 3.0's SubModeMultiDecode). */
   js8RxSpeeds: number
+  /** The operator's own JS8 frequency list (JS8Call's working frequencies with descriptions);
+   *  null/absent = JS8Call 3.0.3's own table. */
+  js8Frequencies?: Js8Freq[] | null
+  /** JS8Call's "Monitor returns to last used frequency": entering JS8 tunes back to the dial last
+   *  used there. Off by default. */
+  js8ReturnToLastDial?: boolean
+  /** The dial last used on JS8 (MHz; 0 = none). Engine-owned: a form save keeps the live one. */
+  js8LastDialMhz?: number
+  /** JS8Call's decode filter. Engine-owned (the cockpit's waterfall controls write it). */
+  js8Filter?: Js8Filter
+  /** The passband centre "QSY to centre" moves the TX offset to (Hz). Engine-owned. */
+  js8QsyCenterHz?: number
+  /** JS8Call's "Automatically switch bands / frequencies at specific times of day". Off by
+   *  default; on, the rig's frequency changes by itself with nobody at the radio. */
+  js8BandHop?: boolean
+  /** JS8Call's Frequency Schedule. */
+  js8Schedule?: Js8Hop[]
   /** Heartbeat repeat interval in minutes; 0 = on demand. HB on/off itself is
    * session-only and is NOT here — the app can never launch beaconing. */
   js8HbIntervalMin: number
@@ -3993,12 +4470,88 @@ export interface Settings {
    * 0-1440): a Band activity row whose newest decode is this old leaves the pane, unless RX is on
    * its offset. Display only. */
   js8ActivityAgingMin: number
+  /** JS8Call's CQ message (default `CQ CQ CQ <MYGRID4>`): what the CQ button and the CQ repeat
+   * send, its macros replaced. Empty sends `CQ CQ CQ` and the square, as JS8Call does. */
+  js8CqText: string
+  /** JS8Call's reply message (default `HW CPY?`): REPLY sends it to the call in the To box. */
+  js8ReplyText: string
+  /** JS8Call's saved messages (default the one `TNX 73 GL`): the dock's Saved menu, in order. */
+  js8SavedMessages: string[]
+  /** JS8Call's "Immediately transmit CQ, Reply, Info, Saved, and Directed messages from the menu"
+   * (default on). Off, those buttons and a station row's asks only fill the compose box. */
+  js8SendAtOnce: boolean
+  /** JS8Call 3.0's pills for calls and commands in the compose box (default on). */
+  js8Pills: boolean
+  /** JS8Call's word suggestions from the JSC dictionary in the compose box (default on). */
+  js8WordSuggestions: boolean
   /** Free text answered to INFO?. */
   js8Info: string
   /** Free text answered to STATUS?; empty = JS8Call's `IDLE <min> VERSION …`. */
   js8Status: string
   /** Joined @GROUP names the station answers directed traffic for. */
   js8Groups: string[]
+  /** JS8Call's "Enable Heartbeat Networking" (default off): the HB button shows only with it on,
+   * and no heartbeat or heartbeat acknowledgement goes out without it. */
+  js8HbNetworking: boolean
+  /** JS8Call's "Allow heartbeat transmissions outside of heartbeat sub-channel (500Hz - 1000Hz)"
+   * (default off): heartbeats and their acknowledgements key on the TX offset. */
+  js8HbAnywhere: boolean
+  /** JS8Call's QSO pause (default ON): while the To box holds a call the HB repeat pauses, no
+   * heartbeat is acknowledged and the repeating CQ stops. */
+  js8HbQsoPause: boolean
+  /** JS8Call 3.0's "Suppress ACK to stations that send heartbeats at less than 55 minute
+   * intervals" (default off). */
+  js8HbAckRateLimit: boolean
+  /** JS8Call's "Do not participate in the @ALLCALL group" (default off). */
+  js8AvoidAllcall: boolean
+  /** JS8Call's "Hold PTT between frames" (off by default): the radio stays keyed from the end of
+   * one frame of a message to the key of its next, while frames of it remain. */
+  js8HoldPtt: boolean
+  /** JS8Call's "Allow Tx frequency changes while transmitting", for the TX offset (off by
+   * default): off, the offset cannot be moved while a message is queued or going out; on, a move
+   * applies from the next frame. */
+  js8TxOffsetWhileSending: boolean
+  /** JS8Call's "Tx delay" in ms (0.2 s by default, 0.1 to 0.5 s): a JS8 frame keys this long before
+   * its period, its first tone still at the period's start delay. */
+  js8TxDelayMs: number
+  /** JS8Call's "spot @APRSIS messages to APRS-IS" (default off; JS8Call ships it on): a heard
+   * @APRSIS GRID becomes an APRS-IS position and an @APRSIS CMD a raw packet, under this callsign.
+   * Needs PSK Reporter on. */
+  js8SpotAprs: boolean
+  /** JS8Call 3.0's inbound APRS-IS relay (default OFF): an APRS message for a heard station is
+   * keyed as `@APRSIS MSG TO:<call> <text> DE <sender>` with nobody at the radio. */
+  js8AprsRelay: boolean
+  /** JS8Call's "never spot these callsigns": sent to no network, and relayed no APRS message. */
+  js8SpotNever: string[]
+  /** JS8Call 3.0's "Hide messages from these callsigns in the RX pane" (empty by default): matched by
+   *  the call as heard or its base call; such a station is marked ✕ in the call list. Display only. */
+  js8RxBlocklist: string[]
+  /** JS8Call's primary highlight words or callsigns (empty by default): Band activity rows holding
+   *  one, and the call list rows of those calls. Display only. */
+  js8HighlightPrimary: string[]
+  /** The same with the secondary highlight; the primary wins a row both name. */
+  js8HighlightSecondary: string[]
+  /** JS8Call's end-of-transmission mark (♢ by default), after a message's last frame. */
+  js8Eot: string
+  /** JS8Call's missing-frame mark (…… by default). */
+  js8Mfi: string
+  /** The JS8 events that play a sound (JS8Call's notifications, all off by default): cq, hb, ack,
+   *  directed, inbox, callNew, callOld. */
+  js8Sounds: string[]
+  /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
+   * default, as in JS8Call. */
+  js8ApiTcp?: boolean
+  /** Its port (JS8Call's 2442). */
+  js8ApiTcpPort?: number
+  /** JS8Call's UDP API: datagrams to a program on this computer, read-only. Off by default. */
+  js8ApiUdp?: boolean
+  /** The port on 127.0.0.1 they go to (JS8Call's 2242). */
+  js8ApiUdpPort?: number
+  /** Answer requests a TCP program sends ("Accept TCP requests"). Off by default, as in JS8Call:
+   * the program hears what the station sends and is answered nothing. */
+  js8ApiTcpAccept?: boolean
+  /** Answer requests a UDP program sends ("Accept UDP requests"). Off by default, as in JS8Call. */
+  js8ApiUdpAccept?: boolean
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number
@@ -4063,8 +4616,10 @@ export interface Settings {
    *  exactly as `baud` is. Full scale for the Phone cockpit's analog PO arc. */
   ratedWatts?: number
   /** Rig connection: "serial" (default), "network" (rigctld → rigAddr over TCP, e.g. a
-   * FlexRadio via SmartSDR), or "omnirig" (VE3NEA's Windows COM rig-control server drives the
-   * radio; Nexus serves the rigctld protocol over it — Windows only). */
+   * FlexRadio via SmartSDR), "omnirig" (VE3NEA's Windows COM rig-control server drives the
+   * radio; Nexus serves the rigctld protocol over it — Windows only), "icomlan" (the Icom
+   * network connection), or "tci" (an SDR program's TCI server at tciHost:tciPort; the radio
+   * stores TCI's own model, `TCI_RIG_MODEL` in tci.ts). */
   rigConn: string
   /** Network rig address host:port when rigConn === "network" (e.g. "192.168.1.50:4992"). */
   rigAddr: string
@@ -4166,6 +4721,29 @@ export interface Settings {
   catBroker: boolean
   /** TCP port the CAT broker listens on (Hamlib NET rigctl default 4532). */
   catBrokerPort: number
+  /** Nexus as a TCI server for programs on this computer (127.0.0.1 and ::1 only). Off by default.
+   *  The station's, not a radio's, and set at the station only, as are the four after it. */
+  tciServer?: boolean
+  /** The TCP port the TCI server listens on: 40001 unless moved. */
+  tciServerPort?: number
+  /** "Programs on TCI may transmit". Off by default; every Nexus transmit gate still applies. */
+  tciServerTx?: boolean
+  /** Programs' CW macros, keyed by Nexus in the CW section only, and only while tciServerTx is on.
+   *  On by default. */
+  tciServerCw?: boolean
+  /** Programs' spots on the band map, and a click on a spot told back to them. On by default; a
+   *  spot or a click never transmits. */
+  tciServerSpots?: boolean
+  /** Where the RF scope's picture comes from: `radio` (the radio's own panadapter, the default) or
+   *  `sdrconnect` (an SDRplay receiver through SDRplay's SDRconnect). Any other word reads as
+   *  `radio`. The station's, like the TCI server's. */
+  scopeSource?: string
+  /** The computer SDRconnect runs on (default 127.0.0.1). */
+  sdrconnectHost?: string
+  /** SDRconnect's WebSocket API port (default 5454). */
+  sdrconnectPort?: number
+  /** How the SDR's centre follows the rig's dial: `centre` (default) or `scroll`. */
+  sdrconnectFollow?: string
   /** The rig's serial HANDSHAKE as the operator DECLARES it (`cat_serial_handshake`):
    *  `auto` | `none` | `hardware` | `xonxoff`. `auto` (the default) is today's behaviour to the
    *  byte — Nexus infers it exactly as before. Anything else REPLACES that inference.
@@ -4192,12 +4770,27 @@ export interface Settings {
   /** Opt-in to Nexus's own Flex client as the radio's CAT (Beta; off by default). SmartSDR CAT
    *  stays the default and the fallback. */
   flexNativeCat?: boolean
+  /** Let the Flex client send CW, Tune and ATU before a tester's bench has confirmed them (Beta;
+   *  off by default). Means something only where the client serves the radio. */
+  flexNativeUnbenched?: boolean
   /** The radio's own address for the Icom network connection (Beta): its "IP Address (LAN)". */
   icomLanHost?: string
   /** The network user the radio was set up with. Not secret; the password is in the OS keychain. */
   icomLanUser?: string
   /** The radio's control port (UDP), 50001 unless moved on the radio. */
   icomLanPort?: number
+  /** The radio in use's TCI connection (the "TCI" Connection choice): the SDR program's server
+   *  address (127.0.0.1 unless moved) and port (50001), which of its transceivers (from 0), its
+   *  dialect ('auto' | 'expertsdr3' | 'thetis' | 'pihpsdr'), Nexus's audio over it, both ways (on
+   *  by default), the SDR program's spectrum in Nexus's scope and Nexus's spots on its panadapter
+   *  (both off). Per radio: see RadioProfile. */
+  tciHost?: string
+  tciPort?: number
+  tciTrx?: number
+  tciDialect?: string
+  tciAudio?: boolean
+  tciPan?: boolean
+  tciSpots?: boolean
   /** Let a broker client (WSJT-X/N1MM) key PTT when Nexus is idle. OFF by
    * default — Nexus owns TX unless the operator opts in. */
   catBrokerPtt?: boolean
@@ -4226,6 +4819,9 @@ export interface Settings {
   /** Station transmit power in WATTS (RF out) — unlocks the Journey miles-per-watt
    * + QRP feats. `null` until set (those feats stay gated). */
   stationPowerW?: number | null
+  /** Log the space weather on each contact (ADIF K_INDEX, A_INDEX, SFI) from a reading no more
+   *  than 3 h old. Off by default. */
+  logSpaceWeather?: boolean
   /** Display units: 'auto' (OS locale) | 'metric' | 'imperial'. Display-only (F4MQS). */
   units?: string
   /** Per-mode RF-power CEILING (0.0–1.0 fraction of the rig's max) — a SAFETY cap for
@@ -4411,6 +5007,9 @@ export interface Settings {
   /** ESM's "call once" in Search and Pounce: my call goes once per station, and the next Enter
    *  asks for a repeat. OFF by default. */
   contestEsmCallOnce?: boolean
+  /** The contest entry's optional "RST sent" box (N1MM's Snt), pre-filled with the report the
+   *  contact sends; a typed one replaces it for that contact only. OFF by default. */
+  contestRstSentBox?: boolean
   /** FD power multiplier tier: 5 QRP-battery, 2 <=100W, 1 >100W. */
   fdPowerMult?: number
   /** Claimed FD bonus ids (the checklist). */
@@ -4605,6 +5204,8 @@ export interface Settings {
   soundTxState?: boolean
   /** Soft tick when a decode batch lands. Off by default. */
   soundDecodeTick?: boolean
+  /** A short rising chirp when the CW turn cue says it is your turn. Off by default. */
+  soundCwTurn?: boolean
   // --- Auto-CQ caller selection (W1.4) ---
   /** When several stations answer your CQ, which to work first:
    *  'first' (stock), 'strongest', 'farthest', or 'cq_first'. */
@@ -4679,9 +5280,18 @@ export interface Settings {
   clublogEmail: string
   /** ClubLog logbook callsign to upload into (empty → your callsign). */
   clublogCallsign: string
-  /** ClubLog developer/app API key (non-secret; never committed). Empty → a
-   *  build-time default if the installer baked one in. */
+  /** ClubLog developer/app API key (never committed). Empty → a
+   *  build-time default if the installer baked one in. Read from afar it is
+   *  blank, and `secretsSavedAtStation` says whether the station has one. */
   clublogApiKey: string
+  /** Only on a read from a computer driving the station: whether the station
+   *  has each stored key saved, the keys themselves staying there (blank in
+   *  this read, and a save from afar keeps the station's own). */
+  secretsSavedAtStation?: { clublogApiKey?: boolean; cloudlogKey?: boolean }
+  /** Only on a read from a computer driving the station: every setting a save
+   *  from there keeps as the station has it, so the form shows each read-only,
+   *  "Set at the station". */
+  stationOnlySettings?: string[]
   /** Auto-upload each logged QSO to ClubLog (realtime push). */
   clublogUpload: boolean
   /** Auto-upload each logged QSO to eQSL.cc (ImportADIF). eQSL username is
@@ -4859,10 +5469,20 @@ export interface RadioProfile {
   flexNativeAudio?: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta). */
   flexNativeCat?: boolean
+  /** This radio's Beta setting for the Flex client's CW, Tune and ATU (off by default). */
+  flexNativeUnbenched?: boolean
   /** This radio's Icom network address, user and control port (Beta). */
   icomLanHost?: string
   icomLanUser?: string
   icomLanPort?: number
+  /** This radio's TCI connection: see Settings.tciHost and the six after it. */
+  tciHost?: string
+  tciPort?: number
+  tciTrx?: number
+  tciDialect?: string
+  tciAudio?: boolean
+  tciPan?: boolean
+  tciSpots?: boolean
 }
 
 /** A compact per-radio summary for the multi-radio switcher (dual-radio). One per configured
@@ -4915,10 +5535,16 @@ export interface AppSnapshot {
   /** The period a band or mode change caught while it was decoding (see `LateDecodes`). Absent
    *  unless there is one, until the first period of the new band or mode decodes. */
   lateDecodes?: LateDecodes
-  /** JTAlert-style UDP callsign highlights for the decode panes. */
+  /** UDP callsign highlights for the decode panes. */
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
-  /** Bumped by an inbound UDP Clear — panes erase on change. */
+  /** Bumped by an inbound UDP Clear of Band Activity — that pane erases on change. */
   clearTick?: number
+  /** The last FreeText a logger sent (JTAlert, GridTracker), as Tx5 took it: Tx5 shows `fill`
+   *  (empty clears it; null leaves it), `refused` says why its over was not sent. `seq` grows by
+   *  one per FreeText, so the cockpit applies each once. Absent until a logger sends one. */
+  udpFreeText?: { seq: number; fill?: string | null; refused?: string | null }
+  /** Bumped by an inbound UDP Clear of Rx Frequency — that pane erases on change. */
+  rxFreqClearTick?: number
   /** Bumped every time a QSO is logged, by any path (backend auto-log included).
    * App fires the "clear DX call after logging" wipe on change. */
   loggedTick?: number
@@ -4936,6 +5562,10 @@ export interface AppSnapshot {
   /** The park or summit of the last worked spot, when a Needed row named one: the log line fills it
    *  with `workCall`. Never a hunt. Absent when there is none. */
   workPark?: { program: string; reference: string } | null
+  /** The last Work came from afar (a computer driving this station) and entered its section without
+   *  arming Enable TX: App opens its cockpit without re-asserting the section, which from the
+   *  station's own screen would arm the latch. Absent for a Work made at the station. */
+  workAfar?: boolean
   /** Pending one-click POTA/SOTA hunt (next QSO with this call auto-tags). */
   /** `states`: where the hunted park or summit is ("US-ND"; two or more for a park on a state
    *  line), absent when the hunt could not place it. */
@@ -5015,6 +5645,9 @@ export interface AppSnapshot {
 export interface ContestEntryShared {
   /** Bumped by every change: a window shows the entry as of this rev. */
   rev: number
+  /** Which contact the entry holds: the number logged from it since the window opened. Every log
+   *  moves it on, and a put names the contact it was made on. */
+  contact: number
   /** The Call box, as typed. */
   call: string
   /** The received boxes by slot id, as typed. A box nobody has touched is absent. */
@@ -5048,6 +5681,36 @@ export type AudioErrorKind =
   | 'recording'
   | 'decodeCrash'
 
+/** The TCI server while it is switched on (mirror of the Rust TciServerStatus,
+ *  `RadioStatus.tciServer`). */
+export interface TciServerStatus {
+  /** The port programs connect to on the station's computer (127.0.0.1 and ::1) while it serves:
+   *  the one asked for, or the next one when another Nexus window holds that. Null while it cannot
+   *  serve. */
+  port: number | null
+  /** Why it is not serving although switched on, in the station's words; null while it serves. */
+  error: string | null
+  /** The programs connected now, in the order they connected. */
+  programs: TciProgramStatus[]
+  /** Moves on with every change to the spots programs sent, so a window asks for them
+   *  (`getTciSpots`) only when they changed; 0 until the first. Absent from an older station. */
+  spots?: number
+}
+
+/** One program connected to the TCI server (mirror of the Rust TciProgramStatus). */
+export interface TciProgramStatus {
+  /** Its number, from 1 in the order programs connected; what a Disconnect names. */
+  id: number
+  /** Where it connects from (`127.0.0.1:53412`). TCI carries no program name. */
+  peer: string
+  /** It is being sent receive audio. */
+  audio: boolean
+  /** A key of its was admitted and has not ended. */
+  keyed: boolean
+  /** The last thing Nexus refused it, in the station's connection-log words; null when nothing. */
+  refused: string | null
+}
+
 /** What is shown beside the ATU while Nexus's Flex client runs a FlexRadio's own tuner (mirror of
  *  the Rust FlexAtu, `RadioStatus.flexAtu`). Read and shown; Nexus writes none of it. */
 export interface FlexAtu {
@@ -5071,6 +5734,10 @@ export interface SlotKeyRefused {
   /** Set when Nexus's own Flex client kept the key off the air itself, for where the radio takes
    *  its transmit audio from: the lane then says that in its own words. Absent otherwise. */
   flexAudio?: FlexAudioRefusal | null
+  /** Set when Nexus kept the key off the air itself because the sound card's transmit audio output
+   *  would not open (`why` is then the sound card's own error): the lane says that in its own
+   *  words. Absent otherwise. */
+  txAudioFailed?: boolean
 }
 
 /** Why Nexus's own Flex client kept a slot over's key off the air (mirror of the Rust
@@ -5096,6 +5763,17 @@ export interface PttRefused {
   mode: string
 }
 
+/** A voice-keyer message Nexus's own Flex client dropped without keying the radio (mirror of the
+ *  Rust VoiceDropped). The words are the UI's, in features/voiceDropped.ts. */
+export interface VoiceDropped {
+  /** When it happened (unix seconds). */
+  at: number
+  /** `noDax`: the radio did not take its transmit audio from DAX within 2 seconds of the press, or
+   *  no longer took it when the message was to key. `keyed`: something else keyed the radio, or held
+   *  the transmitter, before the message could key. */
+  cause: 'noDax' | 'keyed'
+}
+
 /** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words
  *  are the UI's, in features/slotUnkeyFailed.ts. */
 export interface SlotUnkeyFailed {
@@ -5110,6 +5788,18 @@ export interface SlotUnkeyFailed {
 export interface SlotAudioLost {
   /** When it happened (unix seconds). */
   at: number
+}
+
+/** The last FT8 or FT4 over the station dropped because the radio keyed it only after its period
+ *  had ended (mirror of the Rust SlotOverDropped). The words are the UI's, in
+ *  features/slotOverDropped.ts. */
+export interface SlotOverDropped {
+  /** When it happened (unix seconds). */
+  at: number
+  /** How long after the period's end the radio keyed it ("1.2 s"): data, never translated. */
+  late: string
+  /** How many in a row, this one included. */
+  count: number
 }
 
 /** What Parsec presence mode knows (mirror of the Rust ParsecPresenceDto). Tokens only — the

@@ -108,7 +108,9 @@ says which. Work down the list:
    correct the class in
    [Settings ▸ Station ▸ Operator & Radio](settings-reference.md#operator--radio).
    Under split, the message names the frequency it is judging — the *transmit*
-   one, which is not the one you are listening on.
+   one, which is not the one you are listening on. In FT8, FT4, FT2 and JS8 the
+   whole signal counts, its top as well as your TX offset: near the edge of your
+   privileges, move the TX offset further inside.
 2. **The TX latch is off.** The header control reads **TX Off**. Click it on.
    Receive works with it off; nothing transmits.
 3. **Your callsign is not set.** Every network- and air-facing path checks it.

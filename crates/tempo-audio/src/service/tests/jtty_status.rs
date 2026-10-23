@@ -124,7 +124,14 @@ fn decode_sent_in(section: &str) -> bool {
     );
     assert!(!e.wire_decodes().is_empty(), "premise: a line for the wire");
     e.set_operating_mode(section, false);
-    emit_rx_decodes(&sinks, &e, &mut Vec::new(), 1_700_000_000_000.0, 14_074_000);
+    emit_rx_decodes(
+        &sinks,
+        &e,
+        &mut Vec::new(),
+        &mut tempo_net::pskreporter::SpotCache::default(),
+        1_700_000_000_000.0,
+        14_074_000,
+    );
     let mut buf = [0u8; 4096];
     while let Ok((n, _)) = logger.recv_from(&mut buf) {
         let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);

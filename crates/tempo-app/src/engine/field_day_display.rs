@@ -77,11 +77,18 @@ impl Engine {
                 .filter(|&&(_, on)| on)
                 .map(|&(label, _)| label.to_string())
                 .collect(),
-            log: log
-                .qsos()
-                .iter()
-                .map(|q| field_day_qso(q, rs, spec, role))
-                .collect(),
+            rst_sent_box: self
+                .settings
+                .contest_rst_sent_box
+                .then(|| log.session.sent_rst_constant().map(str::to_string))
+                .flatten(),
+            log: {
+                let numbers = log.qso_numbers();
+                log.qsos()
+                    .iter()
+                    .map(|q| field_day_qso(q, rs, spec, role, numbers.get(&q.seq).copied()))
+                    .collect()
+            },
             // The club block, plus the generalised keys `fd_club_dto` does not carry —
             // it lives in `engine.rs` and projects the mirror to the legacy triple. The
             // unprojected set is right here on the mirror, so it is added here rather
@@ -154,6 +161,8 @@ impl Engine {
                     .map(str::to_string)
                     .collect()
             },
+            // A serial to give is a serial sent: what Clear test contacts starts again at 001.
+            sends_serial: log.session.serial_now().is_some(),
             bands: rs.bands.iter().map(|b| b.to_string()).collect(),
             // The dupe rule's mode grouping, so the strip's badge and the engine's
             // refusal answer the same question.
@@ -204,6 +213,7 @@ impl Engine {
                     domain: b.domain.map(|d| d.to_string()),
                     scope: crate::dto::mult_scope_tag(b.scope).to_string(),
                     worked: log.worked_values(b.slot),
+                    club: self.fd_club_worked(b.slot),
                 })
                 .collect(),
             // What the journal restore kept out of this session, and why.
@@ -214,6 +224,22 @@ impl Engine {
                     other_running: running as u32,
                 }),
             },
+            // The journal's writes that failed since its last good one: the operator is told.
+            unsaved: self
+                .station
+                .fd_log_path
+                .as_ref()
+                .and_then(|p| self.station.journals.trouble(p))
+                .map(|t| crate::dto::FdUnsavedDto {
+                    failed_writes: t.failed,
+                    last_saved_unix: t.last_good_unix,
+                }),
+            operator_now: log.operator.clone(),
+            operators: log
+                .operator_stats(now_unix_secs())
+                .into_iter()
+                .map(crate::dto::FdOperatorDto::from)
+                .collect(),
         })
     }
 
@@ -298,6 +324,14 @@ impl Engine {
                 }
             }
         }
+        // The per-operator block names each operator once, and the bands and modes they worked.
+        for o in log.operator_stats(crate::engine::now_unix_secs()) {
+            check(&o.operator)?;
+            for (band, mode, _) in &o.band_mode {
+                check(band)?;
+                check(mode)?;
+            }
+        }
         if self.fd_sync_enabled() {
             for s in [&self.fd_mirror.event, &self.fd_mirror.host_call] {
                 check(s)?;
@@ -331,6 +365,31 @@ impl Engine {
         Ok(status)
     }
 
+    /// ⭐ **The values the CLUB has worked in multiplier slot `slot`**, sorted — what every
+    /// laptop's board lights, whichever position worked it: on the host straight from its club
+    /// log, the list its positions are sent ([`crate::fdevent::ClubLog::worked_mults`]); on a
+    /// position, the list its host sent (`ClubMirror::mults`), empty from a host older than it.
+    /// Empty without club sync: a laptop on its own has only its own board.
+    fn fd_club_worked(&self, slot: &str) -> Vec<String> {
+        if !self.fd_sync_enabled() {
+            return Vec::new();
+        }
+        match &self.fd_club {
+            Some(club) => club.worked_mults(slot),
+            None => {
+                let mut values: Vec<String> = self
+                    .fd_mirror
+                    .mults
+                    .iter()
+                    .filter(|(s, _)| s == slot)
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                values.sort();
+                values
+            }
+        }
+    }
+
     /// ⭐ **What Remote's snapshot carries of this laptop's club board**: the board every position
     /// is sent ([`Engine::fd_club_board_sent`]), as the Remote capture carries it, never the host's
     /// own list of every position its club knows, which grows with each position that ever joined.
@@ -360,6 +419,7 @@ pub(super) fn field_day_qso(
     rs: &tempo_core::fd_rules::FdRuleset,
     spec: &'static tempo_core::contest::ExchangeSpec,
     role: &'static tempo_core::contest::RoleSpec,
+    nr: Option<u32>,
 ) -> FieldDayQso {
     FieldDayQso {
         call: q.call.clone(),
@@ -404,7 +464,10 @@ pub(super) fn field_day_qso(
         // ⭐ The engine's own answer about this row, so the log table marks a
         // zero-scoring dupe instead of guessing at one from a repeated callsign.
         dupe: q.dupe,
+        // …and whether it was worked in a mode the contest bans, which counts for nothing.
+        banned: q.banned_under(rs),
         seq: q.seq,
+        nr,
     }
 }
 
@@ -437,6 +500,122 @@ mod tests {
         }
         e
     }
+
+    /// ⭐ **A laptop out of the club shows its own board, whatever its mirror still holds** — the
+    /// club's list is read only while club sync runs, and the mirror keeps the last host's state
+    /// until a next host's snapshot replaces it. CONTROL: joined, the same mirror lights the
+    /// club's, and this laptop's own stays its own.
+    #[test]
+    fn a_laptop_out_of_the_club_shows_its_own_board() {
+        let mut e = engine("arrlfd", 2);
+        e.fd_mirror_mut().apply(&tempo_net::fdsync::ClubState {
+            reset: true,
+            mults: vec![
+                ("SECTION".into(), "EMA".into()),
+                ("SECTION".into(), "MN".into()),
+            ],
+            ..Default::default()
+        });
+        let board = |e: &Engine| e.field_day_status().unwrap().boards[0].clone();
+        assert_eq!(board(&e).worked, ["EMA", "WI"]);
+        assert!(board(&e).club.is_empty(), "no club sync, no club list");
+        let mut s = e.settings().clone();
+        s.fd_join_addr = "192.168.1.10:42073".into();
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        assert_eq!(board(&e).club, ["EMA", "MN"], "CONTROL: joined");
+        assert_eq!(board(&e).worked, ["EMA", "WI"]);
+    }
+
+    /// ⭐ **A position's board names the position its host removed**, from the host's own line
+    /// (`WireBoardRow::removed`), with the one link word a position's board carries; every other
+    /// line carries none, as before. Remote's capture leaves the word out with the host's own
+    /// (`leave_out_the_hosts_own`).
+    #[test]
+    fn a_positions_board_names_the_position_its_host_removed() {
+        let mut e = engine("arrlfd", 0);
+        let mut s = e.settings().clone();
+        s.fd_join_addr = "192.168.1.10:42073".into();
+        s.fd_position_id = "eeee0001".into();
+        e.apply_settings(s);
+        let row = |pos: &str, removed: bool| tempo_net::fdsync::WireBoardRow {
+            pos: pos.into(),
+            name: pos.into(),
+            qsos: 3,
+            age: 2,
+            removed,
+            ..Default::default()
+        };
+        e.fd_mirror_mut().apply(&tempo_net::fdsync::ClubState {
+            reset: true,
+            board: vec![row("bbbb0002", false), row("cccc0003", true)],
+            ..Default::default()
+        });
+        let board = e.field_day_status().unwrap().club.unwrap().board;
+        let links: Vec<(String, Option<String>)> =
+            board.into_iter().map(|r| (r.posid, r.link)).collect();
+        assert_eq!(
+            links,
+            [
+                ("bbbb0002".to_string(), None),
+                ("cccc0003".to_string(), Some("removed".to_string()))
+            ]
+        );
+    }
+
+    /// ⭐ **The status names who is at the key and carries each operator's figures**, with the
+    /// rates as contacts per hour: one contact in the last ten minutes is 6 an hour.
+    #[test]
+    fn the_status_carries_each_operators_figures_and_who_is_at_the_key() {
+        let mut e = engine("arrlfd", 0);
+        let now = now_unix_secs();
+        let Mode::FieldDay { station, .. } = &mut e.mode else {
+            panic!("active")
+        };
+        station.log.operator = "K9AAA".into();
+        assert!(station
+            .log
+            .log_mode_at("K1A", "2A", "WI", "CW", 0, now - 60));
+        assert!(station
+            .log
+            .log_mode_at("K1B", "2A", "IL", "PH", 0, now - 1200));
+        station.log.operator = "N9BBB".into();
+        assert!(station
+            .log
+            .log_mode_at("K1C", "2A", "OH", "PH", 0, now - 4000));
+        let st = e.field_day_status().expect("a contest is on");
+        assert_eq!(st.operator_now, "N9BBB");
+        let ops: Vec<(String, u32, u32, u32, u32, u32)> = st
+            .operators
+            .iter()
+            .map(|o| {
+                (
+                    o.operator.clone(),
+                    o.qsos,
+                    o.points,
+                    o.new_mults,
+                    o.rate10,
+                    o.rate60,
+                )
+            })
+            .collect();
+        assert_eq!(
+            ops,
+            vec![
+                ("K9AAA".into(), 2, 3, 0, 6, 2),
+                ("N9BBB".into(), 1, 1, 0, 0, 0)
+            ]
+        );
+        assert_eq!(
+            st.operators[0]
+                .band_mode
+                .iter()
+                .map(|c| c.qsos)
+                .sum::<u32>(),
+            2
+        );
+    }
+
     #[test]
     fn bounded_capture_retains_the_native_event_score_and_complete_log() {
         for event in ["arrlfd", "wfd"] {
@@ -796,6 +975,7 @@ mod tests {
                 uniq: 2,
                 rate: 1,
                 age: 17,
+                removed: false,
             })
             .collect();
         let before = serde_json::to_value(e.snapshot().field_day).unwrap();
@@ -1058,6 +1238,96 @@ mod tests {
         assert_eq!(wire["log"].as_array().unwrap().len(), before + 1);
         assert_eq!(wire["log"][before]["dupe"], true, "{}", wire["log"][before]);
         assert!(wire["log"][0].get("dupe").is_none(), "{}", wire["log"][0]);
+    }
+
+    /// ⭐ **A contact in a mode the contest bans says so on the row, and the count leaves it out.**
+    /// The Illinois QSO Party gives FT8 *"no contact credit"*, so the contact is logged and worth
+    /// nothing, and the hosted Remote page, which recounts `qsoCount` from the rows and refuses a
+    /// capture whose count it cannot reproduce, has to be able to tell it from a contact that
+    /// counts. Skipped when false, like `dupe`.
+    /// ⭐ **Every row carries its QSO number on the wire**, in a contest that sends no serial as
+    /// in one that does — the number the log table shows (`FieldDayLog::qso_numbers`).
+    #[test]
+    fn every_contest_row_carries_its_qso_number() {
+        let mut e = Engine::with_settings(crate::settings::Settings {
+            mycall: "W9XYZ".into(),
+            fd_active: true,
+            fd_event: "ilqp".into(),
+            contest_qth_state: "IL".into(),
+            contest_qth_county: "MCLN".into(),
+            ..Default::default()
+        });
+        e.restore_field_day_if_enabled();
+        for (call, qth) in [("K9AAA", "COOK"), ("W9BBB", "LAKE"), ("K9AAA", "COOK")] {
+            let ex = vec![
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), qth.to_string()),
+            ];
+            assert!(e.contest_log_manual(call, &ex, "CW", None).unwrap());
+        }
+        let fd = e.snapshot().field_day.expect("in the party");
+        assert_eq!(
+            fd.log.iter().map(|q| q.nr).collect::<Vec<_>>(),
+            [Some(1), Some(2), Some(3)],
+            "the dupe is numbered too"
+        );
+        let wire = serde_json::to_value(&fd).unwrap();
+        assert_eq!(wire["log"][2]["nr"], 3, "{}", wire["log"][2]);
+    }
+
+    #[test]
+    fn a_banned_mode_contact_says_so_on_the_row_and_counts_for_nothing() {
+        let mut e = Engine::with_settings(crate::settings::Settings {
+            mycall: "W9XYZ".into(),
+            fd_active: true,
+            fd_event: "ilqp".into(),
+            contest_qth_state: "IL".into(),
+            contest_qth_county: "MCLN".into(),
+            ..Default::default()
+        });
+        e.restore_field_day_if_enabled();
+        let ex = |qth: &str| {
+            vec![
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), qth.to_string()),
+            ]
+        };
+        assert!(e
+            .contest_log_manual("K9AAA", &ex("COOK"), "CW", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("K9FT8", &ex("LAKE"), "DIG", Some("FT8"))
+            .unwrap());
+        let fd = e.snapshot().field_day.expect("in the party");
+        let county: Vec<&str> = fd
+            .boards
+            .iter()
+            .find(|b| b.domain.as_deref() == Some("il_counties"))
+            .expect("the county board")
+            .worked
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            (fd.log.len(), fd.qso_count, fd.total_score, county),
+            (2, 1, 2, vec!["COOK"]),
+            "(rows, contacts, score, the county board): the FT8 contact is logged and worth nothing"
+        );
+        let wire = serde_json::to_value(&fd).unwrap();
+        assert_eq!(wire["log"][1]["banned"], true, "{}", wire["log"][1]);
+        assert!(
+            wire["log"][0].get("banned").is_none(),
+            "the CW contact says nothing: {}",
+            wire["log"][0]
+        );
+        // CONTROL: the same contact on RTTY counts, and its row carries no mark.
+        assert!(e
+            .contest_log_manual("K9RTY", &ex("LAKE"), "DIG", Some("RTTY"))
+            .unwrap());
+        let fd = e.snapshot().field_day.expect("in the party");
+        assert_eq!((fd.log.len(), fd.qso_count), (3, 2));
+        let wire = serde_json::to_value(&fd).unwrap();
+        assert!(wire["log"][2].get("banned").is_none(), "{}", wire["log"][2]);
     }
 
     /// ⭐ **THE SIZE BOUND COUNTS THE ROWS IT WOULD SEND.** The browser refuses a capture of more

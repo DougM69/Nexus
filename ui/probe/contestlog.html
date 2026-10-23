@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- The contest logger window in a real browser: scripts/browser-probe --desktop contestlog serves this
+     page from ui/ with the app's own Vite config. src/probe/contestlog.tsx mounts it. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Contest logger probe</title>
+    <style>
+      html, body, #root { margin: 0; height: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/probe/contestlog.tsx"></script>
+  </body>
+</html>

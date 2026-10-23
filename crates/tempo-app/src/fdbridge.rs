@@ -108,13 +108,20 @@ pub struct EnginePositionSync {
     engine: Arc<Mutex<Engine>>,
     /// This pump's generation ([`Engine::fd_link_take_over`]).
     gen: u64,
+    /// The call the JOIN this pump sent last named ([`PositionSync::identity`]), for the mirror
+    /// when the welcome answers it (`ClubMirror::link_call`).
+    joining: Mutex<String>,
 }
 
 impl EnginePositionSync {
     /// The bridge for a new pump, which takes the club link over from every older one.
     pub fn new(engine: Arc<Mutex<Engine>>) -> Self {
         let gen = engine_lock(&engine).fd_link_take_over();
-        Self { engine, gen }
+        Self {
+            engine,
+            gen,
+            joining: Mutex::default(),
+        }
     }
 
     /// Apply `f` to the mirror while this pump owns the club link: a stopped pump's calls
@@ -129,7 +136,12 @@ impl EnginePositionSync {
 
 impl PositionSync for EnginePositionSync {
     fn identity(&self) -> (String, String, String, u64) {
-        engine_lock(&self.engine).fd_sync_identity()
+        let identity = engine_lock(&self.engine).fd_sync_identity();
+        *self
+            .joining
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = identity.2.clone();
+        identity
     }
 
     fn key(&self) -> PositionKey {
@@ -165,8 +177,15 @@ impl PositionSync for EnginePositionSync {
         // FD has no time-window dupe rule).
         let now = now_unix();
         let skew = now as i64 - host_now_unix as i64;
+        // The call this link joined under is the one its JOIN named, whatever Settings say now.
+        let joined = self
+            .joining
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         self.mirror(|m| {
             m.on_welcome(acked, event, host_call, skew);
+            m.link_call = joined;
             m.heard(now);
         });
     }
@@ -235,6 +254,29 @@ mod tests {
         let mut eng = engine_lock(engine);
         let m = eng.fd_mirror_mut();
         (m.link_state(), m.connected)
+    }
+
+    /// ⭐ **A link is on the call its JOIN named** (`ClubMirror::link_call`), whatever Settings
+    /// say by the time the host's welcome comes: it is what a contact that carries no call of its
+    /// own was logged on.
+    #[test]
+    fn a_link_is_on_the_call_its_join_named() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN61", 0)));
+        let pump = EnginePositionSync::new(engine.clone());
+        assert_eq!(
+            pump.identity().2,
+            "W9XYZ",
+            "CONTROL: the JOIN names the Settings call"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.mycall = "K9ABC".into();
+            eng.apply_settings(s);
+        }
+        pump.on_link(true);
+        pump.on_welcome(0, "ILQP", "W9XYZ", now_unix());
+        assert_eq!(engine_lock(&engine).fd_mirror_mut().link_call, "W9XYZ");
     }
 
     /// ⭐ **A pump the supervisor replaced cannot take the new link down.** When the contest

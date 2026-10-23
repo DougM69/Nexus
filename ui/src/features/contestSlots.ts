@@ -15,8 +15,8 @@
 
 import { t, type MessageKey } from '../i18n'
 import type { ContestFieldSpec } from '../types'
-import { inDomain, resolveDomainValue } from './contestDomains'
-import { isCountyLine, readCountyLine, resolveCountyLine } from './countyLine'
+import { domainSuggestions, inDomain, resolveDomainValue } from './contestDomains'
+import { codeChoice, isCountyLine, readCountyLine, resolveCountyLine } from './countyLine'
 
 /** The catalog keys for one slot's caption and tooltip, for the slots only an id can name. Field
  *  Day's two slots keep the captions and tooltips they shipped with. */
@@ -38,26 +38,22 @@ export function slotCaption(key: string): string {
   return m ? t(m.labelKey) : key
 }
 
-/** ⭐ A county list, by rules-file domain id: the state whose party it is, and the example an empty
- *  box shows (the state's most populous county, the one most likely worked). LISTED rather than
+/** ⭐ A county list, by rules-file domain id: the state whose party it is. LISTED rather than
  *  read off the id's spelling, as `COUNTY_LINE_MAX` is: a list missing here leaves its box
  *  captioned by slot id, which `LogEntry.exchangeLabels.test.tsx` refuses for every seeded
  *  contest. */
-const COUNTY_LISTS: Record<string, { state: string; example: string }> = {
-  ca_counties: { state: 'CA', example: 'LANG' },
-  il_counties: { state: 'IL', example: 'COOK' },
-  ny_counties: { state: 'NY', example: 'KIN' },
-  oh_counties: { state: 'OH', example: 'FRAN' },
-  tn_counties: { state: 'TN', example: 'SHEL' },
-  tx_counties: { state: 'TX', example: 'HARR' },
+const COUNTY_LISTS: Record<string, { state: string }> = {
+  ca_counties: { state: 'CA' },
+  il_counties: { state: 'IL' },
+  ny_counties: { state: 'NY' },
+  oh_counties: { state: 'OH' },
+  tn_counties: { state: 'TN' },
+  tx_counties: { state: 'TX' },
 }
 
 /** The lists of US states and Canadian provinces, and the ARRL/RAC section lists. */
 const STATE_LISTS: ReadonlySet<string> = new Set(['cqp_states', 'cqww_rtty_qth', 'il_mults', 'ny_mults', 'oh_mults'])
 const SECTION_LISTS: ReadonlySet<string> = new Set(['arrl_sections', 'fd_sections', 'ss_sections'])
-
-/** The example an empty state or section box shows: a code in both lists, and Field Day's own. */
-const STATE_OR_SECTION_EXAMPLE = 'WI'
 
 /** The roles of a station OUTSIDE the state whose QSO party it works (`contestRoleWords`' ids).
  *  It works only that state's stations, so a county box holds that state's counties alone. */
@@ -94,17 +90,6 @@ export function receivedCaption(spec: ContestFieldSpec, role: string | undefined
   return spec.key
 }
 
-/** The example an EMPTY received box shows: a code from the list it draws on. An INVARIANT
- *  TOKEN, never a catalog string (the strip's `LOG_EXAMPLES` rule). `undefined` for a box with
- *  no list, whose caption says what goes there — the zone box among them, whose placeholder is
- *  the country file's hint for the call typed. */
-export function slotExample(spec: ContestFieldSpec): string | undefined {
-  const county = countyList(spec)
-  if (county) return COUNTY_LISTS[county].example
-  if (spec.domains?.some((d) => STATE_LISTS.has(d) || SECTION_LISTS.has(d))) return STATE_OR_SECTION_EXAMPLE
-  return undefined
-}
-
 /** The tooltip for a slot's box, when the catalog has one. */
 export function slotTitle(key: string): string | undefined {
   const m = SLOT_TEXT[key]
@@ -113,7 +98,8 @@ export function slotTitle(key: string): string | undefined {
 
 /** Why this slot is not loggable yet — Field Day's own two sentences for Field Day's
  *  two slots, and a generic pair naming the field for anything else, by its box's caption for
- *  this station's `role`. */
+ *  this station's `role`. A value in a box over several lists is named, with the codes a name or
+ *  a prefix of it matches. */
 export function fdVerdict(spec: ContestFieldSpec, raw: string, line?: string, role?: string): string {
   const v = raw.trim()
   // A COUNTY LINE says which part stops it, because one bad part refuses the whole line.
@@ -125,6 +111,14 @@ export function fdVerdict(spec: ContestFieldSpec, raw: string, line?: string, ro
       if (read.why === 'tooMany') return t('logEntry.countyLine.tooMany', { max: read.max })
       return t('logEntry.countyLine.incomplete', { max: read.max })
     }
+  }
+  // A box over several lists refuses a value only when it is on none of them (`offTheLists`): say
+  // so, and offer the codes it may have meant, `WASHINGTON` → WASH or WA.
+  if (spec.kind === 'oneOf' && v !== '') {
+    const meant = domainSuggestions(spec.domains, v, 6, false).map((d) => d.code)
+    return meant.length > 0
+      ? t('logEntry.fd.didYouMean', { value: v, codes: codeChoice(meant) })
+      : t('logEntry.fd.notOnList', { value: v })
   }
   // ⚠️ Field Day's two sentences, byte for byte, INCLUDING the em-dash placeholder a
   // blank Section has always shown. "Section \"—\" isn't a known ARRL/RAC section" reads
@@ -141,6 +135,28 @@ export function fdVerdict(spec: ContestFieldSpec, raw: string, line?: string, ro
     : t('logEntry.fd.badField', { field: receivedCaption(spec, role), value: v })
 }
 
+/** ⭐ The country file's names for the countries whose stations send a county, a state or a
+ *  province in a QSO party, and never a country: the three whose stations are in a US state
+ *  (`propagation::dxcc::is_us_state_entity`; Alaska and Hawaii are states on these lists), and
+ *  Canada. A station anywhere else may send its country, which no list holds. */
+const LISTED_QTH_ENTITIES: ReadonlySet<string> = new Set(['United States', 'Alaska', 'Hawaii', 'Canada'])
+
+/** ⭐ **Is `value` on none of the lists this box draws on, from a call that must send one of them?**
+ *  A QSO party's QTH box (`oneOf`) holds a county, a state or a province, and has a free-text arm
+ *  for the country a DX station sends. A station in the USA or Canada sends from the lists, so from
+ *  one a value on none of them is a typo (`COKO`), a code typed in part (`DUP`) or a name two lists
+ *  share (`WASHINGTON`). Logged as typed, it scores no county for either station.
+ *
+ *  Judged only where both answers are known: the call's country (`entity`, the country file's
+ *  answer for the call in the box), and the lists. A list this build does not hold (New York's
+ *  `dx_literal`) may hold the value, so `inDomain` counts it as holding it: refusing what cannot be
+ *  checked would block a legal contact. A box naming no list at all refuses nothing. */
+function offTheLists(spec: ContestFieldSpec, value: string, entity: string | null | undefined): boolean {
+  if (spec.kind !== 'oneOf' || !entity || !LISTED_QTH_ENTITIES.has(entity)) return false
+  const lists = spec.domains ?? []
+  return lists.length > 0 && !lists.some((id) => inDomain(id, value))
+}
+
 /** Is this slot's typed value good enough to log?
  *
  *  Byte-for-byte Field Day's shipped rule, generalised by KIND and by nothing else:
@@ -151,7 +167,10 @@ export function fdVerdict(spec: ContestFieldSpec, raw: string, line?: string, ro
  *  An OPTIONAL slot may be blank, whatever its kind: CQ WW RTTY's QTH is sent by W/VE
  *  stations only, and a DX contact has none to type. A value that IS typed still has to
  *  be legal. A `number` slot carrying its bounds (a CQ zone, 1–40) must be a whole number
- *  inside them. */
+ *  inside them.
+ *
+ *  A `oneOf` box takes what no list holds, a DX station's country, except from a call in the USA
+ *  or Canada: `entity` is the country file's answer for the call in the box (`offTheLists`). */
 /** ⭐ **What a box actually means** — the code, whether the operator typed the code or the
  *  NAME beside it in the contest's own list ("Cook" → COOK, "St. Clair" → SCLA).
  *
@@ -170,7 +189,7 @@ export function fdSlotValue(spec: ContestFieldSpec, raw: string, line?: string):
   return resolveDomainValue(spec.domains, v) ?? v
 }
 
-export function fdFieldOk(spec: ContestFieldSpec, raw: string, line?: string): boolean {
+export function fdFieldOk(spec: ContestFieldSpec, raw: string, line?: string, entity?: string | null): boolean {
   const v = fdSlotValue(spec, raw, line)
   if (v === '') return !spec.required
   if (line && isCountyLine(v)) return readCountyLine(line, v).ok
@@ -178,5 +197,5 @@ export function fdFieldOk(spec: ContestFieldSpec, raw: string, line?: string): b
   if (spec.kind === 'number' && spec.min != null && spec.max != null) {
     return /^\d{1,3}$/.test(v) && Number(v) >= spec.min && Number(v) <= spec.max
   }
-  return true
+  return !offTheLists(spec, v, entity)
 }

@@ -279,10 +279,10 @@ it.each([
   remote.stop()
 })
 
-it('recalibrates negative clock drift without displaying it or dropping independent application data',async()=>{
+it('recalibrates negative clock drift without displaying it or dropping the session\'s lanes',async()=>{
  const {remote,post,socket}=await connection(true)
  socket.receive({type:'session',sessionId:crypto.randomUUID()})
- const disconnected=vi.spyOn(remote.application,'disconnected')
+ const disconnected=vi.spyOn(remote.operations,'disconnected')
  await vi.advanceTimersByTimeAsync(100)
  socket.receive(publication(1,'native',1000))
  expect(await remote.source.read(new AbortController().signal)).toBeTruthy()
@@ -552,6 +552,16 @@ it('tells the page once when a ticket is refused, and not for a failure it will 
 // The stream's messages share the observe socket. Both kinds the relay delivers - a signal and the
 // station's state - reach the stream, and neither is ever read as a malformed observation: that
 // closes the socket, and the station's lease goes with it (found by the compiled-browser stream run).
+it('builds no application lane: a session asks the station for none', async () => {
+  const { remote, socket } = await connection(true, 4)
+  socket.receive({ type: 'session', sessionId: crypto.randomUUID() })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(socket.sent.map(m => (JSON.parse(m) as { type?: string }).type)).not.toContain('applicationHello')
+  expect('application' in remote).toBe(false)
+  expect(socket.readyState).toBe(1)
+  remote.stop()
+})
+
 it('routes both of the stream\'s message kinds to the stream and keeps the socket', async () => {
   const { remote, socket } = await connection(true, 4)
   socket.receive({ type: 'session', sessionId: crypto.randomUUID() })
@@ -615,4 +625,49 @@ it('A5: signs the stream offer with this browser\'s key, for this station, devic
   expect(await verifies(sessionId)).toBe(true)
   expect(await verifies(crypto.randomUUID()), 'control: another session\'s does not verify').toBe(false)
   remote.stop()
+})
+
+// A LAN-ONLY SESSION: Remote on the shack's own network, free once the account's internet use has
+// ended. Its tickets and their renewals ask for that scope, and nothing else changes.
+it('a LAN-only session asks for LAN-only tickets and renews them as LAN-only; any other asks as before', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
+  vi.stubGlobal('WebSocket', Socket)
+  const ticket = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
+  const asked: [string, boolean | undefined][] = []
+  const observationTicket = async (_station: string, _signal: AbortSignal, lan?: boolean) => {
+    asked.push(['ticket', lan]); return { body: { ticket, serverNow: 1000 }, startedAt: performance.now() }
+  }
+  const renewObservation = async (_station: string, _session: string, _signal: AbortSignal, lan?: boolean) => {
+    asked.push(['renew', lan]); return { body: { ok: true, serverNow: 2000 }, startedAt: performance.now() }
+  }
+  for (const lan of [true, false]) {
+    const remote = new HostedConnection({ post: vi.fn(), observationTicket, renewObservation, operationVersion: 4 } as unknown as BrowserClient,
+      crypto.randomUUID(), true)
+    remote.lanOnly = lan
+    remote.start(); await vi.advanceTimersByTimeAsync(0)
+    sockets[sockets.length - 1].receive({ type: 'session', sessionId: crypto.randomUUID() })
+    await vi.advanceTimersByTimeAsync(30_000)
+    remote.stop()
+  }
+  expect(asked).toEqual([['ticket', true], ['renew', true], ['ticket', false], ['renew', false]])
+})
+
+it('puts the LAN-only scope on the wire for a LAN-only ticket and renewal, and nothing new on any other', async () => {
+  const sent: [string, unknown][] = []
+  vi.stubGlobal('fetch', vi.fn(async (path: string, options: RequestInit) => {
+    sent.push([path, JSON.parse(String(options.body))])
+    return { ok: true, json: async () => ({ ticket: 'x', serverNow: 1, ok: true }) }
+  }))
+  const client = new BrowserClient({ getTokenSilently: async () => 'token' } as unknown as Auth0Client)
+  const signal = new AbortController().signal
+  await client.observationTicket('st', signal, true)
+  await client.renewObservation('st', 'se', signal, true)
+  await client.observationTicket('st', signal)
+  await client.renewObservation('st', 'se', signal)
+  expect(sent).toEqual([
+    ['/api/remote/stations/st/ticket', { scope: 'lan' }],
+    ['/api/remote/stations/st/renew', { sessionId: 'se', scope: 'lan' }],
+    ['/api/remote/stations/st/ticket', {}],
+    ['/api/remote/stations/st/renew', { sessionId: 'se' }],
+  ])
 })

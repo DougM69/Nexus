@@ -62,6 +62,8 @@ pub const WRONG_PROOFS: u8 = 3;
 const CREDENTIAL_BYTES: usize = 2560;
 /// What a device id's hash begins with.
 const DEVICE_LABEL: &[u8] = b"nexus-lan-device/1";
+/// What the hash of a computer's name through the room's tunnel begins with.
+const TUNNEL_DEVICE_LABEL: &[u8] = b"nexus-tunnel-device/1";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -69,10 +71,22 @@ fn hex(bytes: &[u8]) -> String {
 
 /// The device id a computer's key gives: SHA-256 over [`DEVICE_LABEL`] and its pin, the first
 /// sixteen bytes, shaped as every id the authority takes is. Its version digit is 8 (RFC 9562's
-/// own-use form), so it is never a hosted browser's id, which the service makes as version 4.
+/// own-use form), so it is never a hosted browser's id, which the service makes as version 4 (and
+/// the shack takes no other: `remote_service::hosted`).
 pub fn device_id(pin: &[u8; 32]) -> String {
+    named(DEVICE_LABEL, pin)
+}
+
+/// The name a computer approved at the shack for the room's tunnel is taken as, from the key pinned
+/// when it was approved: [`device_id`]'s form under a label of the tunnel's own, so it is never a
+/// LAN computer's id, nor a hosted device's.
+pub fn tunnel_device_id(pin: &[u8; 32]) -> String {
+    named(TUNNEL_DEVICE_LABEL, pin)
+}
+
+fn named(label: &[u8], pin: &[u8; 32]) -> String {
     let mut hash = Context::new(&SHA256);
-    hash.update(DEVICE_LABEL);
+    hash.update(label);
     hash.update(pin);
     let mut bytes = [0; 16];
     bytes.copy_from_slice(&hash.finish().as_ref()[..16]);
@@ -218,6 +232,8 @@ pub struct Book {
     serial: AtomicU64,
     /// Moves on every change to who is paired, so a connected computer's session asks again.
     revision: watch::Sender<u64>,
+    /// The same count, read without a lock ([`Book::revisions`]).
+    revisions: AtomicU64,
     /// One write to the store at a time. Never held with `kept` or `window`, and never on the
     /// path that refuses a computer: that is memory's.
     writing: Mutex<()>,
@@ -232,6 +248,7 @@ impl Book {
             window: Mutex::new(None),
             serial: AtomicU64::new(0),
             revision: watch::Sender::new(0),
+            revisions: AtomicU64::new(0),
             writing: Mutex::new(()),
         }
     }
@@ -377,7 +394,22 @@ impl Book {
     }
 
     fn revised(&self) {
+        self.revisions.fetch_add(1, Ordering::SeqCst);
         self.revision.send_modify(|r| *r = r.wrapping_add(1));
+    }
+
+    /// How many times who is paired has changed, read without a lock: Stop's second road asks the
+    /// book again only when this moves, never on a Stop's own path.
+    pub fn revisions(&self) -> u64 {
+        self.revisions.load(Ordering::SeqCst)
+    }
+
+    /// The book's lock, held by a test as a slow reader would hold it, until the guard goes.
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> impl Sized + '_ {
+        self.kept
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Open the pairing window: a press at the shack, and the approval itself. A new code, for ten

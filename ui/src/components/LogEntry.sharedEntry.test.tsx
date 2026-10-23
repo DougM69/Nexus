@@ -89,13 +89,15 @@ const party = (log: FieldDayQso[] = []): FieldDayStatus =>
 
 const engine = {
   open: true,
-  entry: { rev: 1, call: '', fields: {}, marks: null } as ContestEntryShared,
+  entry: { rev: 1, contact: 0, call: '', fields: {}, marks: null } as ContestEntryShared,
   /** The rev the last log left the entry at, and the call it logged. */
   logged: null as { call: string; at: number } | null,
   rows: [] as string[],
-  put(call: string, fields: Record<string, string>, marks: unknown): number {
+  /** The put rule (`contest_entry.rs`): refused when made on a contact already logged. */
+  put(call: string, fields: Record<string, string>, marks: unknown, contact: number): number {
     if (!this.open) throw new Error('contestEntryClosed')
-    this.entry = { rev: this.entry.rev + 1, call, fields, marks }
+    if (contact < this.entry.contact) throw ENTRY_LOGGED
+    this.entry = { rev: this.entry.rev + 1, contact: this.entry.contact, call, fields, marks }
     return this.entry.rev
   },
   /** The claim rule (`contest_entry.rs`): older than the last log, or not the entry as it stands. */
@@ -106,7 +108,7 @@ const engine = {
     }
     this.rows.push(call)
     if (claim && this.open) {
-      this.entry = { ...this.entry, rev: this.entry.rev + 1, call: '', marks: null }
+      this.entry = { ...this.entry, rev: this.entry.rev + 1, contact: this.entry.contact + 1, call: '', marks: null }
       this.logged = { call: claim.call, at: this.entry.rev }
     }
   },
@@ -147,18 +149,19 @@ function Both({ snap }: { snap: AppSnapshot }) {
 }
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
-const callIn = (w: string) => within(screen.getByTestId(w)).getByPlaceholderText('W1AW') as HTMLInputElement
+const callIn = (w: string) => within(screen.getByTestId(w)).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const qthIn = (w: string) => within(screen.getByTestId(w)).getAllByRole('textbox')[2] as HTMLInputElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 const toasts = () => toast.pushToast.mock.calls.map((c) => c[0] as string)
 
 beforeEach(() => {
   engine.open = true
-  engine.entry = { rev: 1, call: '', fields: {}, marks: null }
+  engine.entry = { rev: 1, contact: 0, call: '', fields: {}, marks: null }
   engine.logged = null
   engine.rows = []
-  api.contestEntryPut.mockImplementation((call: string, fields: Record<string, string>, marks: unknown) =>
-    Promise.resolve(engine.put(call, fields, marks)),
+  api.contestEntryPut.mockImplementation(
+    (call: string, fields: Record<string, string>, marks: unknown, contact: number) =>
+      Promise.resolve(engine.put(call, fields, marks, contact)),
   )
   api.contestLogManual.mockImplementation(
     (call: string, _ex: unknown, _m: unknown, _s: unknown, claim?: EntryClaim) =>
@@ -186,7 +189,7 @@ describe('one contact in progress, in two windows', () => {
     await settle()
     type(callIn('logger'), 'K9A')
     await settle()
-    expect(api.contestEntryPut).toHaveBeenLastCalledWith('K9A', expect.any(Object), expect.any(Object))
+    expect(api.contestEntryPut).toHaveBeenLastCalledWith('K9A', expect.any(Object), expect.any(Object), 0)
     rerender(<Both snap={poll(fd)} />)
     await settle()
     expect(callIn('main').value).toBe('K9A')
@@ -262,12 +265,12 @@ describe('one contact in progress, in two windows', () => {
     const fd = party()
     render(strip(poll(fd), 'logger'))
     await settle()
-    const box = screen.getByPlaceholderText('W1AW') as HTMLInputElement
+    const box = screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
     type(box, 'K9ABC')
     type(screen.getAllByRole('textbox')[2] as HTMLInputElement, 'COOK')
     await settle()
     // The operator corrects the call in the main window; this window has not polled since.
-    engine.put('K9ABD', {}, null)
+    engine.put('K9ABD', {}, null, 0)
     fireEvent.keyDown(box, { key: 'Enter' })
     await settle()
     await settle()

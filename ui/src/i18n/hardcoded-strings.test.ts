@@ -34,7 +34,7 @@
 //   • It cannot tell a WRONG translation from a right one, and it cannot tell that a key is
 //     used in the right place. It only proves the English is not baked into the JSX.
 //   • A prose string hidden behind a named constant (`const MSG = 'Saved'; <b>{MSG}</b>`)
-//     passes. That is the deliberate escape hatch invariant TOKENS use (see STATION_EXAMPLES),
+//     passes. That is the deliberate escape hatch invariant TOKENS use (see GUIDE_EXAMPLES),
 //     and it costs an author a conscious act.
 
 import { describe, expect, it } from 'vitest'
@@ -53,30 +53,11 @@ import { EN, type MessageKey } from './index'
  * proven on a real shipped sentence rather than on a fixture.
  */
 const MIGRATED = [
-  'remote-web/ModeEntry.tsx',
-  'remote-web/operations.tsx',
-  'remote-web/collections.tsx',
-  'remote-web/RemoteRecall.tsx',
-  'remote-web/RemoteInsights.tsx',
-  'remote-web/RemoteResponsiveness.tsx',
-  'remote-web/responsiveness.ts',
-  'remote-web/RemoteDxpeditions.tsx',
-  'remote-web/RemoteMemories.tsx',
-  'remote-web/RemoteOta.tsx',
-  'remote-web/RemoteFieldDay.tsx',
-  'remote-web/BrowserApplication.tsx',
   'remote-web/AudioListen.tsx',
-  'remote-web/SessionStatus.tsx',
-  'remote-web/FeedWatch.tsx',
-  'remote-web/useNeedAlerts.ts',
-  'remote-web/useRareDxAlerts.ts',
-  'remote-web/usePotaAlerts.ts',
-  'remote-web/presentation.tsx',
   'remote-web/RemoteApp.tsx',
   'remote-web/StreamView.tsx',
   'remote-web/stream-capture.ts',
   'remote-web/stream-link.ts',
-  'remote-web/control-failure.ts',
   'remote-native/RemoteStation.tsx',
   'remote-native/stream-input.ts',
   // One clean way into streaming (2026-10-02) — born migrated: the beta line, the name a browser
@@ -96,8 +77,6 @@ const MIGRATED = [
   // The Stations on this network window's page (2026-10-04) — born migrated: its list, its pairing
   // dialog and every reason this computer's Nexus gives, each a sentence.
   'lan/LanApp.tsx',
-  'remote-monitor/MonitorApp.tsx',
-  'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',
   // Settings ▸ Appearance ▸ Colours (2026-09-26) — born migrated: the section's rows, and the role
   // table whose `labelKey`/`hintKey` entries name every role and preset word.
@@ -125,10 +104,21 @@ const MIGRATED = [
   // JTTY's cockpit (receive): every string through `t()`, its tokens held as named constants.
   'components/JttyCockpit.tsx',
   'features/pskMacros.ts',
+  // CW's half of the same surface: its keys and their editor, captioned from CW's own catalog
+  // keys. It stops nothing; CwCockpit.tsx's Esc and Stop TX are the stops.
+  'components/CwMacroEditor.tsx',
   'components/SettingsClusterNodes.tsx',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
   'components/RevealNudge.tsx',
+  // Client mode (2026-10-07) — born migrated: the banner of a computer driving another station,
+  // and the words for a call it refused or could not make.
+  'components/ClientBanner.tsx',
+  'features/clientWords.ts',
+  // This computer ▸ Audio (2026-10-08), born migrated: a driving computer's headset.
+  'components/ThisComputerAudio.tsx',
+  'components/ShackFilesSave.tsx',
+  'features/shackFiles.ts',
   // Batch 1 (2026-08-18) — the getting-started guide and the app's own notices. Pure prose,
   // no radio state: the guide is documentation, the update banner and crash fallback are the
   // app talking about itself. Chosen as the first batch because GettingStartedGuide.tsx is
@@ -142,8 +132,8 @@ const MIGRATED = [
   'main.tsx',
   // Batch 2 (2026-08-18) — the logbook and QSO entry. The densest UNITS surface in the tree:
   // every callsign, RST, band, mode, frequency, park reference and ADIF field name in these
-  // five files is invariant and stays in the code (LOG_EXAMPLES in Logbook.tsx and
-  // LogEntry.tsx, PARK_PROGRAMS, and the Q-code/service labels beside them), while the prose
+  // five files is invariant and stays in the code (LOG_EXAMPLES in LogEntry.tsx,
+  // PARK_PROGRAMS, and the Q-code/service labels beside them), while the prose
   // around them moves. It also carried nine of the tree's hand-rolled plurals, which is what
   // proves the `{{count}}` path on real shipped counts rather than on a fixture.
   'components/Logbook.tsx',
@@ -155,6 +145,8 @@ const MIGRATED = [
   'features/exportLacks.ts',
   // The QSO detail view (#313) — born migrated: every string in it is a catalog key.
   'components/QsoDetail.tsx',
+  // The Logbook's country picker — born migrated: the entity names and numbers it lists are data.
+  'components/LogCountryPicker.tsx',
   'components/LogEntry.tsx',
   // Removing the newest contest contact: the strip's and the contest screen's sentences.
   'features/contestRemoval.ts',
@@ -181,10 +173,13 @@ const MIGRATED = [
   // directly; their words resolve through getters, so the record shape is unchanged and the
   // lookup happens when the string is read rather than when the module loads.
   'components/AwardsView.tsx',
+  'components/CallStatsPane.tsx',
+  'components/RecentQsosPane.tsx',
   'components/AwardsJourney.tsx',
   'components/JourneyView.tsx',
   'components/NeededPanel.tsx',
   'components/StatsView.tsx',
+  'components/StatsTimeline.tsx',
   'features/needVisuals.ts',
   'statusMeta.ts',
   'useJourneyUnlocks.ts',
@@ -203,6 +198,7 @@ const MIGRATED = [
   'components/Globe3D.tsx',
   'components/QsoGlobe.tsx',
   'components/globeWebgl.tsx',
+  'components/GlobeGuard.tsx',
   'components/StreetMap.tsx',
   'components/StreetDownloadSheet.tsx',
   'components/SettingsStreetMaps.tsx',
@@ -251,8 +247,8 @@ const MIGRATED = [
   // sections that configure them. The firehose is nearly ALL tokens: every callsign,
   // spotter, DXCC entity, US state, band, mode, submode, frequency and cluster comment on
   // these screens is data and stays in the code, as do the POTA/SOTA programme names, the
-  // P/S/✈/B badge glyphs, `de`, `DXCC`, and the prefix/grid EXAMPLES the watch and hide
-  // filters offer (WATCH_EXAMPLES, HIDE_EXAMPLES). It also proves the registry-by-getter
+  // P/S/✈/B badge glyphs, `de`, `DXCC`, and the prefix/grid examples the watch and hide
+  // filters quote in their hints. It also proves the registry-by-getter
   // path a second time: `SpotLegend.tsx`'s two badge tables resolve their words when read,
   // so `BandStrip.tsx` — which this batch does not own — reads them unchanged.
   'components/SpotsPanel.tsx',
@@ -263,6 +259,9 @@ const MIGRATED = [
   'components/ConfirmationReview.tsx',
   'components/SpotLegend.tsx',
   'components/BandMap.tsx',
+  'components/ContestSpotMe.tsx',
+  'components/SpotsSpotMe.tsx',
+  'features/freqMarkers.ts',
   'components/PounceBanner.tsx',
   'components/WatchlistPanel.tsx',
   // The one-time notice that the retired "Wanted watch list" joined the watch list (2026-09-24).
@@ -290,6 +289,7 @@ const MIGRATED = [
   // keys; "pota.app" and "DX cluster" in them name the services.
   'selfSpot.ts',
   'components/ContestView.tsx',
+  'components/ContestOperators.tsx',
   // The contest logger window (2026-10-10): born migrated — its one string is a catalog key; the
   // modes it logs under are ADIF mode names, tokens.
   'components/ContestLogger.tsx',
@@ -305,6 +305,8 @@ const MIGRATED = [
   // log table read one table of catalog keys; a slot id it has no caption for is a token.
   'features/contestSlots.ts',
   'features/contestLocation.ts',
+  'features/contestUnsaved.ts',
+  'features/contestSpotMarks.ts',
   // The warn-only FD advisories (2026-08-29): born migrated — its two banner/header
   // chips are catalog keys from birth; the mode names, event names and assistance-source
   // labels it interpolates are invariant tokens.
@@ -366,14 +368,17 @@ const MIGRATED = [
   'components/RadioPicker.tsx',
   'components/RadioSwitcher.tsx',
   'rigFormChecks.ts',
+  // The TCI connection's screen helpers (2026-10-20): the status line Find TCI server writes, and
+  // the dialect choices, whose labels are the programs' and radios' own names.
+  'tci.ts',
   // Batch 13 (2026-08-19) — Settings ▸ Radio's audio half (Audio, Headphone monitor,
   // Satellite Doppler, Orbital elements, Rotator) and the SETUP WIZARD, migrated together
   // because the wizard's steps ARE those settings: two surfaces asking the same question in
   // two wordings is how the pair drifted before, and one catalog now holds both. The units
   // rule lands on the HARDWARE here — sound-card device names, sample rates, the dB and ×
   // gain readings, every baud rate, rotator model names and Hamlib model numbers, azimuth and
-  // elevation degrees, Keplerian element sources and epochs, and the callsign/grid/address
-  // EXAMPLES (WIZARD_EXAMPLES, ROTATOR_EXAMPLES) all stay in the code. Two things this batch
+  // elevation degrees, Keplerian element sources and epochs, and the grid EXAMPLES
+  // (WIZARD_EXAMPLES) all stay in the code. Two things this batch
   // settles: a CONFIGURATION control on the transmit path is not a transmit control — Tx
   // Power's drive slider moved exactly as PTT Method did in batch 12, while `SetupHealth`'s
   // Prove TX, which really does key a carrier, did not (see PARTIAL below); and the wizard's
@@ -404,7 +409,7 @@ const MIGRATED = [
   'components/connect/RailHandles.tsx',
   'components/connect/panes.tsx',
   'components/connect/paneFormat.ts',
-  // Connect's Spots box (plan H8), born migrated: its one status line is the Phone pane's own.
+  // Connect's Spots box, born migrated: its one status line is the Phone pane's own.
   'components/connect/SpotsBox.tsx',
   'components/connect/NeededBox.tsx',
   'components/Conversation.tsx',
@@ -527,6 +532,10 @@ const MIGRATED = [
   // word is the only entry, the same split the AI decoder's 400–1200 Hz window and the BW
   // nudge's ±50 Hz take inside their sentences.
   'components/CwCockpit.tsx',
+  // The CW turn cue (2026-10-21) — born migrated: the lamp's words, its pace hint and what a screen
+  // reader hears are all the catalog's (`cw.turn.*`, `cw.pace.*`); only its glyphs are in the code.
+  'components/CwTurnLamp.tsx',
+  'features/cwTurn.ts',
   // The CW zero-beat indicator (2026-08-28) — born migrated, so it never joins the
   // un-migrated backlog. Its only invariants are `Hz` and the signed offset it formats.
   'components/ZeroBeat.tsx',
@@ -560,6 +569,7 @@ const MIGRATED = [
   'components/TuningStrip.tsx',
   'components/PhoneScope.tsx',
   'components/RfScopePane.tsx',
+  'components/RttyTuningScope.tsx',
   'components/Waterfall.tsx',
   // The scope's ⚙ strip, migrated from birth: its only literals are the window widths and the
   // averaging times, measurements held as named constants.
@@ -585,6 +595,13 @@ const MIGRATED = [
   // reading) plus the ◀/▶ glyphs, which are direction and not prose: both carry a translated
   // aria-label, because an arrow names nothing to a screen reader and this one moves a kilowatt.
   'components/AmpStrip.tsx',
+  // JS8's compose box as JS8Call 3.0.3 has it (the pills and word suggestions in the box, the
+  // REPLY/SNR/INFO/STATUS buttons and the Saved menu, and their Settings) — migrated from birth. The
+  // command words, REPLY, the CQ forms and the macros are the mode's tokens. None of it stops a
+  // transmission: the buttons are senders, like Send.
+  'components/Js8ComposeBox.tsx',
+  'components/Js8ComposeActions.tsx',
+  'components/Js8ComposeSettings.tsx',
   // Parsec presence mode's words (the Settings readout, the status-lane stop report) — migrated
   // from birth. The station sends tokens; every sentence is here, from the catalog.
   'features/parsecPresence.ts',
@@ -602,8 +619,14 @@ const MIGRATED = [
   // …and of a slot over the station ended when its audio stopped reaching the radio — migrated
   // from birth.
   'features/slotAudioLost.ts',
+  // …and of an FT8/FT4 over the station dropped because the radio keyed it after its period had
+  // ended — migrated from birth. How late passes through as data.
+  'features/slotOverDropped.ts',
   // …and of a PTT press the station kept off the air for the radio's DAX — migrated from birth.
   'features/pttRefused.ts',
+  // …and of a voice-keyer message the station dropped before the radio took DAX — migrated from
+  // birth.
+  'features/voiceDropped.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
   // …and the headline for the station's audio-error line, by the kind the station names —
@@ -626,6 +649,39 @@ const MIGRATED = [
   // What the radio reports beside Tune while Tune is the Flex radio's own carrier — migrated from
   // birth.
   'components/RadioTuneNote.tsx',
+  // JS8's heartbeat controls (HB NET, HB and its menu, what holds an HB ACK back) and their
+  // Settings switches — migrated from birth; HB and HB NET are the mode's tokens. Neither stops a
+  // transmission: HB off cancels a schedule, and "Send heartbeat now" is a sender.
+  'components/Js8Heartbeat.tsx',
+  'components/Js8HeartbeatSettings.tsx',
+  // JS8's "Store message…" box and the Inbox's notes of what a cap removed — migrated from birth.
+  'components/Js8StoreMessage.tsx',
+  'components/Js8InboxDropped.tsx',
+  // …and the note on a held message's Inbox row that it is too long to hand over at this speed —
+  // migrated from birth; the speed's name is the mode's token.
+  'components/Js8InboxTooLong.tsx',
+  // JS8's frequencies and band schedule (Settings) and its waterfall controls (the decode filter,
+  // QSY to centre) — migrated from birth.
+  'components/Js8FrequencySettings.tsx',
+  'components/Js8WaterfallControls.tsx',
+  // The JS8 lists as JS8Call 3.0.3 draws them — the RX pane, Band activity, the call list, the Inbox,
+  // their menus, the add-a-station dialog and their Settings — migrated from birth. Calls, offsets,
+  // reports, the received text and the marks (✕ ⚑ ★ ☎ ⚟ ♢) are data or glyphs.
+  'components/Js8RxPane.tsx',
+  'components/Js8BandActivity.tsx',
+  'components/Js8CallList.tsx',
+  'components/Js8InboxPanel.tsx',
+  'components/Js8AddStation.tsx',
+  'components/Js8ListMenu.tsx',
+  'components/js8ListMenus.ts',
+  'components/Js8ListsSettings.tsx',
+  // Settings ▸ Digital ▸ JS8's JS8Call API switches and ports — migrated from birth.
+  'components/Js8ApiSettings.tsx',
+  // Settings ▸ Radio ▸ Transmit limits & sharing ▸ Share by TCI: the TCI server's switches, port
+  // and connected programs. Migrated from birth; the addresses it shows are data.
+  'components/TciServerSettings.tsx',
+  // The voice keyer's Delete and its Undo window — migrated from birth.
+  'features/voiceDelete.ts',
 ]
 
 /**

@@ -121,8 +121,11 @@ The other keyer choices work on a Flex too, and are worth knowing about:
 mutes and unmutes the native DAX receive stream cleanly during a long macro, and
 whether Stop TX cuts the *one* word already inside the radio or lets it finish.
 
-**On the Flex native client (Beta)** Nexus does not send CW yet, and the CW screen says so. For CW,
-turn the client off (SmartSDR CAT sends it as above), or use the WinKeyer or Soundcard keyer.
+**On the Flex native client (Beta)** Nexus does not send CW by default, and the CW screen says so. For
+CW, turn the client off (SmartSDR CAT sends it as above), or use the WinKeyer or Soundcard keyer.
+Sending CW through the radio's own keyer is built, and stays off until a tester has checked it on a
+radio; a Beta switch turns it on for one radio before then (see *CW, Tune and the ATU through the
+client* below).
 
 ---
 
@@ -134,20 +137,27 @@ Flex works the way it always does.
 **With Flex native DAX audio on** (the Beta toggle below, through the Flex
 native client), where the radio takes its transmit audio from follows the
 transmit slice's mode. In Phone the radio keeps its own mic, so the mic works as
-it always does. The **voice keyer can't play** then: the radio is listening to
-its mic, not to Nexus, so a recorded message would not go out. The keyer says so
-and keys nothing. **SSTV and APRS can't send** then either: SSTV rides Phone, and
-APRS uses FM, which the radio treats as a voice mode too. Each says so and keys
-nothing, and an automatic APRS ack that can't go out is skipped and noted in the
-diagnostic log.
+it always does. The **voice keyer** switches the radio for each message: Nexus
+asks the radio to take its transmit audio from DAX, keys only once the radio
+reports it, plays the message, unkeys, and gives the radio its mic back once the
+unkey is confirmed. A message the radio has not switched for within 2 seconds,
+or that something else keys first, is dropped, never played later, and the
+status bar says why; one longer than 20 seconds is refused. Turning native DAX
+audio off while a message plays, in Phone or on a digital slice, ends the
+message and unkeys at once, as Stop does; TX On stays as it was. Right after a
+message Nexus's own PTT can be refused for a moment, until the mic is back; the
+mic's own PTT works throughout. **SSTV and APRS can't send** then: SSTV rides
+Phone, and APRS uses FM, which the radio treats as a voice mode too. Each says
+so and keys nothing, and an automatic APRS ack that can't go out is skipped and
+noted in the diagnostic log.
 
 The radio takes DAX instead of the mic for the digital modes and for a
 streamed operator's voice on the Remote page. That is a **radio-wide** setting:
 while it stands, the mic is disconnected on every slice and in every program,
 SmartSDR's own MOX included, and the Phone screen shows a **mic off (DAX)**
-marker beside the frequency. Nexus puts your own setting back when native DAX
-audio goes off or Nexus disconnects, and again at the next connect if a crash
-left it changed.
+marker beside the frequency (not for a voice-keyer message's own switch). Nexus
+puts your own setting back when native DAX audio goes off or Nexus disconnects,
+and again at the next connect if a crash left it changed.
 
 Nexus does not touch the Flex's transmit filter, processor or TX profile, so the
 audio bandwidth an SSB over occupies is whatever your SmartSDR profile last set.
@@ -195,18 +205,33 @@ Two limits worth knowing before you switch one on:
 
 **Tune on the Flex native client (Beta)** keys the radio and plays Nexus's tone, as on any CAT
 link. Tuning with the radio's own carrier, at the tune power you set in SmartSDR, is built and
-stays off until a tester has checked it on a radio. Once it is on, Nexus shows the radio's tune
-power and its transmit timeout beside Tune, and says so when the radio has no transmit timeout:
-then nothing would end the carrier if Nexus or the network failed during a tune, so set one in
-SmartSDR.
+stays off until a tester has checked it on a radio, unless you turn on the Beta switch below. Once
+it is on, Nexus shows the radio's tune power and its transmit timeout beside Tune, and says so when
+the radio has no transmit timeout: then nothing would end the carrier if Nexus or the network
+failed during a tune, so set one in SmartSDR.
 
-**The Flex native client (Beta) offers no ATU button**: use the ATU in SmartSDR or on the radio.
-Running the radio's own tuner from Nexus is built and stays off until a tester has checked it on
-a radio. Once it is on, the ATU button shows when the radio reports a tuner fitted,
-and each press runs one cycle. Beside it Nexus shows the same tune power and transmit timeout as
-beside Tune, and the cycle's result in the radio's own word, or why a press started no cycle.
+**The Flex native client (Beta) offers no ATU button** by default: use the ATU in SmartSDR or on
+the radio. Running the radio's own tuner from Nexus is built and stays off until a tester has
+checked it on a radio, unless you turn on the Beta switch below. Once it is on, the ATU button
+shows when the radio reports a tuner fitted, and each press runs one cycle. Beside it Nexus shows
+the same tune power and transmit timeout as beside Tune, and the cycle's result in the radio's own
+word, or why a press started no cycle.
 FlexRadio documents no command that stops a cycle part way, so Stop TX during a cycle sends the
 radio both its unkey and its tune-off.
+
+**CW, Tune and the ATU through the client (Beta, not yet bench-tested).** **Settings ▸ Radio ▸
+Rig & CAT ▸ Advanced ▸ Let Nexus send CW, Tune and ATU through the native Flex client (not yet
+bench-tested)** turns all three on for that radio before a tester has checked them: CW goes to the
+radio's keyer a word at a time, Tune is the radio's own carrier, and the ATU button runs the
+radio's tuner, as described above. The switch shows only while the Flex native client serves the
+radio (the client on, the radio's IP set). It is off by default, it is per radio, and it changes
+only at the shack, never through the Remote stream. It lifts only the "not checked yet" refusal:
+every other check still applies. Nothing keys unless TX is on, the frequency is inside your licence
+privileges and the TX watchdog allows it, and only while Nexus's slice is the radio's transmit
+slice and nothing else is keying the radio. CW also needs XIT off, break-in on and Sync CWX off;
+Tune and the ATU need XIT off; the ATU needs a tuner fitted. Nobody has run these against a real
+Flex yet, so try them into a dummy load first, and turn the switch off if anything misbehaves.
+Saving a change reconnects Nexus to the radio.
 
 ---
 

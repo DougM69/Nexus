@@ -11,6 +11,9 @@
 // nobody asked to move. So a target is dropped when the mast arrives, and when two readings in a
 // row bring it no closer (stopped, stuck, or heading somewhere else). Degrees throughout.
 
+/** The desktop's own rotor poll interval (RotorStrip, RotorPane). */
+export const ROTATOR_POLL_MS = 2_000
+
 /** A commanded position one axis is still on its way to. `gap` is how far off the last reading
  *  was, `stalls` how many readings in a row have not brought it closer. */
 export interface Pending {
@@ -31,7 +34,7 @@ export function pending(deg: number): Pending {
 }
 
 /** The gap between two positions: the short way round for an azimuth, straight for an elevation. */
-function gap(a: number, b: number, wraps: boolean): number {
+export function gap(a: number, b: number, wraps: boolean): number {
   if (!wraps) return Math.abs(a - b)
   const d = (((a - b) % 360) + 360) % 360
   return d > 180 ? 360 - d : d

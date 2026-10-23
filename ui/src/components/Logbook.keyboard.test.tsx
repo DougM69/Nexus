@@ -22,14 +22,10 @@ import { t } from '../i18n'
 import { setLogSource } from '../features/logSource'
 import { createAskingLogSource } from '../features/askingLogSource'
 import { answerFrom, type LogQuestion } from '../features/logAnswers'
-import { StationControlContext } from '../stationAccess'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
-import type { QueryPage } from '../remote-web/application-query-protocol'
 import type { LoggedQso } from '../types'
 
-// THE BUDGET (2026-10-09). The slowest case here, "a Remote browser without the station’s edit gets the…", takes
-// 0.35 s and 0.34 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
-// one core, past vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
+// THE BUDGET (2026-10-09). A loaded full suite on this box has run cases up to 20 times slower than one core, past
+// vitest's 5 s default. 15 s is the house budget; a test that hangs still fails, after 15 s.
 vi.setConfig({ testTimeout: 15_000 })
 
 const engine = vi.hoisted(() => ({ log: [] as unknown[], revision: 1 }))
@@ -298,25 +294,4 @@ describe('the Logbook is a keyboard grid', () => {
     expect(document.activeElement?.textContent).toContain(callAt(N - 1))
   })
 
-  it('a Remote browser without the station’s edit gets the moves, and no edit or delete', async () => {
-    const page = (): QueryPage => ({ type: 'applicationPage', requestId: 'r', collection: 'log', snapshotId: 's', offset: 0,
-      total: 20, retained: 20, nextCursor: null, ageMs: 0, meta: {},
-      rows: [...log(20)].reverse() as unknown as QueryPage['rows'] })
-    render(
-      <StationControlContext.Provider value={false}>
-        <RemoteCollectionsContext.Provider value={{ page: async () => page() } as unknown as RemoteCollections}>
-          <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />
-        </RemoteCollectionsContext.Provider>
-        <ConfirmHost />
-      </StationControlContext.Provider>,
-    )
-    await waitFor(() => expect(rowAt(0)).not.toBeNull(), { timeout: 3000 })
-    act(() => rowAt(0)!.focus())
-    press('ArrowDown')
-    await waitFor(() => expect(focusedIndex()).toBe(1))
-    press('Enter')
-    press('Delete')
-    expect(document.querySelector('.logbook-form')).toBeNull()
-    expect(screen.queryByRole('dialog')).toBeNull()
-  })
 })

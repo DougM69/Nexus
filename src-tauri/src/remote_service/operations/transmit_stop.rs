@@ -2,10 +2,9 @@
 //! The mirror is updated only under Core; its own lock never contains I/O or
 //! acquires Core/Engine. An admitted Stop retires the current transmit generation at once.
 //!
-//! STOP ANYTHING (operator decision 2026-09-14). Any browser holding station control may stop, with
-//! or without FT8/FT4 transmit permission (that permission is needed only to START), and an admitted
-//! Stop stops every transmission at the station, however it started (`stop_station`). A browser
-//! without station control is refused and changes nothing.
+//! STOP ANYTHING (operator decision 2026-09-14). Any browser holding station control may stop, and an
+//! admitted Stop stops every transmission at the station, however it started (`stop_station`). A
+//! browser without station control is refused and changes nothing.
 //!
 //! NEVER REFUSED FOR ITS AGE (operator ruling 2026-10-03: "Stop TX always stops whatever is
 //! transmitting, even if it was pressed before the last halt"). The stop token is checked for its
@@ -48,10 +47,12 @@ impl Owner {
 }
 
 impl Authority {
-    pub(super) fn revoke_transmit_device(&self, device: &str) -> Result<(), &'static str> {
+    /// A station-control revoke (#318). `reconcile` removes the grant, and ends the device's
+    /// lease if it holds one, before any later request consumes Core.
+    pub(super) fn revoke_grant_device(&self, device: &str) -> Result<(), &'static str> {
         {
             let mut pending = self
-                .transmit_revocations
+                .grant_revocations
                 .lock()
                 .map_err(|_| "authorityUnavailable")?;
             // This local-only queue is bounded independently of a blocked file.
@@ -62,37 +63,7 @@ impl Authority {
         }
         let owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
         if owner.as_ref().is_some_and(|o| o.device == device) {
-            // Ends this browser's own transmission at once. Its Stop stays: stopping needs only
-            // station control, and revoking transmit permission leaves that in place.
-            self.transmit.revoke();
-        }
-        // reconcile removes the queued grant before any subsequent command.
-        // Neither lock above acquires Core/Engine or performs external I/O.
-        Ok(())
-    }
-
-    /// The same for a logging or station-control revoke (#318). `reconcile` removes the grant,
-    /// and ends the device's lease if it holds one, before any later request consumes Core.
-    pub(super) fn revoke_grant_device(
-        &self,
-        grant: Grant,
-        device: &str,
-    ) -> Result<(), &'static str> {
-        {
-            let mut pending = self
-                .grant_revocations
-                .lock()
-                .map_err(|_| "authorityUnavailable")?;
-            let entry = (grant, device.to_owned());
-            // Bounded like the transmit queue, and for the same reason.
-            if pending.len() >= 64 && !pending.contains(&entry) {
-                return Err("remoteBusy");
-            }
-            pending.insert(entry);
-        }
-        let owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
-        if owner.as_ref().is_some_and(|o| o.device == device) {
-            // The controller's in-flight hardware and transmit permits end at once, as they do
+            // The controller's in-flight transmit permits end at once, as they do
             // when Core is free; the lease itself goes at the next reconcile.
             self.revoke_execution();
         }
@@ -106,7 +77,7 @@ impl Authority {
     /// would be gone and the Stop refused `localPermissionRequired` instead of `leaseExpired`. The
     /// worst this allows is an unnecessary unkey of a station that was already transmitting, and
     /// that is a smaller harm than a keyed rig with a Stop button that reported a refusal. It
-    /// keeps nothing else alive: every arming path checks the LIVE lease and the transmit grant.
+    /// keeps nothing else alive: presence is minted only under the LIVE lease (`presence_until`).
     pub(super) fn sync_stop_owner(&self, c: &Core, now: Instant) {
         // The lease's road, for the relay's departures, which cannot wait for Core.
         self.lan_lease.store(
@@ -116,7 +87,7 @@ impl Authority {
         let owner = c
             .lease
             .as_ref()
-            // Station control, not transmit permission: stopping is always the safe direction.
+            // Station control alone: stopping is always the safe direction.
             .filter(|l| c.control_grants.contains(&l.device))
             .and_then(|l| {
                 c.boot.as_ref().map(|boot| Owner {
@@ -250,7 +221,7 @@ impl Authority {
 /// `halt_tx` leaves the TX-enable latch off exactly as a local Stop TX does. The shack's own Stop
 /// controls are untouched.
 ///
-/// ⭐ **AND IT ENDS AN ACTIVE SATELLITE TRACK** (`satellite::disarm_track` — the rail Stop's own
+/// ⭐ **AND IT ENDS AN ACTIVE SATELLITE TRACK** (`disarm_track` — the rail Stop's own
 /// verb: disarm, hand the dial back, halt the mast). This is the ONE place the browser's Stop does
 /// more than the desktop's Stop TX does, and it is deliberate. At the shack those are two
 /// controls, a metre apart, and the operator picks; a browser has one Stop, and a satellite track
@@ -276,44 +247,6 @@ impl Authority {
 /// therefore rides the single guard below, and only the mast halt (a blocking socket write, with no
 /// Engine in it) is allowed a thread.
 pub(super) fn stop_station(engine: &crate::SharedEngine) {
-    /// Every stop verb under the one guard, returning the mast halt the caller runs once the guard
-    /// is gone. The satellite disarm goes first so `halt_tx` stays last, as it is in every combined
-    /// local stop.
-    fn stop(e: &mut tempo_app::engine::Engine) -> Option<String> {
-        tempo_core::applog::info(
-            "tx",
-            "remote Stop TX: stopping every transmission at the station",
-        );
-        #[cfg(feature = "radio")]
-        let halt = super::station::satellite::disarm_track(e);
-        #[cfg(not(feature = "radio"))]
-        let halt = None;
-        e.stop_cw();
-        e.rtty_stop();
-        e.psk_stop();
-        e.sstv_stop();
-        e.stop_voice();
-        e.halt_tx();
-        halt
-    }
-    // A blocking socket write, so the thread that owes the browser its acceptance never runs it. A
-    // thread that cannot be spawned runs it here instead — a Stop that quietly declined to halt the
-    // mast is not an option.
-    fn halt_off_thread(addr: Option<String>) {
-        #[cfg(feature = "radio")]
-        if let Some(addr) = addr {
-            let owned = addr.clone();
-            if std::thread::Builder::new()
-                .name("remote-stop-rotator".into())
-                .spawn(move || super::station::satellite::halt_mast(owned))
-                .is_err()
-            {
-                super::station::satellite::halt_mast(addr);
-            }
-        }
-        #[cfg(not(feature = "radio"))]
-        let _ = addr;
-    }
     match tempo_app::engine::engine_try_lock(engine) {
         Ok(mut e) => {
             let halt = stop(&mut e);
@@ -336,11 +269,230 @@ pub(super) fn stop_station(engine: &crate::SharedEngine) {
                 // Already off the accepting thread; the mast halt needs no second one.
                 #[cfg(feature = "radio")]
                 if let Some(addr) = halt {
-                    super::station::satellite::halt_mast(addr);
+                    halt_mast(addr);
                 }
                 #[cfg(not(feature = "radio"))]
                 let _ = halt;
             });
         }
+    }
+}
+
+/// Every stop verb under the one guard, returning the mast halt the caller runs once the guard is
+/// gone. The satellite disarm goes first so `halt_tx` stays last, as it is in every combined local
+/// stop.
+pub(super) fn stop(e: &mut tempo_app::engine::Engine) -> Option<String> {
+    tempo_core::applog::info(
+        "tx",
+        "remote Stop TX: stopping every transmission at the station",
+    );
+    #[cfg(feature = "radio")]
+    let halt = disarm_track(e);
+    #[cfg(not(feature = "radio"))]
+    let halt = None;
+    e.stop_cw();
+    e.rtty_stop();
+    e.psk_stop();
+    e.sstv_stop();
+    e.stop_voice();
+    e.halt_tx();
+    halt
+}
+
+/// Disarm the desktop's satellite track under the guard Stop already holds, returning the mast halt
+/// for the caller to run once it has let the lock go.
+#[cfg(feature = "radio")]
+fn disarm_track(eng: &mut tempo_app::engine::Engine) -> Option<String> {
+    crate::disarm_sat_track_locked(eng)
+}
+
+/// The mast halt on its own: a blocking socket write, with nothing of Engine left in it.
+#[cfg(feature = "radio")]
+fn halt_mast(addr: String) {
+    let _ = tempo_audio::rotator::stop(&addr);
+}
+
+/// A blocking socket write, so the thread that owes the browser its acceptance never runs it. A
+/// thread that cannot be spawned runs it here instead — a Stop that quietly declined to halt the
+/// mast is not an option.
+pub(super) fn halt_off_thread(addr: Option<String>) {
+    #[cfg(feature = "radio")]
+    if let Some(addr) = addr {
+        let owned = addr.clone();
+        if std::thread::Builder::new()
+            .name("remote-stop-rotator".into())
+            .spawn(move || halt_mast(owned))
+            .is_err()
+        {
+            halt_mast(addr);
+        }
+    }
+    #[cfg(not(feature = "radio"))]
+    let _ = addr;
+}
+
+/// What a Stop on Stop's second road does at the station (`lan::stop_road`): exactly what an
+/// admitted browser Stop does, without the road's thread waiting for anything or naming the
+/// Engine. Its admission is the road's (a datagram that verified, from a computer still paired),
+/// and it asks nothing here.
+///
+/// - **At once, on the road's thread:** the current transmit generation is retired, as
+///   [`Authority::stop_transmit`] retires it, so an arming gesture held under it dies with the Stop.
+///   An atomic step: no lock.
+/// - **As soon as the Engine is free, on a thread of its own:** every stop verb
+///   ([`stop_station`]'s), under one guard. The road's thread only raises a flag and wakes it, so a
+///   radio loop or a command holding the Engine never holds the road; the wait is the one a Stop TX
+///   press at the shack has.
+///
+/// Stops that land while that thread waits for the Engine are one stop, run once it is free, after
+/// all of them have landed: it stops whatever is on the air then, as each of them would. One that
+/// lands while it runs is run again after. However many datagrams a computer sends, there is one
+/// thread, never one per Stop. A verb that panics ends neither the thread nor the Stops after it:
+/// each later Stop is acknowledged, so each still runs every verb.
+pub(crate) struct RoadStop {
+    authority: std::sync::Arc<Authority>,
+    signal: std::sync::Arc<RoadSignal>,
+    stopper: std::thread::Thread,
+}
+
+#[derive(Default)]
+struct RoadSignal {
+    wanted: std::sync::atomic::AtomicBool,
+    gone: std::sync::atomic::AtomicBool,
+}
+
+impl RoadStop {
+    /// The Stop path for `engine`, with its thread. `None` if the thread would not start: the road
+    /// then runs without a Stop of its own, and Stop has the command link alone.
+    pub(crate) fn new(
+        authority: std::sync::Arc<Authority>,
+        engine: crate::SharedEngine,
+    ) -> Option<Self> {
+        Self::running(authority, engine, stop)
+    }
+
+    /// [`RoadStop::new`], with `verbs` run in place of the stop verbs: a test's stand-in for a verb
+    /// that fails.
+    #[cfg(test)]
+    pub(crate) fn with_verbs(
+        authority: std::sync::Arc<Authority>,
+        engine: crate::SharedEngine,
+        verbs: fn(&mut tempo_app::engine::Engine) -> Option<String>,
+    ) -> Option<Self> {
+        Self::running(authority, engine, verbs)
+    }
+
+    fn running(
+        authority: std::sync::Arc<Authority>,
+        engine: crate::SharedEngine,
+        verbs: fn(&mut tempo_app::engine::Engine) -> Option<String>,
+    ) -> Option<Self> {
+        let signal = std::sync::Arc::new(RoadSignal::default());
+        let theirs = signal.clone();
+        let stopper = std::thread::Builder::new()
+            .name("nexus-remote-road-stopper".into())
+            .spawn(move || {
+                while !theirs.gone.load(Ordering::SeqCst) {
+                    if theirs.wanted.swap(false, Ordering::SeqCst) {
+                        // ⛔ Caught, as the command link's runner catches a command's: the thread
+                        // lives on, and the Engine's guard goes before the mast is halted.
+                        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let mut e = tempo_app::engine::engine_lock_result(&engine)
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            verbs(&mut e)
+                        }));
+                        match ran {
+                            Ok(halt) => halt_off_thread(halt),
+                            Err(_) => tempo_core::applog::warn(
+                                "remote",
+                                "a stop verb panicked on Stop's second road; the next Stop runs \
+                                 every verb again",
+                            ),
+                        }
+                        continue;
+                    }
+                    std::thread::park();
+                }
+            })
+            .ok()?;
+        Some(Self {
+            authority,
+            signal,
+            stopper: stopper.thread().clone(),
+        })
+    }
+
+    /// Stop everything at the station: the generation now, the verbs as soon as the Engine is
+    /// free. Returns at once.
+    pub(crate) fn stop(&self) {
+        self.authority.transmit.revoke();
+        self.signal.wanted.store(true, Ordering::SeqCst);
+        self.stopper.unpark();
+    }
+}
+
+impl Drop for RoadStop {
+    fn drop(&mut self) {
+        self.signal.gone.store(true, Ordering::SeqCst);
+        self.stopper.unpark();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
+
+    /// How many times [`fails_first`] ran.
+    static RAN: AtomicUsize = AtomicUsize::new(0);
+
+    /// The stop verbs as this test stands them in: the first run panics, as a verb that met
+    /// something it could not handle would, and every run is counted.
+    fn fails_first(_: &mut tempo_app::engine::Engine) -> Option<String> {
+        if RAN.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("a stop verb that fails");
+        }
+        None
+    }
+
+    /// Waits up to two seconds for the verbs to have run `runs` times.
+    fn ran(runs: usize) -> bool {
+        for _ in 0..400 {
+            if RAN.load(Ordering::SeqCst) >= runs {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    /// ⛔ A stop verb that panics never ends the road's stopper: the next Stop on the road still runs
+    /// the verbs. The first Stop's verbs panic (the test's stand-in); the second Stop, a moment
+    /// later, runs them again. CONTROL: the first Stop's verbs ran, and each Stop retired the
+    /// transmit generation at once, whatever its verbs then did.
+    #[test]
+    fn a_stop_verb_that_panics_never_ends_the_roads_stopper() {
+        let authority = std::sync::Arc::new(Authority::default());
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let road = RoadStop::with_verbs(authority.clone(), engine, fails_first).unwrap();
+        let before = authority.transmit_revocation().generation();
+        road.stop();
+        assert!(ran(1), "CONTROL: the first Stop's verbs ran");
+        std::thread::sleep(Duration::from_millis(50));
+        road.stop();
+        let again = ran(2);
+        assert_eq!(
+            authority.transmit_revocation().generation(),
+            before + 2,
+            "CONTROL: each Stop retired the generation"
+        );
+        assert!(
+            again,
+            "the second Stop on the road ran no verb: {} runs",
+            RAN.load(Ordering::SeqCst)
+        );
     }
 }

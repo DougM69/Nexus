@@ -404,6 +404,8 @@ fn the_reports_board() -> (LogNeeds, Vec<NeedAlert>) {
             q.state.as_deref(),
             q.award_confirmed,
             sat,
+            // The report's log carries no DXCC number or CQ zone: each contact counts by its call.
+            propagation::RecordFields::default(),
         );
     }
     let mut reports: Vec<propagation::PathSpot> = [

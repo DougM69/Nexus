@@ -137,6 +137,9 @@ vi.mock('./api', async (importOriginal) => {
   })
   return {
     ...auto,
+    // A computer running its own station: the backend answers None, and the banner asks once. The
+    // catch-all's `{}` would read as driving a remote station, asked every half second.
+    clientStatus: vi.fn(async () => null),
     askLog: vi.fn(async () => {
       throw new Error('no log in this test')
     }),
@@ -209,6 +212,7 @@ vi.mock('./toast', async (importOriginal) => ({
 vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="waterfall" /> }))
 
 import App from './App'
+import * as api from './api'
 
 vi.setConfig({ testTimeout: 60_000 })
 
@@ -445,5 +449,120 @@ describe('a pick saved in Settings while the mode is on switches, and the screen
     await waitFor(() => expect(screenSwitch().getAttribute('aria-checked')).toBe('true'), WAIT)
     await settle()
     expect(modeLines()).not.toContain(SWITCHED)
+  })
+})
+
+// THE CW AND PHONE SCREENS ENTER THE CONTEST AS THE CONTEST SCREEN DOES. With the mode on and the
+// session dropped (a trip to Chat, a tier switch), the CW and Phone log lines fell back to the
+// everyday form: no exchange boxes, no dupe check, the casual macros. Opening either screen now
+// enters the contest's S&P from another mode, the contest screen's own rule (`handleView`), and
+// keeps a station already in the contest in its role.
+describe('opening CW or Phone with the mode on enters the contest, as the contest screen does', () => {
+  const railButton = (name: RegExp) => screen.findByRole('button', { name }, WAIT)
+  const CW = /^CW operating/
+  const PHONE = /^Phone \(SSB\) operating/
+  beforeEach(() => {
+    localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'custom', enabled: { cw: true, phone: true } }))
+  })
+
+  it.each([
+    ['CW', CW],
+    ['Phone', PHONE],
+  ] as const)('%s, after the session dropped to Chat: S&P, never calling CQ', async (_name, rail) => {
+    station.current = { ...station.current, fdActive: true }
+    engine.current = entered('chat')
+    render(<App />)
+    fireEvent.click(await railButton(rail))
+    await waitFor(() => expect(engine.current).toEqual({ spec: 'fieldday-sp', queue: [], dxcall: null }), WAIT)
+    expect(setMode.mock.calls.map((c) => c[0])).toEqual(['fieldday-sp'])
+  })
+
+  it('CONTROL: with the mode off, opening CW does not enter the contest', async () => {
+    engine.current = entered('chat')
+    render(<App />)
+    fireEvent.click(await railButton(CW))
+    await settle()
+    expect(engine.current).toEqual({ spec: 'chat', queue: [], dxcall: null })
+    expect(setMode.mock.calls.some((c) => c[0] === 'fieldday-sp')).toBe(false)
+  })
+
+  it.each([
+    ['CW', CW],
+    ['Phone', PHONE],
+  ] as const)('%s keeps a running station running: its CQ still queued, and no set_mode', async (_name, rail) => {
+    station.current = { ...station.current, fdActive: true }
+    engine.current = entered('fieldday-run')
+    render(<App />)
+    fireEvent.click(await railButton(rail))
+    await settle()
+    expect(engine.current).toEqual({ spec: 'fieldday-run', queue: ['CQ FD W9XYZ EN52'], dxcall: null })
+    expect(setMode).not.toHaveBeenCalled()
+  })
+})
+
+// "WORK THIS CONTEST IN CW / IN PHONE" (a tester at the Illinois QSO Party, 2026-10-18, looked for Enter
+// Sends Message in the Contest window). From another window a press can only ask: it writes the request
+// the main window hears as a `storage` event (features/contestWorkIn). The main window then makes the
+// rail's own switch, so the contest's S&P is entered where the session dropped and never a CQ, and a
+// station already in the contest keeps its role, and it brings itself to the front (`focus_window`).
+describe('"Work this contest in CW / in Phone"', () => {
+  const ask = (view: string, key = 'nexus.contest.workIn') =>
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key, newValue: JSON.stringify({ view, at: Date.now() }) }))
+    })
+  // The screen the main window shows, as it keeps it (the cockpits themselves need more of the station than
+  // this fake engine has to draw).
+  const shown = () => localStorage.getItem('nexus.view')
+  beforeEach(() => {
+    localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'custom', enabled: { cw: true, phone: true } }))
+    vi.mocked(api.focusWindow).mockClear()
+  })
+
+  it.each(['cw', 'phone'] as const)(
+    'from a contest window: the main window goes to %s, enters the contest in S&P (never CQ) and comes to the front',
+    async (view) => {
+      station.current = { ...station.current, fdActive: true }
+      engine.current = entered('chat')
+      render(<App />)
+      await railContest()
+      await ask(view)
+      await waitFor(() => expect(shown()).toBe(view), WAIT)
+      await waitFor(() => expect(engine.current).toEqual({ spec: 'fieldday-sp', queue: [], dxcall: null }), WAIT)
+      expect(setMode.mock.calls.map((c) => c[0])).toEqual(['fieldday-sp'])
+      expect(api.focusWindow).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it('a running station keeps its run: its CQ still queued, and no set_mode', async () => {
+    station.current = { ...station.current, fdActive: true }
+    engine.current = entered('fieldday-run')
+    render(<App />)
+    await railContest()
+    await ask('cw')
+    await waitFor(() => expect(shown()).toBe('cw'), WAIT)
+    await settle()
+    expect(engine.current).toEqual({ spec: 'fieldday-run', queue: ['CQ FD W9XYZ EN52'], dxcall: null })
+    expect(setMode).not.toHaveBeenCalled()
+  })
+
+  it('CONTROL: another key, or a request for another screen, moves nothing', async () => {
+    station.current = { ...station.current, fdActive: true }
+    render(<App />)
+    await railContest()
+    await ask('cw', 'nexus.contest.entryCall')
+    await ask('operate')
+    await settle()
+    expect(shown()).toBe('operate')
+    expect(api.focusWindow).not.toHaveBeenCalled()
+  })
+
+  it("on the main window's own Contest screen the button is the switch itself", async () => {
+    station.current = { ...station.current, fdActive: true }
+    engine.current = entered('chat')
+    render(<App />)
+    await openContest()
+    fireEvent.click(await screen.findByRole('button', { name: 'Work this contest in Phone' }, WAIT))
+    await waitFor(() => expect(shown()).toBe('phone'), WAIT)
+    expect(localStorage.getItem('nexus.contest.workIn')).toBeNull()
   })
 })

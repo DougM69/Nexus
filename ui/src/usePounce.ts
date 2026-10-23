@@ -2,9 +2,11 @@
 //
 // Every other surface in Nexus polls. This one does not, deliberately: the whole value of the
 // feature is that the alert lands the MOMENT the spot does, and a poll is late by construction.
-// The backend scores each inbound cluster/RBN spot and emits `pounce` only when something clears
-// the operator's rarity threshold, already de-duplicated per call/band/mode — so everything
-// arriving here is worth interrupting for.
+// The backend scores each inbound cluster/RBN spot and raises an alert (`alert`, kind `pounce`;
+// `src-tauri/src/alert.rs`) only when something clears the operator's rarity threshold, already
+// de-duplicated per call/band/mode — so everything arriving here is worth interrupting for. The
+// alert is made once, with its own id, so a computer driving the station hears it under the same
+// id as the station's own screen.
 //
 // SOUND IS THE PRIMARY CHANNEL, NOT THE NOTIFICATION. The OS notification is a bonus: Do Not
 // Disturb, focus modes and notification permissions can all silently suppress it, and a rare-DX
@@ -15,6 +17,18 @@ import { useEffect, useRef, useState } from 'react'
 import { doubleBeep } from './alerts'
 import { osNotify as osNotifyCommand } from './api'
 import type { NeedTag } from './types'
+
+/** An alert as the backend raises it (`src-tauri/src/alert.rs`): versioned, with its own id. */
+export interface RaisedAlert {
+  v: number
+  id: number
+  kind: string
+  atMs: number
+  alert: unknown
+}
+
+/** The one version of the alert's shape this build reads. */
+const ALERT_VERSION = 1
 
 export interface PounceAlert {
   call: string
@@ -74,8 +88,9 @@ function osNotify(a: PounceAlert): void {
 export function usePounce(): { alert: PounceAlert | null; dismiss: () => void } {
   const [alert, setAlert] = useState<PounceAlert | null>(null)
   // Guard against a double-fire if the same alert somehow arrives twice (a window reload racing
-  // the emit). The backend already de-dupes per call/band/mode; this is belt and braces.
-  const lastKey = useRef<string>('')
+  // the emit): the alert's own id. The backend already de-dupes per call/band/mode; this is belt
+  // and braces.
+  const lastId = useRef<number | null>(null)
 
   useEffect(() => {
     let unlisten: (() => void) | undefined
@@ -90,12 +105,14 @@ export function usePounce(): { alert: PounceAlert | null; dismiss: () => void } 
     }
     void (async () => {
       try {
-        const un = await listen<PounceAlert>('pounce', (e) => {
-          const a = e.payload
+        const un = await listen<RaisedAlert>('alert', (e) => {
+          const raised = e.payload
+          // Pounce's, in the shape this build reads; another kind, or a later shape, is not ours.
+          if (!raised || raised.v !== ALERT_VERSION || raised.kind !== 'pounce') return
+          const a = raised.alert as PounceAlert | null
           if (!a || !a.call) return
-          const key = `${a.call}|${a.band}|${a.mode}|${a.atUnix}`
-          if (key === lastKey.current) return
-          lastKey.current = key
+          if (raised.id === lastId.current) return
+          lastId.current = raised.id
           pounceEarcon()
           osNotify(a)
           setAlert(a)

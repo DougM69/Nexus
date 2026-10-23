@@ -1,0 +1,199 @@
+{
+  "running": false,
+  "state": "Listening",
+  "dxcall": null,
+  "qsoCount": 3,
+  "sections": 1,
+  "workedSections": [
+    ""
+  ],
+  "points": 6,
+  "event": "nyqp",
+  "poweredPoints": 24,
+  "bonusPoints": 0,
+  "totalScore": 24,
+  "eventStartUnix": 1792245600,
+  "eventEndUnix": 1792288800,
+  "multCount": 4,
+  "scoreNoteKey": "",
+  "rulesYear": 2026,
+  "rulesGenerated": "2026-10-13T12:00:00Z",
+  "assistanceOn": [
+    "AI CW decoder",
+    "DX cluster / RBN",
+    "PSK Reporter needs",
+    "Super Check Partial",
+    "Call history"
+  ],
+  "log": [
+    {
+      "call": "K2AAA",
+      "class": "",
+      "section": "",
+      "band": "20m",
+      "mode": "PH",
+      "submode": "",
+      "whenUnix": 1791919641,
+      "sat": "",
+      "mex": "59 ALB",
+      "rcvd": [
+        "59",
+        "SUF"
+      ],
+      "dkey": [
+        "K2AAA",
+        "20M",
+        "PH",
+        "SUF",
+        "ALB"
+      ]
+    },
+    {
+      "call": "K2BBB",
+      "class": "",
+      "section": "",
+      "band": "20m",
+      "mode": "CW",
+      "submode": "",
+      "whenUnix": 1791919641,
+      "sat": "",
+      "mex": "599 ALB",
+      "rcvd": [
+        "599",
+        "MON"
+      ],
+      "dkey": [
+        "K2BBB",
+        "20M",
+        "CW",
+        "MON",
+        "ALB"
+      ]
+    },
+    {
+      "call": "K2CCC",
+      "class": "",
+      "section": "",
+      "band": "20m",
+      "mode": "DIG",
+      "submode": "RTTY",
+      "whenUnix": 1791919641,
+      "sat": "",
+      "mex": "599 ALB",
+      "rcvd": [
+        "599",
+        "ERI"
+      ],
+      "dkey": [
+        "K2CCC",
+        "20M",
+        "DIG",
+        "ERI",
+        "ALB"
+      ]
+    }
+  ],
+  "upload": {
+    "enabled": false,
+    "destinations": [],
+    "available": [
+      "qrz",
+      "clublog",
+      "eqsl",
+      "hrdlog",
+      "n3fjp",
+      "cloudlog",
+      "wrl"
+    ],
+    "hint": "Off means this session's contacts are not queued for upload when you merge them into your logbook. One exception, and it is not ours to switch off: saving a ClubLog password re-queues every contact ClubLog has not accepted, including these."
+  },
+  "receives": [
+    {
+      "key": "RST",
+      "kind": "rst",
+      "required": true,
+      "adif": "RST_RCVD"
+    },
+    {
+      "key": "QTH",
+      "kind": "oneOf",
+      "required": true,
+      "domains": [
+        "ny_counties",
+        "ny_mults",
+        "dx_literal"
+      ]
+    }
+  ],
+  "composing": [
+    {
+      "key": "RST",
+      "raw": "599"
+    },
+    {
+      "key": "QTH",
+      "raw": "ALB",
+      "domain": "ny_counties"
+    }
+  ],
+  "sentExchange": "ALB",
+  "composingText": "599 ALB",
+  "composingTextPhone": "59 ALB",
+  "bands": [
+    "160m",
+    "80m",
+    "60m",
+    "40m",
+    "20m",
+    "15m",
+    "10m",
+    "6m",
+    "2m",
+    "1.25m",
+    "70cm",
+    "33cm",
+    "23cm",
+    "13cm",
+    "6cm",
+    "3cm",
+    "1.25cm"
+  ],
+  "dupeRule": {
+    "byCall": true,
+    "byBand": true,
+    "byModeClass": true,
+    "byFields": [
+      "QTH"
+    ],
+    "bySentFields": [
+      "QTH"
+    ],
+    "modeClassGroups": [],
+    "logDupes": true
+  },
+  "role": "in_state",
+  "boards": [
+    {
+      "id": "county",
+      "slot": "QTH",
+      "domain": "ny_counties",
+      "scope": "perLog",
+      "worked": [
+        "ERI",
+        "MON",
+        "SUF"
+      ]
+    },
+    {
+      "id": "mult",
+      "slot": "QTH",
+      "domain": "ny_mults",
+      "scope": "perLog",
+      "worked": [
+        "ERI",
+        "MON",
+        "SUF"
+      ]
+    }
+  ]
+}

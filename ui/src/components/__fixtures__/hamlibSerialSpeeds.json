@@ -1,12 +1,24 @@
 {
   "hamlib": "Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit",
-  "catalog": 117,
+  "catalog": 119,
   "rigs": [
     {
       "model": 1001,
       "name": "Yaesu FT-847",
       "min": 4800,
       "max": 57600
+    },
+    {
+      "model": 1002,
+      "name": "Yaesu FT-1000",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 1003,
+      "name": "Yaesu FT-1000D",
+      "min": 4800,
+      "max": 4800
     },
     {
       "model": 1004,

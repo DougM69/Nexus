@@ -15,7 +15,7 @@
 // A fill belongs to the call it was made for. When the call in the box changes, a fill the
 // operator has not touched goes back to what the box held before it.
 
-import type { CallHistoryFile, ContestFieldSpec } from '../types'
+import type { CallHistoryFile, ContestFieldSpec, FieldDayQso } from '../types'
 import { contestDomain, resolveDomainValue } from './contestDomains'
 
 /** The N1MM columns that can feed a slot, most specific first: by what the slot MEANS (its ADIF
@@ -79,12 +79,80 @@ export function historyFill(
   return out
 }
 
+/** What this contest's own log offers `call`: the last contact with it here, slot by slot, for
+ *  the same slots and under the same test as the file (a code the strip would accept typed). A
+ *  row carries what it received in `rcvd`, in `slots` order; a Field Day row, which has none,
+ *  carries its section. Empty for a moving station, as for the file. */
+export function contestLogFill(
+  call: string,
+  slots: readonly ContestFieldSpec[],
+  log: readonly FieldDayQso[],
+): Record<string, string> {
+  const c = call.trim().toUpperCase()
+  if (c === '' || MOVES.test(c)) return {}
+  let row: FieldDayQso | undefined
+  for (let i = log.length - 1; i >= 0 && !row; i--) if (log[i].call.trim().toUpperCase() === c) row = log[i]
+  if (!row) return {}
+  const { rcvd, section } = row
+  const out: Record<string, string> = {}
+  slots.forEach((f, i) => {
+    if (columnsFor(f).length === 0) return
+    const raw = rcvd ? rcvd[i] : f.key === 'SECTION' ? section : undefined
+    const code = raw === undefined ? undefined : acceptedCode(f, raw)
+    if (code !== undefined) out[f.key] = code
+  })
+  return out
+}
+
+/** What the whole log offers `call` (the station's `contest_logged_qth` answer, asked for the
+ *  call typed): its county or state, in the QTH box only, if the box would accept it typed. */
+export function loggedQthFill(
+  call: string,
+  slots: readonly ContestFieldSpec[],
+  logged: { call: string; value: string } | null,
+): Record<string, string> {
+  const c = call.trim().toUpperCase()
+  if (logged === null || logged.call !== c || MOVES.test(c)) return {}
+  const f = slots.find((s) => s.key === 'QTH')
+  const code = f ? acceptedCode(f, logged.value) : undefined
+  return f && code !== undefined ? { [f.key]: code } : {}
+}
+
+/** Where a fill came from, which the box's caption names: this contest's last contact, the
+ *  call-history file, or the log (with the year of the contact). */
+export type FillSource = 'contest' | 'history' | `log:${number}`
+
+/** ⭐ THE ORDER OF THE SOURCES (the operator's ruling): this contest's last contact with the
+ *  station, then the call-history file, then the most recent contact anywhere in the log. Per box:
+ *  a source that offers nothing for a box leaves it to the next. */
+export function offerFill(
+  fromContest: Readonly<Record<string, string>>,
+  fromFile: Readonly<Record<string, string>>,
+  fromLog: Readonly<Record<string, string>>,
+  logYear: number,
+): { offered: Record<string, string>; sources: Record<string, FillSource> } {
+  const offered: Record<string, string> = {}
+  const sources: Record<string, FillSource> = {}
+  const take = (from: Readonly<Record<string, string>>, source: FillSource) => {
+    for (const [key, value] of Object.entries(from)) {
+      if (key in offered) continue
+      offered[key] = value
+      sources[key] = source
+    }
+  }
+  take(fromContest, 'contest')
+  take(fromFile, 'history')
+  take(fromLog, `log:${logYear}`)
+  return { offered, sources }
+}
+
 /** What the fill has done to the boxes since the strip last cleared. */
 export interface FillState {
   /** The boxes the operator typed in (or grabbed a value into) since the strip last cleared. */
   typed: Readonly<Record<string, true>>
-  /** The boxes holding a call-history value: for which call, the value, and what was there. */
-  filled: Readonly<Record<string, { call: string; value: string; before: string }>>
+  /** The boxes holding a filled value: for which call, the value, what was there, and where it
+   *  came from (absent: the call-history file, which was the only source once). */
+  filled: Readonly<Record<string, { call: string; value: string; before: string; source?: FillSource }>>
 }
 
 export const EMPTY_FILL: FillState = { typed: {}, filled: {} }
@@ -105,6 +173,7 @@ export function applyFill(
   call: string,
   offered: Readonly<Record<string, string>>,
   values: Readonly<Record<string, string>>,
+  sources: Readonly<Record<string, FillSource>> = {},
 ): { writes: Record<string, string>; state: FillState } {
   const c = call.trim().toUpperCase()
   const filled = { ...s.filled }
@@ -113,7 +182,7 @@ export function applyFill(
   // Out: a fill that is no longer what the file offers THIS call. A box still showing it goes
   // back to what it held; one that shows something else has been written since, and keeps that.
   for (const [key, fill] of Object.entries(s.filled)) {
-    if (fill.call === c && offered[key] === fill.value) continue
+    if (fill.call === c && offered[key] === fill.value && sources[key] === fill.source) continue
     delete filled[key]
     moved = true
     if ((values[key] ?? '') === fill.value) writes[key] = fill.before
@@ -121,7 +190,8 @@ export function applyFill(
   // In: what the file offers, wherever the operator has not typed.
   for (const [key, value] of Object.entries(offered)) {
     if (s.typed[key] || filled[key]) continue
-    filled[key] = { call: c, value, before: writes[key] ?? values[key] ?? '' }
+    const before = writes[key] ?? values[key] ?? ''
+    filled[key] = sources[key] ? { call: c, value, before, source: sources[key] } : { call: c, value, before }
     writes[key] = value
     moved = true
   }

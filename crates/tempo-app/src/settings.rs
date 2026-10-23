@@ -314,11 +314,15 @@ pub const SWR_VERIFIED_FLEX_RIGS: [u32; 2] = [2036, 23005];
 
 /// Can Nexus put a number to this radio's SWR — i.e. may the high-SWR cutoff be offered at all?
 ///
-/// TWO paths and nothing else, because those are the two places a raw meter reading is turned
+/// THREE paths and nothing else, because those are the places a raw meter reading is turned
 /// into a ratio by something we can point at:
 /// * **Native Icom CI-V** — the operator's `icom_native_cat` opt-in, on a transport the daemon
-///   can actually own (not network, not OmniRig — the same two refusals
+///   can actually own (not network, not OmniRig, not TCI — the refusals
 ///   [`native_civ_reachable`] makes), for a model in [`SWR_VERIFIED_CIV_RIGS`].
+/// * **The Icom network connection** — whenever [`icom_lan_reachable`] holds, because that
+///   client carries the SAME CI-V daemon over its session, so `SWR` is answered by the same
+///   `swr_from_raw` curve. That covers the IC-7300MK2 and IC-7760 there; over USB both are
+///   driven by rigctld, whose `l SWR` is Hamlib's figure, so they stay unverified on USB.
 /// * **FlexRadio over the network**, for a model in [`SWR_VERIFIED_FLEX_RIGS`].
 ///
 /// Everything else — every plain rigctld rig — reaches `Engine::observe_rig_tx_meters` with
@@ -329,15 +333,22 @@ pub fn swr_scale_verified(
     rig_model: u32,
     rig_conn: &str,
     rig_addr: &str,
+    icom_lan_host: &str,
     icom_native_cat: bool,
 ) -> bool {
     let network = rig_conn_is_network(rig_conn, rig_addr);
+    // `!icom_lan`: the serial daemon never opens a port on that connection (see
+    // `tempo_audio::service::native_civ_model`), so the toggle left on from USB counts for nothing.
+    // Nor on TCI, where the SDR program's own `tx_sensors` are the meter.
     let native_civ = icom_native_cat
         && !network
         && !rig_conn_is_omnirig(rig_conn)
+        && !rig_conn_is_icom_lan(rig_conn)
+        && !rig_conn_is_tci(rig_conn)
         && SWR_VERIFIED_CIV_RIGS.contains(&rig_model);
+    let icom_lan = icom_lan_reachable(rig_model, rig_conn, icom_lan_host);
     let flex_vita = network && SWR_VERIFIED_FLEX_RIGS.contains(&rig_model);
-    native_civ || flex_vita
+    native_civ || icom_lan || flex_vita
 }
 
 /// Hamlib model numbers of the radios that have NO XIT (transmit incremental tuning) at all.
@@ -363,9 +374,9 @@ pub fn swr_scale_verified(
 /// Mirror of `tempo_audio::civ::commands::has_delta_tx` for the native CI-V models, pinned
 /// against it by that crate's `the_no_xit_rigs_are_the_civ_models_without_delta_tx` — the crate
 /// arrow points the other way, so this cannot call it.
-pub const NO_XIT_RIGS: [u32; 57] = [
+pub const NO_XIT_RIGS: [u32; 58] = [
     4, 5, // the FLRig and TRX-Manager bridges
-    1001, 1010, 1015, 1020, 1021, 1022, 1023, 1027, 1041, 1043, 1046, // Yaesu
+    1001, 1002, 1010, 1015, 1020, 1021, 1022, 1023, 1027, 1041, 1043, 1046, // Yaesu
     2007, 2025, 2034, 2035, // Kenwood
     2048, 2049, 2054, 2056, 2057, // PowerSDR, Malachite, Thetis, SDR Console, the QMX
     3009, 3010, 3011, 3013, 3014, 3015, 3016, 3017, 3019, 3023, 3026, 3027, 3044, 3046, 3047, 3055,
@@ -484,6 +495,9 @@ pub fn native_civ_reachable(rig_model: u32, rig_conn: &str, rig_addr: &str) -> b
         // to speak CI-V itself. Without this the satellite offer would pre-fill a Main/Sub
         // mapping whose write has no path at all.
         && !rig_conn_is_omnirig(rig_conn)
+        // TCI too: the SDR program drives the radio, and the only port Nexus opens toward it is
+        // the program's own TCI server.
+        && !rig_conn_is_tci(rig_conn)
 }
 
 /// The FlexRadio profiles Nexus's own Flex client can serve: the SmartSDR CAT profile (2036) and
@@ -541,7 +555,217 @@ pub fn icom_lan_reachable(rig_model: u32, rig_conn: &str, host: &str) -> bool {
         && host.trim().parse::<std::net::Ipv4Addr>().is_ok()
 }
 
+/// Is this rig driven through an SDR program's TCI server, by Nexus's TCI client (the "TCI"
+/// Connection choice)? TCI is Expert Electronics' Transceiver Control Interface: one WebSocket to
+/// the SDR program (ExpertSDR3, Thetis, piHPSDR) carries its CAT, its audio, its spectrum and its
+/// spots.
+///
+/// ⭐ THE SINGLE SOURCE OF TRUTH for that question, like [`rig_conn_is_icom_lan`]: the daemon choice
+/// and every settings-side consumer ask this. A build from before the choice existed reads this
+/// value as Serial (it is neither "network", "omnirig" nor "icomlan").
+pub fn rig_conn_is_tci(rig_conn: &str) -> bool {
+    rig_conn.eq_ignore_ascii_case("tci")
+}
+
+/// Which TCI server a radio's TCI connection talks to, when its operator says so rather than
+/// leaving it to the server ([`RadioProfile::tci_dialect`]). Nexus learns a server's dialect from
+/// what it does, its echoes and its frames, never from its name: servers announce one another's
+/// (piHPSDR introduces itself as ExpertSDR3, and so does Thetis in its default emulation). A forced
+/// dialect is the way out when a server misleads that learning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TciDialect {
+    /// Learned from what the server does. The default.
+    Auto,
+    /// ExpertSDR3, TCI 2.0 (SunSDR2, MB1, Colibri).
+    ExpertSdr3,
+    /// Thetis 2.10.3.14 and later (ANAN, HPSDR, Hermes Lite 2).
+    Thetis,
+    /// piHPSDR.
+    PiHpsdr,
+}
+
+impl TciDialect {
+    /// Every dialect, `Auto` first.
+    pub const ALL: [TciDialect; 4] = [
+        TciDialect::Auto,
+        TciDialect::ExpertSdr3,
+        TciDialect::Thetis,
+        TciDialect::PiHpsdr,
+    ];
+
+    /// The word [`RadioProfile::tci_dialect`] stores for it.
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            TciDialect::Auto => "auto",
+            TciDialect::ExpertSdr3 => "expertsdr3",
+            TciDialect::Thetis => "thetis",
+            TciDialect::PiHpsdr => "pihpsdr",
+        }
+    }
+
+    /// A stored [`RadioProfile::tci_dialect`]. Case and surrounding space do not matter, and any
+    /// other word (a newer build's, a hand edit) is `Auto`: never a forced dialect the operator did
+    /// not choose.
+    pub fn from_setting(v: &str) -> Self {
+        let v = v.trim();
+        Self::ALL
+            .into_iter()
+            .find(|d| v.eq_ignore_ascii_case(d.as_setting()))
+            .unwrap_or(TciDialect::Auto)
+    }
+
+    /// The port the server listens on unless its operator moved it: 50001 for ExpertSDR3 (by a
+    /// user's report; unverified) and for Thetis, 40001 for piHPSDR. `Auto` takes 50001, the port
+    /// of the two servers Nexus targets first.
+    pub const fn default_port(self) -> u16 {
+        match self {
+            TciDialect::Auto | TciDialect::ExpertSdr3 | TciDialect::Thetis => 50001,
+            TciDialect::PiHpsdr => 40001,
+        }
+    }
+}
+
+/// The TCI server's address unless the operator moves it: the SDR program on this computer, the
+/// usual station.
+pub const TCI_DEFAULT_HOST: &str = "127.0.0.1";
+
+/// The TCI server's port unless the operator moves it ([`TciDialect::default_port`]).
+pub const TCI_DEFAULT_PORT: u16 = TciDialect::Auto.default_port();
+
+/// The most spots Nexus puts on an SDR program's panadapter at once
+/// ([`RadioProfile::tci_spots`]).
+pub const TCI_SPOTS_MAX: usize = 100;
+
+fn default_tci_host() -> String {
+    TCI_DEFAULT_HOST.to_string()
+}
+
+fn default_tci_port() -> u16 {
+    TCI_DEFAULT_PORT
+}
+
+fn default_tci_dialect() -> String {
+    TciDialect::Auto.as_setting().to_string()
+}
+
+/// Could Nexus's TCI client serve this radio: on the TCI connection, with a server address and a
+/// port to dial?
+///
+/// ⭐ THE SINGLE SOURCE OF TRUTH for the daemon choice, as [`icom_lan_reachable`] is for the Icom
+/// network client. The connection choice is the opt-in: nothing selects it for the operator. TCI
+/// serves whatever radio the SDR program drives, so there is no model list; the model asks one
+/// thing only, that it is not 0, "None / VOX". That is how an operator stops Nexus driving a radio
+/// (the radio loop opens no CAT channel for model 0, OmniRig's aside, which keeps the rig type
+/// itself), and a TCI client can key the transmitter, so it stops this one too.
+pub fn tci_reachable(rig_model: u32, rig_conn: &str, host: &str, port: u16) -> bool {
+    rig_model != 0 && rig_conn_is_tci(rig_conn) && !host.trim().is_empty() && port != 0
+}
+
+/// The port Nexus's own TCI server listens on unless the operator moves it
+/// ([`Settings::tci_server_port`]): 40001, where WSJT-X, JTDX, MacLoggerDX and the Go TCI tools
+/// look by default, and clear of 50001, where Thetis (and, by a user's report, ExpertSDR3) serves
+/// on the same computer ([`TciDialect::default_port`]).
+pub const TCI_SERVER_DEFAULT_PORT: u16 = 40001;
+
+fn default_tci_server_port() -> u16 {
+    TCI_SERVER_DEFAULT_PORT
+}
+
+/// Where the RF scope's picture comes from ([`Settings::scope_source`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeSource {
+    /// The radio's own panadapter (Flex, Icom CI-V, the FT-710's, a TCI program's), or the sound
+    /// card's audio where it has none. The default.
+    Radio,
+    /// An SDRplay receiver through SDRplay's SDRconnect program, over its WebSocket API.
+    Sdrconnect,
+}
+
+impl ScopeSource {
+    /// The word [`Settings::scope_source`] stores for it.
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            ScopeSource::Radio => "radio",
+            ScopeSource::Sdrconnect => "sdrconnect",
+        }
+    }
+
+    /// A stored [`Settings::scope_source`]. Case and surrounding space do not matter, and any
+    /// other word is the radio's own, so a file from a later build never moves the scope.
+    pub fn from_setting(word: &str) -> ScopeSource {
+        if word.trim().eq_ignore_ascii_case("sdrconnect") {
+            ScopeSource::Sdrconnect
+        } else {
+            ScopeSource::Radio
+        }
+    }
+}
+
+/// How the SDR's centre follows the rig's dial ([`Settings::sdrconnect_follow`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdrconnectFollow {
+    /// The centre is retuned to the dial on every change. The default.
+    Centre,
+    /// The centre is retuned to the dial only when the dial leaves the middle of the span.
+    Scroll,
+}
+
+impl SdrconnectFollow {
+    /// The word [`Settings::sdrconnect_follow`] stores for it.
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            SdrconnectFollow::Centre => "centre",
+            SdrconnectFollow::Scroll => "scroll",
+        }
+    }
+
+    /// A stored [`Settings::sdrconnect_follow`]: any word but `scroll` is the default.
+    pub fn from_setting(word: &str) -> SdrconnectFollow {
+        if word.trim().eq_ignore_ascii_case("scroll") {
+            SdrconnectFollow::Scroll
+        } else {
+            SdrconnectFollow::Centre
+        }
+    }
+}
+
+/// SDRconnect's WebSocket API port as SDRplay ships it.
+pub const SDRCONNECT_DEFAULT_PORT: u16 = 5454;
+
+fn default_scope_source() -> String {
+    ScopeSource::Radio.as_setting().to_string()
+}
+
+fn default_sdrconnect_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_sdrconnect_port() -> u16 {
+    SDRCONNECT_DEFAULT_PORT
+}
+
+fn default_sdrconnect_follow() -> String {
+    SdrconnectFollow::Centre.as_setting().to_string()
+}
+
 impl Settings {
+    /// Where the scope's SDRconnect lives, when the operator chose it as the scope source: the host
+    /// (this computer when left blank) and the port (SDRconnect's default when 0). `None` while
+    /// the scope source is the radio.
+    pub fn sdrconnect_target(&self) -> Option<(String, u16)> {
+        if ScopeSource::from_setting(&self.scope_source) != ScopeSource::Sdrconnect {
+            return None;
+        }
+        let host = self.sdrconnect_host.trim();
+        let host = if host.is_empty() { "127.0.0.1" } else { host };
+        let port = if self.sdrconnect_port == 0 {
+            SDRCONNECT_DEFAULT_PORT
+        } else {
+            self.sdrconnect_port
+        };
+        Some((host.to_string(), port))
+    }
+
     /// Is the RECEIVE dial Doppler's to correct?
     ///
     /// The operator's off switch, and the one mapping that claims the dial for
@@ -699,6 +923,16 @@ impl Settings {
     pub fn sat_main_sub_rig(&self) -> bool {
         MAIN_SUB_SAT_RIGS.contains(&self.active_rig_facts().0)
     }
+
+    /// The `qso_qslsince` the next LoTW download asks from: the stored high-water when a download
+    /// of every call on the account made it, else none, a full pull (`lotw_cursor_every_call`).
+    pub fn lotw_sync_cursor(&self) -> &str {
+        if self.lotw_cursor_every_call {
+            self.lotw_last_qsl.trim()
+        } else {
+            ""
+        }
+    }
 }
 
 /// The operator's amateur license class — drives the transmit-privilege lockout + the
@@ -719,8 +953,8 @@ pub enum LicenseClass {
 
 /// How CW is transmitted. **Cat** = the rig's own keyer via Hamlib `send_morse` (rig in
 /// CW; clean, but older rigs like the IC-756PRO III don't implement it). **Serial** = the
-/// app toggles a DTR/RTS keyline into the rig's KEY jack (rig in CW; the classic
-/// N1MM/fldigi method — clean, needs only a keying cable; see `cw_key_port`/`cw_key_line`).
+/// app toggles a DTR/RTS keyline into the rig's KEY jack (rig in CW; clean, needs only a
+/// keying cable; see `cw_key_port`/`cw_key_line`).
 /// **WinKeyer** = a K1EL hardware keyer (rig in CW; jitter-free). **Soundcard** = the app
 /// keys an audio tone through SSB (rig in USB; works on any rig, but an SSB-audio workaround
 /// — shape it and keep it below ALC).
@@ -902,19 +1136,62 @@ pub struct Settings {
     pub q65_submode: u8,
     // --- JS8 (JS8Call-compatible keyboard-to-keyboard; `crates/js8`) ---
     /// JS8 TRANSMIT speed as an index into `Js8Speed::ALL`: 0 Slow (30 s), 1 Normal (15 s),
-    /// 2 Fast (10 s), 3 Turbo (6 s). An index rather than the enum — the house shape of
+    /// 2 Fast (10 s), 3 Turbo (6 s; "JS8 40" in JS8Call 3.0), 4 Ultra (4 s; "JS8 60", 3.0's
+    /// experimental speed). An index rather than the enum — the house shape of
     /// `q65_submode`/`jt65_submode` — so a stale or hand-edited file degrades to Normal
     /// (`Tier::js8_kind`) instead of refusing to load. Sets the slot clock and the boundary
     /// decode window; receive decodes every speed in `js8_rx_speeds` regardless.
     #[serde(default = "default_js8_speed")]
     pub js8_speed: u8,
     /// Bitmask of speeds the receiver decodes each cycle: Slow 1 · Normal 2 · Fast 4 ·
-    /// Turbo 8. Defaults to 15 (all four) — JS8Call's `SubModeMultiDecode=true` — so a
-    /// fresh install hears every station on the watering hole with zero toggles. 0 is
-    /// treated as 15 by the scheduler (a mask that decodes nothing is never what anyone
-    /// meant).
+    /// Turbo 8 · Ultra 16. Defaults to 31 (all five) — JS8Call 3.0's `SubModeMultiDecode=true`
+    /// (mainwindow.cpp:528-529), whose every-speed decode includes JS8 60 — so a fresh install
+    /// hears every station on the watering hole with zero toggles. A stored mask is kept as
+    /// it is: a file saved before JS8 60 existed decodes the speeds it names, and the JS8 60
+    /// switch adds it. 0 is treated as every speed by the scheduler (a mask that decodes
+    /// nothing is never what anyone meant).
     #[serde(default = "default_js8_rx_speeds")]
     pub js8_rx_speeds: u8,
+    // --- JS8 frequencies, the decode filter, QSY to centre and the band schedule (JS8Call
+    // 3.0.3's Settings ▸ Frequencies and its waterfall controls) ---
+    /// The operator's own JS8 frequency list: JS8Call's working frequencies, with the
+    /// descriptions 3.0 added. `None`, the default and what a file from before this setting
+    /// loads as, is JS8Call 3.0.3's own table (`bandplan::js8_band_plan`), and JS8Call's Reset
+    /// returns to it. `Some` replaces that table wherever JS8 reads one (`bandplan::js8_plan_from`):
+    /// the cockpit's band picker, the dial entering JS8 tunes to, the Remote's list. It may be
+    /// empty, as JS8Call's may.
+    #[serde(default)]
+    pub js8_frequencies: Option<Vec<Js8Freq>>,
+    /// JS8Call's "Monitor returns to last used frequency" (`MonitorLastUsed`), OFF by default
+    /// as JS8Call ships it (Configuration.cpp:2297): on, entering JS8 tunes the rig back to the
+    /// dial last used there (`js8_last_dial_mhz`) instead of the band's JS8 frequency.
+    #[serde(default)]
+    pub js8_return_to_last_dial: bool,
+    /// The dial last used on JS8, MHz (JS8Call's `DialFreq`, its `m_lastMonitoredFrequency`);
+    /// 0 = none yet. ENGINE-OWNED: written while JS8 runs, and kept across a Settings form save
+    /// (a form's copy is a snapshot from whenever it loaded).
+    #[serde(default)]
+    pub js8_last_dial_mhz: f64,
+    /// JS8Call's decode filter (its waterfall controls' `FilterEnabled`, `FilterCenter`,
+    /// `FilterWidth`): on, the JS8 decoder searches only centre ± width/2. ON at 1500 Hz ± 1000
+    /// by default, as JS8Call ships it (WideGraph.cpp:237-241). ENGINE-OWNED: the cockpit's
+    /// controls write it (`Engine::js8_set_filter`), and a form save keeps the live value.
+    #[serde(default)]
+    pub js8_filter: Js8Filter,
+    /// JS8Call's passband centre for QSY (waterfall controls `CenterOffset`, default 1500 Hz):
+    /// "QSY to centre" moves the dial so the transmit offset lands here. ENGINE-OWNED, as the
+    /// filter is.
+    #[serde(default = "default_js8_qsy_center_hz")]
+    pub js8_qsy_center_hz: u16,
+    /// JS8Call's "Automatically switch bands / frequencies at specific times of day"
+    /// (`AutoSwitchBands`), OFF by default as JS8Call ships it (Configuration.cpp:2124). On, the
+    /// JS8 station changes the rig's frequency BY ITSELF at the times in `js8_schedule`, with
+    /// nobody at the radio — never while transmitting or with a message going out.
+    #[serde(default)]
+    pub js8_band_hop: bool,
+    /// JS8Call's Frequency Schedule (`stations`): a dial and a UTC window to switch to it in.
+    #[serde(default)]
+    pub js8_schedule: Vec<Js8Hop>,
     /// Heartbeat repeat interval in minutes; 0 = on demand (JS8Call `HBInterval` default).
     /// Whether HB is ON is NOT a setting — it is session-only (`Engine.js8_hb_on`), so the
     /// app can never launch beaconing.
@@ -976,6 +1253,34 @@ pub struct Settings {
     /// JS8Call's field runs 0-1440.
     #[serde(default = "default_js8_activity_aging_min")]
     pub js8_activity_aging_min: u16,
+    /// JS8Call's CQ message (`CQMessage`, default `CQ CQ CQ <MYGRID4>`): what the CQ button and
+    /// the CQ repeat send, its macros replaced (`js8::proto::macros`). Empty sends `CQ CQ CQ` and
+    /// the square, as JS8Call does. A file from before this setting loads the default, which keys
+    /// the same CQ frame every earlier Nexus keyed.
+    #[serde(default = "default_js8_cq_text")]
+    pub js8_cq_text: String,
+    /// JS8Call's reply message (`Reply`, default `HW CPY?`): the cockpit's REPLY button sends it
+    /// to the call in the To box.
+    #[serde(default = "default_js8_reply_text")]
+    pub js8_reply_text: String,
+    /// JS8Call's saved messages (`Macros`, default the one `TNX 73 GL`): the dock's Saved menu, in
+    /// this order, each with its macros replaced when it is used. An empty list stays empty.
+    #[serde(default = "default_js8_saved_messages")]
+    pub js8_saved_messages: Vec<String>,
+    /// JS8Call's "Immediately transmit CQ, Reply, Info, Saved, and Directed messages from the
+    /// menu" (`TransmitDirected`, default ON). Off, those buttons and a station row's one-click
+    /// asks only fill the compose box, and Send sends it.
+    #[serde(default = "default_true")]
+    pub js8_send_at_once: bool,
+    /// JS8Call 3.0's "Display callsigns and commands as pills" in the compose box
+    /// (`PillsEnabled`, default ON). Display only.
+    #[serde(default = "default_true")]
+    pub js8_pills: bool,
+    /// JS8Call's "Suggest alternative word choices for more efficient message transmission"
+    /// (`Spellcheck`, default ON): a word the JSC dictionary codes in pieces is underlined in the
+    /// compose box, and a right-click on it offers cheaper words. Display only.
+    #[serde(default = "default_true")]
+    pub js8_word_suggestions: bool,
     /// Free text answered to `INFO?` (JS8Call "My Info").
     #[serde(default)]
     pub js8_info: String,
@@ -985,6 +1290,130 @@ pub struct Settings {
     /// Joined @GROUP names (e.g. `@FUN`) the station answers directed traffic for.
     #[serde(default)]
     pub js8_groups: Vec<String>,
+    // --- JS8 heartbeat networking and presence, as JS8Call 3.0.3 has them ---
+    /// JS8Call's "Enable Heartbeat Networking" (its Mode menu's `SubModeHB`, off by default): the
+    /// cockpit's HB button shows only with it on, and no heartbeat or heartbeat acknowledgement
+    /// goes out without it. The HB repeat itself stays session-only (`Engine.js8_hb_on`).
+    #[serde(default)]
+    pub js8_hb_networking: bool,
+    /// JS8Call's "Allow heartbeat transmissions outside of heartbeat sub-channel (500Hz -
+    /// 1000Hz)" (`BeaconAnywhere`, off by default): on, a heartbeat or heartbeat acknowledgement
+    /// keys on the TX offset instead of a free spot in 500-1000 Hz.
+    #[serde(default)]
+    pub js8_hb_anywhere: bool,
+    /// JS8Call's "Pause heartbeat transmissions while in a QSO (i.e., callsign is selected)"
+    /// (`HeartbeatQSOPause`, ON by default, and what a file from before this setting loads as):
+    /// while the cockpit's To box holds a call the HB repeat pauses until the box is cleared, no
+    /// heartbeat is acknowledged, and the repeating CQ stops.
+    #[serde(default = "default_js8_hb_qso_pause")]
+    pub js8_hb_qso_pause: bool,
+    /// JS8Call 3.0's "Suppress ACK to stations that send heartbeats at less than 55 minute
+    /// intervals" (`HBRateLimit`, off by default): a station heard heartbeating again within 55
+    /// minutes of its last acknowledged heartbeat is acknowledged no more.
+    #[serde(default)]
+    pub js8_hb_ack_rate_limit: bool,
+    /// JS8Call's "Do not participate in the @ALLCALL group" (`AvoidAllcall`, off by default):
+    /// nothing addressed to @ALLCALL is answered or shown as addressed to you, a heartbeat and a
+    /// CQ aside.
+    #[serde(default)]
+    pub js8_avoid_allcall: bool,
+    /// JS8Call's "Hold PTT between frames while there are more to be transmitted" (`HoldPTT`,
+    /// off by default, JS8_UI/Configuration.cpp:2404). On, the radio stays keyed from the end of
+    /// one frame of a message to the key of its next, as JS8Call's `stopTx2` leaves PTT up while
+    /// frames of the message remain (mainwindow.cpp:2919-2932); off, PTT drops after every frame
+    /// and keys again at the next boundary. Never past the message's last frame, and never once
+    /// anything stops it (`Engine::js8_holds_ptt_between_frames`).
+    #[serde(default)]
+    pub js8_hold_ptt: bool,
+    /// JS8Call's "Allow Tx frequency changes while transmitting" (`TxQSYAllowed`, off by default,
+    /// JS8_UI/Configuration.cpp:2305), for the TX offset. Off, the offset cannot be moved while a
+    /// message is queued or going out, as JS8Call's `changeFreq` refuses it
+    /// (mainwindow.cpp:5381-5386); on, a move is taken and the frames still to go key at it.
+    #[serde(default)]
+    pub js8_tx_offset_while_sending: bool,
+    /// JS8Call's "Tx delay" (`TxDelay`, 0.2 s by default, JS8_UI/Configuration.cpp:2275; 0.1 to
+    /// 0.5 s on its spin box, Configuration.ui `sbTxDelay`), in ms: a JS8 frame keys this long
+    /// before its period, its first tone still at the period's start delay
+    /// (`Engine::js8_tx_delay_ms`, which takes a value outside that range as the nearer end).
+    #[serde(default = "default_js8_tx_delay_ms")]
+    pub js8_tx_delay_ms: u32,
+    /// JS8Call's "Enable spotting @APRSIS messages to the APRS-IS network" (`SpotToAPRS`,
+    /// Configuration.cpp:2300): a heard `@APRSIS GRID` becomes an APRS-IS position and an
+    /// `@APRSIS CMD` a raw APRS packet, uploaded under this station's callsign on the APRS-IS
+    /// session, which logs in with the passcode computed from that callsign as the iGate's does.
+    /// Only while PSK Reporter uploads (JS8Call's SPOT) and the callsign is real. OFF by default,
+    /// where JS8Call ships it on: a stranger's `@APRSIS CMD` packet would go up under the
+    /// operator's own verified login, so the operator turns it on. A file without the key (an
+    /// upgrader's) loads it off.
+    #[serde(default = "default_js8_spot_aprs")]
+    pub js8_spot_aprs: bool,
+    /// JS8Call 3.0's "Relay APRS-IS messages to stations in the Heard List" (`APRSISRelay`, OFF by
+    /// default, Configuration.cpp:2301). It TRANSMITS with nobody at the radio: an APRS message for
+    /// a station heard on JS8 is keyed as `@APRSIS MSG TO:<call> <text> DE <sender>`, through the
+    /// JS8 transmit route and every guard. Needs `js8_spot_aprs` and PSK Reporter on.
+    #[serde(default)]
+    pub js8_aprs_relay: bool,
+    /// JS8Call's "Never spot these callsigns" (`SpotBlacklist`, default empty): a station on it, as
+    /// heard or by its base call, is spotted to no network (PSK Reporter, JS8NET, APRS-IS) and is
+    /// relayed no APRS message.
+    #[serde(default)]
+    pub js8_spot_never: Vec<String>,
+    // --- JS8 lists, views and sounds: JS8Call 3.0.3's own settings for them, at its defaults ---
+    /// JS8Call 3.0's "Hide messages from these callsigns in the RX pane" (`RXCallsignBlocklist`, empty
+    /// by default, Configuration.cpp:2137): a station on it, by its call as heard or its base call,
+    /// prints nothing in the cockpit's RX pane and is marked ✕ in the call list
+    /// (mainwindow.cpp:3108-3123, displayCallActivity.cpp:218-232). Display only: nothing the station
+    /// answers, files or sends reads it. The call list's "Block this station" adds to it
+    /// (`Engine::js8_set_rx_blocklist`).
+    #[serde(default)]
+    pub js8_rx_blocklist: Vec<String>,
+    /// JS8Call's "Highlight these words or callsigns with the primary background color"
+    /// (`PrimaryHighlightWords`, empty by default): a Band activity row holding one of these words,
+    /// or the call list row of one of these calls, takes the primary highlight
+    /// (displayBandActivity.cpp:328-337, displayCallActivity.cpp:427-432). Display only.
+    #[serde(default)]
+    pub js8_highlight_primary: Vec<String>,
+    /// The same with the secondary background (`SecondaryHighlightWords`); the primary wins a row
+    /// both name, as JS8Call paints the primary last.
+    #[serde(default)]
+    pub js8_highlight_secondary: Vec<String>,
+    /// JS8Call's "End of Transmission Character Indicator" (`EOTCharacter`, ♢ by default,
+    /// Configuration.cpp:2146): printed after the last frame of a message in the RX pane and in Band
+    /// activity. Empty prints nothing there.
+    #[serde(default = "default_js8_eot")]
+    pub js8_eot: String,
+    /// JS8Call's "Missing Frame Character Indicator" (`MFICharacter`, …… by default,
+    /// Configuration.cpp:2147): printed where a message's next frame did not come within one and a
+    /// half periods (mainwindow.cpp:6127-6162).
+    #[serde(default = "default_js8_mfi")]
+    pub js8_mfi: String,
+    /// JS8Call's notification sounds (`EnableNotifications` and its table, every row off by default,
+    /// Configuration.cpp:1996-2002, :2464): the events that play one, of "cq", "hb", "ack",
+    /// "directed", "inbox", "callNew" and "callOld". Empty, the default, plays none.
+    #[serde(default)]
+    pub js8_sounds: Vec<String>,
+    // --- JS8Call's API for other programs on this computer (`engine/js8_api.rs`) ---
+    /// Serve JS8Call's TCP API (`TCPEnabled`): OFF by default, as JS8Call ships it. Read-only, and
+    /// on 127.0.0.1 only whatever else changes (`src-tauri/src/js8_api.rs`).
+    #[serde(default)]
+    pub js8_api_tcp: bool,
+    /// Its port (`TCPServerPort`, JS8Call's 2442).
+    #[serde(default = "default_js8_api_tcp_port")]
+    pub js8_api_tcp_port: u16,
+    /// Send JS8Call's UDP API datagrams (`UDPEnabled`): OFF by default, as JS8Call ships it.
+    #[serde(default)]
+    pub js8_api_udp: bool,
+    /// The port on 127.0.0.1 they go to (`UDPServerPort`, JS8Call's 2242).
+    #[serde(default = "default_js8_api_udp_port")]
+    pub js8_api_udp_port: u16,
+    /// Answer requests a TCP program sends (`AcceptTCPRequests`): OFF by default, as JS8Call ships
+    /// it, so a TCP program hears what the station sends and is answered nothing.
+    #[serde(default)]
+    pub js8_api_tcp_accept: bool,
+    /// Answer requests a UDP program sends (`AcceptUDPRequests`): OFF by default, as JS8Call ships
+    /// it.
+    #[serde(default)]
+    pub js8_api_udp_accept: bool,
     /// FM repeater offset override in Hz (0 = use the band convention from
     /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
     /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
@@ -1171,7 +1600,7 @@ pub struct Settings {
     #[serde(default)]
     pub contest_power: String,
     /// ENTER SENDS MESSAGE in the CW cockpit's contest strip: Enter sends the contact's next
-    /// message from the macro set's keys, step by step, as N1MM Logger+'s ESM does. OFF by
+    /// message from the macro set's keys, step by step. OFF by
     /// default, and nothing but the operator's own switch turns it on: it makes Enter a way to
     /// start a transmission. One switch per cockpit, so an operator can run CW with it and
     /// leave Phone without it.
@@ -1188,6 +1617,11 @@ pub struct Settings {
     /// Enter asks for a repeat instead of sending it again. OFF by default.
     #[serde(default)]
     pub contest_esm_call_once: bool,
+    /// The contest entry's optional "RST sent" box (N1MM's Snt): beside the received report, it
+    /// shows the report this contact will log as sent, and a report typed there replaces it for
+    /// that contact only. OFF by default, and then the entry is exactly what it always was.
+    #[serde(default)]
+    pub contest_rst_sent_box: bool,
     /// Power multiplier tier: 5 = QRP battery/natural, 2 = <=150 W, 1 = >150 W.
     #[serde(default = "default_fd_power")]
     pub fd_power_mult: u32,
@@ -1615,6 +2049,19 @@ pub struct Settings {
     /// — the exact inversion of its intent (reported by an IC-7300 operator on 40 m, 2026-09-11).
     #[serde(default)]
     pub cw_reverse: bool,
+    /// CW SPEED MATCH: a message that answers a station is keyed at the speed the decoder
+    /// measured for that station, held to [`Self::cw_speed_match_min`]..=[`Self::cw_speed_match_max`];
+    /// a CQ, and everything once the answer has gone, keys at [`Self::cw_wpm`]. OFF by default. The
+    /// contest strip's switch saves it alone; Settings ▸ CW saves it with the form. It changes the
+    /// keying speed of a message the operator started, never when or what is sent.
+    #[serde(default)]
+    pub cw_speed_match: bool,
+    /// The slowest speed CW speed match keys an answer at (WPM, 5–50).
+    #[serde(default = "default_cw_speed_match_min")]
+    pub cw_speed_match_min: u32,
+    /// The fastest speed CW speed match keys an answer at (WPM, 5–50).
+    #[serde(default = "default_cw_speed_match_max")]
+    pub cw_speed_match_max: u32,
     /// How RTTY is keyed: "afsk" (default — soundcard two-tone audio through the rig in
     /// LSB; soundcard-clocked, the timing-cleanest path) or "fsk" (true FSK — bit-bang a
     /// serial control line into the rig's FSK input, rig in RTTY mode, unlocking its
@@ -1639,11 +2086,20 @@ pub struct Settings {
     /// (AFSK space = 2125 + shift) AND the RX demodulator.
     #[serde(default = "default_rtty_shift_hz")]
     pub rtty_shift_hz: u32,
-    /// Reverse the mark/space sense (TX tones + RX demod). The standard convention
-    /// is LSB with mark on the lower audio tone; set this when running the rig on
-    /// the opposite sideband (e.g. AFSK in USB/DATA-U) so the RF sense stays correct.
+    /// Reverse the mark/space sense (TX tones + RX demod): the "work an upside-down
+    /// station" control. The sideband is NOT this field's job — that is
+    /// [`Settings::rtty_afsk_sideband`], which swaps the tones itself, so a rig on USB keeps
+    /// mark high on RF without this switch. Read the effective sense through
+    /// [`Settings::rtty_tone_swap`], never this field alone.
     #[serde(default)]
     pub rtty_reverse: bool,
+    /// The sideband AFSK RTTY runs on: "lsb" (the convention, and the default) or "usb".
+    /// "usb" commands the DATA submode on the upper side (PKTUSB → DATA-U / USB-D / DIGU)
+    /// and swaps the AFSK tones, so mark stays HIGH on RF and the decoder still copies.
+    /// Anything other than "usb" is LSB. True FSK ignores it: the rig's own RTTY mode sets
+    /// the sense there.
+    #[serde(default = "default_rtty_afsk_sideband")]
+    pub rtty_afsk_sideband: String,
     /// AI CW decoder (DeepCW model): the PRIMARY CW decode — dramatically better
     /// low-SNR copy than the classic Goertzel decoder (which still supplies the WPM
     /// estimate underneath). On by default; the model ships with the app.
@@ -1656,10 +2112,11 @@ pub struct Settings {
     /// QSO-finding assistance. One switch, so there is exactly one thing to get right
     /// before an event, and one thing to point at afterwards.
     ///
-    /// While on it SUPPRESSES every assistance source at once: the DeepCW AI CW decoder,
-    /// DX cluster / RBN spot ingestion, and the PSK Reporter reception-report feed that
-    /// drives the Needed board. Each state change is journaled with a timestamp so the
-    /// operator can show what was running during the event.
+    /// While on it SUPPRESSES every assistance source at once: CW decoding (the DeepCW AI
+    /// decoder and the classic one, [`Settings::cw_decoder_active`]), DX cluster / RBN spot
+    /// ingestion, and the PSK Reporter reception-report feed that drives the Needed board.
+    /// Each state change is journaled with a timestamp so the operator can show what was
+    /// running during the event.
     ///
     /// **It overrides, never overwrites.** `ai_cw_enabled` / `cluster_enabled` /
     /// `pskreporter` keep the operator's own values untouched; the effective getters
@@ -1839,6 +2296,56 @@ pub struct Settings {
     pub cat_broker: bool,
     /// TCP port the CAT broker listens on (Hamlib NET rigctl default 4532).
     pub cat_broker_port: u16,
+    /// Nexus as a TCI server: programs on this computer (WSJT-X, JTDX, MSHV, loggers, amplifier
+    /// and tuner tools) reach the radio in use THROUGH Nexus over TCI, as they would an SDR
+    /// program's. OFF by default. Its own switch beside the CAT broker's, and both may be on. It
+    /// listens on this computer only (127.0.0.1 and ::1), never the network (operator ruling,
+    /// 2026-10-19), so it has no address to set. Like each TCI server setting below it belongs to
+    /// the station, not to a radio, and is set at the shack only: a save from another computer
+    /// keeps the shack's value.
+    #[serde(default)]
+    pub tci_server: bool,
+    /// The TCP port the TCI server listens on: [`TCI_SERVER_DEFAULT_PORT`] unless the operator
+    /// moves it. While the server is on, no radio's CAT or rotator daemon is given it
+    /// ([`Settings::add_radio_profile`], [`Settings::ensure_distinct_radio_ports`]).
+    #[serde(default = "default_tci_server_port")]
+    pub tci_server_port: u16,
+    /// ⛔ "Programs on TCI may transmit": whether a program on the TCI server may key the
+    /// transmitter at all, with its own audio, the radio's microphone, Tune or CW. OFF by default
+    /// (operator ruling, 2026-10-19). On, every gate in front of Nexus's own transmissions still
+    /// decides each one (the TX-enable latch, the licence, the watchdog, Stop, the one
+    /// transmitter), and no program ever arms transmit.
+    #[serde(default)]
+    pub tci_server_tx: bool,
+    /// The CW-macro tier: programs' CW text (a logger's TCI keyer) keyed by Nexus, in the CW
+    /// section only. ON by default, as part of what the server offers; it transmits only while
+    /// [`Settings::tci_server_tx`] is on, as every program's transmission does.
+    #[serde(default = "default_true")]
+    pub tci_server_cw: bool,
+    /// The spots tier: programs' spots on Nexus's band map, and a click on a spot in Nexus told
+    /// back to them. ON by default, as part of what the server offers. A spot or a click never
+    /// transmits.
+    #[serde(default = "default_true")]
+    pub tci_server_spots: bool,
+
+    /// Where the RF scope's picture comes from ([`ScopeSource`]): `"radio"`, the radio's own
+    /// panadapter as today (the default), or `"sdrconnect"`, an SDRplay receiver through SDRplay's
+    /// SDRconnect program, fed from the rig's RX OUT or a protected splitter. Stored as a word and
+    /// read by [`ScopeSource::from_setting`], so a word this build does not know is the radio's.
+    /// The station's, like the TCI server's: the SDR follows whichever radio is in use.
+    #[serde(default = "default_scope_source")]
+    pub scope_source: String,
+    /// The computer SDRconnect runs on, for its WebSocket API: this one unless the operator says.
+    #[serde(default = "default_sdrconnect_host")]
+    pub sdrconnect_host: String,
+    /// SDRconnect's WebSocket API port ([`SDRCONNECT_DEFAULT_PORT`] unless moved in SDRconnect).
+    #[serde(default = "default_sdrconnect_port")]
+    pub sdrconnect_port: u16,
+    /// How the SDR's centre follows the rig's dial ([`SdrconnectFollow`]): `"centre"`, retuned to
+    /// the dial on every change (the default), or `"scroll"`, retuned only when the dial leaves
+    /// the middle of the span, which moves SDRconnect's own display far less.
+    #[serde(default = "default_sdrconnect_follow")]
+    pub sdrconnect_follow: String,
 
     /// A FlexRadio's IP address for the SmartSDR Ethernet API (port 4992), used by the native
     /// panadapter worker. Distinct from the CAT `rig_addr` (which for the SmartSDR-CAT model 2036
@@ -1871,6 +2378,18 @@ pub struct Settings {
     /// per-radio truth is `RadioProfile::flex_native_cat` and this is the active radio's mirror.
     #[serde(default)]
     pub flex_native_cat: bool,
+    /// Let Nexus's own Flex client start, on this radio, the transmissions no tester's bench has
+    /// confirmed yet: CW through the radio's keyer (CWX), Tune with the radio's own carrier and
+    /// the radio's ATU (`tempo_net::flex::admission::BETA`). OFF by default, for every radio and
+    /// every settings file written before it existed (operator ruling, 2026-10-14: "A Beta
+    /// setting, off by default"). It changes only which starts the client's admission takes past
+    /// its "no readback yet" refusal: every other Flex-side check, and every gate the engine runs
+    /// in front of it (the TX-enable latch, licence privileges, the watchdog, the one
+    /// transmitter), still decides each one. It means something only where the client serves the
+    /// radio (`flex_native_cat`), and a change restarts the client. The per-radio truth is
+    /// `RadioProfile::flex_native_unbenched` and this is the active radio's mirror.
+    #[serde(default)]
+    pub flex_native_unbenched: bool,
     /// The radio's own address for Nexus's Icom network client (the "Icom network (LAN / Wi-Fi)"
     /// Connection choice, Beta): the radio's "IP Address (LAN)". IPv4. The per-radio truth is
     /// `RadioProfile::icom_lan_host` and this is the active radio's mirror. The network user's
@@ -1885,6 +2404,46 @@ pub struct Settings {
     /// it on the radio. Per-radio, as above.
     #[serde(default = "default_icom_lan_port")]
     pub icom_lan_port: u16,
+    /// The SDR program's TCI server, for Nexus's TCI client (the "TCI" Connection choice): its
+    /// address, [`TCI_DEFAULT_HOST`] (the SDR program on this computer) unless the operator points
+    /// it at another computer on the network. The per-radio truth is `RadioProfile::tci_host` and
+    /// this is the active radio's mirror, as for each TCI field below.
+    #[serde(default = "default_tci_host")]
+    pub tci_host: String,
+    /// The TCI server's port: [`TCI_DEFAULT_PORT`], ExpertSDR3's and Thetis's, unless the operator
+    /// moved it (piHPSDR listens on 40001, [`TciDialect::default_port`]).
+    #[serde(default = "default_tci_port")]
+    pub tci_port: u16,
+    /// Which of the server's transceivers this radio is (TCI's `trx`, counted from 0): a server can
+    /// offer more than one (its `trx_count`), and each can be its own Nexus radio on the one server.
+    #[serde(default)]
+    pub tci_trx: u8,
+    /// Which TCI server this is: `"auto"`, learned from what the server does (the default), or
+    /// `"expertsdr3"`, `"thetis"` or `"pihpsdr"`, forced. Kept as the word and read through
+    /// [`TciDialect::from_setting`], so a word this build does not know reads as auto.
+    #[serde(default = "default_tci_dialect")]
+    pub tci_dialect: String,
+    /// Nexus's audio rides the TCI connection, both ways: the radio's receive audio from the SDR
+    /// program, and Nexus's own transmit audio to it. ON by default: no virtual audio cables. Which
+    /// transmissions take Nexus's audio follows the rule for Nexus's own Flex client (operator
+    /// ruling, 2026-10-03, "Follow the slice's mode"): the digital modes, the voice keyer and
+    /// Remote's browser voice do, and Phone at the shack keys the SDR program's own microphone.
+    /// OFF, the sound card carries both directions, and a key asks for the SDR program's selected
+    /// input. One switch for both directions, because a server takes a client's transmit audio only
+    /// while that client's audio stream runs (TCI 2.0, §4.2).
+    #[serde(default = "default_true")]
+    pub tci_audio: bool,
+    /// Draw the SDR program's own spectrum (TCI's IQ stream) in Nexus's RF scope and waterfall. OFF
+    /// by default: the IQ stream shares the one connection with the transmit audio, and the SDR
+    /// program shows its own panadapter anyway.
+    #[serde(default)]
+    pub tci_pan: bool,
+    /// Put Nexus's spots on the SDR program's panadapter, where a click on one selects it in Nexus.
+    /// OFF by default. On, the needed spots only, at most [`TCI_SPOTS_MAX`] at once. A click there
+    /// selects or tunes, and never arms or keys a transmission: an outside program does not start
+    /// one.
+    #[serde(default)]
+    pub tci_spots: bool,
 
     // --- multi-radio (dual-radio) ---
     /// Configured radios. EMPTY in older settings files → migrated to a single profile 0 mirroring
@@ -1902,7 +2461,7 @@ pub struct Settings {
     /// Opt-in: run two radios at the SAME TIME, one per app window. When true AND ≥2 radios are
     /// configured, launching Nexus shows a "which radio?" picker (each window drives one radio,
     /// sharing one logbook). Off by default, so a single-radio station — or one with two radios
-    /// it never runs together — is never bothered with the picker. See [[reference-multiradio-architecture]].
+    /// it never runs together — is never bothered with the picker.
     #[serde(default)]
     pub simultaneous_radios: bool,
     /// Band+mode → radio routing rules, FIRST-MATCH-WINS (see [`RoutingRule`]). Lets a station
@@ -1951,7 +2510,7 @@ pub struct Settings {
     /// Connect to spot networks for need-aware spots (takes effect at startup). When on,
     /// the RBN CW (7000) + RBN digital (7001) skimmer firehoses are connected for the big
     /// CW + digital evidence, PLUS the human DX-cluster node in `cluster_host` for SSB/phone
-    /// (which RBN doesn't carry). SpotCollector-style multi-source aggregation.
+    /// (which RBN doesn't carry). Multi-source aggregation.
     pub cluster_enabled: bool,
     /// LEGACY single human DX-cluster endpoint — kept only to seed `cluster_hosts` on
     /// upgrade (and for back-compat). `cluster_hosts` is the live source of truth.
@@ -2141,6 +2700,11 @@ pub struct Settings {
     /// + QRP feats. `None` until the operator sets it (those feats stay gated).
     #[serde(default)]
     pub station_power_w: Option<f64>,
+    /// Log the space weather on each contact (ADIF `K_INDEX`, `A_INDEX`, `SFI`): the latest
+    /// planetary K and A index and 10.7 cm solar flux Nexus fetched, and only when that reading is
+    /// no more than three hours old. Off by default — a logger's propagation fields are opt-in.
+    #[serde(default)]
+    pub log_space_weather: bool,
     /// Display units for distances/temperature/speed (F4MQS): `"auto"` (from the OS
     /// locale — imperial only for US/LR/MM), `"metric"`, or `"imperial"`. Display-only —
     /// every wire/protocol value stays native (APRS transmits °F/mph, RepeaterBook fetches
@@ -2468,7 +3032,10 @@ pub struct Settings {
     /// restored only while still on 145.800 FM). ISS SSTV is an event-only
     /// downlink, so it fires on every pass; the arm/restore loop lives in the
     /// frontend (issAutoArm.ts, mirroring the sat alarm) since SSTV RX only runs
-    /// while the app is open.
+    /// while the app is open. It takes the radio only while the SSTV or
+    /// Satellites screen is the one in use: on any other screen the pass is
+    /// announced and the radio is left to that screen. Where no radio here can
+    /// receive 145.800 it tunes nothing on any screen, and says so once a session.
     pub iss_sstv_auto_arm: bool,
 
     // --- SSTV (Settings ▸ Digital ▸ SSTV) ---
@@ -2693,6 +3260,11 @@ pub struct Settings {
     /// by default.
     #[serde(default)]
     pub sound_decode_tick: bool,
+    /// The CW turn cue's sound: a short rising chirp when it says it is your turn to send. Off
+    /// by default, like every earcon, and off for a settings file from before it; the cockpit
+    /// never plays it while anything is keyed.
+    #[serde(default)]
+    pub sound_cw_turn: bool,
 
     // --- Auto-CQ caller selection (W1.4) ---
     /// When running CQ and several stations answer, which one to work first:
@@ -2744,7 +3316,32 @@ pub struct Settings {
     /// Incremental-sync high-water mark: the `APP_LoTW_LASTQSL` timestamp from the
     /// last successful download, passed back as `qso_qslsince`. Empty = full pull.
     /// Reset to empty when `lotw_username` changes (the cursor is query-bound).
+    /// Read through [`Settings::lotw_sync_cursor`].
     pub lotw_last_qsl: String,
+    /// `lotw_last_qsl` was made by a download that asked for every call on the account. LoTW
+    /// lets a high-water stand as `qso_qslsince` only "if the identical query is subsequently
+    /// made", and the download used to ask for the Settings call alone (`qso_owncall`): such a
+    /// cursor would skip, for good, every confirmation of another call on the account that LoTW
+    /// matched before it. So a cursor without this mark is not used, and the first download after
+    /// the update is a full one ([`Settings::lotw_sync_cursor`]). An older file has no key, so
+    /// `false`.
+    #[serde(default)]
+    pub lotw_cursor_every_call: bool,
+    /// A download of the whole confirmation history made a year of contacts at a time, newest
+    /// first (`tempo_core::lotw::build_year_report_url`), is under way: the year of the contacts
+    /// it asks for next. 0 = none. Saved after each year LoTW answers in full, so a download LoTW
+    /// cuts short goes on from that year next time instead of starting again from the newest, and
+    /// cleared with the cursor (a changed username, Download everything again, a purged log).
+    #[serde(default)]
+    pub lotw_sweep_year: i32,
+    /// The `qso_qslsince` the year-by-year download leaves as the cursor when its last year is in:
+    /// the `APP_LoTW_LASTQSL` of its first, newest year (the day before that year was asked, when
+    /// it held no confirmation). That high-water belongs to a different
+    /// query (one year of contacts), so it is not this cursor because LoTW says so; it serves
+    /// because it is no later than the moment that first year was asked for, and a confirmation
+    /// a later year's request missed was matched after its own year was asked for, later still.
+    #[serde(default)]
+    pub lotw_sweep_since: String,
     /// LoTW **upload** Station Location name (the `-l` arg passed to TQSL). Non-
     /// secret; TQSL owns the certificate. Empty = upload not configured.
     pub lotw_station_location: String,
@@ -2788,7 +3385,8 @@ pub struct Settings {
     pub eqsl_username: String,
     /// eQSL incremental-sync cursor: a `YYYYMMDDHHMM` timestamp (this sync's start,
     /// rolled back by a safety margin) sent as `RcvdSince`. Empty = full pull.
-    /// Reset to empty when `eqsl_username` changes (the cursor is account-bound).
+    /// Reset to empty when `eqsl_username` or `eqsl_qth_nickname` changes (the cursor is
+    /// account-bound, and each QTH Nickname is an eQSL account of its own).
     pub eqsl_last_sync: String,
     /// QRZ.com account username for callsign lookup. The password lives in the OS
     /// keychain (set via `set_qrz_password`), never here; the session key is cached
@@ -2823,30 +3421,30 @@ pub struct Settings {
     #[serde(default)]
     pub qrz_last_sync_unix: u64,
     /// ClubLog account email (NOT a callsign). The app-password lives in the OS
-    /// keychain; the api key + email are non-secret and live here.
+    /// keychain; the email (non-secret) and the api key live here.
     pub clublog_email: String,
     /// ClubLog logbook callsign to upload into (empty → use `mycall`).
     pub clublog_callsign: String,
-    /// ClubLog developer/app API key. Non-secret per ClubLog, but NEVER committed
-    /// (GPLv3 public repo → auto-revoked); empty → fall back to a build-time
-    /// `option_env!("CLUBLOG_API_KEY")` default.
+    /// ClubLog developer/app API key. NEVER committed (GPLv3 public repo → auto-revoked),
+    /// and kept as a secret: out of a backup, and at the station when another computer
+    /// drives it. Empty → fall back to a build-time `option_env!("CLUBLOG_API_KEY")` default.
     pub clublog_api_key: String,
     /// Auto-upload each logged QSO to ClubLog (realtime push). Off by default.
     pub clublog_upload: bool,
     /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
     /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
     pub eqsl_upload: bool,
-    /// Auto-upload each logged QSO to HRDLog.net (the online logging/awards site,
-    /// NOT the HRD Logbook UDP push above). Off by default. The station callsign is
-    /// `mycall`; the upload code lives in the OS keychain. HRDLog.net is not an ARRL
-    /// confirmation source — an upload here never earns DXCC/WAS credit.
     /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has
     /// several QTH profiles ("if not logged in, if multiple accounts with same
     /// callsign" — their spec); such an account cannot authenticate at all without
     /// it (field report, 2026-09-01). Empty for the single-profile majority, whose
-    /// requests are byte-identical to before.
+    /// requests carry no nickname at all.
     #[serde(default)]
     pub eqsl_qth_nickname: String,
+    /// Auto-upload each logged QSO to HRDLog.net (the online logging/awards site,
+    /// NOT the HRD Logbook UDP push above). Off by default. The station callsign is
+    /// `mycall`; the upload code lives in the OS keychain. HRDLog.net is not an ARRL
+    /// confirmation source — an upload here never earns DXCC/WAS credit.
     pub hrdlog_upload: bool,
     /// Auto-push each logged QSO to World Radio League (`POST /v1/contacts`).
     /// Flipped on by saving a WRL API key, off by clearing it — the credential IS
@@ -3027,6 +3625,57 @@ pub struct WorkingFreq {
     pub mhz: f64,
 }
 
+/// One row of the operator's own JS8 frequency list ([`Settings::js8_frequencies`]): JS8Call's
+/// working frequency, a dial in MHz and the free-text description 3.0 added. JS8Call's other
+/// two columns are fixed here: the mode is JS8 and the IARU region all regions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Freq {
+    pub mhz: f64,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// JS8Call's decode filter ([`Settings::js8_filter`]). Fields default one by one, so a partial
+/// object (a hand edit) still loads.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Js8Filter {
+    pub enabled: bool,
+    /// Audio offset the filter is centred on, Hz.
+    pub center_hz: u16,
+    /// Its full width, Hz: the decoder searches centre ± width/2.
+    pub width_hz: u16,
+}
+
+impl Default for Js8Filter {
+    /// JS8Call's defaults: on, 1500 Hz, 2000 Hz wide (WideGraph.cpp:237-241).
+    fn default() -> Self {
+        Js8Filter {
+            enabled: true,
+            center_hz: 1500,
+            width_hz: 2000,
+        }
+    }
+}
+
+/// One row of JS8Call's Frequency Schedule ([`Settings::js8_schedule`]): switch the dial to
+/// `mhz` while the UTC time of day is inside the window. Both ends count (JS8Call compares
+/// `switch_at <= now <= switch_until`, mainwindow.cpp:243-254), and a window whose end is
+/// before its start runs over midnight. JS8Call's band column is derived from the dial.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Hop {
+    pub mhz: f64,
+    /// Minutes after 00:00 UTC the window opens (0..=1439): JS8Call's "Switch at (UTC)".
+    pub from_min: u16,
+    /// Minutes after 00:00 UTC it closes: JS8Call's "Until (UTC)". The frequency does not
+    /// return at the end; a later row does that.
+    pub until_min: u16,
+    #[serde(default)]
+    pub description: String,
+}
+
 fn default_on() -> bool {
     true
 }
@@ -3124,6 +3773,14 @@ fn default_cw_wpm() -> u32 {
     25
 }
 
+fn default_cw_speed_match_min() -> u32 {
+    15
+}
+
+fn default_cw_speed_match_max() -> u32 {
+    35
+}
+
 fn default_units() -> String {
     "auto".to_string()
 }
@@ -3134,6 +3791,10 @@ fn default_rtty_backend() -> String {
 
 fn default_rtty_fsk_line() -> String {
     "dtr".to_string()
+}
+
+fn default_rtty_afsk_sideband() -> String {
+    "lsb".to_string()
 }
 
 fn default_rtty_baud() -> f64 {
@@ -3539,7 +4200,8 @@ pub enum RouteMode {
     Digital,
     /// FM voice and FM packet: repeaters, simplex, APRS. The class the FT-991A owns on 2 m.
     Fm,
-    /// SSB/AM voice (and SSTV, which rides the phone segment on the same rig).
+    /// SSB/AM voice (and SSTV, which rides the phone segment on the same rig; an SSTV FM
+    /// channel is held in FM, so it routes as `Fm`).
     Ssb,
     Cw,
     Rtty,
@@ -3860,6 +4522,10 @@ pub struct RadioProfile {
     /// [`Settings::flex_native_cat`]). Per-radio, as above.
     #[serde(default)]
     pub flex_native_cat: bool,
+    /// Let the Flex client start THIS radio's CW, Tune and ATU before a bench has confirmed them
+    /// (Beta, off by default; see [`Settings::flex_native_unbenched`]). Per-radio, as above.
+    #[serde(default)]
+    pub flex_native_unbenched: bool,
     /// THIS radio's address, network user and control port for the Icom network client (see
     /// [`Settings::icom_lan_host`]). Per-radio, as above. Its password is in the OS keychain.
     #[serde(default)]
@@ -3868,6 +4534,24 @@ pub struct RadioProfile {
     pub icom_lan_user: String,
     #[serde(default = "default_icom_lan_port")]
     pub icom_lan_port: u16,
+    /// THIS radio's TCI connection: the SDR program's server address and port, its transceiver,
+    /// its dialect, Nexus's audio over it, its spectrum and its spots (see [`Settings::tci_host`]
+    /// and the six fields after it). Per-radio, as above, and two radios can be the two
+    /// transceivers of one server.
+    #[serde(default = "default_tci_host")]
+    pub tci_host: String,
+    #[serde(default = "default_tci_port")]
+    pub tci_port: u16,
+    #[serde(default)]
+    pub tci_trx: u8,
+    #[serde(default = "default_tci_dialect")]
+    pub tci_dialect: String,
+    #[serde(default = "default_true")]
+    pub tci_audio: bool,
+    #[serde(default)]
+    pub tci_pan: bool,
+    #[serde(default)]
+    pub tci_spots: bool,
 }
 
 /// The editable CAT/audio/PTT/rotator/native subset of a [`RadioProfile`], sent from the Settings
@@ -3964,11 +4648,34 @@ pub struct RadioProfilePatch {
     /// sends it, and a payload without it must fail loudly rather than quietly turn the opt-in
     /// off on every save.
     pub flex_native_cat: bool,
+    /// See `RadioProfile::flex_native_unbenched`. No serde default, for the same reason: a payload
+    /// without it must fail loudly rather than quietly decide the setting on every save.
+    pub flex_native_unbenched: bool,
     /// See `RadioProfile::icom_lan_host`. No serde default, for the reason above: a save that
     /// lost the address would leave the radio unreachable with nothing to say why.
     pub icom_lan_host: String,
     pub icom_lan_user: String,
     pub icom_lan_port: u16,
+    /// See `RadioProfile::tci_host` and the six TCI fields after it. `Option`s, like
+    /// `yaesu_rf_scope`, and not bare fields like their neighbours: `None` leaves the radio's
+    /// stored value alone. So a form that does not send them, one from before them, neither fails
+    /// its Save, as a bare field with no serde default would, nor puts the radio's TCI connection
+    /// back to its defaults, as a bare field with one would. A form that states a value has it
+    /// written.
+    #[serde(default)]
+    pub tci_host: Option<String>,
+    #[serde(default)]
+    pub tci_port: Option<u16>,
+    #[serde(default)]
+    pub tci_trx: Option<u8>,
+    #[serde(default)]
+    pub tci_dialect: Option<String>,
+    #[serde(default)]
+    pub tci_audio: Option<bool>,
+    #[serde(default)]
+    pub tci_pan: Option<bool>,
+    #[serde(default)]
+    pub tci_spots: Option<bool>,
 }
 
 impl Settings {
@@ -4030,9 +4737,32 @@ impl RadioProfilePatch {
         }
         p.flex_native_audio = self.flex_native_audio;
         p.flex_native_cat = self.flex_native_cat;
+        p.flex_native_unbenched = self.flex_native_unbenched;
         p.icom_lan_host = self.icom_lan_host;
         p.icom_lan_user = self.icom_lan_user;
         p.icom_lan_port = self.icom_lan_port;
+        // The TCI connection: written where the patch states it, left alone where it does not.
+        if let Some(v) = self.tci_host {
+            p.tci_host = v;
+        }
+        if let Some(v) = self.tci_port {
+            p.tci_port = v;
+        }
+        if let Some(v) = self.tci_trx {
+            p.tci_trx = v;
+        }
+        if let Some(v) = self.tci_dialect {
+            p.tci_dialect = v;
+        }
+        if let Some(v) = self.tci_audio {
+            p.tci_audio = v;
+        }
+        if let Some(v) = self.tci_pan {
+            p.tci_pan = v;
+        }
+        if let Some(v) = self.tci_spots {
+            p.tci_spots = v;
+        }
     }
 }
 
@@ -4151,9 +4881,17 @@ impl Default for RadioProfile {
             yaesu_fix_starts: Default::default(),
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: ICOM_LAN_DEFAULT_PORT,
+            tci_host: default_tci_host(),
+            tci_port: TCI_DEFAULT_PORT,
+            tci_trx: 0,
+            tci_dialect: default_tci_dialect(),
+            tci_audio: true,
+            tci_pan: false,
+            tci_spots: false,
         }
     }
 }
@@ -4212,16 +4950,20 @@ pub fn net_rigctl_port_here(p: &RadioProfile) -> Option<u16> {
 /// ([`port_clash_introduced`]), and one already stored is said in the status lane
 /// ([`net_rigctl_address_conflicts`]).
 pub fn validate_radio_ports(radios: &[RadioProfile], broker: Option<u16>) -> Result<(), String> {
-    if let Some(clash) = daemon_port_clash(radios, broker) {
+    if let Some(clash) = daemon_port_clash(radios, broker, None) {
         return Err(clash);
     }
     net_rigctl_address_conflicts(radios, broker).map_or(Ok(()), Err)
 }
 
-/// Two of Nexus's daemons (or one and the broker) on one TCP port, the first such pair in words:
-/// [`validate_radio_ports`]'s first half, and what [`Settings::ensure_distinct_radio_ports`]
-/// repairs.
-fn daemon_port_clash(radios: &[RadioProfile], broker: Option<u16>) -> Option<String> {
+/// Two of Nexus's daemons (or one and the broker, or the TCI server, `tci_server` while it serves)
+/// on one TCP port, the first such pair in words: [`validate_radio_ports`]'s first half, and what
+/// [`Settings::ensure_distinct_radio_ports`] repairs.
+fn daemon_port_clash(
+    radios: &[RadioProfile],
+    broker: Option<u16>,
+    tci_server: Option<u16>,
+) -> Option<String> {
     let mut used: Vec<(u16, String)> = Vec::new();
     for p in radios.iter().filter(|p| p.enabled) {
         used.push((p.rigctld_port, format!("{}'s CAT", p.name)));
@@ -4231,6 +4973,9 @@ fn daemon_port_clash(radios: &[RadioProfile], broker: Option<u16>) -> Option<Str
     }
     if let Some(b) = broker {
         used.push((b, "the CAT broker".to_string()));
+    }
+    if let Some(t) = tci_server {
+        used.push((t, "the TCI server".to_string()));
     }
     for i in 0..used.len() {
         for j in (i + 1)..used.len() {
@@ -4678,14 +5423,36 @@ fn default_msk144_period_s() -> u16 {
     15
 }
 
+/// JS8Call's CQ message. See [`Settings::js8_cq_text`].
+fn default_js8_cq_text() -> String {
+    ::js8::proto::macros::DEFAULT_CQ.to_string()
+}
+
+/// JS8Call's reply message. See [`Settings::js8_reply_text`].
+fn default_js8_reply_text() -> String {
+    ::js8::proto::macros::DEFAULT_REPLY.to_string()
+}
+
+/// JS8Call's one saved message out of the box (`Macros`, Configuration.cpp:2308-2309). See
+/// [`Settings::js8_saved_messages`].
+fn default_js8_saved_messages() -> Vec<String> {
+    vec!["TNX 73 GL".to_string()]
+}
+
 /// JS8 Normal = index 1 of `Js8Speed::ALL`. See [`Settings::js8_speed`].
 fn default_js8_speed() -> u8 {
     1
 }
 
-/// All four JS8 speeds (Slow 1 | Normal 2 | Fast 4 | Turbo 8). See [`Settings::js8_rx_speeds`].
+/// All five JS8 speeds (Slow 1 | Normal 2 | Fast 4 | Turbo 8 | Ultra 16). See
+/// [`Settings::js8_rx_speeds`].
 fn default_js8_rx_speeds() -> u8 {
-    15
+    modes::Js8Speed::ALL_BITS
+}
+
+/// JS8Call's `CenterOffset` default (WideGraph.cpp:216).
+fn default_js8_qsy_center_hz() -> u16 {
+    1500
 }
 
 /// JS8Call ships autoreply ON (G3). See [`Settings::js8_autoreply`].
@@ -4703,14 +5470,50 @@ fn default_js8_relay() -> bool {
     true
 }
 
+/// The @APRSIS gateway ships OFF, though JS8Call ships its `SpotToAPRS` on: see
+/// [`Settings::js8_spot_aprs`].
+fn default_js8_spot_aprs() -> bool {
+    false
+}
+
+/// JS8Call's `TxDelay` default, 0.2 s, in ms. See [`Settings::js8_tx_delay_ms`].
+fn default_js8_tx_delay_ms() -> u32 {
+    200
+}
+
 /// JS8Call's `TxIdleWatchdog` default (minutes). See [`Settings::js8_idle_watchdog_min`].
 fn default_js8_idle_watchdog_min() -> u16 {
     60
 }
 
+/// JS8Call's `EOTCharacter` default. See [`Settings::js8_eot`].
+fn default_js8_eot() -> String {
+    "\u{2662}".to_string()
+}
+
+/// JS8Call's `MFICharacter` default. See [`Settings::js8_mfi`].
+fn default_js8_mfi() -> String {
+    "\u{2026}\u{2026}".to_string()
+}
+
 /// JS8Call's `ActivityAging` default (minutes). See [`Settings::js8_activity_aging_min`].
 fn default_js8_activity_aging_min() -> u16 {
     2
+}
+
+/// JS8Call ships HeartbeatQSOPause ON. See [`Settings::js8_hb_qso_pause`].
+fn default_js8_hb_qso_pause() -> bool {
+    true
+}
+
+/// JS8Call's TCP API port. See [`Settings::js8_api_tcp_port`].
+fn default_js8_api_tcp_port() -> u16 {
+    crate::engine::js8_api::DEFAULT_TCP_PORT
+}
+
+/// JS8Call's UDP API port. See [`Settings::js8_api_udp_port`].
+fn default_js8_api_udp_port() -> u16 {
+    crate::engine::js8_api::DEFAULT_UDP_PORT
 }
 
 impl Default for Settings {
@@ -4750,6 +5553,13 @@ impl Default for Settings {
             q65_submode: 0,
             js8_speed: default_js8_speed(),
             js8_rx_speeds: default_js8_rx_speeds(),
+            js8_frequencies: None,
+            js8_return_to_last_dial: false,
+            js8_last_dial_mhz: 0.0,
+            js8_filter: Js8Filter::default(),
+            js8_qsy_center_hz: default_js8_qsy_center_hz(),
+            js8_band_hop: false,
+            js8_schedule: Vec::new(),
             js8_hb_interval_min: 0,
             js8_cq_interval_min: 0,
             js8_hb_ack: false,
@@ -4762,9 +5572,38 @@ impl Default for Settings {
             js8_idle_watchdog_min: default_js8_idle_watchdog_min(),
             js8_callsign_aging_min: 0,
             js8_activity_aging_min: default_js8_activity_aging_min(),
+            js8_cq_text: default_js8_cq_text(),
+            js8_reply_text: default_js8_reply_text(),
+            js8_saved_messages: default_js8_saved_messages(),
+            js8_send_at_once: true,
+            js8_pills: true,
+            js8_word_suggestions: true,
             js8_info: String::new(),
             js8_status: String::new(),
             js8_groups: Vec::new(),
+            js8_hb_networking: false,
+            js8_hb_anywhere: false,
+            js8_hb_qso_pause: default_js8_hb_qso_pause(),
+            js8_hb_ack_rate_limit: false,
+            js8_avoid_allcall: false,
+            js8_hold_ptt: false,
+            js8_tx_offset_while_sending: false,
+            js8_tx_delay_ms: default_js8_tx_delay_ms(),
+            js8_spot_aprs: default_js8_spot_aprs(),
+            js8_aprs_relay: false,
+            js8_spot_never: Vec::new(),
+            js8_rx_blocklist: Vec::new(),
+            js8_highlight_primary: Vec::new(),
+            js8_highlight_secondary: Vec::new(),
+            js8_eot: default_js8_eot(),
+            js8_mfi: default_js8_mfi(),
+            js8_sounds: Vec::new(),
+            js8_api_tcp: false,
+            js8_api_tcp_port: default_js8_api_tcp_port(),
+            js8_api_udp: false,
+            js8_api_udp_port: default_js8_api_udp_port(),
+            js8_api_tcp_accept: false,
+            js8_api_udp_accept: false,
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
@@ -4803,6 +5642,7 @@ impl Default for Settings {
             contest_esm_rtty: false,
             contest_esm_phone: false,
             contest_esm_call_once: false,
+            contest_rst_sent_box: false,
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             fd_bonuses_planned: Vec::new(),
@@ -4879,12 +5719,16 @@ impl Default for Settings {
             cw_pitch_hz: 600.0,
             cw_wpm: default_cw_wpm(),
             cw_reverse: false, // plain CW on every band; reverse is an opt-in preference
+            cw_speed_match: false,
+            cw_speed_match_min: default_cw_speed_match_min(),
+            cw_speed_match_max: default_cw_speed_match_max(),
             rtty_backend: default_rtty_backend(), // "afsk" — soundcard-clocked, the robust default
             rtty_fsk_line: default_rtty_fsk_line(), // "dtr" (RTS stays free for PTT)
-            rtty_fsk_port: String::new(), // "" = the CAT serial port
-            rtty_baud: default_rtty_baud(), // true 45.45, never 45
+            rtty_fsk_port: String::new(),         // "" = the CAT serial port
+            rtty_baud: default_rtty_baud(),       // true 45.45, never 45
             rtty_shift_hz: default_rtty_shift_hz(), // 170 Hz — the HF standard
             rtty_reverse: false,
+            rtty_afsk_sideband: default_rtty_afsk_sideband(), // "lsb" — the RTTY convention
             ai_cw_enabled: true,
             // Assistance is a normal, legal way to operate; only the operator's explicit
             // toggle declares an unassisted entry. Never auto-enabled, never date-driven.
@@ -4930,13 +5774,33 @@ impl Default for Settings {
             // operators flip it in the share block; pre-1.0.5 files lack the field and get ON.
             cat_broker: true,
             cat_broker_port: 4532,
+            // Off, and no program transmits through it until the operator says so at the shack
+            // (operator ruling, 2026-10-19); the CW and spots tiers come with the server.
+            tci_server: false,
+            tci_server_port: TCI_SERVER_DEFAULT_PORT,
+            tci_server_tx: false,
+            tci_server_cw: true,
+            tci_server_spots: true,
+            // The radio's own panadapter, as before the choice existed.
+            scope_source: default_scope_source(),
+            sdrconnect_host: default_sdrconnect_host(),
+            sdrconnect_port: SDRCONNECT_DEFAULT_PORT,
+            sdrconnect_follow: default_sdrconnect_follow(),
             flex_radio_ip: String::new(),
             flex_native_pan: false,
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: ICOM_LAN_DEFAULT_PORT,
+            tci_host: default_tci_host(),
+            tci_port: TCI_DEFAULT_PORT,
+            tci_trx: 0,
+            tci_dialect: default_tci_dialect(),
+            tci_audio: true,
+            tci_pan: false,
+            tci_spots: false,
             radios: Vec::new(), // migrated to a single profile on load()
             active_radio: 0,
             radio_pegged: false,
@@ -4998,6 +5862,7 @@ impl Default for Settings {
             monitor_device: String::new(),
             monitor_level: 0.5,
             station_power_w: None,
+            log_space_weather: false,
             units: default_units(),
             swr_stop_enabled: false,
             swr_stop_threshold: 2.5,
@@ -5090,8 +5955,12 @@ impl Default for Settings {
             announce_verbosity: default_announce_verbosity(),
             sound_tx_state: false,
             sound_decode_tick: false,
+            sound_cw_turn: false,
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
+            lotw_cursor_every_call: false,
+            lotw_sweep_year: 0,
+            lotw_sweep_since: String::new(),
             lotw_station_location: String::new(),
             lotw_use_adif_location: false,
             tqsl_path: String::new(),
@@ -5137,9 +6006,21 @@ impl Settings {
     /// Every gate that decides whether the decoder runs must go through here rather than
     /// reading `ai_cw_enabled`, or Unassisted mode becomes a switch that claims more than
     /// it does. Turning the AI decoder off restores the classic Goertzel transcript, so
-    /// the operator still copies CW — just without the model's help.
+    /// the operator still copies CW — just without the model's help. Unassisted mode stops
+    /// that one too ([`Settings::cw_decoder_active`]).
     pub fn ai_cw_active(&self) -> bool {
         self.ai_cw_enabled && !self.unassisted_mode
+    }
+
+    /// Does any CW decoding run, the classic decoder's included? Not in an unassisted entry:
+    /// CQ WW's rules count a CW decoder as QSO-finding assistance, so an unassisted entry gets
+    /// nothing from either decoder — no copy, no call chips or His Call guess, no report or
+    /// name, no measured speed (the Decode head's, a chip click's, CW speed match's) and no
+    /// skim. Every reader of the classic decoder goes through here, and so must anything else
+    /// drawn from the copy, a turn cue when one is built. [`Settings::ai_cw_active`] already
+    /// folds the same flag in for the AI decoder.
+    pub fn cw_decoder_active(&self) -> bool {
+        !self.unassisted_mode
     }
 
     /// Choose [`Settings::cluster_nodes_auto`] for settings written before it existed: automatic
@@ -5163,6 +6044,20 @@ impl Settings {
         };
         let auto = shipped(&DEFAULT_CLUSTER_HOSTS[..2]) || shipped(&DEFAULT_CLUSTER_HOSTS);
         self.cluster_nodes_auto = auto;
+    }
+
+    /// Choose [`Settings::js8_hb_networking`] for settings written before it existed: on for an
+    /// operator whose settings show they used heartbeats, off (JS8Call's default) for everyone
+    /// else, so today's heartbeat users keep their HB button. "Used heartbeats" is read from what
+    /// the settings kept of it: the HB ACK switch on, or an HB repeat interval set. Whether the
+    /// HB repeat itself was on was never stored (it is session-only, `Engine.js8_hb_on`), and an
+    /// interval of 0, the default, sends a heartbeat only when asked, which leaves no trace.
+    ///
+    /// Called by [`Settings::load`] for a file without the key, and by the backup restore for a
+    /// backup without it: the restore deserialises directly and runs none of `load`'s
+    /// migrations, so without this a restored heartbeat user would lose the HB button.
+    pub fn choose_js8_hb_networking_for_old_settings(&mut self) {
+        self.js8_hb_networking = self.js8_hb_ack || self.js8_hb_interval_min > 0;
     }
 
     /// Is DX cluster / RBN spot ingestion EFFECTIVELY on? Cluster and RBN spots are
@@ -5205,9 +6100,13 @@ impl Settings {
     /// decide whether it shows Super Check Partial and fills from call history
     /// (`ui/src/features/contestLists.ts`), so a rename here is a rename there: guarded by
     /// `the_strip_reads_the_scp_and_call_history_labels_the_engine_sends`.
+    ///
+    /// The first is the CW decoder, the classic one included: it is on whenever any CW decoding
+    /// runs ([`Settings::cw_decoder_active`]), with the AI switch on or off, because CQ WW's rule
+    /// names "a CW decoder".
     pub fn assistance_sources(&self) -> [(&'static str, bool); 5] {
         [
-            ("AI CW decoder", self.ai_cw_active()),
+            ("CW decoder", self.cw_decoder_active()),
             ("DX cluster / RBN", self.cluster_active()),
             ("PSK Reporter needs", self.pskr_evidence_active()),
             (SCP_SOURCE, self.scp_active()),
@@ -5274,9 +6173,17 @@ impl Settings {
             yaesu_fix_starts: Default::default(),
             flex_native_audio: self.flex_native_audio,
             flex_native_cat: self.flex_native_cat,
+            flex_native_unbenched: self.flex_native_unbenched,
             icom_lan_host: self.icom_lan_host.clone(),
             icom_lan_user: self.icom_lan_user.clone(),
             icom_lan_port: self.icom_lan_port,
+            tci_host: self.tci_host.clone(),
+            tci_port: self.tci_port,
+            tci_trx: self.tci_trx,
+            tci_dialect: self.tci_dialect.clone(),
+            tci_audio: self.tci_audio,
+            tci_pan: self.tci_pan,
+            tci_spots: self.tci_spots,
         }
     }
 
@@ -5517,6 +6424,10 @@ impl Settings {
         if self.cat_broker {
             used.push(self.cat_broker_port);
         }
+        // …nor the TCI server's, while it serves.
+        if self.tci_server {
+            used.push(self.tci_server_port);
+        }
         // …nor where a NET rigctl radio's Network Address points on this computer: the operator's
         // rigctld is there (`net_rigctl_port_here`).
         used.extend(self.radios.iter().filter_map(net_rigctl_port_here));
@@ -5556,12 +6467,14 @@ impl Settings {
     /// Auto-repair colliding daemon ports so every radio can run its OWN persistent rigctld/rotctld at
     /// the same time (true dual-radio needs two live daemons — a shared port would make the monitor
     /// connect through the active radio's daemon). Bumps any duplicate `rigctld_port`/`rotctld_port`
-    /// (and any that clashes with the CAT broker) to the next free value, first-radio-wins, never
-    /// onto a NET rigctl radio's Network Address on this computer; and moves a rotator's port off
-    /// one. Idempotent; called on load. `add_radio_profile` already assigns distinct ports, so this
-    /// only fixes older configs or hand-edited collisions.
+    /// (and any that clashes with the CAT broker or, while it serves, the TCI server) to the next
+    /// free value, first-radio-wins, never onto a NET rigctl radio's Network Address on this
+    /// computer; and moves a rotator's port off one. Idempotent; called on load.
+    /// `add_radio_profile` already assigns distinct ports, so this only fixes older configs or
+    /// hand-edited collisions.
     pub fn ensure_distinct_radio_ports(&mut self) {
         let broker = self.cat_broker.then_some(self.cat_broker_port);
+        let tci_server = self.tci_server.then_some(self.tci_server_port);
         // Where NET rigctl radios' Network Addresses point on this computer. The operator's rigctld
         // is there (wfview's, or their own), so no daemon is ever MOVED onto one. A CAT daemon
         // already on one is not moved off it either: its rigctld TCP Port is the operator's to
@@ -5585,11 +6498,11 @@ impl Settings {
         let has_invalid_port = self.radios.iter().any(|p| p.rigctld_port == 0);
         if !has_invalid_port
             && !rotator_on_an_address
-            && daemon_port_clash(&self.radios, broker).is_none()
+            && daemon_port_clash(&self.radios, broker, tci_server).is_none()
         {
             return;
         }
-        let mut used: Vec<u16> = broker.into_iter().collect();
+        let mut used: Vec<u16> = broker.into_iter().chain(tci_server).collect();
         let free_from = |start: u16, used: &mut Vec<u16>| -> u16 {
             let mut port = start.max(1024);
             while used.contains(&port) || addresses.contains(&port) {
@@ -5685,9 +6598,17 @@ impl Settings {
         self.flex_native_pan = p.flex_native_pan;
         self.flex_native_audio = p.flex_native_audio;
         self.flex_native_cat = p.flex_native_cat;
+        self.flex_native_unbenched = p.flex_native_unbenched;
         self.icom_lan_host = p.icom_lan_host;
         self.icom_lan_user = p.icom_lan_user;
         self.icom_lan_port = p.icom_lan_port;
+        self.tci_host = p.tci_host;
+        self.tci_port = p.tci_port;
+        self.tci_trx = p.tci_trx;
+        self.tci_dialect = p.tci_dialect;
+        self.tci_audio = p.tci_audio;
+        self.tci_pan = p.tci_pan;
+        self.tci_spots = p.tci_spots;
     }
 
     /// Copy the flat mirror back INTO the active profile — so edits made through today's flat rig/
@@ -5730,9 +6651,17 @@ impl Settings {
             flex_native_pan,
             flex_native_audio,
             flex_native_cat,
+            flex_native_unbenched,
             icom_lan_host,
             icom_lan_user,
             icom_lan_port,
+            tci_host,
+            tci_port,
+            tci_trx,
+            tci_dialect,
+            tci_audio,
+            tci_pan,
+            tci_spots,
         ) = (
             self.ptt_method.clone(),
             self.rig_model,
@@ -5766,9 +6695,17 @@ impl Settings {
             self.flex_native_pan,
             self.flex_native_audio,
             self.flex_native_cat,
+            self.flex_native_unbenched,
             self.icom_lan_host.clone(),
             self.icom_lan_user.clone(),
             self.icom_lan_port,
+            self.tci_host.clone(),
+            self.tci_port,
+            self.tci_trx,
+            self.tci_dialect.clone(),
+            self.tci_audio,
+            self.tci_pan,
+            self.tci_spots,
         );
         if let Some(p) = self.radios.iter_mut().find(|p| p.id == active) {
             p.ptt_method = ptt_method;
@@ -5803,9 +6740,17 @@ impl Settings {
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
             p.flex_native_cat = flex_native_cat;
+            p.flex_native_unbenched = flex_native_unbenched;
             p.icom_lan_host = icom_lan_host;
             p.icom_lan_user = icom_lan_user;
             p.icom_lan_port = icom_lan_port;
+            p.tci_host = tci_host;
+            p.tci_port = tci_port;
+            p.tci_trx = tci_trx;
+            p.tci_dialect = tci_dialect;
+            p.tci_audio = tci_audio;
+            p.tci_pan = tci_pan;
+            p.tci_spots = tci_spots;
         }
     }
 
@@ -5861,7 +6806,7 @@ impl Settings {
     }
 
     /// ONE-TIME MIGRATION (2026-10-10): AGN moved to F8 in the Phone, CW, RTTY and PSK contest
-    /// keys, as in N1MM's default message sets. In the CW, RTTY and PSK contest sets it traded keys
+    /// keys. In the CW, RTTY and PSK contest sets it traded keys
     /// with B4, now on F7, and nothing else moved. In Phone it was on F5, which is free now: on CW
     /// F5 sends his call, and a recording cannot say a callsign. The voice keyer gains an F8 slot
     /// for it.
@@ -6032,6 +6977,9 @@ impl Settings {
         // reason as `satDoppler`: once parsed, the field's default cannot be told from a saved
         // `true`, and a file without the key is one from before the choice existed.
         let mut node_choice_saved = false;
+        // …and whether it says if JS8 heartbeat networking is on, for the same reason: a file
+        // without the key is from before the switch (`choose_js8_hb_networking_for_old_settings`).
+        let mut hb_networking_saved = false;
         let mut s: Settings = match std::fs::read_to_string(path) {
             // Missing file: a normal first run.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
@@ -6061,6 +7009,15 @@ impl Settings {
                     node_choice_saved = serde_json::from_str::<NodeChoice>(&text)
                         .ok()
                         .and_then(|c| c.auto)
+                        .is_some();
+                    #[derive(Deserialize)]
+                    struct HbNetworking {
+                        #[serde(rename = "js8HbNetworking")]
+                        on: Option<bool>,
+                    }
+                    hb_networking_saved = serde_json::from_str::<HbNetworking>(&text)
+                        .ok()
+                        .and_then(|c| c.on)
                         .is_some();
                     s
                 }
@@ -6162,6 +7119,12 @@ impl Settings {
         // key wrote its own choice and is never overruled.
         if !node_choice_saved {
             s.choose_cluster_nodes_for_old_settings();
+        }
+        // Migration (2026-10-15): JS8 heartbeat networking, for a file from before the switch —
+        // see `choose_js8_hb_networking_for_old_settings`. A file that has the key is never
+        // overruled.
+        if !hb_networking_saved {
+            s.choose_js8_hb_networking_for_old_settings();
         }
         // Migration (2026-09-16): the default list was the ve7cc + wa9pie PAIR, and both died
         // on the same day — every default-config install lost its only SSB/phone sources at
@@ -6412,6 +7375,7 @@ impl Settings {
             self.rig_model,
             &self.rig_conn,
             &self.rig_addr,
+            &self.icom_lan_host,
             self.icom_native_cat,
         )
     }
@@ -6471,6 +7435,21 @@ impl Settings {
     pub fn rf_power_ceiling_am(&self) -> f32 {
         let am = self.max_power_am.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0);
         am.min(self.rf_power_ceiling())
+    }
+
+    /// Is AFSK RTTY running on the UPPER sideband? Only the soundcard keyer has a choice:
+    /// FSK commands the rig's own RTTY mode, whose sense the rig sets.
+    pub fn rtty_afsk_usb(&self) -> bool {
+        !self.rtty_backend.eq_ignore_ascii_case("fsk")
+            && self.rtty_afsk_sideband.trim().eq_ignore_ascii_case("usb")
+    }
+
+    /// The mark/space swap TX and RX both apply: the operator's Reverse, XOR the upper
+    /// sideband. On LSB the mark is the lower audio tone, which lands HIGHER on RF; on USB
+    /// the audio maps to RF the other way up, so the tones swap to keep mark high on RF.
+    /// Reverse then inverts whichever sense that is, for an upside-down station.
+    pub fn rtty_tone_swap(&self) -> bool {
+        self.rtty_reverse ^ self.rtty_afsk_usb()
     }
 
     /// ⭐ **The RTTY auto-sequencer's timing, as the sequencer takes it — the ONE place the
@@ -6537,13 +7516,15 @@ impl Settings {
         // WHICH SIDE the section policy below works on. Two different questions,
         // deliberately not unified: Digital's side is a property of the tuned CHANNEL
         // (FT8 on 40 m is USB-side — the band convention would say LSB and be wrong),
-        // while Phone and CW follow the hard band convention (LSB below 10 MHz).
+        // while Phone and CW follow the hard band convention (LSB below 10 MHz; Phone is USB on
+        // 60 m, `bandplan::phone_is_lsb`).
         let lsb = match self.operating_mode {
             OperatingMode::Digital => sideband.trim().eq_ignore_ascii_case("LSB"),
             // Keyboard modes are ALWAYS USB-side: the PSK31 convention is USB on
             // every band (80/40 m included — unlike RTTY's LSB and phone's
             // below-10-MHz rule), so the band fallthrough would be wrong here.
             OperatingMode::Keyboard => false,
+            OperatingMode::Phone => crate::bandplan::phone_is_lsb(dial_mhz),
             _ => dial_mhz < 10.0,
         };
         self.rig_mode_on_sideband(lsb)
@@ -6637,9 +7618,11 @@ impl Settings {
             // (PKTLSB → Yaesu DATA-L / Icom LSB-D / Kenwood DATA, rig-agnostically via Hamlib)
             // to route the USB codec to the modulator: plain LSB takes TX audio from the MIC
             // on the common Icom / default-Yaesu setup and radiates ZERO RF ("red light, no
-            // signal"). LSB-side keeps the RTTY convention (mark = lower audio = higher RF);
-            // `rtty_reverse` flips the TONES, not the sideband. A rig with no DATA submode is
-            // handled by the loop's bounded set_mode retry (tries, is rejected, gives up).
+            // signal"). LSB-side is the RTTY convention (mark = lower audio = higher RF) and the
+            // default; `rtty_afsk_sideband` = "usb" takes the upper side, and `rtty_tone_swap`
+            // swaps the tones to match so mark stays high on RF. `rtty_reverse` flips the TONES,
+            // never the sideband. A rig with no DATA submode is handled by the loop's bounded
+            // set_mode retry (tries, is rejected, gives up).
             // FSK is deliberately NOT run through `plain_ssb_if_configured`: it commands the
             // rig's own RTTY mode, which is what unlocks the narrow RTTY filters and keys the
             // shift. "Plain SSB" has no meaning there — only the AFSK (soundcard) path, which
@@ -6647,6 +7630,8 @@ impl Settings {
             OperatingMode::Rtty => {
                 if self.rtty_backend.eq_ignore_ascii_case("fsk") {
                     "RTTY".to_string()
+                } else if self.rtty_afsk_usb() {
+                    self.plain_ssb_if_configured("PKTUSB")
                 } else {
                     self.plain_ssb_if_configured("PKTLSB")
                 }
@@ -6870,9 +7855,17 @@ mod tests {
             )])),
             flex_native_audio: true,
             flex_native_cat: true,
+            flex_native_unbenched: true,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
+            tci_host: Some("192.0.2.30".into()),
+            tci_port: Some(40001),
+            tci_trx: Some(1),
+            tci_dialect: Some("thetis".into()),
+            tci_audio: Some(false),
+            tci_pan: Some(true),
+            tci_spots: Some(true),
         };
 
         let sent = serde_json::to_value(&patch).expect("patch serializes");
@@ -7210,9 +8203,17 @@ mod tests {
             yaesu_fix_starts: None,
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
+            tci_host: None,
+            tci_port: None,
+            tci_trx: None,
+            tci_dialect: None,
+            tci_audio: None,
+            tci_pan: None,
+            tci_spots: None,
         })
         .expect("patch serializes");
         let patch_keys: Vec<&str> = patch
@@ -7363,6 +8364,7 @@ mod tests {
             flex_native_pan: false,
             flex_native_audio: false,
             flex_native_cat: false,
+            flex_native_unbenched: false,
             icom_lan_host: String::new(),
             icom_lan_user: String::new(),
             icom_lan_port: crate::settings::ICOM_LAN_DEFAULT_PORT,
@@ -7371,6 +8373,13 @@ mod tests {
             // and calls wiring a writer a follow-up. This guard exists to force exactly that look.
             yaesu_rf_scope: None,
             yaesu_fix_starts: Default::default(),
+            tci_host: None,
+            tci_port: None,
+            tci_trx: None,
+            tci_dialect: None,
+            tci_audio: None,
+            tci_pan: None,
+            tci_spots: None,
         })
         .expect("patch serializes");
         let rust_keys: Vec<&str> = rust
@@ -7433,6 +8442,7 @@ mod tests {
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
             "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
             "flexNativePan": false, "flexNativeAudio": false, "flexNativeCat": false,
+            "flexNativeUnbenched": false,
             "icomLanHost": "", "icomLanUser": "", "icomLanPort": 50001,
             "ampModel": "", "ampPort": "", "ampFollowBand": false
         }"#;
@@ -7584,6 +8594,76 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_network_icoms_swr_is_verified_because_it_rides_the_same_ci_v_daemon() {
+        // The Icom network client carries the very CivDaemon the USB path runs, so its `SWR`
+        // answer is the same `swr_from_raw` curve. What decides "verified" is that daemon,
+        // not the model's name.
+        let lan = |model: u32, host: &str| Settings {
+            rig_model: model,
+            rig_conn: "icomlan".into(),
+            icom_lan_host: host.into(),
+            ..Settings::default()
+        };
+        // Positive control: the USB IC-7300 the allow-list was written for.
+        let usb = Settings {
+            rig_model: 3073,
+            rig_conn: "serial".into(),
+            icom_native_cat: true,
+            ..Settings::default()
+        };
+        assert!(
+            usb.swr_scale_is_verified(),
+            "control: USB IC-7300, native CI-V"
+        );
+        assert!(
+            lan(3094, "192.0.2.7").swr_scale_is_verified(),
+            "IC-7300MK2 on the Icom network connection"
+        );
+        for m in ICOM_LAN_RIGS {
+            assert!(
+                lan(m, "192.0.2.7").swr_scale_is_verified(),
+                "model {m} on the Icom network connection"
+            );
+        }
+        // No usable address: the daemon never starts, so nothing reads the curve.
+        assert!(!lan(3094, "").swr_scale_is_verified(), "no address");
+        assert!(
+            !lan(3094, "radio.local").swr_scale_is_verified(),
+            "not IPv4"
+        );
+        // An IC-7300 has no network server; a Xiegu is not served by the network client.
+        assert!(!lan(3073, "192.0.2.7").swr_scale_is_verified(), "IC-7300");
+        assert!(!lan(3088, "192.0.2.7").swr_scale_is_verified(), "Xiegu G90");
+        // The native toggle left on from a USB setup does not count on this connection: the
+        // serial daemon never opens a port there, and with no address nothing else runs.
+        let stale_toggle = Settings {
+            icom_native_cat: true,
+            ..lan(3078, "")
+        };
+        assert!(!stale_toggle.swr_scale_is_verified(), "IC-7610, no address");
+        // ⛔ The IC-7300MK2 over USB is driven by rigctld (Hamlib's unscaled `l SWR`), never
+        // by the CI-V daemon, so the native toggle does not put it on the curve.
+        let mk2_usb = Settings {
+            rig_model: 3094,
+            rig_conn: "serial".into(),
+            icom_native_cat: true,
+            ..Settings::default()
+        };
+        assert!(!mk2_usb.swr_scale_is_verified(), "IC-7300MK2 over USB");
+        // ⛔ OmniRig holds the port and passes its own figure: never verified.
+        for m in SWR_VERIFIED_CIV_RIGS.into_iter().chain(ICOM_LAN_RIGS) {
+            let omni = Settings {
+                rig_model: m,
+                rig_conn: "omnirig".into(),
+                icom_native_cat: true,
+                icom_lan_host: "192.0.2.7".into(),
+                ..Settings::default()
+            };
+            assert!(!omni.swr_scale_is_verified(), "model {m} over OmniRig");
+        }
+    }
+
     /// Helper for the patch test above: the patch a Save would build from a profile.
     fn patch_of(p: &RadioProfile) -> RadioProfilePatch {
         RadioProfilePatch {
@@ -7622,9 +8702,17 @@ mod tests {
             yaesu_fix_starts: Some(p.yaesu_fix_starts.clone()),
             flex_native_audio: p.flex_native_audio,
             flex_native_cat: p.flex_native_cat,
+            flex_native_unbenched: p.flex_native_unbenched,
             icom_lan_host: p.icom_lan_host.clone(),
             icom_lan_user: p.icom_lan_user.clone(),
             icom_lan_port: p.icom_lan_port,
+            tci_host: Some(p.tci_host.clone()),
+            tci_port: Some(p.tci_port),
+            tci_trx: Some(p.tci_trx),
+            tci_dialect: Some(p.tci_dialect.clone()),
+            tci_audio: Some(p.tci_audio),
+            tci_pan: Some(p.tci_pan),
+            tci_spots: Some(p.tci_spots),
         }
     }
 
@@ -7738,6 +8826,889 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// ⭐ The Flex client's Beta setting for CW, Tune and the ATU (`flex_native_unbenched`) is OFF
+    /// for everyone: a fresh station, a radio added later, and a settings file written before it
+    /// existed, on the flat mirror and on every radio. Turned on for one radio it is that radio's
+    /// alone: through a save and a load, a switch to another radio and back, and the per-radio
+    /// patch the Settings form saves a radio not in use with, which must state it.
+    #[test]
+    fn the_flex_beta_setting_is_off_by_default_and_stays_with_its_radio() {
+        let mut fresh = crate::engine::Engine::with_settings(Settings::default());
+        let added = fresh.add_radio();
+        assert!(!fresh.settings().flex_native_unbenched, "a fresh station");
+        assert!(
+            fresh
+                .settings()
+                .radios
+                .iter()
+                .all(|r| !r.flex_native_unbenched),
+            "its radios, radio {added} included"
+        );
+        assert!(!RadioProfile::default().flex_native_unbenched);
+        // A station with no radio profile yet makes its first from the flat mirror, setting and all.
+        let mut flat_only = Settings {
+            flex_native_unbenched: true,
+            ..Settings::default()
+        };
+        flat_only.ensure_radio_profiles();
+        assert!(flat_only.radios[0].flex_native_unbenched);
+
+        // The 1.18.0 file: the client on for the Flex, and no key for this anywhere.
+        let dir = std::env::temp_dir().join("tempo_settings_flex_unbenched");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("flex_unbenched_{}.json", std::process::id()));
+        let old = serde_json::json!({
+            "mycall": "KD9TAW",
+            "activeRadio": 1,
+            "rigModel": 2036,
+            "rigConn": "network",
+            "flexNativeCat": true,
+            "radios": [
+                { "id": 0, "name": "FTDX10", "rigModel": 1042 },
+                { "id": 1, "name": "FLEX-6400", "rigModel": 2036, "rigConn": "network",
+                  "rigAddr": "127.0.0.1:5002", "flexRadioIp": "192.0.2.77",
+                  "flexNativeCat": true },
+            ],
+        });
+        std::fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+        let mut s = Settings::load(&path);
+        assert!(
+            s.flex_native_cat,
+            "precondition: the client serves the Flex"
+        );
+        assert!(!s.flex_native_unbenched, "an old file loads it off");
+        assert!(
+            s.radios.iter().all(|r| !r.flex_native_unbenched),
+            "on every radio"
+        );
+
+        // On for the Flex, the radio in use, as the form saves it: the flat mirror, then the file.
+        s.flex_native_unbenched = true;
+        s.sync_active_from_flat();
+        s.save(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let radio = |id: u32| {
+            written["radios"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == serde_json::json!(id))
+                .expect("the radio is written")["flexNativeUnbenched"]
+                .clone()
+        };
+        assert_eq!(written["flexNativeUnbenched"], serde_json::json!(true));
+        assert_eq!(radio(1), serde_json::json!(true), "the Flex's, on");
+        assert_eq!(radio(0), serde_json::json!(false), "the other radio's, off");
+
+        let mut e = crate::engine::Engine::with_settings(Settings::load(&path));
+        assert!(e.settings().flex_native_unbenched, "it loads again, on");
+        e.set_active_radio(0);
+        assert!(
+            !e.settings().flex_native_unbenched,
+            "the other radio has its own, off"
+        );
+        e.set_active_radio(1);
+        assert!(
+            e.settings().flex_native_unbenched,
+            "the Flex's comes back with it"
+        );
+
+        // The patch for a radio not in use carries it both ways, by value, and a payload that does
+        // not state it is refused rather than read as either.
+        let mut ftdx = e
+            .settings()
+            .radios
+            .iter()
+            .find(|r| r.id == 0)
+            .unwrap()
+            .clone();
+        RadioProfilePatch {
+            flex_native_unbenched: true,
+            ..patch_of(&ftdx)
+        }
+        .apply_to(&mut ftdx);
+        assert!(ftdx.flex_native_unbenched);
+        RadioProfilePatch {
+            flex_native_unbenched: false,
+            ..patch_of(&ftdx)
+        }
+        .apply_to(&mut ftdx);
+        assert!(!ftdx.flex_native_unbenched);
+        let mut payload = serde_json::to_value(patch_of(&ftdx)).unwrap();
+        assert!(payload
+            .as_object_mut()
+            .unwrap()
+            .remove("flexNativeUnbenched")
+            .is_some());
+        assert!(serde_json::from_value::<RadioProfilePatch>(payload).is_err());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The TCI fields under their wire keys, in the order the structs declare them.
+    const TCI_KEYS: [&str; 7] = [
+        "tciHost",
+        "tciPort",
+        "tciTrx",
+        "tciDialect",
+        "tciAudio",
+        "tciPan",
+        "tciSpots",
+    ];
+
+    /// The TCI fields on a fresh station, a fresh radio and every older file: the SDR program on this
+    /// computer on 50001, its first transceiver, the dialect learned, Nexus's audio over the
+    /// connection, the spectrum and the spots off.
+    fn tci_defaults() -> serde_json::Value {
+        serde_json::json!({
+            "tciHost": "127.0.0.1", "tciPort": 50001, "tciTrx": 0, "tciDialect": "auto",
+            "tciAudio": true, "tciPan": false, "tciSpots": false,
+        })
+    }
+
+    /// A TCI connection an operator set up, every field away from its default: piHPSDR on another
+    /// computer, its second transceiver, the sound card for audio, the spectrum and the spots on.
+    fn tci_stated() -> serde_json::Value {
+        serde_json::json!({
+            "tciHost": "192.0.2.40", "tciPort": 40001, "tciTrx": 1, "tciDialect": "pihpsdr",
+            "tciAudio": false, "tciPan": true, "tciSpots": true,
+        })
+    }
+
+    /// Every TCI field of `v`, a serialized `Settings` or `RadioProfile`, that is not as `want` has
+    /// it, labelled with `what`. Every one of them, so one red names each field that moved.
+    fn tci_differences(what: &str, v: &serde_json::Value, want: &serde_json::Value) -> Vec<String> {
+        TCI_KEYS
+            .iter()
+            .filter(|k| v[**k] != want[**k])
+            .map(|k| format!("{what}: {k} is {}, not {}", v[*k], want[*k]))
+            .collect()
+    }
+
+    /// Set the TCI fields of `s`'s flat mirror to `want`'s, as the Settings form saves the radio in
+    /// use.
+    fn set_flat_tci(s: &mut Settings, want: &serde_json::Value) {
+        let mut v = serde_json::to_value(&*s).expect("settings serialize");
+        for k in TCI_KEYS {
+            v[k] = want[k].clone();
+        }
+        *s = serde_json::from_value(v).expect("settings deserialize");
+    }
+
+    /// ⭐ THE TCI DEFAULTS, on everything that starts fresh: the station, a profile from `Default`,
+    /// and a radio added to the roster. Nothing about any of them is TCI until the operator chooses
+    /// the connection, and that choice needs nothing more for an SDR program on this computer.
+    #[test]
+    fn a_fresh_station_and_every_new_radio_start_with_the_tci_defaults() {
+        let mut e = crate::engine::Engine::with_settings(Settings::default());
+        let added = e.add_radio();
+        let added = e
+            .settings()
+            .radios
+            .iter()
+            .find(|r| r.id == added)
+            .expect("the added radio")
+            .clone();
+        let want = tci_defaults();
+        let mut differ = tci_differences(
+            "Settings::default()",
+            &serde_json::to_value(Settings::default()).unwrap(),
+            &want,
+        );
+        differ.extend(tci_differences(
+            "RadioProfile::default()",
+            &serde_json::to_value(RadioProfile::default()).unwrap(),
+            &want,
+        ));
+        differ.extend(tci_differences(
+            "an added radio",
+            &serde_json::to_value(&added).unwrap(),
+            &want,
+        ));
+        assert!(
+            differ.is_empty(),
+            "not the TCI defaults:\n  {}",
+            differ.join("\n  ")
+        );
+    }
+
+    /// ⭐ THE UPGRADE PATH. A settings file from before TCI carries none of its keys, on the flat
+    /// mirror or on any radio, and must load as it always has: every TCI field at its default, and
+    /// nothing on the TCI connection. Proven by reading files without the keys rather than by
+    /// trusting the serde defaults: a settings file and a radio profile through serde alone, then a
+    /// two-radio file through `Settings::load`, the path the app starts on.
+    #[test]
+    fn an_older_settings_file_loads_every_tci_field_at_its_default() {
+        let want = tci_defaults();
+        let bare: Settings = serde_json::from_str(r#"{"mycall":"KD9TAW","rigModel":1042}"#)
+            .expect("an older settings file loads");
+        let mut differ = tci_differences(
+            "an older settings file",
+            &serde_json::to_value(&bare).unwrap(),
+            &want,
+        );
+        let profile: RadioProfile =
+            serde_json::from_str(r#"{"id":0,"name":"FTDX10","rigModel":1042}"#)
+                .expect("an older radio profile loads");
+        differ.extend(tci_differences(
+            "an older radio profile",
+            &serde_json::to_value(&profile).unwrap(),
+            &want,
+        ));
+
+        let dir = std::env::temp_dir().join("tempo_settings_tci_older");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("tci_older_{}.json", std::process::id()));
+        let older = serde_json::json!({
+            "mycall": "KD9TAW",
+            "activeRadio": 1,
+            "rigModel": 3078,
+            "rigConn": "icomlan",
+            "icomLanHost": "192.0.2.50",
+            "radios": [
+                { "id": 0, "name": "FTDX10", "rigModel": 1042 },
+                { "id": 1, "name": "IC-7610", "rigModel": 3078, "rigConn": "icomlan",
+                  "icomLanHost": "192.0.2.50" },
+            ],
+        });
+        std::fs::write(&path, serde_json::to_string(&older).unwrap()).unwrap();
+        let s = Settings::load(&path);
+        let _ = std::fs::remove_file(&path);
+        differ.extend(tci_differences(
+            "the loaded file",
+            &serde_json::to_value(&s).unwrap(),
+            &want,
+        ));
+        for r in &s.radios {
+            differ.extend(tci_differences(
+                &format!("its radio {}", r.id),
+                &serde_json::to_value(r).unwrap(),
+                &want,
+            ));
+        }
+        assert!(
+            differ.is_empty(),
+            "an older file did not load the TCI defaults:\n  {}",
+            differ.join("\n  ")
+        );
+        let on_tci =
+            |r: &&RadioProfile| tci_reachable(r.rig_model, &r.rig_conn, &r.tci_host, r.tci_port);
+        assert_eq!(
+            s.radios.iter().filter(on_tci).count(),
+            0,
+            "nothing in an older file is on TCI"
+        );
+    }
+
+    /// ⭐ THE FILE THIS BUILD REPLACES, written by the build before it. The fixture is what
+    /// `Settings::save` wrote on main at 675f8f8d6 (after 1.19.0), the last tree without the TCI
+    /// fields, for two radios: an FTDX10 on a serial port and an IC-7610 on the Icom network, the
+    /// IC-7610 in use. It was a fixed point there: a load and a save gave it back byte for byte.
+    /// This build must take it the same way: every value the file states comes out of a load and a
+    /// save as it went in, and the TCI fields arrive at their defaults, on the flat mirror and on
+    /// each radio.
+    #[test]
+    fn the_last_settings_file_before_tci_loads_unchanged_but_for_the_tci_defaults() {
+        let text = include_str!("../tests/fixtures/settings-before-tci-two-radios.json");
+        let before: serde_json::Value = serde_json::from_str(text).expect("the fixture parses");
+        assert!(
+            !text.contains("\"tci"),
+            "premise: the file predates the TCI fields"
+        );
+        let dir = std::env::temp_dir().join("tempo_settings_before_tci");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("before_tci_{}.json", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        Settings::load(&path).save(&path).expect("saves");
+        let after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let radios = |v: &serde_json::Value| v["radios"].as_array().expect("radios").clone();
+        assert_eq!(
+            radios(&before).len(),
+            2,
+            "precondition: the fixture's two radios"
+        );
+        let mut changed: Vec<String> = Vec::new();
+        for (k, v) in before.as_object().expect("an object") {
+            if k != "radios" && after.get(k) != Some(v) {
+                changed.push(format!("{k}: {v} became {:?}", after.get(k)));
+            }
+        }
+        let mut differ = tci_differences("the flat mirror", &after, &tci_defaults());
+        for old in radios(&before) {
+            let id = &old["id"];
+            let Some(new) = radios(&after).into_iter().find(|r| &r["id"] == id) else {
+                changed.push(format!("radio {id} is gone"));
+                continue;
+            };
+            for (k, v) in old.as_object().expect("an object") {
+                if new.get(k) != Some(v) {
+                    changed.push(format!("radio {id}: {k}: {v} became {:?}", new.get(k)));
+                }
+            }
+            differ.extend(tci_differences(
+                &format!("radio {id}"),
+                &new,
+                &tci_defaults(),
+            ));
+        }
+        assert!(
+            changed.is_empty() && differ.is_empty(),
+            "the last file before TCI did not come back as it went in.\n\
+             Values the file stated that changed:\n  {}\n\
+             TCI fields not at their defaults:\n  {}",
+            changed.join("\n  "),
+            differ.join("\n  ")
+        );
+    }
+
+    /// A TCI connection belongs to its radio: the first profile a station without one makes from its
+    /// flat mirror takes it; set on the radio in use, as the form saves it, it reaches the file under
+    /// its wire keys on that radio alone; and it loads again and follows the radio through a switch
+    /// to another radio and back.
+    #[test]
+    fn a_tci_connection_stays_with_its_radio_through_a_save_a_load_and_a_switch() {
+        let stated = tci_stated();
+        let mut flat_only = Settings::default();
+        set_flat_tci(&mut flat_only, &stated);
+        flat_only.ensure_radio_profiles();
+        let mut differ = tci_differences(
+            "the first profile, made from the flat mirror",
+            &serde_json::to_value(&flat_only.radios[0]).unwrap(),
+            &stated,
+        );
+
+        let dir = std::env::temp_dir().join("tempo_settings_tci_radio");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("tci_radio_{}.json", std::process::id()));
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    name: "FTDX10".into(),
+                    rig_model: 1042,
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    name: "SunSDR2 DX".into(),
+                    rig_model: 7,
+                    rig_conn: "tci".into(),
+                    rigctld_port: 4535,
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 1,
+            ..Settings::default()
+        };
+        s.sync_flat_from_active();
+        set_flat_tci(&mut s, &stated);
+        s.sync_active_from_flat();
+        s.save(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let radio = |id: u32| {
+            written["radios"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == serde_json::json!(id))
+                .expect("the radio is written")
+                .clone()
+        };
+        differ.extend(tci_differences("the file's flat mirror", &written, &stated));
+        differ.extend(tci_differences("the file's SunSDR2", &radio(1), &stated));
+        differ.extend(tci_differences(
+            "the file's FTDX10",
+            &radio(0),
+            &tci_defaults(),
+        ));
+
+        let mut e = crate::engine::Engine::with_settings(Settings::load(&path));
+        let _ = std::fs::remove_file(&path);
+        let live = |e: &crate::engine::Engine| serde_json::to_value(e.settings()).unwrap();
+        differ.extend(tci_differences("loaded again", &live(&e), &stated));
+        e.set_active_radio(0);
+        differ.extend(tci_differences(
+            "switched to the FTDX10",
+            &live(&e),
+            &tci_defaults(),
+        ));
+        e.set_active_radio(1);
+        differ.extend(tci_differences(
+            "switched back to the SunSDR2",
+            &live(&e),
+            &stated,
+        ));
+        assert!(
+            differ.is_empty(),
+            "the TCI connection did not stay with its radio:\n  {}",
+            differ.join("\n  ")
+        );
+        let s = e.settings();
+        assert!(
+            tci_reachable(s.rig_model, &s.rig_conn, &s.tci_host, s.tci_port),
+            "and the client could serve it"
+        );
+    }
+
+    /// THE PER-RADIO EDIT of a radio not in use (`update_radio_profile`). A radio form that does
+    /// not send the TCI fields (one from a build before them) must have its save leave the radio's
+    /// TCI connection as stored: not fail, and not reset it. The payload is the form's for this
+    /// radio with every TCI key taken out. And a patch that states them writes each one, the
+    /// defaults included, so that "left alone" cannot be "never written".
+    #[test]
+    fn a_radio_form_that_says_nothing_of_tci_leaves_the_radios_tci_settings_alone() {
+        let mut stored = RadioProfile {
+            id: 1,
+            name: "SunSDR2 DX".into(),
+            rig_model: 7,
+            rig_conn: "tci".into(),
+            ..RadioProfile::default()
+        };
+        stored = serde_json::from_value({
+            let mut v = serde_json::to_value(&stored).unwrap();
+            for k in TCI_KEYS {
+                v[k] = tci_stated()[k].clone();
+            }
+            v
+        })
+        .unwrap();
+
+        let mut payload = serde_json::to_value(patch_of(&stored)).unwrap();
+        for k in TCI_KEYS {
+            assert!(
+                payload.as_object_mut().unwrap().remove(k).is_some(),
+                "precondition: the patch carries {k}"
+            );
+        }
+        let patch: RadioProfilePatch =
+            serde_json::from_value(payload).expect("a form without the TCI fields still saves");
+        let mut p = stored.clone();
+        patch.apply_to(&mut p);
+        let mut differ = tci_differences(
+            "after a save that says nothing of TCI",
+            &serde_json::to_value(&p).unwrap(),
+            &tci_stated(),
+        );
+
+        let mut p = stored.clone();
+        RadioProfilePatch {
+            tci_host: Some(TCI_DEFAULT_HOST.into()),
+            tci_port: Some(TCI_DEFAULT_PORT),
+            tci_trx: Some(0),
+            tci_dialect: Some(TciDialect::Auto.as_setting().into()),
+            tci_audio: Some(true),
+            tci_pan: Some(false),
+            tci_spots: Some(false),
+            ..patch_of(&stored)
+        }
+        .apply_to(&mut p);
+        differ.extend(tci_differences(
+            "after a save that states the defaults",
+            &serde_json::to_value(&p).unwrap(),
+            &tci_defaults(),
+        ));
+        assert!(differ.is_empty(), "{}", differ.join("\n"));
+    }
+
+    /// TCI is a connection of its own, whatever its case, and no other connection's. Whether the
+    /// TCI client serves a radio takes four things, and each case below lacks exactly one of them
+    /// beside controls that have all four, so every part of the rule is shown to matter.
+    #[test]
+    fn tci_is_its_own_connection_and_its_client_needs_a_server_and_a_cat_model() {
+        let mut wrong: Vec<String> = Vec::new();
+        for conn in ["tci", "TCI", "Tci"] {
+            if !rig_conn_is_tci(conn) {
+                wrong.push(format!("{conn:?} is the TCI connection"));
+            }
+        }
+        for conn in ["", "serial", "network", "omnirig", "icomlan", "tci1x"] {
+            if rig_conn_is_tci(conn) {
+                wrong.push(format!("{conn:?} is not the TCI connection"));
+            }
+        }
+        if rig_conn_is_network("tci", "192.0.2.40:50001")
+            || rig_conn_is_omnirig("tci")
+            || rig_conn_is_icom_lan("tci")
+        {
+            wrong.push("another connection claims \"tci\"".into());
+        }
+        // The first three are the controls, with all four; each after them lacks one.
+        for (what, model, conn, host, port, serves) in [
+            ("here", 7, "tci", "127.0.0.1", 50001, true),
+            ("elsewhere", 7, "TCI", "192.0.2.40", 40001, true),
+            ("a host name", 7, "tci", "shack-pc.local", 50001, true),
+            ("None / VOX", 0, "tci", "127.0.0.1", 50001, false),
+            ("serial", 7, "serial", "127.0.0.1", 50001, false),
+            ("no address", 7, "tci", " ", 50001, false),
+            ("no port", 7, "tci", "127.0.0.1", 0, false),
+        ] {
+            if tci_reachable(model, conn, host, port) != serves {
+                wrong.push(format!("{what}: the client serves it = {serves}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// ⛔ THE TCI CONNECTION CLOSES THE NATIVE CI-V DOOR, as OmniRig's does: the SDR program drives
+    /// the radio, so no CI-V daemon of Nexus's reaches it, and no CI-V SWR curve reads its meter. A
+    /// model and the native toggle left over from a USB setup change nothing. The radio loop's own
+    /// half (`tempo_audio::service::native_civ_model`) is held to this one by that crate's
+    /// `one_reachability_rule_answers_for_the_daemon_and_for_the_refusal`.
+    #[test]
+    fn the_tci_connection_closes_the_native_civ_door() {
+        // 3081 = IC-9700: a native-CI-V satellite rig whose CI-V SWR is verified. Controls first.
+        assert!(
+            native_civ_reachable(3081, "serial", ""),
+            "control: a serial IC-9700 can reach the native daemon"
+        );
+        assert!(
+            swr_scale_verified(3081, "serial", "", "", true),
+            "control: …and its SWR is the native daemon's verified one"
+        );
+        for conn in ["tci", "TCI"] {
+            assert!(
+                !native_civ_reachable(3081, conn, ""),
+                "{conn}: no CI-V daemon of Nexus's serves a radio the SDR program drives"
+            );
+            assert!(
+                !swr_scale_verified(3081, conn, "", "", true),
+                "{conn}: its SWR is not the CI-V daemon's"
+            );
+        }
+    }
+
+    /// A stored dialect reads as its own word whatever its case and surrounding space, and any other
+    /// word reads as `Auto`, never as a dialect nobody chose. Each has its server's own port.
+    #[test]
+    fn a_tci_dialect_reads_as_its_own_word_and_anything_else_as_auto() {
+        let mut wrong: Vec<String> = Vec::new();
+        for d in TciDialect::ALL {
+            let w = d.as_setting();
+            for v in [w.to_string(), w.to_ascii_uppercase(), format!(" {w} ")] {
+                let read = TciDialect::from_setting(&v);
+                if read != d {
+                    wrong.push(format!("{v:?} reads as {read:?}, not {d:?}"));
+                }
+            }
+        }
+        for v in ["", "aethersdr", "expertsdr2", "thetis3", "sunsdr"] {
+            let read = TciDialect::from_setting(v);
+            if read != TciDialect::Auto {
+                wrong.push(format!("{v:?} reads as {read:?}, not Auto"));
+            }
+        }
+        let ports: Vec<(TciDialect, u16)> = TciDialect::ALL
+            .into_iter()
+            .map(|d| (d, d.default_port()))
+            .collect();
+        let want = [
+            (TciDialect::Auto, 50001),
+            (TciDialect::ExpertSdr3, 50001),
+            (TciDialect::Thetis, 50001),
+            (TciDialect::PiHpsdr, 40001),
+        ];
+        if ports != want {
+            wrong.push(format!("the default ports are {ports:?}, not {want:?}"));
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The scope source's settings on a fresh station and in every older file, by their wire
+    /// keys: the radio's own panadapter, and SDRconnect on this computer at its shipped port.
+    #[test]
+    fn the_scope_source_defaults_to_the_radio_in_a_fresh_and_an_older_file() {
+        let want = serde_json::json!({
+            "scopeSource": "radio", "sdrconnectHost": "127.0.0.1", "sdrconnectPort": 5454,
+            "sdrconnectFollow": "centre",
+        });
+        let fresh = serde_json::to_value(Settings::default()).expect("serializes");
+        let older: Settings = serde_json::from_str("{}").expect("an older file loads");
+        let older = serde_json::to_value(older).expect("serializes");
+        for (what, v) in [("fresh", &fresh), ("older", &older)] {
+            for key in [
+                "scopeSource",
+                "sdrconnectHost",
+                "sdrconnectPort",
+                "sdrconnectFollow",
+            ] {
+                assert_eq!(v[key], want[key], "{what} file, {key}");
+            }
+        }
+        assert_eq!(Settings::default().sdrconnect_target(), None);
+    }
+
+    /// The stored words are read leniently, and a word this build does not know leaves the
+    /// scope on the radio; a blank host or a zero port reads as SDRconnect's own default.
+    #[test]
+    fn the_scope_source_words_read_leniently_and_fall_back_to_the_radio() {
+        assert_eq!(
+            ScopeSource::from_setting(" SDRconnect "),
+            ScopeSource::Sdrconnect
+        );
+        assert_eq!(ScopeSource::from_setting("tci"), ScopeSource::Radio);
+        assert_eq!(ScopeSource::from_setting(""), ScopeSource::Radio);
+        assert_eq!(
+            SdrconnectFollow::from_setting("Scroll"),
+            SdrconnectFollow::Scroll
+        );
+        assert_eq!(
+            SdrconnectFollow::from_setting("fixed"),
+            SdrconnectFollow::Centre
+        );
+        let mut s = Settings {
+            scope_source: "sdrconnect".into(),
+            sdrconnect_host: "  ".into(),
+            sdrconnect_port: 0,
+            ..Settings::default()
+        };
+        assert_eq!(s.sdrconnect_target(), Some(("127.0.0.1".into(), 5454)));
+        s.sdrconnect_host = " shack-pc ".into();
+        s.sdrconnect_port = 5455;
+        assert_eq!(s.sdrconnect_target(), Some(("shack-pc".into(), 5455)));
+    }
+
+    /// The TCI server's settings by their wire keys.
+    const TCI_SERVER_KEYS: [&str; 5] = [
+        "tciServer",
+        "tciServerPort",
+        "tciServerTx",
+        "tciServerCw",
+        "tciServerSpots",
+    ];
+
+    /// The TCI server on a fresh station and in every older file: off, on 40001, no program
+    /// transmitting through it, the CW and spots tiers offered.
+    fn tci_server_defaults() -> serde_json::Value {
+        serde_json::json!({
+            "tciServer": false, "tciServerPort": 40001, "tciServerTx": false,
+            "tciServerCw": true, "tciServerSpots": true,
+        })
+    }
+
+    /// Every TCI server setting of `v`, a serialized `Settings`, that is not as `want` has it,
+    /// labelled with `what`. Every one of them, so one red names each setting that moved.
+    fn tci_server_differences(
+        what: &str,
+        v: &serde_json::Value,
+        want: &serde_json::Value,
+    ) -> Vec<String> {
+        TCI_SERVER_KEYS
+            .iter()
+            .filter(|k| v[**k] != want[**k])
+            .map(|k| format!("{what}: {k} is {}, not {}", v[*k], want[*k]))
+            .collect()
+    }
+
+    /// ⭐ THE TCI SERVER STARTS OFF, and no program transmits through it until the operator turns
+    /// that on at the shack (operator ruling, 2026-10-19). It is the station's, not a radio's: no
+    /// radio profile carries any of its settings, a fresh one or one added to the roster.
+    #[test]
+    fn a_fresh_station_starts_with_the_tci_server_off() {
+        let mut differ = tci_server_differences(
+            "Settings::default()",
+            &serde_json::to_value(Settings::default()).unwrap(),
+            &tci_server_defaults(),
+        );
+        let mut e = crate::engine::Engine::with_settings(Settings::default());
+        e.add_radio();
+        let radios = serde_json::to_value(&e.settings().radios).unwrap();
+        for r in radios.as_array().expect("a roster") {
+            for k in TCI_SERVER_KEYS {
+                if r.get(k).is_some() {
+                    differ.push(format!("radio {} carries {k}", r["id"]));
+                }
+            }
+        }
+        assert!(
+            differ.is_empty(),
+            "not the TCI server's defaults:\n  {}",
+            differ.join("\n  ")
+        );
+    }
+
+    /// ⭐ THE UPGRADE PATH for the TCI server. A file from before it states none of its settings
+    /// and loads with the server off, as that station ran: through serde alone, and the last file
+    /// before TCI through the load and the save the app runs, which then writes each at its
+    /// default.
+    #[test]
+    fn an_older_settings_file_loads_with_the_tci_server_off() {
+        let want = tci_server_defaults();
+        let bare: Settings =
+            serde_json::from_str(r#"{"mycall":"KD9TAW","catBroker":true,"catBrokerPtt":true}"#)
+                .expect("an older settings file loads");
+        let mut differ = tci_server_differences(
+            "an older settings file",
+            &serde_json::to_value(&bare).unwrap(),
+            &want,
+        );
+
+        let text = include_str!("../tests/fixtures/settings-before-tci-two-radios.json");
+        assert!(
+            !text.contains("\"tciServer"),
+            "premise: the file predates the TCI server"
+        );
+        let dir = std::env::temp_dir().join("tempo_settings_tci_server_older");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("tci_server_older_{}.json", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        Settings::load(&path).save(&path).expect("saves");
+        let after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        differ.extend(tci_server_differences(
+            "the last file before TCI, loaded and saved",
+            &after,
+            &want,
+        ));
+        assert!(
+            differ.is_empty(),
+            "an older file did not load with the TCI server off:\n  {}",
+            differ.join("\n  ")
+        );
+    }
+
+    /// The TCI server's settings keep their wire keys both ways: each set away from its default is
+    /// written under its own key with that value, and comes back through a load and through a
+    /// switch of radio, which a setting of the station's does not follow. Each is read off the
+    /// fields as well as off the JSON: a key serde did not map to its field would ride through the
+    /// file in `Settings::unknown` and read back as written, while the field itself never moved.
+    #[test]
+    fn the_tci_server_settings_keep_their_values_through_a_save_a_load_and_a_switch() {
+        let stated = serde_json::json!({
+            "tciServer": true, "tciServerPort": 40002, "tciServerTx": true,
+            "tciServerCw": false, "tciServerSpots": false,
+        });
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    name: "FTDX10".into(),
+                    rig_model: 1042,
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    name: "IC-7610".into(),
+                    rig_model: 3078,
+                    rigctld_port: 4535,
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 0,
+            ..Settings::default()
+        };
+        s.sync_flat_from_active();
+        let mut v = serde_json::to_value(&s).unwrap();
+        for k in TCI_SERVER_KEYS {
+            v[k] = stated[k].clone();
+        }
+        let s: Settings = serde_json::from_value(v).expect("settings deserialize");
+        let fields = |s: &Settings| {
+            (
+                s.tci_server,
+                s.tci_server_port,
+                s.tci_server_tx,
+                s.tci_server_cw,
+                s.tci_server_spots,
+            )
+        };
+        let want = (true, 40002, true, false, false);
+        let mut differ: Vec<String> = Vec::new();
+        if fields(&s) != want {
+            differ.push(format!(
+                "the fields as read: {:?}, not {want:?}",
+                fields(&s)
+            ));
+        }
+
+        let dir = std::env::temp_dir().join("tempo_settings_tci_server_keys");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("tci_server_keys_{}.json", std::process::id()));
+        s.save(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        differ.extend(tci_server_differences("the file", &written, &stated));
+        let mut e = crate::engine::Engine::with_settings(Settings::load(&path));
+        let _ = std::fs::remove_file(&path);
+        let live = |e: &crate::engine::Engine| serde_json::to_value(e.settings()).unwrap();
+        differ.extend(tci_server_differences("loaded again", &live(&e), &stated));
+        if fields(e.settings()) != want {
+            differ.push(format!(
+                "the fields loaded again: {:?}, not {want:?}",
+                fields(e.settings())
+            ));
+        }
+        e.set_active_radio(1);
+        differ.extend(tci_server_differences(
+            "switched to the IC-7610",
+            &live(&e),
+            &stated,
+        ));
+        if fields(e.settings()) != want {
+            differ.push(format!(
+                "the fields switched to the IC-7610: {:?}, not {want:?}",
+                fields(e.settings())
+            ));
+        }
+        assert!(
+            differ.is_empty(),
+            "the TCI server's settings did not keep their values:\n  {}",
+            differ.join("\n  ")
+        );
+    }
+
+    /// The UI types every TCI key where it lives (`ui/src/types.ts`): its `Settings` the
+    /// connection's seven, the radio in use's, and the server's five; its `RadioProfile` the
+    /// connection's seven and none of the server's, which are the station's. A key the UI spells
+    /// another way compiles on both sides and reads nothing, so each name is held to the wire key
+    /// the tests above hold serde to.
+    #[test]
+    fn the_ui_types_declare_every_tci_key_where_it_lives() {
+        let ts = include_str!("../../../ui/src/types.ts");
+        let body = |head: &str| {
+            let start = ts.find(head).expect("the UI declares it") + head.len();
+            let rest = &ts[start..];
+            &rest[..rest.find("\n}").expect("the interface is closed")]
+        };
+        let declares = |body: &str, key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        let settings = body("export interface Settings {");
+        let profile = body("export interface RadioProfile {");
+        let mut wrong: Vec<String> = Vec::new();
+        for k in TCI_KEYS.iter().chain(&TCI_SERVER_KEYS) {
+            if !declares(settings, k) {
+                wrong.push(format!("Settings does not declare {k}"));
+            }
+        }
+        for k in TCI_KEYS {
+            if !declares(profile, k) {
+                wrong.push(format!("RadioProfile does not declare {k}"));
+            }
+        }
+        for k in TCI_SERVER_KEYS {
+            if declares(profile, k) {
+                wrong.push(format!("RadioProfile declares the station's {k}"));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "ui/src/types.ts:\n  {}",
+            wrong.join("\n  ")
+        );
+        // CONTROL: the scan finds a key that is declared, and none that is not.
+        assert!(declares(settings, "catBroker") && declares(profile, "icomLanPort"));
+        assert!(!declares(settings, "tciServerHost") && !declares(profile, "catBroker"));
+    }
+
     /// Two enabled radios on ONE network CAT address warn; the cases that are not a collision
     /// stay silent. Both directions, because a guard shown to fire only one way is half a test.
     #[test]
@@ -7811,6 +9782,67 @@ mod tests {
         assert_eq!(s.rig_mode(), "RTTY");
     }
 
+    /// The AFSK sideband setting. LSB, the default, is unchanged; USB commands the DATA submode
+    /// on the upper side on every band; FSK ignores it. The tone swap is `reverse XOR usb`.
+    #[test]
+    fn rtty_afsk_sideband_picks_the_data_side_and_swaps_the_tones() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Rtty;
+        assert_eq!(s.rtty_afsk_sideband, "lsb");
+        for (mhz, side, want) in [
+            (7.080, "lsb", "PKTLSB"),
+            (14.083, "lsb", "PKTLSB"),
+            (7.080, "usb", "PKTUSB"),
+            (14.083, "usb", "PKTUSB"),
+            (3.580, "USB", "PKTUSB"),
+            (28.080, "usb", "PKTUSB"),
+        ] {
+            s.dial_mhz = mhz;
+            s.rtty_afsk_sideband = side.into();
+            assert_eq!(s.rig_mode(), want, "AFSK {side} at {mhz} MHz");
+        }
+        // The mic-jack opt-out keeps the side: plain USB, not plain LSB.
+        s.data_modes_plain_ssb = true;
+        assert_eq!(s.rig_mode(), "USB");
+        s.data_modes_plain_ssb = false;
+        // True FSK: the rig's own RTTY mode, and no swap from the AFSK side.
+        s.rtty_backend = "fsk".into();
+        assert_eq!(s.rig_mode(), "RTTY");
+        assert!(!s.rtty_afsk_usb());
+        assert!(!s.rtty_tone_swap());
+        s.rtty_reverse = true;
+        assert!(s.rtty_tone_swap(), "FSK keeps the operator's own Reverse");
+        s.rtty_backend = "afsk".into();
+        // (side, reverse) → swap: LSB+reverse == USB, USB+reverse == LSB.
+        for (side, reverse, swap) in [
+            ("lsb", false, false),
+            ("lsb", true, true),
+            ("usb", false, true),
+            ("usb", true, false),
+        ] {
+            s.rtty_afsk_sideband = side.into();
+            s.rtty_reverse = reverse;
+            assert_eq!(s.rtty_tone_swap(), swap, "{side} reverse={reverse}");
+        }
+    }
+
+    /// A settings file from before the AFSK sideband loads on LSB, and a USB pick round-trips
+    /// under its camelCase wire key.
+    #[test]
+    fn rtty_afsk_sideband_defaults_to_lsb_and_round_trips() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("rttyAfskSideband")
+            .expect("the wire key");
+        let old: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(old.rtty_afsk_sideband, "lsb");
+        let mut s = Settings::default();
+        s.rtty_afsk_sideband = "usb".into();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.rtty_afsk_sideband, "usb");
+    }
+
     /// FM is a VHF/UHF (and 10 m) mode. Selecting it must NOT follow the operator down to an
     /// HF band where it does not belong — see `rig_mode`.
     ///
@@ -7861,8 +9893,8 @@ mod tests {
     /// written in these two words can be right for both brands at once.
     ///
     /// Nothing on the air changes either way (`CW` and `CWR` are the same emission on the same
-    /// dial), so this is a receive preference — which is how the rig manuals and N1MM both
-    /// model it, and why it is now a checkbox with no band term.
+    /// dial), so this is a receive preference — which is how the rig manuals model it, and
+    /// why it is now a checkbox with no band term.
     #[test]
     fn cw_commands_the_rigs_own_normal_cw_on_every_band() {
         let mut s = Settings::default();
@@ -7934,7 +9966,7 @@ mod tests {
     }
 
     /// The preference has to SURVIVE A RESTART, and the seam it crosses is the one
-    /// `reference-settings-plumbing` warns about: a serde default turns a loud failure into a
+    /// where a serde default turns a loud failure into a
     /// silent reset. An operator who ticks this once and finds it off every launch is worse off
     /// than before the setting existed, because now they think they have fixed it.
     ///
@@ -8109,6 +10141,26 @@ mod tests {
         assert_eq!(s.rig_mode(), "USB");
         s.dial_mhz = 7.200;
         assert_eq!(s.rig_mode(), "LSB");
+    }
+
+    /// 60 m phone is upper sideband. 47 CFR 97.303(h) sets the J3E carrier 1.5 kHz BELOW each
+    /// channel centre and holds the emission to 2.8 kHz, which only USB satisfies; the IARU
+    /// Region 1 plan and RAC's plan say USB too. The below-10-MHz LSB convention stops at 60 m.
+    #[test]
+    fn phone_on_60m_commands_usb_and_the_other_bands_keep_their_convention() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Phone;
+        s.phone_mode = "ssb".into();
+        // Controls first: the bands either side keep their sideband.
+        for (dial, want) in [(3.8, "LSB"), (7.2, "LSB"), (14.2, "USB")] {
+            s.dial_mhz = dial;
+            assert_eq!(s.rig_mode(), want, "phone at {dial} MHz");
+        }
+        // The four US channel carriers and one dial inside the 5351.5-5366.5 kHz segment.
+        for dial in [5.3305, 5.3465, 5.3570, 5.3715, 5.4035] {
+            s.dial_mhz = dial;
+            assert_eq!(s.rig_mode(), "USB", "60 m phone at {dial} MHz");
+        }
     }
 
     #[test]
@@ -9316,6 +11368,29 @@ mod tests {
         assert_eq!(s.dial_hz(), 14_074_000); // default = FT8 20 m (the default mode)
     }
 
+    /// The CW turn cue's sound ships off, on the exact wire key the UI writes (`soundCwTurn`), a
+    /// settings file from before it loads with it off, and a choice of on survives a save.
+    #[test]
+    fn the_cw_turn_sound_ships_off_on_its_wire_key_and_round_trips() {
+        let s = Settings::default();
+        assert!(!s.sound_cw_turn, "an earcon ships off");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"soundCwTurn\":false"),
+            "the wire key the UI writes"
+        );
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        older.as_object_mut().unwrap().remove("soundCwTurn");
+        let older: Settings = serde_json::from_value(older).unwrap();
+        assert!(!older.sound_cw_turn, "a file from before it: off");
+        let on = Settings {
+            sound_cw_turn: true,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(back.sound_cw_turn, "on survives a save and a load");
+    }
+
     /// The SSTV section's four fields, on the exact wire keys the UI hand-writes.
     ///
     /// All three carry an interior two-letter acronym, which is the `decodeFlowHz` /
@@ -9789,18 +11864,94 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The compose box's six JS8 fields: JS8Call 3.0.3's own defaults (`CQMessage`, `Reply`,
+    /// `Macros`, `TransmitDirected`, `PillsEnabled`, `Spellcheck`), the exact camelCase wire keys,
+    /// an upgrader's file, a cleared list and text that stay cleared, and the TS mirror read from
+    /// `ui/src/types.ts` itself.
+    #[test]
+    fn js8_compose_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(s.js8_cq_text, "CQ CQ CQ <MYGRID4>", "JS8Call CQMessage");
+        assert_eq!(s.js8_reply_text, "HW CPY?", "JS8Call Reply");
+        assert_eq!(
+            s.js8_saved_messages,
+            vec!["TNX 73 GL".to_string()],
+            "JS8Call Macros"
+        );
+        assert!(s.js8_send_at_once, "JS8Call TransmitDirected: on");
+        assert!(s.js8_pills, "JS8Call PillsEnabled: on");
+        assert!(s.js8_word_suggestions, "JS8Call Spellcheck: on");
+
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8CqText\":\"CQ CQ CQ <MYGRID4>\"",
+            "\"js8ReplyText\":\"HW CPY?\"",
+            "\"js8SavedMessages\":[\"TNX 73 GL\"]",
+            "\"js8SendAtOnce\":true",
+            "\"js8Pills\":true",
+            "\"js8WordSuggestions\":true",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        // An upgrader's file predates every key: JS8Call's defaults, so the CQ button keys the CQ
+        // it always keyed.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_cq_text, "CQ CQ CQ <MYGRID4>");
+        assert_eq!(old.js8_saved_messages, vec!["TNX 73 GL".to_string()]);
+        assert!(old.js8_send_at_once && old.js8_pills && old.js8_word_suggestions);
+        // What the operator cleared or turned off stays so, not the default.
+        let mine: Settings = serde_json::from_str(
+            r#"{"js8CqText":"","js8ReplyText":"TNX FER CALL","js8SavedMessages":[],"js8SendAtOnce":false,"js8Pills":false,"js8WordSuggestions":false}"#,
+        )
+        .unwrap();
+        assert_eq!(mine.js8_cq_text, "", "an empty CQ message stays empty");
+        assert_eq!(mine.js8_reply_text, "TNX FER CALL");
+        assert!(
+            mine.js8_saved_messages.is_empty(),
+            "no saved messages stays none"
+        );
+        assert!(!mine.js8_send_at_once && !mine.js8_pills && !mine.js8_word_suggestions);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&mine).unwrap()).unwrap();
+        assert_eq!(back, mine);
+
+        // The TS mirror carries every key, as a typed field line (`  js8CqText: string`).
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in [
+            "js8CqText",
+            "js8ReplyText",
+            "js8SavedMessages",
+            "js8SendAtOnce",
+            "js8Pills",
+            "js8WordSuggestions",
+        ] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
+        // CONTROL: the scan finds nothing that is not there.
+        assert!(!body
+            .lines()
+            .any(|l| l.trim_start().starts_with("js8CqIdx:")));
+    }
+
     /// The ten JS8 fields: JS8Call's own defaults (G3, operator-approved 2026-09-05), the
     /// exact camelCase wire keys, an upgrader's file, and the TS mirror — read from
     /// `ui/src/types.ts` itself, the `the_typescript_patch_carries_every_field_the_rust_patch_does`
     /// cure, because a hand-written key that disagrees compiles clean on both sides and the
-    /// control silently does nothing (reference-settings-plumbing).
+    /// control silently does nothing.
     #[test]
     fn js8_settings_defaults_wire_keys_and_ts_mirror() {
         let s = Settings::default();
         assert_eq!(s.js8_speed, 1, "Normal is index 1 of Speed::ALL");
         assert_eq!(
-            s.js8_rx_speeds, 15,
-            "all four speeds decode with zero toggles"
+            s.js8_rx_speeds, 31,
+            "all five speeds, JS8 60 too, decode with zero toggles"
         );
         assert_eq!(
             s.js8_hb_interval_min, 0,
@@ -9840,7 +11991,7 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let keys = [
             "\"js8Speed\":1",
-            "\"js8RxSpeeds\":15",
+            "\"js8RxSpeeds\":31",
             "\"js8HbIntervalMin\":0",
             "\"js8CqIntervalMin\":0",
             "\"js8HbAck\":false",
@@ -9863,6 +12014,13 @@ mod tests {
         // An upgrader's file predates every key: defaults apply, nothing fails to load.
         let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
         assert_eq!(old.js8_speed, 1);
+        assert_eq!(old.js8_rx_speeds, 31, "no key: every speed, JS8 60 too");
+        // A mask saved before JS8 60 existed keeps its meaning — the four speeds it names.
+        let four: Settings = serde_json::from_str(r#"{"js8RxSpeeds":15}"#).unwrap();
+        assert_eq!(
+            four.js8_rx_speeds, 15,
+            "a stored mask is never widened on load"
+        );
         assert!(old.js8_autoreply && old.js8_relay && !old.js8_hb_ack);
         assert!(
             old.js8_autoreply_confirmation,
@@ -9938,6 +12096,330 @@ mod tests {
             !body.lines().any(|l| l.trim_start().starts_with("js8HbOn:"))
                 && !body.lines().any(|l| l.trim_start().starts_with("js8CqOn:")),
             "HB and CQ-repeat on/off are session-only and must never be settings"
+        );
+    }
+
+    /// The five heartbeat-and-presence switches: JS8Call 3.0.3's defaults (networking, HB
+    /// anywhere, the 55-minute rule and @ALLCALL avoidance off; the QSO pause on), the exact
+    /// camelCase wire keys, an upgrader's file, an explicit choice surviving the round trip, and
+    /// the TS mirror read from `ui/src/types.ts` itself.
+    #[test]
+    fn js8_heartbeat_and_presence_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(
+            (
+                s.js8_hb_networking,
+                s.js8_hb_anywhere,
+                s.js8_hb_qso_pause,
+                s.js8_hb_ack_rate_limit,
+                s.js8_avoid_allcall
+            ),
+            (false, false, true, false, false),
+            "JS8Call's SubModeHB, BeaconAnywhere, HeartbeatQSOPause, HBRateLimit, AvoidAllcall"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8HbNetworking\":false",
+            "\"js8HbAnywhere\":false",
+            "\"js8HbQsoPause\":true",
+            "\"js8HbAckRateLimit\":false",
+            "\"js8AvoidAllcall\":false",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (
+                old.js8_hb_networking,
+                old.js8_hb_anywhere,
+                old.js8_hb_qso_pause,
+                old.js8_hb_ack_rate_limit,
+                old.js8_avoid_allcall
+            ),
+            (false, false, true, false, false),
+            "an upgrader's file takes JS8Call's defaults"
+        );
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8HbNetworking":true,"js8HbAnywhere":true,"js8HbQsoPause":false,"js8HbAckRateLimit":true,"js8AvoidAllcall":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                chosen.js8_hb_networking,
+                chosen.js8_hb_anywhere,
+                chosen.js8_hb_qso_pause,
+                chosen.js8_hb_ack_rate_limit,
+                chosen.js8_avoid_allcall
+            ),
+            (true, true, false, true, true),
+            "every choice, the QSO pause off included, survives the load"
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in [
+            "js8HbNetworking",
+            "js8HbAnywhere",
+            "js8HbQsoPause",
+            "js8HbAckRateLimit",
+            "js8AvoidAllcall",
+        ] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
+    }
+
+    /// JS8 heartbeat networking, for a file from before the switch: on for an operator whose
+    /// settings show they used heartbeats (HB ACK on, or an HB repeat interval set), so the HB
+    /// button they had stays; off, JS8Call's default, for everyone else. A file that has the key
+    /// keeps its own choice, whatever else it holds.
+    #[test]
+    fn a_file_from_before_heartbeat_networking_keeps_a_heartbeat_user_s_hb_button() {
+        let path = scratch_dir("hbnet").join("settings.json");
+        let load = |hb_ack: bool, interval: u16, saved: Option<bool>| {
+            let s = Settings {
+                js8_hb_ack: hb_ack,
+                js8_hb_interval_min: interval,
+                ..Settings::default()
+            };
+            let mut v = serde_json::to_value(&s).unwrap();
+            let fields = v.as_object_mut().unwrap();
+            match saved {
+                Some(on) => {
+                    fields.insert("js8HbNetworking".into(), on.into());
+                }
+                None => assert!(
+                    fields.remove("js8HbNetworking").is_some(),
+                    "the key was there to remove, or this writes a current file and proves nothing"
+                ),
+            }
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+            Settings::load(&path).js8_hb_networking
+        };
+        assert_eq!(
+            [
+                load(false, 0, None),
+                load(true, 0, None),
+                load(false, 10, None),
+                load(true, 10, None)
+            ],
+            [false, true, true, true],
+            "an upgrader: on with HB ACK on or an HB repeat interval set, off otherwise"
+        );
+        assert_eq!(
+            [load(true, 10, Some(false)), load(false, 0, Some(true))],
+            [false, true],
+            "a file with the key keeps its own choice"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// JS8Call's two send options, off by default as JS8Call ships them: Hold PTT between frames
+    /// (`HoldPTT`) and Allow Tx frequency changes while transmitting (`TxQSYAllowed`), the TX
+    /// offset's half. The wire keys, an upgrader's file (off), an explicit on that survives the
+    /// round trip, and the TS mirror.
+    #[test]
+    fn js8_send_options_default_off_and_round_trip() {
+        let s = Settings::default();
+        assert!(!s.js8_hold_ptt, "JS8Call HoldPTT default: off");
+        assert!(
+            !s.js8_tx_offset_while_sending,
+            "JS8Call TxQSYAllowed default: off"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        for k in ["\"js8HoldPtt\":false", "\"js8TxOffsetWhileSending\":false"] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(
+            !old.js8_hold_ptt && !old.js8_tx_offset_while_sending,
+            "an upgrader's file holds no PTT and moves no offset mid-message"
+        );
+        let on: Settings =
+            serde_json::from_str(r#"{"js8HoldPtt":true,"js8TxOffsetWhileSending":true}"#).unwrap();
+        assert!(on.js8_hold_ptt && on.js8_tx_offset_while_sending);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back, on);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in ["js8HoldPtt: boolean", "js8TxOffsetWhileSending: boolean"] {
+            assert!(
+                body.lines().any(|l| l.trim_start() == key),
+                "ui/src/types.ts Settings lacks `{key}`"
+            );
+        }
+    }
+
+    /// JS8Call's TX delay, 0.2 s by default (`TxDelay`), stored in ms: the wire key, an upgrader's
+    /// file (0.2 s), a value of the operator's own surviving the round trip, and the TS mirror.
+    #[test]
+    fn js8_tx_delay_defaults_to_js8calls_and_round_trips() {
+        let s = Settings::default();
+        assert_eq!(s.js8_tx_delay_ms, 200, "JS8Call TxDelay default: 0.2 s");
+        assert!(serde_json::to_string(&s)
+            .unwrap()
+            .contains("\"js8TxDelayMs\":200"));
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_tx_delay_ms, 200, "an upgrader keys 0.2 s early");
+        let set: Settings = serde_json::from_str(r#"{"js8TxDelayMs":400}"#).unwrap();
+        assert_eq!(set.js8_tx_delay_ms, 400);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
+        assert_eq!(back, set);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        assert!(
+            body.lines()
+                .any(|l| l.trim_start() == "js8TxDelayMs: number"),
+            "ui/src/types.ts Settings lacks `js8TxDelayMs: number`"
+        );
+    }
+
+    /// JS8's internet links: the defaults (the @APRSIS gateway OFF, though JS8Call ships its
+    /// SpotToAPRS on; the inbound APRS-IS relay OFF; nobody on the never-spot list), on the wire
+    /// under their own keys, an upgrader's file loading those defaults, an explicit choice
+    /// surviving the round trip, and the TS mirror.
+    #[test]
+    fn js8_link_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(
+            (
+                s.js8_spot_aprs,
+                s.js8_aprs_relay,
+                s.js8_spot_never.is_empty()
+            ),
+            (false, false, true),
+            "the @APRSIS gateway off until the operator turns it on; JS8Call's APRSISRelay off (it \
+             keys unattended); JS8Call's SpotBlacklist empty"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8SpotAprs\":false",
+            "\"js8AprsRelay\":false",
+            "\"js8SpotNever\":[]",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        // An upgrader's file has none of the three keys: the gateway loads off.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (
+                old.js8_spot_aprs,
+                old.js8_aprs_relay,
+                old.js8_spot_never.is_empty()
+            ),
+            (false, false, true),
+            "an upgrader who never set them: the gateway and the relay off, the list empty"
+        );
+        // Each explicit choice differs from its default, so a key read back proves itself.
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8SpotAprs":true,"js8AprsRelay":true,"js8SpotNever":["W1AW","K1ABC"]}"#,
+        )
+        .unwrap();
+        assert!(chosen.js8_spot_aprs && chosen.js8_aprs_relay);
+        assert_eq!(chosen.js8_spot_never, vec!["W1AW", "K1ABC"]);
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in ["js8SpotAprs", "js8AprsRelay", "js8SpotNever"] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
+    }
+
+    /// The JS8 lists, the end and missing-frame marks and the sounds: JS8Call 3.0.3's defaults
+    /// (an empty RX block list and highlight lists, ♢ and ……, every sound off), the exact camelCase
+    /// wire keys, an upgrader's file, a round trip of chosen values, and the TS mirror.
+    #[test]
+    fn js8_list_mark_and_sound_settings_default_as_js8call_and_round_trip() {
+        let s = Settings::default();
+        assert!(s.js8_rx_blocklist.is_empty(), "RXCallsignBlocklist: empty");
+        assert!(
+            s.js8_highlight_primary.is_empty() && s.js8_highlight_secondary.is_empty(),
+            "Primary/SecondaryHighlightWords: empty"
+        );
+        assert_eq!(s.js8_eot, "\u{2662}", "EOTCharacter: ♢");
+        assert_eq!(s.js8_mfi, "\u{2026}\u{2026}", "MFICharacter: ……");
+        assert!(s.js8_sounds.is_empty(), "EnableNotifications: off");
+        let json = serde_json::to_string(&s).unwrap();
+        for k in [
+            "\"js8RxBlocklist\":[]",
+            "\"js8HighlightPrimary\":[]",
+            "\"js8HighlightSecondary\":[]",
+            "\"js8Eot\":\"\u{2662}\"",
+            "\"js8Mfi\":\"\u{2026}\u{2026}\"",
+            "\"js8Sounds\":[]",
+        ] {
+            assert!(json.contains(k), "missing wire key/value {k}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (old.js8_eot.as_str(), old.js8_mfi.as_str()),
+            ("\u{2662}", "\u{2026}\u{2026}"),
+            "an upgrader's file prints JS8Call's marks"
+        );
+        assert!(old.js8_rx_blocklist.is_empty() && old.js8_sounds.is_empty());
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8RxBlocklist":["W1AW"],"js8HighlightPrimary":["@FUN","K1ABC"],"js8HighlightSecondary":["NET"],"js8Eot":"","js8Mfi":"...","js8Sounds":["inbox","cq"]}"#,
+        )
+        .unwrap();
+        assert_eq!(chosen.js8_rx_blocklist, ["W1AW"]);
+        assert_eq!(chosen.js8_highlight_primary, ["@FUN", "K1ABC"]);
+        assert_eq!(chosen.js8_highlight_secondary, ["NET"]);
+        assert_eq!(
+            chosen.js8_eot, "",
+            "an empty end mark stays empty, not the default"
+        );
+        assert_eq!(chosen.js8_mfi, "...");
+        assert_eq!(chosen.js8_sounds, ["inbox", "cq"]);
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        for key in [
+            "js8RxBlocklist",
+            "js8HighlightPrimary",
+            "js8HighlightSecondary",
+            "js8Eot",
+            "js8Mfi",
+            "js8Sounds",
+        ] {
+            assert!(typed(key), "ui/src/types.ts Settings is missing `{key}`");
+        }
+        assert!(
+            !typed("js8RxBlockList"),
+            "control: a near miss is not found"
         );
     }
 
@@ -11421,6 +13903,28 @@ mod tests {
         ]
     }
 
+    /// CW SPEED MATCH ships OFF, at 15..=35 WPM, also in a file that predates it, on its wire keys,
+    /// declared in `ui/src/types.ts`.
+    #[test]
+    fn cw_speed_match_ships_off_with_its_wire_keys_and_ts_mirror() {
+        let read = |s: &Settings| (s.cw_speed_match, s.cw_speed_match_min, s.cw_speed_match_max);
+        assert_eq!(read(&Settings::default()), (false, 15, 35));
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(read(&old), (false, 15, 35));
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        let ts = include_str!("../../../ui/src/types.ts");
+        for key in ["cwSpeedMatch", "cwSpeedMatchMin", "cwSpeedMatchMax"] {
+            assert!(
+                json.contains(&format!("\"{key}\":")),
+                "missing wire key {key}"
+            );
+            assert!(
+                ts.contains(&format!("  {key}?: ")),
+                "ui/src/types.ts lacks {key}"
+            );
+        }
+    }
+
     /// ENTER SENDS MESSAGE's four switches: OFF on a fresh install and in a file that predates
     /// them, on their exact wire keys, and declared in `ui/src/types.ts`. Nothing but the
     /// operator turns ESM on: it makes Enter a way to start a transmission.
@@ -11470,6 +13974,34 @@ mod tests {
         );
         // CONTROL: the scan finds only what is declared.
         assert!(!declares("contestEsm") && !declares("contestEsmCW"));
+    }
+
+    /// The contest entry's "RST sent" box: OFF on a fresh install, on its exact wire key, back from
+    /// the real file as it went in, and declared in `ui/src/types.ts`.
+    #[test]
+    fn contest_rst_sent_box_ships_off_round_trips_and_has_a_ts_mirror() {
+        assert!(!Settings::default().contest_rst_sent_box);
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"contestRstSentBox\":false"), "{json}");
+        let path = scratch_dir("rst_sent_box").join("settings.json");
+        for want in [true, false] {
+            let s = Settings {
+                contest_rst_sent_box: want,
+                ..Settings::default()
+            };
+            s.save(&path).unwrap();
+            assert_eq!(Settings::load(&path).contest_rst_sent_box, want);
+        }
+        let _ = std::fs::remove_file(&path);
+        let ts = include_str!("../../../ui/src/types.ts");
+        let start = ts.find("export interface Settings {").expect("Settings");
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("closed")];
+        assert!(
+            body.lines()
+                .any(|l| l.trim_start().starts_with("contestRstSentBox?:")),
+            "ui/src/types.ts Settings is missing `contestRstSentBox`"
+        );
     }
 
     /// Each ESM switch survives a restart: on by itself, it comes back from the real file as it
@@ -12433,6 +14965,88 @@ mod tests {
         );
     }
 
+    /// ⭐ NO RADIO'S DAEMON IS GIVEN THE TCI SERVER'S PORT while the server is on, as none is given
+    /// the CAT broker's: a radio added steps its CAT and rotator ports over it, and a CAT or
+    /// rotator daemon already on it (an older file, or a port the operator moved the server onto)
+    /// is moved off on load. CONTROL: with the server off its port is no one's, and nothing
+    /// moves.
+    #[test]
+    fn a_radio_daemon_never_takes_the_tci_servers_port() {
+        // The broker off and radio A's CAT on 4532 with its unused rotator port 4533, so 4534 is
+        // where a radio added next would put its CAT: the server sits there.
+        let station = |server: bool, radios: Vec<RadioProfile>| {
+            let mut s = Settings {
+                cat_broker: false,
+                tci_server: server,
+                tci_server_port: 4534,
+                ..Settings::default()
+            };
+            s.radios = radios;
+            s.active_radio = 0;
+            s
+        };
+        let added = |server: bool| {
+            let mut s = station(server, vec![serial_rig(0, "A", 4532)]);
+            let id = s.add_radio_profile();
+            let p = s
+                .radios
+                .iter()
+                .find(|p| p.id == id)
+                .expect("the added radio");
+            vec![(p.name.clone(), p.rigctld_port, p.rotctld_port)]
+        };
+        let repaired = |server: bool, b: RadioProfile| {
+            let mut s = station(server, vec![serial_rig(0, "A", 4532), b]);
+            s.ensure_distinct_radio_ports();
+            daemon_ports(&s)
+        };
+        let mut rotator_on_it = serial_rig(1, "B", 4535);
+        rotator_on_it.rotator_model = 1;
+        rotator_on_it.rotctld_port = 4534;
+        let rows = vec![
+            (
+                "a radio added, the server on",
+                added(true),
+                vec![("Radio 2".into(), 4535, 4536)],
+            ),
+            (
+                "CONTROL: a radio added, the server off",
+                added(false),
+                vec![("Radio 2".into(), 4534, 4535)],
+            ),
+            (
+                "B's CAT on the server's port, the server on",
+                repaired(true, serial_rig(1, "B", 4534)),
+                vec![("A".into(), 4532, 4533), ("B".into(), 4533, 4533)],
+            ),
+            (
+                "CONTROL: B's CAT there, the server off",
+                repaired(false, serial_rig(1, "B", 4534)),
+                vec![("A".into(), 4532, 4533), ("B".into(), 4534, 4533)],
+            ),
+            (
+                "B's rotator on the server's port, the server on",
+                repaired(true, rotator_on_it.clone()),
+                vec![("A".into(), 4532, 4533), ("B".into(), 4535, 4533)],
+            ),
+            (
+                "CONTROL: B's rotator there, the server off",
+                repaired(false, rotator_on_it),
+                vec![("A".into(), 4532, 4533), ("B".into(), 4535, 4534)],
+            ),
+        ];
+        let wrong: Vec<String> = rows
+            .into_iter()
+            .filter(|(_, got, want)| got != want)
+            .map(|(what, got, want)| format!("{what}: {got:?}, not {want:?}"))
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "the TCI server's port and the daemons:\n  {}",
+            wrong.join("\n  ")
+        );
+    }
+
     /// A NET rigctl radio: Connection Network, Rig Model NET rigctl, Network Address `addr`, Nexus's
     /// own rigctld TCP Port `port`.
     fn net_rigctl(id: u32, name: &str, addr: &str, port: u16) -> RadioProfile {
@@ -13366,6 +15980,32 @@ mod tests {
                 "{label} still active in Unassisted mode — the switch must silence every source"
             );
         }
+    }
+
+    /// The record names the CW decoder, on whenever CW decoding runs: CQ WW's rule names "a CW
+    /// decoder", and with the AI switch off the classic decoder still copies. Only an unassisted
+    /// entry stops both ([`Settings::cw_decoder_active`]).
+    #[test]
+    fn the_record_names_the_cw_decoder_on_whenever_cw_decoding_runs() {
+        let mut s = Settings::default();
+        s.ai_cw_enabled = false;
+        assert_eq!(
+            s.assistance_sources()[0],
+            ("CW decoder", true),
+            "with the AI switch off the classic decoder still copies"
+        );
+        s.ai_cw_enabled = true;
+        assert_eq!(
+            s.assistance_sources()[0],
+            ("CW decoder", true),
+            "the AI decoder copies"
+        );
+        s.unassisted_mode = true;
+        assert_eq!(
+            s.assistance_sources()[0],
+            ("CW decoder", false),
+            "an unassisted entry decodes no CW"
+        );
     }
 
     /// It OVERRIDES, never OVERWRITES. The operator's own settings must survive untouched,

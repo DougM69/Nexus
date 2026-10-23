@@ -450,9 +450,8 @@ describe('the Yaesu G-5500 by its own name', () => {
 
 describe('PstRotatorAz by name (Hamlib model 3)', () => {
   // The operator (#362): "Add model 3 to the picker". YO3DMU's PstRotatorAz takes commands over
-  // UDP, port 12000 by default, and Hamlib's PstRotator backend (model 3) speaks that protocol, so
-  // the entry saves 3 and its port box takes an address. The bundled Hamlib 4.7.1 writes the
-  // bearing with `%f.2`, a typo for `%.2f`, so 123.4° goes out as 123.400002.2: the hint says so.
+  // UDP, port 12000 by default. The entry saves Hamlib's number for it, 3, and its port box takes
+  // an address; Nexus talks to PstRotatorAz itself, and listens for its replies on port + 1.
   const labelOf = (model: number) => ROTATOR_MODELS.find((r) => r.model === model)?.label ?? ''
   const portBox = () => screen.getByRole('textbox', { name: 'Rotator serial port' }) as HTMLInputElement
 
@@ -476,12 +475,13 @@ describe('PstRotatorAz by name (Hamlib model 3)', () => {
     expect(screen.queryByRole('spinbutton', { name: 'Hamlib rotator model number' })).toBeNull()
   })
 
-  it('its port box asks for the address, and its hint says where to switch UDP on and what the backend sends', async () => {
+  it('its port box asks for the address, and its hint says where to switch UDP on and where the replies come back', async () => {
     await openRotator(3, 9600)
     expect(portBox().placeholder).toBe('127.0.0.1:12000')
     const hint = screen.getByText(/^PstRotatorAz: enter 127\.0\.0\.1:12000 as the port/)
     expect(hint.textContent).toMatch(/turn on UDP Control in its Setup/)
-    expect(hint.textContent).toMatch(/123\.400002\.2 for 123\.4°/)
+    expect(hint.textContent).toMatch(/Nexus listens for its replies on that port \+ 1, 12001, so no other program may use it/)
+    expect(hint.textContent).not.toMatch(/garble/)
     // In place of the baud hint, which would tell a UDP program to match a line rate.
     expect(screen.queryByText(/Match the rate your controller is set to/)).toBeNull()
   })

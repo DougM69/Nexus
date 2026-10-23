@@ -68,6 +68,9 @@ const INKS = ['--text', '--text-dim', '--text-faint'] as const
 const NIGHT_TOKENS: ReadonlySet<string> = new Set([
   ...SURFACES,
   ...INKS,
+  // The contest entry's sample ink, made from --text-faint and --bg, so it is night-tuned with them
+  // (styles-placeholder.test.tsx holds it to the text floor in every mode, night included).
+  '--text-sample',
   '--accent',
   '--accent-ink',
   '--focus-ring',
@@ -81,7 +84,11 @@ const NIGHT_TOKENS: ReadonlySet<string> = new Set([
   '--well-grid',
 ])
 /** Tokens defined as an ink, which therefore move with it at night — and only that way. */
-const FOLLOWS_INK: Readonly<Record<string, string>> = { '--on-air-rim': '--text', '--state-pending': '--text-dim' }
+const FOLLOWS_INK: Readonly<Record<string, string>> = {
+  '--on-air-rim': '--text',
+  '--state-pending': '--text-dim',
+  '--cw-unconfirmed': '--text-faint',
+}
 /** DESIGN.md's status roles, less the two de-emphasis states that sit under 3:1 on purpose. */
 const STATUS = [
   '--status-new-entity',

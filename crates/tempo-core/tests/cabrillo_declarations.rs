@@ -339,8 +339,14 @@ fn existing_entrant(entry: Entry) -> CabrilloEntrant {
 /// CATEGORY lines CQ asks every entry for — the declared assistance, the declared `band` (`""`
 /// for none), the contest's own mode and the declared power — then the entrant's CLUB, EMAIL
 /// and NAME. `(category lines, entrant lines)`, each in file order; both empty for every
-/// contest that is not CQ's. CQ WW RTTY wrote its CATEGORY lines before (its log decides the
-/// band), so it gains CLUB alone.
+/// contest that is not CQ's. CQ WW RTTY wrote its CATEGORY lines and its claimed score before
+/// (its log decides the band), so it gains CLUB alone.
+///
+/// The entrant lines open with the CLAIMED-SCORE both sponsors' pages list, for an entry that
+/// declares no band or `ALL` (the file sits it after LOCATION, before CLUB). A single-band entry
+/// claims none here: the three rows are on 20 m and 40 m, and CQ scores only the declared band.
+/// The rows' score: CQ WW 0 + 3 + 3 points × (zones 2 + 1, countries 2 + 1) = 36; CQ WPX 1 + 3 + 6
+/// points × prefixes K1, DL1 and JA1 = 30.
 fn cq_lines(event: &str, entry: Entry, band: &str) -> (Vec<String>, Vec<String>) {
     let declared = entry == Entry::Declared;
     let who = |lines: &[&str]| -> Vec<String> {
@@ -350,9 +356,11 @@ fn cq_lines(event: &str, entry: Entry, band: &str) -> (Vec<String>, Vec<String>)
             Vec::new()
         }
     };
-    let mode = match event {
-        "cqww_cw" | "cqwpx_cw" => "CW",
-        "cqww_ssb" | "cqwpx_ssb" => "SSB",
+    let (mode, claimed) = match event {
+        "cqww_cw" => ("CW", 36),
+        "cqww_ssb" => ("SSB", 36),
+        "cqwpx_cw" => ("CW", 30),
+        "cqwpx_ssb" => ("SSB", 30),
         "cqww_rtty" => return (Vec::new(), who(&["CLUB: EXAMPLE CONTEST CLUB"])),
         _ => return (Vec::new(), Vec::new()),
     };
@@ -365,13 +373,17 @@ fn cq_lines(event: &str, entry: Entry, band: &str) -> (Vec<String>, Vec<String>)
     }
     categories.push(format!("CATEGORY-MODE: {mode}"));
     categories.push("CATEGORY-POWER: LOW".to_string());
+    let claim = (band.is_empty() || band == "ALL").then(|| format!("CLAIMED-SCORE: {claimed}"));
     (
         categories,
-        who(&[
-            "CLUB: EXAMPLE CONTEST CLUB",
-            "EMAIL: k1abc@example.com",
-            "NAME: A NAME",
-        ]),
+        claim
+            .into_iter()
+            .chain(who(&[
+                "CLUB: EXAMPLE CONTEST CLUB",
+                "EMAIL: k1abc@example.com",
+                "NAME: A NAME",
+            ]))
+            .collect(),
     )
 }
 
@@ -639,6 +651,7 @@ fn a_cq_ww_multi_two_entry_heads_its_file_the_way_the_sponsor_shows() {
             "CATEGORY-POWER: LOW",
             "CATEGORY-TRANSMITTER: TWO",
             "LOCATION: IL",
+            "CLAIMED-SCORE: 36",
             "CLUB: EXAMPLE CONTEST CLUB",
             "CREATED-BY: Nexus",
             "EMAIL: k1abc@example.com",
@@ -843,7 +856,9 @@ fn an_edited_call_exports_the_golden_of_the_call_logged_right() {
 /// bands shown"*. CQ WW and WPX gain the line; CQ WW RTTY's log said `ALL` (20 m and 40 m) and
 /// the declaration says `20M`, which is what a single-band entrant who also logged other bands
 /// needs (*"Single band entrants are required to include all contacts made during the contest
-/// period, even if made on other bands"*); every other contest's file does not move.
+/// period, even if made on other bands"*); every other contest's file does not move. Those five
+/// files also lose their CLAIMED-SCORE, since the log holds a 40 m contact: *"Only contacts made
+/// on the band specified in the Cabrillo header will be considered for scoring purposes."*
 #[test]
 fn a_declared_band_is_written_only_where_the_sponsor_lists_it() {
     let with_band = |band: &str| CabrilloEntrant {
@@ -856,20 +871,37 @@ fn a_declared_band_is_written_only_where_the_sponsor_lists_it() {
             .map(String::from)
             .collect()
     };
+    let unclaimed = |event: &str, file: &str| -> String {
+        let claimed = match event {
+            "cqww_cw" | "cqww_ssb" => "CLAIMED-SCORE: 36\n",
+            "cqwpx_cw" | "cqwpx_ssb" => "CLAIMED-SCORE: 30\n",
+            // 1 + 3 + 3 points × (3 zones, 3 countries and the W/VE QTH MA).
+            "cqww_rtty" => "CLAIMED-SCORE: 49\n",
+            other => panic!("{other} claims no score"),
+        };
+        assert!(file.contains(claimed), "{event}: {claimed} in\n{file}");
+        file.replace(claimed, "")
+    };
     let mut written = 0;
     for case in &cases() {
         let none = export(case, Entry::Defaults, &CabrilloEntrant::default());
         let got = export(case, Entry::Defaults, &with_band("20M"));
         match case.event {
             "cqww_cw" | "cqww_ssb" | "cqwpx_cw" | "cqwpx_ssb" => {
-                assert_golden_plus(case.event, &got, &none, &["CATEGORY-BAND: 20M".into()]);
+                assert_golden_plus(
+                    case.event,
+                    &got,
+                    &unclaimed(case.event, &none),
+                    &["CATEGORY-BAND: 20M".into()],
+                );
                 written += 1;
             }
             "cqww_rtty" => {
                 assert_eq!(band_lines(&none), ["CATEGORY-BAND: ALL"], "the log's own");
                 assert_eq!(
                     got,
-                    none.replace("CATEGORY-BAND: ALL\n", "CATEGORY-BAND: 20M\n")
+                    unclaimed(case.event, &none)
+                        .replace("CATEGORY-BAND: ALL\n", "CATEGORY-BAND: 20M\n")
                 );
                 written += 1;
             }
@@ -909,7 +941,8 @@ fn a_declared_band_is_written_only_where_the_sponsor_lists_it() {
 /// do not enter operator callsigns in this field, the robot will reject your log"*. So a scored
 /// CQ entry's file needs its assistance, band, mode and power, and a multi-operator one its
 /// class and operators. A checklog is not scored, and no other contest's sponsor is read as
-/// requiring any of them. Each name is a line the export leaves out, by value.
+/// requiring any of them; the Illinois QSO Party requires its own two, the entrant's ENTRY-CLASS and
+/// EMAIL. Each name is a line the export leaves out, by value.
 #[test]
 fn the_lines_cq_requires_and_the_entry_left_blank_are_named() {
     let ssb = cases()
@@ -993,7 +1026,8 @@ fn the_lines_cq_requires_and_the_entry_left_blank_are_named() {
     );
     // Every other contest: nothing is named, whatever is blank. The CQ ones name what these
     // entries leave out (no band declared; a multi-operator entry with no class, whose OPERATORS
-    // line comes with the class), which is the control on this loop.
+    // line comes with the class), which is the control on this loop, and the Illinois QSO Party
+    // the entrant's class and email, left blank here.
     let mut named = Vec::new();
     for case in &cases() {
         for entry in [Entry::Defaults, Entry::Declared] {
@@ -1007,6 +1041,8 @@ fn the_lines_cq_requires_and_the_entry_left_blank_are_named() {
     assert_eq!(
         named,
         [
+            "ilqp Defaults: ENTRY-CLASS EMAIL",
+            "ilqp Declared: ENTRY-CLASS EMAIL",
             "cqww_cw Defaults: CATEGORY-BAND",
             "cqww_cw Declared: CATEGORY-BAND CATEGORY-TRANSMITTER OPERATORS",
             "cqww_ssb Defaults: CATEGORY-BAND",

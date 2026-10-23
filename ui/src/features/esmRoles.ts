@@ -14,13 +14,13 @@ import type { EsmRefusal, EsmRole } from './esm'
 import type { BuiltinMacro, MacroKey, MacroSetId } from './macroSets'
 
 /** Which F-keys send each step, in order. Two keys go out as ONE message, their texts joined —
- *  a set laid out as N1MM's CW default is (his call on F5, the exchange alone on F2) runs its
+ *  a set laid out with his call on F5 and the exchange alone on F2 runs its
  *  "his call and my exchange" as F5 followed by F2. A step with no keys has no message. */
 export type EsmRoleMap = Partial<Record<EsmRole, readonly MacroKey[]>>
 
 /** The contest layout — RTTY's contest set's as it ships: F1 CQ · F2 his call and my exchange ·
- *  F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 QSO B4 · F8 AGN. AGN is on F8 as in
- *  N1MM's default message sets; it traded keys with B4 (operator, 2026-10-10), and nothing else
+ *  F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 QSO B4 · F8 AGN. AGN is on F8; it
+ *  traded keys with B4 (operator, 2026-10-10), and nothing else
  *  moved. ESM sends seven of the eight, QSO B4 to a dupe that calls the run; F5 stays a key the
  *  operator presses. */
 export const CONTEST_LAYOUT_ROLES: EsmRoleMap = {
@@ -157,4 +157,17 @@ export function resolveEsmRole(
     texts.push(text)
   }
   return { keys: [...keys], text: texts.join(' ') }
+}
+
+/** CW SPEED MATCH: whether a CW message ANSWERS a station, so it may key at that station's
+ *  measured speed. A key with a step in `roles` answers unless the step is the CQ; anything else
+ *  (a key of the everyday set or of the operator's own, typed text) answers unless its first word
+ *  is CQ. The engine still keys it at the operator's own speed unless speed match is on and the
+ *  decoder has a fresh speed for the station being worked. */
+export function cwSendsAnswer(roles: EsmRoleMap, key: string | null, text: string): boolean {
+  if (key) {
+    const role = (Object.keys(roles) as EsmRole[]).find((r) => roles[r]?.includes(key as MacroKey))
+    if (role) return role !== 'cq'
+  }
+  return text.trim().split(/\s+/)[0]?.toUpperCase() !== 'CQ'
 }

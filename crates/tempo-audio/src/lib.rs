@@ -40,10 +40,12 @@ pub mod backend;
 /// the exact "fix the app / fix the rig menu" verdict. Pure logic unit-tested; the real
 /// probe rides the `serial` feature and runs only in the `test_cat` command context.
 pub mod baud_ladder;
-/// Stateful, anti-aliased capture-path resampler (device rate → 12 kHz). Pure
-/// DSP — no audio device — so it builds and unit-tests without the `device`
-/// feature; `device::CpalBackend` owns one per capture stream.
-pub mod capture_resample;
+// The audio a remote over carries each way and what feeds and plays it: tempo-codec's, below the
+// engine, so that the client core builds without this crate; named here as they always were.
+pub use tempo_codec::{
+    capture_resample, mic_decode, mic_encode, receive_audio, receive_decode, receive_encode,
+    resample, tci_audio, voice,
+};
 pub mod civ;
 /// Who owns this machine's clock, whether it is working, and whether anything
 /// Nexus can do would help. Unprivileged, read-only detection through the OS's
@@ -70,16 +72,22 @@ pub mod flex;
 #[cfg(feature = "device")]
 pub mod flexspectrum;
 pub mod frames;
+/// This computer's headset for a shack it drives over its own network: the shack's audio and a
+/// tone out through a fixed cushion, the microphone in, on wait-free rings; the devices behind the
+/// `device` feature.
+pub mod headset;
 /// Nexus's own Icom network (LAN / Wi-Fi) client (Beta, opt-in per radio): one network session to
 /// the radio, the native CI-V daemon carried over it, with keying refused. Needs tempo-net, so it
 /// rides the `device` feature like the Flex client.
 #[cfg(feature = "device")]
 pub mod icomlan;
+/// A JS8 frame keyed as JS8Call keys one: its TX delay before its period, its wave on the slot
+/// clock, nothing once its last tone has gone.
+mod js8_slot;
 /// JTTY RX decode thread (armed-decoder-on-the-RX-path, the `pskrx` pattern) over the engine's
 /// `jtty_rx` driver. RX ONLY — no TX path.
 #[cfg(feature = "device")]
 pub mod jttyrx;
-pub mod mic_decode;
 pub mod monitor;
 /// OmniRig (VE3NEA's Windows COM rig-control server) as a CAT backend — a local
 /// rigctld-protocol shim over COM, so `Rig` and every CAT verb are unchanged.
@@ -91,9 +99,8 @@ pub mod proc_util;
 /// RX side of PSK31 (TX runs in the radio loop — `service.rs`).
 #[cfg(feature = "device")]
 pub mod pskrx;
-pub mod receive_audio;
-pub mod receive_encode;
-pub mod resample;
+/// PstRotatorAz over its own UDP control, served to Nexus as a rotctld on loopback.
+pub mod pstrotator;
 pub mod rig;
 pub mod rigctld_proc;
 pub mod rigctld_server;
@@ -108,6 +115,10 @@ pub mod rttyrx;
 pub mod runtime;
 pub mod rxdsp;
 pub mod rxtap;
+/// An SDRplay receiver in the RF scope through SDRplay's SDRconnect, over its WebSocket API.
+/// Receive only. Needs tempo-net, so it rides the `device` feature like the TCI client.
+#[cfg(feature = "device")]
+pub mod sdrconnect;
 pub mod serial_keyer;
 pub mod slot;
 /// SSTV image/gallery persistence helpers (BMP writer, preview downscale,
@@ -117,16 +128,22 @@ pub mod sstv_store;
 /// RX ONLY — no TX path.
 #[cfg(feature = "device")]
 pub mod sstvrx;
+/// Nexus's TCI client as a CAT daemon: one session to an SDR program's TCI server, served to the
+/// radio loop as rigctld on the radio's own port. Needs tempo-net, so it rides the `device`
+/// feature like the Flex and Icom network clients.
+#[cfg(feature = "device")]
+pub mod tci;
 pub mod usbrig;
 /// Which rig a sound card or serial port belongs to, from USB topology (macOS).
 pub mod usbtopo;
-pub mod voice;
 pub mod winkeyer;
 /// FT-710 waterfall over the radio's internal FT4222 USB→SPI bridge.
 pub mod yaesu_wf;
 
 #[cfg(all(feature = "device", feature = "ai-cw"))]
 pub mod aicw;
+/// The AI CW decode thread's stitch rule (pure; built without the model so it is tested).
+pub mod aicw_stitch;
 
 /// Settle the AI CW decoder's CPU-cache probe before any thread exists.
 ///

@@ -36,18 +36,24 @@ Your operator identity, license privileges, and default frequency.
 - **Callsign** — "Your station callsign (required)." Everything keys off this.
 - **Grid** — "Maidenhead locator. All 6 characters — 4 measures every distance
   and bearing from the middle of a ~100-mile square." Drives satellite passes,
-  propagation anchoring, and distance math.
+  propagation anchoring, and distance math. Every contact you log carries it as
+  your grid (ADIF `MY_GRIDSQUARE`) unless the contact arrived with one of its own
+  (WSJT-X's, or one typed in the Logbook). Your LoTW uploads leave a grid Nexus
+  filled in itself out, so TQSL keeps signing from your Station Location; every
+  other service receives it.
 - **Operator name** — "Used by the CW `{NAME}` macro and logging."
 - **Operator at the key** — for multi-operator only: the callsign of whoever is
   actually running the station, when that is not the station call. It is stamped
   on every contact you log (ADIF `OPERATOR`), so a shared activation can be split
   per operator afterwards — POTA and Field Day both want each operator to submit
-  their own. Blank means single-op and nothing is stamped. Change it when you swap
-  seats. It is the same setting as **Operator at the key** under
+  their own. Blank means single-op: your station call is logged as the operator.
+  Change it when you swap seats. It is the same setting as **Operator at the key** under
   [Who's who at this event](#whos-who-at-this-event); editing either one moves
   both.
 - **State** — your US state or province for everyday contacts: the CW `{MYSTATE}`
-  macro and the QTH an RTTY ragchew sends. A contest has a box of its own,
+  macro, the QTH an RTTY ragchew sends, and your state on each contact you log
+  (ADIF `MY_STATE`). A park or summit activation logs the park's state instead,
+  never this one, and LoTW uploads leave it out as they do the grid. A contest has a box of its own,
   **State or province** under [Your station data](#your-station-data) on the
   Contesting tab, because a contest entry can be somewhere else: a portable or mobile
   entry types where it is operating there, and this one stays as it is.
@@ -71,12 +77,11 @@ recommendations.*
 
 ### Remote access
 
-Remote lets you use this station from a web browser. It is an early pilot on a test
-service that may be reset. The shack PC keeps the radio and stays in charge: what
-you click and type in the browser goes to the station, the browser shows what the
-station reports back, and your log, settings and radio never leave this computer.
-Remote streaming is a beta feature, and access could be revoked at any time; the card says
-so beside its switch. The card holds the streaming switch, where the station stands with
+Remote lets you use this station from a web browser. Remote streaming is a beta feature,
+and access could be revoked at any time; the card says so beside its switch. The shack PC
+keeps the radio and stays in charge: what you click and type in the browser goes to the
+station, the browser shows what the station reports back, and your log, settings and radio
+never leave this computer. The card holds the streaming switch, where the station stands with
 the Remote service, and your browsers with their keys. The pairing's transmit option and
 the per-browser permissions are folded under **Advanced**.
 
@@ -84,14 +89,12 @@ the per-browser permissions are folded under **Advanced**.
 browser, sign in, enter the code and choose **Attach this station**. Back here,
 compare the account ID on both screens and choose **Approve this account pairing** —
 that starts the account's 14-day trial, turns Remote on, and approves the browser you
-paired from. Tick **Also allow FT8/FT4 transmit from the Remote page** (under **Advanced**)
-first if that browser should also send FT8/FT4 from the Remote page's own controls. A
-browser streaming this station does not need it: it uses Nexus as you would here, transmit
-included. Any other browser asks with the Remote site's **Stream** button,
-and Nexus asks you wherever you are in it: **Let Chrome on Windows stream this station?**,
-with the browser's key. Approve it only if the key matches the one the browser shows.
-**Approve** there is **Approve browser** without the transmit tick; **Deny** refuses the
-request, and Escape closes the question and answers nothing.
+paired from. A browser streaming this station uses Nexus as you would here, transmit
+included, with this approval alone. Any other browser asks with the Remote site's **Stream**
+button, and Nexus asks you wherever you are in it: **Let Chrome on Windows stream this
+station?**, with the browser's key. Approve it only if the key matches the one the browser
+shows. **Approve** there is **Approve browser**; **Deny** refuses the request, and Escape
+closes the question and answers nothing.
 
 **Turn on Remote** opens an outbound encrypted connection. No port
 forwarding is required. Pairing stays in the operating system's credential store, and
@@ -106,53 +109,45 @@ that is the **Start at sign-in** setting under Appearance, and it stays off unle
 say yes.
 
 **What a browser may do** is decided here at the station. Approving a browser gives it
-station controls and remote logging, and FT8/FT4 transmit too when the approval's transmit
-box is ticked. All of it is kept when Nexus restarts, until you revoke it, for as long as
-that browser stays approved: a browser whose approval was revoked, or given again, starts
-with nothing kept. The switches under each approved browser, under **Advanced**, limit it,
-or give a permission back. Without any of these it can watch the station but not change it.
-With streaming on, station controls alone let a browser stream this window and use Nexus as
-you would here, transmit included; the transmit box is only for the Remote page's own FT8/FT4.
+station controls, which is all a stream needs: with streaming on, they let a browser stream
+this window and use Nexus as you would here, transmit included. They are kept when Nexus
+restarts, until you revoke them, for as long as that browser stays approved: a browser whose
+approval was revoked, or given again, starts with nothing kept. The switch under each
+approved browser, under **Advanced**, limits it, or gives station controls back. Without station
+controls a browser cannot stream this station.
 
 - **Allow station controls** — tuning, band and mode changes, receiver filters and
   DSP, RF power and mic gain, decoder settings, the amplifier, and which radio is
   active. One browser holds control at a time. Revoking them also ends that browser's stream.
-- **Allow remote logging** — the browser's Log QSO form writes to your logbook. Field
-  Day contacts still log at the station.
-- **Allow FT8/FT4 transmission from the Remote page** — calling CQ, answering and sending
-  FT8/FT4 messages with the Remote page's own controls. It also needs station controls, and
-  it goes through the normal TX switch and TX watchdog. Allowing it arms nothing: whenever
-  Nexus starts, the TX switch is off until the browser presses TX On. If the browser goes
-  away the station stops transmitting within five seconds, and
-  **Revoke FT8/FT4 transmission from the Remote page** stops it at once. Without the stream
-  below, no other mode transmits remotely. A browser streaming this station does not need
-  this permission: through the stream it transmits as you would here, in any mode.
+  A browser streaming this station logs with Nexus's own log form, as you would here.
 
 **Stream this station from my browser** is off by default, and on Windows only for
 now. With it on, a browser approved for station controls, while it holds control, can be
 shown this Nexus window and operate it as you would here, transmit included, and hear the
-station's receive audio. It needs no FT8/FT4 transmit permission for that. Only this
-window is sent: a dialog that opens outside it, such as a file picker, is not, and a
+station's receive audio. Only this window is sent: a dialog that opens outside it, such as a file picker, is not, and a
 minimized window sends nothing. The browser's clicks and keys reach Nexus only, never
 anything else on this computer. While a browser is attached, every transmission at the
 station stops within five seconds if its connection drops, and within seven if its picture
 freezes. In Phone, the browser can talk on the rig with its own microphone, at a **Mic level**
 that browser remembers; see [Talk from Remote](phone.md#talk-from-remote).
 
-**How long a browser stays approved.** An approval lasts 30 days, and each time that browser
-opens the station it moves on to 30 days from then, up to 90 days after you approved it here.
-Loading the page without opening the station does not count. Under each approved browser, Nexus
-shows the date it is approved until and the latest it can reach; the browser shows the same. In
-the last 7 days before that latest date, both warn you, and **Approve again** here starts a new
-approval. A new approval gives station controls and logging again, and FT8/FT4 transmit only if
-its box is ticked. Browsers approved by an earlier Nexus keep a fixed 30 days until approved again.
+**How long a browser stays approved.** Until you remove it. An approval never runs out, whether
+the browser is used or not: only **Revoke browser approval** (or **Remove**) here, the browser
+forgetting itself, or **Revoke station access** ends it. Nexus shows each one as approved until
+you remove it, and so does the browser (Nexus 1.17 and 1.18 show such an approval as "Approved
+until 9999-12-31 UTC"). Approvals given under the earlier rule (30 days from last use, 90 at most)
+last until removed too; one that had already run out stays ended, and you approve that browser
+again.
 
 While it holds station control, a browser can press **Listen** to hear the station's receive
 audio; **Volume** beside it sets how loud, and that browser remembers it. **Revoke browser
-approval** removes one browser.
+approval** removes that one browser: every other browser and computer keeps what it has.
 **Turn off Remote** only pauses: it disconnects every browser, and turning Remote on again
 gives each still-approved browser back what it had, with the TX switch off. **End remote
-control and clear permissions** and **Revoke browser approval** clear permissions for good.
+control** does the same for everyone at once: it turns Remote off (it stays off after a restart),
+disconnects every browser and every computer, and turns off Remote over this network; nobody
+is approved again afterwards, and turning Remote on gives each approved device back what it
+had. **Revoke browser approval** clears that browser's permissions for good.
 **Revoke station access**
 disconnects the station and removes its Remote pairing; pair again to reconnect.
 
@@ -214,7 +209,7 @@ streaming browser: one controller at a time, and every transmission stops if its
 The station's network key and its paired computers are kept in this computer's password store,
 apart from the Remote pairing, so **Revoke station access** leaves them alone. **Reset network
 identity** (under **Network identity**) makes a new key and removes every paired computer; pair
-them again afterwards. **End remote control and clear permissions** turns this off too. Turning
+them again afterwards. **End remote control** turns this off too. Turning
 it on or off, pairing, removing and resetting work only at the station itself, never through a
 stream.
 
@@ -230,14 +225,29 @@ closed in full screen reopens at its last size. The page in this window can reac
 Nexus, exactly as in a browser. On Linux and macOS, use Remote in a browser for now.
 
 **Stations on this network…** is the other end of **Remote over this network**. On a Windows
-computer you operate from, it opens a Nexus window of its own for the stations this computer is
-paired with over your own network, with no internet at all. To add one, choose **Pair with a
-station…**: the window looks for stations by name on your network and offers each one it finds
-("Nexus" and the first characters of its key, as the station's card shows it). Press one to use
-its address, or type the address the station shows, then the code it shows under **Pair a
-computer** (capitals or not, spaces or not). This computer makes a key of its own for that station and keeps
-it in this computer's password store, with the station's key, the station's address and nothing
-else. **Stream** connects and opens the station's stream as the Remote page does, with the same
+computer you operate from, it opens a Nexus window of its own for the stations on this computer.
+To add one, press **Sign in…** and sign in to Nexus Remote in your web browser with the account
+the station is linked to, or one its owner invited to operate it: the window finds the station on
+your network by name (or asks for its address), checks that it is the station its owner signed in
+for, and the station is then on this computer on its own network, with no code. Over the internet
+this computer waits until you approve it at the station under Remote access, as a computer paired
+with a code does: Nexus asks there, with this computer's key. A sign-in alone never lets a computer
+or a browser operate the station over the internet. The station takes this computer on its
+network for 30 days from that sign-in; in the last week the window offers **Sign in again**. If Nexus Remote cannot be reached, pair such a computer
+again with a code (**Pair with a code instead…**, below): the station then keeps it until you
+remove it there, with no 30 days to count, and removing it on the Nexus Remote web page no longer
+takes it off the station's network. Signing in from somewhere else (a laptop away from home,
+a friend you invited at their own house), press **Not on this network** when the window asks
+where the station is: the station is then on this computer by its name, over the internet only
+once you approve this computer at the station, until you press **Sign in** on its row once while
+this computer is on the station's network.
+For a station whose owner has not signed in to Nexus
+Remote at the station, choose **Pair with a code instead…**: the window looks for stations by
+name on your network and offers each one it finds ("Nexus" and the first characters of its key,
+as the station's card shows it). Press one to use its address, or type the address the station
+shows, then the code it shows under **Pair a computer** (capitals or not, spaces or not). Either
+way this computer makes keys of its own for that station and keeps them in this computer's
+password store, with the station's keys, the station's address and nothing else. **Stream** connects and opens the station's stream as the Remote page does, with the same
 **Stop TX**, **Esc** and **F11**. It tries the address that worked last first; if the station is
 not there any more (a new address from the router, say), the window looks for it by name and
 connects where it is found. If the station's key ever changes (Nexus reinstalled there, or
@@ -451,6 +461,20 @@ Baud continue across to the right.*
   **Network password** (stored in the keychain, write-only) and **Control port
   (UDP)** in place of Serial Port and Baud. See the
   [Icom guide](../rigs/icom.md#nexuss-own-network-connection-beta).
+  For an SDR program's own TCI server (ExpertSDR3, Thetis, piHPSDR) there is
+  **TCI (SDR program) — Beta**, offered for every radio: Nexus sets the dial and
+  mode and transmits through the program. It puts the **SDR program address**,
+  the **TCI port**, **Find TCI server**, the **Transceiver** and the **SDR
+  program** in place of Rig Model, Serial Port and Baud, with three switches:
+  **Audio over TCI**, on by default, carries the receive audio and Nexus's
+  transmit audio over TCI with no virtual audio cable; **SDR panadapter in the
+  scope**, off by default, draws the program's own spectrum in Nexus's scope;
+  **Spots on the SDR panadapter**, off by default, marks the stations you still
+  need on the program's panadapter; a click on one there only tunes Nexus.
+  **Find TCI server** reads what the server at that address says about itself
+  and closes, the form's port first and then 50001 and 40001; it never
+  transmits. See
+  [TCI: connect to an SDR program's TCI server](../rigs/tci.md).
 - **Network Address** (Network only) — host:port. For a Flex, the WSJT-X-proven
   path is the SmartSDR CAT app on **this** PC: its default TCP port 5002 is
   directed at slice A, so `127.0.0.1:5002` with the FLEX-6xxx model works out of
@@ -506,9 +530,19 @@ Baud continue across to the right.*
   invisible under Remote Desktop**. Native DAX audio works only through the
   **Flex native client (Beta)**: with SmartSDR CAT it does nothing, and the
   setting is kept for the client. On the client the digital modes transmit over
-  DAX, while Phone at the shack keeps the radio's own mic (so the voice keyer
-  can't play there). Both are Beta and **unverified on hardware**, so both are opt-in; if
+  DAX, while Phone at the shack keeps the radio's own mic, and the voice keyer
+  switches the radio to DAX for each message. Both are Beta and **unverified on hardware**, so both are opt-in; if
   the scope stays blank or decodes stop, turn them back off.
+- **Let Nexus send CW, Tune and ATU through the native Flex client (not yet
+  bench-tested)** — appears once the **Flex native client (Beta)** serves the
+  radio (switched on, with the radio's IP set). Off by default, per radio. On
+  the client Nexus does not send CW through the radio's keyer, tune with the
+  radio's own carrier or run its ATU until a tester has checked each on a real
+  radio; this switch lets it do all three on that radio before then. Every
+  other check still applies, the TX-enable latch, your licence privileges and
+  the TX watchdog among them. **Not yet checked on a real Flex**: try them into
+  a dummy load first. Save to apply; Nexus reconnects to the radio. It changes
+  only at the shack, never through the Remote stream.
 - **CI-V bus diagnostic log** — appears once native CI-V is on. Records every
   byte to and from the radio to a file in your Downloads, for hardware-only
   issues like the IC-9700 PTT flicker. Turn on, reproduce, turn off, send the
@@ -558,12 +592,19 @@ target to copy.*
   Settings." Flat means no audio on that input.
 - **Tx Power** — the audio **drive** into the rig, the same control as the
   cockpit **Pwr** slider (they always match). "Trim down until your rig's ALC is
-  just zero. This is *not* the rig's RF watts — set those on the radio."
+  just zero. This is *not* the rig's RF watts — set those on the radio." On a Yaesu
+  that turns its power down with the ALC, such as the FT-991A, the ALC reads above
+  zero whenever the power is below full, so set the drive at full power.
 - **RX Level** — a live dB meter like WSJT-X. "Aim for around 30 dB. Anything
   from ~15–60 dB decodes fine; red means too hot." An audio error shows here.
 - **RX Gain** — "Boost a quiet interface until RX Level reads around 30 dB — the
   meter responds as you release the slider. Leave at ×1.0 unless the meter reads
   low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much."
+
+While you **Edit** a radio that is not the one in use, Tx Power and RX Gain are
+that radio's own levels: moving them changes nothing on the radio in use,
+**Save** stores them on the radio you are editing, and it uses them once it
+becomes the active radio.
 
 ### Receive audio on this computer
 
@@ -586,6 +627,31 @@ from the labels. (The search still knows it — look for "monitor" and you will 
 - **Headphones or speakers** — and "must NOT be the rig's TX output
   device": playing the received band into the transmitter would put it back on the air.
 - **Listening level** — playback volume, with no effect on transmit.
+
+### Scope source
+
+Where the RF scope's picture comes from. **The radio** (as it comes) is the radio's own
+panadapter — Flex, Icom CI-V, the FT-710's, a TCI program's — or the sound card's audio where the
+radio has none. **SDRconnect (SDRplay)** draws an SDRplay RSP receiver instead, through SDRplay's
+own SDRconnect program over its WebSocket API: the receiver's whole span, each station at its own
+frequency, with the dial, the passband and spots drawn on it as usual.
+
+- SDRconnect is a separate, free, closed-source program from SDRplay. Install it, turn its
+  WebSocket API on, and leave it running (with its window, or headless). Nexus ships nothing of
+  SDRplay's and loads none of its code. It serves every RSP except the original RSP1.
+- **SDRconnect computer** and **WebSocket API port** — 127.0.0.1 and 5454 unless SDRconnect runs
+  elsewhere or you moved its port.
+- **Follow the dial** — the receiver's centre is set from the rig's dial: on every change (*Keep
+  the dial in the centre*), or only when the dial nears the edge of the span (*Retune only when
+  the dial nears the edge*), which moves SDRconnect's own display far less. A retune in
+  SDRconnect's window is drawn where it went; Nexus retunes again only when the dial moves.
+- Pick the receiver, and an RSPduo's tuner mode, in SDRconnect. Nexus uses the primary tuner.
+- Receive only: Nexus never transmits through SDRconnect and sends it no CAT. Clicking a spot on
+  the scope tunes the rig through Nexus's normal CAT path.
+- When SDRconnect is not running, sends no IQ, or sends IQ at a rate other than the one it
+  reports, the scope's status line says which, and Nexus keeps trying.
+- **Feed the receiver from the rig's RX OUT, or from a splitter with transmit protection** —
+  never a plain T-piece on the transmit line. An RSP takes at most 0 dBm; 100 W is +50 dBm.
 
 ### Satellite Doppler
 
@@ -673,9 +739,8 @@ right.*
   so the hint under the field names your model's rate and says plainly when the
   saved value cannot work. For **PstRotatorAz** the port is its UDP address,
   `127.0.0.1:12000` on the same PC, and the baud does not matter. Turn on UDP
-  Control in PstRotatorAz's Setup. The hint there also warns that Hamlib's backend
-  for it writes the bearing it sends oddly (123.4° goes out as `123.400002.2`), so
-  PstRotatorAz may not turn to it.
+  Control in PstRotatorAz's Setup. Nexus talks to PstRotatorAz itself and listens
+  for its replies on that port + 1 (12001), so no other program may use that port.
 - **External rotctld (advanced)** — a `host:port` for a rotctld you run yourself,
   or one on another machine. It OVERRIDES the model and port above and stops the
   integrated daemon. It needs the port: a bare host name is not an address.
@@ -752,7 +817,18 @@ commands the amplifier except Follow the radio's band".
   Nexus warns in the status lane if you do it.
   There is no baud setting, deliberately. The SPE adapts itself to whatever speed
   it is spoken to, and the KPA remembers its own rate, so Nexus finds it by asking
-  at each of the four rates Elecraft documents.
+  at each of the rates Elecraft documents: the KPA500's four (4800 to 38400), then
+  the KPA1500's three faster ones (57600, 115200 and 230400).
+- **Connection** (KPA only) — **USB or serial port**, or **Network (KPA1500)**.
+  A KPA1500 on your network is reached at its **Amplifier IP address** (shown on
+  its NET IP ADDRESS menu) and **Port**, 1500 unless you changed the amplifier's
+  command port. Nexus uses the KPA1500's UDP command server, which any number of
+  programs can share, so Elecraft's KPA1500 Remote keeps working alongside; the
+  single TCP connection the amplifier allows is left for it. The readings and the
+  three controls are the same as over USB, and so is every refusal: nothing is
+  sent to the amplifier while you transmit. A reading that does not come back is
+  asked for once more, then the pane says **Not answering**. The KPA500 has no
+  network port.
 
 - **Follow the radio's band** — step the amplifier to whatever band you tune to,
   without being asked. **Off unless you turn it on**, and appears only once a model
@@ -842,6 +918,32 @@ full power on every mode.*
     beside the other port settings, and appears only once sharing is on. Hamlib
     NET rigctl default 4532; change it only if something else on this computer
     already owns the port.
+- **Share by TCI**: off by default. It runs Nexus as a TCI server for programs on
+  this computer (WSJT-X, JTDX, MSHV, Log4OM and others), beside the CAT broker
+  above; both may be on, though not on the same port. Once saved, it shows the
+  address programs connect to, `127.0.0.1:40001` (the next port in a second
+  Nexus window), with **Copy**; if the port is taken, the reason takes the
+  address's place. Only programs on this computer can connect, never another
+  computer or a web page. When it is on:
+  - **TCI server port**: 40001 unless something else on this computer already
+    has it.
+  - **Programs on TCI may transmit**: off by default, shown and set at the
+    station only. On, a program can Tune, key the radio's microphone or send
+    its own audio on the Phone screen, and send CW macros on the CW screen,
+    behind every Nexus transmit safeguard, and no program can turn TX on. A
+    program's own audio goes out only once it has asked for a voice mode (USB,
+    LSB, AM or FM). FT8, FT4 and the other slot-timed modes may not transmit
+    through TCI yet.
+  - **CW macros from programs**: on by default. A logger's CW macros go out on
+    Nexus's own CW keyer, at the program's speed, while programs may transmit.
+  - **Spots from programs**: on by default. Programs' spots show on the band
+    map and in the Phone and CW screens' band activity; a click on one only
+    tunes Nexus, and clicks on spots are passed back to the programs.
+  - **Programs connected**: each connection by number, with its address,
+    whether it is receiving audio or transmitting, the last thing Nexus
+    refused it, and **Disconnect**.
+
+  See [Share by TCI](../rigs/tci-server.md).
 
 ---
 
@@ -892,7 +994,7 @@ with the radio.
 - **Keyer backend** — four ways to send, also switchable live from the CW
   cockpit. **CAT** uses the rig's internal keyer (Hamlib `send_morse`), but older
   rigs (e.g. IC-756PRO III) don't support it. **Serial keyline** toggles DTR/RTS
-  into the rig's KEY jack — the clean N1MM/fldigi method, needs only a keying
+  into the rig's KEY jack — a clean method that needs only a keying
   cable. **WinKeyer** drives a K1EL. **Soundcard** keys an audio tone through SSB
   — a workaround; set drive so ALC reads zero.
 - **Sidetone pitch (Hz)** — 300–1200 Hz. Sets the soundcard keyer tone and the CW
@@ -1068,10 +1170,12 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   set the machine's clock instead. Turn the check off for fully-offline operation
   (no network calls) — the last measurement then keeps steering until it ages
   out, and the bar says when it has.
-- **Station power (W)** — "Your transmit power in watts — unlocks the Journey
-  miles-per-watt & QRP feats." It also feeds the P.533 link budget. Leave blank
-  if unknown. This is what you actually run, for the record — it commands
-  nothing; the rig's power lives on the cockpit **Pwr** slider.
+- **Station power (W)** — "Your transmit power in watts — logged on every
+  contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt &
+  QRP feats." It also feeds the P.533 link budget. Leave blank if unknown, and
+  contacts are logged with no power. This is what you actually run, for the
+  record — it commands nothing; the rig's power lives on the cockpit **Pwr**
+  slider.
 
 Units used to be the last field in this row; it is now on the Station tab under
 [Operator & Radio](#operator--radio).
@@ -1196,6 +1300,10 @@ Comma-separated chip lists for the quick text you fire from each surface:
   zero). **True FSK** bit-bangs the rig's FSK input over a serial control line
   with the rig in RTTY mode, unlocking its narrow RTTY filters. "Software FSK
   timing is casual/Field-Day grade; AFSK is the timing-cleanest path."
+- **AFSK sideband** (AFSK only) — LSB (standard, the default) or USB. On USB,
+  Nexus puts the rig in its upper data mode (DATA-U / USB-D / DIGU) and swaps
+  the tones itself, so mark stays high on the air and the decoder still copies.
+  Leave Reverse off for this.
 - **FSK serial port** (True FSK only) — the port whose control line feeds the
   rig's FSK input. Empty = the CAT serial port.
 - **FSK data line** (True FSK only) — DTR (the common wiring, leaving RTS free
@@ -1208,10 +1316,9 @@ Comma-separated chip lists for the quick text you fire from each surface:
   RX demodulator — true 45.45, never rounded to 45.
 - **Shift (Hz)** — 170 (the HF standard), 425 or 850. The TX tone pair and the RX
   demodulator both.
-- **Reverse (swap mark/space)** — "The convention is LSB with mark on the lower
-  audio tone. Turn this on when deliberately running the opposite sideband (e.g.
-  AFSK in USB/DATA-U) so the on-air sense stays correct." Applies to TX and the
-  RX decoder.
+- **Reverse (swap mark/space)** — swaps mark and space on TX and in the RX
+  decoder, to work a station sending upside down. Not for running USB: pick the
+  AFSK sideband instead, which keeps the sense right on its own.
 
 **Auto call**
 
@@ -1285,12 +1392,14 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
 
 **Speed & receiving**
 
-- **Transmit speed** — Slow (30 s periods), Normal (15 s), Fast (10 s) or Turbo (6 s).
-  The period the TX clock follows; Normal is what most of the band runs. The speed chips
-  in the JS8 header change this same setting.
-- **Decode these speeds** — all four on by default, exactly as JS8Call's multi-decode:
-  a Slow station and a Turbo station on the same band both print, each activity row
-  marked with its speed letter (E/A/B/C). Untick a speed to save CPU on a small machine.
+- **Transmit speed** — Slow (30 s periods), Normal (15 s), Fast (10 s), JS8 40 (6 s) or
+  JS8 60 (4 s), the names JS8Call 3.0 uses: JS8 40 was called Turbo before 3.0, and JS8 60
+  is 3.0's experimental fifth speed. The period the TX clock follows; Normal is what most of
+  the band runs. The speed chips in the JS8 header change this same setting.
+- **Decode these speeds** — all five on by default, exactly as JS8Call 3.0's multi-decode:
+  a Slow station and a JS8 60 station on the same band both print, each activity row
+  marked with its speed letter (E/A/B/C/I). Untick a speed to save CPU on a small machine.
+  Settings saved before JS8 60 arrived keep the four speeds they had; tick JS8 60 to add it.
 - **Callsign aging (minutes)** — off (0) by default, as in JS8Call. Otherwise a station
   not heard for this many minutes drops off the cockpit's Stations list (the one you have
   selected, or one with an unread message for you, stays) and is left out of your
@@ -1298,6 +1407,24 @@ lives here is what JS8Call keeps in its own settings and Nexus cannot infer.
 - **Band activity aging (minutes)** — 2 by default, as in JS8Call. A row of the cockpit's
   Band activity pane whose newest decode is this many minutes old leaves the pane, unless RX
   is on its offset. 0 keeps every row. Up to 1440, a day.
+
+**Frequencies**
+
+- **Return to the last used frequency** — off by default, as in JS8Call. On, opening JS8
+  tunes the rig back to the frequency you last used in JS8, instead of the band's JS8
+  frequency.
+- **JS8 frequencies** — JS8Call 3.0.3's suggested frequencies until you change, add or remove
+  one; then the list is your own, each row a dial in MHz and an optional description. The JS8
+  band picker shows it, and opening JS8 tunes the first one on the band. **Reset** puts
+  JS8Call's list back (asked first); **Export…** saves yours to Downloads as a file and
+  **Import…** reads one back (it asks before replacing a list of your own).
+- **Change frequency by schedule** — off by default, as in JS8Call. On, Nexus changes the
+  rig's frequency **by itself**, with nobody at the radio, at the times in the schedule: a
+  notice in the JS8 screen first, then the change 30 seconds later unless you cancel it. Never
+  while transmitting or while a message is going out. Each row of the **Schedule (UTC)** is a
+  frequency and a window (both ends count; one that ends before it starts runs over midnight;
+  where rows overlap, the one starting later wins). Nothing changes back when a row ends: add
+  a row for that. Move off a scheduled frequency yourself and that row leaves you there.
 
 **Automatic transmissions**
 
@@ -1312,6 +1439,27 @@ nothing until you enable TX in the cockpit, every session.
   signal report (`HEARTBEAT SNR`), one frame per station, and a message you hold for
   that station is offered to it. **Never acknowledge heartbeats from these callsigns**,
   comma-separated and empty by default, leaves those stations unanswered.
+- **Heartbeat networking** — off by default, as in JS8Call (its *Enable Heartbeat
+  Networking*). On, the cockpit shows the **HB** button and **Answer heartbeats** can answer;
+  off, no heartbeat and no acknowledgement goes out. It is the cockpit's **HB NET** switch.
+  Updating from a version without it turns it on if **Answer heartbeats** was on or a
+  heartbeat interval was set, so the **HB** button stays.
+  Heartbeats and acknowledgements go out at Slow, Normal and Fast only, never at Turbo.
+- **Allow heartbeats outside 500–1000 Hz** — off by default, as in JS8Call. On, heartbeats
+  and acknowledgements go out on your own TX offset instead of a free spot in 500–1000 Hz.
+- **Pause heartbeats while a call is in the To box** — on by default, as in JS8Call's
+  pause while in a QSO. While the To box holds a call the heartbeat repeat pauses (it starts
+  again one interval after you clear the box), no heartbeat is acknowledged, and a repeating
+  CQ stops. Switching **HB** on clears the To box.
+- **Don't acknowledge stations that heartbeat more often than every 55 minutes** — off by
+  default, as in JS8Call 3.0. On, a station heard heartbeating again within 55 minutes of its
+  last acknowledged heartbeat is added to **Never acknowledge heartbeats from these callsigns**,
+  as JS8Call adds it to its list, and is not acknowledged then or later; the **HB ACK** chip
+  names it. Take it off that list to acknowledge it again; turning this off leaves the list as
+  it is. A station added while this screen is open is kept when you save it.
+- **Do not take part in @ALLCALL** — off by default, as in JS8Call. On, nothing addressed to
+  `@ALLCALL` is answered (`QUERY MSGS` included) or marked as addressed to you, and
+  `@ALLCALL` leaves the To box's list. Heartbeats and CQs are handled as before.
 - **Auto-reply to queries** — on by default, as in JS8Call: `SNR?`, `GRID?`, `INFO?`,
   `STATUS?`, `HEARING?` and `QUERY MSGS` addressed to you are answered, and a `MSG` to you
   or a group you joined, or a `MSG TO:` you hold for another station, gets an `ACK`. On
@@ -1348,7 +1496,107 @@ nothing until you enable TX in the cockpit, every session.
 - **Groups** — the `@GROUP` names you belong to, comma-separated; a message to one of
   them counts as addressed to you. `@ALLCALL` is everyone and is always on. `@APRSIS` and
   `@JS8NET` cannot be joined, as in JS8Call: Settings will not save while either is in
-  this field, and says so.
+  this field, and says so. The call list's **Add new station or group…** and **Remove this
+  group** change this same list.
+
+**Lists and marks**
+
+- **Hide these callsigns in the RX pane** — JS8Call 3.0's RX block list, comma-separated and
+  empty by default. Nothing a listed station sends prints in the RX pane (by its call as heard
+  or its base call), and the call list marks it ✕; it is still heard, answered and filed as
+  before, and it still shows in Band activity. The call list's **Block this station** adds to
+  it.
+- **Highlight these words or callsigns** — two lists, primary and secondary colour, empty by
+  default as in JS8Call. A Band activity row holding one of the words, and the call list row of
+  one of the calls, is tinted; a row both lists name takes the primary.
+- **End of transmission mark** — ♢ by default, as in JS8Call; up to two characters. It follows
+  the last frame of a message in the RX pane and Band activity.
+- **Missing frame mark** — …… by default, as in JS8Call. It stands where the next frame of a
+  message did not come within one and a half periods.
+
+**Sounds**
+
+A short tone of its own for each of: a CQ, a heartbeat, an ACK for you, a message directed to
+you or your group, a message filed in your Inbox, a new callsign, a callsign you have worked.
+All off by default, as JS8Call's notifications are; **Test** plays one. They sound while the
+JS8 screen is open. JS8Call plays a sound file you pick for each; Nexus plays its own tones.
+
+**Sending**
+
+- **Hold PTT between frames** — off by default, as in JS8Call: PTT drops after each frame
+  of a message and keys again for the next (at Normal the radio is unkeyed for about 1.4
+  seconds between two frames). On, the radio stays keyed from the end of one frame to the
+  start of the next. It still drops after the message's last frame, never holds from one
+  message into the next, and drops at once on Stop TX or TX Off.
+- **Allow TX offset changes while sending** — off by default, as in JS8Call: while a
+  message is waiting to go or going out, the TX offset stays where it is, and the cockpit
+  says why when you try to move it (a list row's **Jump to … Hz** is greyed out). On, the move
+  or the jump is taken at once: the frame on the air
+  moves too, from where it has got to (a heartbeat on its own spot stays there), and the
+  frames still to go are sent at the new offset.
+- **TX delay** — 0.2 seconds by default, as in JS8Call (0.1 to 0.5): how long before each
+  period a frame keys the radio. The frame's first tone still goes out at the period's start
+  delay, so a radio slow to switch to transmit no longer sends it late. Lengthen it for an
+  amplifier or a radio whose relay is slow.
+
+**Composing**
+
+The JS8 compose box as JS8Call 3.0.3 keeps it; the [JS8 chapter](js8.md#composing) shows it
+at work.
+
+- **CQ message** — what the **CQ** button and the repeating CQ send. JS8Call's default,
+  `CQ CQ CQ <MYGRID4>`, is one CQ frame, and so is any of the eight CQ forms the field offers
+  (`CQ DX <MYGRID4>` and the rest). Longer text takes more frames. It must start with `CQ` or
+  hold your callsign, as in JS8Call: Settings will not save otherwise, and says so. Empty
+  sends `CQ CQ CQ` and your square.
+- **Reply message** — what **REPLY** sends to the call in the To box; `HW CPY?` by default,
+  as in JS8Call.
+- **Saved messages** — the dock's **Saved** menu, in this order: add, edit, move up or down,
+  delete. `TNX 73 GL` to start with, as in JS8Call; a list you empty stays empty. The
+  macros a message may carry are listed under it, and work in the CQ and reply messages,
+  INFO and STATUS too: `<MYCALL>`, `<MYGRID4>`, `<MYGRID12>`, `<MYINFO>`, `<MYCQ>`, `<MYHB>`,
+  `<MYREPLY>`, `<MYSTATUS>`, `<MYVERSION>`, `<MYIDLE>`, and for the call in the To box once
+  it has been heard, `<CALL>`, `<SNR>` and `<TDELTA>`.
+- **Send CQ, REPLY, SNR, INFO, STATUS, saved messages and a station's asks at once** — on by
+  default, as JS8Call's *Immediately transmit…*. Off, those buttons and a station row's quick
+  asks put their message in the compose box, and **Send** sends it. The repeating CQ always
+  sends.
+- **Show calls and commands as pills in the compose box** — on by default, as in JS8Call 3.0.
+- **Suggest cheaper words in the compose box** — on by default, as in JS8Call. A word the JS8
+  dictionary sends in pieces is underlined; right-click it for words that take less airtime.
+
+**Spotting and APRS-IS**
+
+Spotting itself follows the **PSK Reporter** switch in
+[Integrations & Feeds](#integrations--feeds), as JS8Call's SPOT button carries PSK Reporter
+and JS8NET together: while it is on, the stations you hear on JS8 go to PSK Reporter and to
+JS8NET, and commands sent to a `@group` go to JS8NET. The [JS8 chapter](js8.md) has the details.
+
+- **Spot @APRSIS messages to APRS-IS** — off by default (JS8Call ships it on). A station heard
+  sending `@APRSIS GRID` is put on the APRS map at that locator, and the text after
+  `@APRSIS CMD` goes to APRS-IS as a raw packet, under your callsign; Nexus logs in to APRS-IS
+  with the passcode worked out from it, as the iGate does.
+- **Relay APRS-IS messages to heard stations** — off by default. **It transmits with nobody at
+  the radio:** an APRS message for a station heard on JS8 is keyed to it as `@APRSIS MSG TO:`,
+  only while TX is on and through every transmit guard, and never to a station on the
+  never-spot list. Needs the switch above.
+- **Never spot these callsigns** — comma-separated, empty by default, as in JS8Call. A station
+  on it, as heard or by its base call, is spotted to no network.
+
+**JS8Call API**
+
+For programs written for JS8Call (loggers, maps, message tools) on this computer; the
+[JS8 chapter](js8.md#programs-written-for-js8call) says what they get. Read-only: they cannot
+send, tune or change a setting. Both listen on 127.0.0.1 only, and none of these settings can be
+seen or changed from the Remote page.
+
+- **TCP API** — off by default, as in JS8Call. Programs connect to 127.0.0.1 on **TCP port**
+  (JS8Call's 2442), one at a time.
+- **UDP API** — off by default, as in JS8Call. Nexus sends to a program listening on 127.0.0.1
+  at **UDP port** (JS8Call's 2242) and answers it there.
+- **Accept TCP requests** / **Accept UDP requests** — off by default, as in JS8Call. Off, a
+  program on that side gets what Nexus hears and sends, and its requests get no answer. On, Nexus
+  answers its requests to read; a request to send, tune or change a setting is never answered.
 
 ### SSTV
 
@@ -1366,8 +1614,11 @@ it well below their SSB drive.*
   — worth doing if you keep SSTV open as a monitor on a shared rig. Stopping the
   receiver yourself is already remembered for the rest of the session.
 - **ISS SSTV auto-arm** — off by default. Tunes 145.800 FM and arms the decoder
-  when the ISS is overhead, and restores your dial at LOS. A pass arm is an
-  explicit act, so this works whether or not the switch above is on.
+  when the ISS is overhead while the SSTV or Satellites screen is open, and
+  restores your dial at LOS. On any other screen it only tells you the ISS is up,
+  and leaves your radio alone. If your radio cannot receive 145.800 MHz, it tells
+  you once per session and does nothing else. A pass arm is an explicit act, so
+  this works whether or not the switch above is on.
 
 **Transmitting**
 
@@ -1671,6 +1922,10 @@ Nexus connects to all of them and merges what they report.*
 - **Near-region opening watch** — "Watch VHF/10 m activity near your QTH (not
   just your own contacts) so openings flag 'open around you' before you've worked
   anyone." Takes effect on restart.
+- **Log space weather on each contact** — off by default. On, every contact you
+  log carries the planetary K index, A index and solar flux (ADIF `K_INDEX`,
+  `A_INDEX`, `SFI`) from the latest reading Nexus fetched from NOAA SWPC, and
+  nothing when that reading is more than 3 hours old.
 - **Prediction engine** — Modelled (fast heuristic) or ITU-R P.533 (full
   physics). "P.533 is the real circuit-reliability method (validated against the
   ITU reference; ~0.1 s per prediction, uses your station power). **Live spots
@@ -1817,6 +2072,10 @@ whether or not something is stored. **Set** saves one, **Forget** removes it.
 
 - **eQSL username** / **eQSL password** — your eQSL.cc login, often your
   callsign.
+- **QTH Nickname** — only for a callsign with more than one QTH profile at
+  eQSL. Enter it exactly as eQSL's My Profile page spells it, capitals
+  included. Each nickname is an eQSL account of its own, so changing it (or the
+  username) makes the next **Sync eQSL now** read that account's whole InBox.
 - **eQSL confirmations** — **Sync eQSL now** downloads confirmations into your
   log. "These count as confirmations but **not** for DXCC/WAS (ARRL doesn't
   accept eQSL) — a separate tier."
@@ -2067,11 +2326,13 @@ What your Cabrillo log declares about the entry, and the switch that keeps the
   100 W PEP), and says so beside the picker: HIGH writes no CATEGORY-POWER line there.
   This is the one power your log declares: **Power sent** is what an exchange carries,
   and Field Day's power multiplier is its score.
-- **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots, the
+- **Unassisted entry** — "Turns off the CW decoder (AI and classic), DX cluster / RBN spots, the
   PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp.
   **Takes effect at once**" — its own command, not Save, because an operator
   flips it as an event starts. "Your own settings for each of those are left
-  alone and come back when you switch this off."
+  alone and come back when you switch this off." Picking `NON-ASSISTED` under
+  **Spotting assistance** does not turn it on: while the switch is off, a line
+  beside that picker says so, with a button that does.
 - **Assistance record** — the timestamped journal: a row per flip and a row each
   time Nexus starts, with which sources were active. Kept in `assistance_journal.json` beside your settings, so
   it survives restarts. Newest first.
@@ -2173,13 +2434,13 @@ claim right now; the record underneath is the evidence, kept across restarts.*
   and stays on this computer: it never goes to the club network or to Remote.
   **Clear** forgets it.
 
-Unassisted mode turns both off, as it does the cluster and the AI CW decoder, and
+Unassisted mode turns both off, as it does the cluster and the CW decoder, and
 the assistance record lists them.
 
 ### Enter Sends Message
 
-ESM, as N1MM Logger+ calls it. "With ESM on, Enter in the contest log strip sends
-the contact’s next message from your F-keys, as N1MM Logger+ does, and the
+ESM for short. "With ESM on, Enter in the contest log strip sends
+the contact’s next message from your F-keys, and the
 contact logs at its last step. ESM is off until you turn it on, in each cockpit
 separately. Enter never turns TX on, and nothing is sent by a timer." How a
 contact runs, step by step, and the rules ESM keeps are in the
@@ -2371,15 +2632,22 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 ### Theme
 
 - **Theme** — three cards, each with a line on its character: **Light**
-  (daylight panel, dark scopes and meters), **Dark** (dark panel, lit dials and
-  meters) and **System**. Light reads best outdoors in daylight.
+  (pale silver front, white panels, dark scopes and meters), **Dark** (dark panel, lit
+  dials and meters) and **System**. Light reads best outdoors in daylight.
   **System** follows your computer's own light or dark setting and changes when it
-  does; Dark is the default. Either way, the top bar's **Field** chip boosts
-  contrast and size on top of the theme you picked.
+  does, on every computer. On Windows it is the default: until you pick a theme,
+  Nexus looks the way Windows is set. On Linux, the Raspberry Pi and macOS, Nexus
+  opens Dark until you pick one. A theme you picked stays picked. Earlier versions
+  saved Dark for everyone who never picked one, so a computer that ran one of them
+  keeps Dark; pick **System** there to follow your computer. Either way, the top
+  bar's **Field** chip boosts contrast and size on top of the theme you picked.
+  **Light** has the warmer, softer look that was the Silver chassis theme. If you had
+  Silver chassis picked, you now see Light, which looks the same. The brighter Light of
+  earlier versions is the **Bright** theme below.
   Below them are ten ready-made themes, each card with a swatch of its colours. **Rig
-  looks**: Amber LCD, Green LCD, Blue VFD and Silver chassis. **Modern**: Midnight
-  (true black), Slate, Lagoon, Ember, Nebula and Paper. Silver chassis and Paper are
-  light themes and the rest are dark. Picking **Light**, **Dark** or **System** again
+  looks**: Amber LCD, Green LCD and Blue VFD. **Modern**: Midnight (true black), Slate,
+  Lagoon, Ember, Nebula, Paper and Bright. Paper and Bright are light themes and the
+  rest are dark. Picking **Light**, **Dark** or **System** again
   goes back to a standard theme. Every theme is checked for contrast like the standard
   two: the scopes and meters stay dark, and the transmit red, the ON AIR sign, alerts,
   and the signal and Needed colours are the same in every theme. **High contrast** keeps
@@ -2450,8 +2718,8 @@ same thing.
 red-green colour-blind eyes as to everyone else. **Auto** follows the theme, and
 turns Amber CRT while Night is on. On one of the ready-made themes, Auto is that
 theme's own palette: Amber CRT on Amber LCD, SDR Green on Green LCD, Blue on Blue
-VFD, Viridis on Silver chassis, Slate and Lagoon, Cividis on Paper and Inferno on
-the rest. A palette you picked by name never changes with the theme. Remembered per
+VFD, Viridis on Slate and Lagoon, Cividis on Paper and Bright, and Inferno on the
+rest. A palette you picked by name never changes with the theme. Remembered per
 computer.
 
 ### Map & globe
@@ -2567,6 +2835,22 @@ turn Remote on (Station ▸ Remote access), Nexus offers to switch this on. The 
 once, and your answer is remembered either way. If your computer will not let Nexus start at
 sign-in, the switch stays off and says so.
 
+### This computer
+
+Shown while this computer operates a station over your own network (**Operate from this
+computer** in Stations on this network). What is set here belongs to this computer: it is kept
+on this computer and never sent to the station.
+
+**Audio** picks where you hear the station's receiver (**The station's audio**) and the
+microphone you talk into when you transmit from here (**Your microphone**). Each starts on the
+system's default. A device you picked that is not plugged in stays shown as not connected; Nexus
+never swaps another in its place, and says why when a device will not open. **Volume** sets how
+loud the station is heard here, from 0 to 42 dB over the level the station keeps for its decoders
+(24 dB to begin with, as on the Remote page); it changes nothing at the station. **Microphone
+level** shows your microphone while this section is open, and **Play a test tone** plays a short
+note in the output you picked. The voice keyer's **Record** records from this microphone too, and
+the message goes to the station's slot. Nexus opens the microphone only while something needs it.
+
 ### Accessibility & eyes-free
 
 Speech and sound cues for operating by ear. The keyboard and screen-reader labels
@@ -2591,6 +2875,9 @@ be photographed, and were not exercised for this capture.*
   know your TX state by ear."
 - **Decode-batch tick** — "A soft tick each cycle new signals are decoded — the
   band's rhythm, eyes-free."
+- **CW turn sound** — "A short rising chirp when the CW turn cue says it is your
+  turn to send. Never while you transmit." Off as it comes. The cue itself is on
+  the CW screen ([Turn Cue](../manual/CW.md#turn-cue)).
 
 ---
 

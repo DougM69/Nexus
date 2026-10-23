@@ -24,8 +24,9 @@ you reconcile a figure that surprises you. Everything except the last three
 cards is counted in the app from the same logbook read the
 [Logbook](logbook-qsl.md) section shows you — every record, no de-duplication,
 no date window. The three geographic cards come from the Rust side, which
-re-resolves each **callsign** through cty.dat, because the stored QSO record
-carries no continent and no CQ zone.
+places each contact in the DXCC entity and CQ zone its record carries, else the
+ones cty.dat gives its **callsign**; the stored QSO record carries no
+continent, so that comes from the zone.
 
 **The headline row** — four figures across the top:
 
@@ -33,10 +34,13 @@ carries no continent and no CQ zone.
   it counts twice.
 - **unique calls** — distinct callsigns, case-folded and trimmed. Suffixes are
   not stripped, so `W1AW` and `W1AW/4` are two.
-- **DXCC entities** — distinct entities, keyed on the cty.dat resolution of the
-  callsign, case-folded so an imported `UNITED STATES` and a resolved
-  `United States` are one entity rather than two. A callsign that won't resolve
-  falls back to whatever country text the record carries.
+- **DXCC entities** — distinct entities, each contact counted under the one the
+  [Awards](awards-journey.md) count it toward: the DXCC number its record
+  carries (LoTW's first), else cty.dat's reading of the callsign, with a WAE
+  area such as Sicily counted as the entity it belongs to (Italy). Case-folded
+  so an imported `UNITED STATES` and a resolved `United States` are one entity
+  rather than two. A contact placed in no entity falls back to whatever country
+  text the record carries.
 - **confirmed** — the share of your QSOs confirmed by **any** channel: LoTW,
   eQSL, a paper card, or a QRZ-logbook match. Rounded to whole percent, so a
   handful of unconfirmed contacts in a large log reads as 100%.
@@ -79,8 +83,12 @@ key as the headline. It is descriptive, not award credit — an entity counts
 here the moment you work it, confirmed or not.
 
 **Most-worked states (WAS)** is the top 12 states, and it counts a QSO only if
-the record's country is United States, Alaska or Hawaii *and* its ADIF `STATE`
-is one of the 50 WAS codes. That gate is the point: without it an Australian
+its DXCC entity is the United States, Alaska or Hawaii *and* its ADIF `STATE`
+is one of the 50 WAS codes. The entity is the one the headline counts, the
+same one the WAS award counts, so the QSO counts however the record spells its
+country (LoTW and DXKeeper write `UNITED STATES OF AMERICA`, some loggers write
+none). Only a contact placed in no entity is judged by the record's country
+instead. That gate is the point: without it an Australian
 `WA` (Western Australia) and a Brazilian `SC` (Santa Catarina) would pile into
 Washington and South Carolina. Casing is folded, so an external logger's `ct`
 lands in the `CT` bucket.
@@ -99,8 +107,10 @@ card** — each a count of QSOs carrying that channel, drawn against your total.
 It is the card that tells you whether a good-looking confirmation rate rests on
 anything an award will accept.
 
-**By continent, By CQ zone, DX vs domestic** are the cty.dat cards. Continent is
-derived from the station's CQ zone into the six WAC continents, and each row
+**By continent, By CQ zone, DX vs domestic** are the geographic cards. Each
+contact is placed where the Awards count it: the entity and CQ zone its record
+carries, else its callsign's. Continent is derived from that CQ zone into the
+six WAC continents, and each row
 carries both the QSO count and the distinct entities behind it ("· 14 ent") —
 40 QSOs spanning 3 entities is a different log from 40 spanning 20. Zones are
 the top 15 you have worked, by QSO count. DX vs domestic is anchored on **your
@@ -130,8 +140,9 @@ cards.
 2. If a card's counts fall short of that, the card is telling you which records
    are missing a field: **By band** and **By mode** drop records with a blank
    band/mode, **Most-worked states (WAS)** drops anything that isn't a US-family
-   entity with a valid state code, and the geographic cards drop callsigns
-   cty.dat can't place.
+   entity with a valid state code, and the geographic cards drop contacts
+   placed in no entity (a callsign cty.dat can't place with no DXCC number on
+   the record, or a record's DXCC 0, a ship at sea).
 3. **Add case variants together before comparing.** By band and By mode split
    `20m` from `20M`, so a band's real total is the sum of its rows. Nothing
    else on the page does this — the entity, state and continent cards all fold

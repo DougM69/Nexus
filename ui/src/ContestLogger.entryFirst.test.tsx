@@ -125,7 +125,7 @@ async function mountLogger(): Promise<void> {
   await act(async () => new Promise((r) => setTimeout(r, 0)))
 }
 
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const sizeLine = () => document.querySelector('.contest-logger-size')!.textContent
 const larger = () => screen.getByRole('button', { name: t('contestLogger.size.larger') }) as HTMLButtonElement
 const smaller = () => screen.getByRole('button', { name: t('contestLogger.size.smaller') }) as HTMLButtonElement
@@ -291,22 +291,27 @@ describe('the contest logger window puts the entry first', () => {
     expect(parts.map(tagged)).toEqual([
       'section.contest-logger-entry',
       'section.contest-logger-recent',
+      // The divider that sizes the last contacts against the screen under them.
+      'div.pane-splitter.horizontal.contest-seam',
       'main.layout.single',
     ])
-    const [entry, recent, contestScreen] = parts as HTMLElement[]
+    const [entry, recent, , contestScreen] = parts as HTMLElement[]
     // The entry holds the contact in progress, the main window's, in its boxes.
-    expect(within(entry).getByPlaceholderText('W1AW')).toBe(callBox())
+    expect(within(entry).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' })).toBe(callBox())
     expect([...entry.querySelectorAll<HTMLInputElement>('.le-fd-big input')].map((b) => b.value)).toEqual([
       'K9ABC',
       '59',
       'COOK',
     ])
     // …under the captions the log line gives them: the county box says it is the county box.
-    expect([...entry.querySelectorAll('.le-fd-big .le-fd-cap')].map((c) => c.textContent)).toEqual([
-      t('logEntry.fd.call.label'),
-      'RST',
-      'County / State',
-    ])
+    // The Call caption's own words, beside the DUPE badge its line carries.
+    expect(
+      [...entry.querySelectorAll('.le-fd-big .le-fd-cap')].map(
+        (c) => (c.querySelector('.le-fd-cap-text') ?? c).textContent,
+      ),
+    ).toEqual([t('logEntry.fd.call.label'), 'RST', 'County / State'])
+    // …and the badge shows in this window too: K9ABC is a dupe here, worked at 16:23 on 20 m USB.
+    expect(entry.querySelector('.le-fd-field-call .le-fd-dupe')!.textContent).toBe('DUPE 16:23 20m USB')
     // The dupe warning, as the log line computes it, right under the boxes: after them in the entry,
     // so before the last contacts.
     const dupe = within(entry).getByRole('alert')
@@ -348,13 +353,15 @@ describe('A− / A+ sizes the entry and the last contacts', () => {
     // At 100 % the boxes are read from a chair: 40 px against the app's 14 px input…
     expect(fontPx(callBox())).toBe(40)
     expect(fontPx(newestRow())).toBe(20)
-    // …which is what the same box gets outside this window: the main window's log line is untouched.
+    // …and outside this window the same box keeps the entry's own 30 px: the main window's log line
+    // is untouched by the window's scale. (It read 14 here while `.settings-input` out-cascaded the
+    // entry's own size in the main window; styles-contest-entry-size.test.tsx holds that down.)
     const nest = (parent: Element, tag: string, className: string) =>
       parent.appendChild(Object.assign(document.createElement(tag), { className }))
     const strip = nest(document.body, 'div', 'log-entry log-entry-fd')
     const field = nest(nest(strip, 'div', 'le-fd-big'), 'label', 'le-fd-field le-fd-field-call')
     const mainBox = nest(field, 'input', 'settings-input mono le-fd-input le-fd-input-call')
-    expect(fontPx(mainBox), 'the main window keeps the app input size').toBe(14)
+    expect(fontPx(mainBox), "the main window keeps the entry's own size").toBe(30)
     strip.remove()
 
     fireEvent.click(larger())

@@ -10,7 +10,7 @@
 //! Input: 16-bit PCM mono WAV at 12 kHz (JS8Call's media/tests and save/ files
 //! are 12 kHz; anything else is refused — there is no 48 k front-end here,
 //! the live capture path resamples before the ring). Audio is sliced into
-//! `period_s` cycles (30/15/10/6 s) from the file start; a short tail is
+//! `period_s` cycles (30/15/10/6/4 s) from the file start; a short tail is
 //! zero-padded like the front-padded ring.
 //!
 //! Output (stdout), one line per decode:
@@ -23,7 +23,8 @@
 //! Usage:
 //!   cargo run -q -p tempo-core --example decode_wav_js8 -- --speed A [-d 3] FILE.wav [...]
 //! Speed letters are JS8Call's submode letters: A Normal, B Fast, C Turbo,
-//! E Slow (`Speed::letter`); the names slow|normal|fast|turbo are accepted too.
+//! E Slow, I Ultra (`Speed::letter`; 3.0 calls C "JS8 40" and I "JS8 60"); the names
+//! slow|normal|fast|turbo|ultra are accepted too.
 
 use js8::phy::{decode, DecodeParams, Speed};
 use js8::proto::alphabet::sixbit_to_string;
@@ -37,6 +38,7 @@ fn parse_speed(s: &str) -> Option<Speed> {
         "B" | "FAST" => Some(Speed::Fast),
         "C" | "TURBO" => Some(Speed::Turbo),
         "E" | "SLOW" => Some(Speed::Slow),
+        "I" | "ULTRA" => Some(Speed::Ultra),
         _ => None,
     }
 }
@@ -83,7 +85,7 @@ fn decode_file(path: &str, speed: Speed, depth: u8) -> std::io::Result<usize> {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: decode_wav_js8 --speed A|B|C|E [-d 1..3] FILE.wav [FILE2.wav ...]");
+    eprintln!("usage: decode_wav_js8 --speed A|B|C|E|I [-d 1..3] FILE.wav [FILE2.wav ...]");
     std::process::exit(2);
 }
 
@@ -98,7 +100,7 @@ fn main() {
             "--speed" | "-b" => {
                 speed = it.next().and_then(|s| parse_speed(s));
                 if speed.is_none() {
-                    eprintln!("--speed expects A|B|C|E or slow|normal|fast|turbo");
+                    eprintln!("--speed expects A|B|C|E|I or slow|normal|fast|turbo|ultra");
                     usage();
                 }
             }

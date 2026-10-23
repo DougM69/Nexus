@@ -94,9 +94,6 @@
 import type { Message } from './types'
 
 export const EN = {
-  "monitor.measurementAge": "Measurement age",
-  "monitor.measuredAgo": "Measured {{seconds}} s ago",
-  "monitor.rigDial": "Reported radio frequency",
   // Hosted Remote observation and local station approval.
   "remote.settingsLegend": "Remote access",
   "remote.stations": "Your stations",
@@ -108,93 +105,16 @@ export const EN = {
   "remote.supportDetails": "Support details",
   "remote.signOut": "Sign out",
   "remote.notConfigured": "The Remote service has not been configured yet.",
-  "remote.applicationLoggingPreview": "Station display with optional manual logging. Radio and transmit controls remain unavailable.",
-  "remote.loggingLocalHint": "Approving a browser also lets it log contacts. To limit a browser, revoke logging here. Logging never grants radio or transmit control.",
-  "remote.loggingTakeOver": "End remote logging and clear permissions",
   "remote.controlRequestFailed": "The command was not confirmed. Check station control permission and the current readings.",
-  "remote.controlNotSent": "Not sent. Nothing reached the station, so nothing changed there. Try again.",
-  "remote.controlBusy": "The station was busy and nothing changed. Try again.",
   "remote.controlLocalHint": "Approving a browser gives it station controls: supported receiver, radio and amplifier controls, and Stop TX, which stops any transmission at the station. With streaming on, they also let it stream this window and use Nexus as you would here, transmit included. To limit a browser, revoke them here, which also ends its stream.",
   // remote parity batch 1
-  "remote.b1.outsidePrivileges": "Not changed. That transmit frequency is outside your license privileges.",
-  "remote.b1.workUnavailable": "This spot can’t be worked from a browser. Nothing changed at the station.",
-  "remote.b1.rotatorNoHeading": "No heading from the station — nothing is configured, or the rotator control isn’t answering.",
   "remote.b1.rotatorPointing": "Pointing the rotator at {{call}}.",
-  "remote.transmitAllow": "Allow FT8/FT4 transmission from the Remote page",
-  "remote.transmitRevoke": "Revoke FT8/FT4 transmission from the Remote page",
-  "remote.transmitLocalHint": "FT8/FT4 transmit from the Remote page also needs station controls. Once allowed, it stays allowed across restarts until you revoke it here, and revoking it stops that browser’s FT8/FT4 transmission from the page at once. Nothing transmits from the page until the browser presses TX On. A streaming browser doesn’t need it: through the stream it transmits as you would here.",
   "remote.controlAllow": "Allow station controls",
   "remote.controlRevoke": "Revoke station controls",
-  "remote.controlRefreshing": "Updating station controls…",
   "remote.controlActive": "Station control active",
-  "remote.modeEntry.label": "Use this mode",
-  "remote.modeEntry.title": "Switch the station to this mode and its remembered frequency. Transmit remains off.",
-  "remote.workspaceEntry.title": "Switch the station’s mode and decoder to this workspace. Transmit remains off.",
-  "remote.controlAvailable": "Station control permitted",
-  "remote.controlRequired": "Station controls are off for this browser. Allow them in Nexus at the station: Settings → Station → Remote access.",
-  "remote.controlOccupied": "Another browser controls the station.",
-  "remote.controlPending": "Waiting for the station to confirm the command…",
-  "remote.configurationControls": "Station settings · Available controls can be changed with station control. Appearance and watchlist choices apply to this browser.",
-  "remote.followNeedsIdle": "To enable band following, disarm transmit and wait for fresh idle radio and amplifier readings.",
-  "remote.followChanged": "The station settings changed. Review the current choice before saving.",
-  "remote.followSaveFailed": "The station could not save the change. The saved choice is unchanged.",
-  "remote.followUnconfirmed": "The change is not confirmed. Check the command result and the station’s saved choice before trying again.",
-  "remote.followRefused": "Change refused. Check station control and current readings.",
-  "remote.followSavedRefreshing": "Saved at the station. Refreshing settings…",
-  "remote.controlSettingsSaved": "The station saved the setting.",
-  "amp.strip.follow.title": "Automatic band following is on. Change it in Settings → Radio → Amplifier.",
   "amp.strip.statusUnknown": "Amplifier status unavailable",
-  "remote.controlApplied": "The station confirmed the command.",
-  "remote.controlRefused": "The station refused the command. Refresh the readings and check local permission.",
-  "remote.controlUnknown": "The command may have taken effect. Check the station before another command.",
-  "remote.controlCheckResult": "Check command result",
-  "remote.controlCheckedStation": "I checked the station — finish this check",
-  "remote.controlAcquire": "Take station control",
-  "remote.controlRelease": "Release station control",
-  "remote.controlOffline": "Station control disconnected",
-  "remote.ftControlPreview": "Approving this browser in Nexus at the station gives it station controls and logging. FT8/FT4 transmit is a separate tick on that approval.",
-  "remote.controlPreview": "Station controls and manual logging require local permission. Remote transmission remains unavailable.",
-  "remote.controlTakeOver": "End remote control and clear permissions",
-  "remote.loggingAllow": "Allow remote logging",
-  "remote.loggingRevoke": "Revoke logging permission",
-  "remote.loggingController": "This browser controls remote logging.",
-  "remote.loggingStatusUnavailable": "Logging control status unavailable",
-  "remote.loggingOffline": "Remote logging disconnected",
-  "remote.loggingUnsupported": "Update the station to enable remote logging.",
-  "remote.loggingActive": "Remote logging control active",
-  "remote.loggingOccupied": "Another browser controls logging.",
-  "remote.loggingAvailable": "Remote logging permitted",
-  "remote.loggingPermissionRequired": "Remote logging is off for this browser. Allow it in Nexus at the station: Settings → Station → Remote access.",
-  "remote.loggingAcquire": "Take logging control",
-  "remote.loggingRelease": "Release logging control",
-  "remote.loggingHint": "Manual entries use the station’s general logbook. Log Field Day contacts, and QSOs you want audio recorded for, in Nexus at the shack.",
-  "remote.loggingSubmitted": "Submitted QSO · retained in this browser until checked",
-  "remote.loggingStationTime": "Station time at submission; check the station log for the recorded time.",
-  "remote.loggingSaving": "Saving QSO at the station…",
-  "remote.loggingSaved": "QSO saved to the station log file. External uploads use the station’s existing queues.",
-  "remote.loggingUnknown": "The QSO may already be logged. Keep this entry and check its result before trying again.",
-  // remote adif+settings
-  "remote.activationExportDone": "Saved {{name}} to this browser’s downloads.",
-  "remote.activationExportTooLarge": "This activation is too large to download here. Export it with Nexus at the station.",
-  "remote.activationExportMissing": "This activation is no longer in the station’s log. Refresh the log and try again.",
-  "remote.activationExportFailed": "The activation file did not arrive intact, so nothing was saved. Try again.",
-  "remote.settingsEditable": "Operating preferences you can change from here are enabled. Station identity, licence, radio, audio, network, account and upload settings stay read-only here. Change them in Nexus at the station, in person or streamed to this browser.",
-  "remote.settingsChanged": "These settings changed at the station after this page loaded them. They have been reloaded; make your change again.",
-  "remote.settingsRefused": "The station did not accept this change. Nothing was saved.",
-  "remote.settingsUnconfirmed": "The station has not confirmed this save. Check the settings at the station before changing them again.",
-  "remote.settingsTooLarge": "This change is too large to send from the browser. Change fewer macros at a time, or make the change at the station.",
-  "remote.settingsCheckedStation": "I checked the settings at the station — finish this check",
+  "remote.controlTakeOver": "End remote control: everyone off until Remote is turned on again",
   // remote parity batch 2
-  "remote.logChangeUnknown": "The station may already have made this change. Check its result before changing the log again.",
-  "remote.logChangeCheck": "Check the result",
-  "remote.logChangeStale": "This contact changed at the station after the log was loaded. Refresh the log and try again.",
-  "remote.logChangeFailed": "The station did not confirm this change. Check logging control, then try again.",
-  "remote.logEntryInvalid": "Check the call, band, mode, frequency and time, then try again.",
-  "remote.loggingRefused": "The station did not confirm this entry. Check logging control and the station’s current mode, then try again.",
-  "remote.loggingNotSent": "Not sent. Nothing reached the station, so this QSO was not logged. Try again.",
-  "remote.loggingBusy": "The station was busy, so this QSO was not logged. Try again.",
-  "remote.loggingCheckResult": "Check submitted QSO result",
-  "remote.loggingCheckedLog": "I checked the station log — finish this check",
   "remote.requestFailed": "The request could not be completed. Check the connection and your service access, then try again.",
   "remote.accountMatch": "Match this account ID on both screens:",
   "remote.trialNotStarted": "Your account is ready. Pair a station from the shack — approving it at the radio starts the fourteen days.",
@@ -205,6 +125,7 @@ export const EN = {
   "remote.confirmAttachWarning": "Only continue if this code came from your own copy of Nexus. A code somebody sent you attaches their station, not yours.",
   "remote.confirmAttach": "Attach this station",
   "remote.trialDisabled": "Service access for this account has been switched off. This is not the same as the trial running out.",
+  "remote.lanFree": "Remote on the shack's own network stays free: Stream and Listen work when this device is on the same network as the station.",
   "remote.askAboutAccess": "Ask about access in the beta channel",
   "remote.stationLimitReached": "This account already has two stations. Revoke one you are not using before pairing another.",
   "remote.pairingExpired": "That pairing code has expired or has already been used. Get a fresh one from Nexus at the shack.",
@@ -223,10 +144,10 @@ export const EN = {
   "remote.sessionEnded": "Remote access to this station ended, so this browser was disconnected. Check your trial and your stations below.",
   "remote.browserPerStation": "Each station approves its browsers separately, so this browser needs approving for this station too.",
   "remote.sharedComputerHint": "Signing out keeps this browser approved. On a shared computer, press “Remove this browser’s approval” for each station before you sign out.",
-  "remote.observe": "Observe station",
   "remote.disconnect": "Disconnect and return to stations",
   "remote.forgetBrowser": "Remove this browser’s approval",
   "remote.thisBrowserApprovedUntil": "This browser is approved until {{until}} UTC.",
+  "remote.thisBrowserApprovedUntilRemoved": "This browser is approved until you remove it in Nexus at the shack.",
   "remote.thisBrowserRenewsUntil": "This browser is approved until {{until}} UTC. Using the station from here keeps it approved, up to {{limit}} UTC.",
   "remote.thisBrowserApprovalEnding": "This browser’s approval ends {{until}} UTC. To keep using it, approve it again in Nexus at the shack.",
   "remote.thisBrowserKey": "This browser’s key: {{key}}",
@@ -245,114 +166,12 @@ export const EN = {
   "remote.approveInShackNamed": "\"{{station}}\" is linked to your account and waiting for approval in Nexus at the shack. Match the account ID there and approve it. The code is good for about {{minutes}} more minutes.",
   "remote.licenses": "Licenses and credits",
   "remote.nativeIntro": "Pair this station with your Remote account. Approving the pairing turns Remote on and approves the browser you paired from; approve any other browser here. While Remote is on, approved browsers receive your station, contact, radio and amplifier data.",
-  "remote.openNexus": "Open Nexus",
-  "remote.browserWorkspace": "Nexus Remote",
-  "remote.quick.name": "Quick Operate",
-  "remote.quick.full": "Full Nexus",
-  "remote.quick.navigation": "Quick Operate navigation",
-  "remote.quick.chooseMode": "Choose operating view",
-  "remote.quick.operate": "Operate",
-  "remote.quick.hunt": "Hunt",
-  "remote.quick.log": "Log",
-  "remote.quick.radioDetails": "Radio details",
   "remote.workDraftKept": "Your current contact draft is unchanged. Start a new contact with {{call}} when ready.",
   "remote.workReplaceDraft": "Clear draft and use {{call}}",
-  "remote.quick.logbook": "General logbook",
   "remote.applicationObserver": "Monitoring only. Operating controls are not available to this browser.",
   "remote.viewUnavailable": "This is not available from the browser right now. Open it in Nexus at the shack.",
-  "remote.recallSnapshot": "Station log snapshot. Names, locations and notes come from previous contacts. Refresh to check for changes.",
-  "remote.recallRefresh": "Refresh history",
-  "remote.insightsSnapshot": "All {{count}} station contacts. Summary captured {{seconds}} s ago.",
-  "remote.insightsExpired": "This summary has expired. Refresh to read the station log again.",
   "remote.awardsObserver": "Journey, confirmation diagnostics and uploads are not available remotely yet.",
-  "remote.insightsRefresh": "Refresh summary",
-  "remote.responsiveness.title": "Responsiveness",
-  "remote.responsiveness.hint": "Measures how quickly this browser and the station answer each other: ten small dial steps, a band change and back, and one Stop while the radio is idle. About twenty seconds.",
-  "remote.responsiveness.needControl": "Take station control to run the check.",
-  "remote.responsiveness.run": "Run check",
-  "remote.responsiveness.copy": "Copy as text",
-  "remote.responsiveness.copied": "Copied",
-  "remote.responsiveness.phase.tuning": "Tuning…",
-  "remote.responsiveness.phase.band": "Changing band…",
-  "remote.responsiveness.phase.stop": "Sending Stop…",
-  "remote.responsiveness.phase.settling": "Waiting for the station…",
-  "remote.responsiveness.refused.needControl": "Not run: this browser does not hold station control.",
-  "remote.responsiveness.refused.needIdle": "Not run: the radio is transmitting, tuning or not answering. Run the check while it is idle.",
-  "remote.responsiveness.refused.unsupported": "Not run: this station is too old to be measured. Update Nexus at the shack.",
-  "remote.responsiveness.report.title": "Remote responsiveness — {{when}}",
-  "remote.responsiveness.report.link": "Link round trip: {{typical}} typical, {{worst}} worst",
-  "remote.responsiveness.report.linkUnknown": "Link round trip: not measured",
-  "remote.responsiveness.report.tuning": "Tuning: {{made}} steps made, {{sent}} sent, {{refused}} refused while one was still in flight",
-  "remote.responsiveness.report.tuningSkipped": "Tuning: skipped — {{reason}}",
-  "remote.responsiveness.report.screen": "  Screen responded: {{typical}} typical, {{worst}} worst (target {{target}})",
-  "remote.responsiveness.report.confirmed": "  Radio confirmed: {{typical}} typical, {{worst}} worst (target {{target}})",
-  "remote.responsiveness.report.readout": "  Readout caught up: {{typical}} typical, {{worst}} worst (target {{target}})",
-  "remote.responsiveness.report.none": "  Not measured",
-  "remote.responsiveness.report.via": "  Confirmed by the station's push: {{pushed}}, by polling: {{polled}}",
-  "remote.responsiveness.report.unconfirmed": { "one": "  {{count}} step was sent and never confirmed", "other": "  {{count}} steps were sent and never confirmed" },
-  "remote.responsiveness.report.band": "Band change: {{made}} sent",
-  "remote.responsiveness.report.bandSkipped": "Band change: skipped — {{reason}}",
-  "remote.responsiveness.report.stop": "Stop while idle: screen {{screen}}, sent {{sent}}, station accepted {{accepted}}, readout {{readout}}",
-  "remote.responsiveness.report.stopSkipped": "Stop: skipped — {{reason}}",
-  "remote.responsiveness.report.flicker": "Controls went off by themselves: {{run}} times during the check, {{idle}} times in the {{seconds}} s before it",
-  "remote.responsiveness.report.verdict": "Within budget: {{passed}} of {{total}} checks",
-  "remote.responsiveness.skip.mode": "the dial cannot be wheel-tuned in this mode",
-  "remote.responsiveness.skip.digital": "the station is in a digital mode, which has no band list to pick from",
-  "remote.responsiveness.skip.noBand": "no other licensed band to move to",
-  "remote.responsiveness.skip.unsupported": "this station does not offer it",
-  "remote.responsiveness.skip.stopUnavailable": "this station does not offer Stop to this browser",
-  "remote.responsiveness.skip.satellite": "the station may be tracking a satellite pass, which Stop would end",
-  "remote.memoriesSnapshot": "Station memories captured {{seconds}} s ago.",
-  "remote.memoriesExpired": "This memory snapshot has expired. Refresh to read it again.",
-  "remote.memoriesRefresh": "Refresh memories",
-  "remote.memoriesObserver": "Observation only. Tuning, editing, file operations and net alerts remain on the station.",
-  "remote.fieldDaySnapshot": "Station contest captured {{seconds}} s ago.",
-  "remote.fieldDayRefresh": "Refresh contest",
-  "remote.fieldDayObserver": "Observation only. Event, operator, scoring changes and exports remain on the station.",
-  "remote.fieldDayInactive": "No contest is running on the station.",
-  "remote.fieldDayTooLarge": "This event is too large to show in the browser. View the complete event in Nexus at the shack.",
-  "remote.otaSnapshot": "Station POTA/SOTA captured {{seconds}} s ago.",
-  "remote.otaRefresh": "Refresh station data",
-  "remote.otaObserver": "Observation only. Hunting, activation changes and files remain on the station.",
-  "remote.otaFeedAge": "Station feed fetched {{seconds}} s ago.",
-  "remote.otaFeedExpired": "Station feed expired. Refresh it in Nexus.",
-  "remote.otaFeedUnavailable": "No station feed available. Open POTA/SOTA in Nexus.",
-  "remote.dxpedSnapshot": "Station DX board updated {{seconds}} s ago.",
-  "remote.dxpedExpired": "This station DX board has expired. Refresh to read it again.",
-  "remote.dxpedRefresh": "Refresh DXpeditions",
-  "remote.dxpedObserver": "Observation only. Work, map navigation, Chase and alarms are unavailable.",
-  "remote.dxpedNoWindows": "Station prediction windows are unavailable. Calendar outlooks use the board’s base model.",
-  "remote.dxpedWindowsAge": "Station prediction windows computed {{minutes}} min ago.",
-  "remote.recallObserver": "Look up prior contacts. Logging from this browser is not available right now.",
-  "remote.recallUnsupported": "Update the station app to view cockpit contact history.",
-  "remote.aprsSnapshot": "Station APRS roster captured {{seconds}} s ago.",
-  "remote.aprsUnavailable": "APRS readings unavailable",
-  "remote.sstvImageUnavailable": "Received image unavailable.",
   // remote parity batch 3
-  "remote.b3.needAlertTitle": "New need: {{station}}",
-  "remote.b3.needAlertBodyFreq": "{{call}} on {{freq}} MHz {{mode}}. {{need}}",
-  "remote.b3.needAlertBodyBand": "{{call}} on {{band}} {{mode}}. {{need}}",
-  "remote.b3.needAlertMoreTitle": "More new needs",
-  "remote.b3.needAlertMore": "More new needs on the station's Needed board: {{count}}.",
-  "remote.b3.needAlertsOff": "Alert me about new needs",
-  "remote.b3.needAlertsOn": "Stop new-need alerts",
-  "remote.b3.needAlertsNote": "Alerts show in this browser only. They never tune the radio or work a station.",
-  "remote.b3.needAlertsBlocked": "Notifications are blocked for this site. Allow them in your browser settings to get alerts.",
-  "remote.b3.needAlertsUnsupported": "This browser can't show notifications.",
-  "remote.b3.rareAlertTitle": "New one: {{station}}",
-  "remote.b3.rareAlertBodyFreq": "{{call}} — {{freq}} MHz {{mode}}",
-  "remote.b3.rareAlertBodyBand": "{{call}} — {{band}} {{mode}}",
-  "remote.b3.rareAlertsOff": "Alert me about rare DX",
-  "remote.b3.rareAlertsOn": "Stop rare-DX alerts",
-  "remote.b3.rareAlertsStationOff": "Pounce is off at the station. Choose what counts as rare in the station's Settings ▸ Spots & Alerts to get these alerts.",
-  "remote.b3.rareAlertsOlder": "Rare-DX alerts need a newer Nexus at the station.",
-  "remote.b3.potaAlertTitle": "New POTA activation: {{reference}}",
-  "remote.b3.potaAlertBody": "{{activator}} at {{name}}, {{freq}} MHz {{mode}}",
-  "remote.b3.potaAlertMoreTitle": "More new POTA activations",
-  "remote.b3.potaAlertMore": "More parks came on the air: {{count}}.",
-  "remote.b3.potaAlertsOff": "Alert me about new POTA activations",
-  "remote.b3.potaAlertsOn": "Stop POTA activation alerts",
-  "remote.b3.potaAlertsStale": "The station has no fresh POTA spots right now. Alerts resume when its POTA board or map refreshes them.",
   // Listening to the station's receive audio. Muted until asked for, and the state line
   // exists so a dead LINK never reads as a dead BAND.
   "remote.audio.start": "Listen",
@@ -367,20 +186,27 @@ export const EN = {
   "remote.audio.inUse": "Another browser is listening to this station.",
   "remote.audio.notController": "Audio stopped because station control was lost.",
   "remote.audio.stopped": "Audio stopped.",
-  // The feed's own control, beside the listen control because they are the same question asked of
-  // two things: what is this tab doing while you are not looking at it. The station's feed pauses
-  // with the tab by default, which costs nothing to run; an operator watching a frequency on a
-  // second screen turns this on and it stays on for that station.
-  "remote.feed.keep": "Keep watching",
-  "remote.feed.keepOff.title": "The feed pauses while this tab is in the background and comes back when you return. Turn this on to keep watching a frequency on a second screen.",
-  "remote.feed.keepOn.title": "The feed stays live while this tab is in the background. Turn this off to let it pause when you look away.",
-  "remote.feed.resumed": "Feed resumed — it was paused while this tab was in the background.",
   // ⚠️ REMOTE STOP: ACCEPTANCE IS NOT RF. The station answers an accepted Stop at once, and when
   // its Engine is held the halt runs afterwards on its own thread — so "stopped" here would tell the
   // operator the rig is unkeyed while it is still on the air. It says SENT until the station's own
   // reading shows the transmitter free, and only then STOPPED.
   'remote.stop.sending': 'Sending stop…',
   'remote.stop.sent': 'Stop sent',
+  'remote.stationFiles.save.label': 'Save to this computer',
+  'remote.stationFiles.save.title':
+    'Copy the file from the station into this computer’s Downloads folder',
+  'remote.stationFiles.save.one': 'Save {{name}} to this computer',
+  'remote.stationFiles.saving': 'Saving… {{pct}}%',
+  'remote.stationFiles.save.done': 'Saved to {{path}}',
+  'remote.stationFiles.save.failed': 'Could not save the station’s file to this computer',
+  'remote.stationFiles.save.notShared': '{{name}} is not a recording, an SSTV picture or ALL.TXT',
+  'remote.stationFiles.list.label': 'Save to this computer…',
+  'remote.stationFiles.list.title.recordings': 'Recordings at the station',
+  'remote.stationFiles.list.title.sstv': 'SSTV pictures at the station',
+  'remote.stationFiles.list.loading': 'Asking the station…',
+  'remote.stationFiles.list.empty': 'The station has none yet.',
+  'remote.stationFiles.list.failed': 'Could not list the station’s files',
+  'remote.stationFiles.close': 'Close',
   'remote.stop.sent.title':
     'The station has accepted the Stop. It is not off the air until the station reports the transmitter free.',
   'remote.stop.stopped': 'Stopped',
@@ -450,6 +276,8 @@ export const EN = {
   "remote.stream.ended.accessExpired": "Your Remote access has ended, so the stream can't start.",
   "remote.stream.ended.remoteOff": "Remote access was switched off for this account, so the stream ended.",
   "remote.stream.ended.tryLater": "Too many tries. Wait a minute, then start the stream again.",
+  "remote.stream.ended.lanOnly": "Your Remote access over the internet has ended, so the stream works only on the shack's own network. Connect this device to the same network as the station, then start the stream again.",
+  "remote.stream.ended.updateStation": "Streaming on the shack's own network needs a newer Nexus at the shack. Update Nexus there, then start the stream again.",
   "remote.stream.ended.station": "The station ended the stream.",
   "remote.stream.ended.insecure": "The station's reply was not encrypted end to end, so the stream was refused.",
   "remote.stream.ended.unsupported": "This browser can't show the stream. Use a current Chrome, Edge, Firefox or Safari.",
@@ -484,26 +312,10 @@ export const EN = {
   // Remote streaming is a beta (the operator, 2026-10-02): the mark and the line, on every surface it is entered from.
   "remote.beta.mark": "Beta",
   "remote.beta.notice": "Remote streaming is a beta feature. Access could be revoked at any time.",
-  "remote.b3.potaAlertsOlder": "POTA activation alerts need a newer Nexus at the station.",
-  "remote.b3.awardsObserver": "Journey and uploads are not available remotely yet. Confirmation diagnostics come from the station.",
-  "remote.b3.sstvSave": "Save",
-  "remote.b3.sstvSaveAria": "Save the {{mode}} picture received {{when}} to this device",
-  "remote.collectionLoading": "Loading station data…",
   "remote.collectionUnavailable": "Station data unavailable. Refresh or reconnect.",
-  "remote.collectionCapped": "Showing {{count}} of {{total}} station results.",
-  "remote.configurationObserver": "Station settings · Read only. Appearance and watchlist choices apply to this browser.",
   "remote.configurationLocal": "Manage accounts, backups and remote access in Nexus at the station, in person or streamed to this browser.",
-  "remote.programmingObserver": "Saved station channels · Read only. Search, editing, exports and radio actions are not connected yet.",
   "remote.collectionObserver": "Station data · Read only",
   "remote.logSearch": "Search call, country, grid, band or mode",
-  "remote.logPage": "Contacts {{start}}–{{end}} · Matches: {{total}}",
-  "remote.logWindow": "Newest {{count}} matches retained; narrow the search for older contacts.",
-  "remote.previousPage": "Previous",
-  "remote.nextPage": "Next",
-  "remote.refreshCollection": "Refresh",
-  "remote.historySession": "History from this Remote session",
-  "remote.historyGap": "Older rows removed from session history: {{count}}.",
-  "remote.historyUnavailable": "Remote history unavailable; reconnect starts a new history window.",
   "remote.voiceKeyerUnavailable": "Remote audio and voice-keyer recordings and playback are not connected yet.",
   "remote.spotsUnavailable": "Remote spot data unavailable.",
   "remote.memoriesUnavailable": "Remote memories are not connected yet.",
@@ -517,8 +329,6 @@ export const EN = {
   "remote.keyboardFollowsStation": "Decoder tuning follows Nexus at the shack.",
   "remote.keyboardTxReported": "Station reports text TX activity; RF output is not confirmed.",
   "remote.keyboardLatched": "Latched",
-  "remote.applicationUnavailable": "Station data unavailable. Check that Nexus is running and Remote is turned on at the shack.",
-  "remote.desktopUpdateRequired": "The Nexus at the shack only supports the station monitor. Update Nexus at the shack to open the full Nexus workspace here.",
   "remote.unpaired": "No Remote account paired",
   "remote.pairing": "Waiting for the account to claim this station",
   "remote.localApproval": "Account linked — local approval required",
@@ -531,6 +341,12 @@ export const EN = {
   "remote.nativeRevoked": "This station's access was revoked from a browser, so it has stopped connecting. Nothing here is broken — pair it again below when you want it back.",
   "remote.nativeTrialEnded": "Your Remote trial has ended, so this station could not be added to the account. Your radio, your log and your settings are untouched.",
   "remote.nativeTrialDisabled": "Remote access for this account has been switched off, so this station could not be added to it. This is not the trial running out. Your radio, your log and your settings are untouched.",
+  "remote.nativeCallsignInvalid": "A Remote trial is one per callsign, so set your station callsign in Settings → Station first, then pair this station again. Your radio, your log and your settings are untouched.",
+  "remote.nativeCallsignNotLicensed": "The callsign in Settings → Station is not an active US licence in the FCC's licence list, so this station could not be added. Check it for a typo. A new licence takes about a day to appear there. Your radio, your log and your settings are untouched.",
+  "remote.nativeTrialUsedByCallsign": "This callsign has already had a Remote trial under another account, so this station could not be added. If this is your callsign, write to support from the email address on your licence. Your radio, your log and your settings are untouched.",
+  "remote.nativeTrialUsedOnThisPc": "This computer has already had a Remote trial under another account, so this station could not be added. Your radio, your log and your settings are untouched.",
+  "remote.nativeUpdateRequired": "Adding a station to Remote needs a newer Nexus. Update Nexus, then pair this station again. Your radio, your log and your settings are untouched.",
+  "remote.nativeTrialActiveElsewhere": "This email address already has a Remote trial running under a different sign-in, such as Google instead of a password, so this station could not be added. In your browser, sign out, sign in the way you did the first time, then pair this station again. Your radio, your log and your settings are untouched.",
   "remote.stationName": "Station name",
   "remote.renameStation": "Rename",
   "remote.saveName": "Save name",
@@ -539,7 +355,7 @@ export const EN = {
   "remote.codeExpires": "This code expires after ten minutes.",
   "remote.approvePairing": "Approve this account pairing",
   "remote.cancelPairing": "Cancel pairing",
-  "remote.restartHint": "Remote stays on when Nexus restarts: if it was on when Nexus closed, it turns itself back on and reconnects. Approved browsers keep what you allowed, FT8/FT4 transmit included. Transmit is always off after a restart until the browser turns it on again. Turn off Remote only disconnects: turning it back on restores what each approved browser had.",
+  "remote.restartHint": "Remote stays on when Nexus restarts: if it was on when Nexus closed, it turns itself back on and reconnects. Approved browsers keep what you allowed. Turn off Remote only disconnects: turning it back on restores what each approved browser had.",
   "remote.disable": "Turn off Remote",
   "remote.enable": "Turn on Remote",
   "remote.autostartOffer": "Remote can only come back after this computer restarts if Nexus starts too. Start Nexus when you sign in to this computer?",
@@ -552,8 +368,8 @@ export const EN = {
   "remote.noBrowsers": "No current browser requests or approvals",
   "remote.revokeBrowser": "Revoke browser approval",
   "remote.approveBrowser": "Approve browser",
-  "remote.approveTransmit": "Also allow FT8/FT4 transmit from the Remote page",
   "remote.browserApprovedUntil": "Approved until {{until}} UTC.",
+  "remote.browserApprovedUntilRemoved": "Approved until you remove it.",
   "remote.browserRenewsUntil": "Approved until {{until}} UTC. Using the station from this browser keeps it approved, up to {{limit}} UTC.",
   "remote.browserApprovalEnding": "This approval ends {{until}} UTC. Approve the browser again to keep it.",
   "remote.approveAgain": "Approve again",
@@ -564,6 +380,40 @@ export const EN = {
   "remote.native.browsers": "Your browsers",
   "remote.native.asks": "Asks to stream this station.",
   "remote.native.remove": "Remove",
+  "remote.native.computers": "Your computers",
+  "remote.native.computerPlatform": "Nexus on {{platform}}",
+  "remote.native.computerAsks": "Asks to operate this station over the internet.",
+  "remote.native.computerKeyNotPinned": "This computer can’t connect until you approve it again here. First check this key matches the one Nexus shows on it.",
+  // Signing in to Nexus Remote at the shack, the notice of a device added by its own sign-in, and People.
+  "remote.account.signIn": "Sign in to Nexus Remote",
+  "remote.account.signInHint": "Sign in with your Nexus Remote account in the browser that opens. There is no code: each of your other devices is then added when you sign in on it.",
+  "remote.account.signingIn": "Waiting for you to sign in, in the browser that opened…",
+  "remote.account.cancelSignIn": "Cancel sign-in",
+  "remote.account.notReady": "Signing in to Nexus Remote is not available in this build yet. Pair with a code instead.",
+  "remote.account.signInFailed": "The sign-in did not finish. Try again.",
+  "remote.account.signInPortBusy": "Another sign-in is already open on this computer. Finish or close it, then try again.",
+  "remote.account.stationLimit": "Your account already has two stations. Remove one on the Remote page first.",
+  "remote.account.reproof": "Sign in again to keep adding devices: the key your station's sign-in was checked with has been retired.",
+  "remote.account.signInAgain": "Sign in again",
+  "remote.account.notOwner": "Sign in with the account this station belongs to.",
+  "remote.account.added": "Added by signing in as you: {{name}} ({{what}}), key {{key}}.",
+  "remote.account.addedGuest": "Added for someone you invited ({{role}}): {{name}} ({{what}}), key {{key}}.",
+  "remote.account.aBrowser": "a browser",
+  "remote.account.gotIt": "Got it",
+  "remote.account.addedByAccount": "Added by signing in.",
+  "remote.account.unconfirmed": "The Remote service says this device is yours, but Nexus could not confirm it. Approve it only if you added it yourself.",
+  "remote.account.removalWaiting": "Removed here. The Remote service hears of it when this station is back online.",
+  "remote.account.people": "People",
+  "remote.account.peopleHint": "Invite someone by the address they sign in with. Their devices are added when they sign in. Someone invited to operate transmits with your station, under your callsign: you stay responsible as its licensee.",
+  "remote.account.noPeople": "Nobody is invited.",
+  "remote.account.email": "Email address",
+  "remote.account.role": "Role",
+  "remote.account.role.operate": "Operate",
+  "remote.account.role.listen": "Listen",
+  "remote.account.operateIsYours": "Someone invited to operate can do all you can from another computer: transmit under your callsign, edit, export or delete your log, upload with your saved logins (LoTW signed with your certificate), spot under your call and read your Winlink mail. Invite to operate only someone you would hand the shack to.",
+  "remote.account.invite": "Invite",
+  "remote.account.uninvite": "Remove",
+  "remote.account.inviteLimit": "This station has invited as many people as it can. Remove someone first.",
   "remote.native.advanced": "Advanced",
   "remote.approve": "Approve",
   // The question Nexus asks at the shack when a browser asks to stream. Never approved by default:
@@ -571,6 +421,9 @@ export const EN = {
   "remote.approval.title": "Let {{browser}} stream this station?",
   "remote.approval.body": "A browser signed in to your Remote account asks to stream this station and operate it as you would here, transmit included. Approve it only if this key matches the one the browser shows: {{key}}.",
   "remote.approval.bodyAgain": "This browser was approved before, but it can’t stream until you approve it again here. When it streams, it can operate this station as you would here, transmit included. Approve it only if this key matches the one the browser shows: {{key}}.",
+  "remote.approval.computerTitle": "Let {{computer}} operate this station?",
+  "remote.approval.computerBody": "Nexus on {{platform}}, signed in to your Remote account, asks to operate this station over the internet as you would here, transmit included. Approve it only if this key matches the one Nexus shows on that computer: {{key}}.",
+  "remote.approval.computerBodyAgain": "Nexus on {{platform}} was approved before, but it can’t connect until you approve it again here. Connected, it can operate this station as you would here, transmit included. Approve it only if this key matches the one Nexus shows on that computer: {{key}}.",
   "remote.approval.deny": "Deny",
   // Remote over this network (Settings ▸ Station ▸ Remote access): this station's own listener, for
   // Nexus on another computer on the same network, with no internet. Pairing is one press at the shack
@@ -629,26 +482,27 @@ export const EN = {
   "remote.lan.find.none": "No station answered by name on this network. Type the address the station shows.",
   "remote.lan.typed.invalid": "Type the address the station shows, like {{address}} or {{withPort}}.",
 
-  // The Stations on this network window's page (lan.html). `Nexus`, `Remote over this network`, `Pair a
-  // computer` (the shack's own card and button) and `Stream` are names on screen; {{address}}, {{key}}
-  // and {{example}} are a station's address, its key's fingerprint and an address, and {{name}} the
-  // name a station advertises (`Nexus` and the start of its key), all invariant.
+  // The Stations on this network window's page (lan.html). `Nexus`, `Nexus Remote`, `Remote over this
+  // network`, `Pair a computer`, `Sign in to Nexus Remote` (the shack's own card and buttons) and
+  // `Stream` are names on screen; {{address}}, {{key}} and {{example}} are a station's address, its
+  // key's fingerprint and an address, {{name}} the name a station advertises (`Nexus` and the start of
+  // its key), and {{date}} a day written YYYY-MM-DD, all invariant.
   "lanWindow.title": "Stations on this network",
-  "lanWindow.intro": "Operate a station on this computer’s network with no internet. Pair this computer with it once, with the code it shows, then stream it here.",
+  "lanWindow.intro": "Operate a station from this computer, on the station’s network or over the internet. Sign in once with your Nexus Remote account, and your station is added here.",
   "lanWindow.opening": "Starting…",
   "lanWindow.lost": "This window lost touch with Nexus. Close it, then open it again from Settings.",
-  "lanWindow.paired": "Paired stations",
-  "lanWindow.none": "No station is paired with this computer yet.",
+  "lanWindow.paired": "Stations on this computer",
+  "lanWindow.none": "No station is on this computer yet. Sign in to add yours.",
   "lanWindow.stationAt": "Station at {{address}}",
   "lanWindow.stationKey": "Key {{key}}",
   "lanWindow.stream": "Stream",
   "lanWindow.connecting": "Connecting…",
   "lanWindow.forget": "Forget",
-  "lanWindow.forgetConfirm": "Forget this station? This computer’s key for it is deleted, and pairing again needs a new code from the station. Remove this computer at the station too.",
+  "lanWindow.forgetConfirm": "Forget this station? This computer’s keys for it are deleted, and using it from here again needs a new sign-in (or a new code, for a station paired with one). If the station still lists this computer, remove it there too.",
   "lanWindow.forgetYes": "Forget it",
   "lanWindow.keep": "Keep it",
   "lanWindow.otherAddress": "The station’s address now",
-  "lanWindow.pair": "Pair with a station…",
+  "lanWindow.pair": "Pair with a code instead…",
   "lanWindow.pairTitle": "Pair with a station on this network",
   "lanWindow.pairHint": "At the station, press Pair a computer under Remote over this network. It shows its address and a code that works once, within ten minutes.",
   "lanWindow.address": "Station address",
@@ -664,7 +518,7 @@ export const EN = {
   "lanWindow.pairSubmit": "Pair",
   "lanWindow.pairing": "Pairing…",
   "lanWindow.cancel": "Cancel",
-  "lanWindow.pairedNow": "Paired. Press Stream to operate the station.",
+  "lanWindow.pairedNow": "Paired. Press Operate from this computer to work the station from here.",
   "lanWindow.disconnected": "Disconnected from the station.",
   "lanWindow.reason.badAddress": "That is not a station’s address. Type it as the station shows it, on this network.",
   "lanWindow.reason.badCode": "The code is sixteen characters, 0 to 9 and a to f. Check it against the station’s screen.",
@@ -687,58 +541,185 @@ export const EN = {
   "lanWindow.reason.unknownStation": "This computer is no longer paired with that station.",
   "lanWindow.reason.stationLeft": "The station ended the connection. Remote over this network may have been turned off there, or this computer removed.",
   "lanWindow.reason.connectionLost": "The connection to the station was lost.",
+  "lanWindow.operate": "Operate from this computer",
+  "lanWindow.operateConfirm": "Operate this station from here? Nexus closes and starts again driving it over this network, and this computer’s own station stays off until you press Leave.",
+  "lanWindow.operateYes": "Close and operate",
+  "lanWindow.operateAt": "Operate at this address",
+  "lanWindow.otherAddressHint": "As the station shows it, like {{example}}, or its computer’s name, like {{name}}.",
+  "lanWindow.reason.nameUnresolved": "No computer on this network answers to that name. Check the name, or type the station’s address as it shows it.",
+  "lanWindow.typedFirst": "Tried first when operating: {{address}}",
+  "lanWindow.typedLabel": "Tried first when operating",
+  "lanWindow.typedChange": "Change",
+  "lanWindow.typedClear": "Clear",
+  "lanWindow.typedSave": "Save",
+  "lanWindow.operateNo": "Not now",
+  "lanWindow.streamInstead": "Stream the station’s screen instead",
+  "lanWindow.choiceHint": "Operate runs Nexus here and works the radio from your own clicks and pop-outs. Streaming only shows a picture of the station’s screen.",
+  "lanWindow.operating": "Nexus is closing, to start again driving the station…",
+  "lanWindow.internet.adding": "Signing in…",
+  "lanWindow.internet.added": "Internet road added (Beta): Operate from this computer uses it when this station is not on this network.",
+  "lanWindow.internet.hint": "Sign in to Nexus Remote in your web browser, so Operate from this computer can reach this station over the internet when it is not on this network.",
+  "lanWindow.internet.signingIn": "Finish signing in to Nexus Remote in your web browser, then come back here.",
+  // {{key}}: this computer's key for the road, in the eight groups the station shows it in when it asks
+  // to approve this computer ("Approve it only if this key matches the one Nexus shows on that computer").
+  "lanWindow.internet.waiting": "Internet road added. Approve this computer at the station, under Remote access, before you use it, and only if the station shows this computer’s key: {{key}}.",
+  "lanWindow.internet.computerKey": "This computer’s key for the internet road: {{key}}",
+  "lanWindow.internet.stationKey": "This station’s key for the internet road: {{key}}",
+  "lanWindow.internet.held": "Check this key before the internet road carries anything. At the station, under Remote access, “This station’s key” must show the same groups. Until you say it matches, Operate from this computer does not use the internet road.",
+  "lanWindow.internet.heldCodePaired": "Check this key before the internet road carries anything. At the station, under Remote access, “This station’s key” must show the same groups. Until you say it matches, Operate from this computer does not use the internet road. Operating from this computer on the station’s own network checks it too: when the station shows this same key there, the internet road comes on by itself.",
+  "lanWindow.internet.keyMatches": "It matches",
+  "lanWindow.internet.keyDiffers": "It doesn’t match",
+  "lanWindow.internet.keyDisagrees": "The service gave a different key for this station than the station itself. This internet road is off. Forget the station here and add it again.",
+  "lanWindow.internet.dropRoadConfirm": "Remove this station’s internet road? Its pairing on this network stays, so Operate from this computer still works here. To add the internet road again later, use “Sign in…” on this row.",
+  "lanWindow.internet.dropRoadYes": "Remove the internet road",
+  "lanWindow.internet.reason.stationKeyDisagrees": "The service gave a different key for this station than the station itself. Nothing was added.",
+  "lanWindow.internet.reason.internetNotIncluded": "The internet road is part of Nexus Remote’s paid service, and your account does not include it now. Operating on this network stays free.",
+  "lanWindow.internet.reason.internetNotReady": "Nexus Remote does not take sign-ins from Nexus yet. Try again after an update.",
+  "lanWindow.internet.reason.signInPortBusy": "Another program is using port 42078, which Nexus signs in through. Close it, then try again.",
+  "lanWindow.internet.reason.signInTimedOut": "The sign-in was not finished within five minutes. Try again.",
+  "lanWindow.internet.reason.signInRefused": "The sign-in was cancelled.",
+  "lanWindow.internet.reason.signInFailed": "The sign-in did not finish. Try again.",
+  "lanWindow.internet.reason.signInUnderWay": "A sign-in is already waiting in your web browser.",
+  "lanWindow.internet.reason.stationNotChosen": "No station was picked, so the internet road was not added.",
+  "lanWindow.internet.chooseTitle": "Which station is this?",
+  "lanWindow.internet.choose": "Your Nexus Remote account has more than one station. Pick the one you paired with here.",
+  "lanWindow.internet.forgetUnreached": "Forgotten on this computer, but Nexus Remote could not be told. At the station, remove this computer under Remote access ▸ Your computers.",
+  "lanWindow.internet.dropRoadUnreached": "The internet road was removed on this computer and the pairing on this network was kept, but Nexus Remote could not be told. At the station, remove this computer under Remote access ▸ Your computers.",
+  "lanWindow.internet.reason.deviceLimit": "The station has eight devices already. Remove one at the station, then try again.",
+  "lanWindow.internet.reason.stationUnavailable": "Your Remote account has no station that can take this computer. Check that the station is linked to your account.",
+  "lanWindow.internet.reason.updateStation": "The station has not given Nexus Remote its key yet. Turn Remote on at the station, then try again.",
+  "lanWindow.internet.reason.serviceUnavailable": "Nexus Remote did not answer. Check this computer’s internet connection, then try again.",
+  "lanWindow.internet.reason.tryLater": "Nexus Remote asked to wait. Try again in a minute.",
+  "lanWindow.internet.reason.accessDenied": "Nexus Remote refused this sign-in. Sign in with the account the station is linked to.",
+  "lanWindow.signIn": "Sign in…",
+  "lanWindow.signInHint": "Sign in with the Nexus Remote account your station is linked to, or one its owner invited to operate it. The station is then on this computer, on its network and over the internet, with no code to type.",
+  "lanWindow.pairCodeHint": "For a station whose owner has not signed in to Nexus Remote at the station yet.",
+  "lanWindow.signIn.choose": "Your Nexus Remote account has more than one station. Pick the one to add to this computer.",
+  "lanWindow.signIn.whereTitle": "Where is the station?",
+  "lanWindow.signIn.where": "Nexus did not find the station on this network. Type its address as the station shows it under Remote over this network, or its computer’s name.",
+  "lanWindow.signIn.tryAddress": "Try this address",
+  "lanWindow.signIn.notHere": "Not on this network",
+  "lanWindow.signIn.done": "Signed in. Operate from this computer reaches the station on its network, and over the internet when it is not there.",
+  "lanWindow.signIn.renewed": "Signed in again.",
+  "lanWindow.signIn.until": "Signed in with your Nexus Remote account. The station takes this computer on its network until {{date}}.",
+  "lanWindow.signIn.renew": "Sign in again by {{date}} to keep operating this station on its network.",
+  "lanWindow.signIn.reason.alreadyHere": "That station is on this computer already. To link it to your account, press Sign in on its row.",
+  "lanWindow.signIn.reason.listenOnly": "You were invited to listen only. Nexus on this computer would operate the station, so it was not added. Listen in your web browser instead.",
+  "lanWindow.signIn.reason.stationNotProven": "Your station has not signed in to Nexus Remote yet. At the station, press Sign in to Nexus Remote (Settings → Station → Remote access), then try again here.",
+  "lanWindow.signIn.reason.stationProofFailed": "Nexus could not confirm that the station Nexus Remote lists is yours, so it was not added. Sign in again at the station, then try again here.",
+  "lanWindow.signIn.reason.notOnThisNetwork": "The station was not found on this network, so it was not added. Sign in again from a computer on the station’s network.",
+  "lanWindow.signIn.reason.stationNotSignedIn": "The station is not taking sign-ins on its network. At the station, check that it is signed in to Nexus Remote and that Remote over this network is on.",
+  "lanWindow.signIn.reason.proofNotYours": "The station did not take this sign-in. Sign in with the account the station belongs to, or ask its owner to invite you.",
+  "lanWindow.signIn.reason.proofRefused": "The station could not check this sign-in. Make sure the station and this computer run the same Nexus, then try again.",
+  "lanWindow.signIn.reason.stationCouldNotKeep": "The station could not keep this computer. Check the station’s credential store, then try again.",
+  "lanWindow.signIn.reason.keyChanged": "Another computer answered at that address, not your station. Check the address.",
+  "lanWindow.away.status": "Not reached on its own network yet: Operate from this computer uses the internet (Beta). On the station’s network, press Sign in here once to use it there too.",
+  "lanWindow.away.added": "Signed in. The station was not found on this network, so it is added over the internet: Operate from this computer uses the internet (Beta) until you sign in here on the station’s network.",
+  "lanWindow.away.stillAway": "The station was not found on this network, so it stays on this computer over the internet.",
+  "lanWindow.away.operateConfirm": "Operate this station from here? Nexus closes and starts again driving it over the internet, and this computer’s own station stays off until you press Leave.",
+  "client.banner.connecting": "Connecting to the station at {{station}}…",
+  "client.banner.live": "Operating the station at {{station}} over this network.",
+  "client.banner.notLive": "Not live: the link to the station at {{station}} dropped. The screens show it as it last was, and Nexus connects again by itself.",
+  "client.banner.busy": "Another device is operating the station at {{station}}.",
+  "client.banner.refused": "The station at {{station}} did not take this computer. {{reason}}",
+  "client.banner.leave": "Leave",
+  "client.banner.leave.title": "Start Nexus again as this computer’s own station",
+  "client.reason.otherBuild": "Nexus here and at the station are two builds of the same version. Install the same build on both computers.",
+  "client.reason.builds.updateStation": "This computer runs Nexus {{computer}} and the station runs Nexus {{station}}. Update Nexus at the station to {{computer}}, and this computer connects again by itself.",
+  "client.reason.builds.updateComputer": "This computer runs Nexus {{computer}} and the station runs Nexus {{station}}. Update Nexus on this computer to {{station}}, and it connects again by itself.",
+  "client.reason.builds.otherBuild": "This computer runs Nexus {{computer}} and the station runs Nexus {{station}}: two builds of the same version. Install the same build on both computers.",
+  "client.reason.localPermissionRequired": "Nexus at the station has not given this computer control. Allow it there.",
+  "client.reason.unknown": "Nexus at the station gave a reason this computer cannot read.",
+  "client.banner.internet.live": "Operating the station over the internet (Beta).",
+  "client.banner.internet.notLive": "Not live: the internet link to the station dropped. The screens show it as it last was, and Nexus connects again by itself.",
+  "client.banner.internet.busy": "Another device is operating the station.",
+  "client.banner.internet.connecting": "Connecting to the station over the internet (Beta)…",
+  "client.banner.internet.refused": "The station did not take this computer over the internet. {{reason}}",
+  "client.banner.takenOver": "Another computer took control of the station. Nothing here is transmitting.",
+  "client.banner.takeControl": "Take control",
+  "client.banner.takeControl.confirm": "This ends the other computer’s operating: anything it is transmitting stops now.",
+  "client.banner.takeControl.cancel": "Cancel",
+  "client.banner.stillThere": "Still there? The internet link ends in a minute unless you click.",
+  "client.banner.stillHere": "I’m here",
+  "client.banner.connectAgain": "Reconnect",
+  "client.banner.udpBlocked": "This network lets no audio or second Stop road through: you can watch, tune and log, and transmitting from here is off.",
+  "client.banner.signingAgain": "Signing in again, so this computer keeps operating the station on its network: finish in your web browser.",
+  "client.banner.signInBy": "Sign in again by {{date}} in Stations on this network to keep operating this station on its network.",
+  "client.reason.idle": "Nobody answered “Still there?”, so the internet link ended.",
+  "client.reason.internetNotIncluded": "The internet road is part of Nexus Remote’s paid service, and your account does not include it now. Operating on the station’s own network stays free.",
+  "client.reason.notApprovedThere": "The station has not approved this computer for the internet road, or removed it. Approve it there, or add the road again.",
+  "client.reason.stationKeyUnconfirmed": "The internet road waits until you check the station’s key. In Stations on this network, compare it with the station’s screen.",
+  "client.reason.stationKeyDisagrees": "The service gave a different key for this station than the station itself, so its internet road is off.",
+  "client.reason.waitingApproval": "This computer waits for approval at the station, under Remote access.",
+  "client.reason.internetNotReady": "Nexus Remote cannot take this computer yet.",
+  "client.reason.stationUnavailable": "Nexus Remote no longer has this station on your account.",
+  "client.reason.serviceUnavailable": "Nexus Remote did not answer. Nexus tries again by itself.",
+  "client.reason.tryLater": "Nexus Remote asked to wait. Nexus tries again by itself.",
+  "client.reason.accessDenied": "Nexus Remote refused this computer.",
+  "client.reason.pipeClosed": "The internet link closed. Nexus tries again by itself.",
+  "client.over.gaps": { "one": "{{count}} gap on the air, {{seconds}} s", "other": "{{count}} gaps on the air, {{seconds}} s" },
+  "client.over.noWord": "No word from the station: your over may have ended.",
+  "client.over.ended.audioGap": "Your over ended: your audio did not reach the station for 0.2 s.",
+  "client.over.ended.pttGap": "Your over ended: your PTT did not reach the station for 0.2 s.",
+  "client.over.ended.stopped": "Your over ended: it was stopped at the station.",
+  "client.over.ended.presence": "Your over ended: the station stopped hearing from this computer.",
+  "client.over.ended.ceiling": "Your over ended: it reached the 10-minute limit.",
+  "client.over.ended.watchdog": "Your over ended: the station's TX watchdog stopped it.",
+  "client.over.ended.routeChanged": "Your over ended: the station's transmit audio changed.",
+  "client.over.ended.refused": "The station did not take your PTT.",
+  "client.bench.label": "Test build: road switch",
+  "client.bench.normal": "Normal",
+  "client.bench.blockLink": "Block the command link",
+  "client.bench.blockStopRoad": "Block the Stop road",
+  "client.bench.blocked.link": "Test build: this computer is blocking its command link to the station.",
+  "client.bench.blocked.stopRoad": "Test build: this computer is blocking its Stop road to the station.",
+  "settings.thisComputer.legend": "This computer",
+  "settings.thisComputer.audio.title": "Audio",
+  "settings.thisComputer.audio.note": "This computer's own, for the station it operates over this network: kept here, never sent to the station.",
+  "settings.thisComputer.audio.default": "System default",
+  "settings.thisComputer.audio.missing": "{{name}} (not connected)",
+  "settings.thisComputer.audio.output.label": "The station's audio",
+  "settings.thisComputer.audio.output.hint": "Where you hear the station's receiver.",
+  "settings.thisComputer.audio.output.trouble": "The audio output would not open: {{why}}",
+  "settings.thisComputer.audio.volume.label": "Volume",
+  "settings.thisComputer.audio.volume.hint": "How loud the station is heard here, over the level it keeps for its decoders. It changes nothing at the station.",
+  "settings.thisComputer.audio.input.label": "Your microphone",
+  "settings.thisComputer.audio.input.hint": "What you talk into when you transmit from here. Nexus opens it only while it is needed.",
+  "settings.thisComputer.audio.input.trouble": "The microphone would not open: {{why}}",
+  "settings.thisComputer.audio.meter.label": "Microphone level",
+  "settings.thisComputer.audio.meter.hint": "Speak normally: the bar should move well into the middle.",
+  "settings.thisComputer.audio.test.label": "Test",
+  "settings.thisComputer.audio.test": "Play a test tone",
+  "settings.thisComputer.audio.test.failed": "The test tone could not play.",
+  "settings.thisComputer.audio.unavailable": "This computer's audio did not start, so the station's audio cannot be heard here.",
+  "settings.thisComputer.audio.notKept": "This computer could not keep that choice. Try again.",
+  "client.refused.unclassed": "This build has no place for that command, so nothing was sent to the station.",
+  "client.refused.runsHere": "That runs on this computer, not at the station.",
+  "client.refused.shackOnly": "That can only be done at the station, on its own screen.",
+  "client.refused.transmitNotYet": "That transmission is not available from this computer yet.",
+  "client.refused.heldPress": "This computer’s PTT reaches the station another way. Nothing was sent.",
+  "client.refused.noStopRoad": "Transmitting from here needs the second Stop link to the station, and this connection has none. Nothing was sent.",
+  "client.refused.noPresence": "The station has not heard this computer’s Stop link in the last 5 seconds, so it takes no transmission from here. Nothing was sent.",
+  "client.refused.staleState": "What this screen shows of the station is more than 2 seconds old, so the station takes no transmission from here until it catches up. Nothing was sent.",
+  "client.refused.pressEnded": "Your PTT press has ended. Let go of PTT and press again to talk.",
+  "client.refused.lockCapped": "Lock ended at its time limit: nobody answered “Still talking?”. Click PTT to let go, then again to talk.",
+  "client.refused.recording": "A voice message is being recorded on this computer. Stop the recording, then press PTT.",
+  "client.refused.pressHeld": "The PTT is held on this computer. Let go of PTT, then record.",
+  "client.refused.typedPassword": "A password typed here is never sent: the station uses the one it has stored.",
+  "client.refused.notController": "Another device has control of the station.",
+  "client.refused.busy": "The station is busy with this computer’s other requests. Try again.",
+  "client.refused.rateLimited": "Too many requests at once for the station. Try again.",
+  "client.refused.replayed": "The station had that request already, and did not run it again.",
+  "client.refused.changedAtShack": "Changed at the station. Reload and save again.",
+  "client.refused.badArguments": "The station could not read that request.",
+  "client.refused.stopped": "Transmit was stopped after you pressed this, so the station did not do it. Press it again if you still want it.",
+  "client.refused.tooLarge": "That is too large to send to the station.",
+  "client.refused.gone": "The link to the station dropped before it answered. Check at the station whether it happened.",
+  "client.refused.notLive": "Not connected to the station.",
+  "client.refused.udpBlocked": "This network blocks the roads Stop and audio need, so transmitting from here is off. Nothing was sent.",
+  "client.refused.unknown": "The station refused it.",
 
-  'monitor.title': 'Station monitor',
-  'monitor.observer': 'Monitoring only',
-  'monitor.native': 'Desktop station',
-  'monitor.fixture': 'Example station · Preview',
   'monitor.connecting': 'Waiting for station data…',
-  'monitor.current': 'Station updates received',
-  'monitor.connectionLost': 'Station updates unavailable. Current readings are hidden.',
-  'monitor.invalid': 'Station data could not be verified. Current readings are hidden.',
-  'monitor.unavailable': 'Reading unavailable',
-  'monitor.stationDial': 'Station dial',
-  'monitor.stationDialHint': 'Frequency selected in Nexus.',
-  'monitor.radioStatus': 'Radio status',
-  'monitor.cat': 'Radio link',
-  'monitor.rigMode': 'Reported radio mode',
-  'monitor.rigKeyed': 'Radio keyed flag',
-  'monitor.nexusTx': 'Nexus transmitter',
-  'monitor.connected': 'Connected',
-  'monitor.disconnected': 'Disconnected',
-  'monitor.keyed': 'Keyed',
-  'monitor.unkeyed': 'Unkeyed',
-  'monitor.busy': 'Busy',
-  'monitor.idle': 'Idle',
-  'monitor.txHint': 'Reported status does not confirm RF output.',
-  'monitor.readingsHint': 'Station updates and hardware readings are separate. A dash means no available reading.',
-  'monitor.amplifier': 'Amplifier',
-  'monitor.ampAlarm': 'Reported alarm',
-  'monitor.ampWarning': 'Reported warning',
-  'monitor.ampNoReading': 'The amplifier has no current reading.',
-  'monitor.ampLastIdentity': 'Last known amplifier. Station updates are unavailable.',
-  'monitor.ampBand': 'Reported band',
-  'monitor.ampTx': 'Amplifier TX flag',
-  'monitor.followBand': 'Saved follow-band setting',
-  'monitor.on': 'On',
-  'monitor.off': 'Off',
-  'monitor.light': 'Use light theme',
-  'monitor.dark': 'Use dark theme',
-  'monitor.system': 'Use system theme',
-  'monitor.previewTools': 'Preview controls',
-  'monitor.scenario': 'Example state',
-  'monitor.textSize': 'Display size',
-  'monitor.pause': 'Pause station updates',
-  'monitor.resume': 'Resume station updates',
-  'monitor.scenario.spe': 'SPE · receiving',
-  'monitor.scenario.kpa': 'KPA · standby',
-  'monitor.scenario.waiting': 'Amplifier · waiting for first poll',
-  'monitor.scenario.firstMiss': 'Amplifier · first missed poll',
-  'monitor.scenario.ampLost': 'Amplifier · connection lost',
-  'monitor.scenario.fault': 'Amplifier · unknown alarm and warning',
-  'monitor.scenario.knownFault': 'Amplifier · SWR alarm',
-  'monitor.scenario.catLost': 'Radio · connection lost',
-  'monitor.scenario.noAmp': 'Second radio · no amplifier',
   // ── Settings ▸ Station ──────────────────────────────────────────────────────────────
   // The pilot surface. Placeholders that are technical tokens (`KD9TAW`, `EN52xa`, `WI`) are
   // deliberately ABSENT — they live in `components/SettingsStation.tsx` as invariants.
@@ -749,11 +730,9 @@ export const EN = {
 
   'settings.station.grid.label': 'Grid',
   'settings.station.grid.hint':
-    'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square.',
+    'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square. Logged on each contact as your grid; your LoTW uploads keep using your TQSL Station Location.',
 
   'settings.station.opName.label': 'Operator name',
-  // Prose, not a token: a locale should offer a first name its operators recognise.
-  'settings.station.opName.placeholder': 'Alex',
   // ⚠️ `{NAME}` is a CW macro token matched literally by the expander — it must survive
   // translation unchanged. It is safe here only because interpolation is `{{double}}`.
   'settings.station.opName.hint': 'Used by the CW {NAME} macro and logging.',
@@ -762,12 +741,12 @@ export const EN = {
   'settings.station.fdOperator.placeholder': 'leave blank if that is you',
   // ⚠️ `OPERATOR` is the ADIF field name — a wire identifier. Keep it verbatim.
   'settings.station.fdOperator.hint':
-    'Only for multi-operator: the callsign of whoever is operating, when that is not the station call. Stamped on every contact you log (ADIF OPERATOR) so a shared activation can be split per operator — POTA and Field Day both want each operator to submit their own. Blank means single-op and nothing is stamped. Change it when you swap seats.',
+    'Only for multi-operator: the callsign of whoever is operating, when that is not the station call. Stamped on every contact you log (ADIF OPERATOR) so a shared activation can be split per operator — POTA and Field Day both want each operator to submit their own. Blank means single-op: your station call is logged as the operator. Change it when you swap seats.',
 
   'settings.station.opState.label': 'State',
   // ⚠️ `{MYSTATE}` — CW macro token, as above.
   'settings.station.opState.hint':
-    'Your US state or province, for everyday contacts — the CW {MYSTATE} macro and the QTH an RTTY ragchew sends. A contest uses its own box, Contesting ▸ Your station data ▸ State or province, so a portable or mobile entry can differ from this one.',
+    'Your US state or province, for everyday contacts — the CW {MYSTATE} macro, the QTH an RTTY ragchew sends, and your state on each contact you log (not a park or summit activation, which logs the park\'s). A contest uses its own box, Contesting ▸ Your station data ▸ State or province, so a portable or mobile entry can differ from this one.',
 
   'settings.station.licenseClass.label': 'License Class',
   // The <option> VALUES ('technician' … 'open') are persisted tokens and stay in the code.
@@ -1039,13 +1018,13 @@ export const EN = {
   // Four whole sentences rather than a stem plus a " since HH:MMZ" fragment: the stamp lands
   // in a different place in different languages. `{{since}}` is a UTC time stamp — invariant.
   'assist.sources.off':
-    'Assistance sources off: AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
+    'Assistance sources off: CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
   'assist.sources.offSince':
-    'Assistance sources off since {{since}}: AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
+    'Assistance sources off since {{since}}: CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial, call history.',
   'assist.sources.on':
-    'AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help.',
+    'CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help.',
   'assist.sources.onSince':
-    'AI CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help since {{since}}.',
+    'CW decoder, DX cluster / RBN, PSK Reporter needs, Super Check Partial and call history are supplying callsign and exchange help since {{since}}.',
   'assist.toggle.declare': 'Declare unassisted entry',
   'assist.toggle.end': 'End unassisted entry',
   'assist.why.summary': 'What this means for your contest category',
@@ -1054,7 +1033,7 @@ export const EN = {
   'assist.why.arrl':
     '<b>ARRL</b> contests call it spotting assistance and name “PSKReporter, Telnet, DX spotting websites or bulletin board systems, automated multi-channel decoders”. Single Operator may not use it (HCAT.1.1: “Use of spotting assistance is not permitted.”). <b>Single Operator Unlimited</b> may (HCAT.2.1). ARRL’s glossary defines a multi-channel decoder as software that “displays multiple decoded signals at the same time”. Nexus decodes one signal at a time, so that definition does not describe its CW decoder. It does describe the cluster, RBN and PSK Reporter feeds.',
   'assist.why.ownDecodes':
-    'Your <b>own radio’s decodes</b> are not assistance under either ruleset, so they keep feeding the Needed board in unassisted mode. Your outbound PSK Reporter uploads also keep running, because ARRL says “Generating spotting information for use by other stations is not considered to be spotting assistance.”',
+    'Your radio’s own <b>digital decodes</b>, FT8 and FT4 among them, keep feeding the Needed board in unassisted mode. Neither ruleset sets them apart: both count any technology that identifies a callsign or multiplier as assistance, so do not use the Needed board to find stations if your contest counts them. Your outbound PSK Reporter uploads also keep running, because ARRL says “Generating spotting information for use by other stations is not considered to be spotting assistance.”',
   'assist.why.notCovered':
     '<b>What this switch does not cover:</b> POTA and SOTA activator spots still arrive. Neither ruleset names those feeds, but both define assistance broadly enough to include them, so switch off the POTA/SOTA features by hand if you are entering a contest that counts them.',
   'assist.why.checkRules':
@@ -1075,6 +1054,11 @@ export const EN = {
   'update.install.title': 'Install the update and restart Nexus',
   'update.notNow.label': 'Not now',
   'update.notNow.title': 'Not now — the update stays downloaded',
+  'update.held': 'Nexus {{version}} is ready, but this computer is driving a station that runs Nexus {{station}}. Update the station at the shack first, or both together: installing here now ends remote operation until the station runs {{version}} too.',
+  'update.held.unknown': 'Nexus {{version}} is ready, but this computer is driving a station. Update the station at the shack first, or both together: installing here now ends remote operation until the station runs {{version}} too.',
+  'update.held.confirm': 'I understand: remote operation ends until the station is updated',
+  'update.held.anyway.label': 'Install anyway',
+  'update.held.anyway.title': 'Install the update here and restart Nexus. The station refuses this computer until it runs the same version.',
   'update.available': "Nexus {{latest}} is available — you're on {{current}}",
   'update.download': 'Download',
   'update.downloadFailed':
@@ -1123,7 +1107,7 @@ export const EN = {
   // squares, band names (20m), mode names (FT8), frequencies, RST reports, POTA/SOTA
   // references, QSL letters (L/C/E) and the Q-codes and service names printed as button
   // labels (QRZ, eQSL, CL, HL, QSL▸). Those live in `components/Logbook.tsx` as named
-  // constants — LOG_EXAMPLES and the labels beside it. What IS here is the prose around
+  // constants. What IS here is the prose around
   // them, and the ADIF field names quoted inside that prose (SIG_INFO, MY_SIG_INFO) are
   // wire identifiers that must survive translation verbatim, exactly as `ADIF OPERATOR`
   // does in `settings.station.fdOperator.hint`.
@@ -1173,6 +1157,7 @@ export const EN = {
   'logbook.parkStates.confirmedTitle':
     'Confirmed: its confirmation came with the state the other station signed. Tick it only if you are sure.',
   'logbook.parkStates.cancel': 'Cancel',
+  'logbook.parkStates.skip': 'Skip to Cancel and Change',
   'logbook.parkStates.apply': {
     one: 'Change {{count}} contact',
     other: 'Change {{count}} contacts',
@@ -1259,7 +1244,14 @@ export const EN = {
     other:
       '{{count}} contacts marked as uploaded were logged under another call than the one in Settings; this check leaves them alone.',
   },
+  'logbook.confirmations.otherCalls': {
+    one: '{{count}} LoTW record is for a call your log holds no contact under, such as a club call on your LoTW account; this check leaves it alone.',
+    other:
+      '{{count}} LoTW records are for calls your log holds no contact under, such as a club call on your LoTW account; this check leaves them alone.',
+  },
   'logbook.confirmations.cancel': 'Cancel',
+  'logbook.confirmations.skipCheck': 'Skip to Cancel and Check',
+  'logbook.confirmations.skipChange': 'Skip to Cancel and Change',
   'logbook.confirmations.apply': {
     one: 'Change {{count}} contact',
     other: 'Change {{count}} contacts',
@@ -1325,6 +1317,11 @@ export const EN = {
   'logbook.export.csv.title': 'Save the whole logbook as a CSV spreadsheet in your Downloads folder',
   'logbook.export.csv.titleRange':
     'Save the selected date range as a CSV spreadsheet in your Downloads folder',
+  'logbook.export.selected.label': 'Export selected ({{count}})',
+  'logbook.export.selected.title':
+    'Save the contacts you picked as an ADIF file in your Downloads folder. Ctrl-click (⌘-click on a Mac) a row to pick it, Shift-click to pick a run of rows, Space picks the focused row, Esc clears.',
+  'logbook.export.selected.notLoaded': 'Some of those rows are still loading. Try the Shift-click again in a moment.',
+  'logbook.export.nothing': 'No contacts to export, so no file was written.',
   'logbook.export.failed': 'Export failed',
   // `{{path}}` is a file path — data, never translated, never re-punctuated.
   'logbook.export.done': {
@@ -1479,8 +1476,7 @@ export const EN = {
     other: 'Purged {{count}} contacts from the log',
   },
 
-  // The hand-log form. Every placeholder that is a pure token (W1AW, FN31, 20m, US-1234…)
-  // is in LOG_EXAMPLES, not here; the three that are human prose are.
+  // The hand-log form. Its boxes show no sample values; the hints that are words are here.
   'logbook.form.open': 'Log QSO',
   'logbook.form.close': 'Close',
   'logbook.field.call.label': 'Call',
@@ -1511,11 +1507,7 @@ export const EN = {
   'logbook.field.parkMine.title':
     'POTA reference of YOUR own activation for this contact (ADIF MY_SIG_INFO). Defaults to POTA.',
   'logbook.field.name.label': 'Name',
-  // Prose, not a token: a locale should offer a first name its operators recognise.
-  'logbook.field.name.placeholder': 'Jim',
   'logbook.field.qth.label': 'QTH',
-  // Also prose — QTH is free text, so the example is a place a reader recognises.
-  'logbook.field.qth.placeholder': 'Dayton, OH',
   'logbook.column.notes': 'Notes',
   'qso.detail.title': 'Contact with {{call}}',
   'qso.detail.section.contact': 'Station worked',
@@ -1561,12 +1553,17 @@ export const EN = {
   'logbook.form.save': 'Save',
   'logbook.form.log': 'Log',
   'logbook.form.saveFailed': 'Could not save the edit',
+  'logbook.form.editGone': 'Could not open the {{call}} contact for editing: the log no longer holds it as it was. Find it in the list.',
   'logbook.form.updated': 'Updated {{call}}',
   'logbook.form.logFailed': 'Could not log QSO',
 
   // The table. Column headers name a CONCEPT and are prose; every value under them is a
   // token. `{{query}}` is what the operator typed, inserted verbatim.
   'logbook.globe.loading': 'Loading globe…',
+  // In the globe band instead of the globe (components/GlobeGuard.tsx): this computer cannot make the WebGL2
+  // context the globe is drawn with, or the globe failed once it was drawn.
+  'logbook.globe.noWebgl2': "The 3-D globe needs WebGL2, which this computer's graphics cannot provide. Your log is not affected.",
+  'logbook.globe.failed': 'The 3-D globe stopped working. Your log is not affected.',
   // The divider under the globe band (layout L7); its tooltip is paneSeam.title.
   'logbook.globe.height.label': 'Globe height',
   'logbook.search.placeholder': 'Search call / grid / band / mode / date…',
@@ -1633,9 +1630,12 @@ export const EN = {
   'logbook.row.park.mine': 'My activation: {{program}} {{ref}}',
   'logbook.row.qsl.lotw': 'LoTW confirmed (award-eligible)',
   'logbook.row.qsl.card': 'Paper card received (award-eligible)',
-  'logbook.row.qsl.eqsl': 'eQSL received (NOT DXCC/WAZ/WAS-eligible)',
+  'logbook.row.qsl.eqsl':
+    'eQSL received (ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus does not count it toward WAZ yet)',
+  'logbook.row.qsl.qrz': 'QRZ logbook confirmed (ARRL awards do not accept it)',
   'logbook.row.qsl.confirmed': 'LoTW / paper — award-eligible',
-  'logbook.row.qsl.eqslOnly': 'eQSL only — not accepted for DXCC/WAZ/WAS',
+  'logbook.row.qsl.eqslOnly':
+    'eQSL only (ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus does not count it toward WAZ yet)',
   'logbook.row.qsl.none': 'Not confirmed',
   'logbook.row.spot.title':
     "Spot {{call}} to the DX cluster (pre-fills this QSO's call + frequency)",
@@ -1697,6 +1697,26 @@ export const EN = {
   'logbook.sat.tagged': '{{call}} tagged as worked via {{sat}}',
   'logbook.sat.cleared': 'Satellite tag cleared for {{call}}',
   'logbook.sat.failed': 'Could not change the satellite tag',
+  // The Country cell's picker: the DXCC entity a contact counts toward, set by hand. Entity names
+  // and numbers are data and arrive as {{entity}}.
+  'logbook.country.pick.title': 'Set the DXCC entity this contact counts toward',
+  'logbook.country.pick.aria': 'Country of {{call}}: {{entity}}. Set its DXCC entity',
+  'logbook.country.search.placeholder': 'Find an entity by name or number',
+  'logbook.country.current': 'DXCC on record: {{entity}}',
+  'logbook.country.byCall': 'No DXCC number on record: it counts by its call.',
+  'logbook.country.lotw': 'LoTW confirmed it as {{entity}}, and the awards count LoTW’s.',
+  'logbook.country.deletedEntity': '{{entity}} · deleted',
+  'logbook.country.loading': 'Reading the entities…',
+  'logbook.country.unavailable': 'The entity list could not be read.',
+  'logbook.country.noMatch': 'No entity matches.',
+  'logbook.country.more': {
+    one: '{{count}} more. Type to narrow the list.',
+    other: '{{count}} more. Type to narrow the list.',
+  },
+  'logbook.country.clear': 'Clear the DXCC number',
+  'logbook.country.set': '{{call}} set to {{entity}}',
+  'logbook.country.cleared': '{{call}}: DXCC number cleared, it counts by its call',
+  'logbook.country.failed': 'Could not set the country',
 
   // The QSL-request note. Four whole sentences instead of a stem plus " via …" and " on …"
   // tails: both stamps land in a different place in different languages. `{{date}}` is a
@@ -1797,8 +1817,8 @@ export const EN = {
   'logEntry.park.program.title': 'On-the-air program for the park/summit you worked',
   // `{{example}}` is a park/summit REFERENCE from the call site — a wire format, never
   // localised. The prose around it is the part a translator owns.
-  'logEntry.park.ref.placeholderPota': 'Park ({{example}} or name)',
-  'logEntry.park.ref.placeholderSota': 'Summit ({{example}})',
+  'logEntry.park.ref.placeholderPota': 'Park (reference or name)',
+  'logEntry.park.ref.placeholderSota': 'Summit (reference)',
   'logEntry.park.ref.title':
     'Park/summit reference of the station you worked — logged to ADIF (POTA→SIG_INFO, SOTA→SOTA_REF)',
   'logEntry.park.live.label': 'live',
@@ -1870,10 +1890,23 @@ export const EN = {
     'Dupe: {{call}} is already in this position\'s log in {{mode}} — this contest counts a station once per mode, any band',
   'logEntry.fd.dupe.ownAnyBandOrMode':
     'Dupe: {{call}} is already in this position\'s log — this contest counts a station once, regardless of band or mode',
+  'logEntry.fd.dupe.badge': 'DUPE',
+  // The early warning at a QSO party: this station is already in the log on this band and mode, from
+  // these counties/states (codes, invariant tokens). Not a dupe until the county typed is one of them.
+  'logEntry.fd.worked': 'Worked: {{qths}}',
+  'logEntry.fd.rstSent.label': 'RST sent',
+  'logEntry.fd.rstSent.title': 'The report this contact logs as sent: {{rst}} unless you type another here, for this contact only. Space and Tab skip this box; click it, or press Shift+Tab from the received report, to change it.',
+  'logEntry.fd.dupe.workedAt': '{{time}} {{band}} {{mode}}',
+  'logEntry.fd.dupe.workedOn': '{{band}} {{mode}}',
+  'logEntry.fd.loggedDupe': 'Logged {{call}} {{exchange}} ({{mode}}) as a DUPE: worked before, it scores no points',
   'logEntry.fd.dupe.club': 'Club dupe: another position already worked {{call}} on {{band}} {{mode}} — logging is allowed but adds no points',
   'logEntry.fd.needField': 'Enter their {{field}} to log.',
   'logEntry.fd.badField': '{{field}} "{{value}}" isn\'t a known value — required to log.',
   'logEntry.fd.badNumber': '{{field}} must be a number from {{min}} to {{max}}.',
+  // A QSO party's QTH box, from a call in the USA or Canada: a value on none of the contest's lists
+  // (`fdVerdict`). The codes are invariant tokens, joined as the language joins a choice.
+  'logEntry.fd.notOnList': "{{value}} is not a county, state or province on this contest's list.",
+  'logEntry.fd.didYouMean': "{{value}} is not a code on this contest's list. Did you mean {{codes}}?",
   'logEntry.fd.zone.label': 'Zone',
   'logEntry.fd.zone.title': 'Their CQ zone, 1–40',
   // A received box says what it holds for this station's role (`receivedCaption` in
@@ -1909,7 +1942,14 @@ export const EN = {
   'logEntry.scp.worked.title': 'Already in this log',
   'logEntry.scp.near.title': 'One character different from what you typed',
   'logEntry.scp.none': 'Super Check Partial has no list yet. Settings › Contesting says why.',
-  'logEntry.history.mark': 'history',
+  'logEntry.history.mark': 'call history',
+  // The other two sources of a contest box's pre-fill: the station's last contact in this contest,
+  // and the most recent one anywhere in the log ({{year}} is that contact's year, digits).
+  'logEntry.fill.contest': 'this contest',
+  'logEntry.fill.contest.title': 'From your last contact with them in this contest. Type over it if they sent something else.',
+  'logEntry.fill.log': 'log {{year}}',
+  'logEntry.fill.log.title':
+    'From your most recent contact with them in the log ({{year}}). Type over it if they sent something else.',
   'logEntry.history.title':
     'From call history ({{file}}). Type over it if they sent something else.',
   // A COUNTY LINE: a station on the border of two to four counties, typed as the counties
@@ -2089,6 +2129,13 @@ export const EN = {
     'DXCC achieved ✓ · {{confirmed}} entities · {{worked}} worked · {{credited}} credited',
   'awards.dxcc.note.toGo': '{{remaining}} confirmed to go · {{worked}} worked · {{credited}} credited',
   'awards.dxcc.note.readyToSubmit': ' · {{count}} ready to submit',
+  'awards.dxcc.note.currentTotal':
+    '{{current}} current · {{total}} total, deleted entities included',
+  'awards.dxccDiffer.head': 'LoTW counts as another entity ({{count}})',
+  'awards.dxccDiffer.note':
+    'LoTW confirmed these contacts under a different DXCC entity than your log has. The awards count LoTW’s entity; your log is not changed.',
+  'awards.dxccDiffer.row': 'Your log: {{logged}} · LoTW: {{lotw}}',
+  'awards.dxccDiffer.unknown': 'DXCC {{code}}',
   'awards.honorRoll.note.numberOne': '#1 Honor Roll ✓ — all {{total}} entities',
   'awards.honorRoll.note.achieved': 'Honor Roll ✓ · {{needed}} to #1',
   'awards.honorRoll.note.toGo':
@@ -2125,6 +2172,22 @@ export const EN = {
 
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',
+  // NEEDED BY BAND: per band, what was never worked there and what was worked but not confirmed.
+  // Award names, band names, entity names, state codes and zone numbers are data.
+  'awards.bandNeeds.head': 'Needed by band',
+  'awards.bandNeeds.award.label': 'Award',
+  'awards.bandNeeds.col.band': 'Band',
+  'awards.bandNeeds.col.unworked': 'Never worked',
+  'awards.bandNeeds.col.unconfirmed': 'Worked, not confirmed',
+  'awards.bandNeeds.note.dxcc':
+    'Current DXCC entities, on the bands that earn DXCC credit (not 60 m or 4 m). Confirmed by LoTW or a QSL card.',
+  'awards.bandNeeds.note.was': 'The 50 states. Confirmed by LoTW or a QSL card.',
+  'awards.bandNeeds.note.waz':
+    'The 40 CQ zones. Confirmed by LoTW, a QSL card or an Authenticity-Guaranteed eQSL.',
+  'awards.bandNeeds.show': 'Show the {{count}} on {{band}}',
+  'awards.bandNeeds.hide': 'Hide the list',
+  'awards.bandNeeds.list.unworked': 'Never worked on {{band}} ({{count}})',
+  'awards.bandNeeds.list.unconfirmed': 'Worked on {{band}}, not confirmed ({{count}})',
   // The divider between the progress column (DXCC and grids by band, DXCC by mode) and the chase
   // lists (layout L7); its tooltip is paneSeam.title.
   'awards.columns.split.label': 'Progress column / chase lists',
@@ -2542,6 +2605,22 @@ export const EN = {
   'stats.dxSplit.head': 'DX vs domestic',
   'stats.dxSplit.domestic': 'Domestic',
   'stats.unplaced': '{{unplaced}} of {{total}} QSOs couldn’t be placed by callsign',
+  // The Timeline card (components/StatsTimeline.tsx). Its lines are named by mode (data) and its
+  // buckets by UTC time and date as the log writes them (data): "Other" is its one line name.
+  'stats.timeline.head': 'Timeline (UTC)',
+  'stats.timeline.range.aria': 'Timeline range',
+  'stats.timeline.range.pastDay': 'Past day',
+  'stats.timeline.range.past30Days': 'Past 30 days',
+  'stats.timeline.range.pastYear': 'Past year',
+  'stats.timeline.other': 'Other',
+  'stats.timeline.empty': 'No QSOs logged in this range.',
+  // `{{range}}` is one of the three range names above.
+  'stats.timeline.chart': 'QSOs per mode, {{range}}. The arrow keys step through the points.',
+  'stats.timeline.hint': 'Point at the chart, or focus it and use the arrow keys, to read each point.',
+  'stats.timeline.table': 'QSOs per mode, {{range}}',
+  'stats.timeline.col.pastDay': 'Hour (UTC)',
+  'stats.timeline.col.past30Days': 'Day (UTC)',
+  'stats.timeline.col.pastYear': 'Month (UTC)',
 
   // ── The map, the globes and the propagation panes ───────────────────────────────────
   // ⚠️ THE UNITS RULE IS THE WHOLE STORY ON THESE SURFACES, because almost everything they
@@ -2843,6 +2922,8 @@ export const EN = {
   // the 2-D map's and NOT the same list, so the two must not share keys.
   'globe.unsupported':
     "This machine's graphics can't run the 3-D globe. Pick Globe, Flat or Beam — they work everywhere.",
+  // In the map cell instead of a 3-D globe that failed once it was drawn (components/GlobeGuard.tsx).
+  'globe.failed': 'The 3-D globe stopped working. Pick Globe, Flat or Beam — they work everywhere.',
   // Beside the map picker while Globe stands in for a stored 3D pick (ConnectView).
   'connect.globe3d.standIn':
     "The 3-D globe can't draw on this computer right now, so the map shows Globe. Your 3D pick is kept.",
@@ -3364,19 +3445,12 @@ export const EN = {
   'spots.post.call.label': 'Callsign',
   'spots.post.freq.label': 'Frequency (MHz)',
   'spots.post.comment.label': 'Comment',
-  // An example cluster comment. The mode name, the split offset and the report are tokens a
-  // translator leaves; the word between them is theirs.
-  'spots.post.comment.placeholder': 'e.g. FT8 up 2 · loud · 599',
   'spots.post.cancel': 'Cancel',
   'spots.post.submit': 'Spot',
   'spots.post.busy': 'Spotting…',
   'spots.post.done': 'Spotted {{call}} on the cluster',
   'spots.post.failed': 'Spot failed',
   'spots.post.rfOnly': 'Not posted: the contest you are running allows spots only over amateur RF while it runs.',
-  'spots.post.confirm.title': 'Spot {{call}} to the DX cluster?',
-  'spots.post.confirm.body': '{{call}} on {{freq}} MHz, posted from the station\u2019s cluster login. Everyone on the cluster sees it.',
-  'spots.post.confirm.post': 'Post spot',
-  'remote.spotNoCluster': 'The station has no DX cluster connected, so nothing was sent.',
 
   // The colour + type key, rendered by BOTH the band strip and the band map from one
   // component — the two surfaces must explain their dots identically, so they share these
@@ -3403,10 +3477,21 @@ export const EN = {
   'spots.beacon.ncdxf': 'NCDXF beacon — one-way, not workable',
   'spots.beacon.w1aw': 'W1AW bulletin — one-way, not workable',
 
-  // ── The vertical band map (the N1MM-style torn-off window) ──────────────────────────
+  // ── The vertical band map (its own torn-off window) ─────────────────────────────────
   // ⚠️ Band and mode names, dial frequencies and every spot's own data are tokens and stay
   // in the component. `{{mode}}` here is CW or SSB — the plotted spot mode, not prose.
   'bandMap.title': 'Band map',
+  // Frequency markers (features/freqMarkers.ts). `{{freq}}` is MHz, `{{call}}` a callsign: tokens.
+  'bandMap.marker.title': 'Marked {{freq}} {{call}}. Click or Enter: tune back here. Delete: remove the marker.',
+  'bandMap.marker.titleBare': 'Marked {{freq}}. Click or Enter: tune back here. Delete: remove the marker.',
+  'bandMap.track.markHint': 'Right-click: mark this frequency with the call in the contest entry (Alt+M in the entry does the same).',
+  'freqMarker.marked': 'Marked {{freq}} for {{call}} on the band map',
+  'freqMarker.markedBare': 'Marked {{freq}} on the band map',
+  'freqMarker.refused.noContest': 'Frequency markers belong to a contest: turn Contest mode on to mark a frequency.',
+  'freqMarker.refused.transmitting': 'Not while transmitting: tuning now would move your signal on the air. Try again when the over ends.',
+  'freqMarker.refused.offBand': 'Not marked: the dial is outside the amateur bands.',
+  'freqMarker.refused.gone': 'That marker is gone: its call was logged on this band, or it was removed.',
+  'freqMarker.refused.failed': 'The marker did not change: {{reason}}',
   'bandMap.offPlan': '{{band}} — off the band plan',
   'bandMap.empty.noPlan': 'no band-plan data for {{band}}',
   // What stands in for the band name when the dial is somewhere the plan cannot name.
@@ -3434,6 +3519,10 @@ export const EN = {
   // `{{detail}}` is the spot line — call, frequency, age, badges, spotter and comment —
   // assembled from data by the call site.
   'bandMap.spot.title': '{{detail}} — click to work',
+  // A program's spot (Share by TCI), whose click only tunes. `{{id}}` is the program's connection
+  // number, as Settings ▸ Share by TCI lists it; TCI is the protocol's name, a token.
+  'bandMap.spot.tci.title': '{{detail}} — click to tune',
+  'bandMap.spot.tci.from': 'from TCI connection {{id}}',
   'bandMap.age.secs': '{{secs}}s ago',
   'bandMap.age.mins': '{{mins}}m ago',
   'bandMap.age.hours': '{{hours}}h ago',
@@ -3452,9 +3541,8 @@ export const EN = {
   'pounce.dismiss.aria': 'Dismiss alert',
 
   // ── The watch list ("alert me loudly when THIS shows up") ───────────────────────────
-  // ⚠️ The prefixes, grid squares and entity names in the examples are TOKENS supplied by
-  // the component (WATCH_EXAMPLES); the ones quoted inside the hint stay in the sentence,
-  // as `ADIF OPERATOR` does elsewhere. `DXCC` is a programme name, not a word.
+  // ⚠️ The prefixes and grid squares quoted inside the hint stay in the sentence, as
+  // `ADIF OPERATOR` does elsewhere. `DXCC` is a programme name, not a word.
   'watchlist.hint':
     "Get a loud alert when a matching station is decoded — a callsign or prefix (wildcards: <code>VP8*</code>, <code>*ABC</code>), a whole DXCC entity, or a grid square (<code>FN31</code>, <code>EM7*</code>). A grid you name here alerts on every band — the HF grid-quiet default doesn't apply to squares you asked for.",
   'watchlist.item.kind.call': 'CALL',
@@ -3472,9 +3560,6 @@ export const EN = {
   'watchlist.add.kind.dxcc': 'DXCC entity',
   'watchlist.add.kind.grid': 'Grid square',
   'watchlist.add.value.aria': 'Watch value',
-  'watchlist.add.value.placeholder.call': 'e.g. {{first}}  or  {{second}}',
-  'watchlist.add.value.placeholder.grid': 'e.g. {{first}}  or  {{second}}',
-  'watchlist.add.value.placeholder.dxcc': 'e.g. {{entity}}',
   'watchlist.add.cqOnly.label': 'CQ only',
   'watchlist.add.cqOnly.title': 'Only alert on a CQ call',
   'watchlist.add.notes.aria': 'Notes for the new entry',
@@ -3500,12 +3585,11 @@ export const EN = {
   // ── The two display filters (hide calls / hide countries) ───────────────────────────
   // Both say the same thing about themselves and say it differently, which is why they do
   // not share keys: one is about callsigns you are tired of seeing, the other about whole
-  // entities. `{{examples}}` is a space-separated list of prefixes from the component.
+  // entities.
   'hideCalls.chip.label': 'Hide calls',
   'hideCalls.chip.title':
     'Hide callsigns (or VP8*-style prefixes) from this pane — a display filter only; decoding, logging, alerts and the auto-responder are untouched',
   'hideCalls.head': 'Hide these callsigns',
-  'hideCalls.placeholder': 'e.g. {{examples}}',
   'hideCalls.note':
     'Space-separated. A trailing <code>*</code> is a prefix ("VP8*" hides every VP8). A view filter only — the stations you are working and those calling you always show. To stop your auto-CQ from answering a call, Alt-double-click it instead.',
 
@@ -3696,7 +3780,7 @@ export const EN = {
   'settings.alerts.geo.hint':
     'Leave every box clear to be alerted about the whole world — that is the default and what this panel has always done. Tick one or more and the new-one, new-grid and CQ alerts are kept to those continents. Someone calling YOU, and anything on your watch list, always alerts wherever they are.',
   'settings.alerts.geo.entities.label': 'Add a country',
-  'settings.alerts.geo.entities.placeholder': 'type to search, e.g. France',
+  'settings.alerts.geo.entities.placeholder': 'type to search',
   'settings.alerts.geo.entities.aria': 'Matching DXCC entities',
   'settings.alerts.geo.entities.hint':
     'Countries added here alert as well as the continents ticked above, so you can follow all of Europe plus Japan. Untick one to drop it. Names are the DXCC list\u2019s own, so Germany appears as Fed. Rep. of Germany.',
@@ -3947,7 +4031,26 @@ export const EN = {
   'contestLogger.size.label': 'Text size: {{pct}}%',
   'contestLogger.size.smaller': 'Smaller text',
   'contestLogger.size.larger': 'Larger text',
+  // The logger window's pin on its bar: keeps the window in front of every other window, and
+  // pressed again lets it stack as an ordinary window. The label stays the same both ways; the
+  // button shows pressed while it is on.
+  'contestLogger.pin.label': 'Keep in front',
+  'contestLogger.pin.title': 'Keep this window in front of Nexus and your other programs, even while you work in another one. Press again to let it stack as an ordinary window.',
+  'contestLogger.pin.failed': 'Could not change whether this window stays in front',
+  // The logger window's layout toggle (the entry alone, or the whole window), and the main window's
+  // Contest screen entry's button that opens that window with the entry alone.
+  'contestLogger.layout.label': 'Entry only',
+  'contestLogger.layout.title': 'Show only the entry in this window: the call, the exchange and the dupe warning, without the last contacts and the contest screen. Press again for the whole window.',
+  'contestScreen.entry.popOut.label': '⧉ Pop out entry',
+  'contestScreen.entry.popOut.title': 'Open this entry alone in a window of its own, without the rest of the contest screen. It shares the contact with this entry, and Enter in either logs it once.',
   'contestLogger.recent.title': 'Last contacts',
+  // The divider under the last contacts (ContestLargeEntry): its accessible name, as every divider's.
+  'contestLogger.recent.splitter.label': 'last contacts height',
+  // The logger window's one line under its bar while the engine holds a satellite's transponder: its
+  // log line logs every contact the ordinary way (the radio's band, no bird), so a pass's contacts go
+  // on the Satellites screen. `{{bird}}` is the satellite's own name (AO-91, ISS), never translated.
+  'contestLogger.satellite.note':
+    '{{bird}} is picked on the Satellites screen. Log its pass contacts there: this window logs them as ordinary contacts.',
   // The same bar over the same log line at the top of the main window's Contest screen
   // (ContestLargeEntry, App.tsx): the screen's name for it.
   'contestScreen.entry.title': 'Log a contact',
@@ -3993,6 +4096,31 @@ export const EN = {
   'fieldDay.rate.hour.title':
     'Contacts logged in the last 60 minutes — a rolling hour, not the clock hour.',
   'fieldDay.rate.hour.aria': 'Contacts in the last 60 minutes',
+  // Operating time by the sponsors' rule: a break of 30 minutes or more between two contacts is
+  // off time, the rest from the first contact to the last is on time.
+  'fieldDay.opTime.on': 'On time',
+  'fieldDay.opTime.on.title': 'Time on the air from the first contact to the last, less the breaks.',
+  'fieldDay.opTime.on.aria': 'On time {{time}}',
+  'fieldDay.opTime.off': 'Off time',
+  'fieldDay.opTime.off.title':
+    'Breaks of {{minutes}} minutes or more between two contacts, the sponsors’ off-time rule.',
+  'fieldDay.opTime.off.aria': 'Off time {{time}}',
+  'fieldDay.operators.heading': 'Operators',
+  'fieldDay.operators.caption': 'Contest statistics per operator',
+  'fieldDay.operators.col.operator': 'Operator',
+  'fieldDay.operators.col.qsos': 'QSOs',
+  'fieldDay.operators.col.points': 'Points',
+  'fieldDay.operators.col.mults': 'New mults',
+  'fieldDay.operators.col.rate10': 'Last 10 min /h',
+  'fieldDay.operators.col.rate60': 'Last 60 min /h',
+  'fieldDay.operators.col.rate60.short': '60 min',
+  'fieldDay.operators.col.best': 'Best hour',
+  'fieldDay.operators.col.band': 'Band',
+  'fieldDay.operators.unnamed.title': 'Contacts logged with no operator named',
+  'fieldDay.operators.note': 'Points are QSO points before multipliers and bonuses. A multiplier counts for the operator who worked it first. Rates are contacts per hour. — marks contacts logged with no operator named.',
+  'fieldDay.operators.atKey': 'At the key: <b>{{call}}</b>',
+  'fieldDay.operators.nobody': 'Nobody is named at the key.',
+  'fieldDay.operators.none': 'No contacts yet.',
   'fieldDay.state.title': 'Sequencer state',
   // The stand-in when the engine has not named a sequencer state yet; the states themselves
   // are the backend's own words, printed as they arrive.
@@ -4012,6 +4140,19 @@ export const EN = {
   'fieldDay.board.count': '{{worked}}/{{total}} worked',
   'fieldDay.board.cell.worked.title': '{{code}} — {{name}} — worked',
   'fieldDay.board.cell.notWorked.title': '{{code}} — {{name}} — not worked yet',
+  // At a club the board is the club's: a cell any position worked is lit, and this laptop's own
+  // are marked apart (⌂) from another position's (✓). "This laptop" is the club grid's word for
+  // the computer the screen is on; `{{own}}` counts its cells, `{{worked}}` the club's.
+  'fieldDay.sections.countClub': '{{worked}}/{{total}} sections · {{own}} on this laptop',
+  'fieldDay.sections.cell.own.title': '{{code}} — {{name}} ({{division}}) — worked on this laptop',
+  'fieldDay.sections.cell.club.title': '{{code}} — {{name}} ({{division}}) — worked by another position',
+  'fieldDay.sections.cell.own.aria': '{{name}}, worked on this laptop',
+  'fieldDay.sections.cell.club.aria': '{{name}}, worked by another position',
+  'fieldDay.board.countClub': '{{worked}}/{{total}} worked · {{own}} on this laptop',
+  'fieldDay.board.cell.own.title': '{{code}} — {{name}} — worked on this laptop',
+  'fieldDay.board.cell.club.title': '{{code}} — {{name}} — worked by another position',
+  'fieldDay.board.legend.own': 'Worked on this laptop',
+  'fieldDay.board.legend.club': 'Worked by another position',
   // The end-of-contest merge. The label carries the count so the button says what it
   // will do BEFORE it does it, and the report says what it did — which is the only thing
   // that tells a second (idempotent, no-op) press apart from a button that did nothing.
@@ -4047,6 +4188,11 @@ export const EN = {
   'contestOver.notNow': 'Not now',
   'contestOver.turnOff': 'Turn off',
   'contestOver.busy': 'Working…',
+  // At a club: this laptop's contacts the club's log does not have yet, the club chip's count.
+  'contestOver.club.queued': {
+    one: '{{count}} contact from this laptop is not in the club\'s log yet. It still goes to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.',
+    other: '{{count}} contacts from this laptop are not in the club\'s log yet. They still go to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.',
+  },
   'fieldDay.upload.label': 'Upload merged contacts to:',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
@@ -4054,6 +4200,22 @@ export const EN = {
   // children itself, so an entity here would render as the literal characters.
   'fieldDay.role.aria': 'Running or S&P',
   'fieldDay.role.running': 'Running',
+  // Spot me (components/ContestSpotMe.tsx). `{{line}}` is the cluster line as sent: a token.
+  'spotMe.button': 'Spot me',
+  'spotMe.button.title': 'Post ONE spot of your call on this frequency to the DX cluster, with the comment beside it. Once per press; then a {{secs}} s wait.',
+  'spotMe.comment.label': 'Spot comment',
+  'spotMe.cooling': 'Wait {{secs}} s',
+  'spotMe.posted': 'Spotted to the DX cluster: {{line}}',
+  'spotMe.refused.noCall': 'Not spotted: set your callsign in Settings first.',
+  'spotMe.refused.noCluster': 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Spot Sources.',
+  'spotMe.refused.cooldown': 'Not spotted again yet: one spot a minute. {{secs}} s to go.',
+  'spotMe.refused.offBand': 'Not spotted: the dial is outside the amateur bands.',
+  'spotMe.refused.noContest': 'Not spotted: Contest mode is off.',
+  'spotMe.refused.notAllowed': 'Not spotted: this contest\'s rules allow no spotting.',
+  'spotMe.refused.rfOnly': 'Not spotted: this contest allows spotting only over amateur radio while it runs.',
+  'spotMe.refused.failed': 'Not spotted: the DX cluster did not take the spot.',
+  'spotMe.selfSpot.warn': 'This contest may not allow self-spotting. Press Spot anyway within {{secs}} s to post.',
+  'spotMe.selfSpot.confirm': 'Spot anyway',
   'fieldDay.role.sp': 'S&P',
 
   // The exports. Cabrillo and ADIF are the file formats' own names and stay in the sentence.
@@ -4123,6 +4285,28 @@ export const EN = {
   'fieldDay.log.column.band': 'Band',
   'fieldDay.log.column.mode': 'Mode',
   'fieldDay.log.empty': 'No contacts logged yet.',
+  // The divider above the Contest screen's log (ContestView): its accessible name, as every divider's.
+  'fieldDay.log.splitter.label': 'contest log height',
+  // The Contest screen's large clock on its banner (ContestView): UTC, then local time. Its accessible name.
+  'fieldDay.clock.aria': 'Contest clock, UTC and local time',
+  // "Work this contest in CW / in Phone" on the Contest screen (ContestView, features/contestWorkIn): the screen
+  // never transmits, so it offers the cockpit that does, and says so once.
+  'fieldDay.workIn.aria': 'Work this contest from a cockpit',
+  'fieldDay.workIn.cw': 'Work this contest in CW',
+  'fieldDay.workIn.cw.title':
+    'Go to the CW screen in the main window, with this contest on its log line: Enter Sends Message, Running / S&P and the F-key messages are there.',
+  'fieldDay.workIn.phone': 'Work this contest in Phone',
+  'fieldDay.workIn.phone.title':
+    'Go to the Phone screen in the main window, with this contest on its log line: Enter Sends Message, Running / S&P and the F-key messages are there.',
+  'fieldDay.workIn.hint.aria': 'Where sending happens',
+  'fieldDay.workIn.hint':
+    'This screen logs and keeps score, and never transmits. To send, work the contest from the CW or Phone screen: its log line has Enter Sends Message, Running / S&P and the F-key messages.',
+  'fieldDay.workIn.hint.dismiss': 'Got it',
+  // The CW and Phone log line with Contest mode on and the contest not running (LogEntry): one line, and
+  // Resume, which re-enters the contest in S&P.
+  'logEntry.contest.notRunning.aria': 'Contest not running',
+  'logEntry.contest.notRunning': 'Contest mode is on, but the contest is not running.',
+  'logEntry.contest.resume': 'Resume',
   'fieldDay.log.remove': 'Remove',
   'fieldDay.log.remove.ask': 'Remove {{contact}}? Click Remove again.',
   'fieldDay.log.remove.title': 'Take this contact out of the contest log. It is kept under Removed and can be restored. Click twice: the first click asks.',
@@ -4139,6 +4323,37 @@ export const EN = {
   'fieldDay.removed.notRemoved': 'That contact is no longer in the Removed list.',
   'fieldDay.removed.failed': 'Nexus could not restore the contact.',
   'fieldDay.removed.restore.remote': 'Only at the station: a press through Remote restores no contact.',
+  'contest.clear.label': 'Clear test contacts',
+  // Each with a `.serial` form, the one a contest that sends a serial number shows: its serials start
+  // again at 001. A contest that sends none (Field Day, a QSO party sending a county) never says so.
+  'contest.clear.title': 
+    'Take every contact of this running out of the contest log, for contacts you logged as a test before the start. Each is kept under Removed, where Restore puts it back. Click twice: the first click asks.',
+  'contest.clear.title.serial':
+    'Take every contact of this running out of the contest log, for contacts you logged as a test before the start. Each is kept under Removed, where Restore puts it back. Serials restart at 001. Click twice: the first click asks.',
+  'contest.clear.confirm': {
+    one: 'Clear {{count}} contact? Click again',
+    other: 'Clear all {{count}} contacts? Click again',
+  },
+  'contest.clear.confirm.serial': {
+    one: 'Clear {{count}} contact? Serials restart at 001. Click again',
+    other: 'Clear all {{count}} contacts? Serials restart at 001. Click again',
+  },
+  'contest.clear.done': {
+    one: 'Took {{count}} contact out of the contest log. It is under Removed, where Restore puts it back.',
+    other: 'Took {{count}} contacts out of the contest log. They are under Removed, where Restore puts each back.',
+  },
+  'contest.clear.done.serial': {
+    one: 'Took {{count}} contact out of the contest log. It is under Removed, where Restore puts it back. Serials restart at 001.',
+    other: 'Took {{count}} contacts out of the contest log. They are under Removed, where Restore puts each back. Serials restart at 001.',
+  },
+  'contest.clear.club': 'The club log drops them too, on every laptop, as soon as the host has them.',
+  'contest.clear.clubAway': 'This laptop is not with the club host right now: the club log drops them when the link is back.',
+  'contest.clear.sentTo': 'Some were already sent to {{places}}: delete them there too.',
+  'contest.clear.logbook': 'Some stay in your logbook.',
+  'contest.clear.logbookUploaded': 'Some stay in your logbook, and {{services}} have them: Nexus cannot take them back from there.',
+  'contest.clear.changed': 'The contest log changed, so nothing was cleared.',
+  'contest.clear.failed': 'Nexus could not clear the contacts, so nothing was cleared.',
+  'contest.clear.remote': 'Only at the station: a press through Remote clears no contact.',
   'fieldDay.log.dupe.title': 'Duplicate — kept in the log and worth no points',
   'fieldDay.log.mult.title': 'New section — multiplier',
   'fieldDay.log.mult': 'Mult!',
@@ -4185,12 +4400,15 @@ export const EN = {
   'fieldDay.cabrillo.restart':
     'Power category and Spotting assistance are read when Contest mode turns on, so after setting them turn Contest mode off and on again. Your contacts stay in the log.',
   'fieldDay.mode.club':
-    'Club sync is on. With Contest mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
+    'Club sync is on. With Contest mode off, this station stays in the club event, and contacts the club\'s log does not have yet still go to the host while Nexus is open. Nothing in the log is lost.',
   // The warn-only rule advisories (FdAdvisories.tsx — warn, NEVER remove or disable;
   // operator ruling). {{event}} is the event's own untranslated name, {{mode}} an on-air
   // mode token, {{sources}} the live assistance-source labels — all invariant slots.
   'fieldDay.advisory.banned':
     '{{mode}} is not permitted at {{event}} ({{year}} rules) — you can still log it, but it will not count',
+  // The same fact in two words (`NoCreditChip`): on the large log line beside its mode chip, in
+  // the Contest banner and in the FT screen's header; the sentence above is its title.
+  'fieldDay.advisory.noCredit': '{{mode}} · no credit',
   'fieldDay.advisory.cluster':
     'DX cluster assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
   'fieldDay.advisory.spotting':
@@ -4244,6 +4462,13 @@ export const EN = {
   'fieldDay.club.link.hosting': 'Hosting on port {{port}}. Positions join at:',
   'fieldDay.club.link.hostingNoAddress': 'Hosting on port {{port}}.',
   'fieldDay.club.link.connected': { one: '{{count}} other position connected.', other: '{{count}} other positions connected.' },
+  // Contacts this laptop logged on another call than the club's: the club's log takes a contact
+  // only on the call the club is on the air under, so these stay here, and the chip does not
+  // count them.
+  'fieldDay.club.link.otherCall': {
+    one: "{{count}} contact was logged on another call than the club's, so it stays in this laptop's own log and is not sent to the club.",
+    other: "{{count}} contacts were logged on another call than the club's, so they stay in this laptop's own log and are not sent to the club.",
+  },
   // A joined laptop's link in the host board's words, with when it last heard the host
   // (`fieldDay.club.heard.*`); Reconnecting and Lost name the address it is trying.
   'fieldDay.club.link.heard': 'Connected to the host, heard {{ago}}.',
@@ -4274,6 +4499,11 @@ export const EN = {
     one: '{{count}} more, not listed here.',
     other: '{{count}} more, not listed here.',
   },
+  // A POSITION SENDING ANOTHER COUNTY THAN THE CLUB (or another state, province or section), on
+  // the host's screen alone: named as its line on the board names it, with what its newest
+  // contact sent and what the club sends. A warning: its contacts are still taken.
+  'fieldDay.club.otherLocation':
+    '{{name}} sends {{sent}}, and this club sends {{club}}. Its contacts are logged as it sent them; set that laptop to {{club}} so the next ones match.',
   'fieldDay.club.boardFull':
     "This club has {{positions}} positions, as many as each position's club board has room for. Past that, each position's board leaves out the positions heard from least recently; contacts, dupe warnings and the score still sync.",
   'fieldDay.club.boardCut':
@@ -4287,6 +4517,13 @@ export const EN = {
     other: "{{count}} contacts in this computer's contest journal belong to another contest, so they are not in this log.",
   },
   'fieldDay.keptOut.kept': 'Nothing was deleted: they are still in the journal, as they were logged.',
+  // The contest journal's writes are failing (a full disk, a file held by another program): the
+  // contacts since the last good write are in memory only. Red, on the Contest screen and the log
+  // strip, until a write lands.
+  'fieldDay.unsaved.since':
+    'Contacts are not being saved to disk. Those logged since {{time}} UTC are in memory only, and a power cut would lose them. Export a Cabrillo file now.',
+  'fieldDay.unsaved.session':
+    'Contacts are not being saved to disk. Those logged this session are in memory only, and a power cut would lose them. Export a Cabrillo file now.',
   // The contest contacts the journal keeps past its four days that the logbook does not hold,
   // offered for the merge (ContestView's FdUnmergedNote). The dates are UTC days, YYYY-MM-DD;
   // `days` is only ever said of two contacts or more.
@@ -4336,6 +4573,17 @@ export const EN = {
   'fieldDay.club.board.link.removed': 'Removed',
   'fieldDay.club.board.heard': '(heard {{ago}})',
   'fieldDay.club.board.heard.never': '(not heard since this Nexus started)',
+  // The host's club log on its own screen (ContestView's ClubLogList): every position's contacts
+  // as the host merged them, newest first, with the position that logged each.
+  'fieldDay.club.log.head': 'Club log',
+  'fieldDay.club.log.title':
+    "Every position's contacts as this host merged them, newest first, with the position that logged each: the club's log, which Club ADIF and Club Cabrillo are written from. A duplicate is marked as in your own log. A long contest lists its newest contacts only, so this screen never slows; every contact is in the club's files.",
+  'fieldDay.club.log.count': {
+    one: '{{count}} contact',
+    other: '{{count}} contacts',
+  },
+  'fieldDay.club.log.newest': 'the newest {{shown}} of {{total}} contacts',
+  'fieldDay.club.log.empty': 'No contacts in the club log yet.',
   'fieldDay.club.grid.caption': 'Positions by band and mode',
   'fieldDay.club.grid.noBand': 'No band yet:',
   'fieldDay.club.grid.notHeard': 'Not heard for more than {{secs}} s',
@@ -4387,6 +4635,8 @@ export const EN = {
   // section placeholder (WI) and the section list itself, which is data.
   'settings.contestCategory.legend': 'Your entry',
   'settings.contestPick.legend': 'Contest',
+  'settings.contestPick.rstSent.label': 'Show the RST sent box',
+  'settings.contestPick.rstSent.hint': 'Adds an RST sent box to the contest entry, beside the received report. It shows the report each contact logs as sent (59 on phone, 599 on CW and digital), and a report typed there is logged for that contact only. Space and Tab skip it. It shows only in contests whose exchange sends a report.',
   'settings.contestPick.contest.label': 'Contest',
   'settings.contestPick.contest.aria': 'Which contest you are entering',
   'settings.contestPick.contest.hint':
@@ -4407,6 +4657,10 @@ export const EN = {
   'settings.contestPick.power.aria': 'Which power category you are entering',
   'settings.contestPick.assisted.label': 'Spotting assistance',
   'settings.contestPick.assisted.aria': 'Whether your entry uses spotting assistance',
+  // Beside that picker while NON-ASSISTED is declared and the Unassisted entry switch is off.
+  // `NON-ASSISTED` is the Cabrillo token, invariant; "Unassisted entry" is the switch's own label.
+  'settings.contestPick.assisted.offer': 'Your log declares NON-ASSISTED, but Unassisted entry is off.',
+  'settings.contestPick.assisted.offer.action': 'Turn on Unassisted entry',
   'settings.contestPick.station.label': 'Station type',
   'settings.contestPick.station.aria': 'Whether this is a school club station',
   'settings.contestPick.entryAxes.unset': 'Not set',
@@ -4461,7 +4715,7 @@ export const EN = {
   'settings.contestCategory.unassisted.aria.declare': 'Declare an unassisted contest entry',
   'settings.contestCategory.unassisted.aria.end': 'End an unassisted contest entry',
   'settings.contestCategory.unassisted.hint':
-    'Turns off the AI CW decoder, DX cluster / RBN spots, the PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
+    'Turns off the CW decoder (AI and classic), DX cluster / RBN spots, the PSK Reporter needs feed, Super Check Partial and call history together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
   // The journal. Each entry's own note and the source names in it are the engine's words,
   // printed as they arrive; the UNASSISTED / assisted state and the empty stand-in are ours.
   'settings.contestCategory.journal.label': 'Assistance record',
@@ -4502,7 +4756,7 @@ export const EN = {
     'This file is for {{contest}}, not the contest picked above, so it is not used now.',
   'settings.contestKeys.legend': 'Enter Sends Message',
   'settings.contestKeys.hint':
-    'With ESM on, Enter in the contest log strip sends the contact’s next message from your F-keys, as N1MM Logger+ does, and the contact logs at its last step. ESM is off until you turn it on, in each cockpit separately. Enter never turns TX on, and nothing is sent by a timer.',
+    'With ESM on, Enter in the contest log strip sends the contact’s next message from your F-keys, and the contact logs at its last step. ESM is off until you turn it on, in each cockpit separately. Enter never turns TX on, and nothing is sent by a timer.',
   'settings.contestKeys.remote':
     'Enter Sends Message is set at the station and works only there, not on this page.',
   'settings.contestKeys.cw.label': 'ESM in the CW cockpit',
@@ -4541,7 +4795,6 @@ export const EN = {
   'contest.esm.refused.clockRepair': 'A clock repair is holding transmit, so Enter sends nothing.',
   'contest.esm.refused.recording': 'The voice keyer is recording, so Enter plays nothing.',
   'contest.esm.refused.pttHeld': 'You are holding PTT, so Enter plays nothing.',
-  'contest.esm.refused.radioHasMic': 'The radio has the mic, so a recording would not go out.',
   'contest.esm.refused.unmapped':
     '{{step}}: no key is mapped, so Enter sends nothing and logs nothing at that step.',
   'contest.esm.refused.empty':
@@ -4654,7 +4907,6 @@ export const EN = {
     'The call that goes on the air and onto every contact you log — at a club event that is the club\'s call, the same one at every position on site.',
 
   'settings.fdWho.position.label': 'Position name',
-  'settings.fdWho.position.placeholder': 'CW tent',
   'settings.fdWho.position.hint':
     'Which tent, trailer or table this station is — it names you on the club band board so everyone can see which position is on which band, and it never goes on the air.',
 
@@ -4696,7 +4948,6 @@ export const EN = {
   'settings.fdClub.host.aria.enable': 'Enable club event hosting',
   'settings.fdClub.host.aria.disable': 'Disable club event hosting',
   'settings.fdClub.eventName.label': 'Event name',
-  'settings.fdClub.eventName.placeholder': 'W9ABC Field Day',
   'settings.fdClub.eventName.hint': 'Shown to joining positions and in discovery.',
   'settings.fdClub.hostPort.label': 'Host port',
   'settings.fdClub.hostPort.hint': 'TCP port for the club sync (default 42073).',
@@ -4856,6 +5107,13 @@ export const EN = {
   'sat.iss.optOut': 'ISS auto-arm off — SSTV disarmed, dial restored',
   'sat.iss.los': 'ISS LOS — SSTV disarmed, dial restored',
   'sat.iss.armed': 'ISS overhead — tuned {{dial}} {{mode}}, SSTV armed',
+  // The same pass seen from any screen but SSTV or Satellites: nothing was touched.
+  'sat.iss.overhead': 'ISS overhead — SSTV on {{dial}} {{mode}}. Open SSTV to receive it; your radio was not retuned.',
+  'sat.iss.overhead.onSstv': 'ISS overhead: SSTV on {{dial}} {{mode}}. A satellite pass has the radio, so it was not retuned.',
+  // The same pass where no radio here can receive the downlink: said once a session, and nothing
+  // is tuned on any screen. The path names the switch where the Settings panel shows it.
+  'sat.iss.cannotReceive':
+    "ISS overhead — your radio can't receive {{dial}} MHz, so ISS SSTV auto-arm can't use it. You can turn the auto-arm off in Settings ▸ Digital ▸ SSTV.",
 
   // The manual element-refresh result (features/tleMessages.ts) — one composer for the
   // Update-now toast and the Settings "Last refresh" line, so the two can never drift.
@@ -5631,8 +5889,8 @@ export const EN = {
   'program.origin.station.label': 'My station {{grid}}',
   'program.origin.station.title': 'Your station grid from Settings',
   // ONE box takes a grid or a city (a locator is the place as typed; anything else is a town to look
-  // up). {{grid}} is an example locator, a token.
-  'program.origin.place.placeholder': 'Grid or city: {{grid}}, Gatlinburg TN',
+  // up).
+  'program.origin.place.placeholder': 'Grid or city',
   'program.origin.place.aria': 'Where to search: a grid square or a city',
   'program.route.to.place.aria': 'Where the route ends: a grid square or a city',
   // A HUMAN example, not a technical one: a locale should offer a place its operators know.
@@ -5888,17 +6146,6 @@ export const EN = {
   // ⚠️ `CHIRP ▸ File ▸ Import` is another program's menu path — keep it as CHIRP prints it.
   'program.export.saved.chirp':
     'Saved {{path}} — open CHIRP ▸ File ▸ Import, then upload to your radio',
-  // From a browser the file lands in THIS machine's downloads, not the shack's, and the station
-  // names no directory in it (it does not record where a saved channel came from), so these say
-  // where the file went rather than quoting a path the operator cannot open.
-  'program.export.browser.saved': 'Saved {{name}} to this browser’s downloads.',
-  'program.export.browser.savedChirp':
-    'Saved {{name}} to this browser’s downloads — open CHIRP ▸ File ▸ Import, then upload to your radio',
-  'program.export.browser.empty': 'The station has no saved channel list to export.',
-  'program.export.browser.tooLarge':
-    'This channel list is too large to download here. Export it with Nexus at the station.',
-  'program.export.browser.failed':
-    'The channel file did not arrive intact, so nothing was saved. Try again.',
 
   // What the workbench says after it acts. The shift is a sign and a number of MHz.
   'program.tune.done': 'Tuned {{freq}} {{mode}} — {{shift}}{{tone}}',
@@ -6016,6 +6263,9 @@ export const EN = {
     'TX locked — your split transmit frequency, {{tx}} MHz, is outside your license privileges. Receiving on {{rx}} MHz is fine.',
   'bandPicker.txLock.title':
     'This frequency/mode is outside your license privileges — transmit is blocked. Pick a band above, or change your license class in Settings.',
+  // The lock when the phone MODE is the whole reason: LSB, AM or FM on 60 m, where USB would key.
+  'bandPicker.txLock.usbOnlyTitle':
+    '60 m allows only USB phone — transmit is blocked. Pick USB or AUTO.',
 
   'freq.control.aria': 'Frequency control',
   'freq.channel.label': 'Band / Channel',
@@ -6080,6 +6330,17 @@ export const EN = {
   'bandStrip.shade.title': 'Your licensed phone segment on this band',
   // `{{detail}}` is the spot line — call, frequency, age, badges, spotter and comment.
   'bandStrip.spot.title': '{{detail}} — click to work',
+  // A program's spot (Share by TCI), whose click only tunes. `{{id}}` is the program's connection
+  // number, as Settings ▸ Share by TCI lists it; TCI is the protocol's name, a token.
+  'bandStrip.spot.tci.title': '{{detail}} — click to tune',
+  'bandStrip.spot.tci.from': 'from TCI connection {{id}}',
+  'contestSpot.dupe': 'dupe',
+  'contestSpot.mult': 'new mult: {{rule}} {{value}}',
+  'contestSpot.tag.dupe': 'DUPE',
+  'contestSpot.tag.mult': 'MULT',
+  'contestSpot.predicted': 'predicted from call history: {{rule}} {{value}}',
+  'contestSpot.predictedLine': 'predicted from call history (county line {{line}}): {{rule}} {{value}}',
+  'contestSpot.tag.predicted': 'MULT?',
   'bandStrip.age.secs': '{{secs}}s ago',
   'bandStrip.age.mins': '{{mins}}m ago',
   'bandStrip.age.hours': '{{hours}}h ago',
@@ -6120,6 +6381,8 @@ export const EN = {
   // ⚠️ `{{port}}` is the device name exactly as the OS enumerated it (`COM5`,
   // `/dev/cu.usbserial-A`), and `/dev/cu.…`, CAT, PTT and None/VOX are the settings' own
   // vocabulary — every one of them names a thing the operator has to pick by that name.
+  // `noCatPtt` names PTT Method's own choices (VOX, Serial RTS, Serial DTR): use the words the
+  // catalog gives those options.
   'settings.radio.check.noPort': 'No serial port chosen — a rig model is set, so CAT needs a port.',
   'settings.radio.check.portMissing':
     '{{port}} is not connected right now — check the rig is powered on, or pick another port.',
@@ -6127,6 +6390,8 @@ export const EN = {
     '{{port}} is a dial-in device and will hang waiting for carrier. Use the matching /dev/cu.… port instead.',
   'settings.radio.check.catNoModel':
     'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
+  'settings.radio.check.noCatPtt':
+    "Hamlib can't key this radio over CAT, so PTT on CAT won't put it in transmit. Choose VOX if your interface keys the radio on audio, or Serial RTS or DTR if it keys on a serial line.",
 
   // ── Settings ▸ the panel shell (chrome, tab rail, Save) ─────────────────────────────
   // The frame every Settings tab renders inside. `{{id}}` is the build stamp — an identifier,
@@ -6184,6 +6449,11 @@ export const EN = {
   'settings.save.fdPositionName': 'Name this position on the Contesting tab before hosting or joining a club event — the club band board shows this name.',
   'settings.save.js8GroupCannotJoin':
     '{{group}} is a group that cannot be joined. Take it out of Groups under JS8 on the Digital tab before saving.',
+  'settings.save.js8CqText':
+    'The JS8 CQ message must start with CQ or hold your callsign, as in JS8Call. Change it under JS8 on the Digital tab before saving.',
+  // `{{port}}` is a port number. The two names are the switches' own labels on the Radio tab.
+  'settings.save.tciServerPortClash':
+    'Share this radio with other programs and Share by TCI both use port {{port}}, and only one of them can have it. Give one of them another port.',
   'settings.save.checkRadio': 'Check the radio settings.',
   'settings.save.failed': 'Could not save settings.',
 
@@ -6451,7 +6721,6 @@ export const EN = {
     'Apply this profile — merged onto your current settings. Your callsign, license class, radio roster and sync history never come from a profile, and anything the profile predates keeps its current value.',
   'settings.profiles.delete.action': 'Delete',
   'settings.profiles.save.label': 'Save current as',
-  'settings.profiles.save.placeholder': 'e.g. Portable VHF',
   'settings.profiles.save.action': 'Save',
   'settings.profiles.save.hint': 'Snapshots the current settings under a name.',
 
@@ -6475,6 +6744,11 @@ export const EN = {
   'settings.rigControl.ptt.rts': 'Serial RTS',
   'settings.rigControl.ptt.dtr': 'Serial DTR',
   'settings.rigControl.ptt.vox': 'VOX (no keying)',
+  // Under PTT Method, whatever the method, on a radio Hamlib cannot key over CAT; the setup wizard
+  // shows the same sentence under its keying choice. VOX, Serial RTS and Serial DTR are the
+  // options' own names above; SignaLink is an interface.
+  'settings.rigControl.ptt.noCatPtt':
+    'Hamlib has no way to key this radio over CAT. Pick how your interface keys it: VOX if it keys on audio, like a SignaLink, or Serial RTS or Serial DTR if it keys on a serial line.',
   // #381. Front/Mic and Rear/Data name the radio's two audio inputs and are prose; CAT, PTT, VOX,
   // USB, the jack labels DATA and ACC, and SignaLink (an interface) are invariant tokens.
   'settings.rigControl.txAudio.label': 'Transmit audio source (CAT PTT)',
@@ -6483,9 +6757,7 @@ export const EN = {
   'settings.rigControl.txAudio.hint':
     'Which of the radio’s audio inputs transmits when Nexus keys it over CAT. <b>Front/Mic</b> is how Nexus has always keyed the radio. <b>Rear/Data</b> keys its data input instead: choose it if your sound card reaches the radio through its rear DATA or ACC jack (where a SignaLink plugs in) or its own USB audio, and the radio sends no audio from Nexus although it does on VOX. The Phone cockpit’s PTT is not affected and keys the radio as it always has. <b>Per radio.</b>',
   'settings.rigControl.pttPort.label': 'PTT Serial Port',
-  // `{{example}}` is the platform's own device-name example, supplied by the panel as an
-  // invariant token (RIG_EXAMPLES) — a "localised" COM16 names no port on any machine.
-  'settings.rigControl.pttPort.placeholder': 'e.g. {{example}} — blank = use the CAT port',
+  'settings.rigControl.pttPort.placeholder': 'blank = use the CAT port',
   'settings.rigControl.pttPort.hint':
     'COM port your RTS/DTR keying line is on — e.g. an SO2R controller (u2R/MK2R) that routes PTT on its own port, separate from CAT. Leave blank if keying shares the CAT port, which is how a single-cable interface like a Digirig Mobile is wired; CAT keeps working either way. <b>Per radio</b>: each rig on an SO2R box has its own keying port, and this one follows the radio you switch to.',
   'settings.rigControl.catRts.label': 'Interface keys RTS on the CAT port',
@@ -6569,11 +6841,61 @@ export const EN = {
     "Enter the radio's IPv4 address, for example {{example}}.",
   'settings.radio.check.icomLanUser': 'No network user is set, so the radio will refuse the login.',
   'settings.radio.check.icomLanPassword': 'No network password is saved for this radio yet: type it and press Set.',
+  // The TCI connection (an SDR program's own TCI server). Program, radio and protocol names
+  // (ExpertSDR3, Thetis, piHPSDR, SunSDR, TCI, rigctld), addresses and port numbers are tokens.
+  // `{{server}}` is what the server said about itself, as sent; `{{address}}` is host:port.
+  'settings.rigControl.conn.tci': 'TCI (SDR program) — Beta',
+  'settings.rigControl.tci.hint':
+    "<b>Beta.</b> Nexus connects to the SDR program's own TCI server, with no rigctld and no virtual COM port. It reads and sets the dial and mode and transmits through the program. With <b>Audio over TCI</b> on, the receive audio and Nexus's own transmit audio go over TCI too. <b>Not ready yet:</b> CW through the program's own keyer (use the Soundcard keyer). Turn the TCI server on in the program first.",
+  'settings.rigControl.tci.host.label': 'SDR program address',
+  'settings.rigControl.tci.host.hint':
+    'The computer the SDR program runs on: <b>127.0.0.1</b> is this one. TCI has no password and no encryption, so reach another computer only on your own network.',
+  'settings.rigControl.tci.port.label': 'TCI port',
+  'settings.rigControl.tci.port.hint':
+    "The port in the program's TCI settings: 50001 in ExpertSDR3 and Thetis as they come, 40001 in piHPSDR. <b>Find TCI server</b> tries both.",
+  'settings.rigControl.tci.find.label': 'TCI server',
+  'settings.rigControl.tci.find.action': 'Find TCI server',
+  'settings.rigControl.tci.find.busy': 'Looking…',
+  'settings.rigControl.tci.find.title':
+    "Look for the SDR program's TCI server at this address: this port first, then 50001 and 40001. It only reads what the server says about itself; it never transmits and never changes the radio.",
+  'settings.rigControl.tci.find.searching': 'Looking for a TCI server at {{host}}…',
+  'settings.rigControl.tci.find.found': 'Found a TCI server at {{address}}: {{server}}.',
+  'settings.rigControl.tci.find.unnamed': 'it does not give its name',
+  'settings.rigControl.tci.find.trxCount': {
+    one: 'It has {{count}} transceiver.',
+    other: 'It has {{count}} transceivers.',
+  },
+  'settings.rigControl.tci.find.unknownProgram':
+    'Nexus does not know this program yet, so it treats it as a plain TCI server.',
+  'settings.rigControl.tci.find.portSet': 'TCI port is now {{port}}: Save to keep it.',
+  'settings.rigControl.tci.find.nexus': "Port {{port}} is Nexus's own TCI server, not an SDR program.",
+  'settings.rigControl.tci.find.notTci': 'Something answered on port {{port}}, but it is not a TCI server.',
+  'settings.rigControl.tci.find.noReady': 'Port {{port}} answered but did not finish the TCI handshake.',
+  'settings.rigControl.tci.find.none':
+    'No TCI server answered at {{host}} (ports tried: {{ports}}). Start the SDR program, turn its TCI server on, and try again.',
+  'settings.rigControl.tci.find.badHost': 'This computer cannot find {{host}}. Check the SDR program address.',
+  'settings.rigControl.tci.find.failed': 'Could not look for a TCI server: {{error}}',
+  'settings.rigControl.tci.trx.label': 'Transceiver',
+  'settings.rigControl.tci.trx.hint': "Which of the program's transceivers this radio is. 1 is the first; most stations use 1.",
+  'settings.rigControl.tci.dialect.label': 'SDR program',
+  'settings.rigControl.tci.dialect.auto': 'Automatic (recommended)',
+  'settings.rigControl.tci.dialect.hint':
+    'Leave it on Automatic: Nexus learns the program from what it does. Name the program only if Nexus reads it wrongly; naming one fills in the port it comes set to.',
+  'settings.rigControl.tci.audio.label': 'Audio over TCI',
+  'settings.rigControl.tci.audio.hint':
+    "Receive audio from the program, and Nexus's transmit audio to it, over TCI instead of a virtual audio cable.",
+  'settings.rigControl.tci.pan.label': 'SDR panadapter in the scope',
+  'settings.rigControl.tci.pan.hint': "Show the SDR program's own spectrum in Nexus's scope and waterfall.",
+  'settings.rigControl.tci.spots.label': 'Spots on the SDR panadapter',
+  'settings.rigControl.tci.spots.hint':
+    "Mark the stations you still need on the program's panadapter, 100 at most. Clicking one there tunes Nexus to it; it never transmits.",
+  'settings.radio.check.tciHost': "Enter the SDR program's address on its own, such as {{example}} when it runs on this computer.",
+  'settings.radio.check.tciPort': 'Enter the TCI port, a number from 1 to 65535: {{example}} as ExpertSDR3 and Thetis come.',
   'operate.strip.state.connectionNoTx': 'No TX on this connection',
   'settings.rigControl.conn.omnirig': 'OmniRig (the radio is set up in OmniRig)',
   'settings.rigControl.conn.omnirig.unavailable': 'OmniRig — Windows only',
   'settings.rigControl.conn.hint':
-    'Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld. The <b>Rig Model</b> still picks which CAT dialect is spoken — for an SDR, choose the program you launched, not the board inside the radio. An Icom on its <b>LAN port</b> needs a program in between, because Icom\'s network protocol is its own: with wfview, turn on its rigctld server and point Nexus at it with Network and Rig Model <b>NET rigctl</b>; with RS-BA1, choose Serial, your Icom\'s own model and the virtual COM port RS-BA1 creates.',
+    'Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld. TCI for an SDR program\'s own TCI server (ExpertSDR3, Thetis, piHPSDR), with no Rig Model to pick. The <b>Rig Model</b> still picks which CAT dialect is spoken — for an SDR, choose the program you launched, not the board inside the radio. An Icom on its <b>LAN port</b> needs a program in between, because Icom\'s network protocol is its own: with wfview, turn on its rigctld server and point Nexus at it with Network and Rig Model <b>NET rigctl</b>; with RS-BA1, choose Serial, your Icom\'s own model and the virtual COM port RS-BA1 creates.',
   'settings.rigControl.conn.omnirig.hint':
     "<b>OmniRig</b> hands rig control to VE3NEA's OmniRig server, the one most Windows logging and contest programs already use. Set the radio up <em>in OmniRig</em> — rig type, COM port, baud — and Nexus talks to it there, so the Rig Model, Serial Port and Baud above are not used. {{availability}}",
   'settings.rigControl.conn.omnirig.unavailable.why':
@@ -6597,13 +6919,13 @@ export const EN = {
   'settings.rigControl.netAddr.hint':
     "host:port. For a Flex: the WSJT-X-proven path is the SmartSDR CAT app on THIS PC — its DEFAULT TCP port 5002 is directed at slice A, so 127.0.0.1:5002 with the FLEX-6xxx / 8xxx model works out of the box; audio rides DAX. Multi-slice: SmartSDR CAT's per-slice ports are B=60001, C=60002, D=60003 — Nexus drives ONE slice, so enter the port of the slice you run digital on. (Direct-to-radio :4992 needs Hamlib's experimental native model and failed on real hardware.) Other rigs: a remote rigctld's host:port with their normal model.",
   'settings.rigControl.netAddr.sdrPorts':
-    'Running an SDR program? Read the port out of the program, don\'t guess it: <b>Thetis</b> → Setup ▸ Serial/Network/Midi CAT ▸ <em>TCP/IP CAT Server</em> (its own box, factory 13013 — not the <em>TCI Server</em> box beside it, factory 50001; TCI is a different protocol and the Hamlib we ship has no backend for it, so pick a CAT profile such as "Thetis" and use the CAT server port); <b>SmartSDR CAT</b> → 5002; <b>piHPSDR</b> → 19090. Whatever it shows, type that.',
+    'Running an SDR program? Read the port out of the program, don\'t guess it: <b>Thetis</b> → Setup ▸ Serial/Network/Midi CAT ▸ <em>TCP/IP CAT Server</em> (its own box, factory 13013); <b>SmartSDR CAT</b> → 5002; <b>piHPSDR</b> → 19090. Whatever it shows, type that. The <em>TCI Server</em> box beside Thetis\'s CAT server (factory 50001) is a different protocol: for it, choose Connection ▸ <b>TCI</b> instead.',
 
   // The serial port and its two rig-specific notes. Each note is ONE sentence per platform,
   // because what it says is a different answer, not a different ending; the Xiegu COM-number
   // clause is the one genuinely optional half and is interpolated whole.
   'settings.rigControl.serialPort.label': 'Serial Port',
-  'settings.rigControl.serialPort.placeholder': 'Select or type, e.g. {{example}}',
+  'settings.rigControl.serialPort.placeholder': 'Select or type',
   'settings.rigControl.serialPort.refresh.action': 'Refresh',
   'settings.rigControl.serialPort.refresh.title': 'Re-scan serial ports',
   'settings.rigControl.serialPort.autoTest.action': 'Auto-test',
@@ -6700,6 +7022,10 @@ export const EN = {
   'settings.rigControl.flexClient.label': 'Flex native client (Beta)',
   'settings.rigControl.flexClient.hint':
     "Nexus connects to the radio itself, at the <b>Flex radio IP</b>, as one of its SmartSDR clients, and runs CAT and PTT on a slice of its own. Beta and <b>unverified on hardware</b>: try transmit into a dummy load first. If Nexus cannot connect, it falls back to SmartSDR CAT. Save to apply.",
+  'settings.rigControl.flexUnbenched.label':
+    'Let Nexus send CW, Tune and ATU through the native Flex client (not yet bench-tested)',
+  'settings.rigControl.flexUnbenched.hint':
+    '<b>Not yet checked on a real Flex:</b> try CW, Tune and the ATU into a dummy load first. Off by default. Save to apply; Nexus reconnects to the radio.',
   // ⚠️ `{{path}}` is a file path the backend chose. Markers are parsed BEFORE values are
   // substituted, so a path that happens to contain `<b>` is text, never markup.
   'settings.rigControl.civLog.label': 'CI-V bus diagnostic log',
@@ -6762,6 +7088,12 @@ export const EN = {
   'settings.audio.rxGain.aria': 'RX capture gain',
   'settings.audio.rxGain.hint':
     'Boost a quiet interface until RX Level reads around 30 dB — the meter responds as you release the slider. Leave at ×1.0 unless the meter reads low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much.',
+  // Under BOTH sliders above, in place of their own hints, while the form edits a radio that is not
+  // the one in use: the sliders then set that radio's stored levels and act on nothing live, so
+  // "the SAME control as the cockpit Pwr" and "the meter responds" are not true there. `{{radio}}`
+  // is that radio's name, as in the multi-radio banner.
+  'settings.audio.multiRadio.levelHint':
+    '<b>Save</b> stores this for <b>{{radio}}</b>, and it takes effect when that radio is in use; the radio in use now does not change.',
 
   // ── Settings ▸ Radio ▸ Headphone monitor ────────────────────────────────────────────
   // "System default" inside these sentences names the picker entry above, so it reads the
@@ -6787,6 +7119,40 @@ export const EN = {
   'settings.headphoneMonitor.level.aria': 'Receive listening level',
   'settings.headphoneMonitor.level.hint':
     'Headphone listening volume (does not affect TX).',
+
+  // ── Settings ▸ Radio ▸ Scope source ─────────────────────────────────────────────────
+  // SDRconnect, SDRplay, RSP, RSP1, RX OUT, CAT, WebSocket API, 127.0.0.1, 5454, 0 dBm, 100 W and
+  // +50 dBm are names and quantities: never translated, never locale-formatted.
+  'settings.scopeSource.legend':
+    "Scope source",
+  'settings.scopeSource.note':
+    "Where the RF scope's picture comes from: the radio's own panadapter (or the sound card's audio where the radio has none), or an SDRplay RSP receiver through SDRconnect. SDRconnect is SDRplay's own program, free and closed-source, which you install and run beside Nexus with its WebSocket API turned on; it serves every RSP except the original RSP1.",
+  'settings.scopeSource.source.label':
+    "Draw the scope from",
+  'settings.scopeSource.source.radio':
+    "The radio",
+  'settings.scopeSource.source.sdrconnect':
+    "SDRconnect (SDRplay)",
+  'settings.scopeSource.source.hint':
+    "SDRconnect draws the receiver's whole span with each station at its own frequency, centred on the rig's dial. Receive only: Nexus never transmits through it and sends it no CAT.",
+  'settings.scopeSource.host.label':
+    "SDRconnect computer",
+  'settings.scopeSource.host.hint':
+    "127.0.0.1 is this computer. Put the name or address of another computer if SDRconnect runs there.",
+  'settings.scopeSource.port.label':
+    "WebSocket API port",
+  'settings.scopeSource.port.hint':
+    "SDRconnect's WebSocket API port: 5454 unless you moved it in SDRconnect.",
+  'settings.scopeSource.follow.label':
+    "Follow the dial",
+  'settings.scopeSource.follow.centre':
+    "Keep the dial in the centre",
+  'settings.scopeSource.follow.scroll':
+    "Retune only when the dial nears the edge",
+  'settings.scopeSource.follow.hint':
+    "How the receiver's centre follows the rig's dial. Retuning only near the edge moves SDRconnect's own display far less.",
+  'settings.scopeSource.rfSafety':
+    "Feed the receiver from the rig's RX OUT, or from a splitter with transmit protection, never from a plain T-piece on the transmit line: an RSP takes at most 0 dBm, and 100 W is +50 dBm.",
 
   // ── Settings ▸ Radio ▸ Satellite Doppler ────────────────────────────────────────────
   // ⚠️ The MAPPING LABELS are not here — they live in `features/satVfo.ts` beside the wire
@@ -6876,6 +7242,16 @@ export const EN = {
   'settings.amplifier.port.label': 'Amplifier port',
   'settings.amplifier.port.hint':
     'Its own port, not the one CAT uses — a serial port can only be open once, so sharing it stops the radio connecting. The speed is worked out for you.',
+  'settings.amplifier.link.label': 'Connection',
+  'settings.amplifier.link.serial': 'USB or serial port',
+  'settings.amplifier.link.network': 'Network (KPA1500)',
+  'settings.amplifier.link.hint':
+    'A KPA1500 on your network can be reached by its IP address instead of a cable. The KPA500 has no network port.',
+  'settings.amplifier.host.label': 'Amplifier IP address',
+  'settings.amplifier.host.hint':
+    'Shown on the KPA1500\u2019s NET IP ADDRESS menu. Nexus talks to the amplifier\u2019s UDP server, which any number of programs can use at once, so Elecraft\u2019s KPA1500 Remote can stay connected beside it.',
+  'settings.amplifier.netPort.label': 'Port',
+  'settings.amplifier.netPort.hint': '1500 unless you changed the amplifier\u2019s command port.',
 
   // ── Settings ▸ Radio ▸ Rotator ──────────────────────────────────────────────────────
   // ⚠️ NOT HERE, and none of it may move: the ROTATOR MODEL NAMES and their Hamlib model
@@ -6910,15 +7286,14 @@ export const EN = {
     'This controller runs at {{rate}} baud — the rate its Hamlib backend declares. Leave it here.',
   'settings.rotator.baud.hint.wrong':
     '<b>This controller runs at {{rate}} baud, not {{set}}</b> — at the wrong rate it never answers and reads as broken hardware. Set {{rate}}, or re-pick the model above to fill it in.',
-  // In place of the baud hint when the model is PstRotatorAz (Hamlib model 3). `{{address}}`,
-  // `{{sent}}` and `{{bearing}}` are invariant tokens the panel supplies: where PstRotatorAz
-  // listens, and what Hamlib's backend for it sends for a bearing. UDP Control and Setup are names
+  // In place of the baud hint when the model is PstRotatorAz (model 3). `{{address}}` and
+  // `{{reply}}` are invariant tokens the panel supplies: where PstRotatorAz listens, and the UDP
+  // port its replies come back on (its port + 1). UDP Control, UDP Control Port and Setup are names
   // in PstRotatorAz's own English window.
   'settings.rotator.port.hint.pstRotator':
-    'PstRotatorAz: enter {{address}} as the port, and turn on UDP Control in its Setup (the baud is not used). Its Hamlib backend can garble the bearing it sends — {{sent}} for {{bearing}}° — so PstRotatorAz may not turn to it.',
+    'PstRotatorAz: enter {{address}} as the port (its UDP Control Port), and turn on UDP Control in its Setup (the baud is not used). Nexus listens for its replies on that port + 1, {{reply}}, so no other program may use it.',
   'settings.rotator.external.label': 'External rotctld (advanced)',
-  // `{{example}}` is a host:port the panel supplies as an invariant token.
-  'settings.rotator.external.placeholder': 'host:port — e.g. {{example}}',
+  'settings.rotator.external.placeholder': 'host:port',
   'settings.rotator.external.aria': 'External rotctld address (advanced)',
   'settings.rotator.external.hint':
     'Point Nexus at a rotctld you run yourself (or one on another machine). It OVERRIDES the model and port above and stops the integrated daemon. Needs the port — a bare host name is not an address.',
@@ -7021,20 +7396,24 @@ export const EN = {
   // each is appended to a line the caller built.
   'setup.rig.title': 'How does the radio connect?',
   'setup.rig.sub':
-    'One detect finds everything — USB rigs and FlexRadios on the network. Skippable; Settings ▸ Radio ▸ Rig & CAT has all of this later (including Test CAT).',
+    'One detect finds everything — USB rigs, FlexRadios on the network and an SDR program\'s TCI server on this computer. Skippable; Settings ▸ Radio ▸ Rig & CAT has all of this later (including Test CAT).',
   'setup.rig.detect.action': '🔍 Detect my radio',
   'setup.rig.detect.busy': 'Detecting…',
   'setup.rig.detect.failed':
     'Detection hit an error: {{error}}. You can still pick your rig by hand below, or skip and set it up later.',
   'setup.rig.detect.empty':
-    'Nothing found — USB: plug in + power on; Flex: must be on this network. Or skip and set it up later.',
+    'Nothing found — USB: plug in + power on; Flex: must be on this network; SDR program: turn its TCI server on. Or skip and set it up later.',
   // The two halves of one scan can fail independently; each is a whole sentence, and the
   // panel joins whichever failed with " · " before the sentence above quotes the lot.
   'setup.rig.detect.usbFailed': 'USB scan failed: {{error}}',
   'setup.rig.detect.flexFailed': 'Flex network scan failed: {{error}}',
+  'setup.rig.detect.tciFailed': 'TCI server search failed: {{error}}',
   'setup.rig.detect.flex.row': '<b>{{radio}}</b> on the network ({{ip}})',
   'setup.rig.detect.flex.via': ' · via SmartSDR CAT',
   'setup.rig.detect.rig.row': '<b>{{radio}}</b> on {{port}}',
+  // `{{server}}` is what the SDR program's TCI server said about itself (program, version, radio).
+  'setup.rig.detect.tci.row': '<b>{{server}}</b> on this computer (TCI, port {{port}})',
+  'setup.rig.detect.tci.via': ' · over its TCI server',
   'setup.rig.flexNote.windows':
     '{{radio}} at {{ip}} — CAT set via SmartSDR CAT (slice A, port 5002; a second slice uses 60001), radio address saved for the native panadapter/DAX. Test CAT below.',
   'setup.rig.flexNote.other':
@@ -7056,10 +7435,21 @@ export const EN = {
     'The port answered, but the exact model is a guess ({{radio}} responded). Pick your radio so its real command set is used.',
   'setup.rig.model.confirm':
     'Confirm the exact model — fixed-rate rigs get their baud set automatically.',
+  // The keying choice on a radio Hamlib cannot key over CAT. The options are PTT Method's own
+  // (settings.rigControl.ptt.vox/rts/dtr) and so is the note under them (ptt.noCatPtt); each blurb
+  // says in one line what its option means. RTS, DTR, SignaLink and Digirig Mobile are tokens.
+  'setup.rig.keying.title': 'How does your interface key the radio?',
+  'setup.rig.keying.vox.blurb': 'It keys the radio when it hears audio, like a SignaLink.',
+  'setup.rig.keying.rts.blurb': "It keys the radio on the serial port's RTS line, like a Digirig Mobile.",
+  'setup.rig.keying.dtr.blurb': "It keys the radio on the serial port's DTR line.",
   'setup.rig.conn.serial.label': 'USB / Serial',
   'setup.rig.conn.serial.blurb': 'Most rigs — one cable',
   'setup.rig.conn.network.label': 'Network',
   'setup.rig.conn.network.blurb': 'SDR software, or a remote rig',
+  'setup.rig.conn.tci.label': 'SDR program (TCI)',
+  'setup.rig.conn.tci.blurb': 'ExpertSDR3, Thetis or piHPSDR, over its TCI server',
+  'setup.rig.tci.hint':
+    'Turn the TCI server on in the SDR program first: ExpertSDR3 and Thetis come set to port 50001, piHPSDR to 40001. Beta: Nexus controls the radio and transmits over TCI, and the audio goes over TCI too, with no virtual audio cable.',
   'setup.rig.address.label': 'Address',
   'setup.rig.network.hint':
     'A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR CAT app on this PC — its default TCP port 5002 drives slice A (per-slice ports: B=60001, C=60002) — and audio through DAX. Other network rigs: pick their model later in Settings ▸ Radio ▸ Rig & CAT.',
@@ -7263,6 +7653,49 @@ export const EN = {
   'settings.transmit.foreignPtt.hint':
     'On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when it owned the CAT cable — every Nexus transmit safeguard still applies. Off: shared programs tune and read but never transmit.',
 
+  // "Share by TCI": Nexus as a TCI server for programs on this computer (TciServerSettings.tsx).
+  // The programs' own names (WSJT-X, JTDX, MSHV, Log4OM, 5MContest), WSJT-X's rig name
+  // `TCI Client RX1`, the protocol's name TCI and the mode names are tokens, never translated;
+  // the call site supplies the emphasis.
+  'settings.transmit.tciServer.label': 'Share by TCI',
+  'settings.transmit.tciServer.hint.off':
+    'Off. Turn it on and programs on this computer that speak TCI, such as <b>WSJT-X</b>, <b>JTDX</b>, <b>MSHV</b> and <b>Log4OM</b>, can use the radio through Nexus at the address that appears here.',
+  'settings.transmit.tciServer.hint.on':
+    "Programs on this computer connect to this address as they would to an SDR program's TCI server. In WSJT-X and JTDX, pick the rig <em>TCI Client RX1</em> and give it this address as its TCI server. They follow whichever radio is active: they can tune it, switch its sideband and lower its power (never raise it), and they get its receive audio. Only programs on this computer can connect, never another computer and never a web page. Takes effect when you save.",
+  // While the switch is on and the station reports no server yet: just turned on and not saved,
+  // or saved a moment ago.
+  'settings.transmit.tciServer.waiting':
+    'Not listening yet. The address appears here once programs can connect. If you just turned this on, save first.',
+  'settings.transmit.tciServer.port.label': 'TCI server port',
+  'settings.transmit.tciServer.port.hint':
+    'WSJT-X, JTDX and MSHV look for 40001. A second Nexus window uses the next port, and the address above always shows the one in use. Change it only if another program on this computer already has it.',
+  'settings.transmit.tciServer.tx.label': 'Programs on TCI may transmit',
+  'settings.transmit.tciServer.tx.hint':
+    "Off: programs tune and read but never transmit. On: a program may key the radio with its own audio or the radio's microphone while Nexus is on its Phone screen, send CW macros on the CW screen, and Tune. Its own audio goes out only once it has asked for a voice mode (USB, LSB, AM or FM). WSJT-X and JTDX ask for a mode only when it differs from Nexus's, so set to USB while Nexus is already in USB they ask for nothing and are refused. Every Nexus transmit safeguard still applies: TX must be on in Nexus, Stop TX wins and holds, and nothing goes past your licence or your power limits. A program never turns TX on. Set at the station only.",
+  // ⛔ Said beside the transmit switch, at the station and from afar alike: the engine refuses a
+  // program's digital overs until the delay Nexus adds to their timing is measured.
+  'settings.transmit.tciServer.tx.slotTimed':
+    "FT8, FT4 and other slot-timed modes may not transmit through TCI yet. Nexus refuses a program's digital transmissions until the delay it adds to their timing has been measured.",
+  'settings.transmit.tciServer.cw.label': 'CW macros from programs',
+  'settings.transmit.tciServer.cw.hint':
+    "A logger's TCI keyer (Log4OM, 5MContest) sends its CW macros through Nexus, on the CW screen only, and only while programs may transmit. Any program can stop the CW.",
+  'settings.transmit.tciServer.spots.label': 'Spots from programs',
+  'settings.transmit.tciServer.spots.hint':
+    "Spots a program sends show on Nexus's band map and in the Phone and CW screens' band activity. A click on one only tunes Nexus, and a click on a spot in Nexus is passed back to the programs. A spot or a click never transmits.",
+  'settings.transmit.tciServer.programs.label': 'Programs connected',
+  'settings.transmit.tciServer.programs.none': 'No program is connected.',
+  // One program's connection, by its number: `{{id}}` counts from 1 in the order programs connected,
+  // because TCI carries no program name.
+  'settings.transmit.tciServer.program.name': 'Connection {{id}}',
+  'settings.transmit.tciServer.program.audio': 'Receiving audio',
+  'settings.transmit.tciServer.program.keyed': 'Transmitting',
+  // `{{why}}` is the station's own words from the connection log, shown as they come.
+  'settings.transmit.tciServer.program.refused': 'Last refused: {{why}}',
+  'settings.transmit.tciServer.disconnect.action': 'Disconnect',
+  'settings.transmit.tciServer.disconnect.title':
+    "Close this program's connection. Anything it is transmitting stops first.",
+  'settings.transmit.tciServer.disconnect.failed': 'Nexus could not disconnect the program',
+
   // ── Settings ▸ Digital (FT8/FT4) ────────────────────────────────────────────────────
   //
   // ⚠️ TWO SUB-GROUPS OF THIS SECTION ARE MISSING FROM THIS FILE ON PURPOSE. "Transmit &
@@ -7343,7 +7776,7 @@ export const EN = {
 
   // Station Housekeeping. ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit
   // control — it chooses whether the station announces itself, and it can neither key nor
-  // unkey anything. Same reading as Tx Power's drive slider in batch 13; nothing here is on
+  // unkey anything. Same reading as Tx Power's drive slider; nothing here is on
   // any cockpit's stop-line census. The watts placeholder ("e.g. 100") is a power value and
   // stays in the component, as the example addresses in Rig & CAT do.
   'settings.digital.housekeeping.title': 'Station Housekeeping',
@@ -7361,7 +7794,7 @@ export const EN = {
     'Measure your PC clock against public NTP servers and CORRECT for it: TempoFast/TempoDeep are slot-timed to UTC, and Nexus shifts its own transmit and decode windows by the measured offset so they land on the true UTC grid even when the clock is off. The top bar shows what is being applied. Turn off for fully-offline operation (no network calls) — the last measurement then keeps steering until it ages out.',
   'settings.digital.stationPower.label': 'Station power (W)',
   'settings.digital.stationPower.hint':
-    'Your transmit power in watts — unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',
+    'Your transmit power in watts — logged on every contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',
   // The units preference. The <option> VALUES ('auto', 'metric', 'imperial') are persisted
   // tokens and stay in the component; km, °C, mi and °F are unit symbols inside these labels.
   'settings.digital.units.label': 'Units',
@@ -7545,9 +7978,11 @@ export const EN = {
   'settings.cw.keyer.winkeyer': 'WinKeyer — K1EL hardware keyer',
   'settings.cw.keyer.soundcard': 'Soundcard — audio tone through a data mode (workaround)',
   'settings.cw.keyer.hint':
-    "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — the clean N1MM/fldigi method, needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone — a workaround; set drive so ALC reads zero. <b>It takes your radio out of CW</b> into a data mode (DATA-U/DATA-L, so the tone reaches the transmitter instead of the mic jack); pick any other keyer and CW mode comes straight back. Also switchable live from the CW cockpit.",
+    "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — a clean method that needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone — a workaround; set drive so ALC reads zero. <b>It takes your radio out of CW</b> into a data mode (DATA-U/DATA-L, so the tone reaches the transmitter instead of the mic jack); pick any other keyer and CW mode comes straight back. Also switchable live from the CW cockpit.",
   'settings.cw.keyer.unproven':
     "CAT CW keying is <b>unproven on this radio</b>. Its Hamlib backend sends a different keying command from the one other radios use, and it reports success either way — so if nothing is transmitted, Nexus cannot tell you. If CW doesn't go out, use the Serial keyline, WinKeyer, or Soundcard keyer.",
+  'settings.cw.keyer.flexCatStop':
+    "On a Flex over <b>SmartSDR CAT</b>, Esc stops Nexus at once, but the radio may finish the word it is sending: SmartSDR CAT has no documented CW stop, so Nexus hands the radio one word at a time. For a stop that cuts mid-word, choose the <b>WinKeyer</b> keyer on SmartSDR CAT's WinKeyer port, or use the <b>Flex native client</b>.",
   'settings.cw.pitch.label': 'Sidetone pitch (Hz)',
   'settings.cw.pitch.hint':
     'CW tone pitch (300–1200 Hz) — the soundcard keyer tone and the CW scope zero-beat marker.',
@@ -7556,11 +7991,11 @@ export const EN = {
   'settings.cw.reverse.hint':
     "Put your radio in its <b>reverse</b> CW mode (CW-R / CW-L) instead of its normal CW, on <b>every band</b>. Off by default, so Nexus asks for plain CW and your radio stays where its own menu puts it. This changes only the pitch you hear on a signal — CW and CW-R transmit identically, and the station you work cannot tell — so it is a personal preference, not a band rule. Which sideband it actually selects depends on the radio: on a Yaesu it is CW-L, while on an Icom it follows that rig's own <b>CW Normal Side</b> menu. The Soundcard keyer ignores this, because it never puts the rig in CW at all.",
   'settings.cw.winkeyerPort.label': 'WinKeyer port',
-  'settings.cw.winkeyerPort.placeholder': '{{example}} — K1EL WinKeyer serial port',
+  'settings.cw.winkeyerPort.placeholder': 'K1EL WinKeyer serial port',
   'settings.cw.winkeyerPort.hint':
     "The serial port your WinKey presents. 1200 baud. A WinKey micro inside a multi-function interface (Timewave Navigator, microHAM) counts — use that device's CW/WinKey port, not its CAT port.",
   'settings.cw.keyPort.label': 'Keyline serial port',
-  'settings.cw.keyPort.placeholder': '{{example}} — the keying interface (separate from CAT)',
+  'settings.cw.keyPort.placeholder': 'the keying interface (separate from CAT)',
   'settings.cw.keyPort.hint':
     "The USB-to-serial into your keying interface (Buxcomm, a homebrew DTR cable, …) that plugs into the rig's KEY jack. Must be a SEPARATE port from CAT. Set the rig to CW and its key-jack to straight-key / bug. An interface with a WinKey chip in it — Timewave Navigator, microHAM, a K1EL WinKeyer — does <b>not</b> key on DTR: pick the WinKeyer backend above instead and give it that device's CW port.",
   'settings.cw.keyLine.label': 'Keying line',
@@ -7613,8 +8048,12 @@ export const EN = {
   'settings.rtty.backend.fsk': 'True FSK — serial keyline (DTR/RTS), rig in RTTY mode',
   'settings.rtty.backend.hint':
     "How Nexus transmits RTTY. <b>AFSK</b> plays the two-tone waveform through the same TX audio path as FT8 (soundcard-clocked = jitter-free; set drive so ALC reads just zero). <b>True FSK</b> bit-bangs the rig's FSK input over a serial control line with the rig in RTTY mode — unlocking its narrow RTTY filters (e.g. the FTDX10's) — with PTT on CAT or its own line. Software FSK timing is casual/Field-Day grade; AFSK is the timing-cleanest path.",
+  'settings.rtty.afskSideband.label': 'AFSK sideband',
+  'settings.rtty.afskSideband.lsb': 'LSB (standard)',
+  'settings.rtty.afskSideband.hint':
+    'The sideband the rig runs AFSK on. LSB is the RTTY convention. On USB, Nexus puts the rig in its upper data mode (DATA-U / USB-D / DIGU) and swaps the tones itself, so mark stays high on the air and the decoder still copies — leave Reverse off.',
   'settings.rtty.fskPort.label': 'FSK serial port',
-  'settings.rtty.fskPort.placeholder': "{{example}} — e.g. the FTDX10's USB Enhanced COM",
+  'settings.rtty.fskPort.placeholder': "e.g. the FTDX10's USB Enhanced COM",
   'settings.rtty.fskPort.hint':
     "The port whose control line feeds the rig's FSK input. Empty = the CAT serial port.",
   'settings.rtty.fskLine.label': 'FSK data line',
@@ -7632,7 +8071,7 @@ export const EN = {
   'settings.rtty.shift.hint': 'Mark/space spacing — the TX tone pair and the RX demodulator both.',
   'settings.rtty.reverse.label': 'Reverse (swap mark/space)',
   'settings.rtty.reverse.hint':
-    'The convention is LSB with mark on the lower audio tone. Turn this on when deliberately running the opposite sideband (e.g. AFSK in USB/DATA-U) so the on-air sense stays correct — applies to TX and the RX decoder.',
+    'Swaps mark and space on TX and in the RX decoder, to work a station sending upside down. Not for running USB: pick the AFSK sideband instead, which keeps the sense right on its own.',
   'settings.rtty.autoCall.title': 'Auto call',
   'settings.rtty.autoListen.label': 'Listen before repeating',
   'settings.rtty.autoListen.hint':
@@ -7653,22 +8092,92 @@ export const EN = {
     'The JTTY screen starts its decoder as soon as you open it. Turn this off to arm the receiver by hand (the Arm RX button in the All decodes pane). Stopping the receiver yourself is already remembered for the rest of the session. This arms the RECEIVER only — transmitting is never armed for you.',
 
   // ── Settings ▸ JS8 ──────────────────────────────────────────────────────────────────
-  // Speed names (Slow/Normal/Fast/Turbo) and the command words (SNR?, GRID?, HEARTBEAT SNR,
-  // MSG TO:, @ALLCALL, @GROUP) are the mode's own vocabulary and stay verbatim in every locale.
+  // Speed names (Slow/Normal/Fast/JS8 40/JS8 60, and the aliases Turbo/Ultra) and the command words
+  // (SNR?, GRID?, HEARTBEAT SNR, MSG TO:, @ALLCALL, @GROUP) are the mode's own vocabulary and stay
+  // verbatim in every locale.
   'settings.js8.legend': 'JS8',
   'settings.js8.receiving.title': 'Speed & receiving',
   'settings.js8.speed.label': 'Transmit speed',
   'settings.js8.speed.hint':
-    'The speed your frames go out at, and the period the TX clock follows: Slow 30 s, Normal 15 s, Fast 10 s, Turbo 6 s. Normal is what most of the band runs. The speed chips in the JS8 header change this same setting.',
+    'The speed your frames go out at, and the period the TX clock follows: Slow 30 s, Normal 15 s, Fast 10 s, JS8 40 6 s, JS8 60 4 s. Normal is what most of the band runs. JS8 40 (called Turbo before JS8Call 3.0) and JS8 60 are for strong signals; JS8Call 3.0 marks JS8 60 experimental. The speed chips in the JS8 header change this same setting.',
   'settings.js8.rxSpeeds.label': 'Decode these speeds',
   'settings.js8.rxSpeeds.hint':
-    'All four are decoded at once by default, as JS8Call does — a Slow station and a Turbo station on the same band both print. Untick a speed to save CPU on a small machine; each activity row is marked with its speed letter (E/A/B/C).',
+    'Every speed is decoded at once by default, as JS8Call does — a Slow station and a JS8 60 station on the same band both print. Untick a speed to save CPU on a small machine; each activity row is marked with its speed letter (E/A/B/C/I). A list saved before JS8 60 arrived keeps the four speeds it had: tick JS8 60 to add it.',
   'settings.js8.callsignAgingMin.label': 'Callsign aging (minutes)',
   'settings.js8.callsignAgingMin.hint':
     'Off (0) by default, as in JS8Call. Otherwise a station not heard for this many minutes leaves the Stations list, unless you have it selected or it has an unread message for you, and your HEARING? replies leave it out. Up to 1440 (a day).',
   'settings.js8.activityAgingMin.label': 'Band activity aging (minutes)',
   'settings.js8.activityAgingMin.hint':
     '2 by default, as in JS8Call. A row of the Band activity pane whose newest decode is this many minutes old leaves the pane, unless RX is on its offset. 0 keeps every row. Up to 1440 (a day).',
+  // JS8 frequencies, the decode filter, QSY to centre and the band schedule (JS8Call 3.0.3).
+  'settings.js8.freq.title': 'Frequencies',
+  'settings.js8.returnToLastDial.label': 'Return to the last used frequency',
+  'settings.js8.returnToLastDial.hint': "Off by default, as in JS8Call. On, opening JS8 tunes the rig back to the frequency you last used in JS8, instead of the band's JS8 frequency.",
+  'settings.js8.freqs.label': 'JS8 frequencies',
+  'settings.js8.freqs.hint.stock': "JS8Call's suggested frequencies. Change, add or remove one and the list becomes your own: the band picker in JS8 shows it, and opening JS8 tunes the first one on the band.",
+  'settings.js8.freqs.hint.own': "Your own list: the band picker in JS8 shows it, and opening JS8 tunes the first one on the band. Reset puts JS8Call's suggested frequencies back.",
+  'settings.js8.freqs.mhz.aria': 'Frequency {{n}} in MHz',
+  'settings.js8.freqs.description.aria': 'Description of frequency {{n}}',
+  'settings.js8.freqs.description.placeholder': 'Description',
+  'settings.js8.freqs.remove.title': 'Remove this frequency',
+  'settings.js8.freqs.remove.aria': 'Remove {{mhz}} MHz',
+  'settings.js8.freqs.add.mhz.aria': 'New frequency in MHz',
+  'settings.js8.freqs.add.mhz.placeholder': 'MHz',
+  'settings.js8.freqs.add.description.aria': 'Description of the new frequency',
+  'settings.js8.freqs.add.action': 'Add',
+  'settings.js8.freqs.badMhz': 'Type the frequency in MHz, for example {{example}}.',
+  'settings.js8.freqs.reset.action': 'Reset',
+  'settings.js8.freqs.reset.confirm.title': 'Reset the JS8 frequencies?',
+  'settings.js8.freqs.reset.confirm.body': "Your list is replaced by JS8Call's suggested frequencies when you save.",
+  'settings.js8.freqs.reset.confirm.action': 'Reset',
+  'settings.js8.freqs.export.action': 'Export…',
+  'settings.js8.freqs.export.done': 'JS8 frequencies saved to {{path}}',
+  'settings.js8.freqs.export.failed': 'Could not save the JS8 frequencies',
+  'settings.js8.freqs.import.action': 'Import…',
+  'settings.js8.freqs.import.bad': 'That file holds no JS8 frequencies Nexus can read. Use a file this list exported.',
+  'settings.js8.freqs.import.done': 'JS8 frequencies imported: {{count}}. Save to keep them.',
+  'settings.js8.freqs.import.confirm.title': 'Replace your JS8 frequencies?',
+  'settings.js8.freqs.import.confirm.body': 'Your list is replaced by the one in this file.',
+  'settings.js8.freqs.import.confirm.action': 'Replace',
+  'settings.js8.schedule.label': 'Change frequency by schedule',
+  'settings.js8.schedule.hint': "Off by default, as in JS8Call. On, Nexus changes the rig's frequency BY ITSELF at the times below, with nobody at the radio: a notice first, then the change 30 seconds later unless you cancel it. Never while transmitting or while a message is going out.",
+  'settings.js8.schedule.list.label': 'Schedule (UTC)',
+  'settings.js8.schedule.list.hint': 'Each row: a frequency, and from when until when (UTC) to be on it. The frequency does not change back when a row ends; add another row for that. Where rows overlap, the one that starts later wins.',
+  'settings.js8.schedule.empty': 'No rows yet.',
+  'settings.js8.schedule.mhz.aria': 'Frequency of row {{n}} in MHz',
+  'settings.js8.schedule.from.aria': 'Row {{n}}: from (UTC)',
+  'settings.js8.schedule.until.aria': 'Row {{n}}: until (UTC)',
+  'settings.js8.schedule.until.title': 'The frequency does not change back at this time. Add another row to return.',
+  'settings.js8.schedule.description.aria': 'Description of row {{n}}',
+  'settings.js8.schedule.remove.title': 'Remove this row',
+  'settings.js8.schedule.remove.aria': 'Remove row {{n}}',
+  'settings.js8.schedule.add.mhz.aria': 'Frequency of the new row in MHz',
+  'settings.js8.schedule.add.action': 'Add row',
+  'js8.wf.failed': 'That did not reach the station.',
+  'js8.wf.centreAt': 'Centre filter at {{hz}} Hz',
+  'js8.wf.pill.title': 'Waterfall controls: the decode filter and QSY to centre',
+  'js8.wf.pill.on': 'Filter {{lo}}–{{hi}} Hz',
+  'js8.wf.pill.off': 'Filter off',
+  'js8.wf.title': 'Waterfall controls',
+  'js8.wf.filter.title': 'Decode filter',
+  'js8.wf.filter.label': 'Filter',
+  'js8.wf.filter.hint.on': 'On, as JS8Call ships it: the decoder looks only between {{lo}} and {{hi}} Hz.',
+  'js8.wf.filter.hint.off': 'Off: the decoder looks across the whole passband (F Low to F High).',
+  'js8.wf.center.label': 'Centre (Hz)',
+  'js8.wf.width.label': 'Width (Hz)',
+  'js8.wf.sync.action': 'Centre on my RX offset',
+  'js8.wf.sync.title': 'Centre the filter on {{hz}} Hz, your RX offset',
+  'js8.wf.qsy.title': 'QSY to centre',
+  'js8.wf.qsyCenter.label': 'Passband centre (Hz)',
+  'js8.wf.qsy.action': 'QSY to centre',
+  'js8.wf.qsy.hint': "Moves the rig's dial so your TX offset ({{tx}} Hz) sits on the passband centre ({{hz}} Hz), for narrow filters and rigs with an uneven passband. The RX offset moves with it. Not while transmitting or while a message is going out.",
+  'js8.wf.hop.title': 'Scheduled frequency change',
+  'js8.wf.hop.body': 'The rig frequency will be changed to {{mhz}} MHz in {{secs}} s.',
+  'js8.wf.hop.held': 'The rig frequency will be changed to {{mhz}} MHz when the transmission ends.',
+  'js8.wf.hop.now': 'Change now',
+  'js8.wf.hop.cancel': 'Cancel',
+  'js8.hop.toast': 'Scheduled frequency change: the rig moves to {{mhz}} MHz in {{secs}} s.',
+  'js8.hop.toast.described': 'Scheduled frequency change: the rig moves to {{mhz}} MHz ({{description}}) in {{secs}} s.',
   'settings.js8.automatic.title': 'Automatic transmissions',
   'settings.js8.hbIntervalMin.label': 'Heartbeat interval (minutes)',
   'settings.js8.hbIntervalMin.hint':
@@ -7681,6 +8190,21 @@ export const EN = {
     'Off by default, as in JS8Call. On, a heard heartbeat is answered with your signal report (HEARTBEAT SNR), one frame per station, and a message you hold for that station is offered to it. Needs TX on.',
   'settings.js8.hbAckDeny.label': 'Never acknowledge heartbeats from these callsigns',
   'settings.js8.hbAckDeny.hint': 'Comma-separated, empty by default as in JS8Call. A heartbeat from a station on this list draws no acknowledgement.',
+  'settings.js8.hbNetworking.label': 'Heartbeat networking',
+  'settings.js8.hbNetworking.hint':
+    'Off by default, as in JS8Call (its Mode ▸ Enable Heartbeat Networking). On, the cockpit shows the HB button and Answer heartbeats can answer the heartbeats you hear; off, no heartbeat and no heartbeat acknowledgement goes out. The same switch as the cockpit’s HB NET.',
+  'settings.js8.hbAnywhere.label': 'Allow heartbeats outside 500–1000 Hz',
+  'settings.js8.hbAnywhere.hint':
+    'Off by default, as in JS8Call. On, your heartbeats and heartbeat acknowledgements go out on your own TX offset. Off, each goes on a free spot between 500 and 1000 Hz, and a heartbeat stays on your offset if it is at or below 1000 Hz.',
+  'settings.js8.hbQsoPause.label': 'Pause heartbeats while a call is in the To box',
+  'settings.js8.hbQsoPause.hint':
+    'On by default, as in JS8Call (its pause while in a QSO). While the cockpit’s To box holds a call, the heartbeat repeat pauses and starts again one interval after you clear the box, no heartbeat is acknowledged, and a repeating CQ stops. Turning the heartbeat repeat on clears the To box.',
+  'settings.js8.hbAckRateLimit.label': 'Don’t acknowledge stations that heartbeat more often than every 55 minutes',
+  'settings.js8.hbAckRateLimit.hint':
+    'Off by default, as in JS8Call 3.0. On, a station heard heartbeating again within 55 minutes of its last acknowledged heartbeat is added to Never acknowledge heartbeats from these callsigns, as JS8Call adds it to its list, and the cockpit’s HB ACK chip names it. Take it off that list to acknowledge it again; turning this off leaves the list as it is.',
+  'settings.js8.avoidAllcall.label': 'Do not take part in @ALLCALL',
+  'settings.js8.avoidAllcall.hint':
+    'Off by default, as in JS8Call. On, nothing addressed to @ALLCALL is answered (a QUERY MSGS included) or marked as addressed to you, and @ALLCALL leaves the To box’s list. Heartbeats and CQs are handled as before.',
   'settings.js8.autoreply.label': 'Auto-reply to queries',
   'settings.js8.autoreply.hint':
     'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered, and a MSG to you or to a group you joined, or a MSG TO: you hold for another station, gets an ACK; each one first asks for your Yes in the cockpit, unless you turn that off below. On @ALLCALL only QUERY MSGS is answered, when a message waits for that station, at most once every 15 minutes. Off, a reply is put in the message box for you to send, as JS8Call does, and QUERY MSGS is not answered. Needs TX on.',
@@ -7707,6 +8231,99 @@ export const EN = {
   'settings.js8.groups.label': 'Groups',
   'settings.js8.groups.hint':
     'The @GROUP names you belong to, comma-separated — a message to one of them counts as addressed to you. @ALLCALL is everyone and is always on.',
+  'settings.js8.sending.title': 'Sending',
+  'settings.js8.holdPtt.label': 'Hold PTT between frames',
+  'settings.js8.holdPtt.hint':
+    'Off by default, as in JS8Call. On, the radio stays keyed from the end of one frame of a message until the next frame starts, instead of dropping PTT after each frame and keying again. PTT still drops after the last frame, and at once when you stop transmitting.',
+  'settings.js8.txOffsetWhileSending.label': 'Allow TX offset changes while sending',
+  'settings.js8.txOffsetWhileSending.hint':
+    'Off by default, as in JS8Call: while a message is waiting to go or going out, the TX offset stays where it is. On, you can move it at once: the frame on the air moves too, from where it has got to, and the frames still to go are sent at the new offset.',
+  'settings.js8.txDelay.label': 'TX delay',
+  'settings.js8.txDelay.hint':
+    "How long before each period a JS8 frame keys the radio, as JS8Call's Tx delay (0.2 s by default). The frame's first tone still goes out on time, at the period's start delay, so a radio slow to key no longer sends it late. Lengthen it for an amplifier or a radio whose relay is slow.",
+  // The delay in seconds, `{{s}}` a number such as 0.2.
+  'settings.js8.txDelay.option': '{{s}} s',
+  // The compose box as JS8Call 3.0.3 keeps it (Js8ComposeSettings). `{{default}}` is JS8Call's own
+  // default text, a protocol token; the CQ forms and the macro list are tokens drawn by the panel.
+  'settings.js8.compose.title': 'Composing',
+  'settings.js8.cqText.label': 'CQ message',
+  'settings.js8.cqText.hint':
+    'What the CQ button and the repeating CQ send. {{default}}, the JS8Call default, is one CQ frame, and so is any of the eight CQ forms in the list. Longer text takes more frames. It must start with CQ or hold your callsign. Empty sends CQ CQ CQ and your square.',
+  'settings.js8.replyText.label': 'Reply message',
+  'settings.js8.replyText.hint': 'What REPLY sends to the call in the To box. {{default}} is the JS8Call default.',
+  'settings.js8.saved.label': 'Saved messages',
+  'settings.js8.saved.empty': 'No saved messages.',
+  'settings.js8.saved.row.aria': 'Saved message {{n}}',
+  'settings.js8.saved.up.aria': 'Move saved message {{n}} up',
+  'settings.js8.saved.down.aria': 'Move saved message {{n}} down',
+  'settings.js8.saved.remove.aria': 'Delete saved message {{n}}',
+  'settings.js8.saved.add.placeholder': 'A new saved message',
+  'settings.js8.saved.add': 'Add',
+  'settings.js8.saved.hint':
+    'The Saved menu by the JS8 compose box lists these, in this order. A saved message goes to the call in the To box, or to everyone when the box is empty.',
+  'settings.js8.macros.label':
+    'These words are replaced with your own when a message is used, in saved messages and in the CQ, reply, INFO and STATUS text:',
+  'settings.js8.sendAtOnce.label': "Send CQ, REPLY, SNR, INFO, STATUS, saved messages and a station's asks at once",
+  'settings.js8.sendAtOnce.hint':
+    'On by default, as in JS8Call. Off, those buttons put their message in the compose box and Send sends it. The repeating CQ always sends.',
+  'settings.js8.pills.label': 'Show calls and commands as pills in the compose box',
+  'settings.js8.pills.hint': 'On by default, as in JS8Call 3.0. Point at a pill to read what that part of the message does.',
+  'settings.js8.wordSuggestions.label': 'Suggest cheaper words in the compose box',
+  'settings.js8.wordSuggestions.hint':
+    'On by default, as in JS8Call. A word the JS8 dictionary sends in pieces is underlined. Right-click it for words that take less airtime.',
+  // JS8Call's SPOT block. `@APRSIS GRID`, `@APRSIS CMD` and `@APRSIS MSG TO:` are JS8 wire words;
+  // APRS-IS, JS8NET, PSK Reporter, JS8Call and iGate are names. None is translated.
+  'settings.js8.spotting.title': 'Spotting and APRS-IS',
+  'settings.js8.spotAprs.label': 'Spot @APRSIS messages to APRS-IS',
+  'settings.js8.spotAprs.hint':
+    'Off by default (JS8Call ships it on), and it works only while the PSK Reporter switch is on. A station heard sending @APRSIS GRID is put on the APRS map at that locator, and the text after @APRSIS CMD goes to APRS-IS as a raw packet. Both go up under your callsign: Nexus logs in to APRS-IS with the passcode worked out from it, as the iGate does, and stores nothing.',
+  'settings.js8.aprsRelay.label': 'Relay APRS-IS messages to heard stations',
+  'settings.js8.aprsRelay.hint':
+    "Off by default. This transmits with nobody at the radio: an APRS message for a station you have heard on JS8 is keyed to it as @APRSIS MSG TO:, signed DE and the sender's call, and acknowledged on APRS-IS in that station's name. Never to a station on the never-spot list below. Only while TX is on, one message at a time, through every transmit guard, the idle and TX watchdogs included. Needs the switch above.",
+  'settings.js8.spotNever.label': 'Never spot these callsigns',
+  'settings.js8.spotNever.hint':
+    "While the PSK Reporter switch is on, the stations you hear on JS8 are spotted as JS8Call spots them: to PSK Reporter and to JS8NET, JS8Call's spotting network, along with the commands sent to a @group. A callsign on this comma-separated list, as heard or by its base call, is spotted to no network. Empty by default, as in JS8Call.",
+
+  // ── Settings ▸ JS8 ▸ the lists, the marks and the sounds (JS8Call 3.0.3's defaults) ────────
+  'settings.js8.lists.title': 'Lists and marks',
+  'settings.js8.rxBlocklist.label': 'Hide these callsigns in the RX pane',
+  'settings.js8.rxBlocklist.hint':
+    'Comma separated, as JS8Call 3.0 has it. Nothing a listed station sends prints in the RX pane, by its call or its base call; the call list marks it ✕. It is still heard, answered and filed as before. The call list’s “Block this station” adds to it.',
+  'settings.js8.highlightPrimary.label': 'Highlight these words or callsigns (primary colour)',
+  'settings.js8.highlightPrimary.hint':
+    'Comma separated. A Band activity row with one of these words, and the call list row of one of these calls, is tinted. Empty by default, as in JS8Call.',
+  'settings.js8.highlightSecondary.label': 'Highlight these words or callsigns (secondary colour)',
+  'settings.js8.highlightSecondary.hint': 'The same with the second colour. A row both lists name takes the primary.',
+  'settings.js8.eot.label': 'End of transmission mark',
+  'settings.js8.eot.hint': 'Printed after the last frame of a message in the RX pane and Band activity. ♢ by default, as in JS8Call; up to 2 characters.',
+  'settings.js8.mfi.label': 'Missing frame mark',
+  'settings.js8.mfi.hint': 'Printed where the next frame of a message did not come within one and a half periods. …… by default, as in JS8Call.',
+  'settings.js8.sounds.title': 'Sounds',
+  'settings.js8.sounds.hint':
+    'A short tone when one of these is heard while the JS8 screen is open, each its own. All off by default, as JS8Call’s notifications are. Test plays it once.',
+  'settings.js8.sound.cq': 'A CQ',
+  'settings.js8.sound.hb': 'A heartbeat',
+  'settings.js8.sound.ack': 'An ACK for you',
+  'settings.js8.sound.directed': 'A message directed to you or your group',
+  'settings.js8.sound.inbox': 'A message filed in your Inbox',
+  'settings.js8.sound.callNew': 'A new callsign',
+  'settings.js8.sound.callOld': 'A callsign you have worked',
+  'settings.js8.sound.test.label': 'Test',
+  'settings.js8.sound.test.title': 'Play this sound once',
+  'settings.js8.sound.test.aria': 'Test the sound for {{event}}',
+  'settings.js8.api.title': 'JS8Call API',
+  'settings.js8.api.hint': 'For programs written for JS8Call, such as loggers, maps and message tools, on this computer. They can read what Nexus hears, the inbox and the station details. They cannot transmit, tune or change anything. Programs on other computers cannot connect.',
+  'settings.js8.api.tcp.label': 'TCP API',
+  'settings.js8.api.tcp.hint': 'Programs connect to 127.0.0.1 on the port below. One at a time, as in JS8Call.',
+  'settings.js8.api.tcpPort.label': 'TCP port',
+  'settings.js8.api.tcpPort.hint': 'JS8Call uses 2442.',
+  'settings.js8.api.udp.label': 'UDP API',
+  'settings.js8.api.udp.hint': 'Nexus sends to a program listening on 127.0.0.1 at the port below, and answers it there.',
+  'settings.js8.api.udpPort.label': 'UDP port',
+  'settings.js8.api.udpPort.hint': 'JS8Call uses 2242.',
+  'settings.js8.api.tcpAccept.label': 'Accept TCP requests',
+  'settings.js8.api.udpAccept.label': 'Accept UDP requests',
+  'settings.js8.api.accept.hint': 'Off by default, as in JS8Call: the program then gets what Nexus hears and sends, and no answer to its requests. On, Nexus answers its requests to read. A request to send, tune or change a setting is never answered.',
 
   // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
   // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its
@@ -7721,7 +8338,7 @@ export const EN = {
     'The SSTV screen starts the decoder as soon as you open it, so a picture on the band decodes without arming anything. Turn this off to arm the receiver by hand (the Arm button in the SSTV header). Stopping the receiver yourself is already remembered for the rest of the session.',
   'settings.sstv.issAutoArm.label': 'ISS SSTV auto-arm',
   'settings.sstv.issAutoArm.hint':
-    'Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead, restores your dial at LOS. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.',
+    "Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead while the SSTV or Satellites screen is open, restores your dial at LOS. On any other screen it only tells you the ISS is up and leaves your radio alone. If your radio can't receive {{freq}} MHz, it tells you once a session and does nothing else. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.",
   'settings.sstv.transmitting.title': 'Transmitting',
   'settings.sstv.txMode.label': 'Transmit mode',
   'settings.sstv.txMode.auto': 'Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)',
@@ -7911,6 +8528,8 @@ export const EN = {
   'settings.integrations.allTxt.label': 'Write ALL.TXT decode log',
   'settings.integrations.allTxt.hint':
     'WSJT-X-format decode log for GridTracker / loggers to tail. Written only while this is on, and it first appears after the next decode.',
+  'settings.integrations.allTxt.js8':
+    'In JS8 it also writes DIRECTED.TXT beside it, as JS8Call does: every directed message heard.',
   // A whole extra sentence, not a tail glued onto the hint above — it appears only once the
   // file exists, and a translator may place it wherever their language wants it. `{{path}}`
   // is a file system path: verbatim, always.
@@ -7974,6 +8593,10 @@ export const EN = {
   'settings.integrations.openingWatch.label': 'Near-region opening watch',
   'settings.integrations.openingWatch.hint':
     'Watch VHF/10 m activity near your QTH (not just your own contacts) so openings flag "open around you" before you\'ve worked anyone. Takes effect on restart.',
+  'settings.integrations.logSpaceWeather.label': 'Log space weather on each contact',
+  // ⚠️ `K_INDEX`, `A_INDEX`, `SFI` are ADIF field names — wire identifiers. Keep them verbatim.
+  'settings.integrations.logSpaceWeather.hint':
+    'Adds the planetary K index, A index and solar flux to every contact you log (ADIF K_INDEX, A_INDEX, SFI), from the latest reading Nexus fetched. Nothing is added when that reading is more than 3 hours old.',
   // ⚠️ `ITU-R P.533` is the recommendation's number — the same token the propagation panes
   // keep as a constant (ENGINE_P533). The <option> values ('heuristic', 'p533') are persisted
   // and stay in the panel.
@@ -8002,8 +8625,7 @@ export const EN = {
   'settings.dxkeeper.note':
     'Pushes each logged QSO into <b>DXKeeper</b> over its TCP Network Service. Enable it in DXKeeper under <em>Configuration ▸ Defaults ▸ Network Service</em> first.',
   'settings.dxkeeper.host.label': 'DXKeeper host',
-  // `{{example}}` is an IP address the panel supplies as an invariant token (LOGGER_EXAMPLES).
-  'settings.dxkeeper.host.placeholder': '{{example}} (empty = off)',
+  'settings.dxkeeper.host.placeholder': 'empty = off',
   'settings.dxkeeper.host.hint': 'Usually 127.0.0.1 — same PC. Leave blank to disable.',
   // `{{port}}` is base + 1, computed and interpolated invariantly.
   'settings.dxkeeper.basePort.hint':
@@ -8021,7 +8643,7 @@ export const EN = {
   'settings.n3fjp.note':
     "Each contact you log in Contest mode reaches the club's master N3FJP log the moment you log it. Nexus fills in the form of the <b>N3FJP Field Day Contest Log</b> (call, band, mode, class and section), so at Field Day the whole club's score updates in real time. CQ WPX, CQ WW RTTY and the ARRL VHF contests carry their exchange too; a QSO party, Sweepstakes or CQ WW CW/SSB contact reaches N3FJP without its exchange. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
   'settings.n3fjp.host.label': 'N3FJP host',
-  'settings.n3fjp.host.placeholder': '{{example}} (empty = off)',
+  'settings.n3fjp.host.placeholder': 'empty = off',
   'settings.n3fjp.host.hint':
     'IP or hostname of the master log computer. Leave blank to disable.',
   'settings.n3fjp.port.label': 'N3FJP port',
@@ -8047,7 +8669,7 @@ export const EN = {
   // is written to settings, not an example, and never came near this file.
   'settings.n1mm.legend': 'N1MM+ Integration',
   'settings.n1mm.addr.label': 'N1MM contact broadcast address',
-  'settings.n1mm.addr.placeholder': '{{example}} (empty = off)',
+  'settings.n1mm.addr.placeholder': 'empty = off',
   'settings.n1mm.addr.hint':
     'Where the N1MM contact packets go (host:port, UDP). Name the port — consumers stack on one host, and 12060 is often already taken by another logger. Leave blank to disable.',
   // The state sentence that follows the hint — one whole sentence per state, because what it
@@ -8120,8 +8742,8 @@ export const EN = {
   // ⚠️ WHAT STAYED IN THE PANEL, and it is nearly all names. The featgroup titles (`LoTW`,
   // `eQSL`, `QRZ`, `HamQTH`, `ClubLog`, `HRDLog`, `RepeaterBook`, `Cloudlog / Wavelog`) are the
   // services' own names and nothing else, so they never came here — a translated service name
-  // names no service. The token-shaped placeholders (`rbuapp_…`, the example Cloudlog URL, the
-  // profile id `1`) are invariant values in `CONFIRMATION_EXAMPLES`.
+  // names no service. The token-shaped placeholder (`rbuapp_…`) is an invariant value in
+  // `CONFIRMATION_EXAMPLES`.
   //
   // ⚠️ WHAT IS VERBATIM INSIDE THESE SENTENCES, for the same reason the DXKeeper hints keep
   // `Base Port`: each one NAMES SOMETHING THE OPERATOR MUST FIND SOMEWHERE ELSE, spelled the way
@@ -8198,7 +8820,6 @@ export const EN = {
   'settings.confirmations.eqsl.username.hint':
     'Your eQSL.cc login (often your callsign). Save settings to apply.',
   'settings.confirmations.eqsl.qthNickname.label': 'QTH Nickname',
-  'settings.confirmations.eqsl.qthNickname.placeholder': 'e.g. Home',
   'settings.confirmations.eqsl.qthNickname.hint':
     'Only needed when your callsign has more than one QTH profile at eQSL — those accounts can\u2019t sign in without it. Leave empty otherwise.',
   'settings.confirmations.eqsl.password.label': 'eQSL password',
@@ -8269,6 +8890,12 @@ export const EN = {
   'settings.confirmations.clublog.apiKey.label': 'ClubLog API key (application-level)',
   'settings.confirmations.clublog.apiKey.placeholder':
     'blank = use the key bundled with this build (if any)',
+  'settings.confirmations.clublog.apiKey.reveal': 'Reveal',
+  'settings.confirmations.clublog.apiKey.hide': 'Hide',
+  'settings.confirmations.clublog.apiKey.savedAtStation': 'Saved at the station',
+  'settings.confirmations.clublog.apiKey.notSavedAtStation': 'None saved at the station',
+  'settings.confirmations.clublog.apiKey.watched': 'Hidden while a stream is watching',
+  'settings.stationOnly.hint': 'Set at the station',
   'settings.confirmations.clublog.apiKey.hint':
     "This is the <b>application</b> credential, not yours — official installer builds bundle one, and you only need email + app-password above. Building from source? Request a free key at clublog.org/requestapikey.php and paste it here (open-source can't ship one — ClubLog auto-revokes published keys).",
   'settings.confirmations.clublog.upload.label': 'Auto-upload QSOs to ClubLog',
@@ -8535,6 +9162,8 @@ export const EN = {
   'settings.accessibility.decodeTick.label': 'Decode-batch tick',
   'settings.accessibility.decodeTick.hint':
     "A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.",
+  'settings.accessibility.cwTurnSound.label': 'CW turn sound',
+  'settings.accessibility.cwTurnSound.hint': 'A short rising chirp when the CW turn cue says it is your turn to send. Never while you transmit.',
 
   // ── Connect — the board, its pane grid, and the one-line pane projections ───────────
   // ⚠️ THE UNITS RULE OWNS THIS SURFACE. Band and mode names, bearings (`~47°`), MUF and
@@ -8734,6 +9363,8 @@ export const EN = {
   'connect.pane.pota.basic': "The POTA/SOTA list isn't available on this screen.",
   'connect.pane.needed.title': 'Needed',
   'connect.pane.needed.basic': "The Needed list isn't available on this screen.",
+  'connect.pane.operators.title': 'Operators',
+  'connect.pane.operators.basic': 'No contest running.',
 
   // Where a snapshot came from. The words are the chip; the freshness is a number.
   'connect.prov.title': 'Data provenance',
@@ -8980,6 +9611,16 @@ export const EN = {
   // place it rather than having it glued on after the fact.
   'aprs.inet.off.label': 'Internet off',
   'aprs.inet.off.detail': 'The APRS-IS feed is switched off.',
+  // The feed is off and the APRS-IS session is up for JS8 alone: its @APRSIS gateway, and its
+  // relay when that is on. `{{relay}}` is the relay sentence below, a WHOLE sentence with its own
+  // leading space, empty when the relay is off.
+  'aprs.inet.js8.label': 'Internet for JS8',
+  'aprs.inet.js8.detail':
+    "This screen's feed is off. APRS-IS is connected for JS8: its @APRSIS gateway sends what JS8 stations address to @APRSIS, under your callsign. Nothing from it is plotted here.{{relay}}",
+  'aprs.inet.js8.connecting':
+    "This screen's feed is off. Connecting to APRS-IS for JS8's @APRSIS gateway, retrying with backoff.{{relay}}",
+  'aprs.inet.js8.relay':
+    "JS8's relay listens on it too, for APRS messages to stations you hear on JS8.",
   'aprs.inet.connecting.label': 'Internet connecting',
   'aprs.inet.connecting.detail':
     'Not connected to APRS-IS yet — retrying with backoff.{{gate}}',
@@ -9253,7 +9894,7 @@ export const EN = {
   'operate.header.layout.classic.title':
     'Classic — WSJT-X layout (Band Activity + Rx Frequency pair, roster aside)',
   'operate.header.layout.roster.label': 'Roster',
-  'operate.header.layout.roster.title': 'Roster — GridTracker layout (Call Roster dominant)',
+  'operate.header.layout.roster.title': 'Roster — Call Roster layout (roster dominant, Band Activity + Rx Frequency aside)',
 
   'operate.header.map.label': 'Map',
   'operate.header.map.title': 'Open the POTA activity map in its own window',
@@ -9461,6 +10102,9 @@ export const EN = {
 
   'operate.decodes.tier.title': 'Decoded by {{tier}}',
   'operate.decodes.utc.title': 'UTC heard',
+  // A received row's time is its period's start, as WSJT-X and ALL.TXT show it; {{time}} is when
+  // the line reached the list (UTC, hhmmss), seconds later for a full-pass decode.
+  'operate.decodes.utc.period.title': 'Start of the period it was heard in (UTC). Arrived at {{time}}.',
   'operate.decodes.dt.title': 'DT — time offset (s); large = clock/sync skew',
   'operate.decodes.dt.title.msk144': 'T — when in the period the ping landed (s)',
   'operate.decodes.marker.lowConf.title': 'Low-confidence decode',
@@ -9529,7 +10173,7 @@ export const EN = {
     'Calling CQ {{dir}} — a DIRECTED call. He is asking for {{dir}} only, so answering from anywhere else will usually be ignored.',
   'operate.roster.state.title': '{{call}} is in {{state}}',
   // The Age column. The unit letter rides inside the message with its number, so a
-  // translation can never separate the two (the Now-Bar's rule, batch 15).
+  // translation can never separate the two (the Now-Bar's rule).
   'operate.roster.age.now': 'now',
   'operate.roster.age.slots': '{{count}} sl',
   'operate.roster.age.minutes': '{{minutes}}m',
@@ -9558,6 +10202,7 @@ export const EN = {
   'operate.tx.next.title': 'Queued as the next transmission',
   'operate.tx.tx5.placeholder': 'Free text',
   'operate.tx.tx5.aria': 'Tx5 free text',
+  'operate.tx.tx5.loggerRefused': "A logger's free text did not go out: {{reason}}",
   'operate.tx.tx6.placeholder': 'CQ call',
   'operate.tx.tx6.aria': 'Tx6 Call CQ (edit for a directed CQ)',
   // The directed-CQ tokens are what goes on the air; they stay as written.
@@ -9611,7 +10256,35 @@ export const EN = {
   'rtty.header.power.title':
     'RF output power — RTTY keys the carrier for the whole over, so most rigs want well under their SSB rating',
   'rtty.header.band.title': "Showing the rig's current band",
-  'rtty.waterfall.hint': 'click nets the decoder',
+  'rtty.waterfall.hint': 'click nets the decoder and your transmit tones',
+  'rtty.waterfall.hint.keyed': 'tuning held while transmitting',
+  'rtty.autoTune.label': 'Auto-tune',
+  'rtty.autoTune.title': 'Net onto the nearest RTTY signal at this shift, near the current tones. This moves the transmit tones too.',
+  'rtty.autoTune.keyed.title': 'Auto-tune is off while transmitting: it would move the transmit tones mid-over',
+  'rtty.autoTune.none': 'Auto-tune: no RTTY signal at this shift near the current tones',
+  'rtty.autoTune.failed': 'Auto-tune could not read the spectrum',
+  'rtty.tag.title': 'Net onto {{call}} at {{hz}} Hz. This moves the transmit tones too.',
+  'rtty.tag.worked.title': '{{call}} at {{hz}} Hz is already in the contest log. Click to net onto it.',
+  'rtty.wf.speed.aria': 'Waterfall speed',
+  'rtty.wf.speed.title': 'A new row every {{ms}} ms',
+  'rtty.wf.speed.fast': 'Fast',
+  'rtty.wf.speed.med': 'Med',
+  'rtty.wf.speed.slow': 'Slow',
+  'rtty.tuning.title': 'Tuning',
+  'rtty.tuning.scope.aria': 'Tuning scope: {{state}}',
+  'rtty.tuning.tuned': 'Tuned',
+  'rtty.tuning.high': 'Signal {{hz}} Hz high',
+  'rtty.tuning.low': 'Signal {{hz}} Hz low',
+  'rtty.tuning.noSignal': 'No signal',
+  'rtty.tuning.disarmed': 'Arm the decoder to tune',
+  'rtty.tuning.keyed': 'Paused while we send',
+  'rtty.tuning.unavailable': 'Not on this link',
+  'rtty.tuning.down.aria': 'Tune down {{hz}} Hz',
+  'rtty.tuning.up.aria': 'Tune up {{hz}} Hz',
+  'rtty.tuning.nudge.title': 'Moves the decoder and the transmit tone together. Hold to repeat.',
+  'rtty.tuning.nudge.keyed': 'Off while transmitting: a nudge also moves the transmit tone.',
+  'rtty.tuning.mark': 'M {{hz}}',
+  'rtty.tuning.mark.title': 'The mark tone the decoder is listening to (Hz)',
 
   // ── RTTY ▸ the decoded-text pane ────────────────────────────────────────────────────
   // The pane's own name is lower-case where the frame prints it and title-case in the ⊞
@@ -9702,6 +10375,7 @@ export const EN = {
   'rtty.macro.empty.label': '(empty)',
   'rtty.macro.empty.title': '{{key}} is empty — click to write a message for it',
   'rtty.macro.edit.aria': 'Edit the {{key}} macro',
+  'rtty.macro.edit.title': 'Edit the {{key}} macro. You can also right-click the key, or press Ctrl+Shift+{{key}}.',
   'rtty.macroEditor.aria': 'Edit {{key}}',
   'rtty.macroEditor.title.label': 'Title',
   'rtty.macroEditor.message.label': 'Message',
@@ -9713,6 +10387,8 @@ export const EN = {
   'rtty.macroEditor.stopTitle': 'A macro transmits, so its title can’t look like a stop button (Stop, Esc, Abort).',
   'rtty.macroEditor.unknownToken': 'Unknown token {{token}} — RTTY can’t send braces, so it would go out as a bare word.',
   'rtty.macroEditor.save': 'Save',
+  'rtty.macroEditor.sendOnce': 'Send once',
+  'rtty.macroEditor.sendOnce.title': 'Send this message now, this once. The key stays as it is.',
   'rtty.macroEditor.cancel': 'Cancel',
   'rtty.macroEditor.resetButton': 'Reset this button',
   'rtty.macroSet.aria': 'Macro set',
@@ -9784,6 +10460,7 @@ export const EN = {
   'psk.macro.empty.label': '(empty)',
   'psk.macro.empty.title': '{{key}} is empty — click to write a message for it',
   'psk.macro.edit.aria': 'Edit the {{key}} macro',
+  'psk.macro.edit.title': 'Edit the {{key}} macro. You can also right-click the key, or press Ctrl+Shift+{{key}}.',
   'psk.macroEditor.aria': 'Edit {{key}}',
   'psk.macroEditor.title.label': 'Title',
   'psk.macroEditor.message.label': 'Message',
@@ -9795,6 +10472,8 @@ export const EN = {
   'psk.macroEditor.stopTitle': 'A macro transmits, so its title can’t look like a stop button (Stop, Esc, Abort).',
   'psk.macroEditor.unknownToken': 'Unknown token {{token}} — it would go out on the air exactly as written.',
   'psk.macroEditor.save': 'Save',
+  'psk.macroEditor.sendOnce': 'Send once',
+  'psk.macroEditor.sendOnce.title': 'Send this message now, this once. The key stays as it is.',
   'psk.macroEditor.cancel': 'Cancel',
   'psk.macroEditor.resetButton': 'Reset this button',
   'psk.macroSet.aria': 'Macro set',
@@ -9889,27 +10568,16 @@ export const EN = {
 
   // ── JS8 ▸ the ⊞ panel labels (the pane heads reuse them) ───────────────────────────────
   'js8.panel.scope': 'Waterfall',
-  'js8.panel.activity': 'Activity',
+  'js8.panel.activity': 'RX',
   'js8.panel.stations': 'Stations',
   'js8.panel.inbox': 'Inbox',
   'js8.panel.log': 'Log',
   'js8.panel.offsets': 'Band activity',
-  'js8.seam.columns.label': 'Activity column / Stations column',
+  'js8.seam.columns.label': 'RX column / Stations column',
   'js8.seam.auxWidth.label': 'Stations column width',
-  'js8.seam.activityOffsets.label': 'Activity / Band activity',
+  'js8.seam.activityOffsets.label': 'RX / Band activity',
   'js8.seam.stationsInbox.label': 'Stations / Inbox',
   'js8.waterfall.splitter.label': 'waterfall height',
-  'js8.panel.activity.title':
-    'Every decoded frame at every enabled speed — E/A/B/C is the speed (Slow/Normal/Fast/Turbo), then offset, SNR and the message. Faint rows are low-confidence copy; italic rows closed without their last frame.',
-  // Appended to the tooltip above rather than folded into it: a translated catalog keeps its
-  // sentence and this one falls back to English, instead of the note going missing wherever the
-  // translation is older than the pane.
-  'js8.panel.activity.differs':
-    'One list, where JS8Call splits two: this is the running transcript, in time order. The Band activity pane holds the same decodes collapsed to one row per offset, with DT.',
-  'js8.panel.activity.empty': 'Listening… frames decoded at every enabled speed print here',
-  'js8.panel.activity.row.title': 'Double-click to write to this station',
-  'js8.panel.offsets.title':
-    'One row per frequency offset in the passband — the newest decode heard there, with its age, SNR, DT (how far off the slot clock the sender is) and speed. Read it to find a clear offset and to see who is in sync.',
   'js8.panel.offsets.empty': 'Listening… each offset in the passband gets a row as it decodes',
   'js8.panel.offsets.row.title': 'Double-click to move RX here',
   'js8.panel.offsets.dt.title': 'DT — the sender’s time delta against the slot clock, in milliseconds. Negative is early.',
@@ -9922,9 +10590,11 @@ export const EN = {
   'js8.header.speed.aria': 'Transmit speed',
   'js8.header.speed.chip.title':
     'Transmit at {{speed}} ({{period}} s periods). Receiving decodes every speed ticked in Settings ▸ Digital ▸ JS8, whatever this is set to.',
+  'js8.header.speed.chip.aliasTitle':
+    'Transmit at {{speed}}, also called {{alias}} ({{period}} s periods). Receiving decodes every speed ticked in Settings ▸ Digital ▸ JS8, whatever this is set to.',
   'js8.header.speed.failed': 'JS8 speed change refused',
   'js8.header.rx.title':
-    'Decoding {{n}} of the 4 speeds at once — choose them in Settings ▸ Digital ▸ JS8',
+    'Decoding {{n}} of the {{total}} speeds at once — choose them in Settings ▸ Digital ▸ JS8',
   'js8.header.band.title': "Showing the rig's current band",
 
   // ── JS8 ▸ the stations pane ──────────────────────────────────────────────────────────
@@ -9934,8 +10604,6 @@ export const EN = {
   'js8.station.sendGrid.title': 'Send your grid square {{grid}} to {{call}}',
   'js8.station.stored': { one: '{{count}} message stored for this station', other: '{{count}} messages stored for this station' },
   'js8.station.unread.title': 'Unread message for you from {{call}}, in the Inbox',
-  'js8.station.pin.title': 'Pin {{call}} to the top of this list',
-  'js8.station.unpin.title': 'Unpin {{call}} — it goes back into the heard order',
   'js8.station.distance.title': 'Great-circle distance to {{grid}}, from your grid square',
   'js8.station.worked.title': 'Worked before — {{count}} in the log, last {{when}}',
   'js8.station.name.title': 'Name from your log',
@@ -9947,12 +10615,27 @@ export const EN = {
   'js8.inbox.state.read': 'read',
   'js8.inbox.state.store': 'held for delivery',
   'js8.inbox.state.delivered': 'delivered',
-  'js8.inbox.read.label': 'Read',
-  'js8.inbox.read.title': 'Mark as read',
-  'js8.inbox.delete.label': 'Delete',
-  'js8.inbox.delete.title': 'Delete this message from the inbox',
   'js8.inbox.failed': 'Inbox change refused',
   'js8.inbox.new': 'New message from {{from}} at {{time}} UTC, in the Inbox',
+
+  // ── JS8 ▸ held messages: "Store message…", and what a cap removed from the inbox ────────
+  'js8.station.store.label': 'Store…',
+  'js8.station.store.title': 'Store a message here for {{call}}: it is held at your station and handed over when {{call}} asks for it',
+  'js8.store.title': 'Store message',
+  'js8.store.label': 'Store this message locally for {{call}}:',
+  'js8.store.aria': 'Message to hold for {{call}}',
+  'js8.store.cancel': 'Cancel',
+  'js8.store.save': 'Store',
+  'js8.store.done': 'Held for {{call}} until they ask for it',
+  'js8.inbox.dropped.chip': 'removed',
+  'js8.inbox.dropped.count.held': 'The inbox holds at most 100 messages for other stations; this one made room for a new one',
+  'js8.inbox.dropped.bytes.held': 'Messages held for other stations may take at most 64 KB; this one made room for a new one',
+  'js8.inbox.dropped.count.mine': 'The inbox keeps at most 100 of your messages; this one made room for a new one',
+  'js8.inbox.dropped.bytes.mine': 'Your messages may take at most 64 KB; this one made room for a new one',
+  'js8.inbox.dropped.clear.label': 'Clear notes',
+  'js8.inbox.dropped.clear.title': 'Clear these notes of messages the inbox removed',
+  'js8.inbox.tooLong.fits': 'Not offered at this speed: handing it over takes {{frames}} frames, one transmission holds {{max}}. Offered at {{speed}}.',
+  'js8.inbox.tooLong.never': 'Not offered: handing it over takes {{frames}} frames, more than one transmission holds at any speed.',
 
   // ── JS8 ▸ the dock: addressee, composer, CQ, HB ──────────────────────────────────────
   'js8.dock.aria': 'JS8 composer',
@@ -9961,14 +10644,99 @@ export const EN = {
   'js8.dock.compose.placeholder': 'Type a message… (Enter queues it; one frame goes out per period)',
   'js8.dock.compose.aria': 'JS8 message',
   'js8.dock.send.label': 'Send',
-  'js8.dock.cq.aria': 'CQ variant',
-  'js8.dock.cq.title': 'Call CQ — a heartbeat frame addressed to @ALLCALL, in the next period',
+  // Typeahead, as JS8Call's: while a message goes out, the box keeps what is still to go and
+  // takes more typing; what has gone sits beside it.
+  'js8.dock.typeahead.sent': 'Sent so far',
+  'js8.dock.typeahead.locked': 'A MSG or relay message cannot be changed while it goes out, as in JS8Call.',
+  // `{{text}}` is the CQ message as it goes out, macros replaced (a protocol token).
+  'js8.dock.cq.send': 'Call CQ in the next period: {{text}}. The CQ message is set in Settings ▸ Digital ▸ JS8.',
+  'js8.dock.cq.fill': 'Put the CQ message in the compose box, and Send sends it: {{text}}. It is set in Settings ▸ Digital ▸ JS8.',
+  // JS8Call's one-click buttons and the Saved menu (Js8ComposeActions). REPLY, SNR, INFO and STATUS
+  // are the mode's own words and are drawn by the dock.
+  'js8.dock.quick.aria': 'One-click messages',
+  'js8.dock.quick.needsCall': 'Put a call in the To box first.',
+  'js8.dock.quick.reply.send': 'Put your reply message to {{call}} in the compose box and send the box.',
+  'js8.dock.quick.reply.fill': 'Put your reply message to {{call}} in the compose box.',
+  'js8.dock.quick.snr.notHeard': 'No report to send: {{call}} has not been heard lately.',
+  'js8.dock.quick.snr.send': 'Put the signal report you hear from {{call}} in the compose box and send the box.',
+  'js8.dock.quick.snr.fill': 'Put the signal report you hear from {{call}} in the compose box.',
+  'js8.dock.quick.info.unset': 'Set INFO in Settings ▸ Digital ▸ JS8 to send it.',
+  'js8.dock.quick.info.send': 'Put your INFO in the compose box and send the box, to the call in the To box or to everyone.',
+  'js8.dock.quick.info.fill': 'Put your INFO in the compose box.',
+  'js8.dock.quick.status.send': 'Put your STATUS in the compose box and send the box, to the call in the To box or to everyone.',
+  'js8.dock.quick.status.fill': 'Put your STATUS in the compose box.',
+  'js8.dock.saved.label': 'Saved',
+  'js8.dock.saved.title.send': 'Saved messages. Pick one to put it in the compose box and send the box, to the call in the To box or to everyone.',
+  'js8.dock.saved.title.fill': 'Saved messages. Pick one to put it in the compose box.',
+  'js8.dock.saved.restore': 'Restore previous message',
+  'js8.dock.saved.none': 'No saved messages',
+  'js8.dock.saved.edit': 'Edit saved messages…',
+  'js8.dock.saved.keep': 'Save current message',
+  // The compose box (Js8ComposeBox): the underline's hover, its right-click menu, and what a pill
+  // says on hover. `{{call}}`, `{{group}}`, `{{to}}`, `{{via}}`, `{{id}}` and `{{grid}}` are tokens.
+  'js8.compose.flag.title': 'The JS8 dictionary sends this word in pieces. Right-click it for cheaper words.',
+  'js8.compose.suggest.aria': 'Cheaper words',
+  'js8.compose.suggest.asking': 'Looking it up…',
+  'js8.compose.suggest.none': 'No suggestions',
+  'js8.pill.sender': 'From {{call}}',
+  'js8.pill.recipient': 'To {{call}}',
+  'js8.pill.group': 'To the group {{group}}',
+  'js8.pill.relay.to': 'Relayed to {{to}}',
+  'js8.pill.relay.via': 'Relayed through {{via}} to {{to}}',
+  'js8.pill.withArg': '{{what}}: {{arg}}',
+  'js8.pill.toBox': '{{what}}. To {{call}}, the call in the To box.',
+  'js8.pill.arg.call': 'station {{call}}',
+  'js8.pill.arg.callMissing': 'the callsign is missing',
+  'js8.pill.arg.id': 'message {{id}}',
+  'js8.pill.arg.idMissing': 'the message number is missing',
+  'js8.pill.arg.grid': 'locator {{grid}}',
+  'js8.pill.arg.gridMissing': 'the locator is missing',
+  'js8.pill.cmd.agnQ': 'Asks them to send the last message again',
+  'js8.pill.cmd.qslQ': 'Asks whether they received it',
+  'js8.pill.cmd.hwCpyQ': 'Asks how they copy you',
+  'js8.pill.cmd.snrQ': 'Asks for your signal report',
+  'js8.pill.cmd.infoQ': 'Asks for their station information',
+  'js8.pill.cmd.gridQ': 'Asks for their locator',
+  'js8.pill.cmd.statusQ': 'Asks for their status',
+  'js8.pill.cmd.queryMsgs': 'Asks whether they hold messages for you',
+  'js8.pill.cmd.hearingQ': 'Asks which stations they hear',
+  'js8.pill.cmd.msgTo': 'Leaves a message for a station to collect later',
+  'js8.pill.cmd.heartbeatSnr': 'A signal report for a heartbeat',
+  'js8.pill.cmd.queryCall': 'Asks whether they can reach a station',
+  'js8.pill.cmd.queryMsg': 'Asks for a message they hold',
+  'js8.pill.cmd.query': 'A query',
+  'js8.pill.cmd.ditDit': 'Two dits, a casual goodbye',
+  'js8.pill.cmd.status': 'Your status',
+  'js8.pill.cmd.hearing': 'The stations you hear',
+  'js8.pill.cmd.cmd': 'A command',
+  'js8.pill.cmd.msg': 'A message, checked on arrival so it is read whole',
+  'js8.pill.cmd.nack': 'Not received',
+  'js8.pill.cmd.ack': 'Received',
+  'js8.pill.cmd.snr': 'A signal report',
+  'js8.pill.cmd.qsl': 'Confirms you received it',
+  'js8.pill.cmd.info': 'Your station information',
+  'js8.pill.cmd.grid': 'Your locator',
+  'js8.pill.cmd.seventyThree': 'Best regards, the end of a contact',
+  'js8.pill.cmd.yes': 'Yes',
+  'js8.pill.cmd.no': 'No',
+  'js8.pill.cmd.rr': 'Roger, received',
+  'js8.pill.cmd.sk': 'Signing off',
+  'js8.pill.cmd.fb': 'Fine business',
+  'js8.pill.cmd.cq': 'A CQ to any station',
+  'js8.pill.cmd.cqContest': 'A CQ for contest stations',
+  'js8.pill.cmd.cqField': 'A CQ for Field Day stations',
+  'js8.pill.cmd.cqDx': 'A CQ for DX stations',
+  'js8.pill.cmd.cqQrp': 'A CQ at low power',
+  'js8.pill.cmd.hb': 'A heartbeat: you are on the air',
+  'js8.pill.cmd.other': 'A command',
   'js8.dock.cqRepeat.title.off':
     'Repeating CQ is off. Click to call CQ every {{min}} min until someone answers — the button counts down to the next one. It keys only while TX is on, and it is never remembered across launches.',
   'js8.dock.cqRepeat.title.on':
     'Repeating CQ is on, but TX is off — nothing keys. Enable TX (the header pill) to let the CQs go out.',
   'js8.dock.cqRepeat.title.armed':
     'Calling CQ every {{min}} min, on your TX offset. Stops on its own when a station answers you, or at the idle watchdog. Click to stop the schedule — a CQ already on the air finishes; Stop TX cuts it.',
+  'js8.dock.cqRepeat.notArmed.unscheduled':
+    'Repeating CQ is on, but no CQ is scheduled: the interval was 0 when the last one went. Turn it off and on to call again.',
   'js8.dock.repeat.now': 'now',
   'js8.dock.hb.title.off':
     'Heartbeat schedule is off. Click to send a heartbeat every period’s interval (Settings ▸ Digital ▸ JS8) — it keys only while TX is on, and it is never remembered across launches.',
@@ -9976,6 +10744,31 @@ export const EN = {
     'Heartbeat schedule is on, but TX is off — nothing keys. Enable TX (the header pill) to let heartbeats go out.',
   'js8.dock.hb.title.armed':
     'Heartbeats are going out on schedule, on a random free slot between 500 and 1000 Hz. Click to stop the schedule.',
+  'js8.dock.hb.notArmed.unscheduled':
+    'HB is on, but no heartbeat of yours is scheduled: with the interval at 0 (Settings ▸ Digital ▸ JS8), HB sends one when it is turned on, and that one has gone. Turn HB off and on, or use Send heartbeat now on its menu, for another.',
+  // ── JS8 ▸ the dock: heartbeat networking (HB NET), HB's menu, the QSO pause (JS8Call 3.0.3) ──
+  'js8.dock.hb.paused':
+    'The heartbeat repeat is paused while a call is in the To box (the QSO pause, Settings ▸ Digital ▸ JS8). Clear the To box and it starts again, its first heartbeat one interval later.',
+  'js8.dock.hb.menu.aria': 'Heartbeat menu',
+  'js8.dock.hb.menu.title': 'Heartbeat menu: send one now, or start or stop the repeat. Right-clicking HB opens it too.',
+  'js8.dock.hb.menu.start': 'Start heartbeat timer',
+  'js8.dock.hb.menu.stop': 'Stop heartbeat timer',
+  'js8.dock.hb.menu.now': 'Send heartbeat now',
+  'js8.dock.hbNet.title.off':
+    'Heartbeat networking is off, as JS8Call ships it: no HB button, no heartbeats and no heartbeat acknowledgements. Click to turn it on (remembered). It sends nothing by itself.',
+  'js8.dock.hbNet.title.on':
+    'Heartbeat networking is on: HB sends your heartbeats, and HB ACK may answer the heartbeats you hear. Click to turn it off (remembered); a running heartbeat repeat stops.',
+  'js8.dock.hbNet.title.speed':
+    'No heartbeats at {{speed}}: JS8Call sends heartbeats and their acknowledgements only at Slow, Normal and Fast. HB is hidden until you change speed, and this switch keeps its setting.',
+  'js8.dock.hbAck.suppressed.speed':
+    'Heartbeat acknowledgements are on, but none goes out at {{speed}}: JS8Call answers heartbeats only at Slow, Normal and Fast.',
+  'js8.dock.hbAck.suppressed.arriving':
+    'Heartbeat acknowledgements are on, but held back now: a message is still arriving, as in JS8Call.',
+  'js8.dock.hbAck.suppressed.qsoPause':
+    'Heartbeat acknowledgements are on, but held back now: a call is in the To box (the QSO pause, Settings ▸ Digital ▸ JS8). Clear the To box to answer heartbeats again.',
+  'js8.dock.hbAck.rateBlocked':
+    'Not answering these stations, which heartbeat more often than every 55 minutes: {{calls}}.',
+  'js8.toast.hb.failed': 'Heartbeat not sent',
 
   // ── JS8 ▸ the dock: command palette, the estimate, the second-act chips, pending, queue ──
   'js8.dock.cmd.aria': 'Directed command',
@@ -9997,16 +10790,26 @@ export const EN = {
     'Relay is on, but TX is off — nothing keys. Enable TX (the header pill) to relay.',
   'js8.dock.relay.title.armed':
     'Relay is ARMED: a > message routed through you is retransmitted with *DE* your call, and the final hop is acknowledged. With Auto-reply off, it is put in the message box for you to send instead. Click to turn it off.',
+  'js8.dock.relay.notArmed.needsAuto':
+    'Relay is on, but with AUTOREPLY off a relay is put in the message box for you to send, and nothing keys by itself. Turn AUTOREPLY on to relay on the air.',
   'js8.dock.hbAck.title.off':
     'Heartbeat acknowledgements are off (JS8Call’s default). Click to answer heartbeats with HEARTBEAT SNR (remembered). Answers only while TX is on.',
   'js8.dock.hbAck.title.on':
     'Heartbeat acknowledgements are on, but TX is off — nothing keys. Enable TX (the header pill).',
   'js8.dock.hbAck.title.armed':
     'Heartbeat acknowledgements are ARMED: each heartbeat heard is answered with HEARTBEAT SNR on a random free slot. Click to turn it off.',
+  'js8.dock.hbAck.notArmed.needsHb':
+    'Heartbeat acknowledgements are on, but they answer only while heartbeat networking (HB NET) is on, as in JS8Call. HB NET sends nothing by itself.',
+  'js8.dock.hbAck.notArmed.needsAuto':
+    'Heartbeat acknowledgements are on, but they answer only while AUTOREPLY is on, as in JS8Call. Turn AUTOREPLY on.',
+  'js8.dock.hbAck.notArmed.needsHbAndAuto':
+    'Heartbeat acknowledgements are on, but they answer only while heartbeat networking (HB NET) and AUTOREPLY are both on, as in JS8Call. HB NET sends nothing by itself.',
   // Appended to all three faces of the three arm chips (the reason it is its own key rather
   // than nine edits is the same as js8.panel.activity.differs).
   'js8.dock.arm.differs':
     'Two acts, where JS8Call has one: this switch is the second, the header’s TX pill is the first, and the chip reads ARMED only while both are on.',
+  'js8.dock.notArmed.idle':
+    'Not armed: nothing from you for {{min}} min, so the idle watchdog holds it. Your next send, switch, speed choice, or Read or Delete in the Inbox brings it back.',
   'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
   'js8.toast.idleTripped':
     'JS8 idle watchdog: no operator activity for {{min}} min — HB, AUTOREPLY, RELAY, HB ACK and the repeating CQ are off. TX stays as you left it. Your next send, switch, speed choice, or Read or Delete in the Inbox brings back AUTOREPLY, RELAY and HB ACK as Settings has them; HB and the repeating CQ stay off until you switch them on.',
@@ -10026,6 +10829,7 @@ export const EN = {
   'js8.dock.origin.autoReply': 'auto-reply',
   'js8.dock.origin.relay': 'relay',
   'js8.dock.origin.cqRepeat': 'repeating CQ',
+  'js8.dock.origin.aprsRelay': 'APRS relay',
   'js8.dock.idle': 'Idle {{min}}/{{limit}} min',
   'js8.dock.idle.off': 'Idle watchdog off',
   'js8.dock.idle.tripped':
@@ -10033,6 +10837,8 @@ export const EN = {
 
   // ── JS8 ▸ the toasts ─────────────────────────────────────────────────────────────────
   'js8.toast.noCallsign': 'Set your callsign in Settings before transmitting',
+  'js8.toast.savedMessage': 'Added to the saved messages: {{text}}',
+  'js8.toast.savedMessage.failed': 'The message could not be saved',
   'js8.toast.txLocked': 'TX locked — this frequency is outside your license privileges',
   'js8.toast.send.failed': 'JS8 send refused',
   'js8.toast.cq.failed': 'JS8 CQ refused',
@@ -10041,6 +10847,108 @@ export const EN = {
   'js8.toast.noAddressee': 'A command needs a station — put a callsign, @ALLCALL or a group in To',
   'js8.toast.answer.failed': 'Could not answer the question',
   'js8.toast.drop.failed': 'Could not drop the queue',
+
+  // ── JS8 ▸ the lists, views and the Inbox, as JS8Call 3.0.3 has them ─────────────────────
+  'js8.rx.title':
+    'What JS8Call shows in its RX pane: the traffic on your RX offset and what is addressed to you or your groups, each message on one line as its frames arrive, the end mark after its last frame and the missing-frame mark where one did not come. Every frame of every offset is in Band activity.',
+  'js8.rx.empty': 'Listening… what is sent on your RX offset, and what is addressed to you, prints here',
+  'js8.rx.line.title': 'Double-click to write to {{call}}',
+  'js8.band.title':
+    'One row per frequency offset in the passband, holding the frames heard there with the end mark after each message: its age, SNR, time delta and speed come from the newest. Read it to find a clear offset and to see who is in sync. Columns and order are in ⋯.',
+  'js8.band.col.text': 'Message(s)',
+  'js8.band.rowMenu.aria': 'Menu for {{offset}} Hz',
+  'js8.col.offset': 'Offset',
+  'js8.col.age': 'Age',
+  'js8.col.snr': 'SNR',
+  'js8.col.tdrift': 'Time delta',
+  'js8.col.speed': 'Speed',
+  'js8.calls.col.mark': 'Mark',
+  'js8.calls.col.callsign': { one: 'Callsign ({{count}})', other: 'Callsigns ({{count}})' },
+  'js8.calls.col.grid': 'Grid',
+  'js8.calls.col.distance': 'Distance',
+  'js8.calls.col.azimuth': '°',
+  'js8.calls.col.log': '✓',
+  'js8.calls.col.logName': 'Name',
+  'js8.calls.col.logComment': 'Comment',
+  'js8.calls.col.actions': 'Quick asks',
+  'js8.calls.col.menu': 'Menu',
+  'js8.calls.rowMenu.aria': 'Menu for {{call}}',
+  'js8.calls.mark.blocked': 'Blocked: messages from this station are hidden in the RX pane (Settings ▸ JS8)',
+  'js8.calls.mark.ack': 'Hearing your station ({{since}} ago)',
+  'js8.calls.mark.cq': 'Calling CQ ({{since}} ago)',
+  'js8.calls.mark.relay': 'Heard through a relay ({{through}})',
+  'js8.calls.mark.groupMessage': 'Unread message for {{group}}, in the Inbox',
+  'js8.calls.add.title': 'Add a station or group',
+  'js8.calls.add.label': 'Station or group callsign',
+  'js8.calls.add.ok': 'Add',
+  'js8.calls.add.cancel': 'Cancel',
+  'js8.calls.add.notCall': '{{name}} is not a valid callsign or group',
+  'js8.calls.add.notGroup': '{{name}} is not a valid group',
+  'js8.view.menu.aria': '{{pane}} options',
+  'js8.view.sortBy': 'Sort by',
+  'js8.view.showColumns': 'Show columns',
+  'js8.view.labels': 'Show column labels',
+  'js8.view.showHb': 'Show band heartbeats and ACKs',
+  'js8.view.sort.offset': 'Frequency offset',
+  'js8.view.sort.timestamp': 'Last heard (oldest first)',
+  'js8.view.sort.timestampRecent': 'Last heard (recent first)',
+  'js8.view.sort.snr': 'SNR (weakest first)',
+  'js8.view.sort.snrStrong': 'SNR (strongest first)',
+  'js8.view.sort.submode': 'Speed (slowest first)',
+  'js8.view.sort.submodeFast': 'Speed (fastest first)',
+  'js8.view.sort.callsign': 'Callsign',
+  'js8.view.sort.ackTimestamp': 'Hearing you (recent first)',
+  'js8.view.sort.distance': 'Distance (closest first)',
+  'js8.view.sort.distanceFar': 'Distance (farthest first)',
+  'js8.view.sort.azimuth': 'Azimuth',
+  'js8.view.col.offset': 'Frequency offset',
+  'js8.view.col.timestamp': 'Last heard',
+  'js8.view.col.snr': 'SNR',
+  'js8.view.col.tdrift': 'Time delta',
+  'js8.view.col.submode': 'Speed',
+  'js8.view.col.callsign': 'Callsign',
+  'js8.view.col.grid': 'Grid',
+  'js8.view.col.distance': 'Distance',
+  'js8.view.col.azimuth': 'Azimuth',
+  'js8.view.col.log': 'Worked before',
+  'js8.view.col.logName': 'Logged name',
+  'js8.view.col.logComment': 'Logged comment',
+  'js8.lists.clear': 'Clear',
+  'js8.lists.clearAll': 'Clear all lists…',
+  'js8.lists.clearAll.confirm.title': 'Clear all JS8 activity?',
+  'js8.lists.clearAll.confirm.body':
+    'The RX pane, Band activity and the call list start empty and fill again as stations are heard. Your Inbox, your settings and the station’s own record of who it heard are kept.',
+  'js8.lists.clearAll.confirm.label': 'Clear all lists',
+  'js8.lists.jumpOffset': 'Jump to {{offset}} Hz',
+  'js8.lists.jumpSpeed': 'Jump to {{speed}} speed',
+  'js8.lists.removeActivity': 'Remove activity',
+  'js8.lists.showInbox': 'Show message inbox',
+  'js8.lists.pin': 'Pin to the top',
+  'js8.lists.unpin': 'Unpin',
+  'js8.lists.add': 'Add new station or group…',
+  'js8.lists.removeStation': 'Remove this station',
+  'js8.lists.removeGroup': 'Remove this group',
+  'js8.lists.block': 'Block this station',
+  'js8.lists.unblock': 'Unblock this station',
+  'js8.lists.saveFailed': 'The JS8 list was not saved',
+  'js8.inbox.new.open': 'Show',
+  'js8.inbox.toolbar.aria': 'Inbox',
+  'js8.inbox.filter.label': 'Messages:',
+  'js8.inbox.filter.all': 'All',
+  'js8.inbox.reply.label': 'Reply',
+  'js8.inbox.reply.title':
+    'Put the path the message came by, MSG and [MESSAGE] in the compose box, as JS8Call does: type your message over [MESSAGE] and send it. Nothing is sent yet.',
+  'js8.inbox.deleteSelected.label': { one: 'Delete', other: 'Delete {{count}}' },
+  'js8.inbox.deleteSelected.title': 'Delete the ticked messages (or press Delete)',
+  'js8.inbox.sort.title': 'Sort by {{column}} (again to reverse)',
+  'js8.inbox.col.pick': 'Pick',
+  'js8.inbox.col.unread': 'Unread',
+  'js8.inbox.col.id': 'ID',
+  'js8.inbox.col.time': 'Time',
+  'js8.inbox.col.from': 'From',
+  'js8.inbox.col.to': 'To',
+  'js8.inbox.col.text': 'Message',
+  'js8.inbox.pick.aria': 'Pick the message from {{from}} at {{time}}',
 
   // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
   // Positive identification only: an unrecognised header falls through to the decoder, so
@@ -10159,7 +11067,7 @@ export const EN = {
   'sstv.tx.overlay.text.aria': 'Overlay text',
   'sstv.tx.overlay.style.aria': 'Text style',
   'sstv.tx.overlay.style.title':
-    "Crisp: the ident's pixel font, proven through the decoder. Banner: big display text with an outline, MMSSTV-style.",
+    "Crisp: the ident's pixel font, proven through the decoder. Banner: big display text with an outline.",
   'sstv.tx.overlay.style.crisp': 'Crisp',
   'sstv.tx.overlay.style.banner': 'Banner',
   'sstv.tx.overlay.size.aria': 'Text size',
@@ -10310,12 +11218,14 @@ export const EN = {
   'cw.panel.scopeCtl': 'Scope Controls',
   'cw.panel.dsp': 'DSP Toggles',
   'cw.panel.txmeters': 'TX Meters',
+  'cw.panel.turnCue': 'Turn Cue',
+  'cw.panel.turnCue.note': 'shows with the AI decoder on and the CW Decode pane shown, outside an unassisted entry',
   'cw.panel.rxdsp': 'RX DSP Levels',
   'cw.panel.bandActivity': 'Band Activity',
   'cw.panel.copilot': 'CW Copilot',
   'cw.panel.decode': 'CW Decode',
   'cw.panel.sent': 'Sent Echo',
-  // Phone's two feeds (#345) in CW (plan H8), named as the views they come from, as in Phone.
+  // Phone's two feeds (#345) in CW, named as the views they come from, as in Phone.
   'cw.panel.spots': 'Spots',
   'cw.panel.needed': 'Needed',
   'cw.pane.decode.title': 'Decode',
@@ -10346,7 +11256,7 @@ export const EN = {
   // routed and the drive over ALC, so it is operating information, not chrome.
   'cw.keyer.cat.title': 'CAT keyer — the rig generates CW (rig in CW). Zero extra hardware.',
   'cw.keyer.serial.title':
-    "Serial keyline — Nexus toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal). The clean N1MM/fldigi method for rigs without CAT CW. Set the keyline port + line in Settings ▸ CW.",
+    "Serial keyline — Nexus toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal). The clean method for rigs without CAT CW. Set the keyline port + line in Settings ▸ CW.",
   'cw.keyer.winkeyer.title':
     'K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings ▸ CW.',
   'cw.keyer.soundcard.title':
@@ -10374,6 +11284,7 @@ export const EN = {
   'cw.record.stop.aria': 'Stop recording this QSO',
   'cw.record.off.title': 'Record the received audio to a WAV in the recordings folder',
   'cw.record.on.title': 'Recording — click to stop recording this QSO',
+  'cw.paddleTookOver': 'Your paddle took over: Nexus stopped its message.',
   'cw.record.startFailed': 'Could not start recording',
   'cw.record.stopFailed': 'Could not stop recording',
 
@@ -10456,6 +11367,8 @@ export const EN = {
     'Live CW decode — the AI (neural-net) decoder reads the whole {{window}} Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder.',
   'cw.decode.log.aria': 'Decoded CW',
   'cw.decode.listening': 'listening…',
+  // In place of the copy while an unassisted contest entry is declared. `CQ WW` is the contest's name.
+  'cw.decode.unassisted': 'Unassisted entry: the CW decoder is off. CQ WW counts it as assistance.',
   'cw.sent.title': "What you've transmitted (F-key macros expanded to the real text)",
 
   // ── CW ▸ the copilot chips ──────────────────────────────────────────────────────────
@@ -10477,12 +11390,80 @@ export const EN = {
   'cw.macro.myCall.label': 'My Call',
   'cw.macro.hisCall.label': 'His Call',
   'cw.macro.spExch.label': 'S&P exch',
+  'cw.macro.empty.label': '(empty)',
+  'cw.macro.empty.title': '{{key}} is empty. Click to write a message for it.',
+  'cw.macro.edit.aria': 'Edit the {{key}} macro',
+  'cw.macro.edit.title': 'Edit the {{key}} macro. You can also right-click the key, or press Ctrl+Shift+{{key}}.',
+  'cw.macroEditor.aria': 'Edit {{key}}',
+  'cw.macroEditor.title.label': 'Title',
+  'cw.macroEditor.message.label': 'Message',
+  'cw.macroEditor.tokens.aria': 'Insert a token',
+  'cw.macroEditor.token.mycall': 'Your callsign',
+  'cw.macroEditor.token.call': 'Their callsign: the station you are working',
+  'cw.macroEditor.token.rst': 'The signal report, sent as 5NN',
+  'cw.macroEditor.token.exch': 'Your contest exchange, without the report (with the serial, where the contest has one)',
+  'cw.macroEditor.token.name': 'Your name, from Settings ▸ Station',
+  'cw.macroEditor.token.hisname': 'Their name, from the callbook lookup',
+  'cw.macroEditor.stopTitle': 'A macro transmits, so its title can’t look like a stop button (Stop, Esc, Abort).',
+  'cw.macroEditor.unknownToken': 'Unknown token {{token}}. The keyer skips braces, so it would go out as a bare word.',
+  'cw.macroEditor.save': 'Save',
+  'cw.macroEditor.sendOnce': 'Send once',
+  'cw.macroEditor.sendOnce.title': 'Send this message now, this once. The key stays as it is.',
+  'cw.macroEditor.cancel': 'Cancel',
+  'cw.macroEditor.resetButton': 'Reset this button',
+  'cw.macros.saveFailed': 'Could not save the CW macro',
   'cw.compose.placeholder': 'Type CW to send… (Enter)',
   'cw.hisCall.label': 'His call',
   'cw.hisCall.title': 'The station you are working. The ! in a macro sends this call. A decoded call fills it in; type over it to answer someone else, then press Enter or a macro key.',
   'cw.compose.send.label': 'Send',
   'cw.send.txLocked': 'TX locked — this frequency is outside your license privileges',
   'cw.send.failed': 'CW send failed',
+  'cw.speedMatch.label': 'CW speed match',
+  'cw.speedMatch.short': 'Match WPM',
+  'cw.speedMatch.title': 'CW speed match: an answer to a station (your call, your exchange) is sent at the speed Nexus measured for that station, within the slowest and fastest set in Settings ▸ CW. A CQ is sent at your own speed, and so is everything once the answer has gone. Without a recent measurement of the station you are working, your own speed.',
+  'cw.speedMatch.failed': 'CW speed match was not saved, so the switch is as it was.',
+  'cw.turn.title': "Whose turn it is, read from the decoder's copy. It never sends: you press the key.",
+  'cw.turn.suggested': 'Suggested now',
+  'cw.turn.key.enter': 'Enter',
+  'cw.turn.idle': 'Listening',
+  'cw.turn.theySend': '{{call}} sending',
+  'cw.turn.theySend.bare': 'Station sending',
+  'cw.turn.finishing': '{{call}} finishing…',
+  'cw.turn.finishing.bare': 'Finishing…',
+  'cw.turn.yourTurn': 'Your turn · {{key}}',
+  'cw.turn.yourTurn.bare': 'Your turn',
+  'cw.turn.type': 'Your turn · type',
+  'cw.turn.partial': 'Probably you · {{key}} once',
+  'cw.turn.partial.bare': 'Probably you',
+  'cw.turn.hold': 'Hold · {{call}}',
+  'cw.turn.hold.bare': 'Hold',
+  'cw.turn.splitOff': 'UP · split off',
+  'cw.turn.unsure': 'Not sure · {{key}}',
+  'cw.turn.unsure.bare': 'Not sure',
+  'cw.turn.youSend': "You're sending",
+  'cw.turn.listen': 'Listening for a reply',
+  'cw.turn.late': 'They may go on · listen',
+  'cw.turn.closing': '73 · log it',
+  'cw.turn.closing.bare': 'Log it',
+  'cw.turn.noReply': 'No reply · {{key}}',
+  'cw.turn.noReply.bare': 'No reply',
+  'cw.turn.fiveNnTu': 'Your turn · send 5NN TU',
+  'cw.turn.fiveNnTu.title': 'Send 5NN TU. The Reply key would send a whole ragchew over.',
+  'cw.turn.say.yourTurn': 'Your turn: {{key}}.',
+  'cw.turn.say.yourTurn.bare': 'Your turn.',
+  'cw.turn.say.fiveNnTu': 'Your turn: send 5NN TU.',
+  'cw.turn.say.hold': "Hold: it is {{call}}'s turn.",
+  'cw.turn.say.hold.bare': 'Hold.',
+  'cw.turn.say.splitOff': 'Hold: they listen up, and split is off.',
+  'cw.turn.say.unsure': 'Not sure whose turn it is.',
+  'cw.turn.say.noReply': 'No reply.',
+  'cw.turn.say.closing': 'They are signing.',
+  'cw.pace.label': 'them {{them}} · you {{you}}',
+  'cw.pace.title': 'Their speed beside yours. Click to send at {{them}} WPM for this contact; your saved speed stays as it is.',
+  'settings.cw.speedMatch.label': 'Answer at the station’s speed',
+  'settings.cw.speedMatch.hint': 'CW speed match: a message answering a station is sent at the speed the decoder measured for it, held between the two speeds below. A CQ, and everything after the answer, goes at your own speed. Off by default; the contest strip has the same switch.',
+  'settings.cw.speedMatch.min.label': 'Speed match: slowest (WPM)',
+  'settings.cw.speedMatch.max.label': 'Speed match: fastest (WPM)',
 
   // ══════════════════════════════════════════════════════════════════════════════════════
   // PHONE — the voice cockpit and the voice keyer pane inside it.
@@ -10567,6 +11548,8 @@ export const EN = {
   'phone.sub.unconfirmed': 'Not confirmed for the sub receiver: {{plates}}',
   'phone.sub.setNotRead': 'Set from Nexus — the radio does not report the sub receiver’s levels back.',
   'phone.sub.failed': 'Nexus could not set the sub receiver’s {{plate}}.',
+  'phone.chain.failed': 'Nexus could not set {{plate}}.',
+  'phone.monitor.failed': 'Nexus could not set the monitor level.',
   'phone.chain.receiver.aria': 'Receiver chain — what you are hearing',
   'phone.chain.transmitter.aria': 'Transmitter chain — how your voice goes out',
   // ── THE FRONT-END PADS AND THE TX MONITOR (2026-09-22) ──────────────────────────────
@@ -10647,6 +11630,9 @@ export const EN = {
   'phone.mode.auto.title':
     'AUTO — sideband by band (now {{sideband}}); a band change re-asserts this',
   'phone.mode.force.title': 'Force {{mode}} until you change bands',
+  // The tooltip on the greyed LSB, AM and FM buttons on 60 m, where a US licence allows upper
+  // sideband only. "USB" is a mode name.
+  'phone.mode.usbOnly': '60 m allows only USB phone',
   'phone.mode.failed': 'Could not set mode',
   'phone.header.power.label': 'Power',
   'phone.header.power.title': 'RF output power',
@@ -10722,8 +11708,14 @@ export const EN = {
   // The BUTTON stays written in the cockpit (it is the stop-line census); these are the
   // toasts it raises, and a toast is neither a control nor anything a sweep can see.
   'phone.tx.locked': 'TX locked — this frequency/mode is outside your license privileges',
+  // …when the phone MODE is the whole reason: LSB, AM or FM on 60 m, where USB would key.
+  // "USB" and "AUTO" are the mode buttons' own names.
+  'phone.tx.usbOnly': 'TX locked — 60 m allows only USB phone. Pick USB or AUTO.',
   'phone.tx.turnedBackOn': 'TX was off — turned it back on. Press PTT again to talk.',
   'phone.tx.remoteLock': 'Lock (hands-free PTT) does not work over Remote. Untick Lock, then hold PTT or the Space bar to talk.',
+  // Lock from a computer driving a station: asked shortly before its time limit, and the answer.
+  'phone.lock.stillTalking': 'Still talking? Lock ends in {{seconds}} s.',
+  'phone.lock.keepTalking': 'Keep talking (K)',
   'phone.tx.clockRepair':
     'Not keyed: a clock repair is running, and nothing starts transmitting until it finishes (two minutes at most).',
 
@@ -10848,8 +11840,6 @@ export const EN = {
   // NAME THE CONTROL THAT IS ON THIS SCREEN: Phone shows no Enable-Tx button, so PTT is the
   // switch when TX is off.
   'phone.keyer.txOff': 'TX is off — click PTT once to turn it back on, then play the message',
-  'phone.keyer.radioHasMic':
-    'The voice keyer can\'t play while the radio has the mic: with Flex native DAX audio on, Phone at the shack uses the radio\'s own mic, so a recorded message would not go out. Nothing was keyed.',
   'phone.keyer.playFailed': 'Could not play F{{slot}}',
   'phone.keyer.recordFailed': 'Could not start recording',
   'phone.keyer.saveFailed': 'Could not save recording',
@@ -10857,6 +11847,10 @@ export const EN = {
   'phone.keyer.importFailed': 'Could not import the WAV',
   'phone.keyer.imported': 'Imported F{{slot}} ({{label}})',
   'phone.keyer.clearFailed': 'Could not clear the slot',
+  // A Delete waits out an Undo window before the recording is really gone.
+  'phone.keyer.deleted': 'Deleted F{{slot}} ({{label}})',
+  'phone.keyer.undo': 'Undo',
+  'phone.keyer.restored': 'Restored F{{slot}} ({{label}})',
   // What the pane says AFTER its teardown acted, for the operator who walked off the Phone
   // screen and never opened the ⊞ menu. Both are conditional on what actually happened.
   'phone.keyer.hide.stoppedOver':
@@ -10949,19 +11943,32 @@ export const EN = {
   // nothing feeds once it is off. `{{mode}}` is the radio's own mode word (DIGU), as data.
   'shell.lane.slotKeyRefused.flex.daxUnfed':
     'Nexus did not key the {{mode}} over at {{time}} UTC: Flex native DAX audio is off, but the radio was still taking its transmit audio from DAX, as Nexus had set it, and nothing feeds DAX now. Nothing was sent and TX was turned off. Nexus puts the radio back on its mic input within a moment; then turn TX on again.',
+  // Nexus kept the key off the air itself because the sound card's transmit audio output would not
+  // open: the radio refused nothing, so the PTT and CAT advice would be wrong. `{{why}}` is the
+  // sound card's own error, as data.
+  'shell.lane.slotKeyRefused.txAudio':
+    'Nexus did not key the radio at {{time}} UTC because the transmit audio output would not open ({{why}}). Nothing was sent and TX was turned off. Check Output Device (TX) in Settings (another program may be holding it, or it is unplugged), then turn TX on again.',
   // The radio did not accept the unkey that ended a slot over: the station halted TX the same way,
   // keeps sending the unkey until the radio takes it, and the lane keeps this until TX is turned on
   // again. `{{why}}` is the radio's own answer, as data.
   'shell.lane.slotUnkeyFailed.message': 'PTT OFF FAILED — TX STOPPED',
   'shell.lane.slotUnkeyFailed.detail':
     'The radio did not accept PTT off at {{time}} UTC ({{why}}), so TX was turned off. It may still be transmitting: check the radio now. Nexus keeps sending PTT off until the radio accepts it. Turn TX on again once the radio is receiving.',
-  // A slot over whose audio stopped reaching the radio part way through (Flex native DAX audio went
-  // off under it, or its DAX transmit route went): the station ended it there rather than leave the
-  // radio keyed and silent for the rest of it, and halted TX; the lane keeps this until TX is turned
-  // on again.
+  // A slot over whose audio stopped reaching the radio part way through (the route carrying it
+  // went: Flex native DAX audio, or Nexus's transmit audio over TCI): the station ended it there
+  // rather than leave the radio keyed and silent for the rest of it, and halted TX; the lane keeps
+  // this until TX is turned on again.
   'shell.lane.slotAudioLost.message': 'OVER ENDED — TX STOPPED',
   'shell.lane.slotAudioLost.detail':
-    'Flex native DAX audio went off at {{time}} UTC in the middle of an over, so the rest of that over would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.',
+    "The route carrying an over's audio to the radio (Flex DAX or TCI) stopped at {{time}} UTC in the middle of the over, so the rest of it would have gone out silent. Nexus ended the over there and turned TX off. Turn TX on again to carry on.",
+  // An FT8 or FT4 over the radio keyed only after this station's period had ended, in the other
+  // station's (a slow CAT link: Split operation's commands before the key, and the key itself): Nexus
+  // unkeyed it at once, sent nothing and left TX on for the next over, as WSJT-X does. A warning, in
+  // a lane of its own: the radio refused nothing and TX did not stop. `{{late}}` is how long after
+  // the period's end ("1.2 s"), as data. The lane goes with the next over that keys in time.
+  'shell.lane.slotOverDropped.message': 'OVER DROPPED — RADIO KEYED LATE',
+  'shell.lane.slotOverDropped.detail':
+    'This over was dropped: the radio keyed only at {{time}} UTC, {{late}} after your period had ended (slow CAT), so Nexus unkeyed it at once and sent nothing, and left TX on for your next over. Split operation sends the radio its commands before each key, which on a slow CAT link can take seconds: if this keeps happening, check the CAT link and Split operation in Settings.',
   // The operator's PTT press that Nexus's own Flex client kept off the air: right after a digital
   // mode, or native audio going off, the radio still took its transmit audio from the DAX Nexus had
   // set, not the mic, so the voice would not have gone out. TX stays on; the next press answers anew.
@@ -10969,6 +11976,15 @@ export const EN = {
   'shell.lane.pttRefused.message': 'PTT REFUSED',
   'shell.lane.pttRefused.detail':
     'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
+  // A voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone at the
+  // shack, native audio on): the radio did not switch its transmit audio to DAX within 2 seconds,
+  // or something else keyed it first. Never played later; the next message the keyer accepts
+  // clears it.
+  'shell.lane.voiceDropped.message': 'VOICE MESSAGE DROPPED',
+  'shell.lane.voiceDropped.noDax':
+    'Nexus did not play the voice message at {{time}} UTC: the radio did not switch its transmit audio to DAX within 2 seconds, so nothing was keyed. The message was dropped, not held; press its key again.',
+  'shell.lane.voiceDropped.keyed':
+    'Nexus did not play the voice message at {{time}} UTC: something else was transmitting or keyed the radio first (your mic or PTT, a tune carrier, another program), so nothing was keyed. The message was dropped, not held.',
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, two minutes
   // at most, nothing starts transmitting, so the clock cannot move in the middle of an over. The lane
   // says so for as long as it lasts.
@@ -11032,6 +12048,8 @@ export const EN = {
   // (logPrompt.title), quoted as this language shows it.
   'shell.keptFile.pendingQso':
     'Nexus could not read the file of QSOs that were waiting in the “Log this QSO?” popup, so it kept that file, untouched, at {{path}}. Nothing was deleted.',
+  'shell.keptFile.contestHeldUploads':
+    'Nexus could not read the list of contacts waiting for contest mode to end before they upload to QRZ, Club Log and the others, so it kept that file, untouched, at {{path}}. The contacts are in your Logbook. Nothing was deleted.',
   'shell.keptFile.fieldDay':
     'Nexus could not read all of the backup of your Field Day or contest log, so it kept that file, untouched, at {{path}}, and started a new backup from the contacts it could read. Nothing was deleted.',
   'shell.keptFile.js8Inbox':
@@ -11147,7 +12165,7 @@ export const EN = {
 
   // ── A torn-off panel window ─────────────────────────────────────────────────────────
   'detached.connecting': 'Connecting to the radio…',
-  'detached.fieldDay.inactive': 'Field Day isn’t active.',
+  'detached.fieldDay.inactive': 'No contest is running.',
   'detached.fdClub.away.head': 'Club board',
   'detached.fdClub.away.body':
     "The club board shows here while the contest is the section you are working in. Step back into the contest and it comes straight back — nothing has stopped, and the host is still collecting contacts.",
@@ -11216,8 +12234,9 @@ export const EN = {
   'nav.order.reset.label': 'Reset order',
   'nav.order.reset.title': 'Reset the section order to default',
   'nav.mode.title': 'Active operating mode',
-  // The operating-mode badge. `QSO` is a Q-code and `FIELD DAY` the event's name, so only the
-  // conversational mode's word is prose.
+  // The operating-mode badge. `QSO` is a Q-code, and in Contest mode the badge names the contest
+  // running by its own short form (`NYQP`, `FIELD DAY`), so only the conversational mode's word
+  // is prose.
   'nav.mode.chat': 'CHAT',
   // One word for the gear: its tooltip, its accessible name and its visible label are the
   // same claim about the same button.
@@ -11392,11 +12411,12 @@ export const EN = {
   'theme.aria': 'Theme',
   'theme.light.label': 'Light',
   'theme.light.title': 'Light (sunlight)',
-  'theme.light.line': 'Daylight panel, dark scopes and meters',
+  'theme.light.line': 'Pale silver front, white panels, dark scopes and meters',
   'theme.dark.label': 'Dark',
   'theme.dark.title': 'Dark (shack)',
   'theme.dark.line': 'Dark panel, lit dials and meters',
-  // System: follow the computer's own light/dark setting (useTheme.ts). Dark stays the default.
+  // System: follow the computer's own light/dark setting (useTheme.ts). The default for a
+  // computer that never chose a theme in the desktop app on Windows; Dark stays the default elsewhere.
   'theme.system.label': 'System',
   'theme.system.title': 'System (follows your computer’s light or dark setting)',
   'theme.system.line': 'Follows your computer, light or dark',
@@ -11411,8 +12431,6 @@ export const EN = {
   'theme.greenLcd.line': 'Black chassis, green phosphor digits',
   'theme.blueVfd.label': 'Blue VFD',
   'theme.blueVfd.line': 'Deep navy chassis, blue-white fluorescent digits',
-  'theme.silver.label': 'Silver chassis',
-  'theme.silver.line': 'Pale silver front, white panels, dark scopes and meters',
   'theme.midnight.label': 'Midnight',
   'theme.midnight.line': 'True black for OLED and dark rooms, cyan lit',
   'theme.slate.label': 'Slate',
@@ -11425,6 +12443,10 @@ export const EN = {
   'theme.nebula.line': 'Violet-tinted dark with lavender keys and digits',
   'theme.paper.label': 'Paper',
   'theme.paper.line': 'Warm cream page, white panels, ink-blue keys — low glare',
+  // The standard Light until 2026-10-13, when Light took the Silver chassis look; a plain name
+  // for the brighter of the two.
+  'theme.bright.label': 'Bright',
+  'theme.bright.line': 'The earlier Light: cool white panels, bright blue keys',
 
   // ── The colour roles (Settings ▸ Appearance ▸ Colours) ─────────────────────────────────
   // A role is a job a colour does (features/paletteRoles.ts); its hint says what it paints on
@@ -11485,6 +12507,8 @@ export const EN = {
   'waterfall.zoom.aria': 'Waterfall zoom span',
   'waterfall.zoom.title':
     'Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–4 kHz), or zoom in around the RX marker',
+  'waterfall.span.aria': 'Waterfall span',
+  'waterfall.span.title': 'Show {{hz}} Hz of the passband',
   'waterfall.gain.title': 'Gain — contrast (how punchy strong signals look). Center = auto.',
   'waterfall.gain.aria': 'Waterfall gain (contrast)',
   'waterfall.zero.title':
@@ -11798,6 +12822,11 @@ export const EN = {
   'rotor.pane.aim.point.title': 'Point the antenna at {{call}}, short path',
   'rotor.pane.aim.unknown': 'location unknown',
   'rotor.pane.aim.noGrid': 'set your grid in Settings for a bearing',
+  // How far the antenna's live heading is from line 2's bearing, the short way round: `{{deg}}` is
+  // whole degrees, 0–180. The rose draws that bearing as a dotted line with a marker on the rim.
+  'rotor.pane.aim.off': '{{deg}}° off',
+  'rotor.pane.aim.off.title':
+    'The antenna is {{deg}}° off the bearing to {{call}} (the dotted line on the rose), the short way round',
 
   // ── The shared cockpit header ───────────────────────────────────────────────────────
   // ⚠️ THE FOUR TRANSMIT CONTROLS THIS HEADER DRAWS ARE ABSENT BY DESIGN: the TX-enable latch,
@@ -11807,7 +12836,7 @@ export const EN = {
   // three plates, which are the passive rendering of that same latch.
   //
   // What is here is the rest: the wheel-tune tooltips, the runaway-guard toast, the power
-  // slider (a CONFIGURATION control on the transmit path — batch 13) and the CAT pill.
+  // slider (a CONFIGURATION control on the transmit path) and the CAT pill.
   'cockpit.header.readout.wheelTune.title': 'Scroll to tune',
   'cockpit.header.readout.digitTune.title': 'Scroll a digit to tune it',
   // Two WHOLE sentences, one per direction — the band name and the edge frequency are invariant
@@ -12091,6 +13120,47 @@ export const EN = {
     'Turn the whole console on. Every section and capability enabled.',
 
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
+  // THE STATS PANE beside a log entry (components/CallStatsPane): what the log holds for the call
+  // typed there. Award names (DXCC, WAS, WAZ), service names (LoTW, eQSL, QRZ), the mode classes'
+  // short forms, band names, entity names, state codes and zone numbers are invariant tokens or
+  // data, kept in the component, never here.
+  'callStats.pane.title': 'Stats',
+  'recentQsos.pane.title': 'Recent contacts',
+  'recentQsos.empty': 'No contacts logged yet',
+  'recentQsos.aria': 'The last {{count}} contacts, newest first',
+  'callStats.empty': 'Type a call in the log entry: its DXCC, WAS and WAZ standing shows here.',
+  'callStats.emptyPicked': 'Pick a station: its DXCC, WAS and WAZ standing shows here.',
+  'callStats.loading': 'Reading the log…',
+  'callStats.failed': 'Stats are not available: {{error}}',
+  'callStats.entity.numbered': '{{entity}} · DXCC {{code}}',
+  'callStats.entity.none': '{{call}} names no DXCC entity.',
+  'callStats.flags.label': 'New for this contact',
+  'callStats.flag.newOne': 'NEW ONE',
+  'callStats.flag.newBand': 'NEW BAND',
+  'callStats.flag.newMode': 'NEW MODE',
+  'callStats.flag.newOne.title': 'No contact in your log counts toward this DXCC entity.',
+  'callStats.flag.newBand.title': 'Worked before, but never on {{band}}.',
+  'callStats.flag.newMode.title': 'Worked before, but never in {{mode}}.',
+  'callStats.flag.no': 'no',
+  'callStats.src.caption': 'Confirmations your log holds, by service',
+  'callStats.src.country': 'Country',
+  'callStats.src.call': 'This call',
+  'callStats.src.card': 'Card',
+  'callStats.src.yes': 'held',
+  'callStats.src.no': 'none',
+  'callStats.src.ag': 'held, Authenticity Guaranteed',
+  'callStats.grid.caption': 'Band and mode slots for {{call}}',
+  'callStats.grid.credit':
+    'Confirmed as each award credits it: DXCC and WAS by LoTW or a QSL card, WAZ also by an Authenticity-Guaranteed eQSL.',
+  'callStats.slot.unworked': 'not worked',
+  'callStats.slot.worked': 'worked, not confirmed',
+  'callStats.slot.confirmed': 'confirmed',
+  'callStats.slot.noCredit': 'no DXCC credit on this band',
+  'callStats.slot.title': '{{award}} {{band}} {{mode}}: {{state}}',
+  'callStats.was.unknown': 'WAS: no state on file for {{call}}.',
+  'callStats.was.none': 'WAS: {{call}} is not a station in the United States.',
+  'callStats.waz.unknown': 'WAZ: no CQ zone for {{call}}.',
+
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning
   // both translations. When in doubt, give the surface its own key.

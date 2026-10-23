@@ -40,6 +40,17 @@ describe('the status lane after a refused slot key', () => {
     expect(lane!.detail).not.toContain('CAT/port')
   })
 
+  it('says the transmit audio would not open, in the sound card’s words, without PTT advice', () => {
+    const why = 'playback stream: Device or resource busy'
+    const lane = slotKeyRefusedLane({ at: AT, why, txAudioFailed: true })
+    expect(lane!.tier).toBe('critical')
+    expect(lane!.message).toBe(EN['shell.lane.slotKeyRefused.message'])
+    expect(lane!.detail).toBe(
+      EN['shell.lane.slotKeyRefused.txAudio'].replace('{{time}}', '14:32:05').replace('{{why}}', why),
+    )
+    expect(lane!.detail).not.toContain('CAT/port')
+  })
+
   it('says the radio was still on the DAX Nexus set once native audio was off, in its own sentence', () => {
     const lane = slotKeyRefusedLane({
       at: AT,

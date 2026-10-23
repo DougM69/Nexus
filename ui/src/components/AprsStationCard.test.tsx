@@ -223,6 +223,18 @@ describe('raw packet and actions', () => {
     // Named as third-party, so nobody mistakes it for Nexus data.
     expect(link.getAttribute('title')).toMatch(/third-party/i)
   })
+
+  it('an iGate keeps its SSID on aprs.fi, and QRZ is handed the whole name to cut', () => {
+    // The reported station. aprs.fi tracks each SSID, so its link names this exact station.
+    // QRZ has one page per callsign: the builder behind the verb drops the SSID (its table is
+    // ui/src/__fixtures__/qrz-urls.json), so the card hands it the name unchanged.
+    card({ call: 'PI1UTR-10' })
+    expect(screen.getByRole('link', { name: /aprs\.fi/i }).getAttribute('href')).toBe(
+      'https://aprs.fi/#!call=PI1UTR-10',
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'QRZ' }))
+    expect(openQrzPage).toHaveBeenCalledWith('PI1UTR-10')
+  })
 })
 
 describe('keyboard and a11y', () => {

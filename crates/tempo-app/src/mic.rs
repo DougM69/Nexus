@@ -25,7 +25,7 @@
 //! G6 is checked last because it is the only gate the arriving audio itself moves: this tick's
 //! frames count before it is judged.
 //!
-//! ## The rules this holds (the audio design's §6, M1–M12)
+//! ## The rules this holds
 //!
 //! - **M1: the hold arms, audio keys.** [`MicLatch::arm`] keys nothing. The first frame accepted
 //!   after the arm answers [`MicTick::Key`], and only then is PTT asserted; the audio follows a
@@ -50,7 +50,7 @@
 //!
 //! ## Where the transport moved the design (it was written for the relay's audio lane)
 //!
-//! The page's microphone reaches the station as a WebRTC Opus track (plan S6), not as `audioTx`
+//! The page's microphone reaches the station as a WebRTC Opus track, not as `audioTx`
 //! bundles on the relay. Three of the design's mechanics are therefore carried by something else,
 //! and the rule is kept in each case:
 //! - **Late (M4).** RTP carries no sender clock the station can trust, so there is no
@@ -60,14 +60,23 @@
 //! - **The over epoch (M12).** An RTP packet carries no over id. The epoch is the feed's: it moves
 //!   on every drop, and the feed refuses every frame until the next arm, so audio from a dead over
 //!   cannot reach a live one.
-//! - **The jitter buffer.** The design's 60 ms (§5.2) is the lead-in: audio is held until
+//! - **The jitter buffer.** The design's 60 ms is the lead-in: audio is held until
 //!   [`MicMode::lead_in_ms`] after the key, and the first [`MicMode::ahead_ms`] of the over is a
 //!   silent pre-roll that gives the output ring its cushion. A frame may therefore arrive up to the
 //!   lead-in late and still be played at its moment, and the voice reaches the air
 //!   `lead_in_ms + ahead_ms` after it reached the station: the design's 60 + 40.
 //!
 //! Silence is what fills a moment whose frame never came: no concealment, so a loss can never
-//! become a burst on the air (design §7), and nothing heard on the air was made up here.
+//! become a burst on the air, and nothing heard on the air was made up here.
+//!
+//! ## The holes, counted for the operator to see
+//!
+//! Each such silence between two stretches of the over's audio is a hole on the air: a stall under
+//! the lead-in leaves none, a longer one leaves one about the stall's length less the lead-in, and
+//! one of [`MicMode::gap_ms`] ends the over (M2) instead. The over counts its holes and their length
+//! ([`MicLatch::holes`]) and the engine publishes them with the over's state ([`MicStatus`]), so a
+//! remote screen can say "1 gap on the air, 0.1 s". ⚠️ DISPLAY ONLY: the count is taken beside the
+//! pacer and changes nothing it feeds, keys or ends.
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -126,13 +135,13 @@ impl MicMode {
     }
 }
 
-/// The browser microphone. 10 minutes matches RTTY and PSK31, one ceiling for every latched mode
-/// (design §9, decision 2); 200 ms is five 40 ms bundles, or ten 20 ms frames, and this codebase's
-/// meaning of "no longer current" (design M2).
+/// The browser microphone. 10 minutes matches RTTY and PSK31, one ceiling for every latched mode;
+/// 200 ms is five 40 ms bundles, or ten 20 ms frames, and this codebase's
+/// meaning of "no longer current" (M2).
 ///
 /// The worst case after a total link death, which these numbers are chosen for: the gap (200 ms)
 /// plus at most the look-ahead queued (40 ms), then the sound card's own buffer, about 280 ms of
-/// RF after the last audio the operator spoke (design M2).
+/// RF after the last audio the operator spoke (M2).
 pub const MIC: MicMode = MicMode {
     name: "Remote microphone",
     max_latch_ms: 10 * 60 * 1000,
@@ -144,6 +153,26 @@ pub const MIC: MicMode = MicMode {
     feed_cap: 25,
     max_early_ms: 500,
 };
+
+/// A program's audio over through Nexus's TCI server (`engine/tci.rs`): the same machinery with a
+/// program's numbers. Everything is the microphone's but the gap:
+/// 300 ms against 200, because a program under decode load may answer the server's TX_CHRONO late
+/// (UNVERIFIED until the loop bench measures WSJT-X's worst answer). The ceiling is the same 10
+/// minutes and no setting raises it; it cuts FST4's and FST4W's longest periods and fits every other
+/// WSJT-X mode.
+pub const TCI_OVER: MicMode = MicMode {
+    name: "TCI program",
+    max_latch_ms: 10 * 60 * 1000,
+    gap_ms: 300,
+    lead_in_ms: 60,
+    ahead_ms: 40,
+    max_push_ms: 40,
+    rate_hz: 12_000,
+    feed_cap: 25,
+    max_early_ms: 500,
+};
+
+const _: () = assert!(TCI_OVER.max_push_ms <= TCI_OVER.ahead_ms);
 
 /// One decoded frame of the page's microphone.
 #[derive(Debug, Clone, PartialEq)]
@@ -176,37 +205,9 @@ pub enum Refused {
     Full,
 }
 
-/// Why an over ended, as the operator is told (the audio design's §7).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MicEnded {
-    /// The operator let go.
-    Released,
-    /// A stop at the station, TX turned off, leaving Phone, a tune, or the licence.
-    Stopped,
-    /// No audio for [`MicMode::gap_ms`] (M2).
-    AudioGap,
-    /// The stream's transmit presence lapsed (M7).
-    Presence,
-    /// The per-over ceiling (C1).
-    Ceiling,
-    /// The wall-clock TX watchdog (C2).
-    Watchdog,
-    /// The transmit route changed under the over (G7).
-    RouteChanged,
-}
-
-/// The over as the stream shows it to the page. Published by the engine, read by the stream.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct MicStatus {
-    /// An over is armed (or keyed).
-    pub armed: bool,
-    /// The operator's audio has keyed the rig.
-    pub keyed: bool,
-    /// Display only: voice for two seconds, and the rig reports no power out.
-    pub no_power_out: bool,
-    /// Why the last over ended, until the next one is armed.
-    pub ended: Option<MicEnded>,
-}
+// Why an over ended, and the over as the stream shows it to the page: tempo-base's, below the
+// engine, so that Stop's road reads and writes them in a build without it.
+pub use tempo_base::mic::{MicEnded, MicStatus};
 
 #[derive(Default)]
 struct FeedState {
@@ -223,14 +224,33 @@ struct FeedState {
 /// It takes audio only while an over is armed, in sequence order. The engine opens it on an arm
 /// and closes it on every drop; closing moves the epoch and empties it in one step, so nothing a
 /// dead over was sent survives into the next.
-#[derive(Clone, Default)]
-pub struct MicFeed(Arc<Mutex<FeedState>>);
+#[derive(Clone)]
+pub struct MicFeed {
+    state: Arc<Mutex<FeedState>>,
+    /// Its mode's [`MicMode::feed_cap`].
+    cap: usize,
+}
+
+impl Default for MicFeed {
+    /// The browser microphone's feed ([`MIC`]).
+    fn default() -> Self {
+        Self::new(&MIC)
+    }
+}
 
 impl MicFeed {
+    /// A feed for an over with `mode`'s numbers.
+    pub fn new(mode: &MicMode) -> Self {
+        Self {
+            state: Arc::default(),
+            cap: mode.feed_cap,
+        }
+    }
+
     fn state(&self) -> MutexGuard<'_, FeedState> {
         // Nothing under this lock can panic halfway through a change that matters, and a drop must
         // always be able to close the feed, so a poisoned lock is taken as it stands.
-        self.0
+        self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -244,7 +264,7 @@ impl MicFeed {
         if s.last_seq.is_some_and(|last| frame.seq <= last) {
             return Err(Refused::OutOfOrder);
         }
-        if s.frames.len() >= MIC.feed_cap {
+        if s.frames.len() >= self.cap {
             return Err(Refused::Full);
         }
         s.last_seq = Some(frame.seq);
@@ -326,6 +346,10 @@ pub enum MicDrop {
     Watchdog,
     /// G6: no audio accepted for [`MicMode::gap_ms`].
     AudioGap,
+    /// The owner let go ([`MicLatch::release`]) and everything the over accepted has been fed. The
+    /// one end with nothing left to flush: the caller drops the latch and closes the feed, and arms
+    /// NO abort, so what the output ring holds plays out and the loop's deadline unkeys after it.
+    Drained,
 }
 
 /// The gate values the predicate re-checks, sampled by the caller for this tick. Values, never
@@ -408,6 +432,16 @@ struct Over {
     /// How much VOICED audio the over has accepted, in ms: frames at or above
     /// [`VOICE_FLOOR_RMS`]. Display only (the no-power warning); nothing keys on it (M5).
     voiced_ms: u64,
+    /// Display only: the holes counted so far, and their samples, each counted once the over's
+    /// audio resumes after it (a silence the over ends in is not a hole on the air but its end).
+    holes: u32,
+    hole_samples: u64,
+    /// Samples of the silence being fed now for want of a frame, until audio resumes.
+    in_hole: u64,
+    /// One past the last sample accepted, on the media clock.
+    end: u64,
+    /// The owner let go ([`MicLatch::release`]): play out what was accepted, then end.
+    released: bool,
 }
 
 impl Over {
@@ -469,6 +503,30 @@ impl MicLatch {
         keyed
     }
 
+    /// The over's owner let go of it, the GRACEFUL end (a TCI program's own `trx:0,false`):
+    /// flushing there would cut the last of the audio it sent. A keyed over
+    /// goes on playing what it has accepted, its gates still checked on every tick, and the tick
+    /// after its last sample is fed answers [`MicDrop::Drained`]. The caller stops pushing at the
+    /// release; what the feed already holds still plays. An over that never keyed has put nothing
+    /// on the air and ends now. Returns whether the over plays on.
+    pub fn release(&mut self) -> bool {
+        match &mut self.phase {
+            Phase::Keyed(over) => {
+                over.released = true;
+                true
+            }
+            _ => {
+                self.phase = Phase::Idle;
+                false
+            }
+        }
+    }
+
+    /// The keyed over is playing out after its owner let go ([`Self::release`]).
+    pub fn releasing(&self) -> bool {
+        matches!(&self.phase, Phase::Keyed(over) if over.released)
+    }
+
     /// An over is armed or keyed: it owns the transmitter.
     pub fn active(&self) -> bool {
         !matches!(self.phase, Phase::Idle)
@@ -479,12 +537,34 @@ impl MicLatch {
         matches!(self.phase, Phase::Keyed(_))
     }
 
+    /// For tests: a keyed over's key moved `by_ms` earlier, as if it had keyed that long before,
+    /// so its ceiling (C1, counted from the key) is reached without waiting it out. Nothing else
+    /// moves; an over that is not keyed is left as it is.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn age_for_test(&mut self, by_ms: u64) {
+        if let Phase::Keyed(over) = &mut self.phase {
+            over.keyed_ms = over.keyed_ms.saturating_sub(by_ms);
+        }
+    }
+
     /// How much voiced audio the keyed over has accepted, in ms (0 when not keyed). For the
     /// no-power warning only.
     pub fn voiced_ms(&self) -> u64 {
         match &self.phase {
             Phase::Keyed(over) => over.voiced_ms,
             _ => 0,
+        }
+    }
+
+    /// The keyed over's holes on the air so far, and how long they lasted in all in ms (both 0 when
+    /// not keyed). DISPLAY ONLY: see the module header.
+    pub fn holes(&self) -> (u32, u32) {
+        match &self.phase {
+            Phase::Keyed(over) => {
+                let ms = over.hole_samples * 1000 / u64::from(self.mode.rate_hz);
+                (over.holes, u32::try_from(ms).unwrap_or(u32::MAX))
+            }
+            _ => (0, 0),
         }
     }
 
@@ -510,7 +590,7 @@ impl MicLatch {
         if !gates.tx_enabled || !gates.tx_allowed || gates.tuning || !gates.in_section {
             return MicTickResult::dropped(MicDrop::GateDown);
         }
-        // G5: the permit for THIS over (M7). A lapse, or another session's presence, ends it.
+        // G5: the permit for THIS over. A lapse, or another session's presence, ends it.
         if !gates.presence {
             return MicTickResult::dropped(MicDrop::Presence);
         }
@@ -559,6 +639,11 @@ impl MicLatch {
                 route: route.unwrap_or(gates.route),
                 frames: VecDeque::new(),
                 voiced_ms: 0,
+                holes: 0,
+                hole_samples: 0,
+                in_hole: 0,
+                end: first.end(),
+                released: false,
             };
             over.count_voice(&mode, &first);
             over.frames.push_back(first);
@@ -573,6 +658,11 @@ impl MicLatch {
         };
         for frame in arrived {
             over.accept(&mode, frame);
+        }
+        // Released, and every sample accepted has been fed on an earlier tick: the graceful end.
+        // Judged before the gap, which is no fault here: the owner has stopped sending on purpose.
+        if over.released && over.position(&mode) >= over.end as i128 {
+            return MicTickResult::dropped(MicDrop::Drained);
         }
         // G6 (M2): the gap, from the arrival of the last frame the over accepted.
         if gates.now.saturating_duration_since(over.last_arrival)
@@ -622,6 +712,7 @@ impl Over {
             return; // overlaps what the over already holds: out of order on the media clock
         }
         self.last_arrival = self.last_arrival.max(frame.arrived);
+        self.end = self.end.max(frame.end());
         self.count_voice(mode, &frame);
         self.frames.push_back(frame);
     }
@@ -653,10 +744,19 @@ impl Over {
                 .frames
                 .front()
                 .filter(|f| f.media as i128 <= at)
-                .map(|f| f.samples[(at - f.media as i128) as usize])
-                // The pre-roll, and any moment whose frame never came: silence, never made up.
-                .unwrap_or(0.0);
-            out.push(sample);
+                .map(|f| f.samples[(at - f.media as i128) as usize]);
+            // Display only: a moment of the over's own audio whose frame never came is part of a
+            // hole, counted once the audio resumes after it. The pre-roll is no hole.
+            match sample {
+                Some(_) if self.in_hole > 0 => {
+                    self.holes = self.holes.saturating_add(1);
+                    self.hole_samples += std::mem::take(&mut self.in_hole);
+                }
+                None if at >= self.media0 as i128 => self.in_hole += 1,
+                _ => {}
+            }
+            // The pre-roll, and any moment whose frame never came: silence, never made up.
+            out.push(sample.unwrap_or(0.0));
             self.cursor += 1;
         }
         Some(out)
@@ -1033,6 +1133,116 @@ mod tests {
         );
     }
 
+    // ── The holes on the air, display only ────────────────────────────────────────────────────
+
+    /// The over keyed at `t0` and driven in 20 ms ticks to `ticks`, the page sending a frame every
+    /// 20 ms (media `20 ms × k`). Each frame reaches the latch at the first tick after it arrives:
+    /// on time, but for those sent during a stall of `stall` ms from 200 ms, which all arrive as it
+    /// ends, as a Wi-Fi queue lets them go.
+    fn through_a_stall(stall: u64, ticks: u64) -> Stalled {
+        let t0 = Instant::now();
+        let mut latch = keyed(t0);
+        let mut out = Vec::new();
+        let mut waiting: Vec<MicFrame> = Vec::new();
+        for k in 1..ticks {
+            let sent = 20 * k;
+            let arrives = if (200..200 + stall).contains(&sent) {
+                200 + stall
+            } else {
+                sent
+            };
+            waiting.push(frame(k + 1, MIC.samples(20) * k, t0 + ms(arrives), 0.5));
+            let now = t0 + ms(sent);
+            let (due, later): (Vec<MicFrame>, Vec<MicFrame>) =
+                waiting.into_iter().partition(|f| f.arrived <= now);
+            waiting = later;
+            let res = latch.tick(up(now), due, PLENTY);
+            if let Some(why) = res.drop {
+                return Stalled {
+                    fed: out,
+                    holes: latch.holes(),
+                    dropped: Some((k, why)),
+                };
+            }
+            if let MicTick::Samples(samples) = res.tick {
+                out.extend(samples);
+            }
+        }
+        Stalled {
+            fed: out,
+            holes: latch.holes(),
+            dropped: None,
+        }
+    }
+
+    /// What [`through_a_stall`] saw: what was fed, the over's holes, and its drop if it ended.
+    struct Stalled {
+        fed: Vec<f32>,
+        holes: (u32, u32),
+        dropped: Option<(u64, MicDrop)>,
+    }
+
+    /// ★ A stall under the lead-in is absorbed: every frame still plays at its moment, the air
+    /// carries no silence past the pre-roll, and no hole is counted. CONTROL: the stall happened
+    /// (three frames arrived together, late).
+    #[test]
+    fn a_stall_under_the_lead_in_leaves_no_hole_on_the_air() {
+        let Stalled {
+            fed,
+            holes,
+            dropped,
+        } = through_a_stall(50, 40);
+        assert_eq!(dropped, None);
+        assert_eq!(holes, (0, 0), "a hole counted where none went on the air");
+        let after_pre_roll = &fed[MIC.samples(MIC.ahead_ms) as usize..];
+        assert!(
+            !after_pre_roll.is_empty() && after_pre_roll.iter().all(|s| *s == 0.5),
+            "silence went on the air after a stall the lead-in should absorb"
+        );
+    }
+
+    /// ★ A stall between the lead-in and the gap leaves one hole on the air, about the stall's
+    /// length less the lead-in, counted once the audio resumes; the over goes on. CONTROL: the
+    /// silence is really in what was fed, and audio follows it.
+    #[test]
+    fn a_stall_past_the_lead_in_leaves_one_counted_hole_and_the_over_goes_on() {
+        let Stalled {
+            fed,
+            holes: (holes, hole_ms),
+            dropped,
+        } = through_a_stall(150, 50);
+        assert_eq!(dropped, None, "a stall under the gap ended the over");
+        assert_eq!(holes, 1);
+        let lead_in = MIC.lead_in_ms as u32;
+        assert!(
+            (150 - lead_in - 20..=150 - lead_in + 20).contains(&hole_ms),
+            "a 150 ms stall left a {hole_ms} ms hole"
+        );
+        let after_pre_roll = &fed[MIC.samples(MIC.ahead_ms) as usize..];
+        let silent = after_pre_roll.iter().filter(|s| **s == 0.0).count() as u64;
+        assert_eq!(
+            silent * 1000 / u64::from(MIC.rate_hz),
+            u64::from(hole_ms),
+            "the count is what went on the air"
+        );
+        assert_eq!(fed.last(), Some(&0.5), "the audio resumed after the hole");
+    }
+
+    /// ★ A stall of the gap or longer ends the over (M2), 200 ms after the last audio arrived and
+    /// within a tick of it, and the silence it ends in is its end, not a hole. CONTROL: the same
+    /// stall 60 ms shorter is a hole the over survives (the test above).
+    #[test]
+    fn a_stall_of_the_gap_ends_the_over_and_counts_no_hole() {
+        let Stalled { holes, dropped, .. } = through_a_stall(250, 50);
+        // The last frame before the stall was sent and arrived at 180 ms: tick 19, at 380 ms.
+        assert_eq!(dropped, Some((19, MicDrop::AudioGap)));
+        assert_eq!(
+            holes,
+            (0, 0),
+            "the silence the over ended in was counted as a hole"
+        );
+    }
+
     // ── G1–G5, G7, C1, C2 ─────────────────────────────────────────────────────────────────────
 
     #[test]
@@ -1158,5 +1368,194 @@ mod tests {
             "a re-armed over refused its first frame"
         );
         assert_eq!(feed.take().len(), 1);
+    }
+
+    // ── The feed's cap is its mode's ──────────────────────────────────────────────────────────
+
+    /// A feed holds at most its OWN mode's frames between two ticks, not the microphone's.
+    /// CONTROL: the microphone's feed still takes its 25.
+    #[test]
+    fn a_feed_holds_its_own_modes_frames() {
+        let t0 = Instant::now();
+        let small = MicMode {
+            feed_cap: 3,
+            ..TCI_OVER
+        };
+        let feed = MicFeed::new(&small);
+        feed.open();
+        let taken: Vec<_> = (0..5u64)
+            .map(|k| feed.push(frame(k + 1, 240 * k, t0, 0.5)))
+            .collect();
+        assert_eq!(
+            taken,
+            vec![
+                Ok(()),
+                Ok(()),
+                Ok(()),
+                Err(Refused::Full),
+                Err(Refused::Full)
+            ],
+            "a feed of cap 3"
+        );
+        let mic = MicFeed::default();
+        mic.open();
+        let full = (0..30u64)
+            .map(|k| mic.push(frame(k + 1, 240 * k, t0, 0.5)))
+            .position(|r| r == Err(Refused::Full));
+        assert_eq!(full, Some(MIC.feed_cap), "the microphone's feed");
+    }
+
+    // ── A TCI program's over: the gap, and the graceful release ───────────────────────────────
+
+    /// A latch keyed at `t0` under `mode` on a first frame of 20 ms.
+    fn keyed_as(mode: MicMode, t0: Instant) -> MicLatch {
+        let mut latch = MicLatch::new(mode);
+        assert!(latch.arm());
+        let res = latch.tick(up(t0), vec![frame(1, 0, t0, 0.5)], PLENTY);
+        assert_eq!(res.tick, MicTick::Key, "precondition: the first frame keys");
+        latch
+    }
+
+    /// The TCI over's gap is its own 300 ms: a 280 ms pause in the program's audio is survived,
+    /// and 300 ms ends the over, where the microphone's 200 ms would have ended both.
+    #[test]
+    fn a_tci_over_survives_a_280_ms_pause_and_ends_at_300() {
+        let t0 = Instant::now();
+        let run = |pause_ms: u64| {
+            let mut latch = keyed_as(TCI_OVER, t0);
+            for k in 1..100u64 {
+                let t = 20 * k;
+                let now = t0 + ms(t);
+                let frames: Vec<MicFrame> = (!(1_000 < t && t < 1_000 + pause_ms))
+                    .then(|| frame(k + 1, TCI_OVER.samples(20) * k, now, 0.5))
+                    .into_iter()
+                    .collect();
+                if let Some(why) = latch.tick(up(now), frames, PLENTY).drop {
+                    return Some((t, why));
+                }
+            }
+            None
+        };
+        assert_eq!(run(280), None, "a 280 ms pause ended a TCI over");
+        // By value: the design's 300 ms, not whatever the constant says.
+        assert_eq!(
+            run(400),
+            Some((1_300, MicDrop::AudioGap)),
+            "the gap did not end the TCI over at 300 ms"
+        );
+    }
+
+    /// ⛔ The TCI over's look-ahead is the design's 40 ms, by value: however often a stalled loop
+    /// asks, nothing is fed further ahead of real time, which is what bounds a stuck carrier.
+    /// CONTROL: something is fed.
+    #[test]
+    fn a_tci_over_never_feeds_more_than_40_ms_ahead() {
+        let t0 = Instant::now();
+        let mut latch = keyed_as(TCI_OVER, t0);
+        let now = t0 + ms(TCI_OVER.lead_in_ms + 100);
+        let mut fed = 0u64;
+        for _ in 0..50 {
+            if let MicTick::Samples(s) = latch.tick(up(now), Vec::new(), PLENTY).tick {
+                fed += s.len() as u64;
+            }
+        }
+        assert!(fed > 0, "control: nothing was fed at all");
+        assert!(
+            fed <= 12_000 * 40 / 1000,
+            "fed {fed} samples ahead of a stalled clock; 40 ms is 480"
+        );
+    }
+
+    /// Everything the latch feeds from `from` until it drops, ticking every 20 ms with no new
+    /// audio, and the drop.
+    fn play_out(
+        latch: &mut MicLatch,
+        t0: Instant,
+        from: u64,
+    ) -> (Vec<f32>, Option<(u64, MicDrop)>) {
+        let mut out = Vec::new();
+        for k in from..from + 100 {
+            let now = t0 + ms(20 * k);
+            let res = latch.tick(up(now), Vec::new(), PLENTY);
+            if let Some(why) = res.drop {
+                return (out, Some((20 * k, why)));
+            }
+            if let MicTick::Samples(s) = res.tick {
+                out.extend(s);
+            }
+        }
+        (out, None)
+    }
+
+    /// ★ The graceful release: the owner lets go with audio still held, and the over plays every
+    /// sample it accepted, the last frame's marker included, then ends as `Drained`, before the
+    /// gap and with nothing left to flush. CONTROL: the same over, not released, plays the same
+    /// audio and is ended by the gap instead, later.
+    #[test]
+    fn a_released_over_plays_out_what_it_accepted_and_then_drains() {
+        let t0 = Instant::now();
+        let marker = 0.25;
+        let fed = |release: bool| {
+            let mut latch = keyed_as(TCI_OVER, t0);
+            let mut out = Vec::new();
+            // Frames 1..=10 arrive on time; the last carries the marker.
+            for k in 1..=10u64 {
+                let now = t0 + ms(20 * k);
+                let level = if k == 10 { marker } else { 0.5 };
+                let f = frame(k + 1, TCI_OVER.samples(20) * k, now, level);
+                if let MicTick::Samples(s) = latch.tick(up(now), vec![f], PLENTY).tick {
+                    out.extend(s);
+                }
+            }
+            if release {
+                assert!(
+                    latch.release(),
+                    "a keyed over must play on after its release"
+                );
+                assert!(latch.releasing());
+            }
+            let (rest, dropped) = play_out(&mut latch, t0, 11);
+            out.extend(rest);
+            (out, dropped)
+        };
+        let (out, dropped) = fed(true);
+        assert!(
+            out.contains(&marker),
+            "the release cut the over's last frame"
+        );
+        let (at, why) = dropped.expect("a released over never ended");
+        assert_eq!(why, MicDrop::Drained, "the release did not end as drained");
+        assert!(at < 500, "drained only at {at} ms, as late as the gap");
+        // CONTROL: unreleased, the same audio plays and the gap ends it.
+        let (out, dropped) = fed(false);
+        assert!(out.contains(&marker));
+        assert_eq!(
+            dropped,
+            Some((500, MicDrop::AudioGap)),
+            "control: an unreleased over ends on its gap"
+        );
+    }
+
+    /// A released over is still gated on every tick: a gate going down during the play-out ends it
+    /// as hard as ever. And an over released before it keyed ends at once, with nothing to play.
+    #[test]
+    fn a_releasing_over_is_still_gated_and_an_armed_one_ends_at_once() {
+        let t0 = Instant::now();
+        let mut latch = keyed_as(TCI_OVER, t0);
+        assert!(latch.release());
+        let mut g = up(t0 + ms(20));
+        g.tx_enabled = false;
+        assert_eq!(
+            latch.tick(g, Vec::new(), PLENTY).drop,
+            Some(MicDrop::GateDown),
+            "a gate went down during the play-out and the over went on"
+        );
+        let mut armed = MicLatch::new(TCI_OVER);
+        assert!(armed.arm());
+        assert!(
+            !armed.release(),
+            "an armed over played on after its release"
+        );
+        assert!(!armed.active(), "an armed over survived its release");
     }
 }

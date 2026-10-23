@@ -9,14 +9,96 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tempo_app::{dto::AmpStatusDto, engine::Engine, settings::Settings};
 
+/// Signing in at the shack binds the station; a device the service approved on its own proof is
+/// granted only once the station has checked that proof itself.
+mod account_grants;
 /// Remote over this network beside the hosted mode: a paired computer's grant through hosted
 /// decisions.
 mod lan_grants;
+/// One rule for every device: a tunnel computer's station control, and End remote control holding
+/// for everyone until Remote is turned on again.
+mod tunnel_grants;
 
 #[derive(Clone, Default)]
-struct MemoryVault {
+pub(super) struct MemoryVault {
     values: Arc<Mutex<HashMap<String, String>>>,
     fail: Arc<AtomicBool>,
+    devices: Arc<Mutex<()>>,
+}
+impl MemoryVault {
+    fn account_entry<T: serde::de::DeserializeOwned>(
+        &self,
+        name: &str,
+    ) -> Result<Option<T>, &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .get(name)
+            .map(|v| serde_json::from_str(v).map_err(|_| "unreadable"))
+            .transpose()
+    }
+    fn save_account_entry<T: serde::Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+    ) -> Result<(), &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .insert(name.into(), serde_json::to_string(value).unwrap());
+        Ok(())
+    }
+}
+impl vault::AccountVault for MemoryVault {
+    fn owner(&self) -> Result<Option<tempo_client::account::Owner>, &'static str> {
+        self.account_entry("account-owner")
+    }
+    fn save_owner(&self, owner: &tempo_client::account::Owner) -> Result<(), &'static str> {
+        self.save_account_entry("account-owner", owner)
+    }
+    fn account_keys(&self) -> Result<Option<vault::AccountKeys>, &'static str> {
+        self.account_entry("account-keys")
+    }
+    fn save_account_keys(&self, keys: &vault::AccountKeys) -> Result<(), &'static str> {
+        self.save_account_entry("account-keys", keys)
+    }
+    fn device_cache(&self) -> Result<Option<tempo_client::account::DeviceCache>, &'static str> {
+        self.account_entry("account-devices")
+    }
+    fn save_device_cache(
+        &self,
+        _held: &vault::DevicesHeld<'_>,
+        cache: &tempo_client::account::DeviceCache,
+    ) -> Result<(), &'static str> {
+        self.save_account_entry("account-devices", cache)
+    }
+    fn devices_lock(&self) -> &Mutex<()> {
+        &self.devices
+    }
+    fn people(&self) -> Result<Option<vault::People>, &'static str> {
+        self.account_entry("account-people")
+    }
+    fn save_people(&self, people: &vault::People) -> Result<(), &'static str> {
+        self.save_account_entry("account-people", people)
+    }
+    fn revokes(&self) -> Result<Option<vault::Revokes>, &'static str> {
+        self.account_entry("account-revokes")
+    }
+    fn save_revokes(&self, revokes: &vault::Revokes) -> Result<(), &'static str> {
+        self.save_account_entry("account-revokes", revokes)
+    }
+    fn uninvites(&self) -> Result<Option<vault::Uninvites>, &'static str> {
+        self.account_entry("account-uninvites")
+    }
+    fn save_uninvites(&self, uninvites: &vault::Uninvites) -> Result<(), &'static str> {
+        self.save_account_entry("account-uninvites", uninvites)
+    }
 }
 impl Vault for MemoryVault {
     fn binding(&self) -> Result<Option<Binding>, &'static str> {
@@ -213,51 +295,6 @@ fn disable_preempts_a_full_command_queue() {
 }
 
 #[test]
-fn memory_publication_obeys_enable_generation_and_disable_preemption() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let (commands, _receiver) = mpsc::channel(1);
-    let service = Service {
-        commands,
-        status: Default::default(),
-        control: Default::default(),
-    };
-    let bank = service.control.lock().unwrap().memories.clone();
-    let raw = include_str!("../../../ui/src/remote-web/__fixtures__/memories.json");
-    assert!(!service.publish_memories("0", Some(raw)));
-    assert!(service.status().unwrap().observation_generation.is_none());
-    service.control.lock().unwrap().enabled = true;
-    assert_eq!(
-        service.status().unwrap().observation_generation.as_deref(),
-        Some("0")
-    );
-    assert!(service.publish_memories("0", Some(raw)));
-    assert!(query::memories::read(&bank).is_ok());
-    assert!(!service.publish_memories("0", Some("{}")));
-    assert!(query::memories::read(&bank).is_err());
-    assert!(service.publish_memories("0", Some(raw)));
-    let (reply, _) = oneshot::channel();
-    service
-        .commands
-        .try_send((Action::Refresh {}, 0, 0, reply))
-        .unwrap();
-    assert_eq!(
-        runtime.block_on(service.action(Action::Disable {})).err(),
-        Some("remoteBusy")
-    );
-    assert!(query::memories::read(&bank).is_err());
-    service.control.lock().unwrap().enabled = true;
-    assert!(
-        !service.publish_memories("0", Some(raw)),
-        "old enable replies cannot revive the bank"
-    );
-    assert!(query::memories::read(&bank).is_err());
-    assert!(service.publish_memories("1", Some(raw)));
-    assert!(query::memories::read(&bank).is_ok());
-    assert!(!service.publish_memories("1", None));
-    assert!(query::memories::read(&bank).is_err());
-}
-
-#[test]
 fn refused_enable_does_not_change_local_authority() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (commands, _receiver) = mpsc::channel(1);
@@ -276,25 +313,6 @@ fn refused_enable_does_not_change_local_authority() {
         Err("remoteBusy")
     ));
     assert!(!service.control.lock().unwrap().enabled);
-}
-
-/// A station read asked as the page asks one (`askAgainWhenBusy`, ui/src/remote-web/application-client.ts):
-/// `applicationBusy` is asked again, three attempts at most and 250 ms apart. Any other answer, and a third
-/// busy, comes back as it came. The station's reads take the Engine with try_lock, so in the probe they
-/// answer busy whenever its readings thread holds it.
-fn ask_again_when_busy<T>(
-    mut read: impl FnMut() -> Result<T, &'static str>,
-) -> Result<T, &'static str> {
-    let mut attempt = 1;
-    loop {
-        match read() {
-            Err("applicationBusy") if attempt < 3 => {
-                attempt += 1;
-                std::thread::sleep(Duration::from_millis(250));
-            }
-            answer => return answer,
-        }
-    }
 }
 
 #[test]
@@ -320,23 +338,8 @@ fn cloud_runtime_probe() {
             std::path::Path::new(config["configurationRoot"].as_str().unwrap())
                 .join("settings.json"),
         );
-        let chars: Vec<_> = "CQ W1AW"
-            .chars()
-            .map(|ch| tempo_core::textmode::DecodedChar {
-                ch,
-                confidence: 0.3,
-            })
-            .collect();
-        e.set_rtty_armed(true);
-        e.set_psk_armed(true);
-        e.set_psk_mode(tempo_core::psk::PskModeKind::Qpsk31, true)
-            .unwrap();
-        e.push_rtty_decode(&chars, -12.5, true);
-        e.push_psk_decode(&chars, 7.5, true);
     }
     let read_engine = engine.clone();
-    let scope_feed = tempo_app::engine::SpectrumFeed::default();
-    let read_scope = scope_feed.clone();
     let readings_stop = Arc::new(AtomicBool::new(false));
     let stop = readings_stop.clone();
     let readings = std::thread::spawn(move || {
@@ -374,138 +377,27 @@ fn cloud_runtime_probe() {
                 },
             );
             drop(e);
-            read_scope.publish_audio(tempo_app::dto::Spectrum {
-                row: vec![0.25; 8],
-                lo_hz: 0.0,
-                hi_hz: 4000.0,
-                source: "audio".into(),
-            });
             std::thread::sleep(Duration::from_millis(100));
         }
     });
     let vault = MemoryVault::default();
-    let prop_cache: crate::PropCache = Default::default();
-    let sstv_files = sstv::fixture::Gallery::new();
-    let sources = query::Sources {
-        needs: Default::default(),
-        spots: Default::default(),
-        live_paths: Default::default(),
-        region_paths: crate::SharedRegionPaths(Default::default()),
-        ota: Default::default(),
-        parks: Default::default(),
-        pounces: Default::default(),
-        health: Default::default(),
-        propagation: prop_cache.clone(),
-        memories: Default::default(),
-        navigation: Default::default(),
-        sstv: sstv_files.source(),
-    };
-    let ota_cache = sources.ota.clone();
-    let park_index = sources.parks.clone();
-    let pounce_recent = sources.pounces.clone();
     let mut service = Service::start(
         origin.clone(),
         Box::new(vault.clone()),
         engine.clone(),
         transport::Feeds {
             monitor: crate::remote_monitor::Publisher::default(),
-            spectrum: Some(scope_feed.clone()),
-            meters: Default::default(),
-            sources: Some(sources.clone()),
             #[cfg(feature = "radio")]
             audio: None,
             stream: Default::default(),
         },
+        Accounts::not_ready(),
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     println!("REMOTE_TEST:{{\"ready\":true}}");
     std::io::stdout().flush().unwrap();
     for line in lines {
         let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
-        if value["type"] == "seedFtQso"
-            || value["type"] == "ftQsoStep"
-            || value["type"] == "ftQsoEvidence"
-        {
-            let root = std::path::Path::new(config["configurationRoot"].as_str().unwrap());
-            let mut e = engine.lock().unwrap();
-            let mut samples = 0;
-            if value["type"] == "seedFtQso" {
-                e.halt_tx();
-                let mut settings = e.settings().clone();
-                settings.mycall = "K2DEF".into();
-                settings.mygrid = "FN31".into();
-                settings.auto_log = false;
-                settings.prompt_to_log = value["prompt"].as_bool().unwrap();
-                settings.save_qso_wav = false;
-                e.apply_settings(settings);
-                e.set_tier(serde_json::from_value(value["tier"].clone()).unwrap());
-                e.set_log_path(root.join("ft-contacts.adi"));
-                e.set_pending_qso_path(root.join("ft-pending.json"));
-                e.take_immediate_retune();
-                e.take_slot_tx_abort();
-            } else if value["type"] == "ftQsoStep" {
-                // Only this ignored pipe-driven test can supply a simulated
-                // peer or advance a native slot. All audio remains in memory.
-                let slot = value["slot"].as_u64().unwrap();
-                if let Some(text) = value["message"].as_str() {
-                    let mut peer = Engine::new("W1AW", "FN31", 0);
-                    peer.set_tier(e.tier());
-                    peer.override_next_tx("K2DEF", Some("FN31"), text);
-                    let tx_slot = if peer.tx_even() { 0 } else { 1 };
-                    let mut frame: Vec<f32> = peer.poll_tx(tx_slot).into_iter().flatten().collect();
-                    samples = frame.len();
-                    assert!(samples > 0, "peer must produce actual native waveform");
-                    frame.resize((e.active_slot_secs() * 12000.0) as usize, 0.0);
-                    assert!(
-                        e.ingest(&frame, slot) > 0,
-                        "station must decode the actual peer waveform"
-                    );
-                } else {
-                    let tx_slot = if slot.is_multiple_of(2) == e.tx_even() {
-                        slot
-                    } else {
-                        slot + 1
-                    };
-                    e.take_immediate_retune();
-                    e.take_slot_tx_abort();
-                    samples = e.poll_tx(tx_slot).into_iter().flatten().count();
-                    assert!(
-                        samples > 0,
-                        "remote-owned native sequencer must generate its over"
-                    );
-                }
-            }
-            let snapshot = e.snapshot();
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"qso":snapshot.qso,"currentQsoLogKey":e.current_qso_log_key(),
-                "pendingQsoLogKey":e.pending_qso_log_key(),"pendingLog":snapshot.pending_log,
-                "records":e.stored_records().into_iter().map(tempo_app::dto::LoggedQso::from).collect::<Vec<_>>(),"adif":std::fs::read_to_string(root.join("ft-contacts.adi")).unwrap_or_default(),
-                "journal":root.join("ft-pending.json").is_file(),"samples":samples,"txEnabled":e.tx_enabled()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "settingsEvidence" {
-            // What a browser's preference change did: the live value, the saved file, the revision
-            // the Settings document shows, and the TX-enable latch and dial it must not move.
-            let e = engine.lock().unwrap();
-            let path = std::path::Path::new(config["configurationRoot"].as_str().unwrap())
-                .join("settings.json");
-            let saved: serde_json::Value = std::fs::read(path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                .unwrap_or(serde_json::Value::Null);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"revision":super::query::settings_revision(e.settings()).unwrap(),
-                "autoLog":e.settings().auto_log,"contestCheck":e.settings().contest_check,
-                "savedAutoLog":saved["autoLog"],"savedContestCheck":saved["contestCheck"],
-                "txEnabled":e.tx_enabled(),"dialHz":e.settings().dial_hz()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         if value["type"] == "seedLogging" || value["type"] == "loggingEvidence" {
             let path = std::path::Path::new(config["configurationRoot"].as_str().unwrap())
                 .join("remote-manual.adi");
@@ -520,62 +412,6 @@ fn cloud_runtime_probe() {
             println!(
                 "REMOTE_TEST:{}",
                 json!({"count":e.stored_log().len(),"adif":std::fs::read_to_string(path).unwrap_or_default(),"txEnabled":e.snapshot().radio.tx_enabled})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "ftCallDecode" {
-            let mut e = engine.lock().unwrap();
-            // Generate a peer's CQ into memory and decode through the real native
-            // path. No radio, PTT, sound device or external station is opened.
-            let mut peer = Engine::new("W1AW", "FN31", 0);
-            peer.set_tier(e.tier());
-            peer.start_cq(None).unwrap();
-            let slot = if peer.tx_even() { 0 } else { 1 };
-            let mut frame: Vec<f32> = peer.poll_tx(slot).into_iter().flatten().collect();
-            assert!(!frame.is_empty(), "the synthetic peer must generate a CQ");
-            frame.resize((e.active_slot_secs() * 12000.0) as usize, 0.0);
-            assert!(
-                e.ingest(&frame, 8) > 0,
-                "the native decoder must hear the peer"
-            );
-            let snapshot = e.snapshot();
-            let decode = snapshot
-                .recent_decodes
-                .iter()
-                .find(|d| d.from.as_deref() == Some("W1AW"))
-                .unwrap();
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"call":"W1AW","grid":null,
-                "message":decode.message,"snr":decode.snr,"freq":decode.freq_hz})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "ftCallEvidence" {
-            let e = engine.lock().unwrap();
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"qso":e.snapshot().qso,"owned":e.remote_ft_tx_owned()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "ftRuntimeEvidence" {
-            let e = engine.lock().unwrap();
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"runtime":e.remote_ft_runtime(),"txEnabled":e.tx_enabled(),"owned":e.remote_ft_tx_owned()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "ftSettingsEvidence" {
-            let e = engine.lock().unwrap();
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"settings":e.remote_ft_settings(),"txEnabled":e.tx_enabled(),"owned":e.remote_ft_tx_owned()})
             );
             std::io::stdout().flush().unwrap();
             continue;
@@ -623,353 +459,14 @@ fn cloud_runtime_probe() {
             std::io::stdout().flush().unwrap();
             continue;
         }
-        if value["type"] == "seedConfiguration" {
-            let root = std::path::Path::new(config["configurationRoot"].as_str().unwrap());
-            let path = crate::radioprog_path();
-            assert!(
-                path.starts_with(root),
-                "the actual station sidecar must resolve inside the isolated probe profile"
-            );
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            let file: crate::RadioProgFile =
-                serde_json::from_value(json!({"version":1,"projects":value["projects"]})).unwrap();
-            let bytes = serde_json::to_vec(&file).unwrap();
-            std::fs::write(&path, &bytes).unwrap();
-            let result = ask_again_when_busy(|| query::configuration_probe(&engine)).unwrap();
-            assert_eq!(std::fs::read(&path).unwrap(), bytes);
-            assert!(!engine.lock().unwrap().snapshot().radio.tx_enabled);
-            println!("REMOTE_TEST:{}", result);
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedNavigation" {
-            let (call, grid, log) = {
-                let e = engine.lock().unwrap();
-                (
-                    e.settings().mycall.clone(),
-                    e.settings().mygrid.clone(),
-                    e.log_revision(),
-                )
-            };
-            let mut prop = propagation::offline(crate::now_unix(), &call, &grid);
-            prop.source = "live".into();
-            *prop_cache.lock().unwrap() = Some((
-                Instant::now(),
-                prop.clone(),
-                crate::PropContext { call, grid, log },
-            ));
-            let seed = query::navigation::test_fresh_catalog();
-            let expected_tles = seed.elements.len();
-            assert!(expected_tles > 300);
-            *crate::TLES.lock().unwrap() = Some(seed);
-            *crate::SATNOGS.lock().unwrap() = Some(Default::default());
-            let e = engine.lock().unwrap();
-            assert!(!e.snapshot().radio.tx_enabled);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"prop":serde_json::from_slice::<serde_json::Value>(&serde_json::to_vec(&prop).unwrap()).unwrap(),"tleCount":expected_tles,"logCount":e.stored_log().len(),"live":query::navigation::live(&e).unwrap()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedStationModes" {
-            let mut e = engine.lock().unwrap();
-            sstv_files.seed(&mut e);
-            aprs::seed(&mut e);
-            let images:Vec<_>=e.sstv_gallery().iter().map(|g| json!({"extension":std::path::Path::new(&g.path).extension().unwrap().to_str().unwrap(),
-                "base64":crate::b64_encode(&std::fs::read(&g.path).unwrap())})).collect();
-            assert!(!e.snapshot().radio.tx_enabled);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"sstv":crate::sstv_state_dto(&e),"aprs":aprs::live(&e).unwrap(),
-                "heard":e.aprs_heard(),"roster":e.aprs_stations(crate::now_unix()),"images":images})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedJs8" {
-            let mut e = engine.lock().unwrap();
-            let mut settings = e.settings().clone();
-            settings.mycall = "N0CALL".into();
-            e.apply_settings(settings);
-            e.js8_load_journal(&value["journal"].to_string());
-            e.js8_send(None, "TEST MESSAGE WITH MULTIPLE FRAMES".into())
-                .unwrap();
-            assert!(!e.snapshot().radio.tx_enabled);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"state":e.js8_state(),"log":e.stored_records().into_iter().map(|r| {
-                    let mut q = tempo_app::dto::LoggedQso::from(r);
-                    q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
-                    q
-                }).collect::<Vec<_>>()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedTempo" {
-            let mut e = engine.lock().unwrap();
-            e.set_tier(serde_json::from_value(value["tier"].clone()).unwrap());
-            e.load_conversations(serde_json::from_value(value["conversations"].clone()).unwrap());
-            let snapshot = e.snapshot();
-            assert!(!snapshot.radio.tx_enabled);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"conversations":snapshot.conversations,"tier":snapshot.link.tier})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedFieldDay" {
-            let mut e = engine.lock().unwrap();
-            let mut settings = e.settings().clone();
-            settings.fd_active = true;
-            settings.fd_event = "arrlfd".into();
-            settings.fd_class = "1D".into();
-            settings.fd_section = "EMA".into();
-            settings.fd_operator = "W1AW".into();
-            settings.fd_power_mult = 2;
-            settings.fd_bonuses = vec!["emergency-power".into()];
-            settings.fd_bonuses_planned = vec!["natural-power".into()];
-            e.apply_settings(settings);
-            e.restore_field_day_if_enabled();
-            assert!(e.fd_log_manual("K1ABC", "2A", "WI", "CW").unwrap());
-            assert!(e.fd_log_manual("K2ABC", "2A", "WI", "PH").unwrap());
-            println!("REMOTE_TEST:{}", json!({"seeded":true}));
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedSweepstakes" {
-            // Sweepstakes works a station once and wants a repeat LOGGED, marked and scored
-            // zero, so the station counts one contact fewer than its log holds. Field Day is left
-            // first: a save made while a contest runs keeps that contest.
-            let mut e = engine.lock().unwrap();
-            let mut settings = e.settings().clone();
-            settings.fd_active = false;
-            e.apply_settings(settings.clone());
-            settings.fd_active = true;
-            settings.fd_event = "arrlss_cw".into();
-            settings.contest_check = "68".into();
-            settings.fd_section = "EMA".into();
-            settings.contest_category_assisted = "NON-ASSISTED".into();
-            settings.contest_category_power = "LOW".into();
-            e.apply_settings(settings);
-            for nr in ["1", "2"] {
-                let fields = [
-                    ("NR", nr),
-                    ("PREC", "A"),
-                    ("CALL", "K9XYZ"),
-                    ("CK", "72"),
-                    ("SEC", "IL"),
-                ]
-                .map(|(k, v)| (k.to_string(), v.to_string()));
-                assert!(e.contest_log_manual("K9XYZ", &fields, "CW", None).unwrap());
-            }
-            let fd = e.snapshot().field_day.unwrap();
-            println!(
-                "REMOTE_TEST:{}",
-                json!({"event":fd.event,"qsoCount":fd.qso_count,"rows":fd.log.len()})
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedOta" {
-            let fixture: serde_json::Value = serde_json::from_str(include_str!(
-                "../../../ui/src/remote-web/__fixtures__/ota.json"
-            ))
-            .unwrap();
-            let mut cache = ota_cache.lock().unwrap();
-            cache.clear();
-            for feed in fixture["feeds"].as_array().unwrap() {
-                let program = feed["program"].as_str().unwrap();
-                if value["missing"].as_str() == Some(program) {
-                    continue;
-                }
-                let mut rows: Vec<propagation::OtaSpot> =
-                    serde_json::from_value(feed["spots"].clone()).unwrap();
-                // The states a spot's park or summit is in, by reference, as the feed's parser
-                // sets them (they are never serialized, so the fixture cannot carry them).
-                for row in &mut rows {
-                    if let Some(states) = value["states"][row.reference.as_str()].as_array() {
-                        row.states = states
-                            .iter()
-                            .map(|s| s.as_str().unwrap().to_owned())
-                            .collect();
-                    }
-                }
-                cache.insert(
-                    program.into(),
-                    (crate::now_unix() - value["age"].as_i64().unwrap_or(0), rows),
-                );
-            }
-            drop(cache);
-            let mut e = engine.lock().unwrap();
-            e.set_hunted_parks_import(vec!["US-0003".into()]);
-            e.set_activation("POTA", "US-0001", Vec::new()).unwrap();
-            e.set_hunt_target("K2ABC", "POTA", "US-0004", Vec::new())
-                .unwrap();
-            println!("REMOTE_TEST:{}", json!({ "seeded": true }));
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "publishMemories" {
-            let generation = service
-                .status()
-                .unwrap()
-                .observation_generation
-                .unwrap_or_default();
-            let accepted = service.publish_memories(&generation, value["bank"].as_str());
-            println!("REMOTE_TEST:{}", json!({ "accepted": accepted }));
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "seedDxpeditions" {
-            let mut e = engine.lock().unwrap();
-            let mut settings = e.settings().clone();
-            settings.mycall = "W1AW".into();
-            e.apply_settings(settings);
-            let mut snapshot = propagation::offline(
-                crate::now_unix(),
-                &e.settings().mycall,
-                &e.settings().mygrid,
-            );
-            snapshot.source = "live".into();
-            snapshot
-                .dxpeditions
-                .workable_now
-                .push(propagation::WorkableCard {
-                    call: "3Y0TEST".into(),
-                    entity: "Bouvet Island".into(),
-                    need: propagation::NeedKind::Atno,
-                    band: "20m".into(),
-                    bearing_deg: 145.,
-                    octant: "SE".into(),
-                    distance_km: 12500.,
-                    status: propagation::WorkStatus::WorkNow,
-                    likelihood: "Good".into(),
-                    likelihood_score: 0.8,
-                    live_confirmed: true,
-                    how_to_call: "Synthetic test advice".into(),
-                    ft8_mode: None,
-                    window_hint: "1400–1700Z".into(),
-                    priority: 100,
-                    modes: vec!["CW".into()],
-                });
-            snapshot.dxpeditions.active.push("3Y0TEST".into());
-            let context = crate::PropContext {
-                call: e.settings().mycall.clone(),
-                grid: e.settings().mygrid.clone(),
-                log: e.log_revision(),
-            };
-            let result = json!({ "boardJson": serde_json::to_string(&snapshot.dxpeditions).unwrap(), "source": snapshot.source, "asOf": snapshot.as_of });
-            *prop_cache.lock().unwrap() = Some((Instant::now(), snapshot, context));
-            println!("REMOTE_TEST:{result}");
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
-        if value["type"] == "keyboardState" {
-            let e = engine.lock().unwrap();
-            println!(
-                "REMOTE_TEST:{}",
-                json!({ "rtty": crate::rtty_state_dto(&e), "psk": crate::psk_state_dto(&e),
-                "txEnabled": e.snapshot().radio.tx_enabled, "logCount": e.stored_records().len() })
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         // Test-only park directory. The response is the desktop search_parks and
         // lookup_park answer for the same search, for parity checks.
-        if value["type"] == "seedParks" {
-            let index = tempo_core::pota::ParkIndex::parse_csv(value["csv"].as_str().unwrap());
-            let search = value["search"].as_str().unwrap();
-            let parks: Vec<_> = index
-                .search(search, 12)
-                .into_iter()
-                .map(crate::ParkDto::from)
-                .collect();
-            let exact = index.lookup(search).map(crate::ParkDto::from);
-            *park_index.lock().unwrap() = index;
-            println!("REMOTE_TEST:{}", json!({ "parks": parks, "exact": exact }));
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         // Test-only rare-DX input: spots run through the desktop's own Pounce detector. The
         // response is what the desktop raised (its `pounce` event payloads), for parity checks.
-        if value["type"] == "seedPounce" {
-            let mut e = engine.lock().unwrap();
-            let mut settings = e.settings().clone();
-            settings.pounce_threshold = tempo_app::settings::PounceThreshold::Atno;
-            e.apply_settings(settings);
-            drop(e);
-            let (tx, rx) = crate::pouncer::channel();
-            for spot in value["spots"].as_array().unwrap() {
-                tx.offer(crate::pouncer::SpotHint {
-                    call: spot["call"].as_str().unwrap().into(),
-                    freq_mhz: spot["freqMhz"].as_f64().unwrap(),
-                    mode: spot["mode"].as_str().unwrap().into(),
-                    spotted_unix: crate::now_unix(),
-                });
-            }
-            drop(tx);
-            let mut fired = Vec::new();
-            crate::pouncer::run(
-                engine.clone(),
-                Default::default(),
-                ota_cache.clone(),
-                rx,
-                pounce_recent.clone(),
-                |p| fired.push(p),
-            );
-            println!("REMOTE_TEST:{}", json!({ "fired": fired }));
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         // Test-only desktop truth for the hosted Awards diagnostics: the report the
         // desktop get_confirmation_diagnostics command returns for the seeded log.
-        if value["type"] == "confirmationDiagnostics" {
-            let e = engine.lock().unwrap();
-            let report = tempo_app::dto::DiagnosticsReportDto::from(
-                e.confirmation_diagnostics(crate::now_unix(), |call| {
-                    propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-                })
-                .expect("the test's log reads"),
-            );
-            let log_count = e.stored_records().len();
-            drop(e);
-            println!(
-                "REMOTE_TEST:{}",
-                json!({ "report": report, "logCount": log_count })
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         // Test-only input to the in-memory engine. The production controller has
         // no import action; the response supplies desktop truth for parity checks.
-        if value["type"] == "seedRecallLog" {
-            let mut e = engine.lock().unwrap();
-            e.import_adif(value["adif"].as_str().unwrap());
-            let my_call = e.settings().mycall.clone();
-            let records = e.stored_records();
-            drop(e);
-            let awards = crate::awards_for_records(&records, &my_call);
-            let geography = propagation::compute_log_stats(
-                &records.iter().map(|q| &q.call).collect::<Vec<_>>(),
-                &my_call,
-            );
-            let mut log: Vec<_> = records
-                .into_iter()
-                .map(tempo_app::dto::LoggedQso::from)
-                .collect();
-            for q in &mut log {
-                q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
-            }
-            println!(
-                "REMOTE_TEST:{}",
-                json!({ "log": log, "awards": awards, "geography": geography })
-            );
-            std::io::stdout().flush().unwrap();
-            continue;
-        }
         let result = match value["type"].as_str() {
             Some("status") => service.status(),
             Some("vaultFailure") => {
@@ -986,13 +483,11 @@ fn cloud_runtime_probe() {
                     engine.clone(),
                     transport::Feeds {
                         monitor: crate::remote_monitor::Publisher::default(),
-                        spectrum: Some(scope_feed.clone()),
-                        meters: Default::default(),
-                        sources: Some(sources.clone()),
                         #[cfg(feature = "radio")]
                         audio: None,
                         stream: Default::default(),
                     },
+                    Accounts::not_ready(),
                 );
                 std::thread::sleep(Duration::from_millis(100));
                 service.status()
@@ -1081,7 +576,7 @@ fn actual_native_socket_refuses_cloud_commands_after_a_valid_publication() {
             });
             let token = transport::random_secret().unwrap();
             let result = transport::connected(&client, "00000000-0000-4000-8000-000000000001", &token,
-                cancellation, &engine, &transport::Feeds { monitor: publisher.clone(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() }, &status).await;
+                cancellation, &engine, &transport::Feeds { monitor: publisher.clone(), #[cfg(feature = "radio")] audio: None, stream: Default::default() }, &status).await;
             assert_eq!(result, Err("invalidResponse"));
             server.await.unwrap();
             assert_eq!(serde_json::to_value(engine.lock().unwrap().snapshot().radio).unwrap(), before);
@@ -1119,7 +614,7 @@ fn an_unparseable_service_message_reconnects_and_never_turns_remote_off() {
             }
         });
         let binding = Binding { origin: origin.clone(), station_id: STATION.into(), account_id: ACCOUNT.into() };
-        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
         let supervised = tokio::spawn(transport::supervise(client, binding, transport::random_secret().unwrap(), cancellation, engine, feeds, status.clone()));
         let mut seen = None;
         for _ in 0..250 {
@@ -1137,6 +632,232 @@ fn an_unparseable_service_message_reconnects_and_never_turns_remote_off() {
         let _ = cancel.send(true);
         supervised.await.unwrap();
         server.abort();
+    });
+}
+/// An operation the hosted page used to send and this station no longer takes — a retired request
+/// or a station control that is neither an FT gesture nor the held contact's log action — is
+/// answered `stationUnsupported`, as an older station answers what it cannot do, and the socket
+/// stays up with Stop's road on it. CONTROL: the parse failure above still reconnects.
+#[test]
+fn a_retired_operation_is_refused_by_name_and_the_station_stays_connected() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    const SESSION: &str = "20000000-0000-4000-8000-000000000001";
+    let retired = [
+        json!({"type":"logManual","requestId":"30000000-0000-4000-8000-000000000001"}),
+        json!({"type":"activationExport","requestId":"30000000-0000-4000-8000-000000000002"}),
+        json!({"type":"stationControl","requestId":"30000000-0000-4000-8000-000000000003",
+            "action":{"action":"decoder.clear","receiver":"cw"}}),
+    ];
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let client = Client::new(&origin).unwrap();
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let control = Arc::new(Mutex::new(Control { enabled: true, ..Default::default() }));
+        let status = SessionStatus { status: Arc::new(Mutex::new(Status::default())), control: control.clone(), generation: 0 };
+        let (cancel, cancellation) = watch::channel(false);
+        let (answers, mut answered) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+        let requests = retired.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            for request in requests {
+                let message = json!({"type":"operationRequest","sessionId":SESSION,"deviceId":SESSION,"operationVersion":4,"request":request});
+                socket.send(Message::Text(message.to_string().into())).await.unwrap();
+                loop {
+                    match tokio::time::timeout(Duration::from_secs(5), socket.next()).await {
+                        Ok(Some(Ok(Message::Text(text)))) => { let _ = answers.send(serde_json::from_str(&text).unwrap()); break }
+                        Ok(Some(Ok(_))) => continue,
+                        _ => return,
+                    }
+                }
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(30), socket.next()).await;
+        });
+        let binding = Binding { origin: origin.clone(), station_id: STATION.into(), account_id: ACCOUNT.into() };
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let supervised = tokio::spawn(transport::supervise(client, binding, transport::random_secret().unwrap(), cancellation, engine, feeds, status.clone()));
+        for request in &retired {
+            let answer = tokio::time::timeout(Duration::from_secs(10), answered.recv()).await.expect("the station answers").expect("an answer");
+            assert_eq!(answer, json!({"type":"operationResponse","sessionId":SESSION,"requestId":request["requestId"],"error":"stationUnsupported"}));
+        }
+        let current = status.status.lock().unwrap().clone();
+        assert_eq!((current.phase.as_str(), current.error), ("connected", None), "the socket stayed up");
+        assert!(control.lock().unwrap().enabled, "Remote is still on");
+        let _ = cancel.send(true);
+        supervised.await.unwrap();
+        server.abort();
+    });
+}
+/// ★ The room's tunnel at the station's own socket: a station that can serve one advertises the
+/// pipe (`x-nexus-pipe-version: 1`), and for each `pipeOpen` the room sends it opens its end of
+/// that pipe, a socket of its own on the pairing's credential, naming the pipe; never more than the
+/// room's four at once. CONTROL: a station that cannot serve one (no LAN road in this build of the
+/// service) advertises nothing and opens nothing, whatever it is sent.
+#[test]
+fn a_station_that_can_serve_a_tunnel_advertises_the_pipe_and_opens_its_end_of_each() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+    use tokio_tungstenite::tungstenite::Message;
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        for serves in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let client = Client::new(&origin).unwrap();
+            let engine: crate::SharedEngine =
+                Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+            let feeds = transport::Feeds {
+                monitor: crate::remote_monitor::Publisher::default(),
+                #[cfg(feature = "radio")]
+                audio: None,
+                stream: Default::default(),
+            };
+            let mut control = Control {
+                enabled: true,
+                ..Default::default()
+            };
+            if serves {
+                let (signer, pkcs8) = station_key::Signer::generate().unwrap();
+                drop(signer);
+                control.station_identity = Some(Arc::new(
+                    lan::tls::Identity::new(&pkcs8, STATION.into()).unwrap(),
+                ));
+                control.tunnel = Some(lan::TunnelDeps {
+                    authority: control.operations.clone(),
+                    engine: engine.clone(),
+                    feeds: feeds.clone(),
+                    dispatcher: crate::command_dispatch::Dispatcher::new(
+                        crate::command_dispatch::ShackStores {
+                            engine: engine.clone(),
+                        },
+                    ),
+                    commands: lan::commands::Commands::default(),
+                });
+            }
+            let control = Arc::new(Mutex::new(control));
+            let status = SessionStatus {
+                status: Arc::new(Mutex::new(Status::default())),
+                control,
+                generation: 0,
+            };
+            let (cancel, cancellation) = watch::channel(false);
+            let token = transport::random_secret().unwrap();
+            // The service: the station's main socket first, then each pipe end it opens.
+            let (seen, mut heard) = tokio::sync::mpsc::unbounded_channel::<(
+                String,
+                Option<String>,
+                Option<String>,
+                bool,
+            )>();
+            let pipes: Vec<String> = (1..=5)
+                .map(|n| format!("50000000-0000-4000-8000-00000000000{n}"))
+                .collect();
+            let sent = pipes.clone();
+            let server = tokio::spawn(async move {
+                let mut held = Vec::new();
+                while let Ok((stream, _)) = listener.accept().await {
+                    let seen = seen.clone();
+                    let mut asked = None;
+                    let socket = tokio_tungstenite::accept_hdr_async(
+                        stream,
+                        |request: &Request, response: Response| {
+                            let header = |name: &str| {
+                                request
+                                    .headers()
+                                    .get(name)
+                                    .and_then(|v| v.to_str().ok())
+                                    .map(str::to_string)
+                            };
+                            asked = Some((
+                                request.uri().path().to_string(),
+                                header("x-nexus-pipe-version"),
+                                header("x-nexus-pipe-id"),
+                                header("authorization").is_some(),
+                            ));
+                            Ok(response)
+                        },
+                    )
+                    .await;
+                    let (Ok(mut socket), Some(asked)) = (socket, asked) else {
+                        continue;
+                    };
+                    if asked.0.ends_with("/connect") {
+                        for pipe in &sent {
+                            socket
+                                .send(Message::Text(
+                                    format!(r#"{{"type":"pipeOpen","pipeId":"{pipe}"}}"#).into(),
+                                ))
+                                .await
+                                .unwrap();
+                        }
+                    }
+                    let _ = seen.send(asked);
+                    held.push(socket);
+                }
+            });
+            let binding = Binding {
+                origin: origin.clone(),
+                station_id: STATION.into(),
+                account_id: ACCOUNT.into(),
+            };
+            let supervised = tokio::spawn(transport::supervise(
+                client,
+                binding,
+                token,
+                cancellation,
+                engine,
+                feeds,
+                status.clone(),
+            ));
+            // The main socket and four ends, then a moment for a fifth end that must not come.
+            let mut asked = Vec::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while let Ok(Some(one)) = tokio::time::timeout_at(deadline, heard.recv()).await {
+                asked.push(one);
+                if asked.len() == 1 + super::tunnel::MAX_TUNNELS || (!serves && asked.len() == 1) {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            while let Ok(one) = heard.try_recv() {
+                asked.push(one)
+            }
+            let _ = cancel.send(true);
+            supervised.await.unwrap();
+            server.abort();
+            let connect = format!("/api/remote/stations/{STATION}/connect");
+            let main: Vec<_> = asked.iter().filter(|a| a.0 == connect).collect();
+            assert!(!main.is_empty(), "premise: the station connected");
+            assert_eq!(
+                main[0].1.as_deref(),
+                serves.then_some("1"),
+                "the pipe advertised only by a station that can serve it"
+            );
+            let ends: Vec<_> = asked.iter().filter(|a| a.0 != connect).collect();
+            if !serves {
+                assert!(
+                    ends.is_empty(),
+                    "a station that cannot serve a tunnel opened a pipe: {ends:?}"
+                );
+                continue;
+            }
+            assert_eq!(
+                ends.len(),
+                super::tunnel::MAX_TUNNELS,
+                "one end for each pipe, up to the room's bound: {ends:?}"
+            );
+            for end in &ends {
+                assert_eq!(end.0, format!("/api/remote/stations/{STATION}/pipe"));
+                assert!(end.3, "on the pairing's credential");
+                assert!(
+                    pipes[..4].contains(end.2.as_ref().unwrap()),
+                    "names a pipe the room asked for: {end:?}"
+                );
+            }
+        }
     });
 }
 /// Exclusive use of the process-wide satellite track badge — the crate's one implementation,
@@ -1165,7 +886,7 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
     const PIPE: usize = 4096;
-    const READS: usize = 8;
+    const READS: usize = 40;
     const DEVICE: &str = "10000000-0000-4000-8000-00000000000d";
     const SESSION: &str = "20000000-0000-4000-8000-00000000000e";
     async fn text(
@@ -1210,9 +931,10 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
             socket.send(operation(json!({"type":"state","requestId":id(3)}))).await.unwrap();
             let epoch = text(&mut socket).await["value"]["transmitEpoch"].as_str().expect("the controller holds the stop token").to_owned();
             relay_engine.lock().unwrap().set_tx_enabled(true);
-            // Fill the pipe: legacy reads the station answers inline, none of them read here.
+            // Fill the pipe: retired operations the station refuses inline, none of the refusals
+            // read here.
             for n in 0..READS as u32 {
-                socket.send(Message::Text(json!({"type":"applicationRead","requestId":id(0x10 + n),"command":"get_snapshot","revision":null}).to_string().into())).await.unwrap();
+                socket.send(operation(json!({"type":"logManual","requestId":id(0x30 + n)}))).await.unwrap();
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
             // The station's writer is stuck. Stop must still get through.
@@ -1228,171 +950,34 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
             let mut answers = Vec::new();
             loop {
                 let answer = text(&mut socket).await;
-                if answer["type"] == "operationResponse" { answers.push(answer); break; }
-                assert_eq!(answer["type"], "applicationResult");
+                let refused = answer["error"] == "stationUnsupported";
                 answers.push(answer);
+                if !refused { break; }
             }
             assert_eq!(answers.len(), READS + 1);
             let queued: usize = answers[..READS].iter().map(|a| a.to_string().len()).sum();
-            assert!(queued > PIPE, "positive control: {queued} bytes of read answers outgrow the {PIPE}-byte pipe nobody was draining, so the writer was stuck when the Stop went in");
+            assert!(queued > PIPE, "positive control: {queued} bytes of refusals outgrow the {PIPE}-byte pipe nobody was draining, so the writer was stuck when the Stop went in");
             assert_eq!(answers[READS]["requestId"], id(0x20));
             assert_eq!(answers[READS]["value"], json!({"stop":"accepted"}));
-            cancel.send(true).unwrap();
+            stop_remote(&mut socket, &cancel).await;
         });
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
-        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
-        let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
         relay.await.unwrap();
         assert_eq!(served, Ok(()), "the session ended because Remote stopped, not because a send timed out");
     });
-}
-
-/// Operation v5: the station SAYS when a rig-touching control settles. Before it, every such
-/// control answered `pending` by construction and the browser learned the outcome by polling -
-/// a `state` read, a `result` read, each a relay round trip, with a 1 s back-off between them.
-/// The station knew the answer the whole time: the radio loop finishes the `Completion` the
-/// receipt holds. Here a v5 browser gets an `operationEvent` with the outcome and a fresh state
-/// (new command window, advanced revision) the moment the readback lands, having sent NOTHING
-/// after the control. The positive control is the same exchange at v4: nothing arrives until
-/// the browser asks with a `result` read - the old path, kept exactly for a browser that never
-/// negotiated the push, and the proof that the event is version-gated rather than broadcast.
-#[test]
-#[cfg(feature = "radio")]
-fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
-    const DEVICE: &str = "10000000-0000-4000-8000-00000000001d";
-    const SESSION: &str = "20000000-0000-4000-8000-00000000001e";
-    async fn text(
-        socket: &mut tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
-        within: Duration,
-    ) -> Option<serde_json::Value> {
-        loop {
-            let next = tokio::time::timeout(within, socket.next()).await.ok()??;
-            if let Message::Text(text) = next.unwrap() {
-                return Some(serde_json::from_str(&text).unwrap());
-            }
-        }
-    }
-    fn sample(
-        engine: &crate::SharedEngine,
-        radio: &tempo_app::remote_monitor::provenance::Connection,
-        hz: u64,
-    ) {
-        let mut e = engine.lock().unwrap();
-        let read = e.remote_radio_read(radio, Instant::now()).unwrap();
-        e.remote_observe_cat(Some(&read), Some(true));
-        e.remote_observe_dial(Some(&read), Some(hz));
-        e.remote_observe_mode(Some(&read), Some("PKTUSB"));
-        e.remote_observe_ptt(Some(&read), Some(false));
-    }
-    for version in [5_u8, 4] {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.block_on(async {
-            let (station_io, relay_io) = tokio::io::duplex(65536);
-            let dir = std::env::temp_dir().join(format!("nexus-push-completion-{version}-{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&dir);
-            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN52", 0)));
-            let radio = {
-                let mut e = engine.lock().unwrap();
-                e.configure_remote_settings_store(dir.join("settings.json"));
-                e.set_tx_enabled(false);
-                e.set_frequency(14.074, "20m", "USB");
-                e.take_immediate_retune();
-                e.remote_open_radio().unwrap()
-            };
-            sample(&engine, &radio, 14_074_000);
-            // The browser's key, pinned at the radio: what it sends carries a proof (S1-M1).
-            let key = LaneKey::new();
-            let status = pinned_station(&key, DEVICE);
-            let authority = status.control.lock().unwrap().operations.clone();
-            authority.permit_station(DEVICE, true).unwrap();
-            let (cancel, cancellation) = watch::channel(false);
-            let relay_engine = engine.clone();
-            let relay = tokio::spawn(async move {
-                let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
-                let mut seq = 0;
-                let mut operation = |request: serde_json::Value| {
-                    seq += 1;
-                    let proof = key.proof(LANE_OPERATION, &request.to_string(), [LANE_STATION, DEVICE, SESSION], seq);
-                    Message::Text(json!({"type":"operationRequest","sessionId":SESSION,"deviceId":DEVICE,"operationVersion":version,"request":request,"proof":proof}).to_string().into())
-                };
-                let id = |n: u32| format!("00000000-0000-4000-8000-0000000000{n:02x}");
-                let reply = Duration::from_secs(3);
-                socket.send(operation(json!({"type":"state","requestId":id(1)}))).await.unwrap();
-                let boot = text(&mut socket, reply).await.unwrap()["value"]["stationBootId"].as_str().unwrap().to_owned();
-                socket.send(operation(json!({"type":"acquire","requestId":id(2),"stationBootId":boot}))).await.unwrap();
-                text(&mut socket, reply).await.unwrap();
-                socket.send(operation(json!({"type":"state","requestId":id(3)}))).await.unwrap();
-                let state = text(&mut socket, reply).await.unwrap()["value"].clone();
-                assert_eq!(state["phase"], "controlling");
-                // The hint the page trusts instead of its own version: named at v5, and only there.
-                let hinted = state["controls"]["capabilities"].as_array().unwrap().contains(&json!("outcomePush"));
-                assert_eq!(hinted, version == 5, "outcomePush is negotiated, not assumed: v{version}");
-                let before = state["revision"].as_u64().unwrap();
-                socket.send(operation(json!({"type":"stationControl","requestId":id(4),"stationBootId":boot,
-                    "leaseId":state["leaseId"],"expectedRevision":before,"commandWindowId":state["commandWindowId"],
-                    "clientSequence":state["nextSequence"],"context":state["controls"]["context"],
-                    "action":{"action":"radio.frequency","dialMhz":7.074,"band":"40m","sideband":"USB"}}))).await.unwrap();
-                let answer = text(&mut socket, reply).await.unwrap();
-                assert_eq!(answer["requestId"], id(4));
-                assert_eq!(answer["value"]["outcome"], "pending", "a rig-touching control is pending by construction");
-                // The radio loop: take the target, write it, read it back.
-                let work = relay_engine.lock().unwrap().take_remote_radio().unwrap();
-                assert_eq!(work.target(), (7_074_000, "PKTUSB"));
-                work.permission().begin_write(Instant::now()).unwrap();
-                sample(&relay_engine, &radio, 7_074_000);
-                let power = work.power_limit();
-                assert!(work.commit_tuning_readback(&mut tempo_app::engine::engine_lock(&relay_engine), power, None));
-                if version == 5 {
-                    // Unprompted: the browser sent nothing after the control.
-                    let event = text(&mut socket, reply).await.expect("the station pushed the outcome");
-                    assert_eq!(event["type"], "operationEvent");
-                    assert_eq!(event["sessionId"], SESSION);
-                    assert_eq!(event["operationId"], id(4));
-                    assert_eq!(event["value"]["operation"], "stationControl");
-                    assert_eq!(event["value"]["operationId"], id(4));
-                    assert_eq!(event["value"]["outcome"], "applied");
-                    assert_eq!(event["value"]["evidence"], "radioReadback");
-                    let fresh = &event["state"];
-                    assert_eq!(fresh["phase"], "controlling");
-                    assert!(fresh["commandWindowId"].is_string(), "a new window, the control having spent the old one");
-                    assert_ne!(fresh["commandWindowId"], state["commandWindowId"]);
-                    assert!(fresh["revision"].as_u64().unwrap() > before, "the revision moved with the dial");
-                    assert_eq!(fresh["nextSequence"].as_u64().unwrap(), state["nextSequence"].as_u64().unwrap() + 1);
-                    assert!(fresh["controls"]["capabilities"].as_array().unwrap().contains(&json!("outcomePush")));
-                    assert_eq!(event.as_object().unwrap().len(), 5, "exactly type, sessionId, operationId, value, state");
-                } else {
-                    // Positive control: a v4 browser is told nothing it did not ask for...
-                    assert_eq!(text(&mut socket, Duration::from_millis(500)).await, None, "no push to a v4 browser");
-                    // ...and learns the outcome the old way, by asking.
-                    socket.send(operation(json!({"type":"result","requestId":id(5),"operationId":id(4)}))).await.unwrap();
-                    let polled = text(&mut socket, reply).await.unwrap();
-                    assert_eq!(polled["requestId"], id(5));
-                    assert_eq!(polled["value"]["outcome"], "applied");
-                }
-                cancel.send(true).unwrap();
-            });
-            let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
-            let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
-            let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, audio: None, stream: Default::default() };
-            let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
-            relay.await.unwrap();
-            assert_eq!(served, Ok(()));
-            let _ = std::fs::remove_dir_all(&dir);
-        });
-    }
 }
 
 // ---- The relay's older lanes, bound to the browser's own key (security review S1-M1) -----------
 //
 // The relay stamps `sessionId` and `deviceId` on everything it forwards, so on its word alone a
 // relay that is not the one the operator trusts could act as any approved browser: take control,
-// keep a lease alive, transmit FT where it is granted, write the log, listen. The stream's offer
-// has carried the browser's signature since A5; these hold the older lanes to the same key. Every
-// message here is written byte for byte, and each proof is made the way the page makes one, so
-// the station is held to the bytes the relay hands it.
+// keep a lease alive, listen. The stream's offer has carried the browser's signature since A5;
+// these hold the older lanes to the same key. Every message here is written byte for byte, and
+// each proof is made the way the page makes one, so the station is held to the bytes the relay
+// hands it.
 
 const LANE_STATION: &str = "30000000-0000-4000-8000-0000000000a1";
 const LANE_DEVICE: &str = "10000000-0000-4000-8000-0000000000a1";
@@ -1467,12 +1052,11 @@ fn pinned_station(key: &LaneKey, device: &str) -> SessionStatus {
     status
 }
 
-/// [`pinned_station`] for `LANE_DEVICE`, granted logging and station control at the radio.
+/// [`pinned_station`] for `LANE_DEVICE`, granted station control at the radio.
 fn lane_station(key: &LaneKey) -> SessionStatus {
     let status = pinned_station(key, LANE_DEVICE);
     {
         let control = status.control.lock().unwrap();
-        control.operations.permit(LANE_DEVICE, true).unwrap();
         control
             .operations
             .permit_station(LANE_DEVICE, true)
@@ -1492,6 +1076,26 @@ async fn lane_text(
             return Some(serde_json::from_str(&text).unwrap());
         }
     }
+}
+
+/// Remote stops, as the relay sees it: the stop is asked for, and the relay holds its end of the
+/// socket until the station closes the session (for at most 5 s). A relay end dropped at once can
+/// reach the station's loop between its look at the stop and its look at the socket, and the
+/// session then ends on the broken socket (`invalidResponse`), not on the stop.
+async fn stop_remote(
+    socket: &mut tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+    cancel: &watch::Sender<bool>,
+) {
+    use futures_util::StreamExt;
+    cancel.send(true).unwrap();
+    let closed = async {
+        while let Some(Ok(message)) = socket.next().await {
+            if message.is_close() {
+                return;
+            }
+        }
+    };
+    let _ = tokio::time::timeout(Duration::from_secs(5), closed).await;
 }
 
 /// Send one message as the relay and read the station's answer to it.
@@ -1578,7 +1182,7 @@ fn s1m1_the_operation_lane_takes_only_what_the_pinned_device_key_signed() {
             socket.send(Message::Text(lane_operation(&heartbeat(9), LANE_DEVICE, Some(key.proof(LABEL, &heartbeat(9).to_string(), ids, 5))).into())).await.unwrap();
             assert_eq!(lane_text(&mut socket, Duration::from_millis(500)).await, None, "a replayed proof is never answered");
 
-            // Heartbeats keep a lease, and FT transmit with it: unsigned, refused; signed, renewed.
+            // Heartbeats keep a lease: unsigned, refused; signed, renewed.
             assert_eq!(lane_exchange(&mut socket, lane_operation(&heartbeat(10), LANE_DEVICE, None)).await["error"], "stationUnsupported");
             let renewed = lane_exchange(&mut socket, lane_operation(&heartbeat(11), LANE_DEVICE, Some(key.proof(LABEL, &heartbeat(11).to_string(), ids, 6)))).await;
             assert_eq!(renewed["value"]["phase"], "controlling", "{renewed}");
@@ -1596,12 +1200,130 @@ fn s1m1_the_operation_lane_takes_only_what_the_pinned_device_key_signed() {
             // The signed release does release.
             let released = lane_exchange(&mut socket, lane_operation(&release(16), LANE_DEVICE, Some(key.proof(LABEL, &release(16).to_string(), ids, 9)))).await;
             assert_eq!(released["value"]["phase"], "available", "{released}");
-            cancel.send(true).unwrap();
+            stop_remote(&mut socket, &cancel).await;
         });
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
-        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None, stream: Default::default() };
-        let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
+        relay.await.unwrap();
+        assert_eq!(served, Ok(()), "the session ended because Remote stopped");
+    });
+}
+
+/// ★ The old Remote page's FT8/FT4 and held-contact actions are gone. A browser that holds what an
+/// older build's approval restores (logging and station control, its key pinned) and a live lease,
+/// and that still sends one of them, signed as the page signed it, is answered `stationUnsupported`
+/// and nothing runs: the latch stays off, and its lease and the socket are untouched. So is a
+/// `result`, which read only those actions' receipts. CONTROL: the same lease still heartbeats, and
+/// its Stop is still taken.
+#[test]
+fn the_old_pages_ft_and_held_contact_actions_are_refused_and_the_lease_stays() {
+    // A stopTransmit reaches the satellite track badge (see the slow-link Stop test above).
+    let _alone = alone();
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let key = LaneKey::new();
+    let ids = [LANE_STATION, LANE_DEVICE, LANE_SESSION];
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let (station_io, relay_io) = tokio::io::duplex(65536);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let status = lane_station(&key);
+        let (cancel, cancellation) = watch::channel(false);
+        let watched = engine.clone();
+        let relay = tokio::spawn(async move {
+            let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
+            let id = |n: u32| format!("00000000-0000-4000-8000-0000000002{n:02x}");
+            let mut seq = 0;
+            let mut signed = |request: serde_json::Value| {
+                seq += 1;
+                lane_operation(&request, LANE_DEVICE, Some(key.proof(LANE_OPERATION, &request.to_string(), ids, seq)))
+            };
+            let state = |n| lane_operation(&json!({"type":"state","requestId":id(n)}), LANE_DEVICE, None);
+            let boot = lane_exchange(&mut socket, state(1)).await["value"]["stationBootId"].as_str().unwrap().to_owned();
+            let owner = lane_exchange(&mut socket, signed(json!({"type":"acquire","requestId":id(2),"stationBootId":boot}))).await;
+            assert_eq!(owner["value"]["phase"], "controlling", "premise: the browser holds the lease: {owner}");
+            let lease = owner["value"]["leaseId"].as_str().unwrap().to_owned();
+            for (n, action) in [
+                (3, json!({"action":"qso.discard","expectedKey":"0123456789abcdef"})),
+                (5, json!({"action":"ft.txEnabled","expectedTier":"FT8","on":true})),
+                (7, json!({"action":"ft.cq","expectedTier":"FT8","direction":null})),
+            ] {
+                let current = lane_exchange(&mut socket, state(n)).await["value"].clone();
+                assert_eq!(current["phase"], "controlling", "{action}: the lease is held");
+                let mut action = action;
+                if action["action"].as_str().unwrap().starts_with("ft.") {
+                    action["transmitEpoch"] = current["transmitEpoch"].clone();
+                }
+                let request = json!({"type":"stationControl","requestId":id(n + 1),"stationBootId":current["stationBootId"],
+                    "leaseId":current["leaseId"],"expectedRevision":current["revision"],"commandWindowId":current["commandWindowId"],
+                    "clientSequence":current["nextSequence"],"context":current["controls"]["context"],"action":action});
+                let answer = lane_exchange(&mut socket, signed(request)).await;
+                assert_eq!(answer["error"], "stationUnsupported", "{action}: {answer}");
+                assert!(!watched.lock().unwrap().tx_enabled(), "{action}: nothing armed");
+            }
+            let result = lane_exchange(&mut socket, signed(json!({"type":"result","requestId":id(9),"operationId":id(3)}))).await;
+            assert_eq!(result["error"], "stationUnsupported", "{result}");
+            // CONTROL: the socket and the lease are as they were, and Stop is still taken.
+            let beat = lane_exchange(&mut socket, signed(json!({"type":"heartbeat","requestId":id(10),"leaseId":lease}))).await;
+            assert_eq!(beat["value"]["phase"], "controlling", "the refusals left the lease alone: {beat}");
+            let stop = lane_exchange(&mut socket, lane_operation(&json!({"type":"stopTransmit","requestId":id(11),
+                "stationBootId":boot,"leaseId":lease,"transmitEpoch":beat["value"]["transmitEpoch"]}), LANE_DEVICE, None)).await;
+            assert_eq!(stop["value"], json!({"stop":"accepted"}), "{stop}");
+            stop_remote(&mut socket, &cancel).await;
+        });
+        let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
+        let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
+        relay.await.unwrap();
+        assert_eq!(served, Ok(()), "the session ended because Remote stopped, and no refusal ended it");
+    });
+}
+
+/// A computer (LAN-paired, or approved for the room's tunnel) reads only over its own pinned TLS
+/// link. The relay's lane is unsigned for `state`, so the station answers it no read in a
+/// computer's name, while a browser's `state` and a Stop in a computer's name are answered as before.
+#[test]
+fn the_relay_lane_answers_no_read_in_a_computers_name() {
+    let _alone = alone();
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    const LAN_COMPUTER: &str = "40000000-0000-4000-8000-0000000000c1";
+    const TUNNEL_COMPUTER: &str = "40000000-0000-4000-8000-0000000000c2";
+    let key = LaneKey::new();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let (station_io, relay_io) = tokio::io::duplex(65536);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let status = lane_station(&key);
+        {
+            let control = status.control.lock().unwrap();
+            control.operations.hold_lan_devices(Box::new(|| vec![LAN_COMPUTER.into()]));
+            control.operations.hold_tunnel_devices(Box::new(|| vec![TUNNEL_COMPUTER.into()]));
+        }
+        let (cancel, cancellation) = watch::channel(false);
+        let relay = tokio::spawn(async move {
+            let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
+            let id = |n: u32| format!("00000000-0000-4000-8000-0000000002{n:02x}");
+            let state = |n| json!({"type":"state","requestId":id(n)});
+            // CONTROL: the browser's unsigned state is answered, as the page needs.
+            let browser = lane_exchange(&mut socket, lane_operation(&state(1), LANE_DEVICE, None)).await;
+            assert_eq!(browser["value"]["allowed"], true, "{browser}");
+            let boot = browser["value"]["stationBootId"].as_str().unwrap().to_owned();
+            for (n, computer) in [(2, LAN_COMPUTER), (3, TUNNEL_COMPUTER)] {
+                let read = lane_exchange(&mut socket, lane_operation(&state(n), computer, None)).await;
+                assert_eq!(read, json!({"type":"operationResponse","sessionId":LANE_SESSION,"requestId":id(n),"error":"stationUnsupported"}), "{computer}");
+            }
+            // Stop still needs nothing: in a computer's name it is answered, not refused.
+            let stop = lane_exchange(&mut socket, lane_operation(&json!({"type":"stopTransmit","requestId":id(4),"stationBootId":boot,"leaseId":id(5),"transmitEpoch":"0000000000000000"}), LAN_COMPUTER, None)).await;
+            assert_eq!(stop["requestId"], id(4), "{stop}");
+            assert_ne!(stop["error"], "stationUnsupported", "{stop}");
+            stop_remote(&mut socket, &cancel).await;
+        });
+        let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
+        let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), #[cfg(feature = "radio")] audio: None, stream: Default::default() };
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
         relay.await.unwrap();
         assert_eq!(served, Ok(()), "the session ended because Remote stopped");
     });
@@ -1650,12 +1372,12 @@ fn s1m1_listen_takes_only_what_the_pinned_device_key_signed() {
             // POSITIVE CONTROL: signed as the page signs it, the station listens.
             let heard = lane_exchange(&mut socket, listen(&lease, Some(key.proof(LISTEN, &body(true, &lease), ids, 5)))).await;
             assert_eq!((heard["listening"].clone(), heard.get("reason").cloned()), (json!(true), None), "{heard}");
-            cancel.send(true).unwrap();
+            stop_remote(&mut socket, &cancel).await;
         });
         let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
         let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
-        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, audio: Some(audio::ReceiveFanout::new(feed.feed.clone())), stream: Default::default() };
-        let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), audio: Some(audio::ReceiveFanout::new(feed.feed.clone())), stream: Default::default() };
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status, None).await;
         relay.await.unwrap();
         assert_eq!(served, Ok(()), "the session ended because Remote stopped");
     });
@@ -1679,6 +1401,15 @@ struct FakeCloud {
     devices: Arc<Mutex<String>>,
     /// The signing key the service holds for the station (S3-M1): the first one sent to it.
     station_key: Arc<Mutex<Option<String>>>,
+    /// While set, the device list and a removal are not answered (a 503), as a service that is down
+    /// answers.
+    refusing: Arc<AtomicBool>,
+    /// Every `enroll/approve` body, as sent.
+    approvals: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// While set, a removal alone is not answered (a 503), while the list still is.
+    refusing_removals: Arc<AtomicBool>,
+    /// Every invitation and its removal, as sent: the route's last word and the body.
+    invites: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
 }
 fn device_list(approved: u8, expires_at: u64) -> String {
     json!({"devices":[{"id":BROWSER,"name":"Test browser","approved":approved,"expiresAt":expires_at}]})
@@ -1701,10 +1432,22 @@ async fn fake_cloud() -> FakeCloud {
     let served = devices.clone();
     let station_key = Arc::new(Mutex::new(None::<String>));
     let held = station_key.clone();
+    let refusing = Arc::new(AtomicBool::new(false));
+    let down = refusing.clone();
+    let approvals = Arc::new(Mutex::new(Vec::new()));
+    let approved_bodies = approvals.clone();
+    let refusing_removals = Arc::new(AtomicBool::new(false));
+    let removals_down = refusing_removals.clone();
+    let invites = Arc::new(Mutex::new(Vec::new()));
+    let invited = invites.clone();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let served = served.clone();
             let held = held.clone();
+            let down = down.clone();
+            let approved_bodies = approved_bodies.clone();
+            let removals_down = removals_down.clone();
+            let invited = invited.clone();
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 4096];
@@ -1738,6 +1481,7 @@ async fn fake_cloud() -> FakeCloud {
                 }
                 let lifetime = head.contains("\r\nx-nexus-device-lifetime: 1\r\n");
                 let keys = head.contains("\r\nx-nexus-device-key: 1\r\n");
+                let kinds = head.contains("\r\nx-nexus-device-kind: 1\r\n");
                 let (status, body) = if head.contains("/enroll ") {
                     let enrollment = json!({"id":STATION,"proof":"a".repeat(64),
                         "code":"0123456789abcdef","expiresAt":now_ms() + 600000});
@@ -1748,6 +1492,9 @@ async fn fake_cloud() -> FakeCloud {
                         json!({"accountId":ACCOUNT,"approved":false}).to_string(),
                     )
                 } else if head.contains("/enroll/approve ") {
+                    if let Ok(sent) = serde_json::from_slice(&request[head_end..]) {
+                        approved_bodies.lock().unwrap().push(sent);
+                    }
                     // The service approves the browser that confirmed the pairing along with it, with
                     // the device key its confirm brought (A5), if it brought one: here, the key the
                     // browser list names for it.
@@ -1767,6 +1514,8 @@ async fn fake_cloud() -> FakeCloud {
                     }
                     let approved = json!({"stationId":STATION,"accountId":ACCOUNT,"device":device});
                     ("200 OK", approved.to_string())
+                } else if head.contains("/native/devices ") && down.load(Ordering::SeqCst) {
+                    ("503 Service Unavailable", "{}".to_string())
                 } else if head.contains("/native/devices ") {
                     let mut listed: serde_json::Value =
                         serde_json::from_str(&served.lock().unwrap()).unwrap();
@@ -1784,27 +1533,108 @@ async fn fake_cloud() -> FakeCloud {
                             device.as_object_mut().unwrap().remove("publicKey");
                         }
                     }
+                    if !kinds {
+                        // The native client's devices, and every device's kind and platform, only
+                        // to a Nexus that asks: any other is listed its browsers alone.
+                        let devices = listed["devices"].as_array_mut().unwrap();
+                        devices.retain(|d| d.get("kind").is_none_or(|k| k == "browser"));
+                        for device in devices {
+                            let device = device.as_object_mut().unwrap();
+                            device.remove("kind");
+                            device.remove("platform");
+                            device.remove("untilRemoved");
+                        }
+                    }
+                    if !head.contains("\r\nx-nexus-device-proof: 1\r\n") {
+                        // Each device's role, how it was added, its proof and a computer's LAN
+                        // key, only to a Nexus that checks proofs itself.
+                        for device in listed["devices"].as_array_mut().unwrap() {
+                            let device = device.as_object_mut().unwrap();
+                            for field in ["role", "addedBy", "proof", "lanKey"] {
+                                device.remove(field);
+                            }
+                        }
+                    }
                     ("200 OK", listed.to_string())
+                } else if head.contains("/native/approve-device ")
+                    && serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
+                        .is_ok_and(|l| l["devices"].as_array().is_some_and(|d| d.len() > 1))
+                {
+                    // Of several devices, the one the request names (every one under its id) gets
+                    // the new approval, and the others are left as they are.
+                    let asked = serde_json::from_slice::<serde_json::Value>(&request[head_end..])
+                        .ok()
+                        .and_then(|v| v["deviceId"].as_str().map(str::to_string));
+                    let mut listed: serde_json::Value =
+                        serde_json::from_str(&served.lock().unwrap()).unwrap();
+                    for device in listed["devices"].as_array_mut().unwrap() {
+                        if device["id"].as_str() == asked.as_deref() {
+                            device["approved"] = 1.into();
+                            device["expiresAt"] = APPROVED_UNTIL.into();
+                            if lifetime {
+                                device["generation"] = 2.into();
+                                device["renewsUntil"] = (APPROVED_UNTIL + 60 * DAY_MS).into();
+                            }
+                        }
+                    }
+                    *served.lock().unwrap() = listed.to_string();
+                    ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/approve-device ") {
                     // The service writes a new approval, and with it the approval generation. The
-                    // browser's device key (A5) is the browser's, and approving leaves it as it is.
-                    let key = serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
-                        .ok()
-                        .and_then(|l| l["devices"][0]["publicKey"].as_str().map(str::to_string));
+                    // browser's device key (A5) is the browser's, and approving leaves it as it is,
+                    // as it leaves a device's kind and platform.
+                    let listed = serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
+                        .unwrap_or_default();
                     let mut approved: serde_json::Value = serde_json::from_str(&if lifetime {
                         device_list_at(1, APPROVED_UNTIL, 2)
                     } else {
                         device_list(1, APPROVED_UNTIL)
                     })
                     .unwrap();
-                    if let Some(key) = key {
-                        approved["devices"][0]["publicKey"] = key.into();
+                    for field in ["id", "publicKey", "kind", "platform", "name"] {
+                        if let Some(value) = listed["devices"][0].get(field) {
+                            approved["devices"][0][field] = value.clone();
+                        }
                     }
                     *served.lock().unwrap() = approved.to_string();
+                    ("200 OK", r#"{"ok":true}"#.to_string())
+                } else if head.contains("/native/revoke-device ")
+                    && (down.load(Ordering::SeqCst) || removals_down.load(Ordering::SeqCst))
+                {
+                    ("503 Service Unavailable", "{}".to_string())
+                } else if head.contains("/native/revoke-device ")
+                    && serde_json::from_str::<serde_json::Value>(&served.lock().unwrap())
+                        .is_ok_and(|l| l["devices"].as_array().is_some_and(|d| d.len() > 1))
+                {
+                    // Of several devices, only the one the request names stops being listed.
+                    let asked = serde_json::from_slice::<serde_json::Value>(&request[head_end..])
+                        .ok()
+                        .and_then(|v| v["deviceId"].as_str().map(str::to_string));
+                    let mut listed: serde_json::Value =
+                        serde_json::from_str(&served.lock().unwrap()).unwrap();
+                    listed["devices"]
+                        .as_array_mut()
+                        .unwrap()
+                        .retain(|d| d["id"].as_str() != asked.as_deref());
+                    *served.lock().unwrap() = listed.to_string();
                     ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/revoke-device ") {
                     // A revoked browser's expiry becomes "now", so the service stops listing it.
                     *served.lock().unwrap() = json!({"devices":[]}).to_string();
+                    ("200 OK", r#"{"ok":true}"#.to_string())
+                } else if (head.contains("/native/invite ") || head.contains("/native/uninvite "))
+                    && down.load(Ordering::SeqCst)
+                {
+                    ("503 Service Unavailable", "{}".to_string())
+                } else if head.contains("/native/invite ") || head.contains("/native/uninvite ") {
+                    let verb = if head.contains("/native/invite ") {
+                        "invite"
+                    } else {
+                        "uninvite"
+                    };
+                    if let Ok(sent) = serde_json::from_slice(&request[head_end..]) {
+                        invited.lock().unwrap().push((verb.to_string(), sent));
+                    }
                     ("200 OK", r#"{"ok":true}"#.to_string())
                 } else if head.contains("/native/revoke ") {
                     ("200 OK", r#"{"ok":true}"#.to_string())
@@ -1848,6 +1678,10 @@ async fn fake_cloud() -> FakeCloud {
         origin,
         devices,
         station_key,
+        refusing,
+        approvals,
+        refusing_removals,
+        invites,
     }
 }
 fn paired_vault(origin: &str) -> MemoryVault {
@@ -1891,20 +1725,13 @@ fn on(status: &Status) -> bool {
 async fn settle() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 }
-/// Turn Remote on, list the browser, and grant it station control and remote logging.
+/// Turn Remote on, list the browser, and grant it station control.
 async fn on_with_grants(service: &Service) {
     eventually(service, "the pairing loaded", |s| s.station_id.is_some()).await;
     service.action(Action::Enable {}).await.unwrap();
     service.action(Action::Refresh {}).await.unwrap();
     service
         .action(Action::StationPermission {
-            device_id: BROWSER.into(),
-            allow: true,
-        })
-        .await
-        .unwrap();
-    service
-        .action(Action::LoggingPermission {
             device_id: BROWSER.into(),
             allow: true,
         })
@@ -1989,7 +1816,7 @@ async fn revoking_station_access_is_remembered_as_off() {
         status.phase, "disabled",
         "Revoke station access is remembered as off"
     );
-    assert!(status.station_permissions.is_empty() && status.logging_permissions.is_empty());
+    assert!(status.station_permissions.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2019,7 +1846,7 @@ async fn a_locked_credential_store_leaves_remote_off_after_a_restart() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn station_and_logging_grants_survive_a_restart_for_a_still_approved_browser() {
+async fn station_grants_survive_a_restart_for_a_still_approved_browser() {
     let cloud = fake_cloud().await;
     let vault = paired_vault(&cloud.origin);
     let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
@@ -2032,7 +1859,7 @@ async fn station_and_logging_grants_survive_a_restart_for_a_still_approved_brows
     // Nobody opens Settings after an unattended restart: the station must fetch the browser list
     // itself before it can restore anything.
     let status = eventually(&service, "grants restored", |s| {
-        s.station_permissions == [BROWSER] && s.logging_permissions == [BROWSER]
+        s.station_permissions == [BROWSER]
     })
     .await;
     assert!(on(&status));
@@ -2067,8 +1894,7 @@ async fn grants_are_not_restored_for_a_revoked_or_reapproved_browser() {
         settle().await;
         service.action(Action::Refresh {}).await.unwrap();
         let status = service.status().unwrap();
-        let restored =
-            !status.station_permissions.is_empty() || !status.logging_permissions.is_empty();
+        let restored = !status.station_permissions.is_empty();
         assert_eq!(
             restored,
             case.starts_with("positive"),
@@ -2080,24 +1906,22 @@ async fn grants_are_not_restored_for_a_revoked_or_reapproved_browser() {
 
 // ---- One approval (operator decision 2026-09-13, late) --------------------------------------------
 //
-// Approving a browser grants it station control and logging, and FT8/FT4 transmit when the approval
-// ticks it. All three are remembered across a restart for as long as that approval stands. That
-// REPLACES "transmit grants never survive a restart"; what did not change is that nothing arms the
-// transmitter: the TX-enable latch starts off and keying still needs the browser's TX On (proven at
-// the authority in operations/transmit_tests.rs, `a_restored_transmit_grant_arms_nothing_...`).
+// Approving a browser grants it station control. It is remembered across a restart
+// for as long as that approval stands, and nothing arms the transmitter: the TX-enable latch starts
+// off.
 
 /// A browser the service lists as waiting for approval.
 fn pending_browser(cloud: &FakeCloud) {
     *cloud.devices.lock().unwrap() = device_list(0, APPROVED_UNTIL - 1);
 }
-/// Approve the browser here, the one-approval way, with or without the transmit tick.
-async fn approve(service: &Service, transmit: bool) -> Status {
+/// Approve the browser here, the one-approval way.
+async fn approve(service: &Service) -> Status {
     service
         .action(Action::Device {
             device_id: BROWSER.into(),
             approve: true,
-            transmit,
             key: None,
+            kind: Some(Kind::Browser),
         })
         .await
         .unwrap()
@@ -2108,28 +1932,23 @@ fn transmitter_idle(engine: &crate::SharedEngine) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn approving_a_browser_grants_control_and_logging_and_transmit_only_when_ticked() {
-    for tick in [false, true] {
-        let cloud = fake_cloud().await;
-        let vault = paired_vault(&cloud.origin);
-        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
-        let service = launch(&cloud, &vault, &engine);
-        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
-        service.action(Action::Enable {}).await.unwrap();
-        pending_browser(&cloud);
-        let before = service.action(Action::Refresh {}).await.unwrap();
-        assert!(
-            before.station_permissions.is_empty() && before.logging_permissions.is_empty(),
-            "a browser waiting for approval holds nothing"
-        );
-        let status = approve(&service, tick).await;
-        assert!(on(&status), "approving a browser does not toggle Remote");
-        assert_eq!(status.station_permissions, [BROWSER], "tick={tick}");
-        assert_eq!(status.logging_permissions, [BROWSER], "tick={tick}");
-        let expected: &[&str] = if tick { &[BROWSER] } else { &[] };
-        assert_eq!(status.transmit_permissions, expected, "tick={tick}");
-        assert!(transmitter_idle(&engine), "a grant arms nothing");
-    }
+async fn approving_a_browser_grants_station_control() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    pending_browser(&cloud);
+    let before = service.action(Action::Refresh {}).await.unwrap();
+    assert!(
+        before.station_permissions.is_empty(),
+        "a browser waiting for approval holds nothing"
+    );
+    let status = approve(&service).await;
+    assert!(on(&status), "approving a browser does not toggle Remote");
+    assert_eq!(status.station_permissions, [BROWSER]);
+    assert!(transmitter_idle(&engine), "a grant arms nothing");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2141,30 +1960,30 @@ async fn an_approval_given_while_remote_is_off_applies_at_turn_on() {
     eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
     pending_browser(&cloud);
     service.action(Action::Refresh {}).await.unwrap();
-    let off = approve(&service, true).await;
+    let off = approve(&service).await;
     assert!(
         !on(&off) && off.observation_generation.is_none(),
         "approving a browser does not turn Remote on; only approving the pairing does"
     );
     assert!(
-        off.station_permissions.is_empty() && off.transmit_permissions.is_empty(),
+        off.station_permissions.is_empty(),
         "nothing is live while Remote is off"
     );
     service.action(Action::Enable {}).await.unwrap();
     eventually(&service, "the approval took effect at Turn on", |s| {
         s.station_permissions == [BROWSER]
-            && s.logging_permissions == [BROWSER]
-            && s.transmit_permissions == [BROWSER]
     })
     .await;
     assert!(transmitter_idle(&engine));
 }
 
 /// Operator decision 2026-09-14: Turn off Remote PAUSES. Turning it back on restores what each
-/// still-approved browser had (transmit only where granted). Revoking a browser, and End remote
-/// control (take over), still clear. The TX-enable latch is off at every step, and nothing keys.
+/// still-approved browser had. Since 2026-10-10 End remote control
+/// (take over) pauses the same way: it drops everyone and holds until Remote is turned on again, and
+/// no browser is approved again after it. Revoking a browser still clears. The TX-enable latch is
+/// off at every step, and nothing keys.
 #[tokio::test(flavor = "multi_thread")]
-async fn turn_off_pauses_but_revoking_a_browser_or_ending_remote_control_clears() {
+async fn turn_off_and_ending_remote_control_pause_but_revoking_a_browser_clears() {
     for case in [
         "positive control: turn off, turn on",
         "turn off, revoke the browser, turn on",
@@ -2178,8 +1997,8 @@ async fn turn_off_pauses_but_revoking_a_browser_or_ending_remote_control_clears(
         service.action(Action::Enable {}).await.unwrap();
         pending_browser(&cloud);
         service.action(Action::Refresh {}).await.unwrap();
-        let granted = approve(&service, true).await;
-        assert_eq!(granted.transmit_permissions, [BROWSER], "{case}: granted");
+        let granted = approve(&service).await;
+        assert_eq!(granted.station_permissions, [BROWSER], "{case}: granted");
         assert!(transmitter_idle(&engine), "{case}");
 
         if case.starts_with("end remote control") {
@@ -2188,7 +2007,7 @@ async fn turn_off_pauses_but_revoking_a_browser_or_ending_remote_control_clears(
         let off = service.action(Action::Disable {}).await.unwrap();
         assert!(!on(&off), "{case}: Remote is off");
         assert!(
-            off.station_permissions.is_empty() && off.transmit_permissions.is_empty(),
+            off.station_permissions.is_empty(),
             "{case}: nothing is live while Remote is off"
         );
         assert!(transmitter_idle(&engine), "{case}");
@@ -2197,28 +2016,24 @@ async fn turn_off_pauses_but_revoking_a_browser_or_ending_remote_control_clears(
                 .action(Action::Device {
                     device_id: BROWSER.into(),
                     approve: false,
-                    transmit: false,
                     key: None,
+                    kind: None,
                 })
                 .await
                 .unwrap();
         }
         service.action(Action::Enable {}).await.unwrap();
 
-        let status = if case.starts_with("positive") {
+        let status = if !case.contains("revoke the browser") {
             eventually(&service, "the paused grants came back", |s| {
                 s.station_permissions == [BROWSER]
-                    && s.logging_permissions == [BROWSER]
-                    && s.transmit_permissions == [BROWSER]
             })
             .await
         } else {
             settle().await;
             let status = service.action(Action::Refresh {}).await.unwrap();
             assert!(
-                status.station_permissions.is_empty()
-                    && status.logging_permissions.is_empty()
-                    && status.transmit_permissions.is_empty(),
+                status.station_permissions.is_empty(),
                 "{case}: nothing comes back: {}",
                 serde_json::to_string(&status).unwrap()
             );
@@ -2229,12 +2044,182 @@ async fn turn_off_pauses_but_revoking_a_browser_or_ending_remote_control_clears(
     }
 }
 
+/// Removing one browser's approval at the shack takes that browser's grants, and only its (operator
+/// decision 2026-10-14): every other browser keeps station control and a lease it holds, now and at the next Turn on. REFUSED: the removed browser at its next command, and
+/// a browser never approved here. Nothing is keyed throughout.
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_one_browser_leaves_every_other_device_its_grants() {
+    const OTHER: &str = "10000000-0000-4000-8000-00000000000e";
+    const NEVER: &str = "10000000-0000-4000-8000-00000000000f";
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    *cloud.devices.lock().unwrap() = json!({"devices":[
+        {"id":BROWSER,"name":"Test browser","approved":0,"expiresAt":APPROVED_UNTIL - 1},
+        {"id":OTHER,"name":"Other browser","approved":0,"expiresAt":APPROVED_UNTIL - 1}]})
+    .to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    for id in [BROWSER, OTHER] {
+        service
+            .action(Action::Device {
+                device_id: id.into(),
+                approve: true,
+                key: None,
+                kind: Some(Kind::Browser),
+            })
+            .await
+            .unwrap();
+    }
+    let holds = |s: &Status, id: &str| s.station_permissions.contains(&id.to_string());
+    let both = service.status().unwrap();
+    assert!(holds(&both, BROWSER), "premise");
+    assert!(holds(&both, OTHER), "premise");
+
+    // The other browser holds the lease, through a connection that stays open.
+    let authority = service.control.lock().unwrap().operations.clone();
+    let connection = operations::LanConnection::new(authority.clone());
+    let acquire = |device: &str| -> String {
+        let session = lan_grants::fresh_id();
+        let ask = |request: operations::Request| {
+            for _ in 0..50 {
+                match authority.handle_version(
+                    (connection.id, 4),
+                    &session,
+                    device,
+                    &request,
+                    &engine,
+                    Instant::now(),
+                ) {
+                    Err("stationBusy" | "remoteBusy") => {
+                        std::thread::sleep(Duration::from_millis(20))
+                    }
+                    other => return other,
+                }
+            }
+            Err("busy throughout")
+        };
+        let boot = match ask(operations::Request::State {
+            request_id: lan_grants::fresh_id(),
+        }) {
+            Ok(state) => state["stationBootId"].as_str().unwrap().to_string(),
+            Err(refused) => return refused.into(),
+        };
+        match ask(operations::Request::Acquire {
+            request_id: lan_grants::fresh_id(),
+            station_boot_id: boot,
+        }) {
+            Ok(acquired) => acquired["phase"].as_str().unwrap_or("none").into(),
+            Err(refused) => refused.into(),
+        }
+    };
+    assert_eq!(acquire(OTHER), "controlling", "premise: the other's lease");
+
+    service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    let after = service.status().unwrap();
+    assert!(!holds(&after, BROWSER), "removed");
+    assert!(
+        holds(&after, OTHER),
+        "removing one browser took another's grants: {}",
+        serde_json::to_string(&after).unwrap()
+    );
+    assert_eq!(
+        authority.local_status()["controller"],
+        json!(OTHER),
+        "removing one browser ended another's lease"
+    );
+    assert_eq!(acquire(BROWSER), "localPermissionRequired", "removed");
+    assert_eq!(acquire(NEVER), "localPermissionRequired", "never approved");
+    assert!(transmitter_idle(&engine));
+
+    // Turn off and on: the other browser's grants come back, the removed one's never do.
+    service.action(Action::Disable {}).await.unwrap();
+    service.action(Action::Enable {}).await.unwrap();
+    eventually(&service, "the other browser's grants came back", |s| {
+        holds(s, OTHER)
+    })
+    .await;
+    settle().await;
+    let back = service.action(Action::Refresh {}).await.unwrap();
+    assert!(!holds(&back, BROWSER), "came back");
+    assert!(holds(&back, OTHER));
+    assert_eq!(acquire(BROWSER), "localPermissionRequired", "removed");
+    assert_eq!(acquire(NEVER), "localPermissionRequired", "never approved");
+    assert!(transmitter_idle(&engine), "the latch is still off");
+}
+
+/// A removal the service never heard still stands at the shack: the browser's grants end at once and
+/// are forgotten, so Turn on gives them back to nobody, though the service still lists the approval
+/// as it was. CONTROL: the same Turn on with no removal gives them back.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_the_service_never_heard_still_stands_at_the_shack() {
+    for removed in [false, true] {
+        let cloud = fake_cloud().await;
+        let engine = engine();
+        let service = on_at(&cloud, &engine).await;
+        pending_browser(&cloud);
+        service.action(Action::Refresh {}).await.unwrap();
+        assert_eq!(approve(&service).await.station_permissions, [BROWSER]);
+        if removed {
+            cloud.refusing.store(true, Ordering::SeqCst);
+            let refused = service
+                .action(Action::Device {
+                    device_id: BROWSER.into(),
+                    approve: false,
+                    key: None,
+                    kind: None,
+                })
+                .await;
+            assert_eq!(
+                refused.map(|s| s.account.removals),
+                Ok(vec![BROWSER.to_string()]),
+                "premise: the service never heard it, and it waits to be told"
+            );
+            let status = service.status().unwrap();
+            assert!(
+                status.station_permissions.is_empty(),
+                "the removal did not stand at once"
+            );
+            // The service answers again, but still never hears the removal: it lists the approval as
+            // it was.
+            cloud.refusing_removals.store(true, Ordering::SeqCst);
+            cloud.refusing.store(false, Ordering::SeqCst);
+        }
+        service.action(Action::Disable {}).await.unwrap();
+        service.action(Action::Enable {}).await.unwrap();
+        let status = if removed {
+            eventually(&service, "Remote back on", on).await;
+            settle().await;
+            service.action(Action::Refresh {}).await.unwrap()
+        } else {
+            eventually(&service, "control: the grants came back", |s| {
+                s.station_permissions == [BROWSER]
+            })
+            .await
+        };
+        assert_eq!(
+            status.station_permissions.is_empty(),
+            removed,
+            "removed={removed}: {}",
+            serde_json::to_string(&status).unwrap()
+        );
+        assert!(transmitter_idle(&engine));
+    }
+}
+
 /// Operator decision 2026-09-14: approving the first pairing turns Remote on, the same way Turn on
 /// Remote does, and the browser that did the pairing is approved with it. The TX-enable latch stays
-/// off, transmit is granted only if the approval ticked it, and a later Turn off is remembered.
+/// off, and a later Turn off is remembered.
 #[tokio::test(flavor = "multi_thread")]
 async fn approving_the_pairing_turns_remote_on_and_approves_the_browser_that_paired() {
-    for tick in [false, true] {
+    {
         let cloud = fake_cloud().await;
         let vault = MemoryVault::default();
         let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
@@ -2256,7 +2241,6 @@ async fn approving_the_pairing_turns_remote_on_and_approves_the_browser_that_pai
             .action(Action::Approve {
                 enrollment_id: STATION.into(),
                 account_id: ACCOUNT.into(),
-                transmit: tick,
             })
             .await
             .unwrap();
@@ -2265,12 +2249,10 @@ async fn approving_the_pairing_turns_remote_on_and_approves_the_browser_that_pai
             "approving the pairing turns Remote on: {}",
             approved.phase
         );
-        let status = eventually(&service, "the pairing browser's grants", |s| {
-            s.station_permissions == [BROWSER] && s.logging_permissions == [BROWSER]
+        eventually(&service, "the pairing browser's grants", |s| {
+            s.station_permissions == [BROWSER]
         })
         .await;
-        let expected: &[&str] = if tick { &[BROWSER] } else { &[] };
-        assert_eq!(status.transmit_permissions, expected, "tick={tick}");
         assert!(transmitter_idle(&engine), "the TX-enable latch stays off");
 
         service.action(Action::Disable {}).await.unwrap();
@@ -2286,33 +2268,12 @@ async fn approving_the_pairing_turns_remote_on_and_approves_the_browser_that_pai
     }
 }
 
-/// THE KEY SAFETY TEST for the reversed rule. FT8/FT4 transmit comes back after a restart only for
-/// a browser the service still lists as approved at the SAME approval, and only if the approval
-/// ticked it. In every case the TX-enable latch is still off after the restart and nothing is keyed.
+/// A revoked switch is remembered across a restart. End remote control (take over) is remembered as
+/// Remote off: after a restart it stays off, and turning it on gives the browser back everything its
+/// approval had (the operator's decision of 2026-10-10: no device is approved again after it).
 #[tokio::test(flavor = "multi_thread")]
-async fn transmit_grant_survives_a_restart_only_if_ticked_on_a_still_approved_browser() {
-    for (case, tick, after_restart, restored) in [
-        (
-            "positive control: ticked, approval unchanged",
-            true,
-            device_list(1, APPROVED_UNTIL),
-            true,
-        ),
-        ("not ticked", false, device_list(1, APPROVED_UNTIL), false),
-        ("revoked", true, device_list(0, APPROVED_UNTIL), false),
-        (
-            "re-approved (a new approval generation)",
-            true,
-            device_list(1, APPROVED_UNTIL + 1),
-            false,
-        ),
-        (
-            "gone from the station",
-            true,
-            json!({"devices":[]}).to_string(),
-            false,
-        ),
-    ] {
+async fn revoking_control_or_taking_over_is_remembered_across_a_restart() {
+    for case in ["revoke station control", "take over"] {
         let cloud = fake_cloud().await;
         let vault = paired_vault(&cloud.origin);
         let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
@@ -2321,71 +2282,13 @@ async fn transmit_grant_survives_a_restart_only_if_ticked_on_a_still_approved_br
         service.action(Action::Enable {}).await.unwrap();
         pending_browser(&cloud);
         service.action(Action::Refresh {}).await.unwrap();
-        let before = approve(&service, tick).await;
+        let granted = approve(&service).await;
         assert_eq!(
-            before.transmit_permissions.len(),
-            usize::from(tick),
-            "{case}: the grant as given before the restart"
-        );
-        settle().await;
-        drop(service);
-
-        *cloud.devices.lock().unwrap() = after_restart;
-        let service = launch(&cloud, &vault, &engine);
-        let still_approved = case.starts_with("positive") || case == "not ticked";
-        let status = if still_approved {
-            eventually(&service, "station control restored", |s| {
-                s.station_permissions == [BROWSER]
-            })
-            .await
-        } else {
-            eventually(&service, "Remote back on", on).await;
-            settle().await;
-            service.action(Action::Refresh {}).await.unwrap()
-        };
-        let expected: &[&str] = if restored { &[BROWSER] } else { &[] };
-        assert_eq!(
-            status.transmit_permissions,
-            expected,
-            "{case}: {}",
-            serde_json::to_string(&status).unwrap()
-        );
-        let authority = service.control.lock().unwrap().operations.clone();
-        assert_eq!(
-            authority.local_status()["transmitDevices"],
-            json!(expected),
-            "{case}"
-        );
-        assert!(
-            !engine.lock().unwrap().tx_enabled(),
-            "{case}: the TX-enable latch is off after every restart"
-        );
-        assert!(transmitter_idle(&engine), "{case}: nothing is keyed");
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn revoking_transmit_or_control_or_taking_over_is_remembered_across_a_restart() {
-    for case in ["revoke transmit", "revoke station control", "take over"] {
-        let cloud = fake_cloud().await;
-        let vault = paired_vault(&cloud.origin);
-        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
-        let service = launch(&cloud, &vault, &engine);
-        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
-        service.action(Action::Enable {}).await.unwrap();
-        pending_browser(&cloud);
-        service.action(Action::Refresh {}).await.unwrap();
-        let granted = approve(&service, true).await;
-        assert_eq!(
-            granted.transmit_permissions,
+            granted.station_permissions,
             [BROWSER],
             "{case}: positive control"
         );
         let revoked = match case {
-            "revoke transmit" => Action::TransmitPermission {
-                device_id: BROWSER.into(),
-                allow: false,
-            },
             "revoke station control" => Action::StationPermission {
                 device_id: BROWSER.into(),
                 allow: false,
@@ -2394,24 +2297,37 @@ async fn revoking_transmit_or_control_or_taking_over_is_remembered_across_a_rest
         };
         let now = service.action(revoked).await.unwrap();
         assert!(
-            now.transmit_permissions.is_empty(),
+            now.station_permissions.is_empty(),
             "{case}: takes effect at once"
         );
         settle().await;
         drop(service);
 
         let service = launch(&cloud, &vault, &engine);
+        if case == "take over" {
+            eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+            settle().await;
+            let held = service.status().unwrap();
+            assert!(!on(&held), "{case}: Remote came back on by itself");
+            assert!(
+                held.station_permissions.is_empty(),
+                "{case}: a grant came back by itself"
+            );
+            assert!(transmitter_idle(&engine), "{case}");
+            service.action(Action::Enable {}).await.unwrap();
+            eventually(
+                &service,
+                "the approval's grants came back at Turn on",
+                |s| s.station_permissions == [BROWSER],
+            )
+            .await;
+            assert!(transmitter_idle(&engine), "{case}: the latch is still off");
+            continue;
+        }
         eventually(&service, "Remote back on", on).await;
         settle().await;
         let status = service.action(Action::Refresh {}).await.unwrap();
-        let (control, logging): (&[&str], &[&str]) = match case {
-            "revoke transmit" => (&[BROWSER], &[BROWSER]),
-            "revoke station control" => (&[], &[BROWSER]),
-            _ => (&[], &[]),
-        };
-        assert_eq!(status.station_permissions, control, "{case}");
-        assert_eq!(status.logging_permissions, logging, "{case}");
-        assert!(status.transmit_permissions.is_empty(), "{case}");
+        assert!(status.station_permissions.is_empty(), "{case}");
         assert!(transmitter_idle(&engine), "{case}");
     }
 }
@@ -2456,9 +2372,9 @@ async fn restored_grants_follow_the_approval_generation_not_its_expiry() {
         service.action(Action::Enable {}).await.unwrap();
         pending_browser(&cloud);
         service.action(Action::Refresh {}).await.unwrap();
-        let granted = approve(&service, true).await;
+        let granted = approve(&service).await;
         assert_eq!(
-            granted.transmit_permissions,
+            granted.station_permissions,
             [BROWSER],
             "{case}: positive control"
         );
@@ -2468,20 +2384,13 @@ async fn restored_grants_follow_the_approval_generation_not_its_expiry() {
         *cloud.devices.lock().unwrap() = after_restart;
         let service = launch(&cloud, &vault, &engine);
         let status = if restored {
-            eventually(&service, case, |s| {
-                s.station_permissions == [BROWSER]
-                    && s.logging_permissions == [BROWSER]
-                    && s.transmit_permissions == [BROWSER]
-            })
-            .await
+            eventually(&service, case, |s| s.station_permissions == [BROWSER]).await
         } else {
             eventually(&service, "Remote back on", on).await;
             settle().await;
             let status = service.action(Action::Refresh {}).await.unwrap();
             assert!(
-                status.station_permissions.is_empty()
-                    && status.logging_permissions.is_empty()
-                    && status.transmit_permissions.is_empty(),
+                status.station_permissions.is_empty(),
                 "{case}: nothing comes back: {}",
                 serde_json::to_string(&status).unwrap()
             );
@@ -2507,7 +2416,7 @@ async fn a_permission_change_after_a_renewal_keeps_the_rest_of_that_approval() {
     service.action(Action::Enable {}).await.unwrap();
     pending_browser(&cloud);
     service.action(Action::Refresh {}).await.unwrap();
-    approve(&service, true).await;
+    approve(&service).await;
     *cloud.devices.lock().unwrap() = device_list_at(1, APPROVED_UNTIL + 10 * DAY_MS, 2);
     service.action(Action::Refresh {}).await.unwrap();
     for allow in [false, true] {
@@ -2521,20 +2430,15 @@ async fn a_permission_change_after_a_renewal_keeps_the_rest_of_that_approval() {
     }
     let now = service.status().unwrap();
     assert_eq!(now.station_permissions, [BROWSER]);
-    assert_eq!(now.logging_permissions, [BROWSER]);
-    assert!(
-        now.transmit_permissions.is_empty(),
-        "revoking station control took transmit with it"
-    );
     settle().await;
     drop(service);
 
     let service = launch(&cloud, &vault, &engine);
     let status = eventually(&service, "the renewed approval's grants", |s| {
-        s.station_permissions == [BROWSER] && s.logging_permissions == [BROWSER]
+        s.station_permissions == [BROWSER]
     })
     .await;
-    assert!(status.transmit_permissions.is_empty());
+    assert_eq!(status.station_permissions, [BROWSER]);
     assert!(transmitter_idle(&engine));
 }
 
@@ -2573,17 +2477,14 @@ async fn a_record_written_by_1_12_0_still_restores_and_is_rebound_to_the_generat
             settle().await;
             let status = service.action(Action::Refresh {}).await.unwrap();
             assert!(
-                status.station_permissions.is_empty() && status.logging_permissions.is_empty(),
+                status.station_permissions.is_empty(),
                 "{case}: {}",
                 serde_json::to_string(&status).unwrap()
             );
             assert!(transmitter_idle(&engine), "{case}");
             continue;
         }
-        eventually(&service, case, |s| {
-            s.station_permissions == [BROWSER] && s.logging_permissions == [BROWSER]
-        })
-        .await;
+        eventually(&service, case, |s| s.station_permissions == [BROWSER]).await;
         settle().await;
         let record: serde_json::Value =
             serde_json::from_str(&vault.values.lock().unwrap()["state"]).unwrap();
@@ -2596,13 +2497,175 @@ async fn a_record_written_by_1_12_0_still_restores_and_is_rebound_to_the_generat
 
         *cloud.devices.lock().unwrap() = device_list_at(1, APPROVED_UNTIL + 10 * DAY_MS, 2);
         let service = launch(&cloud, &vault, &engine);
-        let status = eventually(&service, "restored after a renewal", |s| {
-            s.station_permissions == [BROWSER] && s.logging_permissions == [BROWSER]
+        eventually(&service, "restored after a renewal", |s| {
+            s.station_permissions == [BROWSER]
         })
         .await;
-        assert!(status.transmit_permissions.is_empty(), "{case}");
         assert!(transmitter_idle(&engine), "{case}");
     }
+}
+
+/// An older build remembered a browser's remote logging on a grant (`"logging":true`). That
+/// permission is gone: a browser that held only it is restored nothing and cannot take control, and
+/// the record is written again with it `false` (an earlier build still reads it). Positive control:
+/// in the same record, a browser that held station control gets it back and takes control.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_browser_holding_the_old_logging_grant_cannot_take_control() {
+    const OTHER: &str = "10000000-0000-4000-8000-00000000000e";
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let grant = |id: &str, control: bool| json!({"deviceId":id,"expiresAt":APPROVED_UNTIL,"generation":2,"logging":true,"control":control});
+    let previous = json!({"binding":{"origin":cloud.origin,"stationId":STATION,"accountId":ACCOUNT},
+        "enabled":true,"grants":[grant(BROWSER, false), grant(OTHER, true)]});
+    vault
+        .values
+        .lock()
+        .unwrap()
+        .insert("state".into(), previous.to_string());
+    let listed = |id: &str| {
+        json!({"id":id,"name":"Test browser","approved":1,"expiresAt":APPROVED_UNTIL,
+        "generation":2,"renewsUntil":APPROVED_UNTIL + 60 * DAY_MS})
+    };
+    *cloud.devices.lock().unwrap() =
+        json!({"devices":[listed(BROWSER), listed(OTHER)]}).to_string();
+    let engine = engine();
+    let service = launch(&cloud, &vault, &engine);
+    // The restore is one step for every browser in the record, so once OTHER's grant is back the
+    // whole record has been restored.
+    eventually(&service, "the old record restored", |s| {
+        s.station_permissions == [OTHER]
+    })
+    .await;
+    settle().await;
+
+    let authority = service.control.lock().unwrap().operations.clone();
+    let connection = operations::LanConnection::new(authority.clone());
+    let acquire = |device: &str| -> String {
+        let session = lan_grants::fresh_id();
+        let ask = |request: operations::Request| {
+            for _ in 0..50 {
+                match authority.handle_version(
+                    (connection.id, 4),
+                    &session,
+                    device,
+                    &request,
+                    &engine,
+                    Instant::now(),
+                ) {
+                    Err("stationBusy" | "remoteBusy") => {
+                        std::thread::sleep(Duration::from_millis(20))
+                    }
+                    other => return other,
+                }
+            }
+            Err("busy throughout")
+        };
+        let state = ask(operations::Request::State {
+            request_id: lan_grants::fresh_id(),
+        })
+        .unwrap();
+        assert_eq!(
+            state["allowed"],
+            json!(device == OTHER),
+            "{device}: {state}"
+        );
+        match ask(operations::Request::Acquire {
+            request_id: lan_grants::fresh_id(),
+            station_boot_id: state["stationBootId"].as_str().unwrap().into(),
+        }) {
+            Ok(acquired) => {
+                let phase = acquired["phase"].as_str().unwrap_or("none").to_string();
+                if let Some(lease) = acquired["leaseId"].as_str() {
+                    let _ = ask(operations::Request::Release {
+                        request_id: lan_grants::fresh_id(),
+                        lease_id: lease.into(),
+                    });
+                }
+                phase
+            }
+            Err(refused) => refused.into(),
+        }
+    };
+    assert_eq!(
+        acquire(BROWSER),
+        "localPermissionRequired",
+        "the old logging grant took control"
+    );
+    assert_eq!(
+        acquire(OTHER),
+        "controlling",
+        "positive control: station control"
+    );
+
+    let record: serde_json::Value =
+        serde_json::from_str(&vault.values.lock().unwrap()["state"]).unwrap();
+    let grants = record["grants"].as_array().unwrap();
+    assert!(
+        grants.iter().all(|g| g["logging"] == json!(false)),
+        "the old logging grant was written back: {record}"
+    );
+    assert_eq!(
+        grants.iter().map(|g| &g["deviceId"]).collect::<Vec<_>>(),
+        [&json!(OTHER)],
+        "a browser that held only logging is remembered for nothing: {record}"
+    );
+    assert!(transmitter_idle(&engine));
+}
+
+/// The shack has no remote logging switch: its action is not one Nexus takes. CONTROL: the station
+/// control switch, in the same shape, is.
+#[test]
+fn the_shack_takes_no_remote_logging_switch() {
+    let press = |kind: &str| json!({"type":kind,"deviceId":BROWSER,"allow":true});
+    assert!(serde_json::from_value::<Action>(press("loggingPermission")).is_err());
+    assert!(serde_json::from_value::<Action>(press("stationPermission")).is_ok());
+}
+
+/// An older build remembered the old Remote page's FT8/FT4 transmit on a grant (`"transmit":true`).
+/// This build still reads that record, restores the browser's station control from it,
+/// and writes it again without the field: nothing of the old grant is kept, offered or acted on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_record_holding_the_old_pages_transmit_grant_restores_the_rest_and_drops_it() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    // Written before the service reported a generation, so binding to the listed one rewrites it.
+    let previous = json!({"binding":{"origin":cloud.origin,"stationId":STATION,"accountId":ACCOUNT},
+        "enabled":true,"grants":[{"deviceId":BROWSER,"expiresAt":APPROVED_UNTIL,"logging":true,"control":true,"transmit":true}]});
+    vault
+        .values
+        .lock()
+        .unwrap()
+        .insert("state".into(), previous.to_string());
+    *cloud.devices.lock().unwrap() = device_list_at(1, APPROVED_UNTIL, 2);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    let status = eventually(&service, "the old record restored", |s| {
+        s.station_permissions == [BROWSER]
+    })
+    .await;
+    settle().await;
+    let record: serde_json::Value =
+        serde_json::from_str(&vault.values.lock().unwrap()["state"]).unwrap();
+    assert_eq!(
+        record["grants"][0]["generation"],
+        json!(2),
+        "premise: the record was written again: {record}"
+    );
+    assert!(
+        record["grants"][0].get("transmit").is_none(),
+        "the old transmit grant was written back: {record}"
+    );
+    assert!(
+        !serde_json::to_string(&status).unwrap().contains("transmit"),
+        "no transmit permission is shown: {}",
+        serde_json::to_string(&status).unwrap()
+    );
+    let authority = service.control.lock().unwrap().operations.clone();
+    assert_eq!(
+        authority.local_status(),
+        json!({"controlDevices":[BROWSER],"controller":null})
+    );
+    assert!(transmitter_idle(&engine));
 }
 
 /// Downgrade safety, as behaviour. An older build reads a record carrying a field it does not know
@@ -2633,7 +2696,7 @@ async fn an_unreadable_remembered_record_leaves_remote_off_with_nothing_restored
             eventually(
                 &service,
                 "positive control: a readable record restores",
-                |s| s.transmit_permissions == [BROWSER],
+                |s| s.station_permissions == [BROWSER],
             )
             .await;
             assert!(transmitter_idle(&engine));
@@ -2645,9 +2708,7 @@ async fn an_unreadable_remembered_record_leaves_remote_off_with_nothing_restored
         assert_eq!(status.phase, "disabled", "Remote stays off");
         assert!(status.observation_generation.is_none());
         assert!(
-            status.station_permissions.is_empty()
-                && status.logging_permissions.is_empty()
-                && status.transmit_permissions.is_empty(),
+            status.station_permissions.is_empty(),
             "nothing restored: {}",
             serde_json::to_string(&status).unwrap()
         );
@@ -2655,12 +2716,12 @@ async fn an_unreadable_remembered_record_leaves_remote_off_with_nothing_restored
     }
 }
 
-/// Downgrade safety. The pairing record is untouched; the remembered-state record written without
-/// a transmit grant is still readable by the 1.12.0 build (its `Grant` had no transmit field and
-/// denies unknown fields), and one holding a transmit grant reads as unreadable there, which
-/// leaves Remote off rather than handing that build a grant it has no rule for.
+/// Downgrade safety. The pairing record is untouched; the remembered-state record this build writes
+/// without a generation is still readable by the 1.12.0 build (its `Grant` denies unknown fields),
+/// for this build never writes the old Remote page's transmit grant, and writes the old logging
+/// permission `false`, never granted, where that build requires it.
 #[test]
-fn a_record_without_a_transmit_grant_stays_readable_by_the_previous_build() {
+fn a_record_without_a_generation_stays_readable_by_the_previous_build() {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     #[allow(dead_code)]
@@ -2678,7 +2739,7 @@ fn a_record_without_a_transmit_grant_stays_readable_by_the_previous_build() {
         enabled: bool,
         grants: Vec<PreviousGrant>,
     }
-    let state = |transmit, generation| vault::State {
+    let state = |generation| vault::State {
         binding: Binding {
             origin: REMOTE_ORIGIN.into(),
             station_id: STATION.into(),
@@ -2689,87 +2750,28 @@ fn a_record_without_a_transmit_grant_stays_readable_by_the_previous_build() {
             device_id: BROWSER.into(),
             expires_at: APPROVED_UNTIL,
             generation,
-            logging: true,
             control: true,
-            transmit,
+            retired_logging: Default::default(),
+            retired_transmit: Default::default(),
         }],
     };
-    let without = serde_json::to_string(&state(false, None)).unwrap();
+    let without = serde_json::to_string(&state(None)).unwrap();
     assert!(!without.contains("transmit") && !without.contains("generation"));
+    assert!(without.contains("\"logging\":false"), "{without}");
     assert!(serde_json::from_str::<PreviousState>(&without).is_ok());
-    let with = serde_json::to_string(&state(true, None)).unwrap();
-    assert!(serde_json::from_str::<PreviousState>(&with).is_err());
     // A grant bound to an approval generation (a service with the approval lifetime) is unreadable
     // there too, which that build answers with Remote off and nothing restored; see
     // an_unreadable_remembered_record_leaves_remote_off_with_nothing_restored.
-    let bound = serde_json::to_string(&state(false, Some(2))).unwrap();
+    let bound = serde_json::to_string(&state(Some(2))).unwrap();
     assert!(bound.contains("\"generation\":2"));
     assert!(serde_json::from_str::<PreviousState>(&bound).is_err());
     let read: vault::State = serde_json::from_str(&bound).unwrap();
-    assert!(read == state(false, Some(2)));
+    assert!(read == state(Some(2)));
     // And this build reads a record the previous build wrote.
     let previous = json!({"binding":{"origin":REMOTE_ORIGIN,"stationId":STATION,"accountId":ACCOUNT},
         "enabled":true,"grants":[{"deviceId":BROWSER,"expiresAt":APPROVED_UNTIL,"logging":true,"control":true}]});
     let read: vault::State = serde_json::from_value(previous).unwrap();
-    assert!(read == state(false, None));
-}
-
-#[tokio::test]
-async fn local_transmit_grant_requires_approved_enabled_station_control_and_clears_on_stop() {
-    const DEVICE: &str = "10000000-0000-4000-8000-000000000001";
-    let (commands, _receiver) = mpsc::channel(1);
-    let service = Service {
-        commands,
-        status: Arc::new(Mutex::new(Status::default())),
-        control: Arc::new(Mutex::new(Control::default())),
-    };
-    let grant = || Action::TransmitPermission {
-        device_id: DEVICE.into(),
-        allow: true,
-    };
-    assert!(matches!(service.action(grant()).await, Err("accessDenied")));
-    service.control.lock().unwrap().enabled = true;
-    assert!(matches!(service.action(grant()).await, Err("accessDenied")));
-    service.status.lock().unwrap().devices.push(Device {
-        id: DEVICE.into(),
-        name: "Test browser".into(),
-        approved: 1,
-        expires_at: u64::MAX,
-        generation: None,
-        renews_until: None,
-        public_key: None,
-        key: None,
-    });
-    assert!(matches!(
-        service.action(grant()).await,
-        Err("localPermissionRequired")
-    ));
-    service
-        .action(Action::StationPermission {
-            device_id: DEVICE.into(),
-            allow: true,
-        })
-        .await
-        .unwrap();
-    assert!(service.status().unwrap().transmit_permissions.is_empty());
-    assert_eq!(
-        service.action(grant()).await.unwrap().transmit_permissions,
-        [DEVICE]
-    );
-    service.control.lock().unwrap().stop();
-    assert!(service.status().unwrap().transmit_permissions.is_empty());
-    assert!(matches!(service.action(grant()).await, Err("accessDenied")));
-    // Revocation remains available while disabled; it never creates a grant.
-    assert!(service
-        .action(Action::TransmitPermission {
-            device_id: DEVICE.into(),
-            allow: false
-        })
-        .await
-        .unwrap()
-        .transmit_permissions
-        .is_empty());
-    assert!(_receiver.is_empty());
+    assert!(read == state(None));
 }
 
 /// A pairing saved under an origin this build does not know is never used, never turned on and never
@@ -2885,6 +2887,10 @@ async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
         origin: refusing_cloud("403 Forbidden", r#"{"error":"serviceMoved"}"#).await,
         devices: Arc::new(Mutex::new(String::new())),
         station_key: Default::default(),
+        refusing: Default::default(),
+        approvals: Default::default(),
+        refusing_removals: Default::default(),
+        invites: Default::default(),
     };
     let vault = paired_vault(&refused.origin);
     let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
@@ -2896,6 +2902,124 @@ async fn a_closed_service_is_named_on_http_and_on_the_station_socket() {
     })
     .await;
     assert_eq!(status.error, Some("serviceMoved"));
+}
+
+/// One trial per callsign and per shack PC: approving sends the station callsign configured here, as
+/// configured (trimmed; the service normalises it), and the PC's two identifiers as hashes only. The
+/// raw identifier never leaves the computer.
+#[tokio::test(flavor = "multi_thread")]
+async fn approving_sends_the_station_callsign_and_the_pc_hashes_never_the_raw_ids() {
+    let cloud = fake_cloud().await;
+    let vault = MemoryVault::default();
+    let settings = Settings {
+        mycall: " w1abc/p ".into(),
+        ..Settings::default()
+    };
+    let engine = Arc::new(Mutex::new(Engine::with_settings(settings)));
+    let service = launch(&cloud, &vault, &engine);
+    service
+        .action(Action::Begin {
+            name: "Test station".into(),
+        })
+        .await
+        .unwrap();
+    service.action(Action::Refresh {}).await.unwrap();
+    service
+        .action(Action::Approve {
+            enrollment_id: STATION.into(),
+            account_id: ACCOUNT.into(),
+        })
+        .await
+        .unwrap();
+    let sent = cloud.approvals.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let body = sent[0].as_object().unwrap();
+    let mut keys: Vec<&str> = body.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["callsign", "credential", "id", "pc", "proof"]);
+    assert_eq!(body["callsign"], "w1abc/p");
+    let pc = body["pc"].as_object().unwrap();
+    let mut kinds: Vec<&str> = pc.keys().map(String::as_str).collect();
+    kinds.sort_unstable();
+    assert_eq!(kinds, ["hw", "os"]);
+    // By value where this computer has the identifier: the hash of the kind and the lower-cased id.
+    #[cfg(target_os = "linux")]
+    if let Some(id) = std::fs::read_to_string("/etc/machine-id")
+        .ok()
+        .map(|id| id.trim().to_ascii_lowercase())
+        .filter(|id| !id.is_empty())
+    {
+        let expected: String = ring::digest::digest(
+            &ring::digest::SHA256,
+            format!("nexus-pc:os:{id}").as_bytes(),
+        )
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+        assert_eq!(pc["os"], expected.as_str());
+        assert!(
+            !sent[0].to_string().contains(&id),
+            "the raw machine id was sent"
+        );
+    }
+    for kind in ["hw", "os"] {
+        assert!(
+            pc[kind].is_null() || pc[kind].as_str().is_some_and(|h| h.len() == 64),
+            "{kind}: {}",
+            pc[kind]
+        );
+    }
+}
+
+/// The service's refusals of a trial for this callsign or this PC, or of an older Nexus, are named at
+/// the shack. Unnamed, each 400 or 403 read as a failed request or `accessDenied`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_trial_identity_refusals_are_named_at_the_shack() {
+    for (status, code) in [
+        ("400 Bad Request", "callsignInvalid"),
+        ("403 Forbidden", "callsignNotLicensed"),
+        ("403 Forbidden", "trialUsedByCallsign"),
+        ("403 Forbidden", "trialUsedOnThisPc"),
+        ("403 Forbidden", "updateRequired"),
+    ] {
+        let body: &'static str = Box::leak(format!(r#"{{"error":"{code}"}}"#).into_boxed_str());
+        let origin = refusing_cloud(status, body).await;
+        let client = Client::new(&origin).unwrap();
+        assert_eq!(
+            client
+                .post("enroll/approve", None, json!({ "id": "pairing" }))
+                .await
+                .err(),
+            Some(code)
+        );
+    }
+    // The control: a code outside the list keeps the status mapping.
+    let origin = refusing_cloud("403 Forbidden", r#"{"error":"somethingElse"}"#).await;
+    let client = Client::new(&origin).unwrap();
+    assert_eq!(
+        client
+            .post("enroll/approve", None, json!({ "id": "pairing" }))
+            .await
+            .err(),
+        Some("accessDenied")
+    );
+}
+
+/// Approval refused because the same mailbox already has a trial running under another sign-in. Unnamed,
+/// the 403 read as `accessDenied` and the shack told the operator access was denied, which says nothing
+/// about the sign-in that needs changing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_trial_running_under_another_sign_in_is_named_at_the_shack() {
+    let origin = refusing_cloud("403 Forbidden", r#"{"error":"trialActiveElsewhere"}"#).await;
+    let client = Client::new(&origin).unwrap();
+    assert_eq!(
+        client
+            .post("enroll/approve", None, json!({ "id": "pairing" }))
+            .await
+            .err(),
+        Some("trialActiveElsewhere")
+    );
 }
 
 /// Answers every request, HTTP or WebSocket upgrade, with one fixed status and JSON body.
@@ -2962,13 +3086,13 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 /// Approve the browser here, with the key the operator was shown beside it.
-async fn approve_shown(service: &Service, shown: Option<String>, transmit: bool) -> Status {
+async fn approve_shown(service: &Service, shown: Option<String>) -> Status {
     service
         .action(Action::Device {
             device_id: BROWSER.into(),
             approve: true,
-            transmit,
             key: shown,
+            kind: Some(Kind::Browser),
         })
         .await
         .unwrap()
@@ -3013,7 +3137,7 @@ async fn a5_approving_a_browser_pins_the_key_it_was_shown_and_only_that_key() {
         } else {
             None
         };
-        let status = approve_shown(&service, shown, false).await;
+        let status = approve_shown(&service, shown).await;
         assert_eq!(
             status.station_permissions,
             [BROWSER],
@@ -3052,7 +3176,7 @@ async fn a5_a_pin_outlives_switches_take_over_turn_off_and_a_restart_and_revokin
     service.action(Action::Enable {}).await.unwrap();
     pending_keyed_browser(&cloud, &key.public_key);
     service.action(Action::Refresh {}).await.unwrap();
-    approve_shown(&service, Some(hex(&key.pin())), false).await;
+    approve_shown(&service, Some(hex(&key.pin()))).await;
     assert_eq!(pinned(&service), Some(key.pin()), "premise: pinned");
     for allow in [false, true] {
         service
@@ -3086,8 +3210,8 @@ async fn a5_a_pin_outlives_switches_take_over_turn_off_and_a_restart_and_revokin
         .action(Action::Device {
             device_id: BROWSER.into(),
             approve: false,
-            transmit: false,
             key: None,
+            kind: None,
         })
         .await
         .unwrap();
@@ -3097,6 +3221,714 @@ async fn a5_a_pin_outlives_switches_take_over_turn_off_and_a_restart_and_revokin
         vault.pins().unwrap().is_none(),
         "revoking left the pins entry"
     );
+}
+
+/// A computer running Nexus (the native client), as the service lists it to a Nexus that asks for
+/// kinds: its device key, its kind and its platform.
+const COMPUTER: &str = "10000000-0000-4000-8000-00000000000d";
+fn computer_listed(approved: u8, key: &DeviceKey) -> serde_json::Value {
+    let mut listed = json!({"id":COMPUTER,"name":"Shack laptop","approved":approved,
+        "expiresAt":if approved == 1 { APPROVED_UNTIL } else { APPROVED_UNTIL - 1 },
+        "kind":"computer","platform":"windows","publicKey":key.public_key});
+    if approved == 1 {
+        // The approval the fake service writes when the shack approves it.
+        listed["generation"] = 2.into();
+    }
+    listed
+}
+
+/// ★ The native client's devices reach the shack: this Nexus asks for kinds, so the service lists a
+/// computer beside the browsers, each with its kind and platform, and the desktop is given both. A
+/// service without kinds lists browsers alone, with neither field, and each is a browser.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_is_listed_with_its_kind_and_platform_and_a_service_without_kinds_lists_browsers(
+) {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let key = DeviceKey::new();
+    // The fake lists the computer only to a Nexus that sends the kinds header, as the service does,
+    // so seeing it here is the header having been sent.
+    *cloud.devices.lock().unwrap() = json!({"devices":[
+        {"id":BROWSER,"name":"Test browser","approved":1,"expiresAt":APPROVED_UNTIL,
+            "kind":"browser","platform":null},
+        computer_listed(0, &key),
+    ]})
+    .to_string();
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    let shown: Vec<_> = listed
+        .devices
+        .iter()
+        .map(|d| (d.id.as_str(), d.kind, d.platform, d.key.clone()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (BROWSER, Kind::Browser, None, None),
+            (
+                COMPUTER,
+                Kind::Computer,
+                Some(Platform::Windows),
+                Some(hex(&key.pin()))
+            ),
+        ]
+    );
+    let page = serde_json::to_value(&listed).unwrap();
+    assert_eq!(
+        (
+            &page["devices"][0]["kind"],
+            &page["devices"][0]["platform"],
+            &page["devices"][1]["kind"],
+            &page["devices"][1]["platform"],
+        ),
+        (
+            &json!("browser"),
+            &json!(null),
+            &json!("computer"),
+            &json!("windows")
+        ),
+        "what the desktop is given"
+    );
+    assert!(
+        page["devices"][1].get("publicKey").is_none(),
+        "the key itself never reaches the desktop page"
+    );
+    // A service without kinds: 1.12.0's shape, which names no kind.
+    *cloud.devices.lock().unwrap() = device_list(1, APPROVED_UNTIL);
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    let shown: Vec<_> = listed
+        .devices
+        .iter()
+        .map(|d| (d.id.as_str(), d.kind, d.platform))
+        .collect();
+    assert_eq!(shown, [(BROWSER, Kind::Browser, None)]);
+}
+
+/// ★ Each device's kind and platform are held to the service's own values: a pair it never lists
+/// refuses the list, as an id or a name out of shape does.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_devices_kind_and_platform_are_held_to_the_services_values() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    let key = DeviceKey::new();
+    let listing = |kind: serde_json::Value, platform: serde_json::Value| {
+        let mut device = computer_listed(0, &key);
+        device["kind"] = kind;
+        device["platform"] = platform;
+        json!({ "devices": [device] }).to_string()
+    };
+    for (kind, platform) in [
+        ("computer", "windows"),
+        ("computer", "macos"),
+        ("computer", "linux"),
+        ("phone", "ios"),
+        ("phone", "android"),
+    ] {
+        *cloud.devices.lock().unwrap() = listing(json!(kind), json!(platform));
+        let listed = service.action(Action::Refresh {}).await;
+        assert!(listed.is_ok(), "control: {kind} on {platform} is taken");
+    }
+    *cloud.devices.lock().unwrap() = listing(json!("browser"), json!(null));
+    assert!(
+        service.action(Action::Refresh {}).await.is_ok(),
+        "control: a browser on none"
+    );
+    for (kind, platform) in [
+        (json!("browser"), json!("windows")),
+        (json!("computer"), json!(null)),
+        (json!("computer"), json!("ios")),
+        (json!("computer"), json!("android")),
+        (json!("phone"), json!("linux")),
+        (json!("phone"), json!(null)),
+        (json!("tablet"), json!("windows")),
+        (json!("computer"), json!("beos")),
+        (json!("Computer"), json!("windows")),
+        (json!(null), json!("windows")),
+    ] {
+        *cloud.devices.lock().unwrap() = listing(kind.clone(), platform.clone());
+        assert!(
+            matches!(
+                service.action(Action::Refresh {}).await,
+                Err("invalidResponse")
+            ),
+            "{kind} on {platform} is no device the service lists"
+        );
+    }
+}
+
+/// ★ Approving a computer pins the key the shack showed beside it, as a browser's is (A5), for the
+/// tunnel's TLS to check, and grants nothing on the relay's lanes: no station control
+/// under its id, and the switch cannot give it one. What it holds is station control under the shack's own name for its key while Remote is on
+/// (the operator's decision of 2026-10-10), as a LAN computer does. The pin outlives a restart, still
+/// granting nothing more; revoking the computer removes it.
+#[tokio::test(flavor = "multi_thread")]
+async fn approving_a_computer_pins_its_key_and_grants_nothing_on_the_relays_lanes() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    let key = DeviceKey::new();
+    let fingerprint = hex(&key.pin());
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    assert!(listed.pinned_devices.is_empty(), "premise: nothing pinned");
+    let status = service
+        .action(Action::Device {
+            device_id: COMPUTER.into(),
+            approve: true,
+            key: Some(fingerprint.clone()),
+            kind: Some(Kind::Computer),
+        })
+        .await
+        .unwrap();
+    assert_eq!(status.devices[0].approved, 1, "premise: approved");
+    assert_eq!(status.pinned_devices, [COMPUTER], "its key is pinned");
+    // As a computer's, under this approval: never the fingerprint a browser's pin is.
+    let pin = native_pin(&fingerprint, 2).unwrap();
+    assert_ne!(pin, fingerprint);
+    assert_eq!(
+        pinned_device(&service, COMPUTER).map(|p| hex(&p)),
+        Some(pin.clone())
+    );
+    let granted = |status: &Status| status.station_permissions.clone();
+    let named = lan::tunnel_device_id(&key.pin());
+    assert_eq!(
+        granted(&status),
+        vec![named.clone()],
+        "nothing on the relay's lanes"
+    );
+    assert!(
+        service
+            .control
+            .lock()
+            .unwrap()
+            .remembered
+            .grants()
+            .is_empty(),
+        "nothing remembered to give back"
+    );
+    let allow = Action::StationPermission {
+        device_id: COMPUTER.into(),
+        allow: true,
+    };
+    assert!(matches!(service.action(allow).await, Err("accessDenied")));
+    assert_eq!(granted(&service.status().unwrap()), vec![named.clone()]);
+    settle().await;
+    assert_eq!(
+        vault
+            .pins()
+            .unwrap()
+            .and_then(|p| p.keys.get(COMPUTER).cloned()),
+        Some(pin.clone()),
+        "the pins entry"
+    );
+    // A restart: the pin comes back, and still nothing on the lanes.
+    drop(service);
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    assert_eq!(
+        pinned_device(&service, COMPUTER).map(|p| hex(&p)),
+        Some(pin),
+        "the pin survived"
+    );
+    let listed = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        listed.pinned_devices,
+        [COMPUTER],
+        "shown pinned after the restart"
+    );
+    assert_eq!(granted(&listed), vec![named.clone()]);
+    service
+        .action(Action::Device {
+            device_id: COMPUTER.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        pinned_device(&service, COMPUTER),
+        None,
+        "revoking left the pin"
+    );
+}
+fn pinned_device(service: &Service, device: &str) -> Option<[u8; 32]> {
+    service.control.lock().unwrap().remembered.pinned(device)
+}
+
+/// ★ The room's tunnel takes a computer approved here by the key pinned as it was approved, and
+/// nothing else: a browser's pin is never one; a computer the service lists with another key than
+/// its pin is not one; and a computer removed here is out, with the change told at once to every
+/// session through the room.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tunnel_takes_an_approved_computer_by_its_pinned_key_and_never_a_browser() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let service = launch(&cloud, &vault, &engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    let mut told = approved.roster().subscribe.as_ref()();
+    // A browser, approved with its key pinned (A5): the tunnel never takes it.
+    let browser = DeviceKey::new();
+    pending_keyed_browser(&cloud, &browser.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_shown(&service, Some(hex(&browser.pin()))).await;
+    assert_eq!(
+        pinned(&service),
+        Some(browser.pin()),
+        "premise: the browser is pinned"
+    );
+    assert_eq!(approved.paired(&browser.pin()), None, "a browser's pin");
+    // A computer, approved with its key pinned: taken, by that key alone.
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(approved.paired(&key.pin()), None, "waiting: not yet");
+    let before = approved.revisions();
+    service
+        .action(Action::Device {
+            device_id: COMPUTER.into(),
+            approve: true,
+            key: Some(hex(&key.pin())),
+            kind: Some(Kind::Computer),
+        })
+        .await
+        .unwrap();
+    // Taken as the name its key gives through the room, never as the service's id for it.
+    let named = lan::tunnel_device_id(&key.pin());
+    assert_ne!(named, COMPUTER);
+    assert_eq!(approved.paired(&key.pin()), Some(named.clone()));
+    assert!(approved.revisions() > before, "the change is counted");
+    assert!(told.has_changed().unwrap(), "and told");
+    told.mark_unchanged();
+    // The service lists another key for it: not the pin, so not taken.
+    let other = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(1, &other)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        approved.paired(&key.pin()),
+        None,
+        "a listing with another key"
+    );
+    assert_eq!(
+        approved.paired(&other.pin()),
+        None,
+        "nor the key never pinned"
+    );
+    assert!(told.has_changed().unwrap(), "told");
+    // Listed with its pinned key again, then removed here: out, and told.
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(1, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(approved.paired(&key.pin()), Some(named), "control: back");
+    told.mark_unchanged();
+    service
+        .action(Action::Device {
+            device_id: COMPUTER.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(approved.paired(&key.pin()), None, "removed here");
+    assert!(told.has_changed().unwrap(), "told at once");
+}
+
+use lan_grants::lan_acquire;
+
+/// The shack's own screen's press, read as `remote_station_action` reads it.
+fn press(value: serde_json::Value) -> Action {
+    serde_json::from_value(value).unwrap()
+}
+/// Approve `device` here as the operator was shown it: a computer, with `key` beside it.
+async fn approve_computer(
+    service: &Service,
+    device: &str,
+    key: &DeviceKey,
+) -> Result<Status, &'static str> {
+    service
+        .action(Action::Device {
+            device_id: device.into(),
+            approve: true,
+            key: Some(hex(&key.pin())),
+            kind: Some(Kind::Computer),
+        })
+        .await
+}
+/// A service with Remote on, through `cloud`.
+async fn on_at(cloud: &FakeCloud, engine: &crate::SharedEngine) -> Service {
+    let service = launch(cloud, &paired_vault(&cloud.origin), engine);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service.action(Action::Enable {}).await.unwrap();
+    service
+}
+fn engine() -> crate::SharedEngine {
+    Arc::new(Mutex::new(Engine::with_settings(Settings::default())))
+}
+
+/// ★ An approval is of the device as the operator was shown it. A computer shown as one (Nexus on
+/// Windows, its key, nothing on the relay's lanes) that the service names a browser once the press
+/// is in is granted nothing on those lanes and pinned for nothing: the press is the shack's own
+/// screen's, as it sent it before it carried the kind it showed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_approved_as_shown_is_never_granted_as_the_browser_the_service_names_after() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    let shown = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        shown.devices[0].kind,
+        Kind::Computer,
+        "premise: shown as one"
+    );
+    // Once the press is in, the service names it a browser.
+    let mut renamed = computer_listed(0, &key);
+    renamed["kind"] = "browser".into();
+    renamed.as_object_mut().unwrap().remove("platform");
+    *cloud.devices.lock().unwrap() = json!({ "devices": [renamed] }).to_string();
+    let status = service
+        .action(press(
+            json!({"type":"device","deviceId":COMPUTER,"approve":true,
+            "key":hex(&key.pin())}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        status.station_permissions,
+        Vec::<String>::new(),
+        "the computer approved was granted as a browser"
+    );
+    assert!(
+        status.pinned_devices.is_empty(),
+        "pinned as something it was not shown as"
+    );
+}
+
+/// ★ The press carries the kind it was shown, and the shack grants and pins only for that kind. A
+/// computer shown as one that the service names a browser after the press: nothing on the relay's
+/// lanes, no pin. CONTROL: a browser shown and listed as one is granted what one approval gives; a
+/// computer shown and listed as one is pinned as a computer, and granted nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_press_carries_the_kind_shown_and_the_shack_acts_on_no_other() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let granted = |status: &Status| status.station_permissions.clone();
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    let mut renamed = computer_listed(0, &key);
+    renamed["kind"] = "browser".into();
+    renamed.as_object_mut().unwrap().remove("platform");
+    *cloud.devices.lock().unwrap() = json!({ "devices": [renamed] }).to_string();
+    let status = approve_computer(&service, COMPUTER, &key).await.unwrap();
+    assert_eq!(
+        granted(&status),
+        Vec::<String>::new(),
+        "granted as a browser"
+    );
+    assert!(status.pinned_devices.is_empty(), "pinned as a browser");
+    // CONTROL: a browser shown and listed as one.
+    let browser = DeviceKey::new();
+    pending_keyed_browser(&cloud, &browser.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    let status = approve_shown(&service, Some(hex(&browser.pin()))).await;
+    let one = vec![BROWSER.to_string()];
+    assert_eq!(granted(&status), one);
+    assert_eq!(status.pinned_devices, [BROWSER]);
+    // CONTROL: a computer shown and listed as one.
+    let computer = DeviceKey::new();
+    *cloud.devices.lock().unwrap() =
+        json!({ "devices": [computer_listed(0, &computer)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    let status = approve_computer(&service, COMPUTER, &computer)
+        .await
+        .unwrap();
+    assert_eq!(status.pinned_devices, [COMPUTER]);
+    assert!(
+        !status.station_permissions.contains(&COMPUTER.to_string()),
+        "a computer granted on the relay's lanes"
+    );
+}
+
+/// ★ The service's ids never meet the names the shack gives its computers: a browser the service
+/// lists under the name an approved computer is taken as through the room is refused with the list,
+/// so approving it can never hand that computer a browser's grant, remembered under its name.
+/// Premise: the computer holds station control of its own, as every approved computer does while
+/// Remote is on (the operator's decision of 2026-10-10), and nothing else.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_browser_listed_under_a_computers_name_through_the_room_is_refused() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_computer(&service, COMPUTER, &key).await.unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    let taken = approved.paired(&key.pin()).expect("premise: taken");
+    assert_eq!(
+        lan_acquire(&service, &engine, &taken),
+        "controlling",
+        "premise: its own station control"
+    );
+    let held = |service: &Service| {
+        let control = service.control.lock().unwrap();
+        control
+            .remembered
+            .grants()
+            .iter()
+            .any(|g| g.device_id == taken)
+    };
+    assert!(!held(&service), "control: it holds no browser's grant");
+    let browser = DeviceKey::new();
+    let mut listed: serde_json::Value =
+        serde_json::from_str(&cloud.devices.lock().unwrap()).unwrap();
+    let mut twin: serde_json::Value = serde_json::from_str(&device_list(0, APPROVED_UNTIL - 1))
+        .map(|l: serde_json::Value| l["devices"][0].clone())
+        .unwrap();
+    twin["id"] = taken.clone().into();
+    twin["publicKey"] = browser.public_key.clone().into();
+    listed["devices"].as_array_mut().unwrap().push(twin);
+    *cloud.devices.lock().unwrap() = listed.to_string();
+    let refreshed = service.action(Action::Refresh {}).await;
+    let _ = service
+        .action(Action::Device {
+            device_id: taken.clone(),
+            approve: true,
+            key: Some(hex(&browser.pin())),
+            kind: Some(Kind::Browser),
+        })
+        .await;
+    assert!(
+        !held(&service),
+        "the computer through the room took the grants given the browser named after it"
+    );
+    assert!(
+        matches!(refreshed, Err("invalidResponse")),
+        "a browser named as the shack names a computer was listed"
+    );
+}
+
+/// ★ One id names one device. A list naming two devices under one id is refused whole, as a
+/// malformed id is, so a press meant for one never reaches the other: here a computer listed under
+/// the id of a browser approved with its key pinned, whose approval would have unpinned the browser.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_list_naming_two_devices_under_one_id_is_refused_whole() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let browser = DeviceKey::new();
+    pending_keyed_browser(&cloud, &browser.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_shown(&service, Some(hex(&browser.pin()))).await;
+    assert_eq!(pinned(&service), Some(browser.pin()), "premise: pinned");
+    let computer = DeviceKey::new();
+    let mut twin = computer_listed(0, &computer);
+    twin["id"] = BROWSER.into();
+    let mut listed: serde_json::Value =
+        serde_json::from_str(&cloud.devices.lock().unwrap()).unwrap();
+    listed["devices"].as_array_mut().unwrap().push(twin);
+    *cloud.devices.lock().unwrap() = listed.to_string();
+    let refreshed = service.action(Action::Refresh {}).await;
+    let _ = service
+        .action(press(
+            json!({"type":"device","deviceId":BROWSER,"approve":true,
+            "key":hex(&computer.pin())}),
+        ))
+        .await;
+    assert_eq!(
+        pinned(&service),
+        Some(browser.pin()),
+        "a press under a shared id reached the browser"
+    );
+    let approved = service.control.lock().unwrap().approved.clone();
+    assert_eq!(approved.paired(&computer.pin()), None);
+    assert!(
+        matches!(refreshed, Err("invalidResponse")),
+        "two devices under one id were listed"
+    );
+}
+
+/// ★ Through the room a computer holds nothing granted to another device under the service's id
+/// for it. Approved here, shown as a computer, under the id of a browser approved with station
+/// control, the device the tunnel takes it as cannot take the lease.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_through_the_room_never_holds_a_browsers_grants_under_its_id() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let browser = DeviceKey::new();
+    pending_keyed_browser(&cloud, &browser.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    let granted = approve_shown(&service, Some(hex(&browser.pin()))).await;
+    assert!(
+        granted.station_permissions.contains(&BROWSER.to_string()),
+        "premise: the browser's grant"
+    );
+    let computer = DeviceKey::new();
+    let mut listed = computer_listed(0, &computer);
+    listed["id"] = BROWSER.into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [listed] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_computer(&service, BROWSER, &computer)
+        .await
+        .unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    let taken = approved
+        .paired(&computer.pin())
+        .expect("premise: the tunnel takes the computer approved here");
+    assert_ne!(taken, BROWSER, "named by the service's id");
+    // Since 2026-10-10 a computer approved here holds station control of its own while Remote is on
+    // (as a LAN computer does), under its own name. It holds none of the browser's grants: its
+    // control is its own, untouched when the browser's is revoked.
+    service
+        .action(Action::StationPermission {
+            device_id: BROWSER.into(),
+            allow: false,
+        })
+        .await
+        .unwrap();
+    assert!(
+        !service
+            .status()
+            .unwrap()
+            .station_permissions
+            .contains(&BROWSER.to_string()),
+        "control: the browser's own station control is revoked"
+    );
+    assert_eq!(
+        lan_acquire(&service, &engine, &taken),
+        "controlling",
+        "the computer's control was the browser's, and went with it"
+    );
+}
+
+/// ★ A browser's approval admits nothing through the room: a browser approved here with its key
+/// pinned, which the service then names an approved computer under the same id and key, is not
+/// taken by the tunnel. CONTROL: approved here as a computer, the same key is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_browsers_pin_never_admits_a_computer_through_the_room() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let browser = DeviceKey::new();
+    pending_keyed_browser(&cloud, &browser.public_key);
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_shown(&service, Some(hex(&browser.pin()))).await;
+    assert_eq!(pinned(&service), Some(browser.pin()), "premise: pinned");
+    let approved = service.control.lock().unwrap().approved.clone();
+    let mut renamed = computer_listed(1, &browser);
+    renamed["id"] = BROWSER.into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [renamed] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        approved.paired(&browser.pin()),
+        None,
+        "a browser's pin admitted a computer"
+    );
+    approve_computer(&service, BROWSER, &browser).await.unwrap();
+    assert!(
+        approved.paired(&browser.pin()).is_some(),
+        "control: approved as a computer"
+    );
+}
+
+/// ★ A computer's pin is its approval's. One the service lists as approved again under an approval
+/// the shack never gave (another generation) is not taken on the pin made for the one before.
+/// CONTROL: renewed on use (the same approval, a later end), it is.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_approval_the_shack_never_gave_is_not_taken_on_an_older_pin() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_computer(&service, COMPUTER, &key).await.unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    assert!(approved.paired(&key.pin()).is_some(), "premise: taken");
+    let mut renewed = computer_listed(1, &key);
+    renewed["expiresAt"] = (APPROVED_UNTIL + DAY_MS).into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [renewed] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert!(
+        approved.paired(&key.pin()).is_some(),
+        "control: renewed on use"
+    );
+    let mut again = computer_listed(1, &key);
+    again["generation"] = 4.into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [again] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        approved.paired(&key.pin()),
+        None,
+        "an approval the shack never gave was taken"
+    );
+}
+
+/// ★ An approval ends where the service last said it ends, at the shack as at the room: a computer
+/// whose approval has run out is not taken by the tunnel, before the service is asked again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_whose_approval_ran_out_is_not_taken() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    approve_computer(&service, COMPUTER, &key).await.unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    let mut ending = computer_listed(1, &key);
+    ending["expiresAt"] = (now_ms() + 1500).into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [ending] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert!(
+        approved.paired(&key.pin()).is_some(),
+        "premise: taken before its end"
+    );
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+    assert_eq!(
+        approved.paired(&key.pin()),
+        None,
+        "taken after its approval ran out"
+    );
+}
+
+/// A lookup that fails is never read as approved: an approval whose list will not come pins
+/// nothing, and the tunnel takes nobody. An empty list takes nobody either. CONTROL: the list back,
+/// the same approval pins and is taken.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_list_that_fails_or_is_empty_admits_nobody() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [computer_listed(0, &key)] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    let approved = service.control.lock().unwrap().approved.clone();
+    cloud.refusing.store(true, Ordering::SeqCst);
+    assert!(approve_computer(&service, COMPUTER, &key).await.is_err());
+    assert_eq!(pinned_device(&service, COMPUTER), None, "pinned on no list");
+    assert_eq!(approved.paired(&key.pin()), None, "taken on no list");
+    cloud.refusing.store(false, Ordering::SeqCst);
+    approve_computer(&service, COMPUTER, &key).await.unwrap();
+    assert!(approved.paired(&key.pin()).is_some(), "control: taken");
+    *cloud.devices.lock().unwrap() = json!({ "devices": [] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(approved.paired(&key.pin()), None, "taken on an empty list");
 }
 
 /// ★ Operator ruling D6 (2026-09-28): the operator moves between the stream test build and normal
@@ -3124,8 +3956,6 @@ async fn a5_the_state_record_with_a_pin_made_is_still_read_by_the_previous_build
         generation: Option<u64>,
         logging: bool,
         control: bool,
-        #[serde(default)]
-        transmit: bool,
     }
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3144,7 +3974,7 @@ async fn a5_the_state_record_with_a_pin_made_is_still_read_by_the_previous_build
     service.action(Action::Enable {}).await.unwrap();
     pending_keyed_browser(&cloud, &key.public_key);
     service.action(Action::Refresh {}).await.unwrap();
-    approve_shown(&service, Some(hex(&key.pin())), true).await;
+    approve_shown(&service, Some(hex(&key.pin()))).await;
     settle().await;
     let values = vault.values.lock().unwrap().clone();
     assert!(values.contains_key("pins"), "premise: a pin was made");
@@ -3157,9 +3987,10 @@ async fn a5_the_state_record_with_a_pin_made_is_still_read_by_the_previous_build
         .iter()
         .find(|g| g.device_id == BROWSER)
         .expect("the grant");
+    assert!(grant.control, "a grant lost");
     assert!(
-        grant.logging && grant.control && grant.transmit,
-        "a grant lost"
+        !grant.logging,
+        "the retired logging permission was written as granted"
     );
     let mut inside: serde_json::Value = serde_json::from_str(written).unwrap();
     inside["pins"] = json!({ BROWSER: hex(&key.pin()) });
@@ -3230,7 +4061,7 @@ async fn a5_a_browser_that_changed_its_key_is_shown_unpinned_until_approved_agai
     service.action(Action::Enable {}).await.unwrap();
     pending_keyed_browser(&cloud, &old.public_key);
     service.action(Action::Refresh {}).await.unwrap();
-    let approved = approve_shown(&service, Some(hex(&old.pin())), false).await;
+    let approved = approve_shown(&service, Some(hex(&old.pin()))).await;
     assert_eq!(approved.pinned_devices, [BROWSER], "control: pinned");
     let mut listed: serde_json::Value =
         serde_json::from_str(&cloud.devices.lock().unwrap()).unwrap();
@@ -3252,7 +4083,7 @@ async fn a5_a_browser_that_changed_its_key_is_shown_unpinned_until_approved_agai
         Some(old.pin()),
         "the pin still holds the old key"
     );
-    let again = approve_shown(&service, Some(hex(&new.pin())), false).await;
+    let again = approve_shown(&service, Some(hex(&new.pin()))).await;
     assert_eq!(again.pinned_devices, [BROWSER]);
     assert_eq!(pinned(&service), Some(new.pin()));
 }
@@ -3287,7 +4118,6 @@ async fn a5_approving_the_pairing_pins_the_key_the_confirming_browser_brought() 
             .action(Action::Approve {
                 enrollment_id: STATION.into(),
                 account_id: ACCOUNT.into(),
-                transmit: false,
             })
             .await
             .unwrap();
@@ -3355,7 +4185,6 @@ async fn s3m1_approving_a_pairing_makes_its_key_which_a_restart_keeps_and_revoki
         .action(Action::Approve {
             enrollment_id: STATION.into(),
             account_id: ACCOUNT.into(),
-            transmit: false,
         })
         .await
         .unwrap();
@@ -3513,7 +4342,6 @@ async fn s3l1_the_shack_shows_the_fingerprint_of_its_own_key_while_it_is_paired(
         .action(Action::Approve {
             enrollment_id: STATION.into(),
             account_id: ACCOUNT.into(),
-            transmit: false,
         })
         .await
         .unwrap();

@@ -181,15 +181,61 @@ describe('nonstandard-call (hashed) display parity', () => {
     const m = genStdMessages({ dxCall: 'PJ4/K1ABC', myCall: 'W9XYZ', myGrid: 'EN37', snr: -8 })
     expect(m.tx1).toBe('<PJ4/K1ABC> W9XYZ EN37')
     expect(m.tx2).toBe('<PJ4/K1ABC> W9XYZ -08')
-    expect(m.tx4).toBe('<PJ4/K1ABC> W9XYZ RR73')
+    expect(m.tx4).toBe('PJ4/K1ABC <W9XYZ> RR73')
     expect(m.tx6).toBe('CQ W9XYZ EN37')
   })
-  it('a nonstandard SENDER cannot carry a grid or a numeric report', () => {
-    const m = genStdMessages({ dxCall: 'K1ABC', myCall: 'PJ4/W9XYZ', myGrid: 'EN37', snr: -8 })
-    expect(m.tx1).toBe('<K1ABC> PJ4/W9XYZ')
-    expect(m.tx2).toBe('<K1ABC> PJ4/W9XYZ')
-    expect(m.tx3).toBe('<K1ABC> PJ4/W9XYZ RRR')
-    expect(m.tx6).toBe('CQ PJ4/W9XYZ') // never hashed — a hashed CQ does not unpack
+  it('a nonstandard SENDER beside a plain call hashes its OWN call so the number rides', () => {
+    // Reported from OE/PD1SCO: Tx2 read `<PA0A> OE/PD1SCO` and Tx3 a bare RRR, so no
+    // number reached the other station. WSJT-X 3.0.2's genStdMsgs hashes MY call when only
+    // mine is nonstandard, and the report rides an ordinary Type 1 frame beside PA0A.
+    const m = genStdMessages({ dxCall: 'PA0A', myCall: 'OE/PD1SCO', myGrid: 'JN67', snr: -1 })
+    expect(stdMessageList(m)).toEqual([
+      '<PA0A> OE/PD1SCO',
+      'PA0A <OE/PD1SCO> -01',
+      'PA0A <OE/PD1SCO> R-01',
+      '<PA0A> OE/PD1SCO RR73',
+      '<PA0A> OE/PD1SCO 73',
+      'CQ OE/PD1SCO', // never hashed — a hashed CQ does not unpack
+    ])
+    expect(genStdMessages({ dxCall: 'PA0A', myCall: 'OE/PD1SCO', myGrid: 'JN67', preferRrr: true }).tx4).toBe(
+      '<PA0A> OE/PD1SCO RRR',
+    )
+    const k = genStdMessages({ dxCall: 'K1ABC', myCall: 'PJ4/W9XYZ', myGrid: 'EN37', snr: -8 })
+    expect(k.tx1).toBe('<K1ABC> PJ4/W9XYZ')
+    expect(k.tx2).toBe('K1ABC <PJ4/W9XYZ> -08')
+    expect(k.tx3).toBe('K1ABC <PJ4/W9XYZ> R-08')
+  })
+  it("RR73 and 73 from a standard call to a nonstandard one are WSJT-X's: that call whole, mine hashed", () => {
+    // WSJT-X 3.0.2's Tx4 and Tx5 when only HIS call fails stdCall (genStdMsgs, mainwindow.cpp
+    // 9701 and 9709): `hisCall <my_callsign> RR73` (or RRR, the same expression), a type 4
+    // message. stdCall passes /P and /R, so a portable call of mine closes the same way. The
+    // engine sends exactly these.
+    for (const my of ['K1ABC', 'K1ABC/P', 'K1ABC/R'])
+      for (const dx of ['W9XYZ/M', 'PJ4/W9XYZ', 'YW18FIFA']) {
+        const m = genStdMessages({ dxCall: dx, myCall: my, myGrid: 'FN42', snr: -12 })
+        expect([m.tx4, m.tx5], `${my} × ${dx}`).toEqual([`${dx} <${my}> RR73`, `${dx} <${my}> 73`])
+        const r = genStdMessages({ dxCall: dx, myCall: my, myGrid: 'FN42', preferRrr: true })
+        expect(r.tx4, `${my} × ${dx} RRR`).toBe(`${dx} <${my}> RRR`)
+      }
+    // Tx1–Tx3 keep the DX hashed.
+    const m = genStdMessages({ dxCall: 'W9XYZ/M', myCall: 'K1ABC', myGrid: 'FN42', snr: -12 })
+    expect(stdMessageList(m).slice(0, 3)).toEqual([
+      '<W9XYZ/M> K1ABC FN42',
+      '<W9XYZ/M> K1ABC -12',
+      '<W9XYZ/M> K1ABC R-12',
+    ])
+    // The RRR a /P call sends as its roger where no number can ride (Tx3) keeps its form.
+    expect(genStdMessages({ dxCall: 'W9XYZ/M', myCall: 'K1ABC/P', myGrid: 'FN42' }).tx3).toBe(
+      '<W9XYZ/M> K1ABC/P RRR',
+    )
+    // A call the decoder could not resolve is no callsign to put in full.
+    expect(genStdMessages({ dxCall: '<...>', myCall: 'K1ABC', myGrid: 'FN42' }).tx5).toBe('<...> K1ABC 73')
+  })
+  it('a nonstandard SENDER beside a slashed call still carries neither grid nor number', () => {
+    const m = genStdMessages({ dxCall: 'K1ABC/P', myCall: 'PJ4/W9XYZ', myGrid: 'EN37', snr: -8 })
+    expect(m.tx1).toBe('<K1ABC/P> PJ4/W9XYZ')
+    expect(m.tx2).toBe('<K1ABC/P> PJ4/W9XYZ')
+    expect(m.tx3).toBe('<K1ABC/P> PJ4/W9XYZ RRR')
   })
   it('standard calls are untouched', () => {
     const m = genStdMessages({ dxCall: 'K1ABC', myCall: 'W9XYZ', myGrid: 'EN37', snr: 3 })
@@ -257,12 +303,58 @@ describe('the pairs the packer cannot express — panel parity with the air', ()
       '<PJ4/K1ABC> KD9TAW/P',
       '<PJ4/K1ABC> KD9TAW/P',
       '<PJ4/K1ABC> KD9TAW/P RRR',
-      '<PJ4/K1ABC> KD9TAW/P RR73',
-      '<PJ4/K1ABC> KD9TAW/P 73',
+      'PJ4/K1ABC <KD9TAW/P> RR73', // RR73 and 73: WSJT-X's, the DX whole and mine hashed
+      'PJ4/K1ABC <KD9TAW/P> 73',
       'CQ KD9TAW/P EN52',
     ])
     expect(m[2]).not.toBe(m[0])
     expect(m[2]).not.toBe(m[1])
+  })
+
+  it('only a nonstandard call beside a plain call changes — every other pair byte for byte', () => {
+    // The panel's half of tempo-core/tests/portable_suffix_air.rs's table, row for row. The
+    // two ★ rows are WSJT-X's report and roger with MY call hashed; every other row is what
+    // the panel showed before, but for a standard call's RR73 and 73 to a nonstandard one (the
+    // three PJ4/K1ABC rows of mine), WSJT-X's `PJ4/K1ABC <KD9TAW> RR73`.
+    const rows: [string, string, string][] = [
+      ['KD9TAW', 'PA0A', 'PA0A KD9TAW EN52 | PA0A KD9TAW -07 | PA0A KD9TAW R-07 | PA0A KD9TAW RR73 | PA0A KD9TAW 73'],
+      ['KD9TAW', 'PA0A/P', 'PA0A/P KD9TAW EN52 | PA0A/P KD9TAW -07 | PA0A/P KD9TAW R-07 | PA0A/P KD9TAW RR73 | PA0A/P KD9TAW 73'],
+      ['KD9TAW', 'PA0A/R', 'PA0A/R KD9TAW EN52 | PA0A/R KD9TAW -07 | PA0A/R KD9TAW R-07 | PA0A/R KD9TAW RR73 | PA0A/R KD9TAW 73'],
+      ['KD9TAW', 'PJ4/K1ABC', '<PJ4/K1ABC> KD9TAW EN52 | <PJ4/K1ABC> KD9TAW -07 | <PJ4/K1ABC> KD9TAW R-07 | PJ4/K1ABC <KD9TAW> RR73 | PJ4/K1ABC <KD9TAW> 73'],
+      ['KD9TAW/P', 'PA0A', 'PA0A KD9TAW/P EN52 | PA0A KD9TAW/P -07 | PA0A KD9TAW/P R-07 | PA0A KD9TAW/P RR73 | PA0A KD9TAW/P 73'],
+      ['KD9TAW/P', 'PA0A/P', 'PA0A/P KD9TAW/P EN52 | PA0A/P KD9TAW/P -07 | PA0A/P KD9TAW/P R-07 | PA0A/P KD9TAW/P RR73 | PA0A/P KD9TAW/P 73'],
+      ['KD9TAW/P', 'PA0A/R', '<PA0A/R> KD9TAW/P | <PA0A/R> KD9TAW/P | <PA0A/R> KD9TAW/P RRR | <PA0A/R> KD9TAW/P RR73 | <PA0A/R> KD9TAW/P 73'],
+      ['KD9TAW/P', 'PJ4/K1ABC', '<PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P RRR | PJ4/K1ABC <KD9TAW/P> RR73 | PJ4/K1ABC <KD9TAW/P> 73'],
+      ['KD9TAW/R', 'PA0A', 'PA0A KD9TAW/R EN52 | PA0A KD9TAW/R -07 | PA0A KD9TAW/R R-07 | PA0A KD9TAW/R RR73 | PA0A KD9TAW/R 73'],
+      ['KD9TAW/R', 'PA0A/P', '<PA0A/P> KD9TAW/R | <PA0A/P> KD9TAW/R | <PA0A/P> KD9TAW/R RRR | <PA0A/P> KD9TAW/R RR73 | <PA0A/P> KD9TAW/R 73'],
+      ['KD9TAW/R', 'PA0A/R', 'PA0A/R KD9TAW/R EN52 | PA0A/R KD9TAW/R -07 | PA0A/R KD9TAW/R R-07 | PA0A/R KD9TAW/R RR73 | PA0A/R KD9TAW/R 73'],
+      ['KD9TAW/R', 'PJ4/K1ABC', '<PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R RRR | PJ4/K1ABC <KD9TAW/R> RR73 | PJ4/K1ABC <KD9TAW/R> 73'],
+      // ★
+      ['OE/PD1SCO', 'PA0A', '<PA0A> OE/PD1SCO | PA0A <OE/PD1SCO> -07 | PA0A <OE/PD1SCO> R-07 | <PA0A> OE/PD1SCO RR73 | <PA0A> OE/PD1SCO 73'],
+      ['OE/PD1SCO', 'PA0A/P', '<PA0A/P> OE/PD1SCO | <PA0A/P> OE/PD1SCO | <PA0A/P> OE/PD1SCO RRR | <PA0A/P> OE/PD1SCO RR73 | <PA0A/P> OE/PD1SCO 73'],
+      ['OE/PD1SCO', 'PA0A/R', '<PA0A/R> OE/PD1SCO | <PA0A/R> OE/PD1SCO | <PA0A/R> OE/PD1SCO RRR | <PA0A/R> OE/PD1SCO RR73 | <PA0A/R> OE/PD1SCO 73'],
+      ['OE/PD1SCO', 'PJ4/K1ABC', '<PJ4/K1ABC> OE/PD1SCO | <PJ4/K1ABC> OE/PD1SCO | <PJ4/K1ABC> OE/PD1SCO RRR | <PJ4/K1ABC> OE/PD1SCO RR73 | <PJ4/K1ABC> OE/PD1SCO 73'],
+      // ★
+      ['YW18FIFA', 'PA0A', '<PA0A> YW18FIFA | PA0A <YW18FIFA> -07 | PA0A <YW18FIFA> R-07 | <PA0A> YW18FIFA RR73 | <PA0A> YW18FIFA 73'],
+      ['YW18FIFA', 'PA0A/P', '<PA0A/P> YW18FIFA | <PA0A/P> YW18FIFA | <PA0A/P> YW18FIFA RRR | <PA0A/P> YW18FIFA RR73 | <PA0A/P> YW18FIFA 73'],
+      ['YW18FIFA', 'PA0A/R', '<PA0A/R> YW18FIFA | <PA0A/R> YW18FIFA | <PA0A/R> YW18FIFA RRR | <PA0A/R> YW18FIFA RR73 | <PA0A/R> YW18FIFA 73'],
+      ['YW18FIFA', 'PJ4/K1ABC', '<PJ4/K1ABC> YW18FIFA | <PJ4/K1ABC> YW18FIFA | <PJ4/K1ABC> YW18FIFA RRR | <PJ4/K1ABC> YW18FIFA RR73 | <PJ4/K1ABC> YW18FIFA 73'],
+    ]
+    const cqs: Record<string, string> = {
+      KD9TAW: 'CQ KD9TAW EN52',
+      'KD9TAW/P': 'CQ KD9TAW/P EN52',
+      'KD9TAW/R': 'CQ KD9TAW/R EN52',
+      'OE/PD1SCO': 'CQ OE/PD1SCO',
+      YW18FIFA: 'CQ YW18FIFA',
+    }
+    const wrong: string[] = []
+    for (const [my, dx, want] of rows) {
+      const m = gen(my, dx)
+      const got = m.slice(0, 5).join(' | ')
+      if (got !== want) wrong.push(`${my} × ${dx}\n  shows ${got}\n  want  ${want}`)
+      if (m[5] !== cqs[my]) wrong.push(`CQ ${my}: shows ${m[5]}, want ${cqs[my]}`)
+    }
+    expect(wrong.join('\n')).toBe('')
   })
 
   it('every callsign-class pair names both stations, and Tx3–Tx5 never collide', () => {

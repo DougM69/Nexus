@@ -100,7 +100,7 @@ const box = (cap: string) =>
   [...document.querySelectorAll('.le-fd-big .le-fd-field')]
     .find((l) => l.querySelector('.le-fd-cap')?.textContent === cap)!
     .querySelector('input') as HTMLInputElement
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 
 afterEach(() => {
   cleanup()

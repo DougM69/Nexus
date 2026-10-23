@@ -185,6 +185,10 @@ pub fn func_line(func: &str, value: u8) -> String {
 /// model, the engine's ATU gate refuses the press, and the cockpit disables the button with a
 /// reason. The native Icom (CI-V) path is where those rigs get a real tune-up.
 ///
+/// ⚠️ AND NOT ON THE FT-710, whose `AC` P3 2 is unused and whose tuning start is 3 (Yaesu's
+/// FT-710 CAT manual, page 8): the radio loop sends
+/// [`crate::rigmodels::hamlib_atu_start_tune_value`], which is this value for every other model.
+///
 /// ⚠️ NEEDS BENCH (no rig on this machine). What is verified here is the BYTES: that Nexus
 /// sends `U TUNER 2` and that Hamlib carries the 2 to the backend unclamped. What is NOT
 /// verified is the FTDX10 actually starting a tune-up cycle in response to `AC002`, and
@@ -229,6 +233,21 @@ pub fn morse_line(text: &str) -> String {
     } else {
         format!("b {text}\n")
     }
+}
+/// ⛔ Why the radio's own CW keyer is never handed `text` ([`Rig::send_morse`]), in the CW screen's
+/// words, or `None` when it may be. Hamlib puts the text inside a radio command (`KY <text>;` to a
+/// Kenwood or an Elecraft, `KM1<text>;` to a newer Yaesu), and those radios end a command at the
+/// first `;`, so a `;` in the text would end the keyer's command early and the radio would read
+/// the rest as a command of its own; a line break would end rigctld's own command. Only what
+/// [`tempo_core::cw::sendable`] keeps goes, with spaces between words: the rule a TCI program's
+/// CW keeps too. Nexus's own CW is refused whole by the same rule before any of it is queued
+/// (`Engine::send_cw`), so this is the backstop: a word reaches it only when the keyer was changed
+/// to this one under a message already queued, or from a caller outside the engine.
+pub fn cw_text_refusal(text: &str) -> Option<String> {
+    let c = text
+        .chars()
+        .find(|c| *c != ' ' && !tempo_core::cw::sendable(*c))?;
+    Some(tempo_core::cw::keyer_refusal(c))
 }
 /// Parse the S-meter reading (dB relative to S9) from a rigctld `l STRENGTH` reply.
 /// Hamlib reports STRENGTH as a signed integer dB value where S9 = 0 dB (S1 ≈ -48 dB,
@@ -805,7 +824,7 @@ impl Rig {
     /// Reading the reply the protocol's own length fixes it at the source, so nothing is left to
     /// drain. The drain stays as the backstop it was always meant to be.
     fn command_expecting(&mut self, line: &str, expected_lines: usize) -> std::io::Result<String> {
-        self.command_lines(line, None, None, expected_lines)
+        self.command_lines(line, None, None, expected_lines, false)
     }
 
     fn command_permitted(
@@ -814,7 +833,16 @@ impl Rig {
         deadline_ms: Option<u64>,
         permission: Option<&WritePermission>,
     ) -> std::io::Result<String> {
-        self.command_lines(line, deadline_ms, permission, 1)
+        self.command_lines(line, deadline_ms, permission, 1, false)
+    }
+
+    /// [`Self::command_with_deadline`] for a read that must END by its deadline: each socket read
+    /// waits only for what is left of it. Elsewhere the deadline is looked at between reads, each
+    /// of which may wait the whole 500 ms read window, so a deadline shorter than the window could
+    /// be overrun by up to the window. The tune-time meter reads need the strict form: a read that
+    /// outlasts the tune carrier's lead gaps the carrier. PTT keeps its own deadline as it was.
+    fn command_ending_by(&mut self, line: &str, deadline_ms: u64) -> std::io::Result<String> {
+        self.command_lines(line, Some(deadline_ms), None, 1, true)
     }
 
     fn command_lines(
@@ -823,13 +851,20 @@ impl Rig {
         deadline_ms: Option<u64>,
         permission: Option<&WritePermission>,
         expected_lines: usize,
+        end_by_deadline: bool,
     ) -> std::io::Result<String> {
         // Before the stream is touched: a refused line never reached the wire, so it is neither a
         // link failure nor a reason to drop the connection below.
         if let Some(why) = self.refused_line(line) {
             return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, why));
         }
-        match self.command_inner(line, deadline_ms, permission, expected_lines) {
+        match self.command_inner(
+            line,
+            deadline_ms,
+            permission,
+            expected_lines,
+            end_by_deadline,
+        ) {
             Ok(reply) => Ok(reply),
             Err(e) => {
                 // Diagnostic: dropping the rigctld connection is what triggers the daemon's
@@ -854,6 +889,7 @@ impl Rig {
         deadline_override: Option<u64>,
         permission: Option<&WritePermission>,
         expected_lines: usize,
+        end_by_deadline: bool,
     ) -> std::io::Result<String> {
         if let Some(permission) = permission {
             permission
@@ -918,7 +954,32 @@ impl Rig {
         let mut tail_deadline: Option<std::time::Instant> = None;
         let mut out = Vec::with_capacity(64);
         let mut buf = [0u8; 256];
+        let too_late = |out: &[u8]| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                NoAnswerInTime {
+                    words: format!(
+                        "rig reply incomplete after {deadline_ms} ms (got {:?})",
+                        String::from_utf8_lossy(out)
+                    ),
+                    hamlib: false,
+                },
+            )
+        };
         let partial = loop {
+            // A read that must end by its deadline waits only for what is left of it.
+            if end_by_deadline {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    return Err(too_late(&out));
+                }
+                let window = if tail_deadline.is_some() {
+                    MULTILINE_TAIL_MS
+                } else {
+                    500
+                };
+                stream.set_read_timeout(Some(left.min(Duration::from_millis(window))))?;
+            }
             match stream.read(&mut buf) {
                 Ok(0) => {
                     return Err(std::io::Error::new(
@@ -962,16 +1023,7 @@ impl Rig {
                 break String::from_utf8_lossy(&out).to_string();
             }
             if std::time::Instant::now() >= deadline {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    NoAnswerInTime {
-                        words: format!(
-                            "rig reply incomplete after {deadline_ms} ms (got {:?})",
-                            String::from_utf8_lossy(&out)
-                        ),
-                        hamlib: false,
-                    },
-                ));
+                return Err(too_late(&out));
             }
         };
         // ⚠️ THE REPLY IS SALVAGEABLE; THE CONNECTION IS NOT. The line we stopped waiting for is
@@ -1420,9 +1472,12 @@ impl Rig {
     /// waited for. `None` = the transport's normal deadline.
     pub fn read_meter_f32_within(&mut self, name: &str, deadline_ms: Option<u64>) -> Option<f32> {
         self.control.as_ref()?;
-        let reply = self
-            .command_with_deadline(&format!("l {name}\n"), deadline_ms)
-            .ok()?;
+        let line = format!("l {name}\n");
+        let reply = match deadline_ms {
+            Some(ms) => self.command_ending_by(&line, ms),
+            None => self.command(&line),
+        }
+        .ok()?;
         reply
             .lines()
             .find_map(|l| l.trim().parse::<f32>().ok())
@@ -1575,8 +1630,20 @@ impl Rig {
     }
 
     pub fn send_raw(&mut self, raw: &str) -> Option<String> {
+        self.send_raw_within(raw, None)
+    }
+
+    /// [`Self::send_raw`] with a caller-chosen deadline (ms), for a read made while a tune carrier
+    /// plays: the bound [`Self::read_meter_f32_within`] gives the tune-time meter poll. `None` =
+    /// the transport's normal deadline.
+    pub fn send_raw_within(&mut self, raw: &str, deadline_ms: Option<u64>) -> Option<String> {
         self.control.as_ref()?;
-        let reply = self.command(&format!("w {raw}\n")).ok()?;
+        let line = format!("w {raw}\n");
+        let reply = match deadline_ms {
+            Some(ms) => self.command_ending_by(&line, ms),
+            None => self.command(&line),
+        }
+        .ok()?;
         // `str::trim` does NOT remove a NUL — it is not whitespace — so trim it explicitly or every
         // caller gets "MD02;\0" and has to know that. The rig's own terminator (`;`) is left alone:
         // callers parse the rig's string, not a cleaned-up version of it.
@@ -1817,7 +1884,13 @@ impl Rig {
     /// Key CW from text via the rig's own keyer (Hamlib `send_morse`). Set the speed
     /// first with [`set_keyspd`](Self::set_keyspd). Best for canned/keyboard macros;
     /// CAT latency makes it poor for live paddle feel (use WinKeyer for that).
+    ///
+    /// ⛔ Text the radio's keyer may not be handed ([`cw_text_refusal`]) is refused before anything
+    /// is sent (`InvalidInput`, with the CW screen's words), whoever asks.
     pub fn send_morse(&mut self, text: &str) -> std::io::Result<()> {
+        if let Some(why) = cw_text_refusal(text) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, why));
+        }
         self.cat(&morse_line(text))
     }
     /// Abort CW in progress. Newer Hamlib exposes `\stop_morse`; older builds vary by
@@ -1997,6 +2070,67 @@ mod tests {
         // Multi-character words are untouched — the pad is not blanket rewriting.
         assert_eq!(morse_line("CQ"), "b CQ\n");
         assert_eq!(morse_line("VE3FMQ"), "b VE3FMQ\n");
+    }
+
+    /// ⛔ THE RADIO'S OWN KEYER IS NEVER HANDED A `;`, A LINE BREAK, ANOTHER CONTROL CHARACTER OR A
+    /// CHARACTER WITH NO MORSE. Hamlib puts `send_morse`'s text inside a radio command, and a
+    /// Kenwood, Yaesu or Elecraft radio ends a command at the first `;`: the TS-2000 backend wrote
+    /// `KY TEST;` and then `FA00007000000      ;` for `b TEST;FA00007000000` (rigctl 4.5.5), a
+    /// retune. A line break would end rigctld's own command and start another. Each such text is
+    /// refused, says which character, and NOTHING reaches rigctld. CONTROLS, by value: ordinary
+    /// text, a padded one-character word, several words, lower case and every punctuation mark in
+    /// Nexus's table go out exactly as before.
+    #[test]
+    fn the_cat_keyer_hands_rigctld_no_semicolon_line_break_or_character_without_morse() {
+        let (addr, log) = mock_rigctld(ok_reply(7_030_000));
+        let mut rig = Rig::rigctld(&addr);
+        // Each refused text, and the character the refusal names, as the CW screen shows it.
+        for (bad, named) in [
+            ("TEST;FA00007000000", r#"";""#),
+            ("K1ABC;", r#"";""#),
+            (";", r#"";""#),
+            ("TEST\nF 7000000", r#""\n""#),
+            ("TEST\r", r#""\r""#),
+            ("TEST\tDE", r#""\t""#),
+            ("\u{1b}[2J", r#""\u{1b}""#),
+            ("TEST\u{7f}", r#""\u{7f}""#),
+            ("A\0B", r#""\u{0}""#),
+            ("73!", r#""!""#),
+            ("QRL'", r#""'""#),
+            ("CAFÉ", r#""É""#),
+        ] {
+            let res = rig.send_morse(bad);
+            assert_eq!(
+                *log.lock().unwrap(),
+                Vec::<String>::new(),
+                "{bad:?} reached rigctld"
+            );
+            let Err(err) = res else {
+                panic!("{bad:?} must be refused")
+            };
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{bad:?}");
+            assert!(
+                err.to_string().contains(named),
+                "{bad:?}: the refusal names {named}: {err}"
+            );
+        }
+        for (text, wire) in [
+            ("TEST", "b TEST"),
+            ("K", "b K "),
+            ("?", "b ? "),
+            ("CQ CQ DE W9XYZ", "b CQ CQ DE W9XYZ"),
+            ("cq de w9xyz", "b cq de w9xyz"),
+            ("5NN/?=+-().,:@", "b 5NN/?=+-().,:@"),
+        ] {
+            let from = log.lock().unwrap().len();
+            rig.send_morse(text)
+                .unwrap_or_else(|e| panic!("control: {text:?} keys: {e}"));
+            assert_eq!(
+                log.lock().unwrap()[from..],
+                [wire.to_string()],
+                "control: {text:?} goes out exactly as before"
+            );
+        }
     }
 
     /// THE ATU BUTTON DID NOTHING — the wire form, pinned (operator 2026-08-15, FTDX10).
@@ -2631,6 +2765,101 @@ mod tests {
             "returned after {:?} — that is a timeout, not a read",
             started.elapsed()
         );
+    }
+
+    /// A rigctld that answers each line `delay` after it arrives, or never (`None`), with
+    /// `reply(line)`. One connection after another, since a reply missed by its deadline drops
+    /// the connection.
+    fn mock_rigctld_late(
+        delay: Option<Duration>,
+        reply: impl Fn(&str) -> String + Send + 'static,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut buf = [0u8; 256];
+                'conn: loop {
+                    let n = match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    for line in String::from_utf8_lossy(&buf[..n]).lines() {
+                        let Some(delay) = delay else { continue };
+                        std::thread::sleep(delay);
+                        if stream.write_all(reply(line).as_bytes()).is_err() {
+                            break 'conn;
+                        }
+                    }
+                }
+            }
+        });
+        addr
+    }
+
+    /// The tune-time meter read ENDS at its deadline. A tune carrier plays from a 250 ms lead, so
+    /// the meter read made under it gets 120 ms and is abandoned past that. Each socket read used
+    /// to wait its whole 500 ms window before the deadline was looked at: a rig that never
+    /// answered held the loop 500 ms, and a reply at 300 ms was taken.
+    #[test]
+    fn a_tune_time_meter_read_ends_at_its_deadline() {
+        let meters = |line: &str| {
+            if line.starts_with("w ") {
+                "RM4128;\0".to_string()
+            } else {
+                "1.5\n".to_string()
+            }
+        };
+        let late = || Some(Duration::from_millis(300));
+        let timed = |f: &mut dyn FnMut() -> Option<String>| {
+            let started = std::time::Instant::now();
+            (f(), started.elapsed())
+        };
+        let mut silent = Rig::rigctld(&mock_rigctld_late(None, meters));
+        let (silent_value, silent_took) = timed(&mut || {
+            silent
+                .read_meter_f32_within("SWR", Some(120))
+                .map(|v| v.to_string())
+        });
+        let mut slow = Rig::rigctld(&mock_rigctld_late(late(), meters));
+        let (late_value, late_took) = timed(&mut || {
+            slow.read_meter_f32_within("SWR", Some(120))
+                .map(|v| v.to_string())
+        });
+        let mut slow_raw = Rig::rigctld(&mock_rigctld_late(late(), meters));
+        let (raw_value, raw_took) = timed(&mut || slow_raw.send_raw_within("RM4;", Some(120)));
+        assert_eq!(
+            (silent_value, late_value, raw_value),
+            (None, None, None),
+            "a meter answered after the 120 ms deadline is a miss, never a reading"
+        );
+        for (what, took) in [
+            ("no answer", silent_took),
+            ("answer at 300 ms", late_took),
+            ("raw answer at 300 ms", raw_took),
+        ] {
+            assert!(
+                took < Duration::from_millis(400),
+                "{what}: the 120 ms read held the loop {took:?}"
+            );
+        }
+        // Controls: the same 300 ms answers are read under the transport's own deadline.
+        let mut normal = Rig::rigctld(&mock_rigctld_late(late(), meters));
+        assert_eq!(normal.read_meter_f32("SWR"), Some(1.5));
+        let mut normal_raw = Rig::rigctld(&mock_rigctld_late(late(), meters));
+        assert_eq!(normal_raw.send_raw("RM4;").as_deref(), Some("RM4128;"));
+    }
+
+    /// PTT keeps its deadline exactly as it was: looked at between reads, so a `T 1` answered at
+    /// 800 ms (past the 700 ms PTT deadline, inside the second read) is still taken. Only the
+    /// tune-time meter reads end at their deadline.
+    #[test]
+    fn a_key_answered_after_the_ptt_deadline_is_still_taken_as_before() {
+        let mut rig = Rig::rigctld(&mock_rigctld_late(Some(Duration::from_millis(800)), |_| {
+            "RPRT 0\n".to_string()
+        }));
+        assert_eq!(rig.ptt(true).map_err(|e| e.to_string()), Ok(()));
     }
 
     #[test]

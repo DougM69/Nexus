@@ -26,6 +26,8 @@ vi.mock('../api', () => ({
   setFdOperator: vi.fn(async () => ({})),
   exportLog: vi.fn(async () => ''),
   fdClubExport: vi.fn(async () => ''),
+  // The host's club log under its board: none listed here.
+  fdClubLogNewest: vi.fn(async () => null),
   fdClubGivePosition: vi.fn(async () => ({ outcome: 'given' })),
   fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
   fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
@@ -571,11 +573,35 @@ describe('the host\'s club block names who it turned away and how full its board
     expect(screen.getByText(/19 more, not listed here/)).toBeTruthy()
   })
 
+  // ⭐ A LAPTOP SET UP ON ANOTHER COUNTY sends it on the air under the club's call, a busted
+  // exchange for every station it works. The host names it, with what it sends and what the club
+  // sends, so it can be put right on that laptop; its contacts are still taken. An unnamed
+  // position reads as its line on the board does: who is at it, else the placeholder.
+  it('names each position sending another county than the club, with both', () => {
+    render(
+      <FdClubSection
+        club={{
+          ...HOST,
+          otherLocation: [
+            { posName: 'CW tent', operator: 'K9OPB', sent: 'KANE', club: 'MCLN' },
+            { posName: '', operator: 'K9OPD', sent: 'WILL', club: 'MCLN' },
+            { posName: '', operator: '', sent: 'LAKE', club: 'MCLN' },
+          ],
+        }}
+      />,
+    )
+    expect(screen.getByText(/^CW tent sends KANE, and this club sends MCLN\./)).toBeTruthy()
+    expect(screen.getByText(/^K9OPD sends WILL, and this club sends MCLN\./)).toBeTruthy()
+    expect(screen.getByText(/^Unnamed position sends LAKE, and this club sends MCLN\./)).toBeTruthy()
+    expect(screen.getAllByText(/set that laptop to MCLN so the next ones match/)).toHaveLength(3)
+  })
+
   it('POSITIVE CONTROL: a club with room and no refusals says neither', () => {
     render(<FdClubSection club={HOST} />)
     expect(screen.queryByText(/Turned away/)).toBeNull()
     expect(screen.queryByText(/club board shows|as many as each position/)).toBeNull()
     expect(screen.queryByText(/not in the club's log/)).toBeNull()
+    expect(screen.queryByText(/and this club sends/)).toBeNull()
   })
 })
 

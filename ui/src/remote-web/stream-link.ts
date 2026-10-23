@@ -51,7 +51,7 @@ import { MicMeter, browserMicLevel, micGain, micLevel, type MicLevelEnvironment,
 import {
   MIC_CONSTRAINTS, STREAM_BLIND_MS, STREAM_CHANNELS, STREAM_CONTROL_BYTES, STREAM_HEARTBEAT_MS, STREAM_HELD_KEYS,
   STREAM_HELD_REASSERT_MS, STREAM_INPUT_FLUSH_MS, STREAM_PTT_REASSERT_MS, STREAM_SIGNAL_BYTES, STREAM_UPLINK_BUDGET_BYTES,
-  STREAM_UPLINK_STALL_MS, STREAM_VIEW_SETTLE_MS, parseHeld, parseMicState, parsePttState, parseReceivedMessage,
+  STREAM_UPLINK_STALL_MS, STREAM_VIEW_SETTLE_MS, lanCandidate, parseHeld, parseMicState, parsePttState, parseReceivedMessage,
   parseStreamInput, secureAnswer, viewMessage, type BrowserStreamPayload, type MicEnded, type OfferSignature, type StreamInput,
   type StreamViewSize, type StreamWheel,
 } from './stream-protocol'
@@ -157,6 +157,10 @@ export type StreamEnvironment = {
   /** The service's answer to this station's relay request, read by `parseRelayServers`. Absent,
    *  the stream is direct only. */
   relayServers?: () => Promise<unknown>
+  /** Whether this session may stream on the shack's own network only (a LAN-only ticket: Remote is
+   *  free there). Read as each stream starts. Then the stream asks for no relay and no STUN server, and
+   *  sends only the private host candidates the service lets such a session carry (`lanCandidate`). */
+  lanOnly?: () => boolean
   /** The browser's VP8 codec entries (with the retransmission format that goes with them), or null
    *  where the browser cannot say - the offer then carries its defaults and the station picks VP8. */
   videoCodecs: () => CodecLike[] | null
@@ -371,17 +375,21 @@ export class StreamLink {
     // The relay first, when there is one to ask for: a peer takes its servers when it is built. A
     // stream ended, or started again, while it was asked for goes no further (its phase read fresh).
     const attempt = ++this.attempts
-    const relay = this.env.relayServers ? await this.relay(this.env.relayServers) : []
+    const lan = this.env.lanOnly?.() === true
+    const relay = !lan && this.env.relayServers ? await this.relay(this.env.relayServers) : []
     if (this.closed || attempt !== this.attempts || this.getSnapshot().phase !== 'connecting') return
     const build = (servers: IceServerLike[]) => { try { return this.env.peer(servers) } catch { return null } }
-    // A browser that will not build a peer with the relay's entries still streams direct.
-    const peer = (relay.length ? build([...STREAM_ICE_SERVERS, ...relay]) : null) ?? build([...STREAM_ICE_SERVERS])
+    // A browser that will not build a peer with the relay's entries still streams direct. On the
+    // shack's own network only, it has no server at all: its own address is all it needs to offer.
+    const peer = lan ? build([]) : (relay.length ? build([...STREAM_ICE_SERVERS, ...relay]) : null) ?? build([...STREAM_ICE_SERVERS])
     if (!peer) { this.end('streamUnsupported'); return }
     this.peer = peer
     peer.onicecandidate = event => {
       // The contract carries no end-of-candidates marker, and every browser candidate names its media.
       const c = event.candidate
       if (this.peer !== peer || !c?.candidate || !c.sdpMid) return
+      // The service refuses any other on a LAN-only session, and would end the stream for it.
+      if (lan && !lanCandidate(c.candidate)) return
       const candidate = { kind: 'candidate' as const, candidate: c.candidate, sdpMid: c.sdpMid }
       if (this.unsent) { if (this.unsent.length < 64) this.unsent.push(candidate) } else this.tell(candidate)
     }

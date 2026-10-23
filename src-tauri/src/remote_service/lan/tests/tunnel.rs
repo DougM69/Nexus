@@ -1,0 +1,636 @@
+//! The room's tunnel at the shack (`crate::remote_service::tunnel`): this road's channel through a
+//! pipe whose two ends pass binary messages unread, held to the computers approved for it here. The
+//! room is played by two WebSocket ends joined in memory, each read and written through the pipe's
+//! own bridge; the computer by the client core's own TLS over its end. Its key is the fixtures'
+//! computer key; the station proves the fixtures' station key.
+use super::*;
+use crate::remote_service::tunnel::{bridge, Approved};
+use std::collections::BTreeMap;
+
+/// The device id the service gave the computer when it registered: a hosted device's, never the
+/// LAN's, which is made from the key.
+pub(super) const APPROVED: &str = "10000000-0000-4000-8000-00000000000d";
+
+/// Who the tunnel takes: `computer`, approved under [`APPROVED`] with no end in sight, or nobody.
+pub(super) fn approved_for(computer: Option<&Computer>) -> BTreeMap<[u8; 32], (String, u64)> {
+    approved_until(computer, u64::MAX)
+}
+
+/// The same, its approval ending at `until` (ms since the epoch).
+fn approved_until(computer: Option<&Computer>, until: u64) -> BTreeMap<[u8; 32], (String, u64)> {
+    computer
+        .map(|c| (c.pin, (APPROVED.to_string(), until)))
+        .into_iter()
+        .collect()
+}
+
+/// `s`'s tunnel, held to `roster`, its internet roads on loopback.
+pub(super) fn tunnel_of(s: &Shack, roster: Roster, approved: &Arc<Approved>) -> Tunnel {
+    let deps = TunnelDeps {
+        authority: s.shared.authority.clone(),
+        engine: s.shared.engine.clone(),
+        feeds: s.shared.feeds.clone(),
+        dispatcher: s.shared.dispatcher.clone(),
+        commands: s.shared.commands.clone(),
+    };
+    let counted = approved.clone();
+    Tunnel::new(
+        &deps,
+        s.shared.identity.clone(),
+        roster,
+        Arc::new(move || counted.revisions()),
+        Ipv4Addr::LOCALHOST.into(),
+        None,
+    )
+    .expect("the tunnel")
+}
+
+/// A pipe through an in-memory room, the station's end served by `tunnel` until `stop`: the
+/// computer's end, as the byte stream its TLS runs over.
+pub(super) async fn piped(tunnel: &Tunnel, stop: watch::Receiver<bool>) -> tokio::io::DuplexStream {
+    let (station_side, room_side) = tokio::io::duplex(256 * 1024);
+    let room = tokio::spawn(async move { tokio_tungstenite::accept_async(room_side).await });
+    let (station_end, _) = tokio_tungstenite::client_async("ws://room/pipe", station_side)
+        .await
+        .unwrap();
+    let computer_end = room.await.unwrap().unwrap();
+    let (station_bytes, _) = bridge(station_end);
+    let (computer_bytes, _) = bridge(computer_end);
+    let tunnel = tunnel.clone();
+    tokio::spawn(async move { tunnel.serve(station_bytes, stop).await });
+    computer_bytes
+}
+
+type Through =
+    tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<tokio::io::DuplexStream>>;
+
+/// TLS with `key`, pinning `station`, then the upgrade, over the computer's end of the pipe.
+async fn through(
+    pipe: tokio::io::DuplexStream,
+    key: &str,
+    station: &str,
+) -> Result<Through, String> {
+    let connector = tokio_rustls::TlsConnector::from(tls::client::config(key, station).unwrap());
+    let name = rustls::pki_types::ServerName::try_from("nexus-station").unwrap();
+    let tls = connector
+        .connect(name, pipe)
+        .await
+        .map_err(|e| format!("tls: {e}"))?;
+    let (socket, _) = tokio_tungstenite::client_async("ws://nexus-station/", tls)
+        .await
+        .map_err(|e| format!("upgrade: {e}"))?;
+    Ok(socket)
+}
+
+/// The station's next message other than the status line, how the connection ended, or `silent`.
+async fn heard(socket: &mut Through) -> Value {
+    loop {
+        match tokio::time::timeout(Duration::from_secs(5), socket.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                if value["type"] != "status" {
+                    return value;
+                }
+            }
+            Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
+            Ok(other) => return json!({"closed": format!("{other:?}")}),
+            Err(_) => return json!({"silent": true}),
+        }
+    }
+}
+
+async fn say(socket: &mut Through, value: Value) {
+    socket
+        .send(Message::Text(value.to_string().into()))
+        .await
+        .unwrap();
+}
+
+async fn hello_through(socket: &mut Through) -> Value {
+    say(
+        socket,
+        json!({"type":"hello","protocol":VERSIONS.0,"stream":VERSIONS.1,"operation":VERSIONS.2}),
+    )
+    .await;
+    heard(socket).await
+}
+
+/// ★ Through the room, a computer approved here is welcomed, stamped with the device id the
+/// service gave it, by the key pinned when it was approved; the station proves its own key.
+/// A key not approved here is refused in the handshake and never welcomed. CONTROL: approved, the
+/// same key is welcomed over a fresh pipe.
+#[tokio::test]
+async fn through_the_room_only_a_computer_approved_here_is_welcomed() {
+    let s = shack(home());
+    let approved = Arc::new(Approved::default());
+    let tunnel = tunnel_of(&s, approved.roster(), &approved);
+    let (_stop, stop) = watch::channel(false);
+    let refused = match through(
+        piped(&tunnel, stop.clone()).await,
+        &s.computer.key,
+        &s.public_key,
+    )
+    .await
+    {
+        Ok(mut socket) => hello_through(&mut socket).await,
+        Err(e) => json!({"refused": e}),
+    };
+    assert!(
+        refused["type"] != "welcome",
+        "a key not approved was welcomed: {refused}"
+    );
+    approved.set(approved_for(Some(&s.computer)));
+    let mut socket = through(piped(&tunnel, stop).await, &s.computer.key, &s.public_key)
+        .await
+        .unwrap();
+    let welcome = hello_through(&mut socket).await;
+    assert_eq!(
+        (
+            &welcome["type"],
+            &welcome["deviceId"],
+            &welcome["stationId"]
+        ),
+        (&json!("welcome"), &json!(APPROVED), &json!(STATION)),
+        "{welcome}"
+    );
+    assert!(
+        welcome.get("stopRoad").is_none() && welcome.get("audioRoad").is_none(),
+        "no road of the LAN's through the room: {welcome}"
+    );
+}
+
+/// ★ A computer that holds another key for this station refuses the station in the handshake
+/// BEFORE it sends its own key: TLS 1.3 proves the server first, and the shack is never shown the
+/// computer's key, so its roster is never asked about one. CONTROL: with the right key pinned, the
+/// roster is asked, and the computer is welcomed.
+#[tokio::test]
+async fn a_wrong_station_key_is_refused_before_this_computers_key_is_sent() {
+    let s = shack(home());
+    let approved = Arc::new(Approved::default());
+    approved.set(approved_for(Some(&s.computer)));
+    let asked = Arc::new(AtomicUsize::new(0));
+    let roster = {
+        let (inner, asked) = (approved.roster(), asked.clone());
+        Roster {
+            paired: Arc::new(move |pin: &[u8; 32]| {
+                asked.fetch_add(1, Ordering::SeqCst);
+                (inner.paired)(pin)
+            }),
+            subscribe: inner.subscribe.clone(),
+        }
+    };
+    let tunnel = tunnel_of(&s, roster, &approved);
+    let (_stop, stop) = watch::channel(false);
+    let impostor = tls::Identity::new(&fixture_key(), STATION.into())
+        .unwrap()
+        .public_key()
+        .to_string();
+    let refused = through(
+        piped(&tunnel, stop.clone()).await,
+        &s.computer.key,
+        &impostor,
+    )
+    .await;
+    let Err(why) = refused else {
+        panic!("a station proving another key was taken");
+    };
+    assert!(why.starts_with("tls: "), "{why}");
+    assert!(
+        why.contains("certificate"),
+        "refused as the station's key: {why}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(asked.load(Ordering::SeqCst), 0, "the shack was shown a key");
+    let mut socket = through(piped(&tunnel, stop).await, &s.computer.key, &s.public_key)
+        .await
+        .unwrap();
+    assert_eq!(hello_through(&mut socket).await["type"], "welcome");
+    assert!(
+        asked.load(Ordering::SeqCst) > 0,
+        "control: the roster is asked"
+    );
+}
+
+/// ★ A computer removed here (its approval revoked, its pin gone) is out at once, before anything
+/// else it sends is answered, and its next pipe is refused in the handshake.
+#[tokio::test]
+async fn a_computer_removed_here_is_out_at_once_and_refused_after() {
+    let s = shack(home());
+    let approved = Arc::new(Approved::default());
+    approved.set(approved_for(Some(&s.computer)));
+    let tunnel = tunnel_of(&s, approved.roster(), &approved);
+    let (_stop, stop) = watch::channel(false);
+    let mut socket = through(
+        piped(&tunnel, stop.clone()).await,
+        &s.computer.key,
+        &s.public_key,
+    )
+    .await
+    .unwrap();
+    assert_eq!(hello_through(&mut socket).await["type"], "welcome");
+    let removed = Instant::now();
+    approved.set(approved_for(None));
+    let ended = heard(&mut socket).await;
+    assert!(ended.get("closed").is_some(), "still connected: {ended}");
+    assert!(
+        removed.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        removed.elapsed()
+    );
+    let again = match through(piped(&tunnel, stop).await, &s.computer.key, &s.public_key).await {
+        Ok(mut socket) => hello_through(&mut socket).await,
+        Err(e) => json!({"refused": e}),
+    };
+    assert!(
+        again["type"] != "welcome",
+        "a removed computer was welcomed: {again}"
+    );
+}
+
+/// ★ Nothing pairs through the room, and no stream is signalled there: an approved computer that
+/// asks to pair is closed without a word, and one that signals a stream is told none is available.
+#[tokio::test]
+async fn nothing_pairs_through_the_room_and_no_stream_is_signalled() {
+    let s = shack(home());
+    let approved = Arc::new(Approved::default());
+    approved.set(approved_for(Some(&s.computer)));
+    let tunnel = tunnel_of(&s, approved.roster(), &approved);
+    let (_stop, stop) = watch::channel(false);
+    let mut socket = through(
+        piped(&tunnel, stop.clone()).await,
+        &s.computer.key,
+        &s.public_key,
+    )
+    .await
+    .unwrap();
+    say(
+        &mut socket,
+        json!({"type":"pair","protocol":VERSIONS.0,"stream":VERSIONS.1,"operation":VERSIONS.2,
+            "name":"Shack laptop","nonce":"00".repeat(16)}),
+    )
+    .await;
+    let paired = heard(&mut socket).await;
+    assert!(
+        paired.get("closed").is_some(),
+        "a pairing was answered: {paired}"
+    );
+    let mut socket = through(piped(&tunnel, stop).await, &s.computer.key, &s.public_key)
+        .await
+        .unwrap();
+    assert_eq!(hello_through(&mut socket).await["type"], "welcome");
+    say(
+        &mut socket,
+        json!({"type":"streamSignal","leaseId":"20000000-0000-4000-8000-000000000001",
+            "payload":{"kind":"close"}}),
+    )
+    .await;
+    assert_eq!(
+        heard(&mut socket).await,
+        json!({"type":"streamState","streaming":false,"reason":"streamUnavailable"})
+    );
+}
+
+/// One operation request and its answer, asked again while the station is busy for a moment.
+async fn ask_through(socket: &mut Through, request: Value) -> Value {
+    for _ in 0..50 {
+        let mut request = request.clone();
+        if request["type"] != "stopTransmit" {
+            request["requestId"] = json!(id());
+        }
+        say(socket, json!({"type":"operationRequest","request":request})).await;
+        let answer = heard(socket).await;
+        if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
+            return answer;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the station stayed busy")
+}
+
+/// ★ Through the room, a welcomed computer holds nothing of its own: the tunnel grants no station
+/// control, so its state says so and its take of the lease is refused, by name. CONTROL: given
+/// station control, the same connection takes the lease.
+#[tokio::test]
+async fn through_the_room_a_welcomed_computer_holds_no_control_of_its_own() {
+    let s = shack(home());
+    let approved = Arc::new(Approved::default());
+    approved.set(approved_for(Some(&s.computer)));
+    let tunnel = tunnel_of(&s, approved.roster(), &approved);
+    let (_stop, stop) = watch::channel(false);
+    let mut socket = through(piped(&tunnel, stop).await, &s.computer.key, &s.public_key)
+        .await
+        .unwrap();
+    assert_eq!(hello_through(&mut socket).await["type"], "welcome");
+    let state = ask_through(&mut socket, json!({"type":"state","requestId":id()})).await;
+    assert_eq!(
+        state["value"]["phase"], "localPermissionRequired",
+        "{state}"
+    );
+    let boot = state["value"]["stationBootId"].clone();
+    let acquire = json!({"type":"acquire","requestId":id(),"stationBootId":boot});
+    let refused = ask_through(&mut socket, acquire.clone()).await;
+    assert_eq!(refused["error"], "localPermissionRequired", "{refused}");
+    s.shared.authority.permit_station(APPROVED, true).unwrap();
+    let acquired = ask_through(&mut socket, acquire).await;
+    assert_eq!(acquired["value"]["phase"], "controlling", "{acquired}");
+}
+
+/// ★ A removal reaches every session through the room even past a roster whose lock a panic
+/// poisoned: the removed computer is out at once, and nobody is taken after, since a roster that
+/// cannot be read takes nobody.
+#[tokio::test]
+async fn a_removal_reaches_every_session_even_past_a_poisoned_roster() {
+    let s = shack(home());
+    let approved = Arc::new(Approved::default());
+    approved.set(approved_for(Some(&s.computer)));
+    let tunnel = tunnel_of(&s, approved.roster(), &approved);
+    let (_stop, stop) = watch::channel(false);
+    let mut socket = through(
+        piped(&tunnel, stop.clone()).await,
+        &s.computer.key,
+        &s.public_key,
+    )
+    .await
+    .unwrap();
+    assert_eq!(hello_through(&mut socket).await["type"], "welcome");
+    approved.poison();
+    let told = (approved.roster().subscribe)();
+    let removed = Instant::now();
+    approved.set(approved_for(None));
+    assert!(
+        told.has_changed().unwrap(),
+        "a removal past a poisoned lock was told to no session"
+    );
+    let ended = heard(&mut socket).await;
+    assert!(
+        ended.get("closed").is_some(),
+        "a removed computer is still connected: {ended}"
+    );
+    assert!(
+        removed.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        removed.elapsed()
+    );
+    let again = match through(piped(&tunnel, stop).await, &s.computer.key, &s.public_key).await {
+        Ok(mut socket) => hello_through(&mut socket).await,
+        Err(e) => json!({"refused": e}),
+    };
+    assert!(
+        again["type"] != "welcome",
+        "taken past a poisoned roster: {again}"
+    );
+}
+
+/// ★ An approval that reaches its end ends the session through the room with it, within a status
+/// tick, though nothing told the roster; and the computer is refused after. CONTROL: before its end
+/// the same computer is welcomed.
+#[tokio::test]
+async fn a_session_through_the_room_ends_with_its_approval() {
+    let s = shack(home());
+    let approved = Arc::new(Approved::default());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let ends = now + 1500;
+    approved.set(approved_until(Some(&s.computer), ends));
+    let tunnel = tunnel_of(&s, approved.roster(), &approved);
+    let (_stop, stop) = watch::channel(false);
+    let mut socket = through(
+        piped(&tunnel, stop.clone()).await,
+        &s.computer.key,
+        &s.public_key,
+    )
+    .await
+    .unwrap();
+    assert_eq!(hello_through(&mut socket).await["type"], "welcome");
+    let ended = heard(&mut socket).await;
+    let late = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    assert!(
+        ended.get("closed").is_some(),
+        "still connected past its approval: {ended}"
+    );
+    assert!(
+        late >= ends && late < ends + 1500,
+        "ended {}ms after its approval's end",
+        late as i64 - ends as i64
+    );
+    let again = match through(piped(&tunnel, stop).await, &s.computer.key, &s.public_key).await {
+        Ok(mut socket) => hello_through(&mut socket).await,
+        Err(e) => json!({"refused": e}),
+    };
+    assert!(
+        again["type"] != "welcome",
+        "taken past its approval: {again}"
+    );
+}
+
+/// What the computer's own end keeps for a station it reaches through the room: the service's
+/// station id and the device id it gave this computer, the station key pinned at first sight
+/// (`station`), and this computer's device key for that station.
+pub(super) fn through_record(
+    s: &Shack,
+    station: &str,
+) -> crate::remote_service::vault::PairedStation {
+    crate::remote_service::vault::PairedStation {
+        station_id: STATION.into(),
+        device_id: APPROVED.into(),
+        station_key: station.into(),
+        pkcs8: s.computer.key.clone(),
+        addresses: Vec::new(),
+    }
+}
+
+/// ★ The computer's own end of the tunnel (the client core's `Link::connect_tunnel`, as client mode
+/// opens it): through the room it is welcomed under the device id the service gave it, this build
+/// at both ends; its Stop road comes up beside the tunnel on its own socket and ICE, through the
+/// relay alone; the lease is taken and the shack's state arrives on the link; and a Stop goes on the
+/// road and is acknowledged. CONTROL: the same computer pinning any other station key is refused
+/// `keyChanged` in the handshake and never welcomed.
+#[tokio::test]
+async fn the_computers_own_end_opens_the_link_and_its_stop_road_through_the_room() {
+    use crate::lan_client::link::{Internet, Link};
+    use tempo_client::ice::Relay;
+    use tempo_client::turn::stand_in::StandIn;
+    const USER: &str = "road";
+    const PASSWORD: &str = "throwaway-password";
+    // A shack whose commands run, so its state feeds publish.
+    let app = super::commands::App::new();
+    let s = super::commands::running(&app);
+    let approved = Arc::new(Approved::default());
+    approved.set(approved_for(Some(&s.computer)));
+    let tunnel = tunnel_of(&s, approved.roster(), &approved);
+    let (_stop, stop) = watch::channel(false);
+    let turn = StandIn::start(USER, PASSWORD);
+    let internet = Internet {
+        bind: Ipv4Addr::LOCALHOST.into(),
+        direct: false,
+        stun: None,
+        relay: Some(Relay {
+            server: turn.address,
+            username: USER.into(),
+            password: PASSWORD.into(),
+        }),
+    };
+    let impostor = tls::Identity::new(&fixture_key(), STATION.into())
+        .unwrap()
+        .public_key()
+        .to_string();
+    let refused = Link::connect_tunnel(
+        piped(&tunnel, stop.clone()).await,
+        &through_record(&s, &impostor),
+        41,
+        None,
+        &internet,
+    )
+    .await
+    .err();
+    assert_eq!(refused, Some("keyChanged"), "another station key was taken");
+    let link = Link::connect_tunnel(
+        piped(&tunnel, stop).await,
+        &through_record(&s, &s.public_key),
+        41,
+        None,
+        &internet,
+    )
+    .await
+    .expect("the link through the room");
+    assert_eq!(link.ids.device, APPROVED);
+    assert_eq!(link.ids.station, STATION);
+    let road = link.stop_road().expect("the Stop road beside the tunnel");
+    // The tunnel grants no control of its own: the shack gives it, as it does to any computer.
+    s.shared.authority.permit_station(APPROVED, true).unwrap();
+    let ask = |request: Value| {
+        let link = &link;
+        async move {
+            for _ in 0..50 {
+                let mut request = request.clone();
+                request["requestId"] = json!(id());
+                let answer = link
+                    .operation(request)
+                    .await
+                    .expect("an answer through the room");
+                if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
+                    return answer;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            panic!("the station stayed busy")
+        }
+    };
+    let state = ask(json!({"type":"state"})).await;
+    let boot = state["value"]["stationBootId"].clone();
+    let acquired = ask(json!({"type":"acquire","stationBootId":boot})).await;
+    assert_eq!(acquired["value"]["phase"], "controlling", "{acquired}");
+    road.lease(acquired["value"]["leaseId"].as_str().map(str::to_string));
+    assert!(link.watch(&["snapshot/1"]));
+    let mut arrived = false;
+    for _ in 0..400 {
+        if link.latest("snapshot/1").is_some() {
+            arrived = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(arrived, "the shack's state never arrived through the room");
+    road.stop(1);
+    let mut acknowledged = false;
+    for _ in 0..400 {
+        if road.heard().stopped.contains(&1) {
+            acknowledged = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(
+        acknowledged,
+        "the Stop on the road beside the tunnel was never acknowledged"
+    );
+    let crossed = turn.seen();
+    assert!(
+        crossed.sent_by_channel > 0 && crossed.delivered_by_channel > 0,
+        "the road never crossed the relay both ways: {crossed:?}"
+    );
+    link.close();
+}
+
+/// ★ A station that is not honest, through the room: its welcome names roads of this network
+/// (Stop's second road and the audio road, a port and a tag each), which an honest station's
+/// welcome through the room never does. This computer has no address on the station's network to
+/// take them at, so it leaves them and offers its internet roads in its `open` all the same: Stop
+/// keeps a road of its own beside the tunnel. CONTROL: the honest welcome, naming none, gets the
+/// same `open`.
+#[tokio::test]
+async fn a_welcome_through_the_room_naming_this_networks_roads_leaves_them() {
+    use crate::lan_client::link::{Internet, Link};
+    let key = fixture_key();
+    let identity = tls::Identity::new(&key, STATION.into()).unwrap();
+    let record = crate::remote_service::vault::PairedStation {
+        station_id: STATION.into(),
+        device_id: APPROVED.into(),
+        station_key: identity.public_key().to_string(),
+        pkcs8: Computer::new().key,
+        addresses: Vec::new(),
+    };
+    let config = tls::server(&identity, Arc::new(|_: &[u8; 32]| None), Arc::new(|| true)).unwrap();
+    let internet = Internet {
+        bind: Ipv4Addr::LOCALHOST.into(),
+        direct: true,
+        stun: None,
+        relay: None,
+    };
+    for hostile in [true, false] {
+        let (computer_end, station_end) = tokio::io::duplex(256 * 1024);
+        let config = config.clone();
+        let station = tokio::spawn(async move {
+            let tls = tokio_rustls::TlsAcceptor::from(config)
+                .accept(station_end)
+                .await
+                .unwrap();
+            let mut socket = tokio_tungstenite::accept_async(tls).await.unwrap();
+            let mut heard = Vec::new();
+            while let Some(Ok(message)) = socket.next().await {
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let said: Value = serde_json::from_str(&text).unwrap();
+                let answer = match said["type"].as_str() {
+                    Some("hello") => {
+                        let mut welcome = json!({"type":"welcome","sessionId":id(),
+                            "deviceId":APPROVED,"stationId":STATION,"app":super::super::wire::APP,
+                            "contract":super::super::wire::contract()});
+                        if hostile {
+                            welcome["stopRoad"] = json!({"port":42077,"tag":"0123456789abcdef"});
+                            welcome["audioRoad"] = json!({"port":42076,"tag":"fedcba9876543210"});
+                        }
+                        welcome
+                    }
+                    _ => json!({"type":"refused","reason":"otherBuild"}),
+                };
+                heard.push(said);
+                let _ = socket.send(Message::Text(answer.to_string().into())).await;
+            }
+            heard
+        });
+        let refused = Link::connect_tunnel(computer_end, &record, 41, None, &internet)
+            .await
+            .err();
+        assert_eq!(
+            refused,
+            Some("otherBuild"),
+            "hostile={hostile}: the script ran"
+        );
+        let heard = station.await.unwrap();
+        let open = heard
+            .iter()
+            .find(|said| said["type"] == "open")
+            .expect("an open");
+        assert!(
+            open["roads"]["stop"].is_object(),
+            "hostile={hostile}: no internet Stop road offered: {open}"
+        );
+    }
+}

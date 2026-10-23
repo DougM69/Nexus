@@ -367,6 +367,164 @@ describe('the macro editor', () => {
   })
 })
 
+// RIGHT-CLICK, CTRL+SHIFT+F-KEY AND SEND ONCE — change what a key sends on the fly. Every
+// assertion is on the transmit seam's recorded calls (`rtty_send`) and on the store's
+// (`set_rtty_macros`), never on a caption: a right-click that sent, or a Send once that saved,
+// would show nothing a label could catch.
+describe('right-click, Ctrl+Shift+F-key and Send once', () => {
+  const sendOnce = () => screen.getByRole('button', { name: 'Send once' }) as HTMLButtonElement
+  const locked = { ...snap, radio: { ...snap.radio, txAllowed: false, txRefusal: 'Outside your privileges here' } } as unknown as AppSnapshot
+  beforeEach(() => {
+    mocked(api.rttyStop).mockClear()
+    mocked(api.haltTx).mockClear()
+  })
+
+  it('a right-click opens THAT key’s editor with the caret in Message, keeps the browser’s menu shut, and sends nothing', async () => {
+    await renderCockpit()
+    expect(fireEvent.contextMenu(key('F3')), 'the browser’s menu opened over a transmit key').toBe(false)
+    expect(editor()?.getAttribute('aria-label')).toBe('Edit F3')
+    expect(document.activeElement, 'the caret is in the message').toBe(field(/^message$/i))
+    expect(field(/^message$/i).value).toBe('{CALL} DE {MYCALL} UR 599 599 K')
+    // …and an empty key's own editor, from the same gesture.
+    fireEvent.contextMenu(key('F6'))
+    expect(editor()?.getAttribute('aria-label')).toBe('Edit F6')
+    await act(async () => {})
+    expect(rttySend, 'a right-click keyed the rig').not.toHaveBeenCalled()
+    // POSITIVE CONTROL: a left click on a key still sends it.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(key('F1'))
+    await waitFor(() => expect(rttySend).toHaveBeenCalledWith(frameForAir('CQ CQ CQ DE W9XYZ W9XYZ K')))
+  })
+
+  it('Ctrl+Shift+F3 opens F3’s editor from the compose bar, keeps the key from the browser, and sends nothing', async () => {
+    await renderCockpit()
+    const compose = screen.getByLabelText('RTTY compose')
+    compose.focus()
+    expect(press('F3', { ctrlKey: true, shiftKey: true }, compose), 'Ctrl+Shift+F3 reached the browser').toBe(false)
+    expect(editor()?.getAttribute('aria-label')).toBe('Edit F3')
+    expect(document.activeElement, 'the caret is in the message').toBe(field(/^message$/i))
+    press('F3', { ctrlKey: true, shiftKey: true, repeat: true })
+    // With Alt or Cmd as well it is not the chord, and it stays the system's.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(press('F3', { ctrlKey: true, shiftKey: true, altKey: true }), 'Ctrl+Shift+Alt+F3 is the system’s').toBe(true)
+    expect(press('F3', { ctrlKey: true, shiftKey: true, metaKey: true }), 'Ctrl+Shift+Cmd+F3 is the system’s').toBe(true)
+    expect(editor(), 'a chord with Alt or Cmd opened the editor').toBeNull()
+    await act(async () => {})
+    expect(rttySend, 'the shortcut keyed the rig').not.toHaveBeenCalled()
+    // POSITIVE CONTROL: a bare key still sends (F1, which needs no call in the box).
+    press('F1')
+    await waitFor(() => expect(rttySend).toHaveBeenCalledTimes(1))
+  })
+
+  it('the ✎ names the shortcut, for the keyboard and the screen reader', async () => {
+    await renderCockpit()
+    const edit = editOf('F2')!
+    expect(edit.getAttribute('aria-keyshortcuts')).toBe('Control+Shift+F2')
+    expect(edit.getAttribute('aria-label')).toBe('Edit the F2 macro')
+    expect(edit.title).toBe('Edit the F2 macro. You can also right-click the key, or press Ctrl+Shift+F2.')
+  })
+
+  it('Send once keys the EDITED message through the key’s own path — and the key keeps its own', async () => {
+    await renderCockpit()
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    fireEvent.contextMenu(key('F2'))
+    fireEvent.change(field(/^message$/i), { target: { value: '{CALL} DE {MYCALL} QRZ?' } })
+    fireEvent.click(sendOnce())
+    await waitFor(() => expect(rttySend).toHaveBeenCalledTimes(1))
+    // Expanded and framed exactly as a key's message is.
+    expect(rttySend).toHaveBeenCalledWith(frameForAir('K1ABC DE W9XYZ QRZ?'))
+    expect(editor(), 'sent: the editor closes').toBeNull()
+    expect(setRttyMacros, 'Send once saved the key').not.toHaveBeenCalled()
+    expect(setSettings).not.toHaveBeenCalled()
+    // The key is as it was: its caption, and what it sends.
+    expect(labelOf('F2')).toBe('Answer')
+    press('F2')
+    await waitFor(() => expect(rttySend).toHaveBeenCalledTimes(2))
+    expect(rttySend.mock.calls[1][0]).toBe(frameForAir('K1ABC DE W9XYZ W9XYZ K'))
+  })
+
+  it('Save keeps the edited message on the key — the control for Send once leaving it', async () => {
+    await renderCockpit()
+    fireEvent.contextMenu(key('F2'))
+    fireEvent.change(field(/^message$/i), { target: { value: '{CALL} DE {MYCALL} QRZ?' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    })
+    expect(setRttyMacros).toHaveBeenCalledWith(
+      [{ name: 'everyday', macros: [{ key: 'F2', label: 'Answer', text: '{CALL} DE {MYCALL} QRZ?' }] }],
+      '',
+    )
+    expect(rttySend, 'Save keyed the rig').not.toHaveBeenCalled()
+  })
+
+  it('Send once is refused exactly where the key is — outside the licence, nothing reaches rtty_send, and the draft stays', async () => {
+    await renderCockpit({ snap: locked })
+    press('F1')
+    await act(async () => {})
+    expect(rttySend, 'fixture: the key itself is refused').not.toHaveBeenCalled()
+    expect(pushToast).toHaveBeenLastCalledWith('Outside your privileges here', 'info', 3500)
+    pushToast.mockClear()
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.change(field(/^message$/i), { target: { value: 'CQ CQ DE {MYCALL} K' } })
+    fireEvent.click(sendOnce())
+    await act(async () => {})
+    expect(rttySend, 'Send once went round the licence gate').not.toHaveBeenCalled()
+    expect(pushToast).toHaveBeenCalledWith('Outside your privileges here', 'info', 3500)
+    expect(field(/^message$/i).value, 'a refused Send once keeps the draft').toBe('CQ CQ DE {MYCALL} K')
+  })
+
+  it('with TX off, Send once reaches the engine’s TX gate at rtty_send — the same refusal the key gets', async () => {
+    // The TX-enable latch is the engine's (`Engine::rtty_tx_gate`: "TX is off — enable TX
+    // first"), so what the UI can show is that Send once asks it at the very seam the key does.
+    rttySend.mockImplementation(async () => {
+      throw new Error('TX is off — enable TX first (Stop TX / the watchdog disarmed it)')
+    })
+    await renderCockpit({ snap: { ...snap, radio: { ...snap.radio, txEnabled: false } } as unknown as AppSnapshot })
+    press('F1')
+    await waitFor(() => expect(rttySend).toHaveBeenCalledTimes(1))
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.change(field(/^message$/i), { target: { value: 'CQ CQ DE {MYCALL} K' } })
+    fireEvent.click(sendOnce())
+    await waitFor(() => expect(rttySend).toHaveBeenCalledTimes(2))
+    expect(rttySend.mock.calls[1][0]).toBe(frameForAir('CQ CQ DE W9XYZ K'))
+    await waitFor(() => expect(pushToast.mock.calls.filter(([, kind]) => kind === 'error')).toHaveLength(2))
+  })
+
+  it('will not send a token it cannot fill — the button is off while one is flagged', async () => {
+    await renderCockpit()
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.change(field(/^message$/i), { target: { value: 'CQ {NAME}' } })
+    expect(sendOnce().disabled).toBe(true)
+    fireEvent.click(sendOnce())
+    await act(async () => {})
+    expect(rttySend).not.toHaveBeenCalled()
+    // POSITIVE CONTROL: a known token sends.
+    fireEvent.change(field(/^message$/i), { target: { value: 'CQ {MYCALL}' } })
+    expect(sendOnce().disabled).toBe(false)
+  })
+
+  it('Esc with a right-click’s editor open: idle, it only closes; with an over on the air, it stops', async () => {
+    await renderCockpit()
+    fireEvent.contextMenu(key('F1'))
+    fireEvent.keyDown(field(/^message$/i), { key: 'Escape' })
+    expect(editor(), 'Esc on an idle station closes the editor').toBeNull()
+    expect(mocked(api.rttyStop)).not.toHaveBeenCalled()
+    expect(mocked(api.haltTx), 'Esc-to-cancel turned TX off').not.toHaveBeenCalled()
+    cleanup()
+    // CONTROL: an over on the air — Esc is a stop, editor or no editor.
+    state = { ...IDLE, sending: true }
+    mocked(api.rttyStop).mockResolvedValue(state)
+    mocked(api.haltTx).mockResolvedValue({})
+    await renderCockpit()
+    await waitFor(() => expect((document.querySelector('.rtty-stop') as HTMLButtonElement).disabled).toBe(false))
+    press('F1', { ctrlKey: true, shiftKey: true })
+    expect(editor(), 'fixture: the shortcut opened the editor').not.toBeNull()
+    fireEvent.keyDown(field(/^message$/i), { key: 'Escape' })
+    expect(mocked(api.rttyStop)).toHaveBeenCalled()
+    expect(mocked(api.haltTx)).toHaveBeenCalled()
+  })
+})
+
 describe('Everyday / Contest', () => {
   it('switching saves the choice and shows the other set', async () => {
     await renderCockpit()

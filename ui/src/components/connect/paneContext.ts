@@ -13,6 +13,7 @@ import type {
   AmpStatus,
   AppSnapshot,
   BandOutlook,
+  FieldDayStatus,
   DxpedWindow,
   GettingOut,
   MapSpot,
@@ -103,6 +104,9 @@ export interface PaneContext {
   /** The Needed box's board, exactly the Needed board's (NeededBoard). Absent ⇒ its one-line state and
    *  no Work: the wall display, and the hosted Remote page (the desktop first, 2026-10-07). */
   neededBoard?: NeededBoard
+  /** The running contest, off the snapshot the window already polls (the Operators box). Null when no
+   *  contest runs; absent where the window has none to lend, and the box then shows its one line. */
+  fieldDay?: FieldDayStatus | null
   // callbacks
   onSelectCall: (call: string | null) => void
   onWorkSpot?: (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => void

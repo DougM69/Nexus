@@ -142,6 +142,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
           REMOTE_AUTH0_ISSUER: ${{ vars.REMOTE_AUTH0_ISSUER }}
           REMOTE_AUTH0_CLIENT_ID: ${{ vars.REMOTE_AUTH0_CLIENT_ID }}
+          # Optional Worker settings, each written only when set and refused by value (staging-common.mjs).
+          REMOTE_AUTH0_NATIVE_CLIENT_ID: ${{ vars.REMOTE_AUTH0_NATIVE_CLIENT_ID }}
+          REMOTE_TRIAL_IDENTITY_REQUIRED: ${{ vars.REMOTE_TRIAL_IDENTITY_REQUIRED }}
+          REMOTE_MOVED_TO: ${{ vars.REMOTE_MOVED_TO }}
+          REMOTE_MOVE_STAGE: ${{ vars.REMOTE_MOVE_STAGE }}
+          # Presence only: the artifact declares the optional TRIAL_KEY when this environment holds it.
+          REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}
           REMOTE_RECOVERY_REVISION: ${{ inputs.recovery_revision }}
           REMOTE_RECOVERY_WORKER_SHA256: ${{ inputs.recovery_worker_sha256 }}
           REMOTE_RECOVERY_DATABASE_ID: ${{ inputs.recovery_database_id }}
@@ -153,6 +160,7 @@ jobs:
         env:
           REMOTE_AUTH0_ISSUER: ${{ vars.REMOTE_AUTH0_ISSUER }}
           REMOTE_AUTH0_CLIENT_ID: ${{ vars.REMOTE_AUTH0_CLIENT_ID }}
+          REMOTE_AUTH0_NATIVE_CLIENT_ID: ${{ vars.REMOTE_AUTH0_NATIVE_CLIENT_ID }}
         run: node remote/scripts/staging-artifact.mjs identity
 
       - name: Verify anonymous access to the exact corresponding source
@@ -173,6 +181,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.REMOTE_CLOUDFLARE_API_TOKEN }}
           # Presence only ('true'/'false'). Its value goes to the upload step and nowhere else.
           REMOTE_ADMIN_SUBJECT_PRESENT: ${{ secrets.REMOTE_ADMIN_SUBJECT != '' }}
+          REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}
           # The relay key's values, for the one credential this step mints with them.
           REMOTE_TURN_KEY_ID: ${{ secrets.REMOTE_TURN_KEY_ID }}
           REMOTE_TURN_KEY_TOKEN: ${{ secrets.REMOTE_TURN_KEY_TOKEN }}
@@ -214,6 +223,13 @@ jobs:
         env:
           REMOTE_AUTH0_ISSUER: ${{ vars.REMOTE_AUTH0_ISSUER }}
           REMOTE_AUTH0_CLIENT_ID: ${{ vars.REMOTE_AUTH0_CLIENT_ID }}
+          # Optional Worker settings, each written only when set and refused by value (staging-common.mjs).
+          REMOTE_AUTH0_NATIVE_CLIENT_ID: ${{ vars.REMOTE_AUTH0_NATIVE_CLIENT_ID }}
+          REMOTE_TRIAL_IDENTITY_REQUIRED: ${{ vars.REMOTE_TRIAL_IDENTITY_REQUIRED }}
+          REMOTE_MOVED_TO: ${{ vars.REMOTE_MOVED_TO }}
+          REMOTE_MOVE_STAGE: ${{ vars.REMOTE_MOVE_STAGE }}
+          # Presence only: the artifact declares the optional TRIAL_KEY when this environment holds it.
+          REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}
           REMOTE_D1_DATABASE_ID: ${{ steps.database.outputs.database_id }}
         run: node remote/scripts/staging-artifact.mjs prepare
 
@@ -238,6 +254,7 @@ jobs:
           REMOTE_ADMIN_SUBJECT_PRESENT: ${{ secrets.REMOTE_ADMIN_SUBJECT != '' }}
           REMOTE_TURN_KEY_ID_PRESENT: ${{ secrets.REMOTE_TURN_KEY_ID != '' }}
           REMOTE_TURN_KEY_TOKEN_PRESENT: ${{ secrets.REMOTE_TURN_KEY_TOKEN != '' }}
+          REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}
         run: node remote/scripts/deploy-staging.mjs migrate
 
       # The only step that applies a Worker secret's value (the preflight holds the relay key's too, to
@@ -253,6 +270,7 @@ jobs:
           REMOTE_ADMIN_SUBJECT: ${{ secrets.REMOTE_ADMIN_SUBJECT }}
           REMOTE_TURN_KEY_ID: ${{ secrets.REMOTE_TURN_KEY_ID }}
           REMOTE_TURN_KEY_TOKEN: ${{ secrets.REMOTE_TURN_KEY_TOKEN }}
+          REMOTE_TRIAL_KEY: ${{ secrets.REMOTE_TRIAL_KEY }}
         run: node remote/scripts/deploy-staging.mjs deploy
 
       # These two run whenever the upload step RAN, passed or failed. Once wrangler has uploaded, the

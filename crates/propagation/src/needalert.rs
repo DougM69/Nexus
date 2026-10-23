@@ -319,6 +319,12 @@ pub fn score_slots(
     needs: &dyn OperatorNeeds,
     slots: &AwardSlots,
 ) -> Option<NeedAlert> {
+    // A heard station is a live call with no record, so its entity and zone can only come from
+    // the call, through cty.dat. The log's side of every comparison below counts each contact by
+    // its record first — its DXCC number and CQ zone, as the awards do
+    // ([`crate::dxped::LogNeeds::add_qso`]) — and by its call through cty.dat where the record
+    // carries neither, a WAE area as the entity it belongs to (heard, a WAE area earns no DXCC
+    // tag below).
     let info = dxcc::resolve(call)?;
     let mut tags: Vec<NeedTag> = Vec::new();
     // Set when a zone/grid/state axis is worked-but-unconfirmed; folded into a SINGLE Confirm
@@ -2719,8 +2725,8 @@ mod tests {
     #[test]
     fn a_worked_but_unconfirmed_zone_raises_a_confirm_row() {
         // You worked CQ zone 5 on 20 m once but never got the QSL/LoTW match; a new zone-5
-        // station on 20 m is a confirmation opportunity — SpotCollector shows it for every
-        // multiplier, and now so does Nexus (previously a worked zone was just dropped).
+        // station on 20 m is a confirmation opportunity, and Nexus shows it for every
+        // multiplier (previously a worked zone was just dropped).
         let mut needs = LogNeeds::new();
         needs.add("W1AW", "20m", "CW", None, None, true); // USA/zone5/20m CW worked+CONFIRMED → entity satisfied
         let worked_zones: HashSet<(u8, Band)> = HashSet::from([(5, Band::B20)]);

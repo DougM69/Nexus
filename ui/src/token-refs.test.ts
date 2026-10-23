@@ -126,7 +126,6 @@ const undefinedRefs = [...references.keys()]
  */
 const KNOWN_UNRESOLVED = [
   '--radix-dropdown-menu-content-available-height',
-  '--radix-dropdown-menu-content-available-width',
 ]
 
 describe('CSS custom properties resolve', () => {

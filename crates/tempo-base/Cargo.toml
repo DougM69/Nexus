@@ -1,0 +1,11 @@
+[package]
+publish = false
+name = "tempo-base"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "What Nexus's engine shares with the crates below it: the app's log, its UTC calendar, and what the engine says of a remote over and a held press. Std only."
+
+[lints]
+workspace = true

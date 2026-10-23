@@ -18,6 +18,7 @@ import {
   MacroButton,
   MacroEditor as SharedMacroEditor,
   MacroSetSwitch,
+  type MacroEditorFocus,
   type MacroEditorLabels,
   type MacroSetSwitchLabels,
 } from './MacroEditor'
@@ -49,7 +50,7 @@ interface ButtonProps {
   lit?: boolean
   title: string
   onSend: () => void
-  onEdit: () => void
+  onEdit: (focus: MacroEditorFocus) => void
 }
 
 /** One F-key macro, captioned from RTTY's catalog. */
@@ -65,6 +66,7 @@ export function RttyMacroButton({ slot, control, editing, lit, title, onSend, on
       emptyLabel={t('rtty.macro.empty.label')}
       emptyTitle={t('rtty.macro.empty.title', { key: slot.key })}
       editAria={t('rtty.macro.edit.aria', { key: slot.key })}
+      editTitle={t('rtty.macro.edit.title', { key: slot.key })}
       onSend={onSend}
       onEdit={onEdit}
     />
@@ -75,7 +77,9 @@ interface EditorProps {
   slot: RttyMacroSlot
   left: number
   saving: boolean
+  focus: MacroEditorFocus
   onSave: (label: string, text: string) => void
+  onSendOnce: (text: string) => void
   onCancel: () => void
   onReset: () => void
 }
@@ -83,7 +87,7 @@ interface EditorProps {
 /** The inline editor for one RTTY key. `unknownToken` is RTTY's own wording and the reason this
  *  is not one shared sentence: ITA2 has no braces, so an unknown token loses them and a bare
  *  word goes on the air. */
-export function RttyMacroEditor({ slot, left, saving, onSave, onCancel, onReset }: EditorProps) {
+export function RttyMacroEditor({ slot, left, saving, focus, onSave, onSendOnce, onCancel, onReset }: EditorProps) {
   const labels: MacroEditorLabels = {
     aria: t('rtty.macroEditor.aria', { key: slot.key }),
     titleLabel: t('rtty.macroEditor.title.label'),
@@ -93,6 +97,8 @@ export function RttyMacroEditor({ slot, left, saving, onSave, onCancel, onReset 
     stopTitle: t('rtty.macroEditor.stopTitle'),
     unknownToken: (token) => t('rtty.macroEditor.unknownToken', { token }),
     save: t('rtty.macroEditor.save'),
+    sendOnce: t('rtty.macroEditor.sendOnce'),
+    sendOnceTitle: t('rtty.macroEditor.sendOnce.title'),
     cancel: t('rtty.macroEditor.cancel'),
     resetButton: t('rtty.macroEditor.resetButton'),
   }
@@ -103,7 +109,9 @@ export function RttyMacroEditor({ slot, left, saving, onSave, onCancel, onReset 
       saving={saving}
       labels={labels}
       unknownTokens={unknownRttyTokens}
+      focus={focus}
       onSave={onSave}
+      onSendOnce={onSendOnce}
       onCancel={onCancel}
       onReset={onReset}
     />

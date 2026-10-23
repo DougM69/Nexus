@@ -354,7 +354,9 @@ fn dump_state(backend: &dyn RigBackend) -> String {
     out
 }
 
-/// The reply an unrecognised verb gets. Named because the connection loop counts them.
+/// The reply to a verb this server or its backend does not implement, and to a line that is no
+/// verb at all. Named because the connection loop counts the second kind
+/// ([`looks_like_rigctld`]).
 const NOT_IMPLEMENTED: &str = "RPRT -11\n";
 
 /// Does this line begin an HTTP request rather than a rigctld command?
@@ -370,22 +372,178 @@ const NOT_IMPLEMENTED: &str = "RPRT -11\n";
 /// this module.
 ///
 /// A real rigctld client never sends this. Hamlib's own protocol has no line ending in
-/// ` HTTP/1.x`, so refusing one costs nothing and closes the whole class.
-fn looks_like_http(line: &str) -> bool {
+/// ` HTTP/1.x`, so refusing one costs nothing and closes the whole class. The PstRotatorAz link's
+/// rotctld port asks the same question ([`crate::pstrotator`]).
+pub(crate) fn looks_like_http(line: &str) -> bool {
     let l = line.trim_end();
     // "GET / HTTP/1.1", "POST /x HTTP/1.0" — the version token is the tell, and it is what a
     // browser must send. Matching the METHOD alone would be wrong: `G` is a real rigctld verb.
     l.ends_with(" HTTP/1.1") || l.ends_with(" HTTP/1.0") || l.ends_with(" HTTP/0.9")
 }
 
-/// How many unrecognised lines a client may send before the connection is dropped.
+/// How many lines in a row that are not rigctld protocol at all ([`looks_like_rigctld`]) a
+/// client may send before the connection is dropped.
 ///
-/// A real client sends commands this server understands, or asks once for something it does not
-/// implement and moves on. A run of them means the peer is not speaking this protocol at all —
-/// an HTTP body, a TLS ClientHello, a port scanner — and continuing to read it is what let a web
-/// page walk its payload past the parser one line at a time. Three is generous enough that a
-/// client probing two or three optional verbs at startup is unaffected.
+/// A real client sends rigctld verbs: ones this server understands, and ones that it or the radio
+/// cannot answer, which get `RPRT -11` and never count, however many come in a row. A run of lines
+/// that are no verb at all means the peer is not speaking this protocol — an HTTP body, a TLS
+/// ClientHello, a port scanner — and continuing to read it is what let a web page walk its
+/// payload past the parser one line at a time.
 const MAX_CONSECUTIVE_UNKNOWN: u32 = 3;
+
+/// The most bytes one request line may hold before the connection is dropped ([`read_capped_line`]).
+///
+/// A rigctld request line is a verb and a few arguments — tens of bytes; the longest Nexus serves
+/// (`\set_split_freq_mode`, `L Sub <level> <value>`) is well under a hundred. Hamlib bounds every
+/// field it reads rather than a whole line — `MAXARGSZ` is 511 bytes per argument and the command
+/// name is capped at 31 (`tests/rigctl_parse.c`, 4.7.1) — so it never grows one allocation to a
+/// line's length. This server reads a whole line, so it caps the line: generously above any real
+/// one, and far below a size that a peer could use to make a single connection buffer without
+/// bound (one line and no newline, forever). A line past this is not rigctld, and is refused whole
+/// before any of it is parsed or relayed to the radio.
+const MAX_LINE_BYTES: usize = 4 * 1024;
+
+/// Every verb Hamlib's rigctld knows, as its one-letter form (where it has one) and its long
+/// name: Hamlib 4.7.1's own command table (`test_list[]` in `tests/rigctl_parse.c`), row for row.
+///
+/// It decides one thing, whether a line counts toward the hang-up ([`looks_like_rigctld`]). What
+/// a line does is [`handle_command`]'s alone, which serves a subset of these and answers the rest
+/// `RPRT -11`, as a rigctld answers a verb its radio lacks.
+const RIGCTLD_VERBS: &[(Option<char>, &str)] = &[
+    (Some('F'), "set_freq"),
+    (Some('f'), "get_freq"),
+    (Some('M'), "set_mode"),
+    (Some('m'), "get_mode"),
+    (Some('I'), "set_split_freq"),
+    (Some('i'), "get_split_freq"),
+    (Some('X'), "set_split_mode"),
+    (Some('x'), "get_split_mode"),
+    (Some('K'), "set_split_freq_mode"),
+    (Some('k'), "get_split_freq_mode"),
+    (Some('S'), "set_split_vfo"),
+    (Some('s'), "get_split_vfo"),
+    (Some('N'), "set_ts"),
+    (Some('n'), "get_ts"),
+    (Some('L'), "set_level"),
+    (Some('l'), "get_level"),
+    (Some('U'), "set_func"),
+    (Some('u'), "get_func"),
+    (Some('P'), "set_parm"),
+    (Some('p'), "get_parm"),
+    (Some('G'), "vfo_op"),
+    (Some('g'), "scan"),
+    (Some('A'), "set_trn"),
+    (Some('a'), "get_trn"),
+    (Some('R'), "set_rptr_shift"),
+    (Some('r'), "get_rptr_shift"),
+    (Some('O'), "set_rptr_offs"),
+    (Some('o'), "get_rptr_offs"),
+    (Some('C'), "set_ctcss_tone"),
+    (Some('c'), "get_ctcss_tone"),
+    (Some('D'), "set_dcs_code"),
+    (Some('d'), "get_dcs_code"),
+    (None, "set_ctcss_sql"),
+    (None, "get_ctcss_sql"),
+    (None, "set_dcs_sql"),
+    (None, "get_dcs_sql"),
+    (Some('V'), "set_vfo"),
+    (Some('v'), "get_vfo"),
+    (Some('T'), "set_ptt"),
+    (Some('t'), "get_ptt"),
+    (Some('E'), "set_mem"),
+    (Some('e'), "get_mem"),
+    (Some('H'), "set_channel"),
+    (Some('h'), "get_channel"),
+    (Some('B'), "set_bank"),
+    (Some('_'), "get_info"),
+    (Some('J'), "set_rit"),
+    (Some('j'), "get_rit"),
+    (Some('Z'), "set_xit"),
+    (Some('z'), "get_xit"),
+    (Some('Y'), "set_ant"),
+    (Some('y'), "get_ant"),
+    (None, "set_powerstat"),
+    (None, "get_powerstat"),
+    (None, "send_dtmf"),
+    (None, "recv_dtmf"),
+    (Some('w'), "send_cmd"),
+    (Some('W'), "send_cmd_rx"),
+    (Some('*'), "reset"),
+    (Some('b'), "send_morse"),
+    (None, "stop_morse"),
+    (None, "wait_morse"),
+    (None, "send_voice_mem"),
+    (None, "stop_voice_mem"),
+    (None, "get_dcd"),
+    (None, "uplink"),
+    (None, "set_twiddle"),
+    (None, "get_twiddle"),
+    (None, "set_cache"),
+    (None, "get_cache"),
+    (Some('2'), "power2mW"),
+    (Some('4'), "mW2power"),
+    (Some('1'), "dump_caps"),
+    (Some('3'), "dump_conf"),
+    (None, "dump_state"),
+    (None, "chk_vfo"),
+    (None, "set_vfo_opt"),
+    (None, "get_vfo_info"),
+    (None, "get_rig_info"),
+    (None, "get_vfo_list"),
+    (None, "get_modes"),
+    (None, "get_clock"),
+    (None, "set_clock"),
+    (None, "halt"),
+    (None, "pause"),
+    (None, "password"),
+    (None, "set_separator"),
+    (None, "get_separator"),
+    (None, "set_lock_mode"),
+    (None, "get_lock_mode"),
+    (None, "get_mode_bandwidths"),
+    (None, "send_raw"),
+    (None, "client_version"),
+    (None, "hamlib_version"),
+    (None, "set_gpio"),
+    (None, "get_gpio"),
+    (None, "set_conf"),
+    (None, "get_conf"),
+    (None, "test"),
+];
+
+/// Is this line rigctld protocol: is its first word a verb in [`RIGCTLD_VERBS`], in its short or
+/// long form, bare or behind the extended-response prefix?
+///
+/// ⚠️ THE QUESTION IS "IS THE PEER SPEAKING RIGCTLD?", NOT "CAN THIS RADIO ANSWER?". A real client
+/// asks for what its radio cannot do and is answered `RPRT -11`: Nexus's own radio loop asks a TCI
+/// radio for `NOTCHF`, `SQL` and `PREAMP` on every level poll, and the SDR program reports none of
+/// them. While every `RPRT -11` counted toward the hang-up, the server dropped the loop's own
+/// connection on about every poll. A verb buys its line nothing else: it is dispatched exactly as
+/// before, and a key (`T`, `\set_ptt`) still goes through the backend's own transmit rules.
+///
+/// The first WORD is judged, never the first character. Hamlib's own parser reads one character
+/// as the command, so to it `Host: 127.0.0.1` is `H` (set_channel) and `OPTIONS / RTSP/1.0` is
+/// `O` (set_rptr_offs); judged that way, a browser's headers and a scanner's probes would all be
+/// verbs. Long names match as Hamlib matches them, exactly and case for case. The prefix is one
+/// of the four characters rigctld(1) names for its Extended Response Protocol, `+`, `;`, `|` and
+/// `,`; Hamlib's parser takes other punctuation there as well, which its manual calls untested. A
+/// `#` comment is for a rigctl command file, not a client, and counts.
+fn looks_like_rigctld(line: &str) -> bool {
+    let word = line.split_whitespace().next().unwrap_or("");
+    let verb = word
+        .strip_prefix(|c: char| matches!(c, '+' | ';' | '|' | ','))
+        .unwrap_or(word);
+    match verb.strip_prefix('\\') {
+        Some(long) => RIGCTLD_VERBS.iter().any(|&(_, name)| name == long),
+        None => {
+            let mut chars = verb.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => RIGCTLD_VERBS.iter().any(|&(short, _)| short == Some(c)),
+                _ => false,
+            }
+        }
+    }
+}
 
 fn rprt(ok: bool) -> String {
     if ok {
@@ -702,6 +860,52 @@ fn parse_ptt_set(line: &str) -> Option<bool> {
     }
 }
 
+/// What [`read_capped_line`] found.
+enum CappedLine {
+    /// One request line, its trailing newline (and a preceding `\r`) stripped, within the cap.
+    Line(String),
+    /// The line reached [`MAX_LINE_BYTES`] with no newline: no rigctld client sends one, so the
+    /// caller drops the connection rather than buffer the rest.
+    TooLong,
+    /// End of stream, a read error, or bytes that were not UTF-8 — the caller ends the loop,
+    /// exactly as it did when it read through [`std::io::BufRead::lines`] (whose iterator stops on
+    /// the first of each).
+    Done,
+}
+
+/// Read one request line from `reader`, holding at most `cap` bytes of it in memory.
+///
+/// The broker read every line through [`std::io::BufRead::lines`], which grows one allocation to
+/// the next `\n` with no bound — so a client that sends a line and no newline makes a single
+/// connection buffer without limit. This reads a line's worth and no further: `take(cap + 1)`
+/// yields the first `\n` within the cap (the line, newline stripped as `lines` strips it), or one
+/// byte past the cap with no newline — proof the line is too long, and the most it ever holds.
+/// A line body of exactly `cap` bytes is still a line; `cap + 1` with no newline is not.
+fn read_capped_line<R: BufRead>(reader: &mut R, cap: usize) -> CappedLine {
+    let mut buf: Vec<u8> = Vec::new();
+    // A reborrow so `take` limits THIS read without consuming the caller's reader.
+    let mut limited = std::io::Read::take(&mut *reader, cap as u64 + 1);
+    match limited.read_until(b'\n', &mut buf) {
+        Ok(0) => CappedLine::Done,
+        Ok(_) => {
+            if buf.last() != Some(&b'\n') && buf.len() > cap {
+                return CappedLine::TooLong;
+            }
+            if buf.last() == Some(&b'\n') {
+                buf.pop();
+                if buf.last() == Some(&b'\r') {
+                    buf.pop();
+                }
+            }
+            match String::from_utf8(buf) {
+                Ok(line) => CappedLine::Line(line),
+                Err(_) => CappedLine::Done,
+            }
+        }
+        Err(_) => CappedLine::Done,
+    }
+}
+
 /// Serve one client connection until EOF or `q`. Each line is one request.
 pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
     let mut writer = match stream.try_clone() {
@@ -713,7 +917,7 @@ pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "?".into());
     backend.client_event(&peer, true);
-    let reader = BufReader::new(stream);
+    let mut reader = BufReader::new(stream);
     // Track this connection's PTT so a dropped/EOF'd broker client (WSJT-X or N1MM
     // crashing / closing mid-transmit) can't leave the rig keyed forever — the
     // original code only ever unkeyed on an explicit `T 0`.
@@ -722,8 +926,17 @@ pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
     // protocol must be hung up on, not patiently answered line after line while its payload
     // walks past the parser.
     let mut unknown_run: u32 = 0;
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
+    loop {
+        let line = match read_capped_line(&mut reader, MAX_LINE_BYTES) {
+            CappedLine::Line(line) => line,
+            CappedLine::TooLong => {
+                crate::civ::diag::note(
+                    "rigctld_server: a request line past the length cap — dropping the connection (not a rig client)",
+                );
+                break;
+            }
+            CappedLine::Done => break,
+        };
         if looks_like_http(&line) {
             crate::civ::diag::note(
                 "rigctld_server: HTTP request line on the broker port — dropping (a web page, not a rig client)",
@@ -735,10 +948,12 @@ pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
         }
         match handle_command(&line, backend.as_ref()) {
             Handled::Reply(r) => {
-                // Count only NOT-IMPLEMENTED. A command that ran and failed (`RPRT -1`) is a
-                // real client having a bad day — a rig that refused, a busy port — and must
-                // never cost it the connection.
-                if r == NOT_IMPLEMENTED {
+                // Count only a line that is not rigctld protocol at all (`looks_like_rigctld`),
+                // which is answered NOT-IMPLEMENTED. A rigctld verb answered NOT-IMPLEMENTED is a
+                // real client asking for something its radio does not have, and a command that
+                // ran and failed (`RPRT -1`) is a real client having a bad day — a rig that
+                // refused, a busy port. Neither may ever cost it the connection.
+                if r == NOT_IMPLEMENTED && !looks_like_rigctld(&line) {
                     unknown_run += 1;
                     if unknown_run >= MAX_CONSECUTIVE_UNKNOWN {
                         crate::civ::diag::note(
@@ -1509,6 +1724,115 @@ pub(crate) mod tests {
         );
     }
 
+    /// ⭐ NEXUS'S OWN RADIO LOOP IS NEVER HUNG UP ON FOR ASKING WHAT ITS RADIO CANNOT TELL IT.
+    ///
+    /// On a TCI radio the loop's level poll asks `l NOTCHF`, `l SQL` and `l PREAMP`, levels the SDR
+    /// program does not report, and each is answered `RPRT -11`. The server counted every
+    /// `RPRT -11` toward its hang-up, so it dropped the loop's own connection on about every poll
+    /// and the `Rig` reconnected. These are those three reads, through the loop's own client and
+    /// its own calls, against a backend with no levels, and then the dial: one connection
+    /// throughout.
+    #[test]
+    fn the_loops_own_unanswered_level_reads_keep_its_connection() {
+        struct Counted {
+            base: MockRig,
+            connects: Mutex<u32>,
+        }
+        impl RigBackend for Counted {
+            fn freq_hz(&self) -> u64 {
+                self.base.freq_hz()
+            }
+            fn mode(&self) -> (String, u32) {
+                self.base.mode()
+            }
+            fn ptt(&self) -> bool {
+                self.base.ptt()
+            }
+            fn set_freq(&self, hz: u64) -> bool {
+                self.base.set_freq(hz)
+            }
+            fn set_mode(&self, m: &str, p: u32) -> bool {
+                self.base.set_mode(m, p)
+            }
+            fn set_ptt(&self, on: bool) -> bool {
+                self.base.set_ptt(on)
+            }
+            fn client_event(&self, _peer: &str, connected: bool) {
+                if connected {
+                    *self.connects.lock().unwrap() += 1;
+                }
+            }
+        }
+        let backend = Arc::new(Counted {
+            base: MockRig::default(),
+            connects: Mutex::new(0),
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let b: Arc<dyn RigBackend> = backend.clone();
+        std::thread::spawn(move || serve(listener, b));
+
+        let mut rig = crate::rig::Rig::rigctld(&addr);
+        assert_eq!(rig.read_meter_f32("NOTCHF"), None, "no notch on this radio");
+        assert!(rig.read_level("SQL").is_err(), "no squelch on this radio");
+        assert_eq!(rig.read_preamp_db(), None, "no preamp on this radio");
+        assert_eq!(rig.read_freq().unwrap(), 14_074_000);
+        assert_eq!(
+            *backend.connects.lock().unwrap(),
+            1,
+            "the server hung up on the loop for asking, and the loop had to reconnect"
+        );
+    }
+
+    /// The rule on the wire: a rigctld verb never counts toward the hang-up, whatever it is
+    /// answered and however many come in a row. Each line below is a verb in Hamlib's rigctld table
+    /// that this backend cannot answer (`RPRT -11`): levels and a function it does not have, their
+    /// long forms, the extended-response prefixes, and verbs this server never implemented at all.
+    /// Then the dial, on the same connection.
+    #[test]
+    fn rigctld_verbs_answered_not_implemented_never_cost_the_connection() {
+        let backend: Arc<dyn RigBackend> = Arc::new(MockRig::default());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve_connection(stream, backend);
+        });
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let mut rd = BufReader::new(c.try_clone().unwrap());
+        for line in [
+            "l NOTCHF",
+            "l SQL",
+            "l PREAMP",
+            "u NB",
+            "\\get_level NOTCHF",
+            "+l SQL",
+            ";\\get_func NB",
+            "|u NB",
+            ",\\dump_caps",
+            "\\dump_caps",
+            "G UP",
+            "\\get_rig_info",
+            "\\send_voice_mem 1",
+            "b",
+            "w FA;",
+        ] {
+            c.write_all(format!("{line}\n").as_bytes()).unwrap();
+            let mut reply = String::new();
+            rd.read_line(&mut reply).unwrap();
+            assert_eq!(reply, NOT_IMPLEMENTED, "{line:?}");
+        }
+        c.write_all(b"f\n").unwrap();
+        let mut reply = String::new();
+        rd.read_line(&mut reply).unwrap();
+        assert_eq!(
+            reply, "14074000\n",
+            "the connection is still up and answering"
+        );
+    }
+
     /// #53's mechanism, demonstrated and then pinned out of our broker.
     ///
     /// rogerloxton's VarAC log shows `Convert.ToInt64("14105000\n14105000\n")`: his read
@@ -1845,8 +2169,8 @@ pub(crate) mod tests {
     /// so agreeing with it is agreeing with Hamlib's format — not with our own opinion of it.
     /// `\dump_caps` is the one verb a backend may AUTHOR its capabilities through. A backend that
     /// does not answers exactly what every backend answered before the verb existed — the same
-    /// bytes, so it also still counts as unrecognised — and one that does is read back by the
-    /// radio loop's own reader as exactly what it authored.
+    /// bytes — and one that does is read back by the radio loop's own reader as exactly what it
+    /// authored.
     #[test]
     fn dump_caps_is_not_implemented_unless_the_backend_authors_its_caps() {
         assert_eq!(reply("\\dump_caps", &MockRig::default()), NOT_IMPLEMENTED);
@@ -2303,6 +2627,237 @@ mod browser_smuggling_tests {
         assert_eq!(rig.freq_hz(), 21_074_000);
     }
 
+    /// Write `bytes` on a fresh connection and report whether the server hung up (the read ends
+    /// within two seconds) and what it answered first. Our write side stays open, so an end of
+    /// stream is the server's doing, never ours.
+    fn hung_up_on(bytes: &[u8], rig: &Arc<super::tests::MockRig>) -> (bool, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let backend: Arc<dyn RigBackend> = rig.clone();
+        let h = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            serve_connection(sock, backend);
+        });
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        // A server that hangs up mid-write may refuse the rest of it; that is its answer.
+        let _ = c.write_all(bytes);
+        c.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let mut said = Vec::new();
+        let mut buf = [0u8; 256];
+        let closed = loop {
+            match c.read(&mut buf) {
+                Ok(0) => break true,
+                Ok(n) => said.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break false
+                }
+                // A reset: the server closed with our later bytes still unread.
+                Err(_) => break true,
+            }
+        };
+        drop(c);
+        let _ = h.join();
+        (closed, String::from_utf8_lossy(&said).into_owned())
+    }
+
+    /// CONTROL: a port scanner's text probes are not rigctld, and the third in a row is hung up on
+    /// before anything after it runs.
+    #[test]
+    fn three_lines_in_no_rigctld_vocabulary_are_hung_up_on() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let (closed, said) = hung_up_on(
+            b"HELP\r\nOPTIONS / RTSP/1.0\r\n\\warble\r\nF 21074000\n",
+            &rig,
+        );
+        assert!(closed, "three lines that are no verb hang up: {said:?}");
+        assert_eq!(rig.freq_hz(), 14_074_000, "the line after them never ran");
+        assert!(
+            !said.contains("RPRT 0"),
+            "nothing after them answered: {said:?}"
+        );
+    }
+
+    /// CONTROL: an HTTP request line is hung up on by itself, answered nothing, and nothing after it
+    /// runs, not even a good rigctld line. (The POST test above holds with this guard gone too, on
+    /// the run of its header lines; this one does not.)
+    #[test]
+    fn an_http_request_line_alone_is_hung_up_on() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let (closed, said) = hung_up_on(b"GET / HTTP/1.1\r\nF 21074000\n", &rig);
+        assert!(closed, "an HTTP request line hangs up");
+        assert_eq!(said, "", "nothing is answered to a web page");
+        assert_eq!(rig.freq_hz(), 14_074_000, "the line after it never ran");
+    }
+
+    /// CONTROL: a 64 KiB line is past the length cap, so the FIRST of these ends the connection
+    /// before its first word is ever judged — a line this long is not rigctld whatever it begins
+    /// with, and none of these begins with a verb anyway. Nothing after it runs.
+    #[test]
+    fn three_long_lines_in_no_rigctld_vocabulary_are_hung_up_on() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let junk = "x".repeat(64 * 1024);
+        let bytes = format!("F{junk}\nl{junk}\n\\{junk}\nF 21074000\n");
+        let (closed, said) = hung_up_on(bytes.as_bytes(), &rig);
+        assert!(
+            closed,
+            "three long lines that are no verb hang up: {said:?}"
+        );
+        assert_eq!(rig.freq_hz(), 14_074_000, "the line after them never ran");
+        assert!(
+            !said.contains("RPRT 0"),
+            "nothing after them answered: {said:?}"
+        );
+    }
+
+    /// Drip `total` to the server in `chunk`-sized writes with a flush between each, so one line
+    /// arrives split across many small reads the way a slow (or deliberate) peer sends it. Returns
+    /// whether the server hung up and what it answered — [`hung_up_on`]'s shape, one writer apart.
+    fn hung_up_on_dripped(
+        total: &[u8],
+        chunk: usize,
+        rig: &Arc<super::tests::MockRig>,
+    ) -> (bool, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let backend: Arc<dyn RigBackend> = rig.clone();
+        let h = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            serve_connection(sock, backend);
+        });
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        // One line, split at write boundaries that mean nothing to the server: it must decide on
+        // the bytes it has accumulated, never on where a write happened to end.
+        for part in total.chunks(chunk.max(1)) {
+            if c.write_all(part).is_err() {
+                break; // the server hung up mid-line — the rest of the line is moot
+            }
+            let _ = c.flush();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let mut said = Vec::new();
+        let mut buf = [0u8; 256];
+        let closed = loop {
+            match c.read(&mut buf) {
+                Ok(0) => break true,
+                Ok(n) => said.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break false
+                }
+                Err(_) => break true,
+            }
+        };
+        drop(c);
+        let _ = h.join();
+        (closed, String::from_utf8_lossy(&said).into_owned())
+    }
+
+    /// A single line longer than the cap is refused whole: the connection ends and nothing in that
+    /// line reaches the radio — even though the line BEGINS exactly like a command that would
+    /// retune the rig to 21.074 MHz. Read as one line (as the broker did before the cap), it would
+    /// have set the dial; the good line after it would never be read.
+    #[test]
+    fn a_line_past_the_length_cap_never_reaches_the_radio() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let mut bytes = b"F 21074000 ".to_vec();
+        bytes.resize(bytes.len() + MAX_LINE_BYTES, b'x');
+        bytes.extend_from_slice(b"\nF 18100000\n");
+        let (closed, said) = hung_up_on(&bytes, &rig);
+        assert!(closed, "a line past the cap hangs up: {said:?}");
+        assert_eq!(
+            rig.freq_hz(),
+            14_074_000,
+            "nothing in the over-long line reached the radio"
+        );
+        assert!(
+            !said.contains("RPRT 0"),
+            "the over-long line answered nothing: {said:?}"
+        );
+    }
+
+    /// A client that sends a line and never a newline is bounded and dropped, not buffered without
+    /// end. The whole write (far past the cap, no `\n`) holds the write side open, so an end of
+    /// stream is the server's own doing — before the cap it would read on forever waiting for a
+    /// newline that never comes, and nothing in the line reaches the radio.
+    #[test]
+    fn a_connection_that_sends_a_line_and_never_a_newline_is_dropped() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let mut bytes = b"F 21074000 ".to_vec();
+        bytes.resize(MAX_LINE_BYTES + 512, b'x'); // past the cap, and not a newline in it
+        let (closed, said) = hung_up_on(&bytes, &rig);
+        assert!(
+            closed,
+            "a line that never ends is dropped by the server: {said:?}"
+        );
+        assert_eq!(
+            rig.freq_hz(),
+            14_074_000,
+            "nothing in the never-ending line reached the radio"
+        );
+    }
+
+    /// The decision is on the accumulated bytes, not a write boundary: the same over-cap line, no
+    /// newline, dripped 64 bytes at a time, is dropped exactly as one write is.
+    #[test]
+    fn a_line_past_the_cap_split_across_many_writes_is_still_dropped() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let mut bytes = b"F 21074000 ".to_vec();
+        bytes.resize(MAX_LINE_BYTES + 512, b'x');
+        let (closed, said) = hung_up_on_dripped(&bytes, 64, &rig);
+        assert!(closed, "a dripped over-cap line is dropped too: {said:?}");
+        assert_eq!(
+            rig.freq_hz(),
+            14_074_000,
+            "nothing in the dripped over-long line reached the radio"
+        );
+    }
+
+    /// CONTROL: the cap does not cut legal traffic. A real dial-set command whose line is exactly
+    /// the cap in length is served normally — answered `RPRT 0`, the radio retuned, the connection
+    /// left up.
+    #[test]
+    fn a_command_whose_line_is_exactly_the_cap_is_served() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let mut bytes = b"F 21074000 ".to_vec();
+        bytes.resize(MAX_LINE_BYTES, b'x'); // line body is exactly MAX_LINE_BYTES
+        bytes.push(b'\n');
+        let (closed, said) = hung_up_on(&bytes, &rig);
+        assert!(!closed, "a legal line at exactly the cap is not dropped");
+        assert!(said.contains("RPRT 0"), "it was answered: {said:?}");
+        assert_eq!(rig.freq_hz(), 21_074_000, "it reached the radio");
+    }
+
+    /// The boundary is one byte: a line body ONE byte past the cap is refused, where the same line
+    /// one byte shorter (the test above) is served. Pins the cap against an off-by-one.
+    #[test]
+    fn a_line_one_byte_over_the_cap_is_refused() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let mut bytes = b"F 21074000 ".to_vec();
+        bytes.resize(MAX_LINE_BYTES + 1, b'x'); // line body is MAX_LINE_BYTES + 1
+        bytes.push(b'\n');
+        let (closed, said) = hung_up_on(&bytes, &rig);
+        assert!(closed, "a line one byte over the cap hangs up: {said:?}");
+        assert_eq!(
+            rig.freq_hz(),
+            14_074_000,
+            "the one-byte-over line never reached the radio"
+        );
+    }
+
     /// `G` is a genuine rigctld verb (vfo_op) and must not be mistaken for HTTP's GET.
     #[test]
     fn the_http_test_does_not_catch_real_verbs() {
@@ -2312,5 +2867,53 @@ mod browser_smuggling_tests {
         assert!(!looks_like_http("F 14074000"));
         assert!(!looks_like_http("\\dump_state"));
         assert!(!looks_like_http(""), "a blank line is not HTTP");
+    }
+
+    /// What counts toward the hang-up is a line whose first word is in no rigctld's vocabulary. A
+    /// verb in Hamlib's table, short or long, bare or behind an extended-response prefix, is rigctld
+    /// whatever follows it. A word that only begins like one is not, nor is a `#` comment or
+    /// punctuation rigctld(1) does not name as a prefix.
+    #[test]
+    fn only_a_line_in_no_rigctld_vocabulary_is_not_rigctld() {
+        for line in [
+            "f",
+            "F 14074000",
+            "  t  ",
+            "l NOTCHF",
+            "\\get_level SQL",
+            "G UP",
+            "\\get_rig_info",
+            "b",
+            "\\send_voice_mem 1",
+            "\\dump_caps",
+            "_",
+            "+f",
+            "+\\get_freq",
+            ";\\get_mode",
+            "|l SQL",
+            ",u NB",
+        ] {
+            assert!(looks_like_rigctld(line), "{line:?} is rigctld");
+        }
+        for line in [
+            "HELP",
+            "Host: 127.0.0.1",
+            "OPTIONS / RTSP/1.0",
+            "\\warble",
+            "\\GET_FREQ",
+            "\\",
+            "Fxxxx",
+            "lNOTCHF",
+            "ff",
+            "9",
+            "?",
+            "#comment",
+            "+",
+            "+ f",
+            ":f",
+            "*1",
+        ] {
+            assert!(!looks_like_rigctld(line), "{line:?} is not rigctld");
+        }
     }
 }

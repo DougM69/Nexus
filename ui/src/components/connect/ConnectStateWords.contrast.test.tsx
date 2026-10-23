@@ -55,10 +55,13 @@ import {
   reachesChain,
   rgbHex as hex,
   rootTokensFrom,
+  subjectCut,
   toRgb,
   tokensAt,
   winnerAt,
+  withProps,
   withRoles,
+  withTokens,
   type El,
   type Mode,
   type Rgb,
@@ -497,19 +500,12 @@ function keysOf(w: Word) {
   }
   return k
 }
-/** Only the rules that declare a property can win it: winnerAt over those alone is the same answer. */
-const WITH = new WeakMap<Rule[], Map<string, Rule[]>>()
-function rulesWith(rules: Rule[], props: string[]): Rule[] {
-  let byProps = WITH.get(rules)
-  if (!byProps) WITH.set(rules, (byProps = new Map()))
-  const key = props.join()
-  let out = byProps.get(key)
-  if (!out) byProps.set(key, (out = rules.filter((r) => r.decls.some((d) => props.includes(d.prop)))))
-  return out
-}
+/** The walks below are handed only the rules that can answer (cssCascade's withProps, withTokens and subjectCut,
+ *  which say why the answer is the same): nearly every rule fails at its subject compound, and the walk ran that
+ *  test on every rule, per chain prefix and mode (the beforeAll took ~55 s alone). */
 const winAt = (rules: Rule[], mode: Mode, w: Word, i: number, ...props: string[]) =>
   once(rules, `w|${winnerMode(mode)}|${keysOf(w).shape[i]}|${props.join()}`, () =>
-    winnerAt(rulesWith(rules, props), winnerMode(mode), w.chain.slice(0, i + 1), ...props),
+    winnerAt(subjectCut(withProps(rules, props), w.chain[i]), winnerMode(mode), w.chain.slice(0, i + 1), ...props),
   )
 /** Tokens at word.chain[0..i], built element by element with cssCascade.tokensAt's own semantics (a token an
  *  element inherits arrives computed; one declared on it resolves against its own tokens), then what the
@@ -525,7 +521,7 @@ function tokensAtIndex(rules: Rule[], mode: Mode, w: Word, i: number): Map<strin
     } else tokens = tokensAtIndex(rules, mode, w, i - 1)
     const at = w.chain.slice(0, i + 1)
     const declared = new Map<string, { rule: Rule; value: string }>()
-    for (const rule of rulesWithTokens(rules)) {
+    for (const rule of subjectCut(withTokens(rules), w.chain[i])) {
       if (!reachesChain(rule.selector, at, mode)) continue
       for (const d of rule.decls) {
         if (!d.prop.startsWith('--')) continue
@@ -543,12 +539,6 @@ function tokensAtIndex(rules: Rule[], mode: Mode, w: Word, i: number): Map<strin
     for (const n of [...declared.keys(), ...inline.map(([n]) => n)]) computed.set(n, expandWith(own, own.get(n)!))
     return computed
   })
-}
-const TOKEN_DECLS = new WeakMap<Rule[], Rule[]>()
-function rulesWithTokens(rules: Rule[]): Rule[] {
-  let out = TOKEN_DECLS.get(rules)
-  if (!out) TOKEN_DECLS.set(rules, (out = rules.filter((r) => r.decls.some((d) => d.prop.startsWith('--')))))
-  return out
 }
 const colourAt = (rules: Rule[], mode: Mode, w: Word, i: number, value: string, under: Rgb): Rgb => {
   const k = keysOf(w)
@@ -821,11 +811,12 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   }, 60_000)
 
   it('FIRES: the accent words as they shipped are caught in the light theme, at the ratio Chrome measured', () => {
-    const found = unreadable(ACCENT_SHIPPED, accent, ['light'])
+    // The Light it shipped in is the Bright theme now (Light took Silver's look, 2026-10-13), so it is measured there.
+    const found = unreadable(ACCENT_SHIPPED, accent, ['light skin=bright'])
     const has = (re: RegExp) => found.some((m) => re.test(m))
-    expect(has(/ outlook \.strong "14\.2 MHz" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the MUF').toBe(true)
-    expect(has(/ satPasses \.sat-when ".*" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the next pass').toBe(true)
-    expect(has(/ scope \.mini-spectrum-src "AUDIO" light: #0174ab on #e5eaf0 = 4\.25:1/), 'the scope badge').toBe(true)
+    expect(has(/ outlook \.strong "14\.2 MHz" light skin=bright: #0174ab on #e5eaf0 = 4\.25:1/), 'the MUF').toBe(true)
+    expect(has(/ satPasses \.sat-when ".*" light skin=bright: #0174ab on #e5eaf0 = 4\.25:1/), 'the next pass').toBe(true)
+    expect(has(/ scope \.mini-spectrum-src "AUDIO" light skin=bright: #0174ab on #e5eaf0 = 4\.25:1/), 'the scope badge').toBe(true)
   }, 60_000)
 
   it('the reader itself: its element-by-element tokens are cssCascade.tokensAt, wherever no node sets one inline', () => {
@@ -839,20 +830,21 @@ describe('every state-coloured word on Connect reads in every light theme', () =
   }, 240_000)
 
   it('FIRES: the words as they shipped are caught in the light theme at the ratios Chrome measured', () => {
-    const found = unreadable(SHIPPED, state, ['light'])
+    // The Light it shipped in is the Bright theme now (Light took Silver's look, 2026-10-13), so it is measured there.
+    const found = unreadable(SHIPPED, state, ['light skin=bright'])
     const has = (re: RegExp) => found.some((m) => re.test(m))
-    expect(has(/ spacewx \.swx-impact ".*" light: #a27000 on #e5eaf0 = 3\.58:1/), 'Space Wx caption').toBe(true)
-    expect(has(/ outlook \.cp-work\.w-good "Good" light: #007f35 on #e5eaf0 = 4\.25:1/), 'Band Outlook Good').toBe(true)
+    expect(has(/ spacewx \.swx-impact ".*" light skin=bright: #a27000 on #e5eaf0 = 3\.58:1/), 'Space Wx caption').toBe(true)
+    expect(has(/ outlook \.cp-work\.w-good "Good" light skin=bright: #007f35 on #e5eaf0 = 4\.25:1/), 'Band Outlook Good').toBe(true)
     // The storm line's own colour is the theme's warning now that --state-warn is (it was the fixed #f5a524, 1.69:1).
-    expect(has(/ kpOutlook \.kp-line\.warn .* light: #a76d00 on #e5eaf0 = 3\.59:1/), 'the Kp storm line').toBe(true)
+    expect(has(/ kpOutlook \.kp-line\.warn .* light skin=bright: #a76d00 on #e5eaf0 = 3\.59:1/), 'the Kp storm line').toBe(true)
     // Beside the cockpits, in the boxes' boards and on the NOW bar, before their light rules: the POTA/SOTA box's
     // BAND OPEN (1.65:1 here, 1.66:1 in Chrome: the badge's tint rounds a unit apart) and the bar's PROP CACHED.
     // (A need chip, in the rail as anywhere, is NeedChip.contrast.test.tsx's.)
-    expect(has(/ pota \.pota-badge\.pota-badge-open "BAND OPEN" light: #22c55e on #c2e3d6 = 1\.6[56]:1$/), 'BAND OPEN').toBe(true)
-    expect(has(/ nowBar \.nb-src\.cached "PROP CACHED" light: #a27000 on #fbfcfe = 4\.21:1$/), "the NOW bar's PROP CACHED").toBe(true)
+    expect(has(/ pota \.pota-badge\.pota-badge-open "BAND OPEN" light skin=bright: #22c55e on #c2e3d6 = 1\.6[56]:1$/), 'BAND OPEN').toBe(true)
+    expect(has(/ nowBar \.nb-src\.cached "PROP CACHED" light skin=bright: #a27000 on #fbfcfe = 4\.21:1$/), "the NOW bar's PROP CACHED").toBe(true)
     // NEW PARK, which the census does not count (above): 3.37:1 here, 3.36:1 in Chrome.
-    const badge = unreadable(SHIPPED, all.filter((w) => w.kind === 'pota-badge'), ['light'])
-    expect(badge.some((m) => / pota \.pota-badge\.pota-badge-new "NEW PARK" light: #0174ab on #bcd5e4 = 3\.3[67]:1$/.test(m)), 'NEW PARK').toBe(true)
+    const badge = unreadable(SHIPPED, all.filter((w) => w.kind === 'pota-badge'), ['light skin=bright'])
+    expect(badge.some((m) => / pota \.pota-badge\.pota-badge-new "NEW PARK" light skin=bright: #0174ab on #bcd5e4 = 3\.3[67]:1$/.test(m)), 'NEW PARK').toBe(true)
   }, 60_000)
 
   // A CLOSED BAND RECEDES BY ITS INK, NEVER BY FADING (operator, 2026-09-30: "Closed rows and chips fade by colour instead of

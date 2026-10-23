@@ -267,6 +267,18 @@ describe('a half-typed contact survives the section moving around it', () => {
     expect(callValue(), 'AOS destroyed a half-typed contact').toBe('W1AW')
   })
 
+  it('survives a page switch — App unmounts the whole section and draws it again', async () => {
+    // Nothing above reaches this one: App's view switch unmounts the section itself when the
+    // operator opens another page mid-pass, and no placement inside the section can keep a
+    // field through that. The strip's draft does (`LogEntry` `draft`).
+    const first = render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    await halfTypeAContact()
+    first.unmount()
+    render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    await screen.findByPlaceholderText('Call')
+    expect(callValue(), 'a page switch destroyed a half-typed contact').toBe('W1AW')
+  })
+
   it('the strip renders from the snapshot alone — no bird open, no track', async () => {
     // The gate that makes all of the above true, asserted directly: with
     // nothing selected and nothing armed, the log is still there. If a later

@@ -402,6 +402,26 @@ test('`if:` is shown, and one that cannot be evaluated blocks the step instead o
   assert.ok(always.out.includes('alpha-ran'));
 });
 
+test('`if: ${{ !cancelled() }}` runs here, where nothing cancels a run, and every neighbour still blocks', () => {
+  const at = (name, expr) =>
+    scratch(name, MINIMAL.replace('      - name: alpha gate\n', `      - name: alpha gate\n        if: ${expr}\n`));
+  const run = gates(['--workflow', at('not-cancelled.yml', '${{ !cancelled() }}')]);
+  assert.equal(run.code, 0, run.out);
+  assert.ok(run.out.includes('alpha-ran'), '`!cancelled()` was not run');
+
+  // CONTROL: the near misses are not this expression, and are refused as before.
+  for (const expr of [
+    '${{ !failure() }}',
+    "${{ !cancelled() && github.event_name == 'push' }}",
+    '${{ !cancelled() || failure() }}',
+    '${{ cancelled() }}',
+  ]) {
+    const near = gates(['--workflow', at('near-miss.yml', expr)]);
+    assert.notEqual(near.code, 0, `${expr} left a green exit:\n${near.out}`);
+    assert.ok(!near.out.includes('alpha-ran'), `${expr} was guessed as true`);
+  }
+});
+
 test('a step key this script does not implement is reported, not ignored', () => {
   const file = scratch(
     'strange-key.yml',
@@ -783,6 +803,23 @@ test('a gate whose program is missing is skipped with a named reason, not run bl
   assert.equal(r.code, 3, 'a skipped gate is incomplete coverage, not a green run');
   assert.ok(r.out.includes('`definitely-not-a-real-binary-xyz` is not on PATH'));
   assert.ok(r.out.includes('SKIPPED'));
+});
+
+test('a cargo gate for a Rust target this box lacks is skipped by name, never run blind', () => {
+  // CI adds the phone checks' targets in its toolchain step; a box without one would fail such a
+  // gate on nothing a change did. The triple planted here is no real target, so no toolchain has it.
+  const planted = (target) => scratch(`target-${target}.yml`, MINIMAL.replace('        run: echo alpha-ran\n',
+    `        run: echo planted-target-ran; cargo check --target ${target}\n`));
+  const r = gates(['--workflow', planted('x86_64-nexus-planted')]);
+  assert.equal(r.code, 3, 'a skipped gate is incomplete coverage, not a green run');
+  assert.ok(r.out.includes('the Rust target x86_64-nexus-planted is not installed here'), r.out);
+  assert.ok(r.out.includes('SKIPPED'));
+  assert.ok(!r.out.includes('planted-target-ran'), 'the gate ran on a box without its target');
+  // CONTROL: the host's own target is installed wherever rustc runs, so the same step is a gate.
+  const host = /^host: (\S+)$/m.exec(spawnSync('rustc', ['-vV'], { encoding: 'utf8' }).stdout)[1];
+  const list = gates(['--list', '--workflow', planted(host)]).out;
+  assert.ok(list.includes('  gate     alpha gate'), list);
+  assert.ok(!list.includes('is not installed here'), list);
 });
 
 test('--job scopes the run, and an unknown job id is an error not a silent empty run', () => {

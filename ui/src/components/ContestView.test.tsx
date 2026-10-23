@@ -46,6 +46,20 @@ describe('annotate() reports the engine\'s dupe flag, and never guesses one', ()
   })
 })
 
+// A contact in a mode the contest bans (FT8 at Winter Field Day) counts for nothing, so it
+// brings no section: the first COUNTING contact from the section is the one the table marks
+// as new, as the sections board lights it.
+describe('annotate() marks no new section on a contact in a banned mode', () => {
+  it('leaves the banned contact unmarked and marks the next contact from its section', () => {
+    const ft8 = { ...qso('VE3AAA', '20m', 'DIG'), submode: 'FT8', banned: true }
+    const rows = annotate([ft8, qso('W1AW', '40m', 'CW')])
+    expect(rows.map((r) => r.isNewSection)).toEqual([false, true])
+    // CONTROL: the same contact on RTTY is the section's first.
+    const rtty = { ...qso('VE3AAA', '20m', 'DIG'), submode: 'RTTY' }
+    expect(annotate([rtty, qso('W1AW', '40m', 'CW')]).map((r) => r.isNewSection)).toEqual([true, false])
+  })
+})
+
 describe('the Score Summary rules line (design 3f)', () => {
   const args = (rulesYear: number, rulesGenerated: string) => ({
     eventName: 'ARRL Field Day',
@@ -213,5 +227,32 @@ describe('the band × mode grid', () => {
     expect(text).not.toContain('item 18')
     expect(text).toContain('  Counted above: 1 duplicate contact logged at zero points.')
     expect(table(text.split('\n').filter((l) => l.startsWith('  TOTALS')))).toEqual([['TOTALS', '2']])
+  })
+
+  it('counts a contact in a mode the contest does not allow at zero points, and says so', () => {
+    const summary = (submode: string, banned?: boolean) =>
+      buildSummaryText({
+        eventName: 'IL QSO Party',
+        isWfd: false,
+        rulesYear: 2026,
+        rulesGenerated: '',
+        myClass: '',
+        mySection: '',
+        log: [qso('K9AAA', '20m', 'CW'), { ...qso('K9FT8', '20m', 'DIG'), submode, ...(banned ? { banned } : {}) }],
+        modes: { dig: 1, cw: 1, ph: 0 },
+        workedSet: new Set<string>(),
+        powerMult: 1,
+        qsoPts: 2,
+        poweredPoints: 2,
+        bonusPoints: 0,
+        totalScore: 2,
+        claimedBonuses: [],
+        contest: { sending: '599 MCLN', multCount: 1 },
+        dupeRule: RULE({ modeClassGroups: [['CW', 'DIG']] }),
+      })
+    const NOTE = '  Counted above: 1 contact in a mode this contest does not allow, logged at zero points.'
+    expect(summary('FT8', true)).toContain(NOTE)
+    // CONTROL: the same contact on RTTY counts, and nothing is said.
+    expect(summary('RTTY')).not.toContain('does not allow')
   })
 })

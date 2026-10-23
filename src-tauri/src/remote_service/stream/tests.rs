@@ -88,6 +88,23 @@ struct Fixture {
     delivered: Arc<Mutex<Vec<WebviewInput>>>,
     /// The keep-awake request as the OS would see it: every hold and release, in order.
     awake: Arc<Mutex<Vec<&'static str>>>,
+    /// What the main window was asked to do with its shape, in order.
+    shaped: Arc<Mutex<Vec<String>>>,
+}
+
+/// The main window's shape, as the application would be asked to change it, recorded.
+struct ShapeRecorder(Arc<Mutex<Vec<String>>>);
+
+impl ShapeWindow for ShapeRecorder {
+    fn follow(&self, (width, height): (u32, u32)) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("follow {width}x{height}"));
+    }
+    fn restore(&self) {
+        self.0.lock().unwrap().push("restore".into());
+    }
 }
 
 /// The OS side of the keep-awake request, recorded.
@@ -146,6 +163,7 @@ fn fixture(now: Instant) -> Fixture {
         .unwrap();
     let delivered = Arc::new(Mutex::new(Vec::new()));
     let awake = Arc::new(Mutex::new(Vec::new()));
+    let shaped = Arc::new(Mutex::new(Vec::new()));
     let sink = delivered.clone();
     let input: InputSink = Arc::new(move |i: &WebviewInput| sink.lock().unwrap().push(i.clone()));
     Fixture {
@@ -162,6 +180,8 @@ fn fixture(now: Instant) -> Fixture {
                     Box::new(AwakeRecorder(awake.clone())),
                     Arc::new(|_: &str| {}),
                 ),
+                shape: Some(Arc::new(ShapeRecorder(shaped.clone()))),
+                watched: Default::default(),
             },
             #[cfg(feature = "radio")]
             audio: None,
@@ -173,6 +193,7 @@ fn fixture(now: Instant) -> Fixture {
         lease: acquired["leaseId"].as_str().unwrap().to_string(),
         delivered,
         awake,
+        shaped,
     }
 }
 
@@ -244,7 +265,7 @@ fn an_offer_without_control_or_a_live_lease_is_refused_first() {
         admit(&f.station, &offer(&f.lease), later),
         Err(StreamReason::NotController)
     );
-    // A logging-only browser: a perfectly good lease, and no control grant.
+    // A browser whose control grant was revoked after it took its lease.
     let f = fixture(now);
     f.station.authority.permit_station(DEVICE, false).unwrap();
     assert_eq!(
@@ -887,9 +908,34 @@ fn the_page_is_told_what_the_microphone_over_does() {
     });
     poll(now + Duration::from_millis(20));
     assert_eq!(told(&mut streaming)["keyed"], true, "the key was not told");
-    let release = format!(r#"{{"type":"pttRelease","holdId":"{PRESS}","seq":1}}"#);
-    streaming.ptt(release.as_bytes(), now);
-    poll(now + Duration::from_millis(40));
+    // A stretch of the page's audio lost (frames 3 to 8): a hole on the air, which the engine
+    // counts for a remote screen's display. The page shows no holes, so it is told nothing new.
+    for k in 2..=14u64 {
+        let at = now + Duration::from_millis(20 * k);
+        if k.is_multiple_of(5) {
+            let again = format!(r#"{{"type":"pttHold","holdId":"{PRESS}","seq":{k}}}"#);
+            streaming.ptt(again.as_bytes(), at);
+        }
+        if !(3..=8).contains(&k) {
+            streaming.mic(&tempo_stream::session::MicPacket {
+                seq: k,
+                rtp: 960 * k,
+                clock_hz: 48_000,
+                arrived: at,
+                payload: vec![0xF8, 0xFF, 0xFE],
+            });
+        }
+        poll(at);
+    }
+    assert_eq!(
+        f.station.host.mic.status().holes,
+        1,
+        "premise: the engine counted the hole"
+    );
+    assert_eq!(streaming.mic_state(), None, "a hole alone told the page");
+    let release = format!(r#"{{"type":"pttRelease","holdId":"{PRESS}","seq":15}}"#);
+    streaming.ptt(release.as_bytes(), now + Duration::from_millis(280));
+    poll(now + Duration::from_millis(300));
     assert_eq!(
         told(&mut streaming),
         serde_json::json!({"type":"micState","armed":false,"keyed":false,"noPowerOut":false,"ended":"released"})
@@ -897,7 +943,7 @@ fn the_page_is_told_what_the_microphone_over_does() {
 }
 
 /// Every way an over ends reaches the page under its own name: the page's caption for each is
-/// different (the audio design's §7), so two ends told as one would say the wrong thing.
+/// different, so two ends told as one would say the wrong thing.
 #[test]
 fn every_end_of_an_over_reaches_the_page_under_its_own_name() {
     use tempo_app::mic::MicEnded as Engine;
@@ -1082,13 +1128,13 @@ fn stop_request(streaming: &mut Streaming, lease: &str, now: Instant) -> Vec<u8>
 /// ★ Question B, answered by the operator on 2026-09-27, verbatim: "Control grant is enough",
 /// offered as "As the plan wrote it: the tick only mattered for the old page; any controller can
 /// stream and transmit." So a browser with the station-control grant and a live lease, and
-/// WITHOUT the FT8/FT4 transmit tick, is admitted to stream. Deliberate: change it only with the
-/// operator. CONTROL: without the control grant the same browser is refused.
+/// WITHOUT the FT8/FT4 transmit tick, is admitted to stream; the tick and the old page are gone
+/// now, and nothing else is asked. Deliberate: change it only with the operator. CONTROL: without
+/// the control grant the same browser is refused.
 #[test]
 fn a_controller_without_the_transmit_tick_is_admitted() {
     let now = Instant::now();
     let f = fixture(now);
-    f.station.authority.permit_transmit(DEVICE, false).unwrap();
     assert_eq!(
         f.station
             .authority
@@ -1428,6 +1474,128 @@ fn a_connected_stream_keeps_the_shack_awake_until_it_is_gone() {
         ["hold", "release"],
         "the stream's end did not release it"
     );
+}
+
+/// ⛔ The station's screen is watched from a session's state on until that state is gone, however
+/// the session ends: closed, or dropped by a panic on its thread. The screen is told each change, in
+/// order. While one session is still ending another keeps it watched. CONTROL: before any session,
+/// and after each, it is not.
+#[test]
+fn a_stream_watches_the_screen_from_its_state_until_it_is_gone_however_it_ends() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let watched = f.station.host.watched.clone();
+    let told = Arc::new(Mutex::new(Vec::new()));
+    let heard = told.clone();
+    watched.tell(Arc::new(move |live| heard.lock().unwrap().push(live)));
+    assert!(!watched.live(), "CONTROL: watched before any session");
+    let streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    assert!(
+        watched.live(),
+        "a session's state, and the screen not watched"
+    );
+    drop(streaming);
+    assert!(!watched.live(), "a closed session left the screen watched");
+    let (station, dropped) = (f.station.clone(), offer(&f.lease));
+    let thread = std::thread::spawn(move || {
+        let _streaming = Streaming::new(station, dropped, Instant::now());
+        panic!("the session's thread died");
+    });
+    assert!(thread.join().is_err(), "premise: the thread panicked");
+    assert!(!watched.live(), "a dropped session left the screen watched");
+    let first = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    let second = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    drop(first);
+    assert!(watched.live(), "one session's end ended another's watch");
+    drop(second);
+    assert!(!watched.live());
+    assert_eq!(
+        *told.lock().unwrap(),
+        [true, false, true, false, true, false],
+        "the screen was not told each change, in order"
+    );
+}
+
+/// The main window takes the shape of the page's picture area once the session is connected and
+/// the page has said its view; a view of the same shape (the page's zoom, or a cut of a pixel) is
+/// not a new shape; a new one waits out the gap since the last, then is taken, the latest only;
+/// and when the session's state is gone the window goes back, once.
+#[test]
+fn the_window_follows_the_pages_shape_and_goes_back_once_the_stream_is_gone() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let shaped = || f.shaped.lock().unwrap().clone();
+    let signed = protocol::offer_fingerprint(&offer(&f.lease).sdp).unwrap();
+    let mut streaming = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    streaming.follow(now);
+    assert_eq!(
+        shaped(),
+        Vec::<String>::new(),
+        "followed before the connection"
+    );
+    assert_eq!(streaming.connected(Some(signed), now), Ok(()));
+    streaming.follow(now);
+    assert_eq!(shaped(), Vec::<String>::new(), "followed before any view");
+    streaming.control(&view(1914, 992), |_| true, now);
+    streaming.follow(now);
+    assert_eq!(shaped(), ["follow 1914x992"]);
+    // The page zoomed into the picture: half as much again, its height a pixel over by rounding.
+    streaming.control(&view(2871, 1489), |_| true, now);
+    streaming.follow(now + FOLLOW_GAP * 2);
+    assert_eq!(shaped(), ["follow 1914x992"], "the same shape taken again");
+    // The browser made narrower, after the gap: taken at once.
+    let t1 = now + FOLLOW_GAP * 3;
+    streaming.control(&view(1400, 992), |_| true, t1);
+    streaming.follow(t1);
+    assert_eq!(shaped(), ["follow 1914x992", "follow 1400x992"]);
+    // …then dragged narrower twice within the gap: only the last is taken, once the gap is out.
+    streaming.control(&view(1300, 992), |_| true, t1);
+    streaming.follow(t1 + FOLLOW_GAP / 2);
+    streaming.control(&view(1200, 992), |_| true, t1);
+    streaming.follow(t1 + FOLLOW_GAP - Duration::from_millis(1));
+    assert_eq!(
+        shaped(),
+        ["follow 1914x992", "follow 1400x992"],
+        "taken inside the gap"
+    );
+    streaming.follow(t1 + FOLLOW_GAP);
+    streaming.follow(t1 + FOLLOW_GAP * 3);
+    assert_eq!(
+        shaped(),
+        ["follow 1914x992", "follow 1400x992", "follow 1200x992"]
+    );
+    drop(streaming);
+    assert_eq!(
+        shaped(),
+        [
+            "follow 1914x992",
+            "follow 1400x992",
+            "follow 1200x992",
+            "restore"
+        ],
+        "the window did not go back once when the stream was gone"
+    );
+}
+
+/// A session that never showed the window to a page that said its view leaves the window alone:
+/// one refused at A5, and one connected that ended before any view.
+#[test]
+fn a_stream_that_never_followed_leaves_the_window_alone() {
+    let now = Instant::now();
+    let f = fixture(now);
+    let signed = protocol::offer_fingerprint(&offer(&f.lease).sdp).unwrap();
+    let mut other = signed;
+    other[0] ^= 0xff;
+    let mut refused = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    refused.control(&view(1914, 992), |_| true, now);
+    assert!(refused.connected(Some(other), now).is_err());
+    refused.follow(now);
+    drop(refused);
+    let mut quiet = Streaming::new(f.station.clone(), offer(&f.lease), now);
+    assert_eq!(quiet.connected(Some(signed), now), Ok(()));
+    quiet.follow(now);
+    drop(quiet);
+    assert_eq!(f.shaped.lock().unwrap().clone(), Vec::<String>::new());
 }
 
 // ── Stop TX is never refused (operator ruling, 2026-10-03) ─────────────────────────────────────

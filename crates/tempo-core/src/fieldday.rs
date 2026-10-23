@@ -319,6 +319,36 @@ pub struct LoggedQso {
     /// ADIF writer names no station on any row, so it has nothing of this to carry, and no
     /// journal holds a row with one: a club's rebuilt log is never journaled.
     pub station_call: String,
+    /// ⭐ **The call this station was on the air under when the contact was logged** —
+    /// Settings' "Callsign on the air" at that moment, as [`FieldDayLog::on_air_call`] held it.
+    /// `""` on a row logged before it was recorded, and on every row of a log nothing stamps
+    /// (a club's rebuild).
+    ///
+    /// Club sync reads it: a club's log takes a contact only on the call the club is on the
+    /// air under, so one logged on another call stays in this log alone
+    /// (`Engine::fd_on_another_call` in tempo-app). It is journaled (`APP_NEXUS_ONAIR`), because a
+    /// restart re-reads every row into a session opened under whatever call Settings holds then,
+    /// and a contact must not change its call with it. Nothing else reads it: the Cabrillo QSO
+    /// line writes [`station_call`](Self::station_call), else [`FieldDayLog::mycall`], as it
+    /// always has.
+    pub on_air_call: String,
+    /// ⭐ **The radio this contact was made on** (ADIF `MY_RIG`) — [`FieldDayLog::rig`] at the
+    /// moment it was logged, the name the general log's own funnel stamps (`Engine::log_rig_now`
+    /// in tempo-app), so a radio changed mid-event names the right one on each contact. `""`
+    /// when none was known: no rig set, or a row logged before this was recorded. Journaled
+    /// (`MY_RIG`) and carried into the Logbook by the merge; no contest file writes it.
+    pub rig: String,
+    /// **The power this contact was made at** (ADIF `TX_PWR`), as the general log writes it —
+    /// watts, `"100"`, `"0.5"` — from [`FieldDayLog::tx_power`] at log time; `""` when none was
+    /// set. Text, not a number, because this row is compared for dupes and derives `Eq`.
+    /// Journaled and merged as [`rig`](Self::rig) is.
+    pub tx_power: String,
+    /// **The grid this contact was made from** (ADIF `MY_GRIDSQUARE`) — [`FieldDayLog::grid`] at
+    /// log time, Settings ▸ Station's grid; `""` when none was set, or a row logged before this
+    /// was recorded. Journaled under a private tag (`APP_NEXUS_MYGRID`: a VHF contest's own sent
+    /// `GRID` already writes `MY_GRIDSQUARE`, and that one wins) and carried into the Logbook by
+    /// the merge, marked as Nexus's own so the LoTW upload leaves it out.
+    pub grid: String,
 }
 
 impl LoggedQso {
@@ -347,6 +377,22 @@ impl LoggedQso {
         } else {
             self.submode.as_str()
         }
+    }
+
+    /// ⭐ **Worked in a mode `rs` bans** ([`FdRuleset::banned_modes`](crate::fd_rules::FdRuleset::banned_modes):
+    /// FT8 and FT4 at the Illinois QSO Party, the WSJT modes at Winter Field Day). Such a contact
+    /// is logged and written to the files like any other, and counts for nothing
+    /// ([`FieldDayLog::counts`]).
+    ///
+    /// ⚠️ **The RECORDED mode, never [`recorded_mode`](Self::recorded_mode).** A row that recorded
+    /// none exports as `FT8` for want of anything better, and a guess is not a contact in a banned
+    /// mode: an empty mode is never banned, as `FdRuleset::mode_banned` says.
+    ///
+    /// The same answer as `FdRuleset::mode_banned(&self.submode)` without its allocation, which the
+    /// scorer's walk of every row on every snapshot must not make: the row's mode is stored trimmed
+    /// and uppercase, and the loader takes a banned mode only uppercase and non-empty.
+    pub fn banned_under(&self, rs: &crate::fd_rules::FdRuleset) -> bool {
+        rs.banned_modes.iter().any(|&m| m == self.submode)
     }
 
     /// ⭐ **What the dupe key needs to know about this row's bird** — [`SatKey`]'s
@@ -400,6 +446,152 @@ fn field_raw<'a>(vals: &'a [crate::contest::FieldValue], key: &str) -> &'a str {
         .find(|v| v.key == key)
         .map(|v| v.raw.as_str())
         .unwrap_or("")
+}
+
+/// Whether `q` counts under `rs` ([`FieldDayLog::counts`]): not a duplicate, not a satellite
+/// contact the ruleset gives no credit (Winter Field Day), and not worked in a mode it bans.
+/// Over a ruleset already in hand, because the scorer asks it of every row on every snapshot.
+fn counts_under(rs: &crate::fd_rules::FdRuleset, q: &LoggedQso) -> bool {
+    !q.dupe && (rs.satellite_credit || q.sat.is_none()) && !q.banned_under(rs)
+}
+
+/// ⭐ **One operator's share of a contest log** ([`FieldDayLog::operator_stats`]): what the
+/// counting rows stamped with that operator add up to, under the contest's own scoring.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OperatorStats {
+    /// The [`LoggedQso::operator`] stamp, uppercase. `""` groups the rows that name nobody.
+    pub operator: String,
+    /// Contacts that count ([`FieldDayLog::qso_count`]'s rule: no dupe, no banned mode, no
+    /// uncredited satellite).
+    pub qsos: u32,
+    /// Their QSO points, before multipliers, power tier and bonuses: the per-row points the
+    /// log's score sums, so every operator's points add up to the log's.
+    pub points: u32,
+    /// The multipliers this operator worked FIRST ([`Scoring::new_mults_by_row`]).
+    ///
+    /// [`Scoring::new_mults_by_row`]: crate::contest::Scoring::new_mults_by_row
+    pub new_mults: u32,
+    /// Contacts in the last 10 and the last 60 minutes before `now`.
+    pub last_10_min: u32,
+    pub last_60_min: u32,
+    /// The UTC clock hour with the most contacts — its start (Unix seconds) and its count —
+    /// the earliest such hour on a tie. `(0, 0)` with no contacts.
+    pub best_hour: (u64, u32),
+    /// Contacts by band and mode class, `(band, mode, contacts)`, sorted by band then mode.
+    pub band_mode: Vec<(String, String, u32)>,
+}
+
+/// ⭐ **What a station not yet worked would add to the score's multipliers** — the
+/// question a contest band map asks of every spot ([`FieldDayLog::spot_mults`]).
+///
+/// Owned, so it is built once under whatever lock guards the log and then asked about each
+/// spot with that lock released. The answer is the scorer's own
+/// ([`Scoring::new_mults_of`](crate::contest::Scoring::new_mults_of)): the candidate row is
+/// built the way a logged one is, with the entity and prefix resolved from the call by the
+/// same resolvers, and the role this session logs under.
+///
+/// ⚠️ **A received value is known only from this station's own earlier contact.** A spot
+/// carries no exchange, so a multiplier read from one (a county, a section, a zone, a grid)
+/// is judged from the newest contact with this call in the log, and not at all for a station
+/// never worked. Silence over a guess: a value from anywhere else is not a CONFIRMED multiplier.
+/// What the operator's call-history file says such a station sends is asked separately, and
+/// answered as a PREDICTION ([`predicted_mults`](Self::predicted_mults)).
+#[derive(Debug, Clone)]
+pub struct SpotMults {
+    ruleset: &'static crate::fd_rules::FdRuleset,
+    worked: crate::contest::MultsWorked,
+    role: String,
+    /// The slots this session's role receives: the only ones a prediction may fill.
+    receives: Vec<&'static crate::contest::FieldSpec>,
+    /// The received exchange of each call's newest contact, by uppercase call.
+    rx_by_call: std::collections::HashMap<String, Vec<crate::contest::FieldValue>>,
+}
+
+impl SpotMults {
+    /// `(rule id, value)` for each multiplier working `call` on `band` in `mode_class`
+    /// (`"CW"` | `"PH"` | `"DIG"`) would add, empty for none. `submode` is the on-air mode
+    /// when a spot names one: a contact in a mode the contest bans counts nothing.
+    pub fn new_mults(
+        &self,
+        call: &str,
+        band: &str,
+        mode_class: &str,
+        submode: Option<&str>,
+    ) -> Vec<(&'static str, String)> {
+        if submode.is_some_and(|m| self.ruleset.mode_banned(m)) {
+            return Vec::new();
+        }
+        let call = call.trim().to_ascii_uppercase();
+        let placed = crate::contest::resolve_call(&call);
+        let prefix = crate::contest::wpx_prefix(&call);
+        let row = crate::contest::ScoreRow {
+            mode_class,
+            band,
+            role: &self.role,
+            rx: self.rx_by_call.get(&call).map_or(&[], Vec::as_slice),
+            entity: placed.map(|p| p.entity),
+            prefix: prefix.as_deref(),
+            relation: None,
+        };
+        self.ruleset.scoring.new_mults_of(&self.worked, &row)
+    }
+
+    /// The contest this log runs, as its rules-file event id (`ilqp`): what a call-history file
+    /// is bound to.
+    pub fn event(&self) -> &'static str {
+        self.ruleset.event
+    }
+
+    /// The slots this session's role receives, in its receive order.
+    pub fn receives(&self) -> &[&'static crate::contest::FieldSpec] {
+        &self.receives
+    }
+
+    /// ⭐ **The multipliers a station never worked here is PREDICTED to add**, `(rule id,
+    /// value)`, from what another source says it sends: `exchanges` is one received exchange per
+    /// possibility (a county-line station gives one per county), each counted by the scorer's
+    /// own keys exactly as [`new_mults`](Self::new_mults) counts a logged one. A multiplier any of
+    /// them would add is listed once.
+    ///
+    /// Empty for a station this log has worked: its own earlier exchange is the answer, and
+    /// [`new_mults`](Self::new_mults) gives it. A multiplier the call alone already gives (an
+    /// entity, a prefix) is [`new_mults`](Self::new_mults)'s too, so it is never listed here.
+    pub fn predicted_mults(
+        &self,
+        call: &str,
+        band: &str,
+        mode_class: &str,
+        submode: Option<&str>,
+        exchanges: &[Vec<crate::contest::FieldValue>],
+    ) -> Vec<(&'static str, String)> {
+        let call = call.trim().to_ascii_uppercase();
+        if self.rx_by_call.contains_key(&call)
+            || submode.is_some_and(|m| self.ruleset.mode_banned(m))
+        {
+            return Vec::new();
+        }
+        let confirmed = self.new_mults(&call, band, mode_class, submode);
+        let placed = crate::contest::resolve_call(&call);
+        let prefix = crate::contest::wpx_prefix(&call);
+        let mut out: Vec<(&'static str, String)> = Vec::new();
+        for rx in exchanges {
+            let row = crate::contest::ScoreRow {
+                mode_class,
+                band,
+                role: &self.role,
+                rx,
+                entity: placed.map(|p| p.entity),
+                prefix: prefix.as_deref(),
+                relation: None,
+            };
+            for m in self.ruleset.scoring.new_mults_of(&self.worked, &row) {
+                if !confirmed.contains(&m) && !out.contains(&m) {
+                    out.push(m);
+                }
+            }
+        }
+        out
+    }
 }
 
 /// What [`FieldDayLog::merge_adif`] found in a journal.
@@ -667,32 +859,76 @@ impl Spent {
 
     /// The header field, or nothing when no row was let go.
     fn header(&self) -> String {
-        if self.seq == 0 {
-            return String::new();
-        }
-        let value = format!("{}:{}", self.seq, self.when_unix);
-        format!("<{}:{}>{}\n", Self::TAG, value.len(), value)
+        header_field(Self::TAG, self.seq, self.when_unix)
     }
 
     /// The field read back from a journal's header. One this build cannot read is nothing
     /// let go, never an error: the rows still number themselves.
     fn from_header(header: &str) -> Spent {
-        let open = format!("<{}:", Self::TAG);
-        let Some(at) = header.to_ascii_uppercase().find(&open) else {
-            return Spent::default();
-        };
-        header[at + open.len()..]
-            .split_once('>')
-            .and_then(|(len, tail)| {
-                let value = tail.get(..len.trim().parse::<usize>().ok()?)?;
-                let (seq, when) = value.split_once(':')?;
-                Some(Spent {
-                    seq: seq.trim().parse().ok()?,
-                    when_unix: when.trim().parse().ok()?,
-                })
-            })
+        header_value(header, Self::TAG)
+            .map(|(seq, when_unix)| Spent { seq, when_unix })
             .unwrap_or_default()
     }
+}
+
+/// ⭐ **The latest Clear test contacts** ([`FieldDayLog::remove_all`]): the highest
+/// [`LoggedQso::seq`] given by then, and when it was made ([`FieldDayLog::cleared`]). `seq` 0:
+/// never.
+///
+/// It rides the journal's header as `<APP_NEXUS_CLEARED:n>seq:unix`, as [`Spent`] does, and only
+/// once a clear was made, so a journal never cleared is written exactly as before.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Cleared {
+    seq: u64,
+    when_unix: u64,
+}
+
+impl Cleared {
+    const TAG: &'static str = "APP_NEXUS_CLEARED";
+
+    /// ⭐ **Was the row with `seq`, logged at `when_unix`, logged before this clear — before it by
+    /// its seq AND by its time?** Such a row numbers nothing in the serial run.
+    ///
+    /// Either half alone would be wrong somewhere, and in the direction that sends a number twice.
+    /// The seq orders one session's rows whatever the clock does, where a clock stepped back would
+    /// put a contact logged after the clear before it. The time keeps the clear off a later
+    /// session's rows: a running's seqs may start again from 1 ([`FieldDayLog::spent`] counts
+    /// within its own running), below a clear made a year before. A row is passed over only when
+    /// both say so, so a half that misjudges a row can only count it: the run then skips a number,
+    /// and never sends one twice.
+    fn passed_over(&self, seq: u64, when_unix: u64) -> bool {
+        seq <= self.seq && when_unix <= self.when_unix
+    }
+
+    /// The header field, or nothing when no clear was made.
+    fn header(&self) -> String {
+        header_field(Self::TAG, self.seq, self.when_unix)
+    }
+
+    /// The field read back from a journal's header: `None` when it holds none this build can read.
+    fn from_header(header: &str) -> Option<Cleared> {
+        header_value(header, Self::TAG).map(|(seq, when_unix)| Cleared { seq, when_unix })
+    }
+}
+
+/// A journal header field holding a seq and a moment, `<TAG:n>seq:unix`: nothing for seq 0.
+fn header_field(tag: &str, seq: u64, when_unix: u64) -> String {
+    if seq == 0 {
+        return String::new();
+    }
+    let value = format!("{seq}:{when_unix}");
+    format!("<{tag}:{}>{value}\n", value.len())
+}
+
+/// A [`header_field`] read back out of a journal's header: `None` when it holds none that reads.
+fn header_value(header: &str, tag: &str) -> Option<(u64, u64)> {
+    let open = format!("<{tag}:");
+    let at = header.to_ascii_uppercase().find(&open)?;
+    let (len, tail) = header[at + open.len()..].split_once('>')?;
+    let (seq, when) = tail
+        .get(..len.trim().parse::<usize>().ok()?)?
+        .split_once(':')?;
+    Some((seq.trim().parse().ok()?, when.trim().parse().ok()?))
 }
 
 /// A dupe-checked contest log with scoring — and **the log IS the session**: its
@@ -737,6 +973,21 @@ pub struct FieldDayLog {
     /// ([`LoggedQso::station_call`]). `""` on every log but a club's rebuild, which sets it
     /// for each row of a GOTA station's (`ClubLog::unique_log_with` in tempo-app).
     pub station_call: String,
+    /// The station's call on the air RIGHT NOW, Settings' "Callsign on the air", stamped by the
+    /// engine at contest entry and on every save, and copied onto each row as it is logged
+    /// exactly as [`operator`](Self::operator) is ([`LoggedQso::on_air_call`]). `""` in a log
+    /// nothing stamps.
+    pub on_air_call: String,
+    /// The radio RIGHT NOW (ADIF `MY_RIG`, `""` = none known), stamped by the engine at contest
+    /// entry and whenever the station changes, and copied onto each row as it is logged exactly as
+    /// [`operator`](Self::operator) is ([`LoggedQso::rig`]).
+    pub rig: String,
+    /// The station power RIGHT NOW (ADIF `TX_PWR` text, `""` = none set), stamped and copied as
+    /// [`rig`](Self::rig) is ([`LoggedQso::tx_power`]).
+    pub tx_power: String,
+    /// The station grid RIGHT NOW (Settings ▸ Station, uppercase, `""` = none), stamped and
+    /// copied as [`rig`](Self::rig) is ([`LoggedQso::grid`]).
+    pub grid: String,
     /// The LIVE rows: what is scored, duped, exported, merged and synced.
     qsos: Vec<LoggedQso>,
     /// ⭐ **The contacts the operator took out of the live log — kept, never deleted**
@@ -804,6 +1055,14 @@ pub struct FieldDayLog {
     /// out. Their numbers are [`spent`](Self::spent), as before. A record taken back
     /// (`APP_NEXUS_REMOVED`) is not kept: it ages out as it always did, and stays taken back.
     aged: Vec<AgedRecord>,
+    /// ⭐ **Where the serial run started again: the latest Clear test contacts**
+    /// ([`remove_all`](Self::remove_all)). Read from the journal's header and written back into it
+    /// ([`journal_adif`](Self::journal_adif)), so it outlives a restart.
+    ///
+    /// A fact about an event, not a second counter: the run is still re-derived from the rows
+    /// (`restore_row`), from the ones logged after the clear, as the live run counts them — a
+    /// contact the clear took out numbers nothing, restored or not.
+    cleared: Cleared,
 }
 
 impl FieldDayLog {
@@ -826,6 +1085,10 @@ impl FieldDayLog {
             current_submode: String::new(),
             operator: String::new(),
             station_call: String::new(),
+            on_air_call: String::new(),
+            rig: String::new(),
+            tx_power: String::new(),
+            grid: String::new(),
             qsos: Vec::new(),
             removed: Vec::new(),
             worked: HashSet::new(),
@@ -834,6 +1097,7 @@ impl FieldDayLog {
             held: Vec::new(),
             spent: Spent::default(),
             aged: Vec::new(),
+            cleared: Cleared::default(),
         }
     }
 
@@ -1253,6 +1517,62 @@ impl FieldDayLog {
         Some(self.took_out(vec![row], removed_unix))
     }
 
+    /// ⭐ **Take every contact out of the live log — removed, never deleted** — the contest
+    /// screen's Clear test contacts, when the log is still what the screen named: `row_count` live
+    /// rows, the newest contact `call` (any case) at `when_unix`. Each contact is its own entry,
+    /// oldest first, as [`Self::remove_last`] would make it (a county line one entry with all its
+    /// rows), so each comes back on its own ([`Self::restore`]).
+    ///
+    /// `Changed` when the log is not what was named (a contact logged, removed or restored in
+    /// between), `Empty` when it holds none; either way nothing changes. ⚠️ **The seqs stay
+    /// spent, as for [`Self::remove_last`], and the serial run starts again at 1**: the next
+    /// contact's seq follows the cleared ones, and its serial is 1, after a restart too
+    /// (`cleared`). A contact restored after the clear keeps the serial it was sent and does not
+    /// move the run, so a later contact may send its number again.
+    pub fn remove_all(
+        &mut self,
+        row_count: usize,
+        call: &str,
+        when_unix: u64,
+        removed_unix: u64,
+    ) -> Result<Vec<RemovedQso>, RemoveRefusal> {
+        let newest = self.newest_contact();
+        let Some(first) = newest.first() else {
+            return Err(RemoveRefusal::Empty);
+        };
+        if self.qsos.len() != row_count
+            || !first.call.eq_ignore_ascii_case(call.trim())
+            || first.when_unix != when_unix
+        {
+            return Err(RemoveRefusal::Changed);
+        }
+        // A contact is the run of rows sharing one call and one time, as `newest_contact` reads
+        // the newest.
+        let mut entries = Vec::new();
+        let mut contact: Vec<LoggedQso> = Vec::new();
+        for row in std::mem::take(&mut self.qsos) {
+            if contact
+                .last()
+                .is_some_and(|q| q.call != row.call || q.when_unix != row.when_unix)
+            {
+                entries.push(self.took_out(std::mem::take(&mut contact), removed_unix));
+            }
+            contact.push(row);
+        }
+        entries.push(self.took_out(contact, removed_unix));
+        // ⭐ **The serial run starts again at 1, and the seq does not**: test contacts cleared
+        // before the start leave the contest to begin at 001, while a club host drops a reissued
+        // seq as a repeat. Only here: a removal gives no number back, even of the last contact in
+        // the log. Kept as the clear itself, so a restart counts the run from the rows the live
+        // log counts it from.
+        self.cleared = Cleared {
+            seq: self.max_seq(),
+            when_unix: removed_unix,
+        };
+        self.session.restart_serials();
+        Ok(entries)
+    }
+
     /// The one place rows leave the live log: kept as one entry, the dupe index and every
     /// row's mark rebuilt (removing a row can make a LATER one stop being a duplicate), and
     /// a showing `constant_sent` warning re-derived, since the row it described may be the
@@ -1314,6 +1634,55 @@ impl FieldDayLog {
     /// every count and export.
     pub fn removed(&self) -> &[RemovedQso] {
         &self.removed
+    }
+
+    /// ⭐ **Every row's QSO number, by its [`seq`](LoggedQso::seq)** — live rows and removed ones,
+    /// in every contest, the number the log table shows and the export writes as ADIF `STX`.
+    ///
+    /// In a contest that sends a serial it IS the serial the row was sent ([`issued_serial`]),
+    /// because a second count beside the one that went on the air would show the operator a
+    /// number nobody copied. A row that carries none has no number.
+    ///
+    /// In every other contest it is the row's place in its run, in the order the rows were
+    /// logged (their seq: a contact typed in late with an earlier time takes the next number and
+    /// moves nobody, as N1MM numbers it). **Removed rows are counted**, so a number once shown is
+    /// never given to another contact, after a restart too (the journal keeps removed rows); and
+    /// a run is the rows since the latest Clear test contacts (`cleared`), which starts the count
+    /// again at 1 as it starts the serial run again. A row restored after the clear is counted in
+    /// the run it was logged in.
+    ///
+    /// ⚠️ **Read off the rows, never stored beside them** — the reason `restore_row` gives for
+    /// the serial run. A journal written before numbers existed loads exactly as it did and is
+    /// numbered by the order of its rows (a restore gives a row without a seq the next one, in
+    /// file order); nothing is rewritten.
+    pub fn qso_numbers(&self) -> std::collections::HashMap<u64, u32> {
+        let rows = self
+            .qsos
+            .iter()
+            .chain(self.removed.iter().flat_map(|r| &r.rows))
+            .filter(|q| q.seq != 0);
+        if self.session.serial_now().is_some() {
+            let spec = self.session.exchange;
+            return rows
+                .filter_map(|q| issued_serial(spec, &q.tx).map(|n| (q.seq, n)))
+                .collect();
+        }
+        let mut order: Vec<(bool, u64)> = rows
+            .map(|q| (self.cleared.passed_over(q.seq, q.when_unix), q.seq))
+            .collect();
+        order.sort_unstable();
+        let mut out = std::collections::HashMap::with_capacity(order.len());
+        let mut run = None;
+        let mut n = 0;
+        for (before_clear, seq) in order {
+            if run != Some(before_clear) {
+                run = Some(before_clear);
+                n = 0;
+            }
+            n += 1;
+            out.insert(seq, n);
+        }
+        out
     }
 
     /// Log a contact.
@@ -1517,6 +1886,10 @@ impl FieldDayLog {
             sat: sat.cloned(),
             operator: self.operator.clone(),
             station_call: self.station_call.clone(),
+            on_air_call: self.on_air_call.clone(),
+            rig: self.rig.clone(),
+            tx_power: self.tx_power.clone(),
+            grid: self.grid.clone(),
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -1548,7 +1921,7 @@ impl FieldDayLog {
         slot: u64,
         when_unix: u64,
     ) -> bool {
-        self.log_fields_on(call, fields, mode, submode, slot, when_unix, None)
+        self.log_fields_on(call, fields, mode, submode, slot, when_unix, None, None)
     }
 
     /// ⭐ **Log a contact worked THROUGH A BIRD** — [`log_fields_at`](Self::log_fields_at)
@@ -1571,12 +1944,33 @@ impl FieldDayLog {
         sat: &SatLeg,
         when_unix: u64,
     ) -> bool {
-        self.log_fields_on(call, fields, mode, submode, 0, when_unix, Some(sat))
+        self.log_fields_on(call, fields, mode, submode, 0, when_unix, Some(sat), None)
     }
 
-    /// The shared body of the two above — the field vector resolved against the running
+    /// ⭐ **The contest ENTRY STRIP's write** — [`log_fields_at`](Self::log_fields_at), or
+    /// [`log_satellite_at`](Self::log_satellite_at) with a pass `sat`, carrying the operator's
+    /// own sent RST for this one contact when they typed one in the strip's optional "RST sent"
+    /// box (`sent_rst`, already checked with
+    /// [`ContestSession::sent_rst_ok`](crate::contest::ContestSession::sent_rst_ok)). With
+    /// `None` the row is exactly what those two write. `slot` is 0: a typed contact has no FT
+    /// slot.
+    #[allow(clippy::too_many_arguments)] // log_satellite_at's own, plus the report
+    pub fn log_entry_at(
+        &mut self,
+        call: &str,
+        fields: &[(String, String)],
+        mode: &str,
+        submode: &str,
+        when_unix: u64,
+        sat: Option<&SatLeg>,
+        sent_rst: Option<&str>,
+    ) -> bool {
+        self.log_fields_on(call, fields, mode, submode, 0, when_unix, sat, sent_rst)
+    }
+
+    /// The shared body of the three above — the field vector resolved against the running
     /// exchange, then the one write site.
-    #[allow(clippy::too_many_arguments)] // log_fields_at's own, plus the leg
+    #[allow(clippy::too_many_arguments)] // log_fields_at's own, plus the leg and the report
     fn log_fields_on(
         &mut self,
         call: &str,
@@ -1586,13 +1980,17 @@ impl FieldDayLog {
         slot: u64,
         when_unix: u64,
         sat: Option<&SatLeg>,
+        sent_rst: Option<&str>,
     ) -> bool {
         let spec = self.session.exchange;
         let rx: Vec<crate::contest::FieldValue> = fields
             .iter()
             .filter_map(|(k, v)| spec.copied(k, v))
             .collect();
-        let tx = self.session.tx_for_row(call, mode);
+        let mut tx = self.session.tx_for_row(call, mode);
+        if let Some(raw) = sent_rst {
+            self.session.override_sent_rst(&mut tx, raw);
+        }
         self.log_exchange_on(call, rx, tx, mode, submode, slot, when_unix, sat)
     }
 
@@ -1620,21 +2018,32 @@ impl FieldDayLog {
     /// yields the whole log, and every number below is bit-identical to what it always
     /// was.
     ///
+    /// ⭐ **A contact in a mode the contest bans is left out the same way** (FT8 at the
+    /// Illinois QSO Party: *"FT4 and FT8 contacts will receive no contact credit"*): logged,
+    /// in the files, and worth no point, multiplier, bonus or board cell
+    /// ([`LoggedQso::banned_under`]). It still keys the dupe index like any row, so whether a
+    /// later contact is a duplicate is what it always was, and the FT sequencer, which asks
+    /// that index whether a station was worked, is not touched by it.
+    ///
     /// ⚠️ **The hosted Remote page recounts [`qso_count`](Self::qso_count) from the rows it
-    /// is sent**, by the marks a row carries (its `dupe`, and its `sat` when the status says
-    /// the contest gives a satellite no credit), and refuses a capture whose count it cannot
-    /// reproduce. A row left out here for any other reason has to carry a mark the page
-    /// reads first, or that page's contest view goes blank.
+    /// is sent**, by the marks a row carries (its `dupe`, its `sat` when the status says
+    /// the contest gives a satellite no credit, and its `banned`), and refuses a capture whose
+    /// count it cannot reproduce. A row left out here for any other reason has to carry a
+    /// mark the page reads first, or that page's contest view goes blank.
     ///
     /// `+ Clone` because [`score_rows`](Self::score_rows) must stay clonable — the
     /// scorer walks its rows twice, once for points and once for multipliers.
     fn counting(&self) -> impl Iterator<Item = &LoggedQso> + Clone {
-        // ⭐ …and except a satellite contact the ruleset gives no credit (Winter Field Day):
-        // a row in the log, and in the general log after the merge, worth nothing here.
-        let credit = self.ruleset().satellite_credit;
-        self.qsos
-            .iter()
-            .filter(move |q| !q.dupe && (credit || q.sat.is_none()))
+        let rs = self.ruleset();
+        self.qsos.iter().filter(move |q| counts_under(rs, q))
+    }
+
+    /// ⭐ **Does this row COUNT?** The one predicate [`counting`](Self::counting) filters by,
+    /// for a surface that walks [`qsos`](Self::qsos) itself and must leave out exactly the rows
+    /// the score does: the club TV board, which attributes each counting contact to the
+    /// position that logged it.
+    pub fn counts(&self, q: &LoggedQso) -> bool {
+        counts_under(self.ruleset(), q)
     }
 
     /// ⭐ **The rows the entry SUBMITS** — every row except a satellite contact the ruleset
@@ -1776,10 +2185,99 @@ impl FieldDayLog {
         self.counting().map(|q| qso_points_for_mode(&q.mode)).sum()
     }
 
+    /// ⭐ **Per-operator statistics** — the contest's counting rows grouped by the operator
+    /// each was stamped with ([`LoggedQso::operator`]), best first (points, then contacts,
+    /// then call). Dupes, banned modes and uncredited satellite rows are left out exactly as
+    /// the score leaves them out ([`counting`](Self::counting)); removed contacts are not in
+    /// the live log at all. Points and new multipliers come from the ruleset's own scorer, so
+    /// the operators' figures sum to the log's QSO points and multiplier count.
+    ///
+    /// One pass over the log; `now_unix` is the caller's, so the rate windows are testable.
+    pub fn operator_stats(&self, now_unix: u64) -> Vec<OperatorStats> {
+        use std::collections::HashMap;
+        let scoring = &self.ruleset().scoring;
+        let new_mults = scoring.new_mults_by_row(self.score_rows());
+        let mut stats: Vec<OperatorStats> = Vec::new();
+        let mut index: HashMap<&str, usize> = HashMap::new();
+        let mut hours: Vec<HashMap<u64, u32>> = Vec::new();
+        let mut cells: Vec<HashMap<(&str, &str), u32>> = Vec::new();
+        for ((q, row), new) in self.counting().zip(self.score_rows()).zip(new_mults) {
+            let i = *index.entry(q.operator.as_str()).or_insert_with(|| {
+                stats.push(OperatorStats {
+                    operator: q.operator.clone(),
+                    ..OperatorStats::default()
+                });
+                hours.push(HashMap::new());
+                cells.push(HashMap::new());
+                stats.len() - 1
+            });
+            let s = &mut stats[i];
+            s.qsos += 1;
+            s.points += scoring.qso_points.points_for(&row);
+            s.new_mults += new;
+            let w = q.when_unix;
+            if w <= now_unix && w + 600 > now_unix {
+                s.last_10_min += 1;
+            }
+            if w <= now_unix && w + 3600 > now_unix {
+                s.last_60_min += 1;
+            }
+            *hours[i].entry(w - w % 3600).or_default() += 1;
+            *cells[i]
+                .entry((q.band.as_str(), q.mode.as_str()))
+                .or_default() += 1;
+        }
+        for ((s, h), c) in stats.iter_mut().zip(hours).zip(cells) {
+            s.best_hour = h
+                .into_iter()
+                .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+                .unwrap_or_default();
+            s.band_mode = c
+                .into_iter()
+                .map(|((b, m), n)| (b.to_string(), m.to_string(), n))
+                .collect();
+            s.band_mode.sort();
+        }
+        stats.sort_by(|a, b| {
+            b.points
+                .cmp(&a.points)
+                .then(b.qsos.cmp(&a.qsos))
+                .then(a.operator.cmp(&b.operator))
+        });
+        stats
+    }
+
+    /// ⭐ **The multipliers a spotted station would add** ([`SpotMults`]): what this log has
+    /// earned, under the scorer's own keys, and each call's newest received exchange.
+    pub fn spot_mults(&self) -> SpotMults {
+        let ruleset = self.ruleset();
+        let mut rx_by_call = std::collections::HashMap::new();
+        for q in &self.qsos {
+            rx_by_call.insert(q.call.trim().to_ascii_uppercase(), q.rx.clone());
+        }
+        let role = self.session.role();
+        let exchange = self.session.exchange;
+        SpotMults {
+            ruleset,
+            worked: ruleset.scoring.mults_worked(self.score_rows()),
+            role: role.id.to_string(),
+            receives: role
+                .receives
+                .iter()
+                .filter_map(|k| exchange.field(k))
+                .collect(),
+            rx_by_call,
+        }
+    }
+
     /// Export the log as ADIF records (one `<EOR>` per QSO): every live row, then every
     /// removed one marked `APP_NEXUS_REMOVED` with when it was removed — what the club's
     /// export is built from, and the rows the journal writes
     /// ([`journal_adif`](Self::journal_adif)), which gives each one its sent exchange as well.
+    ///
+    /// A row that sent a report writes it as `RST_SENT`, the tag another program reads, as the
+    /// submitted file's rows do ([`submission_adif`](Self::submission_adif)): for a club this is
+    /// the file its entry submits. The journal writes none.
     ///
     /// ⚠️ **Live rows first, and that order is the downgrade's.** A build that predates the
     /// tag reads a removed row as an ordinary contact (the safe direction: nothing is lost),
@@ -1802,16 +2300,26 @@ impl FieldDayLog {
             "",
             self.qsos.iter().map(|q| (q, None)).chain(removed),
             sent_moved,
+            true,
+            false,
+            None,
         )
     }
 
     /// ⭐ **The ADIF the entry submits**: the live rows (a removed contact is not submitted)
     /// without the satellite contacts a ruleset gives no credit (Winter Field Day: *"Do not
-    /// log any such contacts"*, 2027 rules p.5). [`adif`](Self::adif) is the journal and keeps
+    /// log any such contacts"*, 2027 rules p.5). [`adif`](Self::adif), the club's export, keeps
     /// every row.
     pub fn submission_adif(&self) -> String {
         let sent_moved = self.qsos.iter().any(|q| q.tx != self.session.my_exchange);
-        self.adif_of("", self.submitted().map(|q| (q, None)), sent_moved)
+        self.adif_of(
+            "",
+            self.submitted().map(|q| (q, None)),
+            sent_moved,
+            true,
+            false,
+            Some(&self.qso_numbers()),
+        )
     }
 
     /// `header`: the journal's own header fields, before `<EOH>` (an export has none).
@@ -1821,11 +2329,28 @@ impl FieldDayLog {
     /// it today. The journal always asks for it ([`journal_adif`](Self::journal_adif));
     /// [`adif`](Self::adif) and the submitted file once the sent exchange has moved in the rows
     /// they hold.
+    ///
+    /// `rst_sent`: each row's own sent report under ADIF's `RST_SENT`, the tag another program
+    /// reads. Both exports ask for it, the submitted file
+    /// ([`submission_adif`](Self::submission_adif)) and the club's ([`adif`](Self::adif)). The
+    /// journal does not: a restore reads the sent side from `APP_NEXUS_MYEX`, so the journal's
+    /// bytes stay as they were.
+    ///
+    /// `journal`: the journal's own rows, which also carry the call each was logged on
+    /// (`APP_NEXUS_ONAIR`, [`LoggedQso::on_air_call`]). No export writes it.
+    ///
+    /// `numbers`: each row's QSO number under ADIF's `STX` ([`qso_numbers`](Self::qso_numbers)),
+    /// the serial it was sent in a serial contest. Only the submitted file asks for it: the
+    /// journal never stores a number it can read off the rows, and the club's export is pinned
+    /// byte for byte by the Field Day goldens.
     fn adif_of<'a>(
         &'a self,
         header: &str,
         rows: impl Iterator<Item = (&'a LoggedQso, Option<u64>)>,
         sent_moved: bool,
+        rst_sent: bool,
+        journal: bool,
+        numbers: Option<&std::collections::HashMap<u64, u32>>,
     ) -> String {
         let mut s = format!("ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n{header}<EOH>\n");
         for (q, removed_unix) in rows {
@@ -1937,6 +2462,18 @@ impl FieldDayLog {
             for (tag, val) in &standard {
                 s.push_str(&adif_field(tag, val));
             }
+            // ⭐ The report this row SENT, read off the row by the merged Logbook's own function,
+            // so the two files cannot disagree: never the session's report, and nothing for a
+            // row that sent none or an exchange that has none (both Field Day events).
+            if rst_sent {
+                let sent = crate::contest::sent_exchange(q, spec);
+                if let Some(rst) = crate::contest::merge::rst_of(&sent, spec) {
+                    s.push_str(&adif_field("RST_SENT", &rst));
+                }
+            }
+            if let Some(n) = numbers.and_then(|by_seq| by_seq.get(&q.seq)) {
+                s.push_str(&adif_field("STX", &n.to_string()));
+            }
             // ⭐ The private carrier rides ONLY when the standard tags cannot give the
             // row back — and that condition is not a guess, it is the restore run
             // forward: `rx_from_standard` is the SAME function `restore_row` falls back
@@ -1979,6 +2516,24 @@ impl FieldDayLog {
             if !q.operator.is_empty() {
                 s.push_str(&adif_field("OPERATOR", &q.operator));
             }
+            // The call it was logged on, in the journal alone: a restart reads every row into a
+            // session opened under whatever call Settings holds then.
+            if journal && !q.on_air_call.is_empty() {
+                s.push_str(&adif_field("APP_NEXUS_ONAIR", &q.on_air_call));
+            }
+            // The radio and the power it was made with, in the journal, under their ADIF names:
+            // the merge carries them into the Logbook, and a restart must not lose them.
+            if journal && !q.rig.is_empty() {
+                s.push_str(&adif_field("MY_RIG", &q.rig));
+            }
+            if journal && !q.tx_power.is_empty() {
+                s.push_str(&adif_field("TX_PWR", &q.tx_power));
+            }
+            // …and the grid it was made from, under a private tag: a VHF contest's sent `GRID`
+            // already writes `MY_GRIDSQUARE` on this record.
+            if journal && !q.grid.is_empty() {
+                s.push_str(&adif_field("APP_NEXUS_MYGRID", &q.grid));
+            }
             // A contact the operator removed: kept, with when (`restore_row` reads it back).
             if let Some(at) = removed_unix {
                 s.push_str(&adif_field("APP_NEXUS_REMOVED", &at.to_string()));
@@ -1997,7 +2552,8 @@ impl FieldDayLog {
     /// input merges nothing — never an error. Restored dupe keys keep the ROW's
     /// band, so they survive a mid-event QSY. A row the journal marks removed
     /// (`APP_NEXUS_REMOVED`) comes back REMOVED ([`removed`](Self::removed)), outside the
-    /// dupe index, with its seq and serial still counted.
+    /// dupe index, with its seq still counted, and its serial unless a clear took it out
+    /// (`cleared`).
     ///
     /// Returns what it found ([`AdifMerge`]): the rows it restored, and the records it could not
     /// read — no CALL, or cut off before their `<EOR>` — which the journal's reader keeps the
@@ -2015,6 +2571,10 @@ impl FieldDayLog {
             Some(i) => {
                 // The numbers of the rows an earlier restore let go (`spent`).
                 self.spent = self.spent.max(Spent::from_header(&text[..i]));
+                // The latest clear (`cleared`), as the journal holds it: never a mix of two.
+                if let Some(cleared) = Cleared::from_header(&text[..i]) {
+                    self.cleared = cleared;
+                }
                 &text[i + 5..]
             }
             None => text,
@@ -2137,11 +2697,12 @@ impl FieldDayLog {
     }
 
     /// ⭐ **The journal: the rows of [`adif`](Self::adif), each with the exchange it was sent
-    /// with; in its header the numbers of the rows a restore let go (`spent`); and the records
-    /// the restore held, then the ones it kept past its window** ([`aged`](Self::aged)), after
-    /// them, as the journal held them — what the engine writes the journal file from, so a row
-    /// kept out of this session is never dropped by a rewrite. Never an export: those carry this
-    /// log's rows alone, as [`adif`](Self::adif) writes them.
+    /// with; in its header the numbers of the rows a restore let go (`spent`) and the latest
+    /// clear (`cleared`); and the records the restore held, then the ones it kept past its
+    /// window** ([`aged`](Self::aged)), after them, as the journal held them — what the engine
+    /// writes the journal file from, so a row kept out of this session is never dropped by a
+    /// rewrite. Never an export: those carry this log's rows alone, as [`adif`](Self::adif)
+    /// writes them.
     pub fn journal_adif(&self) -> String {
         let removed = self
             .removed
@@ -2155,9 +2716,12 @@ impl FieldDayLog {
         // session running now, which a Settings edit never makes true, and nothing here can
         // know what the next session will be built from.
         let mut s = self.adif_of(
-            &self.spent.header(),
+            &(self.spent.header() + &self.cleared.header()),
             self.qsos.iter().map(|q| (q, None)).chain(removed),
             true,
+            false,
+            true,
+            None,
         );
         for h in &self.held {
             s.push_str(&h.adif);
@@ -2448,7 +3012,13 @@ impl FieldDayLog {
         // source of truth for one fact, and the two come apart exactly where it matters: a
         // journal that lost rows to `min_when_unix`, a partial restore, an operator who
         // edited the file. Reading the rows cannot drift from the rows.
-        if let Some(n) = issued_serial(spec, &tx) {
+        //
+        // Only from the rows logged since the latest clear, which is a fact about an event
+        // rather than a counter (`cleared`): a contact the clear took out numbers nothing,
+        // restored or not, as in the live run.
+        if let Some(n) =
+            issued_serial(spec, &tx).filter(|_| !self.cleared.passed_over(seq, when_unix))
+        {
             self.session.next_serial = self.session.next_serial.max(n + 1);
         }
         // Resolved on the RESTORE path too, and from the call the row carries — a
@@ -2515,6 +3085,27 @@ impl FieldDayLog {
             // A journaled row went out under the log's own call: only a club's rebuild sets
             // another, and that log is never journaled.
             station_call: String::new(),
+            // The call it was logged on, from the journal's own `APP_NEXUS_ONAIR`: a row
+            // journaled before the tag existed carries none.
+            on_air_call: f
+                .get("APP_NEXUS_ONAIR")
+                .map(|c| c.trim().to_ascii_uppercase())
+                .unwrap_or_default(),
+            // The radio and the power, from the journal's own `MY_RIG` and `TX_PWR`: a row
+            // journaled before they were recorded carries neither.
+            rig: f
+                .get("MY_RIG")
+                .map(|r| r.trim().to_string())
+                .unwrap_or_default(),
+            tx_power: f
+                .get("TX_PWR")
+                .map(|p| p.trim().to_string())
+                .unwrap_or_default(),
+            // The grid, from the journal's `APP_NEXUS_MYGRID`: none on an older row.
+            grid: f
+                .get("APP_NEXUS_MYGRID")
+                .map(|g| g.trim().to_ascii_uppercase())
+                .unwrap_or_default(),
         };
         match removed_unix {
             Some(at) => self.keep_removed(row, at),
@@ -2637,6 +3228,22 @@ impl FieldDayLog {
             } else {
                 String::new()
             };
+        // The band the ENTRY declares, when it is one of the sponsor's (`ALL` or one band).
+        let declared_band = rs
+            .cabrillo_band_categories
+            .iter()
+            .find(|b| b.eq_ignore_ascii_case(entrant.band.trim()));
+        // ⭐ A SINGLE-BAND ENTRY WHOSE LOG HOLDS ANOTHER BAND. CQ WW and WPX (X.2, and WPX's own
+        // log instructions): *"Single band entrants are required to include all contacts made
+        // during the contest period, even if on other bands. Only contacts made on the band
+        // specified in the Cabrillo header will be considered for scoring purposes."* The score
+        // here counts every band, so for such an entry it is more than the sponsor credits.
+        let off_declared_band = declared_band.is_some_and(|b| {
+            !b.eq_ignore_ascii_case("ALL")
+                && self.qsos.iter().any(|q| {
+                    !cabrillo_category_band(std::slice::from_ref(q)).eq_ignore_ascii_case(b)
+                })
+        });
         let headers = crate::contest::CabrilloHeaders {
             // ⭐ …then translated out of ADIF's namespace into Cabrillo's. The id
             // above is an ADIF `CONTEST_ID` enumeration value, which is NOT the
@@ -2727,14 +3334,10 @@ impl FieldDayLog {
             // individual bands shown"); a band picked for another contest claims nothing. A
             // sponsor whose template takes the band off the log (CQ WW RTTY, X.2) still gets that
             // for an entry that declares none.
-            category_band: rs
-                .cabrillo_band_categories
-                .iter()
-                .find(|b| b.eq_ignore_ascii_case(entrant.band.trim()))
-                .map_or_else(
-                    || declared("CATEGORY-BAND", cabrillo_category_band(&self.qsos)),
-                    |b| b.to_string(),
-                ),
+            category_band: declared_band.map_or_else(
+                || declared("CATEGORY-BAND", cabrillo_category_band(&self.qsos)),
+                |b| b.to_string(),
+            ),
             // The contest's own mode where the ruleset names it (every CQ WW CW entry is a CW
             // entry), and otherwise the log's, where the sponsor's template takes that.
             category_mode: if rs.cabrillo_mode_category.is_empty() {
@@ -2746,9 +3349,11 @@ impl FieldDayLog {
             // the whole score: no power tier or ticked bonus after it, and no note saying
             // it leaves something out. An objectives contest WITH its menu (Winter Field
             // Day) is whole too: the sponsor asks for "your calculated total score
-            // including multipliers", and the objectives ticked are the entrant's own.
+            // including multipliers", and the objectives ticked are the entrant's own. A
+            // single-band entry with a contact on another band claims nothing (above).
             claimed_score: (rs.cabrillo_headers.contains(&"CLAIMED-SCORE")
                 && !self.qsos.is_empty()
+                && !off_declared_band
                 && (rs.scoring.post.is_empty() || !rs.objective_menu.is_empty())
                 && rs.score_note_key.is_empty())
             .then(|| {
@@ -3666,6 +4271,39 @@ impl FieldDayStation {
         to == me || (!crate::message::is_std_call(me) && crate::message::unhash_call(to) == me)
     }
 
+    /// Addressed to my call in a caller's RR73, RRR or 73: whole, or hashed whatever my call.
+    /// A caller whose call is nonstandard closes with mine hashed and its own whole, as WSJT-X
+    /// 3.0.2 writes it, `<K1ABC> W9XYZ/M RR73` (`genStdMsgs`, mainwindow.cpp 9702 and 9710), and
+    /// WSJT-X takes that as its own: the decoder prints its own call's hash as `<K1ABC>`
+    /// (`unpack77`, packjt77.f90 644-651, `n12.eq.hashmy12`), `DecodedText` drops the brackets
+    /// (decodedtext.cpp 66), and `auto_sequence` and `processMessage` ask whether that word holds
+    /// its call (7546, 9108). The exchanges still take a standard call of mine only whole
+    /// ([`to_my_call`](Self::to_my_call)).
+    fn closes_to_me(&self, to: &str) -> bool {
+        crate::message::unhash_call(to) == self.mycall()
+    }
+
+    /// The caller `de` of a first call with no grid, as my report names it: WSJT-X's Tx2 to it
+    /// (`genStdMsgs`, mainwindow.cpp), its call hashed where it is nonstandard (`t0a`, 9596,
+    /// 9629-9631) and whole otherwise, beside my call as [`my_call_beside`](Self::my_call_beside)
+    /// writes it (`t0b`, 9625-9626). `None` for `<...>`, which names nobody (WSJT-X puts only a
+    /// callsign into its DX call box, 9402), and for a nonstandard call beside a nonstandard call
+    /// of mine, between which no message carries a report.
+    fn gridless_caller(&self, de: &str) -> Option<String> {
+        let his = crate::message::unhash_call(de);
+        if !crate::message::is_callsign(his) {
+            return None;
+        }
+        match (
+            crate::message::is_std_call(his),
+            crate::message::is_std_call(self.mycall()),
+        ) {
+            (true, _) => Some(his.to_string()),
+            (false, true) => Some(format!("<{his}>")),
+            (false, false) => None,
+        }
+    }
+
     /// My call as WSJT-X 3.0.2 writes it beside a grid or a report, its Tx2 and Tx3
     /// (`genStdMsgs`, mainwindow.cpp): whole when `stdCall` passes it (`/P` and `/R` too), else
     /// hashed, `t0b=hisCall + " <" + my_callsign + "> "` (9597, taken by `if(!bMyCall) { t=t0b;`
@@ -3687,15 +4325,27 @@ impl FieldDayStation {
     /// (9601), RR73 and 73 `if(bHisCall and !bMyCall) t="<" + hisCall + "> " + my_callsign …`
     /// (9702, 9710).
     ///
-    /// WSJT-X also asks whether `to`'s call is standard. Here it always is, or arrives already
-    /// hashed: a station with a nonstandard call cannot send the grid, report or exchange these
-    /// overs answer (its own message packs as free text), and its RR73 or 73 names it hashed.
+    /// ⭐ RR73 and 73 from a standard call of mine to a nonstandard `to` (`W9XYZ/M`, `/4`,
+    /// `/QRP`, `PJ4/W9XYZ`) go `to` whole and mine hashed, as WSJT-X writes them in every set of
+    /// messages (its Tx4 and Tx5 are the same lines in every activity): `if(!bHisCall and
+    /// bMyCall) t=hisCall + " <" + my_callsign + "> " …` (9701, 9709), `W9XYZ/M <K1ABC> RR73`, a
+    /// type 4 message. `hisCall` is the call the decoder printed, brackets dropped
+    /// (decodedtext.cpp 66): such a station sends its exchange, grid or report with its call
+    /// hashed (`K1ABC <W9XYZ/M> R 1D WI`) and closes with it whole (`<K1ABC> W9XYZ/M RR73`), and
+    /// either way it is the same call here. Hashed the other way round, as Field Day's and the
+    /// standard messages' RR73 went before, `<W9XYZ/M> K1ABC RR73` is a type 1 message, not
+    /// WSJT-X's; whole beside my call whole, as the ARRL VHF and standard messages' 73 went
+    /// before, the packer sends the base call, `W9XYZ K1ABC 73`, another station.
     fn closing_calls(&self, to: &str) -> (String, String) {
         let me = self.mycall().to_string();
+        let his = crate::message::unhash_call(to);
+        if crate::message::is_std_call(&me) && crate::message::is_nonstandard_call(his) {
+            return (his.to_string(), format!("<{me}>"));
+        }
         if crate::message::is_std_call(&me) {
             (to.to_string(), me)
         } else {
-            (format!("<{}>", crate::message::unhash_call(to)), me)
+            (format!("<{his}>"), me)
         }
     }
 
@@ -3789,6 +4439,16 @@ impl FieldDayStation {
             .push(format!("logged {call} {}", grid.unwrap_or_default()));
     }
 
+    /// Log the contact with `call`, who sent `class` and `section` in Field Day's exchange. A
+    /// call that came hashed is logged without the brackets, as [`log_worked`](Self::log_worked)
+    /// logs it: a nonstandard call packs its Field Day exchange with the call hashed (`pack28`),
+    /// `K1ABC <W9XYZ/M> R 1D WI`, and WSJT-X logs the call in its DX call box, which the decoded
+    /// message fills with the brackets dropped (`DecodedText`, decodedtext.cpp 66).
+    fn log_field_day(&mut self, call: &str, class: &str, section: &str, slot: u64) {
+        let call = crate::message::unhash_call(call);
+        self.log.log(call, class, section, slot);
+    }
+
     /// My Field Day exchange to `to`, rogered or not (WSJT-X's Tx3 and Tx2).
     ///
     /// ⚠️ **A nonstandard call goes in whole, not as WSJT-X writes it.** Field Day's packer
@@ -3820,6 +4480,16 @@ impl FieldDayStation {
             FtMessages::FieldDay => {}
         }
         for d in decodes {
+            // ⭐ A message naming a call the decoder could not resolve is passed by, as WSJT-X's
+            // Field Day activity passes it by: for a message to this station, `processMessage`
+            // returns at once where it carries `<...>` (mainwindow.cpp 9097-9099, inside the
+            // branch for a message to it that opens at 9050); for a CQ from such a call, only a
+            // callsign goes into the DX call box (`Radio::is_callsign`, 9402), so no message is
+            // built to it. The run would answer that caller as `<...>` and log `...`; S&P would
+            // answer a CQ from it.
+            if d.message.contains("<...>") {
+                continue;
+            }
             let m = Msg::parse(&d.message);
             match (self.state, &m) {
                 // S&P: heard a CQ → answer with my exchange.
@@ -3869,7 +4539,7 @@ impl FieldDayStation {
                     },
                 ) if self.to_my_call(to) => {
                     self.dxcall = Some(de.clone());
-                    self.log.log(de, class, section, slot);
+                    self.log_field_day(de, class, section, slot);
                     self.pending = Some(self.rr73(de));
                     self.state = FdState::Done;
                     self.transcript.push(format!(
@@ -3877,6 +4547,12 @@ impl FieldDayStation {
                     ));
                 }
                 // S&P: the runner rogered + sent their exchange → log + RR73.
+                //
+                // ⭐ Only the station called, by its call, as WSJT-X acts only on its QSO
+                // partner's message (`auto_sequence`, mainwindow.cpp 7546-7549, and
+                // `processMessage`, 9107-9110: the sender must be the DX call). A rogered exchange
+                // to us from anyone else logs nothing and sends nothing back, and the station
+                // called keeps getting our exchange.
                 (
                     FdState::AwaitExchange,
                     Msg::FieldDay {
@@ -3886,8 +4562,8 @@ impl FieldDayStation {
                         class,
                         section,
                     },
-                ) if self.to_my_call(to) => {
-                    self.log.log(de, class, section, slot);
+                ) if self.to_my_call(to) && self.from_dx(de) => {
+                    self.log_field_day(de, class, section, slot);
                     self.pending = Some(self.rr73(de));
                     self.state = FdState::Done;
                     self.transcript
@@ -3899,26 +4575,31 @@ impl FieldDayStation {
                 // in hand from the CallingCq step). Happy-path callers send RR73,
                 // so the added Bye73 alternative never fires on the normal flow.
                 //
+                // ⭐ Only the caller's, by its call, as WSJT-X acts only on its QSO partner's
+                // message (`processMessage`, mainwindow.cpp 9107-9110: the sender must be the
+                // DX call). An RR73, RRR or 73 to us from anyone else logs nothing and sends
+                // nothing back, and the caller keeps getting our R and exchange.
+                //
                 // ⭐ Where the caller runs WSJT-X's Field Day activity, its RR73 or RRR is
                 // answered with 73, as WSJT-X's runner answers it (Tx5, mainwindow.cpp
-                // 9210-9215); the 73 goes once and the run calls CQ again. Only the caller's,
-                // by its call: a 73 must never answer a confirmation the station being worked
-                // did not send. A bare 73, a confirmation from anyone else, and every other
-                // Field Day station close as they always have, with nothing sent back.
-                (FdState::AwaitConfirm, Msg::Rr73 { to, .. })
-                | (FdState::AwaitConfirm, Msg::Rrr { to, .. })
-                | (FdState::AwaitConfirm, Msg::Bye73 { to, .. })
-                    if self.to_my_call(to) =>
+                // 9210-9215); the 73 goes once and the run calls CQ again. A bare 73, and every
+                // other Field Day station, close as they always have, with nothing sent back.
+                //
+                // ⭐ A caller whose call is nonstandard closes with my call hashed
+                // ([`closes_to_me`](Self::closes_to_me)), and is answered with WSJT-X's 73 to it
+                // ([`closing_calls`](Self::closing_calls)).
+                (FdState::AwaitConfirm, Msg::Rr73 { to, de })
+                | (FdState::AwaitConfirm, Msg::Rrr { to, de })
+                | (FdState::AwaitConfirm, Msg::Bye73 { to, de })
+                    if self.closes_to_me(to) && self.from_dx(de) =>
                 {
                     if let Some((call, class, section)) = self.peer_exch.take() {
-                        self.log.log(&call, &class, &section, slot);
+                        self.log_field_day(&call, &class, &section, slot);
                         self.transcript
                             .push(format!("logged {call} {class} {section}"));
                     }
                     self.pending = match &m {
-                        Msg::Rr73 { de, .. } | Msg::Rrr { de, .. }
-                            if self.wsjtx_field_day && self.from_dx(de) =>
-                        {
+                        Msg::Rr73 { de, .. } | Msg::Rrr { de, .. } if self.wsjtx_field_day => {
                             Some(self.bye73(de))
                         }
                         _ => None,
@@ -3940,8 +4621,13 @@ impl FieldDayStation {
             let m = Msg::parse(&d.message);
             match (self.state, &m) {
                 // S&P: a CQ that carries a grid → my grid. (A CQ without one is from a
-                // station whose call the grid message cannot carry.)
-                (FdState::Listening, Msg::Cq { de, grid, .. }) if !grid.is_empty() => {
+                // station whose call the grid message cannot carry.) A CQ from a call the
+                // decoder could not resolve, `<...>`, names nobody and is passed by: WSJT-X puts
+                // only a callsign into its DX call box (`Radio::is_callsign`, mainwindow.cpp
+                // 9402), so it builds no message to one.
+                (FdState::Listening, Msg::Cq { de, grid, .. })
+                    if !grid.is_empty() && !de.contains("<...>") =>
+                {
                     if self.worked_before(de, Some(grid)) {
                         self.transcript.push(format!("skip dupe {de}"));
                         continue;
@@ -3951,9 +4637,11 @@ impl FieldDayStation {
                     self.state = FdState::AwaitExchange;
                     self.transcript.push(format!("answer CQ {de}"));
                 }
-                // Running: a caller's grid → roger it and send mine.
+                // Running: a caller's grid → roger it and send mine. Not a caller from `<...>`,
+                // which names nobody: WSJT-X's messages go to the call in its DX call box
+                // (`genStdMsgs`, mainwindow.cpp 9567-9577), which takes only a callsign (9402).
                 (FdState::CallingCq, Msg::Grid { to, de, grid })
-                    if self.to_me(to) && !grid.is_empty() =>
+                    if self.to_me(to) && !grid.is_empty() && !de.contains("<...>") =>
                 {
                     self.dxcall = Some(de.clone());
                     self.peer_grid = Some(grid.clone());
@@ -3998,8 +4686,11 @@ impl FieldDayStation {
             let m = Msg::parse(&d.message);
             let rpt = d.snr.clamp(-30, 49);
             match (self.state, &m) {
-                // S&P: a CQ that carries a grid → my grid.
-                (FdState::Listening, Msg::Cq { de, grid, .. }) if !grid.is_empty() => {
+                // S&P: a CQ that carries a grid → my grid. Not a CQ from `<...>`, as in the ARRL
+                // VHF contests.
+                (FdState::Listening, Msg::Cq { de, grid, .. })
+                    if !grid.is_empty() && !de.contains("<...>") =>
+                {
                     if self.worked_before(de, Some(grid)) {
                         self.transcript.push(format!("skip dupe {de}"));
                         continue;
@@ -4010,9 +4701,10 @@ impl FieldDayStation {
                     self.state = FdState::AwaitExchange;
                     self.transcript.push(format!("answer CQ {de}"));
                 }
-                // Running: a caller's grid → my report.
+                // Running: a caller's grid → my report. Not a caller from `<...>`, as in the ARRL
+                // VHF contests.
                 (FdState::CallingCq, Msg::Grid { to, de, grid })
-                    if self.to_me(to) && !grid.is_empty() =>
+                    if self.to_me(to) && !grid.is_empty() && !de.contains("<...>") =>
                 {
                     self.dxcall = Some(de.clone());
                     self.peer_grid = Some(grid.clone());
@@ -4024,8 +4716,33 @@ impl FieldDayStation {
                     self.state = FdState::AwaitExchange;
                     self.transcript.push(format!("caller {de} {grid} → report"));
                 }
-                // Running: a caller that sent its report without its grid → R and mine.
-                (FdState::CallingCq, Msg::Report { to, de, .. }) if self.to_me(to) => {
+                // Running: a caller's first call that carries no grid → my report, as WSJT-X
+                // running with no activity answers a message to it of fewer than five words with
+                // Tx2 (`processMessage`, mainwindow.cpp 9315-9325). A caller whose call is
+                // nonstandard sends its first call that way, `<K1ABC> W9XYZ/M` (`msgtype(t0a,
+                // ui->tx1)`, 9627). The report's calls: [`gridless_caller`](Self::gridless_caller).
+                (FdState::CallingCq, Msg::Grid { to, de, grid })
+                    if self.to_me(to) && grid.is_empty() =>
+                {
+                    let Some(his) = self.gridless_caller(de) else {
+                        continue;
+                    };
+                    self.dxcall = Some(de.clone());
+                    self.peer_grid = None;
+                    self.pending = Some(Msg::Report {
+                        to: his,
+                        de: self.my_call_beside(),
+                        snr: rpt,
+                    });
+                    self.state = FdState::AwaitExchange;
+                    self.transcript
+                        .push(format!("caller {de} with no grid → report"));
+                }
+                // Running: a caller that sent its report without its grid → R and mine. Not a
+                // caller from `<...>`.
+                (FdState::CallingCq, Msg::Report { to, de, .. })
+                    if self.to_me(to) && !de.contains("<...>") =>
+                {
                     self.dxcall = Some(de.clone());
                     self.pending = Some(Msg::RReport {
                         to: de.clone(),
@@ -5740,8 +6457,11 @@ mod tests {
 
     /// ⭐ Field Day's runner, where the caller runs WSJT-X's Field Day activity: the caller's
     /// RR73 or RRR is logged and answered with 73 (Tx5), which goes once; then the station is
-    /// done. A bare 73, a confirmation from anyone else, and a runner whose caller does not run
-    /// WSJT-X's Field Day close as they always have: logged, nothing sent back.
+    /// done. A bare 73 from the caller, and a runner whose caller does not run WSJT-X's Field
+    /// Day, close as they always have: logged, nothing sent back. A confirmation from anyone else
+    /// closes nothing, as WSJT-X acts only on its QSO partner's (`processMessage`,
+    /// mainwindow.cpp 9107-9110): nothing is logged, nothing goes to that station, the caller
+    /// still gets the rogered exchange, and the caller's own RR73 then closes the contact.
     #[test]
     fn field_days_runner_answers_its_callers_rr73_with_73_in_wsjtx_field_day() {
         let runner = |wsjtx: bool| {
@@ -5768,7 +6488,6 @@ mod tests {
         }
         for (wsjtx, closing) in [
             (true, "W9XYZ K2DEF 73"),
-            (true, "W9XYZ N0ABC RR73"),
             (false, "W9XYZ K2DEF RR73"),
             (false, "W9XYZ K2DEF RRR"),
         ] {
@@ -5777,6 +6496,136 @@ mod tests {
             assert_eq!(run.log.qso_count(), 1, "{wsjtx} {closing}: logged");
             assert!(run.done(), "{wsjtx} {closing}: done, nothing sent back");
         }
+        // Each row as its call, class and section.
+        let rows = |run: &FieldDayStation| -> Vec<String> {
+            let row = |q: &LoggedQso| format!("{} {} {}", q.call, q.class(), q.section());
+            run.log.qsos().iter().map(row).collect()
+        };
+        for wsjtx in [true, false] {
+            for closing in ["W9XYZ N0ABC RR73", "W9XYZ N0ABC RRR", "W9XYZ N0ABC 73"] {
+                let what = format!("{wsjtx} {closing}");
+                let mut run = runner(wsjtx);
+                run.observe(&[dec(closing)], 1);
+                assert_eq!(rows(&run), Vec::<String>::new(), "{what}: nothing logged");
+                assert_eq!(run.state, FdState::AwaitConfirm, "{what}: still K2DEF's");
+                assert_eq!(
+                    next(&run),
+                    "K2DEF W9XYZ R 3A WI",
+                    "{what}: nothing to N0ABC"
+                );
+                run.observe(&[dec("W9XYZ K2DEF RR73")], 3);
+                assert_eq!(
+                    rows(&run),
+                    ["K2DEF 2A IL"],
+                    "{what}: K2DEF's own RR73 logs it"
+                );
+                let close = if wsjtx { "K2DEF W9XYZ 73" } else { "" };
+                assert_eq!(next(&run), close, "{what}: and closes as before");
+            }
+        }
+    }
+
+    /// ⭐ Field Day's S&P completes a contact only with the station it called, as WSJT-X acts only
+    /// on its QSO partner's message: `auto_sequence` passes a message to us on to
+    /// `processMessage` only when its sender holds the DX call (mainwindow.cpp 7546-7549), and
+    /// `processMessage` acts only on its partner's (9107-9110). With W9XYZ called, by S&P's own
+    /// pounce on its CQ or by the operator's double-click, a rogered exchange to us from N0ABC, or
+    /// from a call the decoder could not resolve (`<...>`), logs nothing and sends that station
+    /// nothing: my exchange goes to W9XYZ again. W9XYZ's own then logs W9XYZ and is closed with
+    /// RR73, as before. So in ARRL Field Day on FT8 and FT4, where the station runs WSJT-X's Field
+    /// Day activity, on FT1, and in Winter Field Day. Heard in the same period, N0ABC's costs W9XYZ
+    /// nothing; a nonstandard call of mine, which the exchanges name hashed, changes none of it;
+    /// and W9XYZ's call hashed is still W9XYZ's, by its base call.
+    #[test]
+    fn field_days_sp_completes_a_contact_only_with_the_station_it_called() {
+        // Each row as its call, class and section.
+        let rows = |st: &FieldDayStation| -> Vec<String> {
+            let row = |q: &LoggedQso| format!("{} {} {}", q.call, q.class(), q.section());
+            st.log.qsos().iter().map(row).collect()
+        };
+        // W9XYZ called by `me`, on its CQ or by a double-click (`picked`), and my exchange to it
+        // gone out.
+        let called = |me: &str, event: FdEvent, class: &str, wsjtx: bool, picked: bool| {
+            let session = ContestSession::field_day(event, class, "EMA");
+            let mut sp = FieldDayStation::search_and_pounce(me, "FN42", session, "20M");
+            sp.set_wsjtx_field_day(wsjtx);
+            if picked {
+                sp.answer_cq("W9XYZ", "EN37");
+            } else {
+                sp.observe(&[dec("CQ FD W9XYZ EN37")], 0);
+            }
+            sp.after_tx();
+            sp
+        };
+        // (where, its event, my class, W9XYZ's and N0ABC's, the station runs WSJT-X's Field Day)
+        for (place, event, mine, theirs, wsjtx) in [
+            ("ARRL Field Day FT8/FT4", FdEvent::ArrlFd, "2B", "1D", true),
+            ("ARRL Field Day FT1", FdEvent::ArrlFd, "2B", "1D", false),
+            ("Winter Field Day", FdEvent::WinterFd, "1H", "1H", false),
+        ] {
+            let exch = format!("W9XYZ K1ABC {mine} EMA");
+            let own = format!("K1ABC W9XYZ R {theirs} WI");
+            let row = format!("W9XYZ {theirs} WI");
+            for picked in [false, true] {
+                let mut sp = called("K1ABC", event, mine, wsjtx, picked);
+                for other in ["N0ABC", "<...>"] {
+                    let what = format!("{place} picked={picked}, {other}'s");
+                    sp.observe(&[dec(&format!("K1ABC {other} R {theirs} WI"))], 1);
+                    assert_eq!(rows(&sp), Vec::<String>::new(), "{what}: nothing logged");
+                    assert_eq!(sp.state, FdState::AwaitExchange, "{what}: still W9XYZ's");
+                    assert_eq!(next(&sp), exch, "{what}: nothing to {other}");
+                    sp.after_tx();
+                }
+                let what = format!("{place} picked={picked}");
+                sp.observe(&[dec(&own)], 3);
+                assert_eq!(rows(&sp), [row.as_str()], "{what}: W9XYZ's own logs W9XYZ");
+                assert_eq!(next(&sp), "W9XYZ K1ABC RR73", "{what}: and gets RR73");
+                sp.after_tx();
+                assert!(sp.done(), "{what}: once");
+            }
+            // N0ABC's and W9XYZ's in the same period, either order.
+            let stranger = dec(&format!("K1ABC N0ABC R {theirs} WI"));
+            for (order, both) in [
+                ("N0ABC's first", [stranger.clone(), dec(&own)]),
+                ("W9XYZ's first", [dec(&own), stranger]),
+            ] {
+                let mut sp = called("K1ABC", event, mine, wsjtx, false);
+                sp.observe(&both, 1);
+                assert_eq!(rows(&sp), [row.as_str()], "{place}, {order}: W9XYZ logged");
+                assert_eq!(next(&sp), "W9XYZ K1ABC RR73", "{place}, {order}: its RR73");
+            }
+        }
+        // A nonstandard call of mine, which the rogered exchanges to me name hashed.
+        let mut sp = called("PJ4/K1ABC", FdEvent::ArrlFd, "2B", true, false);
+        sp.observe(&[dec("<PJ4/K1ABC> N0ABC R 1D WI")], 1);
+        assert_eq!(
+            rows(&sp),
+            Vec::<String>::new(),
+            "PJ4/K1ABC, N0ABC's: nothing logged"
+        );
+        assert_eq!(
+            next(&sp),
+            "W9XYZ PJ4/K1ABC 2B EMA",
+            "PJ4/K1ABC, N0ABC's: W9XYZ's again"
+        );
+        sp.after_tx();
+        sp.observe(&[dec("<PJ4/K1ABC> W9XYZ R 1D WI")], 3);
+        assert_eq!(
+            rows(&sp),
+            ["W9XYZ 1D WI"],
+            "PJ4/K1ABC: W9XYZ's own logs W9XYZ"
+        );
+        assert_eq!(
+            next(&sp),
+            "<W9XYZ> PJ4/K1ABC RR73",
+            "PJ4/K1ABC: and gets RR73"
+        );
+        // W9XYZ's call hashed is W9XYZ's, by its base call: the contact closes as it always has,
+        // the RR73 naming the call as the decoder printed it and the row without the brackets.
+        let mut sp = called("K1ABC", FdEvent::ArrlFd, "2B", true, false);
+        sp.observe(&[dec("K1ABC <W9XYZ> R 1D WI")], 1);
+        assert_eq!(rows(&sp), ["W9XYZ 1D WI"], "<W9XYZ>'s: logged bare");
+        assert_eq!(next(&sp), "<W9XYZ> K1ABC RR73", "<W9XYZ>'s: RR73 as before");
     }
 
     /// The control: a station starts on Field Day's messages, and naming them again moves
@@ -5914,6 +6763,81 @@ mod tests {
             1,
             "the partner's RR73 still closes it"
         );
+    }
+
+    /// ⛔ The ARRL VHF and standard messages' S&P passes by a CQ from a call the decoder could not
+    /// resolve, as WSJT-X builds no message to one: it takes a CQ's call from the word after it
+    /// (`deCallAndGrid`, decodedtext.cpp 212-224), which `...` cannot be, and puts only a
+    /// callsign into its DX call box (`Radio::is_callsign`, mainwindow.cpp 9402). The station's
+    /// next CQ, its call resolved, is answered as before.
+    #[test]
+    fn vhf_and_standard_sp_pass_by_a_cq_from_an_unresolved_call() {
+        for (event, cq) in [
+            ("arrlvhf_jan", "CQ TEST"),
+            ("txqp", "CQ TEST"),
+            ("txqp", "CQ QP"),
+        ] {
+            let mut sp = ft8_station(event, "FN42", false);
+            sp.observe(&[dec(&format!("{cq} <...> EN37"))], 1);
+            assert_eq!(
+                (sp.state, next(&sp)),
+                (FdState::Listening, String::new()),
+                "{event} {cq}: passed by"
+            );
+            sp.observe(&[dec(&format!("{cq} <K9QQQ/M> EN37"))], 3);
+            assert_eq!(
+                (sp.state, next(&sp)),
+                (FdState::AwaitExchange, "<K9QQQ/M> K1ABC FN42".to_string()),
+                "{event} {cq}: its next CQ, resolved, is answered"
+            );
+        }
+    }
+
+    /// ⛔ The ARRL VHF and standard messages' Running passes by a caller whose call the decoder
+    /// could not resolve, its grid or its report, as WSJT-X builds no message to one: its messages
+    /// go to the call in its DX call box (`genStdMsgs`, mainwindow.cpp 9567-9577), which takes
+    /// only a callsign (`Radio::is_callsign`, 9402). The next caller in the same period, its call
+    /// resolved, is answered.
+    #[test]
+    fn vhf_and_standard_runs_pass_by_an_unresolved_caller() {
+        for (event, caller, resolved, state, answer) in [
+            (
+                "arrlvhf_jan",
+                "K1ABC <...> EN37",
+                "K1ABC <K9QQQ/M> EN37",
+                FdState::AwaitConfirm,
+                "<K9QQQ/M> K1ABC R FN42",
+            ),
+            (
+                "txqp",
+                "K1ABC <...> EN37",
+                "K1ABC <K9QQQ/M> EN37",
+                FdState::AwaitExchange,
+                "<K9QQQ/M> K1ABC -05",
+            ),
+            (
+                "txqp",
+                "K1ABC <...> -12",
+                "K1ABC <K9QQQ/M> -12",
+                FdState::AwaitConfirm,
+                "<K9QQQ/M> K1ABC R-05",
+            ),
+        ] {
+            let mut run = ft8_station(event, "FN42", true);
+            let cq = next(&run);
+            run.observe(&[dec(caller)], 1);
+            assert_eq!(
+                (run.state, next(&run)),
+                (FdState::CallingCq, cq),
+                "{event} {caller}: passed by"
+            );
+            run.observe(&[dec(caller), dec(resolved)], 3);
+            assert_eq!(
+                (run.state, next(&run)),
+                (state, answer.to_string()),
+                "{event} {caller}: the next caller, resolved, is answered"
+            );
+        }
     }
 
     #[test]
@@ -6193,6 +7117,430 @@ mod tests {
         );
     }
 
+    /// Every CALL an ADIF export writes, in order.
+    fn adif_calls(adif: &str) -> Vec<String> {
+        adif.split("<CALL:")
+            .skip(1)
+            .filter_map(|r| {
+                let (len, rest) = r.split_once('>')?;
+                rest.get(..len.parse().ok()?).map(str::to_string)
+            })
+            .collect()
+    }
+
+    /// ⭐ Field Day's messages log a call that came hashed without its brackets, as the ARRL VHF
+    /// and standard messages do ([`FieldDayStation::log_worked`]) and as WSJT-X logs the call in
+    /// its DX call box, which a decoded message fills with the brackets dropped (`DecodedText`,
+    /// decodedtext.cpp 66). A nonstandard call (any suffix but `/P` and `/R`) packs its Field Day
+    /// exchange with the call hashed, so a runner on one rogers S&P's exchange as
+    /// `K1ABC <W9XYZ/M> R 1D WI`, and a caller on one sends the run `K1ABC <W9XYZ/M> 1D WI`. In
+    /// S&P, in the run closed by RR73 or 73, and where the caller rogers first, the rows are the
+    /// rows the same contact logs with the call heard whole (the call, the entity and prefix
+    /// resolved from it, the exchange, the dupe mark), the submitted ADIF and the journal write
+    /// the call, and S&P passes the station's next CQ by as a contact already in the log. What
+    /// goes on the air is what it was, but RR73 and 73 to a nonstandard call, which go as WSJT-X
+    /// writes them (`rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them`). The call
+    /// heard whole is the control.
+    #[test]
+    fn field_days_messages_log_a_hashed_call_without_its_brackets() {
+        // The rows, the time set aside, and the calls the submitted ADIF and the journal write.
+        let logged = |st: &FieldDayStation| {
+            let mut rows = st.log.qsos().to_vec();
+            for q in &mut rows {
+                q.when_unix = 0;
+            }
+            let calls = |adif: String| adif_calls(&adif);
+            (
+                rows,
+                calls(st.log.submission_adif()),
+                calls(st.log.journal_adif()),
+            )
+        };
+        // The same for `call` logged whole off the same exchange, in the same slot.
+        let whole = |call: &str, running: bool, slot: u64| {
+            let mut st = contest_station("K1ABC", "arrlfd", running);
+            st.log.log(call, "1D", "WI", slot);
+            logged(&st)
+        };
+        // (the call, as the exchanges name it)
+        for (call, heard) in [
+            ("W9XYZ", "W9XYZ"),
+            ("W9XYZ", "<W9XYZ>"),
+            ("W9XYZ/M", "<W9XYZ/M>"),
+            ("W9XYZ/4", "<W9XYZ/4>"),
+            ("W9XYZ/QRP", "<W9XYZ/QRP>"),
+        ] {
+            // S&P, on the CQ the call sends: a nonstandard call's carries no grid.
+            let cq = if crate::message::is_std_call(call) {
+                format!("CQ FD {call} EN37")
+            } else {
+                format!("CQ {call}")
+            };
+            // The two calls of RR73 and 73.
+            let closing = if crate::message::is_std_call(call) {
+                format!("{heard} K1ABC")
+            } else {
+                format!("{call} <K1ABC>")
+            };
+            let what = format!("{heard} S&P");
+            let mut sp = contest_station("K1ABC", "arrlfd", false);
+            sp.observe(&[dec(&cq)], 0);
+            assert_eq!(
+                next(&sp),
+                format!("{call} K1ABC 2B EMA"),
+                "{what}: the answer"
+            );
+            sp.after_tx();
+            sp.observe(&[dec(&format!("K1ABC {heard} R 1D WI"))], 2);
+            assert_eq!(next(&sp), format!("{closing} RR73"), "{what}: RR73");
+            assert_eq!(logged(&sp), whole(call, false, 2), "{what}: logged");
+            sp.after_tx();
+            sp.rearm(false);
+            sp.observe(&[dec(&cq)], 4);
+            assert_eq!(
+                (sp.state, next(&sp)),
+                (FdState::Listening, String::new()),
+                "{what}: its next CQ is in the log"
+            );
+            // Running: the caller's exchange, then its RR73 or 73.
+            for close in ["RR73", "73"] {
+                let what = format!("{heard} Running, {close}");
+                let mut run = contest_station("K1ABC", "arrlfd", true);
+                run.observe(&[dec(&format!("K1ABC {heard} 1D WI"))], 1);
+                assert_eq!(
+                    next(&run),
+                    format!("{heard} K1ABC R 2B EMA"),
+                    "{what}: R and mine"
+                );
+                run.after_tx();
+                run.observe(&[dec(&format!("K1ABC {heard} {close}"))], 3);
+                let bye = match close {
+                    "RR73" => format!("{closing} 73"),
+                    _ => String::new(),
+                };
+                assert_eq!(next(&run), bye, "{what}: the close");
+                assert_eq!(logged(&run), whole(call, true, 3), "{what}: logged");
+            }
+            // Running: a caller that rogers its exchange first.
+            let what = format!("{heard} Running, rogered first");
+            let mut run = contest_station("K1ABC", "arrlfd", true);
+            run.observe(&[dec(&format!("K1ABC {heard} R 1D WI"))], 1);
+            assert_eq!(next(&run), format!("{closing} RR73"), "{what}: RR73");
+            assert_eq!(logged(&run), whole(call, true, 1), "{what}: logged");
+        }
+    }
+
+    /// ⭐ RR73 AND 73 TO A NONSTANDARD CALL GO OUT AS WSJT-X 3.0.2 WRITES THEM in Field Day's
+    /// messages: that call whole and mine hashed, `W9XYZ/M <K1ABC> RR73` (`genStdMsgs`,
+    /// mainwindow.cpp 9701 and 9709, `if(!bHisCall and bMyCall) t=hisCall + " <" + my_callsign +
+    /// "> " …`), where `hisCall` is the call the decoder printed, brackets dropped (`DecodedText`,
+    /// decodedtext.cpp 66). So S&P's RR73 to a runner signing W9XYZ/M, the run's 73 to such a
+    /// caller's RR73, and the run's RR73 to one that rogers first, with a `/P` call of mine too
+    /// (`stdCall` passes it, 9588). The exchange overs before them, S&P's answer and the run's R
+    /// and exchange, are what they were.
+    #[test]
+    fn rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them() {
+        for me in ["K1ABC", "K1ABC/P"] {
+            for his in ["W9XYZ/M", "W9XYZ/4", "W9XYZ/QRP", "PJ4/W9XYZ"] {
+                let h = format!("<{his}>");
+                let what = format!("{me} working {his}");
+                let mut sp = contest_station(me, "arrlfd", false);
+                sp.observe(&[dec(&format!("CQ {his}"))], 0);
+                assert_eq!(
+                    next(&sp),
+                    format!("{his} {me} 2B EMA"),
+                    "{what}: S&P's answer"
+                );
+                sp.after_tx();
+                sp.observe(&[dec(&format!("{me} {h} R 1D WI"))], 2);
+                assert_eq!(
+                    next(&sp),
+                    format!("{his} <{me}> RR73"),
+                    "{what}: S&P's RR73"
+                );
+                assert_eq!(last_row(&sp).0, his, "{what}: S&P logged");
+
+                let mut run = contest_station(me, "arrlfd", true);
+                run.observe(&[dec(&format!("{me} {h} 1D WI"))], 1);
+                assert_eq!(
+                    next(&run),
+                    format!("{h} {me} R 2B EMA"),
+                    "{what}: the run's R and exchange"
+                );
+                run.after_tx();
+                run.observe(&[dec(&format!("{me} {h} RR73"))], 3);
+                assert_eq!(
+                    next(&run),
+                    format!("{his} <{me}> 73"),
+                    "{what}: the run's 73"
+                );
+                assert_eq!(last_row(&run).0, his, "{what}: the run logged");
+
+                let mut run = contest_station(me, "arrlfd", true);
+                run.observe(&[dec(&format!("{me} {h} R 1D WI"))], 1);
+                assert_eq!(
+                    next(&run),
+                    format!("{his} <{me}> RR73"),
+                    "{what}: the run's RR73 to a caller that rogers first"
+                );
+            }
+        }
+    }
+
+    /// ⭐ RR73 AND 73 TO A NONSTANDARD CALL GO OUT AS WSJT-X 3.0.2 WRITES THEM in the ARRL VHF
+    /// and standard messages too: WSJT-X's Tx4 and Tx5 are the same lines in every activity
+    /// (`genStdMsgs`, mainwindow.cpp 9701 and 9709), `W9XYZ/M <K1ABC> RR73` and `… 73`. A caller
+    /// signing W9XYZ/M sends its grid or report with its call hashed, `K1ABC <W9XYZ/M> EN37`
+    /// (`t0b`, 9597 and 9625-9626), and closes with mine hashed, `<K1ABC> W9XYZ/M RR73` (9702),
+    /// or is heard closing with its own hashed. The run's 73 to it, and the standard messages'
+    /// RR73 to one that rogers my report, take WSJT-X's form. Before, the 73 was
+    /// `W9XYZ/M K1ABC 73`, which the packer sends as `W9XYZ K1ABC 73`: another station's call.
+    #[test]
+    fn rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them_in_every_set() {
+        for his in ["W9XYZ/M", "W9XYZ/4", "W9XYZ/QRP", "PJ4/W9XYZ"] {
+            let h = format!("<{his}>");
+            for close in [
+                format!("<K1ABC> {his} RR73"),
+                format!("<K1ABC> {his} RRR"),
+                format!("K1ABC {h} RR73"),
+            ] {
+                let what = format!("ARRL VHF, {close}");
+                let mut vhf = ft8_station("arrlvhf_jan", "FN42", true);
+                vhf.observe(&[dec(&format!("K1ABC {h} EN37"))], 1);
+                assert_eq!(
+                    next(&vhf),
+                    format!("{h} K1ABC R FN42"),
+                    "{what}: R and mine"
+                );
+                vhf.after_tx();
+                vhf.observe(&[dec(&close)], 3);
+                assert_eq!(
+                    (vhf.state, next(&vhf)),
+                    (FdState::Done, format!("{his} <K1ABC> 73")),
+                    "{what}: the 73"
+                );
+
+                let what = format!("standard messages, {close}");
+                let mut std = ft8_station("txqp", "FN42", true);
+                std.observe(&[dec(&format!("K1ABC {h} -07"))], 1);
+                assert_eq!(next(&std), format!("{h} K1ABC R-05"), "{what}: R and mine");
+                std.after_tx();
+                std.observe(&[dec(&close)], 3);
+                assert_eq!(
+                    (std.state, next(&std)),
+                    (FdState::Done, format!("{his} <K1ABC> 73")),
+                    "{what}: the 73"
+                );
+            }
+            let what = format!("standard messages, {his} rogers my report");
+            let mut std = ft8_station("txqp", "FN42", true);
+            std.observe(&[dec(&format!("K1ABC {h} EN37"))], 1);
+            assert_eq!(next(&std), format!("{h} K1ABC -05"), "{what}: my report");
+            std.after_tx();
+            std.observe(&[dec(&format!("K1ABC {h} R-07"))], 3);
+            assert_eq!(
+                (std.state, next(&std)),
+                (FdState::Done, format!("{his} <K1ABC> RR73")),
+                "{what}: RR73"
+            );
+        }
+    }
+
+    /// The control: outside a standard call of mine closing to a nonstandard one, RR73 and 73
+    /// go out as before. In Field Day's messages a standard call heard hashed, `<W9XYZ>`, and
+    /// both calls nonstandard; in the ARRL VHF and standard messages a standard call, whole or
+    /// heard hashed, and a `/P` call, which `stdCall` passes (mainwindow.cpp 9589). A nonstandard
+    /// call of mine closing to a standard one is `a_nonstandard_call_goes_out_as_wsjtx_writes_it`'s.
+    /// And only the caller's own close sends a 73: one to another call, from another station,
+    /// or naming a call the decoder could not resolve closes nothing and sends no 73.
+    #[test]
+    fn rr73_and_73_otherwise_go_out_as_before() {
+        let mut sp = contest_station("K1ABC", "arrlfd", false);
+        sp.observe(&[dec("CQ FD W9XYZ EN37")], 0);
+        sp.after_tx();
+        sp.observe(&[dec("K1ABC <W9XYZ> R 1D WI")], 2);
+        assert_eq!(
+            next(&sp),
+            "<W9XYZ> K1ABC RR73",
+            "a standard call heard hashed"
+        );
+        let mut sp = contest_station("PJ4/K1ABC", "arrlfd", false);
+        sp.observe(&[dec("CQ W9XYZ/M")], 0);
+        sp.after_tx();
+        sp.observe(&[dec("<PJ4/K1ABC> <W9XYZ/M> R 1D WI")], 2);
+        assert_eq!(
+            next(&sp),
+            "<W9XYZ/M> PJ4/K1ABC RR73",
+            "both calls nonstandard"
+        );
+        for event in ["arrlvhf_jan", "txqp"] {
+            // (the caller as heard, my 73 to its RR73)
+            for (heard, bye) in [
+                ("W9XYZ", "W9XYZ K1ABC 73"),
+                ("<W9XYZ>", "<W9XYZ> K1ABC 73"),
+                ("W9XYZ/P", "W9XYZ/P K1ABC 73"),
+            ] {
+                let what = format!("{event}, {heard}");
+                let mut run = ft8_station(event, "FN42", true);
+                let call = match event {
+                    "arrlvhf_jan" => format!("K1ABC {heard} EN37"),
+                    _ => format!("K1ABC {heard} -07"),
+                };
+                run.observe(&[dec(&call)], 1);
+                run.after_tx();
+                run.observe(&[dec(&format!("K1ABC {heard} RR73"))], 3);
+                assert_eq!(
+                    (run.state, next(&run)),
+                    (FdState::Done, bye.to_string()),
+                    "{what}: the 73"
+                );
+            }
+            for close in [
+                "<K2DEF> W9XYZ/M RR73",
+                "<K1ABC> N0ABC/M RR73",
+                "K1ABC <...> RR73",
+                "<...> W9XYZ/M RR73",
+            ] {
+                let what = format!("{event}, {close}");
+                let mut run = ft8_station(event, "FN42", true);
+                let call = match event {
+                    "arrlvhf_jan" => "K1ABC <W9XYZ/M> EN37",
+                    _ => "K1ABC <W9XYZ/M> -07",
+                };
+                run.observe(&[dec(call)], 1);
+                let roger = next(&run);
+                run.after_tx();
+                run.observe(&[dec(close)], 3);
+                assert_eq!(
+                    (run.state, next(&run), run.log.qsos().len()),
+                    (FdState::AwaitConfirm, roger, 0),
+                    "{what}: nothing closed, no 73"
+                );
+            }
+        }
+    }
+
+    /// ⭐ FIELD DAY'S RUN CLOSES WITH A CALLER WHOSE CALL IS NONSTANDARD. Running WSJT-X 3.0.2,
+    /// such a caller sends its RR73 and 73 with my call hashed and its own whole,
+    /// `<K1ABC> W9XYZ/M RR73` (`genStdMsgs`, mainwindow.cpp 9702 and 9710,
+    /// `if(bHisCall and !bMyCall)`), and WSJT-X takes that as addressed to itself: its decoder
+    /// prints its own call's hash as `<K1ABC>` (`unpack77`, packjt77.f90 644-651,
+    /// `n12.eq.hashmy12`), `DecodedText` drops the brackets (decodedtext.cpp 66), and
+    /// `auto_sequence` and `processMessage` ask whether that word holds its call (7546, 9108). So
+    /// the run logs W9XYZ/M, bare, on its RR73, RRR or 73, and answers the RR73 and RRR with 73
+    /// where the caller runs WSJT-X's Field Day activity (9210-9215). Before, it never closed: it
+    /// sent the caller its R and exchange again.
+    #[test]
+    fn field_days_run_closes_with_a_caller_whose_call_is_nonstandard() {
+        for me in ["K1ABC", "K1ABC/P"] {
+            for (close, answer) in [
+                ("RR73", format!("W9XYZ/M <{me}> 73")),
+                ("RRR", format!("W9XYZ/M <{me}> 73")),
+                ("73", String::new()),
+            ] {
+                let what = format!("{me}, <{me}> W9XYZ/M {close}");
+                let mut run = contest_station(me, "arrlfd", true);
+                run.observe(&[dec(&format!("{me} <W9XYZ/M> 1D WI"))], 1);
+                assert_eq!(next(&run), format!("<W9XYZ/M> {me} R 2B EMA"), "{what}");
+                run.after_tx();
+                run.observe(&[dec(&format!("<{me}> W9XYZ/M {close}"))], 3);
+                assert_eq!(
+                    (run.state, next(&run)),
+                    (FdState::Done, answer),
+                    "{what}: closed"
+                );
+                assert_eq!(
+                    last_row(&run).0,
+                    "W9XYZ/M",
+                    "{what}: logged, without the brackets"
+                );
+                assert_eq!(run.log.qsos().len(), 1, "{what}: once");
+            }
+        }
+        // Winter Field Day's runner, whose caller does not run WSJT-X's activity, sends nothing.
+        let session = ContestSession::field_day(FdEvent::WinterFd, "1H", "EMA");
+        let mut run = FieldDayStation::running("K1ABC", "FN42", session, "20M");
+        run.observe(&[dec("K1ABC <W9XYZ/M> 1H WI")], 1);
+        run.after_tx();
+        run.observe(&[dec("<K1ABC> W9XYZ/M RR73")], 3);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, String::new()),
+            "WFD"
+        );
+        assert_eq!(last_row(&run).0, "W9XYZ/M", "WFD: logged");
+    }
+
+    /// The control: only the caller's own close, to my own call. Hashed to another call, from
+    /// another station, or to a call the decoder could not resolve, it closes nothing and the
+    /// caller gets the R and exchange again; and the exchanges still take my standard call only
+    /// whole (`a_standard_call_goes_out_and_is_heard_exactly_as_before`).
+    #[test]
+    fn field_days_run_closes_only_on_the_callers_own_close_to_my_call() {
+        for (heard, what) in [
+            ("<K2DEF> W9XYZ/M RR73", "to another call"),
+            ("<K1ABC> N0ABC/M RR73", "from another station"),
+            (
+                "<...> W9XYZ/M RR73",
+                "to a call the decoder could not resolve",
+            ),
+        ] {
+            let mut run = contest_station("K1ABC", "arrlfd", true);
+            run.observe(&[dec("K1ABC <W9XYZ/M> 1D WI")], 1);
+            run.after_tx();
+            run.observe(&[dec(heard)], 3);
+            assert_eq!(
+                (run.state, next(&run)),
+                (
+                    FdState::AwaitConfirm,
+                    "<W9XYZ/M> K1ABC R 2B EMA".to_string()
+                ),
+                "{what}: nothing closed"
+            );
+            assert!(run.log.qsos().is_empty(), "{what}: nothing logged");
+        }
+    }
+
+    /// ⭐ FIELD DAY'S MESSAGES PASS BY A CALL THE DECODER COULD NOT RESOLVE, as WSJT-X's Field Day
+    /// activity does: `processMessage` returns at once for a message that carries `<...>`
+    /// (mainwindow.cpp 9097-9099). Running, a caller heard as `<...>` gets no answer and no row,
+    /// whether it sends its exchange or rogers first, and the run keeps calling CQ. The same
+    /// station's next message, its call resolved, is worked as any other's and logged bare. S&P
+    /// does not answer a CQ that names such a call, `CQ FD <...> EN37`, either: WSJT-X puts only a
+    /// callsign into its DX call box (`Radio::is_callsign`, 9402), so it builds no message to one.
+    #[test]
+    fn field_days_run_passes_by_a_caller_the_decoder_could_not_resolve() {
+        for heard in ["K1ABC <...> 1D WI", "K1ABC <...> R 1D WI"] {
+            let mut run = contest_station("K1ABC", "arrlfd", true);
+            run.observe(&[dec(heard)], 1);
+            assert_eq!(
+                (run.state, next(&run)),
+                (FdState::CallingCq, "CQ FD K1ABC FN42".to_string()),
+                "{heard}: no answer"
+            );
+            assert!(run.log.qsos().is_empty(), "{heard}: no row");
+            run.observe(&[dec("K1ABC <W9XYZ/M> 1D WI")], 3);
+            assert_eq!(
+                next(&run),
+                "<W9XYZ/M> K1ABC R 2B EMA",
+                "{heard}: its next, resolved, is answered"
+            );
+            run.after_tx();
+            run.observe(&[dec("<K1ABC> W9XYZ/M RR73")], 5);
+            assert_eq!(next(&run), "W9XYZ/M <K1ABC> 73", "{heard}: and closed");
+            assert_eq!(last_row(&run).0, "W9XYZ/M", "{heard}: and logged bare");
+        }
+        let mut sp = contest_station("K1ABC", "arrlfd", false);
+        sp.observe(&[dec("CQ FD <...> EN37")], 0);
+        assert_eq!(
+            (sp.state, next(&sp)),
+            (FdState::Listening, String::new()),
+            "S&P: a CQ from <...> is not answered"
+        );
+        sp.observe(&[dec("CQ FD W9XYZ EN37")], 2);
+        assert_eq!(next(&sp), "W9XYZ K1ABC 2B EMA", "S&P: the next CQ is");
+    }
+
     /// The direction reaches a running station's CQ at once, and every CQ after; S&P calls none.
     #[test]
     fn a_typed_direction_reaches_the_running_cq() {
@@ -6232,8 +7580,12 @@ mod tests {
         let mut run = ft8_station("tnqp", "FN42", true);
         run.observe(&[dec("N0ABC W9XYZ EN37"), dec("N0ABC W9XYZ -07")], 1);
         assert_eq!(run.state, FdState::CallingCq, "sent to somebody else");
-        run.observe(&[dec("<K1ABC> PJ4/W9XYZ")], 1);
-        assert_eq!(run.state, FdState::CallingCq, "a call with no grid");
+        run.observe(&[dec("<N0ABC> PJ4/W9XYZ")], 1);
+        assert_eq!(
+            run.state,
+            FdState::CallingCq,
+            "a call with no grid to somebody else"
+        );
         run.observe(&[dec("K1ABC W9XYZ EN37")], 3);
         run.observe(&[dec("K1ABC N0ABC R-07")], 5);
         assert_eq!(
@@ -6242,6 +7594,61 @@ mod tests {
             "an R-report from a bystander"
         );
         assert!(run.log.qsos().is_empty());
+    }
+
+    /// ⭐ The standard messages' run answers a caller's first call that carries no grid, as WSJT-X
+    /// running with no activity does. A caller whose call is nonstandard sends it as `t0a` alone,
+    /// `<K1ABC> W9XYZ/M` (mainwindow.cpp 9627), and WSJT-X answers a message to it of fewer than
+    /// five words with Tx2, the report (`processMessage` 9315-9325), to the call in its DX call box
+    /// (9402): `<W9XYZ/M> K1ABC -05`, its call hashed beside mine (`t0a`, 9629-9631, 9655), or
+    /// mine hashed beside its where mine is the nonstandard one (`t0b`, 9625-9626). The contact
+    /// then runs as any other and is logged without a grid. Not answered, as before: a call to
+    /// somebody else, one from `<...>`, and a nonstandard call beside a nonstandard call of mine,
+    /// which no message carries with a report.
+    #[test]
+    fn the_standard_messages_run_answers_a_first_call_with_no_grid() {
+        let mut run = ft8_station("txqp", "FN42", true);
+        run.observe(&[dec("<K1ABC> W9XYZ/M")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::AwaitExchange, "<W9XYZ/M> K1ABC -05".to_string()),
+            "W9XYZ/M's first call: my report"
+        );
+        run.after_tx();
+        run.observe(&[dec("K1ABC <W9XYZ/M> R-07")], 3);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, "W9XYZ/M <K1ABC> RR73".to_string()),
+            "its roger: RR73"
+        );
+        assert_eq!(last_row(&run).0, "W9XYZ/M", "logged");
+
+        let mut run = ft8_station_as("K1ABC/QRP", "txqp", "FN42", true);
+        run.observe(&[dec("<K1ABC/QRP> W9XYZ")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::AwaitExchange, "W9XYZ <K1ABC/QRP> -05".to_string()),
+            "a nonstandard call of mine: my report, my call hashed"
+        );
+        run.after_tx();
+        run.observe(&[dec("<K1ABC/QRP> W9XYZ R-07")], 3);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::Done, "<W9XYZ> K1ABC/QRP RR73".to_string()),
+            "and RR73"
+        );
+        assert_eq!(last_row(&run).0, "W9XYZ", "logged");
+
+        for (mycall, heard, what) in [
+            ("K1ABC", "<N0ABC> W9XYZ/M", "a call to somebody else"),
+            ("K1ABC", "K1ABC <...>", "a call from <...>"),
+            ("K1ABC/QRP", "<K1ABC/QRP> W9XYZ/M", "two nonstandard calls"),
+        ] {
+            let mut run = ft8_station_as(mycall, "txqp", "FN42", true);
+            let cq = next(&run);
+            run.observe(&[dec(heard)], 1);
+            assert_eq!((run.state, next(&run)), (FdState::CallingCq, cq), "{what}");
+        }
     }
 
     /// A change of messages (a tier change, in the engine) re-arms: a contact half-worked in
@@ -6476,6 +7883,291 @@ mod tests {
             ),
             "a move must not un-dupe a station under a rule that names no sent slot"
         );
+    }
+
+    /// The Illinois QSO Party from Kane County: an exchange that SENDS a report (RST and
+    /// county), where Field Day's sends none.
+    fn ilqp_from_kane() -> FieldDayLog {
+        let rs = crate::fd_rules::ruleset_by_id("ilqp", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let data = crate::contest::StationData {
+            mycall: "W9XYZ".into(),
+            contest_qth_state: "IL".into(),
+            contest_qth_county: "KANE".into(),
+            ..Default::default()
+        };
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        FieldDayLog::new("W9XYZ", session, "20m")
+    }
+
+    /// One ILQP contact in `mode`: the report and county `call` sent me.
+    fn ilqp_contact(log: &mut FieldDayLog, call: &str, rst: &str, county: &str, mode: &str) {
+        let rx = [
+            ("RST".to_string(), rst.to_string()),
+            ("QTH".to_string(), county.to_string()),
+        ];
+        let when = 1_792_000_000 + 60 * log.qsos().len() as u64;
+        assert!(log.log_fields_at(call, &rx, mode, "", 0, when), "{call}");
+    }
+
+    /// What `call`'s row sent as its report, set on the row: no session or other row holds it.
+    fn set_sent_rst(log: &mut FieldDayLog, call: &str, rst: &str) {
+        let row = log
+            .qsos_mut()
+            .iter_mut()
+            .find(|q| q.call == call)
+            .expect("the row");
+        row.tx
+            .iter_mut()
+            .find(|v| v.key == "RST")
+            .expect("an ILQP row sends a report")
+            .raw = rst.to_string();
+    }
+
+    /// `call`'s record in an ADIF file.
+    fn record_for<'a>(adif: &'a str, call: &str) -> &'a str {
+        let tag = format!("<CALL:{}>{call} ", call.len());
+        adif.split("<EOR>")
+            .find(|r| r.contains(&tag))
+            .unwrap_or_else(|| panic!("no record for {call} in\n{adif}"))
+    }
+
+    /// ⭐ **The submitted ADIF writes each row's OWN sent report as `RST_SENT`**, the tag
+    /// another program reads. The report rode only in the private `APP_NEXUS_MYEX` carrier, so
+    /// a file imported elsewhere had none, while the merged Logbook's ADIF had it.
+    ///
+    /// By value, on data that disagrees wherever a wrong source could pass: the two rows sent
+    /// different reports, neither is the session's `599`, and each received another value.
+    #[test]
+    fn the_submitted_adif_writes_each_rows_own_sent_report() {
+        let mut log = ilqp_from_kane();
+        ilqp_contact(&mut log, "K9AAA", "559", "COOK", "CW");
+        ilqp_contact(&mut log, "K9BBB", "579", "LAKE", "CW");
+        set_sent_rst(&mut log, "K9AAA", "449");
+        set_sent_rst(&mut log, "K9BBB", "339");
+        let adif = log.submission_adif();
+        for (call, want) in [("K9AAA", "<RST_SENT:3>449 "), ("K9BBB", "<RST_SENT:3>339 ")] {
+            let r = record_for(&adif, call);
+            assert!(r.contains(want), "{call} does not carry {want:?}: {r}");
+            assert_eq!(r.matches("<RST_SENT:").count(), 1, "{call}: {r}");
+        }
+    }
+
+    /// ⭐ **…and nothing else in the file moves**: a whole submitted file, byte for byte, which is
+    /// the file this build wrote before with the one tag added, and its QSO number as `STX`
+    /// ([`FieldDayLog::qso_numbers`]). A phone contact, so the row's `59` is neither the
+    /// session's `599` nor the `57` it received, and the carrier is written beside it as before.
+    #[test]
+    fn a_submitted_record_gains_its_sent_report_and_nothing_else() {
+        let mut log = ilqp_from_kane();
+        log.dial_khz = 14_250;
+        log.on_air_hz = 14_250_000;
+        ilqp_contact(&mut log, "K9AAA", "57", "COOK", "PH");
+        assert_eq!(
+            log.submission_adif(),
+            "ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n\
+             <CALL:5>K9AAA <MODE:3>SSB <BAND:3>20m <FREQ:9>14.250000 \
+             <APP_NEXUS_DIALKHZ:5>14250 <QSO_DATE:8>20261014 <TIME_ON:6>174640 \
+             <CONTEST_ID:12>IL QSO Party <RST_RCVD:2>57 <RST_SENT:2>59 <STX:1>1 \
+             <APP_NEXUS_EX:28>RST::57;QTH:il_counties:COOK \
+             <APP_NEXUS_MYEX:28>RST::59;QTH:il_counties:KANE <APP_NEXUS_QSEQ:1>1 <EOR>\n"
+        );
+    }
+
+    /// A row that sent no report writes no `RST_SENT`, never the session's `599` in its place, and
+    /// an exchange that declares no report (Field Day) writes none on any row. No shipped path
+    /// logs a QSO-party row without a report, so this one is built by hand.
+    #[test]
+    fn a_row_without_a_sent_report_writes_no_rst_sent() {
+        let mut log = ilqp_from_kane();
+        ilqp_contact(&mut log, "K9AAA", "559", "COOK", "CW");
+        ilqp_contact(&mut log, "K9BBB", "579", "LAKE", "CW");
+        set_sent_rst(&mut log, "K9AAA", "");
+        let adif = log.submission_adif();
+        // The control first: the row beside it sent the session's report, and writes it.
+        let with = record_for(&adif, "K9BBB");
+        assert!(with.contains("<RST_SENT:3>599 "), "the control: {with}");
+        let without = record_for(&adif, "K9AAA");
+        assert!(!without.contains("<RST_SENT:"), "{without}");
+        let field_day = moved_log().submission_adif();
+        assert!(!field_day.contains("<RST_SENT:"), "{field_day}");
+    }
+
+    /// ⭐ **The journal keeps its bytes, and the club's export gains the sent report.** One log,
+    /// two whole files: `journal_adif` writes no `RST_SENT`, as before, because a restore reads a
+    /// row's sent side from `APP_NEXUS_MYEX`; `adif`, the export a club's file is written from,
+    /// is the same bytes with the one tag added. The phone row's `59` is neither the session's
+    /// `599` nor the `57` it received, so a journal that wrote the tag would show it here.
+    #[test]
+    fn the_journal_keeps_its_bytes_where_the_club_export_gains_the_sent_report() {
+        let mut log = ilqp_from_kane();
+        log.dial_khz = 14_250;
+        log.on_air_hz = 14_250_000;
+        ilqp_contact(&mut log, "K9AAA", "57", "COOK", "PH");
+        let journal = "ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n\
+             <CALL:5>K9AAA <MODE:3>SSB <BAND:3>20m <FREQ:9>14.250000 \
+             <APP_NEXUS_DIALKHZ:5>14250 <QSO_DATE:8>20261014 <TIME_ON:6>174640 \
+             <CONTEST_ID:12>IL QSO Party <RST_RCVD:2>57 \
+             <APP_NEXUS_EX:28>RST::57;QTH:il_counties:COOK \
+             <APP_NEXUS_MYEX:28>RST::59;QTH:il_counties:KANE <APP_NEXUS_QSEQ:1>1 <EOR>\n";
+        assert_eq!(log.journal_adif(), journal);
+        assert_eq!(
+            log.adif(),
+            journal.replace("<RST_RCVD:2>57 ", "<RST_RCVD:2>57 <RST_SENT:2>59 ")
+        );
+    }
+
+    /// ⭐ **The journal keeps the call each contact was logged on, and no export carries it.** A
+    /// restart reads every row into a session opened under whatever call Settings holds then, so
+    /// a contact logged on the club's call and one logged on the operator's own after it must each
+    /// come back with its own ([`LoggedQso::on_air_call`]). The submitted file and the club's
+    /// export are as they were, and a row journaled before the tag existed carries none.
+    #[test]
+    fn the_journal_keeps_the_call_each_contact_was_logged_on() {
+        let mut log = ilqp_from_kane();
+        log.on_air_call = "W9XYZ".into();
+        ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+        log.on_air_call = "K9OWN".into();
+        ilqp_contact(&mut log, "K9BBB", "599", "WILL", "CW");
+        let journal = log.journal_adif();
+        assert!(
+            record_for(&journal, "K9AAA").contains("<APP_NEXUS_ONAIR:5>W9XYZ "),
+            "{journal}"
+        );
+        assert!(
+            record_for(&journal, "K9BBB").contains("<APP_NEXUS_ONAIR:5>K9OWN "),
+            "{journal}"
+        );
+        for export in [log.adif(), log.submission_adif()] {
+            assert!(!export.contains("APP_NEXUS_ONAIR"), "{export}");
+        }
+        let calls = |log: &FieldDayLog| -> Vec<(String, String)> {
+            log.qsos()
+                .iter()
+                .map(|q| (q.call.clone(), q.on_air_call.clone()))
+                .collect()
+        };
+        // Read back by a session opened under a third call: each row keeps its own.
+        let mut back = ilqp_from_kane();
+        back.mycall = "N9NEW".into();
+        back.on_air_call = "N9NEW".into();
+        back.merge_adif(&journal, 0);
+        let owned =
+            |pairs: [(&str, &str); 2]| pairs.map(|(a, b)| (a.to_string(), b.to_string())).to_vec();
+        assert_eq!(
+            calls(&back),
+            owned([("K9AAA", "W9XYZ"), ("K9BBB", "K9OWN")])
+        );
+        // A journal written before the tag: its rows carry none.
+        let older = journal
+            .replace("<APP_NEXUS_ONAIR:5>W9XYZ ", "")
+            .replace("<APP_NEXUS_ONAIR:5>K9OWN ", "");
+        let mut old = ilqp_from_kane();
+        old.merge_adif(&older, 0);
+        assert_eq!(calls(&old), owned([("K9AAA", ""), ("K9BBB", "")]));
+    }
+
+    /// **Each row keeps the radio and the power it was made with**, stamped at log time
+    /// from the log's RIGHT NOW values, through the journal and a restart; no contest file carries
+    /// them; and a journal written before they were recorded still reads, its rows carrying none.
+    #[test]
+    fn the_journal_keeps_the_radio_and_power_each_contact_was_made_with() {
+        let mut log = ilqp_from_kane();
+        log.rig = "Icom IC-7300".into();
+        log.tx_power = "100".into();
+        ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+        log.rig = "Elecraft KX3".into();
+        log.tx_power = "5".into();
+        ilqp_contact(&mut log, "K9BBB", "599", "WILL", "CW");
+        let journal = log.journal_adif();
+        assert!(
+            record_for(&journal, "K9AAA").contains("<MY_RIG:12>Icom IC-7300 <TX_PWR:3>100 "),
+            "{journal}"
+        );
+        assert!(
+            record_for(&journal, "K9BBB").contains("<MY_RIG:12>Elecraft KX3 <TX_PWR:1>5 "),
+            "{journal}"
+        );
+        for export in [log.adif(), log.submission_adif()] {
+            assert!(
+                !export.contains("MY_RIG") && !export.contains("TX_PWR"),
+                "{export}"
+            );
+        }
+        let kit = |log: &FieldDayLog| -> Vec<(String, String, String)> {
+            log.qsos()
+                .iter()
+                .map(|q| (q.call.clone(), q.rig.clone(), q.tx_power.clone()))
+                .collect()
+        };
+        let owned = |rows: [(&str, &str, &str); 2]| {
+            rows.map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string()))
+                .to_vec()
+        };
+        let mut back = ilqp_from_kane();
+        back.merge_adif(&journal, 0);
+        assert_eq!(
+            kit(&back),
+            owned([
+                ("K9AAA", "Icom IC-7300", "100"),
+                ("K9BBB", "Elecraft KX3", "5")
+            ])
+        );
+        let older = journal
+            .replace("<MY_RIG:12>Icom IC-7300 <TX_PWR:3>100 ", "")
+            .replace("<MY_RIG:12>Elecraft KX3 <TX_PWR:1>5 ", "");
+        assert!(!older.contains("MY_RIG"), "the control: {older}");
+        let mut old = ilqp_from_kane();
+        old.merge_adif(&older, 0);
+        assert_eq!(kit(&old), owned([("K9AAA", "", ""), ("K9BBB", "", "")]));
+    }
+
+    /// **Each row keeps the grid it was made from**, stamped at log time from the log's RIGHT
+    /// NOW grid, through the journal and a restart, under a private tag no contest file writes;
+    /// and a journal written before it was recorded still reads, its rows carrying none.
+    #[test]
+    fn the_journal_keeps_the_grid_each_contact_was_made_from() {
+        let mut log = ilqp_from_kane();
+        log.grid = "EN52".into();
+        ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+        log.grid = "EN61AB".into();
+        ilqp_contact(&mut log, "K9BBB", "599", "WILL", "CW");
+        let journal = log.journal_adif();
+        assert!(
+            record_for(&journal, "K9AAA").contains("<APP_NEXUS_MYGRID:4>EN52 "),
+            "{journal}"
+        );
+        assert!(
+            record_for(&journal, "K9BBB").contains("<APP_NEXUS_MYGRID:6>EN61AB "),
+            "{journal}"
+        );
+        for export in [log.adif(), log.submission_adif()] {
+            assert!(
+                !export.contains("APP_NEXUS_MYGRID") && !export.contains("MY_GRIDSQUARE"),
+                "{export}"
+            );
+        }
+        let grids = |log: &FieldDayLog| -> Vec<(String, String)> {
+            log.qsos()
+                .iter()
+                .map(|q| (q.call.clone(), q.grid.clone()))
+                .collect()
+        };
+        let owned =
+            |rows: [(&str, &str); 2]| rows.map(|(a, b)| (a.to_string(), b.to_string())).to_vec();
+        let mut back = ilqp_from_kane();
+        back.merge_adif(&journal, 0);
+        assert_eq!(
+            grids(&back),
+            owned([("K9AAA", "EN52"), ("K9BBB", "EN61AB")])
+        );
+        let older = journal
+            .replace("<APP_NEXUS_MYGRID:4>EN52 ", "")
+            .replace("<APP_NEXUS_MYGRID:6>EN61AB ", "");
+        assert!(!older.contains("APP_NEXUS_MYGRID"), "the control: {older}");
+        let mut old = ilqp_from_kane();
+        old.merge_adif(&older, 0);
+        assert_eq!(grids(&old), owned([("K9AAA", ""), ("K9BBB", "")]));
     }
 }
 
@@ -7097,5 +8789,161 @@ mod edit_tests {
             .edit_contact("K2DEF", T0, &edit("K2DEG", &[IL], "20M", ""))
             .is_ok());
         assert_eq!(calls(&l), ["K2DEG", "W1AW", "N0SAU"]);
+    }
+}
+
+#[cfg(test)]
+mod operator_stats_tests {
+    use super::*;
+    use crate::contest::{ContestSession, StationData};
+
+    /// ARRL Sweepstakes CW: two points a contact, the section the multiplier, a station
+    /// worked once whatever the band.
+    fn ss() -> FieldDayLog {
+        let rs = crate::fd_rules::ruleset_by_id("arrlss_cw", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let data = StationData {
+            mycall: "W9XYZ".into(),
+            fd_section: "WI".into(),
+            contest_check: "99".into(),
+            contest_category_power: "LOW".into(),
+            contest_category_assisted: "NON-ASSISTED".into(),
+            ..Default::default()
+        };
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        FieldDayLog::new("W9XYZ", session, "20m")
+    }
+
+    /// The top of a UTC clock hour.
+    const H: u64 = 1_759_996_800;
+
+    fn log(l: &mut FieldDayLog, op: &str, band: &str, call: &str, sec: &str, when: u64) -> bool {
+        l.operator = op.into();
+        l.band = band.into();
+        let fields: Vec<(String, String)> = [
+            ("NR", "1"),
+            ("PREC", "A"),
+            ("CALL", call),
+            ("CK", "99"),
+            ("SEC", sec),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        l.session.working(call, when);
+        let logged = l.log_fields_at(call, &fields, "CW", "", 0, when);
+        l.session.logged(call);
+        logged
+    }
+
+    /// Three operators and one unstamped contact, with one dupe.
+    fn club_log() -> FieldDayLog {
+        let mut l = ss();
+        log(&mut l, "K9AAA", "20m", "K1A", "CT", H + 60);
+        log(&mut l, "K9AAA", "20m", "K2B", "NNJ", H + 120);
+        log(&mut l, "K9AAA", "20m", "K3C", "EPA", H + 180);
+        log(&mut l, "K9AAA", "40m", "K4D", "VA", H + 3660);
+        log(&mut l, "N9BBB", "20m", "W5E", "STX", H + 3900);
+        log(&mut l, "N9BBB", "20m", "W6F", "CT", H + 4000);
+        // K1A again: a Sweepstakes dupe on any band, worth nothing to anyone.
+        log(&mut l, "N9BBB", "40m", "K1A", "CT", H + 4100);
+        log(&mut l, "W9CCC", "40m", "N7G", "OR", H + 7300);
+        log(&mut l, "", "20m", "N8H", "OH", H + 7400);
+        l
+    }
+
+    const NOW: u64 = H + 7500;
+
+    fn cells(v: &[(&str, &str, u32)]) -> Vec<(String, String, u32)> {
+        v.iter()
+            .map(|(b, m, n)| (b.to_string(), m.to_string(), *n))
+            .collect()
+    }
+
+    /// ⭐ Every figure for every operator, by value.
+    #[test]
+    fn three_operators_get_their_own_figures() {
+        let l = club_log();
+        let got = l.operator_stats(NOW);
+        let want = vec![
+            OperatorStats {
+                operator: "K9AAA".into(),
+                qsos: 4,
+                points: 8,
+                new_mults: 4,
+                last_10_min: 0,
+                last_60_min: 0,
+                best_hour: (H, 3),
+                band_mode: cells(&[("20m", "CW", 3), ("40m", "CW", 1)]),
+            },
+            OperatorStats {
+                operator: "N9BBB".into(),
+                qsos: 2,
+                points: 4,
+                // CT was K9AAA's first.
+                new_mults: 1,
+                last_10_min: 0,
+                // H + 3900 is exactly an hour before NOW, so outside the hour; H + 4000 is in.
+                last_60_min: 1,
+                best_hour: (H + 3600, 2),
+                band_mode: cells(&[("20m", "CW", 2)]),
+            },
+            // The contact that names nobody is a row of its own, under "".
+            OperatorStats {
+                operator: "".into(),
+                qsos: 1,
+                points: 2,
+                new_mults: 1,
+                last_10_min: 1,
+                last_60_min: 1,
+                best_hour: (H + 7200, 1),
+                band_mode: cells(&[("20m", "CW", 1)]),
+            },
+            OperatorStats {
+                operator: "W9CCC".into(),
+                qsos: 1,
+                points: 2,
+                new_mults: 1,
+                last_10_min: 1,
+                last_60_min: 1,
+                best_hour: (H + 7200, 1),
+                band_mode: cells(&[("40m", "CW", 1)]),
+            },
+        ];
+        assert_eq!(got, want);
+    }
+
+    /// The operators' figures add up to the log's own: contacts, QSO points and multipliers.
+    #[test]
+    fn the_operators_sum_to_the_score() {
+        let l = club_log();
+        let got = l.operator_stats(NOW);
+        let (qso_pts, _, mults, _) = l.ruleset().scoring.score(l.score_rows(), 1);
+        assert_eq!(
+            got.iter().map(|s| s.qsos as usize).sum::<usize>(),
+            l.qso_count()
+        );
+        assert_eq!(l.qso_count(), 8);
+        assert_eq!(got.iter().map(|s| s.points).sum::<u32>(), qso_pts);
+        assert_eq!(Some(got.iter().map(|s| s.new_mults).sum::<u32>()), mults);
+        assert_eq!(mults, Some(7));
+    }
+
+    /// A removed contact leaves its operator's figures with it.
+    #[test]
+    fn a_removed_contact_leaves_the_figures() {
+        let mut l = club_log();
+        let seq = l.qsos().last().expect("rows").seq;
+        assert!(l.remove_row(seq, NOW).is_some());
+        let got = l.operator_stats(NOW);
+        assert_eq!(
+            got.iter().map(|s| s.operator.as_str()).collect::<Vec<_>>(),
+            ["K9AAA", "N9BBB", "W9CCC"]
+        );
+    }
+
+    #[test]
+    fn an_empty_log_has_no_operators() {
+        assert!(ss().operator_stats(NOW).is_empty());
     }
 }

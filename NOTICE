@@ -44,6 +44,19 @@ modifications marked and the full provenance documented in
   than the rest (see *JTTY — the keyboard-mode modem core, from WSJT-X*,
   below).
 
+Nexus also carries a **Rust translation of WSJT-X's FT8/FT4 transmit encoder**, in
+`crates/modes/src/wsjt77/` (`mod.rs`, `pack.rs`, `wave.rs`), ported statement by statement
+from the vendored copies of `lib/77bit/packjt77.f90` (`pack77`, and the transmit-side check
+in `unpack77`), `lib/ft8/genft8.f90`, `lib/ft4/genft4.f90`, `lib/ft8/encode174_91.f90`,
+`lib/crc14.cpp`, `lib/ft8/gen_ft8wave.f90`, `lib/ft4/gen_ft4wave.f90` and
+`lib/ft2/gfsk_pulse.f90`; it reads the LDPC generator table
+`lib/ft8/ldpc_174_91_c_generator.f90` at compile time. It builds FT8 and FT4 overs without
+the lock the Fortran encoder shares with the decoder. Where its result could differ from the
+Fortran's it declines and the vendored encoder makes the message, and the vendored encoder
+still runs on every message sent, for the callsign tables the decoder reads. It is a derived
+work of WSJT-X under the same GPLv3 terms; each file's header names its sources, and the
+module header lists the differences.
+
 WSJT-X is the work of Joe Taylor (K1JT) and the WSJT Development Group,
 including Steve Franke (K9AN), Bill Somerville (G4WJS), Nico Palermo (IV3NWV),
 Uwe Risse (DG2YCB), Brian Moran (N9ADG), and others. See the upstream project
@@ -526,7 +539,19 @@ transcribed as protocol FACTS, each cited to its upstream file in the Rust sourc
 - the 262,144-word JSC dictionary (`jsc_list.cpp`, GPLv3), shipped as the generated blob
   `crates/js8/src/proto/jsc/dict.bin` (sha256 in `dict.sha256`; generator
   `scripts/gen-js8-jsc-dict.mjs`);
-- the default dial frequencies (`models/FrequencyList.cpp`).
+- the default dial frequencies until 1.19.0 (`models/FrequencyList.cpp`).
+
+JS8Call 3.0 is read the same way, from the JS8Call-improved project
+<https://github.com/JS8Call-improved/JS8Call-improved> at tag `v3.0.3` (license: **GNU GPL,
+version 3** at repository level; the files below carry no license header of their own). No
+code was copied. Transcribed from it as protocol facts, each cited in the Rust source:
+
+- the fifth speed, JS8 60 (submode I; `JS8_Include/commons.h`, `JS8_Mode/JS8Submode.cpp`):
+  its samples per symbol, period, start delay and decoder thresholds (it uses the modified
+  Costas array listed above);
+- the default dial frequencies from 1.19.0 (`JS8_Main/FrequencyList.cpp`);
+- the API's message types and fields (`docs/API.md`, `JS8_Mainwindow/networkMessage.cpp`),
+  which Nexus serves to programs on the same computer.
 
 The LDPC(174,87) generator matrix and column order are WSJT-X's
 (`lib/ft8/ldpc_174_87_params.f90`, GPLv3, K1JT / WSJT Development Group) and the
@@ -575,11 +600,134 @@ Hamlib package; macOS relied on `brew install hamlib` the same way.
 ### DXCC country file (cty.dat) — Jim Reisert, AD1C
 `crates/propagation/data/cty.dat` is the AD1C "Country Files" (the big-CTY
 `cty.dat` database) by Jim Reisert, **AD1C** (<https://www.country-files.com/>),
-embedded verbatim (via `include_str!`, see `crates/propagation/src/dxcc.rs`).
+taken verbatim from the Big CTY release of 15 January 2025 (`bigcty-20250115.zip`)
+and embedded via `include_str!` (see `crates/propagation/src/dxcc.rs`).
 It resolves callsigns to DXCC entities and CQ/ITU zones and underpins the
 DXCC / WAS / WAZ awards engine, map spot labels, and Needed-board hints. It is
-distributed under the **MIT License**. © 1994– Jim Reisert AD1C. See
-`crates/propagation/data/cty.dat_copyright.txt`.
+distributed under the **MIT License**, and MIT requires its notice to travel with
+every copy. The release's own notice, the zip's `copyright.txt`, is kept verbatim as
+`crates/propagation/data/cty.dat_copyright.txt`. After a first line giving the
+release date, it reads:
+
+> Copyright © 1994-
+>
+> Permission is hereby granted, free of charge, to any person obtaining a
+> copy of this software and associated documentation files (the
+> “Software”), to deal in the Software without restriction, including
+> without limitation the rights to use, copy, modify, merge, publish,
+> distribute, sublicense, and/or sell copies of the Software, and to
+> permit persons to whom the Software is furnished to do so, subject to
+> the following conditions:
+>
+> The above copyright notice and this permission notice shall be included
+> in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS
+> OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+> MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+> IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+> CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+> TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+> SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The notice names no holder and no end year; it is reproduced as AD1C publishes it.
+
+The project also republishes AD1C's current `cty.dat`, unmodified, every week:
+`scripts/gen-cty.mjs` fetches it from <https://www.country-files.com/bigcty/cty.dat>
+in CI (`.github/workflows/cty.yml`) and publishes it as a GitHub Release asset (`cty`),
+served at <https://hamradiotools.io/nexus/cty.dat>. Installs download it and use a
+newer file in place of the embedded one from their next launch. It is under the same
+MIT License: the 15 September 2026 release's `copyright.txt` differs from the one
+above only in its release date. The mirror publishes the file without a copy of the
+notice, as AD1C's own stable URL does; the notice above applies to it.
+
+### DXCC entity numbers (cty.csv) — Jim Reisert, AD1C
+`crates/propagation/data/cty.csv` is AD1C's `cty.csv` from the same Big CTY release as
+`cty.dat` above, taken verbatim from `bigcty-20250115.zip` (15 January 2025; sha256
+`d5855ec12434d6c47bb6d0d60fe50435a3c0e4401ca2c65102648acf079e3c32`) and embedded via
+`include_str!` (see `crates/propagation/src/dxcc.rs`). From it Nexus reads only each
+entity's primary prefix and DXCC entity number, to match a `cty.dat` entity to the DXCC
+number a logged contact carries, so the DXCC / WAS / WAZ awards count a contact by the
+entity its record or LoTW names. It ships in the same release zip as `cty.dat`, under the
+same **MIT License** and the same notice. The DXCC entity numbers are those the ARRL
+assigns for its DXCC program.
+
+### Deleted DXCC entities — ARRL, from TrustedQSL
+`crates/propagation/data/dxcc_deleted.csv` lists the 62 deleted DXCC entities: each one's
+entity number and name. It is transcribed from the DXCC entity table in the configuration
+data (`src/config.xml`, version 11.34, sha256
+`9f75745e761e6ca09de333433309f5cc9a28c8cc94f975a1284de5bf28d80def`) of **TrustedQSL
+2.8.6**, the ARRL's Logbook of the World client (<https://www.arrl.org/tqsl-download>;
+source `tqsl-2.8.6.tar.gz`, sha256
+`182e5f2ac35a3db8b409b45d96505e6bd265ae4668ed064754209c4b8e7bdf37`). The only changes are
+the dropped " (DELETED)" suffix on each name, the XML escapes read, and the columns Nexus
+does not use; the file's header records the same. TrustedQSL is distributed under these
+terms, reproduced as they require (`src/LICENSE`, beside `config.xml`, carries the same
+terms with the years 2001-2020):
+
+> License Terms and Conditions
+>
+> Copyright (C) 2001-2015 American Radio Relay League, Inc. All rights
+> reserved.
+>
+> Portions (C) 2003-2026 The TrustedQSL Developers. Please see the AUTHORS.txt
+> file for contributors.
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions
+> are met:
+>
+> 1. Any redistribution of source code must retain the above copyright
+> notice, this list of conditions and the disclaimer shown in
+> Paragraph 5 (below).
+>
+> 2. Redistribution in binary form must reproduce the above copyright
+> notice, this list of conditions and the disclaimer shown in
+> Paragraph 5 (below) in the documentation and/or other materials
+> provided with the distribution.
+>
+> 3. Products derived from or including this software may not use
+> "Logbook of the World" or "LoTW" or any other American Radio Relay
+> League, Incorporated trademarks or servicemarks in their names
+> without prior written permission of the ARRL. See Paragraph 6
+> (below) for contact information.
+>
+> 4. Use of this software does not imply endorsement by ARRL of
+> products derived from or including this software and vendors may not
+> claim such endorsement.
+>
+> 5. Disclaimer: This software is provided "as-is" without
+> representation, guarantee or warranty of any kind, either express or
+> implied, including but not limited to the implied warranties of
+> merchantability or of fitness for a particular purpose. The entire
+> risk as to the quality and performance of the software is solely
+> with you. Should the software prove defective, you (and not the
+> American Radio Relay League, its officers, directors, employees or
+> agents) assume the entire cost of all necessary servicing, repair or
+> correction. In no event will ARRL be liable to you or to any third
+> party for any damages, whether direct or indirect, including lost
+> profits, lost savings, or other incidental or consequential damages
+> arising out of the use or inability to use such software, regardless
+> of whether ARRL has been advised of the possibility of such damages.
+>
+> 6. Contact information:
+>
+> American Radio Relay League, Inc.
+> Attn: Logbook of the World Manager
+> 225 Main St
+> Newington, CT 06111
+> voice: 860-594-0200
+> fax: 860-594-0259
+> email: logbook@arrl.org
+> Worldwide Web: www.arrl.org
+>
+> This software consists of voluntary contributions made by many
+> individuals on behalf of the ARRL. More information on the "Logbook
+> of The World" project and the ARRL is available from the ARRL Web
+> site at www.arrl.org.
+
+DXCC and Logbook of The World are ARRL programs. Nexus is not affiliated with, or endorsed
+by, the ARRL.
 
 ### ITU-R / CCIR propagation coefficient data
 The HF path-prediction engine embeds the CCIR ionospheric numerical-map
@@ -1119,10 +1267,10 @@ PATENTS are in the same file.
 
 ### Existing application dependencies
 
-Nexus's Rust workspace — 22 crates under `crates/`: `deepcw`, `fst4`, `ft2`, `ft4`, `ft8`, `js8`,
+Nexus's Rust workspace — 25 crates under `crates/`: `deepcw`, `fst4`, `ft2`, `ft4`, `ft8`, `js8`,
 `jt65`, `modes`, `msk144`, `propagation`, `q65`, `street-map`, `tempo-app`, `tempo-audio`,
-`tempo-core`, `tempo-fast`, `tempo-fast-sys`, `tempo-flexsim`, `tempo-net`, `tempo-sstv`, `tempo-stream`,
-`wspr` —
+`tempo-base`, `tempo-client`, `tempo-codec`, `tempo-core`, `tempo-fast`, `tempo-fast-sys`,
+`tempo-flexsim`, `tempo-net`, `tempo-sstv`, `tempo-stream`, `wspr` —
 and the standalone Tauri shell (`src-tauri/`, which is NOT a workspace member) depend on the
 crates below.
 `Cargo.lock` plus `deny.toml` are the authoritative, machine-checked license set: CI runs
@@ -1162,11 +1310,11 @@ principal third-party components, not a substitute for that gate:
   seed its own scale on a high-DPI panel instead of rendering half-size until the operator
   finds the zoom control) — MIT. Not a new crate: already in the tree at the same version as a
   dependency of gtk, gdkx11 and webkit2gtk, which the Linux webview pulls in regardless.
-- **webview2-com** and **windows-core** (Windows only: the Remote stations window turns off
-  WebView2's own browser keys, such as reload, print and find, so they cannot act on the Remote
-  page) — MIT, and MIT OR Apache-2.0 (© Microsoft Corporation) respectively. Not new crates: both
-  are already in the tree at the same versions (0.38 and 0.61) as dependencies of wry, the
-  webview Tauri uses.
+- **webview2-com** and **windows-core** (Windows only: every Nexus window turns off WebView2's
+  own browser keys, such as reload, print and find, so they cannot act on Nexus's pages) — MIT,
+  and MIT OR Apache-2.0 (© Microsoft Corporation) respectively. Not new crates: both are already
+  in the tree at the same versions (0.38 and 0.61) as dependencies of wry, the webview Tauri
+  uses.
 - **tokio-rustls** (Remote over this network: the shack's own listener, TLS 1.3 with raw keys pinned at
   pairing) — MIT OR Apache-2.0 (© 2017 quininer kel). Not a new crate: already in the tree at the same
   version (0.26) as a dependency of reqwest, hyper-rustls and tokio-tungstenite.
@@ -1216,7 +1364,9 @@ principal third-party components, not a substitute for that gate:
   COM interface and ships none of it.
 - **md-5** (the MD5 digest for the Winlink secure-login challenge-response,
   crates/tempo-core/src/winlink/secure.rs — used only as the published Winlink auth
-  primitive, never for integrity or secrecy) — MIT OR Apache-2.0. Brings the RustCrypto
+  primitive and the long-term credential key of TURN, which the native remote's internet
+  roads use only to authenticate their own requests to a TURN server (RFC 8489 §9.2.2);
+  never for secrecy) — MIT OR Apache-2.0. Brings the RustCrypto
   digest subtree (digest, block-buffer, crypto-common, generic-array, typenum) newly
   into the tree; all MIT or MIT/Apache-2.0, all already on deny.toml's allow-list.
 - **native-tls** (the HRDLog.net upload connection only — `crates/propagation/src/live/hrdlog.rs`;
@@ -1523,12 +1673,16 @@ The bundled and linked components combine into the GPLv3 whole:
   sgp4, keyring, reqwest, hound, socket2, serde, React, TypeScript, Vite,
   Radix; ISC for d3-geo, topojson-client, world-atlas, us-atlas, lucide-react;
   ISC for slowrx and MIT for the `slowrx.rs` port of it vendored at
-  `crates/tempo-sstv/`; MIT for cty.dat and the CQ-zone data; MIT for kappanhang, whose
-  notice is reproduced under *Upstream lineage*; public domain for
+  `crates/tempo-sstv/`; MIT for AD1C's cty.dat and cty.csv and the CQ-zone data; MIT for
+  kappanhang, whose notice is reproduced under *Upstream lineage*; public domain for
   the WMM, Natural Earth, and Census-derived data) are compatible with
   redistribution under GPLv3.
 - MPL-2.0 (serialport) is GPL-compatible; its source-disclosure obligations
   apply per-file to that component.
+- The ARRL's TrustedQSL licence (the deleted-DXCC table) is a permissive BSD-style licence.
+  Its conditions (keep and reproduce the notice and disclaimer, claim no ARRL endorsement,
+  use no ARRL trademark in a product's name) are of the kinds GPLv3 section 7 permits, so the
+  table combines into the GPLv3 whole; this file reproduces the notice.
 - Public domain (the bundled SQLite amalgamation, statically linked) imposes no condition at
   all, so it combines into the GPLv3 whole with nothing to satisfy; the MIT `rusqlite` and
   `libsqlite3-sys` bindings that carry it require only notice retention, which GPLv3 section 7

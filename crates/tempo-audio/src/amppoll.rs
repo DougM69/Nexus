@@ -55,8 +55,8 @@ const MAX_BACKOFF_MS: u64 = 60_000;
 /// How long to wait before retrying an amplifier that failed to open, after `failures` in a row.
 ///
 /// ⭐ WITHOUT THIS, AN AMPLIFIER THAT IS SWITCHED OFF COSTS A PORT SWEEP EVERY SECOND FOREVER.
-/// `KpaLink::open` tries all four documented data rates at a 250 ms probe budget — up to ~1 s of
-/// blocking and four port opens per attempt — because the KPA remembers its own rate and there
+/// `KpaLink::open` tries all seven documented data rates at a 250 ms probe budget — up to ~1.75 s
+/// of blocking and seven port opens per attempt — because the KPA remembers its own rate and there
 /// is nothing to assume. The radio monitor's `retry_after_ms` documents the identical trap from
 /// the other side (a rigctld spawned and killed every 850 ms, forever), and this is the same
 /// curve: 1 s, 2 s, 4 s … capped. A successful open clears it, so an amplifier switched on
@@ -583,7 +583,7 @@ mod imp {
                     engine_lock(&engine).observe_amp_miss(id, &family, reason);
                     continue;
                 }
-                // OFF THE LOCK. `KpaLink::open` sweeps four data rates at 250 ms apiece.
+                // OFF THE LOCK. `KpaLink::open` sweeps seven data rates at 250 ms apiece.
                 let remote_open = remote_amp_read(
                     &mut engine_lock(&engine),
                     id,

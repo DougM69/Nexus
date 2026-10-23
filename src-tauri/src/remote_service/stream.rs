@@ -63,6 +63,16 @@
 //!   budget of the path the picture takes (`Session::path`), and at what the link to the page
 //!   carries (`Session::estimate`, 2026-10-03), which the session is told to look for up to what
 //!   the whole picture needs (`Session::want`): only its size, frame rate and bit rate change.
+//! - **The station's screen hides its stored keys while it is watched: [`Watched`].** From a
+//!   session's state on until it is gone, however it ends; the screen is told each change, and a
+//!   settings read there carries no stored key meanwhile.
+//! - **The window takes the page's shape (2026-10-17).** A full-screen 16:9 window shown in a
+//!   browser of another shape reached the page with wide bars round it. While a session shows it,
+//!   the main window takes the shape of the page's picture area ([`Host::shape`], from the same
+//!   `view` the picture is sized by), within the work area of the monitor it is on, no more than
+//!   once a [`FOLLOW_GAP`]; when the session's state is gone, however the session ended, the
+//!   window goes back to the size, place and state it had. Only the window's own box moves:
+//!   nothing is cut off the picture, and nothing here reaches the stop, presence or lease paths.
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
@@ -103,6 +113,59 @@ pub type InputSink = Arc<dyn Fn(&WebviewInput) + Send + Sync>;
 /// it has one right now.
 pub type WindowHandle = Arc<dyn Fn() -> Option<isize> + Send + Sync>;
 
+/// The station's main window taking the shape of a streamed page's picture area, and going back.
+pub trait ShapeWindow: Send + Sync {
+    /// Take the shape of a picture area of `view` (only its shape is read).
+    fn follow(&self, view: (u32, u32));
+    /// Back to the size, place and state the window had before the first `follow`.
+    fn restore(&self);
+}
+
+/// The main window's [`ShapeWindow`].
+pub type WindowShape = Arc<dyn ShapeWindow>;
+
+/// The soonest the window takes a new shape after its last: each new shape is a new picture size,
+/// which costs the page a keyframe, and a browser being dragged says its size each time it settles.
+pub const FOLLOW_GAP: Duration = Duration::from_secs(1);
+
+/// The main window following one session's page. Dropped with the session's state, however the
+/// session ends, a panic included, and then the window goes back, if it had followed at all.
+struct Following {
+    shape: WindowShape,
+    /// The view last followed, and when.
+    taken: Option<((u32, u32), Instant)>,
+}
+
+impl Following {
+    /// Follow `view` unless the window already has its shape, or took one less than
+    /// [`FOLLOW_GAP`] ago; it is asked again every turn, so the latest view is taken once the gap
+    /// is out.
+    fn tick(&mut self, view: (u32, u32), now: Instant) {
+        if let Some((taken, at)) = self.taken {
+            if same_shape(taken, view) || now.saturating_duration_since(at) < FOLLOW_GAP {
+                return;
+            }
+        }
+        self.shape.follow(view);
+        self.taken = Some((view, now));
+    }
+}
+
+impl Drop for Following {
+    fn drop(&mut self) {
+        if self.taken.is_some() {
+            self.shape.restore();
+        }
+    }
+}
+
+/// Within 2 %: the page's zoom into the picture, or its cut to whole pixels, is not a new shape.
+fn same_shape(a: (u32, u32), b: (u32, u32)) -> bool {
+    let across = f64::from(a.0) * f64::from(b.1);
+    let down = f64::from(b.0) * f64::from(a.1);
+    (across / down - 1.0).abs() <= 0.02
+}
+
 /// What the application gives the stream. Cheap to clone.
 #[derive(Clone, Default)]
 pub struct Host {
@@ -120,6 +183,73 @@ pub struct Host {
     /// The shack kept awake, system and display, while a stream is attached (the operator's pick
     /// "Keep awake during streams"). Held from a session's connection until its state is gone.
     pub awake: tempo_stream::keep_awake::KeepAwake,
+    /// The main window taking the page's shape while a session shows it. `None` in a test or a
+    /// build with no window, and then the window keeps its own.
+    pub shape: Option<WindowShape>,
+    /// Whether a stream is watching the station's screen, which then shows no stored key.
+    pub watched: Watched,
+}
+
+/// Told whether a stream watches the station's screen ([`Watched::tell`]).
+pub type WatchedTeller = Arc<dyn Fn(bool) + Send + Sync>;
+
+/// ⛔ Whether a stream is watching the station's own screen: from a session's state on (after its
+/// admission, before any picture is taken) until that state is gone, however the session ends, a
+/// panic included. While it is, a settings read at the shack carries no stored key, so a key the
+/// operator revealed there cannot reach a viewer who presses nothing. Counted, not a switch: a
+/// session still ending while another starts (a fresh authority on Turn on) keeps it live.
+/// Cheap to clone; every clone is the one state.
+#[derive(Clone, Default)]
+pub struct Watched {
+    open: Arc<std::sync::Mutex<usize>>,
+    /// Told each change, in order, under the count's lock: the station's screen hears it here.
+    tell: Arc<std::sync::OnceLock<WatchedTeller>>,
+}
+
+impl Watched {
+    /// Is a stream watching now?
+    pub fn live(&self) -> bool {
+        *self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            > 0
+    }
+    /// Who hears each change. Set once; a second is ignored.
+    pub fn tell(&self, tell: WatchedTeller) {
+        let _ = self.tell.set(tell);
+    }
+    /// Watched until the returned guard is dropped.
+    pub fn watching(&self) -> Watching {
+        self.change(true);
+        Watching(self.clone())
+    }
+    fn change(&self, opened: bool) {
+        let mut open = self
+            .open
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let was = *open > 0;
+        *open = if opened {
+            *open + 1
+        } else {
+            open.saturating_sub(1)
+        };
+        if was != (*open > 0) {
+            if let Some(tell) = self.tell.get() {
+                tell(*open > 0);
+            }
+        }
+    }
+}
+
+/// One session watching the station's screen ([`Watched`]), until dropped.
+pub struct Watching(Watched);
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        self.0.change(false);
+    }
 }
 
 /// The device key the operator pinned for a browser when they approved it at the radio (A5), as
@@ -261,6 +391,15 @@ enum Road {
     },
 }
 
+/// The road a LAN-only session's offer takes: the LAN road's, on `network`, with a port of the
+/// operating system's choosing as the relay's road has (only the LAN road's own listener keeps the
+/// operator's port). With no network to hold it to, none: the offer is refused `lanOnly`.
+fn lan_only_road(network: Option<tempo_stream::lan::Network>) -> Result<Road, StreamReason> {
+    network
+        .map(|network| Road::Lan { network, port: 0 })
+        .ok_or(StreamReason::LanOnly)
+}
+
 impl Road {
     /// May a datagram from `source` reach the session? On the LAN road, only one from the shack's
     /// own subnet.
@@ -300,6 +439,29 @@ impl StreamLane {
         payload: BrowserSignal,
     ) -> Option<String> {
         self.signal_on(station, to_relay, ids, payload, Road::Relay)
+    }
+
+    /// A `streamSignal` the relay stamped for a session the service lets use the shack's own
+    /// network only (`lanOnly`: an account whose internet use has ended). Its offer runs on the LAN
+    /// road's terms, on the network `network` finds this computer's route on: no STUN, only the
+    /// shack's own address as a candidate, and nothing tried or heard off that subnet, so the media
+    /// cannot leave the LAN whatever the page or the relay sends. With no such network the offer is
+    /// refused `lanOnly`. Only an offer opens a session; anything else routes as on the relay's road.
+    pub fn signal_lan_only(
+        &mut self,
+        station: &Station,
+        to_relay: &tokio::sync::mpsc::UnboundedSender<String>,
+        ids: (String, String, String),
+        payload: BrowserSignal,
+        network: impl FnOnce() -> Option<tempo_stream::lan::Network>,
+    ) -> Option<String> {
+        if !matches!(payload, BrowserSignal::Offer { .. }) {
+            return self.signal_on(station, to_relay, ids, payload, Road::Relay);
+        }
+        match lan_only_road(network()) {
+            Ok(road) => self.signal_on(station, to_relay, ids, payload, road),
+            Err(reason) => state(&ids.0, false, Some(reason)),
+        }
     }
 
     /// The same for a session on the LAN road, which the LAN channel stamped from the key its
@@ -501,12 +663,18 @@ pub(super) struct Streaming {
     awake: Option<tempo_stream::keep_awake::Attached>,
     /// The page's picture area in its own device pixels, once it has said (`view`).
     view: Option<(u32, u32)>,
+    /// The main window following the page's shape, from the connection on.
+    following: Option<Following>,
+    /// The station's screen watched, from this state on until it is gone ([`Watched`]).
+    _watched: Watching,
 }
 
 impl Streaming {
     pub fn new(station: Station, offer: Offer, now: Instant) -> Self {
         // Whatever the over was before this session is not this page's to hear about.
         let mic_told = station.host.mic.status();
+        // Before the session can connect, so before any picture: the screen hides its stored keys.
+        let _watched = station.host.watched.watching();
         Self {
             station,
             offer,
@@ -522,6 +690,8 @@ impl Streaming {
             mic_told,
             awake: None,
             view: None,
+            following: None,
+            _watched,
         }
     }
 
@@ -530,10 +700,13 @@ impl Streaming {
         self.view
     }
 
-    /// The microphone over's state for the page, when it has changed since the page was last told.
+    /// The microphone over's state for the page, when what the page shows of it has changed since
+    /// the page was last told. The over's holes on the air are not among what it shows, so a hole
+    /// alone tells the page nothing new.
     pub fn mic_state(&mut self) -> Option<String> {
         let now = self.station.host.mic.status();
-        if now == self.mic_told {
+        let shown = |s: &tempo_app::mic::MicStatus| (s.armed, s.keyed, s.no_power_out, s.ended);
+        if shown(&now) == shown(&self.mic_told) {
             return None;
         }
         self.mic_told = now;
@@ -581,7 +754,20 @@ impl Streaming {
         self.presence.renew(&self.station, &self.offer, now);
         // Attached: the shack stays awake, system and display, until this stream is gone.
         self.awake = Some(self.station.host.awake.attach());
+        self.following = self
+            .station
+            .host
+            .shape
+            .clone()
+            .map(|shape| Following { shape, taken: None });
         Ok(())
+    }
+
+    /// The main window in the shape of the page's picture area, once the page has said it.
+    pub fn follow(&mut self, now: Instant) {
+        if let (Some(following), Some(view)) = (self.following.as_mut(), self.view) {
+            following.tick(view, now);
+        }
     }
 
     /// Once per lapse of presence, the window's `reset`: a button or key a blind operator was
@@ -734,10 +920,7 @@ impl Streaming {
 
     /// What the held PTT did since the last call, for the page.
     pub fn ptt_reports(&self) -> Vec<String> {
-        self.station
-            .host
-            .ptt
-            .reports()
+        page_reports(&self.station.host.ptt)
             .into_iter()
             .filter_map(|r| {
                 serde_json::to_string(&ControlOut::PttState {
@@ -829,7 +1012,15 @@ impl Streaming {
 }
 
 /// Why an over ended, in the contract's words: each end under its own name, so the page can say
-/// the right thing (the audio design's §7).
+/// the right thing.
+/// What the held PTT says of the page's own presses since the last call, taken: a computer's press
+/// on Stop's road (`super::lan::stop_road`) is left for that road to tell, and never told here.
+pub(crate) fn page_reports(
+    ptt: &tempo_app::remote_control::ptt_hold::PttHold,
+) -> Vec<tempo_app::remote_control::ptt_hold::HoldReport> {
+    ptt.reports_where(|id| !super::lan::stop_road::is_road_press(id))
+}
+
 fn wire_ended(why: tempo_app::mic::MicEnded) -> tempo_stream::protocol::MicEnded {
     use tempo_app::mic::MicEnded as Engine;
     use tempo_stream::protocol::MicEnded as Wire;
@@ -1166,6 +1357,7 @@ fn run(
             session.send(Lane::Audio, &audio, now);
         }
         if let Some(picture) = &video {
+            streaming.follow(now);
             picture.fit(session.path(), streaming.view(), session.estimate());
             if let Some(link) = picture.wanted() {
                 session.want(link, now);

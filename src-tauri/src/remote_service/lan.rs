@@ -50,6 +50,16 @@
 //! 7. Presence: only a heartbeat naming a fresh picture renews it. Input, the held PTT and the
 //!    microphone are taken only while it is live.
 //!
+//! A computer that drives the shack (client mode, protocol 2's command lane) takes no picture.
+//! Beside the TCP port it has Stop's second road ([`stop_road`]): a UDP socket of its own on the
+//! same address, at the TCP port plus two (42077), heard only from the same subnet, with a road
+//! for each connection named in its welcome and keyed from that connection's TLS session
+//! ([`datagram`]). Its Stop goes there as well as on the link, and its presence is renewed only
+//! there, by a heartbeat naming a snapshot the lane pushed under two seconds before. Between the
+//! two, at the TCP port plus one (42076), is its audio road (`audio_road`): the station's receive
+//! audio to it, and its microphone to the station's microphone over, refused while every start from
+//! afar is. A socket, a thread and keys of its own, so audio never stands in Stop's way.
+//!
 //! ## Caps and limits
 //!
 //! | | |
@@ -59,22 +69,26 @@
 //! | Failed handshakes | 5 in a minute, and the address is ignored for 5 minutes |
 //! | The handshake (TLS, upgrade, hello) | 5 s |
 //! | A connected computer's silence | 15 s, then it is gone (it pings every 5 s) |
-//! | A message, either way | 8 KiB |
+//! | A frame, either way | 8 KiB; a bigger call or answer goes in pieces |
 //! | Stream signals | 48 in 10 s, a close always allowed |
+//! | Calls from one computer | 8 running, 4 of them one command, 200 a second; 16 waiting at once |
 //!
 //! The listener has a thread and a runtime of its own, and reaches the radio only through the
 //! operations authority, which never blocks, so a flood can slow it and never the radio loop.
 //!
-//! ## The wire, after TLS: WebSocket text frames of JSON
+//! ## The wire, after TLS: WebSocket frames of JSON, but for the feeds and pieces (`wire`)
 //!
-//! From the computer: `{"type":"hello","protocol":1,"stream":1,"operation":4}` first, then
+//! From the computer: `{"type":"hello","protocol":2,"stream":1,"operation":4}` first, then
 //! `operationRequest` (`state`, `acquire`, `heartbeat`, `release` and `stopTransmit`, as on the
 //! relay's lane, at operation version 4), and `streamSignal` exactly as a page hands it to the
-//! relay.
-//! From the shack: `welcome` (the session, device and LAN station ids it stamped) or `refused`
-//! (`updateStation` / `updateComputer`), `operationResponse`, `streamSignal` and `streamState` as
-//! the relay hands them to a page, and `status` (`rigKeyed`, for the page's ▲ TX and its
-//! microphone's mute).
+//! relay. A computer that drives the shack, never a window, opens the command lane with `open`
+//! (`profile`, `app`, `contract`, `run`) and then sends `call` (`id`, `cmd`, `args`, and `base` for
+//! a whole save), `outcomes` (`ids`) and `watch` (`feeds`).
+//! From the shack: `welcome` (the session, device and LAN station ids it stamped, and its `app` and
+//! `contract`) or `refused` (`updateStation` / `updateComputer`, and for an `open` of another build
+//! of the same version `otherBuild`), `operationResponse`, `streamSignal` and `streamState` as the
+//! relay hands them to a page, and `status` (`rigKeyed`, for the page's ▲ TX and its microphone's
+//! mute); on the command lane `opened`, `result`, `outcomes`, `watching`, `event` and the feeds.
 //!
 //! ## Off by default, and off by itself
 //!
@@ -106,25 +120,38 @@
 //! ## The other end
 //!
 //! The paired computer's side, its key, its pairing and its road, is `crate::lan_client`, which
-//! speaks this wire with this module's own functions and versions.
+//! speaks this wire with this module's own functions and versions. The wire itself, both ends' half
+//! of each road and the computer's link are the client core's (`tempo_client`), read here as there.
+#[cfg(feature = "radio")]
+pub(crate) mod audio_road;
 mod book;
 mod channel;
+pub(crate) mod commands;
+/// Enrolling a computer on this network by its own sign-in to the station's account.
+pub(crate) mod enrol;
+/// The datagram layer of the roads beside the link (the client core's, which both ends read).
+pub(crate) use tempo_client::datagram;
 mod gate;
+/// One connection's writer, at either end of the link (the client core's).
+pub(crate) use tempo_client::outbox;
 pub(crate) mod pairing;
+pub(crate) mod stop_road;
 #[cfg(test)]
 pub(super) mod tests;
 pub mod tls;
+/// The command link's wire, as both ends read and write it (the client core's).
+pub(crate) use tempo_client::wire;
 
 pub use book::Book;
-pub(crate) use book::{device_id, valid_name, NAME_CHARS};
+pub(crate) use book::{device_id, tunnel_device_id, valid_name, NAME_CHARS};
+/// Who may hold a session on a listener: the LAN's paired computers, or the room's tunnel's own.
+pub(crate) use channel::Roster;
+/// Where a connection reads this station's key for the internet road, its public half alone.
+pub(crate) use channel::StationKeyOf;
 
 /// The LAN protocol, stream and operation versions this build speaks, in the order a hello names
 /// them: the shack's own, and the ones its paired computers' window says.
-pub(crate) const VERSIONS: (u8, u8, u8) = (
-    channel::PROTOCOL_VERSION,
-    tempo_stream::protocol::STREAM_VERSION,
-    channel::OPERATION_VERSION,
-);
+pub(crate) use tempo_client::wire::VERSIONS;
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
@@ -137,7 +164,7 @@ use tempo_stream::lan::dnssd::Record;
 use tempo_stream::lan::{Choice, Look, Network, NoNetwork};
 use tokio::sync::{watch, Notify};
 
-use super::operations::Authority;
+use super::operations::{Authority, RoadPresence, RoadStop};
 use super::transport::Feeds;
 
 /// The TCP port the shack listens on, and the UDP port of its stream, unless the operator sets
@@ -310,9 +337,18 @@ pub(super) struct Deps {
     pub feeds: Feeds,
     /// The LAN key and the paired computers.
     pub book: Arc<Book>,
+    /// Whether, and against what, a computer may enrol by its own sign-in (`enrol`).
+    pub enrolment: Arc<enrol::Enrolment>,
     pub resolve: Resolve,
     pub advertise: Advertise,
     pub firewall: FirewallSays,
+    /// The command lane's dispatcher, one for the station: a computer that reconnects, even to a
+    /// listener started again, finds the journal of its calls.
+    pub dispatcher: crate::command_dispatch::Dispatcher<crate::command_dispatch::ShackStores>,
+    /// How the lane runs a call, and the events it may forward.
+    pub commands: commands::Commands,
+    /// This station's key for the internet road, its public half, as each `opened` names it.
+    pub station_key: channel::StationKeyOf,
 }
 
 struct State {
@@ -322,10 +358,14 @@ struct State {
     on: AtomicBool,
     status: Mutex<LanStatus>,
     path: PathBuf,
+    /// Held while the switch is written to `path`, so presses in a row are written in turn and the
+    /// newest is the one left on disk.
+    saving: Mutex<()>,
     wake: Notify,
     closed: AtomicBool,
     authority: Arc<Authority>,
     book: Arc<Book>,
+    enrolment: Arc<enrol::Enrolment>,
     /// The gate of the listener started last, for a test to read ([`Lan::open_from`]).
     #[cfg(test)]
     gate: Mutex<Option<Arc<gate::Gate>>>,
@@ -336,18 +376,22 @@ impl State {
         self.switch.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
-    /// Change the switch, keep it, and wake the listener's thread. Said at once, so a status read
-    /// straight after a press shows it; the listener then says where it listens.
+    /// Change the switch, wake the listener's thread, and then keep it. Said at once, so a status
+    /// read straight after a press shows it; the listener then says where it listens.
     ///
     /// Off, however it went off: the pairing window closes, and no paired computer keeps station
     /// control. The authority stops reading them (`on`) before they are revoked, so the revoke
     /// stands.
+    ///
+    /// ⛔ OFF NEVER WAITS FOR THE DISK. The switch's file is written last, outside the switch's
+    /// lock, once the listener has been told and the paired computers revoked: written first, under
+    /// that lock, a write the disk held up (a busy disk, a scanner opening the file) kept the port
+    /// open, every session running and whatever it kept on the air going until it was through, and
+    /// a status read waited with it. Each write is of the switch as it stands then, one at a time,
+    /// so the newest press is the one left on disk.
     fn decide(&self, change: impl FnOnce(&mut Switch)) {
         if let Ok(mut switch) = self.switch.lock() {
             change(&mut switch);
-            if switch.save(&self.path).is_err() {
-                tempo_core::applog::warn("remote", "on this network: the switch was not saved");
-            }
             self.on.store(switch.on, Ordering::SeqCst);
             // The networks stay listed while it is on, so a pick does not take the picker away.
             let networks = match (switch.on, self.status.lock()) {
@@ -367,6 +411,16 @@ impl State {
             release(&self.authority, &self.book.ids());
         }
         self.wake.notify_one();
+        let _saving = self
+            .saving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Ok(switch) = self.switch.lock().map(|switch| switch.clone()) else {
+            return;
+        };
+        if switch.save(&self.path).is_err() {
+            tempo_core::applog::warn("remote", "on this network: the switch was not saved");
+        }
     }
 
     fn report(&self, status: LanStatus) {
@@ -394,10 +448,12 @@ impl Lan {
             switch: Mutex::new(switch),
             status: Mutex::new(LanStatus::default()),
             path,
+            saving: Mutex::new(()),
             wake: Notify::new(),
             closed: AtomicBool::new(false),
             authority: deps.authority.clone(),
             book: deps.book.clone(),
+            enrolment: deps.enrolment.clone(),
             #[cfg(test)]
             gate: Mutex::new(None),
         });
@@ -494,6 +550,20 @@ impl Lan {
         self.state.book.keep()
     }
 
+    /// Take out every computer enrolled on its own sign-in whose proof is past the offline age
+    /// (`enrol`), as a removal at the shack takes it out, and then out of the LAN's device cache: it
+    /// signs in again to come back. At launch before anything listens, and after each list the
+    /// station reads. The store can block, as for [`Lan::revoke`].
+    pub fn expire(&self) {
+        // As the station keeps them now: the list may have changed them.
+        self.state.enrolment.reread();
+        expire(
+            &self.state.book,
+            &self.state.authority,
+            &self.state.enrolment,
+        );
+    }
+
     /// Reset this station's network identity, at the shack: every paired computer out at once as a
     /// removal is, then a new LAN key with nobody paired to it, and the listener on the new key.
     /// The store can block, as for [`Lan::revoke`].
@@ -503,6 +573,14 @@ impl Lan {
         let renewed = self.state.book.renew();
         self.state.wake.notify_one();
         renewed
+    }
+
+    /// The LAN key's public half, SPKI as lowercase hex, made now if the store holds none: what
+    /// binding the station to its account names beside its signing key. `None` while the store
+    /// will not give one up.
+    pub fn public_key(&self) -> Option<String> {
+        let (identity, _) = self.state.book.identity()?;
+        Some(identity.public_key().to_string())
     }
 
     pub fn status(&self) -> LanStatus {
@@ -546,6 +624,24 @@ fn release(authority: &Authority, devices: &[String]) {
     }
 }
 
+/// [`Lan::expire`]. A computer the book does not hold now (not read yet, or never in it) stays in the
+/// cache, as does every one when the store will not keep the book: the LAN still refuses each at
+/// every admission.
+fn expire(book: &Book, authority: &Authority, enrolment: &enrol::Enrolment) {
+    let gone: Vec<[u8; 32]> = enrolment
+        .expired()
+        .into_iter()
+        .filter(|pin| book.forget(&device_id(pin)))
+        .collect();
+    if gone.is_empty() {
+        return;
+    }
+    release(authority, &gone.iter().map(device_id).collect::<Vec<_>>());
+    if book.keep().is_ok() {
+        enrolment.forget(&gone);
+    }
+}
+
 impl Drop for Lan {
     fn drop(&mut self) {
         self.state.closed.store(true, Ordering::SeqCst);
@@ -566,8 +662,11 @@ fn off_by_itself(state: &State, why: Off) {
 
 /// Keep the listener in step with the switch and the network, until the service goes.
 async fn supervise(state: Arc<State>, deps: Deps) {
-    // The LAN key and the paired computers, from the credential store, before anything listens.
+    // The LAN key and the paired computers, from the credential store, before anything listens; and
+    // the computers among them enrolled on their own sign-in, any past its proof's age taken out.
     deps.book.load();
+    deps.enrolment.load();
+    expire(&deps.book, &deps.authority, &deps.enrolment);
     let mut running: Option<Listener> = None;
     let mut looks: u32 = 0;
     while !state.closed.load(Ordering::SeqCst) {
@@ -672,6 +771,148 @@ async fn supervise(state: Arc<State>, deps: Deps) {
     }
 }
 
+/// What Stop's second road's thread may do (`stop_road::Powers`): the station's Stop path and
+/// presence, the held PTT and the microphone over the stream installed in the engine, and who is
+/// paired. `None` if the Stop path's own thread would not start.
+fn powers(deps: &Deps) -> Option<stop_road::Powers> {
+    let book = deps.book.clone();
+    road_powers(
+        &deps.authority,
+        &deps.engine,
+        &deps.feeds,
+        deps.book.verifier().0,
+        Arc::new(move || book.revisions()),
+    )
+}
+
+/// The same powers for any listener: who is on it, `paired`, and how many times that has changed.
+fn road_powers(
+    authority: &Arc<Authority>,
+    engine: &crate::SharedEngine,
+    feeds: &Feeds,
+    paired: tls::Paired,
+    pairings: Arc<dyn Fn() -> u64 + Send + Sync>,
+) -> Option<stop_road::Powers> {
+    Some(stop_road::Powers {
+        stop: RoadStop::new(authority.clone(), engine.clone())?,
+        presence: RoadPresence::new(authority.clone(), engine.clone()),
+        ptt: feeds.stream.ptt.clone(),
+        mic: feeds.stream.mic.clone(),
+        paired,
+        pairings,
+    })
+}
+
+/// What the audio road's thread may do (`audio_road::Powers`): the station's one receive encoder,
+/// the audio lane's admission, the held PTT, read, and the microphone over the stream installed in
+/// the engine.
+#[cfg(feature = "radio")]
+fn audio_powers(deps: &Deps) -> audio_road::Powers {
+    audio_powers_of(&deps.authority, &deps.feeds)
+}
+
+#[cfg(feature = "radio")]
+fn audio_powers_of(authority: &Arc<Authority>, feeds: &Feeds) -> audio_road::Powers {
+    let authority = authority.clone();
+    audio_road::Powers {
+        receive: feeds.audio.clone(),
+        admitted: Arc::new(move |session, device, lease, now| {
+            authority.audio_admitted(session, device, lease, now)
+        }),
+        ptt: feeds.stream.ptt.clone(),
+        mic: feeds.stream.mic.clone(),
+    }
+}
+
+/// What the room's tunnel serves its computers with, beside the LAN's own listener and sharing its
+/// one authority and its command lane's dispatcher (the station's one lease, and one revision of
+/// each store). Each keeps what it holds by the device's name, and the tunnel's computers have
+/// names of their own (`tunnel_device_id`): no LAN computer's and no hosted device's, so nothing
+/// held for one road's peer is ever another's.
+#[derive(Clone)]
+pub(crate) struct TunnelDeps {
+    pub authority: Arc<Authority>,
+    pub engine: crate::SharedEngine,
+    pub feeds: Feeds,
+    pub dispatcher: crate::command_dispatch::Dispatcher<crate::command_dispatch::ShackStores>,
+    pub commands: commands::Commands,
+}
+
+/// The room's tunnel, as this road serves it (`super::tunnel`): the channel from its TLS on, on the
+/// station's hosted key, held to the computers approved for it at the shack, with internet roads
+/// in place of the LAN's, and nothing that pairs or streams. Cheap to clone.
+#[derive(Clone)]
+pub(crate) struct Tunnel {
+    shared: channel::Shared,
+}
+
+impl Tunnel {
+    /// The tunnel on `identity` (the station's hosted key), held to `roster`, whose changes
+    /// `revisions` counts; its internet roads bound at `bind`, learning their reflexive address
+    /// from `stun`. `None` if TLS could not be made or Stop's own thread would not start.
+    pub(crate) fn new(
+        deps: &TunnelDeps,
+        identity: Arc<tls::Identity>,
+        roster: Roster,
+        revisions: Arc<dyn Fn() -> u64 + Send + Sync>,
+        bind: std::net::IpAddr,
+        stun: Option<SocketAddr>,
+    ) -> Option<Self> {
+        // No pairing window ever opens here.
+        let tls = tls::server(&identity, roster.paired.clone(), Arc::new(|| false)).ok()?;
+        // The room's TLS proves the station's key itself, so its `opened` restates the pin.
+        let station_key = identity.public_key().to_string();
+        let powers = road_powers(
+            &deps.authority,
+            &deps.engine,
+            &deps.feeds,
+            roster.paired.clone(),
+            revisions,
+        )?;
+        Some(Self {
+            shared: channel::Shared {
+                authority: deps.authority.clone(),
+                engine: deps.engine.clone(),
+                feeds: deps.feeds.clone(),
+                tls,
+                identity,
+                roster,
+                desk: None,
+                network: None,
+                port: 0,
+                gate: Arc::new(gate::Gate::default()),
+                handshake: channel::HANDSHAKE,
+                silence: channel::SILENCE,
+                dispatcher: deps.dispatcher.clone(),
+                commands: deps.commands.clone(),
+                build: (wire::APP, wire::contract()),
+                stop_road: None,
+                #[cfg(feature = "radio")]
+                audio_road: None,
+                internet: Some(channel::InternetRoads {
+                    stop: stop_road::StopRoad::internet_only(powers),
+                    #[cfg(feature = "radio")]
+                    audio: Some(audio_road::AudioRoad::internet_only(audio_powers_of(
+                        &deps.authority,
+                        &deps.feeds,
+                    ))),
+                    bind,
+                    stun,
+                }),
+                station_key: Arc::new(move || Some(station_key.clone())),
+            },
+        })
+    }
+
+    /// One computer through the room, from the pipe's first byte to its end.
+    pub(crate) async fn serve<S>(&self, stream: S, stop: watch::Receiver<bool>)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        channel::tunnel(stream, self.shared.clone(), stop).await;
+    }
+}
+
 /// The station's advert by name for a listener at `network` and `port`, on the adapter of
 /// `choice`: "Nexus" and its key's tag, never the computer's name (`tempo_stream::lan::dnssd`).
 /// `None` when Windows will not advertise it, or there is no key to name it by.
@@ -686,10 +927,16 @@ fn advert(deps: &Deps, choice: Option<&Choice>, network: Network, port: u16) -> 
     (deps.advertise)(&record)
 }
 
-/// The listening socket and the connections it has accepted.
+/// The listening socket, the connections it has accepted, and Stop's second road and the audio
+/// road beside it.
 struct Listener {
     network: Network,
     port: u16,
+    /// Stop's second road: its socket on the same address, and its thread.
+    road: Option<stop_road::Running>,
+    /// The audio road: its socket on the same address, and its thread.
+    #[cfg(feature = "radio")]
+    audio: Option<audio_road::Running>,
     /// The generation of the LAN key it presents: a reset moves it, and the listener restarts.
     generation: u64,
     stop: watch::Sender<bool>,
@@ -719,26 +966,80 @@ impl Listener {
             return Err("noNetwork");
         }
         let (paired, pairing) = deps.book.verifier();
-        let tls = tls::server(&identity, paired, pairing).map_err(|_| "unavailable")?;
-        let desk = pairing::Desk::new(deps.book.clone(), &identity).ok_or("unavailable")?;
+        // A computer enrolled on its own sign-in is admitted only within its proof's age: at the
+        // handshake, at its hello and at each of its session's ticks. Read before anything listens,
+        // and until it has been, nobody is admitted.
+        deps.enrolment.load();
+        let paired = deps.enrolment.bounded(paired);
+        // An unknown key is taken for a pairing-only or an enrol-only connection: while the pairing
+        // window is open, or while the station can check an enrolment.
+        let unknown = deps.enrolment.or_pairing(pairing);
+        let tls = tls::server(&identity, paired.clone(), unknown).map_err(|_| "unavailable")?;
+        let desk = pairing::Desk::new(deps.book.clone(), &identity, deps.enrolment.clone())
+            .ok_or("unavailable")?;
         let socket = tokio::net::TcpListener::bind(SocketAddr::new(network.address().into(), port))
             .await
             .map_err(|e| match e.kind() {
                 std::io::ErrorKind::AddrInUse => "portInUse",
                 _ => "noNetwork",
             })?;
+        // Beside it, Stop's second road, heard from the same subnet. A listener without one still
+        // serves, and Stop has the command link alone.
+        let road = powers(deps).and_then(|powers| {
+            let at = SocketAddrV4::new(
+                network.address(),
+                port.saturating_add(stop_road::PORT_AFTER),
+            );
+            stop_road::StopRoad::start(at, stop_road::Hears::Subnet(network), powers)
+        });
+        if road.is_none() {
+            tempo_core::applog::warn(
+                "remote",
+                "on this network: Stop's second road did not open; Stop goes by the link alone",
+            );
+        }
+        // And the audio road, the same way: without it a computer here hears nothing.
+        #[cfg(feature = "radio")]
+        let audio = audio_road::AudioRoad::start(
+            SocketAddrV4::new(
+                network.address(),
+                port.saturating_add(audio_road::PORT_AFTER),
+            ),
+            stop_road::Hears::Subnet(network),
+            audio_powers(deps),
+        );
+        #[cfg(feature = "radio")]
+        if audio.is_none() {
+            tempo_core::applog::warn(
+                "remote",
+                "on this network: the audio road did not open; a computer here hears nothing",
+            );
+        }
         let shared = channel::Shared {
             authority: deps.authority.clone(),
             engine: deps.engine.clone(),
             feeds: deps.feeds.clone(),
             tls,
             identity: Arc::new(identity),
-            desk,
-            network,
+            roster: channel::Roster {
+                paired,
+                ..channel::Roster::lan(&deps.book)
+            },
+            desk: Some(desk),
+            network: Some(network),
             port,
             gate: Arc::new(gate::Gate::default()),
             handshake: channel::HANDSHAKE,
             silence: channel::SILENCE,
+            dispatcher: deps.dispatcher.clone(),
+            commands: deps.commands.clone(),
+            build: (wire::APP, wire::contract()),
+            stop_road: road.as_ref().map(stop_road::Running::road),
+            #[cfg(feature = "radio")]
+            audio_road: audio.as_ref().map(audio_road::Running::road),
+            // This listener's roads are the LAN's: a computer reaching it is on its subnet.
+            internet: None,
+            station_key: deps.station_key.clone(),
         };
         let (stop, stopped) = watch::channel(false);
         #[cfg(test)]
@@ -747,6 +1048,9 @@ impl Listener {
         Ok(Self {
             network,
             port,
+            road,
+            #[cfg(feature = "radio")]
+            audio,
             generation,
             stop,
             task,
@@ -772,11 +1076,21 @@ impl Listener {
     }
 
     /// Close the port and end every connection: each ends its stream, the stream's presence at
-    /// once, and its lease, before this returns. Then the advert is withdrawn, off this thread,
-    /// since that waits for Windows.
+    /// once, and its lease, before this returns. Then Stop's second road and the audio road close,
+    /// their keys with them, and the advert is withdrawn, all off this thread, since each can wait
+    /// a moment.
     async fn stop(self) {
         let _ = self.stop.send(true);
         let _ = self.task.await;
+        if let Some(road) = self.road {
+            let thread = road.stop();
+            let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+        }
+        #[cfg(feature = "radio")]
+        if let Some(audio) = self.audio {
+            let thread = audio.stop();
+            let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+        }
         if let Some(advert) = self.advert {
             let _ = tokio::task::spawn_blocking(move || drop(advert)).await;
         }
@@ -796,6 +1110,9 @@ async fn accept(
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
             accepted = socket.accept() => match accepted {
                 Ok((stream, peer)) => {
+                    // Every frame goes as it is written. With Nagle a small one, a Stop among them,
+                    // can wait for the acknowledgement of the one before: about 40 ms, measured.
+                    let _ = stream.set_nodelay(true);
                     connections.spawn(channel::connection(stream, peer, shared.clone(), stop.clone()));
                 }
                 // Out of descriptors, say: wait a moment rather than spin.

@@ -8,7 +8,6 @@ import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../remote-monit
 import type { MonitorFrame } from '../remote-monitor/protocol'
 import type { MonitorSource } from '../remote-monitor/session'
 import { APPLICATION_VERSIONS } from './application-capabilities'
-import { ApplicationClient } from './application-client'
 import { APPLICATION_MAX_BYTES } from './application-protocol'
 import { AudioLink, browserAudio } from './audio-listen'
 import { StreamLink, browserStream, type StreamEnvironment } from './stream-link'
@@ -20,16 +19,20 @@ import { checkAnswer, checkPin, type StationPins } from './station-key'
 export type AccountSession = {
   accountId: string
   entitlement: { accountId: string; enabled: boolean; expiresAt: number
-    state: 'none' | 'active' | 'ended' | 'disabled'; startedAt: number | null; source: string | null }
+    state: 'none' | 'active' | 'ended' | 'disabled'; startedAt: number | null; source: string | null
+    /** What the account may do now: 'lan' is Remote on the shack's own network only, free once internet
+     *  use has ended. Absent from an older service. */
+    access?: 'internet' | 'lan' | 'none' }
   /** The service's clock. Dates are derived from this, never the browser's own, so a laptop
    *  with the wrong time still shows the right number of days remaining. */
   serverNow: number
-  /** `expires_at` is when this browser's approval ends unless it is used again; `renewsUntil` is the end
-   *  that use cannot move, or null for an approval that never renews. */
+  /** `expires_at` is when this browser's approval ends; `untilRemoved` is true for an approval that lasts
+   *  until it is removed at the shack (every approval since 2026-10-10), whose `expires_at` is no date to
+   *  show. `renewsUntil` is the end that use cannot move under the older rule, or null. */
   /** `stationKey` is the station's own signing key (S3-M1, SPKI hex) as its pairing record at the
    *  service holds it, or null for a station that has not sent one: its answers are refused. */
   stations: { id: string; name: string; stationKey?: string | null; device: { id: string; name: string; approved: number
-    generation?: number; expires_at?: number; renewsUntil?: number | null
+    generation?: number; expires_at?: number; renewsUntil?: number | null; untilRemoved?: boolean
     /** A5: the device key the service holds for this browser (SPKI hex), or null. */
     publicKey?: string | null } | null }[]
   /** A code this account has claimed that the shack has not approved yet, or null. Durable on the
@@ -138,9 +141,11 @@ export class BrowserClient {
     if (!config.ready) return null
     const issuer = new URL(config.issuer)
     if (issuer.protocol !== 'https:' || issuer.username || issuer.password || issuer.search || issuer.hash) throw new RemoteError(503)
+    // The sign-in asks who signed in and the address the service verified, which is how a station
+    // knows a person it invited; never the profile, so no name, nickname or picture.
     const auth = new Auth0Client({ domain: issuer.host, clientId: config.clientId,
       cacheLocation: 'memory', useRefreshTokens: false, httpTimeoutInSeconds: 10,
-      authorizationParams: { audience: config.audience, redirect_uri: window.location.origin, scope: 'openid profile email' } })
+      authorizationParams: { audience: config.audience, redirect_uri: window.location.origin, scope: 'openid email' } })
     const query = new URLSearchParams(window.location.search)
     let signInRefusal: SignInRefusal | null = null
     if (query.has('code') || query.has('error')) {
@@ -173,11 +178,12 @@ export class BrowserClient {
   async post<T>(path: string, body: object = {}, signal?: AbortSignal): Promise<T> {
     return (await this.request<T>(path, body, signal)).body
   }
-  observationTicket(stationId: string, signal: AbortSignal): Promise<{ body: { ticket: string; serverNow: number }; startedAt: number }> {
-    return this.request(`stations/${stationId}/ticket`, {}, signal)
+  /** `lan`: a LAN-only session, the one an account whose internet use has ended may have. */
+  observationTicket(stationId: string, signal: AbortSignal, lan = false): Promise<{ body: { ticket: string; serverNow: number }; startedAt: number }> {
+    return this.request(`stations/${stationId}/ticket`, lan ? { scope: 'lan' } : {}, signal)
   }
-  renewObservation(stationId:string,sessionId:string,signal:AbortSignal):Promise<{body:{ok:boolean;serverNow?:number};startedAt:number}> {
-    return this.request(`stations/${stationId}/renew`,{sessionId},signal)
+  renewObservation(stationId:string,sessionId:string,signal:AbortSignal,lan=false):Promise<{body:{ok:boolean;serverNow?:number};startedAt:number}> {
+    return this.request(`stations/${stationId}/renew`,lan?{sessionId,scope:'lan'}:{sessionId},signal)
   }
   private async request<T>(path: string, body: object, signal?: AbortSignal): Promise<{ body: T; startedAt: number }> {
     let token: string
@@ -194,10 +200,9 @@ export class BrowserClient {
 }
 
 /** A single socket and a single latest frame. Tickets and JWTs never enter URLs,
- * storage or display text. Application mode adds only the reviewed read/ACK contract. */
+ * storage or display text. Application mode adds the operation, audio and stream lanes. */
 export class HostedConnection {
   readonly source: MonitorSource
-  readonly application: ApplicationClient
   readonly operations: OperationClient
   /** Listening. It shares this socket and nothing else: no ACK, no credit, no retry,
    *  and its own byte budget, so a bundle can never consume the allowance an operation
@@ -232,6 +237,8 @@ export class HostedConnection {
   private clockFailures = 0
   private anchor: { server: number; start: number } | null = null
   private sleepState: FeedView
+  /** The page has let the room go (`rest`): asleep, or on the way there, until the operator asks again. */
+  private resting = false
   private feedListeners = new Set<() => void>()
   /** Removes the visibilitychange listener; set for the life of the connection. */
   private watching: (() => void) | undefined
@@ -244,6 +251,10 @@ export class HostedConnection {
    *  browser was revoked, or the sign-in expired. The connection has already stopped retrying, and
    *  without this the page kept showing a workspace that could never come back. */
   onRefused: ((error: RemoteError) => void) | null = null
+  /** A LAN-only session: Remote on the shack's own network, free once the account's internet use has
+   *  ended. Its tickets ask for that scope, and its streams use no relay (`StreamEnvironment.lanOnly`).
+   *  Set before `start()`. */
+  lanOnly = false
 
   /** `device` is this browser's device for the station, and its key (A5): the stream's offer is
    *  signed with it for this session, and so is every message on the older lanes but Stop and `state`
@@ -254,10 +265,6 @@ export class HostedConnection {
   constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false,
     streamEnvironment: StreamEnvironment = browserStream(), private readonly device?: { id: string; key: () => Promise<DeviceKey | null> },
     stationKey: string | null = null, pins?: StationPins) {
-    this.application = new ApplicationClient(message => {
-      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount + new TextEncoder().encode(message).length > (client.operationVersion>=1?OPERATION_REQUEST_BYTES:2048)) throw new RemoteError(503)
-      this.socket.send(message)
-    }, () => this.socket?.close(1000, 'applicationUnavailable'), client.applicationVersion)
     this.operations = new OperationClient(message=>{
       // With room for this browser's proof (S1-M1) where one goes: never on Stop or `state`, so the room
       // Stop has is what it always was.
@@ -287,6 +294,7 @@ export class HostedConnection {
       // The stream's relay, asked for as each stream starts. The request is this connection's,
       // so stopping or reconnecting cancels one still on its way.
       relayServers: streamEnvironment.relayServers ?? (() => this.client.post(`stations/${stationId}/turn`, {}, this.abort.signal)),
+      lanOnly: streamEnvironment.lanOnly ?? (() => this.lanOnly),
       signOffer: streamEnvironment.signOffer ?? (device && (async sdp => {
       // The session this offer is made in: the relay stamps its id on the offer, and the station
       // checks the signature against it.
@@ -343,7 +351,7 @@ export class HostedConnection {
     void this.connect()
   }
   stop(): void {
-    this.application.disconnected(); this.operations.disconnected(); this.audio.close(); this.stream.dispose()
+    this.operations.disconnected(); this.audio.close(); this.stream.dispose()
     this.disposed = true; this.abort.abort(); this.latest = null
     this.watching?.(); this.watching = undefined
     this.deferred?.(); this.deferred = undefined
@@ -354,13 +362,28 @@ export class HostedConnection {
     this.sleepState = { ...this.sleepState, ...value }
     for (const f of this.feedListeners) f()
   }
+  /** The operator has left the page as it is - a stream nobody answered "Still there?" for - so the
+   *  room may go back to sleep as it does for a hidden tab, on the same terms: never while this browser
+   *  can still stop a transmission (`considerSleep`). Being shown again does not undo it, and keeping
+   *  watching does not hold it up: only `wake`, the operator asking again, does. */
+  rest(): void {
+    if (this.disposed) return
+    this.resting = true
+    this.considerSleep()
+  }
+  /** The operator is back: what `rest` let go comes back as a tab being shown does. */
+  wake(): void {
+    if (!this.resting) return
+    this.resting = false
+    if (typeof document !== 'undefined' && document.hidden && !this.sleepState.keepWatching) this.considerSleep(); else this.shown()
+  }
   private setKeepWatching(value: boolean): void {
     this.keep.write(value)
     this.publishFeed({ keepWatching: value })
     if (value) { if (this.sleepState.asleep) this.shown() }
     else if (typeof document !== 'undefined' && document.hidden) this.considerSleep()
   }
-  /** Hidden, and deciding whether to let the room go back to sleep.
+  /** Hidden or resting, and deciding whether to let the room go back to sleep.
    *
    *  ⚠️ NEVER WHILE THIS BROWSER CAN STILL STOP A TRANSMISSION. Stop deliberately outlives the
    *  control lease (operator ruling, 2026-09-15), and closing the socket is what takes it away:
@@ -371,7 +394,8 @@ export class HostedConnection {
    *  carry a null `transmitEpoch`. That is why this waits on the operation client's own updates
    *  rather than a clock - there is nothing to time, only something to be told. */
   private considerSleep(): void {
-    if (this.disposed || this.sleepState.keepWatching || (typeof document !== 'undefined' && !document.hidden)) {
+    const hidden = typeof document !== 'undefined' && document.hidden
+    if (this.disposed || !(this.resting || (hidden && !this.sleepState.keepWatching))) {
       this.deferred?.(); this.deferred = undefined
       return
     }
@@ -388,7 +412,7 @@ export class HostedConnection {
    *  from showing readings that look live. */
   private sleep(): void {
     if (this.sleepState.asleep) return
-    this.stream.close('streamHidden'); this.audio.release(); this.application.disconnected(); this.operations.disconnected()
+    this.stream.close('streamHidden'); this.audio.release(); this.operations.disconnected()
     this.latest = null
     clearInterval(this.renewal); clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined
     // The in-flight ticket request goes with it; the next connect needs a fresh controller.
@@ -397,10 +421,11 @@ export class HostedConnection {
     this.socket = null
     this.publishFeed({ asleep: true, resumed: false })
     // Nulled and marked asleep first, so this close is not read as a drop worth reconnecting from.
-    socket?.close(1000, 'backgrounded')
+    socket?.close(1000, this.resting ? 'idle' : 'backgrounded')
   }
   /** Back on screen. */
   private shown(): void {
+    if (this.resting) return
     this.deferred?.(); this.deferred = undefined
     if (this.disposed) return
     // Someone is looking now, which is the strongest "try now" there is: a tab returning to a
@@ -425,7 +450,7 @@ export class HostedConnection {
     if (this.sleepState.resumed) this.publishFeed({ resumed: false })
   }
   private retry(): void {
-    this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected(); this.stream.disconnected()
+    this.operations.disconnected(); this.audio.disconnected(); this.stream.disconnected()
     this.latest = null; clearInterval(this.renewal)
     if (this.disposed || this.sleepState.asleep || this.reconnectTimer) return
     // What forgives the ladder is a connection that made PROGRESS, read here and cleared as it is
@@ -438,11 +463,9 @@ export class HostedConnection {
     // briefly the socket that carried it survived. A session GRANT proves only that the service is
     // reachable, so it earns nothing on its own and must hold the connection up for
     // RECONNECT_CREDIT_MS to be forgiven - that is the case above, and the one the ladder is for.
-    // Requiring the connection to have LASTED in both cases was too strong: this page can close its
-    // own socket (an application read missing its 3 s credit closes the shared socket - see the
-    // ApplicationClient construction above), and that happens structurally below the ten-second
-    // window, so a station that was answering the whole time escalated to 1, 2, 4, 8, 16, 30 s of
-    // "Station data unavailable" it had done nothing to earn.
+    // Requiring the connection to have LASTED in both cases was too strong: a socket this page closed
+    // itself well inside the ten-second window would otherwise escalate a station that was answering
+    // the whole time to 1, 2, 4, 8, 16, 30 s of "Station data unavailable" it had done nothing to earn.
     if (this.delivered || (this.liveSince !== null && performance.now() - this.liveSince >= RECONNECT_CREDIT_MS)) this.attempt = 0
     this.liveSince = null; this.delivered = false
     const delay = Math.min(30000, 1000 * 2 ** Math.min(this.attempt++, 5))
@@ -459,8 +482,8 @@ export class HostedConnection {
       // supplies the request-start clock after obtaining its account token.
       const startedAt=performance.now()
       const result=typeof this.client.renewObservation==='function'
-        ? await this.client.renewObservation(this.stationId,this.sessionId,this.abort.signal)
-        : {body:await this.client.post<{ok:boolean;serverNow?:number}>(`stations/${this.stationId}/renew`,{sessionId:this.sessionId},this.abort.signal),startedAt}
+        ? await this.client.renewObservation(this.stationId,this.sessionId,this.abort.signal,this.lanOnly)
+        : {body:await this.client.post<{ok:boolean;serverNow?:number}>(`stations/${this.stationId}/renew`,this.lanOnly?{sessionId:this.sessionId,scope:'lan'}:{sessionId:this.sessionId},this.abort.signal),startedAt}
       if(this.socket!==socket||this.disposed)return
       if(result.body.serverNow!==undefined){
         if(!Number.isSafeInteger(result.body.serverNow)||result.body.serverNow<0)throw new RemoteError(503)
@@ -472,7 +495,7 @@ export class HostedConnection {
   private async connect(): Promise<void> {
     if (this.disposed || this.sleepState.asleep) return
     try {
-      const { body: ticket, startedAt: start } = await this.client.observationTicket(this.stationId, this.abort.signal)
+      const { body: ticket, startedAt: start } = await this.client.observationTicket(this.stationId, this.abort.signal, this.lanOnly)
       if (this.disposed || this.sleepState.asleep) return
       if (!/^[0-9a-f]{64}$/.test(ticket.ticket) || !Number.isSafeInteger(ticket.serverNow)) throw new RemoteError(403)
       this.anchor = { server: ticket.serverNow, start };this.sessionId=null;this.clockFailures=0;this.lastClockRenewal=-Infinity
@@ -501,12 +524,13 @@ export class HostedConnection {
           if(this.applicationMode&&message.type==='operationResponse'){reason='invalidOperation';const bytes=new TextEncoder().encode(event.data).length;if(bytes>OPERATION_EXPORT_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message,bytes);return}
           // Operation v5: a settled control, pushed by the station. Same lane, same strictness.
           if (this.applicationMode && message.type === 'operationEvent') { reason = 'invalidOperation'; this.operations.receiveEvent(message, new TextEncoder().encode(event.data).length); return }
+          // This page never asks for the application lane, so anything from it is unrequested.
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('application')) {
-            reason = 'invalidApplication'; this.application.receive(message); return
+            reason = 'invalidApplication'; throw new Error('unexpectedApplicationResult')
           }
           if (new TextEncoder().encode(event.data).length > MAX_FRAME_BYTES + 256) throw new RemoteError(403)
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
-            if (this.applicationMode) { this.application.open(); this.operations.open() }
+            if (this.applicationMode) this.operations.open()
             this.sessionId = message.sessionId
             this.laneSeq = 0
             // A session proves the SERVICE is reachable, so this connection starts counting
@@ -554,10 +578,10 @@ export class HostedConnection {
             if (socket.bufferedAmount + new TextEncoder().encode(ack).length > (this.applicationMode ? (this.operations.enabled?OPERATION_REQUEST_BYTES:2048) : 512)) throw new RemoteError(503)
             socket.send(ack)
           } else throw new RemoteError(403)
-        } catch { this.latest = null; this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected(); this.stream.disconnected(); socket.close(1000, reason) }
+        } catch { this.latest = null; this.operations.disconnected(); this.audio.disconnected(); this.stream.disconnected(); socket.close(1000, reason) }
       }
       socket.onclose = () => { if (this.socket === socket) { this.socket = null; this.retry() } }
-      socket.onerror = () => { this.latest = null; this.application.disconnected(); this.operations.disconnected(); this.stream.disconnected() }
+      socket.onerror = () => { this.latest = null; this.operations.disconnected(); this.stream.disconnected() }
     } catch (error) {
       if (error instanceof RemoteError && [401, 403].includes(error.status)) {
         this.latest = null

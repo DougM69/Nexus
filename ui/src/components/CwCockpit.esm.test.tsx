@@ -51,7 +51,7 @@ const decodeState = {
   name: null as string | null,
 }
 
-/** An operator's own CW profile, mapped N1MM-style: his call on F5, the exchange alone on F2,
+/** An operator's own CW profile: his call on F5, the exchange alone on F2,
  *  so "his call and my exchange" is F5 then F2, sent as one message. */
 const MINE = {
   name: 'Mine',
@@ -235,7 +235,7 @@ afterEach(cleanup)
 
 describe('Enter Sends Message in the CW cockpit', () => {
   it('runs the Illinois QSO Party on the built-in contest set: CQ TEST, his call and the exchange, TU and the log', async () => {
-    settings.macros.cwProfiles = [] // no profile: the built-in set, N1MM's layout
+    settings.macros.cwProfiles = [] // no profile: the built-in set, the contest layout
     await renderCockpit()
     await run()
     expect(engine.keyed).toEqual(['CQ TEST DE KD9TAW KD9TAW K'])
@@ -269,8 +269,8 @@ describe('Enter Sends Message in the CW cockpit', () => {
     expect(engine.calls).toContain('contestLogManual')
   })
 
-  // ⭐ AGN IS ON F8 AND B4 ON F7 in the built-in sets (the operator, 2026-10-10: as in N1MM's
-  // default message sets). Enter's AGN keys the text it keyed from F7 before.
+  // ⭐ AGN IS ON F8 AND B4 ON F7 in the built-in sets (the operator, 2026-10-10). Enter's AGN
+  // keys the text it keyed from F7 before.
   it('asks AGN on the built-in contest set from F8, and keys the AGN it always keyed; F7 is B4', async () => {
     settings.macros.cwProfiles = []
     await renderCockpit()
@@ -287,7 +287,7 @@ describe('Enter Sends Message in the CW cockpit', () => {
     expect(engine.keyed[engine.keyed.length - 1], 'F7 by hand').toBe('K9AAA QSO B4')
   })
 
-  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM): Enter keys the
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule): Enter keys the
   // set's QSO B4 from F7, once, and the next Enter logs the dupe, keying nothing.
   it('running, a dupe gets QSO B4 from F7 once, and the next Enter logs it, keying nothing', async () => {
     settings.macros.cwProfiles = []
@@ -477,5 +477,55 @@ describe('the contest score chip', () => {
     expect(head?.querySelector('.contest-score-chip')?.textContent ?? null).toBe('ILQP · 0 Q · 0 sections · —/hr')
     expect(document.querySelector('.log-entry-fd')).not.toBeNull()
     expect(document.querySelector('.le-fd-score')).toBeNull()
+  })
+})
+
+// CW SPEED MATCH through Enter and the F-keys on the keyboard: the answer goes to the engine
+// marked as one, the CQ unmarked.
+describe('CW speed match through Enter Sends Message and the keyboard', () => {
+  it('marks the S&P answer Enter sends, and the F4 key, but not the CQ key', async () => {
+    settings.macros.cwProfiles = []
+    render(
+      <CwCockpit
+        snap={snap()}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        fieldDay={ILQP}
+        esmSetting={{ on: true, callOnce: false, onSwitch }}
+        speedMatch={{ on: true, onSwitch: () => {} }}
+      />,
+    )
+    await flush()
+    await flush()
+    fireEvent.change(stripCall(), { target: { value: 'K9AAA' } })
+    await flush()
+    await enter(stripCall())
+    expect(api.sendCwArmed.mock.calls.map((c) => c.slice(1))).toEqual([[true]])
+    fireEvent.keyDown(window, { key: 'F4' })
+    await flush()
+    fireEvent.keyDown(window, { key: 'F1' })
+    await flush()
+    expect(api.sendCw.mock.calls.map((c) => c.slice(1))).toEqual([[true], []])
+  })
+  it('reads a key pressed on the keyboard by its step: a CQ that does not say CQ is still the CQ', async () => {
+    settings.macros.cwProfiles = [
+      { ...MINE, macros: MINE.macros.map((m) => (m.key === 'F1' ? { ...m, text: 'TEST {MYCALL}' } : m)) },
+    ]
+    render(
+      <CwCockpit
+        snap={snap()}
+        theme="dark"
+        onWorkSpot={() => {}}
+        spots={[]}
+        fieldDay={ILQP}
+        speedMatch={{ on: true, onSwitch: () => {} }}
+      />,
+    )
+    await flush()
+    await flush()
+    fireEvent.keyDown(window, { key: 'F1' })
+    await flush()
+    expect(api.sendCw.mock.calls).toEqual([['TEST {MYCALL}']])
   })
 })

@@ -1,7 +1,8 @@
 //! Local approval and the Remote background task. Engine access is restricted to
-//! bounded observation, reviewed application reads and separately approved manual logging.
-mod application;
-mod aprs;
+//! bounded observation, the stream, the lease and Stop, and the separately approved FT gestures.
+/// The station's account: binding it to its owner by a sign-in at the shack, the issuer's keys,
+/// and the checks a listed device's proof must pass.
+pub(crate) mod account;
 /// Receive audio for a listening browser. Gated with the radio feature because the
 /// encoder lives in tempo-audio, which a build without it does not have at all.
 #[cfg(feature = "radio")]
@@ -10,9 +11,11 @@ mod audio;
 pub(crate) mod lan;
 /// The relay's older lanes, held to the browser's own key (security review S1-M1).
 mod lanes;
+#[cfg(test)]
+pub(crate) mod log_tests;
 pub(crate) mod operations;
-pub(crate) mod query;
-pub(crate) mod sstv;
+/// The shack PC's two identifiers, hashed, sent when approving a station may start a trial.
+mod pc_identity;
 /// The station's own signing key, which signs its stream answers (security review S3-M1).
 mod station_key;
 #[cfg(test)]
@@ -22,6 +25,8 @@ pub(crate) mod stream;
 #[cfg(test)]
 mod tests;
 mod transport;
+/// The tunnel through the room: Nexus on another computer driving this station over the internet.
+mod tunnel;
 pub(crate) mod vault;
 
 use serde::{Deserialize, Serialize};
@@ -48,10 +53,9 @@ pub struct Status {
     devices: Vec<Device>,
     error: Option<&'static str>,
     observation_generation: Option<String>,
-    logging_permissions: Vec<String>,
     station_permissions: Vec<String>,
-    transmit_permissions: Vec<String>,
-    logging_controller: Option<String>,
+    /// The device holding the station's lease, if any.
+    controller: Option<String>,
     /// A5: the browsers whose listed device key is the one pinned at the radio, the ones that can
     /// stream. An approved browser listed with a key and missing here is approved again to stream.
     pinned_devices: Vec<String>,
@@ -66,6 +70,47 @@ pub struct Status {
     /// Absent only from a build of the service without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     lan: Option<lan::LanStatus>,
+    /// The station's account (`account`): signing in at the shack, and the devices it granted on
+    /// their own proof.
+    account: AccountStatus,
+}
+/// The station's account, as the shack shows it.
+#[derive(Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountStatus {
+    /// A sign-in at the shack is waiting for the browser.
+    signing_in: bool,
+    /// The key that signed the station's own proof has left the issuer's set, so devices can no
+    /// longer check it: the operator signs in again to keep adding devices.
+    reproof: bool,
+    /// The devices the station granted on their own proof since Nexus started, for the notice at
+    /// the shack, each until the operator dismisses it.
+    added: Vec<Added>,
+    /// The devices the service approved on their own proof that the station granted nothing, each
+    /// with why: a proof it could not confirm, or `approveAtStation`, a proof that holds while the
+    /// station grants nothing on a sign-in (`account::GRANTS_ON_SIGN_IN`). Each is shown with the
+    /// prompt a device added at the station gets.
+    unconfirmed: BTreeMap<String, &'static str>,
+    /// Devices removed here while the service could not be reached: out at the station already,
+    /// and told to the service before the station's next list.
+    removals: Vec<String>,
+    /// The people invited to this station, as it keeps them: each address as the service matches
+    /// it, and a role.
+    people: Vec<tempo_client::account::Invite>,
+}
+/// A device the station granted on its own proof: what the notice says of it.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Added {
+    device_id: String,
+    name: String,
+    kind: Kind,
+    platform: Option<Platform>,
+    /// Its pin's fingerprint, shown shortened.
+    key: Option<String>,
+    role: tempo_client::account::Role,
+    /// Someone the station invited, not its owner.
+    guest: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -90,10 +135,86 @@ struct Device {
     /// approving it pins. Worked out here from the listed key, never taken from the service.
     #[serde(skip_deserializing)]
     key: Option<String>,
+    /// What it is. Listed only to a Nexus that asks (`transport::Client::post` does); a service
+    /// without kinds lists browsers alone, so a device it names no kind for is a browser.
+    #[serde(default)]
+    kind: Kind,
+    /// The platform a native device runs on, one its kind may name ([`Kind::fits`]); none for a
+    /// browser.
+    #[serde(default)]
+    platform: Option<Platform>,
+    /// 1 for an approval that lasts until it is removed (the operator's decision of 2026-10-10: every
+    /// approval since), whose `expires_at` is then an end no clock reaches. Listed only to a Nexus that
+    /// asks for kinds; 0 from a service before that rule, whose approvals keep their listed end. Shown,
+    /// never decided on: every list is still held to `expires_at`.
+    #[serde(default)]
+    until_removed: u8,
+    /// What the device may do: listed only to a Nexus that checks proofs itself
+    /// (`transport::Client::post` asks), as are the three fields after it. None from a service
+    /// before roles: every device it lists operates.
+    #[serde(default)]
+    role: Option<tempo_client::account::Role>,
+    /// How it was added: at the station (`shack`), or on its own proof (`account`).
+    #[serde(default)]
+    added_by: Option<String>,
+    /// The proof it registered with: the issuer's ID token for exactly its keys. Checked here
+    /// (`account::vouch`) before anything is granted on it, and never shown.
+    #[serde(default, skip_serializing)]
+    proof: Option<String>,
+    /// A computer's LAN key, SPKI as lowercase hex, which its proof names beside its own key.
+    #[serde(default, skip_serializing)]
+    lan_key: Option<String>,
+}
+/// A device's kind, held to the service's own values: a browser, or Nexus itself on another
+/// computer or a phone (the native client). Approving a native device grants nothing on the
+/// relay's lanes: it pins its key, which the tunnel through the room checks, and that is all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Kind {
+    #[default]
+    Browser,
+    Computer,
+    Phone,
+}
+/// The platforms a native device may name, held to the service's own values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Platform {
+    Windows,
+    Macos,
+    Linux,
+    Ios,
+    Android,
+}
+impl Kind {
+    /// May a device of this kind name this platform? A browser names none, a computer Windows,
+    /// macOS or Linux, and a phone iOS or Android, as the service registers them.
+    fn fits(self, platform: Option<Platform>) -> bool {
+        matches!(
+            (self, platform),
+            (Kind::Browser, None)
+                | (
+                    Kind::Computer,
+                    Some(Platform::Windows | Platform::Macos | Platform::Linux)
+                )
+                | (Kind::Phone, Some(Platform::Ios | Platform::Android))
+        )
+    }
+}
+/// The station's key (S3-M1), and the same key as TLS presents it for the room's tunnel: both, or
+/// neither, but for a key TLS would not take, which then signs answers alone.
+type StationKeys = (
+    Option<Arc<station_key::Signer>>,
+    Option<Arc<lan::tls::Identity>>,
+);
+/// The station's key as the room's tunnel proves it, for the pairing's station.
+fn tunnel_identity(pkcs8: &str, binding: &Binding) -> Option<Arc<lan::tls::Identity>> {
+    lan::tls::Identity::new(pkcs8, binding.station_id.clone()).map(Arc::new)
 }
 /// SHA-256 of a device key's SPKI, lowercase hex in and out: its pin (A5). The station's own key is
-/// shown the same way (S3-L1). `None` for anything that is not the shape of a P-256 key.
-fn fingerprint(public_key: &str) -> Option<String> {
+/// shown the same way (S3-L1), and so is a computer's key for its internet road on that computer
+/// (`lan_client::internet::shown_key`). `None` for anything that is not the shape of a P-256 key.
+pub(crate) fn fingerprint(public_key: &str) -> Option<String> {
     if !tempo_stream::protocol::device_key(public_key) {
         return None;
     }
@@ -110,11 +231,56 @@ fn fingerprint(public_key: &str) -> Option<String> {
 fn pin_shape(key: &str) -> bool {
     key.len() == 64 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
+/// What a computer's (or phone's) pin begins with.
+const NATIVE_PIN_LABEL: &[u8] = b"nexus-native-pin/1";
+/// The pin approving a computer or a phone makes: SHA-256 over [`NATIVE_PIN_LABEL`], the approval's
+/// generation and its key's fingerprint (`key`, lowercase hex), as lowercase hex. Never a browser's
+/// pin, which is the fingerprint itself, so a browser's approval admits nothing through the room's
+/// tunnel and a computer's admits nothing on the relay's lanes; and never another approval's, so a
+/// computer the service lists as approved again, under an approval the shack did not give, is not
+/// taken on the pin made for the one before. A renewal on use keeps the generation, and the pin.
+fn native_pin(key: &str, generation: u64) -> Option<String> {
+    let fingerprint = tempo_stream::protocol::hex_bytes(key).filter(|f| f.len() == 32)?;
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+    hash.update(NATIVE_PIN_LABEL);
+    hash.update(&generation.to_be_bytes());
+    hash.update(&fingerprint);
+    Some(
+        hash.finish()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
+}
+/// An id the service made for a device: the shape every id has, at version 4 (the service makes them
+/// with `crypto.randomUUID`). The shack's own names for computers are version 8 (`lan::device_id`,
+/// `lan::tunnel_device_id`), so no device the service lists can stand for one of them in the
+/// authority they share, or take its grants.
+fn hosted(id: &str) -> bool {
+    identifier(id) && id.as_bytes()[14] == b'4'
+}
 impl Device {
     fn approval(&self) -> Approval {
         Approval {
             expires_at: self.expires_at,
             generation: self.generation,
+        }
+    }
+    /// The pin approving it as it is listed makes: a browser's key's fingerprint, or a computer's or
+    /// phone's [`native_pin`]. `None` with no key, and for a computer or phone with no approval
+    /// generation, which pins nothing.
+    /// What its proof is checked against (`account::vouch_listed`): its kind, its keys, and the
+    /// proof itself.
+    fn proof_row(&self) -> serde_json::Value {
+        json!({"kind": self.kind, "publicKey": self.public_key, "lanKey": self.lan_key,
+            "proof": self.proof})
+    }
+    fn pin(&self) -> Option<String> {
+        let key = self.key.as_deref()?;
+        match self.kind {
+            Kind::Browser => Some(key.to_string()),
+            Kind::Computer | Kind::Phone => native_pin(key, self.generation?),
         }
     }
 }
@@ -148,17 +314,7 @@ impl Approval {
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 // Empty struct variants preserve deny_unknown_fields; Serde unit variants ignore extra fields.
 pub enum Action {
-    LoggingPermission {
-        #[serde(rename = "deviceId")]
-        device_id: String,
-        allow: bool,
-    },
     StationPermission {
-        #[serde(rename = "deviceId")]
-        device_id: String,
-        allow: bool,
-    },
-    TransmitPermission {
         #[serde(rename = "deviceId")]
         device_id: String,
         allow: bool,
@@ -174,9 +330,6 @@ pub enum Action {
         enrollment_id: String,
         #[serde(rename = "accountId")]
         account_id: String,
-        /// "Also allow FT8/FT4 transmit" for the browser that did the pairing.
-        #[serde(default)]
-        transmit: bool,
     },
     Enable {},
     Disable {},
@@ -185,13 +338,15 @@ pub enum Action {
         #[serde(rename = "deviceId")]
         device_id: String,
         approve: bool,
-        /// "Also allow FT8/FT4 transmit" on this approval. Ignored when revoking.
-        #[serde(default)]
-        transmit: bool,
         /// A5: the device key the operator was shown beside this browser (its SHA-256, the device
         /// list's `key`). Pinned only if the service still lists that key once it has approved.
         #[serde(default)]
         key: Option<String>,
+        /// The kind the operator was shown it as: a browser, a computer or a phone. Approving grants
+        /// and pins only for a device the service still lists as that kind once it has approved; with
+        /// none shown, it grants and pins nothing. Ignored when revoking.
+        #[serde(default)]
+        kind: Option<Kind>,
     },
     /// Remote over this network on, at the shack (`lan`): on `address`, this computer's private
     /// IPv4 address the operator picked, or with none as `lan` chooses; on `port`, or as it was.
@@ -223,14 +378,43 @@ pub enum Action {
     /// Reset this station's network identity, at the shack: a new LAN key, and every paired
     /// computer removed.
     LanReset {},
+    /// Sign in to Nexus Remote, at the shack: the station named `name` is bound to the account the
+    /// operator signs in to through the system browser, with no code (`account`). Remote turns on
+    /// once it is bound, as approving a pairing turns it on.
+    SignIn {
+        name: String,
+    },
+    /// Sign in again, at the shack, for a station bound already: its proof is replaced at the
+    /// service, so devices can check it again once the issuer has retired the key that signed the
+    /// old one. Nothing else about the station changes.
+    SignInAgain {},
+    /// End signing in again while the browser is still open: the station stays as it was, on or
+    /// off (Cancel is a stop, and turns Remote off).
+    CancelSignInAgain {},
+    /// Invite someone to this station by their address, to operate it or only to listen: their
+    /// devices are then approved when they sign in with that address, verified.
+    Invite {
+        email: String,
+        role: tempo_client::account::Role,
+    },
+    /// Take an invitation back: none of that person's proofs is taken here from now on, and the
+    /// service removes their devices.
+    Uninvite {
+        email: String,
+    },
+    /// The operator has seen the notice of a device the station granted on its own proof.
+    DismissAdded {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+    },
 }
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// The most browsers a restart remembers grants for. The service lists at most eight per station,
 /// and the record has to fit the smallest OS credential blob (Windows).
 const MAX_REMEMBERED: usize = 8;
 /// A decision a restart must remember. Operator decisions 2026-09-13: Remote remembers being on;
-/// approving a browser grants it station control and logging, plus FT8/FT4 transmit when the
-/// approval ticks it, and each is kept for as long as that approval stands, until revoked.
+/// approving a browser grants it station control, kept for as long as that approval stands, until
+/// revoked.
 ///
 /// Every decision is applied to `Control::remembered` under the `Control` lock at the moment it is
 /// made, so the record always holds the operator's decisions in the order they were made, and Turn
@@ -249,7 +433,8 @@ enum Persist {
     /// disconnected and every live permission cleared, but the remembered grants stay, so Turn on
     /// or a restart restores them for browsers still approved at the same approval.
     Paused,
-    /// A local decision cleared every browser permission (take over, revoke a browser).
+    /// A local decision cleared every browser permission: a browser's removal that could not be
+    /// applied to that browser alone (see `Control::revoke_browser`).
     ClearGrants,
     /// One browser's grants changed. `approval` is the approval the change was made against: a grant
     /// is only ever created against a known approval, and a grant against a different approval (not
@@ -257,19 +442,18 @@ enum Persist {
     Browser {
         device_id: String,
         approval: Option<Approval>,
-        logging: Option<bool>,
         control: Option<bool>,
-        transmit: Option<bool>,
     },
     /// The approvals the service lists right now. A grant remembered against any other approval
-    /// (a browser revoked, re-approved, expired or gone) is forgotten; the rest are rebound to the
-    /// approval as listed. So is a pin for a browser no longer approved.
+    /// (a browser revoked, re-approved, expired or gone) is forgotten, as is one without station
+    /// control; the rest are rebound to the approval as listed. So is a pin for a browser no longer
+    /// approved.
     Approvals(Vec<(String, Approval)>),
     /// The pairing was removed.
     Removed,
     /// A5: the operator approved this browser at the radio with its device key shown (`Some`: the
-    /// key's SHA-256, now pinned), or the approval pinned nothing, or the browser was revoked
-    /// (`None`: no pin).
+    /// key's SHA-256, now pinned; for a computer or phone, its [`native_pin`]), or the approval
+    /// pinned nothing, or the browser was revoked (`None`: no pin).
     Pin {
         device_id: String,
         key: Option<String>,
@@ -290,9 +474,10 @@ enum Write {
 struct Remembered {
     binding: Option<Binding>,
     state: Option<vault::State>,
-    /// A5: browser id to the SHA-256 of the device key the operator pinned for it, kept in the
-    /// vault's pins entry. A pin is an approval's, not a permission's: the switches, take over and
-    /// Turn off leave it; approving at the radio sets it and revoking the browser removes it.
+    /// A5: browser id to the SHA-256 of the device key the operator pinned for it (a computer's or
+    /// phone's: its [`native_pin`]), kept in the vault's pins entry. A pin is an approval's, not a
+    /// permission's: the switches, take over and Turn off leave it; approving at the radio sets it
+    /// and revoking the browser removes it.
     pins: BTreeMap<String, String>,
 }
 impl Remembered {
@@ -377,9 +562,7 @@ impl Remembered {
             Persist::Browser {
                 device_id,
                 approval,
-                logging,
                 control,
-                transmit,
             } => {
                 let at = state.grants.iter().position(|g| g.device_id == device_id);
                 let mut grant = match (at.map(|i| state.grants[i].clone()), approval) {
@@ -391,19 +574,16 @@ impl Remembered {
                         device_id,
                         expires_at: approval.expires_at,
                         generation: approval.generation,
-                        logging: false,
                         control: false,
-                        transmit: false,
+                        retired_logging: Default::default(),
+                        retired_transmit: Default::default(),
                     },
                     (Some(grant), None) => grant,
                     // Nothing remembered for this browser, and no approval to bind a grant to.
                     (None, None) => return None,
                 };
-                grant.logging = logging.unwrap_or(grant.logging);
                 grant.control = control.unwrap_or(grant.control);
-                // FT8/FT4 transmit is only ever held alongside station control.
-                grant.transmit = transmit.unwrap_or(grant.transmit) && grant.control;
-                let keep = grant.logging || grant.control;
+                let keep = grant.control;
                 match at {
                     Some(i) if keep => state.grants[i] = grant,
                     Some(i) => {
@@ -420,7 +600,8 @@ impl Remembered {
                 if let Some((_, approval)) = listed {
                     approval.bind(g);
                 }
-                listed.is_some()
+                // A grant holding nothing (an older build's remote logging alone) goes too.
+                listed.is_some() && g.control
             }),
             Persist::Bound(..) | Persist::Removed | Persist::Pin { .. } | Persist::Listed(_) => {
                 return None
@@ -445,7 +626,6 @@ impl Remembered {
 #[derive(Default)]
 struct Control {
     operations: Arc<operations::Authority>,
-    memories: query::memories::Bank,
     enabled: bool,
     cancel: Option<watch::Sender<bool>>,
     generation: u64,
@@ -461,18 +641,67 @@ struct Control {
     /// Remote over this network (`lan`), beside the relay's road and sharing its authority.
     /// Taken out of the lock to be used. `None` in a test build of the service.
     lan: Option<Arc<lan::Lan>>,
+    /// The same key as `station_key`, as TLS presents it: what the room's tunnel proves itself
+    /// with. Made from the same vault entry at the same moments.
+    station_identity: Option<Arc<lan::tls::Identity>>,
+    /// The computers approved here for the room's tunnel, kept in step with the pins and the
+    /// service's list ([`Control::sync_approved`]).
+    approved: Arc<tunnel::Approved>,
+    /// The computers (and phones) the service lists as approved and not yet ended, by device id:
+    /// what a pin is compared with.
+    natives: BTreeMap<String, Native>,
+    /// What the room's tunnel serves its computers with: the LAN road's authority, feeds and
+    /// command lane. `None` in a build of the service without the LAN road.
+    tunnel: Option<lan::TunnelDeps>,
+    /// Hosted Remote is on: `enabled`, mirrored where the operations authority can read it under its
+    /// own lock, for the tunnel's computers' station control (`Authority::hold_tunnel_devices`).
+    /// Cleared before every stop's invalidation, set only by [`Control::start`].
+    hosted: Arc<std::sync::atomic::AtomicBool>,
+    /// What a computer enrolling on the LAN by its own sign-in is checked against, armed by the
+    /// controller while the station is bound to its owner ([`Controller::arm_enrolment`]).
+    enrolment: Arc<lan::enrol::Enrolment>,
 }
 impl Control {
     fn stop(&mut self) {
+        // Before the invalidation, so the clear it makes is never undone by the tunnel's holder.
+        self.hosted
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         self.operations.invalidate();
         self.enabled = false;
-        if let Ok(mut bank) = self.memories.lock() {
-            *bank = None;
-        }
         self.generation = self.generation.wrapping_add(1);
         if let Some(cancel) = self.cancel.take() {
             let _ = cancel.send(true);
         }
+    }
+    /// Turn hosted Remote on: a fresh authority (every permission in memory cleared), then on. The
+    /// tunnel's approved computers hold station control again from here.
+    fn start(&mut self) {
+        self.stop();
+        self.enabled = true;
+        self.hosted.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    /// Removing one device's approval at the shack ends that device's grants at once (a lease it
+    /// holds with them), remembered and live, and its pin; every other device keeps its own
+    /// (operator decision 2026-10-14). A revoke never waits for Core. Should one not be taken, the
+    /// whole authority is cleared instead, as it was before: fail closed.
+    fn revoke_browser(&mut self, device_id: &str) {
+        let operations = self.operations.clone();
+        let taken = operations.permit_station(device_id, false).is_ok();
+        if taken {
+            self.remember(Persist::Browser {
+                device_id: device_id.to_string(),
+                approval: None,
+                control: Some(false),
+            });
+        } else {
+            operations.invalidate();
+            self.remember(Persist::ClearGrants);
+        }
+        // A5: revoking ends the approval, and its pin with it.
+        self.remember(Persist::Pin {
+            device_id: device_id.to_string(),
+            key: None,
+        });
     }
     /// Hand a decision to the vault writer. Never called from `stop`: `stop` also runs when Nexus
     /// exits, and an exit must not be remembered as the operator turning Remote off.
@@ -482,7 +711,55 @@ impl Control {
                 let _ = writer.send(write);
             }
         }
+        self.sync_approved();
     }
+    /// The computers the service lists as approved and not yet ended (`devices`): who the room's
+    /// tunnel takes, with the pins.
+    fn listed(&mut self, devices: &[Device]) {
+        let now = now_ms();
+        self.natives = devices
+            .iter()
+            .filter(|d| d.kind != Kind::Browser && d.approved == 1 && d.expires_at > now)
+            .filter_map(|d| {
+                let native = Native {
+                    pin: d.pin()?,
+                    key: d.key.clone()?,
+                    until: d.expires_at,
+                };
+                Some((d.id.clone(), native))
+            })
+            .collect();
+        self.sync_approved();
+    }
+    /// Who the room's tunnel takes, until when: each computer the service lists as approved whose
+    /// pin here is the one approving it as listed makes ([`Device::pin`]: its key, under this same
+    /// approval, approved as a computer). Never a browser, whatever its pin. Each is named from the
+    /// key pinned for it (`lan::tunnel_device_id`), never by the service's id, so it can stand for
+    /// no other device in the authority it shares with the relay's road and the LAN's.
+    fn sync_approved(&self) {
+        let keys = self
+            .natives
+            .iter()
+            .filter(|(id, native)| self.remembered.pins.get(*id) == Some(&native.pin))
+            .filter_map(|(_, native)| {
+                let pin: [u8; 32] = tempo_stream::protocol::hex_bytes(&native.key)?
+                    .try_into()
+                    .ok()?;
+                Some((pin, (lan::tunnel_device_id(&pin), native.until)))
+            })
+            .collect();
+        // A computer no longer on it loses station control at once, after it is off the holder.
+        for name in self.approved.set(keys) {
+            let _ = self.operations.permit_station(&name, false);
+        }
+    }
+}
+/// A computer (or phone) the service lists as approved: the pin approving it as listed makes, the
+/// fingerprint of the key listed for it, and when its approval ends.
+struct Native {
+    pin: String,
+    key: String,
+    until: u64,
 }
 /// A command, the Remote generation it was issued under, the authority epoch at that moment (so a
 /// local decision made after it wins), and where to reply.
@@ -524,11 +801,23 @@ pub(super) fn phase(status: &Arc<Mutex<Status>>, value: &str, error: Option<&'st
         status.error = error;
     }
 }
+/// The wall clock in seconds, as proofs are read.
+fn now_s() -> u64 {
+    now_ms() / 1000
+}
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+/// An address one could invite: something before and after an `@`, no space, at most 254 characters.
+fn invitable(address: &str) -> bool {
+    address.len() <= 254
+        && !address.chars().any(|c| c.is_whitespace() || c.is_control())
+        && address
+            .find('@')
+            .is_some_and(|at| at > 0 && at + 1 < address.len())
 }
 fn valid_name(name: &str) -> bool {
     !name.trim().is_empty() && name.chars().count() <= 48 && !name.chars().any(char::is_control)
@@ -537,22 +826,20 @@ impl Service {
     pub fn new(
         engine: crate::SharedEngine,
         publisher: crate::remote_monitor::Publisher,
-        spectrum: tempo_app::engine::SpectrumFeed,
-        meters: tempo_app::engine::MeterFeed,
-        sources: Option<query::Sources>,
         // `audio`: the station's bounded receive-audio copy, for a listening browser.
         // `None` leaves the audio lane unadvertised, so nothing is ever offered it.
         #[cfg(feature = "radio")] audio: Option<Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
         // What a streamed session needs from the application: the window its input goes to.
         stream: stream::Host,
+        // How a paired computer's calls run at the shack, and the events that cross to it.
+        commands: lan::commands::Commands,
+        // Opens the system browser, for signing in to Nexus Remote at the shack.
+        open: account::Opener,
     ) -> Self {
         tempo_app::engine::engine_lock(&engine)
             .configure_remote_settings_store(crate::settings_path());
         let feeds = transport::Feeds {
             monitor: publisher,
-            spectrum: Some(spectrum),
-            meters,
-            sources,
             // One encoder for the station, whoever listens: the Listen lane and every stream.
             #[cfg(feature = "radio")]
             audio: audio.map(audio::ReceiveFanout::new),
@@ -563,6 +850,7 @@ impl Service {
             Box::new(SystemVault),
             engine.clone(),
             feeds.clone(),
+            Accounts::system(open),
         );
         // Its LAN key and paired computers are in the OS credential store, read on its own thread.
         service.with_lan(
@@ -571,10 +859,21 @@ impl Service {
             feeds,
             Arc::new(lan::Book::new(Arc::new(SystemVault))),
             Arc::new(tempo_stream::lan::look),
+            commands,
         )
     }
+    /// This station's key for the internet road as it stands when asked: the public half of the
+    /// pairing's signing key, or none without a pairing. Only the public half leaves the lock.
+    fn station_key_of(&self) -> lan::StationKeyOf {
+        let control = self.control.clone();
+        Arc::new(move || {
+            let control = control.lock().ok()?;
+            Some(control.station_key.as_ref()?.public_key().to_string())
+        })
+    }
     /// Remote over this network, beside the relay's road and sharing its one authority: its switch
-    /// kept at `path`, its key and paired computers in `book`.
+    /// kept at `path`, its key and paired computers in `book`, and a paired computer's calls run
+    /// with `commands`.
     fn with_lan(
         self,
         path: std::path::PathBuf,
@@ -582,9 +881,28 @@ impl Service {
         feeds: transport::Feeds,
         book: Arc<lan::Book>,
         resolve: lan::Resolve,
+        commands: lan::commands::Commands,
     ) -> Self {
-        let authority = self.control.lock().ok().map(|c| c.operations.clone());
-        if let Some(authority) = authority {
+        let held = self
+            .control
+            .lock()
+            .ok()
+            .map(|c| (c.operations.clone(), c.enrolment.clone()));
+        if let Some((authority, enrolment)) = held {
+            let dispatcher =
+                crate::command_dispatch::Dispatcher::new(crate::command_dispatch::ShackStores {
+                    engine: engine.clone(),
+                });
+            // The room's tunnel serves its computers with the same authority, feeds and command
+            // lane: one lease for the station, and one revision of each store, whichever road a
+            // call comes by. Its computers are named by their own keys (`Control::sync_approved`).
+            let tunnel = lan::TunnelDeps {
+                authority: authority.clone(),
+                engine: engine.clone(),
+                feeds: feeds.clone(),
+                dispatcher: dispatcher.clone(),
+                commands: commands.clone(),
+            };
             let lan = Arc::new(lan::Lan::start(
                 path,
                 lan::Deps {
@@ -592,13 +910,18 @@ impl Service {
                     engine,
                     feeds,
                     book,
+                    enrolment,
                     resolve,
                     advertise: lan::advertise(),
                     firewall: lan::firewall_says(),
+                    dispatcher,
+                    commands,
+                    station_key: self.station_key_of(),
                 },
             ));
             if let Ok(mut control) = self.control.lock() {
                 control.lan = Some(lan);
+                control.tunnel = Some(tunnel);
             }
         }
         self
@@ -610,19 +933,27 @@ impl Service {
         engine: crate::SharedEngine,
         publisher: crate::remote_monitor::Publisher,
     ) -> Self {
+        Self::with_accounts(origin, vault, engine, publisher, Accounts::not_ready())
+    }
+    #[cfg(test)]
+    fn with_accounts(
+        origin: String,
+        vault: Box<dyn Vault>,
+        engine: crate::SharedEngine,
+        publisher: crate::remote_monitor::Publisher,
+        accounts: Accounts,
+    ) -> Self {
         Self::start(
             origin,
             vault,
             engine,
             transport::Feeds {
                 monitor: publisher,
-                spectrum: None,
-                meters: Default::default(),
-                sources: None,
                 #[cfg(feature = "radio")]
                 audio: None,
                 stream: stream::Host::default(),
             },
+            accounts,
         )
     }
     /// `feeds` arrives whole rather than as four parameters. They were four until the audio
@@ -633,6 +964,7 @@ impl Service {
         vault: Box<dyn Vault>,
         engine: crate::SharedEngine,
         feeds: transport::Feeds,
+        mut accounts: Accounts,
     ) -> Self {
         let vault: Arc<dyn Vault> = Arc::from(vault);
         let status = Arc::new(Mutex::new(Status {
@@ -650,20 +982,11 @@ impl Service {
             .spawn(move || write_remembered(writer_vault, decisions))
             .ok()
             .map(|_| writer);
-        let operations = Arc::new(
-            operations::Authority::with_spots(feeds.sources.as_ref().map(|s| s.spots.clone()))
-                .placing(
-                    feeds
-                        .sources
-                        .as_ref()
-                        .map(|s| (s.ota.clone(), s.parks.clone())),
-                ),
-        );
+        let operations = Arc::new(operations::Authority::default());
         // A stand-down at the shack retires remote transmit authority. Handing the engine this
         // revocation is what makes `Engine::halt_tx` — the verb every local stop funnels through,
         // including WSJT-X's UDP HaltTx — move the generation a browser carries as its
-        // `transmitEpoch`, so a gesture held across the operator's own Stop TX is refused instead
-        // of arming the rig a second later. See `Engine::halt_tx`.
+        // `transmitEpoch`, its Stop's token. See `Engine::halt_tx`.
         tempo_app::engine::engine_lock(&engine)
             .set_remote_transmit_revocation(operations.transmit_revocation());
         // A streamed operator's held PTT: the stream records the holds, the engine arms and
@@ -674,14 +997,34 @@ impl Service {
         tempo_app::engine::engine_lock(&engine).set_remote_mic_feed(feeds.stream.mic.clone());
         let control = Arc::new(Mutex::new(Control {
             operations,
-            memories: feeds
-                .sources
-                .as_ref()
-                .map(|s| s.memories.clone())
-                .unwrap_or_default(),
             vault_writer,
+            enrolment: Arc::new(lan::enrol::Enrolment::kept_in(
+                accounts.vault.clone(),
+                accounts.now_s,
+            )),
             ..Default::default()
         }));
+        // The tunnel's approved computers hold station control while hosted Remote is on, as the
+        // LAN's paired computers do while LAN is on: read from the tunnel's roster and the mirror of
+        // "on", each behind a lock of its own (never Control's, which is held while Core is taken).
+        if let Ok(control) = control.lock() {
+            let (approved, hosted) = (control.approved.clone(), control.hosted.clone());
+            control.operations.hold_tunnel_devices(Box::new(move || {
+                if hosted.load(std::sync::atomic::Ordering::SeqCst) {
+                    approved.names()
+                } else {
+                    Vec::new()
+                }
+            }));
+        }
+        // A binding names the LAN's own key, once the LAN has started beside this service.
+        if accounts.lan_key.is_none() {
+            let held = Arc::downgrade(&control);
+            accounts.lan_key = Some(Arc::new(move || {
+                let lan = held.upgrade()?.lock().ok()?.lan.clone()?;
+                lan.public_key()
+            }));
+        }
         let (commands, receiver) = mpsc::channel(1);
         let task_status = status.clone();
         let task_control = control.clone();
@@ -704,6 +1047,11 @@ impl Service {
                             engine,
                             feeds,
                             restore: None,
+                            accounts,
+                            signing: None,
+                            staged: None,
+                            removals: Some(Vec::new()),
+                            uninvites: Some(Vec::new()),
                         }
                         .run(receiver),
                     ),
@@ -728,17 +1076,16 @@ impl Service {
         let control = self.control.lock().map_err(|_| "serviceUnavailable")?;
         let enabled = control.enabled;
         let operations = control.operations.local_status();
-        status.logging_permissions =
-            serde_json::from_value(operations["devices"].clone()).unwrap_or_default();
-        status.logging_controller = operations["controller"].as_str().map(str::to_string);
+        status.controller = operations["controller"].as_str().map(str::to_string);
         status.station_permissions =
             serde_json::from_value(operations["controlDevices"].clone()).unwrap_or_default();
-        status.transmit_permissions =
-            serde_json::from_value(operations["transmitDevices"].clone()).unwrap_or_default();
         status.pinned_devices = status
             .devices
             .iter()
-            .filter(|d| d.key.is_some() && control.remembered.pins.get(&d.id) == d.key.as_ref())
+            .filter(|d| {
+                d.pin()
+                    .is_some_and(|pin| control.remembered.pins.get(&d.id) == Some(&pin))
+            })
             .map(|d| d.id.clone())
             .collect();
         status.station_key = control
@@ -763,27 +1110,9 @@ impl Service {
             .lan
             .clone())
     }
-    fn publish_memories(&self, generation: &str, bank: Option<&str>) -> bool {
-        // Parse outside the control lock. Recheck the local enable generation at
-        // admission so an old WebView reply cannot revive a disabled snapshot.
-        let value = bank.and_then(query::memories::parse);
-        let Ok(control) = self.control.try_lock() else {
-            return false;
-        };
-        if !control.enabled || control.generation.to_string() != generation {
-            return false;
-        }
-        let Ok(mut cache) = control.memories.try_lock() else {
-            return false;
-        };
-        *cache = value.map(|v| (std::time::Instant::now(), Arc::new(v)));
-        cache.is_some()
-    }
     pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
         match &action {
-            Action::LoggingPermission { device_id, allow }
-            | Action::StationPermission { device_id, allow }
-            | Action::TransmitPermission { device_id, allow } => {
+            Action::StationPermission { device_id, allow } => {
                 // Keep admission and grant under the same local control lock
                 // as Disable/Take over. A prior status snapshot must not install
                 // a new grant after that local authority has been stopped.
@@ -794,52 +1123,43 @@ impl Service {
                 let mut approval = None;
                 if *allow {
                     let status = self.status.lock().map_err(|_| "serviceUnavailable")?;
+                    // A browser's alone: a computer holds nothing on the relay's lanes to allow.
                     let Some(device) = status
                         .devices
                         .iter()
-                        .find(|d| d.id == *device_id && d.approved == 1)
+                        .find(|d| d.id == *device_id && d.approved == 1 && d.kind == Kind::Browser)
                         .filter(|_| control.enabled)
                     else {
                         return Err("accessDenied");
                     };
                     approval = Some(device.approval());
                 }
-                // These are the restrict switches: each allows or revokes one permission for one
-                // browser, live first, and the record follows only what took effect. Revoking
-                // station control revokes transmit with it.
-                let operations = control.operations.clone();
-                let (logging, station, transmit) = match &action {
-                    Action::StationPermission { .. } => {
-                        operations.permit_station(device_id, *allow)?;
-                        (None, Some(*allow), (!*allow).then_some(false))
-                    }
-                    Action::TransmitPermission { .. } => {
-                        operations.permit_transmit(device_id, *allow)?;
-                        (None, None, Some(*allow))
-                    }
-                    _ => {
-                        operations.permit(device_id, *allow)?;
-                        (Some(*allow), None, None)
-                    }
-                };
+                // The restrict switch: it allows or revokes station control for one browser, live
+                // first, and the record follows only what took effect.
+                control.operations.permit_station(device_id, *allow)?;
                 control.remember(Persist::Browser {
                     device_id: device_id.clone(),
                     approval,
-                    logging,
-                    control: station,
-                    transmit,
+                    control: Some(*allow),
                 });
                 drop(control);
                 return self.status();
             }
             Action::TakeOverLogging {} => {
+                // "End remote control" (the operator's decision of 2026-10-10, one rule for every
+                // device): it drops everyone and holds until Remote is turned on again. Hosted Remote
+                // goes off as Turn off takes it, here and now, never behind the command queue: every
+                // permission in memory cleared, the station's socket closed and with it every browser
+                // and every tunnel session, and off remembered across a restart. What each approval
+                // gave is remembered (`Paused`, not cleared), so turning Remote on again gives every
+                // approved device back what it had, with no approval again.
                 let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
-                control.operations.invalidate();
-                control.remember(Persist::ClearGrants);
+                control.stop();
+                control.remember(Persist::Paused);
                 let lan = control.lan.clone();
                 drop(control);
-                // "End remote control" ends Remote over this network too: its port closes and every
-                // LAN session ends, and the shack says why until it is turned on again.
+                // It ends Remote over this network too: its port closes and every LAN session ends,
+                // and the shack says why until it is turned on again.
                 if let Some(lan) = lan {
                     lan.end_at_shack();
                 }
@@ -902,13 +1222,7 @@ impl Service {
                 ..
             } = &action
             {
-                control.operations.invalidate();
-                control.remember(Persist::ClearGrants);
-                // A5: revoking ends the approval, and its pin with it.
-                control.remember(Persist::Pin {
-                    device_id: device_id.clone(),
-                    key: None,
-                });
+                control.revoke_browser(device_id);
             }
             if matches!(
                 action,
@@ -928,8 +1242,7 @@ impl Service {
             // actions remain immediate even when the command queue is full.
             let permit = self.commands.try_reserve().map_err(|_| "remoteBusy")?;
             if matches!(action, Action::Enable {}) {
-                control.stop();
-                control.enabled = true;
+                control.start();
                 // Turning on starts a fresh authority: every permission in memory is cleared. The
                 // grants remembered for still-approved browsers come back once the service lists
                 // them (see `Controller::apply_restore`). "On" itself is remembered by the
@@ -972,11 +1285,87 @@ struct Controller {
     engine: crate::SharedEngine,
     feeds: transport::Feeds,
     restore: Option<Restore>,
+    accounts: Accounts,
+    signing: Option<Signing>,
+    staged: Option<Staged>,
+    /// The removals made here that the service has not heard yet ([`Controller::queue_removal`]).
+    /// `None` when they could not be read: then no device is granted on its proof, since one of
+    /// them may have been removed here.
+    removals: Option<Vec<String>>,
+    /// The invitations taken back here that the service has not heard yet, each address as it was
+    /// typed ([`Controller::queue_uninvite`]). `None` when they could not be read.
+    uninvites: Option<Vec<String>>,
+}
+/// The station's account, as the controller reaches it (`account`): its entries in the credential
+/// store, the service's account side, how a sign-in binds, the LAN key a binding names, and the
+/// clock proofs are read by.
+pub(crate) struct Accounts {
+    vault: Arc<dyn vault::AccountVault>,
+    /// `accountNotReady` while this build has no configured sign-in for its service.
+    service: Result<Arc<account::Service>, &'static str>,
+    bind: account::Binder,
+    /// The LAN key's public half, SPKI as lowercase hex (made now if there is none): `None` while
+    /// the store will not give one up. `None` here: the LAN's own, once the service has started.
+    lan_key: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
+    now_s: fn() -> u64,
+    /// Whether a device is granted anything on its own sign-in: [`account::GRANTS_ON_SIGN_IN`], in
+    /// every build. Only a test of the grants a sign-in would make sets it otherwise.
+    grants_on_sign_in: bool,
+}
+impl Accounts {
+    /// The account of the service this build is made for, in the OS credential store, signing in
+    /// through `open`'s browser.
+    fn system(open: account::Opener) -> Self {
+        let vault: Arc<dyn vault::AccountVault> = Arc::new(SystemVault);
+        let service = account::Service::new(REMOTE_ORIGIN).map(Arc::new);
+        Self {
+            bind: account::binder(service.clone(), vault.clone(), open, now_s),
+            vault,
+            service,
+            lan_key: None,
+            now_s,
+            grants_on_sign_in: account::GRANTS_ON_SIGN_IN,
+        }
+    }
+    /// No account sign-in: this build's own tenant is not a test's service.
+    #[cfg(test)]
+    fn not_ready() -> Self {
+        Self {
+            vault: Arc::new(tests::MemoryVault::default()),
+            service: Err("accountNotReady"),
+            bind: Arc::new(|_| Box::pin(async { Err("accountNotReady") })),
+            lan_key: None,
+            now_s,
+            grants_on_sign_in: account::GRANTS_ON_SIGN_IN,
+        }
+    }
+}
+/// A sign-in at the shack, running on a task of its own while the operator is in the browser, and
+/// the Remote generation it was asked under: a later Turn off or Cancel wins.
+struct Signing {
+    task: tokio::task::JoinHandle<Result<account::Bound, &'static str>>,
+    generation: u64,
+    /// Proving a bound station again (`Action::SignInAgain`): nothing is installed when it ends.
+    again: bool,
+}
+/// The keys and credential a sign-in binds with: made once and kept until the station is bound, so a
+/// sign-in tried again names the same keys and the service finds the station it already made for
+/// them. No `Debug`: the signing key and the credential are secrets.
+struct Staged {
+    pkcs8: String,
+    public_key: String,
+    credential: String,
+}
+/// What the controller waits on next.
+enum Next {
+    Command(Option<Command>),
+    Retry,
+    Signed(Result<Result<account::Bound, &'static str>, tokio::task::JoinError>),
 }
 /// Remote came on with grants remembered; they wait for the service's browser list.
 struct Restore {
-    /// The authority epoch when Remote came on. Any local decision since then (Turn off, take over,
-    /// revoking a browser) moves it, and that decision wins.
+    /// The authority epoch when Remote came on. Any local decision since then (Turn off, take over)
+    /// moves it, and that decision wins. A browser revoked since is read out of the record.
     epoch: u64,
     at: tokio::time::Instant,
     attempts: u32,
@@ -997,9 +1386,27 @@ impl Controller {
         }
         loop {
             let retry = self.restore.as_ref().map(|r| r.at);
-            tokio::select! {
-                next = receiver.recv() => {
-                    let Some((action, generation, epoch, reply)) = next else { break };
+            let signing = self.signing.as_mut().map(|s| &mut s.task);
+            let next = tokio::select! {
+                next = receiver.recv() => Next::Command(next),
+                _ = async {
+                    match retry {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => Next::Retry,
+                done = async {
+                    match signing {
+                        Some(task) => task.await,
+                        None => std::future::pending().await,
+                    }
+                } => Next::Signed(done),
+            };
+            match next {
+                Next::Command(next) => {
+                    let Some((action, generation, epoch, reply)) = next else {
+                        break;
+                    };
                     let result = self.handle(action, generation, epoch).await;
                     if let Err(error) = result {
                         if let Ok(mut status) = self.status.lock() {
@@ -1008,24 +1415,36 @@ impl Controller {
                     }
                     let _ = reply.send(result);
                 }
-                _ = async {
-                    match retry {
-                        Some(at) => tokio::time::sleep_until(at).await,
-                        None => std::future::pending().await,
-                    }
-                } => self.retry_restore().await,
+                Next::Retry => self.retry_restore().await,
+                Next::Signed(done) => self.signed(done),
             }
+        }
+        if let Some(signing) = self.signing.take() {
+            signing.task.abort();
         }
         if let Ok(mut control) = self.control.lock() {
             control.stop();
         }
     }
     /// Remote remembers being on. If it was on when Nexus last exited, turn it on again exactly as
-    /// Turn on Remote does: a fresh local authority (every in-memory permission cleared, transmit
-    /// included), a fresh generation, and the remembered grants restored for still-approved
+    /// Turn on Remote does: a fresh local authority (every in-memory permission cleared), a fresh
+    /// generation, and the remembered grants restored for still-approved
     /// browsers. A locked or unreadable store, a record written for another pairing, or a record
     /// that says off all leave it off.
     async fn resume(&mut self, binding: Binding) {
+        self.arm_enrolment();
+        self.removals = match self.accounts.vault.revokes() {
+            Ok(Some(kept)) if kept.station_id == binding.station_id => Some(kept.devices),
+            Ok(_) => Some(Vec::new()),
+            Err(_) => None,
+        };
+        self.uninvites = match self.accounts.vault.uninvites() {
+            Ok(Some(kept)) if kept.station_id == binding.station_id => Some(kept.people),
+            Ok(_) => Some(Vec::new()),
+            Err(_) => None,
+        };
+        self.reflect_removals();
+        self.reflect_people();
         let remembered = match self.vault.state() {
             Ok(state) => state.filter(|s| {
                 s.binding == binding
@@ -1051,7 +1470,7 @@ impl Controller {
                     .all(|(id, key)| identifier(id) && pin_shape(key))
         });
         // S3-M1: this pairing's signing key, made here once for a pairing from before it existed.
-        let key = self.station_key(&binding);
+        let (key, identity) = self.station_key(&binding);
         // Decide under the lock BEFORE the pairing becomes visible, so a Turn off that arrives
         // afterwards is ordered after this decision and wins.
         let resumed = {
@@ -1060,11 +1479,11 @@ impl Controller {
             };
             let enabled = remembered.as_ref().is_some_and(|s| s.enabled);
             control.station_key = key;
+            control.station_identity = identity;
             control.key_refused = false;
             control.remember(Persist::Bound(binding, remembered, pins.map(Box::new)));
             if enabled {
-                control.stop();
-                control.enabled = true;
+                control.start();
                 Some(control.generation)
             } else {
                 None
@@ -1092,9 +1511,18 @@ impl Controller {
             self.restore = None;
             return;
         }
-        match self.devices().await {
+        match self.list().await {
             Ok(devices) => {
                 self.apply_restore(&devices);
+                self.listed(&devices);
+                let at = self
+                    .control
+                    .lock()
+                    .ok()
+                    .map(|c| (c.generation, c.operations.epoch()));
+                if let Some(at) = at {
+                    self.vouch(&devices, at).await;
+                }
                 if let Ok(mut status) = self.status.lock() {
                     status.devices = devices;
                 }
@@ -1111,8 +1539,7 @@ impl Controller {
     /// Put back remembered grants for each browser the service still lists as approved at the SAME
     /// approval (`Approval::holds`: the same generation, so a renewal on use still matches), under the
     /// epoch captured when Remote came on. The grants are read from the record now, under the lock, so
-    /// a revocation made while the list was on its way is honoured. FT8/FT4 transmit comes back only
-    /// where it was granted, only with station control, and arms nothing.
+    /// a revocation made while the list was on its way is honoured. Nothing restored arms anything.
     fn apply_restore(&mut self, devices: &[Device]) {
         let Some(restore) = self.restore.take() else {
             return;
@@ -1147,9 +1574,7 @@ impl Controller {
                 .collect()
         };
         let grants = operations::DurableGrants {
-            logging: ids(|g| g.logging),
             control: ids(|g| g.control),
-            transmit: ids(|g| g.control && g.transmit),
         };
         let operations = control.operations.clone();
         match operations.restore(restore.epoch, &grants) {
@@ -1165,6 +1590,171 @@ impl Controller {
             }
         }
     }
+    /// The service's list, as the room's tunnel reads it (`Control::listed`).
+    fn listed(&self, devices: &[Device]) {
+        if let Ok(mut control) = self.control.lock() {
+            control.listed(devices);
+        }
+    }
+    /// The service's list, read after it has been told of every removal made here offline; a
+    /// removal it no longer lists as approved is one it has heard.
+    async fn list(&mut self) -> Result<Vec<Device>, &'static str> {
+        self.send_uninvites().await;
+        self.send_removals().await;
+        let devices = self.devices().await?;
+        let now = now_ms();
+        if let Some(removals) = &self.removals {
+            let heard: Vec<String> = removals
+                .iter()
+                .filter(|id| {
+                    !devices
+                        .iter()
+                        .any(|d| d.id == **id && d.approved == 1 && d.expires_at > now)
+                })
+                .cloned()
+                .collect();
+            if !heard.is_empty() {
+                // A store that will not keep the shorter list leaves it held here for this run.
+                let _ = self.keep_removals(|removals| removals.retain(|id| !heard.contains(id)));
+            }
+        }
+        Ok(devices)
+    }
+    /// Tells the service of each removal made here while it could not be reached, in order, until
+    /// one cannot be sent. Each it answers is no longer waiting.
+    async fn send_removals(&mut self) {
+        let Some(waiting) = self.removals.clone().filter(|w| !w.is_empty()) else {
+            return;
+        };
+        let Ok((binding, token)) = self.bound() else {
+            return;
+        };
+        for device_id in waiting {
+            let sent = self
+                .client
+                .post(
+                    &station_path(&binding, "revoke-device"),
+                    Some(&token),
+                    json!({ "deviceId": device_id }),
+                )
+                .await;
+            if matches!(sent, Err("serviceUnavailable" | "tryLater")) {
+                break;
+            }
+            let _ = self.keep_removals(|removals| removals.retain(|id| *id != device_id));
+        }
+    }
+    /// Tells the service of each invitation taken back here while it could not be reached, in order,
+    /// until one cannot be sent. Each it answers is no longer waiting.
+    async fn send_uninvites(&mut self) {
+        let Some(waiting) = self.uninvites.clone().filter(|w| !w.is_empty()) else {
+            return;
+        };
+        let Ok((binding, token)) = self.bound() else {
+            return;
+        };
+        for address in waiting {
+            let sent = self
+                .client
+                .post(
+                    &station_path(&binding, "uninvite"),
+                    Some(&token),
+                    json!({ "email": address }),
+                )
+                .await;
+            if matches!(sent, Err("serviceUnavailable" | "tryLater")) {
+                break;
+            }
+            let _ = self.keep_uninvites(|people| people.retain(|a| *a != address));
+        }
+    }
+    /// Changes the invitations taken back and waiting, and keeps them in the store. One the store
+    /// will not keep is still held here for this run.
+    fn keep_uninvites(
+        &mut self,
+        change: impl FnOnce(&mut Vec<String>),
+    ) -> Result<(), &'static str> {
+        let (Some(people), Some(binding)) = (self.uninvites.as_mut(), self.binding.as_ref()) else {
+            return Err("stationNotPaired");
+        };
+        change(people);
+        self.accounts.vault.save_uninvites(&vault::Uninvites {
+            station_id: binding.station_id.clone(),
+            people: people.clone(),
+        })
+    }
+    /// A removal made here that the service could not be told of: kept, so it is sent before the
+    /// next list and no proof grants the device again meanwhile.
+    fn queue_removal(&mut self, device_id: String) -> Result<(), &'static str> {
+        if self.removals.is_none() {
+            return Err("credentialStoreUnavailable");
+        }
+        self.keep_removals(|removals| {
+            if !removals.contains(&device_id) {
+                removals.push(device_id);
+            }
+        })
+    }
+    /// Changes the removals waiting, and keeps them in the store. One the store will not keep is
+    /// still held here for this run.
+    fn keep_removals(&mut self, change: impl FnOnce(&mut Vec<String>)) -> Result<(), &'static str> {
+        let (Some(removals), Some(binding)) = (self.removals.as_mut(), self.binding.as_ref())
+        else {
+            return Err("stationNotPaired");
+        };
+        change(removals);
+        let kept = vault::Revokes {
+            station_id: binding.station_id.clone(),
+            devices: removals.clone(),
+        };
+        let saved = self.accounts.vault.save_revokes(&kept);
+        self.reflect_removals();
+        saved
+    }
+    /// Changes the people invited to this station, and keeps them in the store, before anything
+    /// takes them in: an entry that does not read is never written over.
+    fn keep_people(
+        &self,
+        change: impl FnOnce(&mut Vec<tempo_client::account::Invite>),
+    ) -> Result<(), &'static str> {
+        let binding = self.binding.as_ref().ok_or("stationNotPaired")?;
+        let vault = &self.accounts.vault;
+        let mut people = vault
+            .people()?
+            .filter(|people| people.station_id == binding.station_id)
+            .unwrap_or_else(|| vault::People {
+                station_id: binding.station_id.clone(),
+                invites: Vec::new(),
+            });
+        change(&mut people.invites);
+        let saved = vault.save_people(&people);
+        self.reflect_people();
+        self.arm_enrolment();
+        saved
+    }
+    fn reflect_people(&self) {
+        let people = self
+            .binding
+            .as_ref()
+            .and_then(|binding| {
+                self.accounts
+                    .vault
+                    .people()
+                    .ok()
+                    .flatten()
+                    .filter(|people| people.station_id == binding.station_id)
+            })
+            .map(|people| people.invites)
+            .unwrap_or_default();
+        if let Ok(mut status) = self.status.lock() {
+            status.account.people = people;
+        }
+    }
+    fn reflect_removals(&self) {
+        if let Ok(mut status) = self.status.lock() {
+            status.account.removals = self.removals.clone().unwrap_or_default();
+        }
+    }
     async fn devices(&self) -> Result<Vec<Device>, &'static str> {
         let (binding, token) = self.bound()?;
         let value = self
@@ -1177,11 +1767,16 @@ impl Controller {
             devices: Vec<Device>,
         }
         let mut value: Devices = serde_json::from_value(value).map_err(|_| "invalidResponse")?;
+        // One id names one device, and only ever an id the service made: a press, a pin and a grant
+        // are each made for an id, so a second device under it, or one under a name the shack gives
+        // its own computers, refuses the list as a malformed id does.
+        let ids: std::collections::BTreeSet<&str> =
+            value.devices.iter().map(|d| d.id.as_str()).collect();
         if value.devices.len() > 8
-            || value
-                .devices
-                .iter()
-                .any(|d| !identifier(&d.id) || !valid_name(&d.name) || d.approved > 1)
+            || ids.len() != value.devices.len()
+            || value.devices.iter().any(|d| {
+                !hosted(&d.id) || !valid_name(&d.name) || d.approved > 1 || !d.kind.fits(d.platform)
+            })
         {
             return Err("invalidResponse");
         }
@@ -1195,29 +1790,39 @@ impl Controller {
     /// This pairing's signing key (S3-M1), made once: the one the vault holds for it, or a new one
     /// saved there first. A store that will not answer (locked) makes nothing, because the key may
     /// be in it: the station's answers go unsigned until it does.
-    fn station_key(&self, binding: &Binding) -> Option<Arc<station_key::Signer>> {
+    fn station_key(&self, binding: &Binding) -> StationKeys {
         match self.vault.station_key() {
             Ok(Some(kept)) if kept.binding == *binding => {
                 if let Some(signer) = station_key::Signer::restore(&kept.pkcs8) {
-                    return Some(Arc::new(signer));
+                    return (
+                        Some(Arc::new(signer)),
+                        tunnel_identity(&kept.pkcs8, binding),
+                    );
                 }
             }
             Ok(_) => {}
-            Err(_) => return None,
+            Err(_) => return (None, None),
         }
         self.new_station_key(binding)
     }
     /// A new signing key for `binding`, saved before it is used: a key the vault did not keep would
     /// be gone at the next start, and the service would refuse the one made then.
-    fn new_station_key(&self, binding: &Binding) -> Option<Arc<station_key::Signer>> {
-        let (signer, pkcs8) = station_key::Signer::generate()?;
-        self.vault
+    fn new_station_key(&self, binding: &Binding) -> StationKeys {
+        let Some((signer, pkcs8)) = station_key::Signer::generate() else {
+            return (None, None);
+        };
+        let identity = tunnel_identity(&pkcs8, binding);
+        if self
+            .vault
             .save_station_key(&vault::StationKey {
                 binding: binding.clone(),
                 pkcs8,
             })
-            .ok()?;
-        Some(Arc::new(signer))
+            .is_err()
+        {
+            return (None, None);
+        }
+        (Some(Arc::new(signer)), identity)
     }
     fn reflect(&self, value: &str) {
         if let Ok(mut status) = self.status.lock() {
@@ -1245,21 +1850,25 @@ impl Controller {
         }
         Ok((binding, token))
     }
-    /// ONE APPROVAL (operator decision 2026-09-13): approving a browser grants it station control
-    /// and logging, and FT8/FT4 transmit when the approval ticked it. With Remote on they take
-    /// effect at once; with Remote off they wait in the record for Turn on. A local decision made
-    /// after the approval was asked for (Turn off or on, take over, revoking a browser) wins, and
-    /// nothing is granted. ⛔ Granting transmit arms nothing: the browser still has to press TX On.
+    /// ONE APPROVAL (operator decision 2026-09-13): approving a browser grants it station control.
+    /// With Remote on it takes
+    /// effect at once; with Remote off it waits in the record for Turn on. A local decision made
+    /// after the approval was asked for (Turn off or on, take over) wins, and nothing is granted;
+    /// revoking this device does too (the revoke is taken again after this, `Controller::handle`).
     ///
     /// A5: the device key the operator was shown (`shown`) is pinned if the service still lists that
     /// key for the browser now that it has approved it. A key that changed in between pins nothing,
     /// and that browser is approved again before it streams.
+    ///
+    /// The approval is of the device as it was shown (`kind`): a device the service now lists as
+    /// another kind is granted nothing and pinned for nothing, and is asked about again in its own
+    /// words. A computer's pin is its own ([`Device::pin`]), made for this approval.
     fn grant_approved(
         &self,
         devices: &[Device],
         device_id: String,
-        transmit: bool,
         shown: Option<String>,
+        kind: Option<Kind>,
         (generation, epoch): (u64, u64),
     ) -> Result<(), &'static str> {
         let now = now_ms();
@@ -1268,7 +1877,10 @@ impl Controller {
             .find(|d| d.id == device_id && d.approved == 1 && d.expires_at > now)
             .ok_or("invalidResponse")?;
         let approval = device.approval();
-        let pin = shown.filter(|shown| device.key.as_ref() == Some(shown));
+        let as_shown = kind == Some(device.kind);
+        let pin = shown
+            .filter(|shown| as_shown && device.key.as_ref() == Some(shown))
+            .and_then(|_| device.pin());
         let approved: Vec<String> = devices
             .iter()
             .filter(|d| d.approved == 1 && d.expires_at > now)
@@ -1278,26 +1890,388 @@ impl Controller {
         if control.generation != generation || control.operations.epoch() != epoch {
             return Ok(());
         }
-        if control.enabled {
-            let operations = control.operations.clone();
-            operations.permit(&device_id, true)?;
-            operations.permit_station(&device_id, true)?;
-            // A fresh approval without the tick holds no transmit, even if an earlier one did.
-            operations.permit_transmit(&device_id, transmit)?;
+        // A computer (the native client) is granted nothing on the relay's lanes: it never reaches
+        // them. Its approval is its pin, below, which
+        // the tunnel through the room checks. A browser is granted only if it was shown as one.
+        let browser = as_shown && device.kind == Kind::Browser;
+        if control.enabled && browser {
+            control.operations.permit_station(&device_id, true)?;
         }
-        control.remember(Persist::Browser {
-            device_id: device_id.clone(),
-            approval: Some(approval),
-            logging: Some(true),
-            control: Some(true),
-            transmit: Some(transmit),
-        });
+        if browser {
+            control.remember(Persist::Browser {
+                device_id: device_id.clone(),
+                approval: Some(approval),
+                control: Some(true),
+            });
+        }
         control.remember(Persist::Listed(approved));
         control.remember(Persist::Pin {
             device_id,
             key: pin,
         });
         Ok(())
+    }
+    /// The keys and credential this station binds with: those staged for it already, or new ones,
+    /// staged now. The credential store is asked to take the credential first, as for a pairing, so
+    /// the service never makes a station the shack cannot keep.
+    fn staged(&mut self) -> Result<&Staged, &'static str> {
+        if self.staged.is_none() {
+            let (signer, pkcs8) =
+                station_key::Signer::generate().ok_or("credentialStoreUnavailable")?;
+            let credential = transport::random_secret()?;
+            let unbound = Binding {
+                origin: self.client.origin().into(),
+                station_id: String::new(),
+                account_id: String::new(),
+            };
+            self.vault.stage(&unbound, &credential)?;
+            self.staged = Some(Staged {
+                public_key: signer.public_key().to_string(),
+                pkcs8,
+                credential,
+            });
+        }
+        self.staged.as_ref().ok_or("credentialStoreUnavailable")
+    }
+    /// The sign-in at the shack has ended: bound, or why not. Kept staged on a failure, so trying
+    /// again names the same keys.
+    fn signed(
+        &mut self,
+        done: Result<Result<account::Bound, &'static str>, tokio::task::JoinError>,
+    ) {
+        let Some(signing) = self.signing.take() else {
+            return;
+        };
+        // Said ended before the station is bound, so nothing shows it bound and still signing in.
+        self.reflect_account();
+        let result = done.unwrap_or(Err("signInFailed")).and_then(|bound| {
+            if signing.again {
+                self.proven_again();
+                Ok(())
+            } else {
+                self.install(bound, signing.generation)
+            }
+        });
+        if let Err(error) = result {
+            if let Ok(mut status) = self.status.lock() {
+                status.error = Some(error);
+            }
+        }
+    }
+    /// The station's proof was replaced: devices can check it again, with the owner kept now.
+    fn proven_again(&self) {
+        if let Ok(mut status) = self.status.lock() {
+            status.account.reproof = false;
+            status.error = None;
+        }
+        self.arm_enrolment();
+    }
+    /// The station is bound to the account: its credential and its signing key are kept under the
+    /// binding the service gave (the key first: the service already holds its public half, so a key
+    /// made later would be refused), and Remote turns on as approving a pairing turns it on: a
+    /// fresh authority, the TX-enable latch untouched, nothing remembered. A Turn off or Cancel
+    /// since the sign-in started moved the generation, and wins.
+    fn install(&mut self, bound: account::Bound, generation: u64) -> Result<(), &'static str> {
+        let staged = self.staged.as_ref().ok_or("signInFailed")?;
+        let binding = Binding {
+            origin: self.client.origin().into(),
+            station_id: bound.station_id,
+            account_id: bound.account_id,
+        };
+        self.vault.save_station_key(&vault::StationKey {
+            binding: binding.clone(),
+            pkcs8: staged.pkcs8.clone(),
+        })?;
+        self.vault.save(&binding, &staged.credential)?;
+        let key = station_key::Signer::restore(&staged.pkcs8).map(Arc::new);
+        let identity = tunnel_identity(&staged.pkcs8, &binding);
+        self.staged = None;
+        if let Ok(mut control) = self.control.lock() {
+            control.station_key = key;
+            control.station_identity = identity;
+            control.key_refused = false;
+            control.remember(Persist::Bound(binding.clone(), None, None));
+        }
+        self.binding = Some(binding);
+        self.pending = None;
+        self.removals = Some(Vec::new());
+        self.uninvites = Some(Vec::new());
+        self.reflect_removals();
+        self.reflect_people();
+        self.arm_enrolment();
+        self.reflect("disabled");
+        let turned_on = self.control.lock().ok().and_then(|mut control| {
+            (control.generation == generation).then(|| {
+                control.start();
+                control.generation
+            })
+        });
+        if let Some(generation) = turned_on {
+            self.enable(generation)?;
+        }
+        Ok(())
+    }
+    /// Arms the LAN's enrolment with what the station keeps of its account (`lan::enrol`): its owner,
+    /// the issuer's keys and the people invited, read now. Disarmed while the station is not bound
+    /// to an owner of its own, while either is not kept, or while one of the three does not read.
+    fn arm_enrolment(&self) {
+        let vault = &self.accounts.vault;
+        let ready = self.accounts.service.as_ref().ok().and_then(|service| {
+            let station_id = &self.binding.as_ref()?.station_id;
+            let owner = vault
+                .owner()
+                .ok()
+                .flatten()
+                .filter(|owner| owner.station_id == *station_id)?;
+            let tenant = service.tenant();
+            let keys = vault
+                .account_keys()
+                .ok()
+                .flatten()
+                .filter(|kept| kept.issuer == tenant.issuer)?
+                .keys;
+            let invites = match vault.people().ok()? {
+                Some(people) if people.station_id == *station_id => people.invites,
+                _ => Vec::new(),
+            };
+            Some(lan::enrol::Ready {
+                tenant,
+                owner,
+                keys,
+                invites,
+                vault: vault.clone(),
+                now_s: self.accounts.now_s,
+            })
+        });
+        if let Ok(control) = self.control.lock() {
+            control.enrolment.arm(ready);
+        }
+    }
+    /// The service's list, heard: every device the station keeps for the LAN on a proof that the
+    /// service no longer lists as approved is taken out of that keeping (`account::sweep`), and out
+    /// of the LAN at once, as a removal at the shack takes it out.
+    fn sweep(&self, devices: &[Device], now_s: u64) {
+        let Some(binding) = &self.binding else {
+            return;
+        };
+        let now = now_ms();
+        let rows: Vec<serde_json::Value> = devices
+            .iter()
+            .map(|d| {
+                let mut row = d.proof_row();
+                row["approved"] = u8::from(d.approved == 1 && d.expires_at > now).into();
+                row
+            })
+            .collect();
+        let Ok(gone) = account::sweep(&rows, &*self.accounts.vault, &binding.station_id, now_s)
+        else {
+            return;
+        };
+        let lan = self.control.lock().ok().and_then(|c| c.lan.clone());
+        for pin in gone {
+            let pin = lan::pairing::hex32(&pin);
+            if let (Some(lan), Some(pin)) = (&lan, pin) {
+                // Not every kept device is in the LAN's book (a browser never is).
+                let _ = lan.revoke(&lan::device_id(&pin));
+            }
+        }
+    }
+    fn reflect_account(&self) {
+        if let Ok(mut status) = self.status.lock() {
+            status.account.signing_in = self.signing.is_some();
+        }
+    }
+    /// Each device the service lists as approved on its own proof, and not pinned here at that
+    /// approval yet, is checked by the station itself (`account::vouch`) before anything is granted
+    /// on it. One whose proof holds is granted as its role says, as an Approve press grants
+    /// ([`Controller::grant_vouched`]), kept for the LAN, and named in the notice at the shack; while
+    /// the station grants nothing on a sign-in (`account::GRANTS_ON_SIGN_IN`) it is granted nothing
+    /// and waits for Approve (`approveAtStation`). One whose proof does not hold is granted nothing
+    /// and shown with why. Either is shown beside the prompt a device added at the station gets.
+    /// Once pinned, a device is left to the operator's own decisions.
+    async fn vouch(&self, devices: &[Device], at: (u64, u64)) {
+        let now = now_ms();
+        let waiting: Vec<&Device> = {
+            let Ok(control) = self.control.lock() else {
+                return;
+            };
+            devices
+                .iter()
+                .filter(|d| d.proof.is_some() && d.approved == 1 && d.expires_at > now)
+                .filter(|d| {
+                    d.pin()
+                        .is_none_or(|pin| control.remembered.pins.get(&d.id) != Some(&pin))
+                })
+                // Removed here, and the service not told yet: never granted again meanwhile.
+                .filter(|d| {
+                    self.removals
+                        .as_ref()
+                        .is_none_or(|removals| !removals.contains(&d.id))
+                })
+                .collect()
+        };
+        let mut unconfirmed = BTreeMap::new();
+        let mut reproof = None;
+        let now_s = (self.accounts.now_s)();
+        if !waiting.is_empty() {
+            let rows: Vec<serde_json::Value> = waiting.iter().map(|d| d.proof_row()).collect();
+            let station_id = self
+                .binding
+                .as_ref()
+                .map(|b| b.station_id.clone())
+                .unwrap_or_default();
+            let results = match &self.accounts.service {
+                _ if self.removals.is_none() => rows
+                    .iter()
+                    .map(|_| Err("credentialStoreUnavailable"))
+                    .collect(),
+                Ok(service) => {
+                    let (results, again) =
+                        account::vouch(service, &*self.accounts.vault, &station_id, &rows, now_s)
+                            .await;
+                    reproof = Some(again);
+                    results
+                }
+                Err(reason) => rows.iter().map(|_| Err(*reason)).collect(),
+            };
+            let approved: Vec<String> = devices
+                .iter()
+                .filter(|d| d.approved == 1 && d.expires_at > now)
+                .map(|d| d.id.clone())
+                .collect();
+            for (device, result) in waiting.into_iter().zip(results) {
+                match result.and_then(|(vouched, lan)| {
+                    let granted = self.grant_vouched(device, &vouched, &approved, at)?;
+                    Ok(granted.then_some((vouched, lan)))
+                }) {
+                    Ok(Some((vouched, lan))) => {
+                        // The LAN's entry for it. One the store will not take leaves it out of the
+                        // LAN with the internet down, which is where a refusal belongs.
+                        let vault = &*self.accounts.vault;
+                        let _ = Self::keep_for_lan(vault, &station_id, &vouched, lan, now_s);
+                        self.added(device, &vouched);
+                    }
+                    // A local decision since the list was asked for: the next list asks again.
+                    Ok(None) => {}
+                    Err(reason) => {
+                        unconfirmed.insert(device.id.clone(), reason);
+                    }
+                }
+            }
+        }
+        self.sweep(devices, now_s);
+        // And every computer enrolled on the LAN on a proof past the offline age.
+        if let Some(lan) = self.control.lock().ok().and_then(|c| c.lan.clone()) {
+            lan.expire();
+        }
+        // The issuer's keys may be new, and the owner or the people may have changed.
+        self.arm_enrolment();
+        if let Ok(mut status) = self.status.lock() {
+            status.account.unconfirmed = unconfirmed;
+            // Known only when the issuer's keys were read for this list.
+            if let Some(reproof) = reproof {
+                status.account.reproof = reproof;
+            }
+        }
+    }
+    /// What an Approve press grants a device the operator was shown, for one the station vouched
+    /// for on its own proof, by its role: a browser that operates gets station control,
+    /// one that listens does not, and every device gets its pin ([`Device::pin`]). Station
+    /// control and the pin are all a stream needs (`Authority::stream_admitted`), and a streaming
+    /// browser uses the station's own window, transmit included, as any browser approved here does.
+    /// With Remote on the grants take effect at
+    /// once; with it off they wait in the record for Turn on. `false`, granting nothing, when a
+    /// local decision (Turn off or on, take over) was made after the list was asked for.
+    ///
+    /// A computer or phone that would only listen is refused (`listenNative`): its pin alone holds
+    /// station control on the room's tunnel whenever Remote is on (`Control::sync_approved`), so it
+    /// cannot be pinned as a listener. The operator can still approve it at the shack to operate.
+    ///
+    /// ⛔ Every other device is refused too (`approveAtStation`) while the station grants nothing on
+    /// a sign-in (`account::GRANTS_ON_SIGN_IN`): it waits for Approve at the shack, which grants it
+    /// through [`Controller::grant_approved`] as it grants any device.
+    fn grant_vouched(
+        &self,
+        device: &Device,
+        vouched: &tempo_client::account::Vouched,
+        approved: &[String],
+        (generation, epoch): (u64, u64),
+    ) -> Result<bool, &'static str> {
+        let pin = device.pin().ok_or("deviceKey")?;
+        let operate = vouched.role == tempo_client::account::Role::Operate;
+        let browser = device.kind == Kind::Browser;
+        if !browser && !operate {
+            return Err("listenNative");
+        }
+        if !self.accounts.grants_on_sign_in {
+            return Err("approveAtStation");
+        }
+        let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+        if control.generation != generation || control.operations.epoch() != epoch {
+            return Ok(false);
+        }
+        if control.enabled && browser {
+            control.operations.permit_station(&device.id, operate)?;
+        }
+        if browser {
+            control.remember(Persist::Browser {
+                device_id: device.id.clone(),
+                approval: Some(device.approval()),
+                control: Some(operate),
+            });
+        }
+        control.remember(Persist::Listed(approved.to_vec()));
+        control.remember(Persist::Pin {
+            device_id: device.id.clone(),
+            key: Some(pin),
+        });
+        Ok(true)
+    }
+    /// Keeps a device the station vouched for in the LAN's entry in `vault`, by the pin the LAN
+    /// admits it by, the entry held from its read to its save (`vault::DevicesHeld`). An entry that
+    /// does not read is never written over.
+    fn keep_for_lan(
+        vault: &dyn vault::AccountVault,
+        station_id: &str,
+        vouched: &tempo_client::account::Vouched,
+        pin: String,
+        now_s: u64,
+    ) -> Result<(), &'static str> {
+        let held = vault::DevicesHeld::take(vault);
+        let mut cache = vault
+            .device_cache()?
+            .filter(|cache| cache.station_id == station_id)
+            .unwrap_or_else(|| tempo_client::account::DeviceCache::new(station_id));
+        cache.keep(tempo_client::account::CachedDevice {
+            pin,
+            role: vouched.role,
+            guest: vouched.guest,
+            issued_at: vouched.issued_at,
+            confirmed_at: now_s,
+        })?;
+        vault.save_device_cache(&held, &cache)
+    }
+    /// The notice of a device the station granted on its own proof, once.
+    fn added(&self, device: &Device, vouched: &tempo_client::account::Vouched) {
+        if let Ok(mut status) = self.status.lock() {
+            if status
+                .account
+                .added
+                .iter()
+                .any(|a| a.device_id == device.id)
+            {
+                return;
+            }
+            status.account.added.push(Added {
+                device_id: device.id.clone(),
+                name: device.name.clone(),
+                kind: device.kind,
+                platform: device.platform,
+                key: device.key.clone(),
+                role: vouched.role,
+                guest: vouched.guest,
+            });
+        }
     }
     /// Connect under `generation`, which the caller has already made enabled with a fresh
     /// authority (Turn on Remote, a launch that remembers being on, or approving the pairing).
@@ -1336,8 +2310,8 @@ impl Controller {
         // Remote is on and connecting: the next launch turns it back on.
         control.remember(Persist::Enabled);
         // Remembered grants come back once the service confirms each browser is still approved at
-        // the same approval. The epoch is read here, under the lock: a later take over, revocation
-        // or Turn off moves it, and that decision wins.
+        // the same approval. The epoch is read here, under the lock: a later take over or Turn off
+        // moves it, and that decision wins; a later revocation is read out of the record.
         if !control.remembered.grants().is_empty() {
             self.restore = Some(Restore {
                 epoch: control.operations.epoch(),
@@ -1354,9 +2328,7 @@ impl Controller {
         epoch: u64,
     ) -> Result<(), &'static str> {
         match action {
-            Action::LoggingPermission { .. }
-            | Action::StationPermission { .. }
-            | Action::TransmitPermission { .. }
+            Action::StationPermission { .. }
             | Action::TakeOverLogging {}
             | Action::LanOn { .. }
             | Action::LanOff {}
@@ -1366,7 +2338,11 @@ impl Controller {
             | Action::LanRevoke { .. }
             | Action::LanReset {} => return Err("invalidRequest"),
             Action::Begin { name } => {
-                if self.binding.is_some() || self.pending.is_some() || !valid_name(&name) {
+                if self.binding.is_some()
+                    || self.pending.is_some()
+                    || self.signing.is_some()
+                    || !valid_name(&name)
+                {
                     return Err("invalidRequest");
                 }
                 let value = self
@@ -1401,7 +2377,17 @@ impl Controller {
                 });
                 self.reflect("pairing");
             }
+            Action::CancelSignInAgain {} => {
+                if let Some(signing) = self.signing.take_if(|signing| signing.again) {
+                    signing.task.abort();
+                }
+                self.reflect_account();
+            }
             Action::Cancel {} => {
+                if let Some(signing) = self.signing.take() {
+                    signing.task.abort();
+                }
+                self.reflect_account();
                 self.pending = None;
                 self.reflect(if self.binding.is_some() {
                     "disabled"
@@ -1457,9 +2443,11 @@ impl Controller {
                         },
                     );
                 } else if self.binding.is_some() {
-                    let devices = self.devices().await?;
+                    let devices = self.list().await?;
                     // A fresh list is also what a restore after a restart is waiting for.
                     self.apply_restore(&devices);
+                    self.listed(&devices);
+                    self.vouch(&devices, (generation, epoch)).await;
                     if let Ok(mut status) = self.status.lock() {
                         status.devices = devices;
                         status.error = None;
@@ -1469,7 +2457,6 @@ impl Controller {
             Action::Approve {
                 enrollment_id,
                 account_id,
-                transmit,
             } => {
                 let pending = self.pending.as_mut().ok_or("pairingExpired")?;
                 if pending.id != enrollment_id
@@ -1489,12 +2476,21 @@ impl Controller {
                 };
                 // Confirm the OS vault works before creating cloud station authority.
                 self.vault.stage(&binding, &token)?;
+                // One trial per callsign and per shack PC: the station callsign configured here (sent
+                // as it is, blank included, for the service to judge) and the PC's two hashed
+                // identifiers (`pc_identity`), read only now, when approving may start a trial.
+                let callsign = tempo_app::engine::engine_lock(&self.engine)
+                    .settings()
+                    .mycall
+                    .trim()
+                    .to_string();
                 let result = self
                     .client
                     .post(
                         "enroll/approve",
                         None,
-                        json!({ "id": pending.id, "proof": pending.proof, "credential": token }),
+                        json!({ "id": pending.id, "proof": pending.proof, "credential": token,
+                            "callsign": callsign, "pc": pc_identity::pc() }),
                     )
                     .await;
                 let value = match result {
@@ -1512,7 +2508,7 @@ impl Controller {
                 }
                 self.vault.save(&binding, &token)?;
                 // S3-M1: a new pairing is a new station, with a signing key of its own.
-                let key = self.new_station_key(&binding);
+                let (key, identity) = self.new_station_key(&binding);
                 // One approval: the service approved the browser that confirmed this pairing along
                 // with the station. It gets what any approved browser gets, waiting in the record
                 // for Turn on. A service that reports no browser pairs exactly as it used to.
@@ -1534,6 +2530,7 @@ impl Controller {
                     .filter(|(id, approval, _)| identifier(id) && approval.expires_at > now_ms());
                 if let Ok(mut control) = self.control.lock() {
                     control.station_key = key;
+                    control.station_identity = identity;
                     control.key_refused = false;
                     // A new pairing starts with nothing remembered: off, no grants, no pins.
                     control.remember(Persist::Bound(binding.clone(), None, None));
@@ -1541,9 +2538,7 @@ impl Controller {
                         control.remember(Persist::Browser {
                             device_id: device_id.clone(),
                             approval: Some(approval),
-                            logging: Some(true),
                             control: Some(true),
-                            transmit: Some(transmit),
                         });
                         // A5, operator ruling D4 (2026-09-28): that browser's key is pinned on first
                         // use, the trust the pairing already places in the service. Both ends show
@@ -1560,13 +2555,150 @@ impl Controller {
                 // and wins.
                 let turned_on = self.control.lock().ok().and_then(|mut control| {
                     (control.generation == generation).then(|| {
-                        control.stop();
-                        control.enabled = true;
+                        control.start();
                         control.generation
                     })
                 });
                 if let Some(generation) = turned_on {
                     self.enable(generation)?;
+                }
+            }
+            Action::SignIn { name } => {
+                if self.binding.is_some()
+                    || self.pending.is_some()
+                    || self.signing.is_some()
+                    || !valid_name(&name)
+                {
+                    return Err("invalidRequest");
+                }
+                // Not ready: no key is made and nothing is staged.
+                self.accounts.service.as_ref().map_err(|reason| *reason)?;
+                let lan_key = self
+                    .accounts
+                    .lan_key
+                    .as_ref()
+                    .and_then(|lan_key| lan_key())
+                    .ok_or("noKey")?;
+                let staged = self.staged()?;
+                let binds = account::Binds {
+                    name: name.trim().to_string(),
+                    station_key: staged.public_key.clone(),
+                    lan_key,
+                    credential: staged.credential.clone(),
+                    again: None,
+                };
+                self.signing = Some(Signing {
+                    task: tokio::spawn((self.accounts.bind)(binds)),
+                    generation,
+                    again: false,
+                });
+                self.reflect_account();
+            }
+            Action::SignInAgain {} => {
+                if self.pending.is_some() || self.signing.is_some() {
+                    return Err("invalidRequest");
+                }
+                self.accounts.service.as_ref().map_err(|reason| *reason)?;
+                let (binding, credential) = self.bound()?;
+                let station_key = self
+                    .control
+                    .lock()
+                    .map_err(|_| "serviceUnavailable")?
+                    .station_key
+                    .as_ref()
+                    .map(|key| key.public_key().to_string())
+                    .ok_or("noKey")?;
+                // The LAN key as it is now: one reset since the station was bound is proven too.
+                let lan_key = self
+                    .accounts
+                    .lan_key
+                    .as_ref()
+                    .and_then(|lan_key| lan_key())
+                    .ok_or("noKey")?;
+                let binds = account::Binds {
+                    name: String::new(),
+                    station_key,
+                    lan_key,
+                    credential,
+                    again: Some(account::Bound {
+                        station_id: binding.station_id,
+                        account_id: binding.account_id,
+                    }),
+                };
+                self.signing = Some(Signing {
+                    task: tokio::spawn((self.accounts.bind)(binds)),
+                    generation,
+                    again: true,
+                });
+                self.reflect_account();
+            }
+            Action::Invite { email, role } => {
+                let address = email.trim();
+                if !invitable(address) {
+                    return Err("invalidRequest");
+                }
+                let (binding, token) = self.bound()?;
+                self.client
+                    .post(
+                        &station_path(&binding, "invite"),
+                        Some(&token),
+                        json!({ "email": address, "role": role }),
+                    )
+                    .await?;
+                let mailbox = tempo_client::account::mailbox(address);
+                // The service holds this invitation now: one taken back offline and not heard yet
+                // must not take it back when it is sent.
+                let same = |a: &String| tempo_client::account::mailbox(a) == mailbox;
+                if self.uninvites.as_ref().is_some_and(|w| w.iter().any(same)) {
+                    let _ = self.keep_uninvites(|people| people.retain(|a| !same(a)));
+                }
+                self.keep_people(|invites| {
+                    invites.retain(|invite| invite.mailbox != mailbox);
+                    invites.push(tempo_client::account::Invite { mailbox, role });
+                })?;
+            }
+            Action::Uninvite { email } => {
+                let address = email.trim();
+                if !invitable(address) {
+                    return Err("invalidRequest");
+                }
+                let (binding, token) = self.bound()?;
+                // Out here first: from now on no proof of theirs is taken at this station, whether
+                // or not the service can be told.
+                let mailbox = tempo_client::account::mailbox(address);
+                self.keep_people(|invites| invites.retain(|invite| invite.mailbox != mailbox))?;
+                let sent = self
+                    .client
+                    .post(
+                        &station_path(&binding, "uninvite"),
+                        Some(&token),
+                        json!({ "email": address }),
+                    )
+                    .await;
+                match sent {
+                    Ok(_) => {}
+                    // Out here already; the service is told before the station's next list, and
+                    // then removes their devices.
+                    Err("serviceUnavailable" | "tryLater") => {
+                        if self.uninvites.is_none() {
+                            return Err("credentialStoreUnavailable");
+                        }
+                        let address = address.to_string();
+                        self.keep_uninvites(|people| {
+                            if !people.contains(&address) {
+                                people.push(address);
+                            }
+                        })?;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Action::DismissAdded { device_id } => {
+                if let Ok(mut status) = self.status.lock() {
+                    status
+                        .account
+                        .added
+                        .retain(|added| added.device_id != device_id);
                 }
             }
             Action::Enable {} => self.enable(generation)?,
@@ -1587,24 +2719,39 @@ impl Controller {
                 let _ = self.vault.remove_station_key();
                 if let Ok(mut control) = self.control.lock() {
                     control.station_key = None;
+                    control.station_identity = None;
                     control.key_refused = false;
                     control.remember(Persist::Removed);
                 }
                 self.binding = None;
+                self.removals = Some(Vec::new());
+                self.uninvites = Some(Vec::new());
+                self.reflect_removals();
+                self.reflect_people();
+                self.arm_enrolment();
                 self.pending = None;
                 self.reflect("unpaired");
             }
             Action::Device {
                 device_id,
                 approve,
-                transmit,
                 key,
+                kind,
             } => {
                 if !identifier(&device_id) || key.as_deref().is_some_and(|key| !pin_shape(key)) {
                     return Err("invalidRequest");
                 }
+                if !approve {
+                    // Taken when the press was made (`Service::action`); taken again here, after
+                    // any approval of this device that was already on its way when it was made,
+                    // so that approval cannot hand the grants back.
+                    if let Ok(mut control) = self.control.lock() {
+                        control.revoke_browser(&device_id);
+                    }
+                }
                 let (binding, token) = self.bound()?;
-                self.client
+                let sent = self
+                    .client
                     .post(
                         &station_path(
                             &binding,
@@ -1617,20 +2764,25 @@ impl Controller {
                         Some(&token),
                         json!({ "deviceId": device_id }),
                     )
-                    .await?;
+                    .await;
+                match sent {
+                    Ok(_) => {}
+                    // Removed here already; the service is told before the station's next list.
+                    Err("serviceUnavailable" | "tryLater") if !approve => {
+                        return self.queue_removal(device_id);
+                    }
+                    Err(error) => return Err(error),
+                }
                 if let Ok(mut status) = self.status.lock() {
                     status.devices.clear();
                 }
                 if approve {
                     // The list names the approval the service just wrote; the grant binds to it.
-                    let devices = self.devices().await?;
-                    let granted = self.grant_approved(
-                        &devices,
-                        device_id,
-                        transmit,
-                        key,
-                        (generation, epoch),
-                    );
+                    let devices = self.list().await?;
+                    let granted =
+                        self.grant_approved(&devices, device_id, key, kind, (generation, epoch));
+                    self.listed(&devices);
+                    self.vouch(&devices, (generation, epoch)).await;
                     if let Ok(mut status) = self.status.lock() {
                         status.devices = devices;
                     }
@@ -1693,16 +2845,4 @@ pub async fn remote_station_action(
     action: Action,
 ) -> Result<Status, &'static str> {
     service.action(action).await
-}
-
-// The canonical desktop WebView owns the in-memory bank. Detached windows and
-// the hosted browser cannot publish it or send a generic durable-state map.
-#[tauri::command]
-pub fn publish_remote_memory_bank(
-    service: tauri::State<'_, Service>,
-    window: tauri::WebviewWindow,
-    generation: String,
-    bank: Option<String>,
-) -> bool {
-    window.label() == "main" && service.publish_memories(&generation, bank.as_deref())
 }

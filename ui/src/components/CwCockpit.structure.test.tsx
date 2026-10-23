@@ -22,6 +22,7 @@
 // jsdom has no layout, so widths are stubbed the way useRegionCols.test.tsx does.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { installRecentLog, recentRows, resetRecentLog } from './RecentQsosPane.testkit'
 import { CwCockpit } from './CwCockpit'
 import type { AppSnapshot } from '../types'
 import type { CwPanelId, PanelLayoutApi } from '../features/panelState'
@@ -32,6 +33,7 @@ const decodeState = {
   wpm: 22,
   sent: [] as string[],
   keyerError: null as string | null,
+  paddleTookOver: false,
   candidates: [] as { call: string; best: boolean }[],
   state: 'listening',
   headline: '',
@@ -77,6 +79,7 @@ vi.mock('../api', () => ({
   setTune: vi.fn(async () => ({})),
   setFrequency: vi.fn(async () => ({})),
   haltTx: vi.fn(async () => ({})),
+  getCallStats: vi.fn(async () => null),
 }))
 
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
@@ -86,8 +89,9 @@ vi.mock('./BandStrip', () => ({ BandStrip: () => <div data-testid="bandstrip-stu
 // rather than log behaviour: whether the strip draws its own heading under a frame head that
 // already says LOG. The strip's own half is in LogEntry.density.test.tsx.
 vi.mock('./LogEntry', () => ({
-  LogEntry: (p: { titled?: boolean }) => (
-    <div data-testid="log-stub" data-titled={String(p.titled ?? true)} />
+  // A click stands in for a call settling in the strip (LogEntry `onEntryCall`): the Stats pane's source.
+  LogEntry: (p: { titled?: boolean; onEntryCall?: (call: string) => void }) => (
+    <div data-testid="log-stub" data-titled={String(p.titled ?? true)} onClick={() => p.onEntryCall?.('W1AW')} />
   ),
 }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
@@ -98,6 +102,7 @@ beforeEach(() => {
   fire = null
   decodeState.sent = []
   decodeState.keyerError = null
+  decodeState.paddleTookOver = false
   settingsState.rigModel = 0
   unprovenModels = []
   globalThis.ResizeObserver = class {
@@ -639,6 +644,34 @@ describe('the cockpit says when CAT keying is unproven on this radio', () => {
   })
 })
 
+/**
+ * ⭐ THE PADDLE TOOK OVER (operator ruling, 2026-10-12: the paddle wins). On Nexus's Flex client,
+ * once a tester's bench has named what the radio reports for a paddle, the operator's paddle during
+ * Nexus's CW stops the message, and the CW screen says so. It is information, not a fault: it must
+ * read as neither the error banner nor the standing caution, and it adds no shell-child kind.
+ */
+describe('the cockpit says when the paddle took over', () => {
+  const info = () => document.querySelector('.cw-keyer-warn.info')
+
+  it('says so as a notice, in the catalog words, as a shell child of the sanctioned kind', async () => {
+    decodeState.paddleTookOver = true
+    await renderCockpit()
+    const el = info()
+    expect(el, 'no line when the paddle took over').not.toBeNull()
+    expect(el!.textContent).toBe('Your paddle took over: Nexus stopped its message.')
+    expect(el!.getAttribute('role')).toBe('status')
+    expect(el!.matches('.caution'), 'it is not the caution').toBe(false)
+    expect(document.querySelector('.cw-keyer-warn[role="alert"]'), 'it is not the error banner').toBeNull()
+    const shell = document.querySelector('main.layout.single.cw-cockpit')!
+    expect(Array.from(shell.children).filter((c) => c === el).length, 'not a shell child').toBe(1)
+  })
+
+  it('is absent when the paddle did not take over', async () => {
+    await renderCockpit()
+    expect(info()).toBeNull()
+  })
+})
+
 // ── the twin of PhoneCockpit.structure.test.tsx's pinned-meters test ──────────────────
 //
 // CW keys in short bursts, so the flash-in was even shorter here than on Phone: the panel
@@ -805,5 +838,65 @@ describe('CwCockpit column dividers', () => {
     expect(JSON.parse(localStorage.getItem(panelStorageKey('cw'))!).cols).toEqual({ log: 504 })
     expect(document.querySelector('[data-testid="log-stub"]')!.isSameNode(log0), 'the log form remounted').toBe(true)
     expect(document.querySelector('[data-pane="decode"]')!.isSameNode(decode0), 'the decode transcript remounted').toBe(true)
+  })
+})
+
+// THE STATS PANE (2026-10-14): Phone's, in CW — over the log form, its own height, on from the start, asking for
+// the call the strip reports on the radio's band in CW.
+describe('the Stats pane beside the log form', () => {
+  it('stands under the log form in the log column, its own height, and follows the strip’s call', async () => {
+    const { getCallStats } = await import('../api')
+    vi.mocked(getCallStats).mockClear()
+    await renderCockpit({ panels: fakePanels() })
+    const stats = document.querySelector('[data-pane="stats"]')!
+    expect(stats, 'the Stats pane is not on a stock CW screen').not.toBeNull()
+    expect(stats.getAttribute('data-fit')).toBe('content')
+    expect(stats.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log form').toBe('log')
+    expect(getCallStats).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('log-stub'))
+    await act(async () => {})
+    expect(getCallStats).toHaveBeenCalledWith('W1AW', '20m', 'CW')
+  })
+
+  it('is one ⊞ tick', async () => {
+    await renderCockpit({ panels: fakePanels(['stats']) })
+    expect(document.querySelector('[data-pane="stats"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
+  })
+})
+
+// THE RECENT CONTACTS PANE (2026-10-18): inside the log pane under the form, above the Stats pane, its own height; a row
+// click opens that contact in the Logbook's editor (the cockpit's `onOpenLogbook`, with the contact's id).
+describe('the Recent contacts pane under the log form', () => {
+  afterEach(resetRecentLog)
+
+  it('ticked, stands inside the log pane under the form, its own height, and a row opens THAT contact', async () => {
+    installRecentLog()
+    const onOpenLogbook = vi.fn()
+    await renderCockpit({ panels: fakePanels(), onOpenLogbook })
+    const recent = document.querySelector('[data-pane="recent"]')
+    expect(recent, 'ticked, the Recent contacts pane is not on screen').not.toBeNull()
+    expect(recent!.getAttribute('data-fit')).toBe('content')
+    // INSIDE THE LOG PANE, under the form, in the pane's own scrolling body: all it can take is what the
+    // form leaves, so showing it never moves the form or its Log button (measured in Chrome).
+    const logPane = recent!.closest('[data-pane="log"]')
+    expect(logPane, 'not inside the log pane').not.toBeNull()
+    expect(recent!.parentElement, 'not in the log pane’s scrolling body').toBe(logPane!.querySelector(':scope > .pane-body'))
+    expect(recent!.previousElementSibling?.getAttribute('data-testid'), 'not directly under the log form').toBe('log-stub')
+    expect(recent!.nextElementSibling, 'something stands under it inside the log pane').toBeNull()
+    expect(logPane!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under the log pane').toBe('stats')
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    const rows = recentRows()
+    expect(rows, 'the newest contacts, newest first').toHaveLength(2)
+    fireEvent.click(rows[1])
+    expect(onOpenLogbook.mock.calls).toEqual([['W1AW', 'id-older']])
+  })
+
+  it('is one ⊞ tick: hidden, it is gone and the log form stays', async () => {
+    await renderCockpit({ panels: fakePanels(['recent']) })
+    expect(document.querySelector('[data-pane="recent"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]'), 'control: the log rendered').not.toBeNull()
   })
 })

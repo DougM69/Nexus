@@ -7,8 +7,8 @@
 //! inbound spot on the RBN/cluster firehose, and scoring needs the operator's worked sets — which
 //! means the engine lock, and rebuilding `LogNeeds` over the whole logbook. Doing that on the
 //! ingest path would put expensive, lock-taking work on a hot producer. That is exactly the shape
-//! that made the waterfall stall (see tempo-audio `rxtap.rs`, and
-//! [[feedback-root-cause-not-bandaids]]): the callback's only job is a non-blocking handoff.
+//! that made the waterfall stall (see tempo-audio `rxtap.rs`):
+//! the callback's only job is a non-blocking handoff.
 //!
 //! THE COST MODEL. `LogNeeds` is derived from every logged QSO — at 11k contacts that is far too
 //! expensive per spot. It is re-read on a slow cadence from the model every other reader shares
@@ -285,7 +285,7 @@ mod tests {
         let tallies = crate::LogTallies::default();
         crate::LOG_TALLIES.with(|c| c.set(0));
         let pounce = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
-        let (board, _) = crate::needs_kept(&engine, &tallies).expect("the log reads");
+        let board = crate::needs_kept(&engine, &tallies).expect("the log reads");
         let again = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
         assert!(
             Arc::ptr_eq(&pounce, &board) && Arc::ptr_eq(&board, &again),

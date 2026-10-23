@@ -7,10 +7,12 @@
 // model and audio devices onto radio 1's profile, persisted. Operator report, 2026-07-25: with
 // two radios configured, both ended up on one set of comm ports.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
+import { EN } from '../i18n/en'
+import { setRemoteStation } from '../features/durableStore'
 
 // THE BUDGET (2026-10-09). The slowest case here, "takes them OUT of Radio — a move that leaves a copy…", takes
 // 0.33 s and 0.34 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -206,5 +208,54 @@ describe('Config tab: a findable home for backup and restore', () => {
     expect(note).toMatch(/Transmit limits & sharing/)
     // Rendered through <T>, so an entity in the catalog would surface as literal characters.
     expect(note).not.toContain('&amp;')
+  })
+})
+
+// From afar, Reveal would open the station's file manager on the station's screen and is refused,
+// so ALL.TXT and the recordings are saved to this computer instead. At the station, Reveal stays.
+describe('the station’s files: Reveal at the station, Save to this computer from afar', () => {
+  const openTab = async () =>
+    fireEvent.click(await screen.findByRole('tab', { name: EN['settings.tabs.logging'] }))
+  // The Logging tab lists the connectors' credentials and their log, each an array.
+  beforeEach(() => {
+    api.get('getCredentialsStatus').mockImplementation(() => Promise.resolve([]))
+    api.get('getConnectionLog').mockImplementation(() => Promise.resolve([]))
+  })
+
+  it('from afar ALL.TXT saves here and the recordings list the station’s files; nothing reveals', async () => {
+    setRemoteStation(true)
+    try {
+      api.get('shackFileList').mockImplementation(() => Promise.resolve([]))
+      renderPanel()
+      await openTab()
+      // The one left is the diagnostic log's, which is this computer's own file.
+      expect(screen.getAllByRole('button', { name: EN['settings.integrations.allTxt.reveal'] })).toHaveLength(1)
+      expect(screen.queryByRole('button', { name: EN['settings.integrations.qsoWav.reveal'] })).toBeNull()
+      api.get('shackFileRead').mockImplementation(() => Promise.resolve({ data: 'QUJD', offset: 0, size: 3 }))
+      api.get('shackFileSave').mockImplementation(() => Promise.resolve({ name: 'ALL.TXT', path: '/home/op/Downloads/ALL.TXT' }))
+      fireEvent.click(await screen.findByRole('button', { name: EN['remote.stationFiles.save.label'] }))
+      await waitFor(() => expect(api.get('shackFileSave')).toHaveBeenCalledWith('ALL.TXT', 'QUJD', 0))
+      expect(api.get('shackFileRead')).toHaveBeenCalledWith('allTxt', 'ALL.TXT', 0)
+      fireEvent.click(screen.getByRole('button', { name: EN['remote.stationFiles.list.label'] }))
+      await waitFor(() => expect(api.get('shackFileList')).toHaveBeenCalledWith('recordings'))
+      expect(api.get('revealAllTxt')).not.toHaveBeenCalled()
+      expect(api.get('revealRecordings')).not.toHaveBeenCalled()
+    } finally {
+      setRemoteStation(false)
+    }
+  })
+
+  it('at the station both still reveal, and nothing is fetched (CONTROL)', async () => {
+    renderPanel()
+    await openTab()
+    // ALL.TXT's and the diagnostic log's share a label.
+    const reveals = await screen.findAllByRole('button', { name: EN['settings.integrations.allTxt.reveal'] })
+    expect(reveals).toHaveLength(2)
+    for (const reveal of reveals) fireEvent.click(reveal)
+    fireEvent.click(screen.getByRole('button', { name: EN['settings.integrations.qsoWav.reveal'] }))
+    await waitFor(() => expect(api.get('revealRecordings')).toHaveBeenCalledTimes(1))
+    expect(api.get('revealAllTxt')).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: EN['remote.stationFiles.save.label'] })).toBeNull()
+    expect(api.get('shackFileList')).not.toHaveBeenCalled()
   })
 })

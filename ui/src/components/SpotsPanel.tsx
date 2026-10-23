@@ -1,6 +1,6 @@
 import { useStationControl } from '../stationAccess'
 // The raw "Spots" board — every recent cluster/RBN spot (CW/Phone/Digital, all sources),
-// NOT needs-gated. This is the SpotCollector/DXHeat-style firehose view: see everything,
+// NOT needs-gated. This is the firehose view: see everything,
 // filter client-side. The Needed board stays the curated "what to work" list; this is the
 // "what's on the air" list. Single-click a row to QSY/work the spot.
 //
@@ -9,7 +9,7 @@ import { useStationControl } from '../stationAccess'
 // value a row prints (callsign, spotter, entity, US state, band, mode/submode, frequency,
 // comment) and the age column below — all data and measurement, invariant in every locale.
 import { useEffect, useMemo, useState } from 'react'
-import type { BandChannel, NeedAlert, SpotRow } from '../types'
+import type { BandChannel, FieldDayStatus, NeedAlert, SpotRow } from '../types'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
@@ -18,8 +18,10 @@ import { alertsByCall, alertsForSurface, isActivityTag } from '../features/needs
 import { CONTINENT_CODES } from '../features/dxccGeo'
 import { compileTerm, searchTerms } from '../searchQuery'
 import { t } from '../i18n'
+import { spotMarkWords, spotMultTag, useContestSpotMarker } from '../features/contestSpotMarks'
 import { useWatchMatch } from '../watchlist'
 import { WatchTile } from './WatchTile'
+import { SpotsSpotMe, type SpotMeStation } from './SpotsSpotMe'
 
 type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 
@@ -108,6 +110,18 @@ export interface SpotsPanelProps {
   /** Hosted as a PANE of another screen rather than as the Spots view — see SpotsPane. The
    *  Spots view passes none and is exactly as it was. */
   pane?: SpotsPane
+  /** The running contest, passed by the CW and Phone cockpits' pane: a dupe row is struck through
+   *  and dimmed and says DUPE, a row that would be a new multiplier says MULT
+   *  (`features/contestSpotMarks.ts`). Absent = no marks. */
+  fieldDay?: FieldDayStatus | null
+  /** The station, for the Spot me in the board's head (SpotsSpotMe.tsx: one cluster spot of the
+   *  operator's own call per press, its comment "CQ <mode>"). App gives it to every host of the board;
+   *  absent = no Spot me. */
+  spotMe?: SpotMeStation
+  /** This board IS the window Pop out opened (DetachedPanel's `?panel=spots`): as it first mounts it takes
+   *  the filters the view handed over with the press (`adoptPopOutFilters`). Absent, the board opens on its
+   *  own copy, or the defaults, as every other host does. */
+  poppedOut?: boolean
 }
 
 /**
@@ -172,8 +186,70 @@ function useSessionState<T>(
   return [v, setV]
 }
 
-export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts, pane }: SpotsPanelProps) {
+/**
+ * POP OUT OPENS ITS WINDOW ON THE VIEW'S FILTERS (operator, 2026-10-20: copy the main view's filters), and from
+ * there each window keeps its own. A browser copies a page's sessionStorage into a window that page opens; the
+ * window Rust opens for Pop out starts with none, and the one store both windows reach is localStorage. So the
+ * press copies the view's own entries (its bare `nexus.spots.<name>` keys; a pane's carry its scope after the
+ * name) into one localStorage record stamped with the time, before it asks for the window, and the window moves
+ * them into its own session before its board's first paint. That copy is then the window's own, and goes when
+ * the window closes, as before.
+ *
+ * Taken once, never stale. The window takes the record only while it holds no copy of its own, so a press that
+ * only brings the open window forward, or the window reloading, moves nothing in it. It deletes the record as it
+ * reads it, and one stamped more than a minute from now (an earlier press, an earlier run of the app) is deleted
+ * unused. A minute leaves room for a slow window: its first paint waits on the operator data, which a computer
+ * driving a station from afar fetches from that station.
+ */
+const POP_OUT_FILTERS_KEY = 'nexus.spotsPopOut.filters'
+const POP_OUT_FILTERS_MAX_AGE_MS = 60_000
+const VIEW_ENTRY = /^nexus\.spots\.[A-Za-z]+$/
+
+/** This window's copy of the view's filters, as stored. */
+function viewEntries(): Record<string, string> {
+  const entries: Record<string, string> = {}
+  for (let i = 0; i < sessionStorage.length; i++) {
+    const key = sessionStorage.key(i)
+    if (key == null || !VIEW_ENTRY.test(key)) continue
+    const value = sessionStorage.getItem(key)
+    if (value != null) entries[key] = value
+  }
+  return entries
+}
+
+/** The press, before it asks for the window: hand the view's filters over. An earlier press's record goes
+ *  first, so a record this press cannot store never leaves an older one in its place. */
+function handOffFilters(): void {
+  try {
+    localStorage.removeItem(POP_OUT_FILTERS_KEY)
+    localStorage.setItem(POP_OUT_FILTERS_KEY, JSON.stringify({ at: Date.now(), filters: viewEntries() }))
+  } catch {
+    /* storage refused: the window opens on the defaults, as it did before there was a hand-off */
+  }
+}
+
+/** The window, as its board first mounts: move the view's filters into this window's own session. */
+function adoptPopOutFilters(): void {
+  try {
+    // A copy of its own already (the board mounting again, as on a reload, or React's second render in
+    // development): that copy stands.
+    if (Object.keys(viewEntries()).length > 0) return
+    const raw = localStorage.getItem(POP_OUT_FILTERS_KEY)
+    if (raw == null) return
+    localStorage.removeItem(POP_OUT_FILTERS_KEY)
+    const { at, filters } = JSON.parse(raw) as { at?: unknown; filters?: Record<string, unknown> }
+    if (typeof at !== 'number' || Math.abs(Date.now() - at) > POP_OUT_FILTERS_MAX_AGE_MS) return
+    for (const [key, value] of Object.entries(filters ?? {})) {
+      if (VIEW_ENTRY.test(key) && typeof value === 'string') sessionStorage.setItem(key, value)
+    }
+  } catch {
+    /* storage refused, or a record that does not parse: the defaults */
+  }
+}
+
+export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts, pane, fieldDay, spotMe, poppedOut }: SpotsPanelProps) {
   const control = useStationControl()
+  const marker = useContestSpotMarker(fieldDay)
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
   const centroids = useEntityCentroids()
   // The operator's watch list, live — the matcher the Call Roster and the Stations list ask, so
@@ -188,6 +264,11 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
   // view's hidden set otherwise (SpotsPane). Keyed on the NAMES, never on `pane`: Connect's box is
   // a pane that keeps the view's rule.
   const allowModes = pane?.modes != null
+  // The window Pop out opened: the view's filters, moved into this window's own session before a filter
+  // below reads it. A state initializer, so it runs as the board mounts and never on a later render.
+  useState(() => {
+    if (poppedOut) adoptPopOutFilters()
+  })
   // ONE flat mode filter: the SPECIFIC modes present (CW/Phone/FT8/FT4/RTTY/Digital…), each a
   // show/hide toggle. The view stores the HIDDEN set (empty = all shown) so a mode that first
   // appears mid-session shows by default instead of being silently hidden. A pane that names its
@@ -467,8 +548,20 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
           </svg>{' '}
           {hasActiveFilters ? t('spots.filter.toggle.active') : t('spots.filter.toggle.idle')}
         </button>
+        {/* Spot me: one cluster spot of this station per press (SpotsSpotMe.tsx). Not on a page that
+            only watches. */}
+        {control && spotMe && <SpotsSpotMe {...spotMe} />}
         {control && onPopOut && (
-          <button type="button" className="np-popout" onClick={onPopOut} title={t('spots.popOut.title')}>
+          <button
+            type="button"
+            className="np-popout"
+            onClick={() => {
+              // The window opens on these filters (handOffFilters), so they go over before it is asked for.
+              handOffFilters()
+              onPopOut()
+            }}
+            title={t('spots.popOut.title')}
+          >
             {t('spots.popOut.label')}
           </button>
         )}
@@ -688,25 +781,27 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                 ? workedAgeLabel(s.workedAgoSecs)
                 : null
             const watch = watchOf({ call: s.call, entity: s.entity, grid: s.grid })
+            const mark = marker?.(s) ?? null
+            const markWords = spotMarkWords(mark)
+            const multTag = spotMultTag(mark)
+            const rowTitle = canQsy
+              ? t('spots.row.work.title', {
+                  call: s.call,
+                  mode: s.mode,
+                  freq: s.freqMhz.toFixed(3),
+                  spotter: s.spotter,
+                })
+              : t('spots.row.title', {
+                  call: s.call,
+                  freq: s.freqMhz.toFixed(3),
+                  spotter: s.spotter,
+                })
             return (
               <div
                 key={`${s.call}|${s.freqMhz}|${s.spotter}`}
                 role="row"
-                className={`np-row sp-row${s.call === selectedCall ? ' selected' : ''}`}
-                title={
-                  canQsy
-                    ? t('spots.row.work.title', {
-                        call: s.call,
-                        mode: s.mode,
-                        freq: s.freqMhz.toFixed(3),
-                        spotter: s.spotter,
-                      })
-                    : t('spots.row.title', {
-                        call: s.call,
-                        freq: s.freqMhz.toFixed(3),
-                        spotter: s.spotter,
-                      })
-                }
+                className={`np-row sp-row${s.call === selectedCall ? ' selected' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
+                title={markWords.length > 0 ? [rowTitle, ...markWords].join(' · ') : rowTitle}
                 onClick={() => {
                   onSelect(s.call)
                   if (workable) onWork(s)
@@ -757,6 +852,20 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                   {/* The WATCH tile leads the cell, ahead of the worked badge: the comment
                       ellipsizes, and first is the one place the tile cannot be cut. */}
                   {watch && <WatchTile entry={watch} />}
+                  {/* The contest marks lead too: a word on the row, not only a colour. */}
+                  {mark?.dupe && (
+                    <span className="spot-contest-tag dupe" title={markWords.join(' · ')}>
+                      {t('contestSpot.tag.dupe')}
+                    </span>
+                  )}
+                  {multTag && (
+                    <span
+                      className={`spot-contest-tag spot-mult-tag${multTag === 'predicted' ? ' predicted' : ''}`}
+                      title={markWords.join(' · ')}
+                    >
+                      {multTag === 'predicted' ? t('contestSpot.tag.predicted') : t('contestSpot.tag.mult')}
+                    </span>
+                  )}
                   {/* What Hide worked would drop, said on the row itself — so turning the chip
                       off answers "which of these have I worked, and when" without a tooltip.
                       In the widest column, because the age is the part worth reading. */}
@@ -768,7 +877,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                       {t('spots.row.worked', { age: workedAge })}
                     </span>
                   )}
-                  {s.comment || (workedAge || watch ? '' : '—')}
+                  {s.comment || (workedAge || watch || mark ? '' : '—')}
                 </span>
               </div>
             )

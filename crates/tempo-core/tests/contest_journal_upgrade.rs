@@ -108,8 +108,10 @@ fn a_contest_journal_written_by_1_17_0_opens_and_scores_unchanged() {
             log.removed().is_empty(),
             "{contest}: nothing in an older journal comes back removed"
         );
+        // The engine saves the journal with `journal_adif`. 1.17.0 saved `adif()`, which is now
+        // the club's export and also writes each row's sent report.
         assert_eq!(
-            log.adif(),
+            log.journal_adif(),
             journal,
             "{contest}: and the next save writes 1.17.0's bytes back unchanged"
         );

@@ -52,7 +52,7 @@ const fieldDay = {
   log: [],
 } as unknown as FieldDayStatus
 
-const call = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const call = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 // The standard variant's callsign box — a different layout, so a different placeholder.
 const stdCall = () => screen.getByPlaceholderText('Call') as HTMLInputElement
 
@@ -115,13 +115,12 @@ describe('LogEntry — the FD callsign field drops spaces', () => {
   })
 })
 
-describe('LogEntry — space walks the contest exchange, like N1MM and N3FJP', () => {
-  // N1MM's keyboard reference puts it in capitals — "SPACE IS THE PREFERRED TAB CHARACTER" —
-  // and N3FJP's own help tells operators to "press the space bar to tab". Contest operators
-  // arrive with that in their fingers, and a logger that ignores it feels broken at speed.
+describe('LogEntry — space walks the contest exchange, box to box', () => {
+  // Contest operators tab with the space bar: they arrive with that in their fingers, and a
+  // logger that ignores it feels broken at speed.
   // Tab is unchanged (plain DOM order); this adds a second way, it does not replace one.
-  const cls = () => screen.getByPlaceholderText('1D')
-  const sect = () => screen.getByPlaceholderText('WI')
+  const cls = () => screen.getByLabelText(/^Class/)
+  const sect = () => screen.getByLabelText(/^Section/)
 
   it('walks Call → Class → Section → Call', () => {
     renderFd()
@@ -133,6 +132,20 @@ describe('LogEntry — space walks the contest exchange, like N1MM and N3FJP', (
     // Wraps, so a corrected exchange gets back to the call without reaching for the mouse.
     fireEvent.keyDown(sect(), { key: ' ', code: 'Space' })
     expect(document.activeElement).toBe(call())
+  })
+
+  it('Shift+Space walks back: Section → Class → Call → Section, and never types a space', () => {
+    // N1MM's way back is Shift+Tab, which is plain DOM order and still works; a strip that walks
+    // forward on Space walks back on Shift+Space, so a wrong box is corrected without the mouse.
+    renderFd()
+    sect().focus()
+    const back = (el: HTMLElement) => fireEvent.keyDown(el, { key: ' ', code: 'Space', shiftKey: true })
+    expect(back(sect()), 'the space is swallowed').toBe(false)
+    expect(document.activeElement).toBe(cls())
+    back(cls())
+    expect(document.activeElement).toBe(call())
+    back(call())
+    expect(document.activeElement).toBe(sect())
   })
 
   it('the space never reaches the value — Class and Section have no stripping of their own', () => {

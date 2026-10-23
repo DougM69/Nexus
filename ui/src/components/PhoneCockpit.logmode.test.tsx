@@ -331,6 +331,18 @@ describe('the Phone cockpit logs the mode the rig is actually on', () => {
     }
   })
 
+  // 60 m phone is USB (47 CFR 97.303(h)), so a rig on USB there is not a mismatch, and the
+  // contact logs USB. 40 m shows the chip is live: a rig on USB there IS flagged.
+  it('treats USB on 60 m as the commanded mode and logs it as USB', async () => {
+    renderPhone({ dialMhz: 7.2, band: '40m', rigMode: 'USB', sideband: 'LSB' })
+    expect(summaryText(), 'the chip control').toMatch(/rig: USB/)
+    cleanup()
+    renderPhone({ dialMhz: 5.3305, band: '60m', rigMode: 'USB', sideband: 'LSB' })
+    expect(summaryText(), 'the cockpit commanded LSB on 60 m').not.toMatch(/rig: USB/)
+    await logContact('w1aw')
+    expect(loggedMode()).toBe('USB')
+  })
+
   it('ignores a read-back that does not name a phone mode', async () => {
     // A rig reporting CW / PKTUSB / anything outside the phone family while the Phone cockpit
     // is open is a real operational mismatch — the cockpit's own chip shouts about it — but it

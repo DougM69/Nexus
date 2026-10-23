@@ -32,6 +32,9 @@
 //! Every speed is two orders of magnitude inside Turbo's 6 s cycle, so B5's
 //! all-four-speeds-by-default ruling (Turbo's 6 s cycle is the bound) holds
 //! with room to spare — even run serially, not under thread::scope.
+//! With JS8 60 (2026-10-15, same box at load average 11): Slow 86.7, Normal
+//! 44.6, Fast 37.7, Turbo 21.7, JS8 60 16.4 ms, 207 ms all five serially —
+//! still two orders of magnitude inside JS8 60's 4 s cycle, now the bound.
 
 use rustfft::FftPlanner;
 
@@ -125,8 +128,14 @@ mod tests {
     use crate::phy::testutil::{synth_window, word};
 
     /// The whole chain, every speed: one −5 dB frame in, exactly that word
-    /// out, freq within 1 Hz, dt within two coarse steps, sync ≥ ASYNCMIN,
-    /// quality in [0,1], speed stamped, word verified.
+    /// out, freq within 1 Hz (2.5 Hz at JS8 60), dt within two coarse steps,
+    /// sync ≥ ASYNCMIN, quality in [0,1], speed stamped, word verified.
+    ///
+    /// JS8 60's 2.5 Hz is JS8Call 3.0.3's own: its 31.25 Hz tones leave the
+    /// ±2.5 Hz fine search (NFSRCH) nearly flat, and on 150 of the parity lab's
+    /// JS8 60 files (−4…−8 dB) JS8Call 3.0.3's decoder and this one report the
+    /// same spread — mean 0.72 Hz, 95 % within 2.0, worst 2.5 — against at
+    /// most 1.0 Hz for both at JS8 40.
     #[test]
     fn round_trip_at_every_speed() {
         for speed in Speed::ALL {
@@ -138,8 +147,9 @@ mod tests {
             let d = &out[0];
             assert_eq!(d.word, w);
             assert_eq!(d.speed, speed);
+            let tol = if speed == Speed::Ultra { 2.5 } else { 1.0 };
             assert!(
-                (d.freq_hz - 1500.0).abs() <= 1.0,
+                (d.freq_hz - 1500.0).abs() <= tol,
                 "{speed:?}: freq {}",
                 d.freq_hz
             );

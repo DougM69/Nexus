@@ -5,10 +5,9 @@ import { BrowserClient, HostedConnection, RemoteError } from './client'
 import type { AccountSession } from './client'
 import { RemoteApp } from './RemoteApp'
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.removeItem(WORKSPACE_FLAG) })
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 // The old watch/control workspace and observer are hidden behind this flag while streaming is proven;
 // the tests of those views set it, which is how the hidden workspace stays covered.
-const WORKSPACE_FLAG = 'nexus.remote.workspace'
 function account(entitled = true): AccountSession {
   const accountId = crypto.randomUUID()
   const now = Date.now()
@@ -246,7 +245,6 @@ it('browser enrollment displays the local comparison code and does not imply app
     if (path.endsWith('/device')) session.stations[0].device = { id: deviceId, name: 'Test browser', approved: 0 }
     return { ...session, stations: session.stations.map(station => ({ ...station })) }
   })
-  localStorage.setItem(WORKSPACE_FLAG, 'on')
   render(<RemoteApp />)
   fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
   await screen.findByText(`Browser code: ${deviceId.slice(-6)}`)
@@ -298,6 +296,31 @@ it('shows how long this browser stays approved, and warns in its last seven days
     if (cap !== null) expect(text, label).toContain(`up to ${date(session.serverNow + cap * day)} UTC`)
     if (warn === null) expect(text, label).not.toContain('approval ends')
     else expect(text, label).toContain(`This browser’s approval ends ${date(session.serverNow + warn * day)} UTC`)
+    cleanup(); vi.restoreAllMocks()
+  }
+})
+
+// An approval lasts until removed (operator decision 2026-10-10): the page says so, shows no date for the
+// end no clock reaches, and warns of nothing. CONTROL: the same device from a service before that rule
+// still shows its date.
+it('says this browser is approved until it is removed at the shack, with no date and no warning', async () => {
+  const forever = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
+  for (const untilRemoved of [true, false]) {
+    const session = account()
+    session.stations.push({ id: crypto.randomUUID(), name: 'Shack', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1,
+      expires_at: untilRemoved ? forever : session.serverNow + 3 * 86400000, renewsUntil: null, untilRemoved } })
+    client(session)
+    render(<RemoteApp />)
+    await screen.findByRole('button', { name: 'Listen' })
+    const text = document.body.textContent ?? ''
+    if (untilRemoved) {
+      expect(text).toContain('This browser is approved until you remove it in Nexus at the shack.')
+      expect(text).not.toContain('9999')
+      expect(text).not.toContain('approval ends')
+    } else {
+      expect(text, 'control').toContain('This browser is approved until')
+      expect(text, 'control').toContain('approval ends')
+    }
     cleanup(); vi.restoreAllMocks()
   }
 })
@@ -456,7 +479,6 @@ function openableStation() {
   const session = account()
   session.stations.push({ id: crypto.randomUUID(), name: 'Home', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1 } })
   const service = client(session)
-  localStorage.setItem(WORKSPACE_FLAG, 'on')
   let refuse: ((error: RemoteError) => void) | undefined
   vi.spyOn(HostedConnection.prototype, 'start').mockImplementation(function (this: HostedConnection) {
     refuse = error => this.onRefused?.(error)
@@ -470,7 +492,7 @@ function openableStation() {
 it('goes back to the stations page and names the end when an open session is refused', async () => {
   const h = openableStation()
   render(<RemoteApp />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
   expect(await screen.findByRole('button', { name: 'Disconnect and return to stations' })).toBeTruthy()
   // Control: nothing refused yet, so the session is still up.
   expect(screen.queryByRole('heading', { name: 'Your stations' })).toBeNull()
@@ -486,10 +508,41 @@ it('goes back to the stations page and names the end when an open session is ref
   expect(h.stop).toHaveBeenCalled()
 })
 
+// LAN STAYS FREE. An account whose internet use has ended (the service says `access: 'lan'`) keeps
+// Stream and Listen for a browser already approved at the shack, held to the shack's own network: the
+// session it opens is LAN-only. Asking for a new approval stays internet use, and an older service that
+// never says `access` leaves the card exactly as it was.
+it('an ended trial keeps Stream and Listen on the shack\'s own network for an approved browser', async () => {
+  const h = openableStation()
+  h.session.stations.push({ id: crypto.randomUUID(), name: 'Away', device: null })
+  h.session.entitlement = { ...h.session.entitlement, enabled: false, state: 'ended', access: 'lan' }
+  let lanOnly: boolean | undefined
+  vi.mocked(HostedConnection.prototype.start).mockImplementation(function (this: HostedConnection) { lanOnly = this.lanOnly })
+  render(<RemoteApp />)
+  expect((await screen.findByText(/stays free/)).textContent).toMatch(/same network as the station/)
+  const [home, away] = await screen.findAllByRole('button', { name: 'Listen' })
+  expect((home as HTMLButtonElement).disabled).toBe(false)
+  expect((away as HTMLButtonElement).disabled, 'a new approval is not part of what stays free').toBe(true)
+  const states = [...document.querySelectorAll('.remote-station-state')].map(state => state.textContent)
+  expect(states[0]).not.toMatch(/^Your trial ended/)
+  expect(states[1]).toMatch(/^Your trial ended/)
+  fireEvent.click(home)
+  await screen.findByRole('button', { name: 'Disconnect and return to stations' })
+  expect(lanOnly).toBe(true)
+})
+
+it('an ended trial from a service that never says access leaves Stream and Listen off, as before', async () => {
+  const h = openableStation()
+  h.session.entitlement = { ...h.session.entitlement, enabled: false, state: 'ended' }
+  render(<RemoteApp />)
+  expect(((await screen.findByRole('button', { name: 'Listen' })) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.queryByText(/stays free/)).toBeNull()
+})
+
 it('names an expired sign-in, not an ended session, when that is why the ticket was refused', async () => {
   const h = openableStation()
   render(<RemoteApp />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
   await screen.findByRole('button', { name: 'Disconnect and return to stations' })
   act(() => h.refuse(new RemoteError(401, 'signInRequired')))
   const alert = await screen.findByRole('alert')
@@ -500,26 +553,11 @@ it('names an expired sign-in, not an ended session, when that is why the ticket 
 it('signs out from inside an open session, not only from the stations page', async () => {
   const h = openableStation()
   render(<RemoteApp />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
   const signOut = await screen.findByRole('button', { name: 'Sign out' })
   // Control: opening a session signs nobody out.
   expect(h.service.signOut).not.toHaveBeenCalled()
   fireEvent.click(signOut)
   await waitFor(() => expect(h.service.signOut).toHaveBeenCalledTimes(1))
   expect(h.stop).toHaveBeenCalled()
-})
-
-// The observer-only browser has no session row to hold this, and it is the browser the control is
-// most for: watching a frequency and nothing else is exactly what a backgrounded tab would
-// otherwise quietly stop doing.
-it('offers Keep watching to an observer-only browser, not only to the full workspace', async () => {
-  localStorage.clear() // the choice is remembered per station; start from the default
-  openableStation()
-  render(<RemoteApp />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
-  const keep = await screen.findByRole('button', { name: 'Keep watching' })
-  // Off by default: the feed sleeps with the tab unless this operator says otherwise.
-  expect(keep.getAttribute('aria-pressed')).toBe('false')
-  fireEvent.click(keep)
-  expect(screen.getByRole('button', { name: 'Keep watching' }).getAttribute('aria-pressed')).toBe('true')
 })

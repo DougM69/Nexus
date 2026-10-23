@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import { ClickCount, HeldInput, PictureZoom, ZOOM_MAX, framePoint, keyMessage, keyPress, pointerMessage, textMessage, typedChange, typedText, wheelMessage, type PictureBox, type Stage } from './stream-capture'
-import { STREAM_CONTROL_BYTES, parseStreamInput } from './stream-protocol'
+import { MOD_CTRL, MOD_SHIFT, STREAM_CONTROL_BYTES, parseStreamInput } from './stream-protocol'
 
 // A 16:9 picture laid out in a 1600x1000 box: `object-fit: contain` shows it 1600x900, with a 50 px
 // bar above and below it that is part of the element and none of the frame.
@@ -33,8 +33,8 @@ it('builds each input in exactly the contract\'s shape', () => {
   expect(down).toEqual({ type: 'pointer', action: 'down', x: 0.5, y: 0.5, button: 0, buttons: 1, modifiers: 0, pointerType: 'pen', clicks: 2 })
   // A move carries no click count, and an unknown pointer type is a mouse.
   expect(pointerMessage('move', BOX, at(800, 600, { button: -1, pointerType: 'stylus' }), false, 2)).toMatchObject({ button: -1, clicks: 0, pointerType: 'mouse' })
-  const wheel = wheelMessage(BOX, { ...none, ctrlKey: true, clientX: 800, clientY: 600, deltaX: 0, deltaY: 3, deltaMode: 1 })!
-  expect(wheel).toEqual({ type: 'wheel', x: 0.5, y: 0.5, deltaX: 0, deltaY: 3, deltaMode: 1, modifiers: 2 })
+  const wheel = wheelMessage(BOX, { ...none, shiftKey: true, clientX: 800, clientY: 600, deltaX: 0, deltaY: 3, deltaMode: 1 })!
+  expect(wheel).toEqual({ type: 'wheel', x: 0.5, y: 0.5, deltaX: 0, deltaY: 3, deltaMode: 1, modifiers: 1 })
   expect(wheelMessage(BOX, { ...none, clientX: 800, clientY: 600, deltaX: 0, deltaY: 1e9, deltaMode: 0 })!.deltaY).toBe(10_000)
   expect(keyMessage('down', { ...none, shiftKey: true, key: 'W', code: 'KeyW', repeat: false }))
     .toEqual({ type: 'key', action: 'down', key: 'W', code: 'KeyW', modifiers: 1, repeat: false })
@@ -58,6 +58,33 @@ it('keeps Tab and composition input on the page', () => {
   expect(keyMessage('down', { ...none, key: 'Process', code: 'KeyA', repeat: false })).toBeNull()
   // Control: an ordinary key is sent.
   expect(keyMessage('down', { ...none, key: 'Escape', code: 'Escape', repeat: false })).not.toBeNull()
+})
+
+it('leaves the browser its own zoom: Ctrl (Cmd on a Mac) with +, - or 0, and Ctrl with the wheel or a trackpad pinch, are never sent', () => {
+  const key = (action: 'down' | 'up', key: string, code: string, held: Partial<typeof none> = {}) =>
+    keyMessage(action, { ...none, ...held, key, code, repeat: false })
+  const zooms: [string, string][] = [['=', 'Equal'], ['+', 'Equal'], ['-', 'Minus'], ['_', 'Minus'], ['0', 'Digit0'],
+    ['+', 'NumpadAdd'], ['-', 'NumpadSubtract'], ['0', 'Numpad0'],
+    // A German keyboard's + and -, and a French one's 0 (its unshifted key is à).
+    ['+', 'BracketRight'], ['-', 'Slash'], ['à', 'Digit0']]
+  for (const [k, code] of zooms) for (const action of ['down', 'up'] as const) {
+    expect(key(action, k, code, { ctrlKey: true }), `Ctrl ${k} ${code} ${action}`).toBeNull()
+    expect(key(action, k, code, { metaKey: true }), `Cmd ${k} ${code} ${action}`).toBeNull()
+    expect(key(action, k, code, { ctrlKey: true, shiftKey: true }), `Ctrl Shift ${k} ${code} ${action}`).toBeNull()
+  }
+  // A Mac trackpad's pinch reaches the page as the wheel with Ctrl held.
+  expect(wheelMessage(BOX, { ...none, ctrlKey: true, clientX: 800, clientY: 600, deltaX: 0, deltaY: -3, deltaMode: 0 })).toBeNull()
+  // CONTROLS: every other key with Ctrl, the same keys without it or with Alt as well (AltGr is Ctrl and Alt), Ctrl
+  // itself, and the wheel alone or with any other modifier, all still go to the shack.
+  expect(key('down', 'a', 'KeyA', { ctrlKey: true })).toMatchObject({ key: 'a', code: 'KeyA', modifiers: MOD_CTRL })
+  expect(key('down', 'Control', 'ControlLeft', { ctrlKey: true })).toMatchObject({ key: 'Control', modifiers: MOD_CTRL })
+  expect(key('down', '=', 'Equal')).toMatchObject({ key: '=', modifiers: 0 })
+  expect(key('down', '_', 'Minus', { shiftKey: true })).toMatchObject({ key: '_', modifiers: MOD_SHIFT })
+  expect(key('down', '0', 'Numpad0')).toMatchObject({ key: '0', code: 'Numpad0' })
+  expect(key('down', '0', 'Digit0', { ctrlKey: true, altKey: true })).toMatchObject({ key: '0', modifiers: MOD_CTRL | 4 })
+  expect(key('down', '9', 'Digit9', { ctrlKey: true })).toMatchObject({ key: '9', modifiers: MOD_CTRL })
+  for (const held of [{}, { shiftKey: true }, { altKey: true }, { metaKey: true }])
+    expect(wheelMessage(BOX, { ...none, ...held, clientX: 800, clientY: 600, deltaX: 0, deltaY: -3, deltaMode: 0 }), JSON.stringify(held)).not.toBeNull()
 })
 
 it('sends a paste as one line of committed text, within the contract\'s 256 characters', () => {

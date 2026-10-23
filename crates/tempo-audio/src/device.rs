@@ -793,6 +793,10 @@ impl NamedDevice for (String, u32) {
 /// the generic "USB Audio CODEC" name resolve to DIFFERENT codecs (else `find()` always
 /// returns the first).
 ///
+/// Names match as in [`resolve_configured`]: exactly as saved first, then by [`same_name`].
+/// In ONE pass here, because this takes an iterator rather than a factory, so the first
+/// [`same_name`] match is held until the list has run out without an exact one.
+///
 /// ⚠️ The silent `default` fallback is right for exactly one caller — the voice mic, which
 /// passes `default = None` and so gets no fallback at all. Anything resolving a device the
 /// operator explicitly CHOSE must use [`resolve_configured`] instead.
@@ -801,20 +805,44 @@ pub(crate) fn pick_device<D: NamedDevice>(
     name: Option<&str>,
     default: Option<D>,
 ) -> Option<D> {
-    let wanted = name.map(str::trim).filter(|n| !n.is_empty());
+    let wanted = name.filter(|n| !n.trim().is_empty());
     if let (Some(wanted), Some(devs)) = (wanted, devices) {
         let (base, ordinal) = split_device_ordinal(wanted);
-        let mut seen = 0usize;
+        let (trimmed, trimmed_ordinal) = split_device_ordinal(wanted.trim());
+        let (mut seen, mut seen_trimmed, mut by_trimmed) = (0usize, 0usize, None);
         for d in devs {
-            if d.device_name().as_deref() == Some(base) {
+            let Some(n) = d.device_name() else { continue };
+            if n == base {
                 seen += 1;
                 if seen == ordinal {
                     return Some(d);
                 }
             }
+            if same_name(&n, trimmed) {
+                seen_trimmed += 1;
+                if seen_trimmed == trimmed_ordinal {
+                    by_trimmed = Some(d);
+                }
+            }
+        }
+        if by_trimmed.is_some() {
+            return by_trimmed;
         }
     }
     default
+}
+
+/// Whether two device names are the same name once the whitespace at their ENDS is ignored —
+/// never inside a name, so the " #N" ordinal and every interior space still count.
+///
+/// macOS reports some USB codecs with a space at the end of the name: an IC-7300's codec is
+/// offered as `USB Audio CODEC ` (field report, 2026-10). The picker saves that string as
+/// offered, so the exact match finds it; this is for a name whose ends differ from the
+/// device's (saved without the space, or edited by hand). Resolution tries it only AFTER the
+/// exact match, so two devices whose names differ only at their ends each still open
+/// themselves.
+fn same_name(a: &str, b: &str) -> bool {
+    a.trim() == b.trim()
 }
 
 /// The ALSA `CARD=<id>` token of a device name, e.g. `plughw:CARD=Device,DEV=0` →
@@ -844,12 +872,12 @@ fn alsa_card_token(name: &str) -> Option<&str> {
 /// another application is holding is listed by us and unresolvable here. The message names
 /// both possibilities rather than guessing.
 ///
-/// **`mk_devices` is a factory, not an iterator, because resolution takes TWO independent
-/// lazy passes** (exact name, then the card-identity fallback below) and each MUST start from
-/// a fresh enumeration — reusing pass 1's iterator, or retaining its devices to re-scan, would
-/// hold the ALSA handles that the lazy drop exists to release (see pass 1). Pass 2 runs only
-/// on the error path, so the second enumeration is paid only when the exact name already
-/// missed.
+/// **`mk_devices` is a factory, not an iterator, because resolution takes up to THREE
+/// independent lazy passes** (the name exactly as saved, then by [`same_name`], then the
+/// card-identity fallback below) and each MUST start from a fresh enumeration — reusing pass
+/// 1's iterator, or retaining its devices to re-scan, would hold the ALSA handles that the lazy
+/// drop exists to release (see pass 1). A later pass runs only when the earlier ones missed, so
+/// its enumeration is paid only then.
 /// Whether this host's `Device` addresses the whole CARD (both directions — ALSA,
 /// CoreAudio: one AudioDeviceID carries capture and render) or a single-direction
 /// ENDPOINT (WASAPI: `input_devices()` yields only eCapture endpoints, and asking one
@@ -873,6 +901,9 @@ pub(crate) const HOST_GRAIN: DeviceGrain = if cfg!(target_os = "windows") {
 /// endpoint-grained host two directions NEVER share a device, however alike their
 /// names — a shared Windows friendly name is the NORMAL presentation of a USB rig
 /// interface, not evidence of a shared handle (#99, #104).
+///
+/// Names compare by [`same_name`]: the input's own name can end in a space (macOS), and the
+/// output can be saved with or without it.
 pub(crate) fn shares_one_device(grain: DeviceGrain, out_name: Option<&str>, in_name: &str) -> bool {
     if grain == DeviceGrain::Endpoint {
         return false;
@@ -882,9 +913,9 @@ pub(crate) fn shares_one_device(grain: DeviceGrain, out_name: Option<&str>, in_n
         .filter(|n| !n.is_empty())
         .is_some_and(|want| {
             let want_base = split_device_ordinal(want).0;
-            want_base == in_name
+            same_name(want_base, in_name)
                 || matches!(
-                    (alsa_card_token(want_base), alsa_card_token(in_name)),
+                    (alsa_card_token(want_base.trim()), alsa_card_token(in_name.trim())),
                     (Some(w), Some(h)) if w == h
                 )
         })
@@ -901,7 +932,7 @@ where
     I: Iterator<Item = D>,
     F: Fn() -> Option<I>,
 {
-    match name.map(str::trim).filter(|n| !n.is_empty()) {
+    match name.filter(|n| !n.trim().is_empty()) {
         None => default.ok_or_else(|| format!("this system has no default {what} device")),
         Some(wanted) => {
             // ⚠️ CPAL 0.18 UPDATE: this is now belt-and-braces on Linux rather than load-bearing.
@@ -924,6 +955,13 @@ where
             //
             // The ordinal handling (" #N" for identically-named codecs) mirrors
             // `pick_device`; the dropped devices' names still feed the failure message.
+            //
+            // ⭐ THE NAME EXACTLY AS SAVED, whitespace and all. The picker saves the backend's
+            // own string, and macOS reports some USB codecs with a space at the end: an
+            // IC-7300's codec is offered as `USB Audio CODEC ` (field report, 2026-10). This pass
+            // used to trim the saved name first, so that device never matched and the radio had
+            // no audio in either direction — the error read "USB Audio CODEC" is not available
+            // while listing `USB Audio CODEC ` among the devices offered.
             let (base, ordinal) = split_device_ordinal(wanted);
             let mut seen: Vec<String> = Vec::new();
             let mut matched = 0usize;
@@ -942,6 +980,22 @@ where
                     // `d` drops HERE, before the next probe — load-bearing, see above.
                 }
             }
+            // ⭐ THEN BY [`same_name`], for a name saved with different whitespace at its ends
+            // from the device's — saved without the space, or edited by hand. A FRESH lazy pass,
+            // run only when the exact one missed, so an exact match always wins.
+            let (trimmed, trimmed_ordinal) = split_device_ordinal(wanted.trim());
+            if let Some(devs) = mk_devices() {
+                let mut matched = 0usize;
+                for d in devs {
+                    if d.device_name().is_some_and(|n| same_name(&n, trimmed)) {
+                        matched += 1;
+                        if matched == trimmed_ordinal {
+                            return Ok(d);
+                        }
+                    }
+                    // `d` drops HERE before the next probe — same reason as pass 1.
+                }
+            }
             // ⭐ CARD-IDENTITY FALLBACK — #8 (mw0cqu, FT-847 on a CM108/CODEC card). The
             // menu stores the card's `plughw:CARD=<id>` hint (audiodev prefers plughw for
             // its rate/format conversion), but cpal's own enumerator can surface the SAME
@@ -953,11 +1007,15 @@ where
             // this cannot cross to a different rig). A FRESH lazy pass, so the drop-between-
             // probes guarantee from pass 1 still holds. Confined to ALSA by construction: a
             // Windows/Pulse/JACK name has no CARD= token, so this never fires there.
-            if let Some(card) = alsa_card_token(base) {
+            if let Some(card) = alsa_card_token(trimmed) {
                 if let Some(devs) = mk_devices() {
                     for d in devs {
-                        let is_mate =
-                            d.device_name().as_deref().and_then(alsa_card_token) == Some(card);
+                        let is_mate = d
+                            .device_name()
+                            .as_deref()
+                            .map(str::trim)
+                            .and_then(alsa_card_token)
+                            == Some(card);
                         if is_mate {
                             return Ok(d);
                         }
@@ -1148,12 +1206,14 @@ struct TxOutput {
     ring: Arc<SpscRing>,
     /// The resolved device + config, held from `open` until the stream is built. The config is
     /// probed at OPEN time deliberately: an unusable output device must still be an error the
-    /// operator sees when he saves the setting, not a surprise at his first transmission.
+    /// operator sees when he saves the setting, not a surprise at his first transmission. Kept
+    /// after an open that failed, so arming slot TX again can try it again
+    /// ([`AudioBackend::prepare_tx`]).
     deferred: Option<Box<DeferredOut>>,
-    /// The live output stream, once something has actually been transmitted.
+    /// The live output stream, once slot TX was armed or something was transmitted.
     stream: Option<Stream>,
     /// A deferred open that failed. The error is already on its way to the operator through
-    /// `stream_err`; this stops the next buffer trying again.
+    /// `stream_err`; this stops the next buffer trying again. Only arming slot TX tries again.
     failed: bool,
 }
 
@@ -1186,19 +1246,49 @@ pub(crate) fn should_open_tx_stream(state: TxStream, tee_installed: bool) -> boo
     state == TxStream::Deferred && !tee_installed
 }
 
+/// What arming slot TX asks of [`TxOutput`] ([`AudioBackend::prepare_tx`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TxArm {
+    /// An over already has its route: the live stream, or the installed tee.
+    Ready,
+    /// Open the stream now: never opened yet, or an open that failed, tried again.
+    Open,
+    /// No sound card is open to carry an over: it was released for a reopen that has not
+    /// succeeded yet.
+    NoRoute,
+}
+
+/// THE ARM-TIME OPEN: when slot TX is armed the output opens then, not inside the first over
+/// after its key, and an open that failed is tried again (one try per arm, since a failure halts
+/// TX). Not behind a tee, which carries the over instead ([`should_open_tx_stream`]), and never for
+/// a station that only listens, which arms nothing (#139).
+pub(crate) fn tx_arm_action(state: TxStream, tee_installed: bool) -> TxArm {
+    if tee_installed {
+        return TxArm::Ready;
+    }
+    match state {
+        TxStream::Live => TxArm::Ready,
+        TxStream::Deferred | TxStream::Failed => TxArm::Open,
+        TxStream::Absent => TxArm::NoRoute,
+    }
+}
+
 impl TxOutput {
     fn state(&self) -> TxStream {
         if self.stream.is_some() {
             TxStream::Live
+        } else if self.deferred.is_none() {
+            TxStream::Absent
         } else if self.failed {
             TxStream::Failed
-        } else if self.deferred.is_some() {
-            TxStream::Deferred
         } else {
-            TxStream::Absent
+            TxStream::Deferred
         }
     }
 }
+
+/// Why a slot over has no transmit audio route when no sound card is open at all.
+const NO_TX_ROUTE: &str = "no sound card is open for transmit audio";
 
 /// A named mono capture stream + its ring. Downmixes the device to mono at its native
 /// rate into a lock-guarded ring; [`CaptureStream::drain`] drains + resamples to 12 kHz.
@@ -1270,7 +1360,7 @@ struct RxTaps {
 ///
 /// macOS stays on the host default — no report, and CoreAudio's `Xrun` comes from a
 /// `kAudioDeviceProcessorOverload` listener rather than a buffer this would size.
-fn capture_config(cfg: &cpal::SupportedStreamConfig) -> cpal::StreamConfig {
+pub(crate) fn capture_config(cfg: &cpal::SupportedStreamConfig) -> cpal::StreamConfig {
     // `mut` is REQUIRED on Linux and Windows — the blocks below reassign `out.buffer_size` — and
     // unnecessary everywhere else, where they are compiled out. Removing it would break both; this
     // is the same `cfg_attr` shape this file already uses on `sized_capture_buffer` below.
@@ -1334,7 +1424,7 @@ fn wasapi_capture_buffer(rate_hz: u32) -> cpal::BufferSize {
 /// and the retry must not reuse the first attempt's moved callbacks. The retry fires only when a
 /// `Fixed` buffer was requested (Linux); every other platform asks for `Default` already, so its
 /// shipped single-attempt behaviour is byte-identical.
-fn open_capture_with_fallback<S, E: std::fmt::Display>(
+pub(crate) fn open_capture_with_fallback<S, E: std::fmt::Display>(
     sized: cpal::StreamConfig,
     mut build: impl FnMut(cpal::StreamConfig) -> Result<S, E>,
 ) -> Result<S, String> {
@@ -1711,37 +1801,53 @@ impl CpalBackend {
     ///
     /// ⚠️ WHAT IT DOES COST is the open itself, once per session, on the radio loop. For a PHONE
     /// over `set_monitor_tx_mute` gets there first (see its call site: the loop drives it from
-    /// `manual_ptt`), so the cost lands in the PTT settling window. Every other mode — an FT slot,
-    /// CW, RTTY — reaches audio without a keying edge the backend can see, so its FIRST over of a
-    /// session starts later by however long cpal takes to build and start the stream. Nothing is
-    /// lost and nothing after the first over is affected, but it is a real shift on the one over
-    /// that pays it, and it has not been measured on hardware.
+    /// `manual_ptt`), so the cost lands in the PTT settling window. An FT slot's open happens when
+    /// slot TX is armed ([`AudioBackend::prepare_tx`]), ahead of its first over. CW, RTTY and the
+    /// other keyboard modes reach audio without a keying edge the backend can see, so their FIRST
+    /// over of a session starts later by however long cpal takes to build and start the stream.
+    /// Nothing is lost and nothing after the first over is affected, but it is a real shift on the
+    /// one over that pays it, and it has not been measured on hardware.
     fn ensure_tx_stream(&mut self) {
-        if !should_open_tx_stream(self.tx_out.state(), self.tx_tee.is_some()) {
-            return;
+        if should_open_tx_stream(self.tx_out.state(), self.tx_tee.is_some()) {
+            let _ = self.open_tx_stream();
         }
-        let Some(d) = self.tx_out.deferred.take() else {
-            return;
+    }
+
+    /// Build and start the output stream from the device `open` resolved. A failure is logged
+    /// and reported through `stream_err`, marks the route failed so `play` does not try again per
+    /// buffer, and KEEPS the device: arming slot TX again tries it again
+    /// ([`AudioBackend::prepare_tx`]), so a device another program has let go of, or one plugged
+    /// back in, opens then. `Err` carries the sound card's own words, for the operator.
+    fn open_tx_stream(&mut self) -> Result<(), String> {
+        let Some(d) = self.tx_out.deferred.as_deref() else {
+            return Err(NO_TX_ROUTE.to_string());
         };
         // Same non-reentrant native device-graph state as every other cpal entry point.
         let _host_guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         match build_tx_stream(
-            &d,
+            d,
             &self.tx_out.ring,
             &self.tx_level,
             err_recorder(&self.stream_err, "playback"),
         ) {
-            Ok(stream) => self.tx_out.stream = Some(stream),
+            Ok(stream) => {
+                self.tx_out.stream = Some(stream);
+                self.tx_out.deferred = None;
+                self.tx_out.failed = false;
+                Ok(())
+            }
             Err(e) => {
                 self.tx_out.failed = true;
                 tempo_core::applog::error(
                     "audio",
                     &format!("TX output stream failed to open: {e}"),
                 );
+                let why = format!("playback stream: {e}");
                 let mut held = self.stream_err.lock().unwrap_or_else(|p| p.into_inner());
                 if held.is_none() {
-                    *held = Some(format!("playback stream: {e}"));
+                    *held = Some(why.clone());
                 }
+                Err(why)
             }
         }
     }
@@ -1890,7 +1996,99 @@ impl CpalBackend {
         pending.clear();
         n + parked + tee.map_or(0, |t| t.flush())
     }
+
+    /// The rest of the over on the air, played anew (`AudioBackend::retune_tx`: JS8's "Allow TX
+    /// offset changes while sending" moving a frame mid-air). What is still to play is counted
+    /// where it waits, parked at the modem rate and queued for the card at the card's, and its
+    /// rebuild is made BEFORE anything is dropped, so the card never runs dry while it is made.
+    /// Then the queue is dropped as Stop TX drops it ([`Self::flush_tx`]: everything queued as of
+    /// now, and nothing queued after) and the rebuild queued in its place, as much of it as is
+    /// still to play by then: the card may have taken a callback's worth while it was made. Never
+    /// more than was dropped, so the over ends when it would have.
+    ///
+    /// ⚠️ THE RESAMPLER STARTS AGAIN AT THE SPLICE. The one that resampled the over holds the
+    /// over's last samples (its window's look-ahead), and it would sound them first, in the middle
+    /// of the over. A fresh one is set going on the [`RETUNE_PRIME`] samples before the splice,
+    /// which the card has played (fewer than a window, they make no output), so its first output
+    /// is the card's next: the splice is seamless when the card has played a whole number of
+    /// modem samples on the resampler's grid (the tests), and off by under one modem sample
+    /// otherwise. Its tap bank is built before the drop.
+    ///
+    /// A ring too full to take the start of the rebuild beside what it must drop (the first
+    /// seconds of a Slow frame, which is longer than the ring) keeps what it holds: only the part
+    /// still parked at the modem rate is played anew, the resampler running on into it, so the
+    /// move lands where the ring's audio ends. On the DAX route (`tee`) the over is the tee's,
+    /// not the card's, so the tee replaces it ([`crate::backend::TxTee::retune`]) and the ring is
+    /// left alone. With nothing left to play: `false`, and nothing is touched.
+    fn retune_route(
+        tee: Option<&crate::backend::TxTeeHandle>,
+        tx_rs: &mut CaptureResampler,
+        out_ring: &SpscRing,
+        pending: &mut VecDeque<f32>,
+        draining: bool,
+        tail: &mut dyn FnMut(usize, usize) -> Vec<f32>,
+    ) -> bool {
+        if let Some(tee) = tee {
+            return tee.retune(tail);
+        }
+        let card_rate = match tx_rs.out_rate() {
+            0 => u64::from(MODEM_RATE),
+            r => u64::from(r),
+        };
+        let at_modem_rate = |card: usize| {
+            ((card as u64 * u64::from(MODEM_RATE) + card_rate / 2) / card_rate) as usize
+        };
+        let queued = out_ring.len();
+        let left = pending.len() + at_modem_rate(queued);
+        if left == 0 {
+            return false;
+        }
+        let first_on_card = (RETUNE_FIRST as u64 * card_rate / u64::from(MODEM_RATE)) as usize;
+        if out_ring.capacity().saturating_sub(queued) < first_on_card + RETUNE_PRIME {
+            let parked = pending.len();
+            if parked == 0 {
+                return false;
+            }
+            let rest = tail(parked, 0);
+            pending.clear();
+            pending.extend(&rest[rest.len().saturating_sub(parked)..]);
+            return true;
+        }
+        let passthrough = card_rate == u64::from(MODEM_RATE);
+        let prime = if passthrough { 0 } else { RETUNE_PRIME };
+        let rebuilt = tail(left, prime);
+        let mut fresh = CaptureResampler::new(MODEM_RATE, tx_rs.out_rate());
+        let flushed = out_ring.request_flush();
+        if !draining {
+            out_ring.apply_flush();
+        }
+        let parked = pending.len();
+        pending.clear();
+        let still = (parked + at_modem_rate(flushed)).min(left);
+        // `at` is the first sample still to play, in `rebuilt`. The card's next output is the one
+        // whose window starts RETUNE_PRIME samples before it (the window's look-ahead is why the
+        // ring's count reads that way), so the fresh resampler is fed those samples first: fewer
+        // than a window, they make no output, and the next it makes is that one. A rebuild short of
+        // what is still to play (never, from a JS8 frame) plays what it has: the over ends early,
+        // and the loop, with PTT keyed, never panics here.
+        let at = rebuilt.len().saturating_sub(still);
+        let _ = fresh.process(&rebuilt[at.saturating_sub(prime)..at]);
+        *tx_rs = fresh;
+        let rest = &rebuilt[at..];
+        let first = rest.len().min(RETUNE_FIRST);
+        queue_to_card(out_ring, &tx_rs.process(&rest[..first]));
+        Self::route_tx(None, tx_rs, out_ring, pending, draining, &rest[first..]);
+        true
+    }
 }
+
+/// [`CpalBackend::retune_route`]'s prime: the samples before the splice the resampler's window
+/// reaches back over, one short of a window (64 taps).
+const RETUNE_PRIME: usize = 63;
+
+/// …and how much of the rebuild goes to the card at once, before the rest is paced in as any over
+/// is: 100 ms at the modem rate, more than a callback takes.
+const RETUNE_FIRST: usize = 1_200;
 
 /// Queue device-rate TX audio for the output callback, counting anything the ring cannot take.
 ///
@@ -2060,6 +2258,17 @@ impl AudioBackend for CpalBackend {
         self.capture_rs.process(&dev)
     }
 
+    /// ARMING SLOT TX OPENS THE CARD, ahead of the first over (see [`tx_arm_action`]); the slot
+    /// key asks again and keys nothing on an `Err`. A failure stays failed for `play`, which
+    /// never retries per buffer: only the next arm tries again.
+    fn prepare_tx(&mut self) -> Result<(), String> {
+        match tx_arm_action(self.tx_out.state(), self.tx_tee.is_some()) {
+            TxArm::Ready => Ok(()),
+            TxArm::Open => self.open_tx_stream(),
+            TxArm::NoRoute => Err(NO_TX_ROUTE.to_string()),
+        }
+    }
+
     fn play(&mut self, samples: &[f32]) {
         // FIRST TRANSMIT OPENS THE CARD (#139). The backstop for `set_monitor_tx_mute`'s earlier
         // open at key-down: a route that reaches audio without a keying edge still gets a stream.
@@ -2124,6 +2333,18 @@ impl AudioBackend for CpalBackend {
             &self.tx_out.ring,
             &mut self.tx_pending,
             self.tx_out.stream.is_some(),
+        )
+    }
+
+    /// The rest of the over on the air, played anew ([`Self::retune_route`]).
+    fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+        Self::retune_route(
+            self.tx_tee.as_ref(),
+            &mut self.tx_rs,
+            &self.tx_out.ring,
+            &mut self.tx_pending,
+            self.tx_out.stream.is_some(),
+            tail,
         )
     }
 
@@ -2345,8 +2566,8 @@ mod tx_level_tests {
 #[cfg(test)]
 mod tx_route_tests {
     use super::{
-        queue_to_card, should_open_tx_stream, CaptureResampler, CpalBackend, SpscRing, TxStream,
-        MODEM_RATE,
+        queue_to_card, should_open_tx_stream, tx_arm_action, CaptureResampler, CpalBackend,
+        SpscRing, TxArm, TxOutput, TxStream, MODEM_RATE,
     };
     use crate::backend::{TxTee, TxTeeHandle};
     use std::collections::VecDeque;
@@ -2677,6 +2898,48 @@ mod tx_route_tests {
         assert!(!should_open_tx_stream(TxStream::Deferred, true));
     }
 
+    /// ⭐ ARMING SLOT TX OPENS THE OUTPUT, AND TRIES A FAILED ONE AGAIN. The first FT over used to
+    /// open it after its key, and a failure was latched for the session, so every later over keyed
+    /// the radio with no audio. Arming opens it before any over (and a station that only listens
+    /// arms nothing); a failed open is tried again on the next arm, though never by `play` per
+    /// buffer (the test above); a route that cannot exist is said so rather than opened.
+    #[test]
+    fn arming_slot_tx_opens_the_output_and_tries_a_failed_one_again() {
+        assert_eq!(tx_arm_action(TxStream::Deferred, false), TxArm::Open);
+        assert_eq!(
+            tx_arm_action(TxStream::Failed, false),
+            TxArm::Open,
+            "a device that failed once is tried again on the next arm (back, or let go of)"
+        );
+        assert_eq!(tx_arm_action(TxStream::Live, false), TxArm::Ready);
+        assert_eq!(
+            tx_arm_action(TxStream::Absent, false),
+            TxArm::NoRoute,
+            "no sound card open: nothing would carry the over"
+        );
+        for state in [
+            TxStream::Deferred,
+            TxStream::Live,
+            TxStream::Failed,
+            TxStream::Absent,
+        ] {
+            assert_eq!(
+                tx_arm_action(state, true),
+                TxArm::Ready,
+                "{state:?}: the Flex native DAX tee carries the over, and no playback stream opens"
+            );
+        }
+        // A released backend is Absent, failed or not: it holds no device left to try.
+        let released = |failed| TxOutput {
+            ring: Arc::new(tx_ring()),
+            deferred: None,
+            stream: None,
+            failed,
+        };
+        assert_eq!(released(false).state(), TxStream::Absent);
+        assert_eq!(released(true).state(), TxStream::Absent);
+    }
+
     /// ⚠️ THE LAZY OPEN MUST NOT LOSE AUDIO. The tune carrier pre-queues a ~250 ms lead before the
     /// stream can possibly exist, and the FT slot path hands over a whole over in one call. The
     /// ring lives from `open`, so everything queued ahead of the stream is still there, in order,
@@ -2715,6 +2978,332 @@ mod tx_route_tests {
             3,
             "and what does not fit is counted, every sample of it"
         );
+    }
+
+    /// JS8's "Allow TX offset changes while sending": the rest of the over on the air, played anew.
+    /// At the modem's own rate (no resampler): the card has played 4,000 of a 10,000-sample over;
+    /// the rebuild is asked for the 6,000 left and none before them, and once the queue is dropped
+    /// it is what the card plays, sample for sample, and all of it. With the stream running the drop
+    /// is the card's own, at its next callback, as Stop TX's is.
+    #[test]
+    fn a_retune_plays_the_rebuilt_rest_in_place_of_what_was_left() {
+        let rebuilt = |left: usize| -> Vec<f32> { (0..left).map(|i| -(i as f32) - 1.0).collect() };
+        for draining in [false, true] {
+            let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+            let ring = tx_ring();
+            let mut pending = VecDeque::new();
+            let over: Vec<f32> = (0..10_000).map(|i| i as f32).collect();
+            CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &over);
+            for _ in 0..4_000 {
+                ring.pop();
+            }
+            let mut asked = Vec::new();
+            let done = CpalBackend::retune_route(
+                None,
+                &mut tx_rs,
+                &ring,
+                &mut pending,
+                draining,
+                &mut |left, before| {
+                    asked.push((left, before));
+                    rebuilt(left + before)
+                },
+            );
+            assert!(done, "draining {draining}");
+            assert_eq!(asked, [(6_000, 0)], "draining {draining}: what was left");
+            ring.apply_flush(); // the card's next callback (a no-op when the producer applied it)
+            CpalBackend::pump_card(&mut tx_rs, &ring, &mut pending);
+            let mut heard = Vec::new();
+            while let Some(x) = ring.pop() {
+                heard.push(x);
+            }
+            assert_eq!(
+                heard,
+                rebuilt(6_000),
+                "draining {draining}: the rebuilt rest, all of it"
+            );
+            assert!(pending.is_empty());
+        }
+    }
+
+    /// ⭐ THE SPLICE IS SEAMLESS THROUGH THE RESAMPLER. At the card's 48 kHz, an over is resampled
+    /// and the card plays 16,000 of its samples; then the rest is "rebuilt" exactly as it was. What
+    /// the card plays from then on is, sample for sample, what it would have played anyway: the
+    /// fresh resampler, primed on the 63 samples before the splice, takes up exactly where the old
+    /// one was. The old one, kept, would first have sounded the over's own last samples (its
+    /// window's look-ahead) in the middle of the over: the control.
+    #[test]
+    fn a_retune_through_the_resampler_takes_up_exactly_where_the_card_had_got_to() {
+        let over: Vec<f32> = (0..12_000).map(|i| (i as f32 * 0.37).sin() * 0.8).collect();
+        let whole = CaptureResampler::new(MODEM_RATE, 48_000).process(&over);
+        let run = |fresh_resampler: bool| -> Vec<f32> {
+            let mut tx_rs = CaptureResampler::new(MODEM_RATE, 48_000);
+            let ring = tx_ring();
+            let mut pending = VecDeque::new();
+            CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &over);
+            let mut heard: Vec<f32> = (0..16_000).filter_map(|_| ring.pop()).collect();
+            let mut same = |left: usize, before: usize| -> Vec<f32> {
+                over[over.len() - (left + before).min(over.len())..].to_vec()
+            };
+            if fresh_resampler {
+                assert!(CpalBackend::retune_route(
+                    None,
+                    &mut tx_rs,
+                    &ring,
+                    &mut pending,
+                    false,
+                    &mut same
+                ));
+            } else {
+                // The control: the same splice, but the old resampler kept.
+                let left = ring.len() / 4;
+                let rest = same(left, 0);
+                ring.request_flush();
+                ring.apply_flush();
+                CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &rest);
+            }
+            while let Some(x) = ring.pop() {
+                heard.push(x);
+            }
+            heard
+        };
+        let heard = run(true);
+        assert_eq!(heard.len(), whole.len(), "as long as it was");
+        assert_eq!(
+            heard, whole,
+            "sample for sample what the card would have played"
+        );
+        let control = run(false);
+        let off = control
+            .iter()
+            .zip(&whole)
+            .skip(16_000)
+            .take(400)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            off > 0.1,
+            "control: the old resampler sounds the over's end first ({off})"
+        );
+    }
+
+    /// The card plays on while the rest is built: 100 more samples of the over go while `tail`
+    /// works, so only the last 5,900 of the rebuild are still to play, and only they go in; the
+    /// over ends where it would have.
+    #[test]
+    fn a_retune_queues_only_what_is_still_to_play_once_the_rest_is_built() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        let over: Vec<f32> = (0..10_000).map(|i| i as f32).collect();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &over);
+        for _ in 0..4_000 {
+            ring.pop();
+        }
+        let rebuilt = |left: usize| -> Vec<f32> { (0..left).map(|i| -(i as f32) - 1.0).collect() };
+        let mut played_meanwhile = 0;
+        assert!(CpalBackend::retune_route(
+            None,
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            true,
+            &mut |left, before| {
+                for _ in 0..100 {
+                    played_meanwhile += usize::from(ring.pop().is_some());
+                }
+                rebuilt(left + before)
+            },
+        ));
+        assert_eq!(
+            played_meanwhile, 100,
+            "premise: the card took 100 while the rest was built"
+        );
+        ring.apply_flush();
+        CpalBackend::pump_card(&mut tx_rs, &ring, &mut pending);
+        let mut heard = Vec::new();
+        while let Some(x) = ring.pop() {
+            heard.push(x);
+        }
+        assert_eq!(heard, rebuilt(6_000)[100..], "only the 5,900 still to play");
+    }
+
+    /// At the card's 48 kHz the rest is counted at the modem rate: 4 card samples a modem sample,
+    /// and the 63 before it are asked for too, for the resampler's window.
+    #[test]
+    fn a_retune_counts_what_is_left_at_the_modem_rate() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, 48_000);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        let over = vec![0.25f32; 12_000];
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &over);
+        let queued = ring.len();
+        for _ in 0..16_000 {
+            ring.pop();
+        }
+        let mut asked = (0, 0);
+        CpalBackend::retune_route(None, &mut tx_rs, &ring, &mut pending, false, &mut |l, b| {
+            asked = (l, b);
+            vec![0.5; l + b]
+        });
+        assert_eq!(
+            asked,
+            ((queued - 16_000 + 2) / 4, 63),
+            "{queued} queued, 16,000 played"
+        );
+    }
+
+    /// A ring too full to take the start of the rebuild beside what it must drop (the first seconds
+    /// of a Slow frame, longer than the ring) keeps what it holds, and only what is still parked
+    /// at the modem rate is played anew: nothing is dropped from the ring.
+    #[test]
+    fn a_retune_with_the_ring_full_plays_anew_only_what_is_still_parked() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = SpscRing::new(4_096);
+        let mut pending = VecDeque::new();
+        let over: Vec<f32> = (0..10_000).map(|i| i as f32).collect();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, true, &over);
+        let (in_ring, parked) = (ring.len(), pending.len());
+        assert!(
+            parked > 0 && in_ring + parked == 10_000,
+            "premise: the ring full, the rest parked"
+        );
+        let mut asked = Vec::new();
+        assert!(CpalBackend::retune_route(
+            None,
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            true,
+            &mut |left, before| {
+                asked.push((left, before));
+                (0..left + before).map(|i| -(i as f32) - 1.0).collect()
+            },
+        ));
+        assert_eq!(
+            asked,
+            [(parked, 0)],
+            "only what is parked, and none before it"
+        );
+        assert_eq!(ring.len(), in_ring, "the ring as it was");
+        let replaced: Vec<f32> = pending.iter().copied().collect();
+        assert_eq!(
+            replaced,
+            (0..parked).map(|i| -(i as f32) - 1.0).collect::<Vec<f32>>()
+        );
+    }
+
+    /// A rebuild shorter than what is left plays what it has, and nothing of the over as it was:
+    /// the over ends early rather than the loop panicking with PTT keyed.
+    #[test]
+    fn a_retune_with_a_short_rebuild_plays_what_it_has() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        let over: Vec<f32> = (0..10_000).map(|i| i as f32).collect();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &over);
+        for _ in 0..4_000 {
+            ring.pop();
+        }
+        let short: Vec<f32> = (0..5_000).map(|i| -(i as f32) - 1.0).collect();
+        assert!(CpalBackend::retune_route(
+            None,
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            false,
+            &mut |_, _| short.clone(),
+        ));
+        let mut heard = Vec::new();
+        while let Some(x) = ring.pop() {
+            heard.push(x);
+        }
+        assert_eq!(heard, short, "the 5,000 it has, for the 6,000 left");
+    }
+
+    /// Not on the DAX route, whose queue holds two rates: nothing is asked for or touched, and the
+    /// over plays on as it was. Nor with nothing left to play.
+    #[test]
+    fn a_retune_leaves_the_dax_route_and_a_finished_over_alone() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &[0.5; 1_000]);
+        let tee: TxTeeHandle = Arc::new(RecordingTee::default());
+        let mut asked = false;
+        assert!(!CpalBackend::retune_route(
+            Some(&tee),
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            false,
+            &mut |_, _| {
+                asked = true;
+                Vec::new()
+            }
+        ));
+        assert!(!asked, "a DAX route that cannot replace: nothing asked for");
+        assert_eq!(ring.len(), 1_000, "and the over left as it was");
+        while ring.pop().is_some() {}
+        assert!(!CpalBackend::retune_route(
+            None,
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            false,
+            &mut |_, _| {
+                asked = true;
+                Vec::new()
+            }
+        ));
+        assert!(!asked, "nothing left to play: nothing asked for");
+    }
+
+    /// A tee that replaces the rest of the over, recording what it was asked.
+    #[derive(Default)]
+    struct ReplacingTee {
+        asked: Mutex<Vec<(usize, usize)>>,
+    }
+
+    impl TxTee for ReplacingTee {
+        fn feed(&self, _samples: &[f32]) {}
+        fn set_level(&self, _level: f32) {}
+        fn flush(&self) -> usize {
+            0
+        }
+        fn retune(&self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+            let rest = tail(500, 0);
+            self.asked.lock().unwrap().push((500, rest.len()));
+            true
+        }
+    }
+
+    /// ⭐ With the Flex DAX route installed the over is the tee's, so a mid-over switch is the
+    /// tee's to make: the backend hands it the request, and the card's ring (which may still hold
+    /// audio from before the tee) is not touched.
+    #[test]
+    fn a_retune_on_the_dax_route_is_the_tees_and_leaves_the_card_alone() {
+        let mut tx_rs = CaptureResampler::new(MODEM_RATE, MODEM_RATE);
+        let ring = tx_ring();
+        let mut pending = VecDeque::new();
+        CpalBackend::route_tx(None, &mut tx_rs, &ring, &mut pending, false, &[0.5; 1_000]);
+        let tee = Arc::new(ReplacingTee::default());
+        let handle: TxTeeHandle = tee.clone();
+        assert!(CpalBackend::retune_route(
+            Some(&handle),
+            &mut tx_rs,
+            &ring,
+            &mut pending,
+            false,
+            &mut |left, before| vec![0.25; left + before]
+        ));
+        assert_eq!(
+            *tee.asked.lock().unwrap(),
+            vec![(500, 500)],
+            "the tee was asked"
+        );
+        assert_eq!(ring.len(), 1_000, "the card's ring left as it was");
+        assert!(pending.is_empty());
     }
 }
 
@@ -3510,6 +4099,167 @@ mod tests {
         );
     }
 
+    /// ⭐ macOS reports some USB codecs with WHITESPACE AT THE END of the name. A field report
+    /// (IC-7300, 2026-10) listed the radio's codec as `USB Audio CODEC ` — "offered: USB Audio
+    /// CODEC , …". The picker offers and saves that string exactly as the backend gives it, and
+    /// the open path trimmed the SAVED name before an exact comparison, so the codec on the list
+    /// never matched: no receive audio, and no transmit audio either, since the output resolves
+    /// the same way. Stand-ins in that shape, plus a leading space and two of the same codec.
+    fn mac_inputs() -> Vec<(String, u32)> {
+        vec![
+            ("USB Audio CODEC ".to_string(), 1),
+            ("Laptop Microphone".to_string(), 2),
+            (" Phone Microphone".to_string(), 3),
+            ("USB Audio CODEC ".to_string(), 4),
+        ]
+    }
+    fn mac_outputs() -> Vec<(String, u32)> {
+        vec![
+            ("Laptop Speakers".to_string(), 5),
+            ("USB Audio CODEC ".to_string(), 6),
+            ("USB Audio CODEC ".to_string(), 7),
+        ]
+    }
+
+    /// The round trip the picker promises: every name it OFFERS opens the device it was offered
+    /// for — input, output and the voice mic. The second of two identical codecs is offered as
+    /// `USB Audio CODEC  #2` (its own space, then the ordinal) and must still open the second.
+    #[test]
+    fn every_offered_name_opens_its_device_when_names_carry_end_whitespace() {
+        for (what, host) in [("input", mac_inputs()), ("output", mac_outputs())] {
+            let names = host.iter().map(|(n, _)| n.clone()).collect();
+            let offered = crate::audiodev::devices_from_cpal_names(names);
+            for (entry, dev) in offered.iter().zip(&host) {
+                assert_eq!(
+                    resolve_configured(
+                        || Some(host.clone().into_iter()),
+                        Some(entry.name.as_str()),
+                        None,
+                        what
+                    ),
+                    Ok(dev.clone()),
+                    "{what} offered as {:?}",
+                    entry.name
+                );
+                if what == "input" {
+                    assert_eq!(
+                        pick_device(
+                            Some(host.clone().into_iter()),
+                            Some(entry.name.as_str()),
+                            None
+                        ),
+                        Some(dev.clone()),
+                        "voice mic offered as {:?}",
+                        entry.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// The same devices with the name saved WITHOUT the device's whitespace, or with stray
+    /// whitespace of its own (a setting edited by hand). Nothing in the picker saves one, but it
+    /// must open the same device with no action from the operator — ordinal included.
+    #[test]
+    fn a_name_saved_without_the_devices_end_whitespace_still_opens_it() {
+        let input = |saved: &str| {
+            resolve_configured(
+                || Some(mac_inputs().into_iter()),
+                Some(saved),
+                None,
+                "input",
+            )
+            .map(|d| d.1)
+        };
+        let output = |saved: &str| {
+            resolve_configured(
+                || Some(mac_outputs().into_iter()),
+                Some(saved),
+                None,
+                "output",
+            )
+            .map(|d| d.1)
+        };
+        let mic = |saved: &str| pick_device(Some(mac_inputs().into_iter()), Some(saved), None);
+        assert_eq!(input("USB Audio CODEC"), Ok(1));
+        assert_eq!(output("USB Audio CODEC"), Ok(6));
+        assert_eq!(mic("USB Audio CODEC").map(|d| d.1), Some(1));
+        assert_eq!(input("USB Audio CODEC #2"), Ok(4));
+        assert_eq!(output("USB Audio CODEC #2"), Ok(7));
+        assert_eq!(mic("USB Audio CODEC #2").map(|d| d.1), Some(4));
+        assert_eq!(input("Phone Microphone"), Ok(3));
+        assert_eq!(input(" USB Audio CODEC  "), Ok(1));
+        assert_eq!(output("USB Audio CODEC #2 "), Ok(7));
+    }
+
+    /// Two devices whose names differ ONLY by whitespace at an end — implausible, but where both
+    /// exist each must keep opening ITSELF. The saved name is matched exactly as saved first, and
+    /// the whitespace-blind match is only the fallback, so neither can be taken for the other in
+    /// either enumeration order — for the voice mic's single-pass picker too.
+    #[test]
+    fn an_exact_name_beats_a_twin_that_differs_only_by_end_whitespace() {
+        for host in [
+            vec![("Rig Codec ".to_string(), 1), ("Rig Codec".to_string(), 2)],
+            vec![("Rig Codec".to_string(), 2), ("Rig Codec ".to_string(), 1)],
+        ] {
+            for (saved, id) in [("Rig Codec ", 1), ("Rig Codec", 2)] {
+                assert_eq!(
+                    resolve_configured(
+                        || Some(host.clone().into_iter()),
+                        Some(saved),
+                        None,
+                        "output"
+                    )
+                    .map(|d| d.1),
+                    Ok(id),
+                    "{saved:?} in {host:?}"
+                );
+                assert_eq!(
+                    pick_device(Some(host.clone().into_iter()), Some(saved), None).map(|d| d.1),
+                    Some(id),
+                    "voice mic: {saved:?} in {host:?}"
+                );
+            }
+        }
+    }
+
+    /// ONE CARD FOR BOTH DIRECTIONS compares names the same way. On a card-grained host (macOS)
+    /// an output saved as the picker offered `USB Audio CODEC `, or without the space, IS the
+    /// input codec the open just resolved, so the output shares that card.
+    #[test]
+    fn one_card_for_both_directions_ignores_end_whitespace() {
+        use super::{shares_one_device, DeviceGrain};
+        let codec = "USB Audio CODEC ";
+        assert!(shares_one_device(DeviceGrain::Card, Some(codec), codec));
+        assert!(shares_one_device(
+            DeviceGrain::Card,
+            Some("USB Audio CODEC"),
+            codec
+        ));
+        assert!(shares_one_device(
+            DeviceGrain::Card,
+            Some("USB Audio CODEC  #2"),
+            codec
+        ));
+        assert!(!shares_one_device(
+            DeviceGrain::Card,
+            Some("Laptop Speakers"),
+            codec
+        ));
+        // Never on an endpoint-grained host (Windows), whatever the names.
+        assert!(!shares_one_device(
+            DeviceGrain::Endpoint,
+            Some(codec),
+            codec
+        ));
+        // The ALSA card arm too: a name that ends at its card id, then a space.
+        assert!(shares_one_device(
+            DeviceGrain::Card,
+            Some("plughw:CARD=Device,DEV=0"),
+            "sysdefault:CARD=Device "
+        ));
+    }
+
     /// The label is NOT an address. A Linux operator's stored value is the ALSA PCM name,
     /// and resolving what he READS ("USB AUDIO CODEC") must not accidentally work — if it
     /// ever did, something would be persisting labels.
@@ -3719,6 +4469,20 @@ mod resolve_diagnostics {
             "input",
         );
         assert_eq!(got.ok(), Some("plughw:CARD=Device,DEV=0"));
+    }
+
+    /// The card-identity fallback reads a name's card id with the whitespace at the name's ends
+    /// ignored, like every other comparison of a configured name: a name that ENDS at its card
+    /// id (`sysdefault:CARD=Device`) and then carries a space is still that card.
+    #[test]
+    fn the_card_fallback_ignores_end_whitespace() {
+        let got = resolve_configured(
+            || Some(["default:CARD=PCH", "sysdefault:CARD=Device "].into_iter()),
+            Some("plughw:CARD=Device,DEV=0"),
+            None,
+            "input",
+        );
+        assert_eq!(got.ok(), Some("sysdefault:CARD=Device "));
     }
 
     /// The Linux capture buffer: ~100 ms of slack against scheduling hiccups (field

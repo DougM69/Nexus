@@ -294,6 +294,21 @@ describe('the sheet draws what is stamped', () => {
     expect(at({ '--rotor-rose': '395px' }, () => pxOf(p.needle, 'stroke-width'))).toBeCloseTo(6.715, 3)
     expect(at({ '--rotor-rose': '395px' }, () => pxOf(p.ring, 'stroke-width'))).toBeCloseTo(3.95, 3)
     expect(at({ '--rotor-rose': '60px' }, () => pxOf(p.needle, 'stroke-width')), 'a small rose keeps the pane’s own widths').toBe(2.5)
+    // The station's line with them, and its dots apart in step, or a big rose's would run into a solid line.
+    const line = await vi.waitFor(() => {
+      const l = p.rose.querySelector<SVGElement>('.rotor-bearing-line')
+      if (!l) throw new Error('the station’s line is not drawn yet')
+      return l
+    })
+    const gapAt = (rose: string) => {
+      const v = at({ '--rotor-rose': rose }, () => css(line, 'stroke-dasharray')) ?? ''
+      const arms = /^0 max\((.+)\)$/.exec(v)?.[1].split(',').map((a) => parseFloat(a)) ?? []
+      return arms.length === 2 ? Math.max(...arms) : NaN
+    }
+    expect(at({ '--rotor-rose': '395px' }, () => pxOf(line, 'stroke-width'))).toBeCloseTo(3.95, 3)
+    expect(at({ '--rotor-rose': '60px' }, () => pxOf(line, 'stroke-width')), 'a small rose keeps the pane’s own width').toBe(1.5)
+    expect(gapAt('395px')).toBeCloseTo(10.665, 3)
+    expect(gapAt('60px'), 'a small rose keeps the pane’s own dots').toBe(4)
     expect(at({ '--rotor-az': '31px' }, () => pxOf(p.az, 'font-size'))).toBe(31)
     expect(at({ '--rotor-el': '21px' }, () => pxOf(p.el, 'font-size'))).toBe(21)
     expect(at({ '--rotor-az': '10px' }, () => pxOf(p.az, 'font-size')), 'the bearing’s floor is the compact 1.25em').toBe(17.5)

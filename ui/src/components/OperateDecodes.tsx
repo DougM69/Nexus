@@ -3,10 +3,9 @@
 // DT in seconds, the audio offset in Hz, the UTC stamp, the band, the tier and the country.
 // So do the TOKENS the pane is built out of — gathered in DECODE_TOKENS below so a translator
 // can see the whole set at once. What moved is the prose around them.
-import { Fragment, useContext, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
-import { RemoteHistoryContext, RemoteCollectionsContext } from '../remote-web/collections'
 import { useStationControl, useStationCapability, useStationData } from '../stationAccess'
 import { useRovingList } from '../useRovingList'
 import { usePinnedScroll } from '../usePinnedScroll'
@@ -22,6 +21,7 @@ import {
   passesFilter,
   periodStartMs,
   renderWindow,
+  rowTimeMs,
   type DecodeEntry,
   type DecodeFilter,
   type DecodeSort,
@@ -92,6 +92,10 @@ interface Props {
   /** Active mode/tier — sets the T/R period for separator UTC times; a tier
    * change wipes the pane like a band change. */
   tier: Tier
+  /** The live T/R period in seconds (`snap.link.periodSecs`): MSK144, FST4, Q65 and JS8 make it a
+   *  setting, so the tier alone cannot date a row. Absent or 0 (a station that sends none), the
+   *  tier's usual period stands in. */
+  periodSecs?: number
   /** The period a band or mode change caught while it was decoding (the snapshot's
    * `lateDecodes`): shown after the wipe, as WSJT-X shows it, under the band and mode it was
    * heard on, and never worked from. */
@@ -148,7 +152,7 @@ interface Props {
    */
   myGrid?: string
   /**
-   * JTAlert-style UDP callsign highlights (built by OperateCockpit via
+   * UDP callsign highlights (built by OperateCockpit via
    * buildHighlightMap). When a row's from-call matches an entry, the row's
    * backgroundColor/color are overridden with the logger's chosen colors.
    * Inline style wins intentionally — JTAlert colors must show above theme classes.
@@ -176,9 +180,10 @@ interface Props {
    */
   onErase?: () => void
   /**
-   * Bumped by an inbound UDP Clear (snap.clearTick). When the value CHANGES
-   * (skipping mount), the pane wipes its history — same as Erase, but does NOT
-   * invoke onErase (avoids echoing back to the logger).
+   * Bumped by an inbound UDP Clear of this pane (snap.clearTick for Band Activity,
+   * snap.rxFreqClearTick for Rx Frequency). When the value CHANGES (skipping mount),
+   * the pane wipes its history — same as Erase, but does NOT invoke onErase (avoids
+   * echoing back to the logger).
    */
   clearTick?: number
   /** Externally-owned rolling history. The cockpit passes one per pane role so the
@@ -240,6 +245,7 @@ export function OperateDecodes({
   rxOffsetHz,
   band,
   tier,
+  periodSecs,
   late = null,
   harqRescues,
   onCall,
@@ -274,10 +280,6 @@ export function OperateDecodes({
   const rxControl = useStationCapability('receiverSettings')
   const available = useStationData()
   const selectControl = control || available
-  const remoteHistory = useContext(RemoteHistoryContext)
-  const remoteCollections = useContext(RemoteCollectionsContext)
-  const historySeen = useRef({ generation: '', sequence: 0 })
-  const historyErased = useRef(0)
   // Cockpit-owned history when provided (survives layout remounts); private otherwise.
   const localHistRef = useRef<DecodeHistory | null>(null)
   if (history == null && localHistRef.current == null) {
@@ -394,27 +396,11 @@ export function OperateDecodes({
 
   // Ingest this poll's decode list into the rolling history.
   useEffect(() => {
-    if (remoteCollections) {
-      if (!remoteHistory) return
-      if (historySeen.current.generation !== remoteHistory.generation) {
-        histRef.current.reset()
-        historyErased.current = 0
-        historySeen.current = { generation: remoteHistory.generation, sequence: 0 }
-      }
-      if (remoteHistory.tier !== tier || (band && remoteHistory.band !== band)) return
-      for (const entry of [...remoteHistory.rows].sort((a, b) => a.sequence - b.sequence)) {
-        if (entry.sequence > historySeen.current.sequence) {
-          if (entry.firstSequence > historyErased.current) histRef.current.ingest([entry.row], entry.slot, entry.at)
-          historySeen.current.sequence = entry.sequence
-        }
-      }
-    } else {
-      // The period caught decoding at the change is older than anything live, so it goes first.
-      if (late) histRef.current.ingestLate(late)
-      histRef.current.ingest(decodes, slot)
-    }
+    // The period caught decoding at the change is older than anything live, so it goes first.
+    if (late) histRef.current.ingestLate(late)
+    histRef.current.ingest(decodes, slot)
     setTick((t) => t + 1)
-  }, [decodes, slot, late, remoteHistory, remoteCollections, band, tier])
+  }, [decodes, slot, late, band, tier])
 
   // Inbound UDP Clear: when clearTick changes (skip mount), wipe without
   // calling onErase (no echo loop back to the logger).
@@ -422,7 +408,6 @@ export function OperateDecodes({
   useEffect(() => {
     if (clearTick !== clearTickSeen.current) {
       clearTickSeen.current = clearTick
-      historyErased.current = historySeen.current.sequence
       histRef.current.erase()
       repin()
       setTick((t) => t + 1)
@@ -529,11 +514,12 @@ export function OperateDecodes({
   // The order rows are DRAWN in. Everything that addresses a row by position (the roving index,
   // the period separators) reads `drawn`; counts read `shown`, which is the same set.
   const drawn = newestTop ? [...shown].reverse() : shown
+  // The period the separators and the time column date rows by (see the `periodSecs` prop).
+  const periodS = periodSecs && periodSecs > 0 ? periodSecs : undefined
 
   // Wipe this pane (WSJT-X "Erase") and re-pin to the bottom.
   // Also calls onErase so the cockpit can mirror the gesture to loggers.
   const erase = () => {
-    historyErased.current = historySeen.current.sequence
     histRef.current.erase()
     repin()
     setTick((t) => t + 1)
@@ -583,7 +569,6 @@ export function OperateDecodes({
 
   return (
     <section className={`operate-decodes${compact ? ' compact' : ''}`}>
-      {remoteCollections && <span className="dim" role="status">{!remoteHistory ? t('remote.historyUnavailable') : remoteHistory.dropped ? t('remote.historyGap', { count: remoteHistory.dropped }) : t('remote.historySession')}</span>}
       <div className="od-head" data-pane-grip={grip}>
         {/* Title + ✕ on one line, so the close button sits at the pane's top-right in BOTH
             head layouts — the full head is a flex COLUMN (title over the filter row) and a
@@ -775,10 +760,10 @@ export function OperateDecodes({
                   className="od-period-sep"
                   role="separator"
                   aria-label={t('operate.decodes.period.aria', {
-                    time: fmtUtc(periodStartMs(d.slot - 1, tier)),
+                    time: fmtUtc(periodStartMs(d.slot - 1, tier, periodS)),
                   })}
                 >
-                  <span className="od-sep-utc">{fmtUtc(periodStartMs(d.slot - 1, tier))}</span>
+                  <span className="od-sep-utc">{fmtUtc(periodStartMs(d.slot - 1, tier, periodS))}</span>
                   <span className="od-sep-band">{band}</span>
                 </div>
               )}
@@ -856,7 +841,18 @@ export function OperateDecodes({
                 >
                   {d.tier}
                 </span>
-                <span className="decode-utc" title={t('operate.decodes.utc.title')}>{fmtUtc(d.at)}</span>
+                {/* The period it was heard in, as WSJT-X and ALL.TXT stamp it; when it reached
+                    this list goes in the tooltip. */}
+                <span
+                  className="decode-utc"
+                  title={
+                    d.mine
+                      ? t('operate.decodes.utc.title')
+                      : t('operate.decodes.utc.period.title', { time: fmtUtc(d.at) })
+                  }
+                >
+                  {fmtUtc(rowTimeMs(d, tier, periodS))}
+                </span>
                 <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
                 {/* On MSK144 dt is the ping's TIME WITHIN THE PERIOD (WSJT-X renames this
                     column "T"), so it is legitimately 0..period and the FT8 clock-skew

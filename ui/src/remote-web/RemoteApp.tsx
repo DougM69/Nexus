@@ -1,9 +1,10 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+// The hosted Remote page is the stream page. The old watch/control workspace and the observer view are
+// gone and do not come back here: new Remote work goes to the stream, the LAN stream window or the native
+// client.
+import { useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { useViewport } from '../useViewport'
-import { MonitorApp } from '../remote-monitor/MonitorApp'
 import { BrowserClient, HostedConnection, RemoteError } from './client'
-import { FeedWatch } from './FeedWatch'
 import { StreamView } from './StreamView'
 import { deviceKey } from './device-key'
 import { acceptStationKey, forgetStationKey, stationKeyView, type StationKeyView } from './station-key'
@@ -32,32 +33,22 @@ const Wordmark = () => <span className="remote-site-wordmark">
 // reads as "this product is finished with me" rather than "ask and it can be extended". During a
 // closed beta every trial is granted by hand anyway, so asking is the actual mechanism.
 const BETA_CHANNEL = 'https://discord.gg/mCCBaRKj3'
-// The old watch/control workspace (Open Nexus, Observe station) is hidden behind this flag while
-// streaming is proven (the operator, 2026-10-02: "The old watch/control workspace is hidden, though
-// its code stays so we can bring it back after streaming is proven"). Set it in the browser's console
-// on this page, then reload: localStorage.setItem('nexus.remote.workspace', 'on'). The compiled sweep
-// sets it to keep the workspace covered. Read on every render, so it never needs a rebuild.
-const WORKSPACE_FLAG = 'nexus.remote.workspace'
-const workspaceShown = () => { try { return localStorage.getItem(WORKSPACE_FLAG) === 'on' } catch { return false } }
 // Browser approval lifetime: warn this long before the end that using this browser cannot move.
 const APPROVAL_WARNING_MS = 7 * 86400000
 // The service names what it refused. Anything that is not a refusal - a dropped connection, a
 // parse failure - has no name worth showing, so it falls back to the generic message.
 const reason = (cause: unknown) => cause instanceof RemoteError ? cause.code : 'remoteUnavailable'
 function AccountViewport() { useViewport(1, true); return null }
-const BrowserApplication = lazy(() => import('./BrowserApplication').then(module => ({ default: module.BrowserApplication })))
 export function RemoteApp() {
   const [client, setClient] = useState<BrowserClient | null>(null)
   const [ready, setReady] = useState(false)
   const [configured, setConfigured] = useState(true)
   const [session, setSession] = useState<AccountSession | null>(null)
   const [connection, setConnection] = useState<HostedConnection | null>(null)
-  const [workspace, setWorkspace] = useState(false)
-  // The station name while the stream is the open view, or null. A view of its own: it shares the
-  // connection and its lease/Stop core with the workspace and nothing else.
+  // The station name while the stream is the open view, or null.
   const [streaming, setStreaming] = useState<string | null>(null)
   // The station name while Listen is the open view (its receive audio, no picture), or null. The
-  // same connection, lease and Stop as the stream, and the audio lane the workspace's Listen used.
+  // same connection, lease and Stop as the stream.
   const [listening, setListening] = useState<string | null>(null)
   // The station the open view is for: its key goes with the stream page's approval sentence.
   const [opened, setOpened] = useState<string | null>(null)
@@ -159,15 +150,18 @@ export function RemoteApp() {
     const key = await deviceKey(stationId)
     await client?.post(`stations/${stationId}/device`, { name: browserLabel(), ...(key ? { publicKey: key.publicKey } : {}) }); await refresh()
   })
-  function open(stationId: string, application: boolean, stream: string | null = null, listen: string | null = null) {
+  function open(stationId: string, stream: string | null, listen: string | null = null) {
     // The stream rides the application socket: its signalling and the lease it is offered under
     // travel there.
     // A5: the stream's offer is signed with this browser's key for the station, and so is what the
     // older lanes carry (S1-M1). S3-M1: the station's answer must be signed with the key the service
     // lists for it.
     const station = session?.stations.find(station => station.id === stationId), device = station?.device
-    const next = new HostedConnection(client!, stationId, application || stream !== null || listen !== null, undefined,
+    const next = new HostedConnection(client!, stationId, true, undefined,
       device ? { id: device.id, key: () => deviceKey(stationId) } : undefined, station?.stationKey ?? null)
+    // Internet use has ended, and Remote on the shack's own network stays free: this session is held
+    // to it (the service refuses anything else, and so does the station).
+    next.lanOnly = session?.entitlement.access === 'lan'
     // A refused ticket is final: the trial ended mid-session, the station or this browser was
     // revoked, or the sign-in expired. The workspace used to stay up saying "Station data
     // unavailable… check that Nexus is running", which blamed the shack. Go back to the account
@@ -178,7 +172,7 @@ export function RemoteApp() {
       setError(cause.code === 'signInRequired' ? 'signInRequired' : 'sessionEnded')
       void refresh().catch(() => {})
     }
-    setWorkspace(application); setStreaming(stream); setListening(listen); setOpened(stationId); setConnection(next); next.start()
+    setStreaming(stream); setListening(listen); setOpened(stationId); setConnection(next); next.start()
   }
   // S3-L1: the operator takes the key the card shows as new, having compared it with the shack's. The
   // card then shows the keys as kept, read again.
@@ -195,21 +189,14 @@ export function RemoteApp() {
   const browserKey = opened ? keys[opened] ?? null : null
   if (connection && streaming !== null) return <StreamView key="stream" connection={connection} station={streaming} disconnect={leave} signOut={signOutOfSession} autostart browserKey={browserKey} />
   if (connection && listening !== null) return <StreamView key="listen" connection={connection} station={listening} disconnect={leave} signOut={signOutOfSession} autostart browserKey={browserKey} mode="listen" />
-  if (connection && workspace) return <Suspense fallback={<p role="status">{t('monitor.connecting')}</p>}>
-    <BrowserApplication connection={connection} disconnect={leave} signOut={signOutOfSession} />
-  </Suspense>
-  // The observer-only browser is the one this control is most for: watching a frequency and
-  // nothing else is exactly the thing a background tab would otherwise quietly stop doing.
-  if (connection) return <MonitorApp source={connection.source} navigation={<>
-    <FeedWatch feed={connection.feed} />
-    <button className="remote-button" onClick={leave}>{t('remote.disconnect')}</button>
-    <button className="remote-button" onClick={signOutOfSession}>{t('remote.signOut')}</button>
-  </>} />
   // The service decides this and says so; the browser must not re-derive it from enabled plus
   // expiresAt against its own clock, because a laptop with the wrong time would then disagree
   // with the service about whether the trial is live.
   const trial = session?.entitlement
   const entitled = trial?.state === 'active'
+  // Internet use has ended (or never started), and the station can still be used on its own network,
+  // free: Stream and Listen stay, held to that network. The service says so; an older one never does.
+  const lanOnly = !entitled && trial?.access === 'lan'
   // An account that has never held a trial may pair - that is the self-serve path, and gating
   // the pairing form on `entitled` made it unreachable for exactly the people who need it.
   const canPair = trial?.state === 'active' || trial?.state === 'none'
@@ -235,9 +222,11 @@ export function RemoteApp() {
     : trial?.state === 'disabled' ? t('remote.trialDisabled') : t('remote.trialNotStarted')
   // The card's two ways in: Stream, the big one, and Listen, audio only. Stream only from a service
   // that carries the stream's signalling, and not while the station's key has changed (S3-L1).
-  const stationActions = (stream: () => void, listen: () => void, streamOff = false) => <div className="remote-actions remote-station-actions">
-    {(client?.streamVersion ?? 0) >= 1 && <button className="remote-button remote-button--primary remote-station-stream" disabled={busy || !entitled || streamOff} onClick={stream}>{t('remote.stream.open')}</button>}
-    <button className="remote-button remote-station-listen" disabled={busy || !entitled} onClick={listen}>{t('remote.listen.open')}</button>
+  // `usable`: on the shack's own network only, a browser already approved there; asking for a new
+  // approval is not part of what stays free.
+  const stationActions = (stream: () => void, listen: () => void, streamOff = false, usable = entitled) => <div className="remote-actions remote-station-actions">
+    {(client?.streamVersion ?? 0) >= 1 && <button className="remote-button remote-button--primary remote-station-stream" disabled={busy || !usable || streamOff} onClick={stream}>{t('remote.stream.open')}</button>}
+    <button className="remote-button remote-station-listen" disabled={busy || !usable} onClick={listen}>{t('remote.listen.open')}</button>
   </div>
 
   // `trialRequired` is deliberately absent: the trial-state line above already tells the operator
@@ -329,6 +318,7 @@ export function RemoteApp() {
           : t('remote.trialRunning', { days: daysLeft, from: utcDate(trial.startedAt), until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'ended' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'disabled' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialDisabled')}</p>}
+        {lanOnly && session.stations.length > 0 && <p className="remote-site-status" role="status">{t('remote.lanFree')}</p>}
         {(trial?.state === 'ended' || trial?.state === 'disabled') &&
           <p><a href={BETA_CHANNEL} target="_blank" rel="noopener noreferrer">{t('remote.askAboutAccess')}</a></p>}
         {session.stations.map(station => <section className="rm-card remote-section" key={station.id}>
@@ -355,7 +345,7 @@ export function RemoteApp() {
               (the operator, 2026-10-02: "Each station card has one big "Stream" button and a small
               "Listen" for audio only"). Not asked yet, Stream and Listen ask: the shack pops the
               question up with this browser's name and key. Asked, the next step is at the shack. */}
-          <p className="remote-station-state" role="status">{!entitled ? trialReason
+          <p className="remote-station-state" role="status">{!(entitled || (lanOnly && station.device?.approved === 1)) ? trialReason
             : station.device?.approved === 1 ? t('remote.card.ready')
             : station.device ? keys[station.id]
               ? t('remote.card.waiting', { browser: station.device.name, key: shortFingerprint(keys[station.id]) })
@@ -372,21 +362,17 @@ export function RemoteApp() {
             </div>
           </>}
           {station.device?.approved === 1 ? <>
-            {stationActions(() => open(station.id, false, station.name), () => open(station.id, false, null, station.name), keyChanged(station.id))}
+            {stationActions(() => open(station.id, station.name), () => open(station.id, null, station.name), keyChanged(station.id), entitled || lanOnly)}
             {keys[station.id] && <p>{t('remote.thisBrowserKey', { key: shortFingerprint(keys[station.id]) })}</p>}
             {stationKeys[station.id] && !keyChanged(station.id) && <p>{t('remote.thisStationKey', { key: shortFingerprint(stationKeys[station.id].print) })}</p>}
-            {/* How long this browser stays approved, off the service's clock. The warning is for the
-                end that using it cannot move: before that, opening the station keeps it approved. */}
-            {station.device.expires_at !== undefined && <p>{station.device.renewsUntil
+            {/* How long this browser stays approved, off the service's clock: until removed at the shack, or
+                (from a service before that rule) a date. The warning is for an end that is near. */}
+            {station.device.untilRemoved ? <p>{t('remote.thisBrowserApprovedUntilRemoved')}</p>
+              : station.device.expires_at !== undefined && <p>{station.device.renewsUntil
               ? t('remote.thisBrowserRenewsUntil', { until: utcDate(station.device.expires_at), limit: utcDate(station.device.renewsUntil) })
               : t('remote.thisBrowserApprovedUntil', { until: utcDate(station.device.expires_at) })}</p>}
-            {station.device.expires_at !== undefined && (station.device.renewsUntil ?? station.device.expires_at) - session.serverNow <= APPROVAL_WARNING_MS &&
+            {!station.device.untilRemoved && station.device.expires_at !== undefined && (station.device.renewsUntil ?? station.device.expires_at) - session.serverNow <= APPROVAL_WARNING_MS &&
               <p className="rm-warning">{t('remote.thisBrowserApprovalEnding', { until: utcDate(station.device.renewsUntil ?? station.device.expires_at) })}</p>}
-            {/* The old watch/control workspace and the observer, hidden unless the flag is on. */}
-            {workspaceShown() && <div className="remote-actions">
-              <button className="remote-button" disabled={busy || !entitled} onClick={() => open(station.id, true)}>{t('remote.openNexus')}</button>
-              <button className="remote-button" disabled={busy || !entitled} onClick={() => open(station.id, false)}>{t('remote.observe')}</button>
-            </div>}
             <div className="remote-actions">
               <button className="remote-button remote-button--quiet" disabled={busy} onClick={() => void act(async () => {
                 // S3-L1: the station's key kept here goes with this browser's approval, and is kept

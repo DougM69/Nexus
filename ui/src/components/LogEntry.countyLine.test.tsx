@@ -4,7 +4,7 @@
 //
 // The Illinois QSO Party's 2026 rules: "Contacts with/by stations at the border of 2/3/4
 // counties count as 2/3/4 counties and 2/3/4 QSOs." The station on the line sends its counties
-// joined by `/`, which is also how N1MM Logger+ takes them in its exchange box, so the strip
+// joined by `/`, so the strip
 // takes them that way: each part completed and resolved exactly as a single county is, and
 // Enter logs every county as its own row in ONE engine call (`contestLogManualRows`), so the
 // rows share one time, band and mode. A part that is not on the sponsor's chart refuses the
@@ -115,7 +115,7 @@ const box = (caption: string): HTMLInputElement => {
   return cap.closest('label')!.querySelector('input')! as HTMLInputElement
 }
 const qthBox = () => box('County / State')
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const logButton = () => document.querySelector('.le-fd-log-btn') as HTMLButtonElement
 const hits = () => [...document.querySelectorAll('.le-fd-suggest .le-fd-hit-code')].map((n) => n.textContent)
 const verdict = () => [...document.querySelectorAll('.le-fd-verdicts [role="alert"]')].map((n) => n.textContent)
@@ -269,8 +269,8 @@ describe('a county line in the ILQP QTH box', () => {
   })
 })
 
-// ⭐ `+` JOINS A COUNTY LINE EXACTLY AS `/` DOES. N3FJP's loggers take a county line as
-// `COOK+WILL`, so an operator coming from one types that at the Illinois QSO Party. Every case is
+// ⭐ `+` JOINS A COUNTY LINE EXACTLY AS `/` DOES. Some loggers take a county line as
+// `COOK+WILL`, so an operator used to one types that at the Illinois QSO Party. Every case is
 // asserted BY VALUE beside its slash twin, and the controls show the `+` is the county box's
 // alone: a report keeps its `+`, and New York, whose list keeps one county per contact, is untouched.
 describe('a county line joined by + in the ILQP QTH box', () => {

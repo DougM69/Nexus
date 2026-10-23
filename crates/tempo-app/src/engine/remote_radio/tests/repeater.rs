@@ -296,7 +296,8 @@ fn a_hold_the_browser_set_does_not_strand_it_but_a_local_hold_still_refuses() {
 fn a_local_tune_to_the_same_channel_takes_the_hold_back_from_the_browser() {
     // The browser's mark matches on dial and FM configuration, so a desktop tune that lands on
     // the IDENTICAL channel would still match it unless the local verb retires the mark.
-    for local_verb in ["repeater", "sstv"] {
+    // "channel" is the ISS auto-arm's park of the same downlink (`tune_channel`).
+    for local_verb in ["repeater", "sstv", "channel"] {
         let mut s = station(OperatingMode::Phone, 145.5, "2m");
         let (output, hz, shift, offset, tone) = if local_verb == "repeater" {
             (146.94, 146_940_000, "minus", 600_000, 100.0)
@@ -331,10 +332,10 @@ fn a_local_tune_to_the_same_channel_takes_the_hold_back_from_the_browser() {
             .unwrap();
         s.engine.take_remote_radio().unwrap();
 
-        if local_verb == "repeater" {
-            s.engine.repeater_tune(output, shift, offset, tone).unwrap();
-        } else {
-            s.engine.sstv_tune(output, "2m", "FM");
+        match local_verb {
+            "repeater" => s.engine.repeater_tune(output, shift, offset, tone).unwrap(),
+            "sstv" => s.engine.sstv_tune(output, "2m", "FM"),
+            _ => s.engine.tune_channel(output, "2m", "FM"),
         }
         // The desktop's own Phone entry arms the latch (local manual-mode arming). Lower it here so
         // the hold is the ONLY thing left that could refuse the browser: an armed latch refuses

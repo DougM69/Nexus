@@ -146,7 +146,7 @@ function Strip({
   )
 }
 
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const boxes = () => [...document.querySelectorAll<HTMLInputElement>('.le-fd-input-code')]
 const qthBox = () => boxes()[1]
 const line = () => document.querySelector('.le-fd-esm-line')?.textContent ?? null
@@ -283,7 +283,7 @@ describe('Enter Sends Message — one press, one message', () => {
     expect(line()).toBe('A dupe of your own log: Enter sends nothing and logs nothing.')
   })
 
-  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule, like N1MM — log it, mark it,
+  // ⭐ A DUPE CALLS WHILE YOU RUN (the operator, 2026-10-10: one rule — log it, mark it,
   // score it zero, and with ESM send QSO B4). The first Enter sends the B4 key once; the next logs the
   // dupe through the one log path, sending nothing. The dupe warning stays on the strip throughout.
   it('running, a dupe gets QSO B4 once, and the next Enter logs it as a dupe, sending nothing', async () => {
@@ -592,7 +592,7 @@ describe('Enter Sends Message — call history and Super Check Partial (rule 10)
   })
 
   // In S&P the file completes his exchange as the call is typed, before he has sent a thing, so
-  // the first Enter sends your call and the next your exchange, which logs: N1MM's order.
+  // the first Enter sends your call and the next your exchange, which logs.
   /** What the press sent and logged, and what the dock lights for the next Enter. */
   const outcome = () => ({
     sent: harness.sent.map((m) => [m.role, m.text, m.call]),
@@ -609,7 +609,7 @@ describe('Enter Sends Message — call history and Super Check Partial (rule 10)
     expect(qthBox().value, 'premise: the file filled his county').toBe('WILL')
     await enter(callBox())
     expect(outcome()).toEqual({ sent: [[...MY_CALL, 'K9AAA']], logged: [], lit: ['F6'] })
-    expect(document.activeElement, 'the cursor stays in Call, as in N1MM').toBe(callBox())
+    expect(document.activeElement, 'the cursor stays in Call').toBe(callBox())
     expect(line()).toBe(null)
     await enter(callBox())
     expect(outcome()).toEqual({
@@ -753,5 +753,34 @@ describe('Enter Sends Message — off, and from afar, Enter is what it always wa
     for (const el of moved) expect(el.closest('.le-fd-big'), 'inside the strip').not.toBeNull()
     for (const args of focus.mock.calls) expect(args[0]).toEqual({ preventScroll: true })
     focus.mockRestore()
+  })
+})
+
+// ⭐ A QTH ON NO LIST, FROM A CALL IN THE USA OR CANADA, IS NOT A COPIED EXCHANGE. The strip will not
+// log it (`fdFieldOk`, and LogEntry.countyTypeahead's tests), so ESM reads it as not copied: the press
+// that would send my exchange and log the contact sends my call, and nothing logs.
+describe('Enter Sends Message and a QTH on no list', () => {
+  it('in S&P, COKO from a US call sends my call and logs nothing; the real county sends my exchange and logs', async () => {
+    api.resolveEntity.mockImplementation(() => Promise.resolve('United States'))
+    try {
+      const receives = [
+        { key: 'RST', kind: 'rst', required: true },
+        { key: 'QTH', kind: 'oneOf', required: true, domains: ['il_counties', 'il_mults'] },
+      ]
+      render(<Strip fieldDay={party([], { receives })} />)
+      type(callBox(), 'K9AAA')
+      await act(async () => {})
+      type(qthBox(), 'COKO')
+      await enter(qthBox())
+      expect(harness.sent.map((m) => m.role)).toEqual(['myCall'])
+      expect(logged()).toEqual([])
+      // CONTROL: the same press once the county is real.
+      type(qthBox(), 'COOK')
+      await enter(qthBox())
+      expect(harness.sent.map((m) => m.role)).toEqual(['myCall', 'exch'])
+      expect(logged()).toEqual([['K9AAA', [['RST', '599'], ['QTH', 'COOK']]]])
+    } finally {
+      api.resolveEntity.mockImplementation(() => Promise.resolve(null))
+    }
   })
 })

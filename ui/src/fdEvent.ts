@@ -41,8 +41,11 @@ export const FD_EVENT_NAMES: Record<FdKind, string> = {
  * ruleset a downloaded rules file dropped — so an id here that the data does not carry
  * costs the operator that contest and nothing else. Adding a contest is a rules-file
  * row plus a line here; nothing else in the UI knows a contest by name.
+ *
+ * `badge` is the mode badge's own form where the short one has a word too wide for the rail
+ * (`contestBadgeName`).
  */
-export const CONTESTS: { id: string; name: string; short: string }[] = [
+export const CONTESTS: { id: string; name: string; short: string; badge?: string }[] = [
   { id: 'arrlfd', name: FD_EVENT_NAMES.arrlfd, short: 'Field Day' },
   { id: 'wfd', name: FD_EVENT_NAMES.wfd, short: 'WFD' },
   // ⚠️ Sweepstakes is TWO contests, not one with two modes: ARRL runs the CW weekend
@@ -56,9 +59,9 @@ export const CONTESTS: { id: string; name: string; short: string }[] = [
   // (VHF-Rules.pdf v1.2 §5.1 vs §5.2), each running has its own ADIF id and Cabrillo
   // token, and each is on its own weekend in its own month. ARRL's own current names,
   // as they appear on the contest calendar.
-  { id: 'arrlvhf_jan', name: 'ARRL January VHF Contest', short: 'January VHF' },
-  { id: 'arrlvhf_jun', name: 'ARRL June VHF Contest', short: 'June VHF' },
-  { id: 'arrlvhf_sep', name: 'ARRL September VHF Contest', short: 'September VHF' },
+  { id: 'arrlvhf_jan', name: 'ARRL January VHF Contest', short: 'January VHF', badge: 'Jan VHF' },
+  { id: 'arrlvhf_jun', name: 'ARRL June VHF Contest', short: 'June VHF', badge: 'Jun VHF' },
+  { id: 'arrlvhf_sep', name: 'ARRL September VHF Contest', short: 'September VHF', badge: 'Sep VHF' },
   // CQ WW and CQ WPX are likewise two contests each, on separate weekends with separate
   // Cabrillo tokens. The sponsors' own names, from cqww.com and cqwpx.com.
   // NB the RTTY runnings of both are a DIFFERENT sponsor's contests (CQ/RJ, with the RTTY
@@ -92,6 +95,12 @@ export function contestName(id: string | undefined): string {
  *  an invariant token, never translated). */
 export function contestShortName(id: string | undefined): string {
   return CONTESTS.find((c) => c.id === id)?.short ?? id ?? ''
+}
+
+/** The name the rail's mode badge shows: the short form, but `badge` where that has a word too wide
+ *  for the rail's 88 px ("September", and "January" at the larger text sizes, measured in Chrome). */
+export function contestBadgeName(id: string | undefined): string {
+  return CONTESTS.find((c) => c.id === id)?.badge ?? contestShortName(id)
 }
 
 /** Is this one of the two Field Day events, whose class + section Settings ▸ Contesting ▸ Field Day

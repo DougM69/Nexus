@@ -462,10 +462,15 @@ async fn the_window_closing_mid_over_ends_it_at_once() {
             .keep(&paired_record(&r.s, at))
             .unwrap();
         let origin = Origin::start(Reach {
+            lookup: Arc::new(tempo_stream::lan::lookup),
             assets: Arc::new(|_: &str| None),
             stations: Arc::new(Stations::new(Arc::new(store.clone()))),
             find: Arc::new(|_| Ok(Vec::new())),
             name: "Den PC".into(),
+            operate: Arc::new(|_, _| {}),
+            sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+            now_s: || 0,
+            forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
         })
         .unwrap();
         let mut page = page_socket(&origin).await;

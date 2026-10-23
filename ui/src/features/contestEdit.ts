@@ -16,7 +16,7 @@ import { fdFieldOk, fdSlotValue, fdVerdict } from './contestSlots'
 import { countyLineDomain, isCountyLine, readCountyLine } from './countyLine'
 import { SERVICE_NAMES, contactLabel } from './contestRemoval'
 
-/** Ctrl+Y, as N1MM binds it (edit the last contact): Ctrl alone — never with Alt, Shift or Cmd.
+/** Ctrl+Y (edit the last contact): Ctrl alone — never with Alt, Shift or Cmd.
  *  A held key's auto-repeat is the caller's to ignore. */
 export function isEditKey(e: KeyboardEvent): boolean {
   return e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && e.key.toLowerCase() === 'y'
@@ -70,12 +70,15 @@ export function bandOptions(q: FieldDayQso | undefined, bands: readonly string[]
 
 /** The edit the form makes of `rows` — or why it cannot be saved: the first box the strip would
  *  refuse to log, in the order the boxes are shown and named as they are captioned for `role`,
- *  and a county line given another number of counties than the contact has. */
+ *  and a county line given another number of counties than the contact has. `entity` is the
+ *  country file's answer for the form's call, which the strip's rule for a QSO party's QTH box
+ *  reads. */
 export function editOf(
   form: EditForm,
   rows: readonly FieldDayQso[],
   receives: readonly ContestFieldSpec[],
   role?: string,
+  entity?: string | null,
 ): { edit: ContestContactEdit } | { why: string } {
   const call = form.call.replace(/\s+/g, '').toUpperCase()
   if (call === '') return { why: t('contest.edit.needCall') }
@@ -84,7 +87,7 @@ export function editOf(
   for (const f of receives) {
     const raw = form.fields[f.key] ?? ''
     const domain = countyLineDomain(f.domains)
-    if (!fdFieldOk(f, raw, domain)) return { why: fdVerdict(f, raw, domain, role) }
+    if (!fdFieldOk(f, raw, domain, entity)) return { why: fdVerdict(f, raw, domain, role) }
     const value = fdSlotValue(f, raw, domain)
     if (domain && isCountyLine(value)) {
       const read = readCountyLine(domain, value)

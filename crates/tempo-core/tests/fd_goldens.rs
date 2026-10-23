@@ -54,6 +54,14 @@
 //! `X-NEXUS-RULES-YEAR`, the class the entry sends (p.10's `X-EXCHANGE: 3O`): `3A` in
 //! `wfd.cbr`, whose frozen fixture sends an ARRL class, and `2O` in `wfd-classes.cbr`.
 //! Neither declares a power, so neither carries CATEGORY-POWER.
+//!
+//! ⚠️ **A fourth deliberate movement: a contact in a mode the contest bans scores
+//! nothing.** Winter Field Day allows *"All modes, except WSJT modes"*, and each WFD
+//! fixture holds one FT8 contact (JA1ABC in `wfd.cbr`, N7OUT in `wfd-classes.cbr`), so
+//! line 6 of each changed from `CLAIMED-SCORE: 11` to `9` and from `6` to `4`: the
+//! contact's 2 points. Its QSO line did not move, nor did any `.adi` file, nor
+//! `arrlfd.cbr` (ARRL Field Day allows FT8). One pinned number moved with them: WFD's QSO
+//! points in `both_events_score_exactly_what_head_scored`, from 11 to 9.
 // The fixture builder lives in the capture arm so the bytes and the builder can never
 // drift apart. `main` — the capture arm's own entry point — is dead here by
 // construction, and re-exporting it would be worse than allowing it.
@@ -189,10 +197,12 @@ fn both_events_score_exactly_what_head_scored() {
     // legal 5x power tier (55); WFD's Objectives model applies no on-air power
     // multiplier, so powered == qso. Bonus = w1aw-bulletin + web-submission, which are
     // ARRL Field Day's bonuses: Winter Field Day has carried no copy of that menu since
-    // its 2027 rules, so they are worth nothing there (the one deliberate movement here).
+    // its 2027 rules, so they are worth nothing there (a deliberate movement). And WFD
+    // allows no WSJT mode, so JA1ABC's FT8 contact is worth nothing there either: 11 - 2
+    // (the other deliberate movement here).
     for (event, want_qso, want_powered, want_bonus) in [
         (FdEvent::ArrlFd, 11u32, 55u32, 150u32),
-        (FdEvent::WinterFd, 11u32, 11u32, 0u32),
+        (FdEvent::WinterFd, 9u32, 9u32, 0u32),
     ] {
         let log = capture::golden_log(event);
         let rs = ruleset(event, CURRENT_RULES_YEAR);

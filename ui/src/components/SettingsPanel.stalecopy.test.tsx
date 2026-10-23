@@ -317,6 +317,7 @@ describe('an edit made in any section of Settings is saved', () => {
     { section: 'rig-advanced', ...field('dataModesPlainSsb', false, false, true), edit: opened('rig-advanced', clickIn('rig-advanced', 'switch', /^Data modes use plain SSB/)) },
     { section: 'audio', ...field('rxGain', 1, 2, 3), edit: setIn('audio', 'slider', 'RX capture gain', '3') },
     { section: 'headphone-monitor', ...field('monitorEnabled', false, false, true), edit: clickIn('headphone-monitor', 'checkbox', 'Play receive audio on this computer') },
+    { section: 'scope-source', ...field('scopeSource', 'radio', 'radio', 'sdrconnect'), edit: setIn('scope-source', 'combobox', /^Draw the scope from/, 'sdrconnect') },
     { section: 'satellite-doppler', ...field('satDopplerOff', false, false, true), edit: clickIn('satellite-doppler', 'checkbox', 'Enable satellite Doppler correction') },
     {
       section: 'rotator',
@@ -373,9 +374,12 @@ describe('an edit made in any section of Settings is saved', () => {
     {
       section: 'field-day-club',
       ...field('fdEventName', '', 'Club FD', 'Nexus FD'),
-      // No accessible name on this input (its label is a <span> in a <div>): found by its placeholder.
+      // No accessible name on this input (its label is a <span> in a <div>): found by that caption.
       edit: async () => {
-        const input = (await inSection('field-day-club')).getByPlaceholderText('W9ABC Field Day')
+        const input = (await inSection('field-day-club'))
+          .getByText('Event name', { selector: '.settings-label' })
+          .closest('.settings-field')!
+          .querySelector('input') as HTMLInputElement
         fireEvent.change(input, { target: { value: 'Nexus FD' } })
       },
     },
@@ -398,6 +402,7 @@ describe('an edit made in any section of Settings is saved', () => {
     performance: 'display preferences kept on this computer',
     'app-updates': 'setBetaUpdates, the beta channel’s one writer',
     'start-at-sign-in': 'setLaunchAtLogin, the login entry’s one writer',
+    'this-computer': 'setClientAudio, kept in this computer’s own file and never sent to the station',
     'data-folder': 'setDataFolder',
     configurations: 'the backup, restore and reset verbs',
     // Contest mode, the one field it saved through the form, is on the Contesting tab now.

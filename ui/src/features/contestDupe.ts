@@ -8,7 +8,7 @@
 // ZERO IPC. The full own log rides every snapshot and the club-sync block ships club-ONLY
 // keys, so both checks are plain lookups on data already in hand. That is what lets a surface
 // ask this per keystroke, and per roster click, without a round trip.
-import type { DupeRule, FieldDayStatus } from '../types'
+import type { DupeRule, FieldDayQso, FieldDayStatus } from '../types'
 
 /** What a station older than `FieldDayStatus.dupeRule` meant: the `(call, band, mode class)`
  *  triple every surface hardcoded then. Absence must behave exactly as that build did — the
@@ -99,8 +99,34 @@ export function contestDupe(
   modeClass: string,
   exchange?: TypedExchange,
 ): ContestDupeVerdict {
+  return judge(fieldDay, call, band, modeClass, exchange).verdict
+}
+
+/**
+ * The row of this contest's own log that makes `call` an own dupe — the first, which is when
+ * the station was worked — or undefined whenever [`contestDupe`] is not 'own'. The same
+ * judgement, so the strip's "DUPE · 14:32 20m CW" can never name a row the verdict did not.
+ */
+export function contestDupeRow(
+  fieldDay: FieldDayStatus | null | undefined,
+  call: string,
+  band: string,
+  modeClass: string,
+  exchange?: TypedExchange,
+): FieldDayQso | undefined {
+  return judge(fieldDay, call, band, modeClass, exchange).row
+}
+
+function judge(
+  fieldDay: FieldDayStatus | null | undefined,
+  call: string,
+  band: string,
+  modeClass: string,
+  exchange?: TypedExchange,
+): { verdict: ContestDupeVerdict; row?: FieldDayQso } {
+  const none = { verdict: 'none' as const }
   const typed = call.trim().toUpperCase()
-  if (fieldDay == null || typed === '') return 'none'
+  if (fieldDay == null || typed === '') return none
   const rule = fieldDay.dupeRule ?? LEGACY_TRIPLE
   // ⚠️ **A RULE THAT KEYS ON AN EXCHANGE SLOT CANNOT BE JUDGED FROM THESE THREE**, so it
   // declines rather than guessing — the same answer, for the same reason, that
@@ -123,14 +149,13 @@ export function contestDupe(
   // A box the rule names that is still EMPTY is not judged either: a key with a blank in it
   // would match only a row that recorded none, and the contact being typed is not that row.
   if (rule.byFields.length > 0 || rule.bySentFields.length > 0) {
-    if (exchange === undefined) return 'none'
+    if (exchange === undefined) return none
     const named = [...rule.byFields.map(exchange.rx), ...rule.bySentFields.map(exchange.tx)]
-    if (named.some((v) => v.trim() === '')) return 'none'
+    if (named.some((v) => v.trim() === '')) return none
     const key = joined(dupeKey(rule, typed, band, modeClass, exchange))
-    if ((fieldDay.log ?? []).some((q) => q.dkey !== undefined && joined(q.dkey) === key)) {
-      return 'own'
-    }
-    return (fieldDay.club?.dkeys ?? []).some((k) => joined(k) === key) ? 'club' : 'none'
+    const row = (fieldDay.log ?? []).find((q) => q.dkey !== undefined && joined(q.dkey) === key)
+    if (row) return { verdict: 'own', row }
+    return (fieldDay.club?.dkeys ?? []).some((k) => joined(k) === key) ? { verdict: 'club' } : none
   }
   // `dupeModeGroups` rather than `rule.modeClassGroups`: they are the same data from the same
   // field, but the flat one also reaches a station too old to send a rule at all.
@@ -158,14 +183,14 @@ export function contestDupe(
   // satellite row a dupe of nothing at all, so it is skipped whatever the band rule says.
   const skipSat = rule.satelliteIsABand || fieldDay.satelliteCredit === false
   const sameSat = (q: { sat?: string }): boolean => !skipSat || !(q.sat ?? '')
-  const own = (fieldDay.log ?? []).some(
+  const own = (fieldDay.log ?? []).find(
     (q) =>
       (!rule.byCall || q.call.trim().toUpperCase() === typed) &&
       sameSat(q) &&
       (!rule.byBand || (q.band ?? '') === band) &&
       (!rule.byModeClass || fold(q.mode ?? '') === fold(modeClass)),
   )
-  if (own) return 'own'
+  if (own) return { verdict: 'own', row: own }
   // ⚠️ The CLUB key is matched RAW, without the mode fold — the club-sync block ships each
   // dupe key as the sending position recorded it. This is the comparison the log strip has
   // always made; it is preserved verbatim here rather than quietly widened, because folding
@@ -180,5 +205,53 @@ export function contestDupe(
   const club = (fieldDay.club?.dupes ?? []).some(
     ([c, b, m]) => c === typed && b === band && m === modeClass,
   )
-  return club ? 'club' : 'none'
+  return club ? { verdict: 'club' } : none
+}
+
+/**
+ * ⭐ **THE EARLY WARNING: rows the contact being typed may turn out to duplicate.** A rule that
+ * keys on a received slot (every QSO party: once per band and mode FROM EACH COUNTY) cannot call
+ * a contact a dupe until its county is in, and judging it early would refuse a rover who has
+ * moved. But the operator still wants to know, the moment the call is complete, that this
+ * station is already in the log here, and from where.
+ *
+ * So this is the same key as [`contestDupe`] judges, with each received slot the rule names
+ * read as "what is typed so far": a row of this position's own log is returned when its `dkey`
+ * agrees on the call, band and mode class (as the rule names them) and on every SENT slot, and
+ * each received slot it logged begins with what is typed in that box (an empty box agrees with
+ * everything). Once a box holds a whole value that matches, `contestDupe` already says 'own';
+ * once it holds one that does not, no row is returned and the rover is simply a new contact.
+ *
+ * A rule that names no received slot has no such early state, since its verdict is exact as
+ * soon as the call is typed: this returns nothing for it.
+ */
+export function contestWorkedRows(
+  fieldDay: FieldDayStatus | null | undefined,
+  call: string,
+  band: string,
+  modeClass: string,
+  exchange: TypedExchange,
+): FieldDayQso[] {
+  const typed = call.trim().toUpperCase()
+  if (fieldDay == null || typed === '') return []
+  const rule = fieldDay.dupeRule ?? LEGACY_TRIPLE
+  if (rule.byFields.length === 0) return []
+  const key = dupeKey(rule, typed, band, modeClass, exchange)
+  const lead = [rule.byCall, rule.byBand, rule.byModeClass].filter(Boolean).length
+  const rxEnd = lead + rule.byFields.length
+  return (fieldDay.log ?? []).filter(
+    (q) =>
+      q.dkey !== undefined &&
+      q.dkey.length === key.length &&
+      key.every((k, i) => (i >= lead && i < rxEnd ? q.dkey![i].startsWith(k) : q.dkey![i] === k)),
+  )
+}
+
+/** What each of `rows` received in the slots the rule keys on, as its `dkey` holds them ("COOK",
+ *  or "COOK/IL" for a rule naming two), each once, in log order: the "Worked:" list. */
+export function workedValues(fieldDay: FieldDayStatus | null | undefined, rows: readonly FieldDayQso[]): string[] {
+  const rule = fieldDay?.dupeRule ?? LEGACY_TRIPLE
+  const lead = [rule.byCall, rule.byBand, rule.byModeClass].filter(Boolean).length
+  const values = rows.map((q) => (q.dkey ?? []).slice(lead, lead + rule.byFields.length).join('/'))
+  return [...new Set(values.filter((v) => v !== ''))]
 }

@@ -261,10 +261,15 @@ async fn plain_http_to_the_tls_port_is_answered_with_no_http_and_reaches_nothing
     );
     controller.renewed(&r.s).await;
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: Arc::new(Stations::new(Arc::new(StationStore::default()))),
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
+        operate: Arc::new(|_, _| {}),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || 0,
+        forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
     .unwrap();
     let mut tcp = TcpStream::connect((Ipv4Addr::LOCALHOST, origin.port()))
@@ -556,6 +561,7 @@ async fn a_forged_discovery_reply_costs_one_handshake_and_learns_nothing() {
     kept.addresses = vec![dead.to_string()];
     stations.keep(&kept).unwrap();
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: Arc::new(Stations::new(Arc::new(store.clone()))),
         find: {
@@ -563,6 +569,10 @@ async fn a_forged_discovery_reply_costs_one_handshake_and_learns_nothing() {
             Arc::new(move |_| Ok(adverts.lock().unwrap().clone()))
         },
         name: "Den PC".into(),
+        operate: Arc::new(|_, _| {}),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || 0,
+        forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
     .unwrap();
     let mut page = page_socket(&origin).await;
@@ -1130,7 +1140,7 @@ async fn an_answer_signed_by_another_key_never_reaches_the_page() {
             .sign_answer(&offer, &answer, STATION, &kept.device_id, session)
             .unwrap();
         let welcome = json!({"type":"welcome","sessionId":session,"deviceId":kept.device_id,
-            "stationId":STATION});
+            "stationId":STATION,"app":super::super::wire::APP,"contract":super::super::wire::contract()});
         let candidate = json!({"type":"streamSignal","payload":{"kind":"candidate",
             "candidate":"candidate:1 1 udp 2130706431 192.168.1.20 42075 typ host","sdpMid":"0"}});
         let answered = json!({"type":"streamSignal","payload":{"kind":"answer","sdp":signed}});
@@ -1144,10 +1154,15 @@ async fn an_answer_signed_by_another_key_never_reaches_the_page() {
         let store = StationStore::default();
         Stations::new(Arc::new(store.clone())).keep(&kept).unwrap();
         let origin = Origin::start(Reach {
+            lookup: Arc::new(tempo_stream::lan::lookup),
             assets: Arc::new(|_: &str| None),
             stations: Arc::new(Stations::new(Arc::new(store.clone()))),
             find: Arc::new(|_| Ok(Vec::new())),
             name: "Den PC".into(),
+            operate: Arc::new(|_, _| {}),
+            sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+            now_s: || 0,
+            forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
         })
         .unwrap();
         let mut page = page_socket(&origin).await;

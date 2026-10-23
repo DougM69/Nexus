@@ -12,7 +12,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { ContestView } from './ContestView'
 import defaultSettings from './__fixtures__/defaultSettings.json'
-import type { FieldDayStatus, Settings } from '../types'
+import type { FdClubStatus, FieldDayStatus, Settings } from '../types'
 import type { FdRulesetDto } from '../api'
 import type { ContestSwitch } from '../contestSwitch'
 import { setSettings } from '../api'
@@ -38,6 +38,11 @@ vi.mock('../api', () => ({
   openPanelWindow: vi.fn(async () => {}),
   fdMergeToGeneral: vi.fn(async () => ({ added: 2, already: 0, refused: 0, queued: false })),
   setUnassistedMode: vi.fn(async () => ({})),
+  // The club block's own calls, for a session at a club.
+  fdClubLogNewest: vi.fn(async () => null),
+  fdClubGivePosition: vi.fn(async () => ({ outcome: 'given' })),
+  fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
+  fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
 }))
 
 /** 1700Z Sunday 18 October 2026 to 0100Z Monday: the Illinois QSO Party's window. */
@@ -347,7 +352,7 @@ describe('with the mode on, the screen says which rules apply now', () => {
       { fieldDay: session(), fdActive: true },
     )
     expect(lines()).toContain(
-      'Club sync is on. With Contest mode off, this station stays in the club event and sends no contacts until the mode is back on. Nothing in the log is lost.',
+      "Club sync is on. With Contest mode off, this station stays in the club event, and contacts the club's log does not have yet still go to the host while Nexus is open. Nothing in the log is lost.",
     )
     // CONTROL: no club, no such line.
     cleanup()
@@ -420,6 +425,36 @@ describe('turning the mode off offers the contest-over checklist first', () => {
     expect(vi.mocked(setSettings)).not.toHaveBeenCalled()
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(theSwitch().getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('at a club, it says how many of this laptop\'s contacts the club\'s log does not have yet', async () => {
+    // The club chip's count: the link down, two contacts the host never had.
+    const owed: FdClubStatus = {
+      syncState: 'offline',
+      queued: 2,
+      offlineSinceUnix: ILQP_END - 600,
+      hosting: false,
+      event: 'ILQP 2026',
+      hostCall: 'W9CLB',
+      score: 0,
+      qsos: 0,
+      sections: 0,
+      skewSecs: 0,
+      dupes: [],
+      board: [],
+    }
+    const joined = { ...CLUB, fdJoinAddr: '192.168.1.20:42073' }
+    await openOn(joined, { fdActive: true, fieldDay: { ...twoContacts(), club: owed } })
+    await press()
+    expect(document.querySelector('.contest-over-club')?.textContent).toBe(
+      "2 contacts from this laptop are not in the club's log yet. They still go to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.",
+    )
+    // CONTROL: the club holds them all, and the dialog says nothing about it.
+    cleanup()
+    await openOn(joined, { fdActive: true, fieldDay: { ...twoContacts(), club: { ...owed, queued: 0, syncState: 'synced' } } })
+    await press()
+    expect(screen.getByRole('dialog', { name: 'Contest over?' })).toBeTruthy()
+    expect(document.querySelector('.contest-over-club')).toBeNull()
   })
 
   it('Turn off is ONE save: the mode off, with the ticked settings put back', async () => {

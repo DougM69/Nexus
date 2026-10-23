@@ -242,15 +242,19 @@ pub fn catch_up_records(
 /// every screen shows. The record's own values always win, and a resolver that cannot place the
 /// call leaves the field empty. The same rule `Engine::log_qso` applies to a contact it logs.
 ///
+/// The country follows the contact's DXCC number where it carries one ([`country_from`]): K1N
+/// arriving with 182 is filled as Navassa Island, not as the United States its call names.
+///
 /// Never the state of a contact with a hunted park or summit ([`call_places_state`]).
 #[allow(clippy::type_complexity)]
 pub(crate) fn fill_with(
     r: &mut QsoRecord,
     country: Option<&(dyn Fn(&str) -> Option<String> + Send + Sync)>,
+    number: Option<&DxccCountry>,
     state: Option<&(dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync)>,
 ) {
     if r.country.is_none() {
-        r.country = country.and_then(|resolve| resolve(&r.call));
+        r.country = country_from(number, country, &r.call, r.dxcc);
     }
     if r.state.is_none() && call_places_state(r) {
         r.state = state.and_then(|resolve| resolve(&r.call, r.grid.as_deref()));
@@ -276,6 +280,7 @@ pub(crate) fn call_places_state(r: &QsoRecord) -> bool {
 fn fill_loaded(
     log: &mut Logbook,
     country: Option<&(dyn Fn(&str) -> Option<String> + Send + Sync)>,
+    number: Option<&DxccCountry>,
     state: Option<&(dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync)>,
 ) -> bool {
     let fills: Vec<(usize, Option<String>, Option<String>)> = log
@@ -286,7 +291,7 @@ fn fill_loaded(
             let c = r
                 .country
                 .is_none()
-                .then(|| country.and_then(|f| f(&r.call)))
+                .then(|| country_from(number, country, &r.call, r.dxcc))
                 .flatten();
             let st = (r.state.is_none() && call_places_state(r))
                 .then(|| state.and_then(|f| f(&r.call, r.grid.as_deref())))
@@ -436,9 +441,17 @@ pub fn lotw_owed(rows: &crate::logstore::LogRows) -> Result<bool, String> {
 /// so a batch uploaded after the operator sets their home call back still signs each contact
 /// under the call that made it. Records written before that stamp existed carry none and sign
 /// from the live setting, exactly as they always did.
+///
+/// ⭐ The own-station fields Nexus filled in itself from Settings (`MY_GRIDSQUARE`, `MY_STATE`;
+/// [`tempo_core::logbook::SELF_FILLED_FIELD`]) are left out, in both modes, so TQSL signs every
+/// such contact exactly as it did before Nexus filled them: from the named Station Location, or
+/// from the live setting stamped above. A named location's `-a compliant` check would otherwise
+/// skip, without a word, every contact whose filled grid is not the certificate's location. A
+/// field the operator typed or another program logged is not Nexus's and goes as it always has.
 pub fn lotw_batch_adif(batch: &[QsoRecord], adif_location: bool, call: &str, grid: &str) -> String {
     let mut out = tempo_core::logbook::adif_header();
     for r in batch {
+        let r = &tempo_core::logbook::without_self_filled(r);
         if adif_location {
             out.push_str(&tempo_core::logbook::adif_record_with_station(
                 r, call, grid,
@@ -452,10 +465,11 @@ pub fn lotw_batch_adif(batch: &[QsoRecord], adif_location: bool, call: &str, gri
 
 /// Canonical band key for the per-band worked indices.
 ///
-/// Lower-cased, because the band spellings that actually reach the log differ by
-/// source (Nexus writes "20m", a LoTW export "20M", and `parse_adif` passes BAND
-/// through verbatim), and with the band-plan's FM channel suffix stripped
-/// ("2m-fm" → "2m") since FM on 2 m is still 2 m for award purposes. The result is
+/// Lower-cased, because the band spellings sources write differ (Nexus writes "20m", a
+/// LoTW export "20M"); the log holds one (`tempo_core::logbook::canonical`), and the fold
+/// stays because it is right on any input, the live band included. The band-plan's FM
+/// channel suffix is stripped ("2m-fm" → "2m") since FM on 2 m is still 2 m for award
+/// purposes. The result is
 /// byte-identical to `propagation::Band::label()` for every band that crate models,
 /// so this side and the awards/needs side agree on what "2 m" is without tempo-app
 /// having to depend on the propagation crate (it deliberately does not — see
@@ -519,6 +533,28 @@ pub(crate) struct StationKeys<'a>(pub(crate) Option<&'a DxccResolve>);
 
 /// A callsign → DXCC entity resolver, as [`StationCore::dxcc_resolve`] holds it.
 pub type DxccResolve = dyn Fn(&str) -> Option<String> + Send + Sync;
+
+/// A DXCC number → the country (ADIF `COUNTRY`) it gives a contact, the name of the entity it
+/// names; `None` for a number that names none — as [`StationCore::dxcc_country`] holds it.
+pub type DxccCountry = dyn Fn(u32) -> Option<String> + Send + Sync;
+
+/// THE country a contact with `call`, carrying the DXCC number `dxcc`, is named under: the name the
+/// number gives it (`number`), else the entity its call places it in (`by_call`). What every insert
+/// and fill writes where a contact has no country, and what the operator's own changes write
+/// ([`StationCore::country_for`]). `None` when neither names one.
+pub(crate) fn country_from<N, C>(
+    number: Option<&N>,
+    by_call: Option<&C>,
+    call: &str,
+    dxcc: Option<u32>,
+) -> Option<String>
+where
+    N: Fn(u32) -> Option<String> + ?Sized,
+    C: Fn(&str) -> Option<String> + ?Sized,
+{
+    dxcc.and_then(|code| number.and_then(|name| name(code)))
+        .or_else(|| by_call.and_then(|resolve| resolve(call)))
+}
 
 impl HotKeys for StationKeys<'_> {
     fn band_key(&self, band: &str) -> String {
@@ -801,7 +837,8 @@ pub(crate) fn park_state_pairs(
 
 /// What a check of one service ([`check_lotw_confirmations`] and the others) reads of a contact it
 /// only counts: its call, the call it was logged under (the station call, else the operator), its
-/// confirmations and its upload marks.
+/// confirmations and its upload marks. LoTW's check reads every contact's station call in the same
+/// pass, for the calls the log holds.
 const CHECK_COUNTED: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
     columns: &[
         "call",
@@ -819,8 +856,10 @@ const CHECK_COUNTED: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::
 /// checked against the log, read with the Engine lock released. `report` is LoTW's whole
 /// confirmation history, read exactly as its merge reads it
 /// ([`tempo_core::logbook::report_rows`]); `own` is LoTW's whole own-QSO list, read as its own
-/// merge reads it; `own_call` is the call both were asked for, so a contact logged under another
-/// is counted, not judged. It writes nothing.
+/// merge reads it. Both hold every call on the account, and a row pairs only with a contact made
+/// under the call it names, as the merges pair them; `own_call` is the call in Settings, which a
+/// contact or row naming none is taken to be under, and a contact logged under another call is
+/// counted, not judged. It writes nothing.
 ///
 /// The contacts it checks are every contact of a call either download names, in log order: the
 /// candidate sub-log ([`LogPlan::candidates`]), which holds every contact a row can pair with
@@ -900,11 +939,19 @@ pub struct ServiceCheck {
     /// The contacts its gains are, by id, in log order: each lacks the confirmation a row of the
     /// download pairs with it, which Apply's merge adds.
     pub gains: Vec<RecordId>,
+    /// LoTW's confirmations for a call the log holds no contact under (each contact under its
+    /// STATION_CALLSIGN, else the call in Settings, compared as LoTW's pairing compares them, a
+    /// portable suffix taken off: `tempo_core::reconcile::lotw_pairing_call`): a club call on the
+    /// account, say. They change nothing. None for eQSL or QRZ, whose rows the merge pairs without
+    /// a call.
+    pub other_call_records: usize,
 }
 
 /// The check of one service's download (`rows`, its confirmations, and `own_rows`, its own record
 /// of the operator's contacts) against the contacts of every call the two name, and the other
-/// contacts holding the service's mark, which it only counts ([`check_lotw_confirmations`]).
+/// contacts holding the service's mark, which it only counts ([`check_lotw_confirmations`]). For
+/// LoTW, the same pass over the log reads the calls its contacts were made under, and LoTW's
+/// confirmations for any other call are counted ([`ServiceCheck::other_call_records`]).
 ///
 /// ⚠️ It reads the store: never under the Engine lock.
 fn check_downloaded(
@@ -918,6 +965,7 @@ fn check_downloaded(
     use tempo_core::logbook::sqlite::{call_norm_of, Order, Scope};
     use tempo_core::logbook::UploadOutcome;
     use tempo_core::reconcile::check::{check_report, Channel};
+    use tempo_core::reconcile::lotw_pairing_call;
     let calls: std::collections::BTreeSet<String> = rows
         .iter()
         .chain(own_rows)
@@ -933,6 +981,14 @@ fn check_downloaded(
                         .as_ref()
                         .is_some_and(|s| s.outcome == UploadOutcome::Accepted)))
     };
+    // The calls the log's contacts were made under, as LoTW's pairing compares them: read for LoTW
+    // alone.
+    let made_under = |r: &QsoRecord| {
+        (channel == Channel::Lotw)
+            .then(|| lotw_pairing_call(r, own_call))
+            .flatten()
+    };
+    let mut held: HashSet<String> = HashSet::new();
     let mut others: Vec<Arc<QsoRecord>> = Vec::new();
     // The rows this process changed that the store holds: read below as they now stand.
     let mut changed_here: HashSet<RecordId> = HashSet::new();
@@ -940,10 +996,15 @@ fn check_downloaded(
         match r.id.and_then(|id| plan.pending.row(id)) {
             Some(mine) => {
                 changed_here.extend(r.id);
+                held.extend(mine.as_deref().and_then(made_under));
                 others.extend(mine.filter(|m| counted(m)));
             }
-            None if counted(r) => others.push(Arc::new(r.clone())),
-            None => {}
+            None => {
+                held.extend(made_under(r));
+                if counted(r) {
+                    others.push(Arc::new(r.clone()));
+                }
+            }
         }
         ControlFlow::Continue(())
     };
@@ -954,16 +1015,29 @@ fn check_downloaded(
         })
         .map_err(|e| e.to_string())?;
     // Rows on their way that the store has not taken at all.
-    others.extend(
-        plan.pending
-            .rows_matching(|r| counted(r))
-            .into_iter()
-            .filter(|r| r.id.is_some_and(|id| !changed_here.contains(&id))),
-    );
+    for r in plan
+        .pending
+        .rows_matching(|_| true)
+        .into_iter()
+        .filter(|r| r.id.is_some_and(|id| !changed_here.contains(&id)))
+    {
+        held.extend(made_under(&r));
+        if counted(&r) {
+            others.push(r);
+        }
+    }
     local.extend(others);
     let check = check_report(&local, rows, own_rows, channel, own_call);
     let gains = check.gains.iter().filter_map(|&i| local[i].id).collect();
-    Ok(ServiceCheck { check, gains })
+    let other_call_records = rows
+        .iter()
+        .filter(|r| made_under(r).is_some_and(|call| !held.contains(&call)))
+        .count();
+    Ok(ServiceCheck {
+        check,
+        gains,
+        other_call_records,
+    })
 }
 
 /// The rows the lines the operator ticked in Check confirmations make
@@ -1853,7 +1927,7 @@ pub(crate) fn plan_import(
     })
 }
 
-/// A confirmation report planned (LoTW's, eQSL's): the logged contacts it matches upgraded —
+/// A confirmation report planned (eQSL's): the logged contacts it matches upgraded —
 /// `Logbook::merge_report`, on the rows of the report's calls. Its summary, and the plan.
 ///
 /// ⚠️ It reads the store: never under the Engine lock.
@@ -1864,6 +1938,22 @@ pub(crate) fn plan_report(
     let (calls, _) = calls_and_ids(text);
     plan_on_candidates(plan, calls, &[], OpClass::Upgrade, |log| {
         log.merge_report(text)
+    })
+}
+
+/// LoTW's confirmation report planned: the logged contacts it matches upgraded, each row only on
+/// a contact made under the call it names, `settings_call` being the call in Settings —
+/// `Logbook::merge_lotw_report`, on the rows of the report's calls. Its summary, and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_lotw_report(
+    plan: &LogPlan,
+    text: &str,
+    settings_call: Option<&str>,
+) -> Result<(tempo_core::reconcile::ReconcileSummary, Planned), String> {
+    let (calls, _) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &[], OpClass::Upgrade, |log| {
+        log.merge_lotw_report(text, settings_call)
     })
 }
 
@@ -1912,18 +2002,20 @@ pub(crate) fn plan_ota_refs(
 }
 
 /// LoTW's own-QSO report planned: the uploads it shows LoTW holds promoted to accepted, and the
-/// ones already accepted stamped again with its time — `Logbook::merge_own_echo`, on the rows of
-/// the report's calls. How many were newly promoted, and the plan.
+/// ones already accepted stamped again with its time, each row only on a contact made under the
+/// call it names (`settings_call`: as [`plan_lotw_report`]) — `Logbook::merge_own_echo`, on the
+/// rows of the report's calls. How many were newly promoted, and the plan.
 ///
 /// ⚠️ It reads the store: never under the Engine lock.
 pub(crate) fn plan_own_echo(
     plan: &LogPlan,
     text: &str,
     when_unix: i64,
+    settings_call: Option<&str>,
 ) -> Result<(usize, Planned), String> {
     let (calls, _) = calls_and_ids(text);
     plan_on_candidates(plan, calls, &[], OpClass::Stamp, |log| {
-        log.merge_own_echo(text, when_unix)
+        log.merge_own_echo(text, when_unix, settings_call)
     })
 }
 
@@ -2055,6 +2147,13 @@ pub struct StationCore {
     /// launch can key the hot index it builds off the lock with this very resolver
     /// ([`crate::logstore::HotBuild`]).
     pub(crate) dxcc_resolve: Option<Arc<DxccResolve>>,
+    /// DXCC number → the country a contact's record takes from it, injected by the command layer
+    /// for [`Self::dxcc_resolve`]'s reason. `COUNTRY` follows the number: what the operator's own
+    /// changes write beside it ([`Self::country_for`]), what every insert and fill writes where a
+    /// contact has none ([`fill_with`]), and what an export names ([`crate::logexport`]). `None`
+    /// in headless tests: `COUNTRY` is the call's, as before the number was followed. See
+    /// [`Self::set_dxcc_country_resolver`].
+    pub(crate) dxcc_country: Option<Arc<DxccCountry>>,
     /// (Callsign, heard grid) → US state resolver, injected by the command layer (which owns
     /// the FCC callsign index) — same pattern as [`Self::set_dxcc_resolver`], and injected for
     /// the same reason: tempo-app has no `propagation` dependency, so it cannot reach the index
@@ -2208,6 +2307,7 @@ impl StationCore {
             pending_msgs_path: None,
             journals: Default::default(),
             dxcc_resolve: None,
+            dxcc_country: None,
             state_resolve: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
@@ -2277,6 +2377,7 @@ impl StationCore {
         let filled = fill_loaded(
             &mut log,
             self.dxcc_resolve.as_deref(),
+            self.dxcc_country.as_deref(),
             self.state_resolve.as_deref(),
         );
         let store = LogStore::fallback(&path, read, log.records(), resolve)
@@ -2736,14 +2837,18 @@ impl StationCore {
         } else {
             planned.class
         };
-        let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
+        let (country, number, state) = (
+            self.dxcc_resolve.as_deref(),
+            self.dxcc_country.as_deref(),
+            self.state_resolve.as_deref(),
+        );
         let mut appended = Vec::new();
         let mut pairs = Vec::with_capacity(planned.pairs.len());
         for (before, after) in planned.pairs {
             match (before, after) {
                 (None, Some(row)) => {
                     let mut row = QsoRecord::clone(&row);
-                    fill_with(&mut row, country, state);
+                    fill_with(&mut row, country, number, state);
                     if row.id.is_none() {
                         row.id = Some(self.minter.mint());
                     }
@@ -2792,6 +2897,11 @@ impl StationCore {
             if r.id.is_none() {
                 r.id = Some(self.minter.mint());
             }
+            // In the log's one form whoever hands the row over (`Engine::log_qso` has already
+            // made it so, for its duplicate guard): the hot index holds the row as the writer
+            // stores it, and the store reads every row back in that form, so a row taken in any
+            // other way would be held one way here and read another there.
+            tempo_core::logbook::canonical::contact(r);
         }
         let rows: Vec<Arc<QsoRecord>> = recs.iter().cloned().map(Arc::new).collect();
         let (marks, _) = self.make(&RowChange {
@@ -2851,6 +2961,29 @@ impl StationCore {
         // rows' own country is the store's (SPEC-2 v3 D2-A): each insert fills it, and the fill
         // job fills what an older build left.
         self.rekey_hot();
+    }
+
+    /// Inject the DXCC number → country resolver (the command layer passes a closure over
+    /// `propagation::dxcc::country_by_dxcc`). No index is keyed by it, so nothing is rebuilt: it
+    /// names the `COUNTRY` the operator's next change writes, an insert's fill, and an export's.
+    pub fn set_dxcc_country_resolver(
+        &mut self,
+        country: impl Fn(u32) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.dxcc_country = Some(Arc::new(country));
+    }
+
+    /// The `COUNTRY` a contact with `call`, left holding the DXCC number `dxcc`, takes when the
+    /// operator changes it: the name that number gives it, so the two never disagree; else, with
+    /// no number or one that names no entity, its call's entity, as every edit has always written.
+    /// `None` when neither resolver names one (a headless test's station).
+    pub(crate) fn country_for(&self, call: &str, dxcc: Option<u32>) -> Option<String> {
+        country_from(
+            self.dxcc_country.as_deref(),
+            self.dxcc_resolve.as_deref(),
+            call,
+            dxcc,
+        )
     }
 
     /// Build the hot index again under the DXCC resolver the station now holds, which keys
@@ -3863,10 +3996,10 @@ impl StationCore {
         let sent = edit.qsl_sent_change(stored)?;
         let card = edit.qsl_card_change(stored);
         let mut rec = edit.record(stored);
-        // Keep country populated on edits, as `update_qso` does: the form does not carry it.
-        if let Some(resolve) = &self.dxcc_resolve {
-            rec.country = resolve(&rec.call);
-        }
+        // Keep country populated on edits, as `update_qso` does: the form does not carry it. It
+        // follows the DXCC number the contact keeps — the edit leaves the stored one, and a
+        // corrected call drops both — and else the call.
+        rec.country = self.country_for(&rec.call, rec.dxcc.or(stored.dxcc));
         let mut ops = vec![LogOp::Edit {
             id,
             rec: Box::new(rec),
@@ -3882,6 +4015,37 @@ impl StationCore {
             ops.push(LogOp::MarkQslCard { id, received });
         }
         Ok(Ok(ops))
+    }
+
+    /// The DXCC number set — or cleared, `None` — by hand on the contact `id`, as the op that makes
+    /// it on the row as it stands: the number, and the `COUNTRY` that goes with the number it
+    /// leaves ([`Self::country_for`]), so the two never disagree. Refused when the row is no longer
+    /// the version whose key is `edit_key`.
+    pub(crate) fn dxcc_ops(
+        &self,
+        id: RecordId,
+        edit_key: &str,
+        dxcc: Option<u32>,
+        stored: &Arc<QsoRecord>,
+    ) -> Result<Vec<LogOp>, RowRefusal> {
+        Self::fresh_row(stored, edit_key)?;
+        // The number the op leaves — on a clear, LoTW's where the log keeps it — read off the
+        // op's own rule rather than restated here.
+        let left = match (LogOp::SetDxcc {
+            id,
+            dxcc,
+            country: None,
+        })
+        .apply_to(stored)
+        {
+            RowAfter::Now(row) => row.dxcc,
+            RowAfter::Gone | RowAfter::Unchanged => stored.dxcc,
+        };
+        Ok(vec![LogOp::SetDxcc {
+            id,
+            dxcc,
+            country: self.country_for(&stored.call, left),
+        }])
     }
 
     /// The Logbook form's edit of the contact `id`, as ONE change ([`Self::edit_ops`]), in one
@@ -4076,10 +4240,17 @@ impl StationCore {
     /// Reconcile a confirmation/credit report (ADIF — e.g. a LoTW export) INTO the
     /// existing log: monotonically upgrade matched QSOs' confirmation + credit
     /// (which a plain dedup-import would skip and lose), and return the reconcile summary
-    /// (newly confirmed/credited + unmatched orphans). Planned on the rows of the report's calls
-    /// ([`plan_report`]).
-    pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
-        let summary = self.bulk_or_log("merge_lotw_report", |plan| plan_report(plan, text));
+    /// (newly confirmed/credited + unmatched orphans). Each row lands only on a contact made under
+    /// the call it names, `settings_call` being the call in Settings. Planned on the rows of the
+    /// report's calls ([`plan_lotw_report`]).
+    pub fn merge_lotw_report(
+        &mut self,
+        text: &str,
+        settings_call: Option<&str>,
+    ) -> tempo_core::reconcile::ReconcileSummary {
+        let summary = self.bulk_or_log("merge_lotw_report", |plan| {
+            plan_lotw_report(plan, text, settings_call)
+        });
         self.last_lotw_reconcile = Some(summary.clone());
         summary
     }
@@ -4094,12 +4265,18 @@ impl StationCore {
     /// Merge a LoTW own-QSO report (`qso_qsl=no`) INTO the log: promote in-flight
     /// uploads (Pending / never-marked) to `Accepted` where LoTW confirms it holds
     /// your record — the step that turns a just-uploaded QSO into "waiting on the
-    /// partner" (R2) and clears false "never uploaded" (R1) for out-of-band uploads.
-    /// Persists the log when one is promoted ([`plan_own_echo`]). Returns the count newly
-    /// promoted.
-    pub fn merge_lotw_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
+    /// partner" (R2) and clears false "never uploaded" (R1) for out-of-band uploads, each row
+    /// only on a contact made under the call it names (`settings_call`: as
+    /// [`Self::merge_lotw_report`]). Persists the log when one is promoted ([`plan_own_echo`]).
+    /// Returns the count newly promoted.
+    pub fn merge_lotw_own_echo(
+        &mut self,
+        text: &str,
+        when_unix: i64,
+        settings_call: Option<&str>,
+    ) -> usize {
         self.bulk_or_log("merge_lotw_own_echo", |plan| {
-            plan_own_echo(plan, text, when_unix)
+            plan_own_echo(plan, text, when_unix, settings_call)
         })
     }
 
@@ -5311,7 +5488,7 @@ mod hot_parity_tests {
             }
             9 => match restated(sc, rng, "<LOTW_QSL_RCVD:1>Y") {
                 Some(report) => {
-                    sc.merge_lotw_report(&report);
+                    sc.merge_lotw_report(&report, Some("K2DEF"));
                     "LoTW confirmation"
                 }
                 None => "nothing",

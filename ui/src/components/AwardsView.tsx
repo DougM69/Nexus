@@ -5,9 +5,9 @@
 // codes the tables print (data), and the achievement titles/details and diagnosis explanations,
 // which the backend writes. See the invariant-token rule in `i18n/index.ts`.
 
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud, Grid3x3, Satellite } from 'lucide-react'
-import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, QsoDiagnosis, UploadReport } from '../types'
+import type { AwardBandNeeds, AwardSummary, BandNeed, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, DxccDisagreement, QsoDiagnosis, UploadReport } from '../types'
 import {
   getAwards,
   getConfirmationDiagnostics,
@@ -18,6 +18,7 @@ import {
 } from '../api'
 import { t } from '../i18n'
 import { logSource } from '../features/logSource'
+import { utcDate } from '../features/utcLog'
 import { askAgainWhileSaving } from '../features/notAnswered'
 import { PaneSeam } from './PaneSeam'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
@@ -56,6 +57,136 @@ const VUCC_GRIDS = 100
 const IOTA_ISLANDS = 100
 
 type NeedSort = 'entity' | 'bands'
+
+/** The awards NEEDED BY BAND lists, in the order the operator asked for them. */
+const BAND_NEED_AWARDS = ['dxcc', 'was', 'waz'] as const
+type BandNeedAward = (typeof BAND_NEED_AWARDS)[number]
+/** What each award's needs per band count, and what confirms one. */
+function bandNeedNote(award: BandNeedAward): string {
+  switch (award) {
+    case 'was':
+      return t('awards.bandNeeds.note.was')
+    case 'waz':
+      return t('awards.bandNeeds.note.waz')
+    default:
+      return t('awards.bandNeeds.note.dxcc')
+  }
+}
+type BandNeedKind = 'unworked' | 'unconfirmed'
+
+/** NEEDED BY BAND: for DXCC, WAS or WAZ, each band's count never worked there and worked there but not
+ *  confirmed as the award credits it — the station's own count (`AwardSummary.bandNeeds`). Each count
+ *  opens its list under the row. */
+function BandNeedsPanel({ needs }: { needs: AwardBandNeeds }) {
+  const [award, setAward] = useState<BandNeedAward>('dxcc')
+  const [open, setOpen] = useState<{ band: string; kind: BandNeedKind } | null>(null)
+  const count = (row: BandNeed, kind: BandNeedKind) => {
+    const n = row[kind].length
+    const isOpen = open?.band === row.band && open.kind === kind
+    return (
+      <button
+        type="button"
+        className="aw-bn-count"
+        data-kind={kind}
+        aria-expanded={isOpen}
+        disabled={n === 0}
+        title={isOpen ? t('awards.bandNeeds.hide') : t('awards.bandNeeds.show', { count: n, band: row.band })}
+        onClick={() => setOpen(isOpen ? null : { band: row.band, kind })}
+      >
+        {n}
+      </button>
+    )
+  }
+  return (
+    <div className="aw-panel aw-bandneeds">
+      <h3>{t('awards.bandNeeds.head')}</h3>
+      <div className="aw-needctl" role="group" aria-label={t('awards.bandNeeds.award.label')}>
+        {BAND_NEED_AWARDS.map((a) => (
+          <button
+            type="button"
+            key={a}
+            className={`aw-needsort${award === a ? ' active' : ''}`}
+            aria-pressed={award === a}
+            onClick={() => {
+              setAward(a)
+              setOpen(null)
+            }}
+          >
+            {AWARD_NAMES[a]}
+          </button>
+        ))}
+      </div>
+      <p className="aw-empty">{bandNeedNote(award)}</p>
+      <table className="aw-bn-table">
+        <thead>
+          <tr>
+            <th scope="col">{t('awards.bandNeeds.col.band')}</th>
+            <th scope="col">{t('awards.bandNeeds.col.unworked')}</th>
+            <th scope="col">{t('awards.bandNeeds.col.unconfirmed')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {needs[award].map((row) => (
+            <Fragment key={row.band}>
+              <tr>
+                <th scope="row" className="aw-band">
+                  {row.band}
+                </th>
+                <td>{count(row, 'unworked')}</td>
+                <td>{count(row, 'unconfirmed')}</td>
+              </tr>
+              {open?.band === row.band && (
+                <tr>
+                  <td colSpan={3}>
+                    <p className="aw-bn-list" data-kind={open.kind}>
+                      <strong>
+                        {open.kind === 'unworked'
+                          ? t('awards.bandNeeds.list.unworked', { band: row.band, count: row.unworked.length })
+                          : t('awards.bandNeeds.list.unconfirmed', { band: row.band, count: row.unconfirmed.length })}
+                      </strong>{' '}
+                      {row[open.kind].join(' · ')}
+                    </p>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/** A DXCC entity as a disagreement names it: its name and number, or the number alone when the
+ * station's table does not know it. */
+function dxccLabel(code: number, name?: string | null): string {
+  return name ? `${name} (${code})` : t('awards.dxccDiffer.unknown', { code })
+}
+
+/** The contacts LoTW confirmed under another DXCC entity than the log records: counted by
+ * LoTW's, listed so the operator sees every one. The log's own value is never changed. */
+function DxccDifferList({ items }: { items: DxccDisagreement[] }) {
+  return (
+    <>
+      <p className="aw-empty">{t('awards.dxccDiffer.note')}</p>
+      <ul className="aw-needed">
+        {items.map((d, i) => (
+          <li key={`${d.call}-${d.whenUnix}-${i}`}>
+            <span className="aw-entity">
+              {d.call} · {utcDate(d.whenUnix)} · {d.band} {d.mode}
+            </span>
+            <span className="aw-needbands">
+              {t('awards.dxccDiffer.row', {
+                logged: dxccLabel(d.loggedDxcc, d.loggedEntity),
+                lotw: dxccLabel(d.lotwDxcc, d.lotwEntity),
+              })}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </>
+  )
+}
 
 /** Render a chase list (entity + the bands to confirm) with a quick filter + a
  * sort (A–Z or by how many bands are needed), or an empty note. */
@@ -304,10 +435,13 @@ const AWARDS_COLUMN_VARS = ['--awards-col-a', '--awards-col-b'] as const
 export function AwardsView({
   showGamification = true,
   onOpenSettings,
+  onOpenLogbook,
   observation,
   diagnostics,
 }: {
   showGamification?: boolean
+  /** Open a diagnosed contact in the Logbook's editor (by its id), as its ✎ there opens it. */
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** A complete station-owned summary; observation never starts upload/diagnostic reads. */
   observation?: AwardSummary
   /** The station's confirmation diagnostics for an observed summary, shown read only. */
@@ -547,6 +681,14 @@ export function AwardsView({
             {aw.readyToSubmit > 0 &&
               t('awards.dxcc.note.readyToSubmit', { count: aw.readyToSubmit })}
           </span>
+          {aw.dxccConfirmedTotal !== undefined && (
+            <span className="aw-note">
+              {t('awards.dxcc.note.currentTotal', {
+                current: aw.dxccConfirmed,
+                total: aw.dxccConfirmedTotal,
+              })}
+            </span>
+          )}
         </div>
 
         <div className={`aw-card${hr.achieved ? ' aw-card-elite' : ''}`}>
@@ -811,6 +953,8 @@ export function AwardsView({
             </div>
           </div>
 
+          {aw.bandNeeds && <BandNeedsPanel needs={aw.bandNeeds} />}
+
           {aw.vucc.bands.length > 0 && (
             <div className="aw-panel">
               <h3>{t('awards.grids.head')}</h3>
@@ -939,6 +1083,15 @@ export function AwardsView({
               </span>
             )}
           </div>
+          {(aw.dxccDisagreements ?? []).length > 0 && (
+            <div className="aw-panel">
+              <h3>
+                <Globe2 size={14} aria-hidden="true" />{' '}
+                {t('awards.dxccDiffer.head', { count: aw.dxccDisagreements?.length ?? 0 })}
+              </h3>
+              <DxccDifferList items={aw.dxccDisagreements ?? []} />
+            </div>
+          )}
         </div>
         {/* The progress column | chase lists divider (layout L7): out of flow, in the gap before
             the chase lists (styles.css `.awards-colseam`). The stacked sm/xs layout hides it. */}
@@ -1052,6 +1205,19 @@ export function AwardsView({
                       onOpenSettings={observation ? undefined : onOpenSettings}
                       observed={!!observation}
                     />
+                    {/* The contact itself, in the Logbook's editor: the Logbook row's ✎, the one edit
+                        path. Only for a contact the report names by id, in the station's own window. */}
+                    {!observation && onOpenLogbook && d.id && d.call && (
+                      <button
+                        type="button"
+                        className="conf-btn"
+                        onClick={() => onOpenLogbook(d.call!, d.id)}
+                        title={t('logbook.row.edit', { call: d.call })}
+                        aria-label={t('logbook.row.edit', { call: d.call })}
+                      >
+                        ✎
+                      </button>
+                    )}
                   </li>
                 )
               })}

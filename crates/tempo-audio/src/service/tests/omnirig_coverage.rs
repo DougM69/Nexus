@@ -272,3 +272,25 @@ fn a_mode_to_a_rig_omnirig_says_is_not_responding_gives_up_in_words_that_fit_omn
         )
     );
 }
+
+/// The RTTY AFSK sideband reaches OmniRig as DigL, then DigU once the operator picks USB.
+#[test]
+fn rtty_afsk_follows_the_sideband_setting_through_omnirig() {
+    use crate::omnirig::OmniMode;
+    let mut s = OmniScene::new();
+    for (side, want) in [("lsb", OmniMode::DigL), ("usb", OmniMode::DigU)] {
+        {
+            let mut e = s.engine.lock().unwrap();
+            let mut st = e.settings().clone();
+            st.rtty_afsk_sideband = side.into();
+            e.apply_settings(st);
+            e.set_operating_mode("rtty", false);
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while *s.mock.mode.lock().unwrap() != Some(want) && Instant::now() < deadline {
+            s.step();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(*s.mock.mode.lock().unwrap(), Some(want), "AFSK on {side}");
+    }
+}

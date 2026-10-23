@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { answerRemoteAutostartOffer, getRemoteStationStatus, getSettings, remoteStationAction, setLaunchAtLogin } from '../api'
 import { t } from '../i18n'
-import type { RemoteStationAction, RemoteStationStatus } from './types'
+import { isNative, PLATFORM_NAMES, waitsForApprove, type AccountRole, type RemoteStationAction, type RemoteStationStatus } from './types'
 import { shortFingerprint } from '../remote-web/stream-protocol'
 import '../remote-web/remote.css'
 
@@ -18,11 +18,9 @@ export function RemoteStation() {
   const [busy, setBusy] = useState(false)
   const [offer, setOffer] = useState(false)
   const [offerFailed, setOfferFailed] = useState(false)
-  // "Also allow FT8/FT4 transmit from the Remote page" on the pairing approval and on each browser's approval. Off unless
-  // ticked. It limits only the Remote page's own FT8/FT4: a stream needs station controls alone, and a streaming browser
-  // is the operator at the shack, transmit included (the operator, 2026-10-03), so the card's words say so.
-  const [pairingTransmit, setPairingTransmit] = useState(false)
-  const [browserTransmit, setBrowserTransmit] = useState<Record<string, boolean>>({})
+  // People: the address and role of the next invitation.
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState<AccountRole>('operate')
   const pending = useRef(false), mounted = useRef(true), requestEpoch = useRef(0)
   useEffect(() => {
     mounted.current = true
@@ -42,7 +40,7 @@ export function RemoteStation() {
   }, [])
   async function act(action: RemoteStationAction) {
     // Disable cancels the native socket even while an HTTP request is pending.
-    if (pending.current && action.type !== 'disable' && action.type !== 'takeOverLogging' && !(action.type === 'transmitPermission' && !action.allow)) return
+    if (pending.current && action.type !== 'disable' && action.type !== 'takeOverLogging') return
     const epoch = ++requestEpoch.current
     pending.current = true; setBusy(true); setError(null)
     try {
@@ -73,6 +71,24 @@ export function RemoteStation() {
   }
   const connected = status && ['connected', 'connecting', 'reconnecting'].includes(status.phase)
   const issue = error ?? status?.error, phase = status?.phase
+  // The browsers, and the computers running Nexus (the native client) apart from them: a computer's
+  // approval pins its key and grants nothing on the relay's lanes, so it has no switches, here or
+  // under Advanced.
+  // Read on every render, so a status with no list at all is a station with no devices, never a crash
+  // that takes the whole of Settings down with this card.
+  const browsers = status?.devices?.filter(device => !isNative(device)) ?? []
+  const computers = status?.devices?.filter(isNative) ?? []
+  const account = status?.account
+  const roleName = (role: AccountRole) => role === 'listen' ? t('remote.account.role.listen') : t('remote.account.role.operate')
+  // What the station knows of a device beyond its approval: added by its own sign-in, a proof the station
+  // could not confirm (never granted), or a removal the service has not heard yet. A device added by its
+  // sign-in that waits for Approve here was confirmed, so it says only how it was added.
+  const accountNotes = (device: RemoteStationStatus['devices'][number]) => <>
+    {device.addedBy === 'account' && <span>{t('remote.account.addedByAccount')}</span>}
+    {account?.unconfirmed?.[device.id] && !waitsForApprove(status, device.id)
+      && <span className="remote-warning">{t('remote.account.unconfirmed')}</span>}
+    {account?.removals?.includes(device.id) && <span>{t('remote.account.removalWaiting')}</span>}
+  </>
   // One card (the operator, 2026-10-02: "Settings ▸ Remote access becomes one card"): where this
   // station stands with the Remote service and the one thing to do next, then the browsers with their
   // keys. Everything else the panel had folds under Advanced, unchanged: the same state, the same
@@ -91,18 +107,70 @@ export function RemoteStation() {
       // need different next steps: an ended trial is not an account that was switched off.
       : issue === 'trialEnded' ? t('remote.nativeTrialEnded')
       : issue === 'trialDisabled' ? t('remote.nativeTrialDisabled')
+      // One trial per callsign and per shack PC: approval refused for the callsign this Nexus sent, or
+      // for this PC, each with what the operator can do about it here. And a service that needs a newer
+      // Nexus to approve at all.
+      : issue === 'callsignInvalid' ? t('remote.nativeCallsignInvalid')
+      : issue === 'callsignNotLicensed' ? t('remote.nativeCallsignNotLicensed')
+      : issue === 'trialUsedByCallsign' ? t('remote.nativeTrialUsedByCallsign')
+      : issue === 'trialUsedOnThisPc' ? t('remote.nativeTrialUsedOnThisPc')
+      : issue === 'updateRequired' ? t('remote.nativeUpdateRequired')
+      // Approval refused because this mailbox already has a trial under another sign-in. It used to
+      // read as access denied, which does not say that the sign-in is what needs changing.
+      : issue === 'trialActiveElsewhere' ? t('remote.nativeTrialActiveElsewhere')
       // Approving at the shack before the browser agreed to attach the station. Falling through to
       // requestFailed would point an operator standing at the radio at their network.
       : issue === 'awaitingConfirmation' ? t('remote.nativeAwaitingConfirmation')
+      // Signing in at the shack, and inviting people.
+      : issue === 'accountNotReady' ? t('remote.account.notReady')
+      : issue === 'signInPortBusy' ? t('remote.account.signInPortBusy')
+      : issue === 'signInFailed' || issue === 'proofInvalid' || issue.startsWith('token') ? t('remote.account.signInFailed')
+      : issue === 'proofNotYours' ? t('remote.account.notOwner')
+      : issue === 'stationLimit' ? t('remote.account.stationLimit')
+      : issue === 'inviteLimit' ? t('remote.account.inviteLimit')
+      : issue === 'noKey' ? t('remote.vaultFailed')
       : t('remote.requestFailed')}</p>}
     {/* S3-M1: browsers check this station's stream against the key the service recorded for it at
         pairing. Another one there is not fixed by waiting, so it gets its own line until it is. */}
     {status?.keyRefused && <p role="alert">{t('remote.nativeStationKeyPinned')}</p>}
+    {/* The notice: a device the station granted on its own proof, until the operator has seen it. Inline,
+        never a modal: nothing here may stand between the operator and Stop TX. */}
+    {account?.added?.map(added => { const what = added.kind === 'browser' ? t('remote.account.aBrowser')
+      : t('remote.native.computerPlatform', { platform: added.platform ? PLATFORM_NAMES[added.platform] : '—' })
+    const key = added.key ? shortFingerprint(added.key) : '—'
+    return <div key={added.deviceId} role="status" className="remote-native-browser">
+      <span>{added.guest ? t('remote.account.addedGuest', { name: added.name, what, key, role: roleName(added.role) })
+        : t('remote.account.added', { name: added.name, what, key })}</span>
+      <span className="remote-actions">
+        <button type="button" className="remote-button" disabled={busy}
+          onClick={() => void act({ type: 'device', deviceId: added.deviceId, approve: false })}>{t('remote.native.remove')}</button>
+        <button type="button" className="remote-button" disabled={busy}
+          onClick={() => void act({ type: 'dismissAdded', deviceId: added.deviceId })}>{t('remote.account.gotIt')}</button>
+      </span>
+    </div> })}
+    {account?.reproof && <p role="alert">{t('remote.account.reproof')}</p>}
+    {/* Signing in again, for a station bound already: the same sign-in, the station otherwise as it was. */}
+    {phase !== 'unpaired' && (account?.signingIn ? <>
+      <p role="status">{t('remote.account.signingIn')}</p>
+      <button type="button" className="remote-button" onClick={() => void act({ type: 'cancelSignInAgain' })}>{t('remote.account.cancelSignIn')}</button>
+    </> : account?.reproof && <div className="remote-actions">
+      <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'signInAgain' })}>{t('remote.account.signInAgain')}</button>
+    </div>)}
     {/* Linking the station to the account IS the sign-in, so its steps stay in the card while it is
-        not linked; the pairing's transmit option is under Advanced. */}
+        not linked. */}
     {phase === 'unpaired' && <>
       <label>{t('remote.stationName')}<input value={name} maxLength={48} onChange={event => setName(event.target.value)} /></label>
-      <button type="button" className="remote-button" disabled={busy || !name.trim()} onClick={() => void act({ type: 'begin', name })}>{t('remote.pairStation')}</button>
+      {/* Signing in binds the station with no code; pairing with a code stays beside it. */}
+      {account?.signingIn ? <>
+        <p role="status">{t('remote.account.signingIn')}</p>
+        <button type="button" className="remote-button" onClick={() => void act({ type: 'cancel' })}>{t('remote.account.cancelSignIn')}</button>
+      </> : <>
+        <p>{t('remote.account.signInHint')}</p>
+        <div className="remote-actions">
+          <button type="button" className="remote-button" disabled={busy || !name.trim()} onClick={() => void act({ type: 'signIn', name })}>{t('remote.account.signIn')}</button>
+          <button type="button" className="remote-button" disabled={busy || !name.trim()} onClick={() => void act({ type: 'begin', name })}>{t('remote.pairStation')}</button>
+        </div>
+      </>}
     </>}
     {status?.pairingCode && <>
       <p>{t('remote.openService')} <a href={status.origin} target="_blank" rel="noreferrer">{status.origin}</a></p>
@@ -111,7 +179,7 @@ export function RemoteStation() {
       {status.accountId && <p>{t('remote.accountMatch')} <code>{status.accountId}</code></p>}
       <div className="remote-actions">
         {phase === 'approval' && status.accountId && status.pairingId && <button type="button" className="remote-button" disabled={busy}
-          onClick={() => void act({ type: 'approve', accountId: status.accountId!, enrollmentId: status.pairingId!, transmit: pairingTransmit })}>{t('remote.approvePairing')}</button>}
+          onClick={() => void act({ type: 'approve', accountId: status.accountId!, enrollmentId: status.pairingId! })}>{t('remote.approvePairing')}</button>}
         <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'cancel' })}>{t('remote.cancelPairing')}</button>
       </div>
     </>}
@@ -132,79 +200,116 @@ export function RemoteStation() {
           operator compares the two, group by group. */}
       {status.stationKey && <p>{t('remote.thisStationKey', { key: shortFingerprint(status.stationKey) })}</p>}
       {/* The browsers, each with its key and the one thing to do next: the same actions as the
-          per-browser block under Advanced, with its transmit tick (off unless ticked there). */}
+          per-browser block under Advanced. */}
       <h3>{t('remote.native.browsers')}</h3>
-      {status.devices.length === 0 ? <p>{t('remote.noBrowsers')}</p> : <ul className="remote-native-browsers">
-        {status.devices.map(device => { const key = device.key ?? undefined
+      {browsers.length === 0 ? <p>{t('remote.noBrowsers')}</p> : <ul className="remote-native-browsers">
+        {browsers.map(device => { const key = device.key ?? undefined
           const unpinned = device.approved === 1 && !!key && !status.pinnedDevices?.includes(device.id)
           return <li key={device.id} className="remote-native-browser">
             <span className="remote-native-browser-name">{device.name}</span>
             {key && <span className="remote-native-browser-key">{t('remote.browserKey', { key: shortFingerprint(key) })}</span>}
-            <span className="remote-native-browser-state">{device.approved !== 1 ? t('remote.native.asks')
-              : unpinned ? t('remote.browserKeyNotPinned') : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
+            <span className="remote-native-browser-state">{device.approved !== 1 || waitsForApprove(status, device.id) ? t('remote.native.asks')
+              : unpinned ? t('remote.browserKeyNotPinned') : device.untilRemoved === 1 ? t('remote.browserApprovedUntilRemoved')
+              : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
+            {accountNotes(device)}
             <span className="remote-actions">
               {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
-                onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key })}>{t('remote.approve')}</button>}
+                onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, key, kind: device.kind ?? 'browser' })}>{t('remote.approve')}</button>}
               {device.approved === 1 && <button type="button" className="remote-button" disabled={busy}
                 onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.native.remove')}</button>}
             </span>
           </li> })}
       </ul>}
+      {/* The computers running Nexus, each by its name, its platform and its key in eight groups. Approve
+          is the pop-up's own: the key shown pinned. */}
+      {computers.length > 0 && <>
+        <h3>{t('remote.native.computers')}</h3>
+        <ul className="remote-native-browsers">
+          {computers.map(device => { const key = device.key ?? undefined
+            const unpinned = device.approved === 1 && !!key && !status.pinnedDevices?.includes(device.id)
+            return <li key={device.id} className="remote-native-browser">
+              <span className="remote-native-browser-name">{device.name}</span>
+              {device.platform && <span>{t('remote.native.computerPlatform', { platform: PLATFORM_NAMES[device.platform] })}</span>}
+              {key && <span className="remote-native-browser-key">{t('remote.browserKey', { key: shortFingerprint(key) })}</span>}
+              <span className="remote-native-browser-state">{device.approved !== 1 || waitsForApprove(status, device.id) ? t('remote.native.computerAsks')
+                : unpinned ? t('remote.native.computerKeyNotPinned') : device.untilRemoved === 1 ? t('remote.browserApprovedUntilRemoved')
+                : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</span>
+              {accountNotes(device)}
+              <span className="remote-actions">
+                {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
+                  onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, key, kind: device.kind ?? 'browser' })}>{t('remote.approve')}</button>}
+                {device.approved === 1 && <button type="button" className="remote-button" disabled={busy}
+                  onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.native.remove')}</button>}
+              </span>
+            </li> })}
+        </ul>
+      </>}
+      {/* People: invited by the address they sign in with, to operate or only to listen. Their devices are
+          added when they sign in; the station checks each one's proof against this list itself. */}
+      <h3>{t('remote.account.people')}</h3>
+      <p>{t('remote.account.peopleHint')}</p>
+      {(account?.people?.length ?? 0) === 0 ? <p>{t('remote.account.noPeople')}</p> : <ul className="remote-native-browsers">
+        {account!.people.map(person => <li key={person.mailbox} className="remote-native-browser">
+          <span className="remote-native-browser-name">{person.mailbox}</span>
+          <span>{roleName(person.role)}</span>
+          <span className="remote-actions">
+            <button type="button" className="remote-button" disabled={busy}
+              onClick={() => void act({ type: 'uninvite', email: person.mailbox })}>{t('remote.account.uninvite')}</button>
+          </span>
+        </li>)}
+      </ul>}
+      <label>{t('remote.account.email')}<input type="email" value={inviteEmail} maxLength={254} onChange={event => setInviteEmail(event.target.value)} /></label>
+      <label>{t('remote.account.role')}<select value={inviteRole} onChange={event => setInviteRole(event.target.value === 'listen' ? 'listen' : 'operate')}>
+        <option value="operate">{t('remote.account.role.operate')}</option>
+        <option value="listen">{t('remote.account.role.listen')}</option>
+      </select></label>
+      {/* Someone invited to operate holds what the owner's own other computer holds: said where Operate is offered,
+          so the owner invites to operate only someone they would hand the shack to. */}
+      {inviteRole === 'operate' && <p className="remote-warning">{t('remote.account.operateIsYours')}</p>}
+      <div className="remote-actions">
+        <button type="button" className="remote-button" disabled={busy || !inviteEmail.trim()}
+          onClick={() => void act({ type: 'invite', email: inviteEmail.trim(), role: inviteRole })}>{t('remote.account.invite')}</button>
+      </div>
     </>}
     {/* Advanced: the old panel's options, kept as they were (the operator, 2026-10-02: "The old
         pairing and permission options fold under "Advanced" (kept, not deleted)"). */}
     <details className="remote-native-advanced"><summary>{t('remote.native.advanced')}</summary>
       <p>{t('remote.nativeIntro')}</p>
-      {phase === 'approval' && status?.accountId && status.pairingId && <label>
-        <input type="checkbox" checked={pairingTransmit} onChange={event => setPairingTransmit(event.target.checked)} />{t('remote.approveTransmit')}</label>}
       {status?.stationId && <>
         <p>{t('remote.restartHint')}</p>
         <div className="remote-actions">
           <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'refresh' })}>{t('remote.refreshDevices')}</button>
         </div>
-        {status.loggingPermissions && <><p>{t('remote.loggingLocalHint')}</p><button type="button" className="remote-button" onClick={()=>void act({type:'takeOverLogging'})}>{status.stationPermissions ? t('remote.controlTakeOver') : t('remote.loggingTakeOver')}</button></>}
-        {status.stationPermissions && <p>{t('remote.controlLocalHint')}</p>}
-        {status.transmitPermissions && <p>{t('remote.transmitLocalHint')}</p>}
+        {status.stationPermissions && <><p>{t('remote.controlLocalHint')}</p><button type="button" className="remote-button" onClick={()=>void act({type:'takeOverLogging'})}>{t('remote.controlTakeOver')}</button></>}
         <h3>{t('remote.browserApprovals')}</h3><p>{t('remote.browserMatch')}</p>
-        {status.devices.map(device => { const key = device.key ?? undefined
+        {browsers.map(device => { const key = device.key ?? undefined
           // A5: approved, with a key the service lists, and that key not the one pinned here (approved
           // before keys, or the browser came back with a new one): it cannot stream until approved again.
           const unpinned = device.approved === 1 && !!key && !status.pinnedDevices?.includes(device.id)
-          const ending = device.approved === 1 && (device.renewsUntil ?? device.expiresAt) - Date.now() <= APPROVAL_WARNING_MS
+          const ending = device.approved === 1 && device.untilRemoved !== 1 && (device.renewsUntil ?? device.expiresAt) - Date.now() <= APPROVAL_WARNING_MS
           return <div key={device.id}>
           {/* The browser's key beside its name: the page shows the same one, for the operator to compare. */}
           <p>{device.name} <code>{device.id.slice(-6)}</code>{key && <> <span>{t('remote.browserKey', { key: shortFingerprint(key) })}</span></>}</p>
-          {/* One approval: approving grants station controls and logging, plus the Remote page's FT8/FT4 transmit if ticked.
-              The switches below then only restrict (or give back) what an approved browser holds. */}
+          {/* One approval: approving grants station controls. The switch below then only
+              restricts (or gives back) what an approved browser holds. */}
           {device.approved === 1
             ? <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.revokeBrowser')}</button>
-            : <>
-                <label><input type="checkbox" checked={browserTransmit[device.id] ?? false}
-                  onChange={event => { const checked = event.target.checked; setBrowserTransmit(current => ({ ...current, [device.id]: checked })) }} />{t('remote.approveTransmit')}</label>
-                <button type="button" className="remote-button" disabled={busy}
-                  onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key })}>{t('remote.approveBrowser')}</button>
-              </>}
-          {device.approved === 1 && <p>{device.renewsUntil
+            : <button type="button" className="remote-button" disabled={busy}
+                onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, key, kind: device.kind ?? 'browser' })}>{t('remote.approveBrowser')}</button>}
+          {device.approved === 1 && <p>{device.untilRemoved === 1 ? t('remote.browserApprovedUntilRemoved') : device.renewsUntil
             ? t('remote.browserRenewsUntil', { until: utcDate(device.expiresAt), limit: utcDate(device.renewsUntil) })
             : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</p>}
           {/* The last week before the end that use cannot move, or a key not pinned here. Approving again
-              is a NEW approval: it grants station controls and logging again, the Remote page's FT8/FT4
-              transmit only if ticked here, and pins the key shown above. */}
+              is a NEW approval: it grants station controls again, and pins the key shown
+              above. */}
           {(ending || unpinned) && <>
             {ending && <p className="remote-warning">{t('remote.browserApprovalEnding', { until: utcDate(device.renewsUntil ?? device.expiresAt) })}</p>}
             {unpinned && <p className="remote-warning">{t('remote.browserKeyNotPinned')}</p>}
-            <label><input type="checkbox" checked={browserTransmit[device.id] ?? false}
-              onChange={event => { const checked = event.target.checked; setBrowserTransmit(current => ({ ...current, [device.id]: checked })) }} />{t('remote.approveTransmit')}</label>
             <button type="button" className="remote-button" disabled={busy}
-              onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, transmit: browserTransmit[device.id] ?? false, key })}>{t('remote.approveAgain')}</button>
+              onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, key, kind: device.kind ?? 'browser' })}>{t('remote.approveAgain')}</button>
           </>}
-          {device.approved===1&&status.loggingPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'loggingPermission',deviceId:device.id,allow:!status.loggingPermissions!.includes(device.id)})}>{status.loggingPermissions.includes(device.id)?t('remote.loggingRevoke'):t('remote.loggingAllow')}</button>}
           {device.approved===1&&status.stationPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'stationPermission',deviceId:device.id,allow:!status.stationPermissions!.includes(device.id)})}>{status.stationPermissions.includes(device.id)?t('remote.controlRevoke'):t('remote.controlAllow')}</button>}
-          {device.approved===1&&status.transmitPermissions&&<button type="button" className="remote-button"
-            disabled={!status.transmitPermissions.includes(device.id)&&(busy||!connected||!status.stationPermissions?.includes(device.id))}
-            onClick={()=>void act({type:'transmitPermission',deviceId:device.id,allow:!status.transmitPermissions!.includes(device.id)})}>
-            {status.transmitPermissions.includes(device.id)?t('remote.transmitRevoke'):t('remote.transmitAllow')}</button>}
-          {status.loggingController===device.id&&<p role="status">{status.stationPermissions?.includes(device.id)?t('remote.controlActive'):t('remote.loggingController')}</p>}
+          {status.controller===device.id&&<p role="status">{t('remote.controlActive')}</p>}
         </div> })}
         <details><summary>{t('remote.stationAccess')}</summary><p>{t('remote.revokeHint')}</p>
           <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'forget' })}>{t('remote.revokeStation')}</button>

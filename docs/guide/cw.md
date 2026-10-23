@@ -1,8 +1,8 @@
 # CW
 
 The CW cockpit is a casual/ragchew CW station in software. It is deliberately
-scoped: you key every message yourself — there are no contest serials and no
-auto-sequencing. What it gives you is a keyboard keyer with F-key macros, a live
+scoped: you key every message yourself, and there is no auto-sequencing. What it
+gives you is a keyboard keyer with F-key macros, a live
 CW decoder so you can read the other station, on-the-fly speed control, a
 zero-beat scope, and your license privileges enforced — so you can call CQ and
 hold a conversation without a paddle and without copying by ear if you'd rather
@@ -24,7 +24,7 @@ own explanation, so you can read the others before you switch:
 - **CAT** — the rig generates the Morse (Hamlib `send_morse`), with speed pushed
   over CAT. Zero extra hardware; needs a rig that supports CW keying over CAT.
 - **Serial** — Nexus toggles DTR or RTS into the rig's KEY jack and the rig
-  shapes the signal (rig in CW). This is the N1MM/fldigi method for a rig with no
+  shapes the signal (rig in CW). This is the clean method for a rig with no
   CAT keying command. Set the keyline port and line in
   [Settings ▸ CW](settings-reference.md#cw).
 - **WinKeyer** — a K1EL WinKeyer hardware keyer over serial (rig in CW). It's the
@@ -173,6 +173,30 @@ Macros expand `{MYCALL}`, `{NAME}`, `{RST}`, and his-call tokens, and **599 is
 cut down to `5NN`** automatically. Set your operator name (for `{NAME}`) in
 [Settings ▸ Station](settings-reference.md#station).
 
+**To change a macro** from the cockpit, hover it (or tab to it) and click **✎**,
+right-click it, or press **Ctrl+Shift** with its F-key (**Ctrl+Shift+F3** for F3,
+wherever the cursor is in the cockpit). None of these sends anything. The editor is the
+one RTTY and PSK use: **Title**, **Message** (a right-click or the shortcut puts the
+cursor at its end), the tokens (click one to insert it; `!` is the worked station's
+call), **Save**, **Send once**, **Cancel** and **Reset this button**. The F-keys do
+not send while it is open.
+
+- **Save** keeps the change on the key, in the active macro profile: the same keys
+  [Settings ▸ CW](settings-reference.md#cw) ▸ Macros shows and edits. A profile still on
+  the built-in keys becomes your own set the first time you save one: the eight keys the
+  dock showed (the contest's set during a contest) with yours changed, exactly as
+  **Customize** in Settings makes it, and Enter Sends Message keeps sending the same keys
+  for the same steps. **Reset to defaults** in Settings puts the built-in keys back.
+- **Send once** sends the message as it stands, one time, exactly as the key sends its
+  own: the tokens are filled in from the same places, a call you typed in His call is
+  taken first, and outside your license it is refused as the key is. The key keeps its
+  message.
+- **Reset this button** puts back the built-in key the dock would show (the contest's
+  during a contest).
+- **Esc** closes the editor when nothing is on the air and leaves TX on. With an over
+  going out, a tune carrier or anything else keying, it stops as it always does, and the
+  editor stays open.
+
 ## Core workflows
 
 ### Keying backends, and what each one puts the rig into
@@ -267,11 +291,11 @@ for your first over. The Log pane pre-fills **CW / 599**.
 - **The AI model ships as an app resource** (DeepCW, AGPL-3.0, © e04). A build
   without it says so in the pane and the classic decoder carries on — nothing
   else in the cockpit is affected.
-- **Unassisted mode turns the AI decoder off**, whatever the switch says, because
-  a declared unassisted entry means no machine copy. That is the one case where
-  the AI decoder is silent with the setting still on.
-- **No contest exchanges or serials** — this is a casual keyboard station by
-  design. (Contest exchange modes aren't built.)
+- **Unassisted mode turns CW decoding off entirely**, whatever the AI switch says,
+  because CQ WW counts a CW decoder as assistance. Neither the AI nor the classic
+  decoder runs: no copy, no call chips, no His Call guess, no report or name for
+  the log and no speed, and the Decode and Copilot panes say why. CW speed match
+  sends at your own speed. Ending the entry brings the decoder back as you had it.
 
 The license-class gate blocks keying outside your segment — including the
 Technician CW-only segments on 80/40/15 m. Set your class in

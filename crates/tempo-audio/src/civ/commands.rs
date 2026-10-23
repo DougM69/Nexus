@@ -1183,29 +1183,30 @@ pub fn set_band_mode(radio: u8, band: u8, mode: Mode, data: Option<u8>) -> Frame
 }
 
 // ---- scope CONTROL (command 0x27 sub 14/15/19) — set the RIG's panadapter, not the stream ----
-// Byte layouts verified against Hamlib (rigs/icom/icom.c). On dual-receiver rigs (IC-9700/7610)
-// each of these takes a leading Main/Sub selector byte (`main_sub` = Some(0x00) for Main); single-
-// scope rigs pass None and omit it. The caller (CivDaemon) supplies main_sub from scope_is_dual.
+// Every one of these takes a Main/Sub selector byte after the sub-command (`main_sub` 00 = Main,
+// 01 = Sub) on EVERY model — single-scope rigs included, where Icom prints it as "00 (Fixed)":
+// IC-7300 Full Manual pp. 19-14/19-15, IC-705 CI-V guide p. 29, IC-905 p. 28, IC-7300MK2 p. 25,
+// and Hamlib 4.5.5 sends `27 15 00 …` to an IC-7300 as well. ⚠️ This used to omit the byte on
+// single-scope rigs, so the IC-7300/705/905/7300MK2 answered NG to every span, reference level and
+// Center/Fixed frame; the selector is a plain `u8` now so leaving it out cannot be expressed.
 
-fn scope_ctrl_frame(radio: u8, sub: u8, main_sub: Option<u8>, payload: &[u8]) -> Frame {
+fn scope_ctrl_frame(radio: u8, sub: u8, main_sub: u8, payload: &[u8]) -> Frame {
     let mut data = Vec::with_capacity(2 + payload.len());
     data.push(sub);
-    if let Some(ms) = main_sub {
-        data.push(ms);
-    }
+    data.push(main_sub);
     data.extend_from_slice(payload);
     Frame::command(radio, 0x27, &data)
 }
 
 /// Scope SPAN in center mode (`27 15`): the ± half-width in Hz as 5-byte little-endian BCD (the
 /// frequency codec). Table values: 2500/5000/10000/25000/50000/100000/250000/500000.
-pub fn set_scope_span(radio: u8, main_sub: Option<u8>, span_hz: u32) -> Frame {
+pub fn set_scope_span(radio: u8, main_sub: u8, span_hz: u32) -> Frame {
     scope_ctrl_frame(radio, 0x15, main_sub, &freq_to_bcd(u64::from(span_hz)))
 }
 
 /// Scope REFERENCE level (`27 19`): magnitude as 2-byte big-endian BCD in 0.01 dB units (rounded
 /// to 0.5 dB steps), then a trailing sign byte (00 = +, 01 = −). Range −20.0..+20.0 dB.
-pub fn set_scope_ref(radio: u8, main_sub: Option<u8>, ref_tenths_db: i32) -> Frame {
+pub fn set_scope_ref(radio: u8, main_sub: u8, ref_tenths_db: i32) -> Frame {
     let tenths = ref_tenths_db.clamp(-200, 200);
     // Round to the nearest 0.5 dB (5 tenths), then to 0.01-dB hundredths for the wire.
     let hundredths = ((tenths.abs() + 2) / 5 * 5 * 10) as u16;
@@ -1214,12 +1215,12 @@ pub fn set_scope_ref(radio: u8, main_sub: Option<u8>, ref_tenths_db: i32) -> Fra
 }
 
 /// Scope CENTER/FIXED mode (`27 14`): one byte, 00 = center, 01 = fixed.
-pub fn set_scope_center_mode(radio: u8, main_sub: Option<u8>, fixed: bool) -> Frame {
+pub fn set_scope_center_mode(radio: u8, main_sub: u8, fixed: bool) -> Frame {
     scope_ctrl_frame(radio, 0x14, main_sub, &[u8::from(fixed)])
 }
 
-/// READ the scope CENTER/FIXED mode (`27 14` with no payload). The rig answers with the same
-/// sub-command and a trailing mode byte.
+/// READ the scope CENTER/FIXED mode (`27 14 <main_sub>`, no mode byte). The rig answers with the
+/// same two bytes and a trailing mode byte.
 ///
 /// ⚠️ THIS EXISTS SO NEXUS STOPS GUESSING WHY A SPAN WAS REFUSED. `set_scope_span` was reporting
 /// every `NG` as "your scope is not in Center mode", which is only the MOST LIKELY cause and not a
@@ -1227,15 +1228,15 @@ pub fn set_scope_center_mode(radio: u8, main_sub: Option<u8>, fixed: bool) -> Fr
 /// CENTER lit) was sent to check a setting that was already correct, and the real cause stayed
 /// hidden behind our guess. A refusal is a fact about the radio; the reason for it is not, unless
 /// we ask.
-pub fn read_scope_center_mode(radio: u8, main_sub: Option<u8>) -> Frame {
+pub fn read_scope_center_mode(radio: u8, main_sub: u8) -> Frame {
     scope_ctrl_frame(radio, 0x14, main_sub, &[])
 }
 
 /// The mode byte from a `27 14` reply: `Some(true)` = fixed, `Some(false)` = center, `None` when
 /// the frame is not that reply or carries no mode byte.
 ///
-/// The byte is LAST rather than at a fixed index, because a dual-receiver rig puts a Main/Sub
-/// selector between the sub-command and the payload and a single-receiver one does not.
+/// The byte is read LAST rather than at a fixed index: the reply is `14 <main_sub> <mode>`, and
+/// taking the last byte keeps the selector's position out of the decode.
 pub fn parse_scope_center_mode(f: &Frame) -> Option<bool> {
     (f.cmd == 0x27 && f.data.first() == Some(&0x14) && f.data.len() >= 2)
         .then(|| f.data.last().is_some_and(|b| *b != 0))
@@ -1847,12 +1848,50 @@ mod tests {
     #[test]
     fn scope_span_frame_matches_icom_reference() {
         // Hamlib ref: set Main scope span 25 kHz on an IC-9700 → 27 15 00 <25000 LE BCD>.
-        // Dual-scope rig gets the leading Main byte (00); single-scope omits it.
-        let dual = set_scope_span(0xA2, Some(0x00), 25_000);
+        let dual = set_scope_span(0xA2, 0x00, 25_000);
         assert_eq!(dual.cmd, 0x27);
         assert_eq!(dual.data, vec![0x15, 0x00, 0x00, 0x50, 0x02, 0x00, 0x00]);
-        let single = set_scope_span(0x94, None, 25_000);
-        assert_eq!(single.data, vec![0x15, 0x00, 0x50, 0x02, 0x00, 0x00]); // no Main/Sub byte
+    }
+
+    /// ⭐ THE SINGLE-SCOPE ICOMS' SCOPE-CONTROL FRAMES, WHOLE, ON THE WIRE. The selector `00` sits
+    /// after the sub-command on the IC-7300 (Full Manual pp. 19-14/19-15), IC-705 (CI-V p. 29),
+    /// IC-905 (p. 28) and IC-7300MK2 (p. 25) exactly as on the dual-scope rigs; without it each
+    /// of these rigs answered NG. The IC-7300's ±100 kHz span, Center read, Center/Fixed write
+    /// and −10.5 dB reference level, then the same frames on the other three addresses.
+    #[test]
+    fn single_scope_icoms_get_the_selector_byte_on_the_wire() {
+        assert_eq!(
+            set_scope_span(0x94, 0x00, 100_000).to_bytes(),
+            vec![0xFE, 0xFE, 0x94, 0xE0, 0x27, 0x15, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0xFD]
+        );
+        assert_eq!(
+            read_scope_center_mode(0x94, 0x00).to_bytes(),
+            vec![0xFE, 0xFE, 0x94, 0xE0, 0x27, 0x14, 0x00, 0xFD]
+        );
+        assert_eq!(
+            set_scope_center_mode(0x94, 0x00, true).to_bytes(),
+            vec![0xFE, 0xFE, 0x94, 0xE0, 0x27, 0x14, 0x00, 0x01, 0xFD]
+        );
+        assert_eq!(
+            set_scope_ref(0x94, 0x00, -105).to_bytes(),
+            vec![0xFE, 0xFE, 0x94, 0xE0, 0x27, 0x19, 0x00, 0x10, 0x50, 0x01, 0xFD]
+        );
+        for addr in [0xA4, 0xAC, 0xB6] {
+            assert_eq!(
+                set_scope_span(addr, 0x00, 2_500).data,
+                vec![0x15, 0x00, 0x00, 0x25, 0x00, 0x00, 0x00],
+                "{addr:#04x}"
+            );
+            assert_eq!(read_scope_center_mode(addr, 0x00).data, vec![0x14, 0x00]);
+            assert_eq!(
+                set_scope_center_mode(addr, 0x00, false).data,
+                vec![0x14, 0x00, 0x00]
+            );
+            assert_eq!(
+                set_scope_ref(addr, 0x00, 0).data,
+                vec![0x19, 0x00, 0x00, 0x00, 0x00]
+            );
+        }
     }
 
     #[test]
@@ -1860,30 +1899,30 @@ mod tests {
         // 27 19: [scope, 2-byte BE BCD magnitude in 0.01 dB, sign(00=+/01=-)].
         // +10.0 dB → 1000 → 10 00, sign 00.
         assert_eq!(
-            set_scope_ref(0xA2, Some(0x00), 100).data,
+            set_scope_ref(0xA2, 0x00, 100).data,
             vec![0x19, 0x00, 0x10, 0x00, 0x00]
         );
         // −20.0 dB → 2000 → 20 00, sign 01. (Clamped range.)
         assert_eq!(
-            set_scope_ref(0xA2, Some(0x00), -200).data,
+            set_scope_ref(0xA2, 0x00, -200).data,
             vec![0x19, 0x00, 0x20, 0x00, 0x01]
         );
         // +0.5 dB (5 tenths) → 50 → 00 50, sign 00.
         assert_eq!(
-            set_scope_ref(0x94, None, 5).data,
-            vec![0x19, 0x00, 0x50, 0x00]
+            set_scope_ref(0x94, 0x00, 5).data,
+            vec![0x19, 0x00, 0x00, 0x50, 0x00]
         );
     }
 
     #[test]
     fn scope_center_mode_is_one_byte() {
         assert_eq!(
-            set_scope_center_mode(0xA2, Some(0x00), true).data,
+            set_scope_center_mode(0xA2, 0x00, true).data,
             vec![0x14, 0x00, 0x01]
         );
         assert_eq!(
-            set_scope_center_mode(0x94, None, false).data,
-            vec![0x14, 0x00]
+            set_scope_center_mode(0x94, 0x00, false).data,
+            vec![0x14, 0x00, 0x00]
         );
     }
 

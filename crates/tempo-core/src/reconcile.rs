@@ -163,6 +163,10 @@ fn same_contact(a: &QsoRecord, b: &QsoRecord) -> bool {
         r.upload = Default::default();
         r.state = None;
         r.country = None;
+        r.dxcc = None;
+        r.extra.retain(|(k, _)| {
+            k != "CQZ" && k != crate::logbook::LOTW_DXCC_FIELD && k != crate::logbook::EQSL_AG_FIELD
+        });
         // ...plus the two that do not survive our own round-trip intact.
         r.mode.clear();
         r.time_known = false;
@@ -272,6 +276,15 @@ fn closeness(local: &QsoRecord, inc: &QsoRecord) -> Option<(bool, u64)> {
 /// without looking at the time, so of two contacts with one station on one band in one day,
 /// the confirmation of the later one landed on the earlier, for good (#400).
 fn pair_report<R: Borrow<QsoRecord>>(local: &[R], incoming: &[QsoRecord]) -> Vec<Option<usize>> {
+    pair_report_by(local, incoming, |_, _| true)
+}
+
+/// [`pair_report`], where row `j` may land on contact `i` only when `admits(i, j)`.
+fn pair_report_by<R: Borrow<QsoRecord>>(
+    local: &[R],
+    incoming: &[QsoRecord],
+    admits: impl Fn(usize, usize) -> bool,
+) -> Vec<Option<usize>> {
     let buckets = build_buckets(local);
     let mut candidates = Vec::new();
     for (j, inc) in incoming.iter().enumerate() {
@@ -282,7 +295,9 @@ fn pair_report<R: Borrow<QsoRecord>>(local: &[R], incoming: &[QsoRecord]) -> Vec
             };
             for &i in bucket {
                 if let Some(near) = closeness(local[i].borrow(), inc) {
-                    candidates.push((near, j, i));
+                    if admits(i, j) {
+                        candidates.push((near, j, i));
+                    }
                 }
             }
         }
@@ -297,6 +312,101 @@ fn pair_report<R: Borrow<QsoRecord>>(local: &[R], incoming: &[QsoRecord]) -> Vec
         }
     }
     out
+}
+
+/// A call as it is compared: trimmed and ASCII-uppercased, `None` when blank.
+fn named(call: &str) -> Option<String> {
+    Some(call.trim().to_ascii_uppercase()).filter(|c| !c.is_empty())
+}
+
+/// The call LoTW holds `r` under: its own `STATION_CALLSIGN`, else `settings_call`, the call in
+/// Settings. `None` when neither names one.
+///
+/// For a logged contact that is the call the LoTW upload signs it under: a contact naming no
+/// station call (an older build's, or an import's) is signed under the Settings call
+/// ([`crate::logbook::adif_record_with_station`]). For a row of LoTW's downloads it is the call
+/// its QSO was made under, which LoTW names on every row (`STATION_CALLSIGN`, with
+/// `qso_withown=yes`); a row naming none is the Settings call's, as every row was while the
+/// downloads asked for that call alone (`qso_owncall`).
+pub fn lotw_own_call(r: &QsoRecord, settings_call: Option<&str>) -> Option<String> {
+    r.station_callsign
+        .as_deref()
+        .and_then(named)
+        .or_else(|| settings_call.and_then(named))
+}
+
+/// The suffixes that say how a call was operated, not which call it is: portable, mobile,
+/// maritime mobile, aeronautical mobile and low power.
+const PORTABLE_SUFFIXES: [&str; 5] = ["P", "M", "MM", "AM", "QRP"];
+
+/// `call`, as [`named`] gives it, without one of [`PORTABLE_SUFFIXES`] at its end: `KD9TAW/P` is
+/// `KD9TAW`, and `FG/KD9TAW/QRP` is `FG/KD9TAW`. Logs keep or drop these as they like, so the QSO
+/// a log holds as `KD9TAW/P` may have been signed to LoTW under `KD9TAW`. LoTW's FAQ
+/// (lotw.arrl.org/lotw-help/frequently-asked-questions) has a QSO made as P5DX/QRP submitted
+/// under a certificate for P5DX/QRP, then, when the other station logged no suffix, again under
+/// one for the call without it.
+///
+/// Anything else stays part of the call, as LoTW holds it: another call, with a Callsign
+/// Certificate of its own. A prefix (`FG/`, `VE3/`, `W9/`) puts the call in another DXCC entity or
+/// call area. So does a call-area suffix: the same FAQ has an operator who signed 6W6RY, 6W6RY/1
+/// and 6W6RY/2 in one entity request a certificate for each, so a US `KD9TAW/9`, in the same
+/// entity but another call area, is not `KD9TAW`. Nor is any other suffix (`/A`, `/B`).
+fn without_portable_suffix(call: &str) -> &str {
+    match call.rsplit_once('/') {
+        Some((base, suffix)) if !base.is_empty() && PORTABLE_SUFFIXES.contains(&suffix) => base,
+        _ => call,
+    }
+}
+
+/// The call LoTW's pairing compares for `r` ([`pair_lotw`]): the call it is under
+/// ([`lotw_own_call`]), a portable suffix taken off ([`without_portable_suffix`]). `KD9TAW/P`'s
+/// contact takes `KD9TAW`'s confirmation; `FG/KD9TAW`'s and `KD9TAW/9`'s never do.
+pub fn lotw_pairing_call(r: &QsoRecord, settings_call: Option<&str>) -> Option<String> {
+    lotw_own_call(r, settings_call).map(|call| without_portable_suffix(&call).to_string())
+}
+
+/// LoTW's pairing: [`pair_report`], where a row lands only on a contact made under the call it
+/// names, a portable suffix aside ([`lotw_pairing_call`]). The downloads ask for every call on the
+/// account, so of an operator's contacts under two calls with one station on one band in one
+/// minute, each call's row must find its own. Where either names no call (only with no call in
+/// Settings) the two may pair, as every row and contact did while the downloads were asked for
+/// one call.
+pub(crate) fn pair_lotw<R: Borrow<QsoRecord>>(
+    local: &[R],
+    incoming: &[QsoRecord],
+    settings_call: Option<&str>,
+) -> Vec<Option<usize>> {
+    let made_under: Vec<Option<String>> = local
+        .iter()
+        .map(|r| lotw_pairing_call(r.borrow(), settings_call))
+        .collect();
+    let named_on: Vec<Option<String>> = incoming
+        .iter()
+        .map(|r| lotw_pairing_call(r, settings_call))
+        .collect();
+    pair_report_by(local, incoming, |i, j| {
+        match (&made_under[i], &named_on[j]) {
+            (Some(contact), Some(row)) => contact == row,
+            _ => true,
+        }
+    })
+}
+
+/// Whether `row` is the Settings call's ([`lotw_own_call`]): what LoTW's downloads held while they
+/// asked for that call alone, so the rows 1.17.0 merged, and the only rows matching no contact
+/// that are orphans of this log ([`reconcile_lotw`]). True when either names no call. The calls
+/// are compared as named, with no portable suffix taken off: those downloads asked for the call
+/// by name (`qso_owncall`, "records whose 'own' call sign matches"), and LoTW holds a suffixed
+/// call such as `KD9TAW/QRP` as a call of its own ([`without_portable_suffix`]). A row taken for
+/// one 1.17.0 merged when it did not would explain a mark it never put there.
+pub(crate) fn of_settings_call(row: &QsoRecord, settings_call: Option<&str>) -> bool {
+    match (
+        lotw_own_call(row, settings_call),
+        settings_call.and_then(named),
+    ) {
+        (Some(own), Some(settings)) => own == settings,
+        _ => true,
+    }
 }
 
 /// Monotonically upgrade a matched local record from an incoming report row (only
@@ -345,6 +455,34 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
             rec.country = Some(c.clone());
         }
     }
+    // The same for the contact's DXCC number and CQ zone: a LoTW QSL's detail and another
+    // logger's export both carry them, and the awards count by them. Monotonic too — a
+    // number the log holds is never replaced here (LoTW's own, where it differs, is kept beside
+    // it by `reconcile_lotw`).
+    if rec.dxcc.is_none() {
+        rec.dxcc = inc.dxcc;
+    }
+    if crate::logbook::record_cq_zone(rec).is_none() {
+        if let Some(z) = crate::logbook::record_cq_zone(inc) {
+            crate::logbook::set_extra(rec, "CQZ", Some(z.to_string()));
+        }
+    }
+    // And LoTW's DXCC, kept beside the log's by a LoTW merge, where the row is a copy of a record
+    // of ours that carries it (another instance's write of a shared log, a Nexus export
+    // re-imported): what a LoTW merge learned is not lost on the way.
+    if crate::logbook::record_lotw_dxcc(rec).is_none() {
+        if let Some(lotw) = crate::logbook::record_lotw_dxcc(inc) {
+            crate::logbook::set_extra(rec, crate::logbook::LOTW_DXCC_FIELD, Some(lotw.to_string()));
+        }
+    }
+    // And an eQSL card's Authenticity-Guaranteed mark, with the confirmation it came on: CQ's WAZ
+    // credits such a card. Monotonic too — a mark the log holds is never taken away here.
+    if inc.qsl_rcvd.eqsl
+        && crate::logbook::record_eqsl_ag(inc)
+        && !crate::logbook::record_eqsl_ag(rec)
+    {
+        crate::logbook::set_extra(rec, crate::logbook::EQSL_AG_FIELD, Some("Y".into()));
+    }
     // Outbound state — merged so a two-instance shared log doesn't lose an upload stamp or a
     // QSL-sent mark one instance wrote when the other rewrites the whole file. (A LoTW report
     // carries neither, so this is inert for the report path; it matters for recover-from-disk.)
@@ -361,16 +499,74 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
 /// surface, not a contact to fabricate.
 pub fn reconcile<R: StoredRecord>(local: &mut [R], incoming: &[QsoRecord]) -> ReconcileSummary {
     let pairs = pair_report(local, incoming);
+    merge_pairs(local, incoming, pairs, |_| true, |_, _| {})
+}
+
+/// LoTW's [`reconcile`]: a row lands only on a contact made under the call it names
+/// ([`pair_lotw`]; `settings_call` is the call in Settings, which a contact or a row naming no
+/// call of its own is taken to be under), and a row of another call than the Settings call that
+/// matches no contact is no orphan. The downloads ask for every call on the account, and the
+/// diagnostics read an orphan as a gap in this log, offering to change a contact with that
+/// station to match it whatever call the contact was made under: a club call's confirmations
+/// would each be offered as a fix to one of the operator's own contacts. The Settings call's rows
+/// are orphans as they always were.
+pub fn reconcile_lotw<R: StoredRecord>(
+    local: &mut [R],
+    incoming: &[QsoRecord],
+    settings_call: Option<&str>,
+) -> ReconcileSummary {
+    let pairs = pair_lotw(local, incoming, settings_call);
+    merge_pairs(
+        local,
+        incoming,
+        pairs,
+        |row| of_settings_call(row, settings_call),
+        keep_lotw_dxcc,
+    )
+}
+
+/// LoTW's DXCC for a contact it confirmed. Where the log holds none, [`apply_match`] has just
+/// filled it from the row. Where the log holds another, LoTW's is kept beside it
+/// ([`LOTW_DXCC_FIELD`](crate::logbook::LOTW_DXCC_FIELD)): ARRL credits LoTW's, so the awards
+/// count by it, while the log's value stays as entered and the Awards view lists the two. A row
+/// that agrees with the log clears one kept before.
+fn keep_lotw_dxcc(rec: &mut QsoRecord, inc: &QsoRecord) {
+    let Some(lotw) = inc.dxcc else {
+        return;
+    };
+    let differs = rec.dxcc.is_some_and(|logged| logged != lotw);
+    crate::logbook::set_extra(
+        rec,
+        crate::logbook::LOTW_DXCC_FIELD,
+        differs.then(|| lotw.to_string()),
+    );
+}
+
+/// The body of [`reconcile`] and [`reconcile_lotw`]: each row upgrades the contact `pairs` gives
+/// it (and `on_pair` takes what that service's rows are evidence of beyond it), and a confirming
+/// row given none is an orphan where `orphan` admits it.
+fn merge_pairs<R: StoredRecord>(
+    local: &mut [R],
+    incoming: &[QsoRecord],
+    pairs: Vec<Option<usize>>,
+    orphan: impl Fn(&QsoRecord) -> bool,
+    on_pair: impl Fn(&mut QsoRecord, &QsoRecord),
+) -> ReconcileSummary {
     let mut sum = ReconcileSummary::default();
     for (inc, pair) in incoming.iter().zip(pairs) {
         match pair {
-            Some(i) => apply_match(local[i].write(), inc, &mut sum),
+            Some(i) => {
+                let held = local[i].write();
+                apply_match(held, inc, &mut sum);
+                on_pair(held, inc);
+            }
             // Only a row that actually carries a confirmation/credit is a
             // meaningful "missing" diagnostic; a plain unconfirmed QSO row is not.
-            None if inc.confirmed
+            None if (inc.confirmed
                 || inc.award_confirmed
                 || !inc.credit_granted.is_empty()
-                || !inc.credit_submitted.is_empty() =>
+                || !inc.credit_submitted.is_empty())
+                && orphan(inc) =>
             {
                 let mc = mode_class(&inc.mode);
                 let call_u = inc.call.to_ascii_uppercase();
@@ -545,24 +741,28 @@ fn merge_pass<R: StoredRecord>(
 /// upload into the "waiting on the other operator" (R2) state, and clears a false
 /// "never uploaded" (R1) for QSOs uploaded out-of-band (e.g. plain TQSL).
 ///
-/// Paired exactly as [`reconcile`] pairs a confirmation report (`pair_report`: the nearest
-/// contact with the same call, band and mode class within 30 minutes, settled nearest first,
-/// no contact taking two rows). Up to 1.17.0 a row took the oldest contact on its UTC day
+/// Paired exactly as [`reconcile_lotw`] pairs LoTW's confirmations (`pair_lotw`: the nearest
+/// contact with the same call, band and mode class within 30 minutes, made under the call the
+/// row names, settled nearest first, no contact taking two rows; `settings_call` is the call in
+/// Settings). Up to 1.17.0 a row took the oldest contact on its UTC day
 /// without comparing times, so the upload of the later of two contacts with one station on one
 /// band that day marked the earlier one `Accepted`, and a contact marked `Accepted` is no
-/// longer owed to LoTW, so it was never uploaded. What it writes is an upload state, never a
-/// confirmation. Award-confirmed QSOs keep their place in the pairing, so their own row never
-/// lands on a neighbour, but are never written. Idempotent: an already-Accepted/Duplicate QSO
-/// is re-stamped harmlessly and not counted. Returns the number *newly* promoted.
+/// longer owed to LoTW, so it was never uploaded. The list holds every call on the account, so
+/// a row marks only a contact made under its own call, for the same reason. What it writes is an
+/// upload state, never a confirmation. Award-confirmed QSOs keep their place in the pairing, so
+/// their own row never lands on a neighbour, but are never written. Idempotent: an
+/// already-Accepted/Duplicate QSO is re-stamped harmlessly and not counted. Returns the number
+/// *newly* promoted.
 pub fn promote_own_echo<R: StoredRecord>(
     local: &mut [R],
     own: &[QsoRecord],
     when_unix: i64,
+    settings_call: Option<&str>,
 ) -> usize {
     use crate::logbook::{UploadOutcome, UploadStatus};
 
     let mut promoted = 0usize;
-    for i in pair_report(local, own).into_iter().flatten() {
+    for i in pair_lotw(local, own, settings_call).into_iter().flatten() {
         let r: &QsoRecord = local[i].borrow();
         if r.award_confirmed {
             continue;
@@ -669,7 +869,7 @@ mod tests {
         )];
         // Own-QSO report row (submode differs: MFSK→Digital), ±0 day.
         let own = vec![rec("w1aw", "20M", "MFSK", 20_000)];
-        let n = promote_own_echo(&mut log, &own, 99);
+        let n = promote_own_echo(&mut log, &own, 99, None);
         assert_eq!(n, 1);
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
         assert_eq!(log[0].upload.lotw.as_ref().unwrap().when_unix, 99);
@@ -680,7 +880,7 @@ mod tests {
         // A QSO LoTW holds but we never marked (uploaded out-of-band) → Accepted.
         let mut log = vec![rec("W1AW", "20m", "FT8", 20_000)]; // upload state = none
         let own = vec![rec("W1AW", "20m", "FT8", 20_000)];
-        let n = promote_own_echo(&mut log, &own, 7);
+        let n = promote_own_echo(&mut log, &own, 7, None);
         assert_eq!(n, 1);
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
     }
@@ -696,7 +896,7 @@ mod tests {
         ];
         // One own-echo row for the W1AW key → consumes exactly one of the twins.
         let own = vec![rec("W1AW", "20m", "FT8", 20_000)];
-        let n = promote_own_echo(&mut log, &own, 1);
+        let n = promote_own_echo(&mut log, &own, 1, None);
         assert_eq!(n, 1, "one own-echo row promotes one twin");
         assert_eq!(lotw_outcome(&log[0]), None, "award-confirmed untouched");
         let promoted = log[1..]
@@ -717,7 +917,7 @@ mod tests {
             UploadOutcome::Accepted,
         )];
         let own = vec![rec("W1AW", "20m", "FT8", 20_000)];
-        let n = promote_own_echo(&mut log, &own, 5);
+        let n = promote_own_echo(&mut log, &own, 5, None);
         assert_eq!(n, 0, "already on file — re-stamp is not a new promotion");
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
     }
@@ -729,7 +929,7 @@ mod tests {
             UploadOutcome::Pending,
         )];
         let own = vec![rec("K9XYZ", "40m", "FT8", 19_000)]; // different QSO
-        let n = promote_own_echo(&mut log, &own, 1);
+        let n = promote_own_echo(&mut log, &own, 1, None);
         assert_eq!(n, 0);
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Pending));
     }
@@ -743,7 +943,10 @@ mod tests {
             with_lotw(w1aw_at(20_000, 6, 0), UploadOutcome::Pending),
             with_lotw(w1aw_at(20_000, 18, 0), UploadOutcome::Pending),
         ];
-        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 18, 0)], 9), 1);
+        assert_eq!(
+            promote_own_echo(&mut log, &[w1aw_at(20_000, 18, 0)], 9, None),
+            1
+        );
         assert_eq!(
             lotw_outcome(&log[0]),
             Some(UploadOutcome::Pending),
@@ -755,7 +958,10 @@ mod tests {
             with_lotw(w1aw_at(20_000, 17, 45), UploadOutcome::Pending),
             with_lotw(w1aw_at(20_000, 18, 0), UploadOutcome::Pending),
         ];
-        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 17, 58)], 9), 1);
+        assert_eq!(
+            promote_own_echo(&mut log, &[w1aw_at(20_000, 17, 58)], 9, None),
+            1
+        );
         assert_eq!(
             lotw_outcome(&log[0]),
             Some(UploadOutcome::Pending),
@@ -767,10 +973,16 @@ mod tests {
     #[test]
     fn own_echo_31_minutes_from_every_contact_promotes_nothing() {
         let mut log = vec![with_lotw(w1aw_at(20_000, 10, 0), UploadOutcome::Pending)];
-        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 31)], 9), 0);
+        assert_eq!(
+            promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 31)], 9, None),
+            0
+        );
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Pending));
         // The edge is inclusive, as the confirmation match's is: 30:00 still pairs.
-        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 30)], 9), 1);
+        assert_eq!(
+            promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 30)], 9, None),
+            1
+        );
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
     }
 
@@ -783,7 +995,7 @@ mod tests {
             with_lotw(w1aw_at(20_000, 10, 40), UploadOutcome::Pending), // B
         ];
         let own = [w1aw_at(20_000, 10, 19), w1aw_at(20_000, 10, 1)];
-        assert_eq!(promote_own_echo(&mut log, &own, 9), 2);
+        assert_eq!(promote_own_echo(&mut log, &own, 9, None), 2);
         assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Accepted), "B");
     }
 
@@ -795,7 +1007,7 @@ mod tests {
             with_lotw(w1aw_at(20_000, 10, 20), UploadOutcome::Pending),
         ];
         let own = [w1aw_at(20_000, 10, 0), w1aw_at(20_000, 10, 2)];
-        assert_eq!(promote_own_echo(&mut log, &own, 9), 2);
+        assert_eq!(promote_own_echo(&mut log, &own, 9, None), 2);
         assert_eq!(lotw_outcome(&log[1]), Some(UploadOutcome::Accepted));
     }
 
@@ -810,7 +1022,10 @@ mod tests {
             confirmed,
             with_lotw(w1aw_at(20_000, 10, 20), UploadOutcome::Pending),
         ];
-        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 0)], 9), 0);
+        assert_eq!(
+            promote_own_echo(&mut log, &[w1aw_at(20_000, 10, 0)], 9, None),
+            0
+        );
         assert_eq!(
             lotw_outcome(&log[0]),
             None,
@@ -826,7 +1041,10 @@ mod tests {
         let mut date_only = with_lotw(w1aw_at(20_000, 0, 0), UploadOutcome::Pending);
         date_only.time_known = false;
         let mut log = vec![date_only];
-        assert_eq!(promote_own_echo(&mut log, &[w1aw_at(20_000, 14, 0)], 9), 1);
+        assert_eq!(
+            promote_own_echo(&mut log, &[w1aw_at(20_000, 14, 0)], 9, None),
+            1
+        );
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
     }
 
@@ -1514,6 +1732,63 @@ mod tests {
         );
     }
 
+    /// What a merge fills in — a DXCC number, a CQ zone, LoTW's DXCC beside the log's — is the
+    /// merge's, like a confirmation: a copy of one of our records that another instance's merge
+    /// filled is still that record, never a contact we lack, even among date-only twins where
+    /// content is all that tells them apart. And what it filled comes across.
+    #[test]
+    fn merge_own_disk_pairs_a_copy_a_merge_filled_its_dxcc_and_zone_into() {
+        let day = 20_000;
+        let a = date_only("K1N", "20m", "CW", day, Some("599"));
+        let b = date_only("K1N", "20m", "CW", day, Some("339"));
+        let mut filled = a.clone();
+        filled.dxcc = Some(291);
+        crate::logbook::set_extra(&mut filled, "CQZ", Some("8".into()));
+        crate::logbook::set_extra(
+            &mut filled,
+            crate::logbook::LOTW_DXCC_FIELD,
+            Some("182".into()),
+        );
+
+        let mut mem = vec![a, b];
+        let (added, sum) = merge_own_disk(&mut mem, vec![filled]);
+        assert!(
+            added.is_empty(),
+            "a copy of our own 599 contact, not a new one"
+        );
+        assert_eq!((mem.len(), sum.matched), (2, 1));
+        let ours = &mem[0];
+        assert_eq!(ours.rst_sent.as_deref(), Some("599"));
+        assert_eq!(ours.dxcc, Some(291));
+        assert_eq!(crate::logbook::record_cq_zone(ours), Some(8));
+        assert_eq!(crate::logbook::record_lotw_dxcc(ours), Some(182));
+        assert_eq!(mem[1].dxcc, None, "and nothing landed on its twin");
+    }
+
+    /// An eQSL card's Authenticity-Guaranteed mark is the merge's too: a copy of one of our records
+    /// that another instance's eQSL merge marked is still that record, and the mark comes across.
+    #[test]
+    fn merge_own_disk_pairs_a_copy_a_merge_marked_authenticity_guaranteed() {
+        let day = 20_000;
+        let a = date_only("JA1XYZ", "20m", "FT8", day, Some("-05"));
+        let b = date_only("JA1XYZ", "20m", "FT8", day, Some("-12"));
+        let mut marked = a.clone();
+        marked.qsl_rcvd.eqsl = true;
+        marked.confirmed = true;
+        crate::logbook::set_extra(&mut marked, "APP_EQSL_AG", Some("Y".into()));
+
+        let mut mem = vec![a, b];
+        let (added, sum) = merge_own_disk(&mut mem, vec![marked]);
+        assert!(
+            added.is_empty(),
+            "a copy of our own -05 contact, not a new one"
+        );
+        assert_eq!((mem.len(), sum.matched), (2, 1));
+        let ag = |r: &QsoRecord| r.extra.iter().any(|(k, v)| k == "APP_EQSL_AG" && v == "Y");
+        assert_eq!((ag(&mem[0]), mem[0].qsl_rcvd.eqsl), (true, true));
+        assert!(!ag(&mem[1]), "and nothing landed on its twin");
+    }
+
     #[test]
     fn merge_own_disk_keeps_two_records_that_share_a_second() {
         // Date-only imports park at midnight, so two rows CAN share an exact key. They are
@@ -1647,5 +1922,389 @@ mod tests {
             ],
             "the operator's corrected time is the one that survives a rewrite"
         );
+    }
+
+    /// `r` as made under `own`: its STATION_CALLSIGN, which LoTW names on each of its rows.
+    fn under(mut r: QsoRecord, own: &str) -> QsoRecord {
+        r.station_callsign = Some(own.into());
+        r
+    }
+
+    /// The call LoTW holds a record under: its own STATION_CALLSIGN whatever the call in Settings,
+    /// else the Settings call (the call the upload signs a contact naming none under), compared
+    /// trimmed and uppercased, and nothing where neither names one.
+    #[test]
+    fn lotw_own_call_is_the_station_call_else_the_settings_call() {
+        let old = under(w1aw_at(20_000, 12, 0), " n2old ");
+        assert_eq!(lotw_own_call(&old, Some("K2DEF")).as_deref(), Some("N2OLD"));
+        let none = w1aw_at(20_000, 12, 0);
+        assert_eq!(
+            lotw_own_call(&none, Some(" k2def")).as_deref(),
+            Some("K2DEF")
+        );
+        let blank = under(w1aw_at(20_000, 12, 0), "  ");
+        assert_eq!(
+            lotw_own_call(&blank, Some("K2DEF")).as_deref(),
+            Some("K2DEF")
+        );
+        assert_eq!(lotw_own_call(&none, None), None);
+        assert_eq!(lotw_own_call(&none, Some(" ")), None);
+    }
+
+    /// The call LoTW's pairing compares: the call a record is under with one portable suffix taken
+    /// off, and nothing else. A prefix, a call-area digit and any other suffix stay, and so do a
+    /// second suffix and a suffix with no call before it. The Settings call, for a record naming
+    /// none, the same way.
+    #[test]
+    fn lotw_pairing_call_takes_off_one_portable_suffix_and_nothing_else() {
+        let pairing = |own: &str| lotw_pairing_call(&under(w1aw_at(20_000, 12, 0), own), None);
+        for (own, compared) in [
+            ("KD9TAW", "KD9TAW"),
+            ("kd9taw/p", "KD9TAW"),
+            (" KD9TAW/M ", "KD9TAW"),
+            ("KD9TAW/MM", "KD9TAW"),
+            ("KD9TAW/AM", "KD9TAW"),
+            ("KD9TAW/QRP", "KD9TAW"),
+            ("FG/KD9TAW/P", "FG/KD9TAW"),
+            ("FG/KD9TAW", "FG/KD9TAW"),
+            ("VE3/KD9TAW", "VE3/KD9TAW"),
+            ("W9/KD9TAW", "W9/KD9TAW"),
+            ("KD9TAW/9", "KD9TAW/9"),
+            ("KD9TAW/A", "KD9TAW/A"),
+            ("KD9TAW/B", "KD9TAW/B"),
+            ("KD9TAW/QRPP", "KD9TAW/QRPP"),
+            ("KD9TAW/PM", "KD9TAW/PM"),
+            ("KD9TAW/9/P", "KD9TAW/9"),
+            ("KD9TAW/P/M", "KD9TAW/P"),
+            ("/P", "/P"),
+        ] {
+            assert_eq!(pairing(own).as_deref(), Some(compared), "{own:?}");
+        }
+        let none = w1aw_at(20_000, 12, 0);
+        assert_eq!(
+            lotw_pairing_call(&none, Some("kd9taw/qrp")).as_deref(),
+            Some("KD9TAW")
+        );
+        assert_eq!(lotw_pairing_call(&none, None), None);
+    }
+
+    /// ★ Two calls in one log, the operator's now (K2DEF, the call in Settings) and before
+    /// (N2OLD), each with a contact with W1AW on 20 m FT8 at 12:00:00, K2DEF's first. LoTW's rows
+    /// for both calls, N2OLD's listed first and each with its own credit: each lands on its own
+    /// call's contact, by value, and neither on the other's. A matcher that compares no call
+    /// crosses them (both pairs are equally near, so the earlier row takes the earlier contact).
+    #[test]
+    fn each_lotw_row_lands_on_the_contact_made_under_its_own_call() {
+        let d = 20_000;
+        let mut log = vec![
+            under(w1aw_at(d, 12, 0), "K2DEF"),
+            under(w1aw_at(d, 12, 0), "N2OLD"),
+        ];
+        let rows = [
+            under(confirms(w1aw_at(d, 12, 0), "DXCC"), "N2OLD"),
+            under(confirms(w1aw_at(d, 12, 0), "WAS"), "K2DEF"),
+        ];
+        let sum = reconcile_lotw(&mut log, &rows, Some("K2DEF"));
+        assert_eq!((sum.matched, sum.newly_confirmed), (2, 2));
+        let credits: Vec<&[String]> = log.iter().map(|r| r.credit_granted.as_slice()).collect();
+        assert_eq!(credits, [["WAS".to_string()], ["DXCC".to_string()]]);
+    }
+
+    /// A contact naming no call of its own is the Settings call's: N2OLD's row in its minute
+    /// leaves it unconfirmed, and K2DEF's lands. With no call in Settings either, a row may land
+    /// on it, as every row could while the downloads were asked for one call.
+    #[test]
+    fn a_contact_naming_no_call_is_the_settings_call_s() {
+        let d = 20_000;
+        let old = [under(confirms(w1aw_at(d, 12, 0), "DXCC"), "N2OLD")];
+        let mut log = vec![w1aw_at(d, 12, 0)];
+        let sum = reconcile_lotw(&mut log, &old, Some("K2DEF"));
+        assert_eq!((sum.matched, log[0].confirmed), (0, false));
+        let now = [under(confirms(w1aw_at(d, 12, 0), "WAS"), "K2DEF")];
+        reconcile_lotw(&mut log, &now, Some("k2def"));
+        assert_eq!(log[0].credit_granted, ["WAS"]);
+        let mut log = vec![w1aw_at(d, 12, 0)];
+        reconcile_lotw(&mut log, &old, None);
+        assert_eq!(
+            log[0].credit_granted,
+            ["DXCC"],
+            "no call in Settings: as before"
+        );
+    }
+
+    /// A row matching no contact is an orphan, the diagnostics' "why is this missing?", only when
+    /// it is the Settings call's, as every row was while the downloads asked for that call. A
+    /// club call's on the same account is no gap in this log, and the diagnostics would offer to
+    /// change one of the operator's own contacts to match it.
+    #[test]
+    fn only_the_settings_call_s_unmatched_rows_are_orphans() {
+        let d = 20_000;
+        let rows = [
+            under(confirms(rec("K1GAP", "20m", "FT8", d), "DXCC"), "K2DEF"),
+            confirms(rec("K1NONE", "20m", "FT8", d), "DXCC"),
+            under(confirms(rec("K1CLB", "20m", "FT8", d), "DXCC"), "W1CLUB"),
+        ];
+        let orphans = |call: Option<&str>| -> Vec<String> {
+            let mut log = vec![rec("W1AW", "20m", "FT8", d)];
+            reconcile_lotw(&mut log, &rows, call)
+                .orphans
+                .into_iter()
+                .map(|o| o.call)
+                .collect()
+        };
+        assert_eq!(orphans(Some("K2DEF")), ["K1GAP", "K1NONE"]);
+        assert_eq!(
+            orphans(None),
+            ["K1GAP", "K1NONE", "K1CLB"],
+            "no call in Settings: as before"
+        );
+    }
+
+    /// LoTW's own-QSO list holds every call's uploads: N2OLD's marks N2OLD's contact on file and
+    /// never K2DEF's in the same second, which stays Pending, and so still owed to LoTW.
+    #[test]
+    fn own_echo_marks_only_the_contact_made_under_its_own_call() {
+        let d = 20_000;
+        let pending = |own| with_lotw(under(w1aw_at(d, 12, 0), own), UploadOutcome::Pending);
+        let mut log = vec![pending("K2DEF"), pending("N2OLD")];
+        let own = [under(w1aw_at(d, 12, 0), "N2OLD")];
+        assert_eq!(promote_own_echo(&mut log, &own, 9, Some("K2DEF")), 1);
+        assert_eq!(
+            (lotw_outcome(&log[0]), lotw_outcome(&log[1])),
+            (Some(UploadOutcome::Pending), Some(UploadOutcome::Accepted))
+        );
+    }
+
+    /// The credits each contact of `log` holds, in log order: which row it took, by value.
+    fn credits(log: &[QsoRecord]) -> Vec<Vec<String>> {
+        log.iter().map(|r| r.credit_granted.clone()).collect()
+    }
+
+    /// ★ A portable suffix (`/P`, `/M`, `/MM`, `/AM`, `/QRP`) is no other call to LoTW's pairing.
+    /// KD9TAW's contact logged as KD9TAW/P, by a program that signed it to LoTW under KD9TAW,
+    /// takes KD9TAW's confirmation and its WAS; N2OLD's row in the same second, listed first,
+    /// takes N2OLD's contact. And the other side: a row LoTW holds under KD9TAW/QRP (its FAQ has
+    /// such a QSO signed with a certificate for the suffixed call) lands on KD9TAW's contact.
+    /// Every suffix, in either case.
+    #[test]
+    fn a_portable_suffix_pairs_as_its_base_call() {
+        let d = 20_000;
+        let expected = vec![vec!["WAS".to_string()], vec!["DXCC".to_string()]];
+        for suffix in ["P", "M", "MM", "AM", "QRP", "p", "qrp"] {
+            let suffixed = format!("KD9TAW/{suffix}");
+            for (contact, row) in [(suffixed.as_str(), "KD9TAW"), ("KD9TAW", suffixed.as_str())] {
+                let mut log = vec![
+                    under(w1aw_at(d, 12, 0), contact),
+                    under(w1aw_at(d, 12, 0), "N2OLD"),
+                ];
+                let rows = [
+                    under(confirms(w1aw_at(d, 12, 0), "DXCC"), "N2OLD"),
+                    under(confirms(w1aw_at(d, 12, 0), "WAS"), row),
+                ];
+                reconcile_lotw(&mut log, &rows, Some("KD9TAW"));
+                assert_eq!(
+                    credits(&log),
+                    expected,
+                    "the contact made under {contact} takes the row LoTW holds under {row}"
+                );
+            }
+        }
+    }
+
+    /// A prefix makes another call, as LoTW holds it: FG/KD9TAW is another DXCC entity's call, with
+    /// a Callsign Certificate of its own, and so are VE3/KD9TAW and W9/KD9TAW, and FG/KD9TAW/P is
+    /// FG/KD9TAW's. KD9TAW's row at 12:00 never lands on such a contact at 12:00, though it is the
+    /// nearest: it takes KD9TAW's own contact at 12:10.
+    #[test]
+    fn a_prefixed_call_never_takes_the_base_call_s_confirmation() {
+        let d = 20_000;
+        for other in ["FG/KD9TAW", "FG/KD9TAW/P", "VE3/KD9TAW", "W9/KD9TAW"] {
+            let mut log = vec![
+                under(w1aw_at(d, 12, 0), other),
+                under(w1aw_at(d, 12, 10), "KD9TAW"),
+            ];
+            let rows = [under(confirms(w1aw_at(d, 12, 0), "WAS"), "KD9TAW")];
+            reconcile_lotw(&mut log, &rows, Some("KD9TAW"));
+            assert_eq!(
+                credits(&log),
+                [vec![], vec!["WAS".to_string()]],
+                "{other}'s contact takes nothing of KD9TAW's"
+            );
+        }
+    }
+
+    /// Any other suffix stays part of the call. LoTW holds a call-area suffix as a call of its own:
+    /// its FAQ has an operator who signed 6W6RY, 6W6RY/1 and 6W6RY/2 in one DXCC entity request a
+    /// Callsign Certificate for each. So KD9TAW/9's contact at 12:00 takes KD9TAW/9's row and its
+    /// DXCC, and never KD9TAW's row at 12:00, which takes KD9TAW's own contact at 12:10; and so for
+    /// /1, /A and /B.
+    #[test]
+    fn a_call_area_or_other_suffix_is_another_call() {
+        let d = 20_000;
+        for suffix in ["9", "1", "A", "B"] {
+            let other = format!("KD9TAW/{suffix}");
+            let mut log = vec![
+                under(w1aw_at(d, 12, 0), &other),
+                under(w1aw_at(d, 12, 10), "KD9TAW"),
+            ];
+            let rows = [
+                under(confirms(w1aw_at(d, 12, 0), "WAS"), "KD9TAW"),
+                under(confirms(w1aw_at(d, 12, 0), "DXCC"), &other),
+            ];
+            reconcile_lotw(&mut log, &rows, Some("KD9TAW"));
+            assert_eq!(
+                credits(&log),
+                [vec!["DXCC".to_string()], vec!["WAS".to_string()]],
+                "{other}'s contact takes {other}'s row alone"
+            );
+        }
+    }
+
+    /// Two base calls never cross, whatever their suffixes: K2DEF/P's contact and N2OLD/M's, in the
+    /// same second, each take their own call's row (N2OLD's listed first, K2DEF's held under
+    /// K2DEF/QRP), never the other's.
+    #[test]
+    fn two_base_calls_never_cross_whatever_their_suffixes() {
+        let d = 20_000;
+        let mut log = vec![
+            under(w1aw_at(d, 12, 0), "K2DEF/P"),
+            under(w1aw_at(d, 12, 0), "N2OLD/M"),
+        ];
+        let rows = [
+            under(confirms(w1aw_at(d, 12, 0), "DXCC"), "N2OLD"),
+            under(confirms(w1aw_at(d, 12, 0), "WAS"), "K2DEF/QRP"),
+        ];
+        let sum = reconcile_lotw(&mut log, &rows, Some("K2DEF"));
+        assert_eq!((sum.matched, sum.newly_confirmed), (2, 2));
+        assert_eq!(
+            credits(&log),
+            [vec!["WAS".to_string()], vec!["DXCC".to_string()]]
+        );
+    }
+
+    /// LoTW's own-QSO list pairs the same way: KD9TAW's upload marks KD9TAW/P's contact on file,
+    /// and never N2OLD's in the same second, which stays Pending.
+    #[test]
+    fn own_echo_marks_a_portable_contact_by_its_base_call() {
+        let d = 20_000;
+        let pending = |own| with_lotw(under(w1aw_at(d, 12, 0), own), UploadOutcome::Pending);
+        let mut log = vec![pending("N2OLD"), pending("KD9TAW/P")];
+        let own = [under(w1aw_at(d, 12, 0), "KD9TAW")];
+        assert_eq!(promote_own_echo(&mut log, &own, 9, Some("KD9TAW")), 1);
+        assert_eq!(
+            (lotw_outcome(&log[0]), lotw_outcome(&log[1])),
+            (Some(UploadOutcome::Pending), Some(UploadOutcome::Accepted))
+        );
+    }
+
+    /// An orphan is still only a row of the Settings call as LoTW holds it, so as 1.17.0's
+    /// download held it: KD9TAW/P's unmatched row is no gap in a log whose Settings call is
+    /// KD9TAW (the diagnostics would offer to change a contact to match it), and KD9TAW's is.
+    #[test]
+    fn a_suffixed_call_s_unmatched_row_is_no_orphan() {
+        let d = 20_000;
+        let rows = [
+            under(confirms(rec("K1GAP", "20m", "FT8", d), "DXCC"), "KD9TAW"),
+            under(confirms(rec("K1POR", "20m", "FT8", d), "DXCC"), "KD9TAW/P"),
+        ];
+        let mut log = vec![rec("W1AW", "20m", "FT8", d)];
+        let orphans: Vec<String> = reconcile_lotw(&mut log, &rows, Some("KD9TAW"))
+            .orphans
+            .into_iter()
+            .map(|o| o.call)
+            .collect();
+        assert_eq!(orphans, ["K1GAP"]);
+    }
+
+    /// K2DEF, the call in Settings, in any spelling, or not named at all.
+    const K2DEF_SPELT: &[Option<&str>] = &[None, Some("K2DEF"), Some(" k2def "), Some("")];
+
+    /// [`K2DEF_SPELT`], and K2DEF with each portable suffix, in any spelling.
+    const K2DEF_PORTABLE: &[Option<&str>] = &[
+        None,
+        Some("K2DEF"),
+        Some(" k2def "),
+        Some(""),
+        Some("K2DEF/P"),
+        Some("k2def/m"),
+        Some("K2DEF/MM"),
+        Some(" K2DEF/AM "),
+        Some("K2DEF/qrp"),
+    ];
+
+    /// A contact or a row of one call, K2DEF, named as one of `own` (`None`: not named): two
+    /// stations, two bands, two mode classes, over three days, with times bunched so a row falls
+    /// within 30 minutes of two contacts, across midnight and inside one minute, some with no
+    /// time of day, confirmed or not, with or without a code.
+    fn one_call_qso(
+        own: &'static [Option<&'static str>],
+    ) -> impl proptest::strategy::Strategy<Value = QsoRecord> {
+        use proptest::prelude::*;
+        (
+            prop::sample::select(vec!["W1AW", "K1ABC"]),
+            prop::sample::select(vec!["20m", "40m"]),
+            prop::sample::select(vec!["FT8", "CW"]),
+            0u64..3,
+            prop::sample::select(vec![0u64, 1, 29, 30, 31, 60, 1439]),
+            any::<[bool; 3]>(),
+            prop::sample::select(own),
+        )
+            .prop_map(
+                |(call, band, mode, day, minute, [timed, confirmed, coded], own)| {
+                    let mut r = rec(call, band, mode, 20_000 + day);
+                    r.when_unix = (20_000 + day) * 86_400 + minute * 60;
+                    r.time_known = timed;
+                    r.confirmed = confirmed;
+                    r.award_confirmed = confirmed;
+                    r.qsl_rcvd.lotw = confirmed;
+                    if coded {
+                        r.credit_granted = vec!["DXCC".into()];
+                    }
+                    r.station_callsign = own.map(String::from);
+                    r
+                },
+            )
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig {
+            cases: 512,
+            ..proptest::prelude::ProptestConfig::default()
+        })]
+
+        /// ★ The single-call control: where every contact and every row is the Settings call's
+        /// (named in any spelling, or not named), LoTW's merge makes exactly the change the matcher
+        /// that compares no call makes, every contact and the summary, orphans included. Asking
+        /// LoTW for every call changes nothing for an operator with one.
+        #[test]
+        fn one_call_merges_as_the_matcher_that_compares_no_call(
+            log in proptest::collection::vec(one_call_qso(K2DEF_SPELT), 0..10),
+            rows in proptest::collection::vec(one_call_qso(K2DEF_SPELT), 0..10),
+        ) {
+            let (mut lotw, mut blind) = (log.clone(), log);
+            let by_call = reconcile_lotw(&mut lotw, &rows, Some("K2DEF"));
+            let any_call = reconcile(&mut blind, &rows);
+            proptest::prop_assert_eq!(lotw, blind);
+            proptest::prop_assert_eq!(by_call, any_call);
+        }
+
+        /// The same control across the portable suffixes: where every contact and every row is
+        /// K2DEF's, plain or `/P`, `/M`, `/MM`, `/AM` or `/QRP` in any spelling, or names no call,
+        /// LoTW's merge leaves every contact exactly as the matcher that compares no call does, and
+        /// counts the same. Only its orphans may differ: an unmatched row LoTW holds under a
+        /// suffixed call is not the Settings call's as LoTW's downloads held it.
+        #[test]
+        fn one_base_call_merges_as_the_matcher_that_compares_no_call(
+            log in proptest::collection::vec(one_call_qso(K2DEF_PORTABLE), 0..10),
+            rows in proptest::collection::vec(one_call_qso(K2DEF_PORTABLE), 0..10),
+        ) {
+            let (mut lotw, mut blind) = (log.clone(), log);
+            let mut by_call = reconcile_lotw(&mut lotw, &rows, Some("K2DEF"));
+            let mut any_call = reconcile(&mut blind, &rows);
+            proptest::prop_assert_eq!(lotw, blind);
+            by_call.orphans.clear();
+            any_call.orphans.clear();
+            proptest::prop_assert_eq!(by_call, any_call);
+        }
     }
 }

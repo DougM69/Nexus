@@ -87,9 +87,14 @@ export async function runtime({ bindings = {}, port: requestedPort, origin: publ
   const token = (subject, claims = {}, key = privateKey) => new SignJWT({ azp: 'remote-test-client', ...claims })
     .setProtectedHeader({ alg: 'RS256', kid: publicJwk.kid }).setIssuer(issuer).setAudience('remote-test-api')
     .setSubject(subject).setIssuedAt().setExpirationTime('1h').sign(key)
-  const idToken = (subject, nonce) => new SignJWT({ nonce })
-    .setProtectedHeader({ alg: 'RS256', kid: publicJwk.kid }).setIssuer(issuer).setAudience('remote-test-client')
-    .setSubject(subject).setIssuedAt().setExpirationTime('1h').sign(privateKey)
+  // An ID token, as a sign-in returns one: `audience` is the application signed in to, `iat` (seconds)
+  // and `exp` move its times, `claims` adds or overrides any other.
+  const idToken = (subject, nonce, { audience = 'remote-test-client', claims = {}, key = privateKey, iat, exp, iss = issuer } = {}) => {
+    const issuedAt = iat ?? Math.floor(Date.now() / 1000)
+    return new SignJWT({ nonce, ...claims })
+      .setProtectedHeader({ alg: 'RS256', kid: publicJwk.kid }).setIssuer(iss).setAudience(audience)
+      .setSubject(subject).setIssuedAt(issuedAt).setExpirationTime(exp ?? issuedAt + 3600).sign(key)
+  }
   let clientNo = 0
   function client(jwt, cookies = '', nativeToken = null) {
     const ip = `198.51.100.${++clientNo}`

@@ -361,6 +361,44 @@ describe('the rest of the app', () => {
   })
 })
 
+describe("the contest entry's sample text", () => {
+  // The operator, from a contest (2026-10-18): the sample text in the contest entry's boxes
+  // ("W1AW", "599", the county) read like data typed in. It is SEMI-DARK there: its own token,
+  // --text-sample, never brighter than any other hint and dimmer than a typed value, still over
+  // the 4.5:1 text floor in every theme, and never bold, which is what a typed value in these
+  // boxes is. A theme whose hint sits near the floor (Light) has no room to dim it further, so
+  // there the token is the hint's own ink; the dark themes take it down toward the floor.
+  const box = () => bare({ tag: 'input', classes: 'settings-input mono le-fd-input le-fd-input-code', where: 'LogEntry.tsx' })
+
+  it('paints --text-sample, at normal weight', () => {
+    expect(placeholderInk(box()).value).toBe('var(--text-sample)')
+    expect(placeholderProp(box(), 'font-weight')?.value).toBe('400')
+  })
+
+  it('is never brighter than another hint, is dimmer than a typed value, and stays readable, in every theme', () => {
+    const bad: string[] = []
+    const input = box()
+    const hint = placeholderInk(inSettings({ tag: 'input', classes: 'settings-input', where: 'SettingsPanel.tsx' })).value
+    for (const mode of MODES) {
+      const ground = rgbOf('var(--bg)', mode)
+      const sample = contrast(rgbOf(placeholderInk(input).value, mode), ground)
+      const other = contrast(rgbOf(hint, mode), ground)
+      const typed = contrast(rgbOf(valueInk(input).value, mode), ground)
+      if (sample > other) bad.push(`${mode}: sample ${sample.toFixed(2)}:1 is brighter than a hint ${other.toFixed(2)}:1`)
+      if (!(sample < typed)) bad.push(`${mode}: sample ${sample.toFixed(2)}:1 ≥ typed ${typed.toFixed(2)}:1`)
+      if (sample < 4.5) bad.push(`${mode}: sample ${sample.toFixed(2)}:1 — below the 4.5:1 text floor`)
+    }
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
+  it('is dimmer than the other hints in the dark theme, where the contests are worked at night', () => {
+    const input = box()
+    const hint = placeholderInk(inSettings({ tag: 'input', classes: 'settings-input', where: 'SettingsPanel.tsx' })).value
+    const ground = rgbOf('var(--bg)', 'dark')
+    expect(contrast(rgbOf(placeholderInk(input).value, 'dark'), ground)).toBeLessThan(contrast(rgbOf(hint, 'dark'), ground) - 0.3)
+  })
+})
+
 describe('positive controls — the resolver can say no, and the specific rules still win', () => {
   it('reports "inherited" for something that has no placeholder', () => {
     // If the bare `input, textarea` selector were written as `*::placeholder`, or if this

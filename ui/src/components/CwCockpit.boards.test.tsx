@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// SPOTS AND NEEDED ON THE CW SCREEN (plan piece H8) — Phone's two feeds (#345), in CW.
+// SPOTS AND NEEDED ON THE CW SCREEN — Phone's two feeds (#345), in CW.
 //
 // The operator's pick: "CW gets Phone's Spots/Needed panes", hidden by default exactly as in
 // Phone — default-removed, one click in ⊞ Panels — and an existing CW layout loads unchanged.
@@ -26,9 +26,7 @@ import { render, screen, cleanup, fireEvent, act, within } from '@testing-librar
 import { CwCockpit } from './CwCockpit'
 import { SpotsPanel } from './SpotsPanel'
 import { CW_PANELS, panelStorageKey, seamShares, usePanelLayout } from '../features/panelState'
-import { StationControlContext } from '../stationAccess'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
-import type { AppSnapshot, BandChannel, NeedAlert, SpotRow } from '../types'
+import type { AppSnapshot, BandChannel, FieldDayStatus, NeedAlert, SpotRow } from '../types'
 
 // THE BUDGET (2026-10-09). The slowest case here, "a tick docks the real board as a fill feed with its own…", takes
 // 0.61 s and 0.38 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -90,7 +88,14 @@ vi.mock('./CockpitHeader', () => ({
   CockpitHeader: ({ actions }: { actions?: unknown }) => <header className="cockpit-header">{actions as never}</header>,
 }))
 vi.mock('./PhoneScope', () => ({ PhoneScope: () => <div data-testid="scope-stub" /> }))
-vi.mock('./BandStrip', () => ({ BandStrip: () => <div data-testid="bandstrip-stub" /> }))
+/** What the cockpit hands the band strip, for the contest-marks wiring below. */
+const strip = vi.hoisted(() => ({ fieldDay: undefined as unknown }))
+vi.mock('./BandStrip', () => ({
+  BandStrip: (p: { fieldDay?: unknown }) => {
+    strip.fieldDay = p.fieldDay
+    return <div data-testid="bandstrip-stub" />
+  },
+}))
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 vi.mock('../remote-web/RemoteRecall', () => ({ RemoteRecallEntry: () => <div data-testid="recall-stub" /> }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
@@ -176,7 +181,15 @@ function boards() {
 }
 
 /** The cockpit with the real panel record and the board wiring App passes. */
-function Live({ band = '20m', wiring = boards() }: { band?: string; wiring?: ReturnType<typeof boards> }) {
+function Live({
+  band = '20m',
+  wiring = boards(),
+  fieldDay,
+}: {
+  band?: string
+  wiring?: ReturnType<typeof boards>
+  fieldDay?: FieldDayStatus
+}) {
   const panels = usePanelLayout(CW_PANELS)
   return (
     <CwCockpit
@@ -187,6 +200,7 @@ function Live({ band = '20m', wiring = boards() }: { band?: string; wiring?: Ret
       panels={panels}
       spotsBoard={wiring.spotsBoard}
       neededBoard={wiring.neededBoard}
+      fieldDay={fieldDay}
     />
   )
 }
@@ -401,31 +415,19 @@ describe('the feeds’ places', () => {
   })
 })
 
-describe('on the Remote page', () => {
-  // ONE state object per source, as the real store keeps them (see PhoneCockpit.boards.test.tsx).
-  const source = (phase: 'unavailable' | 'ready') => {
-    const state = { phase, total: 0, retained: 0, at: 0 }
-    return { subscribe: () => () => {}, state: () => state } as unknown as RemoteCollections
-  }
-  const observe = (phase: 'unavailable' | 'ready') => (
-    <StationControlContext.Provider value={false}>
-      <RemoteCollectionsContext.Provider value={source(phase)}>
-        <Live />
-      </RemoteCollectionsContext.Provider>
-    </StationControlContext.Provider>
-  )
-
-  it('a pane whose data the page does not carry shows the existing unavailable status; with it, the board', async () => {
-    const r = await mount(observe('unavailable'))
-    fireEvent.click(box(/^Spots$/))
-    fireEvent.click(box(/^Needed$/))
-    expect(pane('spots')!.querySelector('.np-board'), 'a board drawn with no station data').toBeNull()
-    expect(pane('spots')!.textContent).toContain('Remote spot data unavailable.')
-    expect(pane('needed')!.querySelector('.np-board')).toBeNull()
-    expect(pane('needed')!.textContent).toMatch(/unavailable/i)
-    r.unmount()
-    await mount(observe('ready'))
-    expect(callsIn(pane('spots')).sort()).toEqual(['K1CW', 'W1HUMAN'])
-    expect(pane('needed')!.querySelector('.np-board')).not.toBeNull()
+describe('a running contest reaches the band strip and the Spots pane', () => {
+  it('hands the contest to the strip and marks a dupe in the Spots pane', async () => {
+    const fd = { running: true, log: [{ call: 'W1HUMAN', class: '', section: '', band: '20m', mode: 'CW' }] } as unknown as FieldDayStatus
+    render(<Live fieldDay={fd} />)
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    expect(strip.fieldDay, 'the strip was not handed the contest').toBe(fd)
+    if (!pane('spots')) fireEvent.click(box(/^Spots$/))
+    const row = [...pane('spots')!.querySelectorAll<HTMLElement>('.sp-row')].find((r) =>
+      r.textContent?.includes('W1HUMAN'),
+    )
+    expect(row?.className).toContain('contest-dupe')
+    expect(within(row!).getByText('DUPE')).toBeTruthy()
   })
 })

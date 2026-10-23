@@ -35,10 +35,11 @@
 //! Usage:
 //!   cargo run -q -p tempo-core --example encode_wav_js8 -- OUT.wav "KD9TAWabcxyz 3" \
 //!       --speed normal [--f0 1500] [--snr-db N] [--seed N]
-//!   --speed accepts slow|normal|fast|turbo or the ALL.TXT letter E|A|B|C.
+//!   --speed accepts slow|normal|fast|turbo|ultra or the ALL.TXT letter E|A|B|C|I (Ultra is
+//!   JS8Call 3.0's "JS8 60", Turbo its "JS8 40").
 //!
-//! Then, from the parity lab (cwd = a scratch dir; it drops jt9_wisdom.dat + timer.out):
-//!   ~/work/twowayfd/paritylab/js8/stock/js8 -8 -b A -d 3 OUT.wav
+//! Then, with a stock `js8` CLI (cwd = a scratch dir; it drops jt9_wisdom.dat + timer.out):
+//!   js8 -8 -b A -d 3 OUT.wav
 
 use js8::phy::{encode_word, modulate, Speed, Word87};
 use tempo_core::wavfile::write_wav_i16;
@@ -53,13 +54,14 @@ fn arg<T: std::str::FromStr>(args: &[String], flag: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
-/// `slow|normal|fast|turbo` or the ALL.TXT letter `E|A|B|C` (either case).
+/// `slow|normal|fast|turbo|ultra` or the ALL.TXT letter `E|A|B|C|I` (either case).
 fn parse_speed(s: &str) -> Option<Speed> {
     match s.to_ascii_lowercase().as_str() {
         "slow" => Some(Speed::Slow),
         "normal" => Some(Speed::Normal),
         "fast" => Some(Speed::Fast),
         "turbo" => Some(Speed::Turbo),
+        "ultra" => Some(Speed::Ultra),
         other if other.len() == 1 => Speed::from_letter(other.to_ascii_uppercase().chars().next()?),
         _ => None,
     }
@@ -75,14 +77,14 @@ fn main() {
         .collect();
     if positional.len() < 2 {
         eprintln!(
-            "usage: encode_wav_js8 OUT.wav \"<12 sixbit> <i3>\" --speed slow|normal|fast|turbo [--f0 1500] [--snr-db N] [--seed N]"
+            "usage: encode_wav_js8 OUT.wav \"<12 sixbit> <i3>\" --speed slow|normal|fast|turbo|ultra [--f0 1500] [--snr-db N] [--seed N]"
         );
         std::process::exit(2);
     }
     let (out_path, lab) = (positional[0], positional[1].as_str());
     let speed_arg: String = arg(&args, "--speed", "normal".to_string());
     let Some(speed) = parse_speed(&speed_arg) else {
-        eprintln!("unknown --speed {speed_arg:?}: want slow|normal|fast|turbo or E|A|B|C");
+        eprintln!("unknown --speed {speed_arg:?}: want slow|normal|fast|turbo|ultra or E|A|B|C|I");
         std::process::exit(2);
     };
     let f0: f32 = arg(&args, "--f0", 1500.0);

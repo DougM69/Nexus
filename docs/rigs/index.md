@@ -22,6 +22,7 @@ picker; the definitive list for your installed Hamlib version is always
 | **Icom** | [icom.md](icom.md) | IC-9700 incl. 23 cm; IC-7300-class single-USB |
 | **FlexRadio** | [flexradio.md](flexradio.md) | LAN discovery verified on a FLEX-6400M; CAT chain in final verification |
 | **Hermes Lite 2 and other SDRs** | [sdr-programs.md](sdr-programs.md) | Through Thetis or piHPSDR; **not yet field-verified** |
+| **SunSDR (ExpertSDR3) and other TCI programs** | [tci.md](tci.md) | The TCI connection, Beta: CAT, audio and transmit; **not yet field-verified** |
 | **Xiegu** | [xiegu.md](xiegu.md) | Supported but **not yet field-verified** |
 | **Sound-card interfaces** | [interfaces.md](interfaces.md) | Digirig / RIGblaster; **not yet field-verified** |
 | **Rotators** | [rotators.md](rotators.md) | Dummy-verified; real az/el hardware pending |
@@ -79,6 +80,21 @@ and control only**: nothing transmits on this connection yet, and it carries no
 audio. You set the **Radio address**, the **Network user** and its **Network
 password** (kept in the computer's keychain), and the **Control port** if you
 moved it from 50001. See [the Icom guide](icom.md#nexuss-own-network-connection-beta).
+
+### TCI (SDR program) — Beta
+
+For an SDR program's own **TCI server**: ExpertSDR3 (SunSDR2, MB1, Colibri),
+Thetis 2.10.3.14 and later, or piHPSDR. Nexus talks to the program directly,
+with no Rig Model, no rigctld and no virtual COM port. You set the **SDR
+program address** (`127.0.0.1` when it runs on this computer) and the **TCI
+port**, and **Find TCI server** looks for it there. It is **Beta**: Nexus
+sets the dial and mode, transmits through the program, takes its receive
+audio, can draw its panadapter and can mark the stations you need on it. See
+[TCI: connect to an SDR program's TCI server](tci.md).
+
+The other way round, Nexus can be the TCI server for programs on this
+computer, such as WSJT-X, JTDX, MSHV and Log4OM, whatever radio Nexus runs.
+See [Share by TCI](tci-server.md).
 
 ### OmniRig (Windows only)
 

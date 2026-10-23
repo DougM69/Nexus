@@ -11532,7 +11532,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--border);
   margin: 0 2px;
 }
-/* The vertical N1MM-style band map (its own torn-off window via open_panel_window) — flex-fills
+/* The vertical band map (its own torn-off window via open_panel_window) — flex-fills
  * the detached window (flex, not a height:100% chain, per the .app.detached note above). */
 .bandmap {
   flex: 1;
@@ -14768,7 +14768,7 @@ button.cq-skiptx1.on {
   min-width: 0;
 }
 
-/* ── Needed panel (the N1MM-style "what's needed now" board) ────────────────── */
+/* ── Needed panel (the "what's needed now" board) ───────────────────────────── */
 .layout.single.needed-panel {
   display: flex;
   flex-direction: column;

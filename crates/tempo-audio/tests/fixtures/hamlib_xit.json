@@ -1,6 +1,6 @@
 {
   "hamlib": "Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit",
-  "catalog": 117,
+  "catalog": 119,
   "rigs": [
     {
       "model": 1,
@@ -28,6 +28,20 @@
       "name": "Yaesu FT-847",
       "setXit": false,
       "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1002,
+      "name": "Yaesu FT-1000",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1003,
+      "name": "Yaesu FT-1000D",
+      "setXit": true,
+      "getXit": true,
       "xitFunc": false
     },
     {

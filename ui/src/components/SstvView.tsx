@@ -6,12 +6,8 @@
 // catalog under `sstv.*`; the mode names, rasters, key-down seconds, VIS codes, dial
 // readings, callsigns, FSK IDs and the picture's own painted text are invariant tokens and
 // stay in the code.
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
-import { RemoteCollectionsContext } from '../remote-web/collections'
-import { sstvPlan, loadSstvImage } from '../remote-web/sstv'
-import { useSstvImage } from '../remote-web/useSstvImage'
-import { displayNow } from '../remote-web/display-validation'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useStationCapability, useStationControl } from '../stationAccess'
 import { confirmDialog } from '../confirm'
 import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvHealth, SstvState } from '../types'
 import { Waterfall } from './Waterfall'
@@ -72,13 +68,15 @@ import {
   sstvManualRx,
   sstvAutoArm,
   sstvDeleteImage,
-  sstvDeleteImageRemote,
   sstvSend,
   sstvStop,
 } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { announce } from '../announce'
 import { pushToast, withErrorToast } from '../toast'
+import { drivesAnotherStation } from '../features/durableStore'
+import { stationPictureBytes, useStationPicture } from '../features/shackFiles'
+import { ShackFilesSave } from './ShackFilesSave'
 import { pollSingleFlight } from '../singleFlight'
 import { t } from '../i18n'
 // The 15 transmittable modes, their rasters and their exact key-down seconds. A pure
@@ -508,7 +506,11 @@ export function fmtUtc(iso: string): string {
  * would be hiding. Anything not .bmp keeps the broken-image indicator, which is at least
  * honest. Outside the shell (tests) → caption-only card. */
 export function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; remoteSrc?: string | null }) {
-  const src = remoteSrc === undefined ? assetUrl(entry.path) : remoteSrc
+  // On a computer driving the station from afar the path is on the STATION's disk, so the
+  // picture is asked of the station rather than read here at that path.
+  const driving = remoteSrc === undefined && drivesAnotherStation()
+  const fetched = useStationPicture(entry.path, driving)
+  const src = remoteSrc !== undefined ? remoteSrc : driving ? fetched : assetUrl(entry.path)
   const isBmp = /\.bmp$/i.test(entry.path)
   const [fallback, setFallback] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -544,10 +546,7 @@ export function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; re
 export const sstvDownloadName = (g: SstvGalleryEntry) =>
   `nexus-sstv-${`${g.finishedUtc}-${g.mode}`.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')}${g.path.slice(-4).toLowerCase()}`
 
-function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) {
-  const source=useContext(RemoteCollectionsContext), available=useStationData()
-  const ref=useRef<HTMLDivElement>(null)
-  const image=useSstvImage(source,entry.path,ref,active&&available)
+function ReceivedThumb({entry}: {entry:SstvGalleryEntry}) {
   // ⭐ CLICK THE PICTURE TO LOOK AT IT. Clicking a thumbnail did nothing at all until
   // now: the gallery offered delete, edit-and-resend and Reveal in folder, so examining
   // a picture that had just arrived meant leaving Nexus for a file manager. It opens in
@@ -555,9 +554,7 @@ function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) 
   // second monitor while the next picture comes in — the operator's decision. A button
   // and not a click handler on the <figure>, so it is reachable from the keyboard and
   // announces itself; the delete and edit buttons keep sitting on top of it.
-  // DESKTOP ONLY this batch: a Remote browser fetches the full-size copy lazily and needs
-  // its own loading state, which is a separate piece of work.
-  if(!source)return (
+  return (
     <button type="button" className="sstv-thumb-open"
       aria-label={t('sstv.gallery.open.aria',{mode:entry.mode,when:fmtUtc(entry.finishedUtc)})}
       title={t('sstv.gallery.open.title')}
@@ -565,24 +562,6 @@ function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) 
       <GalleryThumb entry={entry}/>
     </button>
   )
-  const mode=SSTV_TX_MODES.find(m=>m.name===entry.mode)
-  return <>
-    <div ref={ref} className="sstv-remote-image" style={{aspectRatio:mode?`${mode.width} / ${mode.height}`:'4 / 3'}}>
-      {image.url ? <GalleryThumb entry={entry} remoteSrc={image.url}/> : <span role="status" className="dim">{image.failed?t('remote.sstvImageUnavailable'):t('remote.collectionLoading')}</span>}
-      {image.failed && <button type="button" className="cw-macro" onClick={image.retry}>{t('remote.refreshCollection')}</button>}
-    </div>
-    {/* Saves the verified picture this page is already showing; nothing is asked of the station.
-        The picture itself is fetched lazily as the thumbnail scrolls into view, so this row
-        appears LATE — and appearing grew the card 27.4 px and shoved the rest of the gallery
-        down under the reader's finger, mid-scroll, every time one landed (and back up again
-        when the blob was released on the way out). Hold the row's space with the same
-        `.cw-macro` box from the first paint; `visibility:hidden` keeps the placeholder out of
-        the reading order and off the tab ring, so only the picture arrives, never a reflow. */}
-    {image.url
-      ? <a className="cw-macro sstv-thumb-save" href={image.url} download={sstvDownloadName(entry)}
-        aria-label={t('remote.b3.sstvSaveAria',{mode:entry.mode,when:fmtUtc(entry.finishedUtc)})}>{t('remote.b3.sstvSave')}</a>
-      : <span className="cw-macro sstv-thumb-save-slot" aria-hidden="true">{t('remote.b3.sstvSave')}</span>}
-  </>
 }
 
 /**
@@ -594,7 +573,7 @@ function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) 
  * txState=false: nothing here transmits.
  */
 export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txFskId, txPowerPct, panels, onOpenSettings, holdDataSubmode }: Props) {
-  const canControl=useStationControl(), receiverControl=useStationCapability('decoder'), dataAvailable=useStationData(), source=useContext(RemoteCollectionsContext), remote=!!source
+  const canControl=useStationControl(), receiverControl=useStationCapability('decoder')
   // Deleting a received picture is permanent and it is the operator's only copy, so a browser may
   // do it only while the station advertises its gallery verb.
   const galleryControl=useStationCapability('sstvGallery')
@@ -626,31 +605,30 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const snapRef = useRef(snap)
   snapRef.current = snap
   useEffect(() => {
-    if (!active || (remote && !dataAvailable)) { if (remote) {setSstv(null);setPlan([]);setPollError(true)};return }
+    if (!active) return
     // The local clock ticks on its own: the state read below is single-flight (#335 —
     // `get_sstv_state` takes the engine mutex, so a tick skips while the last read is out), and
     // a skipped read must not stop the clock.
     const clock = () => setNow(Math.floor(Date.now() / 1000))
-    if (!remote) clock()
-    const clockId = remote ? undefined : window.setInterval(clock, 1000)
+    clock()
+    const clockId = window.setInterval(clock, 1000)
     const stop = pollSingleFlight('sstv state', 1000, (owns) =>
       getSstvState()
         .then((s) => {
           if (owns()) {
             setSstv(s)
-            if (remote) { setPlan(sstvPlan(s)); setNow(Math.floor(displayNow(s)/1000)) }
             setPollError(false)
           }
         })
         .catch(() => {
-          if (owns()) { setPollError(true); if(remote){setSstv(null);setPlan([])} }
+          if (owns()) setPollError(true)
         }),
     )
     return () => {
       window.clearInterval(clockId)
       stop()
     }
-  }, [active, remote, dataAvailable])
+  }, [active])
 
   // ⭐ START THE RECEIVER ON ENTERING THE VIEW, so SSTV does not open on a screen
   // that will never decode anything. Rising edge of `active`, not mount — this view
@@ -664,7 +642,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // than in a ref here so a remount cannot lose it.
   const autoArmed = useRef(false)
   useEffect(() => {
-    if (remote) return
     if (!active) {
       autoArmed.current = false
       return
@@ -678,7 +655,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       .then(() => getSstvState())
       .then(setSstv)
       .catch(() => {})
-  }, [active, remote])
+  }, [active])
 
   const armed = sstv?.armed === true
   const toggleArm = () => {
@@ -733,9 +710,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     setTxPower(Math.min(100, Math.max(0, Math.round(txPowerPct))))
   }, [txPowerPct])
   useEffect(() => {
-    if (remote) return
     void getLicensedBandPlan('sstv').then(setPlan).catch(() => {})
-  }, [remote])
+  }, [])
 
   // Commit a typed dial from the shared header readout; rejects out-of-plan
   // frequencies with a toast (same as the other cockpits).
@@ -915,8 +891,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     )
       return
     await withErrorToast(async () => {
-      if (remote) await sstvDeleteImageRemote(g.finishedUtc, g.mode)
-      else await sstvDeleteImage(g.path)
+      await sstvDeleteImage(g.path)
       setSstv(await getSstvState())
     }, t('sstv.gallery.delete.failed'))
   }
@@ -925,10 +900,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
    *  the BMP fallback already proved) and run it through the ORDINARY loadImage path,
    *  so sniffing, orientation and the ident treat it like any dropped file. */
   const editAndResend = async (g: SstvGalleryEntry) => {
-    const src = source ? null : assetUrl(g.path)
-    if (!source && !src) return
+    const driving = drivesAnotherStation()
+    const src = assetUrl(g.path)
+    if (!src && !driving) return
     await withErrorToast(async () => {
-      const buf = source ? await (await loadSstvImage(source,g.path,()=>dataAvailable)).arrayBuffer() : await (await fetch(src!)).arrayBuffer()
+      const buf = driving ? await stationPictureBytes(g.path) : await (await fetch(src!)).arrayBuffer()
       // A FILE NAME is never built from a translated word (the batch-8 ruling).
       const name = g.path.split(/[\\/]/).pop() ?? 'received-image'
       await loadImage(new File([buf], name))
@@ -1202,7 +1178,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const idInImageRef = useRef(false)
   idInImageRef.current = idInImage
 
-  // Operator text overlays (the MMSSTV-style compose). State drives the item strip;
+  // Operator text overlays (text composed onto the picture). State drives the item strip;
   // the ref is what renderTx and the drag read — the same state+ref pairing as
   // idInImage, and for the same reason: the canvas redraws from source every frame, so
   // items are re-drawn declaratively, never painted once. Items survive an image change
@@ -1598,7 +1574,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   }
 
   // ⛔ HOW A PICTURE ENDED, SAID ONCE as it stops sending: "finished" only for a picture that
-  // played out (N57b, 2026-09-30: one that did not was never finished).
+  // played out (one that did not was never finished).
   //  • This dock's Stop has already said "stopped", the moment it fired.
   //  • A picture the engine dropped or cut short shows its warning line, an alert that says why.
   //  • A picture that played out still shows its whole key-down elapsed: the radio loop stamps
@@ -1908,6 +1884,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               theme={theme}
               active={active}
               rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default
+              keepRowRemainder // even 50 ms rows, as RTTY's: 3 or 4 frames in turn, never always 4
               // NO `txBlanks` — deliberately, do not add it. Scottie DX is ~4.5 minutes of
               // continuous keying; the FT surfaces' dark band would scroll solid black for the
               // whole transmission, which is exactly what field reports (2026-08-17) called
@@ -2087,7 +2064,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 }}
               />
             </label>
-            {/* TEXT OVERLAYS — the MMSSTV-style compose. One-click presets that work
+            {/* TEXT OVERLAYS — text composed onto the picture. One-click presets that work
                 with nothing configured (the Reply pulls the other station's call from
                 the newest FSK ID heard), plus free text. Items draw UNDER the ID plate
                 by construction. Text that CONTAINS the callsign retires the plate — the
@@ -2323,10 +2300,12 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           title={t('sstv.panel.gallery')}
           paneId="gallery"
           {...closeProps('gallery')}
-          // #130: open the folder the pictures are saved in. Local only — a Remote browser has no
-          // file manager on the station's computer to open.
+          // #130: open the folder the pictures are saved in.
+          // From afar the station's file manager is out of reach: save its pictures here instead.
           actions={
-            !remote ? (
+            drivesAnotherStation() ? (
+              <ShackFilesSave folder="sstv" className="cockpit-popout sstv-gallery-reveal" />
+            ) : (
               <button
                 type="button"
                 className="cockpit-popout sstv-gallery-reveal"
@@ -2335,16 +2314,16 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               >
                 {t('sstv.gallery.reveal.label')}
               </button>
-            ) : undefined
+            )
           }
         >
           <div className="sstv-gallery-grid">
             {gallery.length === 0 ? (
-              <div className="sstv-gallery-empty">{remote && !sstv ? (pollError ? t('remote.collectionUnavailable') : t('remote.collectionLoading')) : t('sstv.gallery.empty')}</div>
+              <div className="sstv-gallery-empty">{t('sstv.gallery.empty')}</div>
             ) : (
               gallery.map((g) => (
-                <figure key={g.path} className="sstv-thumb" title={remote ? undefined : g.path}>
-                  <ReceivedThumb entry={g} active={active} />
+                <figure key={g.path} className="sstv-thumb" title={g.path}>
+                  <ReceivedThumb entry={g} />
                   {/* Irreversible — a received picture is the only copy of something somebody
                       sent you, and there is no re-download. Confirmed before it happens, but a
                       plain confirm rather than the Logbook's type-the-word dialog: one image is
@@ -2363,8 +2342,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   >
                     ✕
                   </button>
-                  {/* Edit & resend: a received picture back onto the compose stage — the
-                      MMSSTV workflow of answering a picture with that picture plus your
+                  {/* Edit & resend: a received picture back onto the compose stage, to
+                      answer a picture with that picture plus your
                       text. Same fetch bridge the BMP fallback proved out; the file then
                       rides the ORDINARY loadImage path, so format sniffing, orientation
                       and the ident all apply exactly as if it were dropped in. */}

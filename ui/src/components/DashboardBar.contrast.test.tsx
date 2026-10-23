@@ -22,9 +22,12 @@ import {
   expandWith,
   parseRules,
   rgbHex as hex,
+  subjectCut,
   toRgb,
+  tokenCut,
   tokensAt,
   winnerAt,
+  withProps,
   type El,
   type Mode,
   type Rgb,
@@ -114,13 +117,17 @@ function once<T>(rules: Rule[], key: string, make: () => T): T {
   return memo.get(k) as T
 }
 
+// THE CUTS (2026-10-20). The first case took ~11 s alone, nearly all of it rejecting rules at their subject compound,
+// and ran past its 60 s budget in a loaded full run. So winnerAt and tokensAt are handed only the rules that can
+// answer: cssCascade's withProps, subjectCut and tokenCut, which say why every winner and token is the same.
+
 /** The winning declaration of `props` on the element or the nearest ancestor that has one:
  *  lettering inherits, and a face shows through from the first element that paints one. */
 function nearest(rules: Rule[], mode: Mode, chain: El[], ...props: string[]) {
   return once(rules, `n|${mode}|${chainKey(chain)}|${props.join()}`, () => {
     for (let i = chain.length; i > 0; i--) {
       const at = chain.slice(0, i)
-      const w = winnerAt(rules, mode, at, ...props)
+      const w = winnerAt(subjectCut(withProps(rules, props), at[i - 1]), mode, at, ...props)
       if (w && !/^(inherit|transparent|none)$/.test(w.value.trim())) return { value: w.value, at }
     }
     return null
@@ -128,7 +135,7 @@ function nearest(rules: Rule[], mode: Mode, chain: El[], ...props: string[]) {
 }
 
 const colourOf = (rules: Rule[], mode: Mode, at: El[], value: string, under: Rgb): Rgb => {
-  const tokens = once(rules, `t|${mode}|${chainKey(at)}`, () => tokensAt(rules, mode, at))
+  const tokens = once(rules, `t|${mode}|${chainKey(at)}`, () => tokensAt(tokenCut(rules, mode, at), mode, at))
   const c = toRgb(expandWith(tokens, value), under)
   if (!c) throw new Error(`not a colour: "${value}"`)
   return c

@@ -124,7 +124,7 @@ const qthBox = (): HTMLInputElement => {
   if (!cap) throw new Error('no received QTH box')
   return cap.closest('label')!.querySelector('input')! as HTMLInputElement
 }
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 /** Every line under the strip: the warnings (`alert`) and the club's notes (`status`). */
 const hints = () => [...document.querySelectorAll('.le-fd-verdicts .le-fd-hint')].map((n) => n.textContent)
 
@@ -174,6 +174,19 @@ describe('the dupe warning on a county line', () => {
     renderStrip(ilqp('K9AAA', ['DUPG']))
     typed('K9AAA', 'COOK/DUPG/WILL')
     expect(hints()).toEqual(['DUPG is a dupe; COOK and WILL are new'])
+  })
+
+  it('puts the DUPE badge on the Call box only when every county of the line is a dupe', () => {
+    const badge = () => document.querySelector('.le-fd-field-call .le-fd-dupe')!.textContent
+    renderStrip(ilqp('K9AAA', ['COOK', 'WILL']))
+    typed('K9AAA', 'COOK/WILL')
+    // A row with no time on it (an older station) says where it was worked, not when.
+    expect(badge()).toBe('DUPE 40m CW')
+    // One new county makes the line a contact that scores: the badge goes, as the sentence does.
+    typed('K9AAA', 'COOK/DUPG')
+    expect(hints()).toEqual(['COOK is a dupe; DUPG is new'])
+    expect(badge()).toBe('')
+    expect(callBox().classList.contains('le-fd-input-dupe')).toBe(false)
   })
 
   it('CONTROL: a line whose every county is new says nothing, as a new county does', () => {

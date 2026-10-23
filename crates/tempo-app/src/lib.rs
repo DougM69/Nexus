@@ -308,6 +308,7 @@ impl AppState {
                 smeter_db: None, // engine fills from CAT STRENGTH read-back
                 tx_swr: None,    // engine fills from the keyed-only TX-meter poll
                 tx_alc: None,
+                tx_alc_zone: None,
                 tx_po_w: None,
                 tx_comp_db: None,
                 swr_scale_verified: false,
@@ -336,12 +337,17 @@ impl AppState {
                 tx_allowed: true,
                 tx_refusal: None,
                 tx_emission_mhz: None,
+                phone_usb_only: false,
+                phone_mode_refused: false,
+                fm_channel: false,
                 tuning: false,
                 tx_watchdog: false,
                 slot_key_refused: None,
                 slot_unkey_failed: None,
                 slot_audio_lost: None,
+                slot_over_dropped: None,
                 ptt_refused: None,
+                voice_dropped: None,
                 decode_depth: 3,
                 qso_recording: false,
                 cat_ok: None,
@@ -355,6 +361,7 @@ impl AppState {
                 audio_error: None,
                 audio_error_kind: None,
                 cat_share_error: None,
+                tci_server: None,
                 scope_error: None,
                 scope_span_refused: None,
                 scope_mode_code: None,
@@ -413,8 +420,8 @@ impl AppState {
 
     /// Queue a directed free-text message to `peer` and append it to that peer's
     /// conversation as an outbound [`dto::ChatMessage`]. The store-and-forward
-    /// queue releases it on air once the peer is heard present.
-    pub fn send_message(&mut self, peer: &str, text: &str) {
+    /// queue releases it on air once the peer is heard present. Returns its id in the queue.
+    pub fn send_message(&mut self, peer: &str, text: &str) -> char {
         let ack_id = self.store.queue(peer, text, self.slot);
         let msg = ChatMessage {
             from: Some(self.mycall.clone()),
@@ -437,6 +444,26 @@ impl AppState {
             abandoned: false,
         };
         self.conversation_mut(peer).messages.push(msg);
+        ack_id
+    }
+
+    /// Drop the message `id` to `peer` from the store-and-forward queue while it is still to be
+    /// sent or acknowledged, and mark its bubble abandoned, so it never keys again and the
+    /// operator can send it again. Whether it was dropped: one already delivered, or given up
+    /// on, is left as it is.
+    pub fn abandon_queued(&mut self, peer: &str, id: char) -> bool {
+        if !self.store.drop_one(peer, id) {
+            return false;
+        }
+        if let Some(m) = self.conversations.get_mut(peer).and_then(|c| {
+            c.messages
+                .iter_mut()
+                .find(|m| m.outbound && m.ack_id == Some(id))
+        }) {
+            m.stored = false;
+            m.abandoned = true;
+        }
+        true
     }
 
     /// Echo an outbound open broadcast into the band-activity feed (the
@@ -558,23 +585,19 @@ impl AppState {
     /// One-click RESEND of a no-ack / abandoned outbound bubble: re-queue the same text
     /// through store-and-forward with a FRESH cycle budget and re-point the SAME bubble at
     /// the new queue entry (new ack_id; attempts/flags reset) — no re-typing, no duplicate
-    /// bubble. Returns false if no matching outbound bubble exists.
-    pub fn resend_message(&mut self, peer: &str, ack_id: Option<char>) -> bool {
+    /// bubble. Returns its new id in the queue, or `None` if no matching outbound bubble exists.
+    pub fn resend_message(&mut self, peer: &str, ack_id: Option<char>) -> Option<char> {
         let peer_up = peer.to_uppercase();
         let slot = self.slot;
-        let Some(conv) = self.conversations.get_mut(&peer_up) else {
-            return false;
-        };
+        let conv = self.conversations.get_mut(&peer_up)?;
         // Match by exact id when given; else the newest terminal (no-ack/abandoned) bubble.
-        let Some(m) = conv.messages.iter_mut().rev().find(|m| {
+        let m = conv.messages.iter_mut().rev().find(|m| {
             m.outbound
                 && match ack_id {
                     Some(id) => m.ack_id == Some(id),
                     None => m.no_ack || m.abandoned,
                 }
-        }) else {
-            return false;
-        };
+        })?;
         let text = m.text.clone();
         let new_id = self.store.queue(&peer_up, &text, slot);
         m.ack_id = Some(new_id);
@@ -584,7 +607,7 @@ impl AppState {
         m.delivered = false;
         m.abandoned = false;
         m.stored = true; // held until the peer is heard, exactly like a fresh send
-        true
+        Some(new_id)
     }
 
     /// Stamp a released outbound bubble's transmit-cycle count (exact ack-id match).
@@ -991,6 +1014,7 @@ impl AppState {
             work_view: None,
             work_call: None,
             work_park: None,
+            work_afar: false,
             field_day: None,
             // The engine's club link (fills in snapshot()).
             club_link: None,
@@ -999,6 +1023,8 @@ impl AppState {
             late_decodes: None,
             highlights: Vec::new(),
             clear_tick: 0,
+            udp_free_text: None,
+            rx_freq_clear_tick: 0,
             logged_tick: 0,
             hunt: None,
             // Filled by the engine while coordinated QSY is enabled; None here.

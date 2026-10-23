@@ -99,7 +99,7 @@ function typeContact(call: string, county: string, fdMode: 'CW' | 'DIG' | 'PH' =
       fdMode={fdMode}
     />,
   )
-  fireEvent.change(screen.getByPlaceholderText('W1AW'), { target: { value: call } })
+  fireEvent.change(screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { target: { value: call } })
   const cap = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].find((n) => n.textContent === 'County / State')
   if (!cap) throw new Error('no received QTH box')
   const qth = cap.closest('label')!.querySelector('input')! as HTMLInputElement

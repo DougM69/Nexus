@@ -1,7 +1,7 @@
 //! A streamed Remote operator's microphone, on the engine: the over's latch ([`crate::mic`]),
 //! ARMED by their held PTT, KEYED by their audio, and ended by every stop the station has.
 //!
-//! ## M1 with S7: the hold arms, audio keys, either gap unkeys
+//! ## M1: the hold arms, audio keys, either gap unkeys
 //!
 //! The page's held PTT ([`crate::remote_control::ptt_hold::PttHold`]) used to key the station on
 //! the hold alone, through the desktop's own PTT verb. Under M1 it ARMS a microphone over instead
@@ -16,7 +16,8 @@
 //! instead of the page's hold, and by every rule below.
 //!
 //! What the page is shown of the over (`micState`) is published to the feed by each tick of a live
-//! over and by its end ([`MicStatus`]).
+//! over and by its end ([`MicStatus`]), with the over's holes on the air so far, which are display
+//! only ([`crate::mic::MicLatch::holes`]).
 //!
 //! ## Where each stop reaches it
 //!
@@ -24,9 +25,9 @@
 //! the latch is dropped, and the one-shot abort is armed when the rig was keyed, which the radio
 //! loop turns into `flush_output(); rig.ptt(false)`, as it does the voice keyer's.
 //! - `halt_tx`, the universal stop (the desktop's Stop TX, the stream's own Stop, WSJT-X's HaltTx,
-//!   a lapse of the stream's presence): unchanged, and it drops the over (M10).
+//!   a lapse of the stream's presence): unchanged, and it drops the over.
 //! - `set_tx_enabled(false)`: TX Off ends a microphone over in flight, as it does RTTY and SSTV
-//!   (M10, the design's one deliberate change to what a shipped button does).
+//!   (the one deliberate change to what a shipped button does).
 //! - The per-tick predicate ([`Engine::poll_mic`]): every gate, the ceiling, the watchdog, presence
 //!   for THIS over, the transmit route, and the audio gap.
 //! - The radio loop, when it does not own the operator's radio (`may_key`).
@@ -137,11 +138,14 @@ impl Engine {
     /// tick of a live over ([`Self::poll_mic`]), and by its end, after which no tick runs.
     fn publish_mic_status(&self) {
         if let Some(feed) = &self.mic_feed {
+            let (holes, hole_ms) = self.mic.holes();
             feed.publish(MicStatus {
                 armed: self.mic.active(),
                 keyed: self.mic.keyed(),
                 no_power_out: self.mic_no_power_out(),
                 ended: self.mic_ended,
+                holes,
+                hole_ms,
             });
         }
     }
@@ -230,6 +234,8 @@ impl Engine {
                 MicDrop::Ceiling => MicEnded::Ceiling,
                 MicDrop::Watchdog => MicEnded::Watchdog,
                 MicDrop::AudioGap => MicEnded::AudioGap,
+                // Never: nothing releases the microphone's latch (its release is a drop).
+                MicDrop::Drained => MicEnded::Released,
             });
             // An unexplained unkey reads as a fault: say why.
             tempo_core::applog::info(
@@ -244,6 +250,7 @@ impl Engine {
                         MicDrop::Ceiling => "it reached its 10-minute ceiling",
                         MicDrop::Watchdog => "the TX watchdog tripped",
                         MicDrop::AudioGap => "no audio arrived for 200 ms",
+                        MicDrop::Drained => "it was let go and played out",
                     }
                 ),
             );
@@ -332,7 +339,7 @@ mod tests {
         }
     }
 
-    // ── M1 with S7 ────────────────────────────────────────────────────────────────────────────
+    // ── M1 ────────────────────────────────────────────────────────────────────────────────────
 
     /// ★ M1: the held PTT arms, and only the page's audio keys. `arming_without_audio_never_asserts_ptt`
     /// at the engine: a hundred ticks of a held PTT with no audio key nothing.
@@ -483,9 +490,9 @@ mod tests {
         );
     }
 
-    // ── M7: a lease lapse mid-over ends it ────────────────────────────────────────────────────
+    // ── A lease lapse mid-over ends it ────────────────────────────────────────────────────────
 
-    /// ★ M7: presence lapses mid-over (the page's heartbeats stopped). The next radio-loop poll
+    /// ★ Presence lapses mid-over (the page's heartbeats stopped). The next radio-loop poll
     /// ends the over and arms the abort. CONTROL: a tick before the deadline it is still keyed.
     #[test]
     fn a_lapse_of_presence_mid_over_unkeys_on_the_next_tick() {
@@ -526,7 +533,7 @@ mod tests {
         }
     }
 
-    // ── M10: the existing stops, unchanged ────────────────────────────────────────────────────
+    // ── The existing stops, unchanged ─────────────────────────────────────────────────────────
 
     /// `halt_tx` (Stop TX, a Stop from the stream, HaltTx) and TX Off each end a keyed over, arm
     /// the abort, and close the feed.
@@ -590,7 +597,7 @@ mod tests {
         );
     }
 
-    /// And `Armed` only while the armed over OWNS the transmitter (the lead's Q1 ruling,
+    /// And `Armed` only while the armed over OWNS the transmitter (decided
     /// 2026-09-29): the header's ON AIR sign waits on it for every over, the page's own Hold PTT
     /// included. Anything the arbiter puts in front of it is on the air (a key at the shack, an FT
     /// over, the tune carrier), and then the over is not reported armed, so the sign lights.
@@ -767,7 +774,7 @@ mod tests {
     // ── What the page is shown (micState) ─────────────────────────────────────────────────────
 
     /// The over as the page is shown it: armed, then keyed by the voice, then its end and why.
-    /// Each end names its own cause, so the page can say the right thing (design §7).
+    /// Each end names its own cause, so the page can say the right thing.
     #[test]
     fn the_page_is_shown_the_over_and_why_it_ended() {
         use crate::mic::{MicEnded, MicStatus};
@@ -776,6 +783,7 @@ mod tests {
             keyed,
             no_power_out: false,
             ended,
+            ..MicStatus::default()
         };
         // The voice stops: the audio gap.
         let mut s = scene();
@@ -837,6 +845,44 @@ mod tests {
                 "{name}: the keyed over ended without its abort"
             );
         }
+    }
+
+    /// ★ The over's holes on the air are published with its state, display only: a stall of 150 ms
+    /// in the page's audio is one hole while the over goes on. CONTROL: on time, the audio leaves
+    /// none.
+    #[test]
+    fn the_overs_holes_on_the_air_are_published_with_its_state() {
+        let mut s = scene();
+        s.key();
+        // A frame every 20 ms; those sent from 200 ms until 350 ms arrive together as it ends.
+        let mut waiting: Vec<MicFrame> = Vec::new();
+        for k in 1..=40u64 {
+            let n = 20 * k;
+            if n.is_multiple_of(100) {
+                s.hold.hold(PRESS, s.at(n));
+            }
+            let arrives = if (200..350).contains(&n) { 350 } else { n };
+            waiting.push(frame(k, s.at(arrives)));
+            let (due, later): (Vec<MicFrame>, Vec<MicFrame>) =
+                waiting.into_iter().partition(|f| f.arrived <= s.at(n));
+            waiting = later;
+            for f in due {
+                s.feed.push(f).unwrap();
+            }
+            s.tick(n);
+            if n == 180 {
+                let status = s.feed.status();
+                assert_eq!(
+                    (status.holes, status.hole_ms),
+                    (0, 0),
+                    "on time: {status:?}"
+                );
+            }
+        }
+        assert!(s.e.mic_keyed(), "a stall under the gap ended the over");
+        let status = s.feed.status();
+        assert_eq!(status.holes, 1, "{status:?}");
+        assert!((40..=110).contains(&status.hole_ms), "{status:?}");
     }
 
     /// ★ The operator's ruling "Arms your mic": a press of the Phone cockpit's PTT made through the

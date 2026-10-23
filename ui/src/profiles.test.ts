@@ -132,6 +132,17 @@ describe('mergeProfile — the profile-load contract', () => {
     expect(merged.band).toBe('40m') // control: the profile's real settings still apply
   })
 
+  it('nor does the mark that says a LoTW download of every call made the cursor', () => {
+    // The mark belongs to the cursor beside it. Imported onto an older build's cursor (a download
+    // of the Settings call alone made it), it would let the next sync ask from that cursor, and
+    // skip for good every confirmation of the operator's other calls matched before it.
+    const older = { ...current, lotwCursorEveryCall: false } as unknown as Settings
+    const foreign = { lotwCursorEveryCall: true, band: '40m' } as unknown as Settings
+    const merged = mergeProfile(older, foreign) as unknown as Record<string, unknown>
+    expect(merged.lotwCursorEveryCall).toBe(false)
+    expect(merged.band).toBe('40m') // control: the profile's real settings still apply
+  })
+
   it('a profile value the operator set DOES override the current one', () => {
     const p = { maxPowerDigital: 0.5 } as unknown as Settings
     const merged = mergeProfile(current, p) as unknown as Record<string, unknown>
@@ -328,5 +339,62 @@ describe('a profile saved before Contest mode was named loads unchanged', () => 
     const renamed = { contestMode: true } as unknown as Settings
     const merged = mergeProfile(settings({ fdActive: false } as unknown as Partial<Settings>), renamed)
     expect((merged as unknown as Record<string, unknown>).fdActive).toBe(false)
+  })
+})
+
+// JS8Call's two send options travel with a profile as the rest of a station's JS8 settings do: a
+// profile that sets them loads them, and one saved before they existed leaves the current choice.
+describe('mergeProfile — the JS8 send options travel with a profile', () => {
+  it('loads Hold PTT and the TX offset while sending from a profile, and keeps them over an older one', () => {
+    const current = settings({ js8HoldPtt: false, js8TxOffsetWhileSending: false })
+    const merged = mergeProfile(current, settings({ js8HoldPtt: true, js8TxOffsetWhileSending: true }))
+    expect([merged.js8HoldPtt, merged.js8TxOffsetWhileSending]).toEqual([true, true])
+    const older = mergeProfile(settings({ js8HoldPtt: true, js8TxOffsetWhileSending: true }), settings({}))
+    expect([older.js8HoldPtt, older.js8TxOffsetWhileSending], 'a profile from before them').toEqual([true, true])
+  })
+
+  it('loads the RTTY AFSK sideband from a profile, and keeps it over a profile from before it', () => {
+    expect(mergeProfile(settings({ rttyAfskSideband: 'lsb' }), settings({ rttyAfskSideband: 'usb' })).rttyAfskSideband).toBe('usb')
+    expect(mergeProfile(settings({ rttyAfskSideband: 'usb' }), settings({})).rttyAfskSideband, 'a profile from before it').toBe('usb')
+  })
+
+  it('loads the TX delay from a profile, and keeps it over a profile from before it', () => {
+    expect(mergeProfile(settings({ js8TxDelayMs: 200 }), settings({ js8TxDelayMs: 400 })).js8TxDelayMs).toBe(400)
+    expect(mergeProfile(settings({ js8TxDelayMs: 300 }), settings({})).js8TxDelayMs, 'a profile from before it').toBe(300)
+  })
+})
+
+// A profile saved on a computer driving the station holds that read's notes about the station
+// (which settings are set there, which keys are saved there). They are not settings: loaded at
+// the station, they would mark its own form "Set at the station".
+describe('a profile saved from afar loads at the station without the read’s notes', () => {
+  it('keeps the current read’s notes, whatever the profile carries', () => {
+    const saved = settings({
+      stationOnlySettings: ['txWatchdogMin'],
+      secretsSavedAtStation: { clublogApiKey: true },
+      mygrid: 'EN61',
+    })
+    const merged = mergeProfile(settings({ mygrid: 'EN52' }), saved)
+    expect(merged.stationOnlySettings).toBeUndefined()
+    expect(merged.secretsSavedAtStation).toBeUndefined()
+    expect(merged.mygrid, 'CONTROL: the rest of the profile loads').toBe('EN61')
+  })
+})
+
+// A snapshot read without the station's stored keys (from afar, or while a stream watches the
+// station) holds them blank. Saved so, loading the profile would blank the station's own key.
+describe('a profile saved from a read without the stored keys keeps the station’s key on load', () => {
+  beforeEach(() => memStore.clear())
+  it('leaves the blank keys out, so the current key stays', () => {
+    saveProfile('Field', settings({ clublogApiKey: '', secretsSavedAtStation: { clublogApiKey: true }, mygrid: 'EN61' }))
+    const [saved] = loadProfiles()
+    expect('clublogApiKey' in saved.settings).toBe(false)
+    const merged = mergeProfile(settings({ clublogApiKey: 'FAKE-KEY-0001' }), saved.settings)
+    expect(merged.clublogApiKey).toBe('FAKE-KEY-0001')
+    expect(merged.mygrid, 'CONTROL: the rest of the profile loads').toBe('EN61')
+  })
+  it('CONTROL: a profile read with its key keeps that key', () => {
+    saveProfile('Home', settings({ clublogApiKey: 'FAKE-KEY-0002' }))
+    expect(loadProfiles()[0].settings.clublogApiKey).toBe('FAKE-KEY-0002')
   })
 })

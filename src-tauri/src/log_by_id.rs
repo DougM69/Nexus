@@ -19,17 +19,25 @@
 //! QSL-sent and paper-card marks where the form changes them, in one commit — where the form
 //! used to send three commands, each its own write.
 
+use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use tauri::State;
 use tempo_app::dto::LoggedQso;
+#[cfg(test)]
+use tempo_app::engine::Engine;
+use tempo_app::logstore::LogRows;
 use tempo_app::station::{MadeRow, RowRefusal};
+use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Scope};
 use tempo_core::logbook::{LogOp, QsoEdit, QsoRecord, RecordId};
+
+mod picture;
 
 use crate::{durable_command, qsl_via_arg, sat_name_arg, SharedEngine};
 
-/// One contact, as the version whose edit key is `edit_key`. The same shape a Remote page
-/// names a row by (`remote_service::operations::logging::Target::Id`).
+/// One contact, as the version whose edit key is `edit_key`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RowRef {
@@ -63,11 +71,11 @@ pub enum RowAnswer {
     Busy {},
 }
 
-/// `r` as a page of the log shows it (the entity resolved, as the parent's `log_row` does), with
-/// its key.
+/// `r` as a page of the log shows it (its entity as a page gives it, [`crate::log_queries::shown`]),
+/// with its key.
 fn keyed(r: &QsoRecord) -> KeyedRow {
     let mut row = LoggedQso::from(r.clone());
-    row.entity = propagation::dxcc::resolve(&row.call).map(|i| i.entity.to_string());
+    row.entity = crate::log_queries::shown(r);
     KeyedRow {
         row,
         edit_key: QsoEdit::project(r).key(),
@@ -240,6 +248,59 @@ pub(crate) async fn sat_tag(
     .await
 }
 
+/// What a `dxcc` argument MEANS on [`set_dxcc_by_id`]: `null` clears the number the contact
+/// counts toward (its call counts again), and any other value must name a DXCC entity, current or
+/// deleted ([`propagation::dxcc::entity_by_dxcc`]). ADIF's 0 ("no entity") names none, and a
+/// record keeps whatever it is given, so a number the awards would pass over is refused here
+/// rather than written.
+fn dxcc_arg(dxcc: Option<u32>) -> Result<Option<u32>, String> {
+    match dxcc {
+        Some(code) if propagation::dxcc::entity_by_dxcc(code).is_none() => Err(format!(
+            "DXCC {code} is not a DXCC entity — pick one from the list."
+        )),
+        _ => Ok(dxcc),
+    }
+}
+
+/// Set — or clear — by hand the DXCC entity the contact counts toward (ADIF `DXCC`): `dxcc` is
+/// the entity's number, `null` clears it and the contact counts by its call again. LoTW's number
+/// for the contact, where it keeps one, still counts over it (`tempo_core`'s `dxcc_set`). The
+/// contact's `COUNTRY` is written with it: the name the number it is left with gives it, or its
+/// call's entity where it is left with none (`StationCore::dxcc_ops`).
+#[tauri::command]
+pub async fn set_dxcc_by_id(
+    state: State<'_, SharedEngine>,
+    target: RowRef,
+    dxcc: Option<u32>,
+) -> Result<RowAnswer, String> {
+    set_dxcc(Arc::clone(&state), target, dxcc).await
+}
+
+pub(crate) async fn set_dxcc(
+    engine: SharedEngine,
+    target: RowRef,
+    dxcc: Option<u32>,
+) -> Result<RowAnswer, String> {
+    // Gated BEFORE the lock, as the satellite tag is.
+    let dxcc = dxcc_arg(dxcc)?;
+    let id = id_of(&target)?;
+    // Planned on the row as it stands, unlike `change_row`'s ops: the COUNTRY that goes with the
+    // number is named from the row's own call, and from LoTW's number where a clear leaves it.
+    durable_command(move || {
+        let (made, durability) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::set_dxcc(&engine, id, &target.edit_key, dxcc)
+        });
+        (
+            made.map(|made| match made {
+                Ok(made) => applied(made),
+                Err(refusal) => refused(refusal),
+            }),
+            durability,
+        )
+    })
+    .await
+}
+
 /// [`crate::delete_qso`], by id.
 #[tauri::command]
 pub async fn delete_qso_by_id(
@@ -253,6 +314,149 @@ pub(crate) async fn delete_row(engine: SharedEngine, target: RowRef) -> Result<R
     change_row(engine, target, LogOp::Delete).await
 }
 
+// ── A row the log view showed, found again by its content ───────────────────────────────────
+//
+// The view hands back the row it showed (`LoggedQso`), never a position; these find the contact
+// whose own row that is, with the Engine lock released (one picture of the log, `picture::read`).
+
+/// The contact a log command names: the row the log view showed, keyed ([`seen_target`]). It is
+/// found as it stands now, or refused as stale.
+#[derive(Clone, Debug)]
+pub(crate) struct KeyTarget {
+    call: String,
+    when_unix: u64,
+    key: String,
+}
+
+/// The bytes a row key is the SHA-256 of. Numbers are compared in millionths, so a float and the
+/// same integer agree.
+fn row_canonical(value: &Value) -> String {
+    fn walk(value: &Value, out: &mut String) {
+        match value {
+            Value::Null => out.push('z'),
+            Value::Bool(b) => out.push(if *b { 't' } else { 'f' }),
+            Value::Number(n) => {
+                let x = n.as_f64().unwrap_or(0.0);
+                let micro = (x.abs() * 1e6).round();
+                let sign = if x < 0.0 && micro != 0.0 { "-" } else { "" };
+                let _ = write!(out, "n{sign}{micro:.0};");
+            }
+            Value::String(s) => {
+                let _ = write!(out, "s{}:{s}", s.len());
+            }
+            Value::Array(items) => {
+                let _ = write!(out, "a{}[", items.len());
+                items.iter().for_each(|item| walk(item, out));
+                out.push(']');
+            }
+            Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                let _ = write!(out, "o{}{{", keys.len());
+                for k in keys {
+                    let _ = write!(out, "s{}:{k}", k.len());
+                    walk(&map[k], out);
+                }
+                out.push('}');
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(value, &mut out);
+    out
+}
+
+fn value_key(row: &Value) -> String {
+    digest(&SHA256, row_canonical(row).as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The key of a stored record, built as the log view's row is built (the DTO plus its entity,
+/// [`crate::log_queries::shown`]). If that row shape changes, keys stop matching and every change
+/// is refused as stale — safe, and caught by the echoed-row test.
+pub(crate) fn row_key(record: &QsoRecord) -> String {
+    let mut q = tempo_app::dto::LoggedQso::from(record.clone());
+    q.entity = crate::log_queries::shown(record);
+    serde_json::to_value(q)
+        .map(|v| value_key(&v))
+        .unwrap_or_default()
+}
+
+/// The identity of a row the log view showed: the row itself, exactly as the view was handed it,
+/// keyed by its canonical bytes' SHA-256. [`find`] then finds the record whose OWN key matches
+/// (the change checks it is still that version where it is made), so the row is a claim to be
+/// matched, never an address to trust. The view computes no hash (the desktop webview has no proven `crypto.subtle`), and
+/// the view is handed no such keys: keying a whole log on every reload would cost a serialise and a
+/// digest per record under the engine lock, where keying one row on one click costs nothing anyone
+/// can notice.
+pub(crate) fn seen_target(seen: &tempo_app::dto::LoggedQso) -> KeyTarget {
+    KeyTarget {
+        call: seen.call.clone(),
+        when_unix: seen.when_unix,
+        key: serde_json::to_value(seen)
+            .map(|v| value_key(&v))
+            .unwrap_or_default(),
+    }
+}
+
+/// What finding a key target's contact reads of the contacts with its call: the call and the
+/// time, the two things the target names outright.
+const CANDIDATES: Narrow = Narrow {
+    columns: &["call", "when_unix"],
+    uploads: false,
+};
+
+/// The contact the log view saw as a [`RowRef`]: its id and the edit key of the version found,
+/// or `None` when no contact is that row any more. A position is never the answer: one kept from
+/// an earlier read is stale the moment another writer deletes above it, and acting on it deleted
+/// or rewrote a different contact.
+///
+/// It is the FIRST contact in log order whose own row is
+/// the row the view saw ([`row_key`]), as the search of the log in memory took it, found in ONE
+/// picture of the log with the Engine lock released (SPEC-2 v3 C18). SQL narrows to the contacts
+/// whose `call_norm` is the call's, which holds every contact with exactly that call; the call,
+/// the time and the key are tested here, on whole records from that same picture.
+///
+/// ⚠️ A key target reads the store: never under the Engine lock (a debug build panics). Take
+/// `rows` (`Engine::log_rows`) under it; the change checks what was found where it is made
+/// ([`crate::change_found`]).
+pub(crate) fn find(rows: &LogRows, t: &KeyTarget) -> Result<Option<RowRef>, &'static str> {
+    let call = call_norm_of(&t.call);
+    picture::read(rows, |log| {
+        let mut picks = Vec::new();
+        log.each_in(Scope::CallNorm(&call), CANDIDATES, &mut |pick, q| {
+            if q.call == t.call && q.when_unix == t.when_unix {
+                picks.push(pick);
+            }
+            Ok(())
+        })?;
+        let first = log.whole(&picks)?.into_iter().find(|r| row_key(r) == t.key);
+        Ok(first.and_then(|r| {
+            Some(RowRef {
+                id: r.id?.to_string(),
+                edit_key: QsoEdit::project(&r).key(),
+            })
+        }))
+    })
+}
+
+/// The check a change makes where it is made ([`crate::change_found`]: the version found is still the
+/// contact's), asked of the store alone — for a test that holds what [`find`] found. The id, or
+/// `None` when the contact is gone or another version.
+///
+/// ⚠️ It reads the store: a test holding the Engine lock holds it raw.
+#[cfg(test)]
+pub(crate) fn locate(engine: &Engine, row: &RowRef) -> Option<RecordId> {
+    let id = row.id.parse().ok()?;
+    engine.fresh_log_row(id, &row.edit_key).ok().map(|_| id)
+}
+
+#[cfg(test)]
+mod find_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,11 +466,12 @@ mod tests {
     use tempo_app::engine::engine_lock;
     use tempo_core::logbook::{QslVia, UploadOutcome};
 
-    const COMMANDS: [&str; 5] = [
+    const COMMANDS: [&str; 6] = [
         "edit_qso_by_id",
         "mark_qsl_sent_by_id",
         "mark_qsl_card_by_id",
         "set_sat_tag_by_id",
+        "set_dxcc_by_id",
         "delete_qso_by_id",
     ];
 
@@ -463,6 +668,7 @@ mod tests {
             rt.block_on(qsl_sent(engine.clone(), stale.clone(), Some("B".into()))),
             rt.block_on(qsl_card(engine.clone(), stale.clone(), false)),
             rt.block_on(sat_tag(engine.clone(), stale.clone(), None)),
+            rt.block_on(set_dxcc(engine.clone(), stale.clone(), Some(182))),
             rt.block_on(delete_row(engine.clone(), stale.clone())),
             rt.block_on(edit_row(
                 engine.clone(),
@@ -505,6 +711,699 @@ mod tests {
         };
         assert!(rt.block_on(delete_row(engine.clone(), malformed)).is_err());
         assert_eq!(engine.lock().unwrap().stored_log(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── the DXCC entity set by hand ─────────────────────────────────────────
+
+    /// A store-backed engine whose log holds `rows` (ADIF records, header added), on a folder of
+    /// the test's own, with the station's country resolvers wired as the launch wires them.
+    fn engine_with(tag: &str, rows: &str) -> (std::path::PathBuf, SharedEngine) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-dxcc-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let adif = format!("{}{rows}", tempo_core::logbook::adif_header());
+        std::fs::write(dir.join("log.adi"), adif).expect("log");
+        let opened = tempo_app::logstore::open(
+            &dir.join("log.adi"),
+            Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+            None,
+        )
+        .expect("the store opens");
+        let mut e = tempo_app::engine::Engine::new("K2DEF", "FN31", 0);
+        e.attach_log_store(opened);
+        crate::wire_country_resolvers(&mut e);
+        (dir, Arc::new(std::sync::Mutex::new(e)))
+    }
+
+    /// The 2015 Navassa operation on its US 1×1 call, as an old log holds it: no DXCC number,
+    /// so cty.dat's `=K1N` places it in the United States. Not confirmed.
+    const K1N_2015: &str =
+        "<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW<EOR>\n";
+
+    /// [`K1N_2015`] as Nexus's own log holds it: the country its call names, filled when it was
+    /// logged.
+    const K1N_2015_LOGGED: &str = "<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:6>123400<BAND:3>20m\
+        <MODE:2>CW<COUNTRY:13>United States<EOR>\n";
+
+    /// [`K1N_2015`] as another logger exported it: 182 for Navassa, and a `COUNTRY` that the number
+    /// contradicts — the call's entity.
+    const K1N_2015_CONTRADICTED: &str = "<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:6>123400\
+        <BAND:3>20m<MODE:2>CW<DXCC:3>182<COUNTRY:13>United States<EOR>\n";
+
+    /// A contact's (DXCC, COUNTRY).
+    fn pair(r: &QsoRecord) -> (Option<u32>, Option<String>) {
+        (r.dxcc, r.country.clone())
+    }
+
+    /// Each contact's (DXCC, COUNTRY) in the Logbook's ADIF export, as the desktop writes it.
+    fn exported(engine: &SharedEngine) -> Vec<(String, Option<u32>, Option<String>)> {
+        let source = tempo_app::logexport::Source::of(&engine_lock(engine));
+        let file = tempo_app::logexport::export_logbook(&source, "adif", None, None)
+            .expect("exported")
+            .text;
+        tempo_core::logbook::parse_adif(&file)
+            .iter()
+            .map(|r| (r.call.clone(), r.dxcc, r.country.clone()))
+            .collect()
+    }
+
+    /// The contact's (DXCC, COUNTRY) in the ADIF a logbook service is sent for the Logbook's `row`
+    /// (`upload_record`, every service push's one conversion).
+    fn uploaded(row: &LoggedQso) -> (Option<u32>, Option<String>) {
+        let adif = tempo_core::logbook::adif_record(&crate::upload_record(row.clone()));
+        pair(&tempo_core::logbook::parse_adif(&adif)[0])
+    }
+
+    /// The award summary as the Awards view reads it: from the store.
+    fn awards(engine: &SharedEngine) -> Arc<propagation::AwardSummary> {
+        crate::log_folds::awards_kept(engine, &crate::LogTallies::default()).expect("folded")
+    }
+
+    /// The entities worked and not yet confirmed — the Awards view's "new one" chase.
+    fn chase(engine: &SharedEngine) -> Vec<String> {
+        awards(engine)
+            .needed
+            .iter()
+            .map(|n| n.entity.clone())
+            .collect()
+    }
+
+    /// ★ SP9RCL's case: an old log's K1N contact carries no DXCC number, so it counts as the
+    /// United States. Set to Navassa by hand, it counts as Navassa — stored as ADIF `DXCC`, read
+    /// by the awards from the store — and the row the change answers with shows it. Cleared, it
+    /// counts by its call again.
+    #[test]
+    fn a_k1n_contact_set_to_navassa_by_hand_counts_navassa_and_a_clear_falls_back() {
+        let (dir, engine) = engine_with("k1n", K1N_2015);
+        let rt = runtime();
+        assert_eq!(chase(&engine), ["United States"], "premise: the call alone");
+
+        let (target, _) = row_ref(&engine, 0);
+        let now = current(
+            rt.block_on(set_dxcc(engine.clone(), target.clone(), Some(182)))
+                .expect("made"),
+        );
+        assert_eq!(chase(&engine), ["Navassa Island"]);
+        let stored = on_disk(&dir, &target.id).expect("on disk when the command returned");
+        assert_eq!(stored.dxcc, Some(182));
+        assert_eq!(now.row.entity.as_deref(), Some("Navassa Island"));
+        assert_eq!(now.row.dxcc, Some(182));
+
+        let next = RowRef {
+            id: target.id.clone(),
+            edit_key: now.edit_key,
+        };
+        let now = current(
+            rt.block_on(set_dxcc(engine.clone(), next, None))
+                .expect("made"),
+        );
+        assert_eq!(on_disk(&dir, &target.id).expect("held").dxcc, None);
+        assert_eq!(chase(&engine), ["United States"], "the call counts again");
+        assert_eq!(now.row.entity.as_deref(), Some("United States"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The number set by hand is the contact's ADIF `DXCC`: the export writes it, and a log that
+    /// imports the file counts the contact as Navassa.
+    #[test]
+    fn a_dxcc_set_by_hand_survives_an_export_and_an_import() {
+        let (dir, engine) = engine_with("export", K1N_2015);
+        let rt = runtime();
+        let (target, _) = row_ref(&engine, 0);
+        current(
+            rt.block_on(set_dxcc(engine.clone(), target, Some(182)))
+                .expect("made"),
+        );
+        let source = tempo_app::logexport::Source::of(&engine_lock(&engine));
+        let file = tempo_app::logexport::export_logbook(&source, "adif", None, None)
+            .expect("exported")
+            .text;
+
+        let (into, other) = engine_with("import", "");
+        let (made, _) =
+            tempo_app::logwrite::until_written(|| tempo_app::logwrite::import_adif(&other, &file));
+        assert_eq!(made.expect("imported").0, 1, "one contact added");
+        assert_eq!(chase(&other), ["Navassa Island"]);
+        let held = other.lock().unwrap().stored_log();
+        assert_eq!(held.iter().map(|r| r.dxcc).collect::<Vec<_>>(), [Some(182)]);
+        assert!(file.contains("<DXCC:3>182"), "{file}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&into);
+    }
+
+    /// LoTW's number counts over one set by hand. The operator sets the K1N contact to the United
+    /// States; LoTW then confirms it as Navassa. The awards count Navassa, confirmed, and list the
+    /// two side by side, as they list any contact LoTW confirmed as another entity — the log's
+    /// own number is not changed.
+    #[test]
+    fn lotws_number_counts_over_one_set_by_hand_and_the_two_are_listed() {
+        let (dir, engine) = engine_with("lotw", K1N_2015);
+        let rt = runtime();
+        let (target, _) = row_ref(&engine, 0);
+        current(
+            rt.block_on(set_dxcc(engine.clone(), target.clone(), Some(291)))
+                .expect("made"),
+        );
+        let report = format!(
+            "{}<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+             <LOTW_QSL_RCVD:1>Y<DXCC:3>182<EOR>\n",
+            tempo_core::logbook::adif_header()
+        );
+        let (summary, _) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::merge_lotw_report(&engine, &report)
+        });
+        assert_eq!(
+            summary.expect("merged").matched,
+            1,
+            "premise: LoTW's row paired"
+        );
+        let summary = awards(&engine);
+        assert_eq!(
+            summary
+                .dxcc_disagreements
+                .iter()
+                .map(|x| (
+                    x.call.as_str(),
+                    x.logged_dxcc,
+                    x.logged_entity.as_deref(),
+                    x.lotw_dxcc,
+                    x.lotw_entity.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            [(
+                "K1N",
+                291,
+                Some("United States"),
+                182,
+                Some("Navassa Island")
+            )]
+        );
+        assert_eq!(
+            (summary.dxcc_confirmed, summary.needed.len()),
+            (1, 0),
+            "Navassa, confirmed"
+        );
+        let stored = on_disk(&dir, &target.id).expect("held");
+        assert_eq!(
+            (stored.dxcc, tempo_core::logbook::record_lotw_dxcc(&stored)),
+            (Some(291), Some(182)),
+            "the log keeps its own, LoTW's beside it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The number set by hand survives the edit form, which carries no DXCC and leaves it alone as
+    /// it leaves every field it does not carry; a callsign correction drops it with the call it
+    /// described.
+    #[test]
+    fn a_dxcc_set_by_hand_survives_an_edit_and_goes_with_a_corrected_call() {
+        let (dir, engine) = engine_with("edit", K1N_2015);
+        let rt = runtime();
+        let (target, _) = row_ref(&engine, 0);
+        let next = |key: String| RowRef {
+            id: target.id.clone(),
+            edit_key: key,
+        };
+        let now = current(
+            rt.block_on(set_dxcc(engine.clone(), target.clone(), Some(182)))
+                .expect("made"),
+        );
+        let mut edit = QsoEdit::project(&on_disk(&dir, &target.id).expect("held"));
+        edit.name = Some("Navassa".into());
+        let now = current(
+            rt.block_on(edit_row(engine.clone(), next(now.edit_key), edit))
+                .expect("made"),
+        );
+        assert_eq!(
+            chase(&engine),
+            ["Navassa Island"],
+            "an ordinary edit keeps it"
+        );
+        assert_eq!(on_disk(&dir, &target.id).expect("held").dxcc, Some(182));
+
+        let mut fix = QsoEdit::project(&on_disk(&dir, &target.id).expect("held"));
+        fix.call = "K1NA".into();
+        current(
+            rt.block_on(edit_row(engine.clone(), next(now.edit_key), fix))
+                .expect("made"),
+        );
+        assert_eq!(
+            on_disk(&dir, &target.id).expect("held").dxcc,
+            None,
+            "a corrected call drops it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Only a number that names a DXCC entity is written — ADIF's 0 ("no entity") and a number the
+    /// table does not hold are refused, changing nothing — and a deleted entity is one.
+    #[test]
+    fn only_a_number_that_names_an_entity_is_set() {
+        let (dir, engine) = engine_with("refused", K1N_2015);
+        let rt = runtime();
+        let (target, _) = row_ref(&engine, 0);
+        let before = engine.lock().unwrap().stored_log();
+        for code in [0, 73, 523] {
+            let refused = rt.block_on(set_dxcc(engine.clone(), target.clone(), Some(code)));
+            assert!(refused.is_err(), "{code}: {refused:?}");
+        }
+        assert_eq!(
+            engine.lock().unwrap().stored_log(),
+            before,
+            "nothing changed"
+        );
+        current(
+            rt.block_on(set_dxcc(engine.clone(), target.clone(), Some(229)))
+                .expect("made"),
+        );
+        assert_eq!(on_disk(&dir, &target.id).expect("held").dxcc, Some(229));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ COUNTRY follows the number set by hand. The K1N contact, logged as the United States, is
+    /// set to Navassa: the record, the Logbook's row (the cell and its tooltip), the ADIF export and
+    /// what an upload sends all say Navassa Island beside 182 — the two never disagree. Cleared,
+    /// the contact is its call's again, COUNTRY with it.
+    #[test]
+    fn a_country_set_by_hand_and_its_dxcc_number_agree_everywhere_the_contact_goes() {
+        let (dir, engine) = engine_with("agree", K1N_2015_LOGGED);
+        let rt = runtime();
+        let (target, held) = row_ref(&engine, 0);
+        let us = (None, Some("United States".to_string()));
+        assert_eq!(pair(&held), us, "premise: the call's entity, no number");
+
+        let now = current(
+            rt.block_on(set_dxcc(engine.clone(), target.clone(), Some(182)))
+                .expect("made"),
+        );
+        let navassa = (Some(182), Some("Navassa Island".to_string()));
+        let stored = on_disk(&dir, &target.id).expect("on disk when the command returned");
+        assert_eq!(pair(&stored), navassa, "the record");
+        assert_eq!((now.row.dxcc, now.row.country.clone()), navassa, "the row");
+        assert_eq!(
+            now.row.entity.as_deref(),
+            Some("Navassa Island"),
+            "the Country cell"
+        );
+        assert_eq!(
+            exported(&engine),
+            [("K1N".to_string(), navassa.0, navassa.1.clone())],
+            "the export"
+        );
+        assert_eq!(uploaded(&now.row), navassa, "an upload");
+
+        let next = RowRef {
+            id: target.id.clone(),
+            edit_key: now.edit_key,
+        };
+        let now = current(
+            rt.block_on(set_dxcc(engine.clone(), next, None))
+                .expect("made"),
+        );
+        assert_eq!(pair(&on_disk(&dir, &target.id).expect("held")), us);
+        assert_eq!((now.row.dxcc, now.row.country.clone()), us);
+        assert_eq!(now.row.entity.as_deref(), Some("United States"));
+        assert_eq!(exported(&engine), [("K1N".to_string(), us.0, us.1.clone())]);
+        assert_eq!(uploaded(&now.row), us);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Logbook form names COUNTRY by the DXCC number the contact keeps, not by its call: a K1N
+    /// contact imported as 182 beside the United States is Navassa Island once the operator saves
+    /// any edit to it. With no number left, the form names the call's entity, as it always has.
+    #[test]
+    fn an_edit_names_the_country_by_the_dxcc_number_the_contact_keeps() {
+        let (dir, engine) = engine_with("edit-country", K1N_2015_CONTRADICTED);
+        let rt = runtime();
+        let (target, held) = row_ref(&engine, 0);
+        let next = |key: String| RowRef {
+            id: target.id.clone(),
+            edit_key: key,
+        };
+        let mut edit = QsoEdit::project(&held);
+        edit.name = Some("Navassa".into());
+        let now = current(
+            rt.block_on(edit_row(engine.clone(), target.clone(), edit))
+                .expect("made"),
+        );
+        let stored = on_disk(&dir, &target.id).expect("held");
+        assert_eq!(
+            (pair(&stored), stored.name.as_deref()),
+            ((Some(182), Some("Navassa Island".into())), Some("Navassa")),
+            "the edit, and the country its number gives"
+        );
+        assert_eq!(now.row.country.as_deref(), Some("Navassa Island"));
+
+        // Control: the number cleared by hand, the next edit names the call's entity.
+        let now = current(
+            rt.block_on(set_dxcc(engine.clone(), next(now.edit_key), None))
+                .expect("made"),
+        );
+        let mut edit = QsoEdit::project(&on_disk(&dir, &target.id).expect("held"));
+        edit.name = Some("Again".into());
+        current(
+            rt.block_on(edit_row(engine.clone(), next(now.edit_key), edit))
+                .expect("made"),
+        );
+        assert_eq!(
+            pair(&on_disk(&dir, &target.id).expect("held")),
+            (None, Some("United States".into()))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A contact imported with a COUNTRY its DXCC number contradicts — K1N, 182, "United States"
+    /// — shows, exports and uploads under the number's name, Navassa Island. Its record is NOT
+    /// rewritten: nobody edited it, so the store still holds exactly what was imported. Controls:
+    /// a contact with no number, one with DXCC 0 and one with a number the table does not hold
+    /// keep their own COUNTRY, since no entity is named to follow.
+    #[test]
+    fn a_contact_imported_with_a_country_its_number_contradicts_goes_out_under_the_numbers_name() {
+        let rows = [
+            K1N_2015_CONTRADICTED,
+            "<CALL:4>W1AW<QSO_DATE:8>20200101<TIME_ON:6>120000<BAND:3>40m<MODE:2>CW\
+             <COUNTRY:24>UNITED STATES OF AMERICA<EOR>\n",
+            "<CALL:7>W1AW/MM<QSO_DATE:8>20200102<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+             <DXCC:1>0<COUNTRY:15>MARITIME MOBILE<EOR>\n",
+            "<CALL:4>W1AW<QSO_DATE:8>20200103<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW<DXCC:3>523\
+             <COUNTRY:24>UNITED STATES OF AMERICA<EOR>\n",
+        ]
+        .concat();
+        let (dir, engine) = engine_with("contradicted", &rows);
+        let held = engine.lock().unwrap().stored_log();
+        let id = |at: usize| held[at].id.expect("an id").to_string();
+        let before: Vec<QsoRecord> = (0..4)
+            .map(|at| on_disk(&dir, &id(at)).expect("held"))
+            .collect();
+        assert_eq!(
+            pair(&before[0]),
+            (Some(182), Some("United States".into())),
+            "premise: imported as it came"
+        );
+
+        let row = keyed(&held[0]).row;
+        assert_eq!(row.entity.as_deref(), Some("Navassa Island"), "shown");
+        assert_eq!(
+            exported(&engine),
+            [
+                ("K1N".to_string(), Some(182), Some("Navassa Island".into())),
+                (
+                    "W1AW".to_string(),
+                    None,
+                    Some("UNITED STATES OF AMERICA".into())
+                ),
+                (
+                    "W1AW/MM".to_string(),
+                    Some(0),
+                    Some("MARITIME MOBILE".into())
+                ),
+                (
+                    "W1AW".to_string(),
+                    Some(523),
+                    Some("UNITED STATES OF AMERICA".into())
+                ),
+            ],
+            "exported"
+        );
+        assert_eq!(
+            uploaded(&row),
+            (Some(182), Some("Navassa Island".into())),
+            "uploaded"
+        );
+        let after: Vec<QsoRecord> = (0..4)
+            .map(|at| on_disk(&dir, &id(at)).expect("held"))
+            .collect();
+        assert_eq!(after, before, "no stored record was rewritten");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A clear that leaves the log LoTW's number — LoTW confirmed the contact as Navassa while the
+    /// log held the United States — names COUNTRY by LoTW's number, which the contact now
+    /// carries: the number the change LEAVES, not the one the operator sent (none).
+    #[test]
+    fn a_clear_that_leaves_lotws_number_takes_its_country() {
+        let (dir, engine) = engine_with("lotw-country", K1N_2015_LOGGED);
+        let rt = runtime();
+        let (target, _) = row_ref(&engine, 0);
+        current(
+            rt.block_on(set_dxcc(engine.clone(), target.clone(), Some(291)))
+                .expect("made"),
+        );
+        let report = format!(
+            "{}<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+             <LOTW_QSL_RCVD:1>Y<DXCC:3>182<EOR>\n",
+            tempo_core::logbook::adif_header()
+        );
+        let (summary, _) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::merge_lotw_report(&engine, &report)
+        });
+        assert_eq!(summary.expect("merged").matched, 1, "premise: paired");
+        let (target, held) = row_ref(&engine, 0);
+        assert_eq!(
+            (pair(&held), tempo_core::logbook::record_lotw_dxcc(&held)),
+            ((Some(291), Some("United States".into())), Some(182)),
+            "premise: the log's own number, LoTW's beside it"
+        );
+        current(
+            rt.block_on(set_dxcc(engine.clone(), target.clone(), None))
+                .expect("made"),
+        );
+        assert_eq!(
+            pair(&on_disk(&dir, &target.id).expect("held")),
+            (Some(182), Some("Navassa Island".into()))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A WAE area follows its DXCC number strictly. A Sicily contact set to Italy's 248 by hand
+    /// is Italy in the record, the row (its Country column and its tooltip), the export and an
+    /// upload. One imported with 248 beside "Sicily" is shown, exported and uploaded as Italy, and
+    /// its stored record keeps "Sicily": nobody edited it. Without a number a Sicily contact is
+    /// still Sicily, as its call places it.
+    #[test]
+    fn a_wae_areas_contact_carrying_its_parents_number_is_its_parent_everywhere() {
+        let rows = [
+            "<CALL:6>IT9ABC<QSO_DATE:8>20200101<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <COUNTRY:6>Sicily<EOR>\n",
+            "<CALL:6>IT9XYZ<QSO_DATE:8>20200102<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <DXCC:3>248<COUNTRY:6>Sicily<EOR>\n",
+            "<CALL:6>IT9DEF<QSO_DATE:8>20200103<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <COUNTRY:6>Sicily<EOR>\n",
+        ]
+        .concat();
+        let (dir, engine) = engine_with("wae", &rows);
+        let rt = runtime();
+        let held = engine.lock().unwrap().stored_log();
+        let italy = (Some(248), Some("Italy".to_string()));
+        let sicily = (None, Some("Sicily".to_string()));
+
+        let imported = keyed(&held[1]).row;
+        assert_eq!(
+            imported.entity.as_deref(),
+            Some("Italy"),
+            "an imported one's Country column"
+        );
+        assert_eq!(uploaded(&imported), italy, "an imported one's upload");
+        let imported_before = on_disk(&dir, &imported.id.clone().expect("an id")).expect("held");
+
+        let (target, _) = row_ref(&engine, 0);
+        let now = current(
+            rt.block_on(set_dxcc(engine.clone(), target.clone(), Some(248)))
+                .expect("made"),
+        );
+        assert_eq!(
+            pair(&on_disk(&dir, &target.id).expect("held")),
+            italy,
+            "the record"
+        );
+        assert_eq!((now.row.dxcc, now.row.country.clone()), italy, "the row");
+        assert_eq!(
+            now.row.entity.as_deref(),
+            Some("Italy"),
+            "the Country column"
+        );
+        assert_eq!(uploaded(&now.row), italy, "an upload");
+        assert_eq!(
+            exported(&engine),
+            [
+                ("IT9ABC".to_string(), italy.0, italy.1.clone()),
+                ("IT9XYZ".to_string(), italy.0, italy.1.clone()),
+                ("IT9DEF".to_string(), sicily.0, sicily.1.clone()),
+            ],
+            "the export"
+        );
+        let plain = keyed(&held[2]).row;
+        assert_eq!(
+            (plain.entity.clone(), (plain.dxcc, plain.country.clone())),
+            (Some("Sicily".to_string()), sicily),
+            "without a number: its call's WAE area"
+        );
+        assert_eq!(
+            on_disk(&dir, &imported.id.expect("an id")).expect("held"),
+            imported_before,
+            "the imported record is not rewritten"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── COUNTRY filled from the DXCC number ─────────────────────────────────
+
+    /// A contact's (call, DXCC, COUNTRY), each as the station holds it.
+    fn held_countries(engine: &SharedEngine) -> Vec<(String, Option<u32>, Option<String>)> {
+        engine
+            .lock()
+            .unwrap()
+            .stored_log()
+            .iter()
+            .map(|r| (r.call.clone(), r.dxcc, r.country.clone()))
+            .collect()
+    }
+
+    /// K1N's 2015 contact carrying 182 and no COUNTRY, as a logger that writes `DXCC` only exports
+    /// it; and a W1AW contact carrying neither.
+    const NUMBER_NO_COUNTRY: &str = "<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:6>123400\
+        <BAND:3>20m<MODE:2>CW<DXCC:3>182<EOR>\n\
+        <CALL:4>W1AW<QSO_DATE:8>20200101<TIME_ON:6>120000<BAND:3>40m<MODE:2>CW<EOR>\n";
+
+    /// What every fill below must leave: the number's name where a number names an entity, else
+    /// the call's entity.
+    fn filled_by_number() -> Vec<(String, Option<u32>, Option<String>)> {
+        vec![
+            ("K1N".into(), Some(182), Some("Navassa Island".into())),
+            ("W1AW".into(), None, Some("United States".into())),
+        ]
+    }
+
+    /// ★ An import fills a missing COUNTRY from the contact's DXCC number: K1N with 182 is stored
+    /// as Navassa Island, a contact without a number takes its call's entity, and a contact that
+    /// carries a COUNTRY keeps it — the fill writes only a missing field.
+    #[test]
+    fn an_import_fills_a_missing_country_from_the_dxcc_number() {
+        let (dir, engine) = engine_with("fill-import", "");
+        let text = format!(
+            "{}{NUMBER_NO_COUNTRY}{}",
+            tempo_core::logbook::adif_header(),
+            K1N_2015_CONTRADICTED.replace("20150210", "20150211")
+        );
+        let (made, _) =
+            tempo_app::logwrite::until_written(|| tempo_app::logwrite::import_adif(&engine, &text));
+        assert_eq!(made.expect("imported").0, 3, "three contacts added");
+        let mut want = filled_by_number();
+        want.push(("K1N".into(), Some(182), Some("United States".into())));
+        assert_eq!(held_countries(&engine), want);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A contact logged with a DXCC number and no COUNTRY (another program's, or a Remote log
+    /// form's) is stored with the number's name, as an import is.
+    #[test]
+    fn a_contact_logged_with_a_number_and_no_country_takes_the_numbers_name() {
+        let (dir, engine) = engine_with("fill-logged", "");
+        for rec in tempo_core::logbook::parse_adif(NUMBER_NO_COUNTRY) {
+            assert!(rec.country.is_none(), "premise: no COUNTRY");
+            engine_lock(&engine).log_qso(rec);
+        }
+        assert_eq!(held_countries(&engine), filled_by_number());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The 1.13 path's load fills a missing COUNTRY from the DXCC number too, as an insert does.
+    #[test]
+    fn the_older_log_files_load_fills_a_missing_country_from_the_dxcc_number() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-dxcc-fill-file-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let log = dir.join("log.adi");
+        std::fs::write(
+            &log,
+            format!("{}{NUMBER_NO_COUNTRY}", tempo_core::logbook::adif_header()),
+        )
+        .expect("log");
+        let mut e = tempo_app::engine::Engine::new("K2DEF", "FN31", 0);
+        crate::wire_country_resolvers(&mut e);
+        e.set_log_path(log);
+        let engine: SharedEngine = Arc::new(std::sync::Mutex::new(e));
+        assert_eq!(held_countries(&engine), filled_by_number());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ The fill job fills a stored contact's missing COUNTRY from its DXCC number, as an insert
+    /// does — K1N with 182 → Navassa Island — and from its call where it carries none.
+    #[test]
+    fn the_fill_job_fills_a_missing_country_from_the_dxcc_number() {
+        let (dir, engine) = engine_with("fill-job", NUMBER_NO_COUNTRY);
+        assert!(
+            held_countries(&engine).iter().all(|(_, _, c)| c.is_none()),
+            "premise: the store holds no COUNTRY"
+        );
+        let done = tempo_app::logfill::fill_log_store(
+            &engine,
+            1,
+            &crate::country_of,
+            &|_: &str, _: Option<&str>| None::<String>,
+            &|_: &str| false,
+        )
+        .expect("the job runs");
+        assert_eq!((done.lacking, done.filled), (2, 2));
+        assert_eq!(held_countries(&engine), filled_by_number());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The fill rule's version moved with the rule, so a store the job filled under the older rule
+    /// is filled again. Under that rule a contact its call cannot place, carrying 182, was left
+    /// without a country, and it gains Navassa Island now; a contact the older rule filled from its
+    /// call keeps that country — the job fills only what is missing.
+    #[test]
+    fn a_store_filled_under_the_older_fill_rule_is_filled_again() {
+        let rows = "<CALL:1>Q<QSO_DATE:8>20150210<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+            <DXCC:3>182<EOR>\n\
+            <CALL:3>K1N<QSO_DATE:8>20150211<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW<DXCC:3>182<EOR>\n";
+        let (dir, engine) = engine_with("fill-rules", rows);
+        let k1n = engine.lock().unwrap().stored_log()[1].id.expect("an id");
+        // What the job wrote under the older rule: K1N's country from its call, none for Q (its call
+        // is nowhere), and that rule's version.
+        let older = [tempo_app::station::LogFill {
+            id: k1n,
+            country: Some("United States".into()),
+            state: None,
+        }];
+        let wrote = tempo_app::logwrite::fill(&engine, &older, crate::fill_version(1))
+            .expect("the older fill is written");
+        assert_eq!(wrote, 1, "premise: the older rule's fill");
+        let done = tempo_app::logfill::fill_log_store(
+            &engine,
+            crate::log_fill_version(),
+            &crate::country_of,
+            &|_: &str, _: Option<&str>| None::<String>,
+            &|_: &str| false,
+        )
+        .expect("the job runs");
+        assert!(
+            !done.current,
+            "this rule's version is another: the job runs again"
+        );
+        assert_eq!(
+            held_countries(&engine),
+            [
+                (
+                    "Q".to_string(),
+                    Some(182),
+                    Some("Navassa Island".to_string())
+                ),
+                (
+                    "K1N".to_string(),
+                    Some(182),
+                    Some("United States".to_string())
+                ),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -705,7 +1604,7 @@ mod tests {
     /// longer exists — take it off the list when its reason goes.
     #[test]
     fn no_log_change_is_addressed_by_position() {
-        let sources: [(&str, &str); 7] = [
+        let sources: [(&str, &str); 6] = [
             (
                 "tempo-core logbook.rs",
                 include_str!("../../crates/tempo-core/src/logbook.rs"),
@@ -724,10 +1623,6 @@ mod tests {
             ),
             ("lib.rs", include_str!("lib.rs")),
             ("log_by_id.rs", include_str!("log_by_id.rs")),
-            (
-                "remote logging.rs",
-                include_str!("remote_service/operations/logging.rs"),
-            ),
         ];
         // (file, function, why a position is right there)
         let allowed: [(&str, &str, &str); 10] = [

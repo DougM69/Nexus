@@ -64,22 +64,30 @@ impl Station {
         state.last_dial = 14_074_000;
         state.last_mode = engine_lock(&engine).rig_mode_effective();
         state.rig_asserted = true;
-        let read = state.remote_read(&engine).unwrap();
-        {
-            let mut e = engine_lock(&engine);
-            e.remote_observe_cat(Some(&read), Some(true));
-            e.remote_observe_dial(Some(&read), Some(14_074_000));
-            e.remote_observe_mode(Some(&read), Some(&state.last_mode));
-            e.remote_observe_ptt(Some(&read), Some(false));
-        }
-        Self {
+        let mut station = Self {
             engine,
             state,
             rig: Rig::rigctld(&peer.address),
             backend: MockBackend::new(),
             authority: Revocation::default(),
             path,
-        }
+        };
+        station.read_now();
+        station
+    }
+    /// The station's readings as the live loop keeps them, on a fresh read: CAT up, the dial and
+    /// mode the loop last set, PTT off. The live loop reads the radio every second; `step` runs at
+    /// t = 0 here, so those reads never come round and a reading only ages, and a request is
+    /// refused on one a second old. So a test takes them again just before a request that follows
+    /// its own saves or steps: a settings save's fsync that a loaded disk holds up for a second
+    /// must not age what the request is judged on.
+    fn read_now(&mut self) {
+        let read = self.state.remote_read(&self.engine).unwrap();
+        let mut e = engine_lock(&self.engine);
+        e.remote_observe_cat(Some(&read), Some(true));
+        e.remote_observe_dial(Some(&read), Some(self.state.last_dial));
+        e.remote_observe_mode(Some(&read), Some(&self.state.last_mode));
+        e.remote_observe_ptt(Some(&read), Some(false));
     }
     fn queue(&mut self) -> Completion {
         self.queue_dial(7.074, "40m")
@@ -625,6 +633,7 @@ fn band_selection_uses_the_actual_radio_owner_and_never_replays_the_native_pick(
         let mut expected = Engine::with_settings(engine_lock(&s.engine).settings().clone());
         expected.set_tx_enabled(false);
         for (index, band) in ["40m", "20m", "40m"].into_iter().enumerate() {
+            s.read_now();
             let receipt = {
                 let mut e = engine_lock(&s.engine);
                 let connection = e

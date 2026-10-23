@@ -8,6 +8,10 @@
 // The Install button never installs by surprise. It refuses while the radio is busy and says
 // why, because installing restarts the app and a restart mid-QSO loses the contact.
 //
+// While this computer drives a station it offers no Install at all: the station takes only its
+// own build, so installing here ends remote operation until the station runs the same version.
+// It says that, with both versions, and its "Install anyway" waits for the warning's checkbox.
+//
 // Where Nexus updates itself this is the ONLY update prompt (2026-09-29): the old "update
 // available" notice with its Download button speaks only where the self-updater cannot.
 
@@ -16,6 +20,7 @@
 // the download percentage are invariant technical values — they are interpolated, never
 // formatted. `blockReason` and `error` arrive already-worded from the update hook.
 
+import { useState } from 'react'
 import type { SelfUpdate } from '../useSelfUpdate'
 import { t } from '../i18n'
 
@@ -24,7 +29,8 @@ function pct(done: number, total: number): number {
 }
 
 export function UpdateBanner({ update }: { update: SelfUpdate }) {
-  const { phase, version, blockReason, progress, error, install, dismiss, downloadInstead } = update
+  const { phase, version, blockReason, progress, error, install, installAnyway, held, dismiss, downloadInstead } = update
+  const [confirmed, setConfirmed] = useState(false)
   // 'available'/'downloading' stay silent: nothing is asked of the operator until it is ready to
   // go, and a progress bar for something they did not request is just noise.
   if (phase !== 'ready' && phase !== 'installing' && phase !== 'error') return null
@@ -59,6 +65,40 @@ export function UpdateBanner({ update }: { update: SelfUpdate }) {
         </>
       ) : phase === 'installing' ? (
         <span className="update-what">{t('update.installing', { version: version ?? '' })}</span>
+      ) : held ? (
+        <>
+          <span className="update-what">
+            {held.stationBuild != null
+              ? t('update.held', { version: version ?? '', station: held.stationBuild })
+              : t('update.held.unknown', { version: version ?? '' })}
+          </span>
+          <label className="update-confirm">
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(e) => setConfirmed(e.target.checked)}
+            />
+            {t('update.held.confirm')}
+          </label>
+          <button
+            type="button"
+            className="update-install"
+            onClick={installAnyway}
+            disabled={!confirmed || !!blockReason}
+            title={blockReason ?? t('update.held.anyway.title')}
+          >
+            {blockReason ?? t('update.held.anyway.label')}
+          </button>
+          <button
+            type="button"
+            className="update-close"
+            onClick={dismiss}
+            aria-label={t('update.notNow.label')}
+            title={t('update.notNow.title')}
+          >
+            ✕
+          </button>
+        </>
       ) : (
         <>
           {/* Two whole sentences, not one plus an appended fragment: a language may want the

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// A WORK FROM A CONNECT BOX IS ITS BOARD'S OWN WORK — proven on the real App (plan piece H8).
+// A WORK FROM A CONNECT BOX IS ITS BOARD'S OWN WORK — proven on the real App.
 //
 // THIS MOUNTS THE REAL APP, the real ConnectView, the real Spots board and the real POTA/SOTA board,
 // and stubs only the backend (api) and the waterfall canvas. Each case works the same station twice —
@@ -76,6 +76,9 @@ vi.mock('./api', async (importOriginal) => {
   }
   return {
     ...auto,
+    // A computer running its own station: the backend answers None, and the banner asks once. The
+    // catch-all's `{}` would read as driving a remote station, asked every half second.
+    clientStatus: vi.fn(async () => null),
     askLog: vi.fn(async () => {
       throw new Error('no log in this test')
     }),
@@ -144,6 +147,7 @@ vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="wa
 import App from './App'
 import * as api from './api'
 import { pastTheSwitch } from './components/ConnectView.testkit'
+import { __resetLogDraftsForTests } from './features/logDraft'
 
 type Call = [string, unknown[]]
 /** Every call any api mock received, by name, in order — the whole backend traffic. */
@@ -255,6 +259,11 @@ async function workSpotRow(call: string, box: boolean) {
   const out = { calls: toEntry(traffic()), view: localStorage.getItem('nexus.view') }
   r.unmount()
   cleanup()
+  // Each Work is a window of its own. The cockpit a Work opens keeps the worked call in its log
+  // strip's draft (features/logDraft), which a real window loses only as it closes; kept here, the
+  // second Work would open a strip already holding the call and ask the station for its bearing
+  // in the window this file compares.
+  __resetLogDraftsForTests()
   return out
 }
 
@@ -346,6 +355,7 @@ describe('the Needed box works a need exactly as the Needed screen does', () => 
     const out = { calls: toEntry(traffic()), view: localStorage.getItem('nexus.view') }
     r.unmount()
     cleanup()
+    __resetLogDraftsForTests() // a window of its own (workSpotRow)
     return out
   }
 
@@ -381,6 +391,7 @@ describe('the POTA/SOTA box hunts exactly as the POTA/SOTA screen does', () => {
     const out = { calls: toEntry(traffic()), view: localStorage.getItem('nexus.view') }
     r.unmount()
     cleanup()
+    __resetLogDraftsForTests() // a window of its own (workSpotRow)
     return out
   }
 

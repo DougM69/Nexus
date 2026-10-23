@@ -89,9 +89,12 @@ export function cwRangeForLabel(label: string): { lo: number; hi: number } | nul
   return top !== undefined && r ? { lo: r.lo, hi: top } : null
 }
 
-/** The sideband convention for a dial: LSB below 10 MHz, USB at or above. */
+/** The sideband convention for a dial: LSB below 10 MHz, USB at or above, and USB on 60 m
+ * (47 CFR 97.303(h) puts the carrier 1.5 kHz below each channel centre, which only USB fits).
+ * The 60 m edges are the engine's (`bandplan::phone_is_lsb`, `band_for_dial`: 5.3-5.5 MHz), so
+ * the cockpit's AUTO face and the mode the engine commands agree. */
 export function sidebandForMhz(mhz: number): 'LSB' | 'USB' {
-  return mhz < 10 ? 'LSB' : 'USB'
+  return mhz < 10 && !(mhz >= 5.3 && mhz < 5.5) ? 'LSB' : 'USB'
 }
 
 /**

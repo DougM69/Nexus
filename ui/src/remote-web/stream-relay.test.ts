@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { StreamRelay, STREAM_RATE_LIMIT, STREAM_RATE_WINDOW_MS } from './stream-relay'
-import { STREAM_SDP_BYTES, STREAM_STATION_BYTES, parseReceivedMessage } from './stream-protocol'
+import { STREAM_SDP_BYTES, STREAM_STATION_BYTES, lanCandidate, lanDescription, parseReceivedMessage } from './stream-protocol'
 
 // THE CONTRACT: the same files the station's Rust parsers are tested against.
 type Case = { name: string; message: Record<string, unknown> }
@@ -224,4 +224,82 @@ it('does not end a stream the station or the page has already ended, or one of a
   unadvertised.relay.receiveStation(byName(signal.stationToRoom, 'streaming'), NOW)
   unadvertised.relay.enforce(NOW)
   expect(ends(unadvertised.station)).toEqual([])
+})
+
+// A LAN-ONLY SESSION: its stream is held to the shack's own network, by inspection.
+it('takes as LAN only a private host candidate or an mDNS name, trickled or in an SDP', () => {
+  const line = (address: string, type = 'host') => `candidate:1 1 udp 2122260223 ${address} 54321 typ ${type} generation 0`
+  for (const address of ['10.0.0.5', '172.16.0.1', '172.31.255.254', '192.168.1.20', '4d2a8f1e-8c1b-4f3a-9e2d-2c3b4a5d6e7f.local']) {
+    expect(lanCandidate(line(address)), address).toBe(true)
+    expect(lanCandidate(`a=${line(address)}`), `a=${address}`).toBe(true)
+  }
+  for (const address of ['198.51.100.23', '172.15.0.1', '172.32.0.1', '100.64.0.1', '192.169.0.1', '11.0.0.1', '127.0.0.1', 'fd00::1',
+    '2001:db8::1', '10.0.0', '10.0.0.256', '010.0.0.1', 'example.com', 'x.local.evil'])
+    expect(lanCandidate(line(address)), address).toBe(false)
+  for (const type of ['srflx', 'prflx', 'relay']) expect(lanCandidate(line('192.168.1.20', type)), type).toBe(false)
+  expect(lanCandidate('candidate:1 1 udp 1 192.168.1.20 1 host')).toBe(false)
+  const sdp = 'v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\na=mid:0\r\n'
+  expect(lanDescription(sdp)).toBe(true)
+  expect(lanDescription(`${sdp}a=${line('192.168.1.20')}\r\n`)).toBe(true)
+  expect(lanDescription(`${sdp}a=${line('192.168.1.20')}\r\na=${line('203.0.113.7', 'srflx')}\r\n`)).toBe(false)
+})
+
+function lanSetup({ lanVersion = 1, lanUntil = NOW + 45_000 } = {}) {
+  const station = peer(), browser = peer(), relay = new StreamRelay()
+  relay.sync({ peer: station, supported: true, lanVersion }, [{ sessionId: session, deviceId: device, peer: browser, commandUntil: 0, lanUntil }])
+  return { station, browser, relay }
+}
+const mdns = () => structuredClone(byName(signal.browserToRoom, 'candidate (mDNS host; the station ignores what it cannot resolve)'))
+
+it('forwards a LAN-only session\'s offer and host candidates with lanOnly, on its own deadline, and refuses the rest', () => {
+  const { station, browser, relay } = lanSetup()
+  relay.receiveBrowser(session, offer(), NOW)
+  expect(sentTo(station)).toEqual({ ...signal.roomToStation[0].message, lanOnly: true })
+  relay.receiveBrowser(session, mdns(), NOW)
+  expect(sentTo(station)).toMatchObject({ lanOnly: true, payload: { kind: 'candidate' } })
+  station.send.mockClear()
+  relay.receiveBrowser(session, candidate(), NOW)
+  expect(station.send).not.toHaveBeenCalled()
+  expect(sentTo(browser)).toEqual({ type: 'streamState', streaming: false, reason: 'lanOnly' })
+  // An offer whose SDP names a reflexive candidate is refused whole: it is signed, never edited.
+  const inline = offer() as { payload: { sdp: string } }
+  inline.payload.sdp += 'a=candidate:1 1 udp 1 203.0.113.7 61000 typ srflx raddr 0.0.0.0 rport 0\r\n'
+  relay.receiveBrowser(session, inline, NOW)
+  expect(station.send).not.toHaveBeenCalled()
+  // A close always goes.
+  relay.receiveBrowser(session, close(), NOW)
+  expect(sentTo(station)).toMatchObject({ payload: { kind: 'close' }, lanOnly: true })
+  // Its deadline is lanUntil: past it, the offer is refused as any lapsed one is.
+  const late = lanSetup({ lanUntil: NOW })
+  late.relay.receiveBrowser(session, offer(), NOW)
+  expect(late.station.send).not.toHaveBeenCalled()
+  expect(sentTo(late.browser)).toEqual({ type: 'streamState', streaming: false, reason: 'serviceAccessExpired' })
+})
+
+it('never hands a LAN-only session to a station that did not advertise the LAN version, and an internet one never carries lanOnly', () => {
+  const { station, browser, relay } = lanSetup({ lanVersion: 0 })
+  relay.receiveBrowser(session, offer(), NOW)
+  expect(station.send).not.toHaveBeenCalled()
+  expect(sentTo(browser)).toEqual({ type: 'streamState', streaming: false, reason: 'updateStation' })
+  const internet = setup()
+  internet.relay.sync({ peer: internet.station, supported: true, lanVersion: 1 }, [{ sessionId: session, deviceId: device, peer: internet.browser, commandUntil: NOW + 45_000 }])
+  internet.relay.receiveBrowser(session, candidate(), NOW)
+  expect(sentTo(internet.station)).toEqual(signal.roomToStation[2].message)
+})
+
+it('holds the station\'s end of a LAN-only session to the LAN, and ends its stream only on its own deadline', () => {
+  const { station, browser, relay } = lanSetup()
+  const stationCase = (name: string) => ({ ...structuredClone(byName(signal.stationToRoom, name)), sessionId: session })
+  relay.receiveStation(stationCase('candidate (host: the shack\'s own LAN address, for a browser on its network)'), NOW)
+  expect(sentTo(browser)).toMatchObject({ type: 'streamSignal', payload: { kind: 'candidate' } })
+  relay.receiveStation(stationCase('candidate (reflexive)'), NOW)
+  expect(sentTo(browser)).toEqual({ type: 'streamState', streaming: false, reason: 'lanOnly' })
+  expect(relay.dropped).toBe(1)
+  relay.receiveStation(stationCase('streaming'), NOW)
+  expect(relay.streaming(session)).toBe(true)
+  // commandUntil is 0 (an ended trial), and the stream runs: lanUntil is what it is held to.
+  relay.enforce(NOW + 1)
+  expect(ends(station)).toEqual([])
+  relay.enforce(NOW + 45_000)
+  expect(ends(station)).toEqual([{ type: 'streamEnd', sessionId: session, reason: 'serviceAccessExpired' }])
 })

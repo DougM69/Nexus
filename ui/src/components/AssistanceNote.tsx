@@ -39,6 +39,11 @@
 // once. Nexus decodes one signal at a time. We state what each ruleset says and stop there —
 // we never tell the operator which category they are in.
 //
+// Neither ruleset sets a station's OWN decodes apart (re-read 2026-10-20): both definitions open
+// with any technology that provides callsign or multiplier identification of a signal, and CQ WW's
+// takes in "local" decoding. So the own-decodes line names what keeps feeding the Needed board in
+// an unassisted entry, the radio's digital decodes, and calls none of it exempt.
+//
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The wording now lives
 // in `i18n/en.ts` under `assist.*` — including the rule quotations, which carry a ⚠️ there
 // telling a translator to leave the quoted text, the rule numbers and the category names alone.

@@ -10,6 +10,10 @@
 // leaves everything as it is, Contest mode included. "Turn off" does what is ticked and then turns
 // the mode off.
 //
+// At a club it also says how many of this laptop's contacts the club's log does not have yet (the
+// club chip's count): they still go to the host once the link is back, Contest mode on or off,
+// which only holds while Nexus stays open with club sync on.
+//
 // ⚠️ IT OPENS BEFORE THE MODE GOES OFF, NOT AFTER: the merge and the export read the session the
 // mode holds, and the engine refuses both once it has gone. So both hosts — the Contest screen's
 // switch and a Settings save that turns it off — hold their save until this answers.
@@ -20,8 +24,8 @@
 //     contest's call and categories.
 //   • Unassisted goes back through its own switch (which journals the change) while the mode is
 //     still on, and everything else rides the save that turns it off: the engine lets its note of
-//     "before" go when the mode goes off (`engine/contest_before.rs`), and a change after that
-//     would start a new note holding the contest's value as "before".
+//     "before" go when the mode goes off with all of it put back (`engine/contest_before.rs`), and
+//     a change after that would start a new note holding the contest's value as "before".
 // A step that fails stops the rest, says why, and leaves the mode on.
 //
 // "Before" is the engine's note (`settings.contestBefore`), taken the first time one of these
@@ -90,10 +94,19 @@ export interface ContestOverOffer {
   event: string | undefined
   /** Only the settings the contest changed: what each is now, and what it was before. */
   putBack: PutBackRow[]
+  /** This laptop's contacts the club's log does not have yet: the club chip's count
+   *  (`FdClubStatus.queued`), 0 without club sync. */
+  clubQueued: number
 }
 
-/** What to offer, from the settings the station holds now and the engine's note in them. */
-export function contestOverOffer(now: Settings, contacts: number, event: string | undefined): ContestOverOffer {
+/** What to offer, from the settings the station holds now and the engine's note in them, and the
+ *  club chip's count of contacts the host does not have yet. */
+export function contestOverOffer(
+  now: Settings,
+  contacts: number,
+  event: string | undefined,
+  clubQueued = 0,
+): ContestOverOffer {
   const note = now.contestBefore
   const putBack: PutBackRow[] = []
   if (note) {
@@ -105,11 +118,12 @@ export function contestOverOffer(now: Settings, contacts: number, event: string 
       putBack.push({ key, now: is, before })
     }
   }
-  return { contacts, event, putBack }
+  return { contacts, event, putBack, clubQueued }
 }
 
-/** Is there anything to offer? With nothing, the mode simply goes off, as it always did. */
-export const hasOffer = (o: ContestOverOffer): boolean => o.contacts > 0 || o.putBack.length > 0
+/** Is there anything to offer, or to say? With nothing, the mode simply goes off, as it always did. */
+export const hasOffer = (o: ContestOverOffer): boolean =>
+  o.contacts > 0 || o.putBack.length > 0 || o.clubQueued > 0
 
 /** A value as the checklist shows it: a blank one in the words its setting means by blank. */
 function shown(key: PutBackKey, v: string | boolean): string {
@@ -206,6 +220,9 @@ export function ContestOverDialog({
       description={t('contestOver.desc')}
     >
       <div className="contest-over">
+        {offer.clubQueued > 0 && (
+          <p className="contest-over-club">{t('contestOver.club.queued', { count: offer.clubQueued })}</p>
+        )}
         {offer.contacts > 0 && (
           <>
             <label className="contest-over-item">

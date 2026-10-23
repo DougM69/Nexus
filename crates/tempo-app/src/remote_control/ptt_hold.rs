@@ -9,7 +9,9 @@
 //!
 //! Two sides share one [`PttHold`]:
 //! - the stream (any thread) records what arrived: [`PttHold::hold`], [`PttHold::release`],
-//!   [`PttHold::end`], and takes what the page should be told with [`PttHold::reports`];
+//!   [`PttHold::end`], and takes what the page should be told with [`PttHold::reports_where`],
+//!   which leaves the reports of a press it did not make for the reader whose press it is (a
+//!   computer's Stop road takes its own the same way);
 //! - the engine decides, on every radio-loop tick, through [`PttHold::tick`]. Keying and unkeying
 //!   happen only there, through the engine's own PTT verb and every guard it carries.
 //!
@@ -18,6 +20,11 @@
 //! queue, reordered behind its own release, or sent by a page that missed the unkey. A new press
 //! takes a new id. The last [`ENDED_KEPT`] ended ids are remembered, which covers any delay a
 //! channel with no retransmission can produce by orders of magnitude.
+//!
+//! Each is remembered with why it ended, as its report said, and so is a press in force that was
+//! refused ([`PttHold::end_of`]): a computer's Stop road answers a hold for either with that end, so
+//! the one report that said it can be lost without the computer holding an over that is not on the
+//! air.
 //!
 //! ⛔ A PRESS THAT WAS NOT KEYED NEVER KEYS LATER. A press refused on its first tick (transmit off,
 //! outside the licence, no transmit presence) stays refused for its whole life, even if the reason
@@ -33,18 +40,9 @@ pub const GAP: Duration = Duration::from_millis(200);
 /// How many ended press ids are remembered, so a late hold for one is ignored.
 pub const ENDED_KEPT: usize = 64;
 
-/// Why a press ended, or was never keyed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HoldEnd {
-    /// The station would not key it.
-    Refused,
-    /// No hold arrived for [`GAP`].
-    Lapsed,
-    /// The page released it.
-    Released,
-    /// Something at the station unkeyed it: a Stop, a halt, the stream ending.
-    Stopped,
-}
+// Why a press ended: tempo-base's, below the engine, so that Stop's road reads and writes it in a
+// build without it.
+pub use tempo_base::ptt_hold::HoldEnd;
 
 /// One thing the page should be told about a press.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,7 +71,9 @@ struct Press {
 #[derive(Default)]
 struct State {
     press: Option<Press>,
-    ended: VecDeque<String>,
+    /// The last [`ENDED_KEPT`] presses that ended, each with why: what its report said, or
+    /// `Refused` for one never keyed.
+    ended: VecDeque<(String, HoldEnd)>,
     reports: VecDeque<HoldReport>,
 }
 
@@ -90,11 +90,11 @@ impl State {
         });
     }
 
-    fn retire(&mut self, id: String) {
+    fn retire(&mut self, id: String, end: HoldEnd) {
         if self.ended.len() >= ENDED_KEPT {
             self.ended.pop_front();
         }
-        self.ended.push_back(id);
+        self.ended.push_back((id, end));
     }
 }
 
@@ -115,7 +115,7 @@ impl PttHold {
     /// ended, or the station has stopped the key and nothing may take it over.
     pub fn hold(&self, id: &str, now: Instant) -> bool {
         let mut s = self.state();
-        if s.ended.iter().any(|e| e == id) {
+        if s.ended.iter().any(|(e, _)| e == id) {
             return false;
         }
         let deadline = now + GAP;
@@ -149,10 +149,13 @@ impl PttHold {
             press.phase = Phase::Pending;
         }
         // A refused press was already reported as refused.
-        if was != Phase::Refused {
+        let end = if was == Phase::Refused {
+            HoldEnd::Refused
+        } else {
             s.report(&old, false, Some(HoldEnd::Released));
-        }
-        s.retire(old);
+            HoldEnd::Released
+        };
+        s.retire(old, end);
         if was == Phase::Keyed {
             s.report(id, true, None);
         }
@@ -164,9 +167,9 @@ impl PttHold {
         let mut s = self.state();
         if let Some(press) = s.press.as_mut().filter(|p| p.id == id) {
             press.ending.get_or_insert(HoldEnd::Released);
-        } else if !s.ended.iter().any(|e| e == id) {
+        } else if !s.ended.iter().any(|(e, _)| e == id) {
             // A release that overtook its own first hold: the press is over before it began.
-            s.retire(id.to_string());
+            s.retire(id.to_string(), HoldEnd::Released);
         }
     }
 
@@ -183,12 +186,49 @@ impl PttHold {
         self.state().reports.drain(..).collect()
     }
 
+    /// The reports of the presses `mine` names, oldest first, taken; every other report is left,
+    /// in its order, for the reader whose press it is. Two readers that each take only their own
+    /// presses' reports never take each other's.
+    pub fn reports_where(&self, mine: impl Fn(&str) -> bool) -> Vec<HoldReport> {
+        let mut s = self.state();
+        let (taken, kept): (VecDeque<HoldReport>, VecDeque<HoldReport>) = s
+            .reports
+            .drain(..)
+            .partition(|report| mine(&report.hold_id));
+        s.reports = kept;
+        taken.into()
+    }
+
     /// True while a press is keyed.
     pub fn keyed(&self) -> bool {
         self.state()
             .press
             .as_ref()
             .is_some_and(|p| p.phase == Phase::Keyed)
+    }
+
+    /// True while press `id` is the one in force, keyed and not ending: the one press whose audio
+    /// the microphone over it armed may take. A read; it changes nothing.
+    pub fn keyed_by(&self, id: &str) -> bool {
+        self.state()
+            .press
+            .as_ref()
+            .is_some_and(|p| p.id == id && p.phase == Phase::Keyed && p.ending.is_none())
+    }
+
+    /// Why press `id` will never key: `Refused` while it is in force refused, or why it ended, as
+    /// its report said, for one of the last [`ENDED_KEPT`] that did. `None` for a press pending,
+    /// keyed or still ending, and for one never seen. A read; it changes nothing.
+    pub fn end_of(&self, id: &str) -> Option<HoldEnd> {
+        let s = self.state();
+        if let Some(press) = s.press.as_ref().filter(|p| p.id == id) {
+            return (press.phase == Phase::Refused).then_some(HoldEnd::Refused);
+        }
+        s.ended
+            .iter()
+            .rev()
+            .find(|(e, _)| e == id)
+            .map(|(_, end)| *end)
     }
 
     /// One radio-loop tick, on the engine. `may_key` is whether a remote key would be admitted
@@ -215,10 +255,13 @@ impl PttHold {
                 ptt(false);
             }
             // A refused press has already been reported as refused.
-            if press.phase != Phase::Refused {
+            let end = if press.phase == Phase::Refused {
+                HoldEnd::Refused
+            } else {
                 s.report(&press.id, false, Some(end));
-            }
-            s.retire(press.id);
+                end
+            };
+            s.retire(press.id, end);
             return;
         }
         match press.phase {
@@ -240,7 +283,7 @@ impl PttHold {
                     ptt(false);
                 }
                 s.report(&press.id, false, Some(HoldEnd::Stopped));
-                s.retire(press.id);
+                s.retire(press.id, HoldEnd::Stopped);
             }
             Phase::Keyed | Phase::Refused => {}
         }
@@ -253,6 +296,66 @@ mod tests {
 
     const A: &str = "10000000-0000-4000-8000-00000000000a";
     const B: &str = "10000000-0000-4000-8000-00000000000b";
+
+    /// ★ Two readers each take only their own presses' reports, in order, and never each other's.
+    /// CONTROL: what one reader leaves, the other takes, and nothing is left after both.
+    #[test]
+    fn each_reader_takes_only_its_own_presses_reports() {
+        let t0 = Instant::now();
+        let hold = PttHold::default();
+        let road = "road-0102030405060708-0000000000000001";
+        hold.hold(A, t0);
+        hold.tick(t0, true, false, |_| true);
+        hold.release(A);
+        hold.tick(t0 + ms(20), true, true, |_| true);
+        hold.hold(road, t0 + ms(40));
+        hold.tick(t0 + ms(40), true, false, |_| true);
+        let roads = hold.reports_where(|id| id.starts_with("road-"));
+        assert_eq!(
+            roads,
+            vec![HoldReport {
+                hold_id: road.to_string(),
+                keyed: true,
+                end: None
+            }],
+            "the road takes its own"
+        );
+        let page: Vec<(String, bool, Option<HoldEnd>)> = hold
+            .reports_where(|id| !id.starts_with("road-"))
+            .into_iter()
+            .map(|r| (r.hold_id, r.keyed, r.end))
+            .collect();
+        assert_eq!(
+            page,
+            vec![
+                (A.to_string(), true, None),
+                (A.to_string(), false, Some(HoldEnd::Released))
+            ],
+            "the page's, in order, none of the road's"
+        );
+        assert!(hold.reports().is_empty(), "nothing left");
+    }
+
+    /// ★ `keyed_by` names only the press whose audio may reach the microphone over: the one in
+    /// force, keyed, and not ending. CONTROL: a pending press, another id, a released press and a
+    /// refused one are none of those.
+    #[test]
+    fn keyed_by_names_only_the_keyed_press_in_force() {
+        let t0 = Instant::now();
+        let hold = PttHold::default();
+        assert!(!hold.keyed_by(A), "no press");
+        hold.hold(A, t0);
+        assert!(!hold.keyed_by(A), "pending, not keyed");
+        hold.tick(t0, true, false, |_| true);
+        assert!(hold.keyed_by(A), "keyed");
+        assert!(!hold.keyed_by(B), "another press");
+        hold.release(A);
+        assert!(!hold.keyed_by(A), "released, ending");
+        let refused = PttHold::default();
+        refused.hold(B, t0);
+        refused.tick(t0, false, false, |_| true);
+        assert!(!refused.keyed_by(B), "refused");
+    }
 
     /// The engine's PTT as the tests see it: whether the key is up, and every call made.
     #[derive(Default)]
@@ -328,6 +431,62 @@ mod tests {
         rig.tick(&hold, t0 + ms(20), true);
         assert!(!rig.up);
         assert_eq!(hold.reports().last().unwrap().end, Some(HoldEnd::Released));
+    }
+
+    /// ⛔ A press that will never key says why, as its report said: refused while it is in force
+    /// refused, and released, lapsed, stopped or refused once it has ended. CONTROL: a press never
+    /// seen, a pending one, a keyed one and one still ending say nothing, and every end reported
+    /// is the end it says.
+    #[test]
+    fn a_press_that_will_never_key_says_why() {
+        const C: &str = "10000000-0000-4000-8000-00000000000c";
+        const D: &str = "10000000-0000-4000-8000-00000000000d";
+        let t0 = Instant::now();
+        let hold = PttHold::default();
+        assert_eq!(hold.end_of(A), None, "CONTROL: never seen");
+        hold.hold(A, t0);
+        assert_eq!(hold.end_of(A), None, "CONTROL: pending");
+        hold.tick(t0, true, false, |_| true);
+        assert_eq!(hold.end_of(A), None, "CONTROL: keyed");
+        hold.release(A);
+        assert_eq!(hold.end_of(A), None, "CONTROL: still ending");
+        hold.tick(t0 + ms(20), true, true, |_| true);
+        hold.hold(B, t0 + ms(40));
+        hold.tick(t0 + ms(40), true, false, |_| true);
+        hold.tick(t0 + ms(300), true, true, |_| true);
+        hold.hold(C, t0 + ms(320));
+        hold.tick(t0 + ms(320), false, false, |_| true);
+        let refused_in_force = hold.end_of(C);
+        hold.tick(t0 + ms(600), false, false, |_| true);
+        hold.hold(D, t0 + ms(620));
+        hold.tick(t0 + ms(620), true, false, |_| true);
+        // Unkeyed under it: a Stop at the station.
+        hold.tick(t0 + ms(640), true, false, |_| true);
+        for report in hold.reports() {
+            if let Some(end) = report.end {
+                assert_eq!(
+                    hold.end_of(&report.hold_id),
+                    Some(end),
+                    "CONTROL: {report:?}"
+                );
+            }
+        }
+        assert_eq!(
+            [
+                hold.end_of(A),
+                hold.end_of(B),
+                refused_in_force,
+                hold.end_of(C),
+                hold.end_of(D)
+            ],
+            [
+                Some(HoldEnd::Released),
+                Some(HoldEnd::Lapsed),
+                Some(HoldEnd::Refused),
+                Some(HoldEnd::Refused),
+                Some(HoldEnd::Stopped)
+            ]
+        );
     }
 
     /// ⛔ An ended press never keys again — late holds, reordered holds, a hold after the release.

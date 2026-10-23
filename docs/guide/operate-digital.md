@@ -224,6 +224,19 @@ end) is not implemented.
   [Settings ▸ Radio ▸ Rig & CAT](settings-reference.md#rig--cat): **None**, **Rig**
   (VFO B), and **Fake It** (TX audio held to 1500–2000 Hz with the dial shifted
   in 500 Hz steps for a cleaner signal).
+- **A slow CAT link.** With **Rig**, Nexus sends the radio three commands before
+  each key, and on a slow serial link they can take seconds. If the radio keys
+  only after your period has ended, Nexus unkeys it at once and sends nothing in
+  the other station's period, as WSJT-X does, and keeps TX on for your next over;
+  the status line says the over was dropped and how late the radio was. However
+  many are dropped in a row, TX stays on, as in WSJT-X: the TX watchdog ends a
+  run that never gets an over out. A faster CAT baud rate keys sooner.
+- **A late reply switches the over on the air**, as in WSJT-X. FT8's full
+  decode runs 14.4 s into the period and FT4's at 6.05 s, so a weak R-report or
+  RR73 that only the full decode finds can arrive after your over has started.
+  The rest of that over becomes the new message; the over keeps its start and
+  end, and ALL.TXT gets a second Tx line. Once an over carries your RR73 or 73,
+  no reply changes it. A Tx button clicked during an over switches it too.
 - **Decode depth** (Fast / Normal / Deep) and the **decoder passband**
   (default 200–2900 Hz) are in
   [Settings ▸ Digital](settings-reference.md#digital-ft8ft4).
@@ -239,8 +252,16 @@ your logger see Nexus as WSJT-X** once you turn on **WSJT-X UDP API** in
 It is off by default; its address already matches WSJT-X's default, so nothing
 else needs setting. Outbound Heartbeat / Status / Decode /
 QsoLogged and inbound HaltTx / Clear / Replay / Location / HighlightCallsign all
-use the canonical type numbers, and PSK Reporter spotting batches on the stock
-schedule.
+use the canonical type numbers.
+
+With the **PSK Reporter** switch on, Nexus spots what WSJT-X spots. A decode is
+spotted when it is a CQ or carries the sender's grid, which goes with it; a report,
+a roger, a 73, free text, a low-confidence (`?`) decode and your own signal heard
+on another radio are not. Below 49 MHz a station is spotted once every five minutes
+however often you hear it; on 6 m and up, every decode is. WSPR is not sent to PSK
+Reporter (WSJT-X sends it to WSPRnet), and an FST4W beacon is spotted under its call
+with its grid. The spots go every five minutes, in packets of at most 952 bytes, the
+size WSJT-X sends. JS8 spots by JS8Call's own rules ([JS8](js8.md)).
 
 If another app owns the rig, **Companion mode** rides an upstream WSJT-X/JTDX
 decode stream over UDP (default :2237) instead of decoding itself — point it at
@@ -257,8 +278,10 @@ both programs are on one PC; across the shack it is the other machine's address.
 ## Honest limits
 
 - **Fox role is not implemented** — you can hound a DXpedition, not run one.
-- **No contest modes** in the digital cockpit beyond Field Day (no NA VHF,
-  RTTY RU, WW Digi).
+- **No RTTY Roundup or WW Digi contest messages.** FT8 and FT4 send WSJT-X's
+  contest messages in ARRL Field Day and in the ARRL VHF contests (its NA VHF
+  Contest mode): see
+  [FT8 and FT4 in each contest](contesting-pota.md#ft8-and-ft4-in-each-contest).
 
 ### What each tier can do in 1.10.3
 

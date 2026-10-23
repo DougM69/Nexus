@@ -29,33 +29,62 @@
 // contact in progress through the engine (`features/contestEntryShare`): what is typed in either
 // shows in both as it is typed, every hint follows it in both, and Enter in either logs it once.
 //
+// ⭐ A PASS'S CONTACTS GO ON THE SATELLITES SCREEN (the operator's pick, 2026-10-13: "Say to use the
+// Satellites screen", while a bird is held). This log line logs every contact the ordinary way, on the
+// band the radio is on and with no bird (`contestLogManual`); only the Satellites screen's strip takes a
+// contact's band and bird from the pass (`contestLogSatellite`). So while the engine holds a bird's
+// transponder, read every 2 s as the Satellites screen and the cockpits' rotor strip read it
+// (`getSatTransponder`), one line under the bar names the bird and says to log its pass contacts there.
+// It blocks nothing. It is this window's alone: the main window's Contest screen tops itself with the
+// same entry and was not part of the pick, so it draws no such line and asks nothing about a bird.
+//
 // ⛔ NOTHING IN THIS WINDOW TRANSMITS. No PTT, no F-key messages, no Tune, no Enter Sends Message:
 // the log line here gets no `esm`; the screen's contest switch, Running / S&P and scoring are
 // read-only (`ContestView`'s `logger`); the F-keys do nothing (the webview's own as well, so F5
 // does not reload the logger mid-contact); Esc clears the entry (`LogEntry`'s `sharedEntry`); and
 // A− / A+ only size the text.
-// Every TX and stop control stays on the operator's screen, whose hotkeys are bound in the main
-// window's document only. This is a separate window with a document of its own, so a keystroke
+// Every TX control stays on the operator's screen, whose hotkeys are bound in the main window's
+// document only. The ONE exception is a stop: Esc here is also the station's halt (`DetachedPanel`,
+// since the Illinois QSO Party, 2026-10-18, where this window was the operator's entry and Esc did
+// not stop a CW message), so it stops and clears on the same press. This is a separate window with a document of its own, so a keystroke
 // here never reaches them, and one there never reaches this.
+//
+// ⭐ KEEP IN FRONT (the operator, from a contest tester: "resize it to the point where I can drop it in
+// an area and keep it to the front"). The window drags down to 420×320 with the entry whole in it, and a
+// button on the bar pins it in front of Nexus and of other programs (`set_window_on_top`), remembered in
+// the window's record with its box, so it reopens pinned. Only this window draws it: the main window's
+// Contest screen tops itself with the same entry and has no pin.
+//
+// ⭐ THE ENTRY ALONE (the operator: the contest screen is cluttered). The same window has a second
+// layout, `entry` (`features/contestLoggerLayout`): the bar and the entry, with no last contacts and no
+// contest screen under them. The main window's Contest screen opens it so with "Pop out entry" on its
+// entry's bar; "Logger window" opens the whole window; the toggle on this window's bar switches between
+// the two. It is this window in both, so the entry is shared and logs once exactly as above, and the box
+// and the pin are the window's. With no contest running there is no entry, so the window is whole.
 //
 // It logs as THIS computer's own position — the same engine, contest log and club sync, so the
 // club wire carries nothing new — and under the station's operating mode, read live from the
 // engine, so a contact logged here is credited as the operator's own would be. A Remote viewer
 // never sees this window: the stream is the main window's picture.
 
-import { useEffect, useId, useMemo, useState, type CSSProperties } from 'react'
-import type { FdRulesetDto } from '../api'
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
+import { getSatTransponder, getWindowOnTop, setWindowOnTop, type FdRulesetDto, type WindowOnTop } from '../api'
 import { isFieldDay } from '../fdEvent'
 import { BOX_SCALE_MAX, BOX_SCALE_MIN, BOX_SCALE_STEP, boxScaleValue } from '../features/panelState'
+import { CONTEST_RECENT_SPLIT_MAX, CONTEST_RECENT_SPLIT_MIN } from '../features/paneSeam'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
+import { pollSingleFlight } from '../singleFlight'
+import { withErrorToast } from '../toast'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 import { useContestSwitch } from '../contestSwitch'
 import { useOperatorBoxAsk } from '../features/contestKeys'
+import { useLoggerLayout } from '../features/contestLoggerLayout'
 import { contestLogMode, stationMode, usePskName } from '../features/contestMode'
-import { annotate, ContestLogHead, ContestLogRow, ContestView, OperatorBox } from './ContestView'
-import { FdAdvisories } from './FdAdvisories'
+import { annotate, ContestLogHead, ContestLogRow, ContestView, logIsNumbered, OperatorBox } from './ContestView'
+import { NoCreditChip } from './FdAdvisories'
 import { LogEntry } from './LogEntry'
+import { PaneSeam } from './PaneSeam'
 
 /** Where the entry keeps its text size. Per surface (`windowScope`): each window its own, on this
  *  computer — the main window's Contest screen under the bare key, this window under its own, which
@@ -71,11 +100,57 @@ export function loggerTextScale(stored: string | null): number {
   return boxScaleValue(Number(stored)) ?? 1
 }
 
+/**
+ * The logger window's pin: keeps this window in front of other windows, Nexus's and other programs',
+ * and pressed again lets it stack as an ordinary window. Drawn only where the shell offers it for this
+ * window (`get_window_on_top`), and it shows what the window really is: a refused change leaves it as
+ * it was. A press takes no focus, so the caret stays in the box it was in.
+ */
+function KeepInFront() {
+  const [state, setState] = useState<WindowOnTop | null>(null)
+  useEffect(() => {
+    let live = true
+    getWindowOnTop()
+      .then((s) => live && setState(s))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [])
+  if (!state?.supported) return null
+  const toggle = () => {
+    void withErrorToast(() => setWindowOnTop(!state.on), t('contestLogger.pin.failed')).then((s) => {
+      if (s) setState(s)
+    })
+  }
+  return (
+    <button
+      type="button"
+      className={`contest-logger-toggle contest-logger-pin${state.on ? ' active' : ''}`}
+      aria-pressed={state.on}
+      title={t('contestLogger.pin.title')}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={toggle}
+    >
+      {t('contestLogger.pin.label')}
+    </button>
+  )
+}
+
 /** The newest contacts of the running contest, newest first, in the contest screen's own columns. */
-function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CSSProperties }) {
+export function LastContacts({
+  fieldDay,
+  style,
+  boxRef,
+}: {
+  fieldDay: FieldDayStatus
+  style: CSSProperties
+  boxRef: RefObject<HTMLElement>
+}) {
   const titleId = useId()
   const fieldDayColumns = isFieldDay(fieldDay.event)
   const slotColumns = fieldDayColumns ? [] : (fieldDay.receives ?? [])
+  const numbered = logIsNumbered(fieldDay.log)
   // Marked over the whole log, as the screen marks it (a new section is new in log order), then the
   // newest few, each keyed by its place in the log.
   const rows = useMemo(
@@ -87,12 +162,18 @@ function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CS
     [fieldDay.log],
   )
   return (
-    <section className="contest-logger-recent" aria-labelledby={titleId} style={style}>
+    <section className="contest-logger-recent" aria-labelledby={titleId} style={style} ref={boxRef}>
       <div className="contest-logger-recent-body">
         <h2 id={titleId} className="contest-logger-recent-title">
           {t('contestLogger.recent.title')}
         </h2>
-        <ContestLogHead fieldDayColumns={fieldDayColumns} isWfd={fieldDay.event === 'wfd'} slotColumns={slotColumns} role={fieldDay.role} />
+        <ContestLogHead
+          fieldDayColumns={fieldDayColumns}
+          isWfd={fieldDay.event === 'wfd'}
+          slotColumns={slotColumns}
+          role={fieldDay.role}
+          numbered={numbered}
+        />
         {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
         {rows.map(({ row, at }) => (
           <ContestLogRow
@@ -100,6 +181,7 @@ function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CS
             row={row}
             fieldDayColumns={fieldDayColumns}
             slotColumns={slotColumns}
+            numbered={numbered}
           />
         ))}
       </div>
@@ -113,8 +195,13 @@ function LastContacts({ fieldDay, style }: { fieldDay: FieldDayStatus; style: CS
  * of the main window's Contest screen: one component, so the two cannot drift.
  *
  * It logs under the station's operating section (`contestLogMode`), as the cockpit there logs, and
- * says in words when that is a mode the contest does not permit: the header chip's own sentence,
- * for the same mode (`stationMode`). Logging stays allowed; the contact is the sponsor's to score.
+ * says so when that is a mode the contest does not permit: "FT8 · no credit" on its top row, right
+ * after the mode chip, with the header chip's own sentence on hover, for the same mode
+ * (`stationMode`). A chip and not a band over the boxes, the operator's pick (2026-10-12). Logging
+ * stays allowed; the contact is the sponsor's to score.
+ *
+ * Given `satellite`, the bird whose transponder the engine holds, one plain line under the bar says
+ * to log that pass's contacts on the Satellites screen. Only the logger window passes it.
  *
  * ⛔ NOTHING HERE TRANSMITS: the strip gets no `esm`, and A− / A+ only size the text. `sharedEntry`
  * is the logger window's (`LogEntry`): there Esc clears the entry. Absent, in the main window, Esc
@@ -132,6 +219,9 @@ export function ContestLargeEntry({
   onSaveOperator,
   operatorAsk,
   onOperatorFocused,
+  satellite,
+  barEnd,
+  entryOnly = false,
 }: {
   snap: AppSnapshot
   fieldDay: FieldDayStatus
@@ -148,10 +238,17 @@ export function ContestLargeEntry({
   /** Ctrl+O: the asks the operator box has not answered (`features/contestKeys.ts`). */
   operatorAsk?: number
   onOperatorFocused?: () => void
+  /** The bird whose transponder the engine holds, while one is held (the logger window's read of
+   *  `getSatTransponder`); null while none is. Absent in the main window, which draws no such line. */
+  satellite?: string | null
+  /** What ends the bar after A− / A+: the logger window's pin. Absent in the main window. */
+  barEnd?: ReactNode
+  /** The entry alone: no last contacts under it (the logger window's `entry` layout). */
+  entryOnly?: boolean
 }) {
   const section = snap.radio.operatingMode
   const pskName = usePskName(section)
-  const m = contestLogMode(section, pskName)
+  const m = contestLogMode(section, pskName, snap.link.tier)
   // THE TEXT SIZE (A− / A+): a factor on the app's Text size for the entry and the last contacts,
   // remembered on this computer for this window and clamped as it is read back.
   const [textScale, setTextScale] = useState(() => loggerTextScale(surfaceGet(TEXT_SCALE_KEY)))
@@ -161,6 +258,7 @@ export function ContestLargeEntry({
     surfaceSet(TEXT_SCALE_KEY, String(next))
   }
   const scaled = { '--logger-text-scale': textScale } as CSSProperties
+  const recentBox = useRef<HTMLElement>(null)
   return (
     <>
       <section className="contest-logger-entry" aria-label={t('contestLogger.entry.aria')}>
@@ -192,9 +290,14 @@ export function ContestLargeEntry({
           >
             A+
           </button>
+          {barEnd}
         </div>
+        {satellite != null && (
+          <p className="contest-logger-sat" role="status">
+            {t('contestLogger.satellite.note', { bird: satellite })}
+          </p>
+        )}
         <div className="contest-logger-scaled" style={scaled}>
-          <FdAdvisories fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, pskName)} />
           <LogEntry
             snap={snap}
             mode={m.mode}
@@ -205,6 +308,9 @@ export function ContestLargeEntry({
             fdMode={m.fdMode}
             fdSubmode={m.fdSubmode}
             sharedEntry={sharedEntry}
+            noCreditChip={
+              <NoCreditChip fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, pskName)} />
+            }
             operatorBox={
               <OperatorBox
                 onLogLine
@@ -217,7 +323,28 @@ export function ContestLargeEntry({
           />
         </div>
       </section>
-      <LastContacts fieldDay={fieldDay} style={scaled} />
+      {!entryOnly && (
+        <>
+          <LastContacts fieldDay={fieldDay} style={scaled} boxRef={recentBox} />
+          {/* THE LAST CONTACTS' DIVIDER: it sizes the list, and the Contest screen under it takes what is
+              left (the Illinois QSO Party, 2026-10-18: "splitters to resize sub-windows"). The list stays
+              no taller than its rows, so the divider shortens it and gives the room back; it paints
+              nothing until moved (`.contest-logger-recent[data-sized]`, styles.css), is stored per window
+              and fitted into the window on every load and resize, and Backspace or a double-click puts
+              the list's own height back. It stops nothing and sends nothing. */}
+          <PaneSeam
+            axis="y"
+            varName="--contest-recent-h"
+            strip={recentBox}
+            storageKey="nexus.split.contest.recent"
+            min={CONTEST_RECENT_SPLIT_MIN}
+            max={CONTEST_RECENT_SPLIT_MAX}
+            defaultPct={null}
+            label={t('contestLogger.recent.splitter.label')}
+            className="contest-seam"
+          />
+        </>
+      )}
     </>
   )
 }
@@ -255,6 +382,22 @@ export function ContestLogger({
   // A contest switched by a pick saved in the main window: this copy of the Contest screen says
   // so too.
   const contestSwitch = useContestSwitch(fd)
+  // THE LAYOUT: the whole window, or the entry alone. Only while a contest runs is there an entry.
+  const [layout, setLayout] = useLoggerLayout()
+  const entryOnly = fd != null && layout === 'entry'
+  // THE BIRD HELD, for the line under the entry's bar: the engine's own hold, read every 2 s as the
+  // Satellites screen and the rotor strip read it (one call at a time: it takes the engine mutex). A
+  // read that fails keeps the last answer, as theirs do.
+  const [satellite, setSatellite] = useState<string | null>(null)
+  useEffect(
+    () =>
+      pollSingleFlight('contest logger satellite', 2_000, (owns) =>
+        getSatTransponder()
+          .then((h) => owns() && setSatellite(h?.name ?? null))
+          .catch(() => {}),
+      ),
+    [],
+  )
   return (
     <>
       {fd && (
@@ -269,9 +412,26 @@ export function ContestLogger({
           onSaveOperator={onSaveOperator}
           operatorAsk={operatorAsk}
           onOperatorFocused={() => setOperatorAsk(0)}
+          satellite={satellite}
+          barEnd={
+            <>
+              <button
+                type="button"
+                className={`contest-logger-toggle${entryOnly ? ' active' : ''}`}
+                aria-pressed={entryOnly}
+                title={t('contestLogger.layout.title')}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setLayout(entryOnly ? 'full' : 'entry')}
+              >
+                {t('contestLogger.layout.label')}
+              </button>
+              <KeepInFront />
+            </>
+          }
+          entryOnly={entryOnly}
         />
       )}
-      <main className="layout single">
+      {!entryOnly && <main className="layout single">
         <ContestView
           fieldDay={fd}
           fdActive={fdActive}
@@ -283,8 +443,9 @@ export function ContestLogger({
           operatorAsk={operatorAsk}
           onOperatorFocused={() => setOperatorAsk(0)}
           operatorBoxAbove={fd != null}
+          entryAbove={fd != null}
         />
-      </main>
+      </main>}
     </>
   )
 }

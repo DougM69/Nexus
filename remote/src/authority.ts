@@ -1,7 +1,7 @@
 // Only this adapter turns provider claims and credential digests into authority.
 // ObservationRelay never receives identity data taken directly from a socket.
-import { createRemoteJWKSet, jwtVerify } from 'jose'
-import type { Entitlement, Identity, StationAccess } from '../../ui/src/remote-monitor/relay'
+import { createRemoteJWKSet, decodeJwt, jwtVerify } from 'jose'
+import { OBSERVER_LEASE_MS, type Entitlement, type Identity, type StationAccess } from '../../ui/src/remote-monitor/relay'
 
 export interface RemoteEnv {
   DB: D1Database
@@ -11,6 +11,11 @@ export interface RemoteEnv {
   AUTH0_ISSUER: string
   AUTH0_AUDIENCE: string
   AUTH0_CLIENT_ID: string
+  /** The Native application's client id: Nexus on another computer, signed in through the system
+   *  browser. Its tokens are taken on the native client's routes only, beside a signature by the
+   *  device's own key, and the SPA's never are there. Unset or 'unconfigured', every one of those
+   *  routes refuses `serviceNotConfigured`. */
+  AUTH0_NATIVE_CLIENT_ID?: string
   /** The provider subject allowed to administer trials. Unset or empty means NOBODY can, which is
    *  the only safe default: this gates a write to the entitlement table, so a check that fails
    *  OPEN would let anyone grant themselves the trial the one-trial-ever rule exists to refuse. */
@@ -20,6 +25,13 @@ export interface RemoteEnv {
   TURN_KEY_ID?: string
   TURN_KEY_TOKEN?: string
   REMOTE_BUILD_REVISION?: string
+  /** The HMAC key for trial markers and the licence copy (trial-identity.ts). Unset, the callsign and
+   *  shack-PC fields are checked for shape and nothing more: no marker is written or read. It can never
+   *  be rotated, because the values it was taken over are not kept. */
+  TRIAL_KEY?: string
+  /** '1' once every Nexus that pairs sends its callsign and PC: an approve without them is refused
+   *  `updateRequired` instead of starting a trial guarded by the mailbox alone. */
+  TRIAL_IDENTITY_REQUIRED?: string
 }
 
 export class Refusal extends Error {
@@ -62,6 +74,10 @@ export async function publicKey(value: unknown): Promise<string> {
 
 /** A JSON object carrying exactly `fields`, and any of `optional`, within 4 KiB. */
 export async function body(request: Request, fields: string[], optional: string[] = []): Promise<Record<string, unknown>> {
+  return fieldsOf(await bodyBytes(request), fields, optional)
+}
+/** A JSON request's body within 4 KiB, as the bytes sent: what a native request's signature covers. */
+export async function bodyBytes(request: Request): Promise<Uint8Array> {
   requireValue(request.headers.get('content-type')?.split(';')[0] === 'application/json', 'invalidRequest', 400)
   const reader = request.body?.getReader()
   requireValue(reader, 'invalidRequest', 400)
@@ -77,6 +93,10 @@ export async function body(request: Request, fields: string[], optional: string[
   const buffer = new Uint8Array(bytes)
   let offset = 0
   for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.length }
+  return buffer
+}
+/** Those bytes as a JSON object carrying exactly `fields`, and any of `optional`. */
+export function fieldsOf(buffer: Uint8Array, fields: string[], optional: string[] = []): Record<string, unknown> {
   let value: unknown
   try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(buffer)) }
   catch { throw new Refusal('invalidRequest', 400) }
@@ -119,6 +139,13 @@ export function mailbox(address: string): string {
 }
 
 let jwks: { issuer: string; keys: ReturnType<typeof createRemoteJWKSet> } | undefined
+/** The provider's signing keys, fetched from the configured issuer and cached for this isolate. */
+function keySet(env: RemoteEnv): ReturnType<typeof createRemoteJWKSet> {
+  if (jwks?.issuer !== env.AUTH0_ISSUER) {
+    jwks = { issuer: env.AUTH0_ISSUER, keys: createRemoteJWKSet(new URL('.well-known/jwks.json', env.AUTH0_ISSUER)) }
+  }
+  return jwks.keys
+}
 /** The namespace an Auth0 login Action must use to put the email claims on the access token.
  *  Hardcoded rather than configured because it has to match the Action byte for byte, and a second
  *  place to set it is a second place for it to drift - a drift that fails SILENTLY, by simply never
@@ -127,19 +154,34 @@ const CLAIM_NS = 'https://nexus.hamradiotools.io/'
 
 export async function account(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean }> {
   browserOrigin(request, env)
+  return signedIn(request, env, now, env.AUTH0_CLIENT_ID)
+}
+/** The native client's caller: Nexus on another computer, signed in through the system browser to
+ *  the Native application. The same issuer, API and account as the hosted page's, but only a token
+ *  that Native application was given (`azp`), so the page's tokens open no native route and these
+ *  open no route of the page's (which takes only the SPA's, and only with its exact Origin).
+ *
+ *  It carries no Origin and holds no cookie. A request with either came from a browser, so it is
+ *  refused before its token is read: that is what keeps every native route out of a page's reach
+ *  (no CSRF, whatever credential the page holds), as `native()` keeps the station's. */
+export async function nativeAccount(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean }> {
+  requireValue(!request.headers.has('origin') && !request.headers.has('cookie'), 'originDenied')
+  const clientId = env.AUTH0_NATIVE_CLIENT_ID || 'unconfigured'
+  // Never the SPA's own id, which would let the page's tokens in here.
+  requireValue(clientId !== env.AUTH0_CLIENT_ID, 'serviceNotConfigured', 503)
+  return signedIn(request, env, now, clientId)
+}
+async function signedIn(request: Request, env: RemoteEnv, now: number, clientId: string): Promise<Identity & { subject: string; verified: boolean }> {
   requireValue(env.AUTH0_ISSUER.startsWith('https://') && env.AUTH0_ISSUER.endsWith('/') &&
-    env.AUTH0_CLIENT_ID !== 'unconfigured', 'serviceNotConfigured', 503)
-  if (jwks?.issuer !== env.AUTH0_ISSUER) {
-    jwks = { issuer: env.AUTH0_ISSUER, keys: createRemoteJWKSet(new URL('.well-known/jwks.json', env.AUTH0_ISSUER)) }
-  }
+    clientId !== 'unconfigured', 'serviceNotConfigured', 503)
   let subject: string, until: number, email: string | null = null
   try {
-    const { payload } = await jwtVerify(bearer(request), jwks.keys, {
+    const { payload } = await jwtVerify(bearer(request), keySet(env), {
       issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, algorithms: ['RS256'],
       requiredClaims: ['sub', 'exp', 'iat'], currentDate: new Date(now), clockTolerance: 0,
     })
     requireValue(typeof payload.sub === 'string' && payload.sub.length > 0 && payload.sub.length <= 256 &&
-      payload.azp === env.AUTH0_CLIENT_ID && typeof payload.iat === 'number' && payload.iat * 1000 <= now + 30000)
+      payload.azp === clientId && typeof payload.iat === 'number' && payload.iat * 1000 <= now + 30000)
     subject = payload.sub
     until = Math.min(Number(payload.exp) * 1000, now + 3600000)
     // Only a VERIFIED address counts. An unverified one is a claim the holder typed, so keying
@@ -185,6 +227,72 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
   return { accountId: row.id, expiresAt: until, subject, verified: email !== null }
 }
 
+/** How long after its sign-in a proof is taken, and how far ahead of this service's clock its signing
+ *  time may be. A proof is bounded by when it was signed (`iat`), never by the token's `exp`: the
+ *  provider's ID tokens last ten hours by default, and a proof is only ever presented just after the
+ *  sign-in that made it. */
+export const PROOF_FRESH_MS = 10 * 60000
+export const PROOF_SKEW_MS = 60000
+
+/** What a sign-in vouches for: SHA-256, in base64url, of a label naming what is vouched for, a zero byte,
+ *  for a device its kind and a zero byte, then each key's SPKI DER in order. DER is self-delimiting and
+ *  the kinds are a fixed set, so no two lists of keys hash the same bytes; the zero bytes make that plain.
+ *  The station's keys are its signing key and its LAN key, in that order; a computer's its road key and
+ *  its LAN key, a phone's and a browser's their one key. Nexus and the page put this in the sign-in as its
+ *  nonce, so the token the provider signs names exactly these keys. */
+async function nonceOf(label: string, kind: string | null, keys: string[]): Promise<string> {
+  const parts = [new TextEncoder().encode(label), new Uint8Array([0]),
+    ...(kind === null ? [] : [new TextEncoder().encode(kind), new Uint8Array([0])]), ...keys.map(fromHex)]
+  const bytes = new Uint8Array(parts.reduce((n, part) => n + part.length, 0))
+  parts.reduce((at, part) => { bytes.set(part, at); return at + part.length }, 0)
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+  return btoa(String.fromCharCode(...hash)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+export const stationNonce = (stationKey: string, lanKey: string) => nonceOf('nexus-station/1', null, [stationKey, lanKey])
+export const deviceNonce = (kind: string, keys: string[]) => nonceOf('nexus-device/1', kind, keys)
+
+/** A proof: an ID token from `subject`'s sign-in to the application `clientId`, carrying `nonce`, signed
+ *  by the provider within the last ten minutes. Answers its verified address, if it carries one.
+ *
+ *  Checked as the shack will check it, so the service never stores what the shack would refuse: RS256
+ *  by a key the issuer publishes, the exact issuer, the audience (a list only with `azp` naming the
+ *  application, and any `azp` naming it), the subject, the nonce, and the signing time. The token's
+ *  own `exp` is read only as a token's (it is after its `iat`): the age bound is `iat`'s. */
+export async function verifyProof(env: RemoteEnv, value: unknown, clientId: string, subject: string, nonce: string, now: number): Promise<{ email: string | null }> {
+  requireValue(typeof value === 'string' && value.length <= 4096, 'invalidRequest', 400)
+  try {
+    const issued = decodeJwt(value).iat
+    requireValue(typeof issued === 'number' && Number.isFinite(issued))
+    const { payload } = await jwtVerify(value, keySet(env), {
+      issuer: env.AUTH0_ISSUER, audience: clientId, algorithms: ['RS256'],
+      requiredClaims: ['sub', 'iat', 'nonce'], currentDate: new Date(issued * 1000), clockTolerance: 0,
+    })
+    requireValue(payload.iat === issued && issued * 1000 <= now + PROOF_SKEW_MS && issued * 1000 >= now - PROOF_FRESH_MS)
+    requireValue(payload.sub === subject && subject.length > 0 && payload.nonce === nonce)
+    requireValue(!Array.isArray(payload.aud) || payload.azp === clientId)
+    requireValue(payload.azp === undefined || payload.azp === clientId)
+    const email = payload.email_verified === true && typeof payload.email === 'string' && payload.email.length > 0 &&
+      payload.email.length <= 320 ? payload.email.trim().toLowerCase() : null
+    return { email }
+  } catch { throw new Refusal('proofInvalid', 403) }
+}
+
+/** Who an account is at a station: its owner, a person invited there with a role, or nobody (null). An
+ *  invite is matched on the mailbox of the account's verified address (`mailbox_hash`, written only from
+ *  a verified address at sign-in), and only while it has not been removed. */
+export type Role = 'owner' | 'operate' | 'listen'
+export async function memberRole(env: RemoteEnv, row: StationRow, accountId: string): Promise<Role | null> {
+  if (row.account_id === accountId) return 'owner'
+  const invite = await env.DB.prepare(`SELECT i.role FROM invites i JOIN accounts a ON a.mailbox_hash=i.mailbox_hash
+    WHERE i.station_id=? AND a.id=? AND i.removed_at IS NULL`).bind(row.id, accountId).first<{ role: 'operate' | 'listen' }>()
+  return invite?.role ?? null
+}
+/** The hash an invite keeps of an address: the mailbox it delivers to, as `signedIn` keeps an account's. */
+export async function mailboxHash(address: unknown): Promise<string> {
+  requireValue(typeof address === 'string' && address.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(address.trim()), 'invalidRequest', 400)
+  return digest(`email:${mailbox(address.trim().toLowerCase())}`)
+}
+
 /** Only the pinned provider subject may administer trials.
  *
  *  Fails CLOSED: with ADMIN_SUBJECT unset or empty this refuses everyone, including the operator.
@@ -203,18 +311,69 @@ export function requireAdmin(env: RemoteEnv, subject: string): void {
 // its trial waiting. The one place that writes this is the approve batch in index.ts.
 export const TRIAL_MS = 14 * 24 * 60 * 60 * 1000
 
-export async function trial(env: RemoteEnv, accountId: string, now: number): Promise<Entitlement> {
-  const row = await env.DB.prepare('SELECT enabled, expires_at, started_at, source FROM trials WHERE account_id=?')
-    .bind(accountId).first<{ enabled: number; expires_at: number; started_at: number | null; source: string | null }>()
-  // Four distinct situations, named. Callers must never re-derive these from enabled+expiresAt:
-  // that is the arithmetic this field exists to stop two separate consumers from guessing at.
-  const state = !row ? 'none' : row.enabled !== 1 ? 'disabled' : row.expires_at > now ? 'active' : 'ended'
-  return { accountId, enabled: row?.enabled === 1, expiresAt: row?.expires_at ?? 0,
-    state, startedAt: row?.started_at ?? null, source: row?.source ?? null }
+/** After a paid period ends, the days it still counts: one, or seven while a payment is failing and
+ *  the provider is still retrying it. */
+export const PAID_GRACE_MS = 24 * 60 * 60 * 1000
+export const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000
+
+export type Plan = { kind: 'trial' | 'manual' | 'subscription' | null; status: string | null; periodEnd: number | null; renews: boolean }
+/** The one answer to "what may this account do now", from its trial and its subscription together.
+ *  `enabled`, `expiresAt` and `state` keep their meaning on the wire: internet use allowed, until when,
+ *  and the four named situations, so every gate that reads them is unchanged. `access` adds whether the
+ *  account may still use its stations on its own network ('lan') once internet use has ended, and
+ *  `plan` is what the page needs to say why. */
+export type AccountEntitlement = Entitlement & { access: 'internet' | 'lan' | 'none'; plan: Plan }
+export type EntitlementRow = { enabled: number | null; expires_at: number | null; started_at: number | null; source: string | null
+  status: string | null; plan: string | null; period_end: number | null; cancel_at_period_end: number | null }
+
+/** Until when a subscription in this status allows internet use; 0 when it does not. A subscription
+ *  that is not on one of our prices has no plan, and pays for nothing. */
+function paidUntil(row: EntitlementRow): number {
+  if (row.status === null || row.period_end === null || row.plan === null) return 0
+  if (row.status === 'active' || row.status === 'trialing') return row.period_end + PAID_GRACE_MS
+  if (row.status === 'past_due') return row.period_end + PAST_DUE_GRACE_MS
+  return 0
 }
 
-// The strict gate: is the service usable right now? ONE call site, index.ts:222, and it is
-// reached only by `device`, `ticket`, `renew` and `turn` - the `observe` route returns before it.
+export function entitlementOf(accountId: string, row: EntitlementRow, now: number): AccountEntitlement {
+  // A disabled trials row is an operator's ban, and outranks anything paid: no internet, no LAN.
+  const disabled = row.enabled !== null && row.enabled !== 1
+  const until = disabled ? 0 : Math.max(row.enabled === 1 ? row.expires_at ?? 0 : 0, paidUntil(row))
+  const internet = until > now
+  // Four distinct situations, named. Callers must never re-derive these from enabled+expiresAt:
+  // that is the arithmetic this field exists to stop two separate consumers from guessing at.
+  const state = disabled ? 'disabled' : internet ? 'active' : row.enabled !== null || row.status !== null ? 'ended' : 'none'
+  const kind = row.status !== null ? 'subscription' : row.enabled === null ? null : row.source?.startsWith('trial') ? 'trial' : 'manual'
+  return { accountId, enabled: !disabled && until > 0, expiresAt: disabled ? row.expires_at ?? 0 : until,
+    state, startedAt: row.started_at ?? null, source: row.source ?? null,
+    access: internet ? 'internet' : disabled ? 'none' : 'lan',
+    plan: { kind, status: row.status, periodEnd: row.period_end,
+      renews: row.plan !== null && (row.status === 'active' || row.status === 'trialing') && row.cancel_at_period_end !== 1 } }
+}
+
+export async function readEntitlement(env: RemoteEnv, accountId: string, now: number): Promise<AccountEntitlement> {
+  const row = await env.DB.prepare(`SELECT t.enabled, t.expires_at, t.started_at, t.source,
+    s.status, s.plan, s.period_end, s.cancel_at_period_end
+    FROM (SELECT ? AS id) a LEFT JOIN trials t ON t.account_id=a.id LEFT JOIN subscriptions s ON s.account_id=a.id`)
+    .bind(accountId).first<EntitlementRow>()
+  requireValue(row, 'serviceUnavailable', 503)
+  return entitlementOf(accountId, row, now)
+}
+
+/** The account as a LAN-only session sees it (a ticket of scope 'lan'): usable on the shack's own
+ *  network for as long as Remote is not switched off for the account, whatever its internet use. The
+ *  date is a lease the session renews, never the account's: the observer and stream deadlines taken
+ *  from it end the session within one lease of a switch-off, and nothing internet-only reads it. Only
+ *  the session's observation, its lease and Stop, and a stream held to the LAN (stream-relay.ts) are
+ *  open to such a session (room.ts); every other lane keeps the account's own entitlement. */
+export function lanEntitlement(entitlement: AccountEntitlement, now: number): AccountEntitlement {
+  // Named, never "not none": a reading without the field is no permission.
+  return { ...entitlement, enabled: entitlement.access === 'lan' || entitlement.access === 'internet', expiresAt: now + OBSERVER_LEASE_MS }
+}
+
+// The strict gate: is the service usable right now? Called in index.ts for the browser's `device`,
+// `ticket`, `renew` and `turn`, and the native client's `device`, `turn`, `pipe` and `renew` - the
+// `observe` route returns before it.
 // Observe IS entitlement-gated, but by observerDeadline inside connectObserver (relay.ts:41),
 // which is also what expires a session already in flight. Do not read this function as the
 // whole entitlement story; an audit that does will conclude observe is unguarded here, or that
@@ -231,6 +390,14 @@ export function requireTrial(entitlement: Entitlement, now: number): void {
 export function requireEligible(entitlement: Entitlement): void {
   if (entitlement.state === 'active' || entitlement.state === 'none') return
   throw new Refusal(entitlement.state === 'ended' ? 'trialEnded' : 'trialDisabled')
+}
+
+/** The pairing gate, at the three steps that lead to an approval: eligible, and, unless the account
+ *  already has internet use (a running trial, or a plan), not a person whose trial was spent under
+ *  another sign-in. A subscriber pairs whatever a sibling account spent. */
+export async function requireMayPair(env: RemoteEnv, entitlement: AccountEntitlement, now: number): Promise<void> {
+  requireEligible(entitlement)
+  if (entitlement.access !== 'internet') await requireUnspentIdentity(env, entitlement.accountId, now)
 }
 
 /** Has the PERSON behind this account already consumed a trial under another sign-in?
@@ -364,18 +531,27 @@ export function deviceCookie(request: Request, stationId: string): string | null
   const value = parts[0].slice(name.length)
   return /^[0-9a-f]{64}$/.test(value) ? value : null
 }
-export function cookie(stationId: string, value: string, maxAge = 2592000): string {
+/** The browser credential's lifetime in its cookie, in seconds: the longest a browser keeps one (Chrome
+ *  caps Max-Age at 400 days). An approval no longer ends by itself (`UNTIL_REMOVED`), so the credential is
+ *  re-issued with this whenever its browser is admitted, and only a browser left unused that long loses it. */
+export const COOKIE_MAX_AGE_S = 400 * 86400
+export function cookie(stationId: string, value: string, maxAge = COOKIE_MAX_AGE_S): string {
   return `${cookieName(stationId)}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`
 }
-/** Browser approval lifetime (operator decision 2026-09-14). An approval lasts thirty days from the
- *  last time that browser was admitted to its station, and never more than ninety days from the moment
- *  the shack approved it. Only approving again at the shack starts a new ninety days. */
-export const APPROVAL_MS = 30 * 24 * 60 * 60 * 1000
-export const APPROVAL_LIMIT_MS = 90 * 24 * 60 * 60 * 1000
+/** How long an approval lasts (operator decision 2026-10-10, replacing the 2026-09-14 rule of thirty days
+ *  from last use and ninety at most): until it is removed. It never lapses, used or not; only Remove at
+ *  the shack, the device forgetting itself, or revoking the station ends it.
+ *
+ *  An approved device's `expires_at` is this, the last millisecond of the year 9999. Every Nexus already
+ *  holds a device to `expiresAt > now` and nothing else (1.17 and 1.18 filter and restore by it, and show
+ *  it as a date: "9999-12-31"), so to all of them it is an approval that does not end; it fits a safe
+ *  integer, an i64 and a u64. A Nexus that asks for kinds is also told so by name (`untilRemoved`), and so
+ *  is the browser's own page. */
+export const UNTIL_REMOVED = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
 /** Sent by a Nexus that binds its remembered grants to the approval GENERATION. Only that Nexus is
- *  shown the generation and the renewal limit, and only approvals it gives record an approval time
- *  and so ever renew: 1.12.0 binds restored grants to the expiry (a renewal would silently drop them)
- *  and parses the device list with deny_unknown_fields (an added field fails every refresh). */
+ *  shown the generation, and only approvals it gives record an approval time: 1.12.0 binds restored
+ *  grants to the expiry (moving it would silently drop them) and parses the device list with
+ *  deny_unknown_fields (an added field fails every refresh). */
 export function lifetime(request: Request): boolean {
   return request.headers.get('x-nexus-device-lifetime') === '1'
 }
@@ -384,9 +560,26 @@ export function lifetime(request: Request): boolean {
 export function deviceKeys(request: Request): boolean {
   return request.headers.get('x-nexus-device-key') === '1'
 }
-/** The end that use cannot move, or null for an approval that never renews. */
-export function renewsUntil(row: Pick<DeviceRow, 'approved' | 'approved_at'>): number | null {
-  return row.approved === 1 && row.approved_at !== null ? row.approved_at + APPROVAL_LIMIT_MS : null
+/** Sent by a Nexus that knows the native client's devices. Only that Nexus is listed them, with every
+ *  device's kind and platform: an older one could show a computer only as a browser, and parses the
+ *  list with deny_unknown_fields besides. */
+export function deviceKinds(request: Request): boolean {
+  return request.headers.get('x-nexus-device-kind') === '1'
+}
+/** Does this approval last until it is removed? */
+export function untilRemoved(row: Pick<DeviceRow, 'approved' | 'expires_at'>): boolean {
+  return row.approved === 1 && row.expires_at >= UNTIL_REMOVED
+}
+/** Each approval of this station that still stands, given by a Nexus that binds its grants to the
+ *  generation (`approved_at` recorded), made one that lasts until removed: the approvals given under the
+ *  thirty/ninety-day rule. The generation is not moved, so every grant bound to it stands, and nothing
+ *  ended is revived. An approval given by an older Nexus (no approval time) keeps its fixed end, because
+ *  that Nexus binds its restored grants to the expiry. Asked for whenever the station connects or lists
+ *  its devices, and as a device is used. */
+export async function keepApprovals(env: RemoteEnv, stationId: string, now: number, deviceId?: string): Promise<void> {
+  await env.DB.prepare(`UPDATE devices SET expires_at=? WHERE station_id=? AND approved=1 AND approved_at IS NOT NULL
+    AND expires_at>? AND expires_at<?${deviceId === undefined ? '' : ' AND id=?'}`)
+    .bind(...[UNTIL_REMOVED, stationId, now, UNTIL_REMOVED, ...(deviceId === undefined ? [] : [deviceId])]).run()
 }
 export type DeviceRow = { id: string; name: string; generation: number; approved: number; approved_at: number | null; expires_at: number
   public_key: string | null }
@@ -396,4 +589,51 @@ export async function device(request: Request, env: RemoteEnv, stationId: string
   return env.DB.prepare(`SELECT id,name,generation,approved,approved_at,expires_at,public_key FROM devices
     WHERE station_id=? AND account_id=? AND credential_hash=? AND expires_at>?`)
     .bind(stationId, owner, await digest(credential), now).first<DeviceRow>()
+}
+
+/** What a native request's signature covers begins with this, so a signature made for one is never one
+ *  for anything else a device key signs (a stream's offer, the older lanes' proofs). */
+export const NATIVE_REQUEST = 'nexus-native-request/1'
+/** How long a challenge waits for the request it was asked for. */
+export const CHALLENGE_MS = 60000
+const fromHex = (hex: string) => new Uint8Array(hex.length / 2).map((_, i) => parseInt(hex.slice(2 * i, 2 * i + 2), 16))
+/** A native request signed by `key`: its `x-nexus-signature` (ECDSA P-256 over SHA-256, IEEE P1363
+ *  r||s, lowercase hex) over five lines - the label, its `x-nexus-challenge`, the method, the path,
+ *  and SHA-256 of the body exactly as sent, in lowercase hex.
+ *
+ *  The challenge is one this service gave the same account within the last minute, and it is DELETED
+ *  as it is read, before any signature is tried. So a request is taken once: a replay finds nothing,
+ *  and a challenge another account was given, or one past its minute, is refused the same way.
+ *  DELETE ... RETURNING is what makes that hold across concurrent Worker instances, as for tickets.
+ *  `deviceId` is the reopening device the challenge was given to, or null for a signed-in caller's:
+ *  each takes only its own. */
+export async function signedBy(request: Request, env: RemoteEnv, accountId: string, deviceId: string | null, key: string, bytes: Uint8Array, now: number): Promise<void> {
+  const challenge = request.headers.get('x-nexus-challenge') ?? '', signature = request.headers.get('x-nexus-signature') ?? ''
+  requireValue(/^[0-9a-f]{64}$/.test(challenge) && /^[0-9a-f]{128}$/.test(signature), 'invalidRequest', 400)
+  const taken = await env.DB.prepare('DELETE FROM challenges WHERE digest=? AND account_id=? AND device_id IS ? AND expires_at>? RETURNING digest')
+    .bind(await digest(challenge), accountId, deviceId, now).first()
+  requireValue(taken, 'invalidChallenge', 401)
+  const sent = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('')
+  const signed = new TextEncoder().encode([NATIVE_REQUEST, challenge, request.method, new URL(request.url).pathname, sent].join('\n'))
+  let valid = false
+  try {
+    const verifier = await crypto.subtle.importKey('spki', fromHex(key), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify'])
+    valid = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, verifier, fromHex(signature), signed)
+  } catch { valid = false }
+  requireValue(valid, 'invalidSignature', 401)
+}
+/** The native device a request names (`x-nexus-device-id`), of this station and account and not
+ *  lapsed, or null. A browser's row is never one, whatever its id: a native caller is never admitted on
+ *  a browser's approval, and a browser never on a native device's. */
+export async function nativeDevice(request: Request, env: RemoteEnv, stationId: string, accountId: string, now: number): Promise<DeviceRow | null> {
+  return env.DB.prepare(`SELECT id,name,generation,approved,approved_at,expires_at,public_key FROM devices
+    WHERE id=? AND station_id=? AND account_id=? AND kind IS NOT NULL AND expires_at>?`)
+    .bind(id(request.headers.get('x-nexus-device-id')), stationId, accountId, now).first<DeviceRow>()
+}
+/** A native device's kind and the platforms it may name, as the shack shows them at approval. */
+const PLATFORMS: Record<string, readonly string[]> = { computer: ['windows', 'macos', 'linux'], phone: ['ios', 'android'] }
+export function nativeKind(kind: unknown, platform: unknown): { kind: string; platform: string } {
+  requireValue(typeof kind === 'string' && typeof platform === 'string' && Object.hasOwn(PLATFORMS, kind) &&
+    PLATFORMS[kind].includes(platform), 'invalidRequest', 400)
+  return { kind, platform }
 }

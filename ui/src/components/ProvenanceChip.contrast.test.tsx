@@ -34,9 +34,12 @@ import {
   expandWith,
   parseRules,
   rgbHex as hex,
+  subjectCut,
   toRgb,
+  tokenCut,
   tokensAt,
   winnerAt,
+  withProps,
   withRoles,
   type El,
   type Mode,
@@ -171,11 +174,18 @@ function once<T>(rules: Rule[], key: string, make: () => T): T {
   if (!byKey.has(key)) byKey.set(key, make())
   return byKey.get(key) as T
 }
-const tokensFor = (rules: Rule[], mode: Mode, chain: El[]) => once(rules, `t|${mode}|${chainKey(chain)}`, () => tokensAt(rules, mode, chain))
+// THE CUTS (2026-10-21). Alone, the light sweep took 4.4-5.3 s and the whole file 11-16 s, nearly all of it rejecting
+// rules at their subject compound, once per mode and chain prefix. In full runs the file took 13-70 s, and 145 s in
+// one where FIRES ran 74 s, past its 60 s budget. So winnerAt and tokensAt are handed only the rules that can answer:
+// cssCascade's withProps, subjectCut and tokenCut, which say why every winner and token is the same.
+const tokensFor = (rules: Rule[], mode: Mode, chain: El[]) =>
+  once(rules, `t|${mode}|${chainKey(chain)}`, () => tokensAt(tokenCut(rules, mode, chain), mode, chain))
 /** A preset changes only custom properties, so the mode without its presets decides a winner. */
 const winnerMode = (mode: Mode): Mode => mode.split(' ').filter((p, i) => i === 0 || p.startsWith('skin=')).join(' ') as Mode
 const win = (rules: Rule[], mode: Mode, chain: El[], ...props: string[]) =>
-  once(rules, `w|${winnerMode(mode)}|${chainKey(chain)}|${props.join()}`, () => winnerAt(rules, winnerMode(mode), chain, ...props))
+  once(rules, `w|${winnerMode(mode)}|${chainKey(chain)}|${props.join()}`, () =>
+    winnerAt(subjectCut(withProps(rules, props), chain[chain.length - 1]), winnerMode(mode), chain, ...props),
+  )
 
 const colourOf = (rules: Rule[], mode: Mode, at: El[], value: string, under: Rgb): Rgb => {
   const c = toRgb(expandWith(tokensFor(rules, mode, at), value), under)
@@ -278,8 +288,9 @@ describe('the provenance chip reads in every light theme', () => {
   it('FIRES: the chip as it shipped is caught in the light theme, at the ratios Chrome measured, and not in the dark one', () => {
     const found = unreadable(SHIPPED, chips, LIGHT)
     // The resolver must agree with what Chrome painted, or it is not measuring the same thing.
-    expect(found).toContain('Connect Conditions cached light: #a76d00 on #e5eaf0 = 3.59:1')
-    expect(found).toContain('the map bar live light: #007f35 on #e5eaf0 = 4.25:1')
+    // The Light it shipped in is the Bright theme now (Light took Silver's look, 2026-10-13), so it is measured there.
+    expect(found).toContain('Connect Conditions cached light skin=bright: #a76d00 on #e5eaf0 = 3.59:1')
+    expect(found).toContain('the map bar live light skin=bright: #007f35 on #e5eaf0 = 4.25:1')
     expect(found.some((m) => m.startsWith('DXpeditions offline light skin=paper')), 'the paper theme').toBe(true)
     expect(unreadable(SHIPPED, chips, BASE_MODES.filter((b) => baseTheme(b) === 'dark'))).toEqual([])
   }, 60_000)

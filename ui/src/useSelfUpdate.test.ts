@@ -33,6 +33,9 @@ let selfUpdates = true
 let noticeInfo: UpdateInfo | null = null
 /** Whether `open_download_page` reached a browser. */
 let pageOpens = true
+/** What `client_status` says: null on a computer running its own station, else the link to the
+ *  station this computer drives (only the builds matter here). */
+let driving: { phase: string; stationBuild?: string | null } | null = null
 const checkCalls: number[] = []
 /** Every `invoke(cmd)` the hook made through the api bridge, in order. */
 const invoked: string[] = []
@@ -50,6 +53,7 @@ beforeEach(() => {
   selfUpdates = true
   noticeInfo = null
   pageOpens = true
+  driving = null
   unsubscribe = subscribeToasts((now) => {
     toasts = now
   })
@@ -66,6 +70,7 @@ beforeEach(() => {
       invoke: (cmd: string) => {
         invoked.push(cmd)
         if (cmd === 'update_install_block') return Promise.resolve(null)
+        if (cmd === 'client_status') return Promise.resolve(driving)
         if (cmd === 'check_beta_update') {
           return betaInfo instanceof Error ? Promise.reject(betaInfo) : Promise.resolve(betaInfo)
         }
@@ -232,6 +237,86 @@ describe('install and restart', () => {
     expect(result.current.phase).toBe('error')
     expect(result.current.error).toContain('Read-only file system')
     expect(invoked, 'a failed swap must not restart into the old bundle').not.toContain('restart_app')
+  })
+})
+
+// Installing here while this computer drives a station leaves it a build the station refuses,
+// and the operator is locked out until someone at the shack updates too. So in client mode an
+// offered update is HELD at the press: nothing installs until the operator confirms the warning.
+describe('while this computer drives a station', () => {
+  function offeringInstall(version: string) {
+    return () =>
+      Promise.resolve({
+        available: true,
+        version,
+        download: () => Promise.resolve(),
+        install: () => {
+          invoked.push('plugin:install')
+          return Promise.resolve()
+        },
+      })
+  }
+
+  it('an offered update is held at the press, not installed, and says the station’s version', async () => {
+    driving = { phase: 'live', stationBuild: '1.15.0' }
+    nextCheck = offeringInstall('9.9.9')
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(result.current.phase).toBe('ready')
+    expect(result.current.held).toEqual({ stationBuild: '1.15.0' })
+
+    act(() => result.current.install())
+    await settle()
+    expect(invoked).not.toContain('plugin:install')
+    expect(invoked).not.toContain('prepare_update_install')
+    expect(invoked).not.toContain('restart_app')
+    expect(result.current.phase).toBe('ready')
+  })
+
+  it('on the beta channel too', async () => {
+    driving = { phase: 'live', stationBuild: '1.15.0' }
+    betaInfo = { version: '9.9.9-beta1', notes: null }
+    const { result } = renderHook(() => useSelfUpdate(true))
+    await settle()
+    act(() => result.current.install())
+    await settle()
+    expect(invoked).not.toContain('install_beta_update')
+    expect(invoked).not.toContain('restart_app')
+    expect(result.current.held).toEqual({ stationBuild: '1.15.0' })
+  })
+
+  it('"Install anyway", the warning confirmed, installs and restarts', async () => {
+    driving = { phase: 'live', stationBuild: '1.15.0' }
+    nextCheck = offeringInstall('9.9.9')
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    act(() => result.current.installAnyway())
+    await settle()
+    expect(invoked).toContain('plugin:install')
+    expect(invoked).toContain('restart_app')
+  })
+
+  it('the station already at the offered version: nothing to hold, it installs', async () => {
+    driving = { phase: 'refused', stationBuild: '9.9.9' }
+    nextCheck = offeringInstall('9.9.9')
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(result.current.held).toBeNull()
+    act(() => result.current.install())
+    await settle()
+    expect(invoked).toContain('plugin:install')
+  })
+
+  it('CONTROL: on a computer running its own station nothing changes', async () => {
+    driving = null
+    nextCheck = offeringInstall('9.9.9')
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(result.current.held).toBeNull()
+    act(() => result.current.install())
+    await settle()
+    expect(invoked).toContain('plugin:install')
+    expect(invoked).toContain('restart_app')
   })
 })
 

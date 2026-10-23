@@ -1841,11 +1841,12 @@ impl CivDaemon {
         );
     }
 
-    /// Main/Sub selector byte for the scope-CONTROL commands: `Some(0x00)` (Main) on dual-scope
-    /// rigs, `None` (omit) on single-scope rigs. The stream is already pinned to Main by
-    /// `scope_stream_frames`, so controlling the Main scope is what the operator sees.
-    fn scope_ms(&self) -> Option<u8> {
-        super::scope::scope_is_dual(self.civ_addr).then_some(0x00)
+    /// Main/Sub selector byte for the scope-CONTROL commands: `00` (Main) on EVERY model. Single-
+    /// scope rigs take it too ("00 (Fixed)" in their CI-V references) and answer NG without it,
+    /// which is how the IC-7300's span came to be refused. On a dual-scope rig the stream is
+    /// pinned to Main by `scope_stream_frames`, so the Main scope is the one the operator sees.
+    fn scope_ms(&self) -> u8 {
+        0x00
     }
 
     /// Set the rig's scope SPAN (`27 15`) — the ± half-width in Hz (rig table 2.5k..500k).
@@ -1922,6 +1923,8 @@ impl Drop for CivDaemon {
         // send a best-effort key-up FIRST, while the serial engine is still alive.
         // Idempotent (an already-RX radio just acks); one choke point covers every
         // native teardown path: rig rebuilds, monitor recycles, handoff drops, app exit.
+        // When the wait for it runs out (the engine held behind requests the radio never
+        // answered), the engine still writes it once as it stops: see `engine_loop`'s end.
         if self.engine.is_alive() {
             super::diag::note("CivDaemon::Drop — safety key-up (a daemon is being torn down)");
             let _ = self
@@ -1955,7 +1958,7 @@ mod tests {
         );
     }
 
-    use super::super::engine::tests_support::FakeRadio;
+    use super::super::engine::tests_support::{FakeRadio, Held};
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
@@ -2131,6 +2134,85 @@ mod tests {
             regs.lock().unwrap().scope_fixed,
             "the refusal must leave the rig's scope mode exactly where the operator put it"
         );
+    }
+
+    /// ⭐ THE SINGLE-SCOPE ICOMS TAKE THE MAIN/SUB SELECTOR TOO. Nexus sent `27 14`, `27 15` and
+    /// `27 19` without it to the IC-7300, IC-705, IC-905 and IC-7300MK2, so the rig read the
+    /// first payload byte as the selector, found the frame a byte short, and answered NG: every
+    /// span button was "refused", and the Center-mode read that should have explained it came
+    /// back unanswered. Icom's references put `00` there on every one of these models (IC-7300
+    /// Full Manual pp. 19-14/19-15; IC-705 CI-V p. 29; IC-905 p. 28; IC-7300MK2 p. 25).
+    ///
+    /// Asserted BY VALUE on what reached the radio, and the IC-9700 rides along as the control:
+    /// its bytes were right before and must not move.
+    #[test]
+    fn every_icom_scope_control_frame_carries_the_main_selector() {
+        for model in [
+            IcomModel::Ic7300,
+            IcomModel::Ic705,
+            IcomModel::Ic905,
+            IcomModel::Ic7300Mk2,
+            IcomModel::Ic9700,
+        ] {
+            let addr = model.default_civ_addr();
+            let (radio, _push) = FakeRadio::new(addr);
+            let regs = radio.regs();
+            let d = CivDaemon::start_with_io(Box::new(radio), addr, 0, 1, Some(model)).unwrap();
+
+            d.set_scope_center_mode(false);
+            assert_eq!(
+                d.scope_center_mode(),
+                Some(false),
+                "{model:?}: Center reads back"
+            );
+            assert_eq!(
+                d.set_scope_span(100_000),
+                Ok(()),
+                "{model:?}: a ±100 kHz span in Center mode is taken"
+            );
+            d.set_scope_ref(-105);
+            d.set_scope_center_mode(true);
+            assert!(
+                regs.lock().unwrap().scope_fixed,
+                "{model:?}: the Fixed write landed"
+            );
+            assert_eq!(
+                d.scope_center_mode(),
+                Some(true),
+                "{model:?}: Fixed reads back"
+            );
+            // The #275 refusal still comes through: a span in Fixed mode is the rig's NG.
+            assert_eq!(d.set_scope_span(100_000), Err(CivError::Nak), "{model:?}");
+
+            // Whole frames as they crossed the wire: FE FE <rig> E0 27 <sub> 00 … FD.
+            let frame = |body: &[u8]| [&[0xFE, 0xFE, addr, 0xE0, 0x27][..], body, &[0xFD]].concat();
+            let span = frame(&[0x15, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00]);
+            let sent: Vec<Vec<u8>> = (regs.lock().unwrap().wire.iter())
+                .filter(|w| w.get(4) == Some(&0x27) && matches!(w.get(5), Some(0x14 | 0x15 | 0x19)))
+                .cloned()
+                .collect();
+            assert_eq!(
+                sent,
+                vec![
+                    frame(&[0x14, 0x00, 0x00]),             // Center write
+                    frame(&[0x14, 0x00]),                   // Center read
+                    span.clone(),                           // ±100 kHz
+                    frame(&[0x19, 0x00, 0x10, 0x50, 0x01]), // −10.5 dB
+                    frame(&[0x14, 0x00, 0x01]),             // Fixed write
+                    frame(&[0x14, 0x00]),                   // Fixed read
+                    span,                                   // refused
+                ],
+                "{model:?}: the wire bytes, selector first"
+            );
+            // CONTROL: the fixture refuses the old selector-less span, as the rig did, so it
+            // can never again agree with the frame that broke the IC-7300.
+            let short = Frame::command(addr, 0x27, &[0x15, 0x00, 0x00, 0x10, 0x00, 0x00]);
+            assert_eq!(
+                d.engine.handle().transact(short, Expect::Ack).map(|_| ()),
+                Err(CivError::Nak),
+                "{model:?}: a span without the selector is NG"
+            );
+        }
     }
 
     #[test]
@@ -3169,9 +3251,14 @@ mod tests {
             data_mode,
             model,
         ));
-        // The engine's own first frame is scope-off housekeeping (`27 11 00`), sent
-        // asynchronously on its first loop pass. Wait it out, so a test that snapshots the
-        // log to see what ONE verb sent never counts the engine's frame as the verb's.
+        await_housekeeping(&regs);
+        (engine, b, regs)
+    }
+
+    /// The engine's own first frame is scope-off housekeeping (`27 11 00`), sent
+    /// asynchronously on its first loop pass. Wait it out, so a test that snapshots the
+    /// log to see what ONE verb sent never counts the engine's frame as the verb's.
+    fn await_housekeeping(regs: &Arc<Mutex<Regs>>) {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while regs.lock().unwrap().log.is_empty() {
             assert!(
@@ -3180,7 +3267,6 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(2));
         }
-        (engine, b, regs)
     }
 
     /// Plant DISAGREEING values in the two bands' receive registers — every one different
@@ -3495,14 +3581,7 @@ mod tests {
             2,
             Some(IcomModel::Ic7610),
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while regs2.lock().unwrap().log.is_empty() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "engine housekeeping never ran"
-            );
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        await_housekeeping(&regs2);
         let n = regs2.lock().unwrap().wire.len();
         assert!(b2.set_mode("PKTUSB", 0));
         assert_eq!(
@@ -4758,9 +4837,9 @@ mod tests {
     /// can see one. Returns the reply to each XIT line and the payload of every `21` frame
     /// the radio received, in order.
     ///
-    /// One connection per line, because the server hangs up on a peer after three `RPRT -11`
-    /// in a row (`MAX_CONSECUTIVE_UNKNOWN`, its defence against a web page posting to the
-    /// port). Nexus's own `Rig::set_xit` stops at the first refusal, so it never sends more.
+    /// One connection per line. The server's hang-up (`MAX_CONSECUTIVE_UNKNOWN`, its defence
+    /// against a web page posting to the port) counts only lines that are not rigctld protocol,
+    /// so these refusals would not trip it on one connection either.
     fn xit_then_rit(addr: u8, model: IcomModel) -> (Vec<String>, Vec<Vec<u8>>) {
         let (radio, _push) = FakeRadio::new(addr);
         let regs = radio.regs();
@@ -4876,9 +4955,10 @@ mod tests {
     }
 
     /// ★ A RADIO SWITCH NEVER PUSHES A NATIVE CONNECTION TOWARD HANG-UP. The server drops a peer
-    /// after `MAX_CONSECUTIVE_UNKNOWN` (3) not-implemented replies in a row. A switch sends the
-    /// radio being left `T 0`, `\stop_morse` and `\stop_voice_mem`, and none of them may answer
-    /// `RPRT -11`, so switches back to back leave the loop's connection up.
+    /// after `MAX_CONSECUTIVE_UNKNOWN` (3) lines in a row that are not rigctld protocol. A switch
+    /// sends the radio being left `T 0`, `\stop_morse` and `\stop_voice_mem`: rigctld verbs, which
+    /// never count, and none of them may answer `RPRT -11` either, so switches back to back leave
+    /// the loop's connection up.
     #[test]
     fn back_to_back_switches_leave_the_native_connection_up() {
         let (_d, port, _regs) = daemon_with_regs();
@@ -4886,7 +4966,7 @@ mod tests {
         for _ in 0..3 {
             for line in ["T 0\n", "\\stop_morse\n", "\\stop_voice_mem\n"] {
                 let reply = roundtrip(&mut c, &mut rd, line);
-                assert_ne!(reply, "RPRT -11\n", "{line:?} fed the hang-up counter");
+                assert_ne!(reply, "RPRT -11\n", "{line:?} answered not-implemented");
             }
         }
         assert!(
@@ -4896,19 +4976,17 @@ mod tests {
                 .is_ok(),
             "the connection is still up and answering"
         );
-        // The control, on a fresh connection: three not-implemented verbs in a row DO hang up,
-        // so the check above would see one. (No reply to the third; the server closes first.)
+        // The control, on a fresh connection: three lines in a row that are not rigctld protocol
+        // DO hang up, so the check above would see one. (No reply to the third; the server closes
+        // first.)
         let (mut c, mut rd) = client(port);
         for _ in 0..2 {
-            assert_eq!(
-                roundtrip(&mut c, &mut rd, "\\send_voice_mem 1\n"),
-                "RPRT -11\n"
-            );
+            assert_eq!(roundtrip(&mut c, &mut rd, "\\warble\n"), "RPRT -11\n");
         }
         assert_eq!(
-            roundtrip(&mut c, &mut rd, "\\send_voice_mem 1\n"),
+            roundtrip(&mut c, &mut rd, "\\warble\n"),
             "",
-            "the third not-implemented reply in a row hangs up"
+            "the third line in a row that is not rigctld protocol hangs up"
         );
     }
 
@@ -5098,6 +5176,10 @@ mod tests {
             let regs = radio.regs();
             let daemon =
                 CivDaemon::start_with_link(Box::new(radio), addr, 0, 1, Some(model), link).unwrap();
+            // Both windows below open after the engine's own first frame. On the link that may
+            // not key, nothing ahead of `T 0` reaches the engine (every key is refused before
+            // it), so a late engine thread put `27 11 00` inside the unkey window.
+            await_housekeeping(&regs);
             let (mut c, mut rd) = client(daemon.local_addr().port());
             let before = regs.lock().unwrap().log.len();
             for (line, serial_reply) in [
@@ -5181,6 +5263,68 @@ mod tests {
                 deadline: std::time::Duration::from_millis(300),
                 keying: KeyingPolicy::Allowed,
             }
+        );
+    }
+
+    // ── THE TEARDOWN KEY-UP from an engine held past the teardown's wait ──────────────────────
+
+    /// Drops a daemon on `link` whose engine is HELD (see `Held`) until the teardown has given up
+    /// waiting for its key-up and stops it. Returns what reached the radio once the hold began, and
+    /// how long the teardown took.
+    fn teardown_held(link: Link) -> (Vec<(u8, Vec<u8>)>, Duration) {
+        let model = IcomModel::Ic7610;
+        let addr = model.default_civ_addr();
+        let (radio, _push) = FakeRadio::new(addr);
+        let regs = radio.regs();
+        let (radio, hold) = Held::new(radio);
+        let daemon =
+            CivDaemon::start_with_link(Box::new(radio), addr, 0, 1, Some(model), link).unwrap();
+        hold.until(daemon.engine.stop_flag());
+        hold.wait_held();
+        let before = regs.lock().unwrap().log.len();
+        let t0 = std::time::Instant::now();
+        drop(daemon);
+        (wire_since(&regs, before), t0.elapsed())
+    }
+
+    /// ⛔ THE TEARDOWN'S KEY-UP REACHES THE RADIO EVEN WHEN THE ENGINE CANNOT GET TO IT IN TIME.
+    /// Drop queues the key-up and waits 4 × the link's deadline + 100 ms for it, 1.3 s on a serial
+    /// bus. An engine held past that (requests ahead of it the radio never answered, a stalled
+    /// thread) was then stopped with the key-up still queued, and the key-up never went out: a
+    /// keyed radio stayed keyed. Now the engine writes it once on its way out, and nothing else.
+    #[test]
+    fn the_teardown_key_up_reaches_the_radio_from_an_engine_held_past_the_wait() {
+        let (wire, took) = teardown_held(Link::serial());
+        assert!(
+            took >= Duration::from_millis(1_200),
+            "the wait ran out first: {took:?}"
+        );
+        assert_eq!(
+            wire,
+            vec![(0x1C, vec![0x00, 0x00])],
+            "the key-up, once, and nothing else"
+        );
+    }
+
+    /// The same on the link the radio's network connection starts its daemon with (`icomlan`): a
+    /// 1 s deadline, so a 4.1 s wait, and keying refused, which never refuses an unkey. The
+    /// transport here is the fake radio; the network session's own delivery of the teardown
+    /// key-up is `icomlan`'s `dropping_the_daemon_unkeys_then_gives_the_token_back_then_disconnects`.
+    #[cfg(feature = "device")]
+    #[test]
+    fn on_the_network_link_too_the_teardown_key_up_reaches_the_radio_from_a_held_engine() {
+        let (wire, took) = teardown_held(Link {
+            deadline: crate::icomlan::LAN_DEADLINE,
+            keying: KeyingPolicy::Refused(crate::icomlan::KEYING_REFUSED),
+        });
+        assert!(
+            took >= Duration::from_millis(4_000),
+            "the wait ran out first: {took:?}"
+        );
+        assert_eq!(
+            wire,
+            vec![(0x1C, vec![0x00, 0x00])],
+            "the key-up, once, and nothing else"
         );
     }
 }

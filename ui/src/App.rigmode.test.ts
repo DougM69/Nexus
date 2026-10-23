@@ -23,6 +23,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { FEATURES } from './features/registry'
+import { RIG_MODE_BY_VIEW, rigModeTransition, type RigMode } from './rigModeForView'
 
 const APP = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8')
 /** ⚠️ THE MAP MOVED (#143). `RIG_MODE_BY_VIEW` and the home-on-entry rule now live in
@@ -62,17 +64,35 @@ describe('which views may command the rig mode', () => {
   })
 
   it('has no else-branch that could hand an unlisted view a mode', () => {
-    // The shape that caused #80: `… : 'digital'` as a fallthrough on the view name.
-    const start = MODEMAP.indexOf('RIG_MODE_BY_VIEW')
-    const region = MODEMAP.slice(start, start + 1400)
-    expect(
-      /:\s*'digital'\s*$/m.test(region.split('const mode =')[1] ?? ''),
-      "the mode must be LOOKED UP, never defaulted — a default is how a hunting board got DATA-USB",
-    ).toBe(false)
-    // The refusal for an unlisted view now lives in `rigModeTransition`: no mode, no assert,
-    // and — added by #143 — the home guard is handed back untouched so a later operating
-    // view still homes.
-    expect(MODEMAP).toContain('if (!mode) return { followFreq: false, nextHomed: lastHomed }')
+    // The shape that caused #80: `… : 'digital'` as a fallthrough on the view name. Asked of
+    // `rigModeTransition` itself, not of its source text: this test used to regex a fixed
+    // 1400-character window of the module that ended before `const mode =`, so it read an
+    // empty string and passed whatever the function did.
+    //
+    // Every section the app has that the map does not list, and names no section has, from
+    // every mode homed for and every screen left: no mode, no follow, no ask, and — added by
+    // #143 — the home guard handed back untouched, so a later operating view still homes.
+    const unlisted = [
+      ...FEATURES.filter((f) => f.kind === 'section')
+        .map((f) => f.view ?? f.id)
+        .filter((v) => RIG_MODE_BY_VIEW[v] === undefined),
+      'map',
+      '',
+      'no-such-view',
+    ]
+    // The sweep must reach real views, or it proves nothing.
+    expect(unlisted).toEqual(expect.arrayContaining(['pota', 'sstv', 'aprs', 'sats', 'logbook', 'settings']))
+    const homes: RigMode[] = ['cw', 'phone', 'rtty', 'keyboard', 'digital']
+    for (const view of unlisted) {
+      for (const homed of homes) {
+        for (const from of [undefined, 'sstv', 'operate', 'phone']) {
+          expect(
+            rigModeTransition(view, homed, from),
+            `${view || '(empty)'} from ${from}, ${homed} homed: the mode must be LOOKED UP, never defaulted — a default is how a hunting board got DATA-USB`,
+          ).toEqual({ followFreq: false, nextHomed: homed })
+        }
+      }
+    }
   })
 
   it('does not treat "has a workspace" as "is an operating mode"', () => {

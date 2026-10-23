@@ -491,12 +491,12 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
     expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'txcompose', 'gallery'])
     expect([...PHONE_PANELS.panelIds]).toEqual([
       'scope', 'rigscope', 'txmeters', 'receiver', 'transmitter', 'bandActivity', 'voiceKeyer',
-      'spots', 'needed', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
+      'spots', 'needed', 'recent', 'stats', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
     ])
-    expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'stream'])
+    expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'rfScope', 'tuning', 'stream', 'recent', 'stats'])
     expect([...CW_PANELS.panelIds]).toEqual([
-      'scope', 'scopeCtl', 'dsp', 'txmeters', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
-      'spots', 'needed', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
+      'scope', 'scopeCtl', 'dsp', 'txmeters', 'turnCue', 'rxdsp', 'bandActivity', 'copilot', 'decode', 'sent',
+      'spots', 'needed', 'recent', 'stats', 'box1', 'box2', 'box3', 'box4', 'box5', 'box6',
     ])
   })
 
@@ -545,10 +545,12 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
   // vocabulary's `defaultRemoved` is the answer, and each case below drives one reader of an
   // absent state: `stateOf`, `undoRemoves`, `reset`, and a record written by today's build.
   const PHONE_KEY = panelStorageKey('phone')
-  // The two feeds, and the six boxes (2026-10-07), which ship hidden for the same reason.
-  const HIDDEN = ['spots', 'needed', ...BOX_IDS] as const
+  // The two feeds, the Stats pane (2026-10-14: shown where there is room by the cockpit, never by the record)
+  // and the six boxes (2026-10-07), which ship hidden for the same reason; the Recent contacts pane
+  // (2026-10-18) beside the Stats pane, hidden in every vocabulary.
+  const HIDDEN = ['spots', 'needed', 'recent', 'stats', ...BOX_IDS] as const
 
-  it('a FRESH record shows Spots, Needed and the boxes hidden, and every other Phone pane docked', () => {
+  it('a FRESH record shows Spots, Needed, the Stats pane and the boxes hidden, and every other Phone pane docked', () => {
     const { result } = renderHook(() => usePanelLayout(PHONE_PANELS))
     for (const id of HIDDEN) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
     for (const id of PHONE_PANELS.panelIds) {
@@ -625,13 +627,16 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     expect(shipsHidden.map((v) => v.view)).toEqual(['operate', 'sstv', 'phone', 'cw', 'rtty', 'psk', 'jtty', 'js8'])
     expect([...(PHONE_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
     expect([...(CW_PANELS.defaultRemoved ?? [])]).toEqual([...HIDDEN])
-    for (const v of [SSTV_PANELS, RTTY_PANELS, panelState.PSK_PANELS, panelState.JTTY_PANELS]) {
-      expect([...(v.defaultRemoved ?? [])], v.view).toEqual(['rfScope'])
+    expect([...(SSTV_PANELS.defaultRemoved ?? [])], 'sstv').toEqual(['rfScope'])
+    expect([...(panelState.JTTY_PANELS.defaultRemoved ?? [])], 'jtty').toEqual(['rfScope'])
+    // RTTY and PSK ship the Stats pane hidden beside it (2026-10-14), and the Recent contacts pane.
+    for (const v of [RTTY_PANELS, panelState.PSK_PANELS]) {
+      expect([...(v.defaultRemoved ?? [])], v.view).toEqual(['rfScope', 'recent', 'stats'])
     }
-    // JS8 is a grid cockpit, and FT arranges its columns (2026-10-07): the six boxes of each ship hidden
-    // beside its RF scope pane.
-    expect([...(panelState.JS8_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', ...BOX_IDS])
-    expect([...(OPERATE_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', ...BOX_IDS])
+    // JS8 is a grid cockpit, and FT arranges its columns (2026-10-07): the Stats pane and the six boxes of
+    // each ship hidden beside its RF scope pane.
+    expect([...(panelState.JS8_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', 'recent', 'stats', ...BOX_IDS])
+    expect([...(OPERATE_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', 'stats', ...BOX_IDS])
     for (const v of ALL_PANEL_VOCABULARIES) {
       for (const id of v.defaultRemoved ?? []) {
         expect(v.panelIds, `"${v.view}" hides "${id}", which is not in its vocabulary`).toContain(id)
@@ -663,8 +668,10 @@ describe('the RF scope pane ships hidden in the five digital cockpits (operator,
       expect(result.current.stateOf('rfScope'), `${v.view}: it ships visible`).toBe('removed')
       for (const id of v.panelIds) {
         if (id === 'rfScope') continue
-        // JS8's boxes ship hidden too (panelState.boxes.test.ts reads them).
-        if ((BOX_IDS as readonly string[]).includes(id)) {
+        // JS8's boxes ship hidden too (panelState.boxes.test.ts reads them), and so does the Stats pane
+        // in the four with a log entry (its own block below), and the Recent contacts pane in the three
+        // with a log entry form.
+        if ((BOX_IDS as readonly string[]).includes(id) || id === 'stats' || id === 'recent') {
           expect(result.current.stateOf(id), `${v.view}: "${id}" ships visible`).toBe('removed')
           continue
         }
@@ -699,16 +706,16 @@ describe('the RF scope pane ships hidden in the five digital cockpits (operator,
   })
 })
 
-describe("CW ships Phone's two feeds hidden too (plan H8)", () => {
+describe("CW ships Phone's two feeds hidden too", () => {
   // The operator's pick: "CW gets Phone's Spots/Needed panes", hidden by default exactly as in Phone.
   // Each case drives one reader of an absent state, as Phone's do, against CW's own record.
   const CW_KEY = panelStorageKey('cw')
 
-  it('a FRESH CW record shows Spots, Needed and the boxes hidden, and every other CW pane docked', () => {
+  it('a FRESH CW record shows Spots, Needed, the Stats pane and the boxes hidden, and every other CW pane docked', () => {
     const { result } = renderHook(() => usePanelLayout(CW_PANELS))
-    for (const id of ['spots', 'needed', ...BOX_IDS] as const) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
+    for (const id of ['spots', 'needed', 'recent', 'stats', ...BOX_IDS] as const) expect(result.current.stateOf(id), `${id} ships visible`).toBe('removed')
     for (const id of CW_PANELS.panelIds) {
-      if (id === 'spots' || id === 'needed' || (BOX_IDS as readonly string[]).includes(id)) continue
+      if (id === 'spots' || id === 'needed' || id === 'recent' || id === 'stats' || (BOX_IDS as readonly string[]).includes(id)) continue
       expect(result.current.stateOf(id), `"${id}" changed its default`).toBe('docked')
     }
     expect(localStorage.getItem(CW_KEY)).toBeNull()
@@ -783,5 +790,66 @@ describe('seamShares', () => {
     const [aBot, bBot] = seamShares(1) // dragged fully down
     expect(aBot).toBeGreaterThanOrEqual(MIN_SHARE)
     expect(bBot).toBeGreaterThanOrEqual(MIN_SHARE)
+  })
+})
+
+describe('the Stats pane (2026-10-14): one id in every cockpit with a log entry, on where there is room', () => {
+  // The ruling: a Stats pane beside the log entry, on every logging screen, movable and hidable like the
+  // other panes, on by default where there is room. SSTV has no log entry, so no Stats pane.
+  const WITH_ENTRY = [PHONE_PANELS, CW_PANELS, panelState.JS8_PANELS, OPERATE_PANELS, RTTY_PANELS, panelState.PSK_PANELS]
+
+  it('every cockpit with a log entry lists it, and SSTV does not', () => {
+    for (const v of WITH_ENTRY) expect(v.panelIds, v.view).toContain('stats')
+    expect(SSTV_PANELS.panelIds).not.toContain('stats')
+  })
+
+  it('every vocabulary ships it hidden, so nobody’s screen changes where there is no room for it', () => {
+    // Phone, CW and JS8 show it on a window with room for it (CallStatsPane `withStatsRoom`, in their own
+    // tests); a vocabulary's own reading of an absent entry is hidden in all six.
+    const empty = { v: 1 as const, state: {}, share: {} }
+    expect(WITH_ENTRY.map((v) => [v.view, panelStateIn(v, empty, 'stats')])).toEqual([
+      ['phone', 'removed'],
+      ['cw', 'removed'],
+      ['js8', 'removed'],
+      ['operate', 'removed'],
+      ['rtty', 'removed'],
+      ['psk', 'removed'],
+    ])
+    // A stored tick wins, as for every pane.
+    expect(panelStateIn(RTTY_PANELS, { ...empty, state: { stats: 'docked' } }, 'stats')).toBe('docked')
+    expect(panelStateIn(PHONE_PANELS, { ...empty, state: { stats: 'docked' } }, 'stats')).toBe('docked')
+  })
+
+  it('stands under the log entry: in Phone’s and CW’s log column (the form heads it), under JS8’s log pane, under FT’s callsign card', () => {
+    expect(PHONE_PANELS.arrange!.columns.log).toEqual(['stats'])
+    expect(CW_PANELS.arrange!.columns.log).toEqual(['stats'])
+    expect(panelState.JS8_PANELS.arrange!.columns.log).toEqual(['log', 'stats'])
+    expect(panelState.OPERATE_ARRANGE.classic.columns.log.slice(0, 3)).toEqual(['recall', 'stats', 'stations'])
+    expect(panelState.OPERATE_ARRANGE.roster.columns.log.slice(0, 2)).toEqual(['recall', 'stats'])
+    // Movable as any pane is: nothing pins it.
+    for (const v of [PHONE_PANELS, CW_PANELS, panelState.JS8_PANELS]) expect(v.arrange!.pinned, v.view).not.toContain('stats')
+  })
+})
+
+describe('the Recent contacts pane (2026-10-18): one id in every cockpit with a log entry form', () => {
+  const WITH_FORM = [PHONE_PANELS, CW_PANELS, panelState.JS8_PANELS, RTTY_PANELS, panelState.PSK_PANELS]
+
+  it('every cockpit with a log entry form lists it; FT (a confirm dialog) and SSTV do not', () => {
+    for (const v of WITH_FORM) expect(v.panelIds, v.view).toContain('recent')
+    expect(OPERATE_PANELS.panelIds).not.toContain('recent')
+    expect(SSTV_PANELS.panelIds).not.toContain('recent')
+  })
+
+  it('every vocabulary ships it hidden, and a stored tick wins', () => {
+    const empty = { v: 1 as const, state: {}, share: {} }
+    for (const v of WITH_FORM) expect(panelStateIn(v, empty, 'recent'), v.view).toBe('removed')
+    for (const v of WITH_FORM) expect(panelStateIn(v, { ...empty, state: { recent: 'docked' } }, 'recent'), v.view).toBe('docked')
+  })
+
+  it('rides inside the log pane under the form, so ⊞ Arrange gives it no place of its own', () => {
+    for (const v of [PHONE_PANELS, CW_PANELS, panelState.JS8_PANELS]) {
+      const { a, b, log } = v.arrange!.columns
+      expect([...a, ...b, ...log], v.view).not.toContain('recent')
+    }
   })
 })

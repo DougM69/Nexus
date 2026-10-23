@@ -148,7 +148,8 @@ fn restore(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
 /// one (whose `inner_size` is the maximised box, not the restore rect) — are decided in
 /// [`geom::capture`], with the previous record read back here as its fallback.
 fn capture(window: &tauri::WebviewWindow) {
-    let Some(cur) = live_geometry(window) else {
+    // A window in a streamed page's shape records the box it will go back to, not that shape.
+    let Some(cur) = followed_from().or_else(|| live_geometry(window)) else {
         return;
     };
     let path = geometry_path();
@@ -198,6 +199,124 @@ pub fn capture_now(app: &tauri::AppHandle) {
     }
 }
 
+// ---- The main window in a streamed page's shape --------------------------------------------
+
+/// What the main window was before it took a streamed page's shape, to go back to.
+struct Before {
+    /// The box [`capture`] records while the window is in the page's shape.
+    geometry: Option<WindowGeometry>,
+    fullscreen: bool,
+    maximized: bool,
+    /// The restored box, once out of full screen and maximised: physical px.
+    position: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    /// The monitor it was on, which it never leaves, and its frame (outer size less inner).
+    work: WorkArea,
+    frame: (f64, f64),
+}
+
+/// Set from the first shape a stream gives the window until it goes back. Process-wide, because
+/// the close path's [`capture`] reads it as well as the stream's thread.
+static FOLLOWED: std::sync::Mutex<Option<Before>> = std::sync::Mutex::new(None);
+
+fn followed() -> std::sync::MutexGuard<'static, Option<Before>> {
+    FOLLOWED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn followed_from() -> Option<WindowGeometry> {
+    followed().as_ref().and_then(|before| before.geometry)
+}
+
+/// The main window taking a streamed page's shape ([`geom::follow`]) and going back. Its calls
+/// come from the stream's own thread; each window call is carried to the event loop in order.
+pub(crate) struct MainShape(pub tauri::AppHandle);
+
+impl crate::remote_service::stream::ShapeWindow for MainShape {
+    fn follow(&self, view: (u32, u32)) {
+        let Some(window) = self.0.get_webview_window("main") else {
+            return;
+        };
+        // A minimized window shows the page nothing; it is left where the operator put it.
+        if window.is_minimized().unwrap_or(false) {
+            return;
+        }
+        let mut before = followed();
+        if before.is_none() {
+            let Some(monitor) = window.current_monitor().ok().flatten() else {
+                return;
+            };
+            let geometry = live_geometry(&window);
+            let fullscreen = window.is_fullscreen().unwrap_or(false);
+            if fullscreen {
+                let _ = window.set_fullscreen(false);
+            }
+            let maximized = window.is_maximized().unwrap_or(false);
+            if maximized {
+                let _ = window.unmaximize();
+            }
+            let (Ok(position), Ok(size), Ok(outer)) = (
+                window.outer_position(),
+                window.inner_size(),
+                window.outer_size(),
+            ) else {
+                if maximized {
+                    let _ = window.maximize();
+                }
+                if fullscreen {
+                    let _ = window.set_fullscreen(true);
+                }
+                return;
+            };
+            *before = Some(Before {
+                geometry,
+                fullscreen,
+                maximized,
+                position,
+                size,
+                work: work_area_of(&monitor),
+                frame: (
+                    f64::from(outer.width.saturating_sub(size.width)),
+                    f64::from(outer.height.saturating_sub(size.height)),
+                ),
+            });
+        }
+        let Some(before) = before.as_ref() else {
+            return;
+        };
+        if let Some(to) = geom::follow(view, &before.work, before.frame, geom::MIN_INNER) {
+            let _ = window.set_size(tauri::PhysicalSize::new(to.w, to.h));
+            let _ = window.set_position(tauri::PhysicalPosition::new(to.x, to.y));
+        }
+    }
+
+    fn restore(&self) {
+        let Some(before) = followed().take() else {
+            return;
+        };
+        let Some(window) = self.0.get_webview_window("main") else {
+            return;
+        };
+        // Minimized since: put back behind the minimize, so restoring it later gives its own box.
+        let minimized = window.is_minimized().unwrap_or(false);
+        if minimized {
+            let _ = window.unminimize();
+        }
+        let _ = window.set_size(before.size);
+        let _ = window.set_position(before.position);
+        if before.maximized {
+            let _ = window.maximize();
+        }
+        if before.fullscreen {
+            let _ = window.set_fullscreen(true);
+        }
+        if minimized {
+            let _ = window.minimize();
+        }
+    }
+}
+
 // ---- The Connect dashboard pop-out ---------------------------------------------------------
 
 /// Which pop-outs remember their window: the Connect dashboard, the contest logger and the
@@ -223,6 +342,9 @@ pub(crate) struct PanelRecord {
     /// The operator asked this window to stay behind other windows ([`set_window_behind`]).
     #[serde(default)]
     pub behind: bool,
+    /// The operator pinned this window in front of other windows ([`set_window_on_top`]).
+    #[serde(default)]
+    pub on_top: bool,
 }
 
 /// Where a remembered pop-out's record lives: `<config_dir>/window-<slug>.json`, a sibling of
@@ -263,25 +385,30 @@ pub(crate) struct PanelRestore {
     pub rect: Option<geom::Restored>,
     /// The operator asked it to stay behind other windows.
     pub behind: bool,
+    /// The operator pinned it in front of other windows.
+    pub on_top: bool,
 }
 
-/// The open decision, pure. `behind` survives a record with no believable box: the toggle can
-/// be pressed before the window has ever been closed, so before any box was saved.
+/// The open decision, pure. `behind` and `on_top` survive a record with no believable box: the
+/// toggle can be pressed before the window has ever been closed, so before any box was saved. A
+/// record that says both (a hand edit) opens pinned: a window in front cannot also be behind.
 fn restore_from(
     rec: Option<PanelRecord>,
     monitors: &[WorkArea],
     primary: Option<WorkArea>,
     min: (f64, f64),
 ) -> PanelRestore {
+    let on_top = rec.is_some_and(|r| r.on_top);
     PanelRestore {
         rect: geom::restore(rec.map(|r| r.geom), monitors, primary, min),
-        behind: rec.is_some_and(|r| r.behind),
+        behind: !on_top && rec.is_some_and(|r| r.behind),
+        on_top,
     }
 }
 
 /// What to write on close, pure: the main window's rule for the box (minimised writes nothing,
-/// maximised keeps the restore rect), with the stay-behind choice carried over. A close is not
-/// a vote on it.
+/// maximised keeps the restore rect), with the stay-behind and pin choices carried over. A close
+/// is not a vote on either.
 fn capture_from(
     prev: Option<PanelRecord>,
     cur: WindowGeometry,
@@ -291,6 +418,7 @@ fn capture_from(
     Some(PanelRecord {
         geom,
         behind: prev.is_some_and(|r| r.behind),
+        on_top: prev.is_some_and(|r| r.on_top),
     })
 }
 
@@ -472,14 +600,109 @@ pub fn set_window_behind(window: tauri::WebviewWindow, on: bool) -> Result<Windo
         .ok_or_else(|| "only the Connect window can stay behind other windows".to_string())?;
     // The record first: a write that fails then changes nothing, and the toggle stays true to
     // both the window and what the next open will do.
-    let mut rec = load_panel(&path).unwrap_or_default();
-    rec.behind = on;
+    let prev = load_panel(&path).unwrap_or_default();
+    let rec = kept_behind(prev, on);
     save_panel(&path, &rec).map_err(|e| e.to_string())?;
+    if prev.on_top && !rec.on_top {
+        window.set_always_on_top(false).map_err(|e| e.to_string())?;
+    }
     window.set_always_on_bottom(on).map_err(|e| e.to_string())?;
     Ok(WindowBehind {
         supported: true,
         on,
     })
+}
+
+/// The record with stay-behind set or cleared, pure. A window kept behind is not also pinned in
+/// front, so keeping it behind takes the pin off.
+fn kept_behind(rec: PanelRecord, on: bool) -> PanelRecord {
+    PanelRecord {
+        behind: on,
+        on_top: rec.on_top && !on,
+        ..rec
+    }
+}
+
+// ---- The pin: in front of other windows ----------------------------------------------------
+
+/// Which pop-outs offer the pin: the contest logger, which a logger drops beside a program or a
+/// corner of a screen and keeps in front while working in something else (the operator's ask from
+/// a contest tester). Only a remembered pop-out can offer it, since the record is where it lives.
+pub(crate) fn pins(slug: &str) -> bool {
+    slug == crate::CONTEST_LOGGER_SLUG && remembers(slug)
+}
+
+/// The record with the pin set or cleared, pure. A window pinned in front is not also behind, so
+/// pinning it takes stay-behind off. The box is left as it was: only a close writes that.
+fn pinned(rec: PanelRecord, on: bool) -> PanelRecord {
+    PanelRecord {
+        on_top: on,
+        behind: rec.behind && !on,
+        ..rec
+    }
+}
+
+/// The record path of a window that offers the pin, else `None`.
+fn pin_record_of(window: &tauri::WebviewWindow) -> Option<std::path::PathBuf> {
+    let (slug, _) = panel_key(window.label())?;
+    if !pins(slug) {
+        return None;
+    }
+    record_of(window)
+}
+
+/// The calling window's pin, for the logger's Pin button: whether it offers one, and whether it
+/// is on.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct WindowOnTop {
+    supported: bool,
+    on: bool,
+}
+
+/// Read the calling window's pin.
+#[tauri::command]
+pub fn get_window_on_top(window: tauri::WebviewWindow) -> WindowOnTop {
+    let path = pin_record_of(&window);
+    WindowOnTop {
+        supported: path.is_some(),
+        on: path.and_then(|p| load_panel(&p)).is_some_and(|r| r.on_top),
+    }
+}
+
+/// Pin the calling window in front of other windows, Nexus's and other programs', or unpin it to
+/// stack as an ordinary window again: applied to the window now and written to its record, so it
+/// opens that way next time.
+#[tauri::command]
+pub fn set_window_on_top(window: tauri::WebviewWindow, on: bool) -> Result<WindowOnTop, String> {
+    let path = pin_record_of(&window)
+        .ok_or_else(|| "only the contest logger window can be pinned in front".to_string())?;
+    // The record first, as `set_window_behind` does: a write that fails changes nothing.
+    let prev = load_panel(&path).unwrap_or_default();
+    let rec = pinned(prev, on);
+    save_panel(&path, &rec).map_err(|e| e.to_string())?;
+    if prev.behind && !rec.behind && behind_supported() {
+        window
+            .set_always_on_bottom(false)
+            .map_err(|e| e.to_string())?;
+    }
+    window.set_always_on_top(on).map_err(|e| e.to_string())?;
+    Ok(WindowOnTop {
+        supported: true,
+        on,
+    })
+}
+
+/// Bring the calling window to the front and give it the keyboard: un-minimised, shown and focused.
+/// The main window asks this for itself when a contest window sends the operator to a cockpit in it
+/// ("Work this contest in CW"): the screen they asked for is then the one in front of them, not one
+/// left behind the contest window. Nothing at the radio; only this window's place on the desktop.
+#[tauri::command]
+pub fn focus_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.is_minimized().unwrap_or(false) {
+        window.unminimize().map_err(|e| e.to_string())?;
+    }
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -530,6 +753,7 @@ mod tests {
                 maximized: false,
             },
             behind,
+            on_top: false,
         }
     }
 
@@ -585,7 +809,8 @@ mod tests {
             r,
             PanelRestore {
                 rect: None,
-                behind: false
+                behind: false,
+                on_top: false
             }
         );
     }
@@ -638,6 +863,7 @@ mod tests {
             Some(PanelRecord {
                 geom: WindowGeometry::default(),
                 behind: true,
+                on_top: false,
             }),
             &[primary()],
             Some(primary()),
@@ -661,7 +887,8 @@ mod tests {
             capture_from(Some(prev), cur, false),
             Some(PanelRecord {
                 geom: cur,
-                behind: true
+                behind: true,
+                on_top: false
             })
         );
         // …and a first close, with no record yet, is not behind.
@@ -669,7 +896,8 @@ mod tests {
             capture_from(None, cur, false),
             Some(PanelRecord {
                 geom: cur,
-                behind: false
+                behind: false,
+                on_top: false
             })
         );
     }
@@ -725,6 +953,139 @@ mod tests {
         assert!(legacy.geom.maximized);
         std::fs::write(&path, "{\"w\": 1200,").unwrap();
         assert_eq!(load_panel(&path), None, "a torn file is nothing saved");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ---- the contest logger's pin -------------------------------------------------------------
+
+    /// The logger window's own floor, `panel_min_inner("contestlog")`.
+    const LOGGER_MIN: (f64, f64) = (420.0, 320.0);
+
+    #[test]
+    fn the_contest_logger_drags_down_to_its_documented_minimum() {
+        // 420×320: the call, the exchange boxes, Log, the dupe warning and the newest contact still
+        // on screen (measured in Chrome, `scripts/browser-probe --desktop contestlog`).
+        assert_eq!(
+            crate::panel_min_inner(crate::CONTEST_LOGGER_SLUG),
+            LOGGER_MIN
+        );
+        assert!(
+            remembers(crate::CONTEST_LOGGER_SLUG),
+            "it remembers its box"
+        );
+    }
+
+    #[test]
+    fn the_contest_logger_is_the_window_that_offers_the_pin() {
+        assert!(pins(crate::CONTEST_LOGGER_SLUG));
+        for other in [
+            "connect",
+            "contestscreen",
+            "fieldday",
+            "waterfall",
+            "operate",
+            "",
+        ] {
+            assert!(!pins(other), "{other:?} offers no pin");
+        }
+    }
+
+    #[test]
+    fn a_logger_saved_off_screen_comes_back_on_screen() {
+        // Left on a monitor to the left of the primary that is gone now.
+        let saved = rec(700.0, 500.0, -1500.0, 200.0, false);
+        let rect = restore_from(Some(saved), &[primary()], Some(primary()), LOGGER_MIN)
+            .rect
+            .unwrap();
+        assert_eq!(
+            rect.position, None,
+            "centred on the primary, never replayed off-screen"
+        );
+        assert_eq!((rect.w, rect.h), (700.0, 500.0), "its own size kept");
+        // …and one shrunk under the floor by a hand edit opens at the floor, not smaller.
+        let tiny = restore_from(
+            Some(rec(300.0, 250.0, 40.0, 40.0, false)),
+            &[primary()],
+            Some(primary()),
+            LOGGER_MIN,
+        )
+        .rect
+        .unwrap();
+        assert_eq!((tiny.w, tiny.h), LOGGER_MIN);
+        assert_eq!(tiny.position, Some((40.0, 40.0)));
+    }
+
+    #[test]
+    fn the_pin_is_remembered_and_reopens_the_window_in_front() {
+        let pin = pinned(rec(700.0, 500.0, 40.0, 40.0, false), true);
+        assert!(pin.on_top);
+        assert_eq!(
+            (pin.geom.w, pin.geom.h),
+            (700.0, 500.0),
+            "the box is left as it was"
+        );
+        let r = restore_from(Some(pin), &[primary()], Some(primary()), LOGGER_MIN);
+        assert!(r.on_top && !r.behind);
+        // A close keeps it…
+        let closed = capture_from(Some(pin), pin.geom, false).unwrap();
+        assert!(closed.on_top);
+        // …and a pin pressed before any close, on a zero box, opens pinned at the default size.
+        let first = pinned(PanelRecord::default(), true);
+        let r = restore_from(Some(first), &[primary()], Some(primary()), LOGGER_MIN);
+        assert_eq!((r.rect, r.on_top), (None, true));
+        // Unpinned, it reopens as an ordinary window.
+        let off = pinned(pin, false);
+        assert!(!restore_from(Some(off), &[primary()], Some(primary()), LOGGER_MIN).on_top);
+    }
+
+    #[test]
+    fn in_front_and_behind_never_hold_together() {
+        let behind = rec(700.0, 500.0, 40.0, 40.0, true);
+        let pin = pinned(behind, true);
+        assert_eq!(
+            (pin.on_top, pin.behind),
+            (true, false),
+            "pinning takes stay-behind off"
+        );
+        assert_eq!(
+            (pinned(behind, false).on_top, pinned(behind, false).behind),
+            (false, true)
+        );
+        let back = kept_behind(pin, true);
+        assert_eq!(
+            (back.on_top, back.behind),
+            (false, true),
+            "staying behind takes the pin off"
+        );
+        assert!(
+            kept_behind(pin, false).on_top,
+            "letting it forward keeps the pin"
+        );
+        // A hand-edited record saying both opens pinned, not both.
+        let both = PanelRecord {
+            on_top: true,
+            ..behind
+        };
+        let r = restore_from(Some(both), &[primary()], Some(primary()), LOGGER_MIN);
+        assert_eq!((r.on_top, r.behind), (true, false));
+    }
+
+    #[test]
+    fn a_record_without_the_pin_loads_unpinned_and_a_pinned_one_round_trips() {
+        let path = std::env::temp_dir().join(format!(
+            "nexus_panelrec_{}_{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let r = pinned(rec(700.0, 500.0, 40.0, 40.0, false), true);
+        save_panel(&path, &r).unwrap();
+        assert_eq!(load_panel(&path), Some(r));
+        std::fs::write(
+            &path,
+            r#"{"w":700,"h":500,"x":40,"y":40,"maximized":false,"behind":false}"#,
+        )
+        .unwrap();
+        assert!(!load_panel(&path).unwrap().on_top);
         let _ = std::fs::remove_file(&path);
     }
 

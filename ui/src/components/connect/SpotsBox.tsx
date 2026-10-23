@@ -19,7 +19,6 @@ import { useLayoutEffect, useRef } from 'react'
 import { SpotsPanel } from '../SpotsPanel'
 import type { SpotsFeed } from './paneContext'
 import { useStationControl } from '../../stationAccess'
-import { CollectionStatus, useRemoteCollection } from '../../remote-web/collections'
 import { t } from '../../i18n'
 
 /** The box's filter copy — `nexus.spots.<key>.connect` (SpotsPane `scope`). */
@@ -81,18 +80,14 @@ function useBoxFit<T extends HTMLElement>(): React.RefObject<T> {
 
 export function SpotsBox({ feed }: { feed: SpotsFeed }) {
   const ref = useBoxFit<HTMLDivElement>()
-  // On the Remote page the list is the station's `spots` collection, as in the Phone cockpit's
-  // Spots pane: the board once it is there, and the existing status while it is not.
   const control = useStationControl()
-  const spotsRead = useRemoteCollection('spots')
   return (
     <div className="cn-spots" ref={ref}>
-      {control || spotsRead?.phase === 'ready' ? (
+      {control ? (
         <SpotsPanel {...feed.board} spots={feed.rows} pane={{ scope: CONNECT_SPOTS_SCOPE }} />
       ) : (
         <p className="dim" role="status">{t('remote.spotsUnavailable')}</p>
       )}
-      {!control && <CollectionStatus name="spots" />}
     </div>
   )
 }

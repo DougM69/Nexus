@@ -30,21 +30,51 @@
 //! Windows: WebView2; macOS: WKWebView): `cargo tauri dev` /
 //! `cargo tauri build --features radio`.
 
+/// Signing in to the Remote service's account through the system browser: the shack binding itself
+/// to its owner, and a computer adding its internet road.
+mod account_sign_in;
+/// One alert, made in Rust where it is raised, with its id and a versioned shape: what every window
+/// and a computer driving the station hear.
+mod alert;
+/// Test builds only (the `bench-road-switch` feature): the switch on a computer driving a station
+/// that blocks its command link or its Stop road, one at a time, so each road can be tried alone.
+#[cfg(feature = "bench-road-switch")]
+mod bench_road_switch;
+/// WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P print, Ctrl+F find…) off in every Nexus
+/// window, set on each webview as Tauri makes it.
+mod browser_keys;
 /// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
 mod chains;
+/// Client mode: this computer's Nexus driving a paired station's over this network, with its own
+/// station off. Every command its screens make goes where its class says, and fails closed.
+mod client_mode;
 /// This station's club key for Field Day club sync (kept beside settings.json, never logged or
 /// shown), and the SHA-256 a club host pins position keys by.
 mod club_key;
 /// The human DX-cluster node feeds: which run, which should, and how each node is doing.
 mod cluster_nodes;
+/// Where each command runs when another computer drives this station: at the shack, here,
+/// refused here, starts TX or stops TX.
+mod command_classes;
+/// What another computer that drives this station runs itself and sends here, and what the shack
+/// admits: deny by default at both ends, Stop never refused, at most once, the caps, and the
+/// revision a whole save is checked against.
+mod command_dispatch;
 /// The contest strip's Super Check Partial download and call-history file: the HTTP and the
 /// commands, off the Engine lock. The rules are `tempo_app::scp` and `tempo_app::call_history`.
 mod contest_lists;
+/// The contest's self-spot: one DX cluster spot of the operator's own call per press, with a cooldown.
+mod contest_spot;
 /// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
 /// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
 mod data_folder_location;
+/// Band map frequency markers: a dial and a call to come back to, per contest session, local only.
+mod freq_markers;
+/// JS8Call's API for other programs on this computer: TCP and UDP on 127.0.0.1, read-only, off
+/// until the operator turns a side on. What each line says is `tempo_app::engine::js8_api`.
+mod js8_api;
 /// Remote over this network on the PC an operator works from: its key for each station, pairing,
 /// the pinned road, and the loopback origin the window's page comes from. No engine, no command.
 mod lan_client;
@@ -76,6 +106,13 @@ mod remote_window;
 /// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
 /// the Remote page alike.
 mod self_spot;
+/// The station's recordings, ALL.TXT and SSTV pictures, listed, read in pieces and saved by a
+/// computer that drives the station from afar.
+mod shack_files;
+/// A shipped build never carries the bench's road switch: the release never turns the feature on,
+/// and a build without it has none of it.
+#[cfg(test)]
+mod shipped_without_the_road_switch;
 /// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
@@ -83,6 +120,17 @@ mod sstv_scope_test;
 /// The optional street map's packs: sizing, download, removal, and the byte reads its renderer
 /// makes. Thin glue over `crates/street-map`.
 mod street_map;
+/// Nexus as a TCI server, the app's side: the engine's answers to programs on this computer, the
+/// manager that hot-applies the switch, the state and receive audio they are sent. Off by default.
+#[cfg(feature = "radio")]
+mod tci_server;
+/// Nexus's needed spots for a TCI radio's own panadapter: the Needed board's list, coloured by
+/// need, handed to the engine while the radio's "Spots on the SDR panadapter" is on.
+#[cfg(feature = "radio")]
+mod tci_spots;
+/// Test builds only: no test reads or writes the operator's own Nexus folders.
+#[cfg(test)]
+mod test_dirs;
 mod window_state;
 
 use chains::{panel_key, panel_label, Instance};
@@ -102,6 +150,7 @@ use tempo_app::dto::{
     WinlinkSession,
 };
 use tempo_app::engine::contest_entry::EntryClaim;
+use tempo_app::engine::remote_stream::OnItsOwn;
 use tempo_app::engine::{engine_lock, engine_lock_result, engine_try_lock, Engine};
 use tempo_app::settings::writer::SettingsWriter;
 use tempo_app::settings::{Settings, VoiceMessage};
@@ -130,24 +179,9 @@ struct ConnectWebState {
 }
 type SharedConnectWebState = Arc<Mutex<ConnectWebState>>;
 
-/// Cached propagation nowcast: `(fetched_at, snapshot, context)`. Caching enforces PSK
-/// Reporter's ≥5-minute-per-dataset query limit across UI polls.
-type PropCache = Arc<
-    Mutex<
-        Option<(
-            std::time::Instant,
-            propagation::PropagationSnapshot,
-            PropContext,
-        )>,
-    >,
->;
-/// Context of the base DX board, captured alongside the log needs. Remote readers
-/// must not relabel a cache built for a previous identity or log revision.
-struct PropContext {
-    call: String,
-    grid: String,
-    log: u64,
-}
+/// Cached propagation nowcast: `(fetched_at, snapshot)`. Caching enforces PSK Reporter's
+/// ≥5-minute-per-dataset query limit across UI polls.
+type PropCache = Arc<Mutex<Option<(std::time::Instant, propagation::PropagationSnapshot)>>>;
 
 /// A whole-log result, kept with the log watermark it was built from and `K`, whatever else it
 /// was built from. Each watermark moves on every write of the kinds it names (one choke point,
@@ -202,8 +236,8 @@ type NeedsKept = Arc<Tally<(), propagation::LogNeeds>>;
 struct LogTallies {
     /// The needs model — see [`NeedsKept`].
     needs: NeedsKept,
-    /// The award summary, per operator call.
-    awards: Arc<Tally<String, propagation::AwardSummary>>,
+    /// The award summary and the Stats pane's index, folded together, per operator call.
+    awards: Arc<Tally<String, log_folds::AwardsKept>>,
     /// The Journey model, per the settings it reads.
     journey: Arc<Tally<JourneyKey, propagation::JourneyModel>>,
     /// The log statistics, per operator call.
@@ -226,14 +260,6 @@ thread_local! {
 fn note_log_tally() {
     #[cfg(debug_assertions)]
     LOG_TALLIES.with(|c| c.set(c.get() + 1));
-}
-
-/// The log's identity, for the context a propagation board is labelled with ([`PropContext`]):
-/// its revision, which moves on every change to the log, as the read token it replaces did.
-/// Remote compares it with the revision its own reads take, and a board built from an older log
-/// is not relabelled as this one's. A watermark, not a read of the log.
-fn prop_log_identity(eng: &Engine) -> u64 {
-    eng.log_revision()
 }
 
 #[cfg(test)]
@@ -285,6 +311,7 @@ mod whole_log_reader_tests {
                 q.state.as_deref(),
                 q.award_confirmed,
                 qso_is_sat(q.prop_mode.as_deref()),
+                crate::log_folds::award_fields(&q),
             );
         }
         needs
@@ -340,7 +367,7 @@ mod whole_log_reader_tests {
         );
         LOG_TALLIES.with(|c| c.set(0));
 
-        let (refetch, _) = needs_kept(&engine, &tallies).expect("the log reads");
+        let refetch = needs_kept(&engine, &tallies).expect("the log reads");
         assert_eq!(
             observed(&refetch),
             oracle,
@@ -377,7 +404,7 @@ mod whole_log_reader_tests {
         )
         .0
         .expect("the import is made");
-        let (after, _) = needs_kept(&engine, &tallies).expect("the log reads");
+        let after = needs_kept(&engine, &tallies).expect("the log reads");
         assert_eq!(
             observed(&after),
             observed(&needs_the_old_way(&engine)),
@@ -406,10 +433,14 @@ mod whole_log_reader_tests {
         let engine = engine_with_log();
         let old = {
             let my_call = engine_lock(&engine).settings().mycall.clone();
-            // The log as the store holds it, as `needs_the_old_way` reads it.
+            // The log as the store holds it, as `needs_the_old_way` reads it: each contact with
+            // what its record carries.
             let log = engine.lock().unwrap().stored_records();
-            let calls: Vec<String> = log.into_iter().map(|q| q.call).collect();
-            propagation::compute_log_stats(&calls, &my_call)
+            let mut stats = propagation::stats::LogStatsAccumulator::new(&my_call);
+            for q in &log {
+                stats.add(&q.call, crate::log_folds::award_fields(q));
+            }
+            stats.summary()
         };
         assert!(old.total > 0, "premise: there is something to count");
         let tallies = LogTallies::default();
@@ -981,7 +1012,7 @@ fn is_real_call(call: &str) -> bool {
         && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '/')
 }
 
-/// Connect ALL enabled spot sources (SpotCollector-style aggregation): the RBN CW + RBN
+/// Connect ALL enabled spot sources (one aggregated feed): the RBN CW + RBN
 /// digital skimmer firehoses, plus the human DX-cluster nodes — the SSB/phone aggregator —
 /// that should run: the nodes Nexus picks, or every node in the operator's own list (see
 /// `cluster_nodes`). RBN endpoints are wired once via fixed latches; the human nodes are
@@ -1101,26 +1132,42 @@ struct AprsIsFeed {
 
 static APRS_IS_FEED: Mutex<Option<AprsIsFeed>> = Mutex::new(None);
 
-/// Reconcile the APRS-IS feed with settings: start it, stop it, or reconnect it under a changed
-/// server/filter/callsign. Called at startup and after every Save, so a filter edit takes effect
-/// without a restart.
+/// What the one APRS-IS session should be: whether it runs, its login line, the server, and what
+/// the socket thread does with a line (the APRS screen's store; JS8's inbound relay). No `Debug`,
+/// deliberately: the login line carries the passcode, and nothing may print it.
+struct AprsIsSession {
+    want: bool,
+    login: String,
+    addr: String,
+    screen: bool,
+    relay: bool,
+    /// Up for JS8: a gateway line waits or was just handed over, or the relay listens.
+    js8: bool,
+}
+
+/// [`AprsIsSession`] from Settings and JS8's demand (`Engine::js8_aprs_link`). Pure, so the login a
+/// session presents is a test.
 ///
-/// ⚠️ **Deliberately independent of the APRS RF decoder's arm state.** See the doc comment on
-/// `Settings::aprs_is_enabled` for why: the feed costs no RF resource, can key nothing, and its
-/// value as a diagnostic depends on it running while the RF side is silent.
-fn sync_aprs_is_feed(engine: &SharedEngine) {
-    let (want, login, addr) = {
-        let eng = engine_lock(engine);
-        let s = eng.settings();
-        let call = s.mycall.trim().to_string();
-        // A real callsign is required even read-only: it is the login identity on a public
-        // amateur service, and `pass -1` still names us to every server on the network.
-        let want = s.aprs_is_enabled && is_real_call(&call);
-        // The uplink additionally needs the passcode, which is derived from that same callsign.
-        let code = s
-            .aprs_is_uplink
-            .then(|| tempo_core::aprs::is::passcode(&call));
-        let filter = tempo_core::aprs::is::FilterSpec {
+/// **JS8's @APRSIS gateway rides the APRS screen's session.** While JS8 runs with the gateway on,
+/// the login carries the passcode, logging in exactly as the iGate does; the session comes up when
+/// a gateway line waits (and stays a minute after the last is handed over) or while the inbound
+/// relay listens, whose filter term `t/m` is JS8Call's. Up for JS8 alone, it subscribes to nothing
+/// else and puts nothing on the APRS screen.
+fn aprs_is_session(
+    s: &tempo_app::settings::Settings,
+    js8: tempo_app::engine::js8_links::Js8AprsLink,
+) -> AprsIsSession {
+    let call = s.mycall.trim().to_string();
+    // A real callsign is required even read-only: it is the login identity on a public
+    // amateur service, and `pass -1` still names us to every server on the network.
+    let real = is_real_call(&call);
+    let screen = s.aprs_is_enabled && real;
+    let want = screen || (js8.want && real);
+    // The uplink additionally needs the passcode, which is derived from that same callsign.
+    // JS8's gateway uploads too, so it logs in the same way while it is armed.
+    let code = (s.aprs_is_uplink || js8.armed).then(|| tempo_core::aprs::is::passcode(&call));
+    let mut filter = if screen {
+        tempo_core::aprs::is::FilterSpec {
             range_km: Some(s.aprs_is_radius_km),
             center: propagation::geo::maidenhead_to_latlon(s.mygrid.trim()),
             buddies: s.aprs_is_watch_calls.clone(),
@@ -1128,24 +1175,65 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
             objects: s.aprs_is_objects,
             messages: s.aprs_is_messages,
         }
-        .build();
-        let login = tempo_core::aprs::is::login_line(
-            &call,
-            code,
-            "Nexus",
-            env!("CARGO_PKG_VERSION"),
-            &filter,
-        );
-        let host = s.aprs_is_host.trim();
-        let host = if host.is_empty() {
-            "rotate.aprs2.net"
-        } else {
-            host
-        };
-        (want, login, format!("{host}:{}", s.aprs_is_port))
+        .build()
+    } else {
+        String::new()
+    };
+    if js8.relay {
+        if !filter.is_empty() {
+            filter.push(' ');
+        }
+        filter.push_str("t/m");
+    }
+    let login =
+        tempo_core::aprs::is::login_line(&call, code, "Nexus", env!("CARGO_PKG_VERSION"), &filter);
+    let host = s.aprs_is_host.trim();
+    let host = if host.is_empty() {
+        "rotate.aprs2.net"
+    } else {
+        host
+    };
+    AprsIsSession {
+        want,
+        login,
+        addr: format!("{host}:{}", s.aprs_is_port),
+        screen,
+        relay: js8.relay,
+        js8: js8.want && real,
+    }
+}
+
+/// Reconcile the APRS-IS feed with settings: start it, stop it, or reconnect it under a changed
+/// server/filter/callsign. Called at startup and after every Save, so a filter edit takes effect
+/// without a restart.
+///
+/// ⚠️ **Deliberately independent of the APRS RF decoder's arm state.** See the doc comment on
+/// `Settings::aprs_is_enabled` for why: the feed costs no RF resource, can key nothing, and its
+/// value as a diagnostic depends on it running while the RF side is silent.
+///
+/// **JS8's @APRSIS gateway rides the same session**: see [`aprs_is_session`]. Called again by the
+/// JS8 links thread every few seconds, so the session follows JS8's demand; it returns at once
+/// when nothing changed.
+fn sync_aprs_is_feed(engine: &SharedEngine) {
+    let AprsIsSession {
+        want,
+        login,
+        addr,
+        screen,
+        relay,
+        js8: _,
+    } = {
+        let mut eng = engine_lock(engine);
+        let link = eng.js8_aprs_link(now_unix().max(0) as u64);
+        let session = aprs_is_session(eng.settings(), link);
+        // What the session is for, so its status can say it (the screen's feed may be off).
+        eng.set_aprs_is_for_js8(session.js8, session.js8 && session.relay);
+        session
     };
 
-    let fingerprint = format!("{addr}\u{1}{login}");
+    // What the socket thread does with a line is fixed when it starts, so a change in it is a
+    // new session too.
+    let fingerprint = format!("{addr}\u{1}{login}\u{1}{screen}{relay}");
     let mut slot = APRS_IS_FEED.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(f) = slot.as_ref() {
         if want && f.fingerprint == fingerprint {
@@ -1185,20 +1273,7 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
                 tempo_net::aprsis::run(
                     &addr,
                     &login,
-                    |line| {
-                        let Some(pkt) = tempo_core::aprs::AprsPacket::from_tnc2(line) else {
-                            return;
-                        };
-                        {
-                            let mut e = engine_lock(&eng);
-                            e.push_aprs_heard(tempo_app::engine::AprsHeard::from_packet(
-                                &pkt,
-                                now_unix(),
-                                tempo_app::engine::AprsSource::Inet,
-                                String::from_utf8_lossy(line).into_owned(),
-                            ));
-                        }
-                    },
+                    |line| aprs_is_line(&eng, line, screen, relay),
                     &stop,
                     &state,
                     &outbox,
@@ -1217,6 +1292,30 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
             .spawn(move || aprs_is_bridge(eng, stop, state, outbox))
             .expect("spawn aprs-is-gate");
     }
+}
+
+/// One line off the APRS-IS session. JS8's inbound relay sees an APRS message, parsed strictly
+/// before the engine sees it (untrusted internet input that may be keyed). Only the APRS screen's
+/// own feed reaches its store, tagged `Inet` so nothing downstream has to guess where a station
+/// came from: a session up for JS8 alone puts nothing there.
+fn aprs_is_line(engine: &SharedEngine, line: &[u8], screen: bool, relay: bool) {
+    if relay {
+        if let Some(msg) = tempo_core::aprs::js8gate::parse_inbound_message(line) {
+            engine_lock(engine).js8_aprs_inbound(&msg);
+        }
+    }
+    if !screen {
+        return;
+    }
+    let Some(pkt) = tempo_core::aprs::AprsPacket::from_tnc2(line) else {
+        return;
+    };
+    engine_lock(engine).push_aprs_heard(tempo_app::engine::AprsHeard::from_packet(
+        &pkt,
+        now_unix(),
+        tempo_app::engine::AprsSource::Inet,
+        String::from_utf8_lossy(line).into_owned(),
+    ));
 }
 
 /// Carry packets between the engine and the APRS-IS socket once per second: publish the feed's
@@ -1239,14 +1338,33 @@ fn aprs_is_bridge(
     let mut last_reject: Option<String> = None;
     while !stop.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_secs(1));
-        let (queued, igate_call, uplink_on) = {
+        let verified = state.verified.load(Ordering::Relaxed);
+        let (queued, igate_call, uplink_on, js8_lines) = {
             let mut e = engine_lock(&engine);
             let call = e.settings().mycall.trim().to_string();
             let on = e.settings().aprs_is_uplink;
-            (e.take_aprs_uplink(), call, on)
+            // JS8's @APRSIS gateway lines wait in the engine until a VERIFIED login can take
+            // them (and expire there after five minutes, as JS8Call's do).
+            let js8 = if verified {
+                e.take_js8_aprs_uplink(now_unix().max(0) as u64)
+            } else {
+                Vec::new()
+            };
+            (e.take_aprs_uplink(), call, on, js8)
         };
         let now = now_unix();
         let mut to_send: Vec<Vec<u8>> = Vec::new();
+        // JS8's lines are not RF-heard packets: no iGate gating or q-construct applies (each
+        // already carries the one JS8Call gives it). They share the iGate's per-minute cap, so
+        // the two together never spend the callsign faster than it allows.
+        for line in js8_lines {
+            if !rate.accept(now) {
+                rejected += 1;
+                last_reject = Some("rate cap".into());
+                continue;
+            }
+            to_send.push(line.into_bytes());
+        }
         // Only a VERIFIED login may upload; without one the server refuses us anyway, and gating
         // work on packets that can never be sent is pointless.
         if uplink_on && state.verified.load(Ordering::Relaxed) {
@@ -1278,9 +1396,10 @@ fn aprs_is_bridge(
             }
         }
         let last_packet = state.last_packet_unix.load(Ordering::Relaxed);
-        {
-            let mut e = engine_lock(&engine);
-            e.set_aprs_is_status(tempo_app::engine::AprsIsStatus {
+        publish_aprs_is_status(
+            &engine,
+            &stop,
+            tempo_app::engine::AprsIsStatus {
                 // `enabled` / `uplink_enabled` are re-derived from settings by the getter.
                 connected: state.connected.load(Ordering::Relaxed),
                 verified: state.verified.load(Ordering::Relaxed),
@@ -1290,8 +1409,268 @@ fn aprs_is_bridge(
                 gate_rejected: rejected,
                 last_reject: last_reject.clone(),
                 ..Default::default()
-            });
+            },
+        );
+    }
+}
+
+/// The bridge's once-a-second write of the session's state for the status chip, skipped once the
+/// session is stopped. The app stops a session before it resets the status under this same lock,
+/// so a write that finds `stop` clear lands before the reset and is overwritten, and one after it
+/// finds `stop` set: a stopped session never leaves the status reading connected.
+fn publish_aprs_is_status(
+    engine: &SharedEngine,
+    stop: &std::sync::atomic::AtomicBool,
+    status: tempo_app::engine::AprsIsStatus,
+) {
+    let mut e = engine_lock(engine);
+    if !stop.load(std::sync::atomic::Ordering::SeqCst) {
+        e.set_aprs_is_status(status);
+    }
+}
+
+/// JS8's internet links, off the radio loop: once a minute the JS8NET batch
+/// (`Engine::take_js8net`) goes to `spot.js8call.com:50000` as JS8Call 3.0.3 sends it, and every
+/// few seconds the APRS-IS session is brought in line with what JS8's @APRSIS gateway and relay
+/// need (`sync_aprs_is_feed`). Outbound only: a UDP port bound for each batch and dropped after.
+/// The DNS lookup happens here, never on the radio loop, and a failed one costs that minute's
+/// batch only.
+fn start_js8_links(engine: SharedEngine) {
+    std::thread::Builder::new()
+        .name("js8-links".into())
+        .spawn(move || {
+            let version = format!("Nexus {}", env!("CARGO_PKG_VERSION"));
+            let mut client = tempo_net::js8net::SpotClient::new();
+            let mut tick: u64 = 0;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                tick += 1;
+                sync_aprs_is_feed(&engine);
+                if !tick.is_multiple_of(12) {
+                    continue;
+                }
+                let batch = engine_lock(&engine).take_js8net(&version);
+                if let Err(e) = client.send(&batch) {
+                    conn_log("JS8NET", "error", format!("spots not sent: {e}"));
+                }
+            }
+        })
+        .expect("spawn js8-links");
+}
+
+#[cfg(test)]
+mod aprs_is_session_tests {
+    use super::*;
+    use tempo_app::engine::js8_links::Js8AprsLink;
+    use tempo_app::settings::Settings;
+    use tempo_core::aprs::is::{login_line, passcode};
+
+    fn station() -> Settings {
+        Settings {
+            mycall: "W1AW".into(),
+            mygrid: "FN31".into(),
+            ..Default::default()
         }
+    }
+
+    const JS8_OFF: Js8AprsLink = Js8AprsLink {
+        armed: false,
+        want: false,
+        relay: false,
+    };
+
+    /// The login the iGate presents for W1AW, with `filter`. Compared with `==` and a message,
+    /// never printed: it carries the passcode.
+    fn igate_login(filter: &str) -> String {
+        login_line(
+            "W1AW",
+            Some(passcode("W1AW")),
+            "Nexus",
+            env!("CARGO_PKG_VERSION"),
+            filter,
+        )
+    }
+
+    #[test]
+    fn js8_alone_brings_the_session_up_only_when_it_needs_it_and_logs_in_as_the_igate_does() {
+        let s = station();
+        let idle = aprs_is_session(
+            &s,
+            Js8AprsLink {
+                armed: true,
+                want: false,
+                relay: false,
+            },
+        );
+        assert!(!idle.want, "armed with nothing waiting: no session");
+        let up = aprs_is_session(
+            &s,
+            Js8AprsLink {
+                armed: true,
+                want: true,
+                relay: false,
+            },
+        );
+        assert!(up.want && !up.screen && !up.relay);
+        assert!(
+            up.login == igate_login(""),
+            "the gateway's login is the iGate's, subscribing to nothing"
+        );
+        let relay = aprs_is_session(
+            &s,
+            Js8AprsLink {
+                armed: true,
+                want: true,
+                relay: true,
+            },
+        );
+        assert!(relay.want && relay.relay && !relay.screen);
+        assert!(
+            relay.login == igate_login("t/m"),
+            "the relay adds JS8Call's message filter and nothing else"
+        );
+        assert_eq!(up.addr, "rotate.aprs2.net:14580");
+        // CONTROL: no real callsign, no session, whatever JS8 wants.
+        let mut nocall = station();
+        nocall.mycall = String::new();
+        assert!(
+            !aprs_is_session(
+                &nocall,
+                Js8AprsLink {
+                    armed: true,
+                    want: true,
+                    relay: true
+                }
+            )
+            .want
+        );
+    }
+
+    #[test]
+    fn a_session_up_for_js8_alone_puts_nothing_on_the_aprs_screen() {
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(station())));
+        let line = b"N0CALL-9>APDR16,TCPIP*,qAC,T2TEXAS:!4140.00N/07200.00W>test";
+        aprs_is_line(&engine, line, false, true);
+        assert!(
+            engine_lock(&engine).aprs_heard().is_empty(),
+            "JS8 alone: nothing stored"
+        );
+        // CONTROL: the screen's own feed stores the same line.
+        aprs_is_line(&engine, line, true, false);
+        assert_eq!(engine_lock(&engine).aprs_heard().len(), 1);
+    }
+
+    #[test]
+    fn the_aprs_screen_feed_is_unchanged_until_js8_arms_and_then_carries_the_passcode() {
+        let mut s = station();
+        s.aprs_is_enabled = true;
+        s.aprs_is_radius_km = 100;
+        let read_only = aprs_is_session(&s, JS8_OFF);
+        assert!(read_only.want && read_only.screen && !read_only.relay);
+        assert!(
+            read_only.login.contains(" filter r/"),
+            "precondition: the screen subscribes to a range"
+        );
+        assert!(
+            read_only.login.contains(" pass -1 "),
+            "read-only, as before: no passcode"
+        );
+        let armed = aprs_is_session(
+            &s,
+            Js8AprsLink {
+                armed: true,
+                want: false,
+                relay: false,
+            },
+        );
+        assert!(armed.want && armed.screen);
+        assert!(
+            armed
+                .login
+                .contains(&format!(" pass {} ", passcode("W1AW")))
+                && !armed.login.contains(" pass -1 "),
+            "JS8 armed: the same session logs in with the passcode"
+        );
+        assert!(
+            armed.login.split(" filter ").nth(1) == read_only.login.split(" filter ").nth(1),
+            "and keeps the screen's own filter"
+        );
+    }
+
+    /// The session says what it is for, so its status can: the screen's feed, JS8 (a gateway
+    /// line waiting or just handed over, or the relay listening), or both. JS8 armed with nothing
+    /// to send keeps no session up and is not what one is for.
+    #[test]
+    fn the_session_says_what_it_is_for() {
+        let link = |want, relay| Js8AprsLink {
+            armed: true,
+            want,
+            relay,
+        };
+        let off = station();
+        let mut on = station();
+        on.aprs_is_enabled = true;
+        let mut no_call = station();
+        no_call.mycall = String::new();
+        let purposes: Vec<(&str, bool, bool, bool)> = [
+            (
+                "feed off, JS8 idle",
+                aprs_is_session(&off, link(false, false)),
+            ),
+            (
+                "feed off, a gateway line",
+                aprs_is_session(&off, link(true, false)),
+            ),
+            (
+                "feed off, the relay",
+                aprs_is_session(&off, link(true, true)),
+            ),
+            ("feed on, JS8 off", aprs_is_session(&on, JS8_OFF)),
+            (
+                "feed on, a gateway line",
+                aprs_is_session(&on, link(true, false)),
+            ),
+            ("no real call", aprs_is_session(&no_call, link(true, true))),
+        ]
+        .into_iter()
+        .map(|(what, s)| (what, s.want, s.screen, s.js8))
+        .collect();
+        assert_eq!(
+            purposes,
+            vec![
+                ("feed off, JS8 idle", false, false, false),
+                ("feed off, a gateway line", true, false, true),
+                ("feed off, the relay", true, false, true),
+                ("feed on, JS8 off", true, true, false),
+                ("feed on, a gateway line", true, true, true),
+                ("no real call", false, false, false),
+            ]
+        );
+    }
+
+    /// A stopped session never writes its status back. The bridge publishes once a second; the
+    /// app stops a session and then resets the status, and a last write landing after that reset
+    /// left the status reading connected with no session at all.
+    #[test]
+    fn a_stopped_session_never_writes_its_status_back() {
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(station())));
+        let connected = || tempo_app::engine::AprsIsStatus {
+            connected: true,
+            verified: true,
+            packets: 9,
+            ..Default::default()
+        };
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        publish_aprs_is_status(&engine, &stop, connected());
+        let stopped = engine_lock(&engine).aprs_is_status().connected;
+        stop.store(false, std::sync::atomic::Ordering::SeqCst);
+        publish_aprs_is_status(&engine, &stop, connected());
+        let running = engine_lock(&engine).aprs_is_status().connected;
+        assert_eq!(
+            (stopped, running),
+            (false, true),
+            "stopped: no write; running (the control): written"
+        );
     }
 }
 
@@ -1704,6 +2083,7 @@ static LAST_XRAY: Mutex<Option<(std::time::Instant, f32, i64)>> = Mutex::new(Non
 
 /// The base config root: `%APPDATA%` on Windows, `$XDG_CONFIG_HOME`/`~/.config` on Unix,
 /// else the CWD. The `tempo[-<profile>]` app directory hangs off this.
+#[cfg(not(test))]
 fn config_base() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
@@ -1713,6 +2093,13 @@ fn config_base() -> PathBuf {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
     };
     base.unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The test twin of `config_base`: the running test's own folder, never the operator's (see
+/// `test_dirs`). Everything in the config folder hangs off this one function.
+#[cfg(test)]
+fn config_base() -> PathBuf {
+    test_dirs::root().join("config")
 }
 
 /// Accept only a filesystem-safe profile name — `[A-Za-z0-9_-]`, 1..=32 chars. Anything
@@ -1733,9 +2120,12 @@ fn sanitize_profile(s: &str) -> Option<String> {
 /// instance is unaffected. Two instances get separate config by launching with distinct
 /// profiles; that is what keeps them from clobbering each other's settings/journals.
 ///
-/// ⚠️ `--profile` IS THE ONLY ARGUMENT NEXUS PARSES, AND THAT IS DELIBERATE. A reply on #101
-/// mentioned a `--debug` flag; none exists, and one was considered and declined on 2026-09-07.
-/// The reasons, so the next reader does not add it on the strength of that reply:
+/// ⚠️ `--profile` AND `--client` ARE THE ONLY ARGUMENTS NEXUS PARSES, AND THAT IS DELIBERATE.
+/// `--client <station id>` (`client_mode::requested`) passes the test below for the same reason:
+/// it must be known before anything of this computer's own station opens, so it cannot be a
+/// setting. A reply on #101 mentioned a `--debug` flag; none exists, and one was considered and
+/// declined on 2026-09-07. The reasons, so the next reader does not add it on the strength of
+/// that reply:
 ///
 /// * The extra-detail tier already has a switch — Settings ▸ Logging & Connectors ▸ "Extra
 ///   detail in the diagnostic log" — and it applies LIVE, with no restart. Whatever is being
@@ -2110,6 +2500,7 @@ mod single_radio_tests {
 /// Default = `<base>/tempo` (the default profile's dir — i.e. the pre-profile location, so an
 /// existing `log.adi` stays put and simply becomes the shared one, no migration). Override
 /// with `NEXUS_DATA_DIR` to place the shared log on a NAS/Drive-synced folder (a multi-PC shack).
+#[cfg(not(test))]
 fn shared_data_dir() -> PathBuf {
     // ⚠️ RESOLVED ONCE PER PROCESS (#289). The operator can choose this folder in Settings, and a
     // change must reach the app at the NEXT launch only: the logbook handle is opened from this
@@ -2125,6 +2516,19 @@ fn shared_data_dir() -> PathBuf {
             },
         )
         .clone()
+}
+
+/// The test twin of `shared_data_dir`: the same rule inside the running test's own folder (see
+/// `test_dirs`), resolved once per test as the shipped one is once per launch, and blind to
+/// `NEXUS_DATA_DIR`: a contributor whose shack keeps its log on a share would otherwise have every
+/// test write beside that log.
+#[cfg(test)]
+fn shared_data_dir() -> PathBuf {
+    thread_local! {
+        static RESOLVED: PathBuf = read_data_dir_pointer_in(&config_dir_for(None))
+            .unwrap_or_else(|| config_base().join("tempo"));
+    }
+    RESOLVED.with(PathBuf::clone)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────
@@ -5325,6 +5729,16 @@ fn pending_qso_path() -> PathBuf {
         .join("pending_qso.json")
 }
 
+/// `<config dir>/contest_held_uploads.json` — the contacts logged while contest mode is on, whose
+/// upload waits for it to go off (`Engine::restore_contest_held_uploads`).
+fn contest_held_uploads_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("contest_held_uploads.json")
+}
+
 /// `<config dir>/pending_msgs.json` — the store-and-forward outbound-queue journal,
 /// beside the pending-QSO journal. Held Tempo messages survive a restart.
 fn pending_msgs_path() -> PathBuf {
@@ -5723,6 +6137,7 @@ fn parks_cache_path() -> PathBuf {
 /// diagnostic log below can be "beside the crash log" and "in the app data dir" at once, and
 /// it is worth knowing before anyone moves either of them. (Splitting install from data is
 /// real work with a migration behind it; it is not this change.)
+#[cfg(not(test))]
 fn local_data_dir() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
@@ -5732,6 +6147,13 @@ fn local_data_dir() -> PathBuf {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
     };
     base.unwrap_or_else(|| PathBuf::from(".")).join("Nexus")
+}
+
+/// The test twin of `local_data_dir`: inside the running test's own folder, never the
+/// operator's (see `test_dirs`).
+#[cfg(test)]
+fn local_data_dir() -> PathBuf {
+    test_dirs::root().join("data").join("Nexus")
 }
 
 /// The WSJT-X-format decode log (`ALL.TXT`), in the app's LOCAL data dir — the same class of
@@ -5761,6 +6183,30 @@ fn flush_all_txt(lines: &[String]) {
     }
     use std::io::Write;
     let path = all_txt_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{}", lines.join("\n"));
+    }
+}
+
+/// JS8Call's DIRECTED.TXT (every directed message heard), beside ALL.TXT.
+fn directed_txt_path() -> PathBuf {
+    local_data_dir().join("DIRECTED.TXT")
+}
+
+/// Append JS8's DIRECTED.TXT lines, as [`flush_all_txt`] appends ALL.TXT's.
+fn flush_directed_txt(lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    use std::io::Write;
+    let path = directed_txt_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -6319,12 +6765,35 @@ fn ui_state_path() -> PathBuf {
 /// Read the durable UI state. A missing, unreadable or malformed file is an EMPTY map, never an
 /// error: the caller's fallback is `localStorage`, so "nothing durable yet" is a normal first-run
 /// state and must not look like a failure.
+///
+/// `strict` is for a screen about to merge its own changes into what the file holds now: the
+/// durable store's flush reads it again first (`durableStore.ts`), so that a write made elsewhere
+/// (another window, or a paired computer driving this station) is not put back. To that read, a
+/// file that is there and does not read is an error, never an empty store: merged into an empty
+/// one, the flush would drop every key the screen did not change. A missing file is empty either
+/// way.
 #[tauri::command]
-fn ui_state_load() -> std::collections::BTreeMap<String, String> {
-    std::fs::read_to_string(ui_state_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+fn ui_state_load(
+    strict: Option<bool>,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    ui_state_read(&ui_state_path(), strict.unwrap_or(false))
+}
+
+/// [`ui_state_load`]'s read of `path`: `Err` only for a `strict` read of a file that is there and
+/// does not read as the map.
+fn ui_state_read(
+    path: &Path,
+    strict: bool,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let read = match std::fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        read => read.ok().and_then(|t| serde_json::from_str(&t).ok()),
+    };
+    match read {
+        Some(map) => Ok(map),
+        None if strict => Err("uiStateUnreadable".to_string()),
+        None => Ok(Default::default()),
+    }
 }
 
 /// Replace the durable UI state. Whole-map write rather than per-key: the data is small (tens of
@@ -6339,6 +6808,53 @@ fn ui_state_save(state: std::collections::BTreeMap<String, String>) -> bool {
     serde_json::to_string_pretty(&state)
         .map(|t| write_json_atomic(&ui_state_path(), &t))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod ui_state_file_tests {
+    use super::*;
+
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-ui-state-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// ★ A strict read tells a file that does not read from a store with nothing in it, which is
+    /// what lets a flush merge into the file without dropping keys. CONTROL: the same file read
+    /// the old way is an empty map, as the boot's load has always had it; a missing file is empty
+    /// to both; a good one reads the same to both.
+    #[test]
+    fn a_strict_read_tells_an_unreadable_file_from_an_empty_one() {
+        let dir = scratch("strict");
+        let path = dir.join("ui-state.json");
+        assert_eq!(
+            ui_state_read(&path, true),
+            Ok(Default::default()),
+            "missing"
+        );
+        assert_eq!(
+            ui_state_read(&path, false),
+            Ok(Default::default()),
+            "missing"
+        );
+        std::fs::write(&path, b"{\"nexus.watchlist\": ").unwrap();
+        assert_eq!(
+            ui_state_read(&path, true),
+            Err("uiStateUnreadable".to_string())
+        );
+        assert_eq!(ui_state_read(&path, false), Ok(Default::default()));
+        std::fs::write(&path, b"{\"nexus.watchlist\": \"[]\"}").unwrap();
+        let map: std::collections::BTreeMap<String, String> =
+            [("nexus.watchlist".to_string(), "[]".to_string())].into();
+        assert_eq!(ui_state_read(&path, true), Ok(map.clone()));
+        assert_eq!(ui_state_read(&path, false), Ok(map));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 /// Export + atomically persist the engine's conversation threads. Used for the
@@ -6553,6 +7069,8 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
     // then release the lock before the file append so the UI poll never waits on disk.
     with_engine(&state, |mut eng| {
         let all_txt = eng.take_all_txt_pending();
+        // JS8's DIRECTED.TXT, written beside ALL.TXT under the same switch, the same way.
+        let directed_txt = eng.take_js8_directed_pending();
         // ⭐ R3: the same shape as the ALL.TXT drain beside it — the engine buffers what it
         // cannot say (the Connections log lives here, not there), the poll takes it under the
         // lock and writes it after releasing. Deliberately NOT the connector worker the #290
@@ -6566,6 +7084,7 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
         let snap = eng.snapshot();
         drop(eng);
         flush_all_txt(&all_txt);
+        flush_directed_txt(&directed_txt);
         for line in unconfirmed_auto_log_lines(&auto_logged) {
             conn_log("Logbook", "error", line);
         }
@@ -6575,31 +7094,46 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
 }
 
 /// Queue an outbound free-text message to `peer` (auto-chunked + presence-gated
-/// store-and-forward by the engine). Returns the refreshed snapshot.
+/// store-and-forward by the engine). Returns the refreshed snapshot. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn send_message(
     state: State<'_, SharedEngine>,
     peer: String,
     text: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.send_message(&peer, &text);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    // Sent from afar, it waits in the queue bound to that computer, as a switch it turns on is.
+    let standing = presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?;
+    if let Some(id) = eng.send_message(&peer, &text) {
+        eng.bind_to_presence(OnItsOwn::ChatMessage { peer, id }, standing);
+    }
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
 /// One-click resend of a terminal (no-ack / abandoned) chat bubble: re-queues the same
 /// text with a fresh cycle budget, re-pointing the SAME bubble (no re-typing). `ack_id`
-/// targets the exact bubble; omitted = the newest terminal one.
+/// targets the exact bubble; omitted = the newest terminal one. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn resend_chat(
     state: State<'_, SharedEngine>,
     peer: String,
     ack_id: Option<char>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    if !eng.resend_message(&peer, ack_id) {
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    let standing = presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?;
+    let Some(id) = eng.resend_message(&peer, ack_id) else {
         return Err(format!("no resendable message for {peer}"));
-    }
+    };
+    // The queue holds a resent message under its peer's call in capitals.
+    let peer = peer.to_uppercase();
+    eng.bind_to_presence(OnItsOwn::ChatMessage { peer, id }, standing);
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -6747,8 +7281,8 @@ async fn get_propagation(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .filter(|(when, _, _)| when.elapsed().as_secs() < PROP_TTL_SECS)
-            .map(|(_, snap, _)| snap.clone())
+            .filter(|(when, _)| when.elapsed().as_secs() < PROP_TTL_SECS)
+            .map(|(_, snap)| snap.clone())
     };
 
     // Track whether THIS poll fetched fresh space weather — only then do we push a
@@ -6791,29 +7325,22 @@ async fn get_propagation(
             //
             // Only HERE, where a refetch will use them — never on the cache-hit polls in
             // between — and kept against the log's content, so a refetch over an unchanged
-            // log does not fold it again. The context's log identity is taken in the same
-            // lock, so Remote labels the board with the log the needs were built from. Read
-            // from the logbook store, so on the blocking pool with the fetch.
+            // log does not fold it again. Read from the logbook store, so on the blocking pool
+            // with the fetch.
             let (mc, mg) = (mycall.clone(), mygrid.clone());
             let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
             tauri::async_runtime::spawn_blocking(move || {
-                let (needs, log) = needs_kept(&engine, &tallies)?;
-                let context = PropContext {
-                    call: mc.clone(),
-                    grid: mg.clone(),
-                    log,
-                };
+                let needs = needs_kept(&engine, &tallies)?;
                 propagation::live::snapshot_with_spots(&mc, &mg, 1800, &*needs, &extra)
-                    .map(|snap| (snap, context))
             })
             .await
             .map_err(|e| e.to_string())?
         };
 
         match live {
-            Ok((snap, context)) => {
+            Ok(snap) => {
                 if let Ok(mut guard) = cache.lock() {
-                    *guard = Some((std::time::Instant::now(), snap.clone(), context));
+                    *guard = Some((std::time::Instant::now(), snap.clone()));
                 }
                 fetched_fresh = true;
                 snap
@@ -6824,7 +7351,7 @@ async fn get_propagation(
                 let guard = cache.lock().map_err(|e| e.to_string())?;
                 guard
                     .as_ref()
-                    .map(|(_, s, _)| {
+                    .map(|(_, s)| {
                         let mut s = s.clone();
                         s.source = "cached".to_string();
                         s
@@ -7001,6 +7528,15 @@ async fn get_propagation(
     // trend and regenerate the insight feed with it (overwriting the engine layer's
     // threshold-only insights). me_ll drives the representative MUF + greyline test.
     let me_ll = propagation::geo::maidenhead_to_latlon(&mygrid);
+    // A reading SWPC actually answered, for the opt-in space weather on each logged contact —
+    // never the model's stand-in values a failed fetch leaves in the snapshot.
+    if fetched_fresh && snap.space_wx.fetched {
+        let (kp, a_index, sfi, at) = (wx.kp, wx.a_index, wx.sfi, now.max(0) as u64);
+        let _ = with_engine(&state, move |mut eng| {
+            eng.note_space_weather(kp, a_index, sfi, at)
+        })
+        .await;
+    }
     if fetched_fresh {
         if let Ok(mut h) = wx_history.lock() {
             let muf = me_ll
@@ -7095,7 +7631,7 @@ async fn get_path_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s, _)| propagation::SpaceWx {
+            .map(|(_, s)| propagation::SpaceWx {
                 sfi: s.space_wx.sfi,
                 ssn: LAST_SSN.lock().ok().and_then(|g| *g),
                 kp: s.space_wx.kp,
@@ -7154,7 +7690,7 @@ async fn get_band_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s, _)| propagation::SpaceWx {
+            .map(|(_, s)| propagation::SpaceWx {
                 // R12 only matters to p533; withholding it from the heuristic keeps
                 // that path byte-identical to its pre-engine-seam behavior.
                 ssn: if p533 {
@@ -7336,7 +7872,7 @@ async fn get_dxped_windows(
     // cached snapshot (the same values the dashboard itself was built from).
     let (targets, wx) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        let Some((_, s, _)) = guard.as_ref() else {
+        let Some((_, s)) = guard.as_ref() else {
             return Ok(Vec::new()); // no snapshot yet — the board is empty too
         };
         let mut seen = std::collections::HashSet::new();
@@ -7610,7 +8146,7 @@ async fn get_pca(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s, _)| s.space_wx.kp as f64)
+            .map(|(_, s)| s.space_wx.kp as f64)
             .unwrap_or(0.0)
     };
     let now = now_unix();
@@ -7982,18 +8518,36 @@ fn country_resolver() -> Arc<tempo_app::station::DxccResolve> {
     Arc::clone(&SHARED)
 }
 
+/// The station's two country resolvers, wired as the launch wires them: the entity a call places
+/// a contact in ([`country_resolver`]), and the country a record's own DXCC number gives it
+/// ([`log_queries::dxcc_country`]), which the contact's `COUNTRY` follows.
+fn wire_country_resolvers(eng: &mut Engine) {
+    eng.set_dxcc_resolver_shared(country_resolver());
+    eng.set_dxcc_country_resolver(log_queries::dxcc_country);
+}
+
+/// The fill rule's own version in [`log_fill_version`]. Bump it whenever the rule changes, so a
+/// store filled under an older rule is filled again. 2: a contact carrying a DXCC number is filled
+/// with the number's name ([`log_queries::dxcc_country`]), not its call's entity.
+const FILL_RULES: u32 = 2;
+
 /// The version of the resolvers' data the logbook's country and state fills are written for —
 /// what `fill_ver` in the store records (SPEC-2 v3 D2-A). It changes with anything that can
-/// change what [`country_of`] or [`subdivision_hint`] answers: this build (their rules, the
-/// embedded cty.dat, the grid and province tables), the cty.dat active this session, and the
-/// FCC index the resolver holds. Bump `FILL_RULES` if the fill rule itself ever changes. Which
-/// contacts the job counts is not the fill rule: [`subdivision_applies`] leaves out only contacts
-/// the hint never answers for, so what is written does not change with it.
+/// change what [`country_of`], [`log_queries::dxcc_country`] or [`subdivision_hint`] answers: this
+/// build (their rules, the embedded cty.dat and DXCC tables, the grid and province tables), the
+/// cty.dat active this session, and the FCC index the resolver holds. Bump [`FILL_RULES`] if the
+/// fill rule itself ever changes. Which contacts the job counts is not the fill rule:
+/// [`subdivision_applies`] leaves out only contacts the hint never answers for, so what is written
+/// does not change with it.
 fn log_fill_version() -> i64 {
-    const FILL_RULES: u32 = 1;
+    fill_version(FILL_RULES)
+}
+
+/// [`log_fill_version`] under the fill rule `rules`: what a build of that rule wrote as `fill_ver`.
+fn fill_version(rules: u32) -> i64 {
     let fcc = FCC_LOADED.read().map(|g| g.clone()).unwrap_or_default();
     let key = format!(
-        "fill-rules:{FILL_RULES}|build:{}|cty:{}|fcc:{fcc}",
+        "fill-rules:{rules}|build:{}|cty:{}|fcc:{fcc}",
         env!("CARGO_PKG_VERSION"),
         propagation::dxcc::active_stats().ver.unwrap_or_default(),
     );
@@ -8007,8 +8561,9 @@ fn log_fill_version() -> i64 {
 
 /// Write the country and state the logbook store lacks — once per resolver-data version
 /// ([`log_fill_version`]), after the window is up, on a thread of its own and never the radio
-/// loop's — with the resolvers the engine fills every insert with ([`country_of`],
-/// [`subdivision_hint`]), counting a contact without a state only where one can apply
+/// loop's — with the resolvers the engine fills every insert with ([`country_of`], the engine's
+/// own DXCC-number names, [`subdivision_hint`]), counting a contact without a state only where one
+/// can apply
 /// ([`subdivision_applies`]). See `tempo_app::logfill` (SPEC-2 v3 D2-A).
 fn spawn_log_fill(engine: SharedEngine) {
     let spawned = std::thread::Builder::new()
@@ -9509,17 +10064,6 @@ static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// legacy in-config location, which keeps them hermetic and writes nothing into a real home dir.
 static DOCUMENTS_DIR: OnceLock<PathBuf> = OnceLock::new();
 static PICTURES_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-/// Point the gallery at a scratch directory for the duration of a test process, so a test can
-/// exercise the real delete without touching the operator's own pictures. Set once, as at launch.
-#[cfg(test)]
-pub(crate) fn test_pictures_dir() -> &'static PathBuf {
-    PICTURES_DIR.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("nexus-test-pictures-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("Nexus SSTV")).unwrap();
-        dir
-    })
-}
 
 /// The bundled TLE seed snapshot — `resources/tles/tles.json`, the mirror
 /// payload verbatim. Resource dir first (the packaged app), then the
@@ -11237,7 +11781,10 @@ fn hold_sat_row(
         .filter(|&hz| hz != 0 && hz != uplink)
         .collect();
     let mut eng = engine_lock(state);
-    eng.set_sat_transponder(Some((
+    // A bird no radio here can receive is refused before anything is held, and the reason is
+    // the pick's answer: a hold that can drive nothing would still take the dial from FT8, FT4
+    // and the TX gate (`Engine::hold_sat_transponder`). Everything below describes a hold made.
+    eng.hold_sat_transponder((
         label,
         index,
         tempo_core::doppler::Transponder {
@@ -11246,7 +11793,7 @@ fn hold_sat_row(
             invert: tp.invert,
             half_width_hz: half,
         },
-    )));
+    ))?;
     // AFTER the pick, which clears the list — see `Engine::set_sat_alt_uplinks`.
     eng.set_sat_alt_uplinks(alt_uplinks);
     // ⭐ AND WHAT KIND OF BIRD THIS IS, on the same terms and for the same reason: the
@@ -11907,19 +12454,51 @@ impl SatDopplerConsent {
 /// (±3 min tolerance — the schedule row the operator clicked); omitted =
 /// the current/next one. `None` = no grid, unknown bird, or no matching
 /// pass in the next 48 h — the UI says so plainly.
+///
+/// `afar`: written by the command lane for a computer driving this station, `None` from the shack's
+/// own screen. From afar the track is bound to that computer's presence and ends, dial handback and
+/// all, when it lapses ([`presence_standing`]).
 #[tauri::command]
 async fn start_sat_track(
     state: State<'_, SharedEngine>,
     name: String,
     aos_unix: Option<i64>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<Option<SatTrackDto>, String> {
-    arm_sat_track(&state, name, aos_unix, None)
+    let standing = presence_standing(
+        &engine_lock(&state),
+        afar.as_ref(),
+        std::time::Instant::now(),
+    )?;
+    arm_sat_track(&state, name, aos_unix, standing)
 }
 
-/// The arm itself, with no Tauri in it, so a Remote browser's own gesture reaches exactly this
-/// code rather than a second copy of it (`remote_service::operations::station`).
+/// ⛔ What work started from afar that runs on by itself is bound to (`command_dispatch::PRESENCE_BOUND`):
+/// the presence of the computer that started it, as live now. A track steers the dial and the mast
+/// for a whole pass on its own, and APRS's automatic ack, the presence beacon and the chat CQ run
+/// transmit with no further press, so none a computer started may outlive that computer's being
+/// there; each ends the way that computer's transmissions are cut when its presence lapses. With no
+/// presence live it does not start. A Stop leaves it as the shack's own Stop does: a Stop ends a
+/// transmission, not the session. `None` from the shack's own screen, whose work nothing here
+/// touches.
+fn presence_standing(
+    engine: &tempo_app::engine::Engine,
+    afar: Option<&command_dispatch::Afar>,
+    now: std::time::Instant,
+) -> Result<Option<tempo_app::remote_control::Standing>, String> {
+    match afar {
+        None => Ok(None),
+        Some(_) => engine
+            .remote_presence_standing(now)
+            .map(Some)
+            .ok_or_else(|| command_dispatch::NO_PRESENCE.to_string()),
+    }
+}
+
+/// The arm itself, with no Tauri in it, so an arm made from afar can reach exactly this code
+/// rather than a second copy of it.
 ///
-/// `standing` is the browser authority the gesture was admitted under, `None` for a gesture made
+/// `standing` is the remote authority the gesture was admitted under, `None` for a gesture made
 /// at the shack. A track steers the dial and the mast for the length of a pass, so a remotely
 /// armed one must not outlive the browser that armed it: the loop ends the pass — dial handback
 /// and all — as soon as that authority stops being held (`SatTrackLoss::RemoteAuthorityEnded`).
@@ -13130,9 +13709,14 @@ fn get_meters(meters: State<'_, tempo_app::engine::MeterFeed>) -> Result<MeterRe
 }
 
 /// Set the operating mode: "chat" | "qso-run" | "qso-monitor" | "fieldday-run"
-/// | "fieldday-sp". Returns the refreshed snapshot.
+/// | "fieldday-sp". Returns the refreshed snapshot. `afar`: as [`set_tx_enabled`]'s, for a run
+/// mode, which calls CQ; a passive one is a Stop, and runs whenever it is asked.
 #[tauri::command(async)]
-fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot, String> {
+fn set_mode(
+    state: State<'_, SharedEngine>,
+    mode: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     // A switch that opens a contest session — Field Day entered from another mode — has the
     // session's rows read from the logbook first, off the lock, and opens the session with its
     // dupe sweep in the same hold of the lock as the switch (SPEC-2 v3 C19). Every other switch
@@ -13148,12 +13732,20 @@ fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot,
             // every structured TX tier, not just FT8/FT4). Calling CQ sends a grid (CQ/Tx1); a
             // Field Day run sends an exchange with no grid (callsign only). qso-monitor /
             // fieldday-sp are passive on entry (the backstop covers TX).
+            let start =
+                !tempo_client::dispatch::is_stop("set_mode", &serde_json::json!({ "mode": mode }));
+            if start {
+                command_dispatch::still_bound(eng, afar.as_ref())?;
+            }
             match mode.as_str() {
                 "qso-run" => eng.structured_tx_ready(true)?,
                 "fieldday-run" => eng.structured_tx_ready(false)?,
                 _ => {}
             }
             eng.set_mode(&mode)?;
+            if start {
+                command_dispatch::started_from_afar(eng, afar.as_ref());
+            }
             if let Some(rows) = rows {
                 eng.open_session_from(rows);
             }
@@ -13162,22 +13754,78 @@ fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot,
     )?
 }
 
-/// Current operator/station settings.
+/// A settings read: the settings, and from afar whether the shack has each stored key saved
+/// (`command_dispatch::SAVED_AT_THE_STATION`), the keys themselves blanked, and which settings are
+/// set at the station only (`command_dispatch::SET_AT_THE_STATION`).
+#[derive(serde::Serialize)]
+struct SettingsRead {
+    #[serde(flatten)]
+    settings: Settings,
+    #[serde(
+        rename = "secretsSavedAtStation",
+        skip_serializing_if = "Option::is_none"
+    )]
+    saved_at_the_station: Option<std::collections::BTreeMap<&'static str, bool>>,
+    #[serde(
+        rename = "stationOnlySettings",
+        skip_serializing_if = "Option::is_none"
+    )]
+    set_at_the_station: Option<Vec<&'static str>>,
+}
+
+/// What a settings read answers with, from the Engine's settings `shack`.
+fn settings_read(
+    shack: &Settings,
+    afar: Option<&command_dispatch::Afar>,
+    watched: bool,
+) -> SettingsRead {
+    // Defensive: re-mirror the ACTIVE radio's profile into the flat fields the UI reads
+    // (idempotent — a no-op when already in sync). Guarantees the Settings Rig/Audio form
+    // always shows the active radio's own CAT + audio device, independent of which code path
+    // last flipped the active radio.
+    let mut s = shack.clone();
+    s.sync_flat_from_active();
+    // From afar the stored keys stay at the shack: blanked, with whether each is saved.
+    let saved_at_the_station =
+        command_dispatch::withhold_the_shacks_secret_settings(&mut s, afar, watched);
+    // The Cloudlog key is write-only and never sent to the frontend. It now serializes while
+    // a legacy plaintext key is pending keychain migration (so a save cannot drop it — round
+    // 8 F1), so clear it from THIS clone before it leaves the shell; the engine's own copy is
+    // untouched and the migration retry still sees it.
+    s.cloudlog_key.clear();
+    // The read's own names are no settings: an unknown key of either name cannot ride beside it.
+    s.unknown.remove(command_dispatch::SAVED_AT_THE_STATION);
+    s.unknown.remove(command_dispatch::SET_AT_THE_STATION);
+    SettingsRead {
+        settings: s,
+        saved_at_the_station,
+        // From afar, which settings the save keeps as the shack has them, so the form says so.
+        set_at_the_station: command_dispatch::station_only_settings(afar),
+    }
+}
+
+/// The event the main window hears whether a stream watches it, `true` or `false`, on each change.
+const STREAM_WATCHED_EVENT: &str = "remote-stream-watched";
+
+/// Whether a stream watches the main window now ([`STREAM_WATCHED_EVENT`] tells each change).
 #[tauri::command]
-async fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
-    with_engine(&state, |eng| {
-        // Defensive: re-mirror the ACTIVE radio's profile into the flat fields the UI reads
-        // (idempotent — a no-op when already in sync). Guarantees the Settings Rig/Audio form
-        // always shows the active radio's own CAT + audio device, independent of which code path
-        // last flipped the active radio.
-        let mut s = eng.settings().clone();
-        s.sync_flat_from_active();
-        // The Cloudlog key is write-only and never sent to the frontend. It now serializes while
-        // a legacy plaintext key is pending keychain migration (so a save cannot drop it — round
-        // 8 F1), so clear it from THIS clone before it leaves the shell; the engine's own copy is
-        // untouched and the migration retry still sees it.
-        s.cloudlog_key.clear();
-        s
+fn get_stream_watched(watched: State<'_, remote_service::stream::Watched>) -> bool {
+    watched.live()
+}
+
+/// Current operator/station settings. `afar`: from a computer driving the station, the stored
+/// keys are blanked and the read says which the shack has saved
+/// (`command_dispatch::withhold_the_shacks_secret_settings`). So they are while a stream watches
+/// the station's own screen (`watched`): a key revealed there must not reach a silent viewer.
+#[tauri::command]
+async fn get_settings(
+    state: State<'_, SharedEngine>,
+    watched: State<'_, remote_service::stream::Watched>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<SettingsRead, String> {
+    let watched = watched.live();
+    with_engine(&state, move |eng| {
+        settings_read(eng.settings(), afar.as_ref(), watched)
     })
     .await
 }
@@ -13232,6 +13880,12 @@ fn reset_settings(
 /// cluster/RBN and PSK Reporter MQTT daemons start immediately — no app restart.
 /// The `start_*_feed` latches make this a no-op once a feed is running (so an
 /// already-running feed keeps its original callsign until the next restart).
+/// `afar`: from a computer driving the station, its save keeps the shack's own settings that let
+/// the station transmit by itself, those that guard a transmission and the program it runs to sign
+/// a LoTW upload (`command_dispatch::keep_the_shacks_transmit_settings`), the addresses the shack
+/// sends a stored key or password to (`command_dispatch::keep_the_shacks_credential_addresses`), and
+/// the stored keys themselves (`command_dispatch::keep_the_shacks_secret_settings`).
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn set_settings(
     state: State<'_, SharedEngine>,
@@ -13240,8 +13894,17 @@ fn set_settings(
     region_paths: State<'_, SharedRegionPaths>,
     health: State<'_, SharedHealth>,
     cache: State<'_, PropCache>,
-    settings: Settings,
+    mut settings: Settings,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
+    // From a computer driving the station, the shack's own transmit settings and guards stay, and
+    // so do the program the shack runs to sign a LoTW upload, where the shack sends its stored keys
+    // and passwords, and the stored keys themselves.
+    command_dispatch::keep_the_shacks_settings(
+        engine_lock(&state).settings(),
+        &mut settings,
+        afar.as_ref(),
+    );
     // A form save: the ENGINE's roster wins, so a stale panel cannot revert a rig just added.
     apply_and_persist(
         state,
@@ -13394,10 +14057,9 @@ fn save_and_publish(
             if eng.settings().lotw_username.trim() != settings.lotw_username.trim() {
                 settings.lotw_last_qsl.clear();
             }
+            keep_lotw_place_for_its_account(eng.settings(), &mut settings);
             // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
-            if eng.settings().eqsl_username.trim() != settings.eqsl_username.trim() {
-                settings.eqsl_last_sync.clear();
-            }
+            keep_eqsl_cursor_for_its_account(eng.settings(), &mut settings);
             // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
             let cur = eng.settings();
             if cur.clublog_email != settings.clublog_email
@@ -13948,20 +14610,28 @@ async fn export_general_log(
     from: Option<String>,
     to: Option<String>,
 ) -> Result<tempo_app::dto::LogExportDto, String> {
-    let parse = |d: Option<String>| -> Result<Option<(u64, u64)>, String> {
-        match d.as_deref().map(str::trim) {
-            None | Some("") => Ok(None),
-            Some(s) => tempo_core::logbook::day_bounds_utc(s)
-                .map(Some)
-                .ok_or_else(|| format!("bad export date {s:?} (expected YYYY-MM-DD)")),
-        }
-    };
-    // A day bound is (start, end) of that UTC day: `from` uses the day's start, `to` its end.
-    let from_unix = parse(from)?.map(|b| b.0);
-    let to_unix = parse(to)?.map(|b| b.1);
+    let (from_unix, to_unix) = tempo_app::logexport::day_range(from.as_deref(), to.as_deref())?;
     let source = tempo_app::logexport::Source::of(&engine_lock(&state));
     log_folds::off_the_runtime(move || {
         tempo_app::logexport::export_logbook(&source, &format, from_unix, to_unix).map(Into::into)
+    })
+    .await
+}
+
+/// Export the contacts selected in the Logbook as ADIF: exactly the rows whose ids are `ids`, in
+/// log order, each written as [`export_general_log`] writes it
+/// (`tempo_app::logexport::export_selected`).
+///
+/// Read from the logbook store with the engine lock released, on the blocking pool, as
+/// [`export_general_log`].
+#[tauri::command]
+async fn export_selected_log(
+    state: State<'_, SharedEngine>,
+    ids: Vec<String>,
+) -> Result<tempo_app::dto::LogExportDto, String> {
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
+    log_folds::off_the_runtime(move || {
+        tempo_app::logexport::export_selected(&source, &ids).map(Into::into)
     })
     .await
 }
@@ -13980,12 +14650,12 @@ async fn export_general_log(
 ///
 /// A restore therefore does not put it back, and the operator re-enters it. That is the correct
 /// trade: re-typing one key beats a key that stops working for reasons nobody can see.
-const BACKUP_REDACTED_FIELDS: [&str; 2] = ["clublogApiKey", "cloudlogKey"];
-
-/// Remove [`BACKUP_REDACTED_FIELDS`] from a serialised Settings object.
+///
+/// The fields are `command_dispatch::SECRET_SETTINGS`, the one list a read from afar blanks and a
+/// save from afar keeps too, so the three cannot drift apart.
 fn redact_for_backup(mut settings: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = settings.as_object_mut() {
-        for f in BACKUP_REDACTED_FIELDS {
+        for (f, _) in command_dispatch::SECRET_SETTINGS {
             obj.remove(f);
         }
     }
@@ -14033,7 +14703,7 @@ fn strip_unknown_for_backup(
 /// a restore will ask for those again. Anything that changes that has to revisit this comment.
 /// That is also why `Settings::unknown` is stripped here (`strip_unknown_for_backup`): those
 /// keys come from a NEWER build, and this one cannot tell whether one of them is a credential —
-/// `BACKUP_REDACTED_FIELDS` can only name fields it knows about.
+/// `command_dispatch::SECRET_SETTINGS` can only name fields it knows about.
 ///
 /// The QSO log is NOT here. It is a separate, much larger file with its own ADIF export, and
 /// silently folding it into a "settings" backup would produce a file operators would hand around
@@ -14048,7 +14718,8 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
         )
     };
     let settings = strip_unknown_for_backup(redact_for_backup(settings), &unknown);
-    let ui_state = serde_json::to_value(ui_state_load()).map_err(|e| e.to_string())?;
+    let ui_state = serde_json::to_value(ui_state_read(&ui_state_path(), false).unwrap_or_default())
+        .map_err(|e| e.to_string())?;
     let bundle = serde_json::json!({
         "kind": "nexus-settings-backup",
         // Versioned from the start: a restore that cannot tell which shape it is holding is a
@@ -14065,15 +14736,21 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
 ///
 /// A backup from before the cluster node choice chooses by its node list, exactly as an upgraded
 /// settings file does. A restore runs none of `Settings::load`'s migrations, and the field's
-/// default would otherwise switch a restored list of the operator's own to automatic.
+/// default would otherwise switch a restored list of the operator's own to automatic. A backup
+/// from before JS8 heartbeat networking chooses it as an upgraded file does too, or a restored
+/// heartbeat user would lose the HB button.
 fn settings_from_bundle(
     settings_json: serde_json::Value,
 ) -> Result<tempo_app::settings::Settings, String> {
     let predates_node_choice = settings_json.get("clusterNodesAuto").is_none();
+    let predates_hb_networking = settings_json.get("js8HbNetworking").is_none();
     let mut settings: tempo_app::settings::Settings = serde_json::from_value(settings_json)
         .map_err(|e| format!("The settings in that backup could not be read: {e}"))?;
     if predates_node_choice {
         settings.choose_cluster_nodes_for_old_settings();
+    }
+    if predates_hb_networking {
+        settings.choose_js8_hb_networking_for_old_settings();
     }
     Ok(settings)
 }
@@ -14321,11 +14998,18 @@ fn civ_diagnostic_status() -> String {
     tempo_audio::civ::diag::status().unwrap_or_default()
 }
 
-/// Transmit an open broadcast (FT8-style "to all") free-text message.
+/// Transmit an open broadcast (FT8-style "to all") free-text message. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn broadcast(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
+fn broadcast(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.broadcast(&text);
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -14755,10 +15439,58 @@ async fn probe_cat_ports(
 /// settings change respawns only when something changed.
 type RotctldParams = (u32, String, u32, u16);
 
+/// The integrated rotator daemon: Hamlib's rotctld, or, for PstRotatorAz, Nexus's own UDP link,
+/// which answers the same rotctld protocol on the same loopback port, so every rotator command
+/// in Nexus reaches either one unchanged.
+enum RotDaemon {
+    Hamlib(tempo_audio::rigctld_proc::RigctldProc),
+    PstRotator(tempo_audio::pstrotator::PstRotatorLink),
+}
+
+impl RotDaemon {
+    fn is_alive(&mut self) -> bool {
+        match self {
+            RotDaemon::Hamlib(proc) => proc.is_alive(),
+            RotDaemon::PstRotator(link) => link.is_alive(),
+        }
+    }
+
+    /// What the daemon printed about itself. The link has no stderr: its start failures are
+    /// the `Err` it returns.
+    fn said(&self) -> Vec<String> {
+        match self {
+            RotDaemon::Hamlib(proc) => proc.said(),
+            RotDaemon::PstRotator(_) => Vec::new(),
+        }
+    }
+}
+
+impl From<tempo_audio::rigctld_proc::RigctldProc> for RotDaemon {
+    fn from(proc: tempo_audio::rigctld_proc::RigctldProc) -> Self {
+        RotDaemon::Hamlib(proc)
+    }
+}
+
+/// Start the integrated rotator daemon for `model`. PstRotatorAz's entry (model 3) keeps its
+/// number, so a station set up before the native link gets it with no change; Hamlib's backend
+/// for it is never run (`tempo_audio::pstrotator` says why). Every other model is Hamlib's.
+fn spawn_rotator_daemon(
+    model: u32,
+    port: &str,
+    baud: u32,
+    tcp_port: u16,
+) -> std::io::Result<RotDaemon> {
+    if model == tempo_audio::pstrotator::MODEL {
+        tempo_audio::pstrotator::PstRotatorLink::start(port, tcp_port).map(RotDaemon::PstRotator)
+    } else {
+        tempo_audio::rigctld_proc::spawn_rotctld(model, port, baud, tcp_port).map(RotDaemon::Hamlib)
+    }
+}
+
 /// The integrated rotctld, and what its supervisor remembers between reconciles.
 struct RotctldOwner {
     /// The running daemon and the params it was spawned with.
-    daemon: Option<(tempo_audio::rigctld_proc::RigctldProc, RotctldParams)>,
+    daemon: Option<(RotDaemon, RotctldParams)>,
     /// The params whose start failed and was REPORTED on the Connections log — one line per
     /// episode, however many times [`rotctld_tick`] tries again. Cleared when a daemon comes up
     /// or the rotator is unconfigured; a change of params is a new episode.
@@ -14881,7 +15613,7 @@ fn supervise_rotctld(engine: SharedEngine) {
                 &ROTCTLD,
                 || engine_lock(&engine).settings().clone(),
                 |owner, settings| {
-                    rotctld_tick(owner, &settings, tempo_audio::rigctld_proc::spawn_rotctld);
+                    rotctld_tick(owner, &settings, spawn_rotator_daemon);
                 },
             );
         });
@@ -14902,7 +15634,7 @@ fn supervise_rotctld(engine: SharedEngine) {
 fn rotctld_tick(
     owner: &mut RotctldOwner,
     st: &Settings,
-    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<tempo_audio::rigctld_proc::RigctldProc>,
+    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<RotDaemon>,
 ) -> Option<RotctldSync> {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
     let running = owner
@@ -14913,14 +15645,43 @@ fn rotctld_tick(
 }
 
 fn sync_rotctld_owned(owner: &mut RotctldOwner, st: &Settings) -> RotctldSync {
-    reconcile_rotctld(owner, st, tempo_audio::rigctld_proc::spawn_rotctld)
+    reconcile_rotctld(owner, st, spawn_rotator_daemon)
+}
+
+/// The Connections line for a rotator serial port that is not on this computer, or None when
+/// the port is there or is not a device path this check can judge.
+///
+/// Hamlib retries a missing serial port for about two seconds before rotctld exits (4.5.5: four
+/// "open failed" tries), so the daemon outlives the first-moment check in [`reconcile_rotctld`],
+/// is logged as launched, and is logged as exited on the next supervisor tick: two lines every
+/// [`ROTCTLD_RETRY`] that never name the port. A Mac renames a USB serial port when it moves to
+/// another socket or hub (`cu.usbmodem13201` → `cu.usbmodem113201`), so a saved port going
+/// missing is ordinary there. Only a `/dev/` path is judged: a Windows COM name is not a file,
+/// and a network address is not a serial port.
+fn absent_serial_port(port: &str, present: impl FnOnce() -> Vec<String>) -> Option<String> {
+    if !port.starts_with("/dev/") || std::path::Path::new(port).exists() {
+        return None;
+    }
+    let here = present();
+    let here = if here.is_empty() {
+        "none".to_string()
+    } else {
+        here.join(", ")
+    };
+    Some(format!(
+        "the rotator's serial port {port} is not on this computer, so rotctld was not started. \
+         Serial ports here now: {here}. A Mac renames a USB serial port when it is plugged into \
+         a different socket or hub: if one of these is the controller, choose it in Settings > \
+         Radio > Rotator. Nexus checks again every {} s.",
+        ROTCTLD_RETRY.as_secs()
+    ))
 }
 
 /// The reconcile itself, with the spawn handed in so a test can count its attempts.
 fn reconcile_rotctld(
     owner: &mut RotctldOwner,
     st: &Settings,
-    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<tempo_audio::rigctld_proc::RigctldProc>,
+    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<RotDaemon>,
 ) -> RotctldSync {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
     let params = (
@@ -14955,6 +15716,17 @@ fn reconcile_rotctld(
             }
             let slot = &mut *g;
             *slot = None; // kill-on-drop reaps a stale daemon first
+
+            // A serial port that is not there: say so once, spawn nothing, and let the
+            // supervisor look again — a controller switched on later still comes up by itself.
+            let absent = absent_serial_port(&params.1, tempo_audio::ports::available_ports);
+            if let Some(why) = absent {
+                if report {
+                    conn_log("Rotator", "error", why);
+                }
+                owner.failing = Some(params);
+                return RotctldSync::StartFailed { reported: report };
+            }
             match spawn(params.0, &params.1, params.2, params.3) {
                 Ok(mut proc) => {
                     let port = params.3;
@@ -14967,16 +15739,24 @@ fn reconcile_rotctld(
                         std::thread::sleep(std::time::Duration::from_millis(25));
                     }
                     if proc.is_alive() {
-                        conn_log(
-                            "Rotator",
-                            "info",
+                        let what = if let RotDaemon::PstRotator(_) = proc {
+                            format!(
+                                "PstRotatorAz link up (UDP to {}, rotctld :{port})",
+                                if params.1.is_empty() {
+                                    tempo_audio::pstrotator::DEFAULT_TARGET
+                                } else {
+                                    &params.1
+                                }
+                            )
+                        } else {
                             format!(
                                 "rotctld launched (model {} on {} @ {}, :{port})",
                                 params.0,
                                 if params.1.is_empty() { "-" } else { &params.1 },
                                 params.2
-                            ),
-                        );
+                            )
+                        };
+                        conn_log("Rotator", "info", what);
                         *slot = Some((proc, params));
                         owner.failing = None;
                         RotctldSync::Started
@@ -15012,6 +15792,24 @@ fn reconcile_rotctld(
                         owner.failing = Some(params);
                         RotctldSync::StartFailed { reported: report }
                     }
+                }
+                // The PstRotatorAz link's own words: an address that is not host:port, or a
+                // port another program holds, with the way out. It is not Hamlib, so the
+                // "Hamlib is missing" composer below would name the wrong cure.
+                Err(e) if params.0 == tempo_audio::pstrotator::MODEL => {
+                    if report {
+                        conn_log(
+                            "Rotator",
+                            "error",
+                            format!(
+                                "the PstRotatorAz link could not start: {e}. Nexus keeps trying \
+                                 every {} s.",
+                                ROTCTLD_RETRY.as_secs()
+                            ),
+                        );
+                    }
+                    owner.failing = Some(params);
+                    RotctldSync::StartFailed { reported: report }
                 }
                 Err(e) => {
                     // The shared per-platform composer, not a raw `{e}`: a Mac without
@@ -15124,7 +15922,7 @@ mod rotctld_supervisor_tests {
         let tries = Cell::new(0u32);
         let spawn = |m: u32, p: &str, b: u32, t: u16| {
             tries.set(tries.get() + 1);
-            tempo_audio::rigctld_proc::spawn_rotctld(m, p, b, t)
+            tempo_audio::rigctld_proc::spawn_rotctld(m, p, b, t).map(RotDaemon::from)
         };
 
         // Launch with the controller off: the start fails and the Connections log says so.
@@ -15168,7 +15966,7 @@ mod rotctld_supervisor_tests {
         let tries = Cell::new(0u32);
         let spawn = |m: u32, p: &str, b: u32, t: u16| {
             tries.set(tries.get() + 1);
-            tempo_audio::rigctld_proc::spawn_rotctld(m, p, b, t)
+            tempo_audio::rigctld_proc::spawn_rotctld(m, p, b, t).map(RotDaemon::from)
         };
         assert_eq!(
             reconcile_rotctld(&mut owner, &station(port, 1), spawn),
@@ -15199,6 +15997,60 @@ mod rotctld_supervisor_tests {
         drop(off);
     }
 
+    /// A Mac field report: the saved port was `/dev/cu.usbmodem13201`, the controller was at
+    /// `/dev/cu.usbmodem113201`. Hamlib retries a missing serial port for about two seconds
+    /// before rotctld exits, so every 5 s retry was logged as "launched" and then "exited",
+    /// never once naming the port. A device path that is not there spawns nothing and is
+    /// reported once per episode.
+    #[test]
+    fn a_serial_port_that_is_not_there_spawns_nothing_and_is_reported_once() {
+        let mut st = station(4533, 602);
+        st.rotator_port = "/dev/nexus-test-no-such-rotator".into();
+        let mut owner = owner();
+        let tries = Cell::new(0u32);
+        let spawn = |_: u32, _: &str, _: u32, _: u16| -> std::io::Result<RotDaemon> {
+            tries.set(tries.get() + 1);
+            Err(std::io::Error::other("spawned"))
+        };
+        assert_eq!(
+            reconcile_rotctld(&mut owner, &st, spawn),
+            RotctldSync::StartFailed { reported: true }
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                rotctld_tick(&mut owner, &st, spawn),
+                Some(RotctldSync::StartFailed { reported: false })
+            );
+        }
+        assert_eq!(tries.get(), 0, "no rotctld for a port that is not there");
+    }
+
+    #[test]
+    fn a_missing_serial_port_is_named_with_the_ports_that_are_there() {
+        let here = || vec!["/dev/cu.usbmodem113201".to_string()];
+        assert_eq!(
+            absent_serial_port("/dev/cu.usbmodem13201", here).as_deref(),
+            Some(
+                "the rotator's serial port /dev/cu.usbmodem13201 is not on this computer, so \
+                 rotctld was not started. Serial ports here now: /dev/cu.usbmodem113201. A Mac \
+                 renames a USB serial port when it is plugged into a different socket or hub: if \
+                 one of these is the controller, choose it in Settings > Radio > Rotator. Nexus \
+                 checks again every 5 s."
+            )
+        );
+        assert!(
+            absent_serial_port("/dev/cu.gone", Vec::new)
+                .is_some_and(|w| w.contains("Serial ports here now: none")),
+            "an empty list says none"
+        );
+        // Positive control: a device that IS there, and the ports this check cannot judge (a
+        // Windows COM name, a network address), go to the daemon as before.
+        assert_eq!(absent_serial_port("/dev/null", here), None);
+        assert_eq!(absent_serial_port("COM8", here), None);
+        assert_eq!(absent_serial_port("127.0.0.1:12000", here), None);
+        assert_eq!(absent_serial_port("", here), None);
+    }
+
     #[test]
     fn a_command_that_reaches_no_rotctld_says_what_to_check() {
         let gone = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
@@ -15216,6 +16068,61 @@ mod rotctld_supervisor_tests {
         let silent =
             std::io::Error::new(std::io::ErrorKind::TimedOut, "the rotator did not answer");
         assert_eq!(rotator_error(silent, ""), "the rotator did not answer");
+    }
+
+    /// PstRotatorAz (model 3) runs Nexus's own UDP link, not Hamlib's backend in a rotctld, on
+    /// the settings a station already has: the model and the address in the port box. A reply
+    /// port another program holds is a start failure the Connections log names, and the link
+    /// comes up on its own once the port is free.
+    #[test]
+    fn pstrotatoraz_gets_the_native_link_and_a_taken_reply_port_is_named() {
+        // A fake PstRotatorAz, and the port it replies on (its own + 1) held by "a logger".
+        let (pst, control, held) = (0..50)
+            .find_map(|_| {
+                let pst = std::net::UdpSocket::bind("127.0.0.1:0").ok()?;
+                let control = pst.local_addr().ok()?.port();
+                let held = std::net::UdpSocket::bind(("0.0.0.0", control + 1)).ok()?;
+                Some((pst, control, held))
+            })
+            .expect("a free UDP port pair");
+        let free = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = free.local_addr().expect("its port").port();
+        drop(free);
+        let mut st = station(port, 3);
+        st.rotator_port = format!("127.0.0.1:{control}");
+        let mut owner = owner();
+
+        assert_eq!(
+            sync_rotctld_owned(&mut owner, &st),
+            RotctldSync::StartFailed { reported: true }
+        );
+        let said = format!("UDP port {} is already in use", control + 1);
+        assert!(
+            get_connection_log().iter().any(|e| e.connector == "Rotator"
+                && e.message
+                    .starts_with("the PstRotatorAz link could not start")
+                && e.message.contains(&said)),
+            "the Connections log names the taken reply port, and not as a Hamlib problem"
+        );
+
+        // The other program lets go: same settings, and the link is up.
+        drop(held);
+        assert_eq!(sync_rotctld_owned(&mut owner, &st), RotctldSync::Started);
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            while let Ok((n, _)) = pst.recv_from(&mut buf) {
+                if &buf[..n] == b"<PST>AZ?</PST>" {
+                    let _ = pst.send_to(b"AZ:42\r", ("127.0.0.1", control + 1));
+                }
+            }
+        });
+        let addr = effective_rotator_addr(&st).expect("a rotator");
+        assert_eq!(addr, format!("127.0.0.1:{port}"));
+        assert_eq!(tempo_audio::rotator::read_azimuth(&addr), Some(42.0));
+        let limits = tempo_audio::rotator::read_limits(&addr)
+            .expect("answered")
+            .expect("declared");
+        assert_eq!(limits.elevation(), None, "azimuth only");
     }
 
     #[test]
@@ -15480,6 +16387,295 @@ async fn discover_flex() -> Result<Vec<FlexRadioDto>, String> {
                 })
                 .collect()
         })
+}
+
+/// What Find TCI server found at one address: Settings ▸ Radio ▸ Rig & CAT's button on the TCI
+/// connection, and the setup wizard's look for an SDR program on this computer.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TciProbeDto {
+    /// The address searched (blank searches this computer).
+    host: String,
+    /// False when this computer cannot find the address at all: nothing was tried.
+    resolved: bool,
+    /// Each port tried, in order, and what answered there.
+    tried: Vec<TciPortTriedDto>,
+    /// The first SDR program's TCI server that answered.
+    found: Option<TciServerDto>,
+}
+
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TciPortTriedDto {
+    port: u16,
+    /// `found`, `nexus` (Nexus's own TCI server, skipped), `noAnswer`, `notTci` or `noReady`.
+    outcome: &'static str,
+}
+
+/// What the server said about itself before `ready;`, as sent, and how Nexus will read it.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TciServerDto {
+    port: u16,
+    program: Option<String>,
+    version: Option<String>,
+    device: Option<String>,
+    trx_count: Option<u32>,
+    /// The dialect table's word for it, `unknown` for a program this build does not know.
+    dialect: &'static str,
+}
+
+/// How long Find TCI server gives one address on one port: connect, handshake and `ready;`.
+const TCI_PROBE_PORT_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The longest the whole search may take, the address's name lookup included.
+const TCI_PROBE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The ports Find TCI server tries, in order and each once: the one the form holds, then the ports
+/// the SDR programs come set to (`TciDialect::default_port`: 50001, then piHPSDR's 40001).
+fn tci_probe_ports(port: u16) -> Vec<u16> {
+    let defaults = tempo_app::settings::TciDialect::ALL.map(|d| d.default_port());
+    let mut ports: Vec<u16> = Vec::new();
+    for p in std::iter::once(port).chain(defaults) {
+        if p != 0 && !ports.contains(&p) {
+            ports.push(p);
+        }
+    }
+    ports
+}
+
+/// The dialect a found server will be read in, as the UI names it: the dialect table's own entry,
+/// by its name, or `unknown`.
+fn tci_dialect_word(dialect: &tempo_net::tci::Dialect) -> &'static str {
+    use tempo_net::tci::{AETHERSDR, EXPERT_SDR2, EXPERT_SDR3, PIHPSDR, THETIS_NATIVE};
+    [
+        (EXPERT_SDR3, "expertsdr3"),
+        (EXPERT_SDR2, "expertsdr2"),
+        (THETIS_NATIVE, "thetis"),
+        (PIHPSDR, "pihpsdr"),
+        (AETHERSDR, "aethersdr"),
+    ]
+    .into_iter()
+    .find(|(known, _)| known.name == dialect.name)
+    .map_or("unknown", |(_, word)| word)
+}
+
+/// Find TCI server, blocking: look up `host` (blank: this computer), then try `ports` in turn
+/// ([`tci_probe_ports`]) until an SDR program's TCI server answers. An address that names several (`localhost`: `::1`
+/// and `127.0.0.1`) is tried at each until one takes the connection. Nexus's own TCI server is
+/// passed over and said so. Each try reads the server's handshake and closes, writing nothing to
+/// it (`tempo_net::tci::probe`).
+fn probe_tci_server(host: &str, ports: &[u16]) -> TciProbeDto {
+    use std::net::{SocketAddr, ToSocketAddrs};
+    use tempo_net::tci::probe::{probe, Miss};
+    let host = match host.trim() {
+        "" => tempo_app::settings::TCI_DEFAULT_HOST,
+        typed => typed,
+    }
+    .to_string();
+    let mut dto = TciProbeDto {
+        host: host.clone(),
+        resolved: false,
+        tried: Vec::new(),
+        found: None,
+    };
+    let mut ips: Vec<std::net::IpAddr> = Vec::new();
+    for addr in (host.as_str(), 0).to_socket_addrs().into_iter().flatten() {
+        if !ips.contains(&addr.ip()) {
+            ips.push(addr.ip());
+        }
+    }
+    if ips.is_empty() {
+        return dto;
+    }
+    dto.resolved = true;
+    for &port in ports {
+        let mut outcome = "noAnswer";
+        for ip in &ips {
+            match probe(SocketAddr::new(*ip, port), TCI_PROBE_PORT_BUDGET) {
+                Err(Miss::NoAnswer(_)) => continue,
+                Err(Miss::NotTci(_)) => outcome = "notTci",
+                Err(Miss::NoReady) => outcome = "noReady",
+                Ok(hello) if hello.is_nexus() => outcome = "nexus",
+                Ok(hello) => {
+                    outcome = "found";
+                    dto.found = Some(TciServerDto {
+                        port,
+                        dialect: tci_dialect_word(&hello.dialect),
+                        program: hello.program,
+                        version: hello.version,
+                        device: hello.device,
+                        trx_count: hello.trx_count,
+                    });
+                }
+            }
+            break;
+        }
+        dto.tried.push(TciPortTriedDto { port, outcome });
+        if dto.found.is_some() {
+            break;
+        }
+    }
+    dto
+}
+
+/// Look for an SDR program's TCI server: the Settings button and the setup wizard. It never keys
+/// and never changes the radio: each try only reads what the server says about itself and closes.
+/// Bounded: [`TCI_PROBE_PORT_BUDGET`] an address and a port, and [`TCI_PROBE_LIMIT`] in all. Only
+/// from the shack's own screen (`tempo_client::classes`).
+#[tauri::command]
+async fn tci_probe(host: String, port: u16) -> Result<TciProbeDto, String> {
+    let search = tauri::async_runtime::spawn_blocking(move || {
+        probe_tci_server(&host, &tci_probe_ports(port))
+    });
+    match tokio::time::timeout(TCI_PROBE_LIMIT, search).await {
+        Ok(done) => done.map_err(|e| e.to_string()),
+        Err(_) => Err(format!("no answer within {} s", TCI_PROBE_LIMIT.as_secs())),
+    }
+}
+
+#[cfg(test)]
+mod tci_probe_tests {
+    //! Find TCI server's search, against listeners on loopback: which ports it tries and in what
+    //! order, where it stops, and what it says each port answered. What one probe reads, that it
+    //! writes nothing and how long it may take are `tempo_net::tci::probe`'s, tested there against
+    //! the simulated SDR programs.
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use tokio_tungstenite::tungstenite::{self, Message};
+
+    /// A port nothing listens on.
+    fn closed_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        listener.local_addr().expect("its address").port()
+    }
+
+    /// A TCI server on loopback that sends `burst` to each client and then holds the connection.
+    fn tci_server(burst: &'static str) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let port = listener.local_addr().expect("its address").port();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                if let Ok(mut ws) = tungstenite::accept(stream) {
+                    let _ = ws.send(Message::text(burst));
+                    held.push(ws);
+                }
+            }
+        });
+        port
+    }
+
+    /// A listener on loopback that answers each connection with `reply` and holds it: not TCI.
+    fn plain_listener(reply: &'static [u8]) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let port = listener.local_addr().expect("its address").port();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for mut stream in listener.incoming().flatten() {
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(reply);
+                held.push(stream);
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn the_form_port_comes_first_then_each_program_port_once() {
+        assert_eq!(tci_probe_ports(50001), vec![50001, 40001]);
+        assert_eq!(tci_probe_ports(40001), vec![40001, 50001]);
+        assert_eq!(tci_probe_ports(12345), vec![12345, 50001, 40001]);
+        assert_eq!(
+            tci_probe_ports(0),
+            vec![50001, 40001],
+            "no port: the programs' own"
+        );
+    }
+
+    #[test]
+    fn each_dialect_has_its_own_word_and_a_program_nexus_does_not_know_is_unknown() {
+        use tempo_net::tci::dialect::UNKNOWN;
+        use tempo_net::tci::{Dialect, DriveForm, DIALECTS, EXPERT_SDR3};
+        let words: Vec<&str> = DIALECTS.iter().map(tci_dialect_word).collect();
+        assert!(!words.contains(&"unknown"), "{words:?}");
+        let mut unique = words.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), DIALECTS.len(), "{words:?}");
+        assert_eq!(tci_dialect_word(&UNKNOWN), "unknown");
+        // A server's drive form is learned from what it sends; the word follows the dialect.
+        let global = Dialect {
+            drive: DriveForm::Global,
+            ..EXPERT_SDR3
+        };
+        assert_eq!(tci_dialect_word(&global), "expertsdr3");
+    }
+
+    #[test]
+    fn a_server_is_found_on_the_first_port_that_has_one_and_said_as_it_said_it() {
+        let server = tci_server("protocol:ExpertSDR3,2.0;device:SunSDR2DX;trx_count:2;ready;");
+        let missing = closed_port();
+        let dto = probe_tci_server("127.0.0.1", &[missing, server, closed_port()]);
+        assert!(dto.resolved);
+        assert_eq!(dto.host, "127.0.0.1");
+        assert_eq!(
+            dto.tried,
+            vec![
+                TciPortTriedDto {
+                    port: missing,
+                    outcome: "noAnswer"
+                },
+                TciPortTriedDto {
+                    port: server,
+                    outcome: "found"
+                },
+            ],
+            "it stops at the server"
+        );
+        assert_eq!(
+            dto.found,
+            Some(TciServerDto {
+                port: server,
+                program: Some("ExpertSDR3".into()),
+                version: Some("2.0".into()),
+                device: Some("SunSDR2DX".into()),
+                trx_count: Some(2),
+                dialect: "expertsdr3",
+            })
+        );
+        // The names the UI reads (`TciProbeResult` in ui/src/api.ts).
+        let json = serde_json::to_value(&dto).expect("serialises");
+        assert_eq!(json["found"]["trxCount"], 2);
+        assert_eq!(json["tried"][1]["outcome"], "found");
+        assert_eq!(json["resolved"], true);
+    }
+
+    #[test]
+    fn nexus_own_server_and_something_that_is_not_tci_are_passed_over_and_said() {
+        let nexus = tci_server("protocol:ExpertSDR3,2.0;device:Nexus;trx_count:1;ready;");
+        let http = plain_listener(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        let dto = probe_tci_server("127.0.0.1", &[nexus, http]);
+        assert_eq!(dto.found, None);
+        assert_eq!(
+            dto.tried.iter().map(|t| t.outcome).collect::<Vec<_>>(),
+            vec!["nexus", "notTci"]
+        );
+    }
+
+    #[test]
+    fn a_blank_address_searches_this_computer_and_one_that_cannot_be_looked_up_tries_nothing() {
+        let server = tci_server("protocol:Thetis,2.10.3.14;device:ANAN-G2;ready;");
+        let dto = probe_tci_server("  ", &[server]);
+        assert_eq!(dto.host, "127.0.0.1");
+        assert_eq!(dto.found.map(|f| f.dialect), Some("thetis"));
+        // A name with a NUL in it is refused before any lookup goes out.
+        let dto = probe_tci_server("sdr\0pc", &[server]);
+        assert!(!dto.resolved);
+        assert!(dto.tried.is_empty());
+    }
 }
 
 /// Stop the rotator immediately (rotctld `S`) — the control panel's STOP.
@@ -16225,28 +17421,34 @@ struct CwCandidateDto {
 #[serde(rename_all = "camelCase")]
 struct CwDecodeResult {
     text: String,
+    /// The AI decoder's PROVISIONAL tail: characters too near the live edge to be confirmed
+    /// yet, shown dimmed after `text` and replaced by the next pass. For the eye only: every
+    /// field below is read from the confirmed `text`, never from this.
+    pending: String,
     wpm: u32,
     /// TX echo: recent EXPANDED CW transmissions (oldest→newest) so the cockpit shows
     /// exactly what was sent (macro tokens resolved).
     sent: Vec<String>,
     /// A CW-keyer failure to surface (e.g. the rig rejected CAT `send_morse`), else null.
     keyer_error: Option<String>,
+    /// The operator's own paddle took over from Nexus's CW and the rest of the message was dropped
+    /// (Nexus's Flex client): an information line, not a warning, until the next send.
+    paddle_took_over: bool,
     /// Ranked worked-station callsign candidates from the decode (click to confirm).
     candidates: Vec<CwCandidateDto>,
     /// The RST they sent us, read from the decode (e.g. "599"), else null.
     rst: Option<String>,
     /// The other station's name, read from the decode (e.g. "BOB"), else null.
     name: Option<String>,
-    /// Guided QSO-state tag: "listening" | "cq" | "answered" | "report" | "73".
-    state: String,
-    /// Plain-English state, e.g. "W1ABC is calling CQ".
-    headline: String,
-    /// The guided instruction, e.g. "Press Answer (F2) to call them".
-    prompt: String,
-    /// Recommended action id to highlight: "F2" | "F3" | "log", or null.
-    recommended: Option<String>,
+    /// Whose turn it is and what fits, for the cockpit's turn cue (`tempo_core::cw_turn`): null
+    /// unless the AI decoder is on and keeping up. It never sends; the cockpit lights a key.
+    turn: Option<tempo_core::cw_turn::Turn>,
     /// The operator-confirmed worked callsign (the active peer), if any.
     worked_call: Option<String>,
+    /// An unassisted contest entry is declared: no CW decoder runs
+    /// (`Settings::cw_decoder_active`), so every field above that the decoder fills is empty,
+    /// the turn cue included, and the Decode pane says why.
+    unassisted: bool,
 }
 
 /// Decode CW from the recent RX audio at the operator's pitch — a live readout for the
@@ -16270,16 +17472,37 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
     let sent = eng.cw_sent();
     let worked = eng.active_peer();
     let mycall = eng.settings().mycall.clone();
+    // An unassisted entry gets nothing the decoder would give it. The engine has no copy for it,
+    // and the copilot does not run on the call the operator chose either: no call chips (the
+    // best of which fills His Call), no report or name for the log strip, and no turn cue.
+    let unassisted = !eng.settings().cw_decoder_active();
     // Parse the decode into copilot context. The DXCC resolver (src-tauri has it; tempo-core
     // doesn't) supplies the real-prefix check that filters CW misdecodes out of the chips.
-    let assist = tempo_core::cw_parse::analyze(&d.text, &sent, &mycall, worked.as_deref(), |b| {
-        propagation::dxcc::resolve(b).is_some()
+    let assist = if unassisted {
+        tempo_core::cw_parse::CwAssist::default()
+    } else {
+        tempo_core::cw_parse::analyze(&d.text, &mycall, |b| {
+            propagation::dxcc::resolve(b).is_some()
+        })
+    };
+    // Whose turn it is: none in an unassisted entry either (`Engine::cw_turn`). The call the
+    // F-keys' `!` sends is the station worked, else the decoder's best guess, which the cockpit
+    // puts in His Call.
+    let his_call = worked.clone().or_else(|| {
+        assist
+            .candidates
+            .iter()
+            .find(|c| c.best)
+            .map(|c| c.call.clone())
     });
+    let turn = eng.cw_turn(his_call.as_deref());
     CwDecodeResult {
         text: d.text,
+        pending: eng.cw_decode_pending(),
         wpm: d.wpm,
         sent,
         keyer_error: eng.cw_keyer_error(),
+        paddle_took_over: eng.cw_paddle_took_over(),
         candidates: assist
             .candidates
             .into_iter()
@@ -16290,11 +17513,9 @@ fn read_cw_state(eng: &tempo_app::engine::Engine) -> CwDecodeResult {
             .collect(),
         rst: assist.exchange.rst,
         name: assist.exchange.name,
-        state: assist.guidance.state,
-        headline: assist.guidance.headline,
-        prompt: assist.guidance.prompt,
-        recommended: assist.guidance.recommended,
+        turn,
         worked_call: worked,
+        unassisted,
     }
 }
 
@@ -16306,8 +17527,8 @@ fn set_ai_cw(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, St
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist ai-cw toggle: {e}")
     });
-    // The AI decoder is one of the assistance sources, so its state belongs in the record.
-    journal_assistance(eng.settings(), "AI CW decoder toggled", false);
+    // Nothing for the assistance record: its source is the CW decoder, which the classic decoder
+    // keeps running with the AI off (`Settings::assistance_sources`).
     Ok(eng.snapshot())
 }
 
@@ -16521,14 +17742,57 @@ async fn get_rtty_state(state: State<'_, SharedEngine>) -> Result<RttyStateDto, 
     with_engine(&state, |eng| rtty_state_dto(&eng)).await
 }
 
+/// The RTTY tuning scope's newest frame (`tempo_core::rtty::scope`): about 2 KB.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RttyScopeDto {
+    /// Armed and receiving. False while disarmed and while we transmit.
+    live: bool,
+    /// Counts every point the scope has kept: a frame with the number last drawn is not new.
+    seq: u64,
+    /// The frame's largest |x| or |y|, in audio units: the drawing's auto-scale follows it.
+    peak: f32,
+    /// Interleaved x (mark resonator), y (space resonator) pairs, scaled so `peak` is ±127.
+    xy: Vec<i8>,
+    /// How far the signal sits from the decoder's tones (Hz, positive = higher); absent with no
+    /// signal.
+    offset_hz: Option<f32>,
+}
+
+/// The RTTY tuning scope (polled while its pane is shown and the RTTY cockpit is visible).
+/// Receive-only: it reads what the decode thread pushed and changes nothing.
+#[tauri::command]
+async fn get_rtty_scope(state: State<'_, SharedEngine>) -> Result<RttyScopeDto, String> {
+    with_engine(&state, |eng| {
+        let s = eng.rtty_scope();
+        RttyScopeDto {
+            live: s.live,
+            seq: s.frame.seq,
+            peak: s.frame.peak,
+            xy: s.frame.xy,
+            offset_hz: s.frame.offset_hz,
+        }
+    })
+    .await
+}
+
 /// Arm/disarm the APRS (AFSK-1200 / AX.25) RX decoder (session-only; never launches armed). The
 /// aprs-rx thread starts decoding the 12 kHz RX tap into the heard list. Returns it (empty on arm).
+/// `afar`: as [`set_tx_enabled`]'s; armed from afar, the automatic ack it allows ends with that
+/// computer's presence ([`presence_standing`]).
 #[tauri::command(async)]
 fn aprs_arm(
     state: State<'_, SharedEngine>,
     on: bool,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<Vec<tempo_app::engine::AprsHeard>, String> {
     let mut eng = engine_lock(&state);
+    let standing = if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+        presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?
+    } else {
+        None
+    };
     // An EXPLICIT operator act — the only arm that permits an unattended auto-ack. View entry
     // goes through `aprs_auto_arm` instead, which cannot confer that.
     eng.set_aprs_arm(if on {
@@ -16536,6 +17800,10 @@ fn aprs_arm(
     } else {
         tempo_app::engine::AprsArm::Off
     });
+    eng.bind_to_presence(OnItsOwn::AprsAck, standing);
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.aprs_heard())
 }
 
@@ -16567,8 +17835,7 @@ async fn get_aprs_health(
 
 /// Why what was queued for APRS was last dropped instead of sent (TX off, or outside the licence's
 /// privileges), for the cockpit's status line; `None` once a frame keys. A read of its own, polled
-/// beside the health: the other APRS reads are also the Remote's (`remote_service::aprs`), and the
-/// hosted page checks them against exact key lists.
+/// beside the health.
 #[tauri::command]
 async fn get_aprs_tx_notice(state: State<'_, SharedEngine>) -> Result<Option<String>, String> {
     with_engine(&state, |eng| eng.aprs_tx_notice().map(str::to_string)).await
@@ -16602,6 +17869,8 @@ async fn get_aprs_is_status(
 /// keys. The engine validates every gate (TX armed, privileges, no tune carrier, no other over)
 /// and returns WHY a send was refused; the radio loop keys the rendered AFSK audio with PTT.
 /// `symbol_table`/`symbol_code` are single chars (default `/` and `>`); `path` is the digi aliases.
+/// `afar`: as [`set_tx_enabled`]'s.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn aprs_send_beacon(
     state: State<'_, SharedEngine>,
@@ -16611,23 +17880,32 @@ fn aprs_send_beacon(
     symbol_code: String,
     comment: String,
     path: Vec<String>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<(), String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     let table = symbol_table.chars().next().unwrap_or('/');
     let code = symbol_code.chars().next().unwrap_or('>');
-    eng.aprs_beacon(lat, lon, table, code, &comment, &path)
+    eng.aprs_beacon(lat, lon, table, code, &comment, &path)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    Ok(())
 }
 
 /// Queue an APRS text message to `addressee` — an explicit operator send. The engine validates the
 /// same TX gate as the beacon, assigns a line number for acking, and returns WHY a send was refused.
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn aprs_send_message(
     state: State<'_, SharedEngine>,
     addressee: String,
     text: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<(), String> {
     let mut eng = engine_lock(&state);
-    eng.aprs_send_message(&addressee, &text)
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    eng.aprs_send_message(&addressee, &text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    Ok(())
 }
 
 /// Tune the rig for APRS: QSY to `dial_mhz` on 2 m FM simplex, auto-routing to the 2 m-capable radio
@@ -16675,14 +17953,22 @@ fn repeater_tune(
 /// at the current dial, the RTTY section owning the rig, no tune carrier, no other
 /// transmission) and returns WHY a send was refused; the radio loop keys the
 /// queued text via the configured backend (soundcard AFSK / true-FSK keyline).
+///
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn rtty_send(state: State<'_, SharedEngine>, text: String) -> Result<RttyStateDto, String> {
+fn rtty_send(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_send_text(&text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(rtty_state_dto(&eng))
 }
 
-/// Continuous TX on/off — the cockpit's TX button, the MMTTY latch: stay keyed
+/// Continuous TX on/off — the cockpit's TX button, a latch: stay keyed
 /// and type into a live transmission instead of one keyed over per Enter.
 ///
 /// ON runs the SAME gate a send runs (so the latch can never key where a send
@@ -16692,20 +17978,38 @@ fn rtty_send(state: State<'_, SharedEngine>, text: String) -> Result<RttyStateDt
 /// macro and the TX-enable latch remain the instant kills, and each of them also
 /// drops this. The engine re-checks every TX gate on every radio-loop tick while
 /// it is up, and drops the latch the moment one goes down.
+///
+/// `afar`: as [`set_tx_enabled`]'s, never asked of the off half.
 #[tauri::command(async)]
-fn rtty_set_latched(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, String> {
+fn rtty_set_latched(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
+    if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
     eng.set_rtty_latched(on)?;
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(rtty_state_dto(&eng))
 }
 
 /// Feed typed characters into the live latched transmission (one insertion at a
 /// time from the compose field — RTTY has no un-send, so nothing sent can be
-/// edited or withdrawn). Refused unless continuous TX is latched.
+/// edited or withdrawn). Refused unless continuous TX is latched. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn rtty_type(state: State<'_, SharedEngine>, text: String) -> Result<RttyStateDto, String> {
+fn rtty_type(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_type(&text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(rtty_state_dto(&eng))
 }
 
@@ -16734,13 +18038,15 @@ fn rtty_afc_reset(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String
     Ok(rtty_state_dto(&eng))
 }
 
-/// Net the RTTY decoder onto a new audio center (Hz) from a waterfall click —
-/// rebuilds the demod around the new mark/space pair. RX-only decoder state, so
-/// it needs no TX/privilege gate and is safe during a transmission.
+/// Net the RTTY decoder onto a new audio center (Hz) from a waterfall click or a
+/// tuning-scope nudge — rebuilds the demod around the new mark/space pair. NOT
+/// RX-only: the AFSK transmitter follows the netted center too, so this moves the
+/// transmit tone (see `Engine::rtty_net`); the privilege gate judges the netted
+/// emission at keying, and the engine refuses a net while RTTY transmits.
 #[tauri::command(async)]
 fn rtty_net(state: State<'_, SharedEngine>, hz: f32) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
-    eng.rtty_net(hz);
+    eng.rtty_net(hz)?;
     Ok(rtty_state_dto(&eng))
 }
 
@@ -16803,33 +18109,58 @@ fn psk_state_dto(eng: &Engine) -> PskStateDto {
 /// tune carrier, no other transmission) and returns WHY a send was refused;
 /// the radio loop keys the queued text as shaped BPSK audio at the netted
 /// offset. While continuous TX is latched a send types into the live stream.
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn psk_send(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto, String> {
+fn psk_send(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<PskStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.psk_send_text(&text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(psk_state_dto(&eng))
 }
 
-/// Continuous TX on/off — the PSK cockpit's TX button, the same MMTTY-style
+/// Continuous TX on/off — the PSK cockpit's TX button, the same
 /// latch RTTY carries: ON runs the SAME gate a send runs; OFF lets what was
 /// typed finish keying, then unkeys. NOT the emergency stop — Stop TX, the
 /// Esc/Stop macro and the TX-enable latch cut instantly and each also drops
 /// this. The engine re-checks every TX gate on every radio-loop tick while it
 /// is up and drops the latch the moment one goes down.
+///
+/// `afar`: as [`set_tx_enabled`]'s, never asked of the off half.
 #[tauri::command(async)]
-fn psk_set_latched(state: State<'_, SharedEngine>, on: bool) -> Result<PskStateDto, String> {
+fn psk_set_latched(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<PskStateDto, String> {
     let mut eng = engine_lock(&state);
+    if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
     eng.set_psk_latched(on)?;
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(psk_state_dto(&eng))
 }
 
 /// Feed typed characters into the live latched transmission (one insertion at
 /// a time from the compose field — PSK has no un-send). Refused unless
-/// continuous TX is latched.
+/// continuous TX is latched. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn psk_type(state: State<'_, SharedEngine>, text: String) -> Result<PskStateDto, String> {
+fn psk_type(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<PskStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.psk_type(&text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(psk_state_dto(&eng))
 }
 
@@ -17162,54 +18493,137 @@ fn js8_set_rx_speeds(
     Ok(eng.js8_state())
 }
 
+/// JS8Call's decode filter (the waterfall controls, and the row menus' "Centre filter at …Hz"):
+/// on/off, centre and width in Hz. Receive only. Persisted.
+#[tauri::command(async)]
+fn js8_set_filter(
+    state: State<'_, SharedEngine>,
+    filter: tempo_app::settings::Js8Filter,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_filter(filter);
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// JS8Call 3.0.3's own frequency table as rows of the operator's list (no descriptions, as
+/// JS8Call's defaults have none): what Settings shows, and what Reset returns to.
+#[tauri::command]
+fn js8_default_frequencies() -> Vec<tempo_app::settings::Js8Freq> {
+    tempo_app::bandplan::js8_band_plan()
+        .into_iter()
+        .map(|c| tempo_app::settings::Js8Freq {
+            mhz: c.dial_mhz,
+            description: String::new(),
+        })
+        .collect()
+}
+
+/// The passband centre "QSY to centre" puts the transmit offset on (JS8Call's waterfall
+/// `Center`), Hz. Moves nothing by itself. Persisted.
+#[tauri::command(async)]
+fn js8_set_qsy_center(
+    state: State<'_, SharedEngine>,
+    hz: u16,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_qsy_center(hz);
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// JS8Call's QSY: move the dial so the transmit offset sits on the passband centre. MOVES THE
+/// RIG through the operator's own tune path; refused while anything transmits or a JS8 message
+/// is going out (the engine says why). Persisted, as every QSY is.
+#[tauri::command(async)]
+fn js8_qsy_to_centre(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_qsy_to_centre()?;
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// The answer to a scheduled frequency change's notice: `go` changes it now (held while anything
+/// transmits), otherwise it is cancelled and the frequency stays. Persisted, as a QSY is.
+#[tauri::command(async)]
+fn js8_hop_answer(
+    state: State<'_, SharedEngine>,
+    go: bool,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_hop_answer(go)?;
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
 /// Queue a message (`to` = a callsign, `@GROUP`, or null for @ALLCALL). REFUSED in this
-/// receive-only build; the operator-gated TX batch supplies the body behind it.
+/// receive-only build; the operator-gated TX batch supplies the body behind it. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn js8_send(
     state: State<'_, SharedEngine>,
     to: Option<String>,
     text: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_send(to, text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.js8_state())
 }
 
 /// Queue a directed command (`cmd` = the 32-entry table id) with its argument. Refused here.
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn js8_send_command(
     state: State<'_, SharedEngine>,
     to: String,
     cmd: u8,
     arg: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.js8_send_command(to, cmd, arg)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.js8_state())
 }
 
-/// Call CQ (`idx` = the CQ variant 0..=7). Refused here.
+/// Call CQ with the CQ message from Settings (JS8Call's `CQMessage`). Refused here. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn js8_call_cq(
     state: State<'_, SharedEngine>,
-    idx: u8,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
-    eng.js8_call_cq(idx)?;
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    eng.js8_call_cq()?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.js8_state())
 }
 
 /// The two-act arm's SECOND act. Autoreply / relay / HB-ack are persisted (JS8Call keeps them
 /// across sessions too); HB is session-only by design and is never written to disk. Neither
 /// arms TX — the TX latch is the first act and only the operator's TX button supplies it.
+/// `afar`: as [`set_tx_enabled`]'s, on the on half; the off half always runs. From afar every
+/// switch turns on as here.
 #[tauri::command(async)]
 fn js8_arm(
     state: State<'_, SharedEngine>,
     which: tempo_app::engine::js8::Js8Switch,
     on: bool,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
+    if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
     eng.js8_arm(which, on)?;
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     if which != tempo_app::engine::js8::Js8Switch::Hb {
         persist_settings(eng.settings().clone(), |e| {
             eprintln!("tempo: failed to persist JS8 switch: {e}")
@@ -17218,35 +18632,66 @@ fn js8_arm(
     Ok(eng.js8_state())
 }
 
-/// Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant to send). SESSION-ONLY and
+/// Arm/disarm JS8Call's repeating CQ, which sends the CQ message from Settings. SESSION-ONLY and
 /// never written to disk, exactly like the HB toggle — a relaunch can never come back calling
 /// CQ. The repeat INTERVAL is the persisted half and lives in Settings (`js8CqIntervalMin`).
 /// Arming keys nothing: the TX latch is the first act and is re-read at plan time every slot.
+/// `afar`: as [`set_tx_enabled`]'s, on the on half; the off half always runs.
 #[tauri::command(async)]
 fn js8_cq_repeat(
     state: State<'_, SharedEngine>,
     on: bool,
-    idx: u8,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
-    eng.js8_set_cq_repeat(on, idx)?;
+    if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
+    eng.js8_set_cq_repeat(on)?;
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.js8_state())
 }
 
 /// The operator's Yes or No to the automatic reply the dock asks about (JS8Call's
 /// AutoreplyConfirmation), named by the `display` and `fires_at_ms` it was shown with. A Yes puts
 /// it in the queue, where every TX gate applies when its period comes; a Yes to one no longer
-/// waiting is refused, so it can never send another reply.
+/// waiting is refused, so it can never send another reply. `fires_at_ms` names the reply by the
+/// shack's own time for it, as the shack showed it; it moves nothing. `afar`: as
+/// [`set_tx_enabled`]'s, on a Yes; a No always runs.
 #[tauri::command(async)]
 fn js8_answer_reply(
     state: State<'_, SharedEngine>,
     yes: bool,
     display: String,
     fires_at_ms: u64,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
+    if yes {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
     eng.js8_answer_reply(yes, display, fires_at_ms)?;
+    if yes {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.js8_state())
+}
+
+/// The compose box's words that JS8Call underlines, one answer per word in order (its word
+/// check, "Suggest alternative word choices…", on by default). The JSC dictionary only: no engine
+/// lock, and nothing keys.
+#[tauri::command(async)]
+fn js8_word_check(words: Vec<String>) -> Vec<bool> {
+    tempo_app::engine::js8::js8_word_check(&words)
+}
+
+/// What JS8Call's right-click offers for one underlined word: up to five cheaper words, cheapest
+/// first, and whether the dictionary held any prefix of it. The JSC dictionary only.
+#[tauri::command(async)]
+fn js8_word_suggestions(word: String) -> tempo_app::engine::js8::Js8WordSuggestions {
+    tempo_app::engine::js8::js8_word_suggestions(&word)
 }
 
 /// The native cockpit's compose box, both ways (polled with the state while JS8 is visible):
@@ -17259,6 +18704,58 @@ async fn js8_composer(
     taken: Option<u32>,
 ) -> Result<Option<tempo_app::dto::Js8ComposerPrefill>, String> {
     with_engine(&state, move |mut eng| eng.js8_composer(composing, taken)).await
+}
+
+/// "Send Heartbeat Now", from the HB button's menu: one heartbeat in the next period, the repeat
+/// left as it is. Refused where JS8Call has no HB button (heartbeat networking off, a speed with
+/// no heartbeats). Keys only through the JS8 TX route, so only with TX on. `afar`: as
+/// [`set_tx_enabled`]'s.
+#[tauri::command(async)]
+fn js8_heartbeat_now(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    eng.js8_heartbeat_now()?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    Ok(eng.js8_state())
+}
+
+/// The call in the native cockpit's To box (null when empty): JS8Call's selected call, which the
+/// QSO pause reads. Keys nothing.
+#[tauri::command]
+async fn js8_select_call(
+    state: State<'_, SharedEngine>,
+    call: Option<String>,
+) -> Result<(), String> {
+    with_engine(&state, move |mut eng| eng.js8_select_call(call)).await
+}
+
+/// The native cockpit's compose box while its message goes out (JS8Call's typeahead): what is still
+/// to go, `sent_seen` the characters of it the box had seen go. Taken just before the next frame,
+/// which goes out through every JS8 gate; answered with what the box shows, or none once nothing of
+/// the box's is going out. `afar`: as [`set_tx_enabled`]'s.
+#[tauri::command(async)]
+fn js8_typeahead(
+    state: State<'_, SharedEngine>,
+    sent_seen: usize,
+    unsent: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<Option<tempo_app::dto::Js8Typeahead>, String> {
+    let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    eng.js8_typeahead(sent_seen, unsent)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    Ok(eng.js8_typeahead_state())
+}
+
+/// What the compose box shows of the operator's message going out, or none once it has gone.
+#[tauri::command(async)]
+fn js8_typeahead_state(
+    state: State<'_, SharedEngine>,
+) -> Result<Option<tempo_app::dto::Js8Typeahead>, String> {
+    Ok(engine_lock(&state).js8_typeahead_state())
 }
 
 /// Drop the outbox — a SENDER-class control, not a stop (Stop TX is `halt_tx`).
@@ -17295,6 +18792,66 @@ fn js8_inbox_delete(
     let mut eng = engine_lock(&state);
     eng.js8_inbox_delete(id)?;
     Ok(eng.js8_state())
+}
+
+/// "Store message…" (JS8Call's): leave `text` here for `to`, handed over when `to` asks with
+/// QUERY MSGS and QUERY MSG n. Keys nothing. Journaled.
+#[tauri::command(async)]
+fn js8_store_message(
+    state: State<'_, SharedEngine>,
+    to: String,
+    text: String,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_store_message(to, text)?;
+    Ok(eng.js8_state())
+}
+
+/// Clear the Inbox's notes of what a cap dropped. Journaled.
+#[tauri::command(async)]
+fn js8_inbox_dropped_clear(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_inbox_dropped_clear();
+    Ok(eng.js8_state())
+}
+
+/// The JS8 call list's "Block this station" (JS8Call 3.0's RX block list, `RXCallsignBlocklist`):
+/// that one field, never the settings form. Answers the list as saved, for the UI's mirror.
+#[tauri::command(async)]
+fn js8_set_rx_blocklist(
+    state: State<'_, SharedEngine>,
+    calls: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_rx_blocklist(calls);
+    js8_persist_settings(&eng);
+    Ok(eng.settings().js8_rx_blocklist.clone())
+}
+
+/// The JS8 call list's "Add new station or group…" with a @GROUP, and "Remove this group": the
+/// joined groups, that one field, never the settings form. Answers the groups as saved.
+#[tauri::command(async)]
+fn js8_set_groups(
+    state: State<'_, SharedEngine>,
+    groups: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_groups(groups)?;
+    js8_persist_settings(&eng);
+    Ok(eng.settings().js8_groups.clone())
+}
+
+/// The JS8 call list's "Remove" on `@ALLCALL` and "Add" of `@ALLCALL` (JS8Call's
+/// `set_avoid_allcall`): "Do not participate in the @ALLCALL group", that one field, never the
+/// settings form. Answers the setting as saved.
+#[tauri::command(async)]
+fn js8_set_avoid_allcall(state: State<'_, SharedEngine>, avoid: bool) -> Result<bool, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_avoid_allcall(avoid);
+    js8_persist_settings(&eng);
+    Ok(eng.settings().js8_avoid_allcall)
 }
 
 /// Clear the decoded-PSK transcript (display only; the decoder keeps running).
@@ -17358,20 +18915,32 @@ fn rtty_set_auto(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDt
 }
 
 /// Operator starts an auto CQ run (a human-initiate gate). The engine re-checks every
-/// TX gate and returns WHY a start was refused (Auto off, TX locked, …).
+/// TX gate and returns WHY a start was refused (Auto off, TX locked, …). `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn rtty_auto_cq(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
+fn rtty_auto_cq(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_auto_cq()?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(rtty_state_dto(&eng))
 }
 
 /// Operator answers a surfaced CQ — search & pounce (a human-initiate gate). Same
-/// gate re-check + reason on refusal.
+/// gate re-check + reason on refusal. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn rtty_auto_answer(state: State<'_, SharedEngine>, call: String) -> Result<RttyStateDto, String> {
+fn rtty_auto_answer(
+    state: State<'_, SharedEngine>,
+    call: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.rtty_auto_answer(&call)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(rtty_state_dto(&eng))
 }
 
@@ -17422,8 +18991,6 @@ struct SstvStateDto {
     /// Why the last picture that waited for the transmitter was dropped instead of sent (TX off,
     /// or outside the licence's privileges), or why the radio loop cut short the one going out
     /// (`Engine::sstv_tx_cut`): the cockpit's warning line. Absent otherwise.
-    /// DESKTOP ONLY: the Remote strips it (`remote_service::application`), because the hosted
-    /// page reads this sample against an exact key list and refuses one with a key it lacks.
     #[serde(skip_serializing_if = "Option::is_none")]
     tx_notice: Option<String>,
 }
@@ -17563,7 +19130,8 @@ fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
 /// waveform OFF the engine lock, then hands it to the engine's gated TX path (which keys
 /// nothing until the radio loop takes it behind every safety gate). Returns the fresh
 /// state (with `sending` true). Refuses — with the reason — on an unknown mode, a
-/// dimension mismatch, or any TX gate being down.
+/// dimension mismatch, or any TX gate being down. `afar`: as [`set_tx_enabled`]'s, checked in the
+/// hold the picture is handed over in.
 #[tauri::command(async)]
 fn sstv_send(
     state: State<'_, SharedEngine>,
@@ -17576,6 +19144,7 @@ fn sstv_send(
     // already carries. §97.119(b)(4) is satisfied by the call being in the image emission; it
     // does not say WE must have drawn it. Optional so every existing caller keeps the plate.
     id_in_image: Option<bool>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<SstvStateDto, String> {
     let sstv_mode = parse_sstv_mode(&mode).ok_or_else(|| format!("Unknown SSTV mode: {mode}"))?;
     let spec = tempo_sstv::for_mode(sstv_mode);
@@ -17662,7 +19231,9 @@ fn sstv_send(
     // Re-take the lock and hand it to the gated engine path (re-runs the full gate + the
     // duration-budget check; nothing keys until the radio loop takes it).
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.sstv_send(samples, spec.name.to_string())?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(sstv_state_dto(&eng))
 }
 
@@ -17749,14 +19320,27 @@ fn b64_encode(data: &[u8]) -> String {
 /// the Windows message-pump thread, so a CAT stall inside the radio loop's tick
 /// parks the whole UI. The doc above is the TX-Off latch semantics; the async
 /// attribute is where it runs. Both are load-bearing — keep them together.
+///
+/// `afar`: from a computer driving this station, the stand-down its arm was admitted under (the
+/// command lane's, never that computer's); a Stop since then voids it. Never asked of the off half.
 #[tauri::command(async)]
-fn set_tx_enabled(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSnapshot, String> {
+fn set_tx_enabled(
+    state: State<'_, SharedEngine>,
+    enabled: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    if enabled {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
     eng.set_tx_enabled_by_operator(enabled);
     // TX On refused because a clock repair holds transmit: say so, rather than leave a button
     // that did nothing (`Engine::hold_tx_for_clock_repair`).
     if enabled && !eng.tx_enabled() && eng.clock_repair_holds_tx() {
         return Err(tempo_app::engine::CLOCK_REPAIR_HOLDS_TX.to_string());
+    }
+    if enabled {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     }
     Ok(eng.snapshot())
 }
@@ -17864,33 +19448,14 @@ fn set_peg_lock(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot,
     Ok(engine_lock(&state).snapshot())
 }
 
-/// Peg-lock, with no Tauri in it, so a Remote browser's 🔒 in the satellite radio-binding line
-/// reaches exactly this code. `radio_pegged` is live roster state a whole-settings payload cannot
-/// carry, which is why this is its own verb (see the command above).
+/// Peg-lock, with no Tauri in it. `radio_pegged` is live roster state a whole-settings payload
+/// cannot carry, which is why this is its own verb (see the command above).
 fn write_peg_lock(state: &SharedEngine, on: bool) -> tempo_app::settings::writer::Ticket {
     let mut eng = engine_lock(state);
     eng.set_radio_pegged(on);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: set_peg_lock save failed: {e}")
     })
-}
-
-/// The readiness rail's Doppler fix: the one Settings switch the satellite section turns on where
-/// the operator already is. `satDopplerOff` is an ordinary persisted preference, so this goes
-/// through the atomic remote-preference save — but it names its OWN key rather than widening the
-/// browser's general settings allow-list: turning Doppler on is a satellite gesture, and nothing
-/// here should make `satDopplerOff` writable from a preferences form.
-///
-/// Fail-safe direction is preserved: this only ever writes the switch the operator clicked, and
-/// the per-tick consent gates inside `sat_doppler_tick` are untouched — a confirmed uplink mapping
-/// is still what admits the transmit leg.
-fn write_sat_doppler(
-    state: &SharedEngine,
-    on: bool,
-) -> Result<(), tempo_app::remote_control::Reason> {
-    let mut values = serde_json::Map::new();
-    values.insert("satDopplerOff".into(), serde_json::Value::Bool(!on));
-    engine_lock(state).save_remote_preferences(&values, &["satDopplerOff"])
 }
 
 /// Add a radio to the roster (dual-radio). Appends a new profile with distinct daemon ports; does
@@ -18033,13 +19598,24 @@ struct RoutePreview {
 /// — the per-radio Settings page uses this to configure a radio you're NOT currently operating on
 /// (no live rig swap, no dropped carrier). Persists + returns the snapshot, or refuses an edit
 /// that would put a daemon on a NET rigctl radio's Network Address, in words naming the port.
+/// `afar`: from a computer driving the station, the edit keeps the radio's PTT method and port as
+/// the shack has them (`command_dispatch::keep_the_shacks_radio_ptt`), and the Icom network address
+/// its stored password goes to (`command_dispatch::keep_the_shacks_radio_icom_address`).
 #[tauri::command(async)]
 fn update_radio_profile(
     state: State<'_, SharedEngine>,
     id: u32,
-    patch: tempo_app::settings::RadioProfilePatch,
+    mut patch: tempo_app::settings::RadioProfilePatch,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::keep_the_shacks_radio_ptt(eng.settings(), id, &mut patch, afar.as_ref());
+    command_dispatch::keep_the_shacks_radio_icom_address(
+        eng.settings(),
+        id,
+        &mut patch,
+        afar.as_ref(),
+    );
     eng.update_radio_profile(id, patch)?;
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: update_radio_profile save failed: {e}")
@@ -18049,11 +19625,22 @@ fn update_radio_profile(
 
 /// Hold (`true`) or release (`false`) a steady tune carrier for ATU/amp tuning.
 /// While tuning, normal slot TX is suppressed and the radio loop plays a steady
-/// f0 sine. Returns the refreshed snapshot.
+/// f0 sine. Returns the refreshed snapshot. `afar`: as [`set_tx_enabled`]'s, never asked of the
+/// off half.
 #[tauri::command(async)]
-fn set_tune(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
+fn set_tune(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+    }
     eng.set_tune(on);
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.snapshot())
 }
 
@@ -18062,11 +19649,17 @@ fn set_tune(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, Str
 /// through the sound card, the rig produces its own; and unlike [`set_rig_func`], which toggles
 /// receive-side DSP, this KEYS THE TRANSMITTER — so it goes through `Engine::atu_tune_gate` (TX
 /// armed, inside the operator's privileges, transmitter idle, and the rig actually has a tuner)
-/// and comes back as `Err(reason)` when any of that is not true. Never a silent no-op.
+/// and comes back as `Err(reason)` when any of that is not true. Never a silent no-op. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn atu_tune(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+fn atu_tune(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.atu_tune()?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -18085,6 +19678,20 @@ fn dismiss_tx_alarm(state: State<'_, SharedEngine>, id: u64) -> Result<AppSnapsh
     let mut eng = engine_lock(&state);
     eng.dismiss_tx_alarm(id);
     Ok(eng.snapshot())
+}
+
+/// The operator's Disconnect beside a program connected to the TCI server: whatever that program
+/// keyed ends, then it is closed. `id` is the program's number in the snapshot's
+/// `radio.tciServer.programs`; a number no connected program has is not an error.
+#[tauri::command(async)]
+fn tci_server_disconnect(state: State<'_, SharedEngine>, id: u64) -> Result<AppSnapshot, String> {
+    // Never under the engine lock: the server ends the program's transmissions through its
+    // backend, which takes that lock (tempo_net::tci::server's lock rule).
+    #[cfg(feature = "radio")]
+    tci_server::disconnect(id);
+    #[cfg(not(feature = "radio"))]
+    let _ = id;
+    Ok(engine_lock(&state).snapshot())
 }
 
 /// Result of a "Test CAT" probe (WSJT-X-style): whether the rig is reachable and
@@ -18148,27 +19755,23 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
     #[cfg(feature = "radio")]
     {
         use std::time::{Duration, Instant};
-        let gen0 = {
-            let mut eng = engine_lock(&state);
-            let g = eng.cat_probe_gen();
-            eng.request_cat_reprobe();
-            g
-        };
+        // Our probe's own result, never a dial note or other status published meanwhile.
+        let asked = engine_lock(&state).request_cat_reprobe();
         // Wait for the requested probe to publish. 20 s, not a token pause: a Save-triggered
         // rebuild the request may queue behind costs 700 ms daemon bind + a coexist probe +
         // three slow-transport commands at 2.5 s each, plus the probe itself — and the loop's
         // own heavy poll can precede it. On timeout, say the truth (below) instead of handing
         // back a stale status as if it were the test's answer.
         let deadline = Instant::now() + Duration::from_secs(20);
-        let mut fresh = false;
+        let mut answer = None;
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
-            if engine_lock(&state).cat_probe_gen() != gen0 {
-                fresh = true;
+            answer = engine_lock(&state).cat_reprobe_answer(asked);
+            if answer.is_some() {
                 break;
             }
         }
-        if !fresh {
+        let Some((ok, mut detail)) = answer else {
             // The loop never published our probe. Either it is wedged/slow (stale status
             // exists) or it never ran at all this session (status empty — the radio engine
             // died before its first probe, classically because the audio open failed at
@@ -18183,10 +19786,9 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                 (r.cat_detail, r.audio_error)
             };
             return Ok(cat_test_timeout(detail, audio_error));
-        }
-        let (ok, mut detail, ladder) = {
+        };
+        let ladder = {
             let eng = engine_lock(&state);
-            let r = eng.snapshot().radio;
             let s = eng.settings();
             // The Icom network connection has no serial port to sweep: its Test CAT reports
             // through the live session, so it is never handed to the ladder.
@@ -18218,7 +19820,7 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                     s.icom_native_cat,
                 )
             });
-            (r.cat_ok, r.cat_detail, ladder)
+            ladder
         };
         if ok == Some(false) {
             if let Some((port, baud, rig_model, gate, model_name, native)) = ladder {
@@ -18299,7 +19901,7 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
 /// part-way through, `repairRunning` while a repair is already running and `nothingToRepair` when
 /// none is on offer. The prompt waits for an answer, so this runs on the blocking pool, never on
 /// an async worker. Nexus Remote has no road to it: the prompt would wait on a screen nobody may
-/// be sitting at (`remote_service::application::Command` has no variant).
+/// be sitting at (the full client's class table refuses it from afar).
 #[tauri::command]
 async fn repair_clock(state: State<'_, SharedEngine>) -> Result<bool, String> {
     #[cfg(feature = "radio")]
@@ -18361,8 +19963,8 @@ async fn club_firewall_status(
 /// `onAir` while anything is transmitting, `running` while a press is still waiting on Windows,
 /// `path` or `port` when the command cannot be built, and `unsupported` off Windows. The prompt
 /// waits for an answer, so this runs on the blocking pool. Nexus Remote has no road to it: the
-/// prompt would wait on a screen nobody may be sitting at (`remote_service::application::Command`
-/// has no variant).
+/// prompt would wait on a screen nobody may be sitting at (the full client's class table refuses
+/// it from afar).
 #[tauri::command]
 async fn club_firewall_press(
     state: State<'_, SharedEngine>,
@@ -18614,14 +20216,13 @@ fn get_licensed_band_plan(
     // RTTY / SSTV / PSK / JS8 / JTTY: fixed standard watering-hole channels (like WSJT-X's
     // per-mode dials), license-filtered per band — a Technician sees only the
     // bands their class can key there (RTTY, PSK and JS8 ride data privileges, SSTV
-    // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan).
+    // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan),
+    // or the operator's own (bandplan::js8_plan_from). RTTY's rows come at the dial this
+    // station's keying backend tunes for them (Engine::rtty_channel_plan).
     let lower = mode.to_ascii_lowercase();
     if lower == "rtty" || lower == "sstv" || lower == "psk" || lower == "js8" || lower == "jtty" {
         let (plan, priv_mode) = if lower == "rtty" {
-            (
-                tempo_app::bandplan::rtty_band_plan(),
-                OperatingMode::Digital,
-            )
+            (eng.rtty_channel_plan(), OperatingMode::Digital)
         } else if lower == "psk" {
             (
                 tempo_app::bandplan::psk_band_plan(),
@@ -18635,7 +20236,11 @@ fn get_licensed_band_plan(
                 OperatingMode::Keyboard,
             )
         } else if lower == "js8" {
-            (tempo_app::bandplan::js8_band_plan(), OperatingMode::Digital)
+            // The operator's own JS8 list when there is one (Settings ▸ Digital ▸ JS8).
+            (
+                tempo_app::bandplan::js8_plan_from(eng.settings().js8_frequencies.as_deref()),
+                OperatingMode::Digital,
+            )
         } else {
             (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
         };
@@ -18682,15 +20287,17 @@ fn set_frequency(
 /// An SSTV strip pick / dial commit: claim the Phone section (SSTV rides Phone) and QSY
 /// atomically, so the radio loop never applies the OLD section's mode policy at the new dial
 /// (picking 20 m SSTV from RTTY used to land DATA-L at 14.230). Persists like `set_frequency`.
+/// `afar`: as [`set_operating_mode`]'s.
 #[tauri::command(async)]
 fn sstv_tune(
     state: State<'_, SharedEngine>,
     dial_mhz: f64,
     band: String,
     mode: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.sstv_tune(dial_mhz, &band, &mode);
+    eng.sstv_tune_with_arming(dial_mhz, &band, &mode, afar.is_none());
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist frequency: {e}")
     });
@@ -18698,11 +20305,12 @@ fn sstv_tune(
 }
 
 /// Park the dial on one of the APP's OWN fixed channels — the ISS SSTV auto-arm's 145.800 FM.
-/// Identical to `set_frequency` on the radio; it differs only in what the per-(band, mode)
-/// dial memory makes of it. An app-driven auto-tune is not the operator's dial in that mode,
-/// so it is never remembered — and the operator dial it displaces is banked on the way in
-/// (the auto-arm restores their own dial through `set_frequency` at LOS, because that one IS
-/// theirs). Persists, retunes, returns the snapshot.
+/// An FM channel is held in FM, as the SSTV strip's pick of it is, and routed on FM, as a
+/// repeater tune is (`Engine::tune_channel`; neither while a satellite pass owns the dial). The
+/// per-(band, mode) dial memory never takes it: an app-driven auto-tune is not the operator's
+/// dial in that mode, so it is never remembered — and the operator dial it displaces is banked
+/// on the way in (the auto-arm restores their own dial through `set_frequency` at LOS, because
+/// that one IS theirs). Persists, retunes, returns the snapshot.
 #[tauri::command(async)]
 fn tune_channel(
     state: State<'_, SharedEngine>,
@@ -18746,14 +20354,29 @@ fn pick_band(
 /// next tune. `follow_freq` = true when the operator clicks an actual operating-section tab
 /// (QSY to that mode's home freq); false for incidental nav and the Needed click. Persists,
 /// returns the snapshot.
+///
+/// `afar`: from a computer driving this station (the command lane writes it, never that
+/// computer). A manual section is then entered without arming Enable TX, as Remote's entry enters
+/// it: from afar only the wired starts arm, under the stream's transmit rules.
+///
+/// `keep_dial`: the Phone tab pressed on the SSTV screen. With `follow_freq` the dial stays where
+/// it is when Phone may transmit there and homes when it may not; without, nothing homes. Either
+/// way an FM channel the SSTV screen holds stays FM in Phone
+/// (`Engine::set_operating_mode_keeping_dial`). Absent everywhere else.
 #[tauri::command(async)]
 fn set_operating_mode(
     state: State<'_, SharedEngine>,
     mode: String,
     follow_freq: bool,
+    afar: Option<command_dispatch::Afar>,
+    keep_dial: Option<bool>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.set_operating_mode(&mode, follow_freq);
+    if keep_dial == Some(true) {
+        eng.set_operating_mode_keeping_dial(&mode, follow_freq, afar.is_none());
+    } else {
+        eng.set_operating_mode_with_arming(&mode, follow_freq, afar.is_none());
+    }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist operating mode: {e}")
     });
@@ -18763,9 +20386,9 @@ fn set_operating_mode(
 /// Work a spotted station (the Needed click): set the operating mode AND QSY to the spot's
 /// exact frequency atomically (one engine lock, one round-trip) — so the rig can't end up in
 /// the new mode at the old dial, and the UI never sees a half-applied state. Persists,
-/// returns the snapshot.
+/// returns the snapshot. `afar`: as [`set_operating_mode`]'s.
 #[tauri::command(async)]
-#[allow(clippy::too_many_arguments)] // one per wire argument, after the two managed states
+#[allow(clippy::too_many_arguments)] // one per wire argument after the two managed states, and the lane's
 fn work_spot(
     state: State<'_, SharedEngine>,
     spots: State<'_, SharedSpots>,
@@ -18775,6 +20398,7 @@ fn work_spot(
     call: Option<String>,
     tier: Option<String>,
     park: Option<tempo_app::dto::WorkPark>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     // A digital spot names its protocol (FT8/FT4). The tier switch must happen under the
     // SAME engine lock as the QSY: as two commands, the radio loop could tick in the gap
@@ -18790,7 +20414,7 @@ fn work_spot(
     };
     // Pile-up SPLIT: if the freshest cluster spot for this call names a listening
     // offset ("UP 2" / "QSX …"), configure rig split so TX lands where the DX is
-    // listening — the N1MM behavior, using the spot we already hold. Tolerant
+    // listening, using the spot we already hold. Tolerant
     // lookup (3Y0J/MM matches 3Y0J); no spot or no offset → simplex.
     let split_up_khz = call.as_deref().and_then(|c| {
         spots
@@ -18799,7 +20423,7 @@ fn work_spot(
             .and_then(|buf| work_spot_split_offset(&buf, c, freq_mhz, std::time::Instant::now()))
     });
     let mut eng = engine_lock(&state);
-    eng.work_spot_tiered(tier, &mode, freq_mhz, &band, split_up_khz);
+    eng.work_spot_tiered_with_arming(tier, &mode, freq_mhz, &band, split_up_khz, afar.is_none());
     eng.note_work_call(call); // cross-window prefill hint (pop-out band map → main window log)
     eng.note_work_park(park); // …and a Needed row's park, which that log line fills with the call
     persist_settings(eng.settings().clone(), |e| {
@@ -18834,21 +20458,38 @@ fn work_spot_split_offset(
 
 /// Queue CW to transmit (CAT keyer path). `text` is an F-key macro template or literal
 /// type-ahead; the engine expands it (mycall/name/grid + the worked call + a 599 report)
-/// and the radio loop keys it via the rig. Operator-initiated; respects Monitor.
+/// and the radio loop keys it via the rig. Operator-initiated; respects Monitor. `afar`: as
+/// [`set_tx_enabled`]'s. `reply`: the message answers a station, so CW speed match may key it
+/// at that station's speed (`Engine::send_cw_as`); absent is not an answer.
 #[tauri::command(async)]
-fn send_cw(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
+fn send_cw(
+    state: State<'_, SharedEngine>,
+    text: String,
+    reply: Option<bool>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.send_cw(&text);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    eng.send_cw_as(&text, reply == Some(true));
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
 /// Queue CW for Enter Sends Message: `Engine::send_cw_armed`, which never turns TX on and asks
 /// every gate before it takes anything. `Err` is why nothing was taken, and the contest strip
-/// then logs nothing. No Remote operation reaches it: ESM is the station's own window's.
+/// then logs nothing. No operation of the Remote page reaches it; a computer driving the station
+/// does, with `afar` as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn send_cw_armed(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
+fn send_cw_armed(
+    state: State<'_, SharedEngine>,
+    text: String,
+    reply: Option<bool>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.send_cw_armed(&text)?;
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    eng.send_cw_armed_as(&text, reply == Some(true))?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -18866,6 +20507,15 @@ fn set_cw_peer_info(
     let mut eng = engine_lock(&state);
     eng.set_cw_peer_info(call, name, peer_state);
     Ok(())
+}
+
+/// CW speed match on or off, from the contest strip's switch: saved alone, never a settings-form
+/// save. It changes only the speed an answer keys at.
+#[tauri::command(async)]
+fn set_cw_speed_match(state: State<'_, SharedEngine>, on: bool) -> Result<(), String> {
+    engine_lock(&state)
+        .set_cw_speed_match(on)
+        .map_err(|reason| format!("CW speed match was not saved ({reason:?})"))
 }
 
 /// Set the CW keyer speed in WPM (5–50).
@@ -18918,6 +20568,16 @@ fn set_ptt(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, Stri
     let mut eng = engine_lock(&state);
     eng.set_ptt(on);
     Ok(eng.snapshot())
+}
+
+/// Phone's Lock held from a computer driving this station. Client mode answers it there, as one
+/// hold of a held press on Stop's road (`client_mode`), and the shack refuses it from afar by its
+/// class (`command_dispatch`): it is never a command at the shack. The shack's own Lock keys with
+/// `set_ptt`, unchanged.
+#[tauri::command(async)]
+fn hold_ptt_lock(still_talking: bool) -> Result<serde_json::Value, String> {
+    let _ = still_talking;
+    Err("Lock from afar is held by the computer driving this station.".into())
 }
 
 /// A press on the Phone cockpit's PTT made through the Remote stream's picture (Space over it, or
@@ -19267,8 +20927,13 @@ fn set_cw_keyer(
 /// Play a voice-keyer message: read the slot's WAV and queue it for the radio loop to
 /// transmit (PTT + audio). Errors if the slot has no recording, or with the engine's reason
 /// when it refuses the send (TX off, outside the privileges), which the keyer's toast shows.
+/// `afar`: as [`set_tx_enabled`]'s, asked as the message is queued.
 #[tauri::command(async)]
-fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSnapshot, String> {
+fn play_voice_message(
+    state: State<'_, SharedEngine>,
+    slot: u8,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let file = {
         let eng = engine_lock(&state);
         eng.voice_messages()
@@ -19287,12 +20952,14 @@ fn play_voice_message(state: State<'_, SharedEngine>, slot: u8) -> Result<AppSna
         let samples = tempo_audio::voice::read_wav_12k(&file)
             .map_err(|e| format!("Could not read voice message: {e}"))?;
         let mut eng = engine_lock(&state);
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
         eng.send_voice(samples)?;
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
         Ok(eng.snapshot())
     }
     #[cfg(not(feature = "radio"))]
     {
-        let _ = file;
+        let _ = (file, afar);
         Err("Voice keyer needs the radio build".to_string())
     }
 }
@@ -19510,11 +21177,27 @@ fn set_tx_cycle_auto(state: State<'_, SharedEngine>, auto: bool) -> Result<AppSn
 }
 
 /// Toggle the presence heartbeat — a periodic low-cadence beacon so listening Tempo
-/// stations enter each other's rosters and store-and-forward can deliver. Persisted.
+/// stations enter each other's rosters and store-and-forward can deliver. Persisted. `afar`: as
+/// [`set_tx_enabled`]'s; turned on from afar, it ends with that computer's presence
+/// ([`presence_standing`]).
 #[tauri::command(async)]
-fn set_beacon(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
+fn set_beacon(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    let standing = if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+        presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?
+    } else {
+        None
+    };
     eng.set_beacon(on);
+    eng.bind_to_presence(OnItsOwn::Beacon, standing);
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist heartbeat setting: {e}")
     });
@@ -19541,11 +21224,17 @@ fn redecode(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 }
 
 /// Start a CQ run; `dir` = a directed-CQ token ("DX"/"NA"/"POTA"/…) or None
-/// for a plain CQ (also clears a sticky directed token).
+/// for a plain CQ (also clears a sticky directed token). `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn start_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSnapshot, String> {
+fn start_cq(
+    state: State<'_, SharedEngine>,
+    dir: Option<String>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.start_cq(dir.as_deref())?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -19553,39 +21242,63 @@ fn start_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSn
 /// row's while a contest runs. `dir` is the direction of the CQ typed in the Tx6 row, which the
 /// contest's Running calls where WSJT-X has no activity for the contest; `None` for a plain CQ,
 /// and from a caller that sends none. Outside a contest the row keeps `start_cq`, which sends the
-/// CQ it shows.
+/// CQ it shows. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn start_running(
     state: State<'_, SharedEngine>,
     dir: Option<String>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
-    start_running_on(&state, dir)
+    start_running_on(&state, dir, afar.as_ref())
 }
 
 /// [`start_running`]'s body, over a plain handle. Call CQ can enter the contest's Running from
-/// another mode, so it opens the session as the `set_mode` command does, with its rows.
-fn start_running_on(engine: &SharedEngine, dir: Option<String>) -> Result<AppSnapshot, String> {
+/// another mode, so it opens the session as the `set_mode` command does, with its rows. A start
+/// from afar is checked against its stand-down first, in the hold the run starts in.
+fn start_running_on(
+    engine: &SharedEngine,
+    dir: Option<String>,
+    afar: Option<&command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     tempo_app::engine::act_opening_session(
         engine,
         |eng| eng.start_running_opens_session(),
-        |eng| eng.start_running_with_cq(dir.as_deref()),
+        |eng| {
+            command_dispatch::still_bound(eng, afar)?;
+            eng.start_running_with_cq(dir.as_deref())?;
+            command_dispatch::started_from_afar(eng, afar);
+            Ok(())
+        },
         |eng| eng.snapshot(),
     )
 }
 
-/// The Operate strip's S&P ([`tempo_app::engine::Engine::start_search_and_pounce`]).
+/// The Operate strip's S&P ([`tempo_app::engine::Engine::start_search_and_pounce`]). `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn start_search_and_pounce(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    start_search_and_pounce_on(&state)
+fn start_search_and_pounce(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
+    start_search_and_pounce_on(&state, afar.as_ref())
 }
 
 /// [`start_search_and_pounce`]'s body, over a plain handle, opening a contest session as the
-/// `set_mode` command does, with its rows.
-fn start_search_and_pounce_on(engine: &SharedEngine) -> Result<AppSnapshot, String> {
+/// `set_mode` command does, with its rows. A start from afar is checked against its stand-down
+/// first, in the hold S&P is entered in.
+fn start_search_and_pounce_on(
+    engine: &SharedEngine,
+    afar: Option<&command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     tempo_app::engine::act_opening_session(
         engine,
         |eng| eng.start_search_and_pounce_opens_session(),
-        |eng| eng.start_search_and_pounce(),
+        |eng| {
+            command_dispatch::still_bound(eng, afar)?;
+            eng.start_search_and_pounce()?;
+            command_dispatch::started_from_afar(eng, afar);
+            Ok(())
+        },
         |eng| eng.snapshot(),
     )
 }
@@ -19593,41 +21306,79 @@ fn start_search_and_pounce_on(engine: &SharedEngine) -> Result<AppSnapshot, Stri
 /// Call CQ from Tempo (chat-first): emit ONE structured `CQ <mycall> <mygrid>` frame
 /// and arm TX, staying in Chat mode. Errors if the callsign/grid aren't set (so a CQ
 /// never goes out malformed). `dir` = an optional directed-CQ token (None = plain CQ).
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn call_cq(state: State<'_, SharedEngine>, dir: Option<String>) -> Result<AppSnapshot, String> {
+fn call_cq(
+    state: State<'_, SharedEngine>,
+    dir: Option<String>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.call_cq(dir.as_deref())?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
 /// Toggle the chat CQ RUN (Tempo keep-calling loop): on = immediate CQ + re-send
-/// every idle TX slot until answered (auto-pauses) or stopped.
+/// every idle TX slot until answered (auto-pauses) or stopped. `afar`: as [`set_tx_enabled`]'s;
+/// turned on from afar, the run ends with that computer's presence ([`presence_standing`]).
 #[tauri::command(async)]
-fn set_chat_cq(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
+fn set_chat_cq(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    let standing = if on {
+        command_dispatch::still_bound(&eng, afar.as_ref())?;
+        presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?
+    } else {
+        None
+    };
     eng.set_chat_cq(on)?;
+    eng.bind_to_presence(OnItsOwn::ChatCq, standing);
+    if on {
+        command_dispatch::started_from_afar(&mut eng, afar.as_ref());
+    }
     Ok(eng.snapshot())
 }
 
-/// Resume a paused chat CQ run now (skip the idle auto-resume wait).
+/// Resume a paused chat CQ run now (skip the idle auto-resume wait). `afar`: as
+/// [`set_chat_cq`]'s.
 #[tauri::command(async)]
-fn resume_chat_cq(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+fn resume_chat_cq(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    let standing = presence_standing(&eng, afar.as_ref(), std::time::Instant::now())?;
     eng.resume_chat_cq()?;
+    eng.bind_to_presence(OnItsOwn::ChatCq, standing);
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
 /// WSJT-X Tx-slot click: force `text` as the next transmission to `call`
-/// (starts/retargets the QSO, arms per the double-click behavior option).
+/// (starts/retargets the QSO, arms per the double-click behavior option); refused, with the
+/// reason, when the encoder cannot send its over. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn override_next_tx(
     state: State<'_, SharedEngine>,
     call: String,
     grid: Option<String>,
     text: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    // A row whose over the encoder refuses is never queued, and the operator is told why.
+    if let Some(why) = eng.override_next_tx_refusal(&call, &text) {
+        return Err(why);
+    }
     eng.override_next_tx(&call, grid.as_deref(), &text);
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -19893,6 +21644,9 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         // The club band board is set in glance type (it is watched across the tent, not
         // read at the keyboard), so it opens wider and shorter than the generic default.
         "fdclub" => (860.0, 620.0),
+        // The Spots board: its nine columns need 740 CSS px (`PANEL_NATURAL`), so it opens wider
+        // than the generic 760, leaving the comment column room, at the generic height.
+        "spots" => (960.0, 660.0),
         "waterfall" => (900.0, 300.0), // a wide, short monitoring strip
         // The received-picture viewer. Opens big enough to show the widest raster Nexus
         // decodes (PD-290 is 800×616) at 1:1 with its details strip beside the picture,
@@ -19912,8 +21666,15 @@ fn panel_min_inner(slug: &str) -> (f64, f64) {
         // zoom floor that window could only ever show a 646 px box, and the board's
         // natural is 820. 560 raises the ceiling above it.
         "fdclub" => (560.0, 400.0),
-        // The log line's boxes and its Log button in a row, and a look at the screen above it.
-        "contestlog" => (640.0, 480.0),
+        // The Spots board's nine columns do not survive the generic 420 wide either: at the 65%
+        // zoom floor that window could only ever show a 646 px box, and the columns need 740
+        // (measured in Chrome, `browser-probe --desktop spots`). 490 shows a 754 px box; the
+        // height stays the generic one.
+        "spots" => (490.0, 360.0),
+        // Small enough to drop in a corner beside another program (and pin in front): the call,
+        // the exchange boxes, Log, the dupe warning and the newest contact, the boxes wrapping to a
+        // second row, at the 65% zoom floor. Measured in Chrome (`browser-probe --desktop contestlog`).
+        "contestlog" => (420.0, 320.0),
         // The contest switch and the controls row, which wraps, and a look at the board under them.
         "contestscreen" => (640.0, 480.0),
         // The picture scales to fit, so the viewer drags smaller than most pop-outs —
@@ -19969,6 +21730,7 @@ async fn open_panel_window(
         "connect" => "Nexus — Conditions (formerly Connect)".to_string(),
         "dxped" => "Nexus — DXpeditions".to_string(),
         "needed" => "Nexus — Needed".to_string(),
+        "spots" => "Nexus — Spots".to_string(),
         "operate" => "Nexus — Operate".to_string(),
         // The contest screen's scoreboard, for whichever contest is picked.
         "fieldday" => "Nexus — Contest".to_string(),
@@ -20062,10 +21824,14 @@ async fn open_panel_window(
             // Opened behind, it does not take the keyboard either (see the focus note above).
             builder = builder.always_on_bottom(true).focused(false);
         }
+        if p.on_top {
+            // Pinned in front by the operator (`window_state::set_window_on_top`), and it opens so.
+            builder = builder.always_on_top(true);
+        }
     }
     // Pop-outs are ordinary windows — the operator must be able to send them behind the
-    // main UI (a tester couldn't hide the waterfall while it was pinned always-on-top). A
-    // future "pin" toggle can call `window.set_always_on_top(true)` on demand.
+    // main UI (a tester couldn't hide the waterfall while it was pinned always-on-top). Only
+    // a window the operator pins with its own Pin button opens in front, above.
     let win = builder.build().map_err(|e| e.to_string())?;
     // THE CONTEST LOGGER WINDOW shares the contest strip's contact with the main window for as
     // long as it exists: from here, once it is built, to its `Destroyed` event (the app's window
@@ -20136,7 +21902,7 @@ async fn close_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), 
 /// action). Enters QSO mode answering `call`. `message`/`snr` are the exact
 /// decoded line the operator double-clicked (when available) so the auto-sequencer
 /// jumps to the correct next Tx — WSJT-X double-click semantics — instead of
-/// restarting at the grid. Returns the refreshed snapshot.
+/// restarting at the grid. Returns the refreshed snapshot. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)] // one per managed state it reads
 fn call_station(
@@ -20148,8 +21914,19 @@ fn call_station(
     message: Option<String>,
     snr: Option<i32>,
     freq: Option<f32>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
-    call_station_on(&state, &ota_cache, &parks, &call, grid, message, snr, freq)
+    call_station_on(
+        &state,
+        &ota_cache,
+        &parks,
+        &call,
+        grid,
+        message,
+        snr,
+        freq,
+        afar.as_ref(),
+    )
 }
 
 /// [`call_station`]'s body, over plain handles so a test drives exactly what the command runs.
@@ -20163,6 +21940,7 @@ fn call_station_on(
     message: Option<String>,
     snr: Option<i32>,
     freq: Option<f32>,
+    afar: Option<&command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     // #351 — the park this contact belongs to, when the hunter feed says it can only be one.
     // This is the one path the Call Roster, Band Activity, the station list and their pop-outs
@@ -20184,11 +21962,13 @@ fn call_station_on(
         engine,
         |eng| eng.work_station_opens_session(call, msg),
         |eng| {
+            command_dispatch::still_bound(eng, afar)?;
             // Working a station keys a standard structured message (your grid in Tx1) — refuse
             // without a valid callsign + grid so we never emit a grid-less directed call. The
             // mode plugin decides which tiers are gated (Capabilities::structured_identity).
             eng.structured_tx_ready(true)?;
             eng.work_station(call, g, msg, snr, dx_freq)?;
+            command_dispatch::started_from_afar(eng, afar);
             // Tag only a QSO that really started — `call_station_ctx` answers `Ok` to a few calls
             // it does not act on, and a pend armed for one would wait four hours to stamp the park
             // on some later contact. Ambiguous or absent: the pending hunt is left exactly as it
@@ -20237,20 +22017,32 @@ fn set_area(state: State<'_, SharedEngine>, area: String) -> Result<AppSnapshot,
 }
 
 /// Operator "Resend": re-arm the current QSO message so a stalled/uncopied step
-/// transmits again on the next TX slot. No-op outside a QSO.
+/// transmits again on the next TX slot. No-op outside a QSO. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn qso_resend(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+fn qso_resend(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
     eng.qso_resend();
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
 /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
-/// `text`, directed to the current DX station when known. No-op outside a QSO.
+/// `text`, directed to the current DX station when known. No-op outside a QSO; refused,
+/// with the reason, when the encoder cannot send its over. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
-fn qso_freetext(state: State<'_, SharedEngine>, text: String) -> Result<AppSnapshot, String> {
+fn qso_freetext(
+    state: State<'_, SharedEngine>,
+    text: String,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.qso_freetext(&text);
+    command_dispatch::still_bound(&eng, afar.as_ref())?;
+    eng.qso_freetext_checked(&text)?;
+    command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
 
@@ -20381,10 +22173,14 @@ async fn log_qso(
 }
 
 /// The cty.dat-resolved DXCC entity for a callsign, or null — the log-entry
-/// form keys its "new one" badge on this, not on the QRZ country string.
+/// form and Operate key their "new one" badges on this, not on the QRZ country string.
+/// It is the callsign card's entity (`propagation::dxcc::card_entity`), the one an entity's
+/// worked slots keep a contact under ([`log_queries::on_card`]): a WAE area's call is the DXCC
+/// entity its number names (IT9 is Italy), as the Logbook shows a contact carrying that number.
 #[tauri::command]
 fn resolve_entity(call: String) -> Option<String> {
-    propagation::dxcc::resolve(&call).map(|i| i.entity.to_string())
+    propagation::dxcc::card_entity(propagation::dxcc::resolve(&call).as_ref(), None)
+        .map(str::to_string)
 }
 
 /// Every entity name paired with its cty.dat representative location, as
@@ -20414,6 +22210,31 @@ fn dxcc_entity_names() -> Vec<String> {
         .collect()
 }
 
+/// One DXCC entity as the Logbook's country picker lists it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DxccEntityRow {
+    code: u32,
+    name: String,
+    deleted: bool,
+}
+
+/// Every DXCC entity a contact can be set to count toward, current and deleted, by number
+/// (`propagation::dxcc::entities`) — the Logbook's country picker. The backend owns the table, so
+/// the picker offers exactly the numbers [`log_by_id::set_dxcc_by_id`] accepts. Same arrangement
+/// as [`dxcc_entity_names`].
+#[tauri::command]
+fn dxcc_entities() -> Vec<DxccEntityRow> {
+    propagation::dxcc::entities()
+        .into_iter()
+        .map(|e| DxccEntityRow {
+            code: e.code,
+            name: e.name.to_string(),
+            deleted: e.deleted,
+        })
+        .collect()
+}
+
 /// Every cty.dat entity name with its continent code, `(entity, "EU")` — for band activity's
 /// hide-by-continent (#229). A decode row carries the entity NAME `resolve` gave it, never a
 /// continent, and the UI has no cty.dat, so a continent tick expands through this table.
@@ -20426,9 +22247,8 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 }
 
 /// The log commands below take the ROW the UI showed (`target`, as the log view was handed it),
-/// and never a position. The station keys that row exactly as a Remote browser keys its page
-/// row (call + time + a SHA-256 of the row) and finds the record whose own key matches — see
-/// `remote_service::operations::logging::{seen_target, find, locate}`. They used to take
+/// and never a position. The station keys that row (call + time + a SHA-256 of the row) and
+/// finds the record whose own key matches — see `log_by_id::{seen_target, find}`. They used to take
 /// `index: usize` under the premise "indices shift after a delete — the UI reloads the log",
 /// which held while the desktop was the log's only writer. Remote made it a second writer:
 /// a browser's delete removed a row and shifted every later one, and the shack's next Delete
@@ -20441,7 +22261,7 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 /// under it — and the change is made only while it is still the version found
 /// ([`change_found`]), so a change landing between the two is refused like any other.
 fn find_seen(engine: &SharedEngine, seen: &LoggedQso) -> Result<log_by_id::RowRef, String> {
-    use remote_service::operations::logging::{find, seen_target};
+    use log_by_id::{find, seen_target};
     let rows = engine_lock(engine).log_rows();
     match find(&rows, &seen_target(seen)) {
         Ok(Some(row)) => Ok(row),
@@ -20548,7 +22368,7 @@ fn durability_failed(why: String) -> String {
 /// left it, so a follow-up (a QSL mark from the same edit form) can key the row it just changed.
 fn logged_qso(r: &tempo_core::logbook::QsoRecord) -> LoggedQso {
     let mut q = LoggedQso::from(r.clone());
-    q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+    q.entity = log_queries::shown(r);
     q
 }
 
@@ -20870,11 +22690,72 @@ async fn get_awards(
         .await
 }
 
+/// The Stats pane beside a log entry: what the log holds for the call typed there — its DXCC
+/// entity's band × mode grid, its state's (WAS) and its CQ zone's (WAZ), the NEW ONE / NEW BAND /
+/// NEW MODE flags for `band` and `mode`, and the confirmation channels held for its country and
+/// for the call ([`propagation::CallStats`]).
+///
+/// Counted by the award fold itself, so every slot is one the Awards view counts
+/// ([`log_folds::call_stats_kept`]): folded again only when the log's content or the operator's
+/// call moves, and asked of the kept index for each call. The station typed has no record, so its
+/// entity and zone come from its call, and its state from the licence index, as for a station
+/// heard ([`us_state_hint`]).
+#[tauri::command]
+async fn get_call_stats(
+    state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
+    call: String,
+    band: String,
+    mode: String,
+) -> Result<propagation::CallStats, String> {
+    let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
+    log_folds::off_the_runtime(move || {
+        log_folds::call_stats_for(&engine, &tallies, &call, &band, &mode, |c| {
+            us_state_hint(c, None).map(|(s, _)| s)
+        })
+    })
+    .await
+}
+
+/// What the log last said of a station's county or state ([`log_folds::newest_logged_qth`]).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoggedQth {
+    value: String,
+    when_unix: u64,
+}
+
+/// The contest entry's last pre-fill source for the box receiving `slot`: the newest contact
+/// with `call` anywhere in the log that says where the station was — this contest's received
+/// `slot` on a row of this contest (any year), else a row's `STATE`. Read from the logbook
+/// store through the per-call index, on the blocking pool, so a lifetime log costs one
+/// station's rows; the strip asks once per call, never by scanning a log it holds.
+#[tauri::command]
+async fn contest_logged_qth(
+    state: State<'_, SharedEngine>,
+    call: String,
+    slot: String,
+) -> Result<Option<LoggedQth>, String> {
+    let engine = state.inner().clone();
+    log_folds::off_the_runtime(move || {
+        let (ids, rows) = {
+            let eng = engine_lock(&engine);
+            (eng.fd_session_contest_ids(), eng.log_rows())
+        };
+        Ok(
+            log_folds::newest_logged_qth(&rows, call.trim(), &ids, &slot)?
+                .map(|(value, when_unix)| LoggedQth { value, when_unix }),
+        )
+    })
+    .await
+}
+
 /// The geographic slice of the logbook — QSOs by WAC continent, by CQ zone, and a DX-vs-domestic
 /// split — the dimensions the frontend `StatsView` can't derive on its own (the stored record has
-/// no continent/zone; both re-resolve per callsign here via cty.dat, anchored on the operator's
-/// own call for the DX split). The rest of the Statistics dashboard (band/mode/year/hour/state/
-/// confirmations) is the `statistics` log question's ([`log_queries`]). Pure/offline.
+/// no continent; each contact is placed where the awards count it, by the DXCC number and CQ zone
+/// its record carries, else by its callsign via cty.dat, anchored on the operator's own call for
+/// the DX split). The rest of the Statistics dashboard (band/mode/year/hour/state/confirmations)
+/// is the `statistics` log question's ([`log_queries`]). Pure/offline.
 ///
 /// Folded again only when the log's content or the operator's call moves ([`log_stats`]), from
 /// the logbook store, on the blocking pool.
@@ -20886,6 +22767,23 @@ async fn get_log_stats(
     let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
     log_folds::off_the_runtime(move || log_stats(&engine, &tallies).map(|s| s.as_ref().clone()))
         .await
+}
+
+/// The Statistics view's timeline — contacts per mode over the past day (by hour), the past 30
+/// days (by day) or the past year (by month), each window ending with the current UTC hour, day
+/// or month. Counted where the log is, from the window's contacts alone
+/// ([`log_folds::log_timeline`]), on the blocking pool. Pure/offline.
+#[tauri::command]
+async fn get_log_timeline(
+    state: State<'_, SharedEngine>,
+    range: tempo_core::logbook::query::TimelineRange,
+) -> Result<tempo_core::logbook::query::LogTimeline, String> {
+    let engine = state.inner().clone();
+    log_folds::off_the_runtime(move || {
+        let rows = engine_lock(&engine).log_rows();
+        log_folds::log_timeline(&rows, range, now_unix())
+    })
+    .await
 }
 
 /// The Journey snapshot — the in-app, beginner-first achievement layer (auto-detected
@@ -20932,7 +22830,7 @@ fn confirmation_diagnostics(engine: &Mutex<Engine>) -> Result<DiagnosticsReportD
     })
 }
 
-/// One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose view).
+/// One raw cluster/RBN spot for the Spots panel (the firehose view).
 /// UNLIKE the Needed board, this is NOT needs-gated — every recent spot is returned and
 /// the UI filters client-side. `mode` is the frequency-derived class (CW/Phone/Digital) that
 /// drives the filter chips + privilege gate; `submode` carries the RBN skimmer's specific mode
@@ -21014,6 +22912,53 @@ struct SpotRow {
     /// default window. Decided here from unix seconds rather than by a browser, so a Remote
     /// browser in another time zone and every window at the shack agree on when the day turns.
     worked_today_utc: bool,
+    /// ⭐ While a contest runs: the multipliers working this station here would add, by the
+    /// contest's own scoring (`tempo_core::fieldday::SpotMults`). Empty, and off the wire,
+    /// outside a contest and for a station that adds none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    contest_mults: Vec<SpotMult>,
+    /// ⭐ While a contest runs, for a station this log has never worked: the multipliers the
+    /// operator's call-history file PREDICTS it would add — the value the file says it sends,
+    /// counted by the same scoring (`SpotMults::predicted_mults`). Never one `contest_mults`
+    /// already lists. Empty, and off the wire, with no file, no entry, or call history off.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    contest_predicted: Vec<SpotPredictedMult>,
+    /// The program on Nexus's TCI server that sent this spot, by its connection's number (the
+    /// number Settings lists it by), when a program did ([`get_tci_spots`]). A click on such a
+    /// spot only tunes ([`click_tci_spot`]). `None`, and off the wire, for every cluster and
+    /// skimmer spot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tci: Option<u64>,
+}
+
+/// One multiplier the call history predicts for a spotted station (`SpotRow.contest_predicted`).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SpotPredictedMult {
+    id: &'static str,
+    value: String,
+    /// The counties of a county-line entry, every one of them, when the prediction came from
+    /// one; empty (and off the wire) otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    county_line: Vec<String>,
+}
+
+/// One multiplier a spotted station would add: the contest's rule id (`county`, `country`) and
+/// the value it would count.
+#[derive(serde::Serialize, Clone)]
+struct SpotMult {
+    id: &'static str,
+    value: String,
+}
+
+/// The contest scoring class (`CW` | `PH` | `DIG`) of a spot's mode class (`CW` | `Phone` |
+/// `Digital`), the classes the contest log stores.
+fn spot_contest_class(mode_label: &str) -> &'static str {
+    match mode_label {
+        "CW" => "CW",
+        "Phone" => "PH",
+        _ => "DIG",
+    }
 }
 
 /// When the operator last worked a spotted station, as [`SpotRow`] carries it: seconds ago, and
@@ -21036,6 +22981,100 @@ fn spot_worked(last_unix: Option<u64>, now: i64) -> (Option<i64>, bool) {
 #[tauri::command(async)]
 fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) -> Vec<SpotRow> {
     read_all_spots(&spots, &state, false).unwrap_or_default()
+}
+
+/// The spots programs on Nexus's TCI server sent, for the band map: each a [`SpotRow`] as a
+/// cluster spot is, its `tci` naming the program, newest first. None while programs' spots are
+/// off (`Engine::tci_server_spots_on`). Kept apart from the cluster's ([`get_all_spots`]), and
+/// asked only when the server's status says they changed.
+#[tauri::command(async)]
+fn get_tci_spots(state: State<'_, SharedEngine>) -> Vec<SpotRow> {
+    let now = now_unix();
+    let (class, spots) = {
+        let e = engine_lock(&state);
+        (e.settings().license_class, e.tci_program_spots(now))
+    };
+    let mut rows: Vec<SpotRow> = spots
+        .into_iter()
+        .map(|p| program_spot_row(p, class, now))
+        .collect();
+    rows.sort_by_key(|r| r.age_secs);
+    rows
+}
+
+/// One program's spot as a [`SpotRow`]: its band, mode class (from its frequency, as a cluster
+/// spot's: the program's own mode word is free text) and licence read the way a cluster spot's
+/// are, its text as the comment, no spotter (the program is its source, in `tci`).
+fn program_spot_row(
+    p: tempo_app::engine::tci_spots::ProgramSpot,
+    class: tempo_app::settings::LicenseClass,
+    now: i64,
+) -> SpotRow {
+    use tempo_app::settings::OperatingMode;
+    let spot = p.spot;
+    let freq = spot.hz as f64 / 1_000_000.0;
+    let band = propagation::Band::from_mhz(freq)
+        .map(|b| b.label().to_string())
+        .unwrap_or_default();
+    let (entity, zone) = propagation::dxcc::resolve(&spot.call)
+        .map(|i| (i.entity.to_string(), i.cq_zone))
+        .unwrap_or_default();
+    let mode_label = propagation::classify_spot_mode(freq).label();
+    let licensed = tempo_app::privileges::tx_allowed(
+        class,
+        freq,
+        match mode_label {
+            "Phone" => OperatingMode::Phone,
+            "CW" => OperatingMode::Cw,
+            _ => OperatingMode::Digital,
+        },
+    );
+    SpotRow {
+        beacon: propagation::beacons::classify(&spot.call, freq),
+        call: spot.call,
+        entity,
+        zone,
+        state: None,
+        grid: None,
+        band,
+        freq_mhz: freq,
+        mode: mode_label.to_string(),
+        submode: None,
+        spotter: String::new(),
+        corroborators: Vec::new(),
+        age_secs: (now - spot.heard_unix).max(0),
+        comment: spot.text,
+        licensed,
+        // A program is no voice on a continent: never hidden by the locality filter.
+        spotter_local: true,
+        spotter_conts: Vec::new(),
+        spotter_entities: Vec::new(),
+        worked_ago_secs: None,
+        worked_today_utc: false,
+        contest_mults: Vec::new(),
+        contest_predicted: Vec::new(),
+        tci: Some(p.program),
+    }
+}
+
+/// ⛔ A click on a program's spot on the band map: tune to it, at its own frequency, and have every
+/// program on Nexus's TCI server told. Nothing else: never a section change, an arm, a QSO, a Stop
+/// let go, or a cockpit opened (`Engine::tci_program_spot_clicked`). Refused while anything is on
+/// the air, as a click in an SDR program's panadapter is. Persists the dial, returns the snapshot.
+#[tauri::command(async)]
+fn click_tci_spot(
+    state: State<'_, SharedEngine>,
+    call: String,
+    freq_mhz: f64,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let hz = (freq_mhz * 1_000_000.0).round() as i64;
+    eng.tci_program_spot_clicked(&call, hz)
+        .map_err(str::to_string)?;
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
+    Ok(eng.snapshot())
 }
 
 /// #174: where the voices for one spot are — `(continent codes, DXCC entities)` of the spotter
@@ -21061,6 +23100,17 @@ fn read_all_spots(
     spots: &SharedSpots,
     state: &SharedEngine,
     nonblocking: bool,
+) -> Result<Vec<SpotRow>, String> {
+    read_spots_with(spots, state, nonblocking, &contest_lists::loaded_history)
+}
+
+/// [`read_all_spots`] with the call-history file read through `history` — the imported file
+/// with the contest it is bound to — so a test can hand it one without the shared data folder.
+fn read_spots_with(
+    spots: &SharedSpots,
+    state: &SharedEngine,
+    nonblocking: bool,
+    history: &dyn Fn() -> Option<(String, std::sync::Arc<tempo_app::call_history::CallHistory>)>,
 ) -> Result<Vec<SpotRow>, String> {
     use tempo_app::settings::{LicenseClass, OperatingMode};
     // UNASSISTED mode: no spot may be DISPLAYED either. Ingestion is already gated at the
@@ -21095,7 +23145,7 @@ fn read_all_spots(
     //
     // Poison recovers (engine_lock), so the gate always sees real state; the Option
     // shape is kept for the chains below.
-    let (class, my_call, roster_grids, last_worked) = {
+    let (class, my_call, roster_grids, last_worked, contest_mults, history_on) = {
         let eng = Some(if nonblocking {
             engine_try_lock(state).map_err(|_| "applicationBusy")?
         } else {
@@ -21138,8 +23188,42 @@ fn read_all_spots(
                     .collect()
             })
             .unwrap_or_default();
-        (class, my_call, grids, last_worked)
+        // The contest's earned multipliers, built once here (one pass over the contest log)
+        // and asked about each spot below with the lock released. `None` outside a contest.
+        let contest_mults = eng.as_ref().and_then(|e| e.contest_spot_mults());
+        // Call history is on where the strip's fill is: the operator's switch, and never in
+        // Unassisted mode.
+        let history_on = eng
+            .as_ref()
+            .is_some_and(|e| e.settings().call_history_active());
+        (
+            class,
+            my_call,
+            grids,
+            last_worked,
+            contest_mults,
+            history_on,
+        )
     };
+    // The call-history file, when one is imported for THIS contest. Parsed once per import
+    // (`contest_lists::loaded_history`), so a big file is not read again for every refresh.
+    let history = match &contest_mults {
+        Some(probe) if history_on => {
+            history().and_then(|(contest, h)| (contest == probe.event()).then_some(h))
+        }
+        _ => None,
+    };
+    // What the file says each call sends, read once per call.
+    let mut sends_memo: std::collections::HashMap<
+        String,
+        Vec<Vec<tempo_core::contest::FieldValue>>,
+    > = std::collections::HashMap::new();
+    // A station is spotted many times on one band: ask once per (call, band, mode).
+    #[allow(clippy::type_complexity)]
+    let mut mults_memo: std::collections::HashMap<
+        (String, String, &'static str, Option<String>),
+        (Vec<SpotMult>, Vec<SpotPredictedMult>),
+    > = std::collections::HashMap::new();
     let mut rows: Vec<SpotRow> = recent
         .into_iter()
         .map(|cs| {
@@ -21179,6 +23263,48 @@ fn read_all_spots(
                 spot_voice_origins(&cs.spotter, &cs.corroborators);
             let (worked_ago_secs, worked_today_utc) =
                 spot_worked(last_worked.get(&cs.dx_call).copied(), now);
+            let (contest_mults, contest_predicted) = match &contest_mults {
+                Some(probe) => {
+                    let class = spot_contest_class(mode_label);
+                    let submode = cs.skimmer_mode().map(str::to_string);
+                    mults_memo
+                        .entry((cs.dx_call.clone(), band.clone(), class, submode))
+                        .or_insert_with_key(|(call, band, class, submode)| {
+                            let confirmed = probe
+                                .new_mults(call, band, class, submode.as_deref())
+                                .into_iter()
+                                .map(|(id, value)| SpotMult { id, value })
+                                .collect();
+                            let Some(h) = &history else {
+                                return (confirmed, Vec::new());
+                            };
+                            let sends = sends_memo.entry(call.clone()).or_insert_with(|| {
+                                tempo_app::call_history::exchanges_for(h, call, probe.receives())
+                            });
+                            // A county line is every county the file names for it.
+                            let line: Vec<String> = sends
+                                .first()
+                                .and_then(|first| {
+                                    (0..first.len())
+                                        .find(|&i| sends.iter().any(|rx| rx[i].raw != first[i].raw))
+                                })
+                                .map(|i| sends.iter().map(|rx| rx[i].raw.clone()).collect())
+                                .unwrap_or_default();
+                            let predicted = probe
+                                .predicted_mults(call, band, class, submode.as_deref(), sends)
+                                .into_iter()
+                                .map(|(id, value)| SpotPredictedMult {
+                                    id,
+                                    value,
+                                    county_line: line.clone(),
+                                })
+                                .collect();
+                            (confirmed, predicted)
+                        })
+                        .clone()
+                }
+                None => (Vec::new(), Vec::new()),
+            };
             SpotRow {
                 call: cs.dx_call.clone(),
                 entity,
@@ -21208,6 +23334,9 @@ fn read_all_spots(
                 beacon: propagation::beacons::classify(&cs.dx_call, freq),
                 worked_ago_secs,
                 worked_today_utc,
+                contest_mults,
+                contest_predicted,
+                tci: None,
             }
         })
         .collect();
@@ -21658,13 +23787,14 @@ async fn apply_park_states(
 // check at a time holds what it downloaded, from the check until Apply, Cancel, a new check or
 // the window that ran it closing.
 
-/// What a check asks LoTW with: the account, and the call both downloads are for. Never printed or
-/// logged: it holds the password, as the request URLs built from it do.
+/// What a check asks LoTW with: the account, and the call in Settings. Both downloads ask for every
+/// call on the account. Never printed or logged: it holds the password, as the request URLs built
+/// from it do.
 struct LotwAccess {
     username: String,
     password: String,
-    /// The Settings call (`qso_owncall`), which is also the check's scope; `None` asks LoTW for
-    /// every call on the account, and judges every contact.
+    /// The Settings call: the check's scope, and the call a contact or row naming no call of its
+    /// own is taken to be under; `None` judges every contact.
     owncall: Option<String>,
 }
 
@@ -21798,12 +23928,13 @@ fn whole_eqsl_download(body: String) -> Result<String, String> {
 /// QRZ's answer to the FETCH, whole or not at all: its book, every record QRZ says it sent. A
 /// check of part of the book would take a confirmation that was cut off for a misplaced one, so
 /// an answer that stops short checks nothing. A refusal is said in QRZ's own words, which may echo
-/// the request and its key: screen and session only, as [`sync_qrz`] treats them.
+/// the request and its key: without the key ([`qrz_words_without_key`]), and screen and session
+/// only, as [`sync_qrz`] treats them.
 ///
 /// An empty book checks nothing either, and says so. QRZ answers a FETCH that matched nothing with
 /// a FAIL ([`tempo_core::qrz::QrzFetch::nothing_matched`]), which is no refused key; and a check
 /// never reads "QRZ holds none of these" off a book that may be the wrong one.
-fn whole_qrz_book(answer: &str) -> Result<String, String> {
+fn whole_qrz_book(answer: &str, key: &str) -> Result<String, String> {
     let fetched = tempo_core::qrz::parse_fetch(answer);
     if fetched.nothing_matched {
         return Err(
@@ -21811,7 +23942,7 @@ fn whole_qrz_book(answer: &str) -> Result<String, String> {
         );
     }
     if !fetched.ok {
-        return Err(qrz_fetch_refused(fetched.reason).message.into_string());
+        return Err(qrz_fetch_refused(fetched.reason, key).message.into_string());
     }
     if !tempo_core::qrz::is_whole_fetch(&fetched) {
         return Err(
@@ -21823,11 +23954,11 @@ fn whole_qrz_book(answer: &str) -> Result<String, String> {
 }
 
 /// Logbook ▸ Check confirmations, LoTW: its whole confirmation history and its whole own-QSO
-/// list, each asked for once in the form a full re-download asks (`qso_qslsince=1900-01-01`, and
-/// `qso_qsorxsince=1900-01-01` with no start date) and fetched by `fetch`, then checked against
-/// the log read with the Engine lock released ([`tempo_app::station::check_lotw_confirmations`]).
-/// It moves no sync cursor and writes nothing. The confirmation download, which Apply merges, and
-/// the check.
+/// list, of every call on the account, each asked for once in the form a full re-download asks
+/// (`qso_qslsince=1900-01-01`, and `qso_qsorxsince=1900-01-01` with no start date) and fetched by
+/// `fetch`, then checked against the log read with the Engine lock released
+/// ([`tempo_app::station::check_lotw_confirmations`]). It moves no sync cursor and writes nothing.
+/// The confirmation download, which Apply merges, and the check.
 fn lotw_check_on(
     engine: &SharedEngine,
     access: &LotwAccess,
@@ -21836,7 +23967,6 @@ fn lotw_check_on(
     let query = tempo_core::lotw::LotwQuery {
         username: access.username.clone(),
         password: access.password.clone(),
-        owncall: access.owncall.clone(),
         qsl_since: None,
     };
     let report = whole_lotw_download(fetch(&tempo_core::lotw::build_report_url(&query))?)?;
@@ -21887,7 +24017,10 @@ fn qrz_check_on(
     access: &QrzAccess,
     post: &dyn Fn(String) -> Result<String, String>,
 ) -> Result<(String, tempo_app::station::ServiceCheck), String> {
-    let book = whole_qrz_book(&post(tempo_core::qrz::build_fetch_body(&access.key))?)?;
+    let book = whole_qrz_book(
+        &post(tempo_core::qrz::build_fetch_body(&access.key))?,
+        &access.key,
+    )?;
     let plan = tempo_app::engine::log_plan(engine);
     let check =
         tempo_app::station::check_qrz_confirmations(&plan, &book, access.owncall.as_deref())?;
@@ -22190,6 +24323,10 @@ struct ConfirmationCheckDto {
     /// book. Said in the Connections log, where a bench can hold it against the service's own
     /// count.
     records: usize,
+    /// LoTW only: how many of its confirmations are for a call the log holds no contact under (a
+    /// club call on the account, say). They change nothing. Said in the dialog, and in the
+    /// Connections log with `records`.
+    other_call_records: usize,
     /// Newest first; a contact's confirmation line before its upload line.
     lines: Vec<ConfirmationLineDto>,
     /// The contacts the service confirms that lack its confirmation: Apply adds it.
@@ -22222,6 +24359,7 @@ impl ConfirmationCheckDto {
             session,
             service: check_mark_name(tempo_core::reconcile::check::Mark::Confirmation(channel)),
             records,
+            other_call_records: found.other_call_records,
             lines,
             gain_ids: found.gains.iter().map(|id| id.to_string()).collect(),
             unreached: check.flags.unreached,
@@ -22396,7 +24534,11 @@ async fn confirmation_check(
                 propagation::live::eqsl::fetch_inbox(url)
             }),
             Channel::Qrz => qrz_check_on(&engine, &qrz_access(&engine)?, &|body| {
-                propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
+                propagation::live::qrz::post_form(
+                    tempo_core::qrz::QRZ_LOGBOOK_URL,
+                    env!("CARGO_PKG_VERSION"),
+                    body,
+                )
             }),
         })
     })
@@ -22405,8 +24547,13 @@ async fn confirmation_check(
     conn_logged(
         check_connector(channel),
         |c: &ConfirmationCheckDto| {
+            let other_calls = match c.other_call_records {
+                0 => String::new(),
+                n => format!(" ({n} for a call this log holds no contact under, left alone)"),
+            };
             format!(
-                "check confirmations: {} records, {} listed, {} would gain a confirmation",
+                "check confirmations: {} records{other_calls}, {} listed, {} would gain a \
+                 confirmation",
                 c.records,
                 c.lines.len(),
                 c.gain_ids.len()
@@ -22616,9 +24763,9 @@ fn read_need_alerts(
     // keep running: the same glossary says "Generating spotting information for use by other
     // stations is not considered to be spotting assistance."
     //
-    // Own-radio decodes (assembled above) are NOT assistance under either ruleset — they are
-    // the operator's own receiver — so they stay, and remain the whole Needed board in an
-    // unassisted entry.
+    // Own-radio decodes (assembled above) stay, and are the whole Needed board in an unassisted
+    // entry. Neither ruleset sets them apart: CQ WW and ARRL both count any technology that
+    // identifies a callsign. The contest-assistance note says so (`assist.why.ownDecodes`).
     if !unassisted() {
         if let Ok(buf) = live_paths.lock() {
             let recent = buf.recent(now, 900);
@@ -24138,13 +26285,16 @@ async fn get_credentials_status(
     // The keychain reads and the read of the upload stamps from the logbook store are blocking
     // I/O: on the blocking pool, never a runtime worker.
     let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
-    log_folds::off_the_runtime(move || credentials_status(&engine, &tallies)).await
+    log_folds::off_the_runtime(move || credentials_status(&engine, &tallies, &keychain_has)).await
 }
 
-/// [`get_credentials_status`]' rows.
+/// [`get_credentials_status`]' rows, each credential's `stored` read by `has`, which answers yes or
+/// no for the keychain user a credential is kept under ([`keychain_has`]). It says nothing else: a
+/// remote client shows these rows, so no secret is ever in reach of them.
 fn credentials_status(
     engine: &Mutex<Engine>,
     tallies: &LogTallies,
+    has: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<CredStatus>, String> {
     // ONE lock, taken once and released before the eight keychain reads below (keychain
     // I/O is the slow part, and the radio thread contends for this lock). The upload health is
@@ -24198,19 +26348,14 @@ fn credentials_status(
         ),
         conn_health_of("qrz-logbook"),
     );
-    let has = |entry: Result<keyring::Entry, String>| {
-        entry
-            .and_then(|e| e.get_password().map_err(|er| er.to_string()))
-            .is_ok()
-    };
     // LoTW, QRZ Logbook, eQSL and ClubLog read their history off the persisted per-QSO
     // stamps, so it survives a restart. The lookup-only rows carry `uploads: false`, and since
     // #245 that no longer means they carry no history: the QRZ callbook stamps every completed
     // lookup through `conn_health_of("qrz-xml")` and those survive a restart too. RepeaterBook
     // is the one row still without a history of any kind.
-    let stored_lotw = has(lotw_keychain());
-    let stored_qrz = has(qrz_keychain());
-    let stored_rb = has(repeaterbook_keychain());
+    let stored_lotw = has(LOTW_KEYCHAIN_USER);
+    let stored_qrz = has(QRZ_KEYCHAIN_USER);
+    let stored_rb = has(REPEATERBOOK_KEYCHAIN_USER);
     Ok(vec![
         CredStatus {
             id: "lotw".into(),
@@ -24248,7 +26393,7 @@ fn credentials_status(
         CredStatus {
             id: "qrz-logbook".into(),
             connector: "QRZ Logbook".into(),
-            stored: has(qrz_logbook_keychain()),
+            stored: has(QRZ_LOGBOOK_KEYCHAIN_USER),
             identity: qrz_user,
             uploads: true,
             enabled: qrz_book_on,
@@ -24260,7 +26405,7 @@ fn credentials_status(
         CredStatus {
             id: "eqsl".into(),
             connector: "eQSL".into(),
-            stored: has(eqsl_keychain()),
+            stored: has(EQSL_KEYCHAIN_USER),
             identity: eqsl_user,
             uploads: true,
             enabled: eqsl_on,
@@ -24272,7 +26417,7 @@ fn credentials_status(
         CredStatus {
             id: "clublog".into(),
             connector: "ClubLog".into(),
-            stored: has(clublog_keychain()) && clublog_key,
+            stored: has(CLUBLOG_KEYCHAIN_USER) && clublog_key,
             identity: clublog_email,
             uploads: true,
             enabled: clublog_on,
@@ -24292,7 +26437,7 @@ fn credentials_status(
             // only secret); show mycall so a save is visibly attributed.
             id: "hrdlog".into(),
             connector: "HRDLog.net".into(),
-            stored: has(hrdlog_keychain()),
+            stored: has(HRDLOG_KEYCHAIN_USER),
             identity: mycall.clone(),
             uploads: true,
             enabled: hrdlog_on,
@@ -24306,7 +26451,7 @@ fn credentials_status(
         CredStatus {
             id: "wrl".into(),
             connector: "World Radio League".into(),
-            stored: has(wrl_keychain()),
+            stored: has(WRL_KEYCHAIN_USER),
             // The key covers the whole WRL account; nothing account-identifying is
             // stored client-side, so no identity string to show.
             identity: String::new(),
@@ -24322,7 +26467,7 @@ fn credentials_status(
         CredStatus {
             id: "cloudlog".into(),
             connector: "Cloudlog".into(),
-            stored: has(cloudlog_keychain()),
+            stored: has(CLOUDLOG_KEYCHAIN_USER),
             identity: cloudlog_url,
             uploads: true,
             enabled: cloudlog_on,
@@ -24351,13 +26496,13 @@ fn credentials_status(
             // challenge. The identity is the callsign — Winlink accounts ARE callsigns.
             id: "winlink".into(),
             connector: "Winlink".into(),
-            stored: has(winlink_keychain()),
+            stored: has(WINLINK_KEYCHAIN_USER),
             identity: mycall.clone(),
             // Winlink carries MAIL, not QSO uploads, so "never uploaded anything" is not a fault
             // and must not be rendered as one — the same reason the two lookup-only rows above
             // carry `uploads: false`.
             uploads: false,
-            enabled: has(winlink_keychain()),
+            enabled: has(WINLINK_KEYCHAIN_USER),
             // ⚠️ Session outcomes are NOT wired to this panel: a failed CMS connect appears in
             // the connection log and in the session status chip, not here. Flagged rather than
             // pretended away, exactly as the QRZ callbook row flags its own gap.
@@ -24382,6 +26527,14 @@ fn effective_clublog_key(settings_key: &str) -> String {
         .unwrap_or("")
         .trim()
         .to_string()
+}
+
+/// Whether the OS keychain holds a connector's secret under `user` (service `"tempo"`). Says only
+/// yes or no: the secret is read and dropped here, and a keychain that cannot be read is a no.
+fn keychain_has(user: &str) -> bool {
+    keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, user)
+        .and_then(|entry| entry.get_password())
+        .is_ok()
 }
 
 fn lotw_keychain() -> Result<keyring::Entry, String> {
@@ -24530,7 +26683,12 @@ fn clear_icom_lan_password(radio_id: u32) -> Result<(), String> {
 /// Whether a radio profile has an Icom network password saved. Says only yes or no.
 #[tauri::command]
 fn icom_lan_password_saved(radio_id: u32) -> Result<bool, String> {
-    Ok(OsKeychain.get(radio_id)?.is_some())
+    icom_lan_saved(&OsKeychain, radio_id)
+}
+
+/// [`icom_lan_password_saved`]'s answer from `vault`: yes or no, never the password.
+fn icom_lan_saved(vault: &dyn IcomLanVault, radio_id: u32) -> Result<bool, String> {
+    Ok(vault.get(radio_id)?.is_some())
 }
 
 #[cfg(test)]
@@ -25022,6 +27180,50 @@ fn clear_cloudlog_key() -> Result<(), String> {
 /// the resulting re-pull overlap.
 const EQSL_RCVD_MARGIN_SECS: i64 = 86_400;
 
+/// The eQSL account Settings name: its username and its QTH Nickname, as every request sends
+/// them (trimmed). Each nickname is an account of its own at eQSL, with its own InBox and its own
+/// dates, so the InBox cursor belongs to the pair, not to the username alone.
+fn eqsl_account(s: &Settings) -> (&str, &str) {
+    (s.eqsl_username.trim(), s.eqsl_qth_nickname.trim())
+}
+
+/// A save's eQSL InBox cursor ([`save_and_publish`]): kept while the save names the account the
+/// cursor was made for, and emptied when it names another, so the next sync reads that account's
+/// whole InBox. A config profile loads through the same save.
+fn keep_eqsl_cursor_for_its_account(held: &Settings, form: &mut Settings) {
+    if eqsl_account(held) != eqsl_account(form) {
+        form.eqsl_last_sync.clear();
+    }
+}
+
+/// A save's place in a year-by-year LoTW download ([`save_and_publish`], [`lotw_history_by_year`]):
+/// the download's own, never the form's, so the held one is kept — a form loaded before a year
+/// came in would put an older place back, and Download everything again empties it before its
+/// form is saved — and emptied when the save names another username, as the cursor is.
+fn keep_lotw_place_for_its_account(held: &Settings, form: &mut Settings) {
+    if held.lotw_username.trim() == form.lotw_username.trim() {
+        form.lotw_sweep_year = held.lotw_sweep_year;
+        form.lotw_sweep_since = held.lotw_sweep_since.clone();
+    } else {
+        form.lotw_sweep_year = 0;
+        form.lotw_sweep_since.clear();
+    }
+}
+
+/// Whether a finished eQSL InBox sync may move the cursor: only when its download is complete
+/// (a cut-off one must not skip the cards it never received), and only while Settings still name
+/// the account it read. The fetch runs without the engine lock, and a save meanwhile that names
+/// another account has emptied the cursor for it ([`keep_eqsl_cursor_for_its_account`]).
+fn eqsl_cursor_may_advance(
+    s: &Settings,
+    body: &str,
+    used_username: &str,
+    used_nickname: &str,
+) -> bool {
+    tempo_core::eqsl::is_complete_eqsl_body(body)
+        && eqsl_account(s) == (used_username.trim(), used_nickname.trim())
+}
+
 /// Download new LoTW confirmations and reconcile them into the log.
 ///
 /// Reads the LoTW username + incremental cursor from settings and the password
@@ -25045,7 +27247,9 @@ fn is_complete_lotw_body(body: &str) -> bool {
 /// body is complete, and only while the username and the cursor are still the ones it used. The
 /// fetch runs without the engine lock, for minutes on a full pull, and in that time a username
 /// change or Download everything again ([`reset_lotw_cursor`]) can empty the cursor, and this
-/// download's high-water would put back the incremental cursor that the reset removed.
+/// download's high-water would put back the incremental cursor that the reset removed. The cursor
+/// is the one the download asks from (`Settings::lotw_sync_cursor`): none for one an older build
+/// left, whose full download then moves it.
 fn lotw_cursor_may_advance(
     s: &Settings,
     body: &str,
@@ -25054,7 +27258,7 @@ fn lotw_cursor_may_advance(
 ) -> bool {
     is_complete_lotw_body(body)
         && s.lotw_username.trim() == used_username.trim()
-        && s.lotw_last_qsl.trim() == used_since.trim()
+        && s.lotw_sync_cursor() == used_since.trim()
 }
 
 /// Settings ▸ Confirmations ▸ LoTW ▸ Download everything again: empty the sync cursor, so the
@@ -25104,103 +27308,78 @@ async fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSync
 }
 
 fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, String> {
-    // Read username + cursor (non-secret) under a brief lock; the network fetch
-    // below must NOT hold the engine lock (a full pull can run for minutes).
-    let (username, owncall, since) = {
-        let eng = engine_lock(state);
-        let s = eng.settings();
-        (
-            s.lotw_username.trim().to_string(),
-            s.mycall.trim().to_string(),
-            s.lotw_last_qsl.trim().to_string(),
-        )
-    };
+    let username = engine_lock(state)
+        .settings()
+        .lotw_username
+        .trim()
+        .to_string();
     if username.is_empty() {
         return Err("Set your LoTW username in Settings first.".to_string());
     }
     let password = lotw_keychain()?
         .get_password()
         .map_err(|_| "No LoTW password stored — set it in Settings.".to_string())?;
-    let used_username = username.clone(); // for the post-fetch cursor-binding guard
-    let used_since = since.clone(); // and the cursor it started from (`lotw_cursor_may_advance`)
-    let owncall = Some(owncall).filter(|c| !c.is_empty());
+    download_lotw_report_on(
+        state,
+        &username,
+        &password,
+        u64::try_from(now_unix()).unwrap_or(0),
+        &|url| propagation::live::lotw::fetch_report(url),
+        &|updated| {
+            persist_settings(updated, |e| {
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!("failed to persist the sync cursor: {e}"),
+                )
+            });
+        },
+    )
+}
 
-    // --- Pull 1: confirmations (qso_qsl=yes, incremental via the cursor). ---
-    // The password stays in scope for the second (own-echo) pull below; never log it.
-    let body = {
-        let query = tempo_core::lotw::LotwQuery {
-            username: username.clone(),
-            password: password.clone(),
-            owncall: owncall.clone(),
-            qsl_since: Some(since).filter(|c| !c.is_empty()),
-        };
-        let url = tempo_core::lotw::build_report_url(&query);
-        propagation::live::lotw::fetch_report(&url)?
-    }; // `query` + `url` (both hold the password) dropped here
+/// What `fetch` brings back that is not LoTW's report file.
+///
+/// ⚠️ DO NOT BLAME THE CREDENTIALS HERE — the exact sibling of the eQSL guard, and the same
+/// reasoning. `fetch_report` has already returned a body, so the login worked; a wrong password
+/// fails earlier with its own message. eQSL demonstrated the failure mode on 2026-08-28: it
+/// changed the wording its download opens with, the structural check started rejecting good
+/// files, and operators were told to re-enter passwords that were provably correct because their
+/// UPLOADS were still landing. LoTW can change its wording the same way, and it is the one that
+/// carries award credit, so it should not be the place we find this out again.
+fn lotw_not_a_report() -> String {
+    "LoTW answered, but the download was not the report file it should have been. Your \
+     username and password are fine — this is not a login problem. LoTW may be \
+     returning an error page, or may be down for maintenance. Try again shortly, and \
+     if it keeps happening please report it."
+        .to_string()
+}
 
-    if !tempo_core::lotw::is_lotw_adif(&body) {
-        // ⚠️ DO NOT BLAME THE CREDENTIALS HERE — the exact sibling of the eQSL guard below,
-        // and the same reasoning. `fetch_report` has already returned a body, so the login
-        // worked; a wrong password fails earlier with its own message. eQSL demonstrated the
-        // failure mode on 2026-08-28: it changed the wording its download opens with, the
-        // structural check started rejecting good files, and operators were told to re-enter
-        // passwords that were provably correct because their UPLOADS were still landing.
-        // LoTW can change its wording the same way, and it is the one that carries award
-        // credit, so it should not be the place we find this out again.
-        return Err(
-            "LoTW answered, but the download was not the report file it should have been. Your \
-             username and password are fine — this is not a login problem. LoTW may be \
-             returning an error page, or may be down for maintenance. Try again shortly, and \
-             if it keeps happening please report it."
-                .to_string(),
-        );
-    }
-
-    // Merge via the shared reconcile path, then advance the cursor only on a real
-    // high-water (re-lock: the fetch ran without the engine lock held). Take the log's rows in
-    // the same lock, then release: the own-echo lower bound (the oldest in-flight upload) is
-    // read from the store once the merge is on disk.
-    //
-    // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
-    // cursor is advanced once it is made.
-    // Made again when the store turns it back: another window changed a contact it read first.
-    let (summary, merged) =
-        tempo_app::logwrite::until_written(|| tempo_app::logwrite::merge_lotw_report(state, &body));
-    let mut result: LotwSyncResult = summary?.into();
-    let rows = {
-        let mut eng = engine_lock(state);
-        if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
-            // Advance the cursor ONLY if (a) the download is structurally complete —
-            // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
-            // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
-            // advancing would make the next `qso_qslsince` pull skip them forever (the
-            // merge above already ran, so keeping the old cursor just re-fetches the
-            // tail — reconcile is idempotent) — AND (b) the username is still the one
-            // this download used. If `set_settings` changed it during the (lock-free)
-            // fetch, it already reset the cursor to a full pull for the new identity —
-            // this high-water belongs to the old query, so binding it would risk
-            // skipping records on the next incremental pull — AND (c) the cursor is still
-            // the one this download started from: Download everything again empties it
-            // while a fetch may be running, and this high-water must not undo that. Persist
-            // via a narrow setter so the sync never disturbs live operation (no mode reset /
-            // TX-queue clear).
-            if lotw_cursor_may_advance(eng.settings(), &body, &used_username, &used_since) {
-                let updated = eng.set_lotw_cursor(high_water);
-                persist_settings(updated, |e| {
-                    conn_log(
-                        "LoTW",
-                        "error",
-                        format!("failed to persist the sync cursor: {e}"),
-                    )
-                });
-            }
-        }
-        eng.log_rows()
-    }; // engine lock released before the second network fetch
-       // The confirmations are on disk before the sync says so (off the lock, on the blocking pool).
-    merged
-        .wait(tempo_app::logstore::DURABLE_WAIT)
-        .map_err(durability_failed)?;
+/// [`download_lotw_report_impl`] with the account, the clock, LoTW (`fetch`) and the settings
+/// file (`persist`, handed each change to save, under the Engine lock) supplied.
+///
+/// With a cursor it is one download of what LoTW matched since ([`lotw_since_cursor`]). Without
+/// one — a first download, a changed username, Download everything again, a purged log — it is
+/// the whole history, a year of contacts at a time ([`lotw_history_by_year`]).
+fn download_lotw_report_on(
+    state: &SharedEngine,
+    username: &str,
+    password: &str,
+    now: u64,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+    persist: &dyn Fn(Settings),
+) -> Result<LotwSyncResult, String> {
+    // Both pulls ask for every call on the account, and the cursor is one a download of every
+    // call made (`Settings::lotw_sync_cursor`), so the first download after the update is a full
+    // one.
+    let since = engine_lock(state).settings().lotw_sync_cursor().to_string();
+    let mut result = if since.is_empty() {
+        lotw_history_by_year(state, username, password, now, fetch, persist)?
+    } else {
+        lotw_since_cursor(state, username, password, &since, fetch, persist)?
+    };
+    // The own-echo lower bound (the oldest in-flight upload) is read from the store once the
+    // merge is on disk.
+    let rows = engine_lock(state).log_rows();
     // Best-effort like the pull it bounds: a log that cannot be read skips the own-echo step and
     // says so, and never fails the confirmations already merged.
     let own_start = log_folds::oldest_pending_lotw_date(&rows).unwrap_or_else(|e| {
@@ -25218,13 +27397,12 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     if let Some(start) = own_start {
         let own_body = {
             let query = tempo_core::lotw::LotwQuery {
-                username,
-                password,
-                owncall,
+                username: username.to_string(),
+                password: password.to_string(),
                 qsl_since: None,
             };
             let url = tempo_core::lotw::build_own_report_url(&query, Some(&start));
-            propagation::live::lotw::fetch_report(&url)
+            fetch(&url)
         };
         match own_body {
             Ok(b) if tempo_core::lotw::is_lotw_adif(&b) => {
@@ -25261,6 +27439,209 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     }
 
     Ok(result)
+}
+
+/// Pull 1 with a cursor: the confirmations LoTW matched since `since` (qso_qsl=yes), merged, and
+/// the cursor advanced to the download's high-water.
+fn lotw_since_cursor(
+    state: &SharedEngine,
+    username: &str,
+    password: &str,
+    since: &str,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+    persist: &dyn Fn(Settings),
+) -> Result<LotwSyncResult, String> {
+    // The network fetch below must NOT hold the engine lock (a pull can run for minutes).
+    let used_username = username.to_string(); // for the post-fetch cursor-binding guard
+    let used_since = since.to_string(); // and the cursor it started from (`lotw_cursor_may_advance`)
+    let body = {
+        let query = tempo_core::lotw::LotwQuery {
+            username: username.to_string(),
+            password: password.to_string(),
+            qsl_since: Some(since.to_string()),
+        };
+        let url = tempo_core::lotw::build_report_url(&query);
+        fetch(&url)?
+    }; // `query` + `url` (both hold the password) dropped here
+
+    if !tempo_core::lotw::is_lotw_adif(&body) {
+        return Err(lotw_not_a_report());
+    }
+
+    // Merge via the shared reconcile path, then advance the cursor only on a real
+    // high-water (re-lock: the fetch ran without the engine lock held).
+    //
+    // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
+    // cursor is advanced once it is made.
+    // Made again when the store turns it back: another window changed a contact it read first.
+    let (summary, merged) =
+        tempo_app::logwrite::until_written(|| tempo_app::logwrite::merge_lotw_report(state, &body));
+    let result: LotwSyncResult = summary?.into();
+    {
+        let mut eng = engine_lock(state);
+        if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
+            // Advance the cursor ONLY if (a) the download is structurally complete —
+            // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
+            // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
+            // advancing would make the next `qso_qslsince` pull skip them forever (the
+            // merge above already ran, so keeping the old cursor just re-fetches the
+            // tail — reconcile is idempotent) — AND (b) the username is still the one
+            // this download used. If `set_settings` changed it during the (lock-free)
+            // fetch, it already reset the cursor to a full pull for the new identity —
+            // this high-water belongs to the old query, so binding it would risk
+            // skipping records on the next incremental pull — AND (c) the cursor is still
+            // the one this download started from: Download everything again empties it
+            // while a fetch may be running, and this high-water must not undo that. Persist
+            // via a narrow setter so the sync never disturbs live operation (no mode reset /
+            // TX-queue clear).
+            if lotw_cursor_may_advance(eng.settings(), &body, &used_username, &used_since) {
+                persist(eng.set_lotw_cursor(high_water));
+            }
+        }
+    } // engine lock released before the wait and the second network fetch
+      // The confirmations are on disk before the sync says so (off the lock, on the blocking pool).
+    merged
+        .wait(tempo_app::logstore::DURABLE_WAIT)
+        .map_err(durability_failed)?;
+    Ok(result)
+}
+
+/// Pull 1 without a cursor: every confirmation the account holds, asked for a year of contacts
+/// at a time, newest first ([`tempo_core::lotw::build_year_report_url`]), each year merged and on
+/// disk before the place is saved (`Settings::lotw_sweep_year`).
+///
+/// One request for the whole history is what a large account cannot get: LoTW answers HTTP 503
+/// before the report is made, no high-water comes back, and every retry was the same request, so
+/// such an operator could never download a confirmation. A year is a fraction of it, and a year
+/// LoTW does not answer stops the download there and says so; the next one goes on from that
+/// year, not from the newest again.
+///
+/// The cursor it leaves when the oldest year is in is the newest year's `APP_LoTW_LASTQSL`
+/// (`Settings::lotw_sweep_since`): no later than the moment that year was asked for, so every
+/// confirmation a later year's request missed (matched after it was asked) is matched after the
+/// cursor and comes with the next download. A newest year with no confirmation has no
+/// high-water, and the day before it was asked, by this computer's clock, stands in.
+fn lotw_history_by_year(
+    state: &SharedEngine,
+    username: &str,
+    password: &str,
+    now: u64,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+    persist: &dyn Fn(Settings),
+) -> Result<LotwSyncResult, String> {
+    let year_of = |unix: u64| -> i32 {
+        tempo_core::logbook::lotw_pull_date(unix)[..4]
+            .parse()
+            .unwrap_or(1970)
+    };
+    let newest = year_of(now);
+    let (rows, mut held_year, mut held_since) = {
+        let eng = engine_lock(state);
+        let s = eng.settings();
+        (
+            eng.log_rows(),
+            s.lotw_sweep_year,
+            s.lotw_sweep_since.clone(),
+        )
+    };
+    let oldest = log_folds::oldest_contact_unix(&rows)?
+        .map(year_of)
+        .unwrap_or(newest)
+        .min(newest);
+    let pieces = newest - oldest + 1;
+    let query = tempo_core::lotw::LotwQuery {
+        username: username.to_string(),
+        password: password.to_string(),
+        qsl_since: None,
+    };
+    let mut result: LotwSyncResult = tempo_core::reconcile::ReconcileSummary::default().into();
+    let mut year = if held_year != 0 { held_year } else { newest };
+    loop {
+        let piece = (newest - year + 1).clamp(1, pieces);
+        conn_log(
+            "LoTW",
+            "info",
+            format!(
+                "downloading piece {piece} of {pieces}: the confirmations of {year}'s contacts"
+            ),
+        );
+        let stopped = |why: String, result: &LotwSyncResult| {
+            format!(
+                "LoTW did not send the confirmations of your {year} contacts (piece {piece} of \
+                 {pieces}: {why}). Nexus saved {} newly confirmed contacts and everything newer \
+                 than {year}, and the next Fetch LoTW continues from {year}.",
+                result.newly_confirmed
+            )
+        };
+        let body = match fetch(&tempo_core::lotw::build_year_report_url(
+            &query, year, newest, oldest,
+        )) {
+            Ok(b) if !tempo_core::lotw::is_lotw_adif(&b) => {
+                return Err(stopped(lotw_not_a_report(), &result))
+            }
+            // A year cut off before its end marker is not in: what it holds would be merged, and
+            // the place moved past what it lost.
+            Ok(b) if !is_complete_lotw_body(&b) => {
+                return Err(stopped(
+                    "the download stopped before its end".into(),
+                    &result,
+                ))
+            }
+            Ok(b) => b,
+            Err(e) => return Err(stopped(e, &result)),
+        };
+        let (summary, merged) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::merge_lotw_report(state, &body)
+        });
+        add_lotw_piece(&mut result, summary?.into());
+        // The year is on disk before the place moves past it.
+        merged
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        let mut eng = engine_lock(state);
+        if !lotw_sweep_may_advance(eng.settings(), username, held_year, &held_since) {
+            // The username changed, or Download everything again started over, while this year
+            // was downloading: the place this download holds is no longer the account's.
+            return Ok(result);
+        }
+        if held_since.is_empty() {
+            held_since = tempo_core::lotw::extract_last_qsl(&body)
+                .unwrap_or_else(|| tempo_core::logbook::lotw_pull_date(now.saturating_sub(86_400)));
+        }
+        if year <= oldest {
+            persist(eng.set_lotw_cursor(held_since));
+            return Ok(result);
+        }
+        held_year = year - 1;
+        persist(eng.set_lotw_sweep(held_year, held_since.clone()));
+        year = held_year;
+    }
+}
+
+/// Whether a year of [`lotw_history_by_year`] may move its saved place: only while the username,
+/// the empty cursor and the place are still the ones the year was asked with. A username change
+/// or Download everything again during the (lock-free) fetch empties the place, and this year
+/// must not put an old one back.
+fn lotw_sweep_may_advance(
+    s: &Settings,
+    used_username: &str,
+    used_year: i32,
+    used_since: &str,
+) -> bool {
+    s.lotw_username.trim() == used_username.trim()
+        && s.lotw_sync_cursor().is_empty()
+        && s.lotw_sweep_year == used_year
+        && s.lotw_sweep_since == used_since
+}
+
+/// Add one year's merge to the download's total.
+fn add_lotw_piece(total: &mut LotwSyncResult, piece: LotwSyncResult) {
+    total.matched += piece.matched;
+    total.newly_confirmed += piece.newly_confirmed;
+    total.newly_confirmed_any += piece.newly_confirmed_any;
+    total.newly_credited += piece.newly_credited;
+    total.newly_submitted += piece.newly_submitted;
+    total.orphans.extend(piece.orphans);
 }
 
 /// Locate the `tqsl` binary: a non-empty Settings override that exists, else the
@@ -25662,6 +28043,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         .get_password()
         .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
     let used_username = username.clone();
+    let used_nickname = qth_nickname.clone();
     // Candidate next cursor: this sync's start, floored to the minute and rolled
     // back by the margin (eQSL's RcvdSince timezone is unstated — over-fetch so we
     // never skip records). Captured BEFORE the fetch so nothing arriving during it
@@ -25702,8 +28084,8 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // Merge via the shared reconcile path (eQSL lands confirmed-not-award by
     // construction). Advance the cursor ONLY if (a) the body is structurally
     // complete — a truncated download must not skip unreceived records — AND (b) the
-    // username is unchanged since this sync started (an in-flight change already
-    // reset the cursor for the new account).
+    // account is unchanged since this sync started (an in-flight change already
+    // reset the cursor for the new account): `eqsl_cursor_may_advance`.
     //
     // The merge is planned with the Engine lock released and made under it (SPEC-2 v3 C19); the
     // cursor is advanced once it is made.
@@ -25712,9 +28094,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     let summary: LotwSyncResult = summary?.into();
     {
         let mut eng = engine_lock(state);
-        if tempo_core::eqsl::is_complete_eqsl_body(&body)
-            && eng.settings().eqsl_username.trim() == used_username.trim()
-        {
+        if eqsl_cursor_may_advance(eng.settings(), &body, &used_username, &used_nickname) {
             let updated = eng.set_eqsl_cursor(next_cursor);
             persist_settings(updated, |e| {
                 eprintln!("tempo: failed to persist eQSL cursor: {e}")
@@ -25838,16 +28218,84 @@ const QRZ_SYNC_REFUSED: ConnDetail = conn_detail!(
      QSL. This session's connection log has QRZ's own wording."
 );
 
-/// QRZ answered the FETCH and refused it. Extracted from [`sync_qrz_since`] — which does
-/// blocking HTTP and so cannot be driven in a test — so the one decision that matters can be:
-/// what of QRZ's answer ends up on the half that may be printed. See
-/// `no_qrz_fetch_reason_can_reach_stderr`.
-fn qrz_fetch_refused(reason: Option<String>) -> QrzSyncFailure {
+/// One stored secret a request to a logging service carried, and what stands in for it in the
+/// service's own words.
+struct Echoed<'a> {
+    secret: &'a str,
+    marker: &'a str,
+}
+
+/// ⛔ A logging service's own words, without the stored secrets the request carried. QRZ and
+/// ClubLog echo the failing request in their reply, and the request holds the API key or password;
+/// those words reach the operator's toast, the connection log and a computer driving the station.
+/// Each secret, raw or percent-encoded, is masked (`tempo_core::qrz_correct::scrub_secret`); words
+/// that still show one, in any case, with other separators, or percent-encoded, are replaced
+/// whole by `withheld`. Words with no secret in them come through as the service wrote them.
+fn service_words_without_secrets(words: &str, echoed: &[Echoed<'_>], withheld: &str) -> String {
+    let scrubbed = echoed.iter().fold(words.to_string(), |text, e| {
+        tempo_core::qrz_correct::scrub_secret(&text, e.secret, e.marker)
+    });
+    let folded = |text: &str| -> String {
+        text.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    let shown = folded(&scrubbed);
+    let still_shown = echoed.iter().any(|e| {
+        // The secret's letters and digits, and those of its percent-encoded form (a `-` as `2d`).
+        let plain = folded(e.secret);
+        let encoded: String = e
+            .secret
+            .trim()
+            .bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() {
+                    (b.to_ascii_lowercase() as char).to_string()
+                } else {
+                    format!("{b:02x}")
+                }
+            })
+            .collect();
+        [plain, encoded]
+            .iter()
+            .any(|k| !k.is_empty() && shown.contains(k.as_str()))
+    });
+    if still_shown {
+        withheld.to_string()
+    } else {
+        scrubbed
+    }
+}
+
+/// What the operator is told instead of QRZ's words when they still show the Logbook API key.
+const QRZ_WORDS_WITHHELD: &str = "QRZ refused the request, and its reply echoed the API key \
+     back, so its wording is withheld. Check the QRZ Logbook API key in Settings.";
+
+/// QRZ's own words about a request made with the Logbook API key `key`, without the key
+/// ([`service_words_without_secrets`]).
+fn qrz_words_without_key(words: &str, key: &str) -> String {
+    service_words_without_secrets(
+        words,
+        &[Echoed {
+            secret: key,
+            marker: "«api key»",
+        }],
+        QRZ_WORDS_WITHHELD,
+    )
+}
+
+/// QRZ answered the FETCH, made with `key`, and refused it. Extracted from [`sync_qrz_since`] —
+/// which does blocking HTTP and so cannot be driven in a test — so the one decision that matters
+/// can be: what of QRZ's answer ends up on the half that may be printed, and that its words reach
+/// the screen without the key. See `no_qrz_fetch_reason_can_reach_stderr`.
+fn qrz_fetch_refused(reason: Option<String>, key: &str) -> QrzSyncFailure {
     QrzSyncFailure {
         detail: QRZ_SYNC_REFUSED,
         message: ScreenReason::new(
             reason
                 .filter(|r| !r.trim().is_empty())
+                .map(|r| qrz_words_without_key(&r, key))
                 .unwrap_or_else(|| "QRZ rejected the FETCH — check your Logbook API key.".into()),
         ),
     }
@@ -25862,12 +28310,12 @@ fn qrz_fetch_refused(reason: Option<String>) -> QrzSyncFailure {
 /// rejected the FETCH — check your Logbook API key" in the connection log and left the high-water
 /// where it was, so the worker asked again every five minutes. See
 /// `a_sync_that_finds_nothing_new_is_not_refused`.
-fn qrz_sync_answer(resp: &str) -> Result<tempo_core::qrz::QrzFetch, QrzSyncFailure> {
+fn qrz_sync_answer(resp: &str, key: &str) -> Result<tempo_core::qrz::QrzFetch, QrzSyncFailure> {
     let fetched = tempo_core::qrz::parse_fetch(resp);
     if fetched.ok || fetched.nothing_matched {
         Ok(fetched)
     } else {
-        Err(qrz_fetch_refused(fetched.reason))
+        Err(qrz_fetch_refused(fetched.reason, key))
     }
 }
 
@@ -25906,14 +28354,17 @@ fn sync_qrz_since(
             Some(d) => tempo_core::qrz::build_fetch_since_body(&key, &d),
             None => tempo_core::qrz::build_fetch_body(&key),
         };
-        propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body).map_err(
-            |message| QrzSyncFailure {
-                detail: QRZ_SYNC_UNREACHABLE,
-                message: ScreenReason::new(message),
-            },
-        )?
+        propagation::live::qrz::post_form(
+            tempo_core::qrz::QRZ_LOGBOOK_URL,
+            env!("CARGO_PKG_VERSION"),
+            body,
+        )
+        .map_err(|message| QrzSyncFailure {
+            detail: QRZ_SYNC_UNREACHABLE,
+            message: ScreenReason::new(message),
+        })?
     };
-    let fetched = qrz_sync_answer(&resp)?;
+    let fetched = qrz_sync_answer(&resp, &key)?;
     // Planned with the Engine lock released and made under it (SPEC-2 v3 C19).
     let merge = || tempo_app::logwrite::merge_qrz_report(engine, &fetched.adif);
     // The operator's sync makes it again when the store turns it back (another window changed
@@ -26081,7 +28532,8 @@ impl QrzFailure {
 /// [`QrzEntitlement`] beside the record is what the health stamp reads.
 fn qrz_try_lookup(session_key: &str, callsign: &str) -> Result<QrzOutcome, QrzFailure> {
     let url = tempo_core::qrz::build_lookup_url(session_key, callsign);
-    let body = propagation::live::qrz::fetch(&url).map_err(QrzFailure::unreachable)?;
+    let body = propagation::live::qrz::fetch(&url, env!("CARGO_PKG_VERSION"))
+        .map_err(QrzFailure::unreachable)?;
     qrz_outcome_from_body(&body)
 }
 
@@ -26127,7 +28579,8 @@ fn qrz_login(username: &str, password: &str) -> Result<String, QrzFailure> {
         password: password.to_string(),
         agent: "nexus/0.1".to_string(),
     });
-    let body = propagation::live::qrz::fetch(&url).map_err(QrzFailure::unreachable)?;
+    let body = propagation::live::qrz::fetch(&url, env!("CARGO_PKG_VERSION"))
+        .map_err(QrzFailure::unreachable)?;
     if !tempo_core::qrz::is_qrz_xml(&body) {
         return Err(QrzFailure::unreachable(
             "QRZ returned an unexpected response — check your credentials.".to_string(),
@@ -26718,11 +29171,20 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
     let body = tempo_core::qrz::build_status_body(&key);
     // Blocking HTTP: on the blocking pool (see `get_aurora`).
     let resp = tauri::async_runtime::spawn_blocking(move || {
-        propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
+        propagation::live::qrz::post_form(
+            tempo_core::qrz::QRZ_LOGBOOK_URL,
+            env!("CARGO_PKG_VERSION"),
+            body,
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
-    let st = tempo_core::qrz::parse_status_response(&resp);
+    qrz_status_reply(&resp, &key, mycall)
+}
+
+/// What a QRZ Logbook Test answers, from QRZ's STATUS reply `resp` to a request made with `key`.
+fn qrz_status_reply(resp: &str, key: &str, mycall: &str) -> Result<String, String> {
+    let st = tempo_core::qrz::parse_status_response(resp);
     if st.ok {
         let owner_raw = st.owner.clone().unwrap_or_default();
         // #291: the upload path reuses this owner instead of spending its own STATUS call.
@@ -26738,9 +29200,10 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
             st.count
         ))
     } else {
-        Err(st
-            .reason
-            .unwrap_or_else(|| "QRZ rejected the API key".into()))
+        Err(st.reason.map_or_else(
+            || "QRZ rejected the API key".into(),
+            |reason| qrz_words_without_key(&reason, key),
+        ))
     }
 }
 
@@ -26836,6 +29299,65 @@ mod stamp_subject_tests {
     }
 }
 
+/// The contact a logbook service is sent, from the row the push was handed: its `COUNTRY` the
+/// name its own DXCC number gives it ([`log_queries::sent`]), so a service is never handed a
+/// `DXCC` and a `COUNTRY` that disagree. The one conversion each push below — QRZ, HRDLog.net,
+/// Club Log, eQSL, Cloudlog/Wavelog — builds its ADIF from.
+fn upload_record(record: LoggedQso) -> tempo_core::logbook::QsoRecord {
+    log_queries::sent(record.into())
+}
+
+#[cfg(test)]
+mod upload_record_tests {
+    /// The body of the top-level `fn name(…)` in this file: through the `}` that closes it.
+    fn body(src: &'static str, name: &str) -> &'static str {
+        let start = src
+            .find(&format!("\nfn {name}("))
+            .unwrap_or_else(|| panic!("no fn {name}"));
+        let len = src[start..].find("\n}\n").expect("its end");
+        &src[start..start + len]
+    }
+
+    /// Every service push sends the contact `upload_record` makes of its row, and the DXKeeper
+    /// push the contact `log_queries::sent` makes, so each names `COUNTRY` by the DXCC number; and
+    /// the launch wires the station's resolver of that country. These reach the keychain, the
+    /// network or the whole launch, which no test drives, so the source is read: what is checked
+    /// is that no push is left serialising the row another way. `upload_record` and `sent`
+    /// themselves are held to their answers by value (`log_by_id`'s tests).
+    #[test]
+    fn every_push_and_the_launch_follow_the_dxcc_number_for_country() {
+        let src = include_str!("lib.rs");
+        for name in [
+            "qrz_push_qso_impl",
+            "hrdlog_push_qso_impl",
+            "clublog_push_qso_impl",
+            "eqsl_push_qso_impl",
+            "cloudlog_push_qso_impl",
+        ] {
+            let body = body(src, name);
+            assert!(
+                body.contains("let rec = upload_record(")
+                    && body.contains("adif_record(&rec)")
+                    && !body.contains(".into();"),
+                "{name} must send the row as `upload_record` makes it"
+            );
+        }
+        let launch = body(src, "start_on_the_logbook");
+        assert!(launch.contains("wire_country_resolvers(&mut eng);"));
+        assert!(launch.contains("adif_record_own_log(&log_queries::sent(rec.clone()))"));
+        assert_eq!(launch.matches("dxkeeper_push_async(").count(), 1);
+    }
+}
+
+/// What QRZ's answer `resp` to a push made with `key` says: its reason, which goes to the
+/// operator's toast, the connection log and a computer driving the station, without the key it
+/// may echo ([`qrz_words_without_key`]).
+fn qrz_push_answer(resp: &str, key: &str) -> tempo_core::qrz::QrzPush {
+    let mut push = tempo_core::qrz::parse_push_response(resp);
+    push.reason = push.reason.map(|r| qrz_words_without_key(&r, key));
+    push
+}
+
 fn qrz_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
@@ -26874,9 +29396,12 @@ fn qrz_push_qso_impl(
                 // The same STATUS request Test Connection sends. Only the owner is kept; the
                 // response is never logged (it is QRZ's, and the request carried the key).
                 let body = tempo_core::qrz::build_status_body(&key);
-                let resp =
-                    propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
-                        .ok()?;
+                let resp = propagation::live::qrz::post_form(
+                    tempo_core::qrz::QRZ_LOGBOOK_URL,
+                    env!("CARGO_PKG_VERSION"),
+                    body,
+                )
+                .ok()?;
                 let st = tempo_core::qrz::parse_status_response(&resp);
                 st.owner
                     .filter(|_| st.ok)
@@ -26910,11 +29435,15 @@ fn qrz_push_qso_impl(
     // The row this push is for, kept for the stamp (see `stamp_subject`); the payload below
     // is built from the record without it, as it always was.
     let named = record.id.clone();
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
     let body = tempo_core::qrz::build_insert_body(&key, &adif, false);
-    let resp = propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?;
-    let push = tempo_core::qrz::parse_push_response(&resp);
+    let resp = propagation::live::qrz::post_form(
+        tempo_core::qrz::QRZ_LOGBOOK_URL,
+        env!("CARGO_PKG_VERSION"),
+        body,
+    )?;
+    let push = qrz_push_answer(&resp, &key);
     // Record the outcome on the just-pushed QSO so diagnostics can surface R1 (never
     // pushed to QRZ) / R9 (QRZ upload bounced). QRZ outcomes are always definitive.
     //
@@ -26997,7 +29526,9 @@ async fn qrz_correct_preview(
         let key = qrz_correct_key()?;
         let rec: tempo_core::logbook::QsoRecord = record.into();
         let plan = tempo_core::qrz_correct::preview(
-            &propagation::live::qrz::LogbookApi,
+            &propagation::live::qrz::LogbookApi {
+                app_version: env!("CARGO_PKG_VERSION"),
+            },
             &key,
             &rec,
             selected,
@@ -27025,7 +29556,9 @@ async fn qrz_correct_apply(
         let key = qrz_correct_key()?;
         let rec: tempo_core::logbook::QsoRecord = record.into();
         let outcome = tempo_core::qrz_correct::apply(
-            &propagation::live::qrz::LogbookApi,
+            &propagation::live::qrz::LogbookApi {
+                app_version: env!("CARGO_PKG_VERSION"),
+            },
             &key,
             &rec,
             selected,
@@ -27073,7 +29606,9 @@ async fn qrz_correct_undo_miss() -> Result<String, String> {
             })?;
         let key = qrz_correct_key()?;
         let said = tempo_core::qrz_correct::recover_from_miss(
-            &propagation::live::qrz::LogbookApi,
+            &propagation::live::qrz::LogbookApi {
+                app_version: env!("CARGO_PKG_VERSION"),
+            },
             &key,
             &recovery,
         );
@@ -27419,7 +29954,7 @@ fn hrdlog_push_qso_impl(
     let code = hrdlog_keychain()?
         .get_password()
         .map_err(|_| "No HRDLog.net upload code stored — set it in Settings.".to_string())?;
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
 
     // Build + POST without the lock; the body carries the code — never logged.
@@ -27481,6 +30016,45 @@ async fn clublog_push_qso(
     )
 }
 
+/// What the operator is told instead of ClubLog's words when they still show a stored secret.
+const CLUBLOG_WORDS_WITHHELD: &str = "ClubLog refused the upload, and its reply echoed a stored \
+     password or key back, so its wording is withheld. Check the ClubLog settings.";
+
+/// What ClubLog's answer (`status`, `resp`) to an upload made with `password` and the application
+/// key `api_key` says: its words, which go to the operator's toast, the connection log and a
+/// computer driving the station, without the password or the key they may echo, nor the key
+/// `built_in` to the installer ([`service_words_without_secrets`]).
+fn clublog_push_answer(
+    status: u16,
+    resp: &str,
+    password: &str,
+    api_key: &str,
+    built_in: &str,
+) -> tempo_core::clublog::ClubLogPush {
+    let mut push = tempo_core::clublog::classify_response(status, resp);
+    push.message = push.message.map(|words| {
+        service_words_without_secrets(
+            &words,
+            &[
+                Echoed {
+                    secret: password,
+                    marker: "«password»",
+                },
+                Echoed {
+                    secret: api_key,
+                    marker: "«api key»",
+                },
+                Echoed {
+                    secret: built_in,
+                    marker: "«api key»",
+                },
+            ],
+            CLUBLOG_WORDS_WITHHELD,
+        )
+    });
+    push
+}
+
 fn clublog_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
@@ -27521,22 +30095,28 @@ fn clublog_push_qso_impl(
         .map_err(|_| "No ClubLog app-password stored — set it in Settings.".to_string())?;
     // The row this push is for, kept for the stamp (see `stamp_subject`).
     let named = record.id.clone();
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
 
     let (status, resp) = {
         let query = tempo_core::clublog::ClubLogQuery {
             email,
-            password,
+            password: password.clone(),
             callsign,
-            api_key,
+            api_key: api_key.clone(),
             adif,
         };
         let body = tempo_core::clublog::build_realtime_body(&query);
         propagation::live::clublog::push_realtime(tempo_core::clublog::CLUBLOG_REALTIME_URL, body)?
     }; // `query` + `body` (both hold the secrets) dropped here
 
-    let push = tempo_core::clublog::classify_response(status, &resp);
+    let push = clublog_push_answer(
+        status,
+        &resp,
+        &password,
+        &api_key,
+        &effective_clublog_key(""),
+    );
     if push.result == tempo_core::clublog::ClubLogResult::AuthFail {
         // Halt further auto-pushes until a credential changes (IP-block guard).
         {
@@ -27606,7 +30186,8 @@ async fn eqsl_push_qso(
     let res =
         tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine, true))
             .await
-            .map_err(|e| format!("upload task failed: {e}"))?;
+            .map_err(|e| format!("upload task failed: {e}"))?
+            .map(|(report, _)| report);
     conn_logged(
         "eQSL",
         |r| format!("pushed {} — outcome: {}", who, r.outcome),
@@ -27618,7 +30199,7 @@ fn eqsl_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
     wait: bool,
-) -> Result<UploadReportDto, String> {
+) -> Result<(UploadReportDto, Option<tempo_core::logbook::UploadDetail>), String> {
     // eQSL matches on the two operators' times agreeing: a record with no known
     // time of day can never match — sending it just parks it at eQSL unmatched
     // forever. Refuse with the reason instead of fabricating a midnight.
@@ -27669,7 +30250,7 @@ fn eqsl_push_qso_impl(
     }
     // The row this push is for, kept for the stamp (see `stamp_subject`).
     let named = record.id.clone();
-    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let rec = upload_record(record);
     let adif = tempo_core::logbook::adif_record(&rec);
 
     // Build + POST without the lock; the body carries the password — never logged.
@@ -27679,27 +30260,46 @@ fn eqsl_push_qso_impl(
             &password,
             &adif,
             (!qth_nickname.is_empty()).then_some(qth_nickname.as_str()),
+            env!("CARGO_PKG_VERSION"),
         );
         propagation::live::eqsl::post_form(tempo_core::eqsl::EQSL_IMPORT_URL, body)?
     }; // `body` (holds the password) dropped here
 
-    match tempo_core::eqsl::classify_upload(&resp) {
+    eqsl_answered(named.as_deref(), &rec, &resp, engine, wait)
+}
+
+/// What eQSL's answer to one upload does ([`tempo_core::eqsl::classify_upload`]): the outcome
+/// stamped on the contact, with the class of a refusal, and the report for the caller beside that
+/// class. It reads eQSL's answer alone; the request, and the password in it, are gone by then.
+fn eqsl_answered(
+    named: Option<&str>,
+    rec: &tempo_core::logbook::QsoRecord,
+    answer: &str,
+    engine: &SharedEngine,
+    wait: bool,
+) -> Result<(UploadReportDto, Option<tempo_core::logbook::UploadDetail>), String> {
+    match tempo_core::eqsl::classify_upload(answer) {
         // Transient (system down) → leave unstamped for a clean retry.
-        None => Ok(UploadReportDto {
-            dispatched: 1,
-            outcome: "retry".into(),
-            detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
-            skipped_edited: 0,
-            skipped_deleted: 0,
-            held_mode: 0,
-        }),
-        Some(outcome) => {
+        None => Ok((
+            UploadReportDto {
+                dispatched: 1,
+                outcome: "retry".into(),
+                detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
+                skipped_edited: 0,
+                skipped_deleted: 0,
+                held_mode: 0,
+            },
+            None,
+        )),
+        Some((outcome, detail)) => {
             // Planned with the Engine lock released (SPEC-2 v3 C19), as QRZ's.
-            let subject = stamp_subject(named.as_deref(), &rec);
+            let subject = stamp_subject(named, rec);
+            // ⛔ The CLASS of the refusal, off eQSL's markers — never eQSL's page, which is not
+            // kept anywhere. See `UploadDetail`: this field is exported in the signed LoTW batch.
             let status = tempo_core::logbook::UploadStatus {
                 outcome,
                 when_unix: now_unix(),
-                detail: None,
+                detail,
             };
             let stamp = || {
                 tempo_app::logwrite::stamp_push(
@@ -27720,15 +30320,47 @@ fn eqsl_push_qso_impl(
                     .wait(tempo_app::logstore::DURABLE_WAIT)
                     .map_err(durability_failed)?;
             }
-            Ok(UploadReportDto {
-                dispatched: 1,
-                outcome: outcome.code().to_string(),
-                detail: None,
-                skipped_edited: 0,
-                skipped_deleted: 0,
-                held_mode: 0,
-            })
+            Ok((
+                UploadReportDto {
+                    dispatched: 1,
+                    outcome: outcome.code().to_string(),
+                    detail: detail.map(|d| d.sentence().to_string()),
+                    skipped_edited: 0,
+                    skipped_deleted: 0,
+                    held_mode: 0,
+                },
+                detail,
+            ))
         }
+    }
+}
+
+/// The eQSL part of a contact's one upload toast ("W9XYZ → QRZ ✓ · eQSL ✗ …"), from the push's
+/// report and the class it stamped ([`eqsl_answered`]).
+fn eqsl_toast_part(
+    r: &UploadReportDto,
+    class: Option<tempo_core::logbook::UploadDetail>,
+) -> String {
+    use tempo_core::logbook::UploadDetail as D;
+    match (r.outcome.as_str(), class) {
+        ("accepted", _) => "eQSL ✓".to_string(),
+        ("duplicate", _) => "eQSL dup".to_string(),
+        ("authfail", _) => "eQSL ✗ login invalid — check Settings".to_string(),
+        ("retry", _) => "eQSL ✗ unavailable".to_string(),
+        // The two refusals of the account rather than the contact: each says where its fix is.
+        (_, Some(D::AccountDates)) => {
+            "eQSL ✗ outside your account's dates (check My Profile at eqsl.cc)".to_string()
+        }
+        (_, Some(D::QthNickname)) => {
+            "eQSL ✗ QTH Nickname missing or wrong (check Settings)".to_string()
+        }
+        _ => format!(
+            "eQSL ✗ rejected{}",
+            r.detail
+                .as_deref()
+                .map(|d| format!(": {d}"))
+                .unwrap_or_default()
+        ),
     }
 }
 
@@ -27769,6 +30401,28 @@ fn n3fjp_mode(mode: &str) -> String {
 
 /// Forward ONE general (non-Field-Day) logged QSO to N3FJP ACLog over TCP ADDDIRECT. Uses the
 /// same `n3fjp_host`/`n3fjp_port` as the Field-Day push; N3FJP's EXCLUDEDUPES dedupes any overlap.
+/// Who N3FJP's ACLog is told worked a contact: the record's own `OPERATOR` — the operator at the
+/// key when one was named, the station call otherwise, as the log funnel stamps it — and the
+/// station call for a record that carries none (one logged before the stamp).
+fn n3fjp_operator(record_operator: Option<&str>, mycall: &str) -> String {
+    record_operator
+        .map(str::trim)
+        .filter(|o| !o.is_empty())
+        .unwrap_or(mycall)
+        .to_string()
+}
+
+#[cfg(test)]
+mod n3fjp_operator_tests {
+    /// A contact a second operator logged goes to ACLog under that operator, not the station.
+    #[test]
+    fn the_push_names_the_records_operator_and_the_station_without_one() {
+        assert_eq!(super::n3fjp_operator(Some("K9OP"), "W9XYZ"), "K9OP");
+        assert_eq!(super::n3fjp_operator(None, "W9XYZ"), "W9XYZ");
+        assert_eq!(super::n3fjp_operator(Some("  "), "W9XYZ"), "W9XYZ");
+    }
+}
+
 fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), String> {
     let (host, port, mycall) = {
         let eng = engine_lock(engine);
@@ -27790,7 +30444,7 @@ fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), Str
         mode: n3fjp_mode(&dto.mode),
         freq_mhz: dto.freq_mhz,
         when_unix: dto.when_unix,
-        operator: mycall,
+        operator: n3fjp_operator(dto.operator.as_deref(), &mycall),
         // General-logging extras (#106): a plain (non-contest) QSO carries reports,
         // a name and power, and the push was dropping all of them on the ACLog side.
         rst_sent: dto.rst_sent.clone(),
@@ -27977,7 +30631,7 @@ fn cloudlog_push_qso_impl(
             status: None,
         });
     }
-    let rec: tempo_core::logbook::QsoRecord = dto.clone().into();
+    let rec = upload_record(dto.clone());
     let adif = tempo_core::logbook::adif_record(&rec);
     // The station-location check runs before sending and is said only if the instance refuses:
     // Wavelog is the authority, so the QSO goes either way. The QSO's side is what the record
@@ -28349,7 +31003,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
     }
     if eqsl_on && owed & legs::EQSL != 0 {
         let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine, false) {
-            Ok(r) => {
+            Ok((r, refusal)) => {
                 let ok = matches!(r.outcome.as_str(), "accepted" | "duplicate");
                 conn_log(
                     "eQSL",
@@ -28357,26 +31011,17 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     format!("auto-push QSO with {call} — {}", r.outcome),
                 );
                 if !ok {
-                    let class = match r.outcome.as_str() {
-                        "authfail" => "Credentials",
-                        "retry" => "ServerError",
+                    use tempo_core::logbook::UploadDetail as D;
+                    let class = match (r.outcome.as_str(), refusal) {
+                        ("authfail", _) => "Credentials",
+                        ("retry", _) => "ServerError",
+                        (_, Some(D::AccountDates)) => "AccountDates",
+                        (_, Some(D::QthNickname)) => "QthNickname",
                         _ => "Refused",
                     };
                     diag_upload_failure("eQSL", class, None, &dto);
                 }
-                let part = match r.outcome.as_str() {
-                    "accepted" => "eQSL ✓".to_string(),
-                    "duplicate" => "eQSL dup".to_string(),
-                    "authfail" => "eQSL ✗ login invalid — check Settings".to_string(),
-                    "retry" => "eQSL ✗ unavailable".to_string(),
-                    _ => format!(
-                        "eQSL ✗ rejected{}",
-                        r.detail
-                            .as_deref()
-                            .map(|d| format!(": {d}"))
-                            .unwrap_or_default()
-                    ),
-                };
+                let part = eqsl_toast_part(&r, refusal);
                 // "retry" = eQSL temporarily unavailable → retry; authfail/reject = don't.
                 (part, ok, r.outcome.as_str() == "retry")
             }
@@ -28831,7 +31476,7 @@ fn build_connect_board(
 ) -> Option<tempo_app::connect_web::ConnectBoardData> {
     use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
     // One bounded clone under each lock; everything else is built off-lock.
-    let snap = prop.lock().ok()?.as_ref().map(|(_, p, _)| p.clone())?;
+    let snap = prop.lock().ok()?.as_ref().map(|(_, p)| p.clone())?;
     let (call, grid) = {
         let e = engine_lock(engine);
         let s = e.settings();
@@ -29165,6 +31810,10 @@ async fn fd_log_manual(
 /// ([`EntryClaim`]): checked and logged in one hold of the lock, so Enter pressed in both windows
 /// at once logs the contact once ([`Engine::contest_log_entry`]). The same on the two commands
 /// below. Absent from every other caller, which logs exactly as before.
+///
+/// `sent_rst` is the report typed in the entry's optional "RST sent" box, for this contact only
+/// ([`Engine::contest_log_manual_rows_sent`]), and the same on the two commands below. Absent or
+/// blank, the row carries the constant report exactly as before.
 #[tauri::command]
 async fn contest_log_manual(
     state: State<'_, SharedEngine>,
@@ -29173,12 +31822,14 @@ async fn contest_log_manual(
     mode: String,
     submode: Option<String>,
     entry: Option<EntryClaim>,
+    sent_rst: Option<String>,
 ) -> Result<AppSnapshot, String> {
     journaled_command(Arc::clone(&state), move |eng| {
         let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let snt = sent_rst.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let logged = eng.contest_log_entry(
             entry.as_ref(),
-            |e| e.contest_log_manual(&call, &fields, &mode, sub),
+            |e| e.contest_log_manual_sent(&call, &fields, &mode, sub, snt),
             |logged| *logged,
         )?;
         if !logged {
@@ -29206,12 +31857,14 @@ async fn contest_log_manual_rows(
     mode: String,
     submode: Option<String>,
     entry: Option<EntryClaim>,
+    sent_rst: Option<String>,
 ) -> Result<Vec<bool>, String> {
     journaled_command(Arc::clone(&state), move |eng| {
         let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let snt = sent_rst.as_deref().map(str::trim).filter(|s| !s.is_empty());
         eng.contest_log_entry(
             entry.as_ref(),
-            |e| e.contest_log_manual_rows(&call, &rows, &mode, sub),
+            |e| e.contest_log_manual_rows_sent(&call, &rows, &mode, sub, snt),
             |landed| landed.contains(&true),
         )
     })
@@ -29239,12 +31892,14 @@ async fn contest_log_satellite(
     mode: String,
     submode: Option<String>,
     entry: Option<EntryClaim>,
+    sent_rst: Option<String>,
 ) -> Result<AppSnapshot, String> {
     journaled_command(Arc::clone(&state), move |eng| {
         let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let snt = sent_rst.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let logged = eng.contest_log_entry(
             entry.as_ref(),
-            |e| e.contest_log_satellite(&call, &fields, &mode, sub),
+            |e| e.contest_log_satellite_sent(&call, &fields, &mode, sub, snt),
             |logged| *logged,
         )?;
         if !logged {
@@ -29289,16 +31944,18 @@ fn contest_entry_reset(state: State<'_, SharedEngine>) -> Result<AppSnapshot, St
 
 /// ⭐ **The contest strip changed in one window** while the contest logger window is open: what
 /// it now shows becomes the entry both windows show ([`Engine::contest_entry_put`]). The answer
-/// is the entry's new rev. Refused with the logger window closed, and for an entry larger than
-/// any strip writes. Text in memory only: nothing is logged, written to disk or sent.
+/// is the entry's new rev. `contact` is the contact the strip showed as it changed. Refused with
+/// the logger window closed, for an entry larger than any strip writes, and when made on a
+/// contact already logged. Text in memory only: nothing is logged, written to disk or sent.
 #[tauri::command(async)]
 fn contest_entry_put(
     state: State<'_, SharedEngine>,
     call: String,
     fields: std::collections::BTreeMap<String, String>,
     marks: serde_json::Value,
+    contact: u64,
 ) -> Result<u64, String> {
-    engine_lock(&state).contest_entry_put(&call, fields, marks)
+    engine_lock(&state).contest_entry_put(&call, fields, marks, contact)
 }
 
 /// A contest contact the operator removed, as the contest screen lists it: its rows as the log
@@ -29425,6 +32082,154 @@ async fn contest_restore(
             refusal: refusal.code(),
         },
     })
+}
+
+/// What a Clear test contacts came to.
+#[derive(serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum ContestClearDto {
+    #[serde(rename_all = "camelCase")]
+    Cleared {
+        /// The contacts taken out, each now under Removed.
+        contacts: usize,
+        /// Where any of them had already gone — places a removal cannot take one back from.
+        sent_to: ContestSentToDto,
+        /// At a club: `"linked"` or `"away"`, as for a removal. Absent without club sync.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        club: Option<&'static str>,
+    },
+    Refused {
+        refusal: &'static str,
+    },
+}
+
+/// ⭐ **Clear test contacts** — the contest screen's two-click action: every contact of this
+/// running out of the contest log, each the way [`contest_remove_last`] takes the newest, when the
+/// log is still what the screen named (`row_count` rows, the newest contact `call` at `when_unix`).
+/// Kept under Removed, never deleted; club seqs stay spent, and the serial run starts again at 1.
+/// At a club the club takes each back too (`club`). Answers once the contest journal holds the change; the logbook's copies
+/// are read with the engine lock released, on the blocking pool, in one read.
+///
+/// ⛔ Not one of Remote's operations: removal is refused from afar.
+#[tauri::command]
+async fn contest_clear(
+    state: State<'_, SharedEngine>,
+    row_count: usize,
+    call: String,
+    when_unix: u64,
+) -> Result<ContestClearDto, String> {
+    let engine = Arc::clone(&state);
+    let answer = tokio::task::spawn_blocking(move || {
+        tempo_app::engine::contest_removal::clear(&engine, row_count, &call, when_unix)
+    })
+    .await
+    .map_err(|e| format!("contest log task failed: {e}"))??;
+    Ok(clear_answer(answer))
+}
+
+/// What the contest screen is told after Clear test contacts: how many contacts left the log, every
+/// place any of them had already gone (the first host and address named, WSJT-X if any went
+/// there, the services holding a logbook copy of any), and the club's route — or why nothing was
+/// cleared.
+fn clear_answer(
+    answer: Result<
+        tempo_app::engine::contest_removal::ContestCleared,
+        tempo_app::engine::contest_removal::ContestRefusal,
+    >,
+) -> ContestClearDto {
+    match answer {
+        Ok(cleared) => {
+            let removals = &cleared.removals;
+            ContestClearDto::Cleared {
+                contacts: removals.len(),
+                sent_to: ContestSentToDto {
+                    n3fjp: removals.iter().find_map(|r| r.sent.n3fjp.clone()),
+                    n1mm: removals.iter().find_map(|r| r.sent.n1mm.clone()),
+                    wsjtx: removals.iter().any(|r| r.sent.wsjtx),
+                    logbook: cleared.logbook.is_some(),
+                    uploaded: cleared.logbook.clone().unwrap_or_default(),
+                },
+                club: club_route(removals.first().and_then(|r| r.club)),
+            }
+        }
+        Err(refusal) => ContestClearDto::Refused {
+            refusal: refusal.code(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod contest_clear_answer_tests {
+    use super::*;
+    use tempo_app::engine::contest_removal::{
+        ContestCleared, ContestRefusal, ContestRemoval, ContestSentTo,
+    };
+    use tempo_core::fieldday::RemovedQso;
+
+    fn removal(sent: ContestSentTo, club: Option<bool>) -> ContestRemoval {
+        ContestRemoval {
+            entry: RemovedQso {
+                rows: Vec::new(),
+                removed_unix: 0,
+            },
+            rows: Vec::new(),
+            sent,
+            qids: Vec::new(),
+            club,
+        }
+    }
+
+    /// The wire the contest screen reads (`ContestClearAnswer` in ui/src/api.ts), by value: the
+    /// contacts counted, every place any of them had gone, the logbook's services, the club's
+    /// route; and a refusal by its code.
+    #[test]
+    fn a_clear_answers_the_screen_by_value() {
+        let cleared = ContestCleared {
+            removals: vec![
+                removal(ContestSentTo::default(), Some(true)),
+                removal(
+                    ContestSentTo {
+                        n3fjp: Some("192.168.1.20".into()),
+                        n1mm: None,
+                        wsjtx: true,
+                    },
+                    Some(true),
+                ),
+                removal(ContestSentTo::default(), Some(true)),
+            ],
+            logbook: Some(vec!["lotw"]),
+        };
+        assert_eq!(
+            serde_json::to_value(clear_answer(Ok(cleared))).unwrap(),
+            serde_json::json!({
+                "outcome": "cleared",
+                "contacts": 3,
+                "sentTo": {
+                    "n3fjp": "192.168.1.20",
+                    "wsjtx": true,
+                    "logbook": true,
+                    "uploaded": ["lotw"],
+                },
+                "club": "linked",
+            })
+        );
+        let quiet = ContestCleared {
+            removals: vec![removal(ContestSentTo::default(), None)],
+            logbook: None,
+        };
+        assert_eq!(
+            serde_json::to_value(clear_answer(Ok(quiet))).unwrap(),
+            serde_json::json!({
+                "outcome": "cleared",
+                "contacts": 1,
+                "sentTo": { "wsjtx": false, "logbook": false, "uploaded": [] },
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(clear_answer(Err(ContestRefusal::Changed))).unwrap(),
+            serde_json::json!({ "outcome": "refused", "refusal": "changed" })
+        );
+    }
 }
 
 /// What an edit came to: the contact as it was and as it is now, and where it had already gone,
@@ -29777,6 +32582,16 @@ fn fd_club_export(state: State<'_, SharedEngine>, format: String) -> Result<Stri
     eng.fd_club_export(format == "cabrillo")
 }
 
+/// The host's club log for its own Contest screen and club board: the newest contacts its club
+/// merged, newest first, each with the position that logged it and whether it is a duplicate, and
+/// how many the club holds ([`tempo_app::engine::Engine::fd_club_log_newest`]). `None` when this
+/// instance is not hosting. A read: it changes nothing, and no Remote query or operation reaches
+/// it.
+#[tauri::command(async)]
+fn fd_club_log_newest(state: State<'_, SharedEngine>) -> Option<tempo_app::dto::FdClubLogDto> {
+    engine_lock(&state).fd_club_log_newest()
+}
+
 /// What the host's Give button did: the position given, or why nothing changed.
 #[derive(serde::Serialize)]
 #[serde(tag = "outcome", rename_all = "camelCase")]
@@ -30033,7 +32848,7 @@ fn hunted_parks_count(state: State<'_, SharedEngine>) -> Result<usize, String> {
         .hunted_parks_import_count())
 }
 
-/// Import a park directory from CSV text the operator downloaded (the HRD workflow). Caches it and
+/// Import a park directory from CSV text the operator downloaded. Caches it and
 /// swaps in the new index. Returns the park count. Always works regardless of the download URL.
 #[tauri::command]
 fn import_parks_csv(parks: State<'_, SharedParks>, csv: String) -> Result<usize, String> {
@@ -31239,8 +34054,7 @@ const RADIOPROG_NOT_SAVED: &str =
     "radioprog.json could not be read and could not be moved aside, so it was not saved over";
 
 /// The ONE writer of `radioprog.json`. `path` is a parameter rather than `radioprog_path()` so a
-/// test can point it at a scratch file — the remote curation path (`remote_service::operations::
-/// program_edit`) writes through this same function, so there is never a second writer to drift.
+/// test can point it at a scratch file.
 fn store_radioprog(path: &Path, f: &RadioProgFile) -> Result<(), String> {
     let json = serde_json::to_string_pretty(f).map_err(|e| e.to_string())?;
     std::fs::write(path, json).map_err(|e| format!("couldn't save programming projects: {e}"))
@@ -31875,6 +34689,57 @@ fn clear_refusal(slot: &Mutex<Option<String>>) {
     *slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// A program sharing the radio retunes it: the CAT broker's `F` and a TCI program's `vfo` alike
+/// (`tci_server.rs`), so the two shares can never disagree about what a retune does. It is the
+/// operator's own QSY verb, with the band read from the frequency and the sideband left as it is.
+#[cfg(feature = "radio")]
+fn shared_retune(e: &mut Engine, hz: u64) {
+    let mhz = hz as f64 / 1_000_000.0;
+    // Derive the band label from the freq; keep the current band if off-plan.
+    let band = propagation::model::Band::from_mhz(mhz)
+        .map(|b| b.label().to_string())
+        .unwrap_or_else(|| e.settings().band.clone());
+    let mode = {
+        let m = e.settings().sideband.clone();
+        if m.is_empty() {
+            "USB".to_string()
+        } else {
+            m
+        }
+    };
+    e.set_frequency(mhz, &band, &mode);
+}
+
+/// A program sharing the radio asks for a mode: the rule `EngineRig::set_mode` documents (#140),
+/// for the CAT broker's `M` and a TCI program's `modulation` alike. `Err` carries the mode the
+/// radio is in, for the refusal's words; the caller says it, in its own connection-log lane.
+#[cfg(feature = "radio")]
+fn shared_mode_change(e: &mut Engine, mode: &str) -> Result<(), String> {
+    let commanded = e.rig_mode_effective();
+    if let (Some(req), Some(cur)) = (parse_cat_mode(mode), parse_cat_mode(&commanded)) {
+        if req.satisfied_by(cur) {
+            return Ok(());
+        }
+        // A side flip WITHIN the family the section is already in — the one thing that is
+        // the broker's to change.
+        if req.family == cur.family {
+            if let Some(sb) = req.sideband_word() {
+                let (mhz, band) = {
+                    let s = e.settings();
+                    (s.dial_mhz, s.band.clone())
+                };
+                e.set_frequency(mhz, &band, sb);
+                let now = e.rig_mode_effective();
+                if parse_cat_mode(&now).is_some_and(|n| req.satisfied_by(n)) {
+                    return Ok(());
+                }
+                return Err(now);
+            }
+        }
+    }
+    Err(commanded)
+}
+
 /// Bridges the CAT broker (rigctld server) to Nexus's live engine: other apps read
 /// the dial/mode/PTT and can retune Nexus. CAT-sharing (freq/mode) is always on;
 /// foreign PTT is ARBITRATED (Engine::broker_ptt): allowed only behind the
@@ -31982,21 +34847,7 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         engine_lock(&self.engine).on_air()
     }
     fn set_freq(&self, hz: u64) -> bool {
-        let mut e = engine_lock(&self.engine);
-        let mhz = hz as f64 / 1_000_000.0;
-        // Derive the band label from the freq; keep the current band if off-plan.
-        let band = propagation::model::Band::from_mhz(mhz)
-            .map(|b| b.label().to_string())
-            .unwrap_or_else(|| e.settings().band.clone());
-        let mode = {
-            let m = e.settings().sideband.clone();
-            if m.is_empty() {
-                "USB".to_string()
-            } else {
-                m
-            }
-        };
-        e.set_frequency(mhz, &band, &mode);
+        shared_retune(&mut engine_lock(&self.engine), hz);
         true
     }
     /// Set the mode a foreign client asked for — or say honestly that we did not (#140).
@@ -32027,37 +34878,18 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
     /// APRS park and with an SSTV image in flight must each name the mode the rig is really
     /// in — those three are exactly where the old answer diverged.
     fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
-        let mut e = engine_lock(&self.engine);
-        let commanded = e.rig_mode_effective();
-        if let (Some(req), Some(cur)) = (parse_cat_mode(mode), parse_cat_mode(&commanded)) {
-            if req.satisfied_by(cur) {
-                drop(e);
+        // Decided under the engine lock, said after it is released.
+        let decided = shared_mode_change(&mut engine_lock(&self.engine), mode);
+        match decided {
+            Ok(()) => {
                 clear_refusal(&self.last_mode_refusal);
-                return true;
+                true
             }
-            // A side flip WITHIN the family the section is already in — the one thing that is
-            // the broker's to change.
-            if req.family == cur.family {
-                if let Some(sb) = req.sideband_word() {
-                    let (mhz, band) = {
-                        let s = e.settings();
-                        (s.dial_mhz, s.band.clone())
-                    };
-                    e.set_frequency(mhz, &band, sb);
-                    let now = e.rig_mode_effective();
-                    drop(e);
-                    if parse_cat_mode(&now).is_some_and(|n| req.satisfied_by(n)) {
-                        clear_refusal(&self.last_mode_refusal);
-                        return true;
-                    }
-                    self.refuse_mode(mode, &now);
-                    return false;
-                }
+            Err(now) => {
+                self.refuse_mode(mode, &now);
+                false
             }
         }
-        drop(e);
-        self.refuse_mode(mode, &commanded);
-        false
     }
     fn set_ptt(&self, on: bool) -> bool {
         // v2 arbitration: a foreign app may key ONLY when the operator opted in
@@ -32622,20 +35454,36 @@ fn app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
-/// A callsign's QRZ.com profile URL. The call is sanitized to callsign characters
-/// so a crafted string can never smuggle a different URL through; a portable suffix
-/// ("PJ4/K1ABC") keeps only its base call, which is what QRZ's db pages key on.
-/// `None` when nothing callsign-shaped survives.
+/// A callsign's QRZ.com profile URL. QRZ has one page per callsign, so only the callsign
+/// is kept: an APRS SSID ("PI1UTR-10"; a callsign never contains a `-`) and a D-STAR
+/// module letter after a space ("PI1UTR B") name one of the station's transmitters and
+/// are dropped, and a portable form ("PJ4/K1ABC", "K1ABC/P") keeps only its base call,
+/// which is what QRZ's db pages key on. The call is sanitized to callsign characters
+/// so a crafted string can never smuggle a different URL through. `None` when nothing
+/// callsign-shaped survives.
+///
+/// The hosted Remote page and the DXpedition link build the same URL in the browser
+/// (`ui/src/qrzUrl.ts`); `ui/src/__fixtures__/qrz-urls.json` holds both to one table.
 fn qrz_url(call: &str) -> Option<String> {
-    // Longest slash-separated token = the base call (portable prefixes/suffixes are
-    // shorter than the call itself in practice: PJ4/K1ABC, K1ABC/P).
-    let base = call
+    let station = call
+        .trim_start()
+        .split(|c: char| c.is_whitespace() || c == '-')
+        .next()
+        .unwrap_or("");
+    // The base call is the slash-separated token that looks like a callsign, one with a
+    // digit (W1AW/PORTABLE, K1A/QRP), and among those the longest (PJ4/K1ABC, K1ABC/P),
+    // the last of equal ones; with no digit anywhere, the longest. Each is sanitized
+    // BEFORE it is measured: the browser's copy counts UTF-16 units, not bytes, so
+    // measuring the raw text could pick a different token there.
+    let base = station
         .split('/')
-        .max_by_key(|t| t.len())
-        .unwrap_or("")
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect::<String>()
+        .map(|t| {
+            t.chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
+        })
+        .max_by_key(|t| (t.bytes().any(|b| b.is_ascii_digit()), t.len()))
+        .unwrap_or_default()
         .to_ascii_uppercase();
     (!base.is_empty()).then(|| format!("https://www.qrz.com/db/{base}"))
 }
@@ -32649,6 +35497,26 @@ fn open_qrz_page(app: tauri::AppHandle, call: String) -> Result<(), String> {
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+/// The native title bar's theme, from the operator's theme pick: `"light"`, `"dark"`, or
+/// `None` for System, the computer's own setting. Windows only: there the title bar
+/// otherwise follows the computer whatever the operator picked. On Linux tao's "follow the
+/// computer" forces GTK light whatever the desktop says, which would break System on a dark
+/// desktop, and macOS draws the title bar from the system appearance itself, so off Windows
+/// this does nothing (and the UI never asks).
+#[tauri::command]
+fn set_title_bar_theme(app: tauri::AppHandle, theme: Option<String>) -> Result<(), String> {
+    let theme = match theme.as_deref() {
+        None => None,
+        Some("light") => Some(tauri::Theme::Light),
+        Some("dark") => Some(tauri::Theme::Dark),
+        Some(other) => return Err(format!("no title bar theme {other:?}")),
+    };
+    if cfg!(windows) {
+        app.set_theme(theme);
+    }
+    Ok(())
 }
 
 /// Which page a DXpedition calendar entry opens: the operation's own site when the
@@ -32793,6 +35661,9 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     // held has already done it, before it waited on anything; the second run finds the loop gone
     // and returns at once, and sweeps any daemon started since.
     stop_the_radio();
+    // Programs on JS8Call's API hear that the station is closing, as JS8Call tells them. After the
+    // unkey, and bounded: it never delays taking the transmitter off the air.
+    js8_api::closing();
     // The last settings change, still on its way to `settings.json` on the writer's thread. On
     // every quit, attached or not: it is only what the operator changed, written late.
     flush_settings();
@@ -33221,6 +36092,14 @@ pub fn run() {
     );
     install_panic_logger();
 
+    // ⛔ A computer that drives another station opens nothing of its own station: no settings
+    // opened for writing, no logbook, no Engine, no radio, no daemon, no listener and no feed.
+    // So it branches here, before the first of them (`client_mode`).
+    if let Some(station) = client_mode::requested() {
+        client_mode::run(station);
+        return;
+    }
+
     // ⛔ A second launch while another window converts this data folder's logbook stands down
     // HERE, before it has done anything — no settings written, no feed logged in, no daemon
     // started. The other window's splash already says what is happening; without this, this
@@ -33554,6 +36433,7 @@ pub fn run() {
         icom_native_cat: settings.icom_native_cat,
         flex_native_cat: settings.flex_native_cat,
         flex_radio_ip: settings.flex_radio_ip.clone(),
+        flex_native_unbenched: settings.flex_native_unbenched,
         icom_lan_host: settings.icom_lan_host.clone(),
         icom_lan_user: settings.icom_lan_user.clone(),
         icom_lan_port: settings.icom_lan_port,
@@ -33672,6 +36552,7 @@ pub fn run() {
     // The APRS-IS feed is independent of the APRS RF decoder's arm state by design, so it comes
     // up here with the other network feeds rather than when the APRS view is entered.
     sync_aprs_is_feed(&engine);
+    start_js8_links(engine.clone());
     // Integrated rotator: launch the bundled rotctld when a model is configured, and keep it
     // running — a controller switched on later comes online on its own (`supervise_rotctld`).
     sync_rotctld(&engine);
@@ -33819,8 +36700,12 @@ pub fn run() {
         //    whole cleanup. `Exit` arrives synchronously inside the terminate
         //    callback, so the unkey wait still completes before the process dies.
         match event {
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+            tauri::RunEvent::ExitRequested { .. } => quit_cleanup(app_handle),
+            // Last: Nexus started again in client mode, once this station has quit (Operate from
+            // this computer, in Stations on this network).
+            tauri::RunEvent::Exit => {
                 quit_cleanup(app_handle);
+                client_mode::started_again();
             }
             _ => {}
         }
@@ -33902,6 +36787,9 @@ fn start_on_the_logbook(
         #[cfg(feature = "radio")]
         radio_cfg,
     } = rest;
+    // The TCI server's own copy of the receive audio, taken before the radio thread owns the tap.
+    #[cfg(feature = "radio")]
+    let tci_receive_audio = radio_cfg.rx_tap.tci_audio();
     let engine = d.engine.clone();
     let fd_board_state = d.fd_board.clone();
     let prop_cache = d.prop_cache.clone();
@@ -33916,8 +36804,9 @@ fn start_on_the_logbook(
         // so new-DXCC decode highlighting works; set it BEFORE loading the log so
         // the initial worked-entity index is populated. The SAME shared resolver the store
         // keyed the hot index with when it opened, so the attach below installs that index
-        // rather than building one under this lock.
-        eng.set_dxcc_resolver_shared(country_resolver());
+        // rather than building one under this lock. Beside it, the country a record's own DXCC
+        // number gives it, which the contact's COUNTRY follows.
+        wire_country_resolvers(&mut eng);
         // Wire the subdivision resolver — `us_state_hint`, the SAME function the heard side
         // uses (get_need_alerts / the spot rows), plus the Canadian province. That shared
         // function is the whole point of the fix: the worked side used to have no resolver at
@@ -34066,6 +36955,11 @@ fn start_on_the_logbook(
         // was pending; one this build cannot read is kept aside, and the screen says where.
         eng.set_pending_qso_path(pending_qso_path());
         eng.restore_pending_qso_journal(now_unix());
+        // The uploads contest mode held when the app last closed: still held while it is on, sent
+        // once, paced, when it goes off. One this build cannot read is kept aside, and the screen
+        // says where.
+        eng.set_contest_held_uploads_path(contest_held_uploads_path());
+        eng.restore_contest_held_uploads(now_unix());
         // Saved RX-period WAVs (settings.save_wav) land beside the QSO recordings.
         eng.set_periods_dir(&recordings_dir().join("periods").to_string_lossy());
         // Restore the store-and-forward outbound queue BEFORE the conversation
@@ -34536,12 +37430,13 @@ fn start_on_the_logbook(
                     // publication, and stripping it would leave their master log missing what
                     // they typed in Nexus. The line this fix draws is a nominated local logger
                     // vs a service or a broadcast — flip this one word if the operator wants it
-                    // drawn elsewhere.
+                    // drawn elsewhere. Its COUNTRY is the one its DXCC number gives it, as
+                    // every service's is (`log_queries::sent`).
                     dxkeeper_push_async(
                         host,
                         base,
                         uploads,
-                        tempo_core::logbook::adif_record_own_log(&rec),
+                        tempo_core::logbook::adif_record_own_log(&log_queries::sent(rec.clone())),
                     );
                 }
                 let failed = auto_push_one(
@@ -34569,6 +37464,16 @@ fn start_on_the_logbook(
                             rec.call
                         ),
                     );
+                }
+                // Every leg it owed but did not fail transiently is done: sent, or refused for
+                // good. A contact contest mode held stays in its file until it owes nothing, so
+                // a quit part-way through the paced release sends the rest at the next launch.
+                // `failed` before the HRDLog cap: a leg that cap gives up on is retried then.
+                let done = p.legs & !failed;
+                if done != 0 {
+                    engine_lock_result(&push_engine)
+                        .unwrap_or_else(|e| e.into_inner())
+                        .contest_upload_done(&rec, done);
                 }
                 let failed = capped;
                 // Transient failures (network down / service busy) → re-queue ONLY
@@ -34775,6 +37680,17 @@ fn start_on_the_logbook(
         });
     }
 
+    // Nexus as a TCI server, for the programs on this computer that drive an SDR program over TCI
+    // (WSJT-X, JTDX, MSHV, loggers, amplifier and tuner controllers): one manager thread in the
+    // CAT-broker mold above, on 127.0.0.1 and ::1 only. Off by default — see tci_server.rs.
+    #[cfg(feature = "radio")]
+    tci_server::spawn(engine.clone(), tci_receive_audio, d.meter_feed.clone());
+
+    // JS8Call's API for other programs on this computer, read-only: one manager thread in the
+    // CAT-broker mold above, hot-applying the TCP and UDP switches. Off by default — nothing is
+    // bound or sent until the operator turns a side on.
+    js8_api::spawn(engine.clone());
+
     // Field Day club sync: one manager thread in the CAT-broker mold above —
     // poll settings 1 s, hot-apply both roles. HOST role (fd_host_enable) =
     // the club listener on 0.0.0.0:fd_host_port (the app's one deliberate
@@ -34881,7 +37797,7 @@ fn start_on_the_logbook(
                                             e.fd_note_host_lan(lan);
                                             (
                                                 e.fd_event_label().unwrap_or_default(),
-                                                e.settings().mycall.clone(),
+                                                e.fd_club_call(),
                                             )
                                         };
                                         if let Ok(sock) = &sock {
@@ -35232,12 +38148,13 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
     handle.manage(remote_service_for(
         &d,
         handle.state::<remote_monitor::Publisher>().inner().clone(),
-        handle.state::<LogTallies>().needs.clone(),
         &handle,
     ));
-    // Pounce detector. Emits `pounce` to every window when a rare one appears — the
+    // Pounce detector. Raises an alert to every window when a rare one appears — the
     // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
-    // panel windows get it too without tracking listener lifetimes.
+    // panel windows get it too without tracking listener lifetimes. The alert is made
+    // here, with its id (`alert::raised`), so a computer driving this station hears the
+    // same alert, under the same id, on its link.
     {
         use tauri::Emitter;
         // Take-once: the dependency bundle is cloned for a possible retry, so the
@@ -35256,7 +38173,7 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
                 .name("nexus-pounce".into())
                 .spawn(move || {
                     pouncer::run(eng, needs, ota, rx, recent, move |p| {
-                        let _ = emit_handle.emit("pounce", &p);
+                        let _ = emit_handle.emit(alert::EVENT, &alert::raised("pounce", &p));
                     });
                 })
                 .expect("spawn pounce detector");
@@ -35267,6 +38184,17 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
             );
         }
     }
+    // Nexus's needed spots for a TCI radio's own panadapter: read from the Needed board's list
+    // while the radio in use has its "Spots on the SDR panadapter" on (`tci_spots`).
+    #[cfg(feature = "radio")]
+    tci_spots::spawn(
+        d.engine.clone(),
+        handle.state::<LogTallies>().needs.clone(),
+        d.live_paths.clone(),
+        d.region_paths.clone(),
+        d.spots.clone(),
+        d.ota_spots.clone(),
+    );
     // AI CW decoder (beta): resolve the DeepCW model from the app's cross-platform
     // RESOURCE dir (where Tauri bundles `resources/deepcw/*`) — next to the exe on
     // Windows, under usr/lib/<app>/resources on a Linux .deb/AppImage. The prior
@@ -35382,7 +38310,9 @@ fn finish_launch_or_say_why(handle: tauri::AppHandle, d: BuildDeps, rest: Launch
 }
 
 /// Send the main window from the page it waits on to the app, and hand it back.
-fn send_main_window_to_the_app(handle: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
+fn send_main_window_to_the_app<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+) -> Result<tauri::WebviewWindow<R>, String> {
     use tauri::Manager;
     let main = handle
         .get_webview_window("main")
@@ -35479,6 +38409,562 @@ fn splash_notes(handle: &tauri::AppHandle) -> std::sync::mpsc::Sender<SplashNote
     notes
 }
 
+/// The app's commands: every one its screens can call, in one list. The station's app and client
+/// mode's both run them through this handler; client mode routes each by its class first
+/// (`client_mode::Client::handle`), so a command that runs at the shack never reaches it there.
+pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + Sync> {
+    type Commands = Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + Sync>;
+    let commands: Commands = Box::new(tauri::generate_handler![
+        display_metrics,
+        update_install_block,
+        prepare_update_install,
+        restart_app,
+        client_mode::client_status,
+        client_mode::client_still_here,
+        client_mode::client_take_control,
+        client_mode::client_audio,
+        client_mode::set_client_audio,
+        client_mode::client_audio_level,
+        client_mode::client_audio_test,
+        client_mode::leave_client_mode,
+        quit::logbook_save_choice,
+        check_beta_update,
+        install_beta_update,
+        log_operators,
+        log_activations,
+        export_log_for_activation,
+        export_settings_bundle,
+        import_settings_bundle,
+        export_log_for_operator,
+        ui_state_load,
+        ui_state_save,
+        get_snapshot,
+        remote_monitor::get_remote_monitor_frame,
+        remote_service::get_remote_station_status,
+        get_stream_watched,
+        remote_service::remote_station_action,
+        send_message,
+        resend_chat,
+        select_peer,
+        archive_conversation,
+        set_tier,
+        set_source,
+        get_spectrum_row,
+        get_scope_row,
+        get_scope_frame,
+        get_rf_frame,
+        get_meters,
+        get_fast_power,
+        set_mode,
+        get_settings,
+        set_settings,
+        reset_settings,
+        export_log,
+        export_general_log,
+        export_selected_log,
+        save_text_to_downloads,
+        save_png_to_downloads,
+        civ_diagnostic_log,
+        all_txt_location,
+        winlink_mailbox_list,
+        winlink_message,
+        winlink_mailbox_rebuild,
+        winlink_mark_read,
+        winlink_mailbox_location,
+        winlink_connect,
+        winlink_session_status,
+        winlink_disconnect,
+        set_winlink_password,
+        clear_winlink_password,
+        diag_log_location,
+        reveal_diag_log,
+        recordings_location,
+        sstv_delete_image,
+        reveal_recordings,
+        reveal_sstv_gallery,
+        shack_files::shack_file_list,
+        shack_files::shack_file_read,
+        shack_files::shack_file_save,
+        shack_files::shack_gallery_image,
+        get_data_folder,
+        set_data_folder,
+        clear_data_folder,
+        pick_data_folder,
+        reveal_all_txt,
+        open_qrz_page,
+        set_title_bar_theme,
+        open_dxped_page,
+        open_external_url,
+        os_notify,
+        app_version,
+        radio_launch_info,
+        choose_radio,
+        use_single_radio,
+        import_pota_log,
+        set_skip_tx1,
+        civ_diagnostic_status,
+        broadcast,
+        get_serial_ports,
+        get_serial_ports_detailed,
+        get_audio_devices,
+        detect_rigs,
+        probe_cat_ports,
+        point_rotator,
+        point_rotator_elevation,
+        stop_rotator,
+        set_log_form_grid,
+        discover_flex,
+        tci_probe,
+        get_sat_schedule,
+        get_sat_pass_needs,
+        get_sat_sked,
+        get_iss_pass,
+        get_sat_detail,
+        set_sat_transponder,
+        get_sat_transponder,
+        start_sat_track,
+        stop_sat_track,
+        sat_track_status,
+        point_rotator_at_call,
+        rotator_bearing_to_call,
+        read_rotator,
+        read_rotator_state,
+        cw_decode,
+        set_ai_cw,
+        set_unassisted_mode,
+        cw_clear,
+        preview_cw,
+        cw_skim,
+        rtty_arm,
+        rtty_auto_arm,
+        get_rtty_state,
+        get_rtty_scope,
+        aprs_arm,
+        aprs_auto_arm,
+        get_aprs_heard,
+        get_aprs_health,
+        get_aprs_tx_notice,
+        get_aprs_is_status,
+        get_aprs_stations,
+        aprs_send_beacon,
+        aprs_send_message,
+        aprs_tune,
+        repeater_tune,
+        rtty_send,
+        rtty_set_latched,
+        rtty_type,
+        rtty_stop,
+        rtty_clear,
+        rtty_afc_reset,
+        rtty_net,
+        rtty_set_auto,
+        rtty_auto_cq,
+        rtty_auto_answer,
+        rtty_auto_abort,
+        psk_arm,
+        psk_auto_arm,
+        get_psk_state,
+        get_jtty_state,
+        jtty_arm,
+        jtty_auto_arm,
+        jtty_set_rx,
+        jtty_set_band,
+        jtty_clear,
+        jtty_send,
+        jtty_fkey,
+        jtty_live_start,
+        jtty_live_commit,
+        jtty_sign_off,
+        jtty_stop,
+        jtty_set_tx,
+        jtty_set_serial,
+        js8_enter,
+        get_js8_state,
+        js8_locator_refusal,
+        js8_set_speed,
+        js8_set_rx_speeds,
+        js8_word_check,
+        js8_word_suggestions,
+        js8_set_filter,
+        js8_default_frequencies,
+        js8_set_qsy_center,
+        js8_qsy_to_centre,
+        js8_hop_answer,
+        js8_send,
+        js8_send_command,
+        js8_call_cq,
+        js8_arm,
+        js8_cq_repeat,
+        js8_answer_reply,
+        js8_composer,
+        js8_typeahead,
+        js8_typeahead_state,
+        js8_drop_queue,
+        js8_inbox_mark,
+        js8_inbox_delete,
+        js8_heartbeat_now,
+        js8_select_call,
+        js8_store_message,
+        js8_inbox_dropped_clear,
+        js8_set_rx_blocklist,
+        js8_set_groups,
+        js8_set_avoid_allcall,
+        psk_clear,
+        psk_afc_reset,
+        psk_net,
+        psk_set_mode,
+        psk_send,
+        psk_set_latched,
+        psk_type,
+        psk_stop,
+        sstv_arm,
+        sstv_manual_rx,
+        sstv_auto_arm,
+        sstv_auto_disarm,
+        get_sstv_state,
+        sstv_send,
+        sstv_stop,
+        get_rig_models,
+        get_all_rig_models,
+        get_portless_rig_models,
+        get_cat_cw_unproven_rig_models,
+        get_ptt_mic_data_rig_models,
+        amp_command,
+        get_band_plan,
+        set_license_class,
+        get_licensed_band_plan,
+        privilege_spans::get_privilege_spans,
+        dxcc_entity_names,
+        dxcc_entities,
+        dxcc_entity_continents,
+        cloudlog_station_info,
+        dxcc_entity_locations,
+        set_frequency,
+        sstv_tune,
+        pick_band,
+        tune_channel,
+        set_operating_mode,
+        work_spot,
+        get_connection_log,
+        get_openings_log,
+        get_assistance_journal,
+        contest_lists::scp_ensure,
+        contest_lists::get_scp_status,
+        contest_lists::get_scp_calls,
+        contest_lists::import_call_history,
+        contest_lists::get_call_history_status,
+        contest_lists::get_call_history,
+        contest_lists::clear_call_history,
+        get_credentials_status,
+        send_cw,
+        send_cw_armed,
+        set_cw_peer_info,
+        set_cw_speed_match,
+        set_cw_wpm,
+        set_decode_depth,
+        stop_cw,
+        set_cw_keyer,
+        set_ptt,
+        hold_ptt_lock,
+        arm_stream_mic,
+        release_stream_mic,
+        set_rf_power,
+        set_mic_gain,
+        set_nr_level,
+        set_comp_level,
+        set_notch_freq,
+        set_af_gain,
+        set_monitor_gain,
+        set_att_db,
+        set_preamp_db,
+        set_rf_gain,
+        set_squelch,
+        set_sub_level,
+        set_slice,
+        set_agc,
+        set_split,
+        set_rig_func,
+        set_sideband_override,
+        set_filter_width,
+        set_scope_span,
+        set_yaesu_scope_mode,
+        set_scope_ref,
+        set_flex_pan_span,
+        set_flex_pan_ref,
+        set_scope_fixed,
+        set_rit,
+        set_xit,
+        set_vfo,
+        swap_vfo,
+        play_voice_message,
+        stop_voice,
+        start_voice_recording,
+        cancel_voice_recording,
+        stop_voice_recording,
+        import_voice_message,
+        set_voice_label,
+        clear_voice_message,
+        get_voice_messages,
+        start_qso_recording,
+        stop_qso_recording,
+        set_tx_enabled,
+        set_tx_level,
+        set_msk144_period,
+        set_rx_gain,
+        set_active_radio,
+        set_peg_lock,
+        confirm_sat_uplink,
+        add_radio,
+        remove_radio,
+        rename_radio,
+        set_radio_bands,
+        set_routing_rules,
+        set_default_radio,
+        route_preview,
+        update_radio_profile,
+        set_tune,
+        atu_tune,
+        halt_tx,
+        dismiss_tx_alarm,
+        tci_server_disconnect,
+        test_cat,
+        repair_clock,
+        club_firewall_status,
+        club_firewall_press,
+        set_tx_even,
+        set_tx_cycle_auto,
+        set_beacon,
+        set_rx_offset,
+        set_tx_offset,
+        override_next_tx,
+        redecode,
+        start_cq,
+        start_running,
+        start_search_and_pounce,
+        call_cq,
+        set_chat_cq,
+        resume_chat_cq,
+        notify_erase,
+        qrz_test_connection,
+        set_hunt_target,
+        clear_hunt_target,
+        fd_log_manual,
+        contest_log_manual,
+        contest_log_manual_rows,
+        contest_log_satellite,
+        contest_working,
+        contest_entry_reset,
+        contest_entry_put,
+        contest_remove_last,
+        contest_restore,
+        contest_clear,
+        contest_removed,
+        contest_edit,
+        fd_merge_to_general,
+        contest_unmerged,
+        contest_merge_unmerged,
+        fd_set_upload,
+        contest_i_moved,
+        fd_discover_events,
+        fd_club_export,
+        fd_club_log_newest,
+        fd_club_give_position,
+        fd_club_remove_position,
+        fd_club_allow_back,
+        fd_scoreboard_status,
+        n3fjp_test_connection,
+        set_hold_tx_freq,
+        set_blocked_calls,
+        set_rtty_macros,
+        set_contest_esm,
+        set_psk_macros,
+        set_beta_updates,
+        retire_wanted_calls,
+        set_watch_list,
+        set_launch_at_login,
+        answer_remote_autostart_offer,
+        set_fd_operator,
+        call_station,
+        open_panel_window,
+        close_panel_window,
+        dock_bandmap_window,
+        window_state::get_window_behind,
+        window_state::set_window_behind,
+        window_state::get_window_on_top,
+        window_state::set_window_on_top,
+        window_state::focus_window,
+        remote_window::open_remote_stations_window,
+        remote_window::open_lan_stations_window,
+        street_map::street_map_packs,
+        street_map::street_map_read,
+        street_map::street_map_asset,
+        street_map::street_map_size,
+        street_map::street_map_download,
+        street_map::street_map_cancel,
+        street_map::street_map_remove,
+        street_map::street_map_unfinished,
+        street_map::street_map_updates,
+        street_map::street_map_info,
+        street_map::street_map_install_file,
+        set_area,
+        qso_resend,
+        qso_freetext,
+        log_current_qso,
+        confirm_pending_log,
+        discard_pending_log,
+        log_qso,
+        resolve_entity,
+        contest_zone_hint,
+        contest_logged_qth,
+        edit_qso,
+        mark_qsl_sent,
+        mark_qsl_card,
+        set_sat_tag,
+        lotw_sat_names,
+        delete_qso,
+        log_by_id::edit_qso_by_id,
+        log_by_id::mark_qsl_sent_by_id,
+        log_by_id::mark_qsl_card_by_id,
+        log_by_id::set_sat_tag_by_id,
+        log_by_id::set_dxcc_by_id,
+        log_by_id::delete_qso_by_id,
+        log_queries::ask_log,
+        purge_log,
+        get_awards,
+        get_call_stats,
+        get_journey,
+        get_log_stats,
+        get_log_timeline,
+        get_confirmation_diagnostics,
+        import_adif,
+        sync_lotw_report,
+        set_lotw_password,
+        clear_lotw_password,
+        set_icom_lan_password,
+        clear_icom_lan_password,
+        icom_lan_password_saved,
+        download_lotw_report,
+        reset_lotw_cursor,
+        upload_lotw_report,
+        mark_lotw_uploaded,
+        set_eqsl_password,
+        clear_eqsl_password,
+        download_eqsl_report,
+        set_qrz_password,
+        clear_qrz_password,
+        set_hamqth_password,
+        clear_hamqth_password,
+        qrz_lookup,
+        check_for_update,
+        open_download_page,
+        update_route,
+        set_qrz_logbook_key,
+        clear_qrz_logbook_key,
+        set_cloudlog_key,
+        clear_cloudlog_key,
+        qrz_push_qso,
+        qrz_correct_preview,
+        qrz_correct_apply,
+        qrz_correct_undo_miss,
+        sync_qrz,
+        set_clublog_password,
+        clear_clublog_password,
+        clublog_push_qso,
+        eqsl_push_qso,
+        set_hrdlog_code,
+        clear_hrdlog_code,
+        set_wrl_key,
+        clear_wrl_key,
+        wrl_push_qso,
+        hrdlog_push_qso,
+        get_ota_spots,
+        get_ota_map_spots,
+        get_kp_forecast,
+        get_solar_indices,
+        connect_web_status,
+        search_parks,
+        parks_count,
+        hunted_parks_count,
+        import_parks_csv,
+        import_hunted_parks_csv,
+        download_parks,
+        lookup_park,
+        lookup_park_live,
+        set_repeaterbook_token,
+        repeater_search,
+        geocode_city,
+        radioprog_list_projects,
+        radioprog_save_project,
+        radioprog_delete_project,
+        radioprog_file_notice,
+        export_channels,
+        set_activation,
+        set_activation_state,
+        clear_activation,
+        get_activation,
+        park_state_review,
+        apply_park_states,
+        start_confirmation_check,
+        confirmation_check,
+        apply_confirmation_check,
+        cancel_confirmation_check,
+        get_need_alerts,
+        get_all_spots,
+        get_tci_spots,
+        click_tci_spot,
+        get_propagation,
+        get_path_outlook,
+        get_band_outlook,
+        get_getting_out,
+        get_aurora,
+        get_pca,
+        get_declination,
+        get_satellites,
+        get_contests,
+        post_spot,
+        self_spot_activation,
+        contest_spot::contest_self_spot,
+        contest_spot::cluster_self_spot,
+        freq_markers::get_freq_markers,
+        freq_markers::add_freq_marker,
+        freq_markers::remove_freq_marker,
+        freq_markers::freq_marker_qsy,
+        get_lotw_users_status,
+        fetch_lotw_users,
+        get_fcc_states_status,
+        fetch_fcc_states,
+        get_cty_status,
+        fetch_cty,
+        get_fd_rules_status,
+        fetch_fd_rules,
+        get_fd_ruleset,
+        get_tle_status,
+        fetch_tles_now,
+        import_tles,
+        get_kc2g_muf,
+        get_space_wx_scales,
+        get_xray_now,
+        get_dxped_windows,
+        get_feed_health,
+        get_cluster_nodes,
+        qsy_set_enabled,
+        qsy_configure,
+        qsy_move_now,
+        qsy_pause,
+        qsy_stop
+    ]);
+    // A test build's road switch brings its one command; a shipped build has none of it.
+    #[cfg(feature = "bench-road-switch")]
+    let commands = bench_road_switch::with_its_command(commands);
+    commands
+}
+
+/// The context the app is built in: its configuration and its frontend, embedded once for the
+/// station's app and client mode's alike.
+fn context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 /// One attempt at building the Tauri application.
 ///
 /// Split out of [`run`] for exactly one reason: it has to be callable TWICE. `build()` used to
@@ -35503,6 +38989,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         // The data-folder picker (#289). Driven from Rust only (`pick_data_folder`); no
         // capability entry, so the webview cannot open a dialog of its own.
         .plugin(tauri_plugin_dialog::init())
+        // WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P, Ctrl+F…) off in every window:
+        // set on each webview as Tauri makes it, the configured windows included.
+        .plugin(browser_keys::init())
         .manage(d.engine)
         .manage(remote_publisher)
         .manage(d.spectrum_feed)
@@ -35532,492 +39021,10 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(BetaUpdateState::default())
         .manage(log_queries::LogQueries::default())
         .manage(street_map::StreetMapState::default())
-        .invoke_handler(tauri::generate_handler![
-            display_metrics,
-            update_install_block,
-            prepare_update_install,
-            restart_app,
-            quit::logbook_save_choice,
-            check_beta_update,
-            install_beta_update,
-            log_operators,
-            log_activations,
-            export_log_for_activation,
-            export_settings_bundle,
-            import_settings_bundle,
-            export_log_for_operator,
-            ui_state_load,
-            ui_state_save,
-            get_snapshot,
-            remote_monitor::get_remote_monitor_frame,
-            remote_service::get_remote_station_status,
-            remote_service::publish_remote_memory_bank,
-            remote_service::remote_station_action,
-            send_message,
-            resend_chat,
-            select_peer,
-            archive_conversation,
-            set_tier,
-            set_source,
-            get_spectrum_row,
-            get_scope_row,
-            get_scope_frame,
-            get_rf_frame,
-            get_meters,
-            get_fast_power,
-            set_mode,
-            get_settings,
-            set_settings,
-            reset_settings,
-            export_log,
-            export_general_log,
-            save_text_to_downloads,
-            save_png_to_downloads,
-            civ_diagnostic_log,
-            all_txt_location,
-            winlink_mailbox_list,
-            winlink_message,
-            winlink_mailbox_rebuild,
-            winlink_mark_read,
-            winlink_mailbox_location,
-            winlink_connect,
-            winlink_session_status,
-            winlink_disconnect,
-            set_winlink_password,
-            clear_winlink_password,
-            diag_log_location,
-            reveal_diag_log,
-            recordings_location,
-            sstv_delete_image,
-            reveal_recordings,
-            reveal_sstv_gallery,
-            get_data_folder,
-            set_data_folder,
-            clear_data_folder,
-            pick_data_folder,
-            reveal_all_txt,
-            open_qrz_page,
-            open_dxped_page,
-            open_external_url,
-            os_notify,
-            app_version,
-            radio_launch_info,
-            choose_radio,
-            use_single_radio,
-            import_pota_log,
-            set_skip_tx1,
-            civ_diagnostic_status,
-            broadcast,
-            get_serial_ports,
-            get_serial_ports_detailed,
-            get_audio_devices,
-            detect_rigs,
-            probe_cat_ports,
-            point_rotator,
-            point_rotator_elevation,
-            stop_rotator,
-            set_log_form_grid,
-            discover_flex,
-            get_sat_schedule,
-            get_sat_pass_needs,
-            get_sat_sked,
-            get_iss_pass,
-            get_sat_detail,
-            set_sat_transponder,
-            get_sat_transponder,
-            start_sat_track,
-            stop_sat_track,
-            sat_track_status,
-            point_rotator_at_call,
-            rotator_bearing_to_call,
-            read_rotator,
-            read_rotator_state,
-            cw_decode,
-            set_ai_cw,
-            set_unassisted_mode,
-            cw_clear,
-            preview_cw,
-            cw_skim,
-            rtty_arm,
-            rtty_auto_arm,
-            get_rtty_state,
-            aprs_arm,
-            aprs_auto_arm,
-            get_aprs_heard,
-            get_aprs_health,
-            get_aprs_tx_notice,
-            get_aprs_is_status,
-            get_aprs_stations,
-            aprs_send_beacon,
-            aprs_send_message,
-            aprs_tune,
-            repeater_tune,
-            rtty_send,
-            rtty_set_latched,
-            rtty_type,
-            rtty_stop,
-            rtty_clear,
-            rtty_afc_reset,
-            rtty_net,
-            rtty_set_auto,
-            rtty_auto_cq,
-            rtty_auto_answer,
-            rtty_auto_abort,
-            psk_arm,
-            psk_auto_arm,
-            get_psk_state,
-            get_jtty_state,
-            jtty_arm,
-            jtty_auto_arm,
-            jtty_set_rx,
-            jtty_set_band,
-            jtty_clear,
-            jtty_send,
-            jtty_fkey,
-            jtty_live_start,
-            jtty_live_commit,
-            jtty_sign_off,
-            jtty_stop,
-            jtty_set_tx,
-            jtty_set_serial,
-            js8_enter,
-            get_js8_state,
-            js8_locator_refusal,
-            js8_set_speed,
-            js8_set_rx_speeds,
-            js8_send,
-            js8_send_command,
-            js8_call_cq,
-            js8_arm,
-            js8_cq_repeat,
-            js8_answer_reply,
-            js8_composer,
-            js8_drop_queue,
-            js8_inbox_mark,
-            js8_inbox_delete,
-            psk_clear,
-            psk_afc_reset,
-            psk_net,
-            psk_set_mode,
-            psk_send,
-            psk_set_latched,
-            psk_type,
-            psk_stop,
-            sstv_arm,
-            sstv_manual_rx,
-            sstv_auto_arm,
-            sstv_auto_disarm,
-            get_sstv_state,
-            sstv_send,
-            sstv_stop,
-            get_rig_models,
-            get_all_rig_models,
-            get_portless_rig_models,
-            get_cat_cw_unproven_rig_models,
-            get_ptt_mic_data_rig_models,
-            amp_command,
-            get_band_plan,
-            set_license_class,
-            get_licensed_band_plan,
-            privilege_spans::get_privilege_spans,
-            dxcc_entity_names,
-            dxcc_entity_continents,
-            cloudlog_station_info,
-            dxcc_entity_locations,
-            set_frequency,
-            sstv_tune,
-            pick_band,
-            tune_channel,
-            set_operating_mode,
-            work_spot,
-            get_connection_log,
-            get_openings_log,
-            get_assistance_journal,
-            contest_lists::scp_ensure,
-            contest_lists::get_scp_status,
-            contest_lists::get_scp_calls,
-            contest_lists::import_call_history,
-            contest_lists::get_call_history_status,
-            contest_lists::get_call_history,
-            contest_lists::clear_call_history,
-            get_credentials_status,
-            send_cw,
-            send_cw_armed,
-            set_cw_peer_info,
-            set_cw_wpm,
-            set_decode_depth,
-            stop_cw,
-            set_cw_keyer,
-            set_ptt,
-            arm_stream_mic,
-            release_stream_mic,
-            set_rf_power,
-            set_mic_gain,
-            set_nr_level,
-            set_comp_level,
-            set_notch_freq,
-            set_af_gain,
-            set_monitor_gain,
-            set_att_db,
-            set_preamp_db,
-            set_rf_gain,
-            set_squelch,
-            set_sub_level,
-            set_slice,
-            set_agc,
-            set_split,
-            set_rig_func,
-            set_sideband_override,
-            set_filter_width,
-            set_scope_span,
-            set_yaesu_scope_mode,
-            set_scope_ref,
-            set_flex_pan_span,
-            set_flex_pan_ref,
-            set_scope_fixed,
-            set_rit,
-            set_xit,
-            set_vfo,
-            swap_vfo,
-            play_voice_message,
-            stop_voice,
-            start_voice_recording,
-            cancel_voice_recording,
-            stop_voice_recording,
-            import_voice_message,
-            set_voice_label,
-            clear_voice_message,
-            get_voice_messages,
-            start_qso_recording,
-            stop_qso_recording,
-            set_tx_enabled,
-            set_tx_level,
-            set_msk144_period,
-            set_rx_gain,
-            set_active_radio,
-            set_peg_lock,
-            confirm_sat_uplink,
-            add_radio,
-            remove_radio,
-            rename_radio,
-            set_radio_bands,
-            set_routing_rules,
-            set_default_radio,
-            route_preview,
-            update_radio_profile,
-            set_tune,
-            atu_tune,
-            halt_tx,
-            dismiss_tx_alarm,
-            test_cat,
-            repair_clock,
-            club_firewall_status,
-            club_firewall_press,
-            set_tx_even,
-            set_tx_cycle_auto,
-            set_beacon,
-            set_rx_offset,
-            set_tx_offset,
-            override_next_tx,
-            redecode,
-            start_cq,
-            start_running,
-            start_search_and_pounce,
-            call_cq,
-            set_chat_cq,
-            resume_chat_cq,
-            notify_erase,
-            qrz_test_connection,
-            set_hunt_target,
-            clear_hunt_target,
-            fd_log_manual,
-            contest_log_manual,
-            contest_log_manual_rows,
-            contest_log_satellite,
-            contest_working,
-            contest_entry_reset,
-            contest_entry_put,
-            contest_remove_last,
-            contest_restore,
-            contest_removed,
-            contest_edit,
-            fd_merge_to_general,
-            contest_unmerged,
-            contest_merge_unmerged,
-            fd_set_upload,
-            contest_i_moved,
-            fd_discover_events,
-            fd_club_export,
-            fd_club_give_position,
-            fd_club_remove_position,
-            fd_club_allow_back,
-            fd_scoreboard_status,
-            n3fjp_test_connection,
-            set_hold_tx_freq,
-            set_blocked_calls,
-            set_rtty_macros,
-            set_contest_esm,
-            set_psk_macros,
-            set_beta_updates,
-            retire_wanted_calls,
-            set_watch_list,
-            set_launch_at_login,
-            answer_remote_autostart_offer,
-            set_fd_operator,
-            call_station,
-            open_panel_window,
-            close_panel_window,
-            dock_bandmap_window,
-            window_state::get_window_behind,
-            window_state::set_window_behind,
-            remote_window::open_remote_stations_window,
-            remote_window::open_lan_stations_window,
-            street_map::street_map_packs,
-            street_map::street_map_read,
-            street_map::street_map_asset,
-            street_map::street_map_size,
-            street_map::street_map_download,
-            street_map::street_map_cancel,
-            street_map::street_map_remove,
-            street_map::street_map_unfinished,
-            street_map::street_map_updates,
-            street_map::street_map_info,
-            street_map::street_map_install_file,
-            set_area,
-            qso_resend,
-            qso_freetext,
-            log_current_qso,
-            confirm_pending_log,
-            discard_pending_log,
-            log_qso,
-            resolve_entity,
-            contest_zone_hint,
-            edit_qso,
-            mark_qsl_sent,
-            mark_qsl_card,
-            set_sat_tag,
-            lotw_sat_names,
-            delete_qso,
-            log_by_id::edit_qso_by_id,
-            log_by_id::mark_qsl_sent_by_id,
-            log_by_id::mark_qsl_card_by_id,
-            log_by_id::set_sat_tag_by_id,
-            log_by_id::delete_qso_by_id,
-            log_queries::ask_log,
-            purge_log,
-            get_awards,
-            get_journey,
-            get_log_stats,
-            get_confirmation_diagnostics,
-            import_adif,
-            sync_lotw_report,
-            set_lotw_password,
-            clear_lotw_password,
-            set_icom_lan_password,
-            clear_icom_lan_password,
-            icom_lan_password_saved,
-            download_lotw_report,
-            reset_lotw_cursor,
-            upload_lotw_report,
-            mark_lotw_uploaded,
-            set_eqsl_password,
-            clear_eqsl_password,
-            download_eqsl_report,
-            set_qrz_password,
-            clear_qrz_password,
-            set_hamqth_password,
-            clear_hamqth_password,
-            qrz_lookup,
-            check_for_update,
-            open_download_page,
-            update_route,
-            set_qrz_logbook_key,
-            clear_qrz_logbook_key,
-            set_cloudlog_key,
-            clear_cloudlog_key,
-            qrz_push_qso,
-            qrz_correct_preview,
-            qrz_correct_apply,
-            qrz_correct_undo_miss,
-            sync_qrz,
-            set_clublog_password,
-            clear_clublog_password,
-            clublog_push_qso,
-            eqsl_push_qso,
-            set_hrdlog_code,
-            clear_hrdlog_code,
-            set_wrl_key,
-            clear_wrl_key,
-            wrl_push_qso,
-            hrdlog_push_qso,
-            get_ota_spots,
-            get_ota_map_spots,
-            get_kp_forecast,
-            get_solar_indices,
-            connect_web_status,
-            search_parks,
-            parks_count,
-            hunted_parks_count,
-            import_parks_csv,
-            import_hunted_parks_csv,
-            download_parks,
-            lookup_park,
-            lookup_park_live,
-            set_repeaterbook_token,
-            repeater_search,
-            geocode_city,
-            radioprog_list_projects,
-            radioprog_save_project,
-            radioprog_delete_project,
-            radioprog_file_notice,
-            export_channels,
-            set_activation,
-            set_activation_state,
-            clear_activation,
-            get_activation,
-            park_state_review,
-            apply_park_states,
-            start_confirmation_check,
-            confirmation_check,
-            apply_confirmation_check,
-            cancel_confirmation_check,
-            get_need_alerts,
-            get_all_spots,
-            get_propagation,
-            get_path_outlook,
-            get_band_outlook,
-            get_getting_out,
-            get_aurora,
-            get_pca,
-            get_declination,
-            get_satellites,
-            get_contests,
-            post_spot,
-            self_spot_activation,
-            get_lotw_users_status,
-            fetch_lotw_users,
-            get_fcc_states_status,
-            fetch_fcc_states,
-            get_cty_status,
-            fetch_cty,
-            get_fd_rules_status,
-            fetch_fd_rules,
-            get_fd_ruleset,
-            get_tle_status,
-            fetch_tles_now,
-            import_tles,
-            get_kc2g_muf,
-            get_space_wx_scales,
-            get_xray_now,
-            get_dxped_windows,
-            get_feed_health,
-            get_cluster_nodes,
-            qsy_set_enabled,
-            qsy_configure,
-            qsy_move_now,
-            qsy_pause,
-            qsy_stop
-        ])
+        // Whether a stream watches the main window: settings reads ask it from the first launch
+        // on, before the Remote service that opens a stream exists.
+        .manage(remote_service::stream::Watched::default())
+        .invoke_handler(app_commands())
         // `move`: the hook hands the launch's second half its own copy of the bundle (`launch`),
         // which it owns rather than borrowing a local that is about to go out of scope.
         .setup(move |app| {
@@ -36132,7 +39139,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                 }
             }
         })
-        .build(tauri::generate_context!())
+        .build(context())
 }
 
 /// The `main` window's operating-system handle, the one a streamed session captures.
@@ -36160,7 +39167,6 @@ fn main_window_handle(_: &tauri::AppHandle) -> Option<isize> {
 fn remote_service_for(
     d: &BuildDeps,
     publisher: remote_monitor::Publisher,
-    needs: NeedsKept,
     handle: &tauri::AppHandle,
 ) -> remote_service::Service {
     // Remote as a stream: a streamed operator's input goes to THIS app's main window, as a DOM
@@ -36181,33 +39187,35 @@ fn remote_service_for(
     let app = handle.clone();
     let main_window: remote_service::stream::WindowHandle =
         Arc::new(move || main_window_handle(&app));
+    // A paired computer's calls (the command lane of Remote over this network) run through this
+    // app's own command handler, as its main window's screen runs them; and each event that
+    // crosses to that computer is heard here as the screen hears it, and handed on.
+    let commands = remote_service::lan::commands::Commands::new(command_dispatch::tauri_runner(
+        handle.clone(),
+    ));
+    // …and while a stream watches that window, the window is told, so it hides any stored key it
+    // shows (its settings reads carry none then: `get_settings`).
+    let watched = handle
+        .state::<remote_service::stream::Watched>()
+        .inner()
+        .clone();
+    let screen = handle.clone();
+    watched.tell(Arc::new(move |live| {
+        use tauri::Emitter;
+        let _ = screen.emit_to("main", STREAM_WATCHED_EVENT, live);
+    }));
+    {
+        use tauri::Listener;
+        for &name in command_dispatch::FORWARDED_EVENTS {
+            let raised = commands.clone();
+            handle.listen_any(name, move |event| {
+                raised.raised(name, event.payload().to_string())
+            });
+        }
+    }
     remote_service::Service::new(
         d.engine.clone(),
         publisher,
-        d.spectrum_feed.clone(),
-        d.meter_feed.clone(),
-        Some(remote_service::query::Sources {
-            needs,
-            spots: d.spots.clone(),
-            live_paths: d.live_paths.clone(),
-            region_paths: d.region_paths.clone(),
-            ota: d.ota_spots.clone(),
-            parks: d.parks.clone(),
-            pounces: d.pounces.clone(),
-            health: d.health.clone(),
-            propagation: d.prop_cache.clone(),
-            memories: Default::default(),
-            navigation: remote_service::query::navigation::Source::new(
-                d.aurora_cache.clone(),
-                d.kc2g_cache.clone(),
-                d.proton_cache.clone(),
-                d.scales_cache.clone(),
-            ),
-            sstv: remote_service::sstv::Source::new(vec![
-                sstv_gallery_dir(),
-                legacy_sstv_gallery_dir(),
-            ]),
-        }),
         // Receive audio for a listening browser. Without this the lane is never
         // advertised and no browser is ever offered the control.
         #[cfg(feature = "radio")]
@@ -36220,6 +39228,21 @@ fn remote_service_for(
             awake: tempo_stream::keep_awake::KeepAwake::system(Arc::new(|line: &str| {
                 tempo_core::applog::warn("remote", line)
             })),
+            // …and that window takes the page's shape while it is shown, then goes back.
+            shape: Some(Arc::new(window_state::MainShape(handle.clone()))),
+            watched,
+        },
+        commands,
+        // Signing in to Nexus Remote at the shack opens the system browser, as the internet road's
+        // sign-in does on the operator's computer.
+        {
+            let app = handle.clone();
+            Arc::new(move |url: &str| {
+                use tauri_plugin_opener::OpenerExt;
+                app.opener()
+                    .open_url(url, None::<&str>)
+                    .map_err(|e| e.to_string())
+            })
         },
     )
 }
@@ -36739,8 +39762,147 @@ fn winlink_disconnect() -> Result<(), String> {
 mod tests {
     use crate::remote_service::stored_log_tests::StoredLog;
 
+    /// The AI decoder's provisional tail is for the eye only. The copilot's callsign chips and the
+    /// report and name the log entry takes all read the CONFIRMED copy, so a
+    /// letter the next pass may still change never reaches a log, a macro or the entry.
+    #[test]
+    fn the_cw_copilot_reads_only_the_confirmed_ai_copy() {
+        let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+        e.set_ai_cw_enabled(true);
+        e.feed_rx_audio(&vec![0.25; 12_000]);
+        let (_, _, g) = e.ai_cw_window().expect("a window");
+        e.push_ai_cw_pass(g, "CQ TEST K9ABC K9ABC ", "W9XYZ DE K1XYZ UR 5NN NAME BOB");
+        let r = super::read_cw_state(&e);
+        assert_eq!(
+            r.text, "CQ TEST K9ABC K9ABC ",
+            "the transcript is the confirmed copy"
+        );
+        assert_eq!(
+            r.pending, "W9XYZ DE K1XYZ UR 5NN NAME BOB",
+            "…and the tail rides beside it"
+        );
+        let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert!(
+            calls.contains(&"K9ABC"),
+            "control: a confirmed call is a chip: {calls:?}"
+        );
+        assert!(
+            !calls.contains(&"K1XYZ"),
+            "a provisional call is never a chip: {calls:?}"
+        );
+        assert_eq!(r.rst, None, "a provisional report is never read");
+        assert_eq!(r.name, None, "…nor a provisional name");
+        // The next pass confirms the same letters: now, and only now, they are data.
+        e.push_ai_cw_pass(g, "W9XYZ DE K1XYZ UR 5NN NAME BOB", "");
+        let r = super::read_cw_state(&e);
+        let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert!(
+            calls.contains(&"K1XYZ"),
+            "control: confirmed, the call is a chip: {calls:?}"
+        );
+        assert!(r.rst.is_some(), "control: confirmed, the report is read");
+        assert!(r.name.is_some(), "control: confirmed, the name is read");
+        assert_eq!(r.pending, "");
+    }
+
+    /// An unassisted contest entry gets nothing the CW decoder would give it: CQ WW's rules count
+    /// a CW decoder as QSO-finding assistance. No copy and no speed, so no call chips (the best of
+    /// which fills His Call), no report or name for the log strip, and no guidance (what a turn
+    /// cue would be drawn from). The call the operator chose to work is theirs, and stays.
+    #[test]
+    fn an_unassisted_entry_gets_no_cw_copy_chips_report_or_guidance() {
+        // K9ABC calling W9XYZ, keyed at 25 WPM on the operator's pitch: 12 kHz is the engine's
+        // RX-audio rate (tempo_fast::SAMPLE_RATE).
+        let hear = |e: &mut tempo_app::engine::Engine| {
+            let mut audio = vec![0.0f32; 2_400];
+            audio.extend(tempo_core::cw::morse_samples(
+                "W9XYZ DE K9ABC K9ABC UR 599 NAME BOB",
+                25,
+                e.settings().cw_pitch_hz,
+                12_000,
+            ));
+            audio.extend(vec![0.0f32; 12_000]);
+            for chunk in audio.chunks(1200) {
+                e.feed_rx_audio(chunk);
+            }
+        };
+        let station = || {
+            let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e
+        };
+        // Control: assisted (the AI decoder off, so the classic decoder's copy is the copy).
+        let mut e = station();
+        e.set_ai_cw_enabled(false);
+        hear(&mut e);
+        let r = super::read_cw_state(&e);
+        let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert!(r.text.contains("K9ABC"), "control: the copy: {:?}", r.text);
+        assert!(calls.contains(&"K9ABC"), "control: a chip: {calls:?}");
+        assert_eq!(r.rst.as_deref(), Some("599"), "control: the report");
+        assert!(r.wpm > 0, "control: the speed");
+        assert!(!r.unassisted, "control: nothing to explain");
+
+        // Unassisted, with the AI decoder's switch left on as it ships.
+        let mut e = station();
+        e.set_unassisted_mode(true);
+        e.select_peer("K9ABC");
+        hear(&mut e);
+        let r = super::read_cw_state(&e);
+        assert_eq!(r.text, "", "no copy");
+        assert_eq!(r.pending, "", "no unconfirmed tail");
+        assert_eq!(r.wpm, 0, "no speed");
+        let calls: Vec<&str> = r.candidates.iter().map(|c| c.call.as_str()).collect();
+        assert!(calls.is_empty(), "no call chips: {calls:?}");
+        assert_eq!((r.rst, r.name), (None, None), "no report or name");
+        assert_eq!(r.turn, None, "no turn cue");
+        assert_eq!(
+            r.worked_call.as_deref(),
+            Some("K9ABC"),
+            "the call the operator chose stays"
+        );
+        assert!(r.unassisted, "the Decode pane is told why");
+    }
+
+    /// The turn cue rides the CW read, from the AI decoder's copy. With no station worked, the
+    /// call the F-keys send is the decoder's best guess, so an answer is suggested only for the
+    /// station heard calling. An unassisted entry gets no cue, as it gets nothing else a CW
+    /// decoder gives.
+    #[test]
+    fn the_turn_cue_rides_the_cw_read_and_never_an_unassisted_one() {
+        use tempo_core::cw_turn::{Role, State};
+        let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("cw", false);
+        e.set_frequency(7.03, "40m", "CW");
+        // 5.2 s of audio, then the AI's pass over it: K1ABC's CQ, a letter every 0.15 s from 1 s.
+        for _ in 0..52 {
+            e.feed_rx_audio(&[0.0; 1200]);
+        }
+        let (_, fed, g) = e.ai_cw_window().expect("the AI ring fills");
+        let text = "CQ CQ DE K1ABC K1ABC K";
+        let letters: Vec<(f64, char)> = text
+            .chars()
+            .enumerate()
+            .map(|(i, c)| (1.0 + i as f64 * 0.15, c))
+            .collect();
+        e.push_ai_cw_pass(g, text, "");
+        e.push_ai_cw_times(g, fed as f64 / 12_000.0, &letters, &[]);
+        let turn = super::read_cw_state(&e)
+            .turn
+            .expect("control: a turn is read");
+        assert_eq!(
+            (turn.state, turn.role, turn.call.as_deref()),
+            (State::YourTurn, Some(Role::Answer), Some("K1ABC"))
+        );
+        e.set_unassisted_mode(true);
+        let r = super::read_cw_state(&e);
+        assert_eq!(r.turn, None, "unassisted: no turn cue");
+        assert!(r.unassisted);
+    }
+
     /// The settings backup's stated contract is that it CARRIES NO SECRETS, and
-    /// `BACKUP_REDACTED_FIELDS` can only name credentials this build knows about. With
+    /// `command_dispatch::SECRET_SETTINGS` can only name credentials this build knows about. With
     /// `Settings::unknown` preserving a newer build's keys through save/load, an API key that
     /// build added would otherwise be copied straight into a file the operator is told is safe
     /// to email — so the export drops every preserved key, identified from the live settings
@@ -37416,7 +40578,7 @@ mod tests {
         // Everything QRZ's parser can hand this mapping: its own words, an empty REASON,
         // and no REASON at all.
         for reason in [Some(hostile.clone()), Some(String::new()), None] {
-            let printed = super::qrz_fetch_refused(reason).detail.as_str();
+            let printed = super::qrz_fetch_refused(reason, KEY).detail.as_str();
             assert!(
                 !printed.contains(KEY),
                 "QRZ's own answer reached stderr: {printed:?}"
@@ -37436,15 +40598,15 @@ mod tests {
             hostile.contains(KEY) && hostile.contains('\u{202e}'),
             "control: the hostile REASON must actually carry the key and the override"
         );
-        // …and QRZ's words are UN-PERSISTED, not thrown away: they still reach the screen.
-        // Without this the assertions above would pass just as happily against a build that
-        // dropped the reason on the floor and told the operator nothing.
-        assert!(
-            super::qrz_fetch_refused(Some(hostile))
+        // …and QRZ's words are UN-PERSISTED, not thrown away: they still reach the screen, without
+        // the key. Without this the assertions above would pass just as happily against a build
+        // that dropped the reason on the floor and told the operator nothing.
+        assert_eq!(
+            super::qrz_fetch_refused(Some(hostile), KEY)
                 .message
-                .on_screen()
-                .contains(KEY),
-            "control: QRZ's own wording must still reach the operator's session"
+                .on_screen(),
+            "\u{202e}FETCH denied for key=«api key»\u{200b}",
+            "control: QRZ's own wording must still reach the operator's session, without the key"
         );
     }
 
@@ -37458,7 +40620,7 @@ mod tests {
             "RESULT=FAIL&COUNT=0",
             "RESULT=FAIL&REASON=no+log+entries+found&COUNT=0",
         ] {
-            let fetched = super::qrz_sync_answer(nothing).ok();
+            let fetched = super::qrz_sync_answer(nothing, "TEST-KEY").ok();
             assert!(
                 fetched.as_ref().is_some_and(|f| f.adif.is_empty()),
                 "{nothing}: nothing new is not a refusal, and there is nothing to merge"
@@ -37471,15 +40633,22 @@ mod tests {
             "RESULT=FAIL",
             "RESULT=AUTH",
         ] {
-            assert!(super::qrz_sync_answer(refused).is_err(), "{refused}");
+            assert!(
+                super::qrz_sync_answer(refused, "TEST-KEY").is_err(),
+                "{refused}"
+            );
         }
-        let refused = super::qrz_sync_answer("RESULT=FAIL&REASON=invalid+api+key").err();
+        let refused =
+            super::qrz_sync_answer("RESULT=FAIL&REASON=invalid+api+key", "TEST-KEY").err();
         assert_eq!(
             refused.as_ref().map(|f| f.message.on_screen()),
             Some("invalid api key")
         );
         // …and a book with a record in it is the record to merge.
-        let book = super::qrz_sync_answer("RESULT=OK&COUNT=1&ADIF=&lt;CALL:4&gt;W1AW&lt;eor&gt;");
+        let book = super::qrz_sync_answer(
+            "RESULT=OK&COUNT=1&ADIF=&lt;CALL:4&gt;W1AW&lt;eor&gt;",
+            "TEST-KEY",
+        );
         assert!(book.is_ok_and(|f| f.adif.contains("<CALL:4>W1AW")));
     }
     /// The JS8 station journal lives beside settings.json, exactly where pending_msgs.json
@@ -37820,8 +40989,8 @@ mod tests {
             .expect("the end of the command")
             .0;
         assert!(
-            body.contains("journaled_command(") && body.contains(".contest_log_manual_rows("),
-            "contest_log_manual_rows must journal Engine::contest_log_manual_rows"
+            body.contains("journaled_command(") && body.contains(".contest_log_manual_rows_sent("),
+            "contest_log_manual_rows must journal Engine::contest_log_manual_rows_sent"
         );
         let list = src
             .split_once("tauri::generate_handler![")
@@ -37834,6 +41003,46 @@ mod tests {
             list.lines().any(|l| l.trim() == "contest_log_manual_rows,"),
             "contest_log_manual_rows is not registered — a county line would fail at runtime"
         );
+    }
+
+    /// The entry's "RST sent" box reaches the log only if each of the three contest log commands
+    /// takes the typed report (`sent_rst`) and hands it, blank as absent, to the engine's write
+    /// that carries it. Left out of one, a report typed for a county line or a pass would be
+    /// shown, accepted and then logged as the constant.
+    #[test]
+    fn the_three_contest_log_commands_hand_the_typed_sent_rst_to_the_engine() {
+        let src = include_str!("lib.rs");
+        for (command, engine) in [
+            (
+                "\nasync fn contest_log_manual(",
+                ".contest_log_manual_sent(",
+            ),
+            (
+                "\nasync fn contest_log_manual_rows(",
+                ".contest_log_manual_rows_sent(",
+            ),
+            (
+                "\nasync fn contest_log_satellite(",
+                ".contest_log_satellite_sent(",
+            ),
+        ] {
+            let rest = src.split_once(command).expect("the command").1;
+            let body = &rest[..rest.find("\n}\n").expect("the end of the command")];
+            assert!(
+                body.contains("sent_rst: Option<String>,"),
+                "{command} takes no sent_rst"
+            );
+            let call = body.split_once(engine).map(|(_, a)| a).unwrap_or_else(|| {
+                panic!(
+                    "{command} must log through Engine::{}",
+                    engine.trim_matches(['.', '('])
+                )
+            });
+            assert!(
+                call[..call.find(')').expect("the call closes")].ends_with(", snt"),
+                "{command} must pass the typed report to {engine}"
+            );
+        }
     }
 
     /// ⭐ THE CONTEST LOGGER WINDOW: its strip shares the contact in progress only if the put is
@@ -37898,10 +41107,33 @@ mod tests {
         );
     }
 
-    /// ⭐ Removing the newest contest contact, and editing one, reach the app only if their
-    /// commands are REGISTERED, and the three that change the contest log answer only once its
-    /// journal holds the change (the tempo-app functions that wait for it). And none of them is
-    /// one of Remote's operations: removal and edit are refused from afar, so the Remote
+    /// The Spots window (the Spots board popped out, `?panel=spots`): its own name in the title bar
+    /// and the taskbar, and sizes of its own. The size tables name the slug literally (the UI's
+    /// natural-footprint guard parses them); on the generic arms the window would drag down to 420
+    /// wide, where the board's nine columns do not fit even at the 65% zoom floor.
+    #[test]
+    fn the_spots_window_has_its_own_title_and_sizes() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("\nasync fn open_panel_window(")
+            .expect("open_panel_window is defined");
+        let rest = &src[start + 1..];
+        let open = &rest[..rest.find("\n}\n").expect("the end of the function")];
+        assert!(
+            open.contains("\"spots\" => \"Nexus — Spots\".to_string(),"),
+            "the Spots window says what it is in its title bar"
+        );
+        assert_ne!(
+            crate::panel_default_inner("spots"),
+            crate::panel_default_inner("")
+        );
+        assert_ne!(crate::panel_min_inner("spots"), crate::panel_min_inner(""));
+    }
+
+    /// ⭐ Removing the newest contest contact, clearing every one, and editing one, reach the app
+    /// only if their commands are REGISTERED, and the four that change the contest log answer only
+    /// once its journal holds the change (the tempo-app functions that wait for it). And none of
+    /// them is one of Remote's operations: removal and edit are refused from afar, so the Remote
     /// dispatcher must never name them.
     #[test]
     fn the_contest_removal_commands_are_registered_journaled_and_not_remote() {
@@ -37916,6 +41148,7 @@ mod tests {
         for (command, waits_through) in [
             ("contest_remove_last", Some("contest_removal::remove_last(")),
             ("contest_restore", Some("contest_removal::restore(")),
+            ("contest_clear", Some("contest_removal::clear(")),
             ("contest_removed", None),
             ("contest_edit", Some("contest_edit::edit(")),
         ] {
@@ -37935,17 +41168,22 @@ mod tests {
                 assert!(body.contains(call), "{command} must go through {call}");
             }
         }
-        // The Remote dispatcher's change table. The POSITIVE CONTROL: it does carry the
-        // Logbook's delete, so a check that read nothing could not pass for one that read it.
-        let remote = include_str!("remote_service/operations/logging.rs");
+        // The Remote dispatcher. The POSITIVE CONTROL: it does reach the engine, so a check that
+        // read nothing could not pass for one that read it.
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+        ]
+        .concat();
         assert!(
-            remote.contains("LogOp::Delete"),
-            "the control: Remote's own delete is there"
+            remote.contains(".poll_remote_transmit("),
+            "the control: the dispatcher's own engine call is there"
         );
         for name in [
             "contest_removal",
             "contest_remove_last",
             "contest_restore",
+            "contest_clear",
             "contest_edit",
         ] {
             assert!(!remote.contains(name), "Remote must not reach {name}");
@@ -37995,11 +41233,15 @@ mod tests {
                 );
             }
         }
-        // POSITIVE CONTROL: Remote's change table carries the Logbook's delete.
-        let remote = include_str!("remote_service/operations/logging.rs");
+        // POSITIVE CONTROL: the Remote dispatcher reaches the engine.
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+        ]
+        .concat();
         assert!(
-            remote.contains("LogOp::Delete"),
-            "the control: Remote's own delete is there"
+            remote.contains(".poll_remote_transmit("),
+            "the control: the dispatcher's own engine call is there"
         );
         assert!(
             !remote.contains("contest_unmerged"),
@@ -38036,14 +41278,11 @@ mod tests {
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
-            include_str!("remote_service/operations/logging.rs"),
-            include_str!("remote_service/operations/settings.rs"),
-            include_str!("remote_service/query.rs"),
-            include_str!("remote_service/query/field_day.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(
@@ -38089,19 +41328,58 @@ mod tests {
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
-            include_str!("remote_service/operations/logging.rs"),
-            include_str!("remote_service/operations/settings.rs"),
-            include_str!("remote_service/query.rs"),
-            include_str!("remote_service/query/field_day.rs"),
         ]
         .concat();
         assert!(
-            remote.contains("LogOp::Delete") && remote.contains("bounded_field_day_status"),
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
             "the control: the dispatchers read here are the ones that reach the engine"
         );
         assert!(
             !remote.contains("remove_position") && !remote.contains("allow_back"),
             "Remote must not reach the Remove or Allow back command"
+        );
+    }
+
+    /// ⭐ The host's club log list reaches the engine only if its command is REGISTERED and reads
+    /// the engine's own list, and no Remote dispatcher names it: the list is the host's own
+    /// screens', never the Remote page's. POSITIVE CONTROL: the dispatchers read here do name the
+    /// engine calls they make.
+    #[test]
+    fn the_club_log_command_is_registered_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "fd_club_log_newest,"),
+            "fd_club_log_newest is not registered — the club log list would fail at runtime"
+        );
+        let body = src
+            .split_once("\nfn fd_club_log_newest(")
+            .expect("the command exists")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(body.contains(".fd_club_log_newest()"), "{body}");
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+        ]
+        .concat();
+        assert!(
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
+            "the control: the dispatchers read here are the ones that reach the engine"
+        );
+        assert!(
+            !remote.contains("club_log"),
+            "Remote must not reach the host's club log"
         );
     }
 
@@ -38317,6 +41595,53 @@ mod tests {
         );
     }
 
+    /// The Logbook's country picker lists what `ui/src/api.ts`'s `getDxccEntities` reads: the
+    /// command is defined and registered (a missing one fails only at runtime, as the satellite
+    /// tag's test above says), and it sends every entity the station can set, deleted ones among
+    /// them, under the names the picker reads.
+    #[test]
+    fn the_country_picker_list_is_registered_and_holds_the_deleted_entities() {
+        let src = include_str!("lib.rs");
+        assert!(
+            src.lines().any(|l| l.starts_with("fn dxcc_entities(")),
+            "dxcc_entities is invoked by the UI but defined nowhere"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "dxcc_entities,"),
+            "dxcc_entities is not registered"
+        );
+        let all = serde_json::to_value(crate::dxcc_entities()).expect("serializes");
+        let rows = all.as_array().expect("a list");
+        assert_eq!(rows.len(), 402);
+        assert!(rows.contains(
+            &serde_json::json!({"code": 229, "name": "GERMAN DEMOCRATIC REPUBLIC", "deleted": true})
+        ));
+        assert!(rows.contains(
+            &serde_json::json!({"code": 182, "name": "Navassa Island", "deleted": false})
+        ));
+    }
+
+    /// The row a log command answers with shows the contact as a page of the log does: under the
+    /// entity its record's DXCC number names, where that is another than its call's.
+    #[test]
+    fn a_log_commands_row_shows_the_entity_its_records_number_names() {
+        let row = |dxcc: &str| {
+            let adif = format!(
+                "<CALL:3>K1N<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20150210<TIME_ON:6>123400{dxcc}<EOR>"
+            );
+            crate::logged_qso(&tempo_core::logbook::parse_adif(&adif).remove(0)).entity
+        };
+        assert_eq!(row("<DXCC:3>182").as_deref(), Some("Navassa Island"));
+        assert_eq!(row("").as_deref(), Some("United States"), "by its call");
+    }
+
     /// THE CONNECT DASHBOARD'S WINDOW IS WIRED END TO END. What makes the pop-out
     /// reopen where it was left, and stay behind when asked, runs through wiring no type sees:
     /// the dashboard bar's two commands must be REGISTERED (an unregistered name fails only at
@@ -38336,10 +41661,13 @@ mod tests {
         for name in [
             "window_state::get_window_behind",
             "window_state::set_window_behind",
+            "window_state::get_window_on_top",
+            "window_state::set_window_on_top",
+            "window_state::focus_window",
         ] {
             assert!(
                 list.lines().any(|l| l.trim() == format!("{name},")),
-                "{name} is not registered — the Stay behind toggle would fail at runtime"
+                "{name} is not registered — its toggle would fail at runtime"
             );
         }
         // The body of the top-level `sig`. The leading newline is the column-zero match: this
@@ -38363,6 +41691,16 @@ mod tests {
         assert!(
             open.contains(".prevent_overflow()"),
             "a remembered box is fitted to the work area, title bar included"
+        );
+        // The contest logger's pin: a window pinned in front opens in front.
+        let pin = open
+            .find("if p.on_top {")
+            .expect("the open path reads the pin");
+        assert!(
+            open[pin..]
+                .split_once('}')
+                .is_some_and(|(arm, _)| arm.contains("builder.always_on_top(true)")),
+            "a pinned window opens always on top"
         );
         assert!(
             body("fn capture_all_window_geometry(").contains("window_state::capture_panel(&w);"),
@@ -41464,10 +44802,11 @@ mod tests {
     /// #335: the engine-locking commands the UI POLLS — every one it asks at 2 s or faster, plus
     /// the propagation and need-alert polls. Each must reach the engine through `with_engine`,
     /// on the blocking pool, and never wait for the lock on a runtime worker.
-    const POLLED_ENGINE_COMMANDS: [&str; 20] = [
+    const POLLED_ENGINE_COMMANDS: [&str; 21] = [
         "get_snapshot",
         "cw_decode",
         "get_rtty_state",
+        "get_rtty_scope",
         "get_psk_state",
         "get_jtty_state",
         "get_js8_state",
@@ -42409,6 +45748,40 @@ mod tests {
         }
     }
 
+    /// ⭐ A BIRD NO RADIO HERE CAN RECEIVE IS NOT HELD. The station's only radio is an FT-710 (HF
+    /// and 6 m, its coverage probed) working FT8 on 20 m, and AO-91 goes through the real pick:
+    /// its downlink is on 2 m. The pick answers why and holds nothing, so the Satellites screen
+    /// and the logger window read no hold (`satellite_held`, the read behind
+    /// `get_sat_transponder`), and the radio stays where the operator left it.
+    #[test]
+    fn the_pick_holds_nothing_for_a_bird_the_only_radio_cannot_receive() {
+        let rows = propagation::live::satnogs::parse_transmitters(
+            r#"[{"norad_cat_id":43017,"description":"Mode U/V FM Voice (no CTCSS any longer)","alive":true,"type":"Transceiver","invert":false,"uplink_low":435250000,"uplink_high":null,"uplink_mode":"FM","downlink_low":145960000,"downlink_high":null,"mode":"FM"}]"#,
+        );
+        assert_eq!(rows.len(), 1, "scene: AO-91 parsed");
+        let shared = sat_pick_station("digital");
+        {
+            let mut e = engine_lock(&shared);
+            e.set_frequency(14.074, "20m", "USB");
+            e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
+        }
+        let picked = super::hold_sat_row(&shared, "AO-91", &[&rows[0]], 0);
+        let e = engine_lock(&shared);
+        let r = e.snapshot().radio;
+        assert_eq!(
+            (
+                picked,
+                super::satellite_held(&e).map(|h| h.name),
+                (r.dial_mhz, r.band.as_str(), r.sideband.as_str()),
+            ),
+            (
+                Err("This radio doesn't cover 145.9600 MHz — nothing is held.".to_string()),
+                None,
+                (14.074, "20m", "USB"),
+            )
+        );
+    }
+
     /// …and nothing else moves. The FM birds stay FM through the same pick (SO-50 and PO-101
     /// keep their tones), KOSEN-1 keeps (a)'s CW uplink, RS-44 keeps its inverting pair, and
     /// QO-100's CW-only segment — never tagged FM — is worked exactly as before. Phone.
@@ -42541,6 +45914,7 @@ mod tests {
             rec.grid.as_deref(),
             rec.ota.iota.as_deref(),
             qso_is_sat(rec.prop_mode.as_deref()),
+            crate::log_folds::award_fields(rec),
         );
         awards.summary()
     }
@@ -43344,6 +46718,173 @@ mod tests {
         assert!(!local.is_empty(), "a local arm flies whatever Remote did");
     }
 
+    /// ⛔ A PASS A COMPUTER DRIVING THIS STATION ARMED ENDS WHEN THAT COMPUTER'S PRESENCE LAPSES,
+    /// as its transmissions are cut; one armed at the shack is untouched. Through the standing the
+    /// track handler arms with and the shipped loop: armed from afar under live presence, the pass
+    /// flies (CONTROL); once the presence lapses on the radio loop's tick, not one tick runs and the
+    /// dial goes back. So does another computer's presence taking its place. With no presence live,
+    /// from afar the track does not start. A Stop, which ends a transmission and not the session,
+    /// leaves it flying. The same lapse leaves a pass armed at the shack flying.
+    #[test]
+    fn a_pass_armed_from_afar_ends_when_that_computers_presence_lapses() {
+        use crate::command_dispatch::{Afar, NO_PRESENCE};
+        use crate::presence_standing;
+        use std::time::{Duration, Instant};
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let cfg = tempo_core::rotator::RotatorConfig::default();
+        let t0 = Instant::now();
+        let mut station = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+        let presence = TransmitAuthority::default();
+        let afar = Afar {
+            stand_down: station.remote_transmit_stand_down_generation(),
+        };
+        let flies = |standing: Option<tempo_app::remote_control::Standing>| {
+            let eng = sat_station();
+            engine_lock(&eng).set_sat_pass_engaged(true);
+            let badges = run_simulated_pass_as(&eng, None, cfg, standing);
+            // An ended pass hands the dial back, as at LOS; so does one flown to LOS.
+            let handed_back = engine_lock(&eng).sat_transponder_held().is_none();
+            (!badges.is_empty(), handed_back)
+        };
+
+        // No presence live: from afar it does not start; from the shack it does.
+        assert_eq!(
+            presence_standing(&station, Some(&afar), t0)
+                .err()
+                .as_deref(),
+            Some(NO_PRESENCE),
+            "from afar with no presence"
+        );
+        assert!(matches!(presence_standing(&station, None, t0), Ok(None)));
+
+        assert!(
+            station.hold_remote_presence(presence.permit(t0 + Duration::from_secs(5)).unwrap(), t0)
+        );
+        let from_afar = presence_standing(&station, Some(&afar), t0)
+            .expect("armed from afar under live presence")
+            .expect("bound to that presence");
+        let at_the_shack = presence_standing(&station, None, t0).expect("armed at the shack");
+        assert!(
+            at_the_shack.is_none(),
+            "the shack's own track is bound to nothing"
+        );
+        assert!(flies(Some(from_afar.clone())).0, "CONTROL: it flies");
+
+        // A Stop at the station, or from either road, ends the over, not the session.
+        station.halt_tx();
+        assert!(flies(Some(from_afar.clone())).0, "a Stop leaves it flying");
+
+        // The heartbeats stop: the radio loop's tick carries out the lapse.
+        assert!(station.poll_remote_transmit(t0 + Duration::from_secs(6)));
+        assert_eq!(
+            flies(Some(from_afar)),
+            (false, true),
+            "ended by the lapse, the dial handed back"
+        );
+        assert!(flies(at_the_shack).0, "the shack's own flies on");
+
+        // Another computer's presence takes the place of the one a track was armed under.
+        let t1 = t0 + Duration::from_secs(10);
+        assert!(
+            station.hold_remote_presence(presence.permit(t1 + Duration::from_secs(5)).unwrap(), t1)
+        );
+        let first = presence_standing(&station, Some(&afar), t1)
+            .unwrap()
+            .unwrap();
+        let renewed = presence.permit(t1 + Duration::from_secs(6)).unwrap();
+        assert!(station.hold_remote_presence(renewed, t1));
+        assert!(first.held(), "its own heartbeat keeps it");
+        // One of its own heartbeats arriving late, with an earlier deadline, is still its own.
+        let late = presence.permit(t1 + Duration::from_secs(4)).unwrap();
+        assert!(station.hold_remote_presence(late, t1));
+        assert!(first.held(), "its own late heartbeat keeps it");
+        let other = TransmitAuthority::default();
+        assert!(
+            station.hold_remote_presence(other.permit(t1 + Duration::from_secs(5)).unwrap(), t1)
+        );
+        assert_eq!(
+            flies(Some(first)),
+            (false, true),
+            "ended when another's presence took its place"
+        );
+    }
+
+    /// The track handler, as the command lane runs it: from afar with no presence live it is
+    /// refused before anything is armed or read, by its own words.
+    #[test]
+    fn the_track_handler_from_afar_with_no_presence_starts_nothing() {
+        use crate::command_dispatch::{tauri_runner, Runner, NO_PRESENCE};
+        use crate::start_sat_track;
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![start_sat_track])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let stand_down = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let (answer, answered) = std::sync::mpsc::channel();
+        runner(
+            "start_sat_track".to_string(),
+            serde_json::json!({"name": "ISS", "afar": {"standDown": stand_down}}),
+            Box::new(move |result| {
+                let _ = answer.send(result);
+            }),
+        );
+        let said = answered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the handler answered");
+        assert_eq!(said, Err(NO_PRESENCE.to_string()));
+    }
+
+    /// ⭐ THE 2026-10-13 REPORT'S STATION THROUGH THE SHIPPED LOOP: one radio, an FT-710 (HF +
+    /// 6 m, its coverage probed), working FT8 on 20 m and holding SO-50, a bird it cannot hear,
+    /// when a real pass comes up. The loop flies the whole pass and never steers that radio: the FT8
+    /// dial stays on 14.074, and every badge says no Doppler leg is driven, so the LOS report
+    /// claims no dial handback. The pass itself is still reported — the badges go `tracking`,
+    /// which is what raises the AOS alert (`satPassAlert.ts`).
+    #[test]
+    fn a_real_pass_never_steers_a_radio_that_cannot_hear_the_bird() {
+        let eng: SharedEngine = {
+            let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+            e.set_operating_mode("digital", false);
+            e.set_frequency(14.074, "20m", "USB");
+            e.observe_rig_rx_ranges(Some(vec![(30_000, 56_000_000)]));
+            e.set_sat_transponder(Some((
+                "SO-50|FM repeater".into(),
+                0,
+                tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+            )));
+            std::sync::Arc::new(std::sync::Mutex::new(e))
+        };
+        let badges = run_simulated_pass(&eng, None, tempo_core::rotator::RotatorConfig::default());
+        assert!(
+            badges.iter().any(|b| b.state == "tracking"),
+            "the pass must still be reported: {} badges",
+            badges.len()
+        );
+        let claimed: Vec<_> = badges
+            .iter()
+            .filter(|b| b.doppler_downlink || b.doppler_uplink || b.mode != "pass-only")
+            .map(|b| (b.mode.clone(), b.doppler_downlink, b.doppler_uplink))
+            .collect();
+        // ONE assertion over both facts, so a red names the dial AND the badge by value.
+        let r = engine_lock(&eng).snapshot().radio;
+        assert_eq!(
+            (
+                (r.dial_mhz, r.band.as_str(), r.sideband.as_str()),
+                claimed.first()
+            ),
+            ((14.074, "20m", "USB"), None),
+            "the FT8 dial must never move, and no badge may claim Doppler on this radio"
+        );
+    }
+
     /// A written snapshot round-trips through its own serde (camelCase keys on
     /// the wire), and the untagged loader picks the snapshot shape.
     #[test]
@@ -43412,9 +46953,9 @@ mod tests {
     }
 
     /// The source list exactly as `Settings::assistance_sources` produces it.
-    fn posture(ai: bool, cluster: bool, pskr: bool) -> Vec<AssistanceSourceState> {
+    fn posture(cw: bool, cluster: bool, pskr: bool) -> Vec<AssistanceSourceState> {
         [
-            ("AI CW decoder", ai),
+            ("CW decoder", cw),
             ("DX cluster / RBN", cluster),
             ("PSK Reporter needs", pskr),
         ]
@@ -43448,12 +46989,12 @@ mod tests {
         // Declaring an unassisted entry must.
         assert!(assistance_posture_changed(&log, true, &silent));
         // So must ONE source changing while the unassisted flag stays put (e.g. the operator
-        // turning the AI decoder off by hand) — otherwise the record would claim the decoder
-        // was running when it was not.
+        // turning the cluster off by hand) — otherwise the record would claim the cluster was
+        // connected when it was not.
         assert!(assistance_posture_changed(
             &log,
             false,
-            &posture(false, true, true)
+            &posture(true, false, true)
         ));
     }
 
@@ -44899,6 +48440,28 @@ mod tests {
         assert_eq!(dxped_page_url("///", Some("nonsense")), None);
     }
 
+    /// Every QRZ button opens one page per station: `qrz_url` against each row of the table
+    /// the browser's copy (the hosted Remote page's QRZ button, the DXpedition link) is held
+    /// to as well, by `ui/src/qrzUrl.shared.test.ts`. Every wrong row is listed, by value.
+    #[test]
+    fn qrz_url_is_the_shared_tables() {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../../ui/src/__fixtures__/qrz-urls.json"))
+                .expect("qrz-urls.json parses");
+        let cases = table["cases"].as_array().expect("cases is a list");
+        assert!(!cases.is_empty());
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|row| {
+                let call = row["call"].as_str().expect("every row has a call");
+                let want = row.get("url").expect("every row has a url").as_str();
+                let got = super::qrz_url(call);
+                (got.as_deref() != want).then(|| format!("{call:?}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
     // ---- LoTW download → award credit, end to end -------------------------
     //
     // `tempo_core` proves the flag survives the parse and the merge; this proves
@@ -44979,6 +48542,7 @@ mod tests {
                 q.grid.as_deref(),
                 q.ota.iota.as_deref(),
                 qso_is_sat(q.prop_mode.as_deref()),
+                crate::log_folds::award_fields(&q),
             );
         }
         awards.summary()
@@ -45070,9 +48634,7 @@ mod tests {
         let next = tempo_core::lotw::build_report_url(&tempo_core::lotw::LotwQuery {
             username: "nt9e".into(),
             password: "x".into(),
-            owncall: None,
-            qsl_since: Some(e.settings().lotw_last_qsl.trim().to_string())
-                .filter(|c| !c.is_empty()),
+            qsl_since: Some(e.settings().lotw_sync_cursor().to_string()).filter(|c| !c.is_empty()),
         });
         assert!(
             next.contains("&qso_qslsince=1900-01-01"),
@@ -45090,9 +48652,14 @@ mod tests {
         let mut s = tempo_app::settings::Settings {
             lotw_username: "nt9e".into(),
             lotw_last_qsl: "2026-08-04 21:12:44".into(),
+            lotw_cursor_every_call: true,
             ..Default::default()
         };
-        let used = s.lotw_last_qsl.clone();
+        let used = s.lotw_sync_cursor().to_string();
+        assert_eq!(
+            used, "2026-08-04 21:12:44",
+            "premise: an incremental download"
+        );
         assert!(
             super::lotw_cursor_may_advance(&s, &body, "nt9e", &used),
             "control: nothing moved during the fetch, so its high-water is the new cursor"
@@ -45104,6 +48671,110 @@ mod tests {
         );
         // A full pull already running fetched everything the reset asks for: it may advance.
         assert!(super::lotw_cursor_may_advance(&s, &body, "nt9e", ""));
+    }
+
+    /// ★ The first download after the update asks for every call on the account from 1900, not
+    /// from the cursor an older build left (a download of the Settings call alone made it, and
+    /// LoTW lets a cursor stand only for the identical query), and its high-water then becomes the
+    /// cursor. Were the older cursor still compared, that full download could never move it, and
+    /// every download after would be a full one again.
+    #[test]
+    fn the_first_full_download_after_the_update_moves_the_cursor() {
+        let body = lotw_download();
+        let older: tempo_app::settings::Settings =
+            serde_json::from_str(r#"{"lotwUsername":"nt9e","lotwLastQsl":"2026-08-04 21:12:44"}"#)
+                .unwrap();
+        let since = older.lotw_sync_cursor().to_string();
+        assert_eq!(since, "", "a full download");
+        assert!(super::lotw_cursor_may_advance(
+            &older, &body, "nt9e", &since
+        ));
+    }
+
+    /// ★ A changed QTH Nickname makes the next eQSL sync read that account's whole InBox. Each
+    /// nickname is an account of its own at eQSL, with its own InBox, and the cursor was emptied
+    /// only when the username changed: after a switch the next sync asked the new account only
+    /// for cards since the old one's last sync, and its earlier cards never arrived. A config
+    /// profile carrying another nickname loads through this same save.
+    #[test]
+    fn a_changed_qth_nickname_makes_the_next_eqsl_sync_read_the_whole_inbox() {
+        let held = tempo_app::settings::Settings {
+            eqsl_username: "k2def-test".into(),
+            eqsl_qth_nickname: "Home".into(),
+            eqsl_last_sync: "202610010000".into(),
+            ..Default::default()
+        };
+        // What `download_eqsl_report_impl` asks eQSL for, from the settings a save leaves.
+        let next_sync = |s: &tempo_app::settings::Settings| {
+            tempo_core::eqsl::build_inbox_url(&tempo_core::eqsl::EqslQuery {
+                username: s.eqsl_username.trim().to_string(),
+                password: "not-a-password".into(),
+                rcvd_since: Some(s.eqsl_last_sync.trim().to_string()).filter(|c| !c.is_empty()),
+                qth_nickname: Some(s.eqsl_qth_nickname.trim().to_string())
+                    .filter(|n| !n.is_empty()),
+            })
+        };
+        let saved = |edit: &dyn Fn(&mut tempo_app::settings::Settings)| {
+            let mut form = held.clone();
+            edit(&mut form);
+            super::keep_eqsl_cursor_for_its_account(&held, &mut form);
+            next_sync(&form)
+        };
+        let portable = saved(&|f| f.eqsl_qth_nickname = "Portable".into());
+        assert!(
+            portable.ends_with("&QTHNickname=Portable&RcvdSince=190001010000"),
+            "{portable}"
+        );
+        // Controls: a changed username does the same, as it always has. A save that names the
+        // same account keeps the cursor, the nickname's surrounding spaces included, since no
+        // request ever sends them.
+        let other_login = saved(&|f| f.eqsl_username = "k2def-other".into());
+        assert!(
+            other_login.ends_with("&RcvdSince=190001010000"),
+            "{other_login}"
+        );
+        for kept in [
+            saved(&|f| f.eqsl_upload = !f.eqsl_upload),
+            saved(&|f| f.eqsl_qth_nickname = " Home ".into()),
+        ] {
+            assert!(
+                kept.ends_with("&QTHNickname=Home&RcvdSince=202610010000"),
+                "{kept}"
+            );
+        }
+    }
+
+    /// The nickname can change while an eQSL sync runs: the fetch holds no engine lock. The
+    /// sync's cursor belongs to the account it read, so it must not land on the account the save
+    /// switched to, or that account's first sync asks only for cards since the other's.
+    #[test]
+    fn an_eqsl_sync_already_running_keeps_its_cursor_off_another_account() {
+        let inbox = "Received eQSLs for K2DEF\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<EOH>\n\
+                     <CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261001<TIME_ON:6>180000<EOR>\n";
+        let mut s = tempo_app::settings::Settings {
+            eqsl_username: "k2def-test".into(),
+            eqsl_qth_nickname: "Home".into(),
+            ..Default::default()
+        };
+        assert!(
+            super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "control: nothing moved during the fetch"
+        );
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, &inbox[..inbox.len() - 7], "k2def-test", "Home"),
+            "control: a cut-off download never moves it"
+        );
+        s.eqsl_qth_nickname = "Portable".into();
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "a sync of Home finishing after the switch to Portable"
+        );
+        s.eqsl_qth_nickname = "Home".into();
+        s.eqsl_username = "k2def-other".into();
+        assert!(
+            !super::eqsl_cursor_may_advance(&s, inbox, "k2def-test", "Home"),
+            "a sync finishing after the username changed, as before"
+        );
     }
 
     /// #46 (kr4fqg): "W1AW/1 doesn't resolve, but clicking the image loads the QRZ page."
@@ -45199,6 +48870,51 @@ mod tests {
         assert!(!restored(&shipped, Some(false)), "…either way");
     }
 
+    /// A backup from before JS8 heartbeat networking restores as the same settings file loads: a
+    /// heartbeat user (HB ACK on, or an HB repeat interval set) keeps the HB button, everyone else
+    /// gets JS8Call's default, off, and a backup that carries the switch keeps it. A restore runs
+    /// none of `Settings::load`'s migrations, so this is the restore's own call to the same rule.
+    #[test]
+    fn a_restored_backup_from_before_heartbeat_networking_chooses_as_the_file_would_load() {
+        let dir = std::env::temp_dir().join(format!("nexus-hbnet-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("settings.json");
+        let both = |hb_ack: bool, interval: u16, saved: Option<bool>| {
+            let s = tempo_app::settings::Settings {
+                js8_hb_ack: hb_ack,
+                js8_hb_interval_min: interval,
+                ..Default::default()
+            };
+            let mut v = serde_json::to_value(&s).unwrap();
+            let fields = v.as_object_mut().unwrap();
+            match saved {
+                Some(on) => {
+                    fields.insert("js8HbNetworking".into(), on.into());
+                }
+                None => assert!(fields.remove("js8HbNetworking").is_some()),
+            }
+            std::fs::write(&file, serde_json::to_string(&v).unwrap()).unwrap();
+            (
+                super::settings_from_bundle(v).unwrap().js8_hb_networking,
+                tempo_app::settings::Settings::load(&file).js8_hb_networking,
+            )
+        };
+        for (hb_ack, interval, saved, want) in [
+            (false, 0, None, false),
+            (true, 0, None, true),
+            (false, 10, None, true),
+            (true, 10, Some(false), false),
+            (false, 0, Some(true), true),
+        ] {
+            assert_eq!(
+                both(hb_ack, interval, saved),
+                (want, want),
+                "HB ACK {hb_ack}, interval {interval}, saved {saved:?}: restored, and loaded"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The bundle must not carry secrets: it is written to Downloads and operators mail these
     /// to themselves. Passwords and API keys live in the OS keychain and must stay there.
     /// Serialised Settings is checked here against the field names that would be the giveaway.
@@ -45230,7 +48946,7 @@ mod tests {
         assert!(
             raw.as_object().unwrap().contains_key("clublogApiKey"),
             "settings.json no longer carries clublogApiKey — if it moved to the keychain, say so \
-             here and drop it from BACKUP_REDACTED_FIELDS; if it was RENAMED, the redaction is \
+             here and drop it from SECRET_SETTINGS; if it was RENAMED, the redaction is \
              now silently missing a live credential"
         );
     }
@@ -45530,6 +49246,7 @@ mod tests {
             &hunter_cache(&[("POTA", &[sp])]),
             &crate::SharedParks::default(),
             "W8OH",
+            None,
             None,
             None,
             None,
@@ -45854,6 +49571,87 @@ mod tests {
             tempo_core::reconcile::check::Channel::Eqsl,
             || crate::eqsl_check_on(engine, &test_eqsl(), &|url| eqsl.fetch(url)),
         )
+    }
+
+    /// ★ An eQSL refusal reaches the contact with its reason, and its toast names the fix. The
+    /// push classified eQSL's answer and stamped the outcome alone, so the Connections row and
+    /// Awards ▸ Confirmations had no reason to give for any eQSL bounce, and a contact outside the
+    /// dates of the operator's eQSL account read as a bad login. Only eQSL's answer is handed in
+    /// here: the request, and the password it carries, never reach this half of the push.
+    #[test]
+    fn an_eqsl_refusal_is_stamped_with_its_reason() {
+        use tempo_core::logbook::{UploadDetail as D, UploadOutcome as U};
+        let log = tempo_core::logbook::parse_adif(
+            &[
+                check_row("W1AW", "20m", "FT8", "180000", ""),
+                check_row("K1ABC", "20m", "FT8", "181500", ""),
+                check_row("N0SUP", "20m", "FT8", "183000", ""),
+            ]
+            .concat(),
+        );
+        let (dir, engine) = store_holding("eqsl-refusal-reason", &log);
+        let answered = |call: &str, answer: &str| {
+            let held = engine
+                .stored_records()
+                .into_iter()
+                .find(|r| r.call == call)
+                .expect("logged");
+            let named = held.id.map(|id| id.to_string());
+            crate::eqsl_answered(named.as_deref(), &held, answer, &engine, true).expect("answered")
+        };
+        let (dates, class) = answered(
+            "W1AW",
+            "Error: No match on eQSL_User/eQSL_Pswd for date 20190314 18:22<BR>\n\
+             Result: 0 out of 1 records added",
+        );
+        assert_eq!(
+            (dates.outcome.as_str(), dates.detail.as_deref(), class),
+            (
+                "rejected",
+                Some(D::AccountDates.sentence()),
+                Some(D::AccountDates)
+            ),
+            "what Awards ▸ Confirmations' Push to eQSL shows"
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&dates, class),
+            "eQSL ✗ outside your account's dates (check My Profile at eqsl.cc)"
+        );
+        let (nickname, class) = answered(
+            "K1ABC",
+            "Error: NO MATCH ON APP_EQSL_QTH_NICKNAME<BR>\nResult: 0 out of 1 records added",
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&nickname, class),
+            "eQSL ✗ QTH Nickname missing or wrong (check Settings)"
+        );
+        // Control: a bad login is still the login.
+        let (login, class) = answered(
+            "N0SUP",
+            "Error: No match on eQSL_User/eQSL_Pswd<BR>\nResult: 0 out of 1 records added",
+        );
+        assert_eq!(
+            crate::eqsl_toast_part(&login, class),
+            "eQSL ✗ login invalid — check Settings"
+        );
+        let stamp = |call: &str| {
+            engine
+                .stored_records()
+                .into_iter()
+                .find(|r| r.call == call)
+                .and_then(|r| r.upload.eqsl)
+                .map(|s| (s.outcome, s.detail))
+        };
+        assert_eq!(
+            [stamp("W1AW"), stamp("K1ABC"), stamp("N0SUP")],
+            [
+                Some((U::Rejected, Some(D::AccountDates))),
+                Some((U::Rejected, Some(D::QthNickname))),
+                Some((U::AuthFail, Some(D::Credentials))),
+            ],
+            "each contact carries its own reason, for the Connections row and Awards"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The QRZ Logbook key the tests check with. It is no one's: the fake below answers.
@@ -46215,7 +50013,7 @@ mod tests {
 
     /// ★ The check uploads nothing and moves no cursor, for each service. Each is asked once for
     /// the whole of what it holds: LoTW twice, in the form a full re-download asks (the whole
-    /// confirmation history for the Settings call, and the whole own-QSO list with no start
+    /// confirmation history of every call on the account, and the whole own-QSO list with no start
     /// date); eQSL for its InBox from 1900, said outright, for the QTH Nickname set; QRZ with one
     /// bare FETCH of the whole book. Apply asks nothing (it is handed no transport). Nothing is
     /// queued to a connector, and no sync cursor moves: not LoTW's, eQSL's or QRZ's.
@@ -46308,21 +50106,61 @@ mod tests {
             "&qso_qsl=yes",
             "&qso_qsldetail=yes",
             "&qso_withown=yes",
-            "&qso_owncall=K2DEF",
             "&qso_qslsince=1900-01-01",
         ] {
             assert!(asked[0].contains(part), "the confirmations: {part}");
         }
-        for part in [
-            "&qso_qsl=no",
-            "&qso_owncall=K2DEF",
-            "&qso_qsorxsince=1900-01-01",
-        ] {
+        for part in ["&qso_qsl=no", "&qso_qsorxsince=1900-01-01"] {
             assert!(asked[1].contains(part), "the own-QSO list: {part}");
         }
         assert!(
             !asked[1].contains("qso_startdate"),
             "the whole own-QSO list, from no start date"
+        );
+        for url in asked.iter() {
+            assert!(
+                !url.contains("qso_owncall"),
+                "every call on the account, not the one in Settings alone"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// LoTW's check counts its confirmations for a call the log holds no contact under, a club call
+    /// on the same account, which gain no contact; the Settings call's gains the contact naming no
+    /// call of its own.
+    #[test]
+    fn the_lotw_check_counts_the_confirmations_of_a_call_the_log_does_not_hold() {
+        let (dir, engine) = store_holding(
+            "check-other-call",
+            &tempo_core::logbook::parse_adif(&check_row("W1AW", "20m", "FT8", "120000", "")),
+        );
+        let lotw = FakeLotw {
+            report: lotw_answer(&[
+                check_row(
+                    "W1AW",
+                    "20m",
+                    "FT8",
+                    "120000",
+                    "<STATION_CALLSIGN:6>W1CLUB<QSL_RCVD:1>Y",
+                ),
+                check_row(
+                    "W1AW",
+                    "20m",
+                    "FT8",
+                    "120000",
+                    "<STATION_CALLSIGN:5>K2DEF<QSL_RCVD:1>Y",
+                ),
+            ]),
+            own: lotw_answer(&[]),
+            asked: Default::default(),
+        };
+        let checks = crate::ConfirmationChecks::default();
+        let session = checks.start("main");
+        let dto = lotw_checked(&checks, session, &engine, &lotw).expect("the check reads");
+        assert_eq!(
+            (dto.records, dto.other_call_records, dto.gain_ids.len()),
+            (2, 1, 1)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -47313,6 +51151,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("the call itself goes through");
         engine_lock(&engine).log_qso(park_rec(call, None, crate::now_unix()));
@@ -47467,6 +51306,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("our own line is a benign no-op, not an error");
         let eng = engine_lock(&engine);
@@ -47511,6 +51351,7 @@ mod tests {
                 &cache,
                 &crate::SharedParks::default(),
                 "K1ABC",
+                None,
                 None,
                 None,
                 None,
@@ -48029,7 +51870,7 @@ mod tests {
         buf.push(mk("W6A"));
         buf.push(mk("K1ABC"));
         let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(buf));
-        let rows = crate::read_all_spots(&spots, &engine, false).expect("rows");
+        let rows = crate::read_spots_with(&spots, &engine, false, &|| None).expect("rows");
         let w6a = rows.iter().find(|r| r.call == "W6A").expect("W6A row");
         let ago = w6a.worked_ago_secs.expect("W6A was worked");
         assert!(
@@ -48039,6 +51880,218 @@ mod tests {
         let k1abc = rows.iter().find(|r| r.call == "K1ABC").expect("K1ABC row");
         assert_eq!(k1abc.worked_ago_secs, None, "control: never worked");
         assert!(!k1abc.worked_today_utc);
+    }
+
+    /// ⭐ **While a contest runs, a spot carries the multipliers working it would add** — by the
+    /// contest's own scoring, the entity resolved as a logged contact's is, a received value known
+    /// only from the station's own earlier contact — and outside a contest it carries none.
+    #[test]
+    fn a_contest_spot_carries_the_multipliers_it_would_add() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let _ = tempo_core::contest::install_call_resolver(crate::contest_place_call);
+        let s = tempo_app::settings::Settings {
+            mycall: "W9XYZ".into(),
+            fd_event: "cqww_cw".into(),
+            contest_cq_zone: 4,
+            contest_qth_state: "IL".into(),
+            band: "20m".into(),
+            ..Default::default()
+        };
+        let mk = |call: &str, freq_khz: f64| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz,
+            comment: String::new(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let mut buf = SpotBuffer::new(100);
+        buf.push(mk("DL1ABC", 14_025.0));
+        buf.push(mk("DL1ABC", 7_025.0));
+        buf.push(mk("F5XYZ", 14_030.0));
+        let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(buf));
+        let mults = |engine: &SharedEngine, call: &str, band: &str| {
+            let rows = crate::read_spots_with(&spots, engine, false, &|| None).expect("rows");
+            let r = rows
+                .iter()
+                .find(|r| r.call == call && r.band == band)
+                .unwrap_or_else(|| panic!("{call} on {band}"));
+            let got: Vec<(&str, String)> = r
+                .contest_mults
+                .iter()
+                .map(|m| (m.id, m.value.clone()))
+                .collect();
+            (got, r.entity.clone())
+        };
+        // Outside a contest nothing is marked, a station never worked included.
+        let idle: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::with_settings(s.clone()),
+        ));
+        assert_eq!(
+            mults(&idle, "F5XYZ", "20m").0,
+            vec![],
+            "no contest, no marks"
+        );
+        let mut e = tempo_app::engine::Engine::with_settings(s);
+        e.set_mode("fieldday-sp").unwrap();
+        let fields: Vec<(String, String)> = [("RST", "599"), ("ZN", "14")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        assert!(e.contest_log_manual("DL1ABC", &fields, "CW", None).unwrap());
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(e));
+        let (got, germany) = mults(&engine, "DL1ABC", "20m");
+        assert_eq!(
+            got,
+            vec![],
+            "worked here: its zone and country are both counted on 20 m"
+        );
+        assert_eq!(
+            mults(&engine, "DL1ABC", "40m").0,
+            vec![("zone", "14".to_string()), ("country", germany)],
+            "CQ WW counts both per band; the zone is the one this station sent on 20 m"
+        );
+        let (got, france) = mults(&engine, "F5XYZ", "20m");
+        assert_eq!(
+            got,
+            vec![("country", france)],
+            "a station never worked: its country, and no guess at a zone it has not sent"
+        );
+        // The spot's mode class in the contest log's words, which a per-mode rule buckets by.
+        assert_eq!(
+            ["CW", "Phone", "Digital"].map(crate::spot_contest_class),
+            ["CW", "PH", "DIG"]
+        );
+    }
+
+    /// ⭐ **A band map predicts a never-worked station's county from the call-history file**, by
+    /// the contest's own scoring, as N1MM does: the file's county for a station never worked, if
+    /// that county is not worked yet. The station's own earlier exchange beats the file; no
+    /// file, no entry, a file for another contest, call history off, or no contest: nothing.
+    #[test]
+    fn a_spot_predicts_the_multiplier_its_call_history_gives() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let s = tempo_app::settings::Settings {
+            mycall: "W9XYZ".into(),
+            fd_event: "ilqp".into(),
+            fd_active: true,
+            contest_qth_state: "WI".into(),
+            band: "20m".into(),
+            ..Default::default()
+        };
+        let mk = |call: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz: 14_035.0,
+            comment: String::new(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let mut buf = SpotBuffer::new(100);
+        for call in ["K9NEW", "K9OLD", "K9WRK", "K9LIN", "K9NON"] {
+            buf.push(mk(call));
+        }
+        let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(buf));
+        let file = |contest: &str| {
+            let row = |v: &str| [("Loc1".to_string(), v.to_string())].into_iter().collect();
+            let h = tempo_app::call_history::CallHistory {
+                fields: Vec::new(),
+                entries: [
+                    ("K9NEW", "LAKE"),
+                    ("K9OLD", "COOK"),
+                    ("K9WRK", "LAKE"),
+                    ("K9LIN", "COOK/DUPG"),
+                ]
+                .into_iter()
+                .map(|(c, v)| (c.to_string(), row(v)))
+                .collect(),
+            };
+            Some((contest.to_string(), std::sync::Arc::new(h)))
+        };
+        type Predicted = Vec<(&'static str, String, Vec<String>)>;
+        let predicted = |engine: &SharedEngine,
+                         history: &dyn Fn() -> Option<(
+            String,
+            std::sync::Arc<tempo_app::call_history::CallHistory>,
+        )>,
+                         call: &str|
+         -> Predicted {
+            let rows = crate::read_spots_with(&spots, engine, false, history).expect("rows");
+            rows.iter()
+                .find(|r| r.call == call)
+                .unwrap_or_else(|| panic!("{call}"))
+                .contest_predicted
+                .iter()
+                .map(|m| (m.id, m.value.clone(), m.county_line.clone()))
+                .collect()
+        };
+        let ilqp = || file("ilqp");
+        // No contest: nothing, whatever the file says.
+        let idle: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::with_settings(s.clone()),
+        ));
+        assert_eq!(
+            predicted(&idle, &ilqp, "K9NEW"),
+            vec![],
+            "outside a contest"
+        );
+        let mut e = tempo_app::engine::Engine::with_settings(s.clone());
+        e.set_mode("fieldday-sp").unwrap();
+        // The id a file is bound to at import is the snapshot's `fieldDay.event`.
+        assert_eq!(e.snapshot().field_day.expect("a contest").event, "ilqp");
+        let fields = |qth: &str| -> Vec<(String, String)> {
+            vec![("RST".into(), "599".into()), ("QTH".into(), qth.into())]
+        };
+        assert!(e
+            .contest_log_manual("K9AAA", &fields("COOK"), "CW", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("K9WRK", &fields("PEOR"), "CW", None)
+            .unwrap());
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(e));
+        assert_eq!(
+            predicted(&engine, &ilqp, "K9NEW"),
+            vec![("county", "LAKE".to_string(), vec![])],
+            "never worked, LAKE not worked: predicted"
+        );
+        assert_eq!(predicted(&engine, &ilqp, "K9OLD"), vec![], "COOK is worked");
+        assert_eq!(
+            predicted(&engine, &ilqp, "K9WRK"),
+            vec![],
+            "worked from PEOR: its own exchange beats the file's LAKE"
+        );
+        assert_eq!(
+            predicted(&engine, &ilqp, "K9LIN"),
+            vec![(
+                "county",
+                "DUPG".to_string(),
+                vec!["COOK".to_string(), "DUPG".to_string()]
+            )],
+            "a county line: the county it would add, and the whole line"
+        );
+        assert_eq!(predicted(&engine, &ilqp, "K9NON"), vec![], "no entry");
+        assert_eq!(predicted(&engine, &|| None, "K9NEW"), vec![], "no file");
+        assert_eq!(
+            predicted(&engine, &|| file("ohqp"), "K9NEW"),
+            vec![],
+            "a file bound to another contest"
+        );
+        // Call history off (Unassisted turns it off with every assistance source).
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut off = eng.settings().clone();
+            off.call_history_enabled = false;
+            eng.apply_settings(off);
+        }
+        assert_eq!(
+            predicted(&engine, &ilqp, "K9NEW"),
+            vec![],
+            "call history off"
+        );
     }
 
     /// #184 (akhepcat): "just because I'm not licensed to transmit in the US, there are no
@@ -48109,6 +52162,63 @@ mod tests {
         // And nobody LOSES a band by this change: every class lists the same set.
         assert_eq!(general.len(), open.len());
         assert_eq!(tech.len(), open.len());
+    }
+
+    /// The RTTY cockpit's channel list is the RTTY plan as this station tunes it. AFSK's signal
+    /// sits a mark tone below its dial, so there each row comes a mark tone above the plan's FSK
+    /// dial and a pick puts the mark where the plan says, as on FSK, and on the dial RTTY's own
+    /// home tunes. The list served the plan's FSK dial on both backends, so the default AFSK's
+    /// 20 m pick keyed 14.0807–14.0809, inside FT4.
+    #[test]
+    fn the_rtty_channel_list_tunes_the_dial_each_backend_needs() {
+        use std::sync::{Arc, Mutex};
+        use tauri::Manager;
+        let mut got = Vec::new();
+        for backend in ["afsk", "fsk"] {
+            let settings = tempo_app::settings::Settings {
+                rtty_backend: backend.into(),
+                ..tempo_app::settings::Settings::default()
+            };
+            let engine: crate::SharedEngine = Arc::new(Mutex::new(
+                tempo_app::engine::Engine::with_settings(settings),
+            ));
+            let app = tauri::test::mock_builder()
+                .manage(Arc::clone(&engine))
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .expect("a mock app");
+            let row = |band: &str| {
+                super::get_licensed_band_plan(app.state::<crate::SharedEngine>(), "rtty".into())
+                    .expect("the RTTY list")
+                    .into_iter()
+                    .find(|c| c.band == band)
+                    .map(|c| format!("{:.6}", c.dial_mhz))
+            };
+            let (twenty, seventeen) = (row("20m"), row("17m"));
+            // RTTY entered on 20 m: the section's home, beside the list's row.
+            let home = {
+                let mut e = crate::engine_lock(&engine);
+                e.set_frequency(14.074, "20m", "USB");
+                e.set_operating_mode("rtty", true);
+                format!("{:.6}", e.settings().dial_mhz)
+            };
+            got.push((backend, twenty, seventeen, home));
+        }
+        let rows = |backend, twenty: &str, seventeen: &str| {
+            (
+                backend,
+                Some(twenty.to_string()),
+                Some(seventeen.to_string()),
+                twenty.to_string(),
+            )
+        };
+        assert_eq!(
+            got,
+            vec![
+                rows("afsk", "14.085125", "18.107125"),
+                rows("fsk", "14.083000", "18.105000"),
+            ],
+            "AFSK rows a mark tone above the plan, FSK on it, and the home on the list's row"
+        );
     }
 
     /// A MID from the front end is a FILENAME fragment, so the traversal shapes are refused at
@@ -48424,6 +52534,2066 @@ mod tests {
         assert!(matches!(made, Ok(Ok(_))));
         assert_eq!(folds(), 3, "an edit folds each tally again");
     }
+
+    /// ★ The start handlers run a start from afar only under the stand-down the command lane read
+    /// it under (`command_dispatch::still_bound`). Called through the shack's own runner, as the
+    /// lane calls them, each wired start whose `afar` names a stand-down a halt has moved since is
+    /// refused, `STOPPED_SINCE`, and leaves the station as it was: TX off, nothing queued to play.
+    /// Named with the stand-down as it stands now, each runs. CONTROL: with no `afar`, as the
+    /// shack's own screen calls them, each runs as it always has; and Enable TX's off half runs
+    /// whatever `afar` it carries.
+    #[test]
+    fn a_start_from_afar_runs_only_under_the_stand_down_it_was_read_under() {
+        use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
+        use crate::{
+            call_cq, call_station, override_next_tx, play_voice_message, qso_freetext, qso_resend,
+            set_tx_enabled, start_cq,
+        };
+        use serde_json::{json, Value};
+        let dir = std::env::temp_dir().join(format!("nexus-afar-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("f1.wav");
+        let voice = crate::lan_client::audio_road::voice_message(&[0.1; 1_200]).unwrap();
+        std::fs::write(&wav, voice).unwrap();
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&engine);
+            let mut settings = e.settings().clone();
+            settings.voice_messages = vec![tempo_app::settings::VoiceMessage {
+                slot: 1,
+                label: "CQ".into(),
+                file: wav.display().to_string(),
+            }];
+            e.apply_settings(settings);
+        }
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .manage(crate::SharedOtaSpots::default())
+            .manage(crate::SharedParks::default())
+            .invoke_handler(tauri::generate_handler![
+                call_cq,
+                call_station,
+                override_next_tx,
+                play_voice_message,
+                qso_freetext,
+                qso_resend,
+                set_tx_enabled,
+                start_cq
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let with = |mut args: Value, stand_down: Option<u64>| {
+            if let Some(stand_down) = stand_down {
+                args["afar"] = json!({ "standDown": stand_down });
+            }
+            args
+        };
+        let stopped = Err(STOPPED_SINCE.to_string());
+        for (cmd, args) in [
+            ("call_cq", json!({})),
+            ("call_station", json!({"call": "K1ABC"})),
+            (
+                "override_next_tx",
+                json!({"call": "K1ABC", "text": "K1ABC W9XYZ EN52"}),
+            ),
+            ("play_voice_message", json!({"slot": 1})),
+            ("qso_freetext", json!({"text": "TNX 73"})),
+            ("qso_resend", json!({})),
+            ("set_tx_enabled", json!({"enabled": true})),
+            ("start_cq", json!({})),
+        ] {
+            let stale = {
+                let mut e = engine_lock(&engine);
+                let stale = e.remote_transmit_stand_down_generation();
+                e.halt_tx();
+                // The keyer plays only with TX on: on at the shack, which moves no stand-down.
+                if cmd == "play_voice_message" {
+                    e.set_tx_enabled(true);
+                }
+                stale
+            };
+            let voided = ask(cmd, with(args.clone(), Some(stale)));
+            let (armed, queued) = {
+                let mut e = engine_lock(&engine);
+                (e.tx_enabled(), e.poll_voice().is_some())
+            };
+            let left_alone = if cmd == "play_voice_message" {
+                !queued
+            } else {
+                !armed && !queued
+            };
+            assert!(
+                voided == stopped && left_alone,
+                "{cmd} under a moved stand-down: {voided:?}, TX armed {armed}, voice queued {queued}"
+            );
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let ran = ask(cmd, with(args.clone(), Some(now)));
+            assert_ne!(ran, stopped, "{cmd} under the stand-down as it stands");
+            let ran = ask(cmd, args);
+            assert_ne!(ran, stopped, "CONTROL {cmd}, from the shack's own screen");
+        }
+        let stale = {
+            let mut e = engine_lock(&engine);
+            e.set_tx_enabled(true);
+            e.remote_transmit_stand_down_generation().wrapping_sub(1)
+        };
+        let off = ask(
+            "set_tx_enabled",
+            with(json!({"enabled": false}), Some(stale)),
+        );
+        assert!(off.is_ok(), "CONTROL: the off half runs: {off:?}");
+        assert!(!engine_lock(&engine).tx_enabled(), "CONTROL: TX off");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ The free-text box's command and the Tx row's command, working W9XYZ/M on FT8: text whose
+    /// over the encoder refuses is answered with the reason, which the screen shows as the
+    /// command's error (`withErrorToast`), and nothing is queued. CONTROL: `73` is queued.
+    #[test]
+    fn the_free_text_and_tx_row_commands_answer_an_encoder_refusal_with_the_reason() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::{override_next_tx, qso_freetext};
+        use serde_json::{json, Value};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("K1ABC", "FN42", 0),
+        ));
+        engine_lock(&engine).set_tier(tempo_app::dto::Tier::Ft8);
+        engine_lock(&engine).call_station_with_grid("W9XYZ/M", None);
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![override_next_tx, qso_freetext])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let tx_now = || engine_lock(&engine).snapshot().qso.and_then(|q| q.tx_now);
+        let why = |text: &str| {
+            format!(
+                "FT8 cannot encode \"{text}\", so nothing goes out. After two calls only a report \
+                 (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 characters."
+            )
+        };
+        let before = tx_now();
+        assert!(before.is_some(), "premise: the call is queued");
+        assert_eq!(
+            ask("qso_freetext", json!({"text": "TNX 73"})),
+            Err(why("W9XYZ/M K1ABC TNX 73")),
+            "the free-text box"
+        );
+        assert_eq!(
+            ask(
+                "override_next_tx",
+                json!({"call": "W9XYZ/M", "text": "W9XYZ/M K1ABC TNX"})
+            ),
+            Err(why("W9XYZ/M K1ABC TNX")),
+            "the Tx row"
+        );
+        assert_eq!(tx_now(), before, "nothing queued");
+        assert!(
+            ask("qso_freetext", json!({"text": "73"})).is_ok(),
+            "CONTROL"
+        );
+        assert_eq!(tx_now().as_deref(), Some("W9XYZ/M <K1ABC> 73"), "CONTROL");
+    }
+
+    /// A mock app and its main window.
+    pub(crate) type ShackApp = (
+        tauri::App<tauri::test::MockRuntime>,
+        tauri::WebviewWindow<tauri::test::MockRuntime>,
+    );
+
+    /// A mock of the shack's app over `engine`, with a main window, holding the app's own handlers
+    /// for the Operate strip's Call CQ and contest S&P, the JS8 sends, keyboard CW and its macros,
+    /// the tune carrier and the rig's tuner, the RTTY, PSK, APRS, SSTV and chat starts, Enable TX
+    /// and the stops a cockpit sends: what the starts from afar are run through, as the
+    /// command lane runs them (`command_dispatch::tauri_runner`). Here because a handler's command
+    /// macro is reachable only from the module that defines it.
+    pub(crate) fn shack_app_for_starts_from_afar(engine: crate::SharedEngine) -> ShackApp {
+        use crate::{
+            aprs_arm, aprs_send_beacon, aprs_send_message, broadcast, resend_chat, resume_chat_cq,
+            send_message, set_beacon, set_chat_cq, set_mode, sstv_send, sstv_stop,
+        };
+        use crate::{
+            atu_tune, halt_tx, js8_answer_reply, js8_arm, js8_call_cq, js8_cq_repeat,
+            js8_heartbeat_now, js8_send, js8_send_command, js8_typeahead, psk_send,
+            psk_set_latched, psk_stop, psk_type, rtty_auto_answer, rtty_auto_cq, rtty_send,
+            rtty_set_latched, rtty_stop, rtty_type, send_cw, send_cw_armed, set_tune,
+            set_tx_enabled, start_running, start_search_and_pounce, stop_cw,
+        };
+        let app = tauri::test::mock_builder()
+            .manage(engine)
+            .invoke_handler(tauri::generate_handler![
+                atu_tune,
+                aprs_arm,
+                aprs_send_beacon,
+                aprs_send_message,
+                broadcast,
+                resend_chat,
+                resume_chat_cq,
+                send_message,
+                set_beacon,
+                set_chat_cq,
+                set_mode,
+                sstv_send,
+                sstv_stop,
+                halt_tx,
+                js8_answer_reply,
+                js8_arm,
+                js8_call_cq,
+                js8_cq_repeat,
+                js8_heartbeat_now,
+                js8_send,
+                js8_send_command,
+                js8_typeahead,
+                psk_send,
+                psk_set_latched,
+                psk_stop,
+                psk_type,
+                rtty_auto_answer,
+                rtty_auto_cq,
+                rtty_send,
+                rtty_set_latched,
+                rtty_stop,
+                rtty_type,
+                send_cw,
+                send_cw_armed,
+                set_tune,
+                set_tx_enabled,
+                start_running,
+                start_search_and_pounce,
+                stop_cw
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        (app, main)
+    }
+
+    /// ⛔ Every JS8 switch turns on from afar, through the shack's own `js8_arm`, and only under
+    /// the stand-down the command lane read it under. For the automatic replies, the heartbeat,
+    /// relay, heartbeat acks and heartbeat networking, each off at the shack: named with a
+    /// stand-down a halt has moved since, it is refused `STOPPED_SINCE` and stays off; named with
+    /// the stand-down as it stands, it turns on (CONTROL). A `which` naming no switch is refused by
+    /// the handler, as from the shack's own screen, and turns nothing on.
+    #[test]
+    fn a_js8_switch_from_afar_turns_on_only_under_the_stand_down_it_was_read_under() {
+        use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
+        use serde_json::{json, Value};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "js8_arm".to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        // Each switch as the shack holds it, by value.
+        let switches = || {
+            let e = engine_lock(&engine);
+            let s = e.settings();
+            [
+                ("autoreply", s.js8_autoreply),
+                ("hb", e.js8_state().hb_on),
+                ("relay", s.js8_relay),
+                ("hback", s.js8_hb_ack),
+                ("hbnet", s.js8_hb_networking),
+            ]
+        };
+        let is_on = |which: &str| switches().iter().any(|(name, on)| *name == which && *on);
+        // The shack's own screen leaves `which` off, and the persisted others on.
+        let set_up = |which: &str| {
+            let mut e = engine_lock(&engine);
+            // The three that transmit by themselves move only by their own switch.
+            use tempo_app::engine::js8::Js8Switch;
+            e.js8_arm(Js8Switch::Autoreply, which != "autoreply")
+                .unwrap();
+            e.js8_arm(Js8Switch::Relay, which != "relay").unwrap();
+            e.js8_arm(Js8Switch::HbAck, which != "hback").unwrap();
+            let mut settings = e.settings().clone();
+            settings.js8_hb_networking = which != "hbnet";
+            e.apply_settings(settings);
+            e.js8_enter();
+            e.halt_tx();
+            let stale = e.remote_transmit_stand_down_generation();
+            e.halt_tx();
+            stale
+        };
+        for which in ["autoreply", "hb", "relay", "hback", "hbnet"] {
+            let stale = set_up(which);
+            let off = switches();
+            assert!(!is_on(which), "premise: {which} off at the shack: {off:?}");
+            let voided = ask(json!({"which": which, "on": true, "afar": {"standDown": stale}}));
+            assert_eq!(voided, Err(STOPPED_SINCE.to_string()), "{which}");
+            assert_eq!(switches(), off, "{which}: nothing turned on after a Stop");
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let ran = ask(json!({"which": which, "on": true, "afar": {"standDown": now}}));
+            assert!(ran.is_ok(), "{which}: {ran:?}");
+            assert!(
+                is_on(which),
+                "CONTROL: {which} on from afar: {:?}",
+                switches()
+            );
+        }
+        let stand_down = set_up("autoreply");
+        let off = switches();
+        for which in [
+            json!("AUTOREPLY"),
+            json!("heartbeat"),
+            json!(null),
+            json!(1),
+        ] {
+            let ran = ask(json!({"which": which, "on": true, "afar": {"standDown": stand_down}}));
+            assert!(ran.is_err(), "{which}: {ran:?}");
+            assert_eq!(switches(), off, "{which}: nothing turned on");
+        }
+    }
+
+    /// ★ The Operate strip's Call CQ and contest S&P, the JS8 starts (the sends, the typeahead,
+    /// the automatic replies and the repeating CQ switched on, the yes to an automatic reply) and keyboard CW with its macros run
+    /// from afar only under the stand-down the command lane read them under, as the FT buttons do.
+    /// Called through the shack's own runner, as the lane calls them, each one whose `afar` names a
+    /// stand-down a halt has moved since is refused, `STOPPED_SINCE`, and leaves the station as it
+    /// was: TX as the shack left it, nothing queued or scheduled for JS8, the reply still asking,
+    /// the CW keyer idle. Named with the stand-down as it stands now, and with no `afar` (the
+    /// shack's own screen), each is not refused that way. Every command is asked; the ones that ran
+    /// after a Stop are named together. A yes naming a reply by a time the shack never gave it is
+    /// refused and keys nothing. CONTROL: under the stand-down as it stands, a CQ run arms TX, a
+    /// JS8 message and a yes to a reply are queued, the automatic replies are on, the CQ repeats,
+    /// and a CW macro holds the transmitter.
+    #[test]
+    fn a_contest_js8_or_cw_start_from_afar_runs_only_under_the_stand_down_it_was_read_under() {
+        use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
+        use serde_json::{json, Value};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let with = |mut args: Value, stand_down: Option<u64>| {
+            if let Some(stand_down) = stand_down {
+                args["afar"] = json!({ "standDown": stand_down });
+            }
+            args
+        };
+        // What a start leaves at the station: TX armed, JS8 frames queued, the CW keyer holding
+        // the transmitter, the JS8 heartbeat and repeating CQ scheduled and the automatic replies
+        // on, a reply still asking.
+        let left = || {
+            let e = engine_lock(&engine);
+            let js8 = e.js8_state();
+            (
+                e.tx_enabled(),
+                !js8.queue.is_empty(),
+                e.tx_owner().is_some(),
+                (js8.hb_on, js8.cq_on, js8.autoreply),
+                js8.pending_reply.is_some(),
+            )
+        };
+        let stopped = Err(STOPPED_SINCE.to_string());
+        let mut ran_after_a_stop = Vec::new();
+        for (cmd, args) in [
+            ("start_running", json!({})),
+            ("start_search_and_pounce", json!({})),
+            ("js8_call_cq", json!({})),
+            ("js8_heartbeat_now", json!({})),
+            ("js8_send", json!({"to": null, "text": "HELLO FROM AFAR"})),
+            (
+                "js8_send_command",
+                json!({"to": "W1AW", "cmd": 0, "arg": ""}),
+            ),
+            ("js8_arm", json!({"which": "autoreply", "on": true})),
+            ("js8_typeahead", json!({"sentSeen": 0, "unsent": "MORE"})),
+            ("js8_cq_repeat", json!({"on": true})),
+            ("js8_answer_reply", json!({"yes": true})),
+            ("send_cw", json!({"text": "CQ {MYCALL}"})),
+            ("send_cw_armed", json!({"text": "TU {MYCALL}"})),
+        ] {
+            let mut args = args;
+            let stale = {
+                let mut e = engine_lock(&engine);
+                e.halt_tx();
+                let mut settings = e.settings().clone();
+                settings.js8_hb_networking = true;
+                e.apply_settings(settings);
+                // Off at the shack, so turning them on from afar is seen.
+                e.js8_arm(
+                    tempo_app::engine::js8::Js8Switch::Autoreply,
+                    cmd != "js8_arm",
+                )
+                .unwrap();
+                if cmd.starts_with("js8_") {
+                    e.js8_enter();
+                } else {
+                    e.set_tier(tempo_app::dto::Tier::Ft8);
+                }
+                if cmd.starts_with("send_cw") {
+                    e.set_operating_mode("cw", false);
+                }
+                let stale = e.remote_transmit_stand_down_generation();
+                e.halt_tx();
+                // These two key only with TX on: on at the shack, which moves no stand-down.
+                if matches!(cmd, "send_cw_armed" | "js8_answer_reply" | "js8_typeahead") {
+                    e.set_tx_enabled(true);
+                }
+                if cmd == "js8_typeahead" {
+                    e.js8_send(None, "A MESSAGE GOING OUT".into()).unwrap();
+                }
+                // A query heard at the shack, whose automatic reply asks the operator first; the
+                // yes names it as the screen was shown it.
+                if cmd == "js8_answer_reply" {
+                    e.js8_api_hear_snr_query("W1AW");
+                    let reply = e.js8_state().pending_reply.expect("premise: a reply asks");
+                    args["display"] = json!(reply.display);
+                    args["firesAtMs"] = json!(reply.fires_at_ms);
+                }
+                stale
+            };
+            let before = left();
+            let voided = ask(cmd, with(args.clone(), Some(stale)));
+            let after = left();
+            if voided != stopped || after != before {
+                ran_after_a_stop.push(format!(
+                    "{cmd}: {voided:?}, (TX armed, JS8 queued, keyer busy, (HB, CQ, AUTO) on, \
+                     reply asking) {before:?} -> {after:?}"
+                ));
+            }
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let ran = ask(cmd, with(args.clone(), Some(now)));
+            assert_ne!(ran, stopped, "{cmd} under the stand-down as it stands");
+            match cmd {
+                "start_running" => assert!(left().0, "CONTROL: the CQ run arms TX: {ran:?}"),
+                "js8_send" => assert!(left().1, "CONTROL: the message is queued: {ran:?}"),
+                "send_cw" => assert!(left().2, "CONTROL: the keyer holds TX: {ran:?}"),
+                "js8_arm" => assert!(left().3 .2, "CONTROL: the replies are on: {ran:?}"),
+                "js8_cq_repeat" => assert!(left().3 .1, "CONTROL: the CQ repeats: {ran:?}"),
+                "js8_answer_reply" => {
+                    assert!(
+                        left().1 && !left().4,
+                        "CONTROL: the reply is queued: {ran:?}"
+                    )
+                }
+                _ => {}
+            }
+            engine_lock(&engine).halt_tx();
+            let ran = ask(cmd, args);
+            assert_ne!(ran, stopped, "CONTROL {cmd}, from the shack's own screen");
+        }
+        assert!(
+            ran_after_a_stop.is_empty(),
+            "ran from afar after a Stop: {ran_after_a_stop:#?}"
+        );
+        // ⛔ A yes naming the reply by a time the shack never gave it: refused, the reply still
+        // asking, nothing queued or keyed.
+        let (now, reply) = {
+            let mut e = engine_lock(&engine);
+            e.halt_tx();
+            e.js8_enter();
+            e.set_tx_enabled(true);
+            e.js8_api_hear_snr_query("W1AW");
+            let reply = e.js8_state().pending_reply.expect("premise: a reply asks");
+            (e.remote_transmit_stand_down_generation(), reply)
+        };
+        for made_up in [reply.fires_at_ms + 1, reply.fires_at_ms - 1, 0, u64::MAX] {
+            let said = ask(
+                "js8_answer_reply",
+                with(
+                    json!({"yes": true, "display": reply.display, "firesAtMs": made_up}),
+                    Some(now),
+                ),
+            );
+            let e = engine_lock(&engine);
+            let js8 = e.js8_state();
+            assert!(
+                said.is_err()
+                    && js8.queue.is_empty()
+                    && js8.pending_reply.is_some()
+                    && e.tx_owner().is_none(),
+                "a made-up {made_up}: {said:?}, queued {}, asking {}",
+                js8.queue.len(),
+                js8.pending_reply.is_some()
+            );
+        }
+        let said = ask(
+            "js8_answer_reply",
+            with(
+                json!({"yes": true, "display": reply.display, "firesAtMs": reply.fires_at_ms}),
+                Some(now),
+            ),
+        );
+        assert!(
+            said.is_ok() && !engine_lock(&engine).js8_state().queue.is_empty(),
+            "CONTROL: the shack's own name for it: {said:?}"
+        );
+    }
+
+    /// ⛔ CW TYPED ON A COMPUTER DRIVING THE STATION MEETS THE RADIO'S KEYER RULE, ON THE WIRE. The
+    /// text goes through the station's own runner, as the command lane runs it, into `send_cw` and
+    /// the engine's one CW queue; each word the queue gives is handed to the radio's keyer as the
+    /// radio loop's CAT keyer hands it (`Rig::send_morse`), here to a rigctld that records every
+    /// line. Kenwood, Yaesu and Elecraft radios end a command at `;`, so a message holding one is
+    /// refused whole, says why, and nothing of it reaches rigctld; Enter Sends Message on that
+    /// computer is answered with the refusal, so its strip logs nothing. CONTROL: ordinary text
+    /// from afar reaches it as typed, and Enter's send takes it.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn cw_typed_from_afar_never_reaches_the_radios_keyer_with_a_semicolon() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use serde_json::{json, Value};
+        use std::io::{BufRead, BufReader, Write};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&engine);
+            e.set_license_class("extra");
+            e.set_cw_keyer("cat", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+        }
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        // A rigctld that records every line it is sent, answering each `RPRT 0`.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let wire = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = wire.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let Ok(read) = stream.try_clone() else {
+                    continue;
+                };
+                for line in BufReader::new(read).lines() {
+                    let Ok(line) = line else { break };
+                    log.lock().unwrap().push(line);
+                    if stream.write_all(b"RPRT 0\n").is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        let mut rig = tempo_audio::rig::Rig::rigctld(&addr);
+        let mut key_what_is_queued = || loop {
+            let Some((word, _, _)) = engine_lock(&engine).poll_cw_word() else {
+                break;
+            };
+            let _ = rig.send_morse(&word);
+        };
+        let semicolon = "CW not sent: \";\" is never handed to the radio's own keyer, because \
+             Kenwood, Yaesu and Elecraft radios read it as the end of a command. Take it out of \
+             the message.";
+        let text = "CQ TEST;FA00007000000 DE KD9TAW";
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let sent = ask("send_cw", json!({"text": text, "afar": {"standDown": now}}));
+        assert!(sent.is_ok(), "premise: the start from afar ran: {sent:?}");
+        key_what_is_queued();
+        assert_eq!(
+            wire.lock().unwrap().clone(),
+            Vec::<String>::new(),
+            "nothing of the message from afar reached rigctld: it is refused whole"
+        );
+        assert_eq!(
+            engine_lock(&engine).cw_keyer_error().as_deref(),
+            Some(semicolon),
+            "the CW screen says why"
+        );
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let took = ask(
+            "send_cw_armed",
+            json!({"text": text, "afar": {"standDown": now}}),
+        );
+        assert_eq!(
+            took.map(|_| ()),
+            Err(semicolon.to_string()),
+            "Enter's send from afar is refused, with the character, so its strip logs nothing"
+        );
+        key_what_is_queued();
+        assert_eq!(
+            wire.lock().unwrap().clone(),
+            Vec::<String>::new(),
+            "nothing of Enter's message reached rigctld"
+        );
+        // CONTROL: ordinary text from afar reaches the radio's keyer as typed, and Enter's send
+        // takes it.
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let sent = ask(
+            "send_cw",
+            json!({"text": "CQ TEST DE KD9TAW", "afar": {"standDown": now}}),
+        );
+        assert!(sent.is_ok(), "CONTROL: {sent:?}");
+        key_what_is_queued();
+        assert_eq!(
+            wire.lock().unwrap().clone(),
+            ["b CQ", "b TEST", "b DE", "b KD9TAW"],
+            "CONTROL: ordinary text from afar reaches the radio's keyer as typed"
+        );
+        let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+        let took = ask(
+            "send_cw_armed",
+            json!({"text": "TU", "afar": {"standDown": now}}),
+        );
+        assert!(
+            took.is_ok(),
+            "CONTROL: Enter's send from afar takes it: {took:?}"
+        );
+    }
+
+    /// ★ The tune carrier, the rig's tuner, and the RTTY and PSK starts (a send, continuous TX
+    /// switched on and typed into, the RTTY auto-sequencer's CQ and answer) run from afar only under
+    /// the stand-down the command lane read them under, as the FT buttons do. Called through the
+    /// shack's own runner, as the lane calls them, each one whose `afar` names a stand-down a halt
+    /// has moved since is refused, `STOPPED_SINCE`, and leaves the station as it was: no carrier,
+    /// nothing queued or latched, the sequencer idle, nothing typed onto the air. Named with the
+    /// stand-down as it stands now, and with no `afar` (the shack's own screen), each is not
+    /// refused that way. Every command is asked; the ones that ran after a Stop are named together.
+    /// The off half of the tune carrier and of either latch, named with that same stale stand-down,
+    /// still runs and takes it down: it is a Stop. CONTROL: under the stand-down as it stands, the
+    /// carrier is up, a send holds the transmitter, the latch is up, typed text is keyed, and the
+    /// sequencer runs. The rig's tuner is refused here by its own gate (no rig with a tuner), never
+    /// as stopped.
+    #[test]
+    fn a_tune_rtty_or_psk_start_from_afar_runs_only_under_the_stand_down_it_was_read_under() {
+        use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
+        use serde_json::{json, Value};
+        use tempo_app::engine::{PskStreamTick, RttyStreamTick};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let with = |mut args: Value, stand_down: Option<u64>| {
+            if let Some(stand_down) = stand_down {
+                args["afar"] = json!({ "standDown": stand_down });
+            }
+            args
+        };
+        // What a start leaves at the station: the tune carrier up, the transmitter held, either
+        // latch up, the RTTY sequencer's state.
+        let left = || {
+            let e = engine_lock(&engine);
+            (
+                e.tuning(),
+                e.tx_owner().is_some(),
+                e.rtty_latched(),
+                e.psk_latched(),
+                e.rtty_state().seq_state,
+            )
+        };
+        // Whether typed text is waiting to key on the latch, as the radio loop would find it.
+        let typed = |cmd: &str| {
+            let mut e = engine_lock(&engine);
+            if cmd.starts_with("rtty") {
+                matches!(e.poll_rtty_stream(64), RttyStreamTick::Text(_))
+            } else {
+                matches!(e.poll_psk_stream(64), PskStreamTick::Text(_))
+            }
+        };
+        let stopped = Err(STOPPED_SINCE.to_string());
+        let mut ran_after_a_stop = Vec::new();
+        for (cmd, args) in [
+            ("set_tune", json!({"on": true})),
+            ("atu_tune", json!({})),
+            ("rtty_send", json!({"text": "CQ FROM AFAR"})),
+            ("rtty_set_latched", json!({"on": true})),
+            ("rtty_type", json!({"text": "TYPED FROM AFAR"})),
+            ("rtty_auto_cq", json!({})),
+            ("rtty_auto_answer", json!({"call": "W1AW"})),
+            ("psk_send", json!({"text": "CQ FROM AFAR"})),
+            ("psk_set_latched", json!({"on": true})),
+            ("psk_type", json!({"text": "TYPED FROM AFAR"})),
+        ] {
+            // The station as the shack's own screen leaves it: the cockpit's section, TX on (on
+            // at the shack, which moves no stand-down), Auto on for the sequencer, continuous TX
+            // up for the typing.
+            let set_up = || {
+                let mut e = engine_lock(&engine);
+                e.halt_tx();
+                e.take_slot_tx_abort();
+                if cmd.starts_with("rtty") {
+                    e.set_operating_mode("rtty", false);
+                } else if cmd.starts_with("psk") {
+                    e.set_operating_mode("keyboard", false);
+                }
+                e.set_tx_enabled(true);
+                if cmd.starts_with("rtty_auto") {
+                    e.set_rtty_auto(true).expect("premise: Auto on");
+                }
+                match cmd {
+                    "rtty_type" => e.set_rtty_latched(true).expect("premise: latched"),
+                    "psk_type" => e.set_psk_latched(true).expect("premise: latched"),
+                    _ => {}
+                }
+            };
+            set_up();
+            let stale = engine_lock(&engine).remote_transmit_stand_down_generation();
+            set_up();
+            let before = left();
+            let voided = ask(cmd, with(args.clone(), Some(stale)));
+            let after = left();
+            let keyed_typing = cmd.ends_with("_type") && typed(cmd);
+            if voided != stopped || after != before || keyed_typing {
+                let voided = voided.as_ref().map(|_| "ran");
+                ran_after_a_stop.push(format!(
+                    "{cmd}: {voided:?}, (tuning, TX held, RTTY latched, PSK latched, sequencer) \
+                     {before:?} -> {after:?}, typed text keyed {keyed_typing}"
+                ));
+            }
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let ran = ask(cmd, with(args.clone(), Some(now)));
+            assert_ne!(ran, stopped, "{cmd} under the stand-down as it stands");
+            match cmd {
+                "set_tune" => assert!(left().0, "CONTROL: the carrier is up: {ran:?}"),
+                "atu_tune" => assert!(ran.is_err(), "CONTROL: no tuner here: {ran:?}"),
+                "rtty_send" | "psk_send" => {
+                    assert!(left().1, "CONTROL: the send holds TX: {ran:?}")
+                }
+                "rtty_set_latched" => assert!(left().2, "CONTROL: latched: {ran:?}"),
+                "psk_set_latched" => assert!(left().3, "CONTROL: latched: {ran:?}"),
+                "rtty_type" | "psk_type" => {
+                    assert!(typed(cmd), "CONTROL: the text keys: {ran:?}")
+                }
+                _ => assert_ne!(left().4, before.4, "CONTROL: the sequencer runs: {ran:?}"),
+            }
+            // ⛔ The off half of a switch is a Stop: named with the stale stand-down, it still runs
+            // and takes down what the on half put up.
+            if args.get("on").is_some() {
+                let off = ask(cmd, with(json!({"on": false}), Some(stale)));
+                let up = left();
+                assert!(
+                    off.is_ok() && !up.0 && !up.2 && !up.3,
+                    "{cmd} off, under a stale stand-down: {:?}, (tuning, TX held, RTTY latched, \
+                     PSK latched, sequencer) {up:?}",
+                    off.map(|_| "ran")
+                );
+            }
+            set_up();
+            let ran = ask(cmd, args);
+            assert_ne!(ran, stopped, "CONTROL {cmd}, from the shack's own screen");
+        }
+        engine_lock(&engine).halt_tx();
+        assert!(
+            ran_after_a_stop.is_empty(),
+            "ran from afar after a Stop: {ran_after_a_stop:#?}"
+        );
+    }
+
+    /// An SSTV picture the size its mode needs, for a send from afar: its mode's name, width,
+    /// height and pixels as the screen sends them.
+    pub(crate) fn sstv_picture() -> serde_json::Value {
+        let spec = tempo_sstv::for_mode(tempo_sstv::lookup_slug("robot36").expect("robot36"));
+        let rgb = vec![0x80u8; spec.line_pixels as usize * spec.image_lines as usize * 3];
+        serde_json::json!({
+            "mode": "robot36",
+            "width": spec.line_pixels,
+            "height": spec.image_lines,
+            "rgbBase64": b64_encode(&rgb),
+        })
+    }
+
+    /// ⛔ APRS, SSTV and chat from afar, through the shack's own handlers, run only under the
+    /// stand-down the command lane read them under. For each start (Monitor armed by hand, a
+    /// beacon, a message, a picture, a chat message, a broadcast, a message sent again, the CQ run
+    /// turned on or resumed, the presence beacon, a CQ run entered as a mode): named with a
+    /// stand-down a halt has moved since, it is refused `STOPPED_SINCE` and leaves nothing on or
+    /// queued; named with the stand-down as it stands, it runs (CONTROL: what it starts is seen),
+    /// and so it does from the shack's own screen. What transmits by itself afterwards (the ack,
+    /// the beacon, the CQ run) is refused from afar with no presence live, and starts nothing.
+    #[test]
+    fn an_aprs_sstv_or_chat_start_from_afar_runs_only_under_the_stand_down_it_was_read_under() {
+        use crate::command_dispatch::{tauri_runner, Runner, NO_PRESENCE, STOPPED_SINCE};
+        use serde_json::{json, Value};
+        use std::time::{Duration, Instant};
+        use tempo_app::engine::{AprsArm, TxOwner};
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        // The stand-down is the transmit authority's, as production wires it.
+        let transmit = TransmitAuthority::default();
+        engine_lock(&engine).set_remote_transmit_revocation(transmit.revocation());
+        let (app, _main) = shack_app_for_starts_from_afar(engine.clone());
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the handler answered")
+        };
+        let with = |mut args: Value, stand_down: Option<u64>| {
+            if let Some(stand_down) = stand_down {
+                args["afar"] = json!({ "standDown": stand_down });
+            }
+            args
+        };
+        // The slots the shack's sequencer is asked about, each once, in order.
+        let slot = std::cell::Cell::new(0u64);
+        let next_slots = || {
+            let from = slot.get();
+            slot.set(from + 8);
+            from..from + 8
+        };
+        // The station as the shack's own screen leaves it before each: Stopped, in the section
+        // the start belongs to, with nothing of APRS or chat on and a chat peer heard, and TX on
+        // where the start keys only with it on (at the shack, which moves no stand-down).
+        let set_up = |e: &mut tempo_app::engine::Engine, cmd: &str| {
+            e.halt_tx();
+            e.set_aprs_arm(AprsArm::Off);
+            e.set_beacon(false);
+            e.set_chat_cq(false).unwrap();
+            e.set_operating_mode(
+                if cmd == "sstv_send" {
+                    "phone"
+                } else {
+                    "digital"
+                },
+                false,
+            );
+            match cmd {
+                "set_mode" => {
+                    e.set_mode("qso-monitor").unwrap();
+                    e.set_tier(tempo_app::dto::Tier::Ft8);
+                }
+                _ if cmd.starts_with("aprs_") || cmd == "sstv_send" => {}
+                _ => {
+                    e.set_mode("chat").unwrap();
+                    e.hear_for_test("CQ W1AW FN31", -5, next_slots().start);
+                }
+            }
+            if cmd == "resume_chat_cq" {
+                // A run on at the shack, then Stopped: on, and TX off.
+                e.set_chat_cq(true).unwrap();
+                e.halt_tx();
+            }
+            let stale = e.remote_transmit_stand_down_generation();
+            e.halt_tx();
+            if matches!(
+                cmd,
+                "aprs_send_beacon"
+                    | "aprs_send_message"
+                    | "sstv_send"
+                    | "broadcast"
+                    | "send_message"
+            ) {
+                e.set_tx_enabled(true);
+            }
+            stale
+        };
+        // What the start puts on, or on the air.
+        let started = |e: &mut tempo_app::engine::Engine, cmd: &str| -> bool {
+            match cmd {
+                "aprs_arm" => e.aprs_arm_source() == AprsArm::Explicit,
+                // The frame the radio loop keys next.
+                "aprs_send_beacon" | "aprs_send_message" => e.poll_aprs_tx().is_some(),
+                "sstv_send" => e.tx_owner() == Some(TxOwner::Sstv),
+                "broadcast" | "send_message" => {
+                    next_slots().any(|slot| !e.poll_tx(slot).is_empty())
+                }
+                "set_beacon" => e.beacon_enabled(),
+                "set_chat_cq" => e.chat_cq_state() != "off",
+                // Each arms TX as its CQ goes out.
+                "resume_chat_cq" | "set_mode" => e.tx_enabled(),
+                // There is no message to send again: it ran, and the shack said so.
+                "resend_chat" => false,
+                _ => unreachable!("{cmd}"),
+            }
+        };
+        // The chat messages still to go or to be acknowledged: their bubbles.
+        let live_messages = |e: &tempo_app::engine::Engine| {
+            e.snapshot()
+                .conversations
+                .iter()
+                .flat_map(|c| c.messages.iter())
+                .filter(|m| {
+                    m.outbound && m.ack_id.is_some() && !(m.abandoned || m.delivered || m.no_ack)
+                })
+                .count()
+        };
+        let presence = TransmitAuthority::default();
+        let stopped = Err(STOPPED_SINCE.to_string());
+        let mut ran_after_a_stop = Vec::new();
+        let mut kept_after_a_revocation = Vec::new();
+        for (cmd, args) in [
+            ("aprs_arm", json!({"on": true})),
+            (
+                "aprs_send_beacon",
+                json!({"lat": 41.9, "lon": -87.6, "symbolTable": "/", "symbolCode": ">",
+                       "comment": "FROM AFAR", "path": ["WIDE1-1"]}),
+            ),
+            (
+                "aprs_send_message",
+                json!({"addressee": "W1AW", "text": "HELLO FROM AFAR"}),
+            ),
+            ("sstv_send", sstv_picture()),
+            ("broadcast", json!({"text": "HELLO FROM AFAR"})),
+            (
+                "send_message",
+                json!({"peer": "W1AW", "text": "HELLO FROM AFAR"}),
+            ),
+            ("resend_chat", json!({"peer": "W1AW"})),
+            ("set_chat_cq", json!({"on": true})),
+            ("resume_chat_cq", json!({})),
+            ("set_beacon", json!({"on": true})),
+            ("set_mode", json!({"mode": "qso-run"})),
+        ] {
+            {
+                let now = Instant::now();
+                let permit = presence.permit(now + Duration::from_secs(60)).unwrap();
+                assert!(engine_lock(&engine).hold_remote_presence(permit, now));
+            }
+            let stale = set_up(&mut engine_lock(&engine), cmd);
+            let voided = ask(cmd, with(args.clone(), Some(stale)));
+            let after = started(&mut engine_lock(&engine), cmd);
+            if voided != stopped || after {
+                let said = match &voided {
+                    Ok(_) => "ran".to_string(),
+                    Err(error) => error.clone(),
+                };
+                ran_after_a_stop.push(format!("{cmd}: {said}, started {after}"));
+            }
+            set_up(&mut engine_lock(&engine), cmd);
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let messages_before = live_messages(&engine_lock(&engine));
+            let ran = ask(cmd, with(args.clone(), Some(now)));
+            assert_ne!(ran, stopped, "{cmd} under the stand-down as it stands");
+            if cmd == "resend_chat" {
+                // It ran: re-queued a message that had failed, or said there was none.
+                assert!(
+                    ran.is_ok() || ran == Err("no resendable message for W1AW".to_string()),
+                    "CONTROL: it ran: {ran:?}"
+                );
+            } else {
+                assert!(
+                    started(&mut engine_lock(&engine), cmd),
+                    "CONTROL {cmd}: it started: {ran:?}"
+                );
+            }
+            // ⛔ Its stand-down revoked with no halt (the computer's permission to transmit
+            // withdrawn): the radio loop's tick stops the station and ends what it left on or
+            // queued.
+            if ran.is_ok() {
+                transmit.revoke();
+                let halted = engine_lock(&engine).poll_remote_transmit(Instant::now());
+                let e = engine_lock(&engine);
+                let message_left = live_messages(&e) != messages_before;
+                let left = (
+                    e.tx_enabled(),
+                    e.aprs_arm_source() == AprsArm::Explicit,
+                    e.beacon_enabled(),
+                    e.chat_cq_state() != "off",
+                    matches!(cmd, "send_message" | "resend_chat") && message_left,
+                );
+                if !halted || left != (false, false, false, false, false) {
+                    kept_after_a_revocation.push(format!(
+                        "{cmd}: halted {halted}, (TX, ack, beacon, CQ run, message) {left:?}"
+                    ));
+                }
+            }
+            set_up(&mut engine_lock(&engine), cmd);
+            let ran = ask(cmd, args.clone());
+            assert_ne!(ran, stopped, "CONTROL {cmd}, from the shack's own screen");
+            if cmd != "resend_chat" {
+                assert!(
+                    started(&mut engine_lock(&engine), cmd),
+                    "CONTROL {cmd}, from the shack's own screen: {ran:?}"
+                );
+            }
+        }
+        assert!(
+            ran_after_a_stop.is_empty(),
+            "ran from afar after a Stop: {ran_after_a_stop:#?}"
+        );
+        assert!(
+            kept_after_a_revocation.is_empty(),
+            "kept after its stand-down was revoked: {kept_after_a_revocation:#?}"
+        );
+        // ⛔ The off half of each switch is a Stop: named with a stand-down a halt has moved since,
+        // it still runs, and turns the switch off. Leaving a run mode for a passive one too.
+        let on = |e: &tempo_app::engine::Engine, cmd: &str| match cmd {
+            "aprs_arm" => e.aprs_arm_source() != AprsArm::Off,
+            "set_beacon" => e.beacon_enabled(),
+            "set_chat_cq" => e.chat_cq_state() != "off",
+            _ => e.snapshot().qso.is_some_and(|qso| qso.running),
+        };
+        for (cmd, on_half, off_half) in [
+            ("aprs_arm", json!({"on": true}), json!({"on": false})),
+            ("set_beacon", json!({"on": true}), json!({"on": false})),
+            ("set_chat_cq", json!({"on": true}), json!({"on": false})),
+            (
+                "set_mode",
+                json!({"mode": "qso-run"}),
+                json!({"mode": "qso-monitor"}),
+            ),
+        ] {
+            let stale = set_up(&mut engine_lock(&engine), cmd);
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let said = ask(cmd, with(on_half, Some(now)));
+            assert!(
+                said.is_ok() && on(&engine_lock(&engine), cmd),
+                "{cmd}: premise, on: {said:?}"
+            );
+            let said = ask(cmd, with(off_half, Some(stale)));
+            assert!(
+                said.is_ok() && !on(&engine_lock(&engine), cmd),
+                "{cmd}: the off half after a Stop: {said:?}"
+            );
+        }
+        // ⛔ What transmits by itself, from afar with no presence live: refused by its own words,
+        // and nothing turned on. CONTROL: with presence, it turns on (above).
+        let lapsed = Instant::now() + Duration::from_secs(120);
+        engine_lock(&engine).poll_remote_transmit(lapsed);
+        for (cmd, args) in [
+            ("aprs_arm", json!({"on": true})),
+            ("set_beacon", json!({"on": true})),
+            ("set_chat_cq", json!({"on": true})),
+            ("resume_chat_cq", json!({})),
+            (
+                "send_message",
+                json!({"peer": "W1AW", "text": "HELLO FROM AFAR"}),
+            ),
+            ("resend_chat", json!({"peer": "W1AW"})),
+        ] {
+            set_up(&mut engine_lock(&engine), cmd);
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            let bubbles = || {
+                engine_lock(&engine)
+                    .snapshot()
+                    .conversations
+                    .iter()
+                    .find(|c| c.peer == "W1AW")
+                    .map_or(0, |c| c.messages.len())
+            };
+            let before = bubbles();
+            let said = ask(cmd, with(args, Some(now)));
+            assert_eq!(said, Err(NO_PRESENCE.to_string()), "{cmd}");
+            if cmd == "send_message" || cmd == "resend_chat" {
+                // A message the shack's own screen sent earlier may still be queued here.
+                assert_eq!(bubbles(), before, "{cmd} queued a message");
+            } else {
+                assert!(!started(&mut engine_lock(&engine), cmd), "{cmd} started");
+            }
+        }
+    }
+
+    /// ⛔ An FT, JS8, CW, tune, RTTY or PSK start from afar ends when the stand-down it ran under is
+    /// revoked with no halt (the computer's permission to transmit withdrawn), as an APRS, SSTV or
+    /// chat start does. Called through the shack's own runner, as the command lane calls them, with
+    /// the stand-down as it stands: each runs (CONTROL), then the stand-down is revoked and the
+    /// radio loop ticks. The station halts: TX off, no carrier, neither latch up. CONTROL: the same
+    /// start from the shack's own screen (no `afar`) outlives a bare revocation, as it always has.
+    #[test]
+    fn a_start_from_afar_ends_when_its_stand_down_is_revoked_with_no_halt() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::{
+            atu_tune, call_cq, call_station, js8_answer_reply, js8_arm, js8_call_cq, js8_cq_repeat,
+            js8_heartbeat_now, js8_send, js8_send_command, js8_typeahead, override_next_tx,
+            psk_send, psk_set_latched, psk_type, qso_freetext, qso_resend, rtty_auto_answer,
+            rtty_auto_cq, rtty_send, rtty_set_latched, rtty_type, send_cw, send_cw_armed, set_tune,
+            set_tx_enabled, start_cq, start_running, start_search_and_pounce,
+        };
+        use serde_json::{json, Value};
+        use std::time::Instant;
+        use tempo_app::engine::js8::Js8Switch;
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let transmit = TransmitAuthority::default();
+        engine_lock(&engine).set_remote_transmit_revocation(transmit.revocation());
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .manage(crate::SharedOtaSpots::default())
+            .manage(crate::SharedParks::default())
+            .invoke_handler(tauri::generate_handler![
+                atu_tune,
+                call_cq,
+                call_station,
+                js8_answer_reply,
+                js8_arm,
+                js8_call_cq,
+                js8_cq_repeat,
+                js8_heartbeat_now,
+                js8_send,
+                js8_send_command,
+                js8_typeahead,
+                override_next_tx,
+                psk_send,
+                psk_set_latched,
+                psk_type,
+                qso_freetext,
+                qso_resend,
+                rtty_auto_answer,
+                rtty_auto_cq,
+                rtty_send,
+                rtty_set_latched,
+                rtty_type,
+                send_cw,
+                send_cw_armed,
+                set_tune,
+                set_tx_enabled,
+                start_cq,
+                start_running,
+                start_search_and_pounce
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the handler answered")
+        };
+        // The station as the shack's own screen leaves it for the start: Stopped, in the start's
+        // section, TX on where the start keys only with it on (at the shack, which moves no
+        // stand-down), and what the start needs in place.
+        let set_up = |cmd: &str, args: &mut Value| {
+            let mut e = engine_lock(&engine);
+            e.halt_tx();
+            e.take_slot_tx_abort();
+            if cmd.starts_with("js8_") {
+                let mut settings = e.settings().clone();
+                settings.js8_hb_networking = true;
+                e.apply_settings(settings);
+                e.js8_arm(Js8Switch::Autoreply, false).unwrap();
+                e.js8_enter();
+            } else if cmd.starts_with("send_cw") {
+                e.set_operating_mode("cw", false);
+            } else if cmd.starts_with("rtty") {
+                e.set_operating_mode("rtty", false);
+            } else if cmd.starts_with("psk") {
+                e.set_operating_mode("keyboard", false);
+            } else if cmd == "atu_tune" {
+                e.set_license_class("extra");
+                e.set_frequency(14.290, "20m", "USB");
+                e.set_operating_mode("phone", false);
+                e.observe_rig_tuner(Some(true), true);
+            } else if cmd != "set_tune" {
+                e.set_operating_mode("digital", false);
+                e.set_tier(tempo_app::dto::Tier::Ft8);
+            }
+            e.set_tx_enabled(true);
+            match cmd {
+                "rtty_auto_cq" | "rtty_auto_answer" => {
+                    e.set_rtty_auto(true).expect("premise: Auto on")
+                }
+                "rtty_type" => e.set_rtty_latched(true).expect("premise: latched"),
+                "psk_type" => e.set_psk_latched(true).expect("premise: latched"),
+                "js8_typeahead" => e.js8_send(None, "A MESSAGE GOING OUT".into()).unwrap(),
+                "js8_answer_reply" => {
+                    // A query heard at the shack, whose automatic reply asks the operator first;
+                    // the yes names it as the screen was shown it.
+                    e.js8_api_hear_snr_query("W1AW");
+                    let reply = e.js8_state().pending_reply.expect("premise: a reply asks");
+                    args["display"] = json!(reply.display);
+                    args["firesAtMs"] = json!(reply.fires_at_ms);
+                }
+                _ => {}
+            }
+        };
+        // Revoke the stand-down with no halt and tick the radio loop: whether it halted, and
+        // what is left (TX armed, the tune carrier, either latch).
+        let revoke_and_tick = || {
+            transmit.revoke();
+            let mut e = engine_lock(&engine);
+            let halted = e.poll_remote_transmit(Instant::now());
+            (
+                halted,
+                (
+                    e.tx_enabled(),
+                    e.tuning(),
+                    e.rtty_latched(),
+                    e.psk_latched(),
+                ),
+            )
+        };
+        let mut kept_after_a_revocation = Vec::new();
+        for (cmd, args) in [
+            ("call_cq", json!({})),
+            ("call_station", json!({"call": "K1ABC"})),
+            (
+                "override_next_tx",
+                json!({"call": "K1ABC", "text": "K1ABC W9XYZ EN52"}),
+            ),
+            // A message FT8 can carry: after both calls, `TNX 73` is one the encoder refuses.
+            ("qso_freetext", json!({"text": "73"})),
+            ("qso_resend", json!({})),
+            ("set_tx_enabled", json!({"enabled": true})),
+            ("start_cq", json!({})),
+            ("start_running", json!({})),
+            ("start_search_and_pounce", json!({})),
+            ("js8_call_cq", json!({})),
+            ("js8_heartbeat_now", json!({})),
+            ("js8_send", json!({"to": null, "text": "HELLO FROM AFAR"})),
+            (
+                "js8_send_command",
+                json!({"to": "W1AW", "cmd": 0, "arg": ""}),
+            ),
+            ("js8_arm", json!({"which": "autoreply", "on": true})),
+            ("js8_typeahead", json!({"sentSeen": 0, "unsent": "MORE"})),
+            ("js8_cq_repeat", json!({"on": true})),
+            ("js8_answer_reply", json!({"yes": true})),
+            ("send_cw", json!({"text": "CQ {MYCALL}"})),
+            ("send_cw_armed", json!({"text": "TU {MYCALL}"})),
+            ("set_tune", json!({"on": true})),
+            ("rtty_send", json!({"text": "CQ FROM AFAR"})),
+            ("rtty_set_latched", json!({"on": true})),
+            ("rtty_type", json!({"text": "TYPED FROM AFAR"})),
+            ("rtty_auto_cq", json!({})),
+            ("rtty_auto_answer", json!({"call": "W1AW"})),
+            ("psk_send", json!({"text": "CQ FROM AFAR"})),
+            ("psk_set_latched", json!({"on": true})),
+            ("psk_type", json!({"text": "TYPED FROM AFAR"})),
+            // Last: its set-up moves the dial to a phone frequency.
+            ("atu_tune", json!({})),
+        ] {
+            let mut afar = args.clone();
+            set_up(cmd, &mut afar);
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            afar["afar"] = json!({ "standDown": now });
+            let ran = ask(cmd, afar);
+            assert!(ran.is_ok(), "CONTROL {cmd}: it ran from afar: {ran:?}");
+            let (halted, left) = revoke_and_tick();
+            if !halted || left != (false, false, false, false) {
+                kept_after_a_revocation.push(format!(
+                    "{cmd}: halted {halted}, (TX, tuning, RTTY latched, PSK latched) {left:?}"
+                ));
+            }
+            let mut own = args;
+            set_up(cmd, &mut own);
+            let ran = ask(cmd, own);
+            assert!(ran.is_ok(), "CONTROL {cmd}: it ran from the shack: {ran:?}");
+            let (halted, _) = revoke_and_tick();
+            assert!(
+                !halted,
+                "CONTROL {cmd}: the shack's own start outlives a bare revocation"
+            );
+        }
+        engine_lock(&engine).halt_tx();
+        assert!(
+            kept_after_a_revocation.is_empty(),
+            "kept after its stand-down was revoked: {kept_after_a_revocation:#?}"
+        );
+    }
+
+    /// ⛔ A voice message started from afar ends when the stand-down it ran under is revoked with
+    /// no halt, as every other start from afar does: the radio loop's next tick halts, TX goes
+    /// off and the message already playing is cut. CONTROL: the same message started at the
+    /// shack's own screen (no `afar`) plays on through a bare revocation, as it always has.
+    #[test]
+    fn a_voice_message_from_afar_ends_when_its_stand_down_is_revoked_with_no_halt() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::play_voice_message;
+        use serde_json::{json, Value};
+        use std::time::Instant;
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let dir = std::env::temp_dir().join(format!("nexus-afar-voice-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("f1.wav");
+        let voice = crate::lan_client::audio_road::voice_message(&[0.1; 1_200]).unwrap();
+        std::fs::write(&wav, voice).unwrap();
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let transmit = TransmitAuthority::default();
+        {
+            let mut e = engine_lock(&engine);
+            e.set_remote_transmit_revocation(transmit.revocation());
+            let mut settings = e.settings().clone();
+            settings.voice_messages = vec![tempo_app::settings::VoiceMessage {
+                slot: 1,
+                label: "CQ".into(),
+                file: wav.display().to_string(),
+            }];
+            e.apply_settings(settings);
+            e.set_license_class("extra");
+            e.set_frequency(14.290, "20m", "USB");
+            e.set_operating_mode("phone", false);
+        }
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![play_voice_message])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        // Play F1 (from afar under the stand-down as it stands, or from the shack), let the audio
+        // service take it so it is playing, then revoke the stand-down with no halt and tick the
+        // radio loop: (halted, TX on, the over in flight cut).
+        let play_then_revoke = |afar: bool| -> (bool, bool, bool) {
+            {
+                let mut e = engine_lock(&engine);
+                e.halt_tx();
+                e.take_slot_tx_abort();
+                // The keyer plays only with TX on: on at the shack, which moves no stand-down.
+                e.set_tx_enabled(true);
+            }
+            let mut args = json!({"slot": 1});
+            if afar {
+                let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+                args["afar"] = json!({ "standDown": now });
+            }
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "play_voice_message".to_string(),
+                args,
+                Box::new(move |result: Result<Value, String>| {
+                    let _ = answer.send(result);
+                }),
+            );
+            let ran = answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the handler answered");
+            assert!(ran.is_ok(), "CONTROL: F1 played (afar {afar}): {ran:?}");
+            let mut e = engine_lock(&engine);
+            assert!(
+                e.poll_voice().is_some(),
+                "CONTROL: the audio service took F1 (afar {afar})"
+            );
+            drop(e);
+            transmit.revoke();
+            let mut e = engine_lock(&engine);
+            let halted = e.poll_remote_transmit(Instant::now());
+            (halted, e.tx_enabled(), e.take_slot_tx_abort())
+        };
+        assert_eq!(
+            play_then_revoke(true),
+            (true, false, true),
+            "from afar: (halted, TX on, the playing message cut)"
+        );
+        assert_eq!(
+            play_then_revoke(false),
+            (false, true, false),
+            "CONTROL from the shack: (halted, TX on, the playing message cut)"
+        );
+        engine_lock(&engine).halt_tx();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ From afar a section entry arms nothing. Called through the shack's own runner, as the
+    /// command lane calls them, with `afar` as the lane writes it: a section change into Phone, a
+    /// Phone spot worked and an SSTV channel picked each put the station in Phone and leave Enable
+    /// TX off, as Remote's entry does. CONTROL: each began in Digital with TX off, and the same
+    /// three from the shack's own screen (no `afar`) arm it, as they always have.
+    #[test]
+    fn a_section_entry_from_afar_arms_nothing() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::{set_operating_mode, sstv_tune, work_spot};
+        use serde_json::{json, Value};
+        use tempo_app::settings::OperatingMode;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_net::cluster::SpotBuffer::new(8),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .manage(spots)
+            .invoke_handler(tauri::generate_handler![
+                set_operating_mode,
+                sstv_tune,
+                work_spot
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let mut armed = Vec::new();
+        for (cmd, args) in [
+            (
+                "set_operating_mode",
+                json!({"mode": "phone", "followFreq": false}),
+            ),
+            (
+                "work_spot",
+                json!({"mode": "phone", "freqMhz": 14.25, "band": "20m"}),
+            ),
+            (
+                "sstv_tune",
+                json!({"dialMhz": 14.23, "band": "20m", "mode": "USB"}),
+            ),
+        ] {
+            for from_afar in [true, false] {
+                let mut args = args.clone();
+                {
+                    let mut e = engine_lock(&engine);
+                    e.set_operating_mode("digital", false);
+                    assert!(!e.tx_enabled(), "CONTROL {cmd}: Digital, TX off");
+                    if from_afar {
+                        let stand_down = e.remote_transmit_stand_down_generation();
+                        args["afar"] = json!({ "standDown": stand_down });
+                    }
+                }
+                let ran = ask(cmd, args);
+                assert!(ran.is_ok(), "{cmd}: {ran:?}");
+                let e = engine_lock(&engine);
+                assert_eq!(
+                    e.settings().operating_mode,
+                    OperatingMode::Phone,
+                    "{cmd}: the section entered"
+                );
+                if !from_afar {
+                    assert!(e.tx_enabled(), "CONTROL {cmd}: the shack's own entry arms");
+                } else if e.tx_enabled() {
+                    armed.push(cmd);
+                }
+            }
+        }
+        assert!(armed.is_empty(), "Enable TX armed from afar by {armed:?}");
+    }
+
+    /// The Phone tab pressed on the SSTV screen, through the shack's own runner with the arguments
+    /// the screen sends (`keepDial`). A General on 20 m FT8 tunes the rig's knob to the 14.230 image
+    /// channel (the SSTV screen claims no section, so the station is still in FT8's): Phone keeps
+    /// 14.230. CONTROLS: the same entry without `keepDial` homes to the 14.225 segment default as
+    /// every other Phone entry does, and FT8's own 14.074 is no phone frequency, so the SSTV screen's
+    /// entry homes it too.
+    #[test]
+    fn the_phone_tab_on_the_sstv_screen_keeps_a_phone_dial_at_the_wire() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::set_operating_mode;
+        use serde_json::{json, Value};
+        use tempo_app::settings::OperatingMode;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![set_operating_mode])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        for (case, knob_hz, keep, want) in [
+            ("the report", 14_230_000, true, 14.230),
+            ("CONTROL: no keepDial", 14_230_000, false, 14.225),
+            ("CONTROL: FT8's 14.074", 14_074_000, true, 14.225),
+        ] {
+            {
+                let mut e = engine_lock(&engine);
+                *e = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+                e.set_license_class("general");
+                e.set_operating_mode("digital", false);
+                e.set_frequency(14.074, "20m", "USB");
+                e.seed_rig_dial(14_074_000);
+                e.observe_rig_freq(knob_hz);
+            }
+            let mut args = json!({"mode": "phone", "followFreq": true});
+            if keep {
+                args["keepDial"] = json!(true);
+            }
+            let ran = ask("set_operating_mode", args);
+            assert!(ran.is_ok(), "{case}: {ran:?}");
+            let e = engine_lock(&engine);
+            assert_eq!(e.settings().operating_mode, OperatingMode::Phone, "{case}");
+            let dial = e.settings().dial_mhz;
+            assert!(
+                (dial - want).abs() < 1e-9,
+                "{case}: the dial is {dial}, not {want}"
+            );
+        }
+    }
+
+    /// The Phone tab pressed on the SSTV screen while the 2 m FM image channel holds the rig in FM,
+    /// through the shack's own runner with the arguments the screen sends: Phone keeps the dial
+    /// AND commands FM there, whether it follows (`followFreq`) or Phone is already the section
+    /// homed for, and the snapshot it answers tells the Phone cockpit (`fmChannel`). CONTROLS:
+    /// Phone entered from another screen (no `keepDial`) uses the station's phone mode, USB here,
+    /// as it always has.
+    #[test]
+    fn the_phone_tab_on_the_sstv_screen_keeps_a_2m_fm_channel_in_fm_at_the_wire() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::set_operating_mode;
+        use serde_json::{json, Value};
+        use tempo_app::settings::OperatingMode;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![set_operating_mode])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        for (case, args, want) in [
+            (
+                "the report: Phone follows",
+                json!({"mode": "phone", "followFreq": true, "keepDial": true}),
+                "FM",
+            ),
+            (
+                "the report: Phone already homed",
+                json!({"mode": "phone", "followFreq": false, "keepDial": true}),
+                "FM",
+            ),
+            (
+                "CONTROL: another screen, Phone already homed",
+                json!({"mode": "phone", "followFreq": false}),
+                "USB",
+            ),
+            (
+                "CONTROL: another screen, Phone follows",
+                json!({"mode": "phone", "followFreq": true}),
+                "USB",
+            ),
+        ] {
+            {
+                let mut e = engine_lock(&engine);
+                *e = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+                e.set_license_class("general");
+                e.set_operating_mode("digital", false);
+                e.set_frequency(14.074, "20m", "USB");
+                e.sstv_tune(144.500, "2m", "FM");
+                assert_eq!(e.rig_mode_effective(), "FM", "{case}: premise");
+            }
+            let ran = ask("set_operating_mode", args);
+            assert!(ran.is_ok(), "{case}: {ran:?}");
+            let e = engine_lock(&engine);
+            assert_eq!(e.settings().operating_mode, OperatingMode::Phone, "{case}");
+            let dial = e.settings().dial_mhz;
+            assert!((dial - 144.500).abs() < 1e-9, "{case}: the dial is {dial}");
+            assert_eq!(e.rig_mode_effective(), want, "{case}: the rig mode");
+            let told = ran
+                .as_ref()
+                .ok()
+                .map(|s| s["radio"]["fmChannel"] == json!(true));
+            assert_eq!(told, Some(want == "FM"), "{case}: what the cockpit is told");
+        }
+    }
+
+    // ── a first LoTW download of a large account, a year at a time ─────────────────────────
+
+    /// 2026-10-17 12:00 UTC: "now" for the year-by-year downloads below.
+    const SWEEP_NOW: u64 = 1_792_238_400;
+
+    /// A contact (or LoTW's row for it) with `call` on 20m FT8 at noon on `yyyymmdd`.
+    fn dated_row(call: &str, yyyymmdd: &str, more: &str) -> String {
+        format!(
+            "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>{yyyymmdd}<TIME_ON:6>120000{more}<EOR>\n",
+            call.len()
+        )
+    }
+
+    /// LoTW's answer for one year: the banner, its high-water when it holds a row, the rows, and
+    /// the end marker.
+    fn year_answer(last_qsl: &str, rows: &[String]) -> String {
+        let high_water = if rows.is_empty() {
+            String::new()
+        } else {
+            format!("<APP_LoTW_LASTQSL:{}>{last_qsl}\n", last_qsl.len())
+        };
+        format!(
+            "ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW\n{high_water}<eoh>\n{}\
+             <APP_LoTW_EOF>\n",
+            rows.concat()
+        )
+    }
+
+    /// A large account as LoTW answers it: HTTP 503 for the whole history at once (no QSO date
+    /// bound), each year on its own, and `fail_years` 503 too while it holds them. Every request
+    /// it is asked is kept, in order.
+    struct LargeLotw {
+        years: std::collections::BTreeMap<i32, String>,
+        since_answer: String,
+        fail_years: std::cell::RefCell<Vec<i32>>,
+        asked: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl LargeLotw {
+        fn scene() -> Self {
+            let years = [
+                (
+                    2026,
+                    year_answer(
+                        "2026-10-15 08:00:00",
+                        &[dated_row("W1AW", "20260301", "<QSL_RCVD:1>Y")],
+                    ),
+                ),
+                (
+                    2025,
+                    year_answer(
+                        "2026-09-01 07:00:00",
+                        &[dated_row("K1ABC", "20250601", "<QSL_RCVD:1>Y")],
+                    ),
+                ),
+                (
+                    2024,
+                    year_answer(
+                        "2026-10-16 09:00:00",
+                        &[dated_row("N0SUP", "20240115", "<QSL_RCVD:1>Y")],
+                    ),
+                ),
+            ];
+            LargeLotw {
+                years: years.into_iter().collect(),
+                since_answer: year_answer("2026-10-17 10:00:00", &[]),
+                fail_years: std::cell::RefCell::new(Vec::new()),
+                asked: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+
+        fn fetch(&self, url: &str) -> Result<String, String> {
+            self.asked.borrow_mut().push(url.to_string());
+            if url.contains("&qso_qsl=no") {
+                return Ok(year_answer("", &[]));
+            }
+            let start = url.split("&qso_startdate=").nth(1).map(|s| &s[..4]);
+            let end = url.split("&qso_enddate=").nth(1).map(|s| &s[..4]);
+            if !url.contains("&qso_qslsince=1900-01-01") {
+                return Ok(self.since_answer.clone());
+            }
+            let year: i32 = match (start, end) {
+                (None, None) => return Err("LoTW: server returned HTTP 503".into()),
+                (Some(y), _) | (None, Some(y)) => y.parse().unwrap(),
+            };
+            if self.fail_years.borrow().contains(&year) {
+                return Err("LoTW: server returned HTTP 503".into());
+            }
+            Ok(self
+                .years
+                .get(&year)
+                .cloned()
+                .unwrap_or_else(|| year_answer("", &[])))
+        }
+
+        /// The QSO-date bounds of each confirmation request asked, in order.
+        fn bounds_asked(&self) -> Vec<(Option<String>, Option<String>, String)> {
+            self.asked
+                .borrow()
+                .iter()
+                .filter(|u| u.contains("&qso_qsl=yes"))
+                .map(|u| {
+                    let param = |name: &str| {
+                        u.split(&format!("&{name}="))
+                            .nth(1)
+                            .map(|s| s.split('&').next().unwrap().to_string())
+                    };
+                    (
+                        param("qso_startdate"),
+                        param("qso_enddate"),
+                        param("qso_qslsince").unwrap(),
+                    )
+                })
+                .collect()
+        }
+    }
+
+    /// A log holding a contact in each of 2024, 2025 and 2026, on a store, with the LoTW
+    /// username set and no cursor.
+    fn sweep_scene(tag: &str) -> (std::path::PathBuf, SharedEngine) {
+        let log = tempo_core::logbook::parse_adif(
+            &[
+                dated_row("N0SUP", "20240115", ""),
+                dated_row("K1ABC", "20250601", ""),
+                dated_row("W1AW", "20260301", ""),
+            ]
+            .concat(),
+        );
+        let (dir, engine) = store_holding(tag, &log);
+        {
+            let mut eng = engine.lock().unwrap();
+            let s = crate::Settings {
+                lotw_username: "k2def-test".into(),
+                ..eng.settings().clone()
+            };
+            eng.apply_settings(s);
+        }
+        (dir, engine)
+    }
+
+    /// One Fetch LoTW against `lotw`, with every settings change it saves kept in `saved`.
+    fn fetch_lotw(
+        engine: &SharedEngine,
+        lotw: &LargeLotw,
+        saved: &std::cell::RefCell<Vec<crate::Settings>>,
+    ) -> Result<crate::LotwSyncResult, String> {
+        crate::download_lotw_report_on(
+            engine,
+            "k2def-test",
+            "not-a-password",
+            SWEEP_NOW,
+            &|url| lotw.fetch(url),
+            &|s| saved.borrow_mut().push(s),
+        )
+    }
+
+    fn cursor_and_place(engine: &SharedEngine) -> (String, bool, i32, String) {
+        let eng = engine.lock().unwrap();
+        let s = eng.settings();
+        (
+            s.lotw_last_qsl.clone(),
+            s.lotw_cursor_every_call,
+            s.lotw_sweep_year,
+            s.lotw_sweep_since.clone(),
+        )
+    }
+
+    fn confirmed(engine: &SharedEngine) -> Vec<String> {
+        let mut calls: Vec<String> = engine
+            .stored_records()
+            .into_iter()
+            .filter(|r| r.qsl_rcvd.lotw)
+            .map(|r| r.call)
+            .collect();
+        calls.sort();
+        calls
+    }
+
+    fn y(s: &str) -> Option<String> {
+        Some(s.to_string())
+    }
+
+    /// ★ A first Fetch LoTW on an account too large for one request completes. LoTW answers the
+    /// whole history at once with HTTP 503; asked a year of contacts at a time, newest first, it
+    /// answers each, and every confirmation lands. The cursor left is the newest year's
+    /// high-water (not the oldest year's, which is later here and would skip what came in
+    /// between), saved, and the next Fetch LoTW is one incremental request from it.
+    #[test]
+    fn a_first_lotw_download_too_large_for_one_request_completes_a_year_at_a_time() {
+        let (dir, engine) = sweep_scene("lotw-sweep-whole");
+        let lotw = LargeLotw::scene();
+        let saved = std::cell::RefCell::new(Vec::new());
+
+        let r = fetch_lotw(&engine, &lotw, &saved).expect("the download completes");
+        assert_eq!(r.newly_confirmed, 3, "a confirmation from each year");
+        assert_eq!(confirmed(&engine), ["K1ABC", "N0SUP", "W1AW"]);
+        let from_1900 = "1900-01-01".to_string();
+        assert_eq!(
+            lotw.bounds_asked(),
+            [
+                (y("2026-01-01"), None, from_1900.clone()),
+                (y("2025-01-01"), y("2025-12-31"), from_1900.clone()),
+                (None, y("2024-12-31"), from_1900.clone()),
+            ],
+            "the newest year first, open at the top; the log's oldest year open at the bottom"
+        );
+        let done = ("2026-10-15 08:00:00".to_string(), true, 0, String::new());
+        assert_eq!(cursor_and_place(&engine), done);
+        let last = saved.borrow().last().cloned().expect("saved");
+        assert_eq!(
+            (
+                last.lotw_last_qsl.clone(),
+                last.lotw_cursor_every_call,
+                last.lotw_sweep_year,
+                last.lotw_sweep_since.clone()
+            ),
+            done,
+            "the cursor reaches the settings file"
+        );
+
+        lotw.asked.borrow_mut().clear();
+        fetch_lotw(&engine, &lotw, &saved).expect("the next download");
+        assert_eq!(
+            lotw.bounds_asked(),
+            [(None, None, "2026-10-15%2008%3A00%3A00".to_string())],
+            "an existing cursor makes one incremental request, unbounded by QSO date"
+        );
+        assert_eq!(
+            cursor_and_place(&engine).0,
+            "2026-10-15 08:00:00",
+            "an answer with nothing new keeps the cursor"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A year LoTW does not answer stops the download there and says so. The years before it
+    /// are merged and the place saved, so the next Fetch LoTW goes on from that year (it does not
+    /// ask for the newest again) and finishes with the newest year's high-water.
+    #[test]
+    fn a_year_lotw_does_not_answer_is_where_the_next_download_goes_on() {
+        let (dir, engine) = sweep_scene("lotw-sweep-resume");
+        let lotw = LargeLotw::scene();
+        lotw.fail_years.borrow_mut().push(2025);
+        let saved = std::cell::RefCell::new(Vec::new());
+
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("2025 is not answered");
+        assert!(
+            e.contains("your 2025 contacts (piece 2 of 3: LoTW: server returned HTTP 503)")
+                && e.contains("the next Fetch LoTW continues from 2025"),
+            "{e}"
+        );
+        assert_eq!(confirmed(&engine), ["W1AW"], "2026 is in");
+        let place = (
+            String::new(),
+            false,
+            2025,
+            "2026-10-15 08:00:00".to_string(),
+        );
+        assert_eq!(cursor_and_place(&engine), place);
+        let last = saved.borrow().last().cloned().expect("saved");
+        assert_eq!(
+            (last.lotw_sweep_year, last.lotw_sweep_since.clone()),
+            (2025, "2026-10-15 08:00:00".to_string()),
+            "the place reaches the settings file"
+        );
+
+        lotw.fail_years.borrow_mut().clear();
+        lotw.asked.borrow_mut().clear();
+        let r = fetch_lotw(&engine, &lotw, &saved).expect("the rest");
+        assert_eq!(r.newly_confirmed, 2);
+        assert_eq!(confirmed(&engine), ["K1ABC", "N0SUP", "W1AW"]);
+        let from_1900 = "1900-01-01".to_string();
+        assert_eq!(
+            lotw.bounds_asked(),
+            [
+                (y("2025-01-01"), y("2025-12-31"), from_1900.clone()),
+                (None, y("2024-12-31"), from_1900),
+            ],
+            "it goes on from 2025"
+        );
+        assert_eq!(
+            cursor_and_place(&engine),
+            ("2026-10-15 08:00:00".to_string(), true, 0, String::new()),
+            "the newest year's high-water, not the last year's"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A year whose download stops before LoTW's end marker is not in: its place is not passed.
+    #[test]
+    fn a_year_cut_short_is_not_passed() {
+        let (dir, engine) = sweep_scene("lotw-sweep-cut");
+        let mut lotw = LargeLotw::scene();
+        let cut = lotw.years[&2025].replace("<APP_LoTW_EOF>\n", "");
+        lotw.years.insert(2025, cut);
+        let saved = std::cell::RefCell::new(Vec::new());
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("2025 is cut short");
+        assert!(e.contains("stopped before its end"), "{e}");
+        assert_eq!(
+            cursor_and_place(&engine),
+            (
+                String::new(),
+                false,
+                2025,
+                "2026-10-15 08:00:00".to_string()
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A newest year with no confirmation has no high-water: the day before it was asked stands
+    /// in as the cursor.
+    #[test]
+    fn a_newest_year_with_no_confirmation_leaves_the_day_before_as_the_cursor() {
+        let (dir, engine) = sweep_scene("lotw-sweep-empty-newest");
+        let mut lotw = LargeLotw::scene();
+        lotw.years.insert(2026, year_answer("", &[]));
+        let saved = std::cell::RefCell::new(Vec::new());
+        fetch_lotw(&engine, &lotw, &saved).expect("completes");
+        assert_eq!(
+            cursor_and_place(&engine),
+            ("2026-10-16".to_string(), true, 0, String::new())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Download everything again while a year is downloading starts over: the year that was
+    /// running does not put its place back.
+    #[test]
+    fn download_everything_again_during_a_year_keeps_the_place_empty() {
+        let (dir, engine) = sweep_scene("lotw-sweep-reset");
+        let lotw = LargeLotw::scene();
+        let saved = std::cell::RefCell::new(Vec::new());
+        let reset_during_2025 = |url: &str| {
+            if url.contains("&qso_startdate=2025-01-01") {
+                engine.lock().unwrap().reset_lotw_cursor();
+            }
+            lotw.fetch(url)
+        };
+        crate::download_lotw_report_on(
+            &engine,
+            "k2def-test",
+            "not-a-password",
+            SWEEP_NOW,
+            &reset_during_2025,
+            &|s| saved.borrow_mut().push(s),
+        )
+        .expect("stops quietly");
+        assert_eq!(
+            cursor_and_place(&engine),
+            (String::new(), false, 0, String::new())
+        );
+        assert_eq!(lotw.bounds_asked().len(), 2, "2024 is not asked");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The place is the download's own: a Settings save from a form loaded before it moved keeps
+    /// it, and a changed username empties it.
+    #[test]
+    fn a_settings_save_keeps_the_downloads_place() {
+        let (dir, engine) = sweep_scene("lotw-sweep-form");
+        let form = engine.lock().unwrap().settings().clone();
+        let held = engine
+            .lock()
+            .unwrap()
+            .set_lotw_sweep(2019, "2026-10-15 08:00:00".into());
+        let mut stale = form.clone();
+        crate::keep_lotw_place_for_its_account(&held, &mut stale);
+        assert_eq!(
+            (stale.lotw_sweep_year, stale.lotw_sweep_since.as_str()),
+            (2019, "2026-10-15 08:00:00")
+        );
+        let mut other = crate::Settings {
+            lotw_username: "n0sup-test".into(),
+            ..held.clone()
+        };
+        crate::keep_lotw_place_for_its_account(&held, &mut other);
+        assert_eq!(
+            (other.lotw_sweep_year, other.lotw_sweep_since.as_str()),
+            (0, "")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// The cockpit's gestures that enter a running contest from another mode (Call CQ, a double-click
@@ -48506,6 +54676,7 @@ mod contest_entry_command_tests {
             Some("CQ FD W9XYZ EN37".into()),
             Some(-12),
             None,
+            None,
         )
         .expect("the double-click is taken");
         let fd = snap.field_day.as_ref().expect("in the contest");
@@ -48522,7 +54693,7 @@ mod contest_entry_command_tests {
     #[test]
     fn call_cq_enters_the_contest_with_its_rows() {
         let (dir, engine) = back_in_ft8_qso_mode("contest-entry-cq");
-        let snap = crate::start_running_on(&engine, None).expect("the run starts");
+        let snap = crate::start_running_on(&engine, None, None).expect("the run starts");
         let fd = snap.field_day.as_ref().expect("in the contest");
         assert!(fd.running, "the contest's Running");
         assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
@@ -48534,7 +54705,7 @@ mod contest_entry_command_tests {
     #[test]
     fn the_strips_sp_enters_the_contest_with_its_rows() {
         let (dir, engine) = back_in_ft8_qso_mode("contest-entry-sp");
-        let snap = crate::start_search_and_pounce_on(&engine).expect("S&P is taken");
+        let snap = crate::start_search_and_pounce_on(&engine, None).expect("S&P is taken");
         assert_eq!(
             snap.field_day.as_ref().map(|fd| fd.running),
             Some(false),
@@ -48542,5 +54713,763 @@ mod contest_entry_command_tests {
         );
         assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod remote_credential_reply_tests {
+    //! What a remote client is answered when its Settings badges ask which credentials are saved
+    //! and when its connector Tests run at the shack with the keys stored there: yes or no, ok or
+    //! an error, and never a byte of a secret. Made-up values only: nothing here reads the OS
+    //! keychain or reaches a service. (At the end of this file so that the handler list a test
+    //! builds is not the first `generate_handler!` here: `command_classes` reads that one.)
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// A QRZ Logbook key, made up, in the shape QRZ issues.
+    const QRZ_BOOK_KEY: &str = "A1B2-C3D4-E5F6-0789";
+    /// A Cloudlog/Wavelog key, made up, in the shape Cloudlog issues (`cl` and 13 hex digits).
+    const CLOUDLOG_KEY: &str = "cl5f3a9b2c7d1e4";
+    /// An Icom network password, made up.
+    const ICOM_PASSWORD: &str = "Vq7Rm2Xz9Lp4";
+    /// A ClubLog application key typed into Settings, made up.
+    const CLUBLOG_APP_KEY: &str = "Jw4Nc8Tb1Hy6";
+
+    /// A made-up secret for every keychain user the badges read.
+    fn stored_secrets() -> BTreeMap<&'static str, &'static str> {
+        BTreeMap::from([
+            (LOTW_KEYCHAIN_USER, "Zx81qPv3Lm0K"),
+            (QRZ_KEYCHAIN_USER, "Kd7wYt42Gh5S"),
+            (QRZ_LOGBOOK_KEYCHAIN_USER, QRZ_BOOK_KEY),
+            (EQSL_KEYCHAIN_USER, "Mn5bVr90Pz3T"),
+            (CLUBLOG_KEYCHAIN_USER, "Hg3fDs18Ux7W"),
+            (HRDLOG_KEYCHAIN_USER, "Qw2eRt56Bn8Y"),
+            (WRL_KEYCHAIN_USER, "Lk9jHg07Cv4E"),
+            (CLOUDLOG_KEYCHAIN_USER, CLOUDLOG_KEY),
+            (REPEATERBOOK_KEYCHAIN_USER, "rbuapp_Pq8oIu65Fd2A"),
+            (WINLINK_KEYCHAIN_USER, "Yt6rEw34Sx1Q"),
+        ])
+    }
+
+    /// Every secret the shack holds in these tests.
+    fn every_secret() -> Vec<&'static str> {
+        let mut all: Vec<&str> = stored_secrets().into_values().collect();
+        all.extend([ICOM_PASSWORD, CLUBLOG_APP_KEY]);
+        all
+    }
+
+    fn folded(text: &str) -> String {
+        text.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    }
+
+    fn hex4(bytes: &[u8]) -> bool {
+        bytes.len() == 4 && bytes.iter().all(u8::is_ascii_hexdigit)
+    }
+
+    /// A token shaped as a QRZ Logbook key (four groups of four hex digits) or a Cloudlog/Wavelog
+    /// key (`cl` or `wl` and 13 hex digits), whatever its value.
+    fn key_shaped(reply: &str) -> Option<String> {
+        let b = reply.as_bytes();
+        for at in 0..b.len() {
+            if b.len() - at >= 19
+                && (0..4).all(|g| hex4(&b[at + g * 5..at + g * 5 + 4]))
+                && [4, 9, 14].iter().all(|&dash| b[at + dash] == b'-')
+            {
+                return Some(reply[at..at + 19].to_string());
+            }
+            let starts = at == 0 || !b[at - 1].is_ascii_alphanumeric();
+            if starts
+                && b.len() - at >= 15
+                && (b[at..at + 2].eq_ignore_ascii_case(b"cl")
+                    || b[at..at + 2].eq_ignore_ascii_case(b"wl"))
+                && b[at + 2..at + 15].iter().all(u8::is_ascii_hexdigit)
+                && b.get(at + 15).is_none_or(|c| !c.is_ascii_alphanumeric())
+            {
+                return Some(reply[at..at + 15].to_string());
+            }
+        }
+        None
+    }
+
+    /// Where `reply` gives away a secret: any eight letters and digits of one in a row, in any
+    /// case and whatever separates them (so the whole secret, verbatim or reformatted, and any
+    /// stretch of it), or one percent-encoded, or a key-shaped token whatever its value.
+    fn leaks(reply: &str, secrets: &[&str]) -> Vec<String> {
+        let reply_folded = folded(reply);
+        let mut found = Vec::new();
+        for secret in secrets {
+            let s = folded(secret);
+            let window = s.len().min(8);
+            if (0..=s.len() - window).any(|at| reply_folded.contains(&s[at..at + window])) {
+                found.push(format!("a stretch of {secret:?}"));
+            }
+            let encoded: String = secret
+                .bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => (b as char).to_string(),
+                    _ => format!("%{b:02X}"),
+                })
+                .collect();
+            if reply.contains(&encoded) {
+                found.push(format!("{secret:?} percent-encoded"));
+            }
+        }
+        if let Some(token) = key_shaped(reply) {
+            found.push(format!("the key-shaped {token:?}"));
+        }
+        found
+    }
+
+    /// The shack's settings, with an identity for every connector that shows one.
+    fn station() -> tempo_app::settings::Settings {
+        tempo_app::settings::Settings {
+            mycall: "W9TST".into(),
+            lotw_username: "w9tst-lotw".into(),
+            eqsl_username: "W9TST".into(),
+            qrz_username: "W9TST".into(),
+            clublog_email: "w9tst@example.invalid".into(),
+            clublog_api_key: CLUBLOG_APP_KEY.into(),
+            cloudlog_url: "https://log.example.invalid".into(),
+            ..Default::default()
+        }
+    }
+
+    fn badges(saved: &[&str]) -> (Vec<CredStatus>, String) {
+        let engine = Mutex::new(Engine::with_settings(station()));
+        let rows = credentials_status(&engine, &LogTallies::default(), &|user| {
+            saved.contains(&user) && stored_secrets().contains_key(user)
+        })
+        .expect("the badges read");
+        let reply = serde_json::to_string(&rows).expect("the rows serialize");
+        (rows, reply)
+    }
+
+    fn stored_by_id(rows: &[CredStatus]) -> BTreeMap<String, bool> {
+        rows.iter()
+            .map(|row| (row.id.clone(), row.stored))
+            .collect()
+    }
+
+    /// ⭐ The control: the check below finds a secret in a reply that carries one, however it is
+    /// carried, and passes a reply that carries none. Without this, a clean result could mean a
+    /// check that sees nothing.
+    #[test]
+    fn the_leak_check_catches_a_deliberately_leaky_reply() {
+        let secrets = every_secret();
+        for secret in &secrets {
+            let upper = secret.to_ascii_uppercase();
+            let stretch = &folded(secret)[1..9];
+            for leaky in [
+                format!("{{\"value\":\"{secret}\"}}"),
+                format!("invalid api key {upper}"),
+                format!("KEY={}", secret.replace('-', "%2D").replace('_', "%5F")),
+                format!("reason: …{stretch}…"),
+            ] {
+                assert!(
+                    !leaks(&leaky, &secrets).is_empty(),
+                    "missed {secret:?} in {leaky:?}"
+                );
+            }
+        }
+        for shaped in ["FFFF-0000-ABCD-1234", "key wl0123456789abc."] {
+            assert!(
+                !leaks(shaped, &secrets).is_empty(),
+                "missed the key-shaped {shaped:?}"
+            );
+        }
+        // A badge row that carried a secret where an identity goes, as a leaky reply would.
+        let (mut rows, _) = badges(&[CLOUDLOG_KEYCHAIN_USER]);
+        rows[0].identity = stored_secrets()[LOTW_KEYCHAIN_USER].to_string();
+        let leaky = serde_json::to_string(&rows).unwrap();
+        assert!(
+            !leaks(&leaky, &secrets).is_empty(),
+            "missed a secret in a badge row"
+        );
+        // And a reply with none passes.
+        for clean in [
+            "{\"id\":\"qrz-logbook\",\"connector\":\"QRZ Logbook\",\"stored\":true}",
+            "W9TST (Main) — 12 QSOs in the online logbook",
+            "connect failed: connection refused",
+        ] {
+            assert_eq!(leaks(clean, &secrets), Vec::<String>::new(), "{clean:?}");
+        }
+    }
+
+    /// ⭐ From afar the badges say saved or not saved, by value for every connector, both ways
+    /// round, and the reply carries no byte of any secret the shack holds.
+    #[test]
+    fn the_badges_say_saved_or_not_by_value_and_carry_no_secret() {
+        let first = [
+            LOTW_KEYCHAIN_USER,
+            QRZ_LOGBOOK_KEYCHAIN_USER,
+            CLUBLOG_KEYCHAIN_USER,
+            WRL_KEYCHAIN_USER,
+            REPEATERBOOK_KEYCHAIN_USER,
+        ];
+        let second = [
+            QRZ_KEYCHAIN_USER,
+            EQSL_KEYCHAIN_USER,
+            HRDLOG_KEYCHAIN_USER,
+            CLOUDLOG_KEYCHAIN_USER,
+            WINLINK_KEYCHAIN_USER,
+        ];
+        let expect = |saved_first: bool| -> BTreeMap<String, bool> {
+            [
+                ("lotw", saved_first),
+                ("qrz-xml", !saved_first),
+                ("qrz-logbook", saved_first),
+                ("eqsl", !saved_first),
+                ("clublog", saved_first),
+                ("hrdlog", !saved_first),
+                ("wrl", saved_first),
+                ("cloudlog", !saved_first),
+                ("repeaterbook", saved_first),
+                ("winlink", !saved_first),
+            ]
+            .into_iter()
+            .map(|(id, stored)| (id.to_string(), stored))
+            .collect()
+        };
+        for (saved, saved_first) in [(&first, true), (&second, false)] {
+            let (rows, reply) = badges(saved);
+            assert_eq!(stored_by_id(&rows), expect(saved_first));
+            assert_eq!(
+                leaks(&reply, &every_secret()),
+                Vec::<String>::new(),
+                "{reply}"
+            );
+        }
+        let (rows, reply) = badges(&[]);
+        assert!(
+            rows.iter().all(|row| !row.stored),
+            "nothing saved reads not saved"
+        );
+        assert_eq!(
+            leaks(&reply, &every_secret()),
+            Vec::<String>::new(),
+            "{reply}"
+        );
+    }
+
+    struct OneRadio;
+
+    impl IcomLanVault for OneRadio {
+        fn get(&self, radio_id: u32) -> Result<Option<String>, String> {
+            Ok((radio_id == 1).then(|| ICOM_PASSWORD.to_string()))
+        }
+        fn set(&self, _: u32, _: &str) -> Result<(), String> {
+            unreachable!("a badge never stores")
+        }
+        fn clear(&self, _: u32) -> Result<(), String> {
+            unreachable!("a badge never clears")
+        }
+    }
+
+    /// From afar the Icom badge says saved or not saved, and never the password.
+    #[test]
+    fn the_icom_badge_says_saved_or_not_and_never_the_password() {
+        for (radio, saved) in [(1, true), (2, false)] {
+            let answer = icom_lan_saved(&OneRadio, radio);
+            assert_eq!(answer, Ok(saved), "radio {radio}");
+            let reply = serde_json::to_string(&answer.unwrap()).unwrap();
+            assert_eq!(
+                leaks(&reply, &every_secret()),
+                Vec::<String>::new(),
+                "{reply}"
+            );
+        }
+    }
+
+    /// ⭐ A QRZ Logbook Test answers ok or an error, and an error never carries the key, however
+    /// QRZ echoes the request that carried it. QRZ's own words still come through when they hold
+    /// no key.
+    #[test]
+    fn a_qrz_test_answers_ok_or_an_error_and_never_the_key() {
+        let secrets = every_secret();
+        let ok = qrz_status_reply(
+            "RESULT=OK&OWNER=W9TST&BOOK_NAME=Main&COUNT=12",
+            QRZ_BOOK_KEY,
+            "W9TST",
+        );
+        assert_eq!(
+            ok,
+            Ok("W9TST (Main) — 12 QSOs in the online logbook".to_string())
+        );
+        assert_eq!(
+            qrz_status_reply("RESULT=AUTH&REASON=invalid api key", QRZ_BOOK_KEY, "W9TST"),
+            Err("invalid api key".to_string()),
+            "a reason with no key in it reaches the operator as QRZ wrote it"
+        );
+        assert_eq!(
+            qrz_status_reply(
+                "RESULT=FAIL&REASON=invalid api key A1B2-C3D4-E5F6-0789",
+                QRZ_BOOK_KEY,
+                "W9TST"
+            ),
+            Err("invalid api key «api key»".to_string()),
+            "a verbatim echo keeps QRZ's words, with the key masked"
+        );
+        assert_eq!(
+            qrz_status_reply(
+                "RESULT=AUTH&REASON=bad key a1b2-c3d4-e5f6-0789",
+                QRZ_BOOK_KEY,
+                "W9TST"
+            ),
+            Err(QRZ_WORDS_WITHHELD.to_string()),
+            "an echo the mask cannot find is withheld whole"
+        );
+        for echo in [
+            "RESULT=FAIL&REASON=invalid api key A1B2-C3D4-E5F6-0789",
+            "RESULT=FAIL&REASON=KEY%3DA1B2-C3D4-E5F6-0789%26ACTION%3DSTATUS",
+            "RESULT=FAIL&REASON=KEY%3DA1B2%252DC3D4%252DE5F6%252D0789",
+            "RESULT=AUTH&REASON=bad key a1b2-c3d4-e5f6-0789",
+            "RESULT=AUTH&REASON=bad key A1B2C3D4E5F60789",
+        ] {
+            let answer = qrz_status_reply(echo, QRZ_BOOK_KEY, "W9TST");
+            let error = answer.expect_err("a refused key is an error");
+            assert!(!error.is_empty(), "{echo}");
+            assert_eq!(
+                leaks(&error, &secrets),
+                Vec::<String>::new(),
+                "{echo} -> {error}"
+            );
+        }
+    }
+
+    /// An N3FJP Test, run as the command lane runs it for a remote client, answers ok with what
+    /// is listening, or the error. N3FJP takes no credential at all.
+    #[test]
+    fn an_n3fjp_test_from_afar_answers_ok_or_an_error() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let port = listener.local_addr().unwrap().port();
+        let serving = std::thread::spawn(move || {
+            let (mut peer, _) = listener.accept().expect("the Test connects");
+            let mut asked = [0u8; 64];
+            let n = peer.read(&mut asked).unwrap();
+            assert_eq!(&asked[..n], b"<CMD><PROGRAM></CMD>\r\n");
+            peer.write_all(
+                b"<CMD><PROGRAMRESPONSE><PGM>N3FJP's Test Log</PGM><VER>6.6</VER></CMD>",
+            )
+            .unwrap();
+        });
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .map(|a| a.port())
+            .expect("a port no one listens on");
+        for (to, expected) in [(port, Some("N3FJP's Test Log v6.6")), (closed, None)] {
+            let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(
+                tempo_app::settings::Settings {
+                    n3fjp_host: "127.0.0.1".into(),
+                    n3fjp_port: to,
+                    ..Default::default()
+                },
+            )));
+            let app = tauri::test::mock_builder()
+                .manage(engine)
+                .invoke_handler(tauri::generate_handler![n3fjp_test_connection])
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .expect("a mock app");
+            let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+                .build()
+                .expect("a main window");
+            let runner: Runner = tauri_runner(app.handle().clone());
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "n3fjp_test_connection".to_string(),
+                serde_json::json!({}),
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            let said = answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the handler answered");
+            match expected {
+                Some(listening) => assert_eq!(said, Ok(serde_json::json!(listening))),
+                None => {
+                    let error = said.expect_err("nothing listening is an error");
+                    assert!(error.starts_with("connect failed"), "{error}");
+                }
+            }
+        }
+        serving.join().expect("the fake N3FJP served");
+    }
+}
+
+#[cfg(test)]
+mod secrets_toward_remote_tests {
+    use super::*;
+
+    const CLUBLOG_OVERRIDE: &str = "FAKEovrQz0123vX";
+    const CLUBLOG_BUILT_IN: &str = "FAKEbkJw4567tY";
+    const CLUBLOG_PASSWORD: &str = "fake app&Pw Zq7x 89";
+    const CLOUDLOG_PENDING: &str = "cl0123456789abcdef";
+    const QRZ_KEY: &str = "A1B2-C3D4-E5F6-0789";
+
+    /// Every form of each secret a text may show it in: raw, upper and lower case, percent-encoded,
+    /// with its separators gone, and any eight-character stretch of it.
+    fn leaks(text: &str, secrets: &[&str]) -> Vec<String> {
+        let folded = |t: &str| -> String {
+            t.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_lowercase())
+                .collect()
+        };
+        let shown = folded(text);
+        let mut found = Vec::new();
+        for secret in secrets {
+            let encoded: String = secret
+                .bytes()
+                .map(|b| {
+                    if b.is_ascii_alphanumeric() {
+                        (b as char).to_string()
+                    } else {
+                        format!("%{b:02X}")
+                    }
+                })
+                .collect();
+            let plain = folded(secret);
+            if text.contains(secret)
+                || text.contains(&secret.to_ascii_uppercase())
+                || text.contains(&secret.to_ascii_lowercase())
+                || text.contains(&encoded)
+                || shown.contains(&plain)
+            {
+                found.push(format!("the whole of {secret:?}"));
+            }
+            let chars: Vec<char> = plain.chars().collect();
+            if let Some(stretch) = chars
+                .windows(8)
+                .map(|w| w.iter().collect::<String>())
+                .find(|w| shown.contains(w.as_str()))
+            {
+                found.push(format!("a stretch {stretch:?} of {secret:?}"));
+            }
+        }
+        found
+    }
+
+    /// A station holding a ClubLog key override and a Cloudlog key waiting for the keychain.
+    fn station() -> Settings {
+        Settings {
+            clublog_api_key: CLUBLOG_OVERRIDE.into(),
+            cloudlog_key: CLOUDLOG_PENDING.into(),
+            ..Default::default()
+        }
+    }
+
+    /// The positive control: the leak check catches each secret in each form, in a deliberately
+    /// leaky settings read (the Engine's settings as they are) and in echoes, and passes clean text.
+    #[test]
+    fn the_leak_check_catches_a_deliberately_leaky_reply() {
+        let leaky = serde_json::to_string(&station()).unwrap();
+        let found = leaks(&leaky, &[CLUBLOG_OVERRIDE, CLOUDLOG_PENDING]);
+        assert_eq!(
+            found.len(),
+            4,
+            "both secrets, whole and stretched: {found:?}"
+        );
+        for echo in [
+            format!("bad key {QRZ_KEY}"),
+            format!("bad key {}", QRZ_KEY.to_ascii_lowercase()),
+            format!("bad key {}", QRZ_KEY.replace('-', "%2D")),
+            format!("bad key {}", QRZ_KEY.replace('-', "")),
+            format!("bad key {}", &QRZ_KEY[2..12]),
+        ] {
+            assert!(!leaks(&echo, &[QRZ_KEY]).is_empty(), "missed in {echo:?}");
+        }
+        assert_eq!(leaks("invalid api key", &[QRZ_KEY]), Vec::<String>::new());
+    }
+
+    /// From afar the read names every setting the save keeps as the shack has it, once, whatever an
+    /// unknown key of that name planted; at the shack it names none.
+    #[test]
+    fn a_settings_read_from_afar_says_what_is_set_at_the_station() {
+        let afar = command_dispatch::Afar { stand_down: 1 };
+        let mut shack = station();
+        shack.unknown.insert(
+            command_dispatch::SET_AT_THE_STATION.into(),
+            serde_json::json!(["planted"]),
+        );
+        let read = serde_json::to_value(settings_read(&shack, Some(&afar), false)).unwrap();
+        assert_eq!(
+            read[command_dispatch::SET_AT_THE_STATION],
+            serde_json::json!(command_dispatch::station_only_settings(Some(&afar)).unwrap())
+        );
+        assert_eq!(
+            read.to_string()
+                .matches(command_dispatch::SET_AT_THE_STATION)
+                .count(),
+            1
+        );
+        let own = serde_json::to_value(settings_read(&shack, None, false)).unwrap();
+        assert!(
+            own.get(command_dispatch::SET_AT_THE_STATION).is_none(),
+            "at the shack, no list and nothing planted"
+        );
+    }
+
+    /// ⛔ While a stream watches the station's screen, the settings read that screen makes (the real
+    /// `get_settings`, with no `afar`, run as the command lane runs it) carries no stored key in any
+    /// form, and says by value which the station has saved. CONTROL: before the stream opens and
+    /// after it ends, the same read carries the ClubLog key.
+    #[test]
+    fn a_settings_read_at_the_shack_while_a_stream_watches_carries_no_stored_key() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&engine);
+            let mut s = e.settings().clone();
+            s.clublog_api_key = CLUBLOG_OVERRIDE.into();
+            s.cloudlog_key = CLOUDLOG_PENDING.into();
+            e.apply_settings(s);
+        }
+        let watched = remote_service::stream::Watched::default();
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .manage(watched.clone())
+            .invoke_handler(tauri::generate_handler![get_settings])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let read = || {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "get_settings".to_string(),
+                serde_json::json!({}),
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+                .expect("a settings read")
+        };
+        assert_eq!(
+            read()["clublogApiKey"],
+            CLUBLOG_OVERRIDE,
+            "CONTROL: no stream"
+        );
+        let stream = watched.watching();
+        let during = read();
+        let text = during.to_string();
+        assert_eq!(
+            leaks(&text, &[CLUBLOG_OVERRIDE, CLOUDLOG_PENDING]),
+            Vec::<String>::new(),
+            "while a stream watches: {text}"
+        );
+        assert_eq!(during["clublogApiKey"], "");
+        assert_eq!(
+            during[command_dispatch::SAVED_AT_THE_STATION]["clublogApiKey"],
+            true,
+            "the screen is not told the station has its key saved: {text}"
+        );
+        assert!(
+            during.get(command_dispatch::SET_AT_THE_STATION).is_none(),
+            "at the shack nothing is set at the station: {text}"
+        );
+        drop(stream);
+        let after = read();
+        assert_eq!(
+            after["clublogApiKey"], CLUBLOG_OVERRIDE,
+            "CONTROL: stream gone"
+        );
+        assert!(after.get(command_dispatch::SAVED_AT_THE_STATION).is_none());
+    }
+
+    /// ⛔ A settings read from afar carries no stored key, says by value which the station has
+    /// saved, and cannot carry a planted "saved" of its own. CONTROL: the station's own screen
+    /// still reads its ClubLog key, and never the Cloudlog one.
+    #[test]
+    fn a_settings_read_from_afar_carries_no_stored_key() {
+        let afar = command_dispatch::Afar { stand_down: 1 };
+        let mut shack = station();
+        shack.unknown.insert(
+            command_dispatch::SAVED_AT_THE_STATION.into(),
+            serde_json::json!("planted"),
+        );
+        let read = serde_json::to_value(settings_read(&shack, Some(&afar), false)).unwrap();
+        let text = read.to_string();
+        assert_eq!(
+            leaks(&text, &[CLUBLOG_OVERRIDE, CLOUDLOG_PENDING]),
+            Vec::<String>::new(),
+            "from afar: {text}"
+        );
+        assert_eq!(read["clublogApiKey"], "");
+        assert_eq!(
+            read[command_dispatch::SAVED_AT_THE_STATION],
+            serde_json::json!({ "clublogApiKey": true, "cloudlogKey": true })
+        );
+        assert_eq!(
+            text.matches(command_dispatch::SAVED_AT_THE_STATION).count(),
+            1,
+            "the flags once: {text}"
+        );
+        let none =
+            serde_json::to_value(settings_read(&Settings::default(), Some(&afar), false)).unwrap();
+        assert_eq!(
+            none[command_dispatch::SAVED_AT_THE_STATION],
+            serde_json::json!({ "clublogApiKey": false, "cloudlogKey": false })
+        );
+        let own = serde_json::to_value(settings_read(&shack, None, false)).unwrap();
+        assert_eq!(
+            own["clublogApiKey"], CLUBLOG_OVERRIDE,
+            "CONTROL: at the shack"
+        );
+        assert!(own.get("cloudlogKey").is_none(), "CONTROL: write-only");
+        assert!(
+            own.get(command_dispatch::SAVED_AT_THE_STATION).is_none(),
+            "at the shack, no flags and nothing planted"
+        );
+    }
+
+    /// The forms a service's echo of `secret` comes back in.
+    fn echoes(secret: &str) -> Vec<String> {
+        let each = |other: &dyn Fn(char) -> String| -> String {
+            secret
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_string()
+                    } else {
+                        other(c)
+                    }
+                })
+                .collect()
+        };
+        vec![
+            secret.to_string(),
+            each(&|c| format!("%{:02X}", c as u32)),
+            each(&|c| format!("%25{:02X}", c as u32)),
+            each(&|_| String::new()),
+            secret.to_ascii_lowercase(),
+            secret.to_ascii_uppercase(),
+        ]
+    }
+
+    /// ⛔ QRZ's push reason, the sync's and the confirmation check's refusals: an echoed Logbook
+    /// key is scrubbed from each, whoever called. CONTROL: words with no key come through as QRZ
+    /// wrote them, and a verbatim echo is masked rather than withheld.
+    #[test]
+    fn an_echoed_qrz_key_is_scrubbed_from_every_reply() {
+        let push_reason = |resp: &str| qrz_push_answer(resp, QRZ_KEY).reason.unwrap_or_default();
+        let sync_refusal = |resp: &str| {
+            qrz_sync_answer(resp, QRZ_KEY)
+                .err()
+                .map(|f| f.message.into_string())
+                .unwrap_or_default()
+        };
+        let check_refusal = |resp: &str| whole_qrz_book(resp, QRZ_KEY).err().unwrap_or_default();
+        for (path, said) in [
+            ("qrz_push_qso", &push_reason as &dyn Fn(&str) -> String),
+            ("sync_qrz", &sync_refusal),
+            ("confirmation_check", &check_refusal),
+        ] {
+            for echo in echoes(QRZ_KEY) {
+                let resp = format!("RESULT=FAIL&REASON=invalid api key KEY={echo}");
+                let words = said(&resp);
+                assert!(!words.is_empty(), "{path}: said nothing for {resp}");
+                assert_eq!(
+                    leaks(&words, &[QRZ_KEY]),
+                    Vec::<String>::new(),
+                    "{path}: {words:?}"
+                );
+            }
+            assert_eq!(
+                said(&format!("RESULT=FAIL&REASON=invalid api key KEY={QRZ_KEY}")),
+                "invalid api key KEY=«api key»",
+                "{path}: a verbatim echo is masked"
+            );
+            assert_eq!(
+                said(&format!(
+                    "RESULT=FAIL&REASON=invalid api key KEY={}",
+                    QRZ_KEY.replace('-', "%252D")
+                )),
+                QRZ_WORDS_WITHHELD,
+                "{path}: a twice-encoded echo is withheld"
+            );
+            assert_eq!(
+                said("RESULT=FAIL&REASON=invalid api key"),
+                "invalid api key",
+                "CONTROL: {path}"
+            );
+        }
+    }
+
+    /// ⛔ ClubLog's words: the app-password, the typed key and the key built into the installer are
+    /// each scrubbed, whoever called. CONTROL: words with no secret come through as ClubLog wrote
+    /// them, the outcome is still read off them, and a verbatim echo is masked.
+    #[test]
+    fn an_echoed_clublog_secret_is_scrubbed_from_every_reply() {
+        let secrets = [CLUBLOG_PASSWORD, CLUBLOG_OVERRIDE, CLUBLOG_BUILT_IN];
+        for secret in secrets {
+            for echo in echoes(secret) {
+                for status in [400, 403, 500] {
+                    let body = format!("Rejected: email=op@example.com&password=x&api={echo}");
+                    let words = clublog_push_answer(
+                        status,
+                        &body,
+                        CLUBLOG_PASSWORD,
+                        CLUBLOG_OVERRIDE,
+                        CLUBLOG_BUILT_IN,
+                    )
+                    .message
+                    .unwrap_or_default();
+                    assert!(!words.is_empty(), "{status}: said nothing for {body}");
+                    assert_eq!(
+                        leaks(&words, &secrets),
+                        Vec::<String>::new(),
+                        "{status}: {words:?}"
+                    );
+                }
+            }
+        }
+        let masked = clublog_push_answer(
+            403,
+            &format!("Invalid password {CLUBLOG_PASSWORD} for api {CLUBLOG_BUILT_IN}"),
+            CLUBLOG_PASSWORD,
+            "",
+            CLUBLOG_BUILT_IN,
+        );
+        assert_eq!(
+            masked.message.as_deref(),
+            Some("Invalid password «password» for api «api key»")
+        );
+        let encoded = clublog_push_answer(
+            403,
+            "Invalid password fake%20app%26Pw%20Zq7x%2089",
+            CLUBLOG_PASSWORD,
+            "",
+            CLUBLOG_BUILT_IN,
+        );
+        assert_eq!(
+            encoded.message.as_deref(),
+            Some("Invalid password «password»"),
+            "a percent-encoded echo is masked"
+        );
+        let plain = clublog_push_answer(
+            200,
+            "Duplicate QSO",
+            CLUBLOG_PASSWORD,
+            CLUBLOG_OVERRIDE,
+            CLUBLOG_BUILT_IN,
+        );
+        assert_eq!(plain.message.as_deref(), Some("Duplicate QSO"), "CONTROL");
+        assert_eq!(
+            plain.result,
+            tempo_core::clublog::ClubLogResult::Duplicate,
+            "CONTROL"
+        );
     }
 }

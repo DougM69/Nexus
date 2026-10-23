@@ -132,7 +132,8 @@ impl CivHandle {
     }
 }
 
-/// The running engine. Dropping it stops the thread (and the port closes with it).
+/// The running engine. Dropping it stops the thread (and the port closes with it); a key-up still
+/// queued then goes out once first (see the end of `engine_loop`).
 pub struct CivEngine {
     handle: CivHandle,
     scope_row: Arc<Mutex<Option<ScopeSweep>>>,
@@ -222,6 +223,12 @@ impl CivEngine {
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
     }
+
+    /// The flag Drop raises to stop the thread, so a test can hold the engine until it is raised.
+    #[cfg(test)]
+    pub(super) fn stop_flag(&self) -> Arc<AtomicBool> {
+        self.stop.clone()
+    }
 }
 
 impl Drop for CivEngine {
@@ -304,8 +311,10 @@ fn engine_loop(
     let mut internal: std::collections::VecDeque<CivRequest> = std::collections::VecDeque::new();
     let mut scope_sent: Option<bool> = None; // last commanded waveform-output state
     let mut buf = [0u8; 512];
+    let mut stopped = false; // left because the owner stopped us, not because the port died
     loop {
         if stop.load(Ordering::Relaxed) {
+            stopped = true;
             break;
         }
         // Keep the radio's waveform-output state in sync with the wanted flag.
@@ -416,7 +425,23 @@ fn engine_loop(
     if let Some((req, _)) = pending.take() {
         req.resolve(Err(CivError::Gone));
     }
+    // ⛔ TX SAFETY: STOPPED WITH A KEY-UP STILL QUEUED, WRITE IT ONCE ON THE WAY OUT. A daemon's
+    // teardown queues its safety key-up and waits for it (`CivDaemon`'s Drop: 4 × the deadline +
+    // 100 ms); when the engine is held past that wait (requests ahead of it the radio never
+    // answered, a stalled thread) the owner stops it with the key-up still here, and it used to be
+    // answered `Gone` and never written: a keyed radio left keyed, at the moment CAT is struggling.
+    // Only that exact frame, only once, ONE attempt bounded by the port's own timeout, and no reply
+    // awaited. Everything else queued is answered `Gone` unwritten, as before, so nothing on the
+    // way out can key the radio or wait on it.
+    let mut key_up = stopped.then(|| super::commands::set_ptt(radio_addr, false));
     while let Ok(req) = rx.try_recv() {
+        if key_up.as_ref() == Some(&req.frame) {
+            key_up = None;
+            super::diag::note("CivEngine stopped, key-up still queued: sending it on the way out");
+            let bytes = req.frame.to_bytes();
+            super::diag::log(super::diag::Dir::Tx, &bytes);
+            let _ = io.write_all(&bytes).and_then(|_| io.flush());
+        }
         req.resolve(Err(CivError::Gone));
     }
     alive.store(false, Ordering::Relaxed);
@@ -429,6 +454,7 @@ pub(crate) mod tests_support {
     use super::super::frame::{bcd_to_freq, freq_to_bcd, Frame, CONTROLLER};
     use std::collections::VecDeque;
     use std::io::{self, Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -666,7 +692,7 @@ pub(crate) mod tests_support {
     /// (`on_sub` false) or the Sub band. A plain frame acts on whichever band is selected when
     /// it arrives; a band-directed one ([`band_directed`]) on the band it names. Returns the
     /// reply to send: `None` = ack, `Some((0xFA, _))` = NAK, [`SILENT`] = say nothing.
-    fn act(r: &mut Regs, addr: u8, cmd: u8, data: &[u8], on_sub: bool) -> Option<(u8, Vec<u8>)> {
+    fn act(r: &mut Regs, cmd: u8, data: &[u8], on_sub: bool) -> Option<(u8, Vec<u8>)> {
         r.acted.push((on_sub, cmd, data.to_vec()));
         // See `Regs::drop_data_writes` and `Regs::nak_data_writes`.
         let data_write = cmd == 0x1A && data.first() == Some(&0x06) && data.len() > 1;
@@ -977,41 +1003,32 @@ pub(crate) mod tests_support {
                     None => Some((0x16, vec![sub, file.get(&sub).copied().unwrap_or(0)])),
                 }
             }
-            // Scope CENTER/FIXED (`27 14`) — remembered so the span below can be
-            // refused. The mode is the LAST payload byte on both frame shapes
-            // (`27 14 <fixed>` single-scope, `27 14 <main_sub> <fixed>` dual).
-            // ⚠️ READ vs WRITE, and the distinction is load-bearing. A CI-V READ is
-            // the bare sub-command (`27 14`, len 1); a WRITE carries the mode after it
-            // (`27 14 <fixed>`, or `27 14 <main_sub> <fixed>` on a dual-scope rig). The
-            // arm below used to take `data.last()` unconditionally, so a READ would have
-            // been swallowed as a write of `0x14` — setting the mode to Center and
-            // answering nothing. A test built on that would have "passed" while the
-            // fixture quietly rewrote the state under it.
-            // A READ carries no mode byte; a WRITE does. Length alone cannot tell
-            // them apart, because a dual-scope rig puts a Main/Sub selector between the
-            // sub-command and the payload: a single-rig WRITE and a dual-rig READ are
-            // both two bytes. So ask the SAME question the real code asks — is this
-            // address dual — instead of guessing from the length.
-            (0x27, Some(0x14))
-                if data.len() == 1 + usize::from(crate::civ::scope::scope_is_dual(addr)) =>
-            {
-                Some((0x27, {
-                    let mut d = vec![0x14];
-                    if crate::civ::scope::scope_is_dual(addr) {
-                        d.push(0x00);
+            // Scope CONTROL (`27 14` CENTER/FIXED, `27 15` span, `27 19` ref level) — laid out
+            // as Icom's CI-V references draw them: the sub-command, then a Main/Sub selector
+            // byte, then the payload. The selector is there on EVERY model, single-scope ones
+            // included, where it is "00 (Fixed)": IC-7300 Full Manual pp. 19-14/19-15, IC-705
+            // CI-V guide p. 29, IC-905 p. 28, IC-7300MK2 p. 25. Hamlib 4.5.5 emits `27 15 00 …`
+            // to an IC-7300 too.
+            // ⚠️ A FRAME OF ANY OTHER LENGTH IS NAKED, AS THE RIG DOES. This fixture used to read
+            // the selector as present only on dual-scope addresses — the same wrong layout the
+            // daemon sent — so every test agreed with the bug and an IC-7300 refused every span,
+            // reference level and Center/Fixed write in the field. Reads are `27 14 00` (len 2);
+            // writes are `27 14 00 <mode>` (3), `27 15 00 <5 BCD>` (7), `27 19 00 <2 BCD> <sign>` (5).
+            (0x27, Some(sub @ (0x14 | 0x15 | 0x19))) => {
+                match (sub, data.len()) {
+                    (0x14, 2) => Some((0x27, vec![0x14, 0x00, u8::from(r.scope_fixed)])),
+                    (0x14, 3) => {
+                        r.scope_fixed = data[2] == 0x01;
+                        None
                     }
-                    d.push(u8::from(r.scope_fixed));
-                    d
-                }))
+                    // Scope SPAN — NAKed while the scope is in Fixed mode, which is the #275
+                    // refusal this fixture exists to produce.
+                    (0x15, 7) if r.scope_fixed => Some((0xFA, Vec::new())),
+                    (0x15, 7) | (0x19, 5) => None,
+                    _ => Some((0xFA, Vec::new())),
+                }
             }
-            (0x27, Some(0x14)) => {
-                r.scope_fixed = data.last().is_some_and(|&b| b == 0x01);
-                None
-            }
-            // Scope SPAN (`27 15`) — NAKed while the scope is in Fixed mode, which
-            // is the #275 refusal this fixture exists to produce.
-            (0x27, Some(0x15)) if r.scope_fixed => Some((0xFA, Vec::new())),
-            (0x27, _) => None, // scope enable/disable, span in centre
+            (0x27, _) => None, // scope enable/disable
             // Voice TX memory (`28 00`, `00` = stop): acked. Whether a real rig acks
             // a stop with nothing playing is a bench question; tests assert the frame.
             (0x28, Some(0x00)) => None,
@@ -1028,7 +1045,7 @@ pub(crate) mod tests_support {
     ///
     /// A radio without the command (`cmd29` false — the IC-9700 fixture) NAKs it, and so does
     /// the IC-7610 for any command its table does not mark. The selection is never touched.
-    fn band_directed(r: &mut Regs, addr: u8, data: &[u8]) -> Option<(u8, Vec<u8>)> {
+    fn band_directed(r: &mut Regs, data: &[u8]) -> Option<(u8, Vec<u8>)> {
         let nak = Some((0xFA, Vec::new()));
         let (Some(&band), Some(&cmd)) = (data.first(), data.get(1)) else {
             return nak;
@@ -1040,7 +1057,7 @@ pub(crate) mod tests_support {
         if !r.cmd29 || band > 0x01 || !marked {
             return nak;
         }
-        match act(r, addr, cmd, inner, band == 0x01) {
+        match act(r, cmd, inner, band == 0x01) {
             // Acks and refusals come back bare (p. 15); a lost reply stays lost.
             reply @ (None | Some((0xFA | SILENT, _))) => reply,
             Some((rcmd, rdata)) => {
@@ -1194,7 +1211,6 @@ pub(crate) mod tests_support {
                 if self.mute {
                     continue;
                 }
-                let addr = self.addr;
                 let action = {
                     // Poison-tolerant: a test asserting under the regs lock may
                     // panic; the engine thread must not cascade after it.
@@ -1208,10 +1224,10 @@ pub(crate) mod tests_support {
                     if r.off {
                         Some((SILENT, Vec::new()))
                     } else if f.cmd == 0x29 {
-                        band_directed(&mut r, addr, &f.data)
+                        band_directed(&mut r, &f.data)
                     } else {
                         let on_sub = r.sel_sub;
-                        act(&mut r, addr, f.cmd, &f.data, on_sub)
+                        act(&mut r, f.cmd, &f.data, on_sub)
                     }
                 };
                 match action {
@@ -1248,13 +1264,107 @@ pub(crate) mod tests_support {
             Ok(n)
         }
     }
+
+    /// A [`FakeRadio`] whose engine thread a test can HOLD, the way a starved or stalled engine
+    /// thread is held: once [`Hold::until`] names a flag, the engine's next read blocks until that
+    /// flag is raised. [`Hold::wait_held`] returns once the engine is inside the hold, so nothing
+    /// it writes can land between the test's look at the log and the flag.
+    pub struct Held {
+        inner: FakeRadio,
+        hold: Arc<Hold>,
+    }
+
+    /// The test's side of a [`Held`] radio.
+    #[derive(Default)]
+    pub struct Hold {
+        until: Mutex<Option<Arc<AtomicBool>>>,
+        inside: AtomicBool,
+        released: AtomicBool,
+        /// Once released, every write times out before it reaches the radio.
+        refuse_writes: AtomicBool,
+        /// What the engine did with the port once released, in order: `"read"` or `"write"`.
+        after: Mutex<Vec<&'static str>>,
+    }
+
+    impl Held {
+        pub fn new(inner: FakeRadio) -> (Held, Arc<Hold>) {
+            let hold = Arc::new(Hold::default());
+            let held = Held {
+                inner,
+                hold: hold.clone(),
+            };
+            (held, hold)
+        }
+    }
+
+    impl Hold {
+        /// Hold the engine at its next read until `flag` is raised.
+        pub fn until(&self, flag: Arc<AtomicBool>) {
+            *self.until.lock().unwrap() = Some(flag);
+        }
+
+        /// Returns once the engine is inside the hold (10 s at most: a bound on "never", not a
+        /// measurement, so a loaded box cannot fail it).
+        pub fn wait_held(&self) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !self.inside.load(Ordering::SeqCst) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the engine never reached the hold"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        /// Every write after the release times out, as a port that cannot take it does.
+        pub fn refuse_writes(&self) {
+            self.refuse_writes.store(true, Ordering::SeqCst);
+        }
+
+        /// What the engine did with the port after the release.
+        pub fn after(&self) -> Vec<&'static str> {
+            self.after.lock().unwrap().clone()
+        }
+    }
+
+    impl Write for Held {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.hold.released.load(Ordering::SeqCst) {
+                self.hold.after.lock().unwrap().push("write");
+                if self.hold.refuse_writes.load(Ordering::SeqCst) {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "refused"));
+                }
+            }
+            self.inner.write(buf)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.inner.flush()
+        }
+    }
+
+    impl Read for Held {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.hold.released.load(Ordering::SeqCst) {
+                self.hold.after.lock().unwrap().push("read");
+            }
+            let until = self.hold.until.lock().unwrap().clone();
+            if let Some(flag) = until {
+                while !flag.load(Ordering::SeqCst) {
+                    self.hold.inside.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                self.hold.released.store(true, Ordering::SeqCst);
+            }
+            self.inner.read(buf)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::commands::{read_freq, read_smeter, set_freq};
+    use super::super::commands::{read_freq, read_smeter, set_freq, set_ptt};
     use super::super::frame::{freq_to_bcd, Frame};
-    use super::tests_support::FakeRadio;
+    use super::tests_support::{FakeRadio, Held};
     use super::*;
 
     /// A radio whose replies take `delay` to arrive after each command.
@@ -1516,5 +1626,107 @@ mod tests {
             .handle()
             .transact(super::super::commands::set_ptt(0xA2, true), Expect::Ack);
         assert_eq!(r.unwrap_err(), CivError::Nak);
+    }
+
+    // ── THE WAY OUT: a key-up still queued when the engine is stopped ────────────────────────
+
+    /// What reached the radio once the hold began, what the engine did with the port once released,
+    /// and each queued caller's answer.
+    type WayOut = (
+        Vec<(u8, Vec<u8>)>,
+        Vec<&'static str>,
+        Vec<Result<Frame, CivError>>,
+    );
+
+    /// Stops an engine HELD (see [`Held`]) with `queued` waiting behind it, as a daemon's teardown
+    /// stops one whose key-up it gave up waiting for. `refuse_writes`: the port times out every
+    /// write once the engine is released.
+    fn stop_held(queued: &[Frame], refuse_writes: bool) -> WayOut {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let (io, hold) = Held::new(radio);
+        let eng = CivEngine::start(Box::new(io), 0xA2, None);
+        hold.until(eng.stop_flag());
+        hold.wait_held();
+        if refuse_writes {
+            hold.refuse_writes();
+        }
+        let before = regs.lock().unwrap().log.len();
+        // Queued as `transact` queues them, without waiting for the answers.
+        let answers: Vec<_> = queued
+            .iter()
+            .map(|frame| {
+                let (tx, rx) = mpsc::sync_channel(1);
+                let req = CivRequest {
+                    frame: frame.clone(),
+                    expect: Expect::Ack,
+                    reply_to: Some(tx),
+                };
+                eng.handle.tx.send(req).unwrap();
+                rx
+            })
+            .collect();
+        drop(eng); // raises the flag, which ends the hold, and joins the thread
+        let wire = regs.lock().unwrap().log[before..].to_vec();
+        let answers = answers
+            .iter()
+            .map(|rx| rx.try_recv().expect("every caller is answered"))
+            .collect();
+        (wire, hold.after(), answers)
+    }
+
+    /// ⛔ STOPPED WITH THE KEY-UP STILL QUEUED, the engine writes it on its way out: only that frame
+    /// (not the read, the dial or the KEY queued with it), only once (two were queued), and nothing
+    /// awaited after it. Every caller is still answered `Gone`.
+    #[test]
+    fn a_stopped_engine_writes_a_queued_key_up_once_and_nothing_else() {
+        let (wire, after, answers) = stop_held(
+            &[
+                read_freq(0xA2),
+                set_ptt(0xA2, true),
+                set_ptt(0xA2, false),
+                set_freq(0xA2, 144_200_000, None),
+                set_ptt(0xA2, false),
+            ],
+            false,
+        );
+        assert_eq!(
+            wire,
+            vec![(0x1C, vec![0x00, 0x00])],
+            "the key-up, once, alone"
+        );
+        assert_eq!(after, vec!["write"], "one write, and no answer awaited");
+        assert_eq!(answers, vec![Err(CivError::Gone); 5]);
+    }
+
+    /// The control: with no key-up queued, nothing at all goes out on the way out, the queued KEY
+    /// least of all.
+    #[test]
+    fn a_stopped_engine_with_no_key_up_queued_writes_nothing() {
+        let (wire, after, answers) = stop_held(
+            &[
+                set_ptt(0xA2, true),
+                read_freq(0xA2),
+                set_freq(0xA2, 144_200_000, None),
+            ],
+            false,
+        );
+        assert_eq!(wire, Vec::<(u8, Vec<u8>)>::new(), "nothing went out");
+        assert_eq!(after, Vec::<&str>::new());
+        assert_eq!(answers, vec![Err(CivError::Gone); 3]);
+    }
+
+    /// The way out is bounded: ONE attempt at the key-up, with the port's own timeout. A port that
+    /// times it out is not tried again, and nothing waits after it.
+    #[test]
+    fn the_key_up_on_the_way_out_is_one_attempt() {
+        let (wire, after, answers) = stop_held(&[set_ptt(0xA2, false)], true);
+        assert_eq!(after, vec!["write"], "one attempt, no retry");
+        assert_eq!(
+            wire,
+            Vec::<(u8, Vec<u8>)>::new(),
+            "the port took none of it"
+        );
+        assert_eq!(answers, vec![Err(CivError::Gone)]);
     }
 }

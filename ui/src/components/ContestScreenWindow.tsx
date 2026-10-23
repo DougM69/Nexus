@@ -21,9 +21,9 @@
 //
 // ⭐ ITS KEYS ARE THE LOGGER WINDOW'S. F1–F12 are held, so an F5 reached for out of habit cannot reload the
 // window mid-contest; with Alt, Ctrl or Cmd held a key is the system's, as on the main window's Contest
-// screen, so Alt+F4 still closes it. Esc does what the Logger window's does away from its log line, which is
-// nothing of its own: it closes a dialog and backs out of an edit, and sends nothing. There is no log line
-// here to clear, and the stop is the main window's: Esc there, and Stop TX on every cockpit.
+// screen, so Alt+F4 still closes it. Esc is the station's stop here as in the main window (`halt_tx`, bound by
+// `DetachedPanel` for every contest window since the Illinois QSO Party, 2026-10-18, where Esc in a contest
+// window did not stop a CW message); on the same press it still closes a dialog and backs out of an edit.
 //
 // THE MAIN WINDOW'S SIDE is `useContestScreenWindow`, below: whether the section is out, the Pop out, Bring it
 // back, and the window's close. Nothing about the window is stored, and Nexus reopens no pop-out when it

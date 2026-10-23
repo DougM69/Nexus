@@ -4,16 +4,13 @@
 // feature (operator, 2026-09-27, "Session permit"), OFF unless the operator turns it on. What is
 // pinned here is what the operator sees and what Save writes: the switch ships off, it writes
 // `remoteStream`, a station that cannot capture its window is told so instead of being offered a
-// switch that would do nothing, and the Remote page never shows it (no browser may turn it on).
+// switch that would do nothing.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import { EN } from '../i18n/en'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
-import { navigationPages } from '../remote-web/__fixtures__/navigation-page'
-import configuration from '../remote-web/__fixtures__/configuration-settings.json'
 
 const platform = vi.hoisted(() => ({ windows: true }))
 vi.mock('../platform', async (importOriginal) => {
@@ -60,13 +57,7 @@ function station(extra: Record<string, unknown> = {}) {
   return { ...defaultSettings, mycall: 'KD9TAW', mygrid: 'EN52', ...extra } as never
 }
 
-function renderPanel(remote = false) {
-  // The Remote page is the panel inside a RemoteCollectionsContext (useNavigation's `remote`),
-  // reading the station's Settings document instead of the local settings.
-  const page = vi.fn(async () => {
-    const pages = navigationPages('settings', configuration)
-    return { ...pages[0], rows: pages.flatMap((p) => p.rows), nextCursor: null }
-  })
+function renderPanel() {
   const panel = (
     <SettingsPanel
       activeRadioId={0}
@@ -81,15 +72,7 @@ function renderPanel(remote = false) {
       features={features}
     />
   )
-  return render(
-    remote ? (
-      <RemoteCollectionsContext.Provider value={{ page } as unknown as RemoteCollections}>
-        {panel}
-      </RemoteCollectionsContext.Provider>
-    ) : (
-      panel
-    ),
-  )
+  return render(panel)
 }
 
 async function openStationTab() {
@@ -206,13 +189,6 @@ describe('the beta line', () => {
     await waitFor(() => expect(screen.getByText(EN['settings.remoteStream.unavailable'])).toBeTruthy())
     expect(line()?.textContent).toBe(BETA)
   })
-  it('is not on the Remote page\'s copy of Settings, which streams nothing (the site says it on each station)', async () => {
-    renderPanel(true)
-    await openStationTab()
-    await waitFor(() => expect(screen.getByText(EN['remote.configurationLocal'])).toBeTruthy())
-    expect(screen.getByText(EN['remote.configurationLocal']).textContent).toMatch(/in Nexus at the station, in person or streamed to this browser/)
-    expect(line()).toBeNull()
-  })
 })
 
 describe('where the switch is not offered', () => {
@@ -227,13 +203,4 @@ describe('where the switch is not offered', () => {
     expect(screen.queryByText(DISPLAY_NOTE), 'a note about a stream this station cannot send').toBeNull()
   })
 
-  it('is never on the Remote page: no browser may turn streaming on', async () => {
-    renderPanel(true)
-    await openStationTab()
-    // CONTROL for the absence: the section itself rendered, with the Remote page's own note.
-    await waitFor(() => expect(screen.getByText(EN['remote.configurationLocal'])).toBeTruthy())
-    expect(theSwitch()).toBeNull()
-    expect(screen.queryByText(EN['settings.remoteStream.unavailable'])).toBeNull()
-    expect(screen.queryByText(DISPLAY_NOTE)).toBeNull()
-  })
 })

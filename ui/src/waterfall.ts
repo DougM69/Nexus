@@ -801,16 +801,66 @@ export function resampleRow(
   }
 }
 
+/** Where `traceContrast` starts to rise and where it reaches the top of the palette, as fractions
+ *  of the display window. */
+export const TRACE_CONTRAST_KNEE = 0.04
+export const TRACE_CONTRAST_TOP = 0.85
+
+/**
+ * The RTTY waterfall's contrast curve: the strength a row value is drawn at, 0..1 in, 0..1 out.
+ *
+ * A smoothstep from `TRACE_CONTRAST_KNEE` to `TRACE_CONTRAST_TOP` of the display window. In the
+ * window's usual 24 dB that keeps the parked noise grain (a few dB up) near the palette floor and
+ * pushes a keying mark/space pair (10-20 dB up) toward the bright end, so the two traces stand out
+ * from the band. The price is stated rather than hidden: signals in the top 15 % all read as
+ * full-scale, and the weakest traces (under ~6 dB) draw a little darker than the linear map. RTTY
+ * is read for where the pairs are, not for how strong each one is; the FT surfaces keep the linear
+ * map. Monotonic, so a sequential palette stays luminance-monotonic.
+ */
+export function traceContrast(t: number): number {
+  const x = Math.min(1, Math.max(0, (t - TRACE_CONTRAST_KNEE) / (TRACE_CONTRAST_TOP - TRACE_CONTRAST_KNEE)))
+  return x * x * (3 - 2 * x)
+}
+
+const RAMPS = new Map<ColormapName, { top: number; rises: boolean }>()
+/** A palette's brightness ramp: where it is brightest, 0..1 along it (relative luminance), and
+ *  whether it only brightens on the way there. The top for inferno, viridis and the single-hue
+ *  ramps; 0.6 for turbo, which falls through orange to a dark red after its yellow-green. */
+export function paletteRamp(name: ColormapName): { top: number; rises: boolean } {
+  let ramp = RAMPS.get(name)
+  if (ramp === undefined) {
+    const lut = bakeLut(name)
+    const lin = (c: number) => (c / 255 <= 0.04045 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4)
+    const y = Array.from({ length: 256 }, (_, i) => 0.2126 * lin(lut[i * 4]) + 0.7152 * lin(lut[i * 4 + 1]) + 0.0722 * lin(lut[i * 4 + 2]))
+    const at = y.indexOf(Math.max(...y))
+    // A dip of 0.002 (well under a just-noticeable step) is the LUT's rounding, not a fall.
+    ramp = { top: at / 255, rises: at > 0 && y.slice(0, at + 1).every((v, i) => i === 0 || v >= y[i - 1] - 0.002) }
+    RAMPS.set(name, ramp)
+  }
+  return ramp
+}
+
+/** A contrast curve fitted to a palette, or undefined where it would not add contrast. It ends
+ *  where the palette is brightest, so on turbo a strong trace lands on the yellow-green rather than
+ *  the dark red past it (through the bare curve a 15 dB trace fell from relative luminance 0.76 to
+ *  0.33). A palette that darkens on the way to its brightest (Digipan, Linrad) or is brightest at
+ *  its floor (Negative) takes none: measured, the curve lowered their trace-to-noise contrast. */
+export function curveForPalette(name: ColormapName, curve: (t: number) => number): ((t: number) => number) | undefined {
+  const { top, rises } = paletteRamp(name)
+  if (!rises) return undefined
+  return top >= 1 ? curve : (t: number) => curve(t) * top
+}
+
 /**
  * Pre-bake a colormap to a `size`×RGBA lookup table (default 256) so the render
  * hot path is `lut[round(t*255)*4]` instead of a per-pixel linear-light
  * `sampleLut`. Alpha is fully opaque. Throws (via sampleLut) on an unknown map.
  */
-export function bakeLut(name: ColormapName, size = 256): Uint8ClampedArray {
+export function bakeLut(name: ColormapName, size = 256, curve?: (t: number) => number): Uint8ClampedArray {
   const out = new Uint8ClampedArray(size * 4)
   const denom = size > 1 ? size - 1 : 1
   for (let i = 0; i < size; i++) {
-    const [r, g, b] = sampleLut(name, i / denom)
+    const [r, g, b] = sampleLut(name, curve ? curve(i / denom) : i / denom)
     const o = i * 4
     out[o] = r
     out[o + 1] = g
@@ -898,14 +948,19 @@ export function zoomWindow(
 
 /** Scope feeds whose rows span ABSOLUTE RF Hz (a native panadapter retuned to the dial:
  * 'flex' = SmartSDR VITA, 'civ' = Icom CI-V scope, 'yaesu' = the FT-710's FT4222 USB→SPI
- * bridge). ''/'audio' = the soundcard FFT, whose rows span demodulated audio-passband Hz.
+ * bridge; 'tci' = an SDR program's own IQ over TCI, centred on its receiver; and 'sdrconnect' =
+ * an SDRplay receiver's IQ through SDRconnect, the operator's other scope source).
+ * ''/'audio' = the soundcard FFT, whose rows span demodulated audio-passband Hz.
  *
  * ⚠️ A FEED LABEL THIS PREDICATE DOES NOT KNOW FALLS THROUGH TO THE AUDIO READING, and nothing
  * errors: the row is drawn against a 0-4000 Hz axis with dB-scaled thresholds instead of its
  * real RF span. The waterfall is simply wrong. So this list and the labels the backend publishes
  * are one fact in two places — `yaesu_wf::SOURCE` names this function for the same reason. */
 export function isRfScopeSource(source: string): boolean {
-  return source === 'flex' || source === 'civ' || source === 'yaesu'
+  return (
+    source === 'flex' || source === 'civ' || source === 'yaesu' || source === 'tci' ||
+    source === 'sdrconnect'
+  )
 }
 
 /** Why a rig-scope control pane cannot appear when no native panadapter is streaming —
@@ -1137,6 +1192,34 @@ export const WATERFALL_ZOOMS: { value: number; label: string }[] = [
   { value: 1000, label: '1 kHz' },
   { value: 600, label: '600 Hz' },
 ]
+
+/** The RTTY waterfall's span buttons. The audio row the waterfall draws spans 0–4000 Hz (512
+ *  bins, 7.8 Hz each), so no span wider than that exists to offer: the buttons run 1 and 2 kHz
+ *  windows round the decoder, then the 200–3000 Hz Std view and the 200–4000 Hz Full view, labelled
+ *  by the edge each reaches. Every value is one of `WATERFALL_ZOOMS`, so a button and the zoom
+ *  select (the other surfaces) persist the same span under the same key. `widthHz` is the window
+ *  each shows. */
+export const RTTY_WATERFALL_SPANS: { value: number; label: string; widthHz: number }[] = [
+  { value: 1000, label: '1k', widthHz: 1000 },
+  { value: 2000, label: '2k', widthHz: 2000 },
+  { value: 0, label: '3k', widthHz: WF_STD_HI - WF_F_MIN },
+  { value: -1, label: '4k', widthHz: WF_F_MAX - WF_F_MIN },
+]
+
+/** The RTTY waterfall's speed buttons: milliseconds per drawn row (the `rowMs` prop). Fast is the
+ *  rig-scope cadence RTTY has always drawn at; Med and Slow keep 2× and 4× the history on screen
+ *  and poll the row that much less often. Each is a whole number of 60 Hz frames. A slower row is
+ *  the latest spectrum when it is drawn, not a peak over the frames it skipped. */
+export const RTTY_WATERFALL_SPEEDS = [
+  { id: 'fast', rowMs: 50 },
+  { id: 'med', rowMs: 100 },
+  { id: 'slow', rowMs: 200 },
+] as const
+export type RttyWaterfallSpeed = (typeof RTTY_WATERFALL_SPEEDS)[number]['id']
+/** A stored speed, or Fast for anything else (missing, blocked, stale). */
+export function coerceRttySpeed(v: string | null): RttyWaterfallSpeed {
+  return RTTY_WATERFALL_SPEEDS.find((x) => x.id === v)?.id ?? 'fast'
+}
 
 /** WSPR's 200 Hz sub-band (#101): the window every WSPR decoder searches, and the engine's own
  *  `tx_offset_bounds` for the tier, which clamps both markers to it. A waterfall on the WSPR

@@ -2,17 +2,19 @@ import { useStationControl, useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT: the band and mode names (`modeLabel` is CW or
 // SSB), the scale's edge frequencies, the dial reading, and every value in a spot's tooltip —
-// `detail` is the spot line assembled from cluster data, and `de <spotter>` is the cluster's own
-// shorthand. The need and badge WORDS arrive already translated from `needVisuals.ts` and
-// `SpotLegend.tsx`, whose tables resolve through getters.
+// `detail` is the spot line assembled from cluster data, `de <spotter>` is the cluster's own
+// shorthand, and `TCI` with a program's connection number is a program's spot's source. The need
+// and badge WORDS arrive already translated from `needVisuals.ts` and `SpotLegend.tsx`, whose
+// tables resolve through getters.
 //
 // The dial marker reads `txAllowed` to say the engine is blocking transmit here. It is a readout;
 // this surface has no transmit control and is on no cockpit's stop-line census.
 import { useRef, useState } from 'react'
-import type { SpotRow, NeedTag, AppSnapshot } from '../types'
+import type { SpotRow, NeedTag, AppSnapshot, FieldDayStatus } from '../types'
 import { bandRangeForLabel, cwRangeForLabel } from '../band'
 import { useWheelTune } from '../useWheelTune'
 import { NEED_CHIP } from '../features/needVisuals'
+import { spotMarkWords, spotMultTag, useContestSpotMarker } from '../features/contestSpotMarks'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
@@ -29,6 +31,12 @@ interface Props {
   phoneSegHi?: number | null
   /** All live cluster spots (unfiltered); the strip picks the ones matching `spotMode` on this band. */
   spots: SpotRow[]
+  /** The spots programs on Nexus's TCI server sent (`features/tciSpots.ts`), drawn as cluster spots
+   *  are but dotted, with their source beside the call. Each names its program (`tci`). */
+  tciSpots?: SpotRow[]
+  /** ⛔ A click on a program's spot: it only tunes (`clickTciSpot`). Never `onWorkSpot`, which can
+   *  change the section and arm; without this a program's spot does nothing when clicked. */
+  onTciSpot?: (s: SpotRow) => void
   /** Which spot mode to plot — 'Phone' (SSB, default) for the Phone cockpit, 'CW' for the CW one. */
   spotMode?: 'Phone' | 'CW'
   /** Top need tag per heard call (UPPERCASE) — colours the tick by why it's worth working. */
@@ -39,6 +47,9 @@ interface Props {
   onWorkSpot: (s: SpotRow) => void
   /** When set, shows a "pop out" button that opens the full vertical band-map in its own window. */
   onPopOut?: () => void
+  /** The running contest, when one runs: a dupe flag is struck through and dimmed, a flag that
+   *  would be a new multiplier wears MULT (`features/contestSpotMarks.ts`). Absent = no marks. */
+  fieldDay?: FieldDayStatus | null
 
   // ── Tuning from the strip itself (#96) ─────────────────────────────────────────────────
   // The pop-out band map wheel-tunes (#39); the docked strip is the same frequency scale in
@@ -61,6 +72,14 @@ interface Props {
 /** The scale's unit, printed on the axis beside the edge frequency. A unit symbol is a token:
  * MHz is MHz in every language, and the guard is told so by this constant. */
 const MHZ_UNIT = 'MHz'
+
+/** The protocol's name, beside a program's spot: a token, the same in every language. */
+const TCI = 'TCI'
+
+/** A program's spot's source, beside its call: the protocol and the program's connection number. */
+function tciSource(program: number): string {
+  return `${TCI} ${program}`
+}
 
 /** Compact "how long ago" for a spot tooltip. The unit letter rides inside the message with its
  * number, so a translation can never separate the two. */
@@ -85,11 +104,14 @@ export function BandStrip({
   phoneSegLo,
   phoneSegHi,
   spots,
+  tciSpots,
+  onTciSpot,
   spotMode = 'Phone',
   needByCall,
   typeByCall,
   onWorkSpot,
   onPopOut,
+  fieldDay,
   sideband,
   tuneEnabled,
   stepHz,
@@ -114,6 +136,7 @@ export function BandStrip({
   // sensitivity setting are all the ones the operator already knows, never a second
   // implementation that drifts. `enabled` false makes it inert (the read-only case).
   // Called BEFORE the off-plan early return below: hooks must run on every render.
+  const marker = useContestSpotMarker(fieldDay)
   const trackEl = useRef<HTMLDivElement | null>(null)
   useWheelTune(trackEl, {
     dialMhz,
@@ -164,7 +187,7 @@ export function BandStrip({
     )
   }
 
-  const phone = spots
+  const phone = [...spots, ...(tciSpots ?? [])]
     .filter((s) => s.mode === spotMode && s.band === band)
     .sort((a, b) => a.freqMhz - b.freqMhz)
 
@@ -241,7 +264,9 @@ export function BandStrip({
           />
         )}
         {phone.map((s) => {
-          const key = `${s.call}-${s.freqMhz}`
+          // A program's spot: its source, the connection Settings ▸ Share by TCI lists it by.
+          const program = s.tci ?? null
+          const key = program != null ? `${TCI}${program}-${s.call}-${s.freqMhz}` : `${s.call}-${s.freqMhz}`
           const repeat = seen.get(key) ?? 0
           seen.set(key, repeat + 1)
           // Fade older spots so density + freshness read at a glance (fresh ≈ opaque, ~30 min → faint).
@@ -268,8 +293,13 @@ export function BandStrip({
           // POTA colour) included, keeps its own. It reads the P's own entry, so whatever takes the
           // P away takes the colour too. Not `is-need`: it labels the station, so the bar stays thin.
           const dimCls = !chip && !beacon && type === 'Pota' ? ' pota-dim' : ''
+          // A beacon is never worked in a contest, so it is never marked.
+          const mark = beacon ? null : (marker?.(s) ?? null)
+          const markWords = spotMarkWords(mark)
+          const multTag = spotMultTag(mark)
           const detail = [
             s.call,
+            ...markWords,
             beacon?.word,
             chip?.label,
             badge?.word,
@@ -278,27 +308,48 @@ export function BandStrip({
             s.state,
             `${s.freqMhz.toFixed(3)} MHz`,
             ageLabel(s.ageSecs),
+            program != null && t('bandStrip.spot.tci.from', { id: program }),
             s.spotter && `de ${s.spotter}`,
             s.comment,
           ]
             .filter(Boolean)
             .join(' · ')
+          // A program's spot only tunes, and its tooltip says so.
+          const tip = program != null ? t('bandStrip.spot.tci.title', { detail }) : t('bandStrip.spot.title', { detail })
           return (
             <button
               key={repeat ? `${key}#${repeat}` : key}
               type="button"
-              className="bandstrip-spot"
+              className={`bandstrip-spot${program != null ? ' from-tci' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
               style={{ left: `${pct(s.freqMhz)}%`, opacity }}
-              title={workAllowed ? t('bandStrip.spot.title', { detail }) : detail}
+              title={workAllowed ? tip : detail}
+              aria-label={mark ? [s.call, ...markWords].join(' · ') : undefined}
               disabled={!workAllowed}
-              onClick={() => { if (workAllowed) onWorkSpot(s) }}
+              // ⛔ A program's spot only tunes: never the Work, whatever it names.
+              onClick={() => {
+                if (!workAllowed) return
+                if (program != null) onTciSpot?.(s)
+                else onWorkSpot(s)
+              }}
             >
               {beacon && (
                 <span className={`bandstrip-type spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>
               )}
               {badge && <span className={`bandstrip-type spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
               <span className={`bandstrip-tick${needCls}${dimCls}`} />
-              <span className="bandstrip-spot-call mono">{s.call}</span>
+              {multTag && (
+                // Leans toward the middle of the band, so a flag near either edge keeps its tag
+                // inside the track.
+                <span
+                  className={`spot-mult-tag${multTag === 'predicted' ? ' predicted' : ''}${pct(s.freqMhz) > 50 ? ' lean-left' : ''}`}
+                >
+                  {multTag === 'predicted' ? t('contestSpot.tag.predicted') : t('contestSpot.tag.mult')}
+                </span>
+              )}
+              <span className="bandstrip-spot-call mono">
+                {s.call}
+                {program != null && <span className="spot-type-badge type-tci">{tciSource(program)}</span>}
+              </span>
             </button>
           )
         })}

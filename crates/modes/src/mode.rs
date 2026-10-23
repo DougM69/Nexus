@@ -8,6 +8,7 @@
 //! to modes only through this interface.
 
 use crate::decode::Decode;
+use crate::source::DecodeSink;
 
 /// The JS8 speed enum — owned by `crates/js8`, re-exported by this crate's `lib.rs` so
 /// `tempo-app`/`tempo-audio` write `modes::Js8Speed` without naming the modem crate.
@@ -86,7 +87,7 @@ pub enum ModeKind {
     /// tier-routed planner is the only TX path; the encoder here serves the lab.
     ///
     /// Carries its speed for the same reason FST4/Q65 carry a period: the T/R period is
-    /// 30/15/10/6 s and the decode window is `speed.frames_needed()` samples, so both
+    /// 30/15/10/6/4 s and the decode window is `speed.frames_needed()` samples, so both
     /// [`Self::slot_secs`] and [`Self::frame_samples`] are pure functions of the kind. The
     /// speed comes from `Settings::js8_speed` (an index into [`Js8Speed::ALL`]).
     Js8 {
@@ -134,8 +135,8 @@ impl ModeKind {
         speed: Js8Speed::Normal,
     };
 
-    /// Every JS8 speed (Slow, Normal, Fast, Turbo) — the capability invariants hold for
-    /// each, exactly as `q65_all` / `fst4_all` enumerate their families.
+    /// Every JS8 speed (Slow, Normal, Fast, Turbo, Ultra) — the capability invariants hold
+    /// for each, exactly as `q65_all` / `fst4_all` enumerate their families.
     pub fn js8_all() -> impl Iterator<Item = ModeKind> {
         Js8Speed::ALL
             .into_iter()
@@ -573,6 +574,48 @@ pub trait Mode: Send + Sync {
             ap_cq_only,
         )
     }
+
+    /// [`decode_frame_a7`](Mode::decode_frame_a7), telling `sink` of each decode the moment the
+    /// decoder finds it and, for FT8, asking it after every sync candidate whether to stop
+    /// ([`DecodeSink`]). FT8 and FT4 stream, as WSJT-X's decoders do; every other mode hands its
+    /// decodes over only in the returned list, and this default tells `sink` nothing.
+    #[allow(clippy::too_many_arguments)] // mirrors the modem decode ABI
+    fn decode_frame_streaming(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        nftx: i32,
+        frame_time_ms: i64,
+        a7_final: bool,
+        partial: bool,
+        ap: bool,
+        ap_cq_only: bool,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        let _ = sink;
+        self.decode_frame_a7(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            nftx,
+            frame_time_ms,
+            a7_final,
+            partial,
+            ap,
+            ap_cq_only,
+        )
+    }
 }
 
 /// Build a boxed [`Mode`] from its [`ModeKind`].
@@ -636,17 +679,40 @@ impl Mode for Ft8Mode {
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
-        ft8::encode(msg)
+        // ⛔ NEVER A MESSAGE THE ENCODER REFUSES: empty, which every caller reads as "do not
+        // key" (`wsjt77::Refusal`). `genft8` answers a bad message with 79 zero tones and the
+        // vendored entry point passes them on as an over, one steady carrier for 12.64 s; a text
+        // the packer builds from fields it never set has no frame at all.
+        if crate::wsjt77::ft8_refusal(msg).is_some() {
+            return Vec::new();
+        }
+        // The lock-free encoder, so an over built at its key never waits for a decode holding the
+        // modem; the vendored one still runs on the message for the callsign tables it writes
+        // (`ft8::encode_later`). A message whose vendored result is not a function of its text
+        // is the vendored encoder's alone (`crate::wsjt77`).
+        let tones = match crate::wsjt77::ft8_tones(msg) {
+            Some(tones) => {
+                ft8::encode_later(msg);
+                tones
+            }
+            None => ft8::encode(msg),
+        };
+        // The vendored encoder's bad message, where only it could tell: every over carries its
+        // Costas arrays, so 79 zeros are that answer and never a frame.
+        if tones.iter().all(|&t| t == 0) {
+            return Vec::new();
+        }
+        tones
     }
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
         // WSJT-X positions FT8 tones 0.5 s into the slot (the decoder's `xdt = t − 0.5`).
-        // `ft8::gen_wave` returns only the bare 12.64 s tone stream, so we PREPEND the
+        // `gen_ft8wave` returns only the bare 12.64 s tone stream, so we PREPEND the
         // 0.5 s lead-in here to return a slot-positioned waveform (the same contract FT4
         // already satisfies). Without it the radio loop plays the tones at the slot
         // boundary and the whole over goes out 0.5 s early — every receiver sees us at
         // DT ≈ −0.5 s, off-nominal and at the edge of the decode window.
         let lead = (0.5 * fsample).round().max(0.0) as usize;
-        let tones = ft8::gen_wave(itone, fsample, f0);
+        let tones = crate::wsjt77::ft8_wave(itone, fsample, f0);
         let mut wave = vec![0f32; lead + tones.len()];
         wave[lead..].copy_from_slice(&tones);
         wave
@@ -724,6 +790,53 @@ impl Mode for Ft8Mode {
         .map(Into::into)
         .collect()
     }
+    fn decode_frame_streaming(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        nftx: i32,
+        frame_time_ms: i64,
+        a7_final: bool,
+        partial: bool,
+        ap: bool,
+        ap_cq_only: bool,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        // The same slot key as `decode_frame_a7`.
+        let nutc = (frame_time_ms / 1000).rem_euclid(86_400) as i32;
+        ft8::decode_frame_a7_streaming(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            nftx,
+            nutc,
+            a7_final,
+            partial,
+            ap,
+            ap_cq_only,
+            &mut |progress| match progress {
+                ft8::Progress::Found(d) => {
+                    sink.found(&d.clone().into());
+                    false
+                }
+                ft8::Progress::Candidate => sink.give_up(),
+            },
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
 }
 
 /// Standard WSJT-X **FT4** — 7.5 s T/R, 4-GFSK, the fast contest sibling.
@@ -749,17 +862,28 @@ impl Mode for Ft4Mode {
         }
     }
     fn encode(&self, msg: &str) -> Vec<i32> {
-        ft4::encode(msg)
+        // As FT8: never a message the encoder refuses (its bad message is already empty here),
+        // and lock-free, with the vendored encode owed for the callsign tables.
+        if crate::wsjt77::ft4_refusal(msg).is_some() {
+            return Vec::new();
+        }
+        match crate::wsjt77::ft4_tones(msg) {
+            Some(tones) => {
+                ft4::encode_later(msg);
+                tones
+            }
+            None => ft4::encode(msg),
+        }
     }
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
         // Same slot-positioning contract as FT8: WSJT-X's FT4 decoder reports
         // `xdt = t − 0.5` (ft4_decode.f90), i.e. the nominal signal start is
-        // 0.5 s into the period — but `ft4::gen_wave` places the tones at t ≈ 0
+        // 0.5 s into the period — but `gen_ft4wave` places the tones at t ≈ 0
         // (measured: signal 0.00–5.04 s of the 6.048 s buffer). Played at the
         // boundary that put every transmission at DT ≈ −0.5 for the whole band.
         // Prepend the lead-in so our FT4 goes out at the standard DT ≈ 0.
         let lead = (0.5 * fsample).round().max(0.0) as usize;
-        let tones = ft4::gen_wave(itone, fsample, f0);
+        let tones = crate::wsjt77::ft4_wave(itone, fsample, f0);
         let mut wave = vec![0f32; lead + tones.len()];
         wave[lead..].copy_from_slice(&tones);
         wave
@@ -790,6 +914,41 @@ impl Mode for Ft4Mode {
             nqso_progress,
             nfqso,
             ap_cq_only,
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect()
+    }
+    fn decode_frame_streaming(
+        &self,
+        iwave: &[i16],
+        nfa: i32,
+        nfb: i32,
+        ndepth: i32,
+        mycall: &str,
+        hiscall: &str,
+        nqso_progress: i32,
+        nfqso: i32,
+        _nftx: i32,
+        _frame_time_ms: i64,
+        _a7_final: bool,
+        _partial: bool,
+        _ap: bool,
+        ap_cq_only: bool,
+        sink: &mut dyn DecodeSink,
+    ) -> Vec<Decode> {
+        // The arguments `decode_frame` reads, and nothing more (see there).
+        ft4::decode_frame_streaming(
+            iwave,
+            nfa,
+            nfb,
+            ndepth,
+            mycall,
+            hiscall,
+            nqso_progress,
+            nfqso,
+            ap_cq_only,
+            &mut |d| sink.found(&d.clone().into()),
         )
         .into_iter()
         .map(Into::into)
@@ -1357,14 +1516,14 @@ mod tx_capability_tests {
     fn js8_registers_as_a_parametric_kind() {
         // ⭐ B7 (operator gate G1) makes JS8 transmit-capable: `tx_mode` now hands back a
         // Mode at every speed, so the engine's `tier_is_rx_only` no longer refuses to arm
-        // the latch. The parametric registration (one name, four speeds) is unchanged.
+        // the latch. The parametric registration (one name, every speed) is unchanged.
         for speed in Js8Speed::ALL {
             let kind = ModeKind::Js8 { speed };
             let m = make_mode(kind);
             assert_eq!(
                 m.name(),
                 "JS8",
-                "one name for all four speeds; the speed rides Decode.mode"
+                "one name for every speed; the speed rides Decode.mode"
             );
             assert_eq!(m.slot_secs(), speed.period_s() as f32);
             assert_eq!(m.frame_samples(), speed.frames_needed());
@@ -1386,7 +1545,11 @@ mod tx_capability_tests {
                 speed: Js8Speed::Normal
             }
         );
-        assert_eq!(ModeKind::js8_all().count(), 4);
+        assert_eq!(
+            ModeKind::js8_all().count(),
+            5,
+            "Slow, Normal, Fast, JS8 40, JS8 60"
+        );
         assert_eq!(ModeKind::ALL.len(), 10);
         assert!(ModeKind::ALL.contains(&ModeKind::JS8_NORMAL));
     }
@@ -2039,7 +2202,7 @@ impl Mode for WsprMode {
 /// speed. **Transmit-capable since B7 (operator gate G1)**: the engine's tier-routed
 /// planner is the only TX path; the encoder here serves the lab.
 ///
-/// `structured_identity: true` — the FAIL-CLOSED default kept deliberately (judge.md ruling):
+/// `structured_identity: true` — the FAIL-CLOSED default kept deliberately:
 /// JS8 frames carry the callsign, so a blank MYCALL must refuse to build a frame; the JS8
 /// TX planner will call `structured_tx_ready(false)` itself and `compose` refuses a
 /// non-packable call on top. `early_decode: true` only documents that the tier decodes

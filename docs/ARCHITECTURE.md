@@ -4,7 +4,7 @@
 > store-and-forward) and the modem/audio/rig substrate it shares with the rest
 > of **Nexus**, the all-mode amateur radio operations center this project became.
 >
-> **Author / contact:** KD9TAW &lt;kd9taw@protonmail.com&gt;
+> **Author / contact:** KD9TAW &lt;contact@hamradiotools.io&gt;
 > **Repository:** https://sourceforge.net/projects/nexus-ham-radio
 > **License:** GPL-3.0-only (full text in [`COPYING`](../COPYING)).
 
@@ -279,7 +279,9 @@ keeps the message layer intact (only the waveform length differs:
 `SlotClock::tempofast()` runs a `PERIOD_MS = 4000` period; `SlotClock::tempodeep()` runs a
 15 s period (`DX1_PERIOD_S`). It exposes `phase_ms`, `ms_to_next_slot`,
 `slot_index`, `next_boundary_ms`, and a `within_tolerance` window
-(`TIMING_TOLERANCE_MS = 80`), with a `PRE_TX_GUARD_MS = 200` pre-TX guard.
+(`TIMING_TOLERANCE_MS = 80`). Its `pre_tx_guard_ms` (`PRE_TX_GUARD_MS = 200`) is read by
+nothing: TempoFast's tones start `FT1_LEAD_IN_SECS` (0.3 s) into the slot, shifted inside the
+4 s buffer by `crates/modes/src/mode.rs`.
 
 The capture buffer must match the active tier's window. `tempo_audio::frames::RxRing`
 is a rolling buffer holding the latest `cap` samples (front-zero-padded until
@@ -633,11 +635,14 @@ MinGW FFTW prefix.
 The cross build needs a static single-precision FFTW3f for MinGW at
 `FFTW_MINGW_PREFIX` (default `/tmp/fftw-mingw`; the cross script overrides it to
 `target/fftw-mingw`). `scripts/build-windows-cross.sh` builds it once and caches
-it:
+it, with SSE2/AVX/AVX2 codelets that FFTW picks by CPU at run time (WSJT-X's own
+Windows FFTW has SIMD too). A stamp in the prefix records the version and flags, so a
+cache built with other flags is rebuilt:
 
 ```bash
 ./configure --host=x86_64-w64-mingw32 --enable-float --enable-static \
-            --disable-shared --prefix=$FFTW_MINGW_PREFIX
+            --disable-shared --enable-sse2 --enable-avx --enable-avx2 \
+            --with-our-malloc --prefix=$FFTW_MINGW_PREFIX
 ```
 
 ### 9.4 NSIS bundling: offline WebView2 + Hamlib
@@ -741,4 +746,4 @@ This is experimental amateur-radio software; operate within your license
 privileges and local regulations. ARRL Field Day prohibits fully-automated
 contacts, so Nexus's Field Day workflow is operator-initiated by design.
 
-**Author / open-source contact:** KD9TAW &lt;kd9taw@protonmail.com&gt;
+**Author / open-source contact:** KD9TAW &lt;contact@hamradiotools.io&gt;

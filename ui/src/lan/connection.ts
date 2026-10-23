@@ -1,7 +1,7 @@
 // One road to a station on this network, as the stream view uses a connection: the same four parts
 // the hosted connection hands it (operations, stream, audio, source), carried on the loopback
 // socket to this computer's Nexus, which carries them on to the station over the pinned TLS road
-// (src-tauri/src/lan_client/road.rs).
+// (crates/tempo-client/src/road.rs).
 //
 // - The keys never enter this page. The offer goes unsigned from here; this computer's Nexus signs
 //   it with its own key for the station (A5) on its way. The answer is checked there against the

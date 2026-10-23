@@ -12,7 +12,7 @@
 
 use super::*;
 use crate::flex::encode::CwxText;
-use crate::flex::ptt_evidence::ATU_CEILING_MS;
+use crate::flex::ptt_evidence::{Failure, KeyHandle, OperatorKey, ATU_CEILING_MS};
 use tempo_flexsim::fault::{statuses, PGXL};
 use tempo_flexsim::session::{Item, Rule};
 use tempo_flexsim::{Fault, Foreign, Session as SimSession};
@@ -109,9 +109,31 @@ struct Bench {
 impl Bench {
     /// Connected, registered, with our transmit slice made and the radio idle.
     fn ready(faults: Vec<Fault>, previous_handles: Vec<u32>) -> Bench {
+        Bench::with_key(faults, previous_handles, ptt_evidence::OPERATOR_KEY)
+    }
+
+    /// [`Bench::ready`], the session taking `key` as the operator's own.
+    fn with_key(faults: Vec<Fault>, previous_handles: Vec<u32>, key: Option<OperatorKey>) -> Bench {
+        Bench::with_inputs(faults, previous_handles, key, ptt_evidence::OPERATOR_MIC)
+    }
+
+    /// [`Bench::ready`], the session taking `mic` as the operator's own mic.
+    fn with_mic(faults: Vec<Fault>, previous_handles: Vec<u32>, mic: Option<OperatorKey>) -> Bench {
+        Bench::with_inputs(faults, previous_handles, ptt_evidence::OPERATOR_KEY, mic)
+    }
+
+    /// [`Bench::ready`], the session taking `key` and `mic` as the operator's own.
+    fn with_inputs(
+        faults: Vec<Fault>,
+        previous_handles: Vec<u32>,
+        key: Option<OperatorKey>,
+        mic: Option<OperatorKey>,
+    ) -> Bench {
         let mut config = Config::new(Station::new("Nexus").unwrap());
         config.previous_handles = previous_handles;
         config.unbenched = true;
+        config.operator_key = key;
+        config.operator_mic = mic;
         let mut radio = Radio {
             rules: SimSession::v4_gui_client(),
             faults,
@@ -306,6 +328,52 @@ fn refuses(code: &str) -> Vec<Rule> {
 
 fn cwx(text: &str) -> TxStart {
     TxStart::CwxSend(CwxText::new(text).unwrap())
+}
+
+/// The operator's own key as these tests name it: no bench has shown what the radio reports for a
+/// paddle, so `PADDLE` is invented.
+const PADDLE: OperatorKey = OperatorKey {
+    source: "PADDLE",
+    handle: KeyHandle::Ours,
+};
+
+/// The simulator's operator: their paddle keys `after` ms into `word`'s keying, under `source` and
+/// `handle` (`None`: ours), for `hold` ms, then lets go.
+fn touch(word: &str, after: u64, source: &str, handle: Option<u32>, hold: u64) -> Fault {
+    Fault::OperatorKeys {
+        word: word.into(),
+        after: Duration::from_millis(after),
+        source: source.into(),
+        handle,
+        hold: Duration::from_millis(hold),
+    }
+}
+
+/// The radio idle: no client, no source.
+const IDLE: &str =
+    "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=";
+
+/// The take-over, as the session reports it.
+const TOOK_OVER: Event = Event::OperatorTookOver {
+    kind: StartKind::Cwx,
+};
+
+impl Bench {
+    /// The readback failures the session reported, in order.
+    fn failures(&self) -> Vec<&ReadbackFailure> {
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::ReadbackFailed(f) => Some(f),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where the first event `pred` holds for sits, in order.
+    fn position(&self, pred: impl Fn(&Event) -> bool) -> Option<usize> {
+        self.events.iter().position(pred)
+    }
 }
 
 /// ⭐ rigctld's `T 0` sends the open operation's own stop, and for what only a previous session of
@@ -817,4 +885,796 @@ fn stop_tx_mid_cycle_sends_both_stops_and_a_cycle_that_goes_on_alarms() {
     assert_eq!(again, [stopped, stopped + TRANSITION_TIMEOUT_MS]);
     assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1);
     assert!(b.closed_unconfirmed());
+}
+
+// ── A paddle touch during our CW (operator ruling, 2026-10-12: the paddle wins) ──────────────
+//
+// The simulator's operator (`Fault::OperatorKeys`) keys the radio part way into a word, under a
+// source and handle the test supposes, holds it, then lets go. No bench has named what a real
+// radio reports for a paddle, so the rule is inert as it ships; these tests name a key of their
+// own (`PADDLE`) through the configuration's test-only door, as a bench's value would name one.
+
+/// ⭐ THE DIAGNOSTIC LINE. A readback check that fails is reported once, before the alarm it leads
+/// to, with the check, the kind of start and the radio's own line as it arrived: what a tester's
+/// bench sends back to show what the radio reports. It keys nothing: the wire is today's. A missed
+/// deadline reports the last interlock line before it. An operation that ends well reports nothing.
+#[test]
+fn a_failed_readback_check_is_reported_with_the_radios_line() {
+    let mut b = Bench::with_key(
+        vec![touch("TEST", 200, "PADDLE", None, 1_000)],
+        vec![],
+        None,
+    )
+    .in_cw();
+    b.start(cwx("TEST"), Some(1_500)).expect("sending");
+    b.advance(10 + 200);
+    let line = format!(
+        "S0|interlock tx_client_handle=0x{OURS:08X} state=TRANSMITTING reason= source=PADDLE \
+         tx_allowed=1 amplifier="
+    );
+    let failure = ReadbackFailure {
+        kind: Some(StartKind::Cwx),
+        handle: Some(OURS),
+        report: FailureReport {
+            failure: Failure::Ownership,
+            line: Some(line.clone()),
+            last_interlock: None,
+        },
+    };
+    assert_eq!(b.failures(), [&failure]);
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "readback check failed: Ownership on a Cwx start, Nexus's handle 0x2B6E1F40; the \
+             radio's line: {line}"
+        )
+    );
+    assert!(
+        b.position(|e| matches!(e, Event::ReadbackFailed(_)))
+            < b.position(|e| *e == Event::UnkeyUnconfirmed),
+        "before the alarm: {:?}",
+        b.events
+    );
+    assert_eq!(
+        b.transmit_wire(),
+        ["cwx send \"TEST\" 1", "cwx clear", "xmit 0"],
+        "today's wire"
+    );
+
+    // A missed deadline: an over the radio does not unkey (the simulator's StuckTransmit).
+    let mut b = Bench::ready(vec![Fault::StuckTransmit], vec![]);
+    b.start(TxStart::Key, None).expect("keyed");
+    b.advance(100);
+    assert_eq!(b.end_ours(), ["xmit 0"]);
+    b.advance(TRANSITION_TIMEOUT_MS);
+    let keyed = keyed_by(OURS, "SW");
+    let failure = ReadbackFailure {
+        kind: Some(StartKind::Key),
+        handle: Some(OURS),
+        report: FailureReport {
+            failure: Failure::Timeout,
+            line: None,
+            last_interlock: Some(keyed.clone()),
+        },
+    };
+    assert_eq!(b.failures(), [&failure]);
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "readback check failed: Timeout on a Key start, Nexus's handle 0x2B6E1F40; no line \
+             failed it; the last interlock line: {keyed}"
+        )
+    );
+    // Before the handshake there is no handle to name, and with nothing of ours open, no kind.
+    assert_eq!(
+        ReadbackFailure {
+            kind: None,
+            handle: None,
+            report: FailureReport {
+                failure: Failure::Write,
+                line: None,
+                last_interlock: None,
+            },
+        }
+        .to_string(),
+        "readback check failed: Write with no start of ours open; no line from the radio"
+    );
+    assert!(b.closed_unconfirmed());
+
+    // The control: a word the radio's break-in ends.
+    let mut b = Bench::ready(vec![], vec![]).in_cw();
+    b.start(cwx("CQ"), Some(300)).expect("sending");
+    b.advance(3_000);
+    assert_eq!(b.count(&Event::UnkeyConfirmed), 1);
+    assert_eq!(b.failures(), Vec::<&ReadbackFailure>::new());
+}
+
+/// ⭐ AS IT SHIPS, NO KEY IS NAMED, and a paddle touch during the CW is handled as today: an unknown
+/// keying source fails the readback, the CW stops go out at once (`cwx clear`, then `xmit 0`), the
+/// operator is told and the session closes. The scene of the take-over below, with no key.
+#[test]
+fn with_no_key_named_the_paddle_is_handled_as_today() {
+    let mut b = Bench::with_key(
+        vec![touch("TEST", 200, "PADDLE", None, 1_000)],
+        vec![],
+        None,
+    )
+    .in_cw();
+    let sent = b.now;
+    b.start(cwx("TEST"), Some(1_500)).expect("sending");
+    b.advance(10 + 200);
+    assert_eq!(
+        b.transmit_wire(),
+        ["cwx send \"TEST\" 1", "cwx clear", "xmit 0"]
+    );
+    assert_eq!(b.written_at("xmit 0"), Some(sent + 10 + 200));
+    assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1);
+    assert!(b.closed_unconfirmed());
+    assert_eq!(b.count(&TOOK_OVER), 0);
+}
+
+/// ⭐ THE PADDLE WINS, with a key named as a bench would name it. The operator's paddle keys 200 ms
+/// into the word: `cwx clear` goes out on that sample, and no other stop ever does, no unkey above
+/// all. The session reports the take-over and no alarm, stays up, and refuses every start while the
+/// operator has the radio, the message's next word included. Our part ends once the clear's reply
+/// and the hold (300 + 300) have passed, while the operator still keys; nothing of ours is on the
+/// air after it, and `T 0` sends nothing. Once the radio is idle the next word sends as usual.
+#[test]
+fn the_operators_key_during_a_cwx_word_drops_the_rest_with_no_alarm() {
+    let mut b = Bench::with_key(
+        vec![touch("TEST", 200, "PADDLE", None, 1_000)],
+        vec![],
+        Some(PADDLE),
+    )
+    .in_cw();
+    let sent = b.now;
+    b.start(cwx("TEST"), Some(1_500)).expect("sending");
+    b.advance(10 + 200);
+    assert_eq!(b.transmit_wire(), ["cwx send \"TEST\" 1", "cwx clear"]);
+    assert_eq!(
+        b.written_at("cwx clear"),
+        Some(sent + 10 + 200),
+        "on the operator's first sample"
+    );
+    assert_eq!(b.count(&TOOK_OVER), 1);
+    assert_eq!(b.start(cwx("DE"), Some(300)), Err(Refusal::OperatorKeying));
+    assert_eq!(b.start(TxStart::Key, None), Err(Refusal::OperatorKeying));
+    assert!(
+        b.s.snapshot().ours_on_air,
+        "ours until our part is proven over"
+    );
+    b.advance(600 - 1);
+    assert!(b.s.keyed(), "inside the hold");
+    b.advance(1);
+    assert!(!b.s.keyed(), "{:?}", b.events);
+    assert!(
+        !b.s.snapshot().ours_on_air,
+        "the operator's keying is not ours"
+    );
+    assert!(!b.s.transmit_ready(), "the radio not yet seen idle");
+    assert_eq!(b.end_ours(), Vec::<String>::new());
+    assert_eq!(
+        b.start(cwx("DE"), Some(300)),
+        Err(Refusal::OperatorKeying),
+        "while the paddle keys"
+    );
+    // The operator lets go, and the radio is idle.
+    b.advance(1_000);
+    assert!(b.s.transmit_ready());
+    b.start(cwx("DE"), Some(300))
+        .expect("the next word sends as usual");
+    b.advance(3_000);
+    assert_eq!(
+        b.transmit_wire(),
+        ["cwx send \"TEST\" 1", "cwx clear", "cwx send \"DE\" 2"]
+    );
+    assert_eq!(
+        (
+            b.count(&TOOK_OVER),
+            b.count(&Event::UnkeyUnconfirmed),
+            b.count(&Event::UnkeyConfirmed),
+            b.s.phase()
+        ),
+        (1, 0, 1, Phase::Ready),
+        "the one end confirmed is DE's own"
+    );
+    assert!(
+        !b.events
+            .iter()
+            .any(|e| matches!(e, Event::Closed { .. } | Event::ReadbackFailed(_))),
+        "{:?}",
+        b.events
+    );
+
+    // A touch shorter than the hold: the paddle has let go, and our part has not yet ended. A
+    // word then is still refused for the operator, not as "already keyed".
+    let mut b = Bench::with_key(
+        vec![touch("TEST", 200, "PADDLE", None, 100)],
+        vec![],
+        Some(PADDLE),
+    )
+    .in_cw();
+    b.start(cwx("TEST"), Some(1_500)).expect("sending");
+    b.advance(10 + 200 + 100 + 150);
+    assert!(b.s.keyed(), "inside the hold");
+    assert_eq!(
+        b.s.model()
+            .interlock
+            .sample
+            .as_ref()
+            .map(|s| s.state.as_str()),
+        Some("READY"),
+        "premise: the paddle has let go"
+    );
+    assert_eq!(b.start(cwx("DE"), Some(300)), Err(Refusal::OperatorKeying));
+    b.advance(600);
+    assert!(!b.s.keyed());
+    assert!(b.s.transmit_ready(), "seen idle as our part ended");
+    b.start(cwx("DE"), Some(300))
+        .expect("the next word sends as usual");
+
+    // Stop TX during the hand-over (rigctld's `T 0`): never gated, and still only our CWX's own
+    // stop, the clear; never an unkey at the paddle.
+    let mut b = Bench::with_key(
+        vec![touch("TEST", 200, "PADDLE", None, 1_000)],
+        vec![],
+        Some(PADDLE),
+    )
+    .in_cw();
+    b.start(cwx("TEST"), Some(1_500)).expect("sending");
+    b.advance(10 + 200 + 100);
+    assert!(b.s.keyed(), "inside the hand-over");
+    assert_eq!(b.end_ours(), ["cwx clear"]);
+    b.advance(2_000);
+    assert_eq!(
+        b.transmit_wire(),
+        ["cwx send \"TEST\" 1", "cwx clear", "cwx clear"]
+    );
+    assert_eq!((b.count(&Event::UnkeyUnconfirmed), b.s.keyed()), (0, false));
+}
+
+/// ⭐ With a key named, any other keying during our CWX still fails the readback, as today: the
+/// mic's PTT, the accessory and foot-switch inputs, the radio's voice keyer, a tune, a source no one
+/// named, and the key's own source under another client's handle or under no client when the bench
+/// showed ours. The CW stops go out and the operator is told; no take-over is reported.
+#[test]
+fn an_unrecognised_source_inside_a_cwx_window_still_alarms() {
+    for (source, handle) in [
+        ("MIC", None),
+        ("ACC", None),
+        ("RCA", None),
+        ("DVK", None),
+        ("TUNE", None),
+        ("FOOT", None),
+        ("PADDLE", Some(0x7A3C_0001)),
+        ("PADDLE", Some(0)),
+    ] {
+        let what = format!("{source} {handle:?}");
+        let mut b = Bench::with_key(
+            vec![touch("TEST", 200, source, handle, 1_000)],
+            vec![],
+            Some(PADDLE),
+        )
+        .in_cw();
+        b.start(cwx("TEST"), Some(1_500)).expect("sending");
+        b.advance(10 + 200);
+        assert_eq!(
+            b.transmit_wire(),
+            ["cwx send \"TEST\" 1", "cwx clear", "xmit 0"],
+            "{what}"
+        );
+        assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1, "{what}");
+        assert!(b.closed_unconfirmed(), "{what}");
+        assert_eq!(b.count(&TOOK_OVER), 0, "{what}");
+        assert_eq!(b.failures().len(), 1, "{what}");
+    }
+}
+
+/// ⭐ Nexus's own CW still keying after its clear is still Nexus's to stop, with the paddle on the
+/// air: after a 300 ms touch the radio keys our CWX again and holds it (the simulator's held CWX).
+/// Still keyed when the clear's reply and the hold (300 + 300) have passed, it fails the readback at
+/// that moment: the CW stops go out again, `cwx clear` and `xmit 0`, the operator is told, and the
+/// diagnostic line carries the radio's last report, our CWX keying.
+#[test]
+fn our_cwx_still_keying_after_the_clear_still_escalates_with_the_paddle_on_the_air() {
+    let mut b = Bench::with_key(
+        vec![touch("TEST", 200, "PADDLE", None, 300), Fault::HoldsCwx],
+        vec![],
+        Some(PADDLE),
+    )
+    .in_cw();
+    let sent = b.now;
+    b.start(cwx("TEST"), Some(1_500)).expect("sending");
+    b.advance(10 + 200);
+    assert_eq!(b.transmit_wire(), ["cwx send \"TEST\" 1", "cwx clear"]);
+    b.advance(600 - 1);
+    assert_eq!(b.written_at("xmit 0"), None, "inside the hold");
+    b.advance(1);
+    assert_eq!(
+        b.transmit_wire(),
+        ["cwx send \"TEST\" 1", "cwx clear", "cwx clear", "xmit 0"]
+    );
+    assert_eq!(b.written_at("xmit 0"), Some(sent + 10 + 200 + 600));
+    assert_eq!(
+        (
+            b.count(&TOOK_OVER),
+            b.count(&Event::UnkeyUnconfirmed),
+            b.closed_unconfirmed()
+        ),
+        (1, 1, true)
+    );
+    assert_eq!(
+        b.failures(),
+        [&ReadbackFailure {
+            kind: Some(StartKind::Cwx),
+            handle: Some(OURS),
+            report: FailureReport {
+                failure: Failure::State,
+                line: None,
+                last_interlock: Some(keyed_by(OURS, "SW"))
+            }
+        }]
+    );
+}
+
+/// ⭐ While the operator's paddle keys the radio and Nexus is idle, a key of ours is refused with
+/// the operator's own reason and nothing reaches the wire; once the radio is idle the same key
+/// sends. Under no client when the bench says so. With no key named, the same sample refuses as any
+/// keying source does today.
+#[test]
+fn a_key_while_the_paddle_keys_is_refused_and_one_after_it_sends() {
+    let no_client = OperatorKey {
+        handle: KeyHandle::NoClient,
+        ..PADDLE
+    };
+    for (key, handle) in [(PADDLE, OURS), (no_client, 0)] {
+        let mut b = Bench::with_key(vec![], vec![], Some(key)).in_cw();
+        b.line(&keyed_by(handle, "PADDLE"));
+        assert_eq!(
+            b.start(cwx("CQ"), Some(300)),
+            Err(Refusal::OperatorKeying),
+            "{key:?}"
+        );
+        assert_eq!(
+            b.start(TxStart::Key, None),
+            Err(Refusal::OperatorKeying),
+            "{key:?}"
+        );
+        assert_eq!(b.transmit_wire(), Vec::<String>::new(), "{key:?}");
+        b.line(&format!(
+            "S0|interlock tx_client_handle=0x{handle:08X} state=UNKEY_REQUESTED reason= source= \
+             tx_allowed=1 amplifier="
+        ));
+        b.line(IDLE);
+        b.start(cwx("CQ"), Some(300)).expect("after the paddle");
+        assert_eq!(b.transmit_wire(), ["cwx send \"CQ\" 1"], "{key:?}");
+    }
+    let mut b = Bench::with_key(vec![], vec![], None).in_cw();
+    b.line(&keyed_by(OURS, "PADDLE"));
+    assert_eq!(
+        b.start(cwx("CQ"), Some(300)),
+        Err(Refusal::SourceActive {
+            source: "PADDLE".into()
+        })
+    );
+}
+
+/// ⭐ STOP TX, THEN THE PADDLE: the unkey that follows a clear goes out only while the radio shows
+/// Nexus's own CW transmitting, never at the operator's key, whatever the radio reports for it.
+/// Stop TX 100 ms into the word, the operator's paddle 100 ms later, under our handle, for 3 s: no
+/// unkey, no alarm, and our part ends with the clear's reply and the hold. On a radio that refused
+/// the clear, our part cannot be shown over: the follow-up's moment passes with the paddle keying
+/// and sends nothing, and the stops come 5 s after Stop TX, as for any clear the radio never takes.
+#[test]
+fn stop_tx_then_the_paddle_never_draws_the_follow_up_unkey() {
+    let scene = |refused: bool| {
+        let mut b = Bench::with_key(
+            vec![touch("TEST", 200, "PADDLE", None, 3_000)],
+            vec![],
+            Some(PADDLE),
+        )
+        .in_cw();
+        if refused {
+            b.answer_with("cwx clear", refuses(tempo_flexsim::fault::REFUSED));
+        }
+        b.start(cwx("TEST"), Some(1_500)).expect("sending");
+        b.advance(10 + 100);
+        let stopped = b.now;
+        assert!(matches!(b.stop(TxStop::CwxClear), StopOutcome::Sent { .. }));
+        (b, stopped)
+    };
+    let (mut b, _) = scene(false);
+    b.advance(3_500);
+    assert_eq!(b.transmit_wire(), ["cwx send \"TEST\" 1", "cwx clear"]);
+    assert_eq!(
+        (
+            b.s.keyed(),
+            b.count(&TOOK_OVER),
+            b.count(&Event::UnkeyUnconfirmed),
+            b.s.phase()
+        ),
+        (false, 1, 0, Phase::Ready)
+    );
+
+    let (mut b, stopped) = scene(true);
+    b.advance(300 + 300);
+    assert_eq!(b.count(&TOOK_OVER), 1);
+    assert_eq!(b.written_at("xmit 0"), None, "no unkey at the paddle");
+    b.advance(TRANSITION_TIMEOUT_MS);
+    assert_eq!(
+        b.written_at("xmit 0"),
+        Some(stopped + TRANSITION_TIMEOUT_MS),
+        "the escalation's"
+    );
+    assert_eq!(
+        b.transmit_wire(),
+        ["cwx send \"TEST\" 1", "cwx clear", "cwx clear", "xmit 0"]
+    );
+    assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1);
+}
+
+/// The radio's refusal of a `cwx clear` while another client transmits (TCPIP-cwx: "Transmit not
+/// allowed due to other client transmitting"), as it may answer one while the operator's paddle
+/// keys.
+const OTHER_CLIENT_TRANSMITTING: &str = "500000C2";
+
+/// ⭐ WAIT WHILE THE PADDLE KEYS (operator ruling, 2026-10-12): the radio refuses the hand-over's
+/// clear while the operator's paddle keys, for 8 s, so our part cannot be shown over and the
+/// escalation comes due 5 s after the clear. Its unkey waits while the radio shows the paddle
+/// keying, Stop TX meanwhile sends only our own clear (never held), and the unkey goes once the
+/// hold (300 + 300) has passed after the radio stopped showing the paddle: our CW still unproven
+/// after the paddle let go, the stops go out again and the operator is told. Our part is ours
+/// throughout. Then a refused clear with the radio reporting its own transmit timeout during the
+/// wait: anything the readback does not take ends the wait at once.
+#[test]
+fn a_refused_clear_holds_the_unkey_while_the_paddle_keys_and_sends_it_after() {
+    let mut b = Bench::with_key(
+        vec![touch("TEST", 200, "PADDLE", None, 8_000)],
+        vec![],
+        Some(PADDLE),
+    )
+    .in_cw();
+    b.answer_with("cwx clear", refuses(OTHER_CLIENT_TRANSMITTING));
+    let sent = b.now;
+    b.start(cwx("TEST"), Some(1_500)).expect("sending");
+    b.advance(10 + 200);
+    let touched = b.now;
+    assert_eq!(b.transmit_wire(), ["cwx send \"TEST\" 1", "cwx clear"]);
+    assert_eq!(b.written_at("cwx clear"), Some(touched));
+    b.advance(TRANSITION_TIMEOUT_MS + 2_000);
+    assert_eq!(
+        (b.written_at("xmit 0"), b.count(&Event::UnkeyUnconfirmed)),
+        (None, 0),
+        "no unkey while the paddle keys, {} ms after the clear",
+        b.now - touched
+    );
+    assert!(
+        b.s.keyed() && b.s.snapshot().ours_on_air,
+        "our part still ours to end"
+    );
+    assert_eq!(b.end_ours(), ["cwx clear"], "Stop TX: our own stop");
+    // The paddle lets go 8 s after its touch (UNKEY_REQUESTED and READY, then idle 100 ms on).
+    let let_go = sent + 10 + 200 + 8_000;
+    b.advance(let_go + 600 - 1 - b.now);
+    assert_eq!(
+        b.written_at("xmit 0"),
+        None,
+        "inside the hold after it let go"
+    );
+    b.advance(1);
+    assert_eq!(b.written_at("xmit 0"), Some(let_go + 600));
+    assert_eq!(
+        b.transmit_wire(),
+        [
+            "cwx send \"TEST\" 1",
+            "cwx clear",
+            "cwx clear",
+            "cwx clear",
+            "xmit 0"
+        ]
+    );
+    assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1);
+    assert!(b.closed_unconfirmed());
+
+    let mut b = Bench::with_key(
+        vec![touch("TEST", 200, "PADDLE", None, 8_000)],
+        vec![],
+        Some(PADDLE),
+    )
+    .in_cw();
+    b.answer_with("cwx clear", refuses(OTHER_CLIENT_TRANSMITTING));
+    b.start(cwx("TEST"), Some(1_500)).expect("sending");
+    b.advance(10 + 200 + TRANSITION_TIMEOUT_MS + 1_000);
+    assert_eq!(b.written_at("xmit 0"), None, "the wait");
+    let timeout = b.now;
+    b.line(&format!(
+        "S0|interlock tx_client_handle=0x{OURS:08X} state=TIMEOUT reason= source= tx_allowed=1 \
+         amplifier="
+    ));
+    b.advance(1);
+    assert_eq!(b.written_at("xmit 0"), Some(timeout));
+    assert_eq!(b.count(&Event::UnkeyUnconfirmed), 1);
+}
+
+/// ⭐ …and as soon as the radio shows Nexus's own CW, the wait is over: after the paddle's 8 s the
+/// radio keys our CWX again and holds it (the simulator's held CWX), and the stops go out at the
+/// next millisecond, the paddle no longer keying. Until then, the paddle keying, nothing did.
+#[test]
+fn a_refused_clear_sends_the_unkey_as_soon_as_the_radio_shows_our_cw() {
+    let mut b = Bench::with_key(
+        vec![touch("TEST", 200, "PADDLE", None, 8_000), Fault::HoldsCwx],
+        vec![],
+        Some(PADDLE),
+    )
+    .in_cw();
+    b.answer_with("cwx clear", refuses(OTHER_CLIENT_TRANSMITTING));
+    let sent = b.now;
+    b.start(cwx("TEST"), Some(1_500)).expect("sending");
+    let ours_again = sent + 10 + 200 + 8_000;
+    b.advance(ours_again - b.now);
+    assert_eq!(
+        (b.written_at("xmit 0"), b.count(&Event::UnkeyUnconfirmed)),
+        (None, 0),
+        "nothing while the paddle keyed"
+    );
+    assert_eq!(
+        b.s.model()
+            .interlock
+            .sample
+            .as_ref()
+            .map(|s| s.source.as_str()),
+        Some(ptt_evidence::CWX.source),
+        "premise: the radio shows our CWX keying"
+    );
+    b.advance(1);
+    assert_eq!(b.written_at("xmit 0"), Some(ours_again + 1));
+    assert_eq!(
+        b.transmit_wire(),
+        ["cwx send \"TEST\" 1", "cwx clear", "cwx clear", "xmit 0"]
+    );
+    assert_eq!(
+        (b.count(&TOOK_OVER), b.count(&Event::UnkeyUnconfirmed)),
+        (1, 1)
+    );
+}
+
+/// ⭐ THE OPERATOR'S KEY ALONE IS NOT OURS, with a key named: with nothing of ours open and that key
+/// keying under this session's handle, rigctld's `T 0`, a stop and the teardown send nothing, and
+/// the snapshot does not say something of ours is on the air. A previous session's handle keeps
+/// today's rule (every stop), and so does our own CW's source; with no key named, so does the
+/// paddle.
+#[test]
+fn t_0_with_only_the_operators_key_on_the_air_sends_nothing() {
+    let none = Vec::<String>::new();
+    let mut b = Bench::with_key(vec![], vec![PREVIOUS], Some(PADDLE));
+    b.line(&keyed_by(OURS, "PADDLE"));
+    assert!(!b.s.snapshot().ours_on_air);
+    assert_eq!(b.end_ours(), none);
+    assert_eq!(b.stop(TxStop::Unkey), StopOutcome::NothingOfOurs);
+    assert_eq!(b.stop(TxStop::CwxClear), StopOutcome::NothingOfOurs);
+    b.s.close(&mut b.out, b.now);
+    b.settle();
+    assert_eq!(b.transmit_wire(), none, "the teardown sends nothing at it");
+    for (key, line) in [
+        (Some(PADDLE), keyed_by(PREVIOUS, "PADDLE")),
+        (Some(PADDLE), keyed_by(OURS, ptt_evidence::CWX.source)),
+        (None, keyed_by(OURS, "PADDLE")),
+    ] {
+        let mut b = Bench::with_key(vec![], vec![PREVIOUS], key);
+        b.line(&line);
+        assert!(b.s.snapshot().ours_on_air, "{line}");
+        assert_eq!(b.end_ours(), ["cwx clear", "xmit 0"], "{line}");
+    }
+}
+
+/// The operator's own mic as these tests name it: no bench has shown what the radio reports for
+/// the mic's PTT during an over of ours, so `MIC` under our handle is supposed.
+const MIC: OperatorKey = OperatorKey {
+    source: "MIC",
+    handle: KeyHandle::Ours,
+};
+
+/// The take-over of an over, as the session reports it.
+const MIC_TOOK_OVER: Event = Event::OperatorTookOver {
+    kind: StartKind::Key,
+};
+
+/// The simulator's operator: their mic's PTT keys `after` ms into each over's keying, under
+/// `source` and `handle` (`None`: ours), for `hold` ms, then lets go; our unkey changes nothing the
+/// interlock shows meanwhile.
+fn press(after: u64, source: &str, handle: Option<u32>, hold: u64) -> Fault {
+    Fault::OperatorMic {
+        after: Duration::from_millis(after),
+        source: source.into(),
+        handle,
+        hold: Duration::from_millis(hold),
+    }
+}
+
+impl Bench {
+    /// Let time pass, a millisecond at a time, until the radio's last whole sample is keyed under
+    /// `source`: when it arrived.
+    fn advance_until_keyed_by(&mut self, source: &str) -> u64 {
+        for _ in 0..10_000 {
+            let keyed = self.s.model().interlock.sample.as_ref().is_some_and(|s| {
+                s.source == source && matches!(s.state.as_str(), "PTT_REQUESTED" | "TRANSMITTING")
+            });
+            if keyed {
+                return self.now;
+            }
+            self.advance(1);
+        }
+        panic!("the radio never showed {source} keying: {:?}", self.events);
+    }
+}
+
+/// ⭐ AS IT SHIPS, NO MIC IS NAMED, and the mic's PTT during an over is handled as today: an
+/// unknown keying source fails the readback, and nothing more happens until the over's own unkey
+/// (the radio loop's `T 0` at its end), which the radio cannot then prove: 5 s later the unkey goes
+/// out again, the operator is told and the session closes. The scene of the take-over below, with
+/// no mic.
+#[test]
+fn with_no_mic_named_the_mics_ptt_during_an_over_is_handled_as_today() {
+    let mut b = Bench::with_mic(vec![press(300, "MIC", None, 2_000)], vec![], None);
+    b.start(TxStart::Key, None).expect("keying");
+    b.advance_until_keyed_by("MIC");
+    b.advance(500);
+    assert_eq!(b.transmit_wire(), ["xmit 1"], "the over runs on");
+    assert_eq!(b.failures().len(), 1);
+    assert_eq!(b.end_ours(), ["xmit 0"], "the over's own end");
+    let ended = b.now;
+    b.advance(TRANSITION_TIMEOUT_MS);
+    assert_eq!(b.transmit_wire(), ["xmit 1", "xmit 0", "xmit 0"]);
+    assert_eq!(
+        b.wrote
+            .iter()
+            .filter(|(_, c)| c == "xmit 0")
+            .map(|(t, _)| *t)
+            .next_back(),
+        Some(ended + TRANSITION_TIMEOUT_MS)
+    );
+    assert_eq!(
+        (
+            b.count(&MIC_TOOK_OVER),
+            b.count(&Event::UnkeyUnconfirmed),
+            b.closed_unconfirmed()
+        ),
+        (0, 1, true)
+    );
+}
+
+/// ⭐ YOUR MIC WINS, with a mic named as a bench would name it: the operator's mic keys 300 ms into
+/// our over. Our own unkey goes out on that sample, the session reports the take-over and no alarm,
+/// and stays up. Our part is ours until the unkey's reply and the hold have passed (a key then is
+/// refused as already keyed); after it the mic's keying is not ours (`T 0` sends nothing at it, a
+/// key is refused for the mic), and once the radio is idle the next over keys as usual.
+#[test]
+fn the_operators_mic_during_an_over_ends_our_key_with_no_alarm() {
+    let mut b = Bench::with_mic(vec![press(300, "MIC", None, 2_000)], vec![], Some(MIC));
+    b.start(TxStart::Key, None).expect("keying");
+    let pressed = b.advance_until_keyed_by("MIC");
+    assert_eq!(b.transmit_wire(), ["xmit 1", "xmit 0"]);
+    assert_eq!(
+        b.written_at("xmit 0"),
+        Some(pressed),
+        "on the mic's first sample"
+    );
+    assert_eq!(b.count(&MIC_TOOK_OVER), 1);
+    assert!(
+        b.s.keyed() && b.s.snapshot().ours_on_air,
+        "ours until our part is proven over"
+    );
+    assert_eq!(b.start(TxStart::Key, None), Err(Refusal::AlreadyKeyed));
+    b.advance(ptt_evidence::MIC_HOLD_MS - 1);
+    assert!(b.s.keyed(), "inside the hold");
+    b.advance(1);
+    assert!(!b.s.keyed(), "{:?}", b.events);
+    assert!(!b.s.snapshot().ours_on_air, "the mic's keying is not ours");
+    assert_eq!(
+        b.end_ours(),
+        Vec::<String>::new(),
+        "T 0 sends nothing at it"
+    );
+    assert_eq!(
+        b.start(TxStart::Key, None),
+        Err(Refusal::HardwarePtt {
+            source: "MIC".into()
+        }),
+        "while the mic keys"
+    );
+    // The mic lets go 2 s after its press, and the radio is idle 100 ms on.
+    b.advance(pressed + 2_000 + 100 - b.now);
+    assert!(b.s.transmit_ready());
+    b.start(TxStart::Key, None)
+        .expect("the next over keys as usual");
+    assert_eq!(b.transmit_wire(), ["xmit 1", "xmit 0", "xmit 1"]);
+    assert_eq!(
+        (
+            b.count(&MIC_TOOK_OVER),
+            b.count(&Event::UnkeyUnconfirmed),
+            b.count(&Event::UnkeyConfirmed),
+            b.s.phase()
+        ),
+        (1, 0, 0, Phase::Ready)
+    );
+    assert!(
+        !b.events
+            .iter()
+            .any(|e| matches!(e, Event::Closed { .. } | Event::ReadbackFailed(_))),
+        "{:?}",
+        b.events
+    );
+}
+
+/// ⭐ With a mic named, any other keying during our over still fails the readback, as today: the
+/// accessory and foot-switch inputs, the radio's voice keyer, a tune, the paddle, a source no one
+/// named, and the mic's own source under another client's handle or under no client when the bench
+/// showed ours. No take-over is reported, the over's unkey cannot be proven, and 5 s after it the
+/// operator is told. A mic named takes over no CWX either.
+#[test]
+fn an_unrecognised_source_during_an_over_still_alarms() {
+    for (source, handle) in [
+        ("ACC", None),
+        ("RCA", None),
+        ("DVK", None),
+        ("TUNE", None),
+        ("PADDLE", None),
+        ("FOOT", None),
+        ("MIC", Some(0x7A3C_0001)),
+        ("MIC", Some(0)),
+    ] {
+        let what = format!("{source} {handle:?}");
+        let mut b = Bench::with_mic(vec![press(300, source, handle, 2_000)], vec![], Some(MIC));
+        b.start(TxStart::Key, None).expect("keying");
+        b.advance_until_keyed_by(source);
+        assert_eq!(b.transmit_wire(), ["xmit 1"], "{what}");
+        assert_eq!(b.failures().len(), 1, "{what}");
+        assert_eq!(b.end_ours(), ["xmit 0"], "{what}");
+        b.advance(TRANSITION_TIMEOUT_MS);
+        assert_eq!(
+            (
+                b.count(&MIC_TOOK_OVER),
+                b.count(&Event::UnkeyUnconfirmed),
+                b.closed_unconfirmed()
+            ),
+            (0, 1, true),
+            "{what}"
+        );
+    }
+    let mut b = Bench::with_inputs(
+        vec![touch("TEST", 200, "MIC", None, 1_000)],
+        vec![],
+        None,
+        Some(MIC),
+    )
+    .in_cw();
+    b.start(cwx("TEST"), Some(1_500)).expect("sending");
+    b.advance(10 + 200);
+    assert_eq!(
+        b.transmit_wire(),
+        ["cwx send \"TEST\" 1", "cwx clear", "xmit 0"]
+    );
+    assert_eq!((b.count(&TOOK_OVER), b.count(&MIC_TOOK_OVER)), (0, 0));
+}
+
+/// ⭐ THE OPERATOR'S MIC ALONE IS NOT OURS, with a mic named: with nothing of ours open and the mic
+/// keying under this session's handle, rigctld's `T 0` and a stop send nothing, and the snapshot
+/// does not say something of ours is on the air. A previous session's handle keeps today's rule
+/// (every stop), and with no mic named, so does the mic.
+#[test]
+fn t_0_with_only_the_operators_mic_on_the_air_sends_nothing() {
+    let mut b = Bench::with_mic(vec![], vec![PREVIOUS], Some(MIC));
+    b.line(&keyed_by(OURS, "MIC"));
+    assert!(!b.s.snapshot().ours_on_air);
+    assert_eq!(b.end_ours(), Vec::<String>::new());
+    assert_eq!(b.stop(TxStop::Unkey), StopOutcome::NothingOfOurs);
+    for (mic, line) in [
+        (Some(MIC), keyed_by(PREVIOUS, "MIC")),
+        (None, keyed_by(OURS, "MIC")),
+    ] {
+        let mut b = Bench::with_mic(vec![], vec![PREVIOUS], mic);
+        b.line(&line);
+        assert!(b.s.snapshot().ours_on_air, "{line}");
+        assert_eq!(b.end_ours(), ["cwx clear", "xmit 0"], "{line}");
+    }
 }

@@ -8,7 +8,10 @@
 // keyboard can never be trapped in it), and composition input (an IME's work in progress, which
 // has no single key to send) are all dropped. So is every touch of a gesture with two fingers in
 // it: they zoom and pan the picture on this page (PictureZoom), and a pinch once reached the shack
-// as two presses and a drag on whatever lay under them. The station forwards what does arrive into
+// as two presses and a drag on whatever lay under them. The browser's own zoom stays the browser's
+// too: Ctrl (Cmd on a Mac) with +, - or 0, and Ctrl with the wheel, which is also how a trackpad's
+// pinch arrives; the picture once kept them, and the page could not be zoomed while it was focused.
+// The station forwards what does arrive into
 // Nexus's window as DOM events; there is no path from here to anything else on the shack PC.
 import { MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT, STREAM_CONTROL_BYTES, type StreamKey, type StreamPointer, type StreamText, type StreamWheel } from './stream-protocol'
 
@@ -74,8 +77,10 @@ export class ClickCount {
 }
 
 /** One wheel event on the picture, in the browser's own delta mode: the dispatcher in Nexus's window
- *  turns lines and pages into pixels against its own layout, which is the one that scrolls. */
+ *  turns lines and pages into pixels against its own layout, which is the one that scrolls. Null with
+ *  Ctrl held: that is the browser's zoom, a trackpad's pinch included. */
 export function wheelMessage(box: PictureBox, event: Modifiers & { clientX: number; clientY: number; deltaX: number; deltaY: number; deltaMode: number }): StreamWheel | null {
+  if (event.ctrlKey) return null
   const point = framePoint(box, event.clientX, event.clientY)
   if (!point) return null
   const bound = (value: number) => Math.max(-10_000, Math.min(10_000, Number.isFinite(value) ? value : 0))
@@ -83,10 +88,19 @@ export function wheelMessage(box: PictureBox, event: Modifiers & { clientX: numb
   return { type: 'wheel', x: point.x, y: point.y, deltaX: bound(event.deltaX), deltaY: bound(event.deltaY), deltaMode, modifiers: modifiers(event) }
 }
 
+/** The browser's zoom keys: Ctrl (Cmd on a Mac) with +, - or 0, by the character on any layout, or
+ *  by the key where a layout puts another character on it (a French keyboard's 0) or it is the
+ *  number pad's. Ctrl with Alt is not one: that is AltGr on many keyboards. */
+function browserZoomKey(event: Modifiers & { key: string; code: string }): boolean {
+  return (event.ctrlKey || event.metaKey) && !event.altKey
+    && (['+', '=', '-', '_', '0'].includes(event.key) || ['Digit0', 'Numpad0', 'NumpadAdd', 'NumpadSubtract'].includes(event.code))
+}
+
 /** One key on the focused picture, or null for the ones that stay here: Tab (leaving the picture is
- *  the keyboard's way out), and composition input, which is not a key. */
+ *  the keyboard's way out), composition input, which is not a key, and the browser's zoom keys. */
 export function keyMessage(action: StreamKey['action'], event: Modifiers & { key: string; code: string; repeat: boolean; isComposing?: boolean }): StreamKey | null {
   if (event.key === 'Tab' || event.isComposing || event.key === 'Process' || event.key === 'Dead' || event.key === 'Unidentified') return null
+  if (browserZoomKey(event)) return null
   if (!event.key || [...event.key].length > 32 || /[\u0000-\u001f\u007f]/.test(event.key) || !/^[A-Za-z0-9]{0,32}$/.test(event.code)) return null
   return { type: 'key', action, key: event.key, code: event.code, modifiers: modifiers(event), repeat: event.repeat }
 }

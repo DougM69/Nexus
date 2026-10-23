@@ -14,7 +14,7 @@ use tempo_stream::protocol::BrowserSignal;
 
 /// The shack's `connection` behind a port on this box's loopback address: each connection
 /// accepted there is handed to it as if it came from `PEER`, on the station's own subnet.
-async fn behind_a_port(s: &Shack, stop: watch::Receiver<bool>) -> SocketAddrV4 {
+pub(super) async fn behind_a_port(s: &Shack, stop: watch::Receiver<bool>) -> SocketAddrV4 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let SocketAddr::V4(at) = listener.local_addr().unwrap() else {
         unreachable!()
@@ -46,7 +46,7 @@ pub(super) fn paired_record(s: &Shack, at: SocketAddrV4) -> PairedStation {
 }
 
 /// Another station's key: SPKI as lowercase hex.
-fn another_key() -> String {
+pub(super) fn another_key() -> String {
     tls::Identity::new(&fixture_key(), STATION.into())
         .unwrap()
         .public_key()
@@ -60,7 +60,7 @@ fn lan_on(s: &Shack, scratch: &Scratch) -> Lan {
         s,
         scratch,
         Arc::new(|_| only(Err(NoNetwork::Choose))),
-        s.shared.desk.book.clone(),
+        s.shared.desk.as_ref().unwrap().book.clone(),
     );
     lan.turn_on(None, None).unwrap();
     lan
@@ -95,7 +95,7 @@ async fn ask_road(road: &mut road::Road, request: Value) -> Value {
             return serde_json::from_str(&answered).unwrap();
         }
         let answer = heard(road).await;
-        if answer["error"] != "stationBusy" {
+        if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
             return answer;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -132,7 +132,7 @@ pub(super) fn recorded() -> (String, String) {
 async fn the_pinned_road_refuses_another_key_before_showing_its_own() {
     let mut s = shack(home());
     let shown = Arc::new(AtomicUsize::new(0));
-    let (paired, pairing) = s.shared.desk.book.verifier();
+    let (paired, pairing) = s.shared.desk.as_ref().unwrap().book.verifier();
     let counted = shown.clone();
     let counting: tls::Paired = Arc::new(move |pin: &[u8; 32]| {
         counted.fetch_add(1, Ordering::SeqCst);
@@ -194,7 +194,11 @@ async fn a_computer_removed_at_the_shack_is_told_it_is_not_paired() {
 }
 
 /// The shack's `connection` behind a port on `ip`, as [`behind_a_port`].
-async fn behind_a_port_on(s: &Shack, ip: Ipv4Addr, stop: watch::Receiver<bool>) -> SocketAddrV4 {
+pub(super) async fn behind_a_port_on(
+    s: &Shack,
+    ip: Ipv4Addr,
+    stop: watch::Receiver<bool>,
+) -> SocketAddrV4 {
     let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
     let SocketAddr::V4(at) = listener.local_addr().unwrap() else {
         unreachable!()
@@ -208,6 +212,68 @@ async fn behind_a_port_on(s: &Shack, ip: Ipv4Addr, stop: watch::Receiver<bool>) 
                 shared.clone(),
                 stop.clone(),
             ));
+        }
+    });
+    at
+}
+
+/// Until `s`'s station has let go of every connection the window made to it (its own count, at its
+/// gate): a refused try ends at the station when the computer's last bytes and its close arrive, and
+/// on a loaded machine those can come a retransmission after the window gave up (about 200 ms,
+/// measured), each holding one of the two places an address may have open. A try made sooner is
+/// dropped as it arrives, which the window reads as nothing answering. So a test that tries an
+/// address again waits for the station's own count, never for the window's answer alone.
+pub(super) async fn let_go(s: &Shack) {
+    let peer = PEER.parse::<SocketAddr>().unwrap().ip();
+    let given_up = tokio::time::Instant::now() + Duration::from_secs(10);
+    while s.shared.gate.open(peer) > 0 {
+        assert!(
+            tokio::time::Instant::now() < given_up,
+            "the station still holds a connection"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// How late a refused connection's end reaches the station through [`ending_late`].
+const LATE: Duration = Duration::from_millis(300);
+
+/// A relay to `to` on `ip` that ends each connection at the station late, as a loaded machine
+/// does: the station's bytes go back at once and the computer's first read (its hello) goes on at
+/// once, then everything else the computer sends, its close too, [`LATE`] behind.
+async fn ending_late(to: SocketAddrV4, ip: Ipv4Addr) -> SocketAddrV4 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
+    let SocketAddr::V4(at) = listener.local_addr().unwrap() else {
+        unreachable!()
+    };
+    tokio::spawn(async move {
+        while let Ok((computer, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let Ok(station) = tokio::net::TcpStream::connect(to).await else {
+                    return;
+                };
+                let (mut from_computer, mut to_computer) = computer.into_split();
+                let (mut from_station, mut to_station) = station.into_split();
+                let back = tokio::spawn(async move {
+                    let _ = tokio::io::copy(&mut from_station, &mut to_computer).await;
+                    let _ = to_computer.shutdown().await;
+                });
+                let mut buffer = vec![0u8; 16 * 1024];
+                let mut first = true;
+                loop {
+                    let read = from_computer.read(&mut buffer).await.unwrap_or(0);
+                    if !first || read == 0 {
+                        tokio::time::sleep(LATE).await;
+                    }
+                    if read == 0 || to_station.write_all(&buffer[..read]).await.is_err() {
+                        break;
+                    }
+                    first = false;
+                }
+                let _ = to_station.shutdown().await;
+                let _ = back.await;
+            });
         }
     });
     at
@@ -909,7 +975,7 @@ async fn an_answer_that_does_not_hold_never_reaches_the_page() {
             .sign_answer(&offer, &answer, STATION, &kept.device_id, session)
             .unwrap();
         let welcome = json!({"type":"welcome","sessionId":session,"deviceId":kept.device_id,
-            "stationId":STATION});
+            "stationId":STATION,"app":super::super::wire::APP,"contract":super::super::wire::contract()});
         let candidate = json!({"type":"streamSignal","payload":{"kind":"candidate",
             "candidate":"candidate:1 1 udp 2130706431 192.168.1.20 42075 typ host","sdpMid":"0"}});
         let answered = json!({"type":"streamSignal","payload":{"kind":"answer","sdp":signed}});
@@ -1007,7 +1073,7 @@ pub(super) async fn page_ask(page: &mut Client2, request: Value) -> Value {
             .await
             .unwrap();
         let answer = told(page).await;
-        if answer["error"] != "stationBusy" {
+        if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
             return answer;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1046,7 +1112,7 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
             &s,
             &scratch,
             Arc::new(move |_| only(Ok(network))),
-            s.shared.desk.book.clone(),
+            s.shared.desk.as_ref().unwrap().book.clone(),
         );
         lan.turn_on(None, Some(port)).unwrap();
         let at = SocketAddr::new(address.into(), port);
@@ -1059,10 +1125,15 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
 
         let store = StationStore::default();
         let origin = Origin::start(Reach {
+            lookup: Arc::new(tempo_stream::lan::lookup),
             assets: Arc::new(|_: &str| None),
             stations: Arc::new(Stations::new(Arc::new(store.clone()))),
             find: Arc::new(|_| Ok(Vec::new())),
             name: "Den PC".into(),
+            operate: Arc::new(|_, _| {}),
+            sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+            now_s: || 0,
+            forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
         })
         .unwrap();
         let mut page = page_socket(&origin).await;
@@ -1077,6 +1148,11 @@ fn pairing_then_control_then_stop_from_the_page_end_to_end() {
         assert_eq!(paired["station"]["addresses"][0], at.to_string());
         assert_eq!(paired["station"]["key"], json!(lan.status().key.unwrap()));
         assert!(store.raw(&format!("lan-station-{STATION}")).is_some());
+        assert_eq!(
+            Stations::new(Arc::new(store.clone())).code_paired(STATION),
+            Ok(true),
+            "kept as paired with a code"
+        );
 
         let connect = json!({"type":"connect","stationId":STATION});
         page.send(Message::Text(connect.to_string().into()))
@@ -1191,6 +1267,7 @@ async fn a_station_not_where_it_was_is_tried_where_it_is_found_by_name() {
     let store = StationStore::default();
     let stations = Stations::new(Arc::new(store.clone()));
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: Arc::new(Stations::new(Arc::new(store.clone()))),
         find: {
@@ -1201,6 +1278,10 @@ async fn a_station_not_where_it_was_is_tried_where_it_is_found_by_name() {
             })
         },
         name: "Den PC".into(),
+        operate: Arc::new(|_, _| {}),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || 0,
+        forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
     .unwrap();
     let mut page = page_socket(&origin).await;
@@ -1286,6 +1367,7 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
     let store = StationStore::default();
     let stations = Stations::new(Arc::new(store.clone()));
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: Arc::new(Stations::new(Arc::new(store.clone()))),
         find: {
@@ -1296,6 +1378,10 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
             })
         },
         name: "Den PC".into(),
+        operate: Arc::new(|_, _| {}),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || 0,
+        forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
     .unwrap();
     let mut page = page_socket(&origin).await;
@@ -1311,6 +1397,7 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
     assert_eq!(connected["address"], live.to_string());
     assert_eq!(looks.load(Ordering::SeqCst), 1);
 
+    let_go(&other).await;
     remembered(&[taken, live]);
     let connected = page_connect(&mut page, None).await;
     assert_eq!(
@@ -1325,6 +1412,7 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
     );
 
     adverts.lock().unwrap().clear();
+    let_go(&other).await;
     remembered(&[taken]);
     assert_eq!(
         page_connect(&mut page, None).await,
@@ -1341,6 +1429,7 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
         protocol: 1,
         key: hex(digest(&SHA256, &spki).as_ref())[..16].to_string(),
     }];
+    let_go(&other).await;
     remembered(&[taken]);
     assert_eq!(
         page_connect(&mut page, None).await,
@@ -1348,6 +1437,51 @@ async fn another_station_at_a_remembered_address_does_not_hide_this_one() {
         "found by name where nothing listens"
     );
     assert_eq!(looks.load(Ordering::SeqCst), 3);
+}
+
+/// ★ Another station's refusals that end late at it still leave this station's key told, however
+/// often the window tries: each try waits until that station has let the one before go. Here each
+/// try's end reaches the other station [`LATE`] after the window gave up on it, as a loaded machine
+/// delays a connection's last segment and its close, and every try is told `keyChanged`. Without
+/// the wait, the third try finds the two before still held there, is dropped as it arrives, and
+/// reads as nothing answering (`unreachable`). Skipped, saying so, on a box with no private address
+/// of its own.
+#[tokio::test]
+async fn another_stations_refusals_that_end_late_still_tell_the_key() {
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let s = shack(home());
+    let other = shack(home());
+    let (_stop, stop) = watch::channel(false);
+    let taken = ending_late(behind_a_port_on(&other, private, stop).await, private).await;
+    let store = StationStore::default();
+    let stations = Stations::new(Arc::new(store.clone()));
+    let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
+        assets: Arc::new(|_: &str| None),
+        stations: Arc::new(Stations::new(Arc::new(store.clone()))),
+        find: Arc::new(|_| Ok(Vec::new())),
+        name: "Den PC".into(),
+        operate: Arc::new(|_, _| {}),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || 0,
+        forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
+    })
+    .unwrap();
+    let mut page = page_socket(&origin).await;
+    let mut kept = paired_record(&s, taken);
+    kept.addresses = vec![taken.to_string()];
+    stations.keep(&kept).unwrap();
+    for attempt in 1..=4 {
+        let_go(&other).await;
+        assert_eq!(
+            page_connect(&mut page, None).await,
+            json!({"type":"connectRefused","reason":"keyChanged"}),
+            "try {attempt}"
+        );
+    }
 }
 
 /// ★ Pairing again with a station this computer is paired with already keeps this computer's own
@@ -1371,10 +1505,15 @@ async fn pairing_again_with_a_known_station_keeps_this_computers_key() {
     let store = StationStore::default();
     let stations = Arc::new(Stations::new(Arc::new(store.clone())));
     let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
         assets: Arc::new(|_: &str| None),
         stations: stations.clone(),
         find: Arc::new(|_| Ok(Vec::new())),
         name: "Den PC".into(),
+        operate: Arc::new(|_, _| {}),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || 0,
+        forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
     })
     .unwrap();
     let mut page = page_socket(&origin).await;
@@ -1414,4 +1553,121 @@ async fn pairing_again_with_a_known_station_keeps_this_computers_key() {
         made.pkcs8 != s.computer.key && made.pkcs8 != kept.pkcs8,
         "another station's key, or this one's, was used"
     );
+}
+
+/// ★ Pairing again with a code, for a station this computer was added to with the account: the
+/// station takes this computer until it is removed there, so the window names no day to sign in
+/// again by on its row, and Operate's launch does not sign in again for it. CONTROL: a pairing the
+/// station did not finish (the code typed wrong) leaves the day as it was, and another station's
+/// day stays through both. Skipped, saying so, on a box with no private address of its own.
+#[tokio::test]
+async fn pairing_again_with_a_code_leaves_no_day_to_sign_in_again_by() {
+    use crate::client_mode::sign_in_again_by;
+    use tempo_client::account::{PROOF_MAX_AGE_S, RENEW_BEFORE_S};
+    const NOW: u64 = 1_800_000_000;
+    const ELSEWHERE: &str = "70000000-0000-4000-8000-000000000001";
+    let Some(private) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own");
+        return;
+    };
+    let s = shack(home());
+    let scratch = Scratch::new();
+    let lan = lan_on(&s, &scratch);
+    let (_stop, stop) = watch::channel(false);
+    let at = behind_a_port_on(&s, private, stop).await;
+    let (dir, _) = crate::lan_client::tests::typed_file("paired-again");
+    let stations = Arc::new(
+        Stations::new(Arc::new(StationStore::default())).signed_in(dir.join("lan-account.json")),
+    );
+    // Added with the account: this computer's record for the station, and when it signed in, the
+    // last week of its thirty days now.
+    let issued_at = NOW - PROOF_MAX_AGE_S + RENEW_BEFORE_S;
+    stations.keep(&paired_record(&s, at)).unwrap();
+    stations
+        .keep(&record(ELSEWHERE, &["192.168.1.21:42075"]))
+        .unwrap();
+    stations.keep_signed(STATION, issued_at).unwrap();
+    stations.keep_signed(ELSEWHERE, issued_at).unwrap();
+    let origin = Origin::start(Reach {
+        lookup: Arc::new(tempo_stream::lan::lookup),
+        assets: Arc::new(|_: &str| None),
+        stations: stations.clone(),
+        find: Arc::new(|_| Ok(Vec::new())),
+        name: "Den PC".into(),
+        operate: Arc::new(|_, _| {}),
+        sign_in: Arc::new(|_, _, _| Box::pin(async { Err("accountNotReady") })),
+        now_s: || NOW,
+        forget_internet: Arc::new(|_| Box::pin(async { Ok(()) })),
+    })
+    .unwrap();
+    let mut page = page_socket(&origin).await;
+    // What the window is told of each station added with the account: its id, until when it takes
+    // this computer, and whether to sign in again now.
+    async fn days(page: &mut Client2) -> Vec<(String, u64, bool)> {
+        page.send(Message::Text(json!({"type":"stations"}).to_string().into()))
+            .await
+            .unwrap();
+        let listed = told(page).await;
+        let mut days: Vec<(String, u64, bool)> = listed["account"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|day| {
+                let id = day["stationId"].as_str().unwrap().to_string();
+                (id, day["until"].as_u64().unwrap(), day["renew"] == true)
+            })
+            .collect();
+        days.sort();
+        days
+    }
+    let until = NOW + RENEW_BEFORE_S;
+    let both = vec![
+        (STATION.to_string(), until, true),
+        (ELSEWHERE.to_string(), until, true),
+    ];
+    assert_eq!(days(&mut page).await, both, "premise: the last week");
+    let until = Some(until);
+    assert_eq!(sign_in_again_by(&stations, STATION, NOW), until);
+
+    lan.pair().unwrap();
+    let shown = lan.status().pairing.unwrap().code;
+    let wrong = format!(
+        "{}{}",
+        &shown[..15],
+        if shown.ends_with('0') { '1' } else { '0' }
+    );
+    let pair =
+        |code: &str| json!({"type":"pair","address":at.to_string(),"code":code,"name":"Den PC"});
+    page.send(Message::Text(pair(&wrong).to_string().into()))
+        .await
+        .unwrap();
+    let refused = told(&mut page).await;
+    assert_eq!(refused["type"], "pairRefused", "{refused}");
+    assert_eq!(
+        days(&mut page).await,
+        both,
+        "a pairing the station did not finish"
+    );
+    assert_eq!(sign_in_again_by(&stations, STATION, NOW), until);
+
+    page.send(Message::Text(pair(&shown).to_string().into()))
+        .await
+        .unwrap();
+    let paired = told(&mut page).await;
+    assert_eq!(paired["type"], "paired", "{paired}");
+    assert_eq!(
+        days(&mut page).await,
+        vec![(ELSEWHERE.to_string(), NOW + RENEW_BEFORE_S, true)],
+        "the station's row still names a day to sign in again by"
+    );
+    assert_eq!(
+        sign_in_again_by(&stations, STATION, NOW),
+        None,
+        "Operate's launch signs in again"
+    );
+    assert_eq!(sign_in_again_by(&stations, ELSEWHERE, NOW), until);
+    assert_eq!(stations.signed(STATION), None);
+    let kept = stations.get(STATION).unwrap().unwrap();
+    assert_eq!(kept.pkcs8, s.computer.key, "paired again with its own key");
+    std::fs::remove_dir_all(dir).unwrap();
 }

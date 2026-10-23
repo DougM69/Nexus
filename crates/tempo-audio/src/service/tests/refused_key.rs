@@ -897,3 +897,269 @@ fn a_keyed_ft8_over_keys_on_the_first_tick_of_its_slot() {
     );
     assert!(s.armed() && s.slot_key_refused().is_none());
 }
+
+// ── No transmit audio: a slot over never keys the radio with nothing to send ────────────────────
+// The sound card's output used to be opened by the first over's `play`, after its key, and an open
+// that failed was latched for the session with nothing on screen: every later over keyed the radio
+// with no audio. Slot TX now opens the output when TX is armed, and an output that will not open
+// keys nothing, halts TX and says why, on the refused key's own line, until TX is on again.
+
+/// What [`MockBackend::tx_open_error`] stands in for: a playback device another program holds.
+const NO_OUTPUT: &str = "playback stream: Device or resource busy";
+
+impl Scene {
+    /// The sound card's words, when the refusal on screen is for transmit audio that would not
+    /// open.
+    fn refused_for_tx_audio(&self) -> Option<String> {
+        self.slot_key_refused()
+            .filter(|r| r.tx_audio_failed)
+            .map(|r| r.why)
+    }
+}
+
+/// ⭐ AN FT8 OVER WHOSE AUDIO OUTPUT WILL NOT OPEN NEVER KEYS THE RADIO: TX STOPS WITH THE REASON,
+/// AND THE NEXT GOOD OPEN KEYS NORMALLY. The open used to happen inside the first over, after the
+/// key, and its failure keyed every over of the session with no audio and said nothing. Now
+/// nothing goes on the wire, nothing is played, TX is off and the line says why in the sound
+/// card's words; once the device is back and the operator turns TX on again, the next over keys
+/// and plays as any over does.
+#[test]
+fn an_ft8_over_with_no_audio_output_never_keys_and_halts_tx_until_a_good_open() {
+    let mut s = Scene::on(Key::Accepts, FT8_DIAL, ft8_cq_at_the_boundary);
+    s.backend.tx_open_error = Some(NO_OUTPUT.to_string());
+    assert!(s.armed(), "premise: Call CQ armed TX");
+    s.run_to(300.0);
+    let sent = s.log.lock().unwrap().clone();
+    assert_eq!(
+        s.keys(),
+        0,
+        "the radio was keyed with no audio to send: {sent:?}"
+    );
+    assert!(s.backend.played.is_empty(), "an over went to a dead output");
+    assert!(
+        !s.armed(),
+        "TX is still on: the next over would key the radio with no audio"
+    );
+    assert_eq!(
+        s.refused_for_tx_audio().as_deref(),
+        Some(NO_OUTPUT),
+        "nothing says why TX stopped, in the sound card's own words: {:?}",
+        s.slot_key_refused()
+    );
+    // …and it stays stopped: this station's next boundary (slot 2, 30 s) keys nothing.
+    s.run_to(30_100.0);
+    assert_eq!(s.keys(), 0, "a later boundary keyed the radio");
+    assert!(s.backend.played.is_empty());
+
+    // The device is back (the other program let go of it), and the operator turns TX on again.
+    s.backend.tx_open_error = None;
+    ft8_cq_at_the_boundary(&mut s.engine.lock().unwrap());
+    assert_eq!(s.slot_key_refused(), None, "turning TX on again clears it");
+    // Slot 4 (60 s) is the next of this station's boundaries.
+    s.run_to(59_990.0);
+    assert_eq!(s.keys(), 0, "premise: keyed before its slot");
+    s.run_to(60_100.0);
+    assert_eq!(s.keys(), 1, "the next good open does not key normally");
+    assert!(!s.backend.played.is_empty(), "the good over was not played");
+    assert!(s.armed(), "a good over turned TX off");
+    assert_eq!(s.slot_key_refused(), None);
+}
+
+/// ⭐ THE OUTPUT OPENS WHEN SLOT TX IS ARMED, NOT AT THE FIRST OVER, AND NEVER FOR A STATION THAT
+/// ONLY LISTENS (#139: a codec that cannot play and capture at once loses its decodes to an idle
+/// playback stream). An FT8 station with TX off opens nothing over a whole T/R cycle; Phone, whose
+/// section entry arms TX for the mic, still opens nothing until its own key-down; an FT8 station
+/// armed mid-slot has its output opened on the next tick, before any over is due.
+#[test]
+fn slot_tx_opens_its_audio_output_when_armed_and_a_listening_station_opens_none() {
+    let mut s = Scene::on(Key::Accepts, FT8_DIAL, |e| e.set_tier(Tier::Ft8));
+    s.run_to(31_000.0);
+    assert!(!s.armed(), "premise: TX is off");
+    assert_eq!(
+        s.backend.prepare_tx_calls, 0,
+        "a station that only listens opened its transmit audio"
+    );
+
+    let mut p = Scene::new(Key::Accepts, phone);
+    assert!(p.armed(), "premise: Phone's section entry armed TX");
+    p.run_to(1_000.0);
+    assert_eq!(
+        p.backend.prepare_tx_calls, 0,
+        "Phone opened the slot path's transmit audio without a key-down"
+    );
+
+    // Armed in slot 2, this station's own, after its boundary: the CQ waits for slot 4.
+    ft8_cq_at_the_boundary(&mut s.engine.lock().unwrap());
+    s.run_to(31_040.0);
+    assert!(
+        s.backend.prepare_tx_calls >= 1,
+        "arming TX did not open the transmit audio"
+    );
+    assert_eq!(s.keys(), 0, "premise: no over was due yet");
+    assert!(s.armed() && s.slot_key_refused().is_none());
+}
+
+// ── A key a CAT-broker client holds: an armed FT run waits for it ──────────────────────────────
+// With "Other programs may key transmit" on, a program on Nexus's CAT broker (WSJT-X, VarAC) keys
+// the radio through this loop as a held key (`Engine::broker_ptt`). An armed FT run planned its
+// over all the same, and the slot keyed a second time and played the whole over under the
+// client's key: one transmitter, two programs' signals. The slot planner now plans no over while
+// the client holds its key (`Engine::plan_tx`), as for a program on Nexus's TCI server, and the
+// run keys its next free slot once the client lets go.
+
+/// "Other programs may key transmit" on.
+fn share_the_key(e: &mut Engine) {
+    let mut settings = e.settings().clone();
+    settings.cat_broker_ptt = true;
+    e.apply_settings(settings);
+}
+
+/// One FT8 over played from the first tick of its slot: the 0.5 s lead-in and 79 symbols of
+/// 1,920 samples, at 12 kHz.
+const FT8_OVER: usize = 157_680;
+
+impl Scene {
+    /// The over on the air, or the last one sent: the WSJT-X Status's Tx Message.
+    fn sent(&self) -> String {
+        let e = self.engine.lock().unwrap();
+        e.wsjtx_tx_status().tx_message.trim().to_string()
+    }
+
+    /// Run to 1 s into each FT8 slot of `slots`: the message each one sent, `None` where nothing
+    /// played.
+    fn overs(&mut self, slots: &[u64]) -> Vec<Option<String>> {
+        slots
+            .iter()
+            .map(|&slot| {
+                let played = self.backend.played.len();
+                self.run_to(slot as f64 * 15_000.0 + 1_000.0);
+                (self.backend.played.len() > played).then(|| self.sent())
+            })
+            .collect()
+    }
+}
+
+/// The CQ as this station sends it with no client keying, from slot 0: the same scene, the
+/// client's key apart. It is longer than one free-text frame, so it goes out in three overs.
+fn the_cq_with_no_client() -> Vec<Option<String>> {
+    let mut c = Scene::on(Key::Accepts, FT8_DIAL, |e| {
+        share_the_key(e);
+        ft8_cq_at_the_boundary(e);
+    });
+    let overs = c.overs(&[0, 2, 4, 6]);
+    assert!(
+        matches!(overs.as_slice(), [Some(_), Some(_), Some(_), None]),
+        "control: the CQ is not three overs: {overs:?}"
+    );
+    overs
+}
+
+/// ⛔ AN ARMED FT8 CQ SENDS NOTHING WHILE A CAT-BROKER CLIENT HOLDS ITS KEY, AND FROM THE NEXT FREE
+/// SLOT AFTER THE RELEASE IT GOES OUT AS IT DOES WITH NO CLIENT: every over once, in order, one T/R
+/// cycle later. The client keys between the overs and holds its key through this station's slot,
+/// as WSJT-X does for an over of its own. The boundary used to key again and play the CQ under the
+/// client's key.
+#[test]
+fn an_armed_ft8_cq_sends_nothing_under_a_broker_clients_key_and_its_next_slot_sends_it() {
+    let control = the_cq_with_no_client();
+    let mut s = Scene::on(Key::Accepts, FT8_DIAL, |e| {
+        share_the_key(e);
+        ft8_cq_at_the_boundary(e);
+        assert!(
+            e.broker_ptt(true),
+            "premise: the client keys between the overs"
+        );
+    });
+    assert!(s.armed(), "premise: Call CQ armed TX");
+    // Slot 0 is this station's: the client holds its key through it.
+    s.run_to(12_000.0);
+    assert!(
+        s.state.manual_ptt_applied,
+        "premise: the loop keyed the client's key"
+    );
+    assert_eq!(
+        (s.keys(), s.backend.played.len()),
+        (1, 0),
+        "the slot keyed again and played its over under the client's key"
+    );
+    assert!(s.armed(), "the CQ was disarmed");
+    // The client lets go: the radio unkeys, and nothing keys before slot 2 (30 s).
+    assert!(
+        s.engine.lock().unwrap().broker_ptt(false),
+        "premise: the release"
+    );
+    s.run_to(29_990.0);
+    assert!(
+        s.unkeyed_after_the_key(),
+        "the client's release did not unkey the radio"
+    );
+    assert_eq!(
+        (s.keys(), s.backend.played.len()),
+        (1, 0),
+        "the CQ keyed before this station's next slot"
+    );
+    assert_eq!(
+        s.overs(&[2, 4, 6, 8]),
+        control,
+        "from the next free slot the CQ did not go out as with no client, every over once"
+    );
+    assert_eq!(
+        s.backend.played.len(),
+        3 * FT8_OVER,
+        "an over that waited was not sent whole"
+    );
+    assert!(s.armed() && s.slot_key_refused().is_none());
+}
+
+/// ⛔ A LATE START (a Call CQ inside this station's own slot) UNDER A CAT-BROKER CLIENT'S KEY SENDS
+/// NOTHING EITHER, AND THE CQ GOES OUT FROM THE NEXT FREE SLOT AFTER THE RELEASE, every over once.
+/// The late start keyed again and played the CQ under the client's key.
+#[test]
+fn a_late_start_under_a_broker_clients_key_sends_nothing_and_the_next_slot_sends_it() {
+    let control = the_cq_with_no_client();
+    let mut s = Scene::on(Key::Accepts, FT8_DIAL, |e| {
+        share_the_key(e);
+        e.set_tier(Tier::Ft8);
+    });
+    s.run_to(100.0);
+    assert_eq!(
+        s.state.last_slot,
+        Some(0),
+        "scene guard: slot 0's boundary is consumed"
+    );
+    {
+        let mut e = s.engine.lock().unwrap();
+        ft8_cq(&mut e);
+        assert!(
+            e.broker_ptt(true),
+            "premise: the client keys as the CQ arms"
+        );
+    }
+    s.run_to(5_000.0);
+    assert!(
+        s.state.manual_ptt_applied,
+        "premise: the loop keyed the client's key"
+    );
+    assert_eq!(
+        (s.keys(), s.backend.played.len()),
+        (1, 0),
+        "the late start keyed again and played its over under the client's key"
+    );
+    // The client lets go early in the slot: the CQ waits for slot 2 all the same.
+    assert!(
+        s.engine.lock().unwrap().broker_ptt(false),
+        "premise: the release"
+    );
+    s.run_to(29_990.0);
+    assert_eq!(
+        (s.keys(), s.backend.played.len()),
+        (1, 0),
+        "the CQ keyed before this station's next slot"
+    );
+    assert_eq!(
+        s.overs(&[2, 4, 6, 8]),
+        control,
+        "from the next free slot the CQ did not go out as with no client, every over once"
+    );
+    assert!(s.armed() && s.slot_key_refused().is_none());
+}

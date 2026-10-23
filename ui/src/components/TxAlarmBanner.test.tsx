@@ -7,8 +7,7 @@
 // screen. It locks nothing: the dial and the CAT verdict render exactly as without it.
 //
 // The cascade half is computed over the real sheets, never grepped: its own row, and in flow.
-// Whether it covers Stop TX or moves the dock is geometry, which jsdom never lays out — that is
-// the compiled browser's check (remote/test/browser.test.mjs, the Quick layout scenario).
+// Whether it covers Stop TX or moves the dock is geometry, which jsdom never lays out.
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, act } from '@testing-library/react'
 import { CockpitHeader } from './CockpitHeader'
@@ -64,7 +63,7 @@ const mount = (snap: AppSnapshot, onSnap = vi.fn(), control = true) =>
   )
 const banner = () => document.querySelector<HTMLElement>('.ch-txalarm')
 
-beforeAll(() => loadSheets(['styles.css', 'cockpit-panes.css', 'remote-web/application.css']))
+beforeAll(() => loadSheets(['styles.css', 'cockpit-panes.css']))
 beforeEach(() => vi.mocked(dismissTxAlarm).mockReset())
 afterEach(cleanup)
 
@@ -133,11 +132,4 @@ describe('the transmitter alarm in the cockpit header', () => {
     expect(css(banner()!, 'position'), 'positioned, it could sit over Stop TX').toBeNull()
   })
 
-  it('spans the Remote’s compact header grid', () => {
-    // The Quick header (`.cockpit-header--quick`) is a two-column grid: without a span the banner
-    // would take one cell of a row and squeeze beside nothing.
-    mount(snapWith([alarm(7, UNCONFIRMED, AT)]))
-    document.querySelector('.cockpit-header')!.classList.add('cockpit-header--quick')
-    expect(css(banner()!, 'grid-column')).toBe('1 / -1')
-  })
 })

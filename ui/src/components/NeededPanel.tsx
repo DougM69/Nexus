@@ -1,7 +1,5 @@
 import { useStationCapability, useStationControl } from '../stationAccess'
-import { controlFailureMessage } from '../remote-web/control-failure'
-import { useRotatorHeading } from '../remote-web/rotator'
-// The N1MM-style "what's needed now" board: every needed station the engine sees
+// The "what's needed now" board: every needed station the engine sees
 // (from the log — new DXCC/ATNO, new band-slot, new mode, new zone, needs-confirm),
 // ranked by priority and boldly colored by the shared need palette. Single-click a
 // row to QSY the radio to that band and listen. The same stations light up on the
@@ -49,15 +47,11 @@ function chipFor(tag: NeedTag): { label: string; cls: string; title: string } {
 
 /** Manual rotator control: live heading readout + point-at-azimuth. Rendered only
  * when a rotator is configured (same gate as the per-row ↗ buttons). */
-function RotatorWidget({ remote = false }: { remote?: boolean }) {
+function RotatorWidget() {
   const [az, setAz] = useState<number | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
-  // A browser reads the heading the STATION measured, and only while this widget is mounted.
-  // An older station offers no such read and the readout stays the honest "—".
-  const heading = useRotatorHeading(remote)
   useEffect(() => {
-    if (remote) return
     // Single-flight (#335): `read_rotator` takes the engine mutex and then waits on rotctld,
     // which may be down; a tick skips while the last read is still out.
     return pollSingleFlight('rotator widget', 5000, (owns) =>
@@ -65,7 +59,7 @@ function RotatorWidget({ remote = false }: { remote?: boolean }) {
         .then((a) => owns() && setAz(a))
         .catch(() => {}), // best-effort — rotctld may be down; the readout just shows —
     )
-  }, [remote])
+  }, [])
   const point = async () => {
     // Mirrors the Go button's disabled gate — the Enter key path must never slew
     // the rotator on an empty field (Number('') is 0 → due North) or re-enter
@@ -79,15 +73,14 @@ function RotatorWidget({ remote = false }: { remote?: boolean }) {
       await pointRotator(norm)
       pushToast(t('needed.rotator.pointed', { deg: Math.round(norm) }), 'success', 2500)
     } catch (e) {
-      pushToast(remote ? controlFailureMessage(e) : typeof e === 'string' ? e : t('needed.rotator.failed'), 'error', 4000)
+      pushToast(typeof e === 'string' ? e : t('needed.rotator.failed'), 'error', 4000)
     } finally {
       setBusy(false)
     }
   }
-  const shown = remote ? heading.azimuthDeg : az
   return (
     <span className="np-rotator" title={t('needed.rotator.title')}>
-      <span className="np-rotator-az mono" title={remote && shown == null ? t('remote.b1.rotatorNoHeading') : undefined}>{shown != null ? `${Math.round(shown)}°` : '—°'}</span>
+      <span className="np-rotator-az mono">{az != null ? `${Math.round(az)}°` : '—°'}</span>
       <input
         type="number"
         className="np-rotator-input mono"
@@ -536,7 +529,7 @@ export function NeededPanel({
           </svg>{' '}
           {hasActiveFilters ? t('needed.filter.toggle.active') : t('needed.filter.toggle.idle')}
         </button>
-        {!pane && rotatorControl && onPoint && <RotatorWidget remote={!control} />}
+        {!pane && rotatorControl && onPoint && <RotatorWidget />}
         {control && onPopOut && (
           <button
             type="button"

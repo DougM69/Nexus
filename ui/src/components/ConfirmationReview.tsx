@@ -167,6 +167,13 @@ export function ConfirmationReview({
   // The keyboard goes into the dialog when it opens and back to where it was opened from when it
   // closes, applied or cancelled (SpotDialog's rule).
   const boxRef = useRef<HTMLDivElement>(null)
+  // The first Tab stop skips the lists to the buttons: with thousands of lines, Tab otherwise
+  // passes every checkbox before Cancel. It lands on Cancel, which changes nothing.
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const skipToButtons = () => {
+    cancelRef.current?.focus({ preventScroll: true })
+    cancelRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }
   useLayoutEffect(() => {
     if (!open) return
     const active = document.activeElement
@@ -375,6 +382,12 @@ export function ConfirmationReview({
               {t('logbook.confirmations.uploadsOutOfScope', { count: got.uploadsOutOfScope })}
             </p>
           )}
+          {/* LoTW's records for another call on the account: left alone on purpose, so said. */}
+          {got.otherCallRecords > 0 && (
+            <p className="park-review-note">
+              {t('logbook.confirmations.otherCalls', { count: got.otherCallRecords })}
+            </p>
+          )}
         </div>
       </>
     )
@@ -392,6 +405,13 @@ export function ConfirmationReview({
           <h2>{t('logbook.confirmations.title')}</h2>
         </div>
         <p className="park-review-intro">{t('logbook.confirmations.intro')}</p>
+        {/* Named by the two buttons it reaches: Check until a service has been checked, then
+            Change, as below. */}
+        <button type="button" className="park-review-skip" onClick={skipToButtons}>
+          {checking || checks.length === 0
+            ? t('logbook.confirmations.skipCheck')
+            : t('logbook.confirmations.skipChange')}
+        </button>
         {found != null &&
           SERVICES.map((service) => {
             const f = found[service]
@@ -411,7 +431,7 @@ export function ConfirmationReview({
             )
           })}
         <div className="logconfirm-actions">
-          <button type="button" className="logconfirm-discard" onClick={close}>
+          <button ref={cancelRef} type="button" className="logconfirm-discard" onClick={close}>
             {t('logbook.confirmations.cancel')}
           </button>
           {/* Check until a service has been checked; then Apply. A check every service failed

@@ -1,14 +1,13 @@
 // @vitest-environment jsdom
 //
-// ⭐ THE CONTEST STRIP'S ALT+W AND CTRL+O, by value, as N1MM Logger+'s key list has them:
+// ⭐ THE CONTEST STRIP'S ALT+W AND CTRL+O, by value:
 //
-//   - "Ctrl+W or Alt+W = Wipe entry fields. Release a reserved serial number. Ctrl+W is
-//     irreversible, Alt+W can be reversed by typing it again". Alt+W clears the whole log line, the
-//     call and every exchange box, and a second Alt+W right after puts back what it cleared: the
-//     call, the boxes and their call-history marks. Any other key between the two, or a line typed
-//     since, ends the chance, as any other key lets a Ctrl+D press lapse.
-//   - "Ctrl+O = Set operator call". Ctrl+O asks for the operator box, which the window answers
-//     (`features/contestKeys.ts`); the strip only asks.
+//   - Alt+W clears the whole log line, the call and every exchange box, and releases the serial
+//     number in flight; a second Alt+W right after puts back what it cleared: the call, the boxes
+//     and their call-history marks. Any other key between the two, or a line typed since, ends the
+//     chance, as any other key lets a Ctrl+D press lapse.
+//   - Ctrl+O asks for the operator box, which the window answers (`features/contestKeys.ts`); the
+//     strip only asks.
 //
 // Both are window keys while the strip's host is on screen, as Ctrl+D is, and neither is ever a
 // stop key's: Esc and Space pass by untouched. Never on the hosted Remote page.
@@ -94,7 +93,7 @@ function Strip({ fieldDay = party(), active = true, remote = false }: { fieldDay
   )
 }
 
-const callBox = () => screen.getByPlaceholderText('W1AW') as HTMLInputElement
+const callBox = () => screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const boxes = () => [...document.querySelectorAll<HTMLInputElement>('.le-fd-input-code')]
 const rstBox = () => boxes()[0]
 const qthBox = () => boxes()[1]

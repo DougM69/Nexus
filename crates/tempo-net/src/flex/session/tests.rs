@@ -313,6 +313,101 @@ fn transmit_needs_a_live_eligible_interlock() {
     }
 }
 
+/// ⭐ The operator's Beta setting reaches admission through the configuration ([`Config::beta`],
+/// off by default). Off, the session takes keys only: a tune, an ATU cycle and a CWX word are
+/// refused `NoReadback` with nothing written, as before the setting existed. On, it takes all four
+/// kinds and each start goes out on the wire, while a check that still fails (the slice's XIT)
+/// refuses it with its own reason and writes nothing.
+#[test]
+fn the_beta_setting_lets_the_session_start_tune_atu_and_cwx() {
+    use crate::flex::encode::CwxText;
+    const IN_CW: &str = "S12345678|slice 0 mode=CW xit_on=0";
+    const KEYER: &str = "S0|transmit break_in=1 break_in_delay=300 synccwx=0";
+    const TUNER: &str = "S0|atu status=NONE atu_enabled=1";
+    assert!(!config().beta, "off unless the operator turns it on");
+    let ready = |beta: bool| {
+        let mut c = config();
+        c.beta = beta;
+        let mut h = Harness::with(c);
+        h.register();
+        for line in [OUR_TX_SLICE, IN_CW, KEYER, TUNER, IDLE] {
+            h.line(line);
+        }
+        assert!(h.s.transmit_ready());
+        h
+    };
+    let starts = || {
+        [
+            (TxStart::TuneOn, None, "transmit tune 1"),
+            (TxStart::AtuStart, None, "atu start"),
+            (
+                TxStart::CwxSend(CwxText::new("TEST").unwrap()),
+                Some(300),
+                "cwx send \"TEST\"",
+            ),
+        ]
+    };
+    let kinds = [
+        StartKind::Key,
+        StartKind::Tune,
+        StartKind::Atu,
+        StartKind::Cwx,
+    ];
+    // Off: today's session.
+    for (start, lasting, _) in starts() {
+        let mut h = ready(false);
+        let kind = start.kind();
+        assert!(!h.s.switched_on(kind), "{kind:?}");
+        assert_eq!(
+            h.s.start_lasting(&mut h.out, start, lasting, h.now),
+            Err(Refusal::NoReadback(kind))
+        );
+        assert_eq!(
+            (h.starts_written(), h.keying_on_the_wire()),
+            (0, 0),
+            "{kind:?}"
+        );
+    }
+    let mut h = ready(false);
+    assert!(h.s.switched_on(StartKind::Key));
+    h.start().expect("a key, with the setting off");
+    // On: every kind, each start written.
+    for kind in kinds {
+        assert!(ready(true).s.switched_on(kind), "{kind:?}");
+    }
+    for (start, lasting, text) in starts() {
+        let mut h = ready(true);
+        let kind = start.kind();
+        h.s.start_lasting(&mut h.out, start, lasting, h.now)
+            .unwrap_or_else(|r| panic!("{kind:?} refused with the setting on: {r:?}"));
+        assert_eq!(
+            (h.starts_written(), h.keying_on_the_wire()),
+            (1, 1),
+            "{kind:?}"
+        );
+        assert!(
+            h.texts().iter().any(|t| t.starts_with(text)),
+            "{kind:?}: {:?}",
+            h.texts()
+        );
+        // A check that still fails refuses it, by its own reason.
+        let mut h = ready(true);
+        h.line("S12345678|slice 0 xit_on=1");
+        let (start, lasting, _) = starts()
+            .into_iter()
+            .find(|(s, _, _)| s.kind() == kind)
+            .unwrap();
+        assert_eq!(
+            h.s.start_lasting(&mut h.out, start, lasting, h.now),
+            Err(Refusal::XitOn),
+            "{kind:?}"
+        );
+        assert_eq!(h.keying_on_the_wire(), 0, "{kind:?}");
+    }
+    let mut h = ready(true);
+    h.start().expect("a key, with the setting on");
+}
+
 #[test]
 fn a_partial_line_dies_with_its_session() {
     // partialLineAcrossDisconnect and newTcpSessionResetsOldBytes: a partial line is never a
@@ -809,7 +904,7 @@ fn answer_gui(s: &mut Session, wire: &mut LoggingWire, reply: &str) {
 }
 
 /// ⭐ THE UDP REGISTRATION'S DATAGRAM GOES AFTER REGISTRATION, JUST BEFORE `client udpport`, where
-/// upstream sends it (port plan §4.5, step 7). The radio learns the client's UDP endpoint from its
+/// upstream sends it. The radio learns the client's UDP endpoint from its
 /// source, which firmware that answers `client udpport` with "not supported" needs. Its owner sent
 /// it after the whole bring-up (about 46 ms after the command), and then before the session even
 /// connected. The datagram is its owner's to send (the session has no I/O of its own); here it is

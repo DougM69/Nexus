@@ -678,13 +678,23 @@ fn net_rigctl_shares_wfviews_rigctld_on_this_computer_whatever_rigctld_tcp_port_
     assert_eq!(sessions, shared);
 }
 
-/// A port nothing was listening on a moment ago.
+/// A port nothing was listening on a moment ago, and never one an earlier call handed out. A port
+/// let go is free again, so the next `:0` bind can be given the same number: two draws for one
+/// station then put its Network Address and its rigctld TCP Port on one port, and Nexus rightly
+/// says so. A repeat stays bound while the next is drawn, so the draw moves on.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    let mut given = GIVEN.lock().unwrap();
+    let mut repeats = Vec::new();
+    loop {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        if !given.contains(&port) {
+            given.push(port);
+            return port;
+        }
+        repeats.push(listener);
+    }
 }
 
 /// ⭐ THE RADIO LOOP RUNS A RADIO THROUGH WFVIEW'S RIGCTLD. On the shared rigctld the loop reads
@@ -1998,7 +2008,7 @@ fn test_cat_on_a_refused_address_says_why_again() {
     let mut state = RadioLoop::new(applied, daemon, &cfg);
     state.after_the_launch_open(&rig, probe.ok);
     state.cat_reopen_at = 60_000.0; // the backoff is not due
-    engine.lock().unwrap().request_cat_reprobe();
+    let asked = engine.lock().unwrap().request_cat_reprobe();
     let mut opens = 0;
     let mut reopen_rig = |t: &Transport, coexist: bool| {
         opens += 1;
@@ -2017,6 +2027,13 @@ fn test_cat_on_a_refused_address_says_why_again() {
         )
         .unwrap();
     let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+    // The reopen answered Test CAT: its line is the test's result.
+    let answer = engine
+        .lock()
+        .unwrap()
+        .cat_reprobe_answer(asked)
+        .map(|(_, d)| d);
+    assert_eq!(answer.as_deref(), Some(said.as_str()));
     assert_eq!(
         (opens, said, heard_at(&broker)),
         (1, held_by_the_broker(broker.port(), "IC-9700"), (0, 0))

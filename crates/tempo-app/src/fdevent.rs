@@ -4,16 +4,18 @@
 //! The HOST holds a [`ClubLog`]: every position's rows merged idempotently by
 //! `(position id, seq)`, an append-only NDJSON event journal (one merged row
 //! per line, flushed per merge — no whole-file clobber window, unlike the ADIF
-//! journal's rewrite), the club dupe index, sections, per-position stats and
-//! the scored total. **The club log is always reconstructible as the union of
-//! the position journals** — the invariant that makes "host dies, nothing
-//! lost" true: a restarted host replays its own journal, and every position
-//! re-pushes its tail for free because the merge is idempotent.
+//! journal's rewrite), the club dupe index, sections, the multiplier values
+//! worked, per-position stats and the scored total. **The club log is always
+//! reconstructible as the union of the position journals** — the invariant
+//! that makes "host dies, nothing lost" true: a restarted host replays its own
+//! journal, and every position re-pushes its tail for free because the merge
+//! is idempotent.
 //!
 //! A non-host POSITION holds only the compact [`ClubMirror`]: club dupe keys
-//! (the while-typing verdict), sections, counters and board rows pushed down
-//! by the host. No per-QSO attribution — which is why the scoreboard server
-//! runs at the host (`Engine::fd_board_snapshot` is `Some` only there).
+//! (the while-typing verdict), sections, the multiplier values the club has
+//! worked (its board), counters and board rows pushed down by the host. No
+//! per-QSO attribution — which is why the scoreboard server runs at the host
+//! (`Engine::fd_board_snapshot` is `Some` only there).
 //!
 //! Dupe semantics are N3FJP's: a CROSS-POSITION dupe is a **warning, never a
 //! lock** — the host keeps both rows, exports dedupe earliest-wins, and the
@@ -907,6 +909,19 @@ pub struct KeptOut {
     pub at: u64,
 }
 
+/// ⭐ **A position sending another county than the club** ([`ClubLog::other_location`]): named as
+/// its line on the host's board names it, with what its newest contact sent and what the club
+/// sends there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OtherLocation {
+    /// Its name as the host shows it ([`ClubLog::shown_names`]), empty for a position with none.
+    pub name: String,
+    /// Who is at it, as its presence reports say: what an unnamed position's line reads as.
+    pub operator: String,
+    pub sent: String,
+    pub club: String,
+}
+
 /// The most kept-out contacts the host keeps, journals and lists: a peer can send any number,
 /// and a list past this is a peer's flood, not a club's typing.
 const MAX_KEPT_OUT: usize = 256;
@@ -914,11 +929,30 @@ const MAX_KEPT_OUT: usize = 256;
 /// sentence, and the whole Field Day view Remote reads is bounded.
 pub const KEPT_OUT_SHOWN: usize = 16;
 
+/// ⭐ **The most of the club's contacts the host's own screen lists** ([`ClubLog::newest`]), the
+/// newest, beside how many the club holds. A hundred is the last half hour of a busy five-position
+/// club (each running about 40 an hour), or the last hour or more of most clubs: enough to watch
+/// every contact arrive and to check one a position has just logged. And it is a fixed size, so the
+/// screen's poll reads, sends and draws the same hundred rows at the club's five-thousandth contact
+/// as at its fiftieth; the whole log is in the club's files.
+pub const CLUB_LOG_SHOWN: usize = 100;
+
+/// One contact of the club's log as the host's own screen lists it ([`ClubLog::newest`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClubLogEntry<'a> {
+    /// The merged row: the position that logged it, when, and what.
+    pub row: &'a MergedRow,
+    /// What it received, read under the club's exchange as the club's files read it.
+    pub rx: Vec<FieldValue>,
+    /// A later contact of a key the club already holds: the files' own verdict.
+    pub dupe: bool,
+}
+
 /// ⭐ **A line of the host's journal that is not a merged row**, tagged by its kind
 /// (`{"pin":{…}}`). An older Nexus's replay reads none as a row (a row's `posid`, `seq` and
 /// `call` are required) and skips it, as it skips a torn line; this build reads each before
-/// trying a row. `at` is this host's clock, and a note from a previous event ages out with
-/// that event's rows ([`ClubLog::attach_journal_since`]).
+/// trying a row. `at` is this host's clock, and a note from an earlier running stays out with
+/// that running's rows ([`ClubLog::attach_journal`]).
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum JournalNote {
@@ -950,6 +984,24 @@ enum JournalNote {
     Remove { pos: String, at: u64 },
     /// …and let it back in ([`ClubLog::allow_back`]).
     AllowBack { pos: String, at: u64 },
+    /// ⭐ The call and entry class the club's files are written under from this line on
+    /// ([`ClubLog::note_host_settings`]), so a host restarted after its Contest mode went off
+    /// still writes the club's. Replayed in journal order. An older Nexus replaying this journal
+    /// skips the line, and writes the files under its Settings, as it always did.
+    Hosted {
+        call: Option<String>,
+        class: Option<String>,
+        at: u64,
+    },
+}
+
+/// ⭐ **The station call and entry class a club's files are written under while the host's own
+/// Settings no longer hold them** ([`ClubLog::note_host_settings`]): each `None` while the files
+/// take the host's Settings, as they always did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Hosted {
+    call: Option<String>,
+    class: Option<String>,
 }
 
 /// The club's claimed score, part by part ([`ClubLog::score_with`]).
@@ -1005,6 +1057,15 @@ pub struct ClubLog {
     /// Sections in first-seen order (same append-only contract).
     sections_list: Vec<String>,
     sections_set: HashSet<String>,
+    /// ⭐ **The multiplier values the club has worked** — `(slot, value)` for every slot a
+    /// multiplier board of this contest is over ([`mult_slots`](Self::mult_slots)), in
+    /// first-seen order, each with the index in [`dkeys_list`](Self::dkeys_list) of the key
+    /// its contact brought: a value is taken only from a contact that brings a NEW key, the
+    /// row a club counts, as a position's own board reads only the rows its log counts. So
+    /// the list is append-only within a generation and rides the dupe cursor
+    /// ([`club_state`](Self::club_state)).
+    mults_list: Vec<(usize, String, String)>,
+    mults_set: HashSet<(String, String)>,
     positions: HashMap<String, ClubPosition>,
     /// Merge ARRIVAL times (host clock) with the row's `(posid, seq)`, pruned to the trailing
     /// hour — the per-position rate meter. In-memory only: after a host restart the rate
@@ -1034,6 +1095,10 @@ pub struct ClubLog {
     removed: HashMap<String, u64>,
     /// How many positions this run has heard of ([`ClubPosition::heard`]).
     heard: u64,
+    /// ⭐ The call and entry class the club's files are written under since the host's Contest
+    /// mode went off ([`note_host_settings`](Self::note_host_settings)). Journaled, so a
+    /// restarted host still writes the club's.
+    hosted: Hosted,
     /// ⭐ The contacts this host kept out of the club's log, oldest first, for its own screen
     /// until the event ends ([`kept_out`](Self::kept_out)). Journaled, so a restart keeps them;
     /// one entry per contact, however often its position sends it again; at most
@@ -1071,10 +1136,6 @@ struct Aside {
     /// When it arrived on this run, for the rate meter it rejoins when put back.
     arrived: Option<u64>,
 }
-
-/// How far back a host journal replay reaches: four days, the position ADIF journal's window —
-/// see `ClubLog::attach_journal_since` for why.
-const STALE_EVENT_SECS: u64 = 4 * 86_400;
 
 fn now_unix() -> u64 {
     std::time::SystemTime::now()
@@ -1159,6 +1220,25 @@ impl ClubLog {
     /// what a position running the same contest builds its keys with.
     fn dupe_rule(&self) -> DupeRule {
         self.ruleset().dupe_rule
+    }
+
+    /// ⭐ **The slots this club's multiplier boards are over** — every board the contest draws
+    /// for any of its roles ([`tempo_core::contest::boards`], what a position's own board is built
+    /// from), each slot once: an Illinois QSO Party's QTH, a Field Day's SECTION. Every role,
+    /// because the club log does not hold the host's: its positions all run the host's role, and
+    /// a board picks out its own slot's values.
+    fn mult_slots(&self) -> Vec<&'static str> {
+        let rs = self.ruleset();
+        let spec = self.exchange();
+        let mut slots: Vec<&'static str> = Vec::new();
+        for role in spec.roles {
+            for b in tempo_core::contest::boards(&rs.scoring, spec, role) {
+                if !slots.contains(&b.slot) {
+                    slots.push(b.slot);
+                }
+            }
+        }
+        slots
     }
 
     /// Is this club running one of the two Field Day events — the contests a v1
@@ -1439,6 +1519,54 @@ impl ClubLog {
         &self.kept_out
     }
 
+    /// ⭐ **The positions sending another county than the club**: each position whose newest
+    /// contact in the club's log (its highest seq) sent another value than `club`, the club's own
+    /// sent exchange, in a slot where the club's value is one off the contest's lists (a county,
+    /// a state or province, a section). Compared trimmed and case-blind; a slot either side left
+    /// empty says nothing. Named positions first, alphabetically, as the board orders them.
+    ///
+    /// Only a warning, for the host's screen: a laptop set up on another county sends it on the
+    /// air under the club's call, a busted exchange for every station it works, and its contacts
+    /// are taken as sent. Read off the contacts, so a position is named once it has logged one,
+    /// and no longer once its newest contact sends the club's value again.
+    pub fn other_location(&self, club: &[WireField]) -> Vec<OtherLocation> {
+        let mut newest: HashMap<&str, &MergedRow> = HashMap::new();
+        for row in &self.rows {
+            let at = newest.entry(row.posid.as_str()).or_insert(row);
+            if row.seq > at.seq {
+                *at = row;
+            }
+        }
+        let shown = self.shown_names();
+        let mut out: Vec<(&str, OtherLocation)> = newest
+            .into_iter()
+            .filter_map(|(pos, row)| {
+                club.iter()
+                    .filter(|c| !c.d.is_empty() && !c.r.trim().is_empty())
+                    .find_map(|c| {
+                        let sent = row.mex.iter().find(|m| m.k == c.k)?.r.trim();
+                        (!sent.is_empty() && !sent.eq_ignore_ascii_case(c.r.trim())).then(|| {
+                            OtherLocation {
+                                name: shown.get(pos).cloned().unwrap_or_default(),
+                                operator: self
+                                    .positions
+                                    .get(pos)
+                                    .map(|p| p.operator.clone())
+                                    .unwrap_or_default(),
+                                sent: sent.to_ascii_uppercase(),
+                                club: c.r.trim().to_ascii_uppercase(),
+                            }
+                        })
+                    })
+                    .map(|o| (pos, o))
+            })
+            .collect();
+        out.sort_by(|(a_pos, a), (b_pos, b)| {
+            (a.name.is_empty(), &a.name, a_pos).cmp(&(b.name.is_empty(), &b.name, b_pos))
+        });
+        out.into_iter().map(|(_, o)| o).collect()
+    }
+
     /// The key hash `posid` is pinned to, if any (the host's own tests and the shell's).
     pub fn pinned(&self, posid: &str) -> Option<&str> {
         self.pins.get(posid).map(String::as_str)
@@ -1538,15 +1666,97 @@ impl ClubLog {
         self.event_id == FdEvent::ArrlFd.code()
     }
 
+    /// ⭐ **A Settings save on the host**: `was` its station call and entry class before the save
+    /// and `is` after it, `active_was` and `active` whether Contest mode was on before it and is
+    /// on after it.
+    ///
+    /// The club's files are written under the host's call and class ([`hosted_call`],
+    /// [`hosted_class`]), and "Contest over?" puts the station's own back in the very save that
+    /// turns Contest mode off, while the Club Cabrillo button shows only with the mode on. So the
+    /// save that turns the mode off HOLDS each at what it was before that save, and from then on
+    /// neither the station's own call put back, nor the mode turned on again under it to reach
+    /// the button, moves the club's. A held one follows the host's Settings again once the mode
+    /// is on with that very value back (a break in the party, or a test the evening before, then
+    /// a class corrected), compared trimmed and case-blind. Each change is journaled, so a
+    /// restarted host still writes the club's.
+    ///
+    /// [`hosted_call`]: Self::hosted_call
+    /// [`hosted_class`]: Self::hosted_class
+    pub fn note_host_settings(
+        &mut self,
+        was: (&str, &str),
+        is: (&str, &str),
+        active_was: bool,
+        active: bool,
+        now: u64,
+    ) {
+        let mut hosted = self.hosted.clone();
+        if active_was && !active {
+            hosted.call.get_or_insert_with(|| was.0.trim().to_string());
+            hosted.class.get_or_insert_with(|| was.1.trim().to_string());
+        } else if active {
+            let back = |held: &Option<String>, set: &str| {
+                held.as_deref()
+                    .is_some_and(|h| h.eq_ignore_ascii_case(set.trim()))
+            };
+            if back(&hosted.call, is.0) {
+                hosted.call = None;
+            }
+            if back(&hosted.class, is.1) {
+                hosted.class = None;
+            }
+        }
+        if hosted != self.hosted {
+            self.journal_note(&JournalNote::Hosted {
+                call: hosted.call.clone(),
+                class: hosted.class.clone(),
+                at: now,
+            });
+            self.hosted = hosted;
+        }
+    }
+
+    /// The station call the club's files are written under: the one held since the host's
+    /// Contest mode went off ([`note_host_settings`](Self::note_host_settings)), else `settings`,
+    /// the host's own.
+    pub fn hosted_call<'a>(&'a self, settings: &'a str) -> &'a str {
+        self.hosted.call.as_deref().unwrap_or(settings)
+    }
+
+    /// …and the entry class, the same way.
+    pub fn hosted_class<'a>(&'a self, settings: &'a str) -> &'a str {
+        self.hosted.class.as_deref().unwrap_or(settings)
+    }
+
     /// Open (creating if absent) the append-only journal at `path`, replaying
     /// any rows already in it — the host-restart recovery. Replayed rows are
     /// NOT re-journaled. Call once, before serving.
+    ///
+    /// ⭐ **Only the running of the contest the host's clock is in** ([`FdRuleset::running_of`]),
+    /// as a position's own journal restore reads its journal: the journal is named from the
+    /// Event name, so a club that rehearsed under the name it hosts the contest with would begin
+    /// the contest with the rehearsal in its club log, its score and its files. A running's day
+    /// begins a day before the contest starts, so a rehearsal on an earlier day belongs to the
+    /// running before, and so does every note made with it.
+    ///
+    /// ⭐ **And the whole of that running, whatever its age**, as a position's own restore keeps
+    /// its own: a host relaunched the week after the contest to export the club's files replays
+    /// every contact and note of it, the call and class the club was hosted under among them. A
+    /// running lasts until the next one's day begins, so a host relaunched from then starts that
+    /// running's club empty, under its own call and class.
     pub fn attach_journal(&mut self, path: &PathBuf) -> std::io::Result<()> {
-        self.attach_journal_since(path, now_unix().saturating_sub(STALE_EVENT_SECS))
+        self.attach_journal_at(path, now_unix())
     }
 
-    /// [`Self::attach_journal`] with the cutoff exposed, so a test can age a journal
-    /// without waiting days.
+    /// [`Self::attach_journal`] at `now_unix`, so a test can stand on a contest's own day.
+    pub fn attach_journal_at(&mut self, path: &PathBuf, now_unix: u64) -> std::io::Result<()> {
+        let rs = self.ruleset();
+        let running = rs.running_of(now_unix);
+        self.replay_journal(path, |at| rs.running_of(at) == running)
+    }
+
+    /// Every row and note of the journal from `oldest_unix` on, whatever its running: a test's
+    /// replay of a whole journal (`0`), or of one aged without waiting days.
     ///
     /// ⚠️ THE CUTOFF EXISTS BECAUSE ITS ABSENCE SILENTLY ATE A WHOLE POSITION'S LOG, on
     /// the DEFAULT settings. The host journal is named from the event name, and the shipped
@@ -1562,12 +1772,23 @@ impl ClubLog {
     /// Four days was the position journal's own expiry (see `restore_field_day_if_enabled`),
     /// deliberately: the two halves of the same event must age out together or the watermark
     /// outlives the log it describes, which is exactly this bug. The position's journal now keeps
-    /// its running's rows whatever their age and numbers on from them, so inside a running the
-    /// watermark cannot outlive them; the cutoff still keeps an earlier event's out.
+    /// its running's rows whatever their age and numbers on from them, and so does the host's
+    /// replay ([`Self::attach_journal`]): inside a running the watermark cannot outlive them, and
+    /// the running keeps an earlier event's out.
     pub fn attach_journal_since(
         &mut self,
         path: &PathBuf,
         oldest_unix: u64,
+    ) -> std::io::Result<()> {
+        self.replay_journal(path, |at| at >= oldest_unix)
+    }
+
+    /// The replay itself: every row and note of the journal at `path` that `keep` takes by its
+    /// time, in journal order, then the journal opened for appending.
+    fn replay_journal(
+        &mut self,
+        path: &PathBuf,
+        keep: impl Fn(u64) -> bool,
     ) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1578,40 +1799,46 @@ impl ClubLog {
                     match note {
                         // A pin from a previous event pins nothing in this one, and the first
                         // pin of a position wins, as it does live.
-                        JournalNote::Pin { pos, key_hash, at } if at >= oldest_unix => {
+                        JournalNote::Pin { pos, key_hash, at } if keep(at) => {
                             self.pins.entry(pos).or_insert(key_hash);
                         }
                         JournalNote::Pin { .. } => {}
                         // A previous event's are as stale as its rows; a contact a later row
                         // merged under the same id is in the club's log after all.
-                        JournalNote::KeptOut(k) if k.at >= oldest_unix => {
+                        JournalNote::KeptOut(k) if keep(k.at) => {
                             self.list_kept_out(k);
                         }
                         JournalNote::KeptOut(_) => {}
                         // In journal order: the rows above it under that position were the
                         // laptop it was given away from, and leave the club's log as they did.
-                        JournalNote::Give { pos, key_hash, at } if at >= oldest_unix => {
+                        JournalNote::Give { pos, key_hash, at } if keep(at) => {
                             self.hand_over(&pos, &key_hash);
                         }
                         JournalNote::Give { .. } => {}
                         // In journal order, as they were made; a previous event's are as stale
                         // as its rows, and must not keep this event's same seq out.
-                        JournalNote::TakeBack { pos, seq, at } if at >= oldest_unix => {
+                        JournalNote::TakeBack { pos, seq, at } if keep(at) => {
                             self.take_back(&pos, seq, at);
                         }
-                        JournalNote::PutBack { pos, seq, at } if at >= oldest_unix => {
+                        JournalNote::PutBack { pos, seq, at } if keep(at) => {
                             self.put_back(&pos, seq, at);
                         }
                         JournalNote::TakeBack { .. } | JournalNote::PutBack { .. } => {}
                         // In journal order, as the host's operator pressed them; a previous
                         // event's keeps nobody out of this one.
-                        JournalNote::Remove { pos, at } if at >= oldest_unix => {
+                        JournalNote::Remove { pos, at } if keep(at) => {
                             self.removed.insert(pos, at);
                         }
-                        JournalNote::AllowBack { pos, at } if at >= oldest_unix => {
+                        JournalNote::AllowBack { pos, at } if keep(at) => {
                             self.removed.remove(&pos);
                         }
                         JournalNote::Remove { .. } | JournalNote::AllowBack { .. } => {}
+                        // In journal order, the latest standing; a previous event's names no
+                        // call this one is written under.
+                        JournalNote::Hosted { call, class, at } if keep(at) => {
+                            self.hosted = Hosted { call, class };
+                        }
+                        JournalNote::Hosted { .. } => {}
                     }
                     continue;
                 }
@@ -1624,7 +1851,7 @@ impl ClubLog {
                     // A row with NO timestamp (0) is kept. It cannot be aged, and silently
                     // dropping a contact we merely cannot date is the same class of mistake
                     // this cutoff exists to fix — an undateable row is a row somebody worked.
-                    if row.when_unix != 0 && row.when_unix < oldest_unix {
+                    if row.when_unix != 0 && !keep(row.when_unix) {
                         continue;
                     }
                     self.merge_row(row, 0);
@@ -1691,6 +1918,18 @@ impl ClubLog {
         self.positions.get(&q.pos).map(|p| p.acked).unwrap_or(0)
     }
 
+    /// ⭐ **A row taken off the wire and not added**: its position's ack moves past `seq`, so the
+    /// laptop that sent it is never asked for it again, and nothing else changes: not the log, its
+    /// journal, its counts, nor the kept-out list (the laptop that logged it says so on its own
+    /// screen). The engine's, for a contact its own position logged on another call than the
+    /// club's (`Engine::fd_club_merge`). Returns the position's ack, as [`merge`](Self::merge)
+    /// does.
+    pub fn take_off(&mut self, pos: &str, seq: u64) -> u64 {
+        let p = self.position(pos);
+        p.acked = p.acked.max(seq);
+        p.acked
+    }
+
     /// [`merge`](Self::merge) minus the wire type; `now == 0` = a journal
     /// replay (no arrival stamped, nothing re-journaled).
     fn merge_row(&mut self, mut row: MergedRow, now: u64) -> bool {
@@ -1742,22 +1981,43 @@ impl ClubLog {
         }
     }
 
-    /// One live row into the club's dupe keys, sections and its position's counts — the part
-    /// of a merge [`rebuild_index`](Self::rebuild_index) repeats for every live row.
+    /// One live row into the club's dupe keys, sections, multiplier values and its position's
+    /// counts — the part of a merge [`rebuild_index`](Self::rebuild_index) repeats for every
+    /// live row.
     fn index_row(&mut self, row: &MergedRow) {
         // ⭐ A satellite contact the contest gives no credit (Winter Field Day) is kept in
         // the club's rows and journal, and acked and counted on its position's board like
         // any row, but it counts for nothing in the club: no dupe key and no section, so it
         // never stands in the way of a contact that does count.
         let counts = row.sat.is_empty() || self.ruleset().satellite_credit;
+        // ⭐ …and a contact in a mode the contest bans (FT8 at the Illinois QSO Party) keys the
+        // club's dupes like any row, so whether a later contact is a duplicate is what it always
+        // was, but brings no section and no multiplier value: it scores nothing in the club's
+        // file, so it lights no cell on any laptop's board.
+        let credited = counts && !self.ruleset().mode_banned(&row.submode);
         let dkey = row.dkey(&self.dupe_rule(), self.exchange());
         if counts && self.dkeys_set.insert(dkey.clone()) {
+            let at = self.dkeys_list.len();
             self.dkeys_list.push(dkey);
             // Index-parallel, always built, sent only for a Field Day club.
             self.dupes_list.push(row.dupe_key());
+            if credited {
+                for slot in self.mult_slots() {
+                    let value = row
+                        .ex
+                        .iter()
+                        .find(|f| f.k == slot)
+                        .map(|f| f.r.trim().to_ascii_uppercase())
+                        .unwrap_or_default();
+                    if !value.is_empty() && self.mults_set.insert((slot.to_string(), value.clone()))
+                    {
+                        self.mults_list.push((at, slot.to_string(), value));
+                    }
+                }
+            }
         }
         let sect = row.section.trim().to_ascii_uppercase();
-        if counts && !sect.is_empty() && self.sections_set.insert(sect.clone()) {
+        if credited && !sect.is_empty() && self.sections_set.insert(sect.clone()) {
             self.sections_list.push(sect);
         }
         let pos = self.position(&row.posid);
@@ -1765,16 +2025,19 @@ impl ClubLog {
         pos.last_qso_unix = pos.last_qso_unix.max(row.when_unix);
     }
 
-    /// ⭐ **The dupe keys, sections and per-position counts, rebuilt from the live rows in merge
-    /// order** — exactly what merging them one by one builds, so after a take-back the club is
-    /// as if the contact had never come, and after its undo as if it had never gone. One more
-    /// generation: a delta cannot take a key away, so every connection gets a fresh snap.
+    /// ⭐ **The dupe keys, sections, multiplier values and per-position counts, rebuilt from the
+    /// live rows in merge order** — exactly what merging them one by one builds, so after a
+    /// take-back the club is as if the contact had never come, and after its undo as if it had
+    /// never gone. One more generation: a delta cannot take a key away, so every connection gets
+    /// a fresh snap.
     fn rebuild_index(&mut self) {
         self.dkeys_list.clear();
         self.dkeys_set.clear();
         self.dupes_list.clear();
         self.sections_list.clear();
         self.sections_set.clear();
+        self.mults_list.clear();
+        self.mults_set.clear();
         for p in self.positions.values_mut() {
             p.qsos_raw = 0;
             p.last_qso_unix = 0;
@@ -2102,6 +2365,20 @@ impl ClubLog {
         &self.sections_list
     }
 
+    /// ⭐ **The values the club has worked in multiplier slot `slot`**, sorted — what the host's
+    /// own board lights, from the list every position is sent ([`club_state`](Self::club_state)),
+    /// so the host and its positions can never light different cells.
+    pub fn worked_mults(&self, slot: &str) -> Vec<String> {
+        let mut values: Vec<String> = self
+            .mults_list
+            .iter()
+            .filter(|(_, s, _)| s == slot)
+            .map(|(_, _, v)| v.clone())
+            .collect();
+        values.sort();
+        values
+    }
+
     /// Earliest-wins unique attribution: for every club dupe key, the row
     /// that logged it FIRST by the position's own clock (merge order breaks
     /// ties — an offline position's late re-push of an EARLIER contact takes
@@ -2155,6 +2432,45 @@ impl ClubLog {
     /// which position logged each of the club's contacts without re-deriving the dedupe.
     pub fn unique_log_rows(&self) -> Vec<usize> {
         self.export_indices()
+    }
+
+    /// ⭐ **The club's contacts for the host's own screen, newest first** — at most `limit` of
+    /// [`rows`](Self::rows), by the time each was made (the logging position's own clock, the
+    /// time the club's files write), the later merge first between two made in one second. So an
+    /// offline position's catch-up lands at the times its contacts were made, not on top, and the
+    /// list is the newest `limit`, never the first merged.
+    ///
+    /// Each carries what it received, read under the club's exchange as
+    /// [`unique_log_with`](Self::unique_log_with) reads it for the files, and whether it is a
+    /// DUPLICATE, which is the files' own verdict, never a second reading of it: a row whose key
+    /// the earliest-wins dedupe the files are written by
+    /// ([`earliest_unique_indices`](Self::earliest_unique_indices)) holds for an earlier contact.
+    /// That is a row the files leave out, or, in a contest that wants repeats reported, the one
+    /// they write as its zero-point repeat ([`export_indices`](Self::export_indices)), so a mark
+    /// moves with the file's line when an offline position's late re-push of an EARLIER contact
+    /// takes the key back. A satellite contact the contest gives no credit is in no file and is no
+    /// one's duplicate, as on a position's own log.
+    pub fn newest(&self, limit: usize) -> Vec<ClubLogEntry<'_>> {
+        let mut first = vec![false; self.rows.len()];
+        for i in self.earliest_unique_indices() {
+            first[i] = true;
+        }
+        let credit = self.ruleset().satellite_credit;
+        let spec = self.exchange();
+        let mut order: Vec<usize> = (0..self.rows.len()).collect();
+        order.sort_unstable_by_key(|&i| std::cmp::Reverse((self.rows[i].when_unix, i)));
+        order
+            .into_iter()
+            .take(limit)
+            .map(|i| {
+                let row = &self.rows[i];
+                ClubLogEntry {
+                    row,
+                    rx: from_wire_fields(&row.ex, spec),
+                    dupe: !first[i] && (credit || row.sat.is_empty()),
+                }
+            })
+            .collect()
     }
 
     /// The deduped (earliest-wins) club log as a [`FieldDayLog`] under the
@@ -2316,10 +2632,14 @@ impl ClubLog {
     /// The band-board rows (one per known position), stalest-last untouched —
     /// display order is the UI's business. `age` is seconds since last heard.
     pub fn board_rows(&self, now: u64) -> Vec<WireBoardRow> {
-        // Per-position uniq + rate in one pass each.
+        // Per-position uniq + rate in one pass each. A contact in a mode the contest bans is one
+        // of the files' rows and scores nothing, so it is not one that scores here.
+        let rs = self.ruleset();
         let mut uniq: HashMap<&str, u64> = HashMap::new();
         for i in self.earliest_unique_indices() {
-            *uniq.entry(self.rows[i].posid.as_str()).or_insert(0) += 1;
+            if !rs.mode_banned(&self.rows[i].submode) {
+                *uniq.entry(self.rows[i].posid.as_str()).or_insert(0) += 1;
+            }
         }
         let mut rate: HashMap<&str, u64> = HashMap::new();
         for (t, p, _) in &self.arrivals {
@@ -2351,6 +2671,8 @@ impl ClubLog {
                     uniq: uniq.get(id.as_str()).copied().unwrap_or(0),
                     rate: rate.get(id.as_str()).copied().unwrap_or(0),
                     age: now.saturating_sub(p.last_seen_unix.min(now)),
+                    // Every laptop's board says so with the next club line; its line stays.
+                    removed: self.is_removed(id),
                 }
             })
             .collect()
@@ -2383,6 +2705,14 @@ impl ClubLog {
                 .get(sections_from..)
                 .unwrap_or(&[])
                 .to_vec(),
+            // Past the DUPE cursor: each value came in with the key at its index, so the delta
+            // that sends a key sends the values its contact brought.
+            mults: self.mults_list[self
+                .mults_list
+                .partition_point(|(at, _, _)| *at < dupes_from)..]
+                .iter()
+                .map(|(_, slot, value)| (slot.clone(), value.clone()))
+                .collect(),
             score,
             qsos: self.qsos_raw(),
             board: self.board_rows(now),
@@ -2469,6 +2799,10 @@ impl ClubLog {
 pub struct ClubMirror {
     pub event: String,
     pub host_call: String,
+    /// The call this laptop's link JOINED under, the one the welcome answered: what a contact
+    /// that carries no call of its own was logged on (`Engine::fd_on_another_call`). Set by the
+    /// pump's bridge from the JOIN it sent (`fdbridge::EnginePositionSync`).
+    pub link_call: String,
     /// LEGACY club dupe keys — the while-typing verdict unions these with own
     /// log. EMPTY when the host is running anything but Field Day: the triple is
     /// not that contest's dupe rule, and no club warning is honest where a wrong
@@ -2477,6 +2811,10 @@ pub struct ClubMirror {
     /// The same keys under the ruleset's own rule — what a v2 position reads.
     pub dkeys: HashSet<Vec<String>>,
     pub sections: HashSet<String>,
+    /// ⭐ The multiplier values the club has worked, `(slot, value)`, as the host sent them
+    /// (`ClubState::mults`): what this laptop's board lights beside its own contacts. Empty from
+    /// a host older than the list, and this laptop's board is then its own, as it always was.
+    pub mults: HashSet<(String, String)>,
     pub score: u32,
     pub qsos: u64,
     pub board: Vec<WireBoardRow>,
@@ -2519,6 +2857,7 @@ impl ClubMirror {
             self.dupes.clear();
             self.dkeys.clear();
             self.sections.clear();
+            self.mults.clear();
         }
         for k in &st.dupes {
             self.dupes.insert(k.clone());
@@ -2528,6 +2867,9 @@ impl ClubMirror {
         }
         for s in &st.sections {
             self.sections.insert(s.clone());
+        }
+        for m in &st.mults {
+            self.mults.insert(m.clone());
         }
         self.score = st.score;
         self.qsos = st.qsos;
@@ -2591,6 +2933,7 @@ impl ClubMirror {
     pub fn forget_host(&mut self) {
         self.event.clear();
         self.host_call.clear();
+        self.link_call.clear();
         self.last_error = None;
         self.unreachable = None;
         self.welcomed = false;
@@ -3308,7 +3651,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("fd_event_event.jsonl");
         let now = now_unix();
-        let last_year = now - 365 * 86_400;
+        // Last year's Field Day: the running before this one, whatever today's date.
+        let fd = party("arrlfd");
+        let last_year = fd.event_window(fd.running_of(now) - 1).start_unix;
         {
             let mut old = ClubLog::new(FdEvent::ArrlFd, "event");
             old.attach_journal_since(&path, 0).unwrap();
@@ -3473,7 +3818,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("fd_event_event.jsonl");
         let now = now_unix();
-        let last_year = now - 365 * 86_400;
+        // Last year's Field Day: the running before this one, whatever today's date.
+        let fd = party("arrlfd");
+        let last_year = fd.event_window(fd.running_of(now) - 1).start_unix;
 
         // Last year's host wrote five rows for this position.
         {
@@ -3506,8 +3853,7 @@ mod tests {
 
         // This year's host replays the SAME file.
         let mut host = ClubLog::new(FdEvent::ArrlFd, "event");
-        host.attach_journal_since(&path, now.saturating_sub(STALE_EVENT_SECS))
-            .unwrap();
+        host.attach_journal(&path).unwrap();
         assert_eq!(
             host.rows().len(),
             0,
@@ -3617,6 +3963,7 @@ mod tests {
             dupes: vec![("W1AW".into(), "20m".into(), "DIG".into())],
             dkeys: vec![vec!["W1AW".into(), "20M".into(), "DIG".into()]],
             sections: vec!["CT".into()],
+            mults: vec![("SECTION".into(), "CT".into())],
             score: 10,
             qsos: 1,
             board: vec![],
@@ -3626,12 +3973,14 @@ mod tests {
             dupes: vec![("K1ABC".into(), "40m".into(), "CW".into())],
             dkeys: vec![vec!["K1ABC".into(), "40M".into(), "CW".into()]],
             sections: vec!["EMA".into()],
+            mults: vec![("SECTION".into(), "EMA".into())],
             score: 14,
             qsos: 2,
             board: vec![],
         });
         assert_eq!(m.dupes.len(), 2, "deltas union");
         assert_eq!(m.dkeys.len(), 2, "…and the generalised keys with them");
+        assert_eq!(m.mults.len(), 2, "…and the club's multiplier values");
         assert_eq!((m.score, m.qsos), (14, 2), "scalars overwrite");
         // A rejoin snap (host restarted into a new event) CLEARS before applying.
         m.apply(&ClubState {
@@ -3639,6 +3988,7 @@ mod tests {
             dupes: vec![("N0XYZ".into(), "20m".into(), "PH".into())],
             dkeys: vec![vec!["N0XYZ".into(), "20M".into(), "PH".into()]],
             sections: vec!["MN".into()],
+            mults: vec![("SECTION".into(), "MN".into())],
             score: 1,
             qsos: 1,
             board: vec![],
@@ -3655,6 +4005,13 @@ mod tests {
         assert!(m
             .dkeys
             .contains(&vec!["N0XYZ".to_string(), "20M".into(), "PH".into()]));
+        assert_eq!(
+            m.mults,
+            [("SECTION".to_string(), "MN".to_string())]
+                .into_iter()
+                .collect(),
+            "and so are the club's multiplier values"
+        );
     }
 
     #[test]
@@ -4419,6 +4776,766 @@ mod tests {
         let s = club.score_with("W9XYZ", session, 1, &[], &[]);
         assert_eq!((s.qso_points, s.mults, s.total), (4, Some(2), 8));
         assert!(cab.contains("CLAIMED-SCORE: 8\n"), "{cab}");
+    }
+
+    /// ⭐ **The call and class a club's files are written under, through the saves a host makes**
+    /// ([`ClubLog::note_host_settings`]): the host's Settings until Contest mode goes off; from
+    /// that save, what they were before it, so "Contest over?" putting the station's own back
+    /// never reaches the club's files, nor does the mode turned on again under the station's own
+    /// call; each one following Settings again once the mode is on with its very value back. A
+    /// restarted host replays each change.
+    ///
+    /// The club's values (W9XYZ, the classes) and the station's own (K9OWN, no class) disagree
+    /// at every step, so each answer names which side it came from.
+    #[test]
+    fn a_club_holds_the_call_and_class_it_was_hosted_under_from_contest_mode_off() {
+        const LOW: &str = "ILLINOIS FIXED LOW POWER";
+        let dir = std::env::temp_dir().join(format!("nexus-fd-hosted-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fd_event_hosted.ilqp.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        club.attach_journal_since(&path, 0).unwrap();
+        // What the files are written under, with Settings at `(call, class)`.
+        let under = |c: &ClubLog, call: &str, class: &str| {
+            (
+                c.hosted_call(call).to_string(),
+                c.hosted_class(class).to_string(),
+            )
+        };
+        let own = |s: &str| s.to_string();
+        let at = ILQP_START;
+
+        // The class corrected while the party runs: the files follow Settings.
+        club.note_host_settings(("W9XYZ", ""), ("W9XYZ", "UNLIMITED"), true, true, at);
+        assert_eq!(
+            under(&club, "K9OWN", ""),
+            (own("K9OWN"), own("")),
+            "CONTROL: nothing held, the files take Settings, whatever they are"
+        );
+
+        // A break: the mode off with nothing put back, then on again, then the class corrected.
+        club.note_host_settings(
+            ("W9XYZ", "UNLIMITED"),
+            ("W9XYZ", "UNLIMITED"),
+            true,
+            false,
+            at + 60,
+        );
+        assert_eq!(
+            under(&club, "K9OWN", ""),
+            (own("W9XYZ"), own("UNLIMITED")),
+            "held from the save that turned the mode off"
+        );
+        club.note_host_settings(
+            ("W9XYZ", "UNLIMITED"),
+            ("W9XYZ", "UNLIMITED"),
+            false,
+            true,
+            at + 120,
+        );
+        club.note_host_settings(("W9XYZ", "UNLIMITED"), ("W9XYZ", LOW), true, true, at + 180);
+        assert_eq!(
+            under(&club, "W9XYZ", LOW),
+            (own("W9XYZ"), own(LOW)),
+            "the mode back on under the club's own values: they follow Settings again"
+        );
+        assert_eq!(
+            under(&club, "K9OWN", ""),
+            (own("K9OWN"), own("")),
+            "…released, not held at the new class"
+        );
+
+        // "Contest over?": the station's own put back in the save that turns the mode off.
+        club.note_host_settings(("W9XYZ", LOW), ("K9OWN", ""), true, false, at + 240);
+        assert_eq!(
+            under(&club, "K9OWN", ""),
+            (own("W9XYZ"), own(LOW)),
+            "the put-back never reaches the club's files"
+        );
+        // The mode on again under the station's own call, to reach the Club Cabrillo button.
+        club.note_host_settings(("K9OWN", ""), ("K9OWN", ""), false, true, at + 300);
+        assert_eq!(
+            under(&club, "K9OWN", ""),
+            (own("W9XYZ"), own(LOW)),
+            "nor does the mode turned on again under the station's own call"
+        );
+        // A restarted host holds the same.
+        let mut reborn = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        reborn.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(
+            under(&reborn, "K9OWN", ""),
+            (own("W9XYZ"), own(LOW)),
+            "the journal replays the hold"
+        );
+
+        // The club's call typed back (case-blind) with the mode on: the call follows Settings
+        // again; the class, still the station's own, stays held.
+        club.note_host_settings(("K9OWN", ""), ("w9xyz", ""), true, true, at + 360);
+        assert_eq!(
+            under(&club, "w9xyz", ""),
+            (own("w9xyz"), own(LOW)),
+            "each one is let go on its own value"
+        );
+        let mut reborn = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        reborn.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(
+            under(&reborn, "K9OWN", ""),
+            (own("K9OWN"), own(LOW)),
+            "the journal replays the release too, in order"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host names each position whose newest contact sent another county than the club**
+    /// ([`ClubLog::other_location`]), for its own screen: by the name its board line shows (or who
+    /// is at an unnamed one), with what it sent and what the club sends, named positions first.
+    ///
+    /// Each rule on data that tells it apart: the CW tent went from McLean to Kane (named, Kane);
+    /// the SSB tent from Kane to McLean typed in lower case with spaces (not named); the Alpha
+    /// tent's newest, Kane, was taken back, so Lake decides; an unnamed position on Will reads as
+    /// its operator; the RTTY tent sent the club's county with another report (a slot off no list
+    /// says nothing). CONTROL: a club sending nothing names nobody.
+    #[test]
+    fn the_host_names_each_position_whose_newest_contact_sent_another_county() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        let t = ILQP_START;
+        for (pos, name) in [
+            ("bbbb", "CW tent"),
+            ("cccc", "SSB tent"),
+            ("dddd", ""),
+            ("eeee", "Alpha tent"),
+            ("ffff", "RTTY tent"),
+        ] {
+            club.join(pos, name, "W9XYZ", t);
+        }
+        let report = PosReport {
+            op: "K9OPD".into(),
+            ..Default::default()
+        };
+        club.position_status("dddd", &report, t);
+        let row = |pos: &str, seq: u64, call: &str, mine: &str| {
+            ilqp_row(pos, seq, call, "40m", "CW", "", "COOK", mine, t + seq * 60)
+        };
+        let mut rows = vec![
+            row("bbbb", 1, "K9AAA", "MCLN"),
+            row("bbbb", 2, "K9BBB", "KANE"),
+            row("cccc", 1, "K9CCC", "KANE"),
+            row("cccc", 2, "K9DDD", "MCLN"),
+            row("dddd", 1, "K9EEE", "WILL"),
+            row("eeee", 1, "K9FFF", "LAKE"),
+            row("eeee", 2, "K9GGG", "KANE"),
+            row("ffff", 1, "K9HHH", "MCLN"),
+        ];
+        // The SSB tent's McLean as a laptop could type it; the RTTY tent's other report.
+        for f in &mut rows[3].mex {
+            if f.k == "QTH" {
+                f.r = " mcln ".into();
+            }
+        }
+        rows[7].mex = party_fields("ilqp", &[("RST", "559"), ("QTH", "MCLN")]);
+        for q in &rows {
+            club.merge(q, q.when);
+        }
+        assert!(club.take_back("eeee", 2, t + 600));
+        let sent = to_wire_fields(&party_session("ilqp", "IL", "MCLN").my_exchange);
+        let named = |c: &ClubLog| {
+            c.other_location(&sent)
+                .into_iter()
+                .map(|o| (o.name, o.operator, o.sent, o.club))
+                .collect::<Vec<_>>()
+        };
+        let one = |name: &str, op: &str, sent: &str| {
+            (
+                name.to_string(),
+                op.to_string(),
+                sent.to_string(),
+                "MCLN".to_string(),
+            )
+        };
+        assert_eq!(
+            named(&club),
+            vec![
+                one("Alpha tent", "", "LAKE"),
+                one("CW tent", "", "KANE"),
+                one("", "K9OPD", "WILL"),
+            ]
+        );
+        assert!(
+            club.other_location(&[]).is_empty(),
+            "CONTROL: a club sending nothing names nobody"
+        );
+    }
+
+    /// ⭐ **A rehearsal under the same Event name stays out of the party's club log.** The host's
+    /// journal is named from the Event name, and the host replayed the last four days of it, so a
+    /// club that rehearsed on the Wednesday under the name it hosts the party with began the
+    /// party with the rehearsal in its club log: on the club line of every laptop, in the score
+    /// and in the Club Cabrillo, before the first contact of the day (measured: 18 points, 3
+    /// contacts, `CLAIMED-SCORE: 18`, QSO lines dated four days early). The host now replays the
+    /// running of the contest its clock is in ([`FdRuleset::running_of`]), as a position's own
+    /// journal restore does, and the notes with the rows: a laptop removed at the rehearsal is
+    /// not turned away at the party.
+    ///
+    /// By value: the rehearsal's three contacts 3.5 days before the start, inside the four days;
+    /// two rows a second either side of the moment the party's running begins (a day before the
+    /// start); the party's first contact. CONTROL: replayed whole, the journal holds all six and
+    /// the removal. And on the rehearsal's own evening the host replays the rehearsal: the rule is
+    /// the running, not the age.
+    #[test]
+    fn a_rehearsal_under_the_same_event_name_stays_out_of_the_party() {
+        let dir = std::env::temp_dir().join(format!("nexus-fd-rehearsal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fd_event_ilqp-2026.ilqp.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let rehearsal = ILQP_START - (3 * 86_400 + 12 * 3600);
+        let day_begins = ILQP_START - tempo_core::fd_rules::RUNNING_DAY_LEAD_SECS;
+        {
+            let mut wed = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+            wed.attach_journal_since(&path, 0).unwrap();
+            let rows = [
+                ("bbbb0002", 1, "K9AAA", "COOK", rehearsal),
+                ("bbbb0002", 2, "K9BBB", "KANE", rehearsal + 60),
+                ("cccc0003", 1, "K9CCC", "DUPG", rehearsal + 120),
+                ("bbbb0002", 3, "K9EVE", "LAKE", day_begins - 1),
+                ("bbbb0002", 4, "K9DAY", "WILL", day_begins),
+                ("aaaa0001", 1, "K9PTY", "COOK", ILQP_START + 60),
+            ];
+            for (pos, seq, call, qth, when) in rows {
+                let q = ilqp_row(pos, seq, call, "40m", "CW", "", qth, "MCLN", when);
+                wed.merge(&q, when);
+            }
+            wed.remove("cccc0003", "aaaa0001", rehearsal + 180).unwrap();
+        }
+        let calls = |c: &ClubLog| c.rows().iter().map(|r| r.call.clone()).collect::<Vec<_>>();
+
+        let mut whole = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+        whole.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(
+            (calls(&whole).len(), whole.is_removed("cccc0003")),
+            (6, true),
+            "CONTROL: the journal holds the six contacts and the removal"
+        );
+
+        let mut party_day = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+        party_day
+            .attach_journal_at(&path, ILQP_START + 1800)
+            .unwrap();
+        assert_eq!(
+            calls(&party_day),
+            vec!["K9DAY".to_string(), "K9PTY".into()],
+            "the party's club log holds the party's running alone, from the second its day begins"
+        );
+        assert!(
+            !party_day.is_removed("cccc0003"),
+            "a laptop removed at the rehearsal is not turned away at the party"
+        );
+        let session = party_session("ilqp", "IL", "MCLN");
+        let cab = party_day
+            .export_cabrillo_with("W9XYZ", session, &CabrilloEntrant::default())
+            .unwrap();
+        assert_eq!(
+            cab.lines().filter(|l| l.starts_with("QSO:")).count(),
+            2,
+            "{cab}"
+        );
+        assert!(
+            !cab.contains("K9AAA") && !cab.contains("K9EVE"),
+            "no rehearsal contact in the party's club file: {cab}"
+        );
+
+        let mut eve = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+        eve.attach_journal_at(&path, rehearsal + 3600).unwrap();
+        assert_eq!(
+            (calls(&eve), eve.is_removed("cccc0003")),
+            (
+                vec![
+                    "K9AAA".to_string(),
+                    "K9BBB".into(),
+                    "K9CCC".into(),
+                    "K9EVE".into()
+                ],
+                true
+            ),
+            "on its own evening the host replays the rehearsal and its removal"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A host relaunched days after the party replays the whole party, and nothing of the
+    /// running before it.** The host replayed only the last four days of its journal, so one
+    /// relaunched the next weekend to export, or days on after a crash, began with an empty club
+    /// log under the operator's own call: its Club Cabrillo and Club ADIF held none of the party
+    /// (measured: 3 of 3 contacts one and three days on, 0 of 3 five and ten days on). It now
+    /// replays the running its clock is in whatever the age, as a position's own journal restore
+    /// does, and the notes with the rows: the call and class the club was hosted under among them.
+    ///
+    /// By value, in one journal: a rehearsal on the Saturday morning under the same Event name,
+    /// two hours before the party's running begins; a laptop removed at it; the party's three
+    /// contacts; and the hold "Contest over?" made at the party's end. Relaunched one, five and
+    /// ten days after the start, the host holds the party alone, under the club's call and class,
+    /// with the rehearsal's contact and removal out, the first time where the four days would have
+    /// kept them. The running ends when the next one's day begins: a second before, the same;
+    /// from then, an empty club under the host's own call and class, so a laptop on the club's
+    /// call meets the sentence a laptop on another call always has.
+    #[test]
+    fn a_host_relaunched_days_after_the_party_replays_its_whole_running() {
+        let dir =
+            std::env::temp_dir().join(format!("nexus-fd-whole-running-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fd_event_ilqp-2026.ilqp.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let rehearsal = ILQP_START - 26 * 3600;
+        let end = party("ilqp").event_window(2026).end_unix;
+        {
+            let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+            club.attach_journal_since(&path, 0).unwrap();
+            let rows = [
+                ("bbbb0002", 1, "K9REH", "COOK", rehearsal),
+                ("bbbb0002", 2, "K9AAA", "COOK", ILQP_START + 60),
+                ("cccc0003", 1, "K9BBB", "KANE", ILQP_START + 3600),
+                ("aaaa0001", 1, "K9CCC", "LAKE", end - 60),
+            ];
+            for (pos, seq, call, qth, when) in rows {
+                let q = ilqp_row(pos, seq, call, "40m", "CW", "", qth, "MCLN", when);
+                club.merge(&q, when);
+            }
+            club.remove("cccc0003", "aaaa0001", rehearsal + 180)
+                .unwrap();
+            // "Contest over?" at the party's end puts the operator's own call back, and no class.
+            club.note_host_settings(
+                ("W9XYZ", "UNLIMITED"),
+                ("K9OWN", ""),
+                true,
+                false,
+                end + 600,
+            );
+        }
+        let replay = |now: u64| {
+            let mut host = ClubLog::for_ruleset(party("ilqp"), "ILQP 2026");
+            host.attach_journal_at(&path, now).unwrap();
+            host
+        };
+        // The calls the club log holds, whether the rehearsal's removal stands, and the call and
+        // class its files are written under, the host's Settings being the operator's own.
+        let held = |c: &ClubLog| {
+            (
+                c.rows().iter().map(|r| r.call.clone()).collect::<Vec<_>>(),
+                c.is_removed("cccc0003"),
+                c.hosted_call("K9OWN").to_string(),
+                c.hosted_class("").to_string(),
+            )
+        };
+        let party_held = (
+            vec!["K9AAA".to_string(), "K9BBB".into(), "K9CCC".into()],
+            false,
+            "W9XYZ".to_string(),
+            "UNLIMITED".to_string(),
+        );
+        // Each QSO line's call sent and call worked.
+        let worked = |cab: &str| {
+            cab.lines()
+                .filter(|l| l.starts_with("QSO:"))
+                .map(|l| {
+                    let f: Vec<&str> = l.split_whitespace().collect();
+                    (f[5].to_string(), f[f.len() - 3].to_string())
+                })
+                .collect::<Vec<_>>()
+        };
+        let session = party_session("ilqp", "IL", "MCLN");
+        for days in [1, 5, 10] {
+            let host = replay(ILQP_START + days * 86_400);
+            assert_eq!(
+                held(&host),
+                party_held,
+                "relaunched {days} days after the start"
+            );
+            let cab = host
+                .export_cabrillo_with(
+                    host.hosted_call("K9OWN"),
+                    session.clone(),
+                    &CabrilloEntrant::default(),
+                )
+                .unwrap();
+            assert_eq!(
+                worked(&cab),
+                ["K9AAA", "K9BBB", "K9CCC"].map(|c| ("W9XYZ".to_string(), c.to_string())),
+                "the Club Cabrillo {days} days on: {cab}"
+            );
+        }
+
+        let next = party("ilqp").event_window(2027).start_unix
+            - tempo_core::fd_rules::RUNNING_DAY_LEAD_SECS;
+        assert_eq!(
+            held(&replay(next - 1)),
+            party_held,
+            "a second before the next running's day begins"
+        );
+        let later = replay(next);
+        assert_eq!(
+            held(&later),
+            (Vec::new(), false, "K9OWN".to_string(), String::new()),
+            "from the second the next running's day begins: an empty club, under the host's own \
+             call and class"
+        );
+        assert_eq!(
+            later.call_refusal(later.hosted_call("K9OWN"), "W9XYZ"),
+            Some(call_mismatch(&later.contest_id, "K9OWN", "W9XYZ")),
+            "a laptop still on the club's call then meets the sentence a laptop on another call \
+             always has"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An Illinois QSO Party club whose CW tent worked K9AAA from Cook and whose second laptop
+    /// then worked `call` from `theirs` on 20 m in the digital mode `sub`.
+    fn ilqp_club_with_digital(call: &str, theirs: &str, sub: &str) -> ClubLog {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        club.merge(
+            &ilqp_row(
+                "aaaa",
+                1,
+                "K9AAA",
+                "40m",
+                "CW",
+                "",
+                "COOK",
+                "MCLN",
+                ILQP_START + 180,
+            ),
+            1,
+        );
+        club.merge(
+            &ilqp_row(
+                "bbbb",
+                1,
+                call,
+                "20m",
+                "DIG",
+                sub,
+                theirs,
+                "MCLN",
+                ILQP_START + 240,
+            ),
+            2,
+        );
+        club
+    }
+
+    /// What a club's FT8 contact comes to: `(rows, QSO points, multipliers, bonus, total)`,
+    /// the counties every laptop's board lights, the second laptop's scoring rows on the band
+    /// board, and the club Cabrillo.
+    #[allow(clippy::type_complexity)] // one tuple, read whole by one assertion
+    fn club_outcome(
+        club: &ClubLog,
+    ) -> ((u64, u32, Option<u32>, u32, u32), Vec<String>, u64, String) {
+        let session = party_session("ilqp", "IL", "MCLN");
+        let s = club.score_with("W9XYZ", session.clone(), 1, &[], &[]);
+        let uniq = club
+            .board_rows(ILQP_START + 300)
+            .iter()
+            .find(|r| r.pos == "bbbb")
+            .map(|r| r.uniq)
+            .expect("the second laptop's line");
+        let cab = club
+            .export_cabrillo_with("W9XYZ", session, &CabrilloEntrant::default())
+            .expect("one entry");
+        (
+            (club.qsos_raw(), s.qso_points, s.mults, s.bonus, s.total),
+            club.worked_mults("QTH"),
+            uniq,
+            cab,
+        )
+    }
+
+    /// ⭐ **A club's FT8 contact is in the club's log and file, and scores nothing** — no points,
+    /// no county on any laptop's board, no count on its position's line. The sponsor: *"FT4 and
+    /// FT8 contacts will receive no contact credit."*
+    ///
+    /// Measured before (the readiness audit, two laptops over loopback): K9AAA on CW from Cook
+    /// and an FT8 K9FT8 from Lake gave a club line and CLAIMED-SCORE of 8 where the credited
+    /// score is 2, and Lake lit on every laptop's board.
+    #[test]
+    fn a_clubs_ft8_contact_is_filed_and_scores_nothing() {
+        let (numbers, board, uniq, cab) =
+            club_outcome(&ilqp_club_with_digital("K9FT8", "LAKE", "FT8"));
+        assert_eq!(
+            (numbers, board, uniq),
+            ((2, 2, Some(1), 0, 2), vec!["COOK".to_string()], 0),
+            "((rows, points, multipliers, bonus, total), the board, the FT8 laptop's scoring rows)"
+        );
+        assert!(cab.contains("CLAIMED-SCORE: 2\n"), "{cab}");
+        assert!(
+            cab.contains(" W9XYZ 599 MCLN K9FT8 599 LAKE\n"),
+            "the contact is still a line of the club's file:\n{cab}"
+        );
+        // CONTROL: the same contact on RTTY scores (2 + 2) × 2 and lights Lake.
+        let (numbers, board, uniq, cab) =
+            club_outcome(&ilqp_club_with_digital("K9FT8", "LAKE", "RTTY"));
+        assert_eq!(
+            (numbers, board, uniq),
+            (
+                (2, 4, Some(2), 0, 8),
+                vec!["COOK".to_string(), "LAKE".to_string()],
+                1
+            )
+        );
+        assert!(cab.contains("CLAIMED-SCORE: 8\n"), "{cab}");
+    }
+
+    /// ⭐ **A Winter Field Day club's FT8 contact brings its section to no laptop's board.** The
+    /// sponsor allows *"All modes, except WSJT modes"*, so the contact is in the club's rows and
+    /// scores nothing, and the sections every position is sent leave its section out. CONTROL:
+    /// ARRL Field Day bans no mode, and the same rows bring both sections and both contacts'
+    /// points.
+    #[test]
+    fn a_winter_field_day_clubs_ft8_contact_brings_no_section() {
+        let club_of = |event: FdEvent| {
+            let mut club = ClubLog::new(event, "TEST CLUB");
+            club.merge(&wq("aaaa", 1, "W1AW", "20m", "CW", "CT", 100), 1);
+            // `wq` gives a digital row FT8, as an FT8 position's row is.
+            club.merge(&wq("bbbb", 1, "K1ABC", "20m", "DIG", "EMA", 200), 2);
+            club
+        };
+        let wfd = club_of(FdEvent::WinterFd);
+        assert_eq!(
+            (
+                wfd.qsos_raw(),
+                wfd.sections(),
+                wfd.scored("W9ABC", "2O", "WI", 1, &[]).0
+            ),
+            (2, &["CT".to_string()][..], 2),
+            "(rows, the sections sent, QSO points): W1AW's CW contact alone"
+        );
+        let arrl = club_of(FdEvent::ArrlFd);
+        assert_eq!(
+            (
+                arrl.qsos_raw(),
+                arrl.sections(),
+                arrl.scored("W9ABC", "2A", "WI", 1, &[]).0
+            ),
+            (2, &["CT".to_string(), "EMA".to_string()][..], 4)
+        );
+    }
+
+    /// ⭐ **…and a bonus station a club worked only on FT4 adds nothing.** Measured before (the
+    /// readiness audit): an FT8-only W9OAB took a club line from 32 to 150, its points, its
+    /// county and the 100.
+    #[test]
+    fn a_bonus_station_a_club_worked_only_on_ft4_adds_nothing() {
+        let (numbers, board, _, cab) =
+            club_outcome(&ilqp_club_with_digital("W9OAB", "ADAM", "FT4"));
+        assert_eq!(
+            (numbers, board),
+            ((2, 2, Some(1), 0, 2), vec!["COOK".to_string()])
+        );
+        assert!(cab.contains("CLAIMED-SCORE: 2\n"), "{cab}");
+        // CONTROL: worked on RTTY, W9OAB is its 2 points, Adams and the 100.
+        let (numbers, board, _, cab) =
+            club_outcome(&ilqp_club_with_digital("W9OAB", "ADAM", "RTTY"));
+        assert_eq!(
+            (numbers, board),
+            (
+                (2, 4, Some(2), 100, 108),
+                vec!["ADAM".to_string(), "COOK".to_string()]
+            )
+        );
+        assert!(cab.contains("CLAIMED-SCORE: 108\n"), "{cab}");
+    }
+
+    /// `call`'s record in an ADIF file.
+    fn record_of<'a>(adif: &'a str, call: &str) -> &'a str {
+        let tag = format!("<CALL:{}>{call} ", call.len());
+        adif.split("<EOR>")
+            .find(|r| r.contains(&tag))
+            .unwrap_or_else(|| panic!("no record for {call} in\n{adif}"))
+    }
+
+    /// ⭐ **The Club ADIF writes each row's OWN sent report as `RST_SENT`**, the tag another
+    /// program reads, as a position's own ADIF does: the report the position that logged the
+    /// contact sent, the one its line in the club's Cabrillo file carries.
+    ///
+    /// By value, on data that disagrees wherever a wrong source could pass: the two positions
+    /// sent different reports, neither is the host session's `599`, and each received another.
+    #[test]
+    fn the_club_adif_writes_each_rows_own_sent_report() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        for (pos, call, got, sent, at) in [
+            ("aaaa", "K9AAA", "559", "449", 60),
+            ("bbbb", "K9BBB", "579", "339", 120),
+        ] {
+            let mut q = ilqp_row(
+                pos,
+                1,
+                call,
+                "40m",
+                "CW",
+                "",
+                "COOK",
+                "MCLN",
+                ILQP_START + at,
+            );
+            q.ex = party_fields("ilqp", &[("RST", got), ("QTH", "COOK")]);
+            q.mex = party_fields("ilqp", &[("RST", sent), ("QTH", "MCLN")]);
+            club.merge(&q, at);
+        }
+        let session = party_session("ilqp", "IL", "MCLN");
+        let cab = club
+            .export_cabrillo_with("W9XYZ", session.clone(), &CabrilloEntrant::default())
+            .expect("one entry");
+        let adif = club.export_adif_with("W9XYZ", session);
+        for (call, line, rst_sent) in [
+            (
+                "K9AAA",
+                " W9XYZ 449 MCLN K9AAA 559 COOK\n",
+                "<RST_SENT:3>449 ",
+            ),
+            (
+                "K9BBB",
+                " W9XYZ 339 MCLN K9BBB 579 COOK\n",
+                "<RST_SENT:3>339 ",
+            ),
+        ] {
+            // The control first: the row carries its reports, as its Cabrillo line says.
+            assert!(cab.contains(line), "the control, {call}: {cab}");
+            let r = record_of(&adif, call);
+            assert!(
+                r.contains(rst_sent),
+                "{call} does not carry {rst_sent:?}: {r}"
+            );
+            assert_eq!(r.matches("<RST_SENT:").count(), 1, "{call}: {r}");
+        }
+    }
+
+    /// A club row that sent no report writes no `RST_SENT`, never the host's `599` in its place,
+    /// and a Field Day club, whose exchange has no report, writes none. No position sends a
+    /// party row without a report, so this one is built by hand: the wire shape of a row whose
+    /// report was empty.
+    #[test]
+    fn a_club_row_without_a_sent_report_writes_no_rst_sent() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        club.merge(
+            &ilqp_row(
+                "aaaa",
+                1,
+                "K9AAA",
+                "40m",
+                "CW",
+                "",
+                "COOK",
+                "MCLN",
+                ILQP_START + 60,
+            ),
+            1,
+        );
+        let mut q = ilqp_row(
+            "bbbb",
+            1,
+            "K9BBB",
+            "40m",
+            "CW",
+            "",
+            "WILL",
+            "MCLN",
+            ILQP_START + 120,
+        );
+        q.mex
+            .iter_mut()
+            .find(|f| f.k == "RST")
+            .expect("a party row sends a report")
+            .r
+            .clear();
+        club.merge(&q, 2);
+        let adif = club.export_adif_with("W9XYZ", party_session("ilqp", "IL", "MCLN"));
+        // The control first: the row beside it sent the club's report, and writes it.
+        let with = record_of(&adif, "K9AAA");
+        assert!(with.contains("<RST_SENT:3>599 "), "the control: {with}");
+        let without = record_of(&adif, "K9BBB");
+        assert!(!without.contains("<RST_SENT:"), "{without}");
+        let mut field_day = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        field_day.merge(
+            &with_sent(wq("aaaa", 1, "W1AW", "20m", "PH", "CT", 100), ("3A", "WI")),
+            100,
+        );
+        let fd = field_day.export_adif("W9ABC", "3A", "WI");
+        assert!(!record_of(&fd, "W1AW").contains("<RST_SENT:"), "{fd}");
+    }
+
+    /// ⭐ **The club log lists every multiplier value any position worked** — what every laptop's
+    /// board lights (`ClubState::mults`): the county board's counties and the in-state board's
+    /// states, both off the party's QTH slot, in the order they were first worked. A club dupe
+    /// brings nothing (it is the same contact, its key already in), the delta past a key cursor
+    /// carries the values its contacts brought, and a take-back takes a value with it under a new
+    /// generation and its undo puts it back.
+    #[test]
+    fn the_club_lists_every_multiplier_value_any_position_worked() {
+        let mut club = ClubLog::for_ruleset(party("ilqp"), "ILQP TEST");
+        let row = |pos: &str, seq: u64, call: &str, qth: &str, at: u64| {
+            ilqp_row(
+                pos,
+                seq,
+                call,
+                "40m",
+                "CW",
+                "",
+                qth,
+                "MCLN",
+                ILQP_START + at,
+            )
+        };
+        club.merge(&row("aaaa", 1, "K9AAA", "COOK", 60), 1);
+        club.merge(&row("bbbb", 1, "K9BBB", "WILL", 120), 2);
+        club.merge(&row("bbbb", 2, "W1AW", "CT", 180), 3);
+        // The second position works K9AAA again on the same band and mode, from the same county:
+        // the club dupe, the club's key already in.
+        club.merge(&row("bbbb", 3, "K9AAA", "COOK", 240), 4);
+        assert_eq!(club.qsos_raw(), 4);
+        assert_eq!(club.worked_mults("QTH"), ["COOK", "CT", "WILL"]);
+        let pair = |v: &str| ("QTH".to_string(), v.to_string());
+        assert_eq!(
+            club.club_state(0, 0, 0, 5).mults,
+            [pair("COOK"), pair("WILL"), pair("CT")],
+            "first worked first"
+        );
+        let (keys, _) = club.counts();
+        assert_eq!(keys, 3, "three keys: the dupe brought none");
+        assert_eq!(
+            club.club_state(1, 0, 0, 5).mults,
+            [pair("WILL"), pair("CT")],
+            "past the first key, the values its contacts brought"
+        );
+        assert!(club.club_state(keys, 0, 0, 5).mults.is_empty());
+        // Will was the second position's alone: a take-back takes it, under a new generation.
+        let before = club.generation();
+        assert!(club.take_back("bbbb", 1, 6));
+        assert_eq!(club.worked_mults("QTH"), ["COOK", "CT"]);
+        assert!(
+            club.generation() > before,
+            "every position gets a fresh snap"
+        );
+        assert!(club.put_back("bbbb", 1, 7));
+        assert_eq!(club.worked_mults("QTH"), ["COOK", "CT", "WILL"]);
+        // CONTROL: no other slot is a board here.
+        assert!(club.worked_mults("RST").is_empty());
+    }
+
+    /// ⭐ **A Field Day club's board is its sections, and a club dupe brings no section** — the
+    /// second position's W1AW on 20 m CW is the contact the first already logged, however it
+    /// copied the section, as a position's own log counts only the contacts it counts. Read off
+    /// the legacy `class`/`sect` a v1 position streams (`wq`), through the one synthesis.
+    #[test]
+    fn a_field_day_clubs_board_is_its_sections_and_a_club_dupe_brings_none() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.merge(&wq("aaaa", 1, "W1AW", "20m", "CW", "CT", 100), 10);
+        club.merge(&wq("bbbb", 1, "W1AW", "20m", "CW", "EMA", 200), 11);
+        club.merge(&wq("bbbb", 2, "K1ABC", "40m", "CW", "me", 300), 12);
+        assert_eq!(club.worked_mults("SECTION"), ["CT", "ME"]);
+        assert!(
+            club.worked_mults("CLASS").is_empty(),
+            "the class is no board"
+        );
+        let pair = |v: &str| ("SECTION".to_string(), v.to_string());
+        assert_eq!(club.club_state(0, 0, 0, 13).mults, [pair("CT"), pair("ME")]);
     }
 
     /// ⭐ **Two positions logging the same station: the second is the CLUB dupe** — kept
@@ -6642,6 +7759,22 @@ mod tests {
         assert_eq!(club.remove("bbbb0002", "aaaa0001", 102), Ok(()));
         assert!(club.is_removed("bbbb0002"));
         assert_eq!(club.link("bbbb0002", 102), PositionLink::Removed);
+        // Every laptop's board says so with the next club line (`WireBoardRow::removed`), the
+        // line itself staying.
+        let flagged = |c: &ClubLog| -> Vec<(String, bool)> {
+            c.board_rows(102)
+                .into_iter()
+                .map(|r| (r.pos, r.removed))
+                .collect()
+        };
+        assert_eq!(
+            flagged(&club),
+            [
+                ("aaaa0001".to_string(), false),
+                ("bbbb0002".to_string(), true),
+                ("cccc0003".to_string(), false)
+            ]
+        );
         assert_eq!(club.held("bbbb0002", cw), Err(POSITION_REMOVED.to_string()));
         assert_eq!(
             club.held("cccc0003", ssb),
@@ -6671,6 +7804,10 @@ mod tests {
         );
         assert_eq!(club.allow_back("bbbb0002", 105), Ok(()));
         assert!(!club.is_removed("bbbb0002"));
+        assert!(
+            flagged(&club).iter().all(|(_, removed)| !removed),
+            "and stops saying so after Allow back"
+        );
         assert_eq!(club.held("bbbb0002", cw), Ok(()), "served again");
         assert_eq!(club.link("bbbb0002", 105), PositionLink::Connected);
         assert_eq!(
@@ -6839,5 +7976,166 @@ mod tests {
             (None, None),
             "another address"
         );
+    }
+
+    // ---- the host's own screen lists the club's contacts ------------------
+
+    /// `(position, seq)` of each listed contact, with its mark.
+    fn listed(club: &ClubLog, limit: usize) -> Vec<(String, u64, bool)> {
+        club.newest(limit)
+            .iter()
+            .map(|e| (e.row.posid.clone(), e.row.seq, e.dupe))
+            .collect()
+    }
+
+    /// `(position, seq)` of each contact the club's files write, in their order.
+    fn in_the_file(club: &ClubLog) -> Vec<(String, u64)> {
+        club.unique_log_rows()
+            .into_iter()
+            .map(|i| (club.rows()[i].posid.clone(), club.rows()[i].seq))
+            .collect()
+    }
+
+    /// ⭐ **The host's club log lists the club's contacts newest first, by the time each was
+    /// made** — the logging position's own clock, which the club's files write — the later merge
+    /// first between two made in one second, and no more of them than it is asked for: the
+    /// newest, never the first merged. An offline position's catch-up lands at the times its
+    /// contacts were made, not on top of the list.
+    #[test]
+    fn the_hosts_club_log_lists_its_contacts_newest_first_and_no_more_than_asked() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.merge(&wq("aaaa", 1, "K1AAA", "20m", "CW", "CT", 100), 10);
+        club.merge(&wq("aaaa", 2, "K1BBB", "20m", "CW", "CT", 300), 11);
+        // An offline position's catch-up: merged last, made in between.
+        club.merge(&wq("bbbb", 1, "K1CCC", "40m", "CW", "EMA", 200), 12);
+        // Made in the same second as K1BBB, merged after it.
+        club.merge(&wq("bbbb", 2, "K1DDD", "40m", "CW", "EMA", 300), 13);
+        let calls = |limit: usize| -> Vec<String> {
+            club.newest(limit)
+                .iter()
+                .map(|e| e.row.call.clone())
+                .collect()
+        };
+        assert_eq!(calls(10), ["K1DDD", "K1BBB", "K1CCC", "K1AAA"]);
+        assert_eq!(calls(2), ["K1DDD", "K1BBB"], "the newest two");
+        assert!(calls(0).is_empty());
+        assert_eq!(
+            club.rows().len(),
+            4,
+            "the list takes nothing out of the log"
+        );
+    }
+
+    /// ⭐ **The contact the club log marks as a duplicate is the one its files leave out** — the
+    /// earliest-wins dedupe the Club ADIF and Club Cabrillo are written by, read once. The
+    /// LATER-merged row here is the EARLIER contact (an offline position's re-push), so the file
+    /// keeps it and the first-merged row is the duplicate: a mark judged in merge order would
+    /// fall on the wrong row. CONTROL: the same station on a new band is no duplicate. Each
+    /// contact carries what it received, read as the file reads it.
+    #[test]
+    fn the_club_logs_duplicate_is_the_contact_its_files_leave_out() {
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.merge(&wq("aaaa", 1, "W1AW", "20m", "DIG", "CT", 500), 10);
+        let mut earlier = wq("bbbb", 1, "W1AW", "20m", "DIG", "CT", 100);
+        earlier.class = "5A".into();
+        club.merge(&earlier, 11);
+        club.merge(&wq("bbbb", 2, "W1AW", "40m", "DIG", "CT", 600), 12);
+        assert_eq!(
+            listed(&club, CLUB_LOG_SHOWN),
+            [
+                ("bbbb".to_string(), 2, false),
+                ("aaaa".to_string(), 1, true),
+                ("bbbb".to_string(), 1, false),
+            ]
+        );
+        let mut unmarked: Vec<(String, u64)> = listed(&club, CLUB_LOG_SHOWN)
+            .into_iter()
+            .filter(|(_, _, dupe)| !dupe)
+            .map(|(pos, seq, _)| (pos, seq))
+            .collect();
+        let mut file = in_the_file(&club);
+        unmarked.sort();
+        file.sort();
+        assert_eq!(
+            unmarked, file,
+            "the file writes exactly the unmarked contacts"
+        );
+        let got: Vec<Vec<(&str, String)>> = club
+            .newest(CLUB_LOG_SHOWN)
+            .iter()
+            .map(|e| e.rx.iter().map(|v| (v.key, v.raw.clone())).collect())
+            .collect();
+        assert_eq!(
+            got[2],
+            [("CLASS", "5A".to_string()), ("SECTION", "CT".to_string())],
+            "the earlier contact's own exchange"
+        );
+    }
+
+    /// ⭐ **In a contest that wants repeats reported, the club log marks the repeat its file
+    /// marks.** The New York QSO Party's file writes both contacts and the later one as its
+    /// zero-point repeat, in the order they were made; the list marks the same one, and the
+    /// later-merged row is the earlier contact, so merge order would mark the other.
+    #[test]
+    fn a_club_whose_contest_reports_dupes_marks_the_repeat_its_file_marks() {
+        let mut club = ClubLog::for_ruleset(party("nyqp"), "NYQP TEST");
+        let row = |pos: &str, seq: u64, when: u64| WireQso {
+            pos: pos.into(),
+            seq,
+            call: "K2AAA".into(),
+            class: String::new(),
+            sect: String::new(),
+            ex: party_fields("nyqp", &[("RST", "599"), ("QTH", "BRX")]),
+            mex: party_fields("nyqp", &[("RST", "599"), ("QTH", "ALB")]),
+            band: "20m".into(),
+            mode: "CW".into(),
+            sub: String::new(),
+            when,
+            op: String::new(),
+            sat: String::new(),
+            sat_fm: false,
+        };
+        club.merge(&row("bbbb", 1, 2_000), 1);
+        club.merge(&row("aaaa", 1, 1_000), 2);
+        let log = club.unique_log_with("W2XYZ", party_session("nyqp", "NY", "ALB"));
+        let mut file: Vec<(String, u64, bool)> = in_the_file(&club)
+            .into_iter()
+            .zip(log.qsos())
+            .map(|((pos, seq), q)| (pos, seq, q.dupe))
+            .collect();
+        let mut list = listed(&club, CLUB_LOG_SHOWN);
+        assert_eq!(
+            list,
+            [
+                ("bbbb".to_string(), 1, true),
+                ("aaaa".to_string(), 1, false)
+            ],
+            "the later contact is the repeat"
+        );
+        file.sort();
+        list.sort();
+        assert_eq!(list, file, "both in the file, the same one marked");
+    }
+
+    /// A satellite contact Winter Field Day gives no credit is in no file and no score, and is no
+    /// one's duplicate: the club log does not mark it, as the position's own log does not. A
+    /// terrestrial repeat of the contact it holds is marked. CONTROL: the file leaves out both.
+    #[test]
+    fn a_satellite_contact_winter_field_day_gives_no_credit_is_no_duplicate() {
+        let mut club = ClubLog::new(FdEvent::WinterFd, "TEST WFD");
+        club.merge(&wq("aaaa", 1, "W1AW", "2m", "PH", "CT", 100), 10);
+        let mut bird = wq("bbbb", 1, "W1AW", "2m", "PH", "CT", 200);
+        bird.sat = "AO-91".into();
+        club.merge(&bird, 11);
+        club.merge(&wq("bbbb", 2, "W1AW", "2m", "PH", "CT", 300), 12);
+        assert_eq!(
+            listed(&club, CLUB_LOG_SHOWN),
+            [
+                ("bbbb".to_string(), 2, true),
+                ("bbbb".to_string(), 1, false),
+                ("aaaa".to_string(), 1, false),
+            ]
+        );
+        assert_eq!(in_the_file(&club), [("aaaa".to_string(), 1)]);
     }
 }

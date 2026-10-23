@@ -1,18 +1,18 @@
-import { useStationCapability } from '../stationAccess'
-import { useNavigation } from '../remote-web/useNavigation'
-import { settingsForm, type SettingsConfiguration } from '../remote-web/configuration'
-import { useAmplifierFollow } from '../remote-web/useAmplifierFollow'
-import { useReceiverGain } from '../remote-web/useReceiverGain'
-import { useRemotePreferences } from '../remote-web/useRemotePreferences'
+import { useStationCapability, useStationControl } from '../stationAccess'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { RemoteStationsWindow } from '../remote-native/RemoteStationsWindow'
 import { LanStation } from '../remote-native/LanStation'
+import { isStreamInput } from '../remote-native/stream-input'
+import { useStreamWatched } from '../remote-native/stream-watched'
 import { BetaNote } from '../remote-web/BetaNote'
 import { SAT_VFO_MAPS } from '../features/satVfo'
-import { JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
+import { JS8_ALL_SPEEDS_MASK, JS8_SPEED_LIST, JS8_UNJOINABLE_GROUPS } from '../js8Vocab'
+import { Js8ComposeSettings } from './Js8ComposeSettings'
+import { js8CqTextRefused } from '../js8Compose'
 import { confirmDialog } from '../confirm'
-import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
+import { Js8FrequencySettings } from './Js8FrequencySettings'
+import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   clearDataFolder,
@@ -98,11 +98,24 @@ import {
   type RadioProfilePatch,
   testCat,
   probeCatPorts,
+  tciProbe,
+  tciServerDisconnect,
   qrzTestConnection,
   syncQrz,
   n3fjpTestConnection,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import {
+  TCI_DEFAULT_HOST,
+  TCI_DEFAULT_PORT,
+  TCI_DIALECTS,
+  TCI_RIG_MODEL,
+  TCI_RIG_MODEL_NAME,
+  tciDialectShown,
+  tciPortForDialect,
+  tciProbeMessage,
+  tciTrxChoices,
+} from '../tci'
 // What reads the catalog today: the panel SHELL (its chrome, the tab rail, Save, and the
 // toasts/confirms its handlers raise), the whole Appearance tab (Workspace + Features +
 // Accessibility), the Logging & Connectors sections above Confirmations (Connections,
@@ -195,6 +208,8 @@ import { elementBandParts } from '../features/elementBands'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, revealDiagLog, revealRecordings } from '../api'
+import { drivesAnotherStation } from '../features/durableStore'
+import { ShackFilesSave } from './ShackFilesSave'
 import { getCloudlogStations, type CloudlogStation } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { sayExportLacks } from '../features/exportLacks'
@@ -205,6 +220,8 @@ import { cloudlogLocationMismatch } from '../settings/cloudlogLocation'
 import { SettingsStation } from './SettingsStation'
 import { SettingsClusterNodes } from './SettingsClusterNodes'
 import { SettingsStreetMaps } from './SettingsStreetMaps'
+import { Js8ApiSettings } from './Js8ApiSettings'
+import { TciServerSettings, sharePortClash } from './TciServerSettings'
 import { getClusterNodes } from '../api'
 import type { ClusterNodes } from '../types'
 import { SetupHealth } from './SetupHealth'
@@ -220,8 +237,11 @@ import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { SettingsSearch } from './SettingsSearch'
 import { SettingsLicenses } from './SettingsLicenses'
 import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
+import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
+import { Js8ListsSettings } from './Js8ListsSettings'
 import { resolveTarget } from '../settings/registry'
-import { changedSince, patchSettings } from '../settings/patch'
+import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
+import { changedSince, mergeListEdit, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
 // the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
 import { FSK_ID_SECONDS_LABEL, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
@@ -232,7 +252,7 @@ import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { TextSize } from '../useTextSize'
-import type { ThemeChoice } from '../useTheme'
+import type { Theme, ThemeChoice } from '../useTheme'
 import { skinOf, type SkinId } from '../features/skins'
 import type { NightChoice } from '../useNight'
 import type { Motion } from '../useMotion'
@@ -250,6 +270,7 @@ import { ARRL_SECTIONS_BY_DIVISION, RETIRED_SECTIONS } from '../features/arrlSec
 // end there (mac QA audit, 2026-08-17). The check moved to the shared platform module when
 // the modifier-chord labels needed it too.
 import { IS_MAC, IS_WINDOWS } from '../platform'
+import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from '../settings/ampAddress'
 
 interface Props {
   /** The live contest session, for the READ-ONLY role read-out on the Contesting tab.
@@ -316,6 +337,9 @@ interface Props {
    *  setter: owned by App's `useSkin`. Optional like the theme. */
   skin?: SkinId | null
   onSkinChange?: (id: SkinId | null) => void
+  /** The theme the page paints, light or dark (System resolved): what Colours names the standard
+   *  Light's own colours by. Optional like the theme. */
+  paintedTheme?: Theme
   /** #215: Field mode — maximum contrast plus larger type (`useFieldMode`). It shipped as a
    *  chip in the top bar only, which is the other half of why the operator who asked for a
    *  high-contrast, large-text setting could not find one: the two halves of the answer were
@@ -487,6 +511,8 @@ const APP_DEFAULT_BAUD = 38400
  */
 export const RIG_FIXED_BAUD = new Map<number, number>([
   // Yaesu
+  [1002, 4800], // FT-1000
+  [1003, 4800], // FT-1000D
   [1004, 4800], // FT-1000MP Mark-V
   [1010, 4800], // FT-736R
   [1014, 4800], // FT-920
@@ -598,14 +624,14 @@ export const baudForRotator = (modelNum: number, currentBaud: number): number | 
 }
 
 /**
- * PstRotatorAz (YO3DMU), which takes its commands over UDP rather than a serial line: Hamlib's
- * PstRotator backend is model 3, and the port box takes the program's address, 12000 on this
- * machine by default ("UDP Control" in its Setup). The backend writes a bearing with `%f.2`, a
- * typo for `%.2f` that is in the bundled Hamlib 4.7.1's own format string and still on Hamlib's
- * master: 123.4° goes out as `123.400002.2`. Whether PstRotatorAz reads that as 123.4 takes a
- * real one to tell, so the hint says what is sent. Not prose, like `ROTATOR_EXAMPLES`.
+ * PstRotatorAz (YO3DMU), which takes its commands over UDP rather than a serial line. The entry
+ * keeps Hamlib's number for it, model 3, but Nexus talks to PstRotatorAz itself
+ * (`tempo_audio::pstrotator`), because Hamlib's backend garbles the bearing and has no stop. The
+ * port box takes the program's address, 12000 on this machine by default ("UDP Control" in its
+ * Setup), and its replies come back on that port + 1, which Nexus must be able to listen on.
+ * Not prose: the address is the program's own default, a token.
  */
-const PSTROTATOR = { model: 3, address: '127.0.0.1:12000', bearing: '123.4', sent: '123.400002.2' } as const
+const PSTROTATOR = { model: 3, address: '127.0.0.1:12000', reply: '12001' } as const
 
 /**
  * The curated rotator list. Model numbers and the `(az)` / `(az/el)` suffixes are checked
@@ -690,6 +716,11 @@ type WorkingFrequency = NonNullable<Settings['workingFrequencies']>[number]
 
 /** The worldwide 60 m FT8 dial (#175) — `bandplan::SIXTY_M_FT8_WORLDWIDE_MHZ` on the Rust side, which
  *  the band button tunes for a non-US callsign. Shown beside the US row below. */
+// SDRconnect as SDRplay ships it: on this computer, its WebSocket API on 5454. The same values as
+// the backend's `default_sdrconnect_host` / `SDRCONNECT_DEFAULT_PORT` (settings.rs).
+const SDRCONNECT_DEFAULT_HOST = '127.0.0.1'
+const SDRCONNECT_DEFAULT_PORT = 5454
+
 const SIXTY_M_FT8_WORLDWIDE_MHZ = 5.357
 
 /** The stock WSJT-X working-frequency table, shown read-only for reference.
@@ -892,76 +923,36 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     yaesuRfScope: s.yaesuRfScope ?? false,
     flexNativeAudio: s.flexNativeAudio ?? false,
     flexNativeCat: s.flexNativeCat ?? false,
+    flexNativeUnbenched: s.flexNativeUnbenched ?? false,
     icomLanHost: s.icomLanHost ?? '',
     icomLanUser: s.icomLanUser ?? '',
     icomLanPort: s.icomLanPort ?? 50001,
+    // The TCI connection, per radio: Rust's defaults where the form has none.
+    tciHost: s.tciHost ?? '127.0.0.1',
+    tciPort: s.tciPort ?? 50001,
+    tciTrx: s.tciTrx ?? 0,
+    tciDialect: s.tciDialect ?? 'auto',
+    tciAudio: s.tciAudio ?? true,
+    tciPan: s.tciPan ?? false,
+    tciSpots: s.tciSpots ?? false,
   }
 }
 
 /**
- * The example network addresses the Logging & Connectors fields show INSIDE a placeholder.
- *
- * Invariant tokens, gathered rather than inlined for the reason `STATION_EXAMPLES` states: a
- * bare address in a `placeholder=` is the moment someone has to decide which category the
- * value is in, and an address a translator "localises" connects to nothing. The prose beside
- * them — "(empty = off)" — is a catalog entry that interpolates one of these.
- */
-const LOGGER_EXAMPLES = {
-  dxkeeperHost: '127.0.0.1',
-  n3fjpHost: '192.168.1.10',
-  n1mmAddr: '127.0.0.1:12060',
-  clusterNode: 've7cc.net:23',
-} as const
-
-/**
- * The club-call example on Settings ▸ Contesting ▸ Who's who at this event. A callsign, so it
- * is invariant — the same characters in every language, and a "localised" one is not a call.
- */
-const FD_WHO_EXAMPLES = {
-  clubCall: 'W9ABC',
-} as const
-
-/**
- * The Confirmations placeholders that are TOKENS rather than prose — same rule as
- * `LOGGER_EXAMPLES`, one category up: a "localised" `rbuapp_` prefix matches no token
- * RepeaterBook issues, and a translated example hostname resolves nowhere. The station-profile
- * placeholder is the bare number `1` and stays inline, as every number alone does. `lanRanges`
- * is the address ranges the plain-http note names (#378): addresses, written as an operator types
- * them, interpolated into the prose rather than left in it.
+ * The Confirmations placeholders that are TOKENS rather than prose: a "localised" `rbuapp_`
+ * prefix matches no token RepeaterBook issues. `lanRanges` is the address ranges the plain-http
+ * note names (#378): addresses, written as an operator types them, interpolated into the prose
+ * rather than left in it.
  */
 const CONFIRMATION_EXAMPLES = {
   rbToken: 'rbuapp_…',
-  cloudlogUrl: 'https://log.example.com',
   lanRanges: '192.168.x.x, 10.x.x.x, 172.16–31.x.x, 127.x.x.x',
-} as const
-
-/**
- * The serial-device names the Rig & CAT port fields show INSIDE a placeholder, one per
- * platform — same rule as `LOGGER_EXAMPLES`. A device name is whatever the OS enumerated, so a
- * "localised" `COM16` or `/dev/cu.usbserial-1420` names no port on any machine; the prose
- * around them ("Select or type, e.g. …") is a catalog entry that interpolates one of these.
- */
-const RIG_EXAMPLES = {
-  macSerialPort: '/dev/cu.usbserial-1420',
-  serialPort: 'COM16',
-} as const
-
-/**
- * The rotator's own device and address examples — the same rule as `RIG_EXAMPLES` one section
- * down the tab. A controller's serial device is whatever the OS enumerated and `127.0.0.1:4533`
- * is rotctld's default address; a "localised" one reaches nothing. The prose around them
- * ("host:port — e.g. …") is a catalog entry that interpolates one of these.
- */
-const ROTATOR_EXAMPLES = {
-  macPort: '/dev/cu.usbserial-1420',
-  port: 'COM7 / /dev/ttyUSB1',
-  host: '127.0.0.1:4533',
 } as const
 
 /**
  * Amplifier family tokens and their names.
  *
- * Same category as `ROTATOR_EXAMPLES`: NOT prose. The values are the exact strings Rust stores
+ * NOT prose. The values are the exact strings Rust stores
  * in `amp_model` ('' | 'spe' | 'kpa') and the labels are manufacturers' product names, which are
  * the same in every language — a translated "SPE Expert 1.3K-FA" names no amplifier anyone owns.
  * The one word that IS prose, "no amplifier", goes through the catalog.
@@ -971,16 +962,10 @@ const AMP_FAMILIES = [
   { value: 'kpa', label: 'Elecraft KPA500 / KPA1500' },
 ] as const
 
-/** Serial-device examples for the amplifier port. Device paths, never translated. */
-const AMP_EXAMPLES = {
-  macPort: '/dev/cu.usbserial-1410',
-  port: 'COM8 / /dev/ttyUSB2',
-} as const
-
 /**
  * OmniRig's two rig slots, named the way OmniRig's own window names them.
  *
- * Same category as `RIG_EXAMPLES`: this is not prose, it is the string an operator reads in
+ * Same category as `AMP_FAMILIES`: this is not prose, it is the string an operator reads in
  * ANOTHER program's interface and has to match this picker against. A translated "RIG 1" names
  * nothing in OmniRig, so the label the panel shows is also the label OmniRig shows. Indexed by
  * the stored slot number, which is the `value` beside it.
@@ -1003,18 +988,6 @@ const MACRO_SET_QSO = 'QSO'
 const MACRO_SET_CQ = 'CQ'
 
 /**
- * The keying-interface port examples the CW and RTTY placeholders show — same rule as
- * `RIG_EXAMPLES` above. A COM number is whatever the OS enumerated, so a "localised" one names
- * no port; the prose around it ("… — the keying interface") is a catalog entry that
- * interpolates one of these.
- */
-const KEYING_EXAMPLES = {
-  winkeyerPort: 'COM6',
-  cwKeyPort: 'COM7',
-  rttyFskPort: 'COM8',
-} as const
-
-/**
  * The RTTY Auto-call timing bounds and the values the controls ship carrying (#304).
  *
  * ⚠️ **A SECOND COPY OF A NUMBER THE ENGINE ALSO HOLDS**, and the reason it is exported is that
@@ -1034,13 +1007,12 @@ export const RTTY_AUTO_REPEATS_DEFAULT = 3
 /**
  * APRS's own wire formats, shown as examples or written into a frame.
  *
- * `ssid` and `watchCalls` are callsigns, `path` is a digipeater path the packet carries
- * verbatim, and `isHost` is a hostname — all four are matched literally by something outside
- * this program, so all four stay here and are interpolated into the prose beside them.
+ * `ssid` is a callsign, `path` is a digipeater path the packet carries verbatim, and `isHost`
+ * is a hostname — all three are matched literally by something outside this program, so all
+ * three stay here and are interpolated into the prose beside them.
  */
 const APRS_EXAMPLES = {
   ssid: 'KD9TAW-9',
-  watchCalls: 'W9XYZ-9, KD9ABC',
   path: 'WIDE1-1, WIDE2-1',
   isHost: 'rotate.aprs2.net',
 } as const
@@ -1059,9 +1031,11 @@ const ISS_SSTV_MHZ = 145.8
  * Tokens the panel prints beside a number or stores as a `<select>` value, where the row has
  * no prose in it at all. Named rather than written inline for the `MACRO_SET_QSO` reason: a
  * bare word in JSX text is what the i18n guard reads as un-migrated English. `RTS` is a serial
- * control line and `Hz` a unit symbol — the same category as `LINK_TOKENS` in the Now-Bar.
+ * control line, `USB` a sideband and `Hz` a unit symbol — the same category as `LINK_TOKENS` in
+ * the Now-Bar.
  */
 const SERIAL_LINE_RTS = 'RTS'
+const SIDEBAND_USB = 'USB'
 const UNIT_HZ = 'Hz'
 
 /**
@@ -1108,6 +1082,7 @@ export function SettingsPanel({
   onThemeChange,
   skin = null,
   onSkinChange,
+  paintedTheme,
   fieldMode = false,
   onFieldModeChange,
   highContrast = false,
@@ -1120,15 +1095,8 @@ export function SettingsPanel({
   motion = 'system',
   onMotionChange,
 }: Props) {
-  const configuration=useNavigation<SettingsConfiguration>('settings')
-  const remote=configuration.remote
+  const remote = !useStationControl()
   const canSelectRadio = useStationCapability('radioSelection')
-  const remoteFollow = useAmplifierFollow(configuration.value, activeRadioId, configuration.refresh)
-  const remoteGain = useReceiverGain(configuration.value, activeRadioId, radio, configuration.refresh)
-  // Remote: the operating preferences the station lets this browser change. Every other field stays
-  // read-only (`disabled={remote}`); these follow the station's offer instead.
-  const remotePrefs = useRemotePreferences(configuration.value, configuration.refresh)
-  const locked = (key: FieldKey) => remote && !remotePrefs.canEdit(key)
   // Restore-from-backup (#28 item 4). A hidden file input, the same shape the Logbook's ADIF
   // import uses — Tauri has no native picker wired here and this needs none.
   const backupFileRef = useRef<HTMLInputElement | null>(null)
@@ -1247,6 +1215,15 @@ export function SettingsPanel({
     if (a.logbookGlobe !== undefined) setLogbookGlobe(a.logbookGlobe)
   }
   const [form, setForm] = useState<Settings | null>(null)
+  // From a computer driving the station, the read names the settings a save from there keeps as
+  // the station has them (`stationOnlySettings`): each shows here read-only, and says so, instead
+  // of taking an edit the save would quietly put back. At the station the read names none.
+  const stationOnly = (key: FieldKey) => form?.stationOnlySettings?.includes(key) === true
+  const locked = (key: FieldKey) => remote || stationOnly(key)
+  const setAtStation = (key: FieldKey) =>
+    stationOnly(key) ? (
+      <span className="settings-hint" data-set-at-station={key}>{t('settings.stationOnly.hint')}</span>
+    ) : null
   // #289 — the data + log folder. Read once when Settings opens; a change applies at the next
   // launch, so the readout keeps saying what THIS run is using until then.
   const [dataFolder, setDataFolderInfo] = useState<DataFolderInfo | null>(null)
@@ -1283,12 +1260,6 @@ export function SettingsPanel({
       if (picked) setDataFolderPath(picked)
     }, t('settings.dataFolder.browse.failed'))
   }
-  useEffect(()=>{
-    if(!remote)return
-    const next=configuration.value?settingsForm(configuration.value):null
-    // A refreshed document keeps unsaved preference edits unless the station changed that setting.
-    setForm(remotePrefs.rebase(form,next,configuration.value));dirtyRef.current=false;savedRef.current=next;setStatus('idle')
-  },[remote,configuration.value])
   // The blocklist editor's text — its OWN write path (apiSetBlockedCalls, the narrow
   // verb), never the form save: the engine deliberately ignores blockedCalls in a
   // whole-struct save so a stale form can't revert a mid-QSO Alt-click. Seeded from the
@@ -1609,6 +1580,38 @@ export function SettingsPanel({
   const [qrzSyncing, setQrzSyncing] = useState(false)
   const [hamqthPw, setHamqthPw] = useState('')
   const [clublogPw, setClublogPw] = useState('')
+  // The ClubLog key shows as •••• until Reveal at the station's own screen; any press or key that
+  // comes through a stream masks it again.
+  const [clublogKeyShown, setClublogKeyShown] = useState(false)
+  useEffect(() => {
+    if (!clublogKeyShown) return
+    const hide = () => { if (isStreamInput()) setClublogKeyShown(false) }
+    document.addEventListener('pointerdown', hide, true)
+    document.addEventListener('keydown', hide, true)
+    return () => {
+      document.removeEventListener('pointerdown', hide, true)
+      document.removeEventListener('keydown', hide, true)
+    }
+  }, [clublogKeyShown])
+  // While a stream watches this screen the key is hidden and Reveal refused, and the station sends
+  // none: each change reads the stored keys again (blank, with whether each is saved, while watched).
+  const watched = useStreamWatched()
+  const watchedSeen = useRef(watched)
+  useEffect(() => {
+    if (watched) setClublogKeyShown(false)
+    if (watchedSeen.current === watched) return
+    watchedSeen.current = watched
+    let live = true
+    void getSettings()
+      .then((s) => {
+        if (!live) return
+        const keys = { clublogApiKey: s.clublogApiKey, secretsSavedAtStation: s.secretsSavedAtStation }
+        setForm((prev) => (prev ? { ...prev, ...keys } : prev))
+        if (savedRef.current) savedRef.current = { ...savedRef.current, ...keys }
+      })
+      .catch(() => {})
+    return () => { live = false }
+  }, [watched])
   const [hrdlogCode, setHrdlogCodeField] = useState('')
   const [wrlKey, setWrlKeyField] = useState('')
   const [rbToken, setRbTokenField] = useState('')
@@ -1803,6 +1806,18 @@ export function SettingsPanel({
       live = false
     }
   }, [onIcomLan, icomLanRadioId, remote])
+  // Find TCI server (the TCI connection): whether a search runs, and the status line under its
+  // button. A line about one radio's address is cleared when the form moves to another radio or
+  // off the TCI connection, so it never describes a server this form is not pointed at.
+  const [tciFinding, setTciFinding] = useState(false)
+  const [tciFindNote, setTciFindNote] = useState('')
+  const onTci = form?.rigConn === 'tci'
+  // The scope source as the backend reads it (`ScopeSource::from_setting`): any word but
+  // `sdrconnect` is the radio's own.
+  const scopeFromSdrconnect = (form?.scopeSource ?? '').trim().toLowerCase() === 'sdrconnect'
+  useEffect(() => {
+    setTciFindNote('')
+  }, [onTci, editingRadioId])
   // In-progress MHz text for the override row being edited — committed only when
   // it parses as a positive number, so a half-typed "14." never corrupts the form.
   const [mhzDraft, setMhzDraft] = useState<{ idx: number; text: string } | null>(null)
@@ -1827,11 +1842,6 @@ export function SettingsPanel({
     }
     if (lastActiveRef.current === activeRadioId) return
     lastActiveRef.current = activeRadioId
-    if (remote) {
-      configuration.refresh()
-      setEditingRadioId(activeRadioId)
-      return
-    }
     void getSettings()
       .then((s) => {
         setForm(s)
@@ -1950,12 +1960,32 @@ export function SettingsPanel({
     )
   }
 
+  // True while the form edits a radio that is NOT the one in use. Its RX Gain and Tx Power then edit
+  // the form only, and Save stores them on that radio: `set_rx_gain` / `set_tx_level` take no radio,
+  // so applying them live would change the radio in use. Keyed on the LIVE active radio, as the
+  // satellite VFO map's guard is, because that is the radio the two verbs act on.
+  const editingOtherRadio = editingRadioId != null && editingRadioId !== (activeRadioId ?? form?.activeRadio)
+  // …and the hint both sliders show then, in place of their own: those call Tx Power the cockpit
+  // Pwr's control and say the RX Level meter answers RX Gain, which holds for the radio in use only.
+  const otherRadioLevelHint = (
+    <T
+      k="settings.audio.multiRadio.levelHint"
+      tags={{ b: <strong /> }}
+      vals={{
+        radio:
+          form?.radios?.find((r) => r.id === editingRadioId)?.name ??
+          t('settings.audio.multiRadio.selectedRadio'),
+      }}
+    />
+  )
+
   // Apply RX capture gain to the LIVE audio stream (not just the form). Called on
   // release — `set_rx_gain` persists + returns a snapshot, so we commit once the
   // operator lets go of the slider rather than on every drag tick (which would
   // disk-thrash). The RX Level meter then responds within a poll, so the control
   // visibly "works" instead of appearing dead until a full Save.
   const applyRxGainLive = (value: number) => {
+    if (editingOtherRadio) return
     void setRxGain(value).catch(() => pushToast(t('settings.audio.rxGain.failed'), 'error'))
   }
 
@@ -1967,6 +1997,7 @@ export function SettingsPanel({
   // bypasses the throttle window so the final settled value is never silently dropped by it.
   const txLevelThrottleRef = useRef(0)
   const applyTxLevelLive = (value: number, force = false) => {
+    if (editingOtherRadio) return
     const now = Date.now()
     if (!force && now - txLevelThrottleRef.current < 60) return
     txLevelThrottleRef.current = now
@@ -1977,8 +2008,11 @@ export function SettingsPanel({
   // (radio.txLevel). When the cockpit changes it, mirror the live value into the form so the slider
   // tracks it (previously the form was a stale copy, so cockpit→Settings never showed). setForm
   // directly (not updateNum) so this live-sync never spuriously marks the form dirty.
+  // Not while the form edits another radio: the live value is the drive of the radio in use, and
+  // mirrored into another radio's form it was saved as that radio's drive.
   useEffect(() => {
     if(remote)return
+    if (editingOtherRadio) return
     const live = radio?.txLevel
     if (live == null) return
     setForm((prev) => (prev && Math.abs(prev.txLevel - live) > 1e-6 ? { ...prev, txLevel: live } : prev))
@@ -2026,6 +2060,16 @@ export function SettingsPanel({
   const updateBool = (key: FieldKey, value: boolean) => {
     markDirty()
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
+  }
+
+  // Declare or end an unassisted entry: at once, by its own command rather than Save, with the form
+  // field synced so a later Save cannot write the stale value back. The Unassisted entry switch and
+  // the offer beside a NON-ASSISTED declaration both come here, and only on the operator's click.
+  const declareUnassisted = (on: boolean) => {
+    updateBool('unassistedMode', on)
+    setUnassistedMode(on)
+      .then(() => getAssistanceJournal().then(setAssistLog))
+      .catch(() => {})
   }
 
   // The GEOGRAPHIC alert scope (#174). Both halves are plain add/remove on a list, and both
@@ -2096,13 +2140,29 @@ export function SettingsPanel({
   }
   // JS8Call's allow/deny lists, one comma-separated field each, upper-cased as JS8Call's
   // `splitWords` reads them (Configuration.cpp:2416-2428).
-  const setJs8CallList = (key: 'js8AutoreplyAllow' | 'js8AutoreplyDeny' | 'js8HbAckDeny', raw: string) => {
+  const setJs8CallList = (
+    key: 'js8AutoreplyAllow' | 'js8AutoreplyDeny' | 'js8HbAckDeny' | 'js8SpotNever',
+    raw: string,
+  ) => {
     markDirty()
     const calls = raw
       .split(',')
       .map((c) => c.trim().toUpperCase())
       .filter(Boolean)
     setForm((prev) => (prev ? { ...prev, [key]: calls } : prev))
+  }
+  // The JS8 lists, marks and sounds (Js8ListsSettings): each list as it parses, each mark as typed.
+  const setJs8Words = (key: 'js8RxBlocklist' | 'js8HighlightPrimary' | 'js8HighlightSecondary', list: string[]) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, [key]: list } : prev))
+  }
+  const setJs8Mark = (key: 'js8Eot' | 'js8Mfi', value: string) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
+  }
+  const setJs8Sounds = (events: string[]) => {
+    markDirty()
+    setForm((prev) => (prev ? { ...prev, js8Sounds: events } : prev))
   }
   const parseJs8Groups = (raw: string): string[] =>
     raw
@@ -2151,7 +2211,7 @@ export function SettingsPanel({
   // The Guided copilot recommends the next F-key by ROLE (CQ → answer → report → 73):
   // customization changes the TEXT each key sends, never the key's job — so the
   // recommended-key highlight and the auto call fill (!) keep working for everyone.
-  // The ROLE table moved to the catalog with the CW tab's editor (batch 17), as the comment
+  // The ROLE table moved to the catalog with the CW tab's editor, as the comment
   // that stood here said it would. A role says what the key is FOR, which is prose — except
   // F1's, which is the Q-code the key sends and stays a token beside `MACRO_SET_QSO`.
   //
@@ -2421,6 +2481,56 @@ export function SettingsPanel({
     })
   }
 
+  // The Connection choice. TCI stores its own model number (`TCI_RIG_MODEL`): the SDR program
+  // drives whatever radio it runs, so there is no model to pick, and the picker is not shown. Leaving
+  // TCI takes that number back off, to "— None —", because the rigctld Nexus ships cannot load it: a
+  // Serial or Network radio left on it could never connect, so the model is asked for again.
+  const selectConn = (conn: string) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      if (conn === 'tci') {
+        return { ...prev, rigConn: conn, rigModel: TCI_RIG_MODEL, rigModelName: TCI_RIG_MODEL_NAME }
+      }
+      if (prev.rigModel === TCI_RIG_MODEL) return { ...prev, rigConn: conn, rigModel: 0, rigModelName: '' }
+      return { ...prev, rigConn: conn }
+    })
+  }
+
+  // The TCI program, as `tci_dialect` stores it. Naming a program fills in the port it comes set to
+  // (`tciPortForDialect`), over another program's port only.
+  const selectTciDialect = (dialect: string) => {
+    markDirty()
+    setForm((prev) =>
+      prev
+        ? { ...prev, tciDialect: dialect, tciPort: tciPortForDialect(prev.tciPort ?? TCI_DEFAULT_PORT, dialect) }
+        : prev,
+    )
+  }
+
+  // Find TCI server: the address in the form, its port first and then the ports the programs come
+  // set to. A server found on another port fills that port in, as Detect's "Use this" fills a found
+  // radio in; the operator saves it.
+  const onFindTci = () => {
+    if (!form) return
+    const host = (form.tciHost ?? '').trim() || TCI_DEFAULT_HOST
+    const port = form.tciPort ?? TCI_DEFAULT_PORT
+    setTciFinding(true)
+    setTciFindNote(t('settings.rigControl.tci.find.searching', { host }))
+    tciProbe(host, port)
+      .then((r) => {
+        const moved = r.found != null && r.found.port !== port
+        if (r.found && moved) updateNum('tciPort', r.found.port)
+        setTciFindNote(tciProbeMessage(r, moved))
+      })
+      .catch((e) =>
+        setTciFindNote(
+          t('settings.rigControl.tci.find.failed', { error: e instanceof Error ? e.message : String(e) }),
+        ),
+      )
+      .finally(() => setTciFinding(false))
+  }
+
   // The rotator twin, and it exists because the rotator picker did NOT have one: picking a
   // model wrote `rotatorModel` and nothing else, so a SPID or a Green Heron kept the app-wide
   // 9600 that its backend does not run at. Same rule, same shape — see `ROT_FIXED_BAUD`.
@@ -2455,7 +2565,20 @@ export function SettingsPanel({
       onSaved?.()
     })
   }
-  const handleAddRadio = () => {
+  const handleAddRadio = async () => {
+    // Selecting the new radio for editing (below) replaces what the rig form holds, so unsaved
+    // edits get the same confirm as Edit gives them.
+    if (
+      dirtyRef.current &&
+      !(await confirmDialog({
+        title: t('settings.radios.edit.confirm.title'),
+        body: t('settings.radios.edit.confirm.body'),
+        confirmLabel: t('settings.radios.edit.confirm.action'),
+        danger: true,
+      }))
+    ) {
+      return
+    }
     // Adding does not switch the station onto the new radio -- see Engine::add_radio. Select it
     // for EDITING instead, so the operator lands on the profile they just made and can configure
     // it, while the rig they are actually operating keeps running.
@@ -2464,7 +2587,13 @@ export function SettingsPanel({
       reloadRadios()
       const fresh = await getSettings()
       const added = fresh.radios?.[fresh.radios.length - 1]
-      if (added) setEditingRadioId(added.id)
+      if (!added) return
+      // …with ITS config in the form, as Edit loads one. Selected without it, the form still held
+      // the radio it was editing before, and the first Save copied that radio's port, baud and
+      // sound card onto the new one (two Yaesus on a Mac, 2026-10-14).
+      setForm((prev) => (prev ? { ...prev, ...radioPatch(added) } : prev))
+      setEditingRadioId(added.id)
+      dirtyRef.current = false
     })
   }
   const handleRemoveRadio = async (id: number) => {
@@ -2483,8 +2612,16 @@ export function SettingsPanel({
     ) {
       return
     }
-    void withErrorToast(() => removeRadio(id), t('settings.radios.remove.failed')).then((s) => {
+    void withErrorToast(() => removeRadio(id), t('settings.radios.remove.failed')).then(async (s) => {
       if (!s) return
+      // …and its fields with it. Handed to the operating radio still holding the deleted radio's
+      // port, baud and sound card, the form's next Save folded them into the operating radio.
+      if (editingRadioId === id) {
+        const fresh = await getSettings()
+        const operating = fresh.radios?.find((p) => p.id === (activeRadioId ?? fresh.activeRadio))
+        if (operating) setForm((prev) => (prev ? { ...prev, ...radioPatch(operating) } : prev))
+        dirtyRef.current = false
+      }
       // If the deleted radio was the one the rig form is editing, retarget the form: a
       // dangling editingRadioId routes every later Save through update_radio_profile(<gone
       // id>), which no-ops on a missing id — so station-wide edits (callsign, credentials)
@@ -2545,6 +2682,8 @@ export function SettingsPanel({
   // optimistic flip would show "on" on a computer that refused, which is exactly the lie the
   // unsupported-platform message exists to prevent.
   const [launchAtLoginError, setLaunchAtLoginError] = useState<string | null>(null)
+  // A computer driving a station has a "This computer" section, for its headset.
+  const driving = useDriving()
   const toggleLaunchAtLogin = (on: boolean) => {
     setLaunchAtLoginError(null)
     void setLaunchAtLogin(on).then(
@@ -2687,14 +2826,6 @@ export function SettingsPanel({
     }
     void withErrorToast(() => setActiveRadio(id), t('settings.radios.switch.failed')).then((s) => {
       if (!s) return
-      if (remote) {
-        // The streamed Settings projection is deliberately smaller than this
-        // form. Refresh its complete configuration document after selection.
-        configuration.refresh()
-        setEditingRadioId(id)
-        onSaved?.()
-        return
-      }
       void getSettings().then((full) => {
         setForm(full)
         dirtyRef.current = false
@@ -2871,9 +3002,19 @@ export function SettingsPanel({
   // `forced` reaches the backend whatever the form held when it loaded: the contest-over checklist's
   // put-backs, which "what changed since" would drop when a value was changed elsewhere after Settings
   // opened (a seat swap in the pop-out scoreboard) and is being put back to what the form still holds.
+  //
+  // One list another writer adds to while the form is open: the 55-minute rule puts the stations it
+  // stops on the JS8 "never acknowledge" list. The form's edit of it goes over the list as it is now
+  // (`mergeListEdit`), so a station the rule added since Settings opened is never written away.
   const saveForm = (payload: NonNullable<typeof form>, forced: Partial<Settings> = {}) => {
     const changes = changedSince(savedRef.current, payload)
-    return patchSettings((live) => ({ ...(live.activeRadio === payload.activeRadio ? changes : payload), ...forced }))
+    return patchSettings((live) => {
+      const sent: Partial<Settings> = { ...(live.activeRadio === payload.activeRadio ? changes : payload), ...forced }
+      if ('js8HbAckDeny' in sent) {
+        sent.js8HbAckDeny = mergeListEdit(savedRef.current?.js8HbAckDeny ?? [], payload.js8HbAckDeny ?? [], live.js8HbAckDeny ?? [])
+      }
+      return sent
+    })
   }
 
   // Persist the rig form to the radio it actually describes.
@@ -2928,6 +3069,24 @@ export function SettingsPanel({
     } else {
       await saveForm({ ...next, mycall: next.mycall.trim().toUpperCase() }, forced)
     }
+    // The form's `radios` is a copy, and the writes above changed the profiles it copies, so take
+    // it again. Edit loads a radio from this copy and `withActiveRadioConfig` writes the operating
+    // radio back from it: left stale, a saved baud, port or sound card came back on the radio
+    // re-opened for Edit, and the operating radio's went back at the next save of the other one.
+    const { radios } = await getSettings()
+    setForm((prev) => (prev ? { ...prev, radios } : prev))
+    // The baseline the next Save is diffed against (`saveForm`) holds the radio fields as the form
+    // now holds them. With another radio open the flat fields hold THAT radio, while a station-wide
+    // save sends the radio in use's own config from `radios` (`withActiveRadioConfig`), so the
+    // baseline holds the same. With the edited radio's fields there, or an older copy than `radios`,
+    // a field of the radio in use read as a change, and the next Save sent that copy's drive and
+    // gain back over the cockpit's newer ones. Test CAT and Auto-test save through here too, so the
+    // radio fields move here for every caller; `commitSave` then takes the whole of what this returns.
+    const saved = { ...next, radios }
+    const baseline =
+      editingRadioId != null && editingRadioId !== next.activeRadio ? withActiveRadioConfig(saved) : saved
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(baseline), radios }
+    return baseline
   }
 
   // A station-wide save (LoTW/eQSL credentials, config profiles) that must NOT carry the rig
@@ -3449,7 +3608,6 @@ export function SettingsPanel({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if(remote){await remoteFollow.save();await remotePrefs.save(form);return}
     if (!form) return
     if (!form.mycall.trim()) {
       // Don't dead-end on another tab: route the operator to where the fix is instead of a
@@ -3495,6 +3653,24 @@ export function SettingsPanel({
       setError(t('settings.save.js8GroupCannotJoin', { group: unjoinable }))
       return
     }
+    // JS8Call's Settings refuse a CQ message that is not empty, does not start with CQ and does not
+    // hold the callsign (Configuration.cpp:3003-3008), and so does this Save.
+    if (js8CqTextRefused(form.js8CqText ?? '', form.mycall ?? '')) {
+      setTab('digital')
+      setError(t('settings.save.js8CqText'))
+      return
+    }
+    // "Share this radio with other programs" and "Share by TCI" on one port: whichever starts
+    // second cannot have it, and the operator would find out from a refusal in the log. Refused ON
+    // THE CHANGE, as the position name is: a station that already holds the two on one port (an
+    // older file, or a computer driving the station, where both are the station's) still saves
+    // everything else.
+    const portClash = sharePortClash(form)
+    if (portClash !== null && portClash !== sharePortClash(savedRef.current)) {
+      setTab('radio')
+      setError(t('settings.save.tciServerPortClash', { port: portClash }))
+      return
+    }
     // Check the RADIO before saving it. Until now the callsign was the only validated field, so
     // every way of getting the rig wrong saved silently and then behaved like broken hardware —
     // the symptom always shows up far from the cause. Errors block and name the fix; warnings are
@@ -3519,13 +3695,15 @@ export function SettingsPanel({
     // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): a Save that turns Contest mode off
     // offers it FIRST and saves nothing until it is answered — the merge and the export need the
     // session the mode holds. "Now" is what this Save would leave: the live settings, with this
-    // form's own changes. With nothing to offer, the Save goes ahead as it always did.
+    // form's own changes. It says the club chip's count of contacts the host does not have yet.
+    // With nothing to offer or say, the Save goes ahead as it always did.
     if (savedRef.current?.fdActive === true && !form.fdActive) {
       const live = await getSettings()
       const offer = contestOverOffer(
         { ...live, ...changedSince(savedRef.current, form) },
         fieldDay?.log?.length ?? 0,
         fieldDay?.event,
+        fieldDay?.club?.queued ?? 0,
       )
       if (hasOffer(offer)) {
         setOverOffer(offer)
@@ -3545,9 +3723,9 @@ export function SettingsPanel({
       // Editing a NON-active radio writes ONLY that radio's CAT/audio/PTT/rotator/native config;
       // the active radio, its flat mirror and station-wide settings are untouched (the backend
       // re-syncs the flat mirror from the still-active radio). No live rig swap.
-      await persistRadioForm(next, forced)
+      const saved = await persistRadioForm(next, forced)
       dirtyRef.current = false
-      savedRef.current = next
+      savedRef.current = saved
       setStatus('saved')
       onSaved?.()
     } catch (err) {
@@ -3570,13 +3748,13 @@ export function SettingsPanel({
     setOverOffer(null)
   }
 
-  if (!form || (remote&&!configuration.value)) {
+  if (!form) {
     return (
       <section className="panel settings-panel" data-remote-configuration={remote || undefined}>
         <div className="panel-header">
           <h2>{t('settings.panel.title')}</h2>
         </div>
-        <p className="empty" role="status">{remote ? configuration.loading ? t('remote.collectionLoading') : t('remote.collectionUnavailable') : t('settings.panel.loading')}</p>
+        <p className="empty" role="status">{t('settings.panel.loading')}</p>
       </section>
     )
   }
@@ -3798,8 +3976,6 @@ export function SettingsPanel({
           ))}
         </div>
         <div className="settings-scroll">
-          {remote && <p className="settings-note" role="status">{remoteFollow.supported || remoteGain.supported || remotePrefs.supported ? t('remote.configurationControls') : t('remote.configurationObserver')}</p>}
-          {remote && remotePrefs.supported && <p className="settings-note">{t('remote.settingsEditable')}</p>}
           {remote && (tab==='logging'||tab==='configurations') && <p className="settings-note">{t('remote.configurationLocal')}</p>}
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
           {tab === 'configurations' && !remote && (
@@ -4418,7 +4594,7 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-colours">
             <legend>{t('settings.colours.legend')}</legend>
             <span className="settings-hint">{t('settings.colours.hint')}</span>
-            <SettingsColours palette={palette} skin={skin} onChange={onPaletteChange} />
+            <SettingsColours palette={palette} skin={skin} paintedTheme={paintedTheme} onChange={onPaletteChange} />
           </fieldset>
           )}
 
@@ -4739,11 +4915,26 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- This computer: what belongs to the computer the operator sits at while it drives a
+              station over this network (client mode), kept here and never sent to the station. Its
+              Audio is the headset the station's audio plays on and the microphone. ---- */}
+          {tab === 'appearance' && driving && (
+          <fieldset className="settings-section" id="settings-this-computer">
+            <legend>{t('settings.thisComputer.legend')}</legend>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.thisComputer.audio.title')}</span>
+              <ThisComputerAudio />
+            </div>
+          </fieldset>
+          )}
+
           {/* ---- Operator & radio ---- */}
           {tab === 'station' && (
           <SettingsStation
             readOnly={remote}
             unitsLocked={remote ? locked('units') : undefined}
+            locked={locked}
+            setAtStation={setAtStation}
             form={form}
             error={error}
             bandPlan={bandPlan}
@@ -4770,7 +4961,7 @@ export function SettingsPanel({
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.remoteStream.label')}</span>
-                  <button
+                  <button disabled={locked('remoteStream')} data-setting="remoteStream"
                     type="button"
                     role="switch"
                     aria-checked={form.remoteStream === true}
@@ -4780,6 +4971,7 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
+                {setAtStation('remoteStream')}
                 <span className="settings-hint">{t('settings.remoteStream.hint')}</span>
                 {/* What the capture needs from this PC, as far as the code shows it: a minimized
                     window gives no picture, and closing Nexus ends the capture. */}
@@ -4965,7 +5157,9 @@ export function SettingsPanel({
                               ? r.rigAddr || t('settings.radios.card.noAddress')
                               : r.rigConn === 'icomlan'
                                 ? r.icomLanHost || t('settings.radios.card.noAddress')
-                                : r.serialPort || t('settings.radios.card.noPort'),
+                                : r.rigConn === 'tci'
+                                  ? `${r.tciHost || TCI_DEFAULT_HOST}:${r.tciPort ?? TCI_DEFAULT_PORT}`
+                                  : r.serialPort || t('settings.radios.card.noPort'),
                         flex:
                           (r.flexRadioIp ?? '').trim() !== ''
                             ? t('settings.radios.card.meta.flex', { ip: r.flexRadioIp ?? '' })
@@ -5275,7 +5469,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={newProfileName}
-                    placeholder={t('settings.profiles.save.placeholder')}
                     onChange={(e) => setNewProfileName(e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
@@ -5299,7 +5492,7 @@ export function SettingsPanel({
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.ptt.label')}</span>
-                <select disabled={remote}
+                <select disabled={locked('pttMethod')} data-setting="pttMethod"
                   className="settings-input"
                   value={form.pttMethod}
                   onChange={(e) => update('pttMethod', e.target.value)}
@@ -5310,7 +5503,16 @@ export function SettingsPanel({
                     </option>
                   ))}
                 </select>
+                {setAtStation('pttMethod')}
                 <span className="settings-hint">{t('settings.rigControl.ptt.hint')}</span>
+                {/* A radio Hamlib cannot key over CAT, as you look and whatever the method: the
+                    setup wizard's sentence under its keying choice. Not over OmniRig (its own rig
+                    file keys the radio) or the Icom network connection, as checkRigForm's
+                    save-time warning is not. */}
+                {form.rigConn !== 'omnirig' && form.rigConn !== 'icomlan' &&
+                  NO_CAT_PTT_TRANSCEIVERS.includes(form.rigModel) && (
+                    <span className="settings-hint">{t('settings.rigControl.ptt.noCatPtt')}</span>
+                  )}
               </label>
 
               {/* #381: which input a CAT key-down selects. Offered where Rust's `cat_ptt_mode` can
@@ -5341,15 +5543,14 @@ export function SettingsPanel({
                   <span className="settings-label">
                     {t('settings.rigControl.pttPort.label')}
                   </span>
-                  <input disabled={remote}
+                  <input disabled={locked('pttSerialPort')} data-setting="pttSerialPort"
                     className="settings-input"
                     list="serial-port-list"
                     value={form.pttSerialPort}
-                    placeholder={t('settings.rigControl.pttPort.placeholder', {
-                      example: IS_MAC ? RIG_EXAMPLES.macSerialPort : RIG_EXAMPLES.serialPort,
-                    })}
+                    placeholder={t('settings.rigControl.pttPort.placeholder')}
                     onChange={(e) => update('pttSerialPort', e.target.value)}
                   />
+                  {setAtStation('pttSerialPort')}
                   <span className="settings-hint">
                     <T k="settings.rigControl.pttPort.hint" tags={{ b: <strong /> }} />
                   </span>
@@ -5359,12 +5560,13 @@ export function SettingsPanel({
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.catRts.label')}</span>
                 <span className="settings-input-row">
-                  <input disabled={remote}
+                  <input disabled={locked('catRtsKeysPtt')} data-setting="catRtsKeysPtt"
                     type="checkbox"
                     checked={form.catRtsKeysPtt ?? false}
                     onChange={(e) => updateBool('catRtsKeysPtt', e.target.checked)}
                   />
                 </span>
+                {setAtStation('catRtsKeysPtt')}
                 <span className="settings-hint">
                   <T k="settings.rigControl.catRts.hint" tags={{ b: <strong /> }} />
                 </span>
@@ -5473,6 +5675,9 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.rigControl.detect.hint')}</span>
               </div>
 
+              {/* No model to pick on TCI: the SDR program drives whatever radio it runs, and the
+                  radio keeps TCI's own number (`selectConn`), which no entry here could show. */}
+              {form.rigConn !== 'tci' && (
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.rigModel.label')}</span>
                 {/* Type-to-find. It sits BEFORE the select, so it is what the wrapping label
@@ -5552,13 +5757,14 @@ export function SettingsPanel({
                 </span>
                 <span className="settings-hint">{t('settings.rigControl.rigModel.hint')}</span>
               </label>
+              )}
 
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.conn.label')}</span>
                 <select disabled={remote}
                   className="settings-input"
                   value={form.rigConn || 'serial'}
-                  onChange={(e) => update('rigConn', e.target.value)}
+                  onChange={(e) => selectConn(e.target.value)}
                 >
                   <option value="serial">{t('settings.rigControl.conn.serial')}</option>
                   <option value="network">{t('settings.rigControl.conn.network')}</option>
@@ -5566,8 +5772,8 @@ export function SettingsPanel({
                       OmniRig is named in the docs and in half the Windows logging ecosystem, so
                       a mac/Linux operator who goes looking for it must find the answer here
                       instead of concluding the build is broken. */}
-                  <option value="omnirig" disabled={omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).disabled}>
-                    {omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).label}
+                  <option value="omnirig" disabled={omnirigChoiceFor(IS_WINDOWS).disabled}>
+                    {omnirigChoiceFor(IS_WINDOWS).label}
                   </option>
                   {/* Offered only for the six Icoms with a network server built in, and kept while
                       chosen so the select always shows its own value; Detect never picks it, and a
@@ -5575,6 +5781,8 @@ export function SettingsPanel({
                   {(ICOM_LAN_MODELS.includes(form.rigModel) || form.rigConn === 'icomlan') && (
                     <option value="icomlan">{t('settings.rigControl.conn.icomlan')}</option>
                   )}
+                  {/* Offered for every radio: TCI serves whatever radio the SDR program runs. */}
+                  <option value="tci">{t('settings.rigControl.conn.tci')}</option>
                 </select>
                 <span className="settings-hint">
                   <T k="settings.rigControl.conn.hint" tags={{ b: <strong /> }} />
@@ -5584,7 +5792,7 @@ export function SettingsPanel({
                     k="settings.rigControl.conn.omnirig.hint"
                     tags={{ b: <strong />, em: <em /> }}
                     vals={{
-                      availability: omnirigChoiceFor(remote ? configuration.value?.platform==='windows' : IS_WINDOWS).disabled
+                      availability: omnirigChoiceFor(IS_WINDOWS).disabled
                         ? t('settings.rigControl.conn.omnirig.unavailable.why')
                         : t('settings.rigControl.conn.omnirig.install'),
                     }}
@@ -5603,8 +5811,7 @@ export function SettingsPanel({
                   >
                     {/* ⚠️ NOT PROSE. These are the labels OmniRig's OWN window puts on its two
                         slots; they are how the operator matches this picker to that window, so
-                        they read the same in every language (RIG_EXAMPLES, beside the device
-                        names, for the same reason). */}
+                        they read the same in every language. */}
                     <option value="1">{OMNIRIG_SLOTS[1]}</option>
                     <option value="2">{OMNIRIG_SLOTS[2]}</option>
                   </select>
@@ -5619,16 +5826,16 @@ export function SettingsPanel({
                   </span>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.rigControl.icomLan.host.label')}</span>
-                    <input disabled={remote}
+                    <input disabled={locked('icomLanHost')} data-setting="icomLanHost"
                       className="settings-input"
                       type="text"
                       inputMode="decimal"
                       value={form.icomLanHost ?? ''}
-                      placeholder="192.168.1.50"
                       onChange={(e) => update('icomLanHost', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
                     />
+                    {setAtStation('icomLanHost')}
                     <span className="settings-hint">
                       <T k="settings.rigControl.icomLan.host.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -5687,7 +5894,7 @@ export function SettingsPanel({
                   </label>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.rigControl.icomLan.port.label')}</span>
-                    <input disabled={remote}
+                    <input disabled={locked('icomLanPort')} data-setting="icomLanPort"
                       className="settings-input"
                       type="number"
                       inputMode="numeric"
@@ -5696,7 +5903,139 @@ export function SettingsPanel({
                       onChange={(e) => updateNum('icomLanPort', Number(e.target.value))}
                       autoComplete="off"
                     />
+                    {setAtStation('icomLanPort')}
                     <span className="settings-hint">{t('settings.rigControl.icomLan.port.hint')}</span>
+                  </label>
+                </>
+              )}
+
+              {/* The TCI connection: the SDR program's own TCI server, one WebSocket. Find TCI
+                  server reads the server's handshake and closes, writing nothing to it. The three
+                  switches at the end are stored per radio; the spots switch takes effect when spots
+                  over TCI arrive, and the note above says so. */}
+              {form.rigConn === 'tci' && (
+                <>
+                  {/* A note across the whole row, not one cell's hint: what works and what is not
+                      ready yet must not hide in a narrow column. */}
+                  <p className="settings-note" data-tci-hint>
+                    <T k="settings.rigControl.tci.hint" tags={{ b: <strong /> }} />
+                  </p>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.host.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="text"
+                      value={form.tciHost ?? TCI_DEFAULT_HOST}
+                      placeholder={TCI_DEFAULT_HOST}
+                      onChange={(e) => update('tciHost', e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <span className="settings-hint">
+                      <T k="settings.rigControl.tci.host.hint" tags={{ b: <strong /> }} />
+                    </span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.port.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="number"
+                      inputMode="numeric"
+                      min="1"
+                      max="65535"
+                      value={String(form.tciPort ?? TCI_DEFAULT_PORT)}
+                      placeholder={String(TCI_DEFAULT_PORT)}
+                      onChange={(e) => updateNum('tciPort', Number(e.target.value))}
+                      autoComplete="off"
+                    />
+                    <span className="settings-hint">
+                      <T k="settings.rigControl.tci.port.hint" tags={{ b: <strong /> }} />
+                    </span>
+                  </label>
+                  <div className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.find.label')}</span>
+                    <div className="settings-input-row">
+                      <button
+                        type="button"
+                        className="settings-refresh"
+                        onClick={onFindTci}
+                        disabled={remote || tciFinding}
+                        title={t('settings.rigControl.tci.find.title')}
+                      >
+                        {tciFinding
+                          ? t('settings.rigControl.tci.find.busy')
+                          : t('settings.rigControl.tci.find.action')}
+                      </button>
+                    </div>
+                    {/* Mounted while the section shows and empty until there is something to say,
+                        as the rig filter's count is, so a screen reader hears each answer. */}
+                    <span className="settings-hint" role="status" data-tci-find-status>
+                      {tciFindNote}
+                    </span>
+                  </div>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.trx.label')}</span>
+                    <select disabled={remote}
+                      className="settings-input"
+                      value={String(form.tciTrx ?? 0)}
+                      onChange={(e) => updateNum('tciTrx', Number(e.target.value))}
+                    >
+                      {/* TCI numbers its transceivers from 0; the programs show them from 1. */}
+                      {tciTrxChoices(form.tciTrx ?? 0).map((n) => (
+                        <option key={n} value={String(n)}>
+                          {n + 1}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="settings-hint">{t('settings.rigControl.tci.trx.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.dialect.label')}</span>
+                    <select disabled={remote}
+                      className="settings-input"
+                      value={tciDialectShown(form.tciDialect)}
+                      onChange={(e) => selectTciDialect(e.target.value)}
+                    >
+                      {TCI_DIALECTS.map((d) => (
+                        <option key={d.value} value={d.value}>
+                          {d.label ?? t('settings.rigControl.tci.dialect.auto')}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="settings-hint">{t('settings.rigControl.tci.dialect.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.audio.label')}</span>
+                    <span className="settings-input-row">
+                      <input disabled={remote}
+                        type="checkbox"
+                        checked={form.tciAudio ?? true}
+                        onChange={(e) => updateBool('tciAudio', e.target.checked)}
+                      />
+                    </span>
+                    <span className="settings-hint">{t('settings.rigControl.tci.audio.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.pan.label')}</span>
+                    <span className="settings-input-row">
+                      <input disabled={remote}
+                        type="checkbox"
+                        checked={form.tciPan ?? false}
+                        onChange={(e) => updateBool('tciPan', e.target.checked)}
+                      />
+                    </span>
+                    <span className="settings-hint">{t('settings.rigControl.tci.pan.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.rigControl.tci.spots.label')}</span>
+                    <span className="settings-input-row">
+                      <input disabled={remote}
+                        type="checkbox"
+                        checked={form.tciSpots ?? false}
+                        onChange={(e) => updateBool('tciSpots', e.target.checked)}
+                      />
+                    </span>
+                    <span className="settings-hint">{t('settings.rigControl.tci.spots.hint')}</span>
                   </label>
                 </>
               )}
@@ -5708,7 +6047,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={form.rigAddr}
-                    placeholder="127.0.0.1:5002"
                     onChange={(e) => update('rigAddr', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
@@ -5761,7 +6099,11 @@ export function SettingsPanel({
                       at it was pointing them at a daemon that refuses to start.
 
                       The check that settles this class is one command: start rigctld on the
-                      model and see whether it does. Do not infer a backend from a grep. */}
+                      model and see whether it does. Do not infer a backend from a grep.
+
+                      The TCI Server box now has a home of its own: Nexus's TCI client, the TCI
+                      Connection choice, which never goes through rigctld. So the sentence sends a
+                      TCI port there, and this field keeps the CAT server's. */}
                   <span className="settings-hint">
                     <T k="settings.rigControl.netAddr.sdrPorts" tags={{ b: <strong />, em: <em /> }} />
                   </span>
@@ -5771,8 +6113,9 @@ export function SettingsPanel({
               {/* Serial Port + Baud belong to whoever OPENS the port. With Network that is
                   rigctld over TCP; with OmniRig it is OmniRig itself, which owns the rig type,
                   the port and the baud — so asking for them here would be asking the operator
-                  to configure the same radio twice and get it wrong once. */}
-              {form.rigConn !== 'network' && form.rigConn !== 'omnirig' && form.rigConn !== 'icomlan' && (
+                  to configure the same radio twice and get it wrong once. TCI has no serial port:
+                  the SDR program is reached over its own network server. */}
+              {form.rigConn !== 'network' && form.rigConn !== 'omnirig' && form.rigConn !== 'icomlan' && form.rigConn !== 'tci' && (
                 <>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.serialPort.label')}</span>
@@ -5784,9 +6127,7 @@ export function SettingsPanel({
                     className="settings-input"
                     list="serial-port-list"
                     value={form.serialPort}
-                    placeholder={t('settings.rigControl.serialPort.placeholder', {
-                      example: IS_MAC ? RIG_EXAMPLES.macSerialPort : RIG_EXAMPLES.serialPort,
-                    })}
+                    placeholder={t('settings.rigControl.serialPort.placeholder')}
                     onChange={(e) => update('serialPort', e.target.value)}
                   />
                   {/* Shared by the CAT + PTT port inputs. The label text shows the USB product
@@ -6173,6 +6514,42 @@ export function SettingsPanel({
                 </label>
               )}
 
+              {/* The client's Beta setting for CW, Tune and the ATU, which no bench has confirmed yet
+                  (operator ruling, 2026-10-14, "A Beta setting, off by default"). Per radio, and
+                  shown only where Nexus's own Flex client is this radio's connection, the one place
+                  it means anything (`flex_client_reachable` and the opt-in above). Only at the
+                  shack: a press that comes through the Remote stream changes nothing. */}
+              {form.rigConn === 'network' &&
+                [2036, 23005].includes(form.rigModel) &&
+                form.flexNativeCat &&
+                (form.flexRadioIp ?? '').trim() !== '' && (
+                  <label className="settings-field">
+                    <span className="settings-label">
+                      {t('settings.rigControl.flexUnbenched.label')}
+                    </span>
+                    <button disabled={locked('flexNativeUnbenched')} data-setting="flexNativeUnbenched"
+                      type="button"
+                      role="switch"
+                      aria-checked={form.flexNativeUnbenched ?? false}
+                      className={`toggle${form.flexNativeUnbenched ? ' on' : ''}`}
+                      onClick={() => {
+                        // Read before anything else, while the stream's dispatch is still running.
+                        if (isStreamInput()) {
+                          pushToast(t('remote.lan.atShackOnly'), 'error')
+                          return
+                        }
+                        updateBool('flexNativeUnbenched', !form.flexNativeUnbenched)
+                      }}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                    {setAtStation('flexNativeUnbenched')}
+                    <span className="settings-hint">
+                      <T k="settings.rigControl.flexUnbenched.hint" tags={{ b: <strong /> }} />
+                    </span>
+                  </label>
+                )}
+
               {/* The log records Nexus's own CI-V engine, so it is offered where that engine drives
                   the radio, asked the way the native switch above asks it: by the model NUMBER and
                   the connection (`civBlocked`, the engine's `native_civ_model`), with the switch on,
@@ -6221,7 +6598,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={form.flexRadioIp}
-                    placeholder="e.g. 192.168.1.50"
                     onChange={(e) => update('flexRadioIp', e.target.value)}
                     autoComplete="off"
                   />
@@ -6268,7 +6644,7 @@ export function SettingsPanel({
                 <span className="settings-label">
                   {t('settings.rigControl.serialHandshake.label')}
                 </span>
-                <select disabled={remote}
+                <select disabled={locked('catSerialHandshake')} data-setting="catSerialHandshake"
                   className="settings-input"
                   value={form.catSerialHandshake ?? 'auto'}
                   onChange={(e) => update('catSerialHandshake', e.target.value)}
@@ -6282,6 +6658,7 @@ export function SettingsPanel({
                     {t('settings.rigControl.serialHandshake.xonxoff')}
                   </option>
                 </select>
+                {setAtStation('catSerialHandshake')}
                 <span className="settings-hint">
                   {t('settings.rigControl.serialHandshake.hint')}
                 </span>
@@ -6291,7 +6668,7 @@ export function SettingsPanel({
                 <span className="settings-label">
                   {t('settings.rigControl.pttLineState.label')}
                 </span>
-                <select disabled={remote}
+                <select disabled={locked('catPttLineState')} data-setting="catPttLineState"
                   className="settings-input"
                   value={form.catPttLineState ?? 'auto'}
                   onChange={(e) => update('catPttLineState', e.target.value)}
@@ -6303,6 +6680,7 @@ export function SettingsPanel({
                   <option value="low">{t('settings.rigControl.pttLineState.low')}</option>
                   <option value="high">{t('settings.rigControl.pttLineState.high')}</option>
                 </select>
+                {setAtStation('catPttLineState')}
                 <span className="settings-hint">
                   {t('settings.rigControl.pttLineState.hint')}
                 </span>
@@ -6450,7 +6828,11 @@ export function SettingsPanel({
                   aria-label={t('settings.audio.txPower.aria')}
                 />
                 <span className="settings-hint">
-                  <T k="settings.audio.txPower.hint" tags={{ b: <strong />, em: <em /> }} />
+                  {editingOtherRadio ? (
+                    otherRadioLevelHint
+                  ) : (
+                    <T k="settings.audio.txPower.hint" tags={{ b: <strong />, em: <em /> }} />
+                  )}
                 </span>
               </label>
 
@@ -6471,25 +6853,23 @@ export function SettingsPanel({
               <label className="settings-field">
                 <span className="settings-label">
                   {t('settings.audio.rxGain.label')}{' '}
-                  <span className="settings-value">×{remote ? remoteGain.gain?.toFixed(1) ?? '—' : (form.rxGain ?? 1).toFixed(1)}</span>
+                  <span className="settings-value">×{(form.rxGain ?? 1).toFixed(1)}</span>
                 </span>
-                <input disabled={remote && !remoteGain.canEdit}
+                <input disabled={remote}
                   className="settings-slider"
                   type="range"
                   min="1"
                   max="8"
                   step="0.1"
-                  value={String(remote ? remoteGain.gain ?? 1 : form.rxGain ?? 1)}
-                  onPointerDown={() => { if (remote) remoteGain.begin() }}
-                  onKeyDown={(e) => { if (remote && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) remoteGain.begin() }}
-                  onChange={(e) => remote ? remoteGain.change(Number(e.target.value)) : updateNum('rxGain', Number(e.target.value))}
-                  onPointerUp={(e) => remote ? void remoteGain.commit() : applyRxGainLive(Number((e.target as HTMLInputElement).value))}
-                  onKeyUp={(e) => remote ? void remoteGain.commit() : applyRxGainLive(Number((e.target as HTMLInputElement).value))}
-                  onPointerCancel={() => { if (remote) remoteGain.cancel() }}
-                  onBlur={() => { if (remote) remoteGain.cancel() }}
+                  value={String(form.rxGain ?? 1)}
+                  onChange={(e) => updateNum('rxGain', Number(e.target.value))}
+                  onPointerUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
+                  onKeyUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
                   aria-label={t('settings.audio.rxGain.aria')}
                 />
-                <span className="settings-hint">{t('settings.audio.rxGain.hint')}</span>
+                <span className="settings-hint">
+                  {editingOtherRadio ? otherRadioLevelHint : t('settings.audio.rxGain.hint')}
+                </span>
               </label>
             </div>
           </fieldset>
@@ -6556,6 +6936,76 @@ export function SettingsPanel({
                   {t('settings.headphoneMonitor.level.hint')}
                 </span>
               </label>
+            </div>
+          </fieldset>
+
+          {/* ---- Scope source: the radio's own panadapter, or an SDRplay receiver through
+              SDRconnect. The station's, not a radio's: the SDR follows whichever radio is in use.
+              Receive only — nothing here reaches the transmitter or the rig's CAT. ---- */}
+          <fieldset className="settings-section" id="settings-scope-source">
+            <legend>{t('settings.scopeSource.legend')}</legend>
+            <p className="settings-note">{t('settings.scopeSource.note')}</p>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.scopeSource.source.label')}</span>
+                <select disabled={remote}
+                  className="settings-input"
+                  value={scopeFromSdrconnect ? 'sdrconnect' : 'radio'}
+                  onChange={(e) => update('scopeSource', e.target.value)}
+                >
+                  <option value="radio">{t('settings.scopeSource.source.radio')}</option>
+                  <option value="sdrconnect">{t('settings.scopeSource.source.sdrconnect')}</option>
+                </select>
+                <span className="settings-hint">{t('settings.scopeSource.source.hint')}</span>
+              </label>
+              {scopeFromSdrconnect && (
+                <>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.scopeSource.host.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="text"
+                      value={form.sdrconnectHost ?? SDRCONNECT_DEFAULT_HOST}
+                      placeholder={SDRCONNECT_DEFAULT_HOST}
+                      onChange={(e) => update('sdrconnectHost', e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <span className="settings-hint">{t('settings.scopeSource.host.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.scopeSource.port.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="number"
+                      inputMode="numeric"
+                      min="1"
+                      max="65535"
+                      value={String(form.sdrconnectPort ?? SDRCONNECT_DEFAULT_PORT)}
+                      placeholder={String(SDRCONNECT_DEFAULT_PORT)}
+                      onChange={(e) => updateNum('sdrconnectPort', Number(e.target.value))}
+                      autoComplete="off"
+                    />
+                    <span className="settings-hint">{t('settings.scopeSource.port.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.scopeSource.follow.label')}</span>
+                    <select disabled={remote}
+                      className="settings-input"
+                      value={(form.sdrconnectFollow ?? '').trim().toLowerCase() === 'scroll' ? 'scroll' : 'centre'}
+                      onChange={(e) => update('sdrconnectFollow', e.target.value)}
+                    >
+                      <option value="centre">{t('settings.scopeSource.follow.centre')}</option>
+                      <option value="scroll">{t('settings.scopeSource.follow.scroll')}</option>
+                    </select>
+                    <span className="settings-hint">{t('settings.scopeSource.follow.hint')}</span>
+                  </label>
+                  {/* Across the whole row: the one line here about the operator's hardware. */}
+                  <p className="settings-note" data-sdrconnect-rf-safety>
+                    {t('settings.scopeSource.rfSafety')}
+                  </p>
+                </>
+              )}
             </div>
           </fieldset>
 
@@ -6888,11 +7338,7 @@ export function SettingsPanel({
                       type="text"
                       value={form.rotatorPort ?? ''}
                       placeholder={
-                        (form.rotatorModel ?? 0) === PSTROTATOR.model
-                          ? PSTROTATOR.address
-                          : IS_MAC
-                            ? ROTATOR_EXAMPLES.macPort
-                            : ROTATOR_EXAMPLES.port
+                        (form.rotatorModel ?? 0) === PSTROTATOR.model ? PSTROTATOR.address : undefined
                       }
                       onChange={(e) => update('rotatorPort', e.target.value)}
                       autoComplete="off"
@@ -6917,14 +7363,13 @@ export function SettingsPanel({
                       when the saved value cannot work. */}
                   {(() => {
                     // PstRotatorAz has no line rate to match: its hint says where it listens,
-                    // and what Hamlib's backend for it sends as a bearing.
+                    // and where Nexus listens for its replies.
                     if ((form.rotatorModel ?? 0) === PSTROTATOR.model) {
                       return (
                         <span className="settings-hint">
                           {t('settings.rotator.port.hint.pstRotator', {
                             address: PSTROTATOR.address,
-                            sent: PSTROTATOR.sent,
-                            bearing: PSTROTATOR.bearing,
+                            reply: PSTROTATOR.reply,
                           })}
                         </span>
                       )
@@ -6967,9 +7412,7 @@ export function SettingsPanel({
                   className="settings-input"
                   type="text"
                   value={form.rotatorHost}
-                  placeholder={t('settings.rotator.external.placeholder', {
-                    example: ROTATOR_EXAMPLES.host,
-                  })}
+                  placeholder={t('settings.rotator.external.placeholder')}
                   onChange={(e) => update('rotatorHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
@@ -7142,7 +7585,13 @@ export function SettingsPanel({
                 <select disabled={remote}
                   className="settings-input"
                   value={form.ampModel ?? ''}
-                  onChange={(e) => update('ampModel', e.target.value)}
+                  onChange={(e) => {
+                    update('ampModel', e.target.value)
+                    // Only a KPA1500 has a network port; any other family goes back to serial.
+                    if (e.target.value !== 'kpa' && ampPortIsNetwork(form.ampPort ?? '')) {
+                      update('ampPort', '')
+                    }
+                  }}
                   aria-label={t('settings.amplifier.model.label')}
                 >
                   <option value="">{t('settings.amplifier.model.none')}</option>
@@ -7158,14 +7607,67 @@ export function SettingsPanel({
               {/* The port field appears only once a family is picked — the rotator's pattern,
                   and the reason is the same: an empty port box under "no amplifier" invites an
                   operator to fill it in and then wonder why nothing happened. */}
-              {(form.ampModel ?? '') !== '' && (
+              {/* A KPA1500 can also be reached over the network. The choice is not stored on its
+                  own: an address of the form host:port IS the network (ui/src/settings/
+                  ampAddress.ts), so a radio profile carries it in the existing port field. */}
+              {(form.ampModel ?? '') === 'kpa' && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.amplifier.link.label')}</span>
+                  <select disabled={remote}
+                    className="settings-input"
+                    value={ampPortIsNetwork(form.ampPort ?? '') ? 'network' : 'serial'}
+                    onChange={(e) =>
+                      update('ampPort', e.target.value === 'network' ? joinAmpAddress('', KPA_NET_PORT) : '')
+                    }
+                    aria-label={t('settings.amplifier.link.label')}
+                  >
+                    <option value="serial">{t('settings.amplifier.link.serial')}</option>
+                    <option value="network">{t('settings.amplifier.link.network')}</option>
+                  </select>
+                  <span className="settings-hint">{t('settings.amplifier.link.hint')}</span>
+                </div>
+              )}
+              {(form.ampModel ?? '') === 'kpa' && ampPortIsNetwork(form.ampPort ?? '') && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.amplifier.host.label')}</span>
+                  <input disabled={remote}
+                    className="settings-input"
+                    type="text"
+                    value={splitAmpAddress(form.ampPort ?? '').host}
+                    onChange={(e) =>
+                      update('ampPort', joinAmpAddress(e.target.value, splitAmpAddress(form.ampPort ?? '').port))
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label={t('settings.amplifier.host.label')}
+                  />
+                  <span className="settings-hint">{t('settings.amplifier.host.hint')}</span>
+                </div>
+              )}
+              {(form.ampModel ?? '') === 'kpa' && ampPortIsNetwork(form.ampPort ?? '') && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.amplifier.netPort.label')}</span>
+                  <input disabled={remote}
+                    className="settings-input"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={splitAmpAddress(form.ampPort ?? '').port}
+                    onChange={(e) =>
+                      update('ampPort', joinAmpAddress(splitAmpAddress(form.ampPort ?? '').host, Number(e.target.value)))
+                    }
+                    aria-label={t('settings.amplifier.netPort.label')}
+                  />
+                  <span className="settings-hint">{t('settings.amplifier.netPort.hint')}</span>
+                </div>
+              )}
+              {(form.ampModel ?? '') !== '' && !((form.ampModel ?? '') === 'kpa' && ampPortIsNetwork(form.ampPort ?? '')) && (
                 <div className="settings-field">
                   <span className="settings-label">{t('settings.amplifier.port.label')}</span>
                   <input disabled={remote}
                     className="settings-input"
                     type="text"
                     value={form.ampPort ?? ''}
-                    placeholder={IS_MAC ? AMP_EXAMPLES.macPort : AMP_EXAMPLES.port}
                     onChange={(e) => update('ampPort', e.target.value)}
                     autoComplete="off"
                     aria-label={t('settings.amplifier.port.label')}
@@ -7180,15 +7682,14 @@ export function SettingsPanel({
               {(form.ampModel ?? '') !== '' && (form.ampPort ?? '') !== '' && (
                 <div className="settings-field">
                   <label className="settings-check">
-                    <input disabled={remote && !remoteFollow.canEdit}
+                    <input disabled={remote}
                       type="checkbox"
-                      checked={remote ? remoteFollow.follow : form.ampFollowBand ?? false}
-                      onChange={(e) => remote ? remoteFollow.change(e.target.checked) : updateBool('ampFollowBand', e.target.checked)}
+                      checked={form.ampFollowBand ?? false}
+                      onChange={(e) => updateBool('ampFollowBand', e.target.checked)}
                     />
                     <span>{t('settings.amplifier.follow.label')}</span>
                   </label>
                   <span className="settings-hint">{t('settings.amplifier.follow.hint')}</span>
-                  {remote && remoteFollow.waitingForIdle && <span className="settings-hint">{t('remote.followNeedsIdle')}</span>}
                 </div>
               )}
             </div>
@@ -7237,7 +7738,7 @@ export function SettingsPanel({
                 ).map(([label, key]) => (
                   <label key={key} className="settings-power-cap">
                     <span>{label}</span>
-                    <input disabled={remote}
+                    <input disabled={locked(key)} data-setting={key}
                       type="number"
                       min={0}
                       max={100}
@@ -7250,6 +7751,7 @@ export function SettingsPanel({
                   </label>
                 ))}
               </div>
+              {setAtStation('maxPowerPhone')}
               <span className="settings-hint">{t('settings.transmit.powerCaps.hint')}</span>
             </div>
 
@@ -7281,7 +7783,7 @@ export function SettingsPanel({
             <div className="settings-field">
               <label className="settings-toggle">
                 <span className="settings-label">{t('settings.transmit.swrStop.label')}</span>
-                <button disabled={remote || !radio?.swrScaleVerified}
+                <button disabled={locked('swrStopEnabled') || !radio?.swrScaleVerified} data-setting="swrStopEnabled"
                   type="button"
                   role="switch"
                   aria-checked={form.swrStopEnabled === true}
@@ -7293,7 +7795,8 @@ export function SettingsPanel({
               </label>
               <label className="settings-power-cap">
                 <span>{t('settings.transmit.swrStop.threshold')}</span>
-                <input disabled={remote || !radio?.swrScaleVerified || form.swrStopEnabled !== true}
+                <input disabled={locked('swrStopThreshold') || !radio?.swrScaleVerified || form.swrStopEnabled !== true}
+                  data-setting="swrStopThreshold"
                   type="number"
                   min={1}
                   max={99}
@@ -7304,6 +7807,7 @@ export function SettingsPanel({
                 />
                 <span className="settings-power-cap-unit">:1</span>
               </label>
+              {setAtStation('swrStopEnabled')}
               {/* ⚠️ THE MODEL COMES FROM THE ACTIVE RADIO, NOT FROM `form`. `form` mirrors
                   `editingRadioId`, which is decoupled from `activeRadioId` (see :1464) — while
                   `radio` is always the ACTIVE radio's live state. Reading the two together asked
@@ -7342,7 +7846,7 @@ export function SettingsPanel({
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.transmit.parsecStop.label')}</span>
-                  <button
+                  <button disabled={locked('parsecPresenceStop')} data-setting="parsecPresenceStop"
                     type="button"
                     role="switch"
                     aria-checked={form.parsecPresenceStop === true}
@@ -7352,6 +7856,7 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
+                {setAtStation('parsecPresenceStop')}
                 <span className="settings-hint">{t('settings.transmit.parsecStop.hint')}</span>
                 {form.parsecPresenceStop === true && parsecPresence && (
                   <span className="settings-hint" role="status">
@@ -7396,7 +7901,7 @@ export function SettingsPanel({
             <div className="settings-field">
               <span className="settings-label">{t('settings.transmit.share.label')}</span>
               <div className="rig-share-row">
-                <button disabled={remote}
+                <button disabled={locked('catBroker')} data-setting="catBroker"
                   type="button"
                   role="switch"
                   aria-checked={form.catBroker}
@@ -7405,6 +7910,7 @@ export function SettingsPanel({
                 >
                   <span className="toggle-knob" />
                 </button>
+                {setAtStation('catBroker')}
                 {/* #165: WITH THE BIND REFUSED, THE ADDRESS IS NOT A FACT. The reporter runs
                     their own rigctld on 4532, so Nexus's broker asks for a port that is gone
                     — and this block printed `127.0.0.1:4532` regardless, an address to paste
@@ -7469,7 +7975,7 @@ export function SettingsPanel({
               {form.catBroker && (
                 <div className="settings-field">
                   <span className="settings-label">{t('settings.transmit.foreignPtt.label')}</span>
-                  <button disabled={remote}
+                  <button disabled={locked('catBrokerPtt')} data-setting="catBrokerPtt"
                     type="button"
                     role="switch"
                     aria-checked={form.catBrokerPtt ?? false}
@@ -7478,10 +7984,29 @@ export function SettingsPanel({
                   >
                     <span className="toggle-knob" />
                   </button>
+                  {setAtStation('catBrokerPtt')}
                   <span className="settings-hint">{t('settings.transmit.foreignPtt.hint')}</span>
                 </div>
               )}
-            </div>          </fieldset>
+            </div>
+
+            {/* "Share by TCI": the other way to share this radio, for programs that speak TCI. Its
+                own switch beside the CAT broker's; both may be on. */}
+            <TciServerSettings
+              form={form}
+              status={radio?.tciServer}
+              onSwitch={updateBool}
+              onPort={(port) => updateNum('tciServerPort', port)}
+              onDisconnect={(id) => {
+                void withErrorToast(
+                  () => tciServerDisconnect(id),
+                  t('settings.transmit.tciServer.disconnect.failed'),
+                )
+              }}
+              locked={locked}
+              setAtStation={setAtStation}
+            />
+          </fieldset>
           </>
           )}
 
@@ -7524,7 +8049,7 @@ export function SettingsPanel({
 
                 <label className="settings-field">
                   <span className="settings-label">Tx Watchdog (min)</span>
-                  <input disabled={remote}
+                  <input disabled={locked('txWatchdogMin')} data-setting="txWatchdogMin"
                     className="settings-input"
                     type="number"
                     inputMode="numeric"
@@ -7534,13 +8059,14 @@ export function SettingsPanel({
                     onChange={(e) => update('txWatchdogMin', e.target.value)}
                     autoComplete="off"
                   />
+                  {setAtStation('txWatchdogMin')}
                   <span className="settings-hint">Auto-halt TX after this many minutes (0 = off).</span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
                     <span className="settings-label">Disable TX after sending 73</span>
-                    <button disabled={remote}
+                    <button disabled={locked('disableTxAfter73')} data-setting="disableTxAfter73"
                       type="button"
                       role="switch"
                       aria-checked={form.disableTxAfter73 !== false}
@@ -7550,6 +8076,7 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
+                  {setAtStation('disableTxAfter73')}
                   <span className="settings-hint">
                     After your final 73 goes out, Enable TX drops — working the next station is a
                     deliberate arm (WSJT-X default). A CQ run is unaffected: it returns to CQ.
@@ -7578,7 +8105,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label>
                     <span className="settings-label">Tune timeout (s)</span>
-                    <input disabled={remote}
+                    <input disabled={locked('tuneTimeoutSecs')} data-setting="tuneTimeoutSecs"
                       className="settings-input"
                       type="number"
                       min={1}
@@ -7592,6 +8119,7 @@ export function SettingsPanel({
                         setForm((prev) => (prev ? { ...prev, tuneTimeoutSecs: n } : prev))
                       }}
                     />
+                    {setAtStation('tuneTimeoutSecs')}
                   </label>
                   <span className="settings-hint">
                     Auto-release the tune carrier after this many seconds — never leave a key-down
@@ -7649,7 +8177,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label>
                     <span className="settings-label">Stop CQ after N calls</span>
-                    <input disabled={remote}
+                    <input disabled={locked('cqMaxCalls')} data-setting="cqMaxCalls"
                       className="settings-input"
                       type="number"
                       min={1}
@@ -7658,6 +8186,7 @@ export function SettingsPanel({
                       placeholder="keep calling"
                       onChange={(e) => updateNullableNum('cqMaxCalls', e.target.value, 1)}
                     />
+                    {setAtStation('cqMaxCalls')}
                   </label>
                   <span className="settings-hint">
                     How many unanswered CQs before Nexus pauses. Default 8, then it waits and calls
@@ -7671,7 +8200,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label>
                     <span className="settings-label">Wait before calling CQ again</span>
-                    <input disabled={remote}
+                    <input disabled={locked('cqPauseSecs')} data-setting="cqPauseSecs"
                       className="settings-input"
                       type="number"
                       min={0}
@@ -7680,6 +8209,7 @@ export function SettingsPanel({
                       placeholder="180"
                       onChange={(e) => updateNullableNum('cqPauseSecs', e.target.value, 0)}
                     />
+                    {setAtStation('cqPauseSecs')}
                   </label>
                   <span className="settings-hint">
                     Seconds off the air after an unanswered run, before the next one starts.
@@ -7697,7 +8227,7 @@ export function SettingsPanel({
                       className="settings-input"
                       type="text"
                       value={blockedText ?? (form.blockedCalls ?? []).join(' ')}
-                      placeholder="none — e.g. PD2BS K1ABC"
+                      placeholder="none"
                       onChange={(e) => setBlockedText(e.target.value)}
                       onBlur={() => {
                         if (blockedText == null) return
@@ -7726,7 +8256,7 @@ export function SettingsPanel({
                 <div className="settings-field">
                   <label>
                     <span className="settings-label">Tempo chat: send cycles per message</span>
-                    <input disabled={remote}
+                    <input disabled={locked('chatMaxCycles')} data-setting="chatMaxCycles"
                       className="settings-input"
                       type="number"
                       min={1}
@@ -7735,6 +8265,7 @@ export function SettingsPanel({
                       placeholder="3"
                       onChange={(e) => updateNullableNum('chatMaxCycles', e.target.value, 1)}
                     />
+                    {setAtStation('chatMaxCycles')}
                   </label>
                   <span className="settings-hint">
                     A chat message transmits at most this many cycles, then shows "no ack" (tap the
@@ -8174,7 +8705,6 @@ export function SettingsPanel({
                     step="1"
                     inputMode="decimal"
                     value={form.stationPowerW ?? ''}
-                    placeholder="e.g. 100"
                     onChange={(e) => {
                       markDirty()
                       const raw = e.target.value.trim()
@@ -8264,16 +8794,17 @@ export function SettingsPanel({
             <div className="settings-grid">
               <label className="settings-field">
                 <span className="settings-label">{t('settings.beacons.txPercent.label')}</span>
-                <input
+                <input data-setting="beaconTxPercent"
                   className="settings-input"
                   type="number"
                   min={0}
                   max={100}
-                  disabled={remote || (rrActive)}
+                  disabled={locked('beaconTxPercent') || (rrActive)}
                   title={rrActive ? t('settings.beacons.txPercent.title') : undefined}
                   value={String(form.beaconTxPercent ?? 0)}
                   onChange={(e) => updateNum('beaconTxPercent', Number(e.target.value))}
                 />
+                {setAtStation('beaconTxPercent')}
                 <span className="settings-hint">
                   {rrActive ? (
                     <T k="settings.beacons.txPercent.hint.roundRobin" tags={{ b: <strong /> }} />
@@ -8544,7 +9075,7 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">{t('settings.cw.keyer.title')}</span>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.cw.keyer.label')}</span>
-                <select disabled={remote}
+                <select disabled={locked('cwKeyer')} data-setting="cwKeyer"
                   className="settings-input"
                   value={form.cwKeyer ?? 'cat'}
                   onChange={(e) => update('cwKeyer', e.target.value)}
@@ -8554,6 +9085,7 @@ export function SettingsPanel({
                   <option value="winkeyer">{t('settings.cw.keyer.winkeyer')}</option>
                   <option value="soundcard">{t('settings.cw.keyer.soundcard')}</option>
                 </select>
+                {setAtStation('cwKeyer')}
                 <span className="settings-hint">
                   <T k="settings.cw.keyer.hint" tags={{ b: <strong /> }} />
                 </span>
@@ -8566,6 +9098,15 @@ export function SettingsPanel({
                 {(form.cwKeyer ?? 'cat') === 'cat' && catCwUnprovenModels.includes(form.rigModel) && (
                   <span className="settings-warn" role="status">
                     ⚠ <T k="settings.cw.keyer.unproven" tags={{ b: <strong /> }} />
+                  </span>
+                )}
+                {/* A FLEX OVER SMARTSDR CAT (model 2036) HAS NO DOCUMENTED CW STOP: Esc stops Nexus,
+                    and the radio may finish the word it was handed (IL QSO Party). Its WinKeyer
+                    port and Nexus's own Flex client both have one. Not shown when that client
+                    carries the radio, which keys CW through CWX. */}
+                {(form.cwKeyer ?? 'cat') === 'cat' && form.rigModel === 2036 && !form.flexNativeCat && (
+                  <span className="settings-hint" role="note">
+                    <T k="settings.cw.keyer.flexCatStop" tags={{ b: <strong /> }} />
                   </span>
                 )}
               </label>
@@ -8582,6 +9123,45 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('cwPitchHz', Number(e.target.value))}
                 />
                 <span className="settings-hint">{t('settings.cw.pitch.hint')}</span>
+              </label>
+              {/* CW SPEED MATCH: its switch is also in the CW contest strip, which saves it alone;
+                  this form saves it with the rest. The min/max live only here. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.cw.speedMatch.label')}</span>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    disabled={remote}
+                    checked={!!form.cwSpeedMatch}
+                    onChange={(e) => updateBool('cwSpeedMatch', e.target.checked)}
+                    aria-label={t('settings.cw.speedMatch.label')}
+                  />
+                  <span className="settings-hint">{t('settings.cw.speedMatch.hint')}</span>
+                </span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.cw.speedMatch.min.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  min="5"
+                  max="50"
+                  inputMode="numeric"
+                  value={form.cwSpeedMatchMin ?? 15}
+                  onChange={(e) => updateNum('cwSpeedMatchMin', Number(e.target.value))}
+                />
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.cw.speedMatch.max.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  min="5"
+                  max="50"
+                  inputMode="numeric"
+                  value={form.cwSpeedMatchMax ?? 35}
+                  onChange={(e) => updateNum('cwSpeedMatchMax', Number(e.target.value))}
+                />
               </label>
               {/* REVERSE CW — a preference, not a band rule (operator 2026-09-11, reversing the
                   2026-07-24 band-aware ruling). Nexus used to command CWR below 10 MHz by itself;
@@ -8616,17 +9196,16 @@ export function SettingsPanel({
               {form.cwKeyer === 'winkeyer' && (
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.cw.winkeyerPort.label')}</span>
-                  <input disabled={remote}
+                  <input disabled={locked('winkeyerPort')} data-setting="winkeyerPort"
                     className="settings-input"
                     type="text"
                     value={form.winkeyerPort}
-                    placeholder={t('settings.cw.winkeyerPort.placeholder', {
-                      example: KEYING_EXAMPLES.winkeyerPort,
-                    })}
+                    placeholder={t('settings.cw.winkeyerPort.placeholder')}
                     onChange={(e) => update('winkeyerPort', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  {setAtStation('winkeyerPort')}
                   <span className="settings-hint">{t('settings.cw.winkeyerPort.hint')}</span>
                 </label>
               )}
@@ -8634,17 +9213,16 @@ export function SettingsPanel({
                 <>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.cw.keyPort.label')}</span>
-                    <input disabled={remote}
+                    <input disabled={locked('cwKeyPort')} data-setting="cwKeyPort"
                       className="settings-input"
                       type="text"
                       value={form.cwKeyPort ?? ''}
-                      placeholder={t('settings.cw.keyPort.placeholder', {
-                        example: KEYING_EXAMPLES.cwKeyPort,
-                      })}
+                      placeholder={t('settings.cw.keyPort.placeholder')}
                       onChange={(e) => update('cwKeyPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
                     />
+                    {setAtStation('cwKeyPort')}
                     {/* "US Navigator" was listed here as an example through 0.27. The Timewave
                         Navigator keys through a K1EL WinKey micro, which ignores DTR/RTS
                         entirely — so this hint pointed a Navigator owner at the one backend
@@ -8655,7 +9233,7 @@ export function SettingsPanel({
                   </label>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.cw.keyLine.label')}</span>
-                    <select disabled={remote}
+                    <select disabled={locked('cwKeyLine')} data-setting="cwKeyLine"
                       className="settings-input"
                       value={form.cwKeyLine ?? 'dtr'}
                       onChange={(e) => update('cwKeyLine', e.target.value)}
@@ -8663,6 +9241,7 @@ export function SettingsPanel({
                       <option value="dtr">{t('settings.cw.keyLine.dtr')}</option>
                       <option value="rts">{SERIAL_LINE_RTS}</option>
                     </select>
+                    {setAtStation('cwKeyLine')}
                     <span className="settings-hint">{t('settings.cw.keyLine.hint')}</span>
                   </label>
                 </>
@@ -8809,7 +9388,7 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">{t('settings.rtty.keying.title')}</span>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rtty.backend.label')}</span>
-                <select disabled={remote}
+                <select disabled={locked('rttyBackend')} data-setting="rttyBackend"
                   className="settings-input"
                   value={form.rttyBackend ?? 'afsk'}
                   onChange={(e) => update('rttyBackend', e.target.value)}
@@ -8817,30 +9396,44 @@ export function SettingsPanel({
                   <option value="afsk">{t('settings.rtty.backend.afsk')}</option>
                   <option value="fsk">{t('settings.rtty.backend.fsk')}</option>
                 </select>
+                {setAtStation('rttyBackend')}
                 <span className="settings-hint">
                   <T k="settings.rtty.backend.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
+              {form.rttyBackend !== 'fsk' && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rtty.afskSideband.label')}</span>
+                  <select disabled={remote}
+                    className="settings-input"
+                    value={form.rttyAfskSideband === 'usb' ? 'usb' : 'lsb'}
+                    onChange={(e) => update('rttyAfskSideband', e.target.value)}
+                  >
+                    <option value="lsb">{t('settings.rtty.afskSideband.lsb')}</option>
+                    <option value="usb">{SIDEBAND_USB}</option>
+                  </select>
+                  <span className="settings-hint">{t('settings.rtty.afskSideband.hint')}</span>
+                </label>
+              )}
               {form.rttyBackend === 'fsk' && (
                 <>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.rtty.fskPort.label')}</span>
-                    <input disabled={remote}
+                    <input disabled={locked('rttyFskPort')} data-setting="rttyFskPort"
                       className="settings-input"
                       type="text"
                       value={form.rttyFskPort ?? ''}
-                      placeholder={t('settings.rtty.fskPort.placeholder', {
-                        example: KEYING_EXAMPLES.rttyFskPort,
-                      })}
+                      placeholder={t('settings.rtty.fskPort.placeholder')}
                       onChange={(e) => update('rttyFskPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
                     />
+                    {setAtStation('rttyFskPort')}
                     <span className="settings-hint">{t('settings.rtty.fskPort.hint')}</span>
                   </label>
                   <label className="settings-field">
                     <span className="settings-label">{t('settings.rtty.fskLine.label')}</span>
-                    <select disabled={remote}
+                    <select disabled={locked('rttyFskLine')} data-setting="rttyFskLine"
                       className="settings-input"
                       value={form.rttyFskLine ?? 'dtr'}
                       onChange={(e) => update('rttyFskLine', e.target.value)}
@@ -8848,6 +9441,7 @@ export function SettingsPanel({
                       <option value="dtr">{t('settings.rtty.fskLine.dtr')}</option>
                       <option value="rts">{SERIAL_LINE_RTS}</option>
                     </select>
+                    {setAtStation('rttyFskLine')}
                     <span className="settings-hint">{t('settings.rtty.fskLine.hint')}</span>
                   </label>
                 </>
@@ -8928,7 +9522,7 @@ export function SettingsPanel({
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.rtty.autoRepeats.label')}</span>
-                <input disabled={remote}
+                <input disabled={locked('rttyAutoRepeats')} data-setting="rttyAutoRepeats"
                   className="settings-input"
                   type="number"
                   min={RTTY_AUTO_REPEATS_MIN}
@@ -8937,6 +9531,7 @@ export function SettingsPanel({
                   value={String(form.rttyAutoRepeats ?? RTTY_AUTO_REPEATS_DEFAULT)}
                   onChange={(e) => updateNum('rttyAutoRepeats', Number(e.target.value))}
                 />
+                {setAtStation('rttyAutoRepeats')}
                 <span className="settings-hint">
                   <T k="settings.rtty.autoRepeats.hint" tags={{ b: <strong /> }} />
                 </span>
@@ -9013,7 +9608,7 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('js8Speed', Number(e.target.value))}
                 >
                   {JS8_SPEED_LIST.map((s) => (
-                    <option key={s.key} value={s.idx}>
+                    <option key={s.key} value={s.idx} title={s.alias ?? undefined}>
                       {s.label}
                     </option>
                   ))}
@@ -9025,10 +9620,10 @@ export function SettingsPanel({
                 <div className="js8-rx-speeds">
                   {JS8_SPEED_LIST.map((s) => {
                     const bit = 1 << s.idx
-                    const mask = form.js8RxSpeeds ?? 15
+                    const mask = form.js8RxSpeeds ?? JS8_ALL_SPEEDS_MASK
                     const on = (mask & bit) !== 0
                     return (
-                      <label key={s.key} className="settings-toggle">
+                      <label key={s.key} className="settings-toggle" title={s.alias ?? undefined}>
                         <span className="settings-label">{s.label}</span>
                         <button disabled={remote}
                           type="button"
@@ -9081,6 +9676,17 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.js8.activityAgingMin.hint')}</span>
               </label>
             </div>
+
+            {/* JS8Call's Settings ▸ Frequencies: the operator's own list, returning to the last
+                frequency, and the band schedule (its own file). */}
+            <Js8FrequencySettings
+              form={form}
+              disabled={remote}
+              onChange={(patch) => {
+                markDirty()
+                setForm((prev) => (prev ? { ...prev, ...patch } : prev))
+              }}
+            />
 
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.js8.automatic.title')}</span>
@@ -9138,6 +9744,7 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">{t('settings.js8.hbAckDeny.hint')}</span>
               </label>
+              <Js8HeartbeatSettings form={form} disabled={remote} update={updateBool} />
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.js8.autoreply.label')}</span>
@@ -9210,7 +9817,7 @@ export function SettingsPanel({
               </div>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.js8.idleWatchdogMin.label')}</span>
-                <input disabled={remote}
+                <input disabled={locked('js8IdleWatchdogMin')} data-setting="js8IdleWatchdogMin"
                   className="settings-input"
                   type="number"
                   inputMode="numeric"
@@ -9220,6 +9827,7 @@ export function SettingsPanel({
                   onChange={(e) => updateMinutes('js8IdleWatchdogMin', e.target.value)}
                   autoComplete="off"
                 />
+                {setAtStation('js8IdleWatchdogMin')}
                 <span className="settings-hint">{t('settings.js8.idleWatchdogMin.hint')}</span>
               </label>
             </div>
@@ -9260,6 +9868,123 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.js8.groups.hint')}</span>
               </label>
             </div>
+
+            {/* Sending: two of JS8Call's transmit options, both off by default as there. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.sending.title')}</span>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.holdPtt.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8HoldPtt === true}
+                    className={`toggle${form.js8HoldPtt === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8HoldPtt', form.js8HoldPtt !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.holdPtt.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.txOffsetWhileSending.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8TxOffsetWhileSending === true}
+                    className={`toggle${form.js8TxOffsetWhileSending === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8TxOffsetWhileSending', form.js8TxOffsetWhileSending !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.txOffsetWhileSending.hint')}</span>
+              </div>
+              {/* JS8Call's Tx delay: its spin box's 0.1 to 0.5 s, 0.2 s by default. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.txDelay.label')}</span>
+                <select disabled={remote}
+                  className="settings-input"
+                  value={String(form.js8TxDelayMs ?? 200)}
+                  onChange={(e) => updateNum('js8TxDelayMs', Number(e.target.value))}
+                >
+                  {[100, 200, 300, 400, 500].map((ms) => (
+                    <option key={ms} value={String(ms)}>
+                      {t('settings.js8.txDelay.option', { s: (ms / 1000).toFixed(1) })}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">{t('settings.js8.txDelay.hint')}</span>
+              </label>
+            </div>
+            <Js8ComposeSettings
+              form={form}
+              disabled={remote}
+              onChange={(patch) => {
+                markDirty()
+                setForm((prev) => (prev ? { ...prev, ...patch } : prev))
+              }}
+            />
+
+            {/* JS8Call's SPOT block: spotting rides the PSK Reporter switch, as JS8Call's SPOT
+                carries PSK Reporter and JS8NET together; these are the @APRSIS gateway, the
+                inbound APRS-IS relay (it keys unattended, so it ships off) and the never-spot
+                list. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.js8.spotting.title')}</span>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.spotAprs.label')}</span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    // Off by default, though JS8Call ships it on: an absent key reads as off.
+                    aria-checked={form.js8SpotAprs === true}
+                    className={`toggle${form.js8SpotAprs === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8SpotAprs', form.js8SpotAprs !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.js8.spotAprs.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.js8.aprsRelay.label')}</span>
+                  <button disabled={locked('js8AprsRelay')} data-setting="js8AprsRelay"
+                    type="button"
+                    role="switch"
+                    aria-checked={form.js8AprsRelay === true}
+                    className={`toggle${form.js8AprsRelay === true ? ' on' : ''}`}
+                    onClick={() => updateBool('js8AprsRelay', form.js8AprsRelay !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                {setAtStation('js8AprsRelay')}
+                <span className="settings-hint">{t('settings.js8.aprsRelay.hint')}</span>
+              </div>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.spotNever.label')}</span>
+                <ListInput disabled={remote}
+                  className="settings-input"
+                  entries={form.js8SpotNever ?? []}
+                  onText={(raw) => setJs8CallList('js8SpotNever', raw)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.js8.spotNever.hint')}</span>
+              </label>
+            </div>
+            <Js8ListsSettings form={form} disabled={remote} setList={setJs8Words} setMark={setJs8Mark} setSounds={setJs8Sounds} />
+
+            {/* JS8Call's API for programs on this computer: read-only, 127.0.0.1 only, both
+                sides off by default (its own file says what keeps each promise). Never on the
+                Remote page: the keys are withheld from Remote's settings projection, so the page
+                could only show a guess. */}
+            {!remote && <Js8ApiSettings form={form} onSwitch={updateBool} onPort={updateNum} locked={locked} setAtStation={setAtStation} />}
           </fieldset>
           )}
 
@@ -9602,7 +10327,6 @@ export function SettingsPanel({
                           .filter(Boolean),
                       )
                     }
-                    placeholder={APRS_EXAMPLES.watchCalls}
                     spellCheck={false}
                     disabled={remote || (!form.aprsIsEnabled)}
                   />
@@ -9963,6 +10687,25 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">
                   {t('settings.accessibility.decodeTick.hint')}
+                </span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">
+                    {t('settings.accessibility.cwTurnSound.label')}
+                  </span>
+                  <button disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.soundCwTurn ?? false}
+                    className={`toggle${form.soundCwTurn ? ' on' : ''}`}
+                    onClick={() => updateBool('soundCwTurn', !form.soundCwTurn)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  {t('settings.accessibility.cwTurnSound.hint')}
                 </span>
               </div>
             </div>
@@ -10334,7 +11077,7 @@ export function SettingsPanel({
                         the interface — so it is invariant and stays here, exactly as the
                         Phone/CW/Digital tab labels do. */}
                     <span className="settings-label">WSJT-X UDP API</span>
-                    <button disabled={remote}
+                    <button disabled={locked('wsjtxUdp')} data-setting="wsjtxUdp"
                       type="button"
                       role="switch"
                       aria-checked={form.wsjtxUdp}
@@ -10344,21 +11087,23 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
+                  {setAtStation('wsjtxUdp')}
                   <span className="settings-hint">{t('settings.integrations.wsjtxUdp.hint')}</span>
                 </div>
 
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.integrations.udpAddr.label')}</span>
-                  <input
+                  <input data-setting="wsjtxUdpAddr"
                     className="settings-input"
                     type="text"
                     value={form.wsjtxUdpAddr}
                     placeholder="127.0.0.1:2237"
                     onChange={(e) => update('wsjtxUdpAddr', e.target.value)}
-                    disabled={remote || (!form.wsjtxUdp)}
+                    disabled={locked('wsjtxUdpAddr') || (!form.wsjtxUdp)}
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  {setAtStation('wsjtxUdpAddr')}
                   <span className="settings-hint">{t('settings.integrations.udpAddr.hint')}</span>
                 </label>
 
@@ -10440,6 +11185,9 @@ export function SettingsPanel({
                   </label>
                   <span className="settings-hint">
                     {t('settings.integrations.allTxt.hint')}
+                    {/* JS8Call's one "write logs" switch covers its DIRECTED.TXT too. */}
+                    {' '}
+                    {t('settings.integrations.allTxt.js8')}
                     {allTxtPath && (
                       <>
                         {' '}
@@ -10451,15 +11199,21 @@ export function SettingsPanel({
                       </>
                     )}
                   </span>
-                  <button disabled={remote}
-                    type="button"
-                    className="settings-linkbtn"
-                    onClick={() => {
-                      revealAllTxt().catch(() => {})
-                    }}
-                  >
-                    {t('settings.integrations.allTxt.reveal')}
-                  </button>
+                  {/* From afar Reveal would open the station's file manager on the station's
+                      screen, so the file is saved to this computer instead. */}
+                  {drivesAnotherStation() ? (
+                    <ShackFilesSave folder="allTxt" className="settings-linkbtn" />
+                  ) : (
+                    <button disabled={remote}
+                      type="button"
+                      className="settings-linkbtn"
+                      onClick={() => {
+                        revealAllTxt().catch(() => {})
+                      }}
+                    >
+                      {t('settings.integrations.allTxt.reveal')}
+                    </button>
+                  )}
                 </div>
 
                 {/* The diagnostic log has no toggle — it is written from the first moments of
@@ -10558,15 +11312,21 @@ export function SettingsPanel({
                       </>
                     )}
                   </span>
-                  <button disabled={remote}
-                    type="button"
-                    className="settings-linkbtn"
-                    onClick={() => {
-                      revealRecordings().catch(() => {})
-                    }}
-                  >
-                    {t('settings.integrations.qsoWav.reveal')}
-                  </button>
+                  {/* From afar Reveal would open the station's file manager on the station's
+                      screen, so the file is saved to this computer instead. */}
+                  {drivesAnotherStation() ? (
+                    <ShackFilesSave folder="recordings" className="settings-linkbtn" />
+                  ) : (
+                    <button disabled={remote}
+                      type="button"
+                      className="settings-linkbtn"
+                      onClick={() => {
+                        revealRecordings().catch(() => {})
+                      }}
+                    >
+                      {t('settings.integrations.qsoWav.reveal')}
+                    </button>
+                  )}
                 </div>
 
                 <label className="settings-field">
@@ -10645,7 +11405,6 @@ export function SettingsPanel({
                   onHostsChange={mutateClusterHosts}
                   standings={clusterNodes}
                   disabled={remote}
-                  placeholder={LOGGER_EXAMPLES.clusterNode}
                 />
                 <label className="settings-field">
                   <span className="settings-label">
@@ -10655,7 +11414,6 @@ export function SettingsPanel({
                     className="settings-input"
                     value={form.clusterSsid ?? ''}
                     onChange={(e) => update('clusterSsid', e.target.value)}
-                    placeholder="2"
                     inputMode="numeric"
                     spellCheck={false}
                   />
@@ -10688,6 +11446,26 @@ export function SettingsPanel({
                   </label>
                   <span className="settings-hint">
                     {t('settings.integrations.openingWatch.hint')}
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">
+                      {t('settings.integrations.logSpaceWeather.label')}
+                    </span>
+                    <button disabled={remote}
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.logSpaceWeather}
+                      className={`toggle${form.logSpaceWeather ? ' on' : ''}`}
+                      onClick={() => updateBool('logSpaceWeather', !form.logSpaceWeather)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    {t('settings.integrations.logSpaceWeather.hint')}
                   </span>
                 </div>
 
@@ -10764,9 +11542,7 @@ export function SettingsPanel({
                   className="settings-input"
                   type="text"
                   value={form.dxkeeperHost ?? ''}
-                  placeholder={t('settings.dxkeeper.host.placeholder', {
-                    example: LOGGER_EXAMPLES.dxkeeperHost,
-                  })}
+                  placeholder={t('settings.dxkeeper.host.placeholder')}
                   onChange={(e) => update('dxkeeperHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
@@ -10836,9 +11612,7 @@ export function SettingsPanel({
                   className="settings-input"
                   type="text"
                   value={form.n3fjpHost ?? ''}
-                  placeholder={t('settings.n3fjp.host.placeholder', {
-                    example: LOGGER_EXAMPLES.n3fjpHost,
-                  })}
+                  placeholder={t('settings.n3fjp.host.placeholder')}
                   onChange={(e) => update('n3fjpHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
@@ -10951,9 +11725,7 @@ export function SettingsPanel({
                   className="settings-input"
                   type="text"
                   value={form.n1mmAddr ?? ''}
-                  placeholder={t('settings.n1mm.addr.placeholder', {
-                    example: LOGGER_EXAMPLES.n1mmAddr,
-                  })}
+                  placeholder={t('settings.n1mm.addr.placeholder')}
                   onChange={(e) => update('n1mmAddr', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
@@ -11335,7 +12107,7 @@ export function SettingsPanel({
                   <span className="settings-label">
                     {t('settings.confirmations.lotw.tqslPath.label')}
                   </span>
-                  <input disabled={remote}
+                  <input disabled={locked('tqslPath')} data-setting="tqslPath"
                     className="settings-input"
                     type="text"
                     value={form.tqslPath}
@@ -11344,6 +12116,7 @@ export function SettingsPanel({
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  {setAtStation('tqslPath')}
                   <span className="settings-hint">
                     {t('settings.confirmations.lotw.tqslPath.hint')}
                   </span>
@@ -11421,7 +12194,6 @@ export function SettingsPanel({
                     className="settings-input"
                     type="text"
                     value={form.eqslQthNickname ?? ''}
-                    placeholder={t('settings.confirmations.eqsl.qthNickname.placeholder')}
                     onChange={(e) => update('eqslQthNickname', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
@@ -11811,15 +12583,54 @@ export function SettingsPanel({
                   <span className="settings-label">
                     {t('settings.confirmations.clublog.apiKey.label')}
                   </span>
-                  <input disabled={remote}
-                    className="settings-input"
-                    type="text"
-                    value={form.clublogApiKey}
-                    placeholder={t('settings.confirmations.clublog.apiKey.placeholder')}
-                    onChange={(e) => update('clublogApiKey', e.target.value)}
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
+                  {/* From afar the station sends no key, only whether it has one saved; and at the
+                      station a stream may neither change it nor reveal it. */}
+                  <div className="settings-input-row">
+                    <input disabled={locked('clublogApiKey') || form.secretsSavedAtStation !== undefined || watched}
+                      data-setting="clublogApiKey"
+                      className="settings-input"
+                      type={clublogKeyShown ? 'text' : 'password'}
+                      value={watched ? '' : form.clublogApiKey}
+                      placeholder={watched
+                        ? t('settings.confirmations.clublog.apiKey.watched')
+                        : form.secretsSavedAtStation === undefined
+                        ? t('settings.confirmations.clublog.apiKey.placeholder')
+                        : form.secretsSavedAtStation.clublogApiKey
+                          ? t('settings.confirmations.clublog.apiKey.savedAtStation')
+                          : t('settings.confirmations.clublog.apiKey.notSavedAtStation')}
+                      onChange={(e) => {
+                        // Read before anything else, while the stream's dispatch is still running.
+                        if (isStreamInput()) {
+                          pushToast(t('remote.lan.atShackOnly'), 'error')
+                          return
+                        }
+                        update('clublogApiKey', e.target.value)
+                      }}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    {(form.secretsSavedAtStation === undefined || watched) && (
+                      <button
+                        type="button"
+                        className="settings-refresh"
+                        aria-pressed={clublogKeyShown}
+                        disabled={watched}
+                        title={watched ? t('settings.confirmations.clublog.apiKey.watched') : undefined}
+                        onClick={() => {
+                          if (isStreamInput()) {
+                            pushToast(t('remote.lan.atShackOnly'), 'error')
+                            return
+                          }
+                          setClublogKeyShown((shown) => !shown)
+                        }}
+                      >
+                        {clublogKeyShown
+                          ? t('settings.confirmations.clublog.apiKey.hide')
+                          : t('settings.confirmations.clublog.apiKey.reveal')}
+                      </button>
+                    )}
+                  </div>
+                  {setAtStation('clublogApiKey')}
                   <span className="settings-hint">
                     <T k="settings.confirmations.clublog.apiKey.hint" tags={{ b: <strong /> }} />
                   </span>
@@ -12025,15 +12836,15 @@ export function SettingsPanel({
                   <span className="settings-label">
                     {t('settings.confirmations.cloudlog.url.label')}
                   </span>
-                  <input disabled={remote}
+                  <input disabled={locked('cloudlogUrl')} data-setting="cloudlogUrl"
                     className="settings-input"
                     type="text"
                     value={form.cloudlogUrl ?? ''}
-                    placeholder={CONFIRMATION_EXAMPLES.cloudlogUrl}
                     onChange={(e) => update('cloudlogUrl', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  {setAtStation('cloudlogUrl')}
                   <span className="settings-hint">
                     {t('settings.confirmations.cloudlog.url.hint')}
                   </span>
@@ -12057,7 +12868,6 @@ export function SettingsPanel({
                     type="text"
                     inputMode="numeric"
                     value={form.cloudlogStationId ?? ''}
-                    placeholder="1"
                     onChange={(e) => update('cloudlogStationId', e.target.value)}
                     autoComplete="off"
                   />
@@ -12316,6 +13126,24 @@ export function SettingsPanel({
                 </button>
                 <span className="settings-hint">{t('settings.fieldDay.mode.hint', { contest: pickedContest })}</span>
               </label>
+              {/* The entry's optional "RST sent" box (N1MM's Snt): off, the entry is what it always
+                  was. It saves with the form, and shows only in a contest that sends a report. */}
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.contestPick.rstSent.label')}</span>
+                  <button
+                    disabled={remote}
+                    type="button"
+                    role="switch"
+                    aria-checked={!!form.contestRstSentBox}
+                    className={`toggle${form.contestRstSentBox ? ' on' : ''}`}
+                    onClick={() => updateBool('contestRstSentBox', !form.contestRstSentBox)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.contestPick.rstSent.hint')}</span>
+              </div>
               {/* Rules data currency (fd-rules.json): the parameters behind scoring, windows,
                   bonuses and sections. No cron — rules change ~yearly, so this pre-event
                   button is the refresh path; a download applies at the NEXT launch. */}
@@ -12413,7 +13241,6 @@ export function SettingsPanel({
                     className="settings-input mono"
                     type="text"
                     value={form.contestQthCounty ?? ''}
-                    placeholder="FRAN"
                     onChange={(e) => update('contestQthCounty', e.target.value.toUpperCase())}
                     autoComplete="off"
                     spellCheck={false}
@@ -12428,7 +13255,6 @@ export function SettingsPanel({
                     className="settings-input mono"
                     type="text"
                     value={form.contestQthState ?? ''}
-                    placeholder="WI"
                     onChange={(e) => update('contestQthState', e.target.value.toUpperCase())}
                     autoComplete="off"
                     spellCheck={false}
@@ -12448,7 +13274,6 @@ export function SettingsPanel({
                     inputMode="numeric"
                     maxLength={2}
                     value={form.contestCheck ?? ''}
-                    placeholder="74"
                     onChange={(e) => update('contestCheck', e.target.value.replace(/\D/g, ''))}
                     autoComplete="off"
                     spellCheck={false}
@@ -12465,7 +13290,6 @@ export function SettingsPanel({
                     min={0}
                     max={40}
                     value={form.contestCqZone || ''}
-                    placeholder="4"
                     onChange={(e) => update('contestCqZone', clampZone(e.target.value, 40))}
                     autoComplete="off"
                   />
@@ -12481,7 +13305,6 @@ export function SettingsPanel({
                     min={0}
                     max={90}
                     value={form.contestItuZone || ''}
-                    placeholder="8"
                     onChange={(e) => update('contestItuZone', clampZone(e.target.value, 90))}
                     autoComplete="off"
                   />
@@ -12499,7 +13322,6 @@ export function SettingsPanel({
                     className="settings-input mono"
                     type="text"
                     value={form.contestPower ?? ''}
-                    placeholder="KW"
                     onChange={(e) => update('contestPower', e.target.value.toUpperCase())}
                     autoComplete="off"
                     spellCheck={false}
@@ -12583,6 +13405,23 @@ export function SettingsPanel({
                       </button>
                     ))}
                   </div>
+                  {/* NON-ASSISTED is what the log declares; the Unassisted entry switch below is
+                      what turns the aids off. While they disagree, one line says so and offers
+                      the switch. The declaration never turns it on by itself: it is asked, not
+                      inferred (`contest_category_assisted`). */}
+                  {field === 'contestCategoryAssisted' && form.contestCategoryAssisted === 'NON-ASSISTED' && !form.unassistedMode && (
+                    <span className="settings-hint" data-unassisted-offer>
+                      {t('settings.contestPick.assisted.offer')}{' '}
+                      <button
+                        type="button"
+                        className="settings-linkbtn"
+                        disabled={remote}
+                        onClick={() => declareUnassisted(true)}
+                      >
+                        {t('settings.contestPick.assisted.offer.action')}
+                      </button>
+                    </span>
+                  )}
                 </div>
               ))}
               <span className="settings-hint">{t('settings.contestPick.entryAxes.hint')}</span>
@@ -12605,13 +13444,7 @@ export function SettingsPanel({
                   role="switch"
                   aria-checked={!!form.unassistedMode}
                   className={`toggle${form.unassistedMode ? ' on' : ''}`}
-                  onClick={() => {
-                    const on = !form.unassistedMode
-                    updateBool('unassistedMode', on)
-                    setUnassistedMode(on)
-                      .then(() => getAssistanceJournal().then(setAssistLog))
-                      .catch(() => {})
-                  }}
+                  onClick={() => declareUnassisted(!form.unassistedMode)}
                   aria-label={
                     form.unassistedMode
                       ? t('settings.contestCategory.unassisted.aria.end')
@@ -13205,7 +14038,6 @@ export function SettingsPanel({
                   className="settings-input mono"
                   type="text"
                   value={form.fdClass}
-                  placeholder={(form.fdEvent ?? 'arrlfd') === 'wfd' ? '2O' : '1D'}
                   onChange={(e) => update('fdClass', e.target.value.toUpperCase())}
                   autoComplete="off"
                   spellCheck={false}
@@ -13223,7 +14055,6 @@ export function SettingsPanel({
                   className={`settings-input mono${fdSectionInvalid ? ' invalid' : ''}`}
                   type="text"
                   value={form.fdSection}
-                  placeholder="WI"
                   list="fd-section-list"
                   aria-invalid={fdSectionInvalid}
                   onChange={(e) => update('fdSection', e.target.value.toUpperCase())}
@@ -13305,7 +14136,6 @@ export function SettingsPanel({
                   className="settings-input"
                   value={form.mycall}
                   onChange={(e) => update('mycall', e.target.value)}
-                  placeholder={FD_WHO_EXAMPLES.clubCall}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -13322,7 +14152,6 @@ export function SettingsPanel({
                     setFdJoinNote(null)
                     update('fdPositionName', e.target.value)
                   }}
-                  placeholder={t('settings.fdWho.position.placeholder')}
                 />
                 <span className="settings-hint">{t('settings.fdWho.position.hint')}</span>
               </label>
@@ -13439,7 +14268,6 @@ export function SettingsPanel({
                   className="settings-input"
                   value={form.fdEventName ?? ''}
                   onChange={(e) => update('fdEventName', e.target.value)}
-                  placeholder={t('settings.fdClub.eventName.placeholder')}
                 />
                 <span className="settings-hint">{t('settings.fdClub.eventName.hint')}</span>
               </div>
@@ -13464,13 +14292,13 @@ export function SettingsPanel({
             <div className="settings-grid">
               <div className="settings-field">
                 <span className="settings-label">{t('settings.fdClub.join.label')}</span>
-                <input
+                <input data-setting="fdJoinAddr"
                   className="settings-input mono"
                   value={form.fdJoinAddr ?? ''}
                   onChange={(e) => update('fdJoinAddr', e.target.value)}
-                  placeholder="192.168.1.10:42073"
-                  disabled={remote || (!!form.fdHostEnable)}
+                  disabled={locked('fdJoinAddr') || (!!form.fdHostEnable)}
                 />
+                {setAtStation('fdJoinAddr')}
                 <span className="settings-hint">
                   {form.fdHostEnable
                     ? t('settings.fdClub.join.hostingHint')
@@ -13640,23 +14468,6 @@ export function SettingsPanel({
         </div>
 
         <div className="settings-actions">
-          {remote && remoteFollow.error && <span className="settings-error" role="alert">{remoteFollow.error === 'contextChanged' ? t('remote.followChanged')
-            : remoteFollow.error === 'persistenceFailed' ? t('remote.followSaveFailed') : ['unconfirmed', 'hardwareUnconfirmed'].includes(remoteFollow.error) ? t('remote.followUnconfirmed') : t('remote.followRefused')}</span>}
-          {remote && remoteFollow.confirming && <span className="settings-ok" role="status">{t('remote.followSavedRefreshing')}</span>}
-          {remote && remoteFollow.saved && <span className="settings-ok" role="status">{t('settings.panel.saved')}</span>}
-          {remote && remotePrefs.result && (
-            <span className={remotePrefs.result === 'saved' ? 'settings-ok' : 'settings-error'} role={remotePrefs.result === 'saved' ? 'status' : 'alert'}>
-              {remotePrefs.result === 'saved' ? t('settings.panel.saved')
-                : remotePrefs.result === 'contextChanged' ? t('remote.settingsChanged')
-                  : remotePrefs.result === 'tooLarge' ? t('remote.settingsTooLarge')
-                    : remotePrefs.result === 'unconfirmed' ? t('remote.settingsUnconfirmed')
-                      : remotePrefs.result === 'notSent' ? t('remote.controlNotSent') : t('remote.settingsRefused')}
-            </span>
-          )}
-          {remote && remotePrefs.result === 'unconfirmed' && <>
-            <button type="button" className="settings-refresh" onClick={remotePrefs.check}>{t('remote.logChangeCheck')}</button>
-            <button type="button" className="settings-refresh" onClick={remotePrefs.acknowledge}>{t('remote.settingsCheckedStation')}</button>
-          </>}
           {/* Warnings from the last save. They did NOT block it -- the save went through -- so
               they are stated once and left visible rather than interrupting. An operator whose
               setup is unusual but correct must be able to read them and carry on. */}
@@ -13676,9 +14487,9 @@ export function SettingsPanel({
             className="settings-save"
             // Not disabled on an empty callsign — clicking routes to the Station tab with a clear
             // message (handleSubmit), rather than a greyed button that gives no reason or fix.
-            disabled={remote ? !(remoteFollow.canSave || remotePrefs.canSave(form)) : status === 'saving'}
+            disabled={status === 'saving'}
           >
-            {(remote ? remoteFollow.saving || remotePrefs.saving : status === 'saving') ? t('settings.panel.saving') : t('settings.panel.save')}
+            {status === 'saving' ? t('settings.panel.saving') : t('settings.panel.save')}
           </button>
         </div>
       </form>

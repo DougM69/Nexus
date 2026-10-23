@@ -24,7 +24,9 @@
 //   · one `[data-theme='…'][data-<role>='<preset>']` block per preset per theme in styles.css,
 //     plus a `[data-<role>='<preset>'] .well` rule: a display well DECLARES the dark palette on
 //     itself, so a preset arriving by inheritance from <html> would stop at the well's edge.
-// The DARK values are also what every display well paints, in both themes (DISPLAY WELLS).
+// The DARK values are also what every display well paints, in both themes (DISPLAY WELLS), but
+// for one case: on its default preset the standard Light gives its wells its own accent and readout
+// (skins.ts STANDARD_LIGHT_WELL), as a light built-in theme does.
 //
 // THE VALUES BELOW ARE THE SPEC, the sheet is the implementation: styles-palette-roles.test.ts
 // resolves the real cascade for every role × preset × mode (dark, light, dark-high, light-high,
@@ -117,15 +119,13 @@ const ACCENT: PaletteRole = {
         '--bubble-mine': '#1f5d73',
         '--bubble-mine-text': '#eaf7fc',
       },
-      // Darkened on 2026-09-27 from #0d8ecf, same hue (operator: "Darken it slightly"): that
-      // read 3.3–3.6:1 as lettering on the light panels, this reads 4.7:1 or better. The focus
-      // ring follows the accent now; it was a shade darker only because #0d8ecf missed 3:1 on
-      // the page.
+      // The light theme's own accent: Silver's steel blue since Light took Silver's look
+      // (2026-10-13; styles.css LIGHT). The cyan #0174ab it had before is the Bright theme's now.
       light: {
-        '--accent': '#0174ab',
+        '--accent': '#3b5a7a',
         '--accent-ink': '#ffffff',
-        '--focus-ring': '#0174ab',
-        '--bubble-mine': '#0174ab',
+        '--focus-ring': '#3b5a7a',
+        '--bubble-mine': '#3b5a7a',
         '--bubble-mine-text': '#ffffff',
       },
       night: {
@@ -136,12 +136,12 @@ const ACCENT: PaletteRole = {
           '--bubble-mine': '#124658',
           '--bubble-mine-text': '#bdc9ce',
         },
-        // Darker again on the warm night panel: Night must dim the day cyan above.
+        // Darker again on the warm night panel: Night must dim the day accent above.
         light: {
-          '--accent': '#006fae',
+          '--accent': '#325171',
           '--accent-ink': '#ffffff',
-          '--focus-ring': '#006fae',
-          '--bubble-mine': '#006fae',
+          '--focus-ring': '#325171',
+          '--bubble-mine': '#325171',
           '--bubble-mine-text': '#ffffff',
         },
       },
@@ -229,14 +229,15 @@ const READOUT: PaletteRole = {
   hue: [70, 320],
   dimsAtNight: true,
   presets: [
-    // The digits were painted in the accent until this role existed, so the default is the
-    // accent's own two values: nothing moves for anyone who does not pick one. At night too.
+    // The digits were painted in the accent until this role existed, so the dark default is the
+    // accent's own two values: nothing moves for anyone who does not pick one. At night too. The
+    // light default is Silver's navy digits since Light took Silver's look (2026-10-13).
     {
       id: 'cyan',
       labelKey: 'palette.preset.cyan',
       dark: { '--readout': '#4cc9f0' },
-      light: { '--readout': '#0174ab' },
-      night: { dark: { '--readout': '#42a7c7' }, light: { '--readout': '#006fae' } },
+      light: { '--readout': '#143d6b' },
+      night: { dark: { '--readout': '#42a7c7' }, light: { '--readout': '#0c3664' } },
     },
     // At night the digits dim in the dark theme and in every well. Amber dims less than the
     // others: taken as far, it would come within ΔE 0.15 of the critical orange. In the light

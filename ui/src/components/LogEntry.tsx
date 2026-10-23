@@ -1,12 +1,11 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog (`i18n/en.ts`); a hardcoded one fails CI. What does NOT come from
-// the catalog is LOG_EXAMPLES and PARK_PROGRAMS below, the contest boxes' examples
-// (`slotExample`), plus everything this strip prints about a
+// the catalog is LOG_EXAMPLES and PARK_PROGRAMS below, plus everything this strip prints about a
 // contact — the callsign, RST, grid, band, mode and frequency are wire values, and a locale that
 // "translated" one would have broken an example of a wire format. See the invariant-token rule in
 // `i18n/index.ts`.
 
-import { useContext, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import {
   isOnAir,
@@ -18,7 +17,7 @@ import {
   type LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { clearHuntTarget, contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
+import { clearHuntTarget, contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestLoggedQth, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
@@ -36,14 +35,17 @@ import {
   withLastCountyPart,
 } from '../features/countyLine'
 import { composingSlot } from '../features/contestExchange'
+import { readLogDraft, writeLogDraft } from '../features/logDraft'
 import { CALL_HISTORY_SOURCE, SCP_SOURCE, useCallHistory, useScpList } from '../features/contestLists'
 import { scpLine } from '../features/scp'
-import { applyFill, EMPTY_FILL, historyFill, typedIn, type FillState } from '../features/callHistoryFill'
-import { fdFieldOk, fdSlotValue, fdVerdict, receivedCaption, slotCaption, slotExample, slotTitle } from '../features/contestSlots'
+import { applyFill, contestLogFill, EMPTY_FILL, historyFill, loggedQthFill, offerFill, typedIn, type FillSource, type FillState } from '../features/callHistoryFill'
+import { fdFieldOk, fdSlotValue, fdVerdict, receivedCaption, slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
-import { contestDupe, type ContestDupeVerdict } from '../features/contestDupe'
+import { contestUnsavedText } from '../features/contestUnsaved'
+import { contestDupe, contestDupeRow, contestWorkedRows, workedValues, type ContestDupeVerdict } from '../features/contestDupe'
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { askForOperatorBox, isOperatorBoxKey, isWipeKey } from '../features/contestKeys'
+import { isMarkKey, markHere, publishEntryCall } from '../features/freqMarkers'
 import { isEditKey } from '../features/contestEdit'
 import { ContestContactEdit, type EditNote } from './ContestContactEdit'
 import { esmPress, type EsmCaret, type EsmRole, type EsmStrip } from '../features/esm'
@@ -56,8 +58,6 @@ import { baseCall, sameCall } from '../callsign'
 import { placeCode, placeName } from '../features/otaStates'
 import { RecallPanel } from './RecallPanel'
 import { ContestScoreChip } from './ContestScoreChip'
-import { RemoteCollectionsContext } from '../remote-web/collections'
-import { PARKS_COMMAND } from '../remote-web/application-query-protocol'
 import { pushToast, withErrorToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
 import { useStationControl } from '../stationAccess'
@@ -91,6 +91,27 @@ const FD_RECEIVES_FALLBACK: ContestFieldSpec[] = [
  *  station's role (`receivedCaption`), as the contest log table and the edit caption it. */
 const fdFieldLabel = slotCaption
 
+/** The word on a filled box's caption: where the fill came from (a fill with no source is the
+ *  call-history file's, the only source there once was). */
+function fillMark(source: FillSource | undefined): string {
+  if (source === 'contest') return t('logEntry.fill.contest')
+  if (source?.startsWith('log:')) return t('logEntry.fill.log', { year: source.slice(4) })
+  return t('logEntry.history.mark')
+}
+/** …and its title, which says the same at length. */
+function fillTitle(source: FillSource | undefined, file: string): string {
+  if (source === 'contest') return t('logEntry.fill.contest.title')
+  if (source?.startsWith('log:')) return t('logEntry.fill.log.title', { year: source.slice(4) })
+  return t('logEntry.history.title', { file })
+}
+
+/** A row's UTC time as HH:MM, the DUPE badge's "when". Digits only: an invariant token. */
+function utcHhMm(whenUnix: number): string {
+  const d = new Date(whenUnix * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
+}
+
 /** One received value off a logged DTO row, by slot id.
  *
  *  ⚠️ A DTO row carries `class`/`section`, not a received VECTOR — the generalised row
@@ -123,6 +144,18 @@ function afterLogged(
  *  digital — the same split the engine makes for a sent RST on a phone row. */
 function defaultContestRst(fdMode: 'CW' | 'PH' | 'DIG' | undefined): string {
   return (fdMode ?? 'PH') === 'PH' ? '59' : '599'
+}
+
+/** Where the optional "RST sent" box keeps a report typed in it, beside the received slots' ids:
+ *  lower case, so no ruleset's slot id (upper case, always) can be it. It lives with the boxes, so
+ *  the shared entry, Alt+W and Clear carry it as they carry them. */
+const SENT_RST_KEY = 'sentRst'
+
+/** A typed sent RST is logged only with its mode's digit count: 2 on phone (R 1–5, S 1–9), 3 on CW
+ *  and digital (and T 1–9). The engine's own check (`ContestSession::sent_rst_ok`) refuses any
+ *  other, so the strip holds Log back rather than sending one it will refuse. */
+function sentRstOk(raw: string, fdMode: 'CW' | 'PH' | 'DIG' | undefined): boolean {
+  return ((fdMode ?? 'PH') === 'PH' ? /^[1-5][1-9]$/ : /^[1-5][1-9]{2}$/).test(raw)
 }
 
 /** The cty.dat names of the two countries whose stations send a QTH in CQ WW RTTY —
@@ -198,33 +231,20 @@ function overrideModeFor(m: string): string {
 }
 
 /**
- * The invariant example values this strip shows in empty fields, gathered so the guard can prove
- * they never became catalog entries. Every one is drawn from a technical namespace — a callsign,
- * a Field Day class, an ARRL section code, the signal-report format's name, a unit, a POTA park
- * and a SOTA summit reference — so it is the same characters in every language.
+ * The invariant hints this strip shows in empty fields, gathered so the guard can prove they never
+ * became catalog entries: the signal-report format's name and a unit, the same characters in every
+ * language. Neither is a sample value; a box that would only show one (a callsign, a class, a
+ * section, a park) is left blank.
  */
 const LOG_EXAMPLES = {
-  call: 'W1AW',
-  fdClass: '1D',
-  fdSection: 'WI',
   rst: 'RST',
   freqUnit: 'MHz',
-  potaRef: 'K-1234',
-  sotaRef: 'W7A/MN-001',
 } as const
 
 /**
  * On-the-air programs for the park/summit picker. The ADIF SIG value and the label the operator
  * reads are the SAME token here, which is why this is one list and not a value/label pair.
  */
-/** The example value shown in an empty box, by slot; any other box shows a code from the list it
- *  draws on (`slotExample`). An example drawn from a technical namespace is an INVARIANT TOKEN
- *  and never a catalog string — see `LOG_EXAMPLES`. */
-const FD_FIELD_EXAMPLES: Record<string, string | undefined> = {
-  CLASS: LOG_EXAMPLES.fdClass,
-  SECTION: LOG_EXAMPLES.fdSection,
-}
-
 const PARK_PROGRAMS = ['POTA', 'SOTA'] as const
 
 /** Now, split into a UTC date (YYYY-MM-DD) + time (HH:MM) for the override's inputs. */
@@ -283,7 +303,7 @@ interface Props {
   /** Open the Logbook filtered to a callsign — handed straight to the recall card below, whose
    *  previous-contact rows become clickable when it is present (#192). Omitted = inert rows,
    *  which is what a build with the Logbook section switched off gets. */
-  onOpenLogbook?: (call: string) => void
+  onOpenLogbook?: (call: string, id?: string | null) => void
   /** Click-to-work handoff from the Needed board: the callsign to prefill + focus RST.
    * `ts` changes per click so re-working the same call refires the prefill. `park` is the park
    * or summit a Needed row is an activation of: it fills the park box for that call, and no
@@ -300,7 +320,20 @@ interface Props {
     rst: string | null
     name: string | null
     confirmed: boolean
+    /** The report we SEND them, when the host knows it (JS8: their SNR at this station, which
+     *  JS8Call's log dialog puts in "RST sent", mainwindow.cpp:3891-3896). Filled once per
+     *  call, into a box nobody has typed in, as `rst` fills the received one. */
+    rstSent?: string | null
   } | null
+  /** Hz above the dial the contact was on, for hosts whose logged frequency is the dial plus the
+   *  audio offset (JS8Call logs `m_freqNominal + freq()`, mainwindow.cpp:3899). Absent = the
+   *  dial, as before. An override's own frequency still wins. */
+  logOffsetHz?: number
+  /** When the contact started, as the host knows it, for the call it names: JS8Call's QSO start
+   *  is the moment the call was selected (`m_callSelectedTime`, mainwindow.cpp:3860-3866). Used
+   *  only while the strip's call is that call, and then the contact's end is when it is logged.
+   *  An override's own time still wins. */
+  startedAt?: { call: string; unix: number } | null
   /**
    * The host holds the SAME callsign in a field of its own (RTTY's Call box), and the two are
    * one field shown twice. Called with the strip's call, trimmed and uppercased, whenever it
@@ -415,6 +448,13 @@ interface Props {
    */
   scoreChip?: boolean
   /**
+   * CONTEST STRIP ONLY — the chip that says the station's mode earns no credit in the contest
+   * running ("FT8 · no credit", FdAdvisories' `NoCreditChip`), drawn in this strip's header row
+   * right after the mode chip. Only the large log line passes it (`ContestLargeEntry`); every
+   * cockpit's strip is as it was.
+   */
+  noCreditChip?: React.ReactNode
+  /**
    * CONTEST STRIP ONLY — the Contest screen's operator box, drawn in this strip's header row right
    * beside Sending and I moved (ContestView's `OperatorBox`). Only the large log line passes it
    * (`ContestLargeEntry`: the top of the main window's Contest screen and of the logger window);
@@ -422,6 +462,23 @@ interface Props {
    * the report, the exchange, Log) does not pass through it, and its Enter is its own.
    */
   operatorBox?: React.ReactNode
+  /**
+   * WHOSE CONTACT THIS IS, for the draft that outlives the strip (`features/logDraft`): a host
+   * that unmounts this strip when the operator goes to another page names its cockpit here, and
+   * the strip comes back with the contact the operator left in it. Phone, CW and Satellites pass
+   * it: App's view switch draws them, so a page switch unmounts them. Absent, nothing is kept: the
+   * RTTY, PSK and JS8 strips never unmount (their hosts keep them), the Remote page keeps its own
+   * forms mounted, and the Contest screen's entry is a contest strip, which keeps none anyway
+   * (the draft effect says why).
+   */
+  draft?: string
+  /**
+   * CW AND PHONE ONLY — Contest mode is on but the station is out of the contest (the re-entry on
+   * opening did not happen, or the session dropped while the screen was open), so this line is the
+   * everyday form, with no exchange boxes and no dupe check. Given, one line says so, with Resume: the
+   * host re-enters the contest in S&P (never a CQ). App passes it only while that is so.
+   */
+  onResumeContest?: () => void
 }
 
 /**
@@ -444,6 +501,8 @@ export function LogEntry({
   pendingWork,
   onConsumeWork,
   cwLive,
+  logOffsetHz,
+  startedAt,
   onCallChange,
   onEntryCall,
   onReset,
@@ -458,7 +517,10 @@ export function LogEntry({
   esm,
   sharedEntry,
   scoreChip = true,
+  noCreditChip,
   operatorBox,
+  draft,
+  onResumeContest,
 }: Props) {
   const remoteMode = remote != null
   // THE STATION'S OWN WINDOW, where the hunt tag's ✕ can end a hunt. Not the hosted Remote page,
@@ -466,9 +528,6 @@ export function LogEntry({
   // and without it in Satellites: it cannot make that call, and a browser ends a hunt on the POTA /
   // SOTA view, by its own change under the logging grant (RemoteOta).
   const stationOwn = useStationControl()
-  // A station that offers its park directory answers the two offline park reads below.
-  // Nothing else here reaches the station, and the live POTA lookup never does.
-  const remoteParks = useContext(RemoteCollectionsContext)?.client.supports(PARKS_COMMAND) ?? false
   type DraftContext = { band: string; freqMhz: number; mode: string }
   const [remoteDraftContext, setRemoteDraftContext] = useState<DraftContext | null>(null)
   const [remoteWorkOffer, setRemoteWorkOffer] = useState<({ call: string; ts: number } & { context: DraftContext }) | null>(null)
@@ -486,25 +545,51 @@ export function LogEntry({
   // and not a settled no. The FD layout renders neither field.
   const asksForGrid = exchange === 'satellite' && !fdActive
 
-  const [logCall, setLogCall] = useState('')
-  const [logRstSent, setLogRstSent] = useState(defaultRst)
-  const [logRstRcvd, setLogRstRcvd] = useState(defaultRst)
-  const [logName, setLogName] = useState('')
-  const [logQth, setLogQth] = useState('')
-  const [logComment, setLogComment] = useState('')
-  const [logNotes, setLogNotes] = useState('')
+  // The contact this strip's cockpit left when the operator last went to another page (`draft`),
+  // read once as the strip mounts, and never into a contest strip: the draft effect says why.
+  const [kept] = useState(() => (draft && !fdActive ? readLogDraft(draft) : undefined))
+  const [logCall, setLogCall] = useState(kept?.call ?? '')
+  // When the call in the strip was entered — typed or clicked in — which is the contact's start
+  // (TIME_ON): the rule JS8's host already gives the strip (`startedAt`), for every cockpit. The
+  // first keystroke is the start, so a call typed or corrected a key at a time keeps it; another
+  // call is another contact, and a cleared strip has none. A draft brings it back with the call.
+  const callEnteredRef = useRef<{ call: string; unix: number } | null>(
+    kept?.call.trim() && kept.enteredUnix != null
+      ? { call: kept.call.trim().toUpperCase(), unix: kept.enteredUnix }
+      : null,
+  )
+  useEffect(() => {
+    const c = logCall.trim().toUpperCase()
+    const prev = callEnteredRef.current
+    if (!c) callEnteredRef.current = null
+    else if (!prev || !(c.startsWith(prev.call) || prev.call.startsWith(c))) {
+      callEnteredRef.current = { call: c, unix: Math.floor(Date.now() / 1000) }
+    } else if (prev.call !== c) callEnteredRef.current = { call: c, unix: prev.unix }
+  }, [logCall])
+  // The two reports as set for THIS contact (typed, or the CW decoder's read of theirs), or null for
+  // a box nobody has touched, which shows the report of the mode the strip logs under NOW, as a
+  // contest strip's report box does (`fdValue`). One strip lives across a mode change (the Satellites
+  // strip follows the station's), and a report held from mount kept an FM pass's 59 on a CW contact.
+  const [logRstSent, setLogRstSent] = useState<string | null>(kept?.rstSent ?? null)
+  const [logRstRcvd, setLogRstRcvd] = useState<string | null>(kept?.rstRcvd ?? null)
+  const rstSentShown = logRstSent ?? defaultRst
+  const rstRcvdShown = logRstRcvd ?? defaultRst
+  const [logName, setLogName] = useState(kept?.name ?? '')
+  const [logQth, setLogQth] = useState(kept?.qth ?? '')
+  const [logComment, setLogComment] = useState(kept?.comment ?? '')
+  const [logNotes, setLogNotes] = useState(kept?.notes ?? '')
   // Autofill stash (written to the record, not separately edited): grid/state/country.
-  const [logGrid, setLogGrid] = useState('')
-  const [logState, setLogState] = useState('')
-  const [logCountry, setLogCountry] = useState('')
+  const [logGrid, setLogGrid] = useState(kept?.grid ?? '')
+  const [logState, setLogState] = useState(kept?.state ?? '')
+  const [logCountry, setLogCountry] = useState(kept?.country ?? '')
   // The STATE box as it stands, and where its value came from: the operator (who also owns the
   // untouched empty box), a callbook lookup, or the park or summit in the park box. Every write
   // goes through `setStateBox`, so both are current before React renders, as `parkBoxRef` is for
   // the park box. The station reads the source when the contact is logged: a callbook's state is
   // the licensee's ADDRESS, so a park's own state outranks it, and the operator's outranks both.
-  const stateBoxRef = useRef('')
-  const stateSourceRef = useRef<StateSource>('operator')
-  const [stateSource, setStateSource] = useState<StateSource>('operator')
+  const stateBoxRef = useRef(kept?.state ?? '')
+  const stateSourceRef = useRef<StateSource>(kept?.stateSource ?? 'operator')
+  const [stateSource, setStateSource] = useState<StateSource>(kept?.stateSource ?? 'operator')
   const setStateBox = (value: string, source: StateSource) => {
     stateBoxRef.current = value
     stateSourceRef.current = source
@@ -514,19 +599,19 @@ export function LogEntry({
   // The callbook's own state for this call, kept apart from the box: the recall card pairs a state
   // with the callbook's town ("Columbus, OH"), and once the park has placed the box its state is
   // not where that town is.
-  const [callbookState, setCallbookState] = useState('')
+  const [callbookState, setCallbookState] = useState(kept?.callbookState ?? '')
   // Callbook profile photo (display-only, not written to the log). Cleared when the call changes.
-  const [logImage, setLogImage] = useState<string | null>(null)
+  const [logImage, setLogImage] = useState<string | null>(kept?.image ?? null)
   // POTA/SOTA park of the station worked (ota.their_*). Prefilled from a hunted spot; editable.
-  const [logParkProgram, setLogParkProgram] = useState('POTA')
-  const [logParkRef, setLogParkRef] = useState('')
+  const [logParkProgram, setLogParkProgram] = useState(kept?.parkProgram ?? 'POTA')
+  const [logParkRef, setLogParkRef] = useState(kept?.parkRef ?? '')
   // WHOSE park the box holds, and whether a hunt put it there. A prefill is bound to the hunted
   // activator (`hunt: true`); a park the operator typed or picked is bound to the call in the box
   // (`hunt: false`, and `call: ''` when there was no call yet), and follows that call while the
   // operator types it, so a park typed before any call belongs to the first call TYPED after it
   // (#383). Written wherever a park goes INTO the box and read only while one is there, so a clear
   // leaves it alone. See the prefill below for why the value alone cannot say.
-  const parkForRef = useRef({ call: '', hunt: false })
+  const parkForRef = useRef(kept?.parkFor ?? { call: '', hunt: false })
   // THE PARK A NEEDED CLICK HANDED OVER (`pendingWork.park`). The Needed board fills the strip with
   // the station's call and the park it is activating, and sets no hunt: nothing waits in the
   // engine, so nothing shows at the top of the POTA/SOTA view and the strip's Clear really clears
@@ -534,7 +619,9 @@ export function LogEntry({
   // prefill below, so it fills, and leaves with its station, exactly as a hunted park does, and a
   // hunt pending for the same station at another park does not replace it. It is spent the way a
   // hunt is, by the contact it is logged with (`reset`).
-  const [workPark, setWorkPark] = useState<{ call: string; program: string; reference: string } | null>(null)
+  const [workPark, setWorkPark] = useState<{ call: string; program: string; reference: string } | null>(
+    kept?.workPark ?? null,
+  )
   // The park box as it stands, for the park prefill: the LAST value written to it. Every write
   // goes through `setPark`, so this always has it, even before React renders it. The call-change
   // effect runs just before the prefill and can empty the box in the same commit, while the
@@ -542,15 +629,17 @@ export function LogEntry({
   // (it was): a render can land ahead of a write still pending from a passive effect, and syncing
   // from it put the box back to what that render saw. After a hunted log, the spent hunt's refill
   // was such a write; the hunt's end rendered first, the prefill judged an empty box, and the
-  // refill then landed with nothing left to take it out (#383, N26).
-  const parkBoxRef = useRef('')
+  // refill then landed with nothing left to take it out (#383).
+  const parkBoxRef = useRef(kept?.parkRef ?? '')
   const setPark = (value: string) => {
     parkBoxRef.current = value
     setLogParkRef(value)
   }
   // Local park-directory suggestions (POTA only) as the operator types the reference.
   const [parkHits, setParkHits] = useState<Park[]>([])
-  const [parkPicked, setParkPicked] = useState(false)
+  // A park the draft put back counts as picked, as a hunt's prefill does: the strip comes back as it
+  // was left, not with a suggestion list open under the box.
+  const [parkPicked, setParkPicked] = useState(!!kept?.parkRef)
   // Auto-loaded details for a complete park reference (name/location/grid), local-first then live.
   const [parkDetail, setParkDetail] = useState<Park | null>(null)
   const [parkDetailLive, setParkDetailLive] = useState(false)
@@ -648,6 +737,18 @@ export function LogEntry({
     if (f.kind !== 'rst') return fdFields[f.key] ?? ''
     return typedMarks[f.key] ? (fdFields[f.key] ?? rstDefault) : rstDefault
   }
+  // ⭐ THE OPTIONAL "RST SENT" BOX (N1MM's Snt; Settings ▸ Contesting, off by default). The engine
+  // says it is on by sending the report this contest sends (`rstSentBox`, `599`), and only for a
+  // contest that sends one. It shows what this contact will log as sent — 59 on phone, the
+  // session's own on CW and digital, exactly what the engine stamps — and, like the received
+  // report, a value typed in it is the operator's only while it is marked typed for THIS contact:
+  // the next contact goes back to the constant. Never on the Remote, which logs no contest here.
+  const sentRstConst = fdActive && !remoteMode ? fieldDay?.rstSentBox : undefined
+  const sentRstDefault = (fdMode ?? 'PH') === 'PH' ? '59' : (sentRstConst ?? '599')
+  const sentRstTyped = sentRstConst !== undefined && !!typedMarks[SENT_RST_KEY]
+  const sentRstValue = sentRstTyped ? (fdFields[SENT_RST_KEY] ?? sentRstDefault) : sentRstDefault
+  const sentRstGood = !sentRstTyped || sentRstOk(sentRstValue, fdMode)
+  const sentRstRef = useRef<HTMLInputElement | null>(null)
 
   // Pre-fill the exchange from the last logged FD contact — but ONLY when the
   // log actually GREW. `fieldDay` is a fresh object every 300 ms snapshot poll;
@@ -663,6 +764,10 @@ export function LogEntry({
   // that sends one needed it retyped on every contact. Untouched, not WRITTEN: a report
   // written here is the mode this contact was logged in, and it stayed in the box after a
   // move to another one.
+  //
+  // ⭐ ONCE PER CONTACT. A contact this strip logged was cleared for as its log landed
+  // (`logIt` moves `fdSeenLen` on past its rows), so the snapshot that first shows it clears
+  // nothing more here. A strip that did not log it clears here, once.
   const fdLogLen = fieldDay?.log?.length ?? 0
   const fdSeenLen = useRef(fdLogLen)
   useEffect(() => {
@@ -678,7 +783,7 @@ export function LogEntry({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fdActive, fdLogLen])
 
-  // ⭐ REMOVE THE NEWEST CONTACT — Ctrl+D (N1MM's key) or Remove last, PRESSED TWICE. The first
+  // ⭐ REMOVE THE NEWEST CONTACT — Ctrl+D or Remove last, PRESSED TWICE. The first
   // press names the contact on the verdict line and changes nothing; a second within
   // REMOVE_CONFIRM_MS removes it. Any other key, the window running out, or a new contact lets it
   // lapse, so nothing is removed that the operator was not just shown — and if the newest contact
@@ -708,6 +813,9 @@ export function LogEntry({
   // The line Alt+W wiped (`pressWipe`, below), kept until any other key: what a second Alt+W puts back.
   const wipedRef = useRef<{ call: string; fields: Record<string, string>; fill: FillState } | null>(null)
   const pressWipeRef = useRef<() => void>(() => {})
+  // The call Alt+M marks with (`features/freqMarkers.ts`).
+  const markCallRef = useRef(logCall)
+  markCallRef.current = logCall
   const armedRef = useRef(removeArmed)
   armedRef.current = removeArmed
   const pressRemove = () => {
@@ -743,7 +851,7 @@ export function LogEntry({
   }
   const pressRemoveRef = useRef(pressRemove)
   pressRemoveRef.current = pressRemove
-  // ⭐ CTRL+Y OPENS THE NEWEST CONTACT FOR EDIT (N1MM's key), in place of the entry boxes: its call,
+  // ⭐ CTRL+Y OPENS THE NEWEST CONTACT FOR EDIT, in place of the entry boxes: its call,
   // what they sent, its band and its mode (`ContestContactEdit`). Enter saves, Esc leaves it as it
   // was, and the entry boxes come back as they were, with the caret in Call. The contact keeps its
   // time, serial and number. Never through the Remote stream; and at a club the line says how a
@@ -810,7 +918,7 @@ export function LogEntry({
     if (!removable || !active) return
     const onKey = (e: KeyboardEvent) => {
       // Every key but Alt+W itself (a bare modifier is not a key) ends the chance to put back a line
-      // Alt+W wiped: N1MM's "if nothing new has been typed in since".
+      // Alt+W wiped: it comes back only if nothing new has been typed in since.
       if (!isModifierKey(e) && !isWipeKey(e)) wipedRef.current = null
       if (isRemoveKey(e)) {
         // This strip's key while it shows: the browser's own (a bookmark, or delete-next-character
@@ -822,7 +930,7 @@ export function LogEntry({
         return
       }
       if (isEditKey(e)) {
-        // Ctrl+Y is redo in a text box; while this strip shows it is N1MM's edit-last.
+        // Ctrl+Y is redo in a text box; while this strip shows it edits the last contact.
         e.preventDefault()
         if (!e.repeat) pressEditRef.current()
         setEsmLine(null)
@@ -843,11 +951,20 @@ export function LogEntry({
       } else if (isOperatorBoxKey(e)) {
         e.preventDefault()
         if (!e.repeat) askForOperatorBox()
+      } else if (isMarkKey(e)) {
+        // N1MM's Mark: the dial, on the band map, with the call in this line (`features/freqMarkers.ts`).
+        e.preventDefault()
+        if (!e.repeat) void markHere(markCallRef.current)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [removable, active])
+  // The one the band map's right-click reads (another window, so a shared key): this strip's call,
+  // while it is on screen.
+  useEffect(() => {
+    if (removable && active) publishEntryCall(logCall)
+  }, [removable, active, logCall])
   // ONE line in the verdict slot while a press waits or an answer shows: the strip does not grow.
   const removeLine = removeArmed
     ? t('logEntry.remove.armed', { contact: removeArmed.label })
@@ -904,21 +1021,71 @@ export function LogEntry({
     }
     setFill(EMPTY_FILL)
   }
+  // ⭐ THE WHOLE LOG'S ANSWER for the call typed (the third source below): asked of the station,
+  // which reads that one call's contacts through the log's per-call index, a moment after the
+  // call stops changing. Never a scan of a log this strip holds, and never on the Remote.
+  const [loggedQth, setLoggedQth] = useState<{ call: string; value: string; whenUnix: number } | null>(null)
+  const hasQthBox = fdReceives.some((f) => f.key === 'QTH')
+  useEffect(() => {
+    const c = logCall.trim().toUpperCase()
+    if (!fdActive || remoteMode || !hasQthBox || c.length < 3) return
+    let live = true
+    const timer = window.setTimeout(() => {
+      // Through a promise from the start, so a station that cannot answer (an older one, or none)
+      // is the same quiet "nothing" as a call the log does not hold.
+      Promise.resolve()
+        .then(() => contestLoggedQth(c, 'QTH'))
+        .then((r) => {
+          if (live) setLoggedQth(r && typeof r.value === 'string' ? { call: c, value: r.value, whenUnix: r.whenUnix } : null)
+        })
+        .catch(() => {})
+    }, 200)
+    return () => {
+      live = false
+      window.clearTimeout(timer)
+    }
+  }, [fdActive, remoteMode, hasQthBox, logCall])
+
   // ⭐ THE FILL, AS THE CALL IS TYPED (operator, 2026-10-08). Every change of the call (typed, a
-  // click on the SCP line, the decoder's or the host's) brings the boxes in line with what the
-  // file holds for exactly that call: `features/callHistoryFill` decides what may go in, and
-  // takes a fill back out when the call stops being the one it was for.
+  // click on the SCP line, the decoder's or the host's) brings the boxes in line with what is
+  // known of exactly that call, from three sources in the operator's order (2026-10-18): this
+  // contest's last contact with the station, then the call-history file, then the most recent
+  // contact anywhere in the log. `features/callHistoryFill` decides what may go in, never over a
+  // box the operator typed in, and takes a fill back out when the call stops being the one it
+  // was for. A box that has the caret when its fill lands is selected, so typing replaces it, as
+  // Space and Tab select a box they move to.
   const fdReceivesKey = fdReceives.map((f) => f.key).join(' ')
   useEffect(() => {
     if (!fdActive) return
-    const offered = historyFill(logCall, fdReceives, historyFile, fieldDay?.event)
+    // ⚠️ A STATION ALREADY WORKED ON THIS BAND AND MODE takes no fill from this contest or the
+    // log: what it sends NOW decides whether this is a dupe or a rover's new county, so the box
+    // waits for the operator, with the counties already logged on the amber line above it. Filled
+    // with the county logged last, it would turn the contact into a dupe nobody copied.
+    const modeClass = fdMode ?? 'PH'
+    const composing = (slot: string) => composingSlot(fieldDay?.composing, slot)
+    const workedHere =
+      contestDupe(fieldDay, logCall, snap.radio.band, modeClass) === 'own' ||
+      contestWorkedRows(fieldDay, logCall, snap.radio.band, modeClass, { rx: () => '', tx: composing }).length > 0
+    const { offered, sources } = offerFill(
+      workedHere ? {} : contestLogFill(logCall, fdReceives, fieldDay?.log ?? []),
+      historyFill(logCall, fdReceives, historyFile, fieldDay?.event),
+      workedHere ? {} : loggedQthFill(logCall, fdReceives, loggedQth),
+      loggedQth ? new Date(loggedQth.whenUnix * 1000).getUTCFullYear() : 0,
+    )
     const values = Object.fromEntries(fdReceives.map((f) => [f.key, fdValue(f)]))
-    const r = applyFill(fillRef.current, logCall, offered, values)
+    const r = applyFill(fillRef.current, logCall, offered, values, sources)
     if (r.state === fillRef.current) return
     setFill(r.state)
-    if (Object.keys(r.writes).length > 0) setFdFields((prev) => ({ ...prev, ...r.writes }))
+    if (Object.keys(r.writes).length === 0) return
+    setFdFields((prev) => ({ ...prev, ...r.writes }))
+    requestAnimationFrame(() => {
+      for (const key of Object.keys(r.writes)) {
+        const box = fdBoxRefs.current[key]
+        if (box && box === document.activeElement && r.state.filled[key]) box.select()
+      }
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fdActive, logCall, historyFile, fieldDay?.event, fdReceivesKey])
+  }, [fdActive, logCall, historyFile, fieldDay?.event, fdReceivesKey, fdLogLen, loggedQth, snap.radio.band, fdMode])
 
   // "I moved" (§4.1): the read-only sent exchange becomes editable, one box per
   // composing slot, and takes effect on the NEXT contact.
@@ -1006,13 +1173,16 @@ export function LogEntry({
    * "this call is final" — a clicked spot, or a CONFIRMED decoder call. An unconfirmed best guess
    * is deliberately excluded: the decoder walks K9 → K9A → K9ABC, and looking each one up would
    * spend the operator's QRZ quota on calls that were never worked.
+   *
+   * A call a draft put back (`kept`) starts settled: the draft effect keeps no call but the
+   * operator's, so a callbook answer it never got is still asked for.
    */
-  const settledCallRef = useRef(false)
+  const settledCallRef = useRef(kept != null)
 
   // The call whose identity (name/QTH/grid/state/country) the enrichment fields currently hold.
   // Clear them when the call changes to a DIFFERENT one, so a previous callsign's data never
   // bleeds onto another call's recall card — and so onCallBlur re-looks-up the new call.
-  const enrichedForRef = useRef('')
+  const enrichedForRef = useRef(kept?.enrichedFor ?? '')
   // The call for which an Enter-triggered QRZ lookup was already ATTEMPTED (success OR miss/no
   // callbook), so a second Enter logs instead of re-looping the lookup on an unresolvable call.
   const triedLookupRef = useRef('')
@@ -1137,7 +1307,7 @@ export function LogEntry({
   // also why no test here reddens on removing this line alone: `parkPicked` still catches
   // it. The guard's value is that the property no longer depends on that.)
   useEffect(() => {
-    if ((remoteMode && !remoteParks) || !asksForPark) {
+    if (remoteMode || !asksForPark) {
       setParkHits([])
       return
     }
@@ -1157,9 +1327,9 @@ export function LogEntry({
     }, 180)
     return () => clearTimeout(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logParkRef, logParkProgram, asksForPark, remoteMode, remoteParks])
+  }, [logParkRef, logParkProgram, asksForPark, remoteMode])
 
-  // Auto-load a park's details the moment a COMPLETE valid POTA reference is entered (like HRD):
+  // Auto-load a park's details the moment a COMPLETE valid POTA reference is entered:
   // instant offline lookup first, then the live POTA directory if it's not in the local list. Purely
   // informational — never blocks typing or logging, and swallows all errors (offline = no chip).
   // `asksForPark` first: a pending hunt still PREFILLS logParkRef in every exchange
@@ -1168,7 +1338,7 @@ export function LogEntry({
   // it never renders.
   useEffect(() => {
     const ref = logParkRef.trim().toUpperCase()
-    if ((remoteMode && !remoteParks) || !asksForPark || logParkProgram !== 'POTA' || !/^[A-Z0-9]{1,4}-\d{4,5}$/.test(ref)) {
+    if (remoteMode || !asksForPark || logParkProgram !== 'POTA' || !/^[A-Z0-9]{1,4}-\d{4,5}$/.test(ref)) {
       setParkDetail(null)
       return
     }
@@ -1203,7 +1373,7 @@ export function LogEntry({
       cancelled = true
       clearTimeout(id)
     }
-  }, [logParkRef, logParkProgram, asksForPark, remoteMode, remoteParks])
+  }, [logParkRef, logParkProgram, asksForPark, remoteMode])
 
   // WHERE THE PARK IN THE BOX IS ("US-ND"), the places its contact takes its state from: a hunted
   // park's from the hunt, which the station tags by call in every exchange, and a typed POTA
@@ -1247,7 +1417,7 @@ export function LogEntry({
   // and hits Enter. Keyed on `ts` to refire on re-click of the same call.
   useEffect(() => {
     if (!pendingWork) return
-    if (remoteMode && (remote?.pending || remoteDraftContext || logCall.trim() || logName.trim() || logQth.trim() || logComment.trim() || logNotes.trim() || logParkRef.trim() || overrideOpen || logRstSent !== defaultRst || logRstRcvd !== defaultRst)) {
+    if (remoteMode && (remote?.pending || remoteDraftContext || logCall.trim() || logName.trim() || logQth.trim() || logComment.trim() || logNotes.trim() || logParkRef.trim() || overrideOpen || rstSentShown !== defaultRst || rstRcvdShown !== defaultRst)) {
       setRemoteWorkOffer({ ...pendingWork, context: currentDraftContext() })
       onConsumeWork?.()
       return
@@ -1295,6 +1465,9 @@ export function LogEntry({
   // clobbering what the operator typed.
   const cwFilledFor = useRef<string | null>(null)
   const cwRstFilled = useRef(false)
+  // The report SENT this strip last filled in (`cwLive.rstSent`): it follows the host's value while
+  // the box still shows it, as JS8Call's log dialog takes their SNR when it opens.
+  const cwRstSentAuto = useRef<string | null>(null)
   const cwNameFilled = useRef(false)
   // The two-way link (`onCallChange`): the call the strip and its host last agreed on, trimmed and
   // uppercased. A fill sets it BEFORE the strip changes, so the change is not reported back; a
@@ -1330,12 +1503,19 @@ export function LogEntry({
         settledCallRef.current = cwLive.confirmed === true
         cwFilledFor.current = up
         cwRstFilled.current = false
+        cwRstSentAuto.current = null
         cwNameFilled.current = false
       }
     }
+    if (cwFilledFor.current && cwLive.rstSent && cwLive.rstSent !== cwRstSentAuto.current) {
+      const sent = cwLive.rstSent
+      const auto = cwRstSentAuto.current
+      setLogRstSent((v) => (v == null || v.trim() === '' || v === defaultRst || v === auto ? sent : v))
+      cwRstSentAuto.current = sent
+    }
     if (cwFilledFor.current && !cwRstFilled.current && rst) {
       // The decoder's read of `rst` is the report we RECEIVED from them.
-      setLogRstRcvd((v) => (v.trim() === '' || v === defaultRst ? rst : v))
+      setLogRstRcvd((v) => (v == null || v.trim() === '' || v === defaultRst ? rst : v))
       cwRstFilled.current = true
     }
     if (cwFilledFor.current && !cwNameFilled.current && name) {
@@ -1343,7 +1523,7 @@ export function LogEntry({
       cwNameFilled.current = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwLive?.call, cwLive?.rst, cwLive?.name])
+  }, [cwLive?.call, cwLive?.rst, cwLive?.name, cwLive?.rstSent])
   // …and the strip's side of the link: every change the fill above did not make is reported.
   useEffect(() => {
     const c = logCall.trim().toUpperCase()
@@ -1549,7 +1729,7 @@ export function LogEntry({
     setOvDate(date)
     setOvTime(time)
     setOvBand(snap.radio.band)
-    setOvFreq(String(snap.radio.dialMhz))
+    setOvFreq(String(liveFreqMhz))
     setOvMode(overrideModeFor(mode))
     setOverrideOpen(true)
   }
@@ -1568,14 +1748,62 @@ export function LogEntry({
     if (b) setOvBand(b)
   }
 
+  // ⭐ THE DRAFT, KEPT AS THE STRIP CHANGES (`draft`, `features/logDraft`). After every render the
+  // cockpit's draft is the contact as this strip shows it, so the cockpit can leave the screen at any
+  // moment with nothing left to save, and whatever empties the strip — a log, Clear, or a rule of the
+  // strip's own — empties the draft with it. The radio's band, frequency and mode are not in it:
+  // they are read as the contact is logged, as they always were.
+  //
+  // Only the OPERATOR'S contact is kept: a call typed, clicked to work or confirmed
+  // (`humanCallEditRef`, `settledCallRef`). A decoder's unconfirmed guess is the decoder's, and it
+  // offers one again when the cockpit is back, as on any mount. And none is kept
+  //  · in a contest strip — its contact is the session's: the engine binds a serial number to the
+  //    call, the logger window shares the entry, and Enter Sends Message would send to a call that
+  //    came back without being typed;
+  //  · with the other-radio override open — that contact is right only with the band, frequency,
+  //    mode and time typed for it, and a draft carries none of them;
+  //  · while the contact is being logged (`committing`), so a strip that goes before its log lands
+  //    never comes back with the logged contact in it for a second Enter to log again.
+  const committing = useRef(false)
+  useEffect(() => {
+    if (!draft) return
+    const operators = logCall.trim() !== '' && (humanCallEditRef.current || settledCallRef.current)
+    writeLogDraft(
+      draft,
+      operators && !fdActive && !overrideOpen && !committing.current
+        ? {
+            call: logCall,
+            rstSent: logRstSent,
+            rstRcvd: logRstRcvd,
+            name: logName,
+            qth: logQth,
+            comment: logComment,
+            notes: logNotes,
+            grid: logGrid,
+            state: stateBoxRef.current,
+            stateSource: stateSourceRef.current,
+            callbookState,
+            country: logCountry,
+            image: logImage,
+            parkProgram: logParkProgram,
+            parkRef: parkBoxRef.current,
+            parkFor: parkForRef.current,
+            workPark,
+            enrichedFor: enrichedForRef.current,
+            enteredUnix: callEnteredRef.current?.unix ?? null,
+          }
+        : null,
+    )
+  })
+
   const reset = () => {
     // Before the call goes: a contact abandoned here gives its call-history values back. A
     // logged one has already said it keeps them (`endFill(true)` beside its `reset()`).
     endFill(false)
     setRemoteDraftContext(null)
     setLogCall('')
-    setLogRstSent(defaultRst)
-    setLogRstRcvd(defaultRst)
+    setLogRstSent(null)
+    setLogRstRcvd(null)
     setLogName('')
     setLogQth('')
     setLogComment('')
@@ -1605,7 +1833,7 @@ export function LogEntry({
     }
     // Keep fdClass/fdSection across resets for speed in FD runs.
     // Snap focus back to the callsign field so the operator can type the next
-    // contact immediately (rapid logging / a Field Day run), like WSJT-X/N1MM.
+    // contact immediately (rapid logging / a Field Day run), like WSJT-X.
     // rAF so it lands after the cleared value re-renders. Only the mounted layout's
     // input (FD or standard) holds the ref, so this always hits the visible field.
     // preventScroll for the same reason as the click-to-work RST focus above:
@@ -1614,8 +1842,8 @@ export function LogEntry({
     onReset?.()
   }
 
-  // ⭐ ALT+W — WIPE THE LINE, AND PUT IT BACK (`features/contestKeys.ts`; N1MM's "Alt+W can be
-  // reversed by typing it again"). The wipe clears the call as Clear does — the serial in flight
+  // ⭐ ALT+W — WIPE THE LINE, AND PUT IT BACK (`features/contestKeys.ts`: typing Alt+W again
+  // reverses it). The wipe clears the call as Clear does — the serial in flight
   // released, Enter Sends Message at a new contact — and every box as well, a report back to its
   // default, keeping what the line held. A second Alt+W, with no other key between and the line
   // still as the wipe left it, puts back the call, the boxes and their call-history marks, and takes
@@ -1628,7 +1856,9 @@ export function LogEntry({
     const wiped = wipedRef.current
     wipedRef.current = null
     const blank =
-      logCall.trim() === '' && fdReceives.every((f) => fdValue(f) === (f.kind === 'rst' ? rstDefault : ''))
+      logCall.trim() === '' &&
+      sentRstValue === sentRstDefault &&
+      fdReceives.every((f) => fdValue(f) === (f.kind === 'rst' ? rstDefault : ''))
     if (wiped && blank) {
       setLogCall(wiped.call)
       setFdFields(wiped.fields)
@@ -1643,8 +1873,8 @@ export function LogEntry({
   pressWipeRef.current = pressWipe
 
   // THE LOGGER WINDOW'S ESC (`sharedEntry`): it clears the entry, as Clear does, from anywhere in
-  // that window. Nothing in that window transmits, so its Esc has no over to stop, and a logger
-  // clearing a typo never reaches the operator's. On every other strip Esc stays the cockpit's
+  // that window. The same press is also the station's halt there (`DetachedPanel`), so this listener
+  // only clears. On every other strip Esc stays the cockpit's
   // (in CW, Operate, RTTY and PSK it stops TX), exactly as before. Left alone in the "I moved"
   // editor and a contact's edit, whose own Esc backs out of the edit, and while a dialog has the
   // key.
@@ -1669,7 +1899,10 @@ export function LogEntry({
   // Field Day is the same two slots and the same two tests: CLASS non-blank, SECTION a member of
   // `fd_sections`. `FD_SECTION_CODES` above is that domain's value set, and `contestDomains.ts`
   // is where the strip and the board now read it from.
-  const fdBadField = fdReceives.find((f) => !fdFieldOk(f, fdValue(f), fdLineDomain(f)))
+  //
+  // A QSO party's QTH box is judged by the call's country too (`logEntity`): from a station in the
+  // USA or Canada a value must be on the contest's lists, where a DX station may send its country.
+  const fdBadField = fdReceives.find((f) => !fdFieldOk(f, fdValue(f), fdLineDomain(f), logEntity))
   const fdExchangeOk = fdBadField === undefined
 
   // GRID GATE. A blank grid is normal and logs fine — most HF contacts have none.
@@ -1715,8 +1948,12 @@ export function LogEntry({
   // Remote drafts survive navigation and other operators' QSYs. Keep their
   // captured contact context; the explicit other-radio override still wins.
   const draftContext = remoteMode ? remoteDraftContext : null
+  // The frequency a contact logged now is on: the dial, plus the host's audio offset where it logs
+  // one (`logOffsetHz`), to the hertz.
+  const liveFreqMhz =
+    logOffsetHz == null ? snap.radio.dialMhz : Math.round(snap.radio.dialMhz * 1e6 + logOffsetHz) / 1e6
   const effBand = overrideOpen ? ovBand : draftContext?.band ?? snap.radio.band
-  const effFreqMhz = overrideOpen ? ovFreqNum : draftContext?.freqMhz ?? snap.radio.dialMhz
+  const effFreqMhz = overrideOpen ? ovFreqNum : draftContext?.freqMhz ?? liveFreqMhz
   const effMode = overrideOpen ? ovMode : draftContext?.mode ?? mode
 
   useEffect(() => {
@@ -1746,7 +1983,7 @@ export function LogEntry({
       // is mandatory — never log
       // a blank as the literal '?' (it would inflate the section multiplier), so bail until the
       // exchange is complete and the section is a real ARRL/RAC code.
-      if (!fdExchangeOk) return
+      if (!fdExchangeOk || !sentRstGood) return
       // ⭐ THE TRANSPORT IS THE FIELD VECTOR — `contest_log_manual(call, fields, …)`,
       // one pair per box the strip actually rendered, in the session's own receive
       // order. It replaced `fd_log_manual`'s two positional slots, which could carry
@@ -1762,6 +1999,10 @@ export function LogEntry({
       // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
       // that class so a CW or phone contact can never acquire one it has no meaning for.
       const fsub = fmode === 'DIG' ? fdSubmode : undefined
+      // The report typed in the "RST sent" box, for this contact only. The two commands below carry
+      // it when one was typed, and are the commands themselves when none was, so a contact with
+      // nothing typed there makes exactly the call it always made.
+      const snt = sentRstTyped ? sentRstValue : undefined
       // ⭐ A CONTACT THIS STRIP LOGS ENDS AS ITS LOG LANDS (below): its boxes become the next
       // contact's then, as the after-log clear makes them once the snapshot shows the contact.
       // With the logger window open, what this strip puts next (the call going blank, the next call
@@ -1782,15 +2023,24 @@ export function LogEntry({
       // shows, so Enter pressed in both windows at once logs the contact once (the engine refuses
       // the second). With it closed nothing is named and the commands get what they always got.
       const entry = share.sharing ? await share.claim(shareContent) : undefined
+      // ⭐ THE STRIP THAT LOGS CLEARS ONCE, as its log lands (below), and the rows its log adds
+      // are cleared for then: `fdSeenLen` moves on past them. The snapshot that first showed them
+      // cleared again, emptying a county or report typed for the next contact in between (a fast
+      // typist, or call history filling it from the next call). Counted from what this strip had
+      // seen as it logged, so rows a snapshot showed before the log answered count once.
+      const seenAtLog = fdSeenLen.current
       if (lineSlot && lineRead?.ok) {
         const exchangeWith = (county: string) =>
           ex.map(([k, v]) => [k, k === lineSlot.key ? county : v] as [string, string])
         const rows = lineRead.counties.map(exchangeWith)
+        const logRows: typeof contestLogManualRows = snt
+          ? (c, r, m, s, e) => contestLogManualRows(c, r, m, s, e, snt)
+          : contestLogManualRows
         const r = await withErrorToast(
           () =>
             entry
-              ? sharedRefusal(contestLogManualRows(call, rows, fmode, fsub, entry), call)
-              : contestLogManualRows(call, rows, fmode, fsub),
+              ? sharedRefusal(logRows(call, rows, fmode, fsub, entry), call)
+              : logRows(call, rows, fmode, fsub),
           t('logEntry.fd.failed'),
         )
         if (r) {
@@ -1821,6 +2071,9 @@ export function LogEntry({
           // The contact is in the log once any county entered it; a line that was all dupes
           // leaves the entry on screen, as a refused single contact does.
           if (logged.length > 0) {
+            // Logged through the shared entry: this strip's changes from here are the next contact's.
+            if (entry) share.logged()
+            fdSeenLen.current = Math.max(fdSeenLen.current, seenAtLog + logged.length)
             endFill(true)
             setFdFields((prev) => afterLogged(prev, fdReceives, loggedRow))
             reset()
@@ -1834,7 +2087,8 @@ export function LogEntry({
       // already the prop that says which surface this strip is on, so the routing is
       // the one fact the strip knows and the engine cannot infer: a transponder still
       // held does not make a contact typed into the Phone cockpit a satellite contact.
-      const logToContest = exchange === 'satellite' ? contestLogSatellite : contestLogManual
+      const logOne = exchange === 'satellite' ? contestLogSatellite : contestLogManual
+      const logToContest: typeof contestLogManual = snt ? (c, f, m, s, e) => logOne(c, f, m, s, e, snt) : logOne
       const r = await withErrorToast(
         () =>
           entry
@@ -1846,15 +2100,23 @@ export function LogEntry({
         // The toast names what was copied, in receive order, whatever the slots are —
         // it read `class`/`section` off two named locals, which for CQP would have
         // announced a serial as a Field Day class.
-        pushToast(
-          t('logEntry.fd.logged', {
-            call,
-            // A blank optional slot (a DX station's QTH) is not a word in the toast.
-            exchange: ex.map(([, v]) => v).filter((v) => v !== '').join(' '),
-            mode: fmode,
-          }),
-          'success',
-        )
+        // A blank optional slot (a DX station's QTH) is not a word in the toast.
+        const exchangeWords = ex.map(([, v]) => v).filter((v) => v !== '').join(' ')
+        // ⭐ A DUPE IS LOGGED, MARKED AND SCORES ZERO in every shipped contest, so the press
+        // answers like any other — and said "Logged" exactly as for a new contact. The engine's
+        // own mark on the row it just wrote (the newest row for this call) says which it was.
+        const rows = r.fieldDay?.log ?? []
+        let newest: FieldDayQso | undefined
+        for (let i = rows.length - 1; i >= 0 && newest === undefined; i--) {
+          if (sameCall(rows[i].call, call)) newest = rows[i]
+        }
+        if (newest?.dupe) {
+          pushToast(t('logEntry.fd.loggedDupe', { call, exchange: exchangeWords, mode: fmode }), 'info')
+        } else {
+          pushToast(t('logEntry.fd.logged', { call, exchange: exchangeWords, mode: fmode }), 'success')
+        }
+        if (entry) share.logged()
+        fdSeenLen.current = Math.max(fdSeenLen.current, seenAtLog + 1)
         endFill(true)
         setFdFields((prev) => afterLogged(prev, fdReceives, loggedRow))
         reset()
@@ -1863,11 +2125,22 @@ export function LogEntry({
     }
 
     // Standard logbook path.
-    const rstSent = logRstSent.trim() || defaultRst
-    const rstRcvd = logRstRcvd.trim() || defaultRst
+    const rstSent = rstSentShown.trim() || defaultRst
+    const rstRcvd = rstRcvdShown.trim() || defaultRst
     // Override open → the hand-entered UTC instant (one that is not a real date and time held
     // Log above); closed → now, exactly as before.
-    const whenUnix = overrideOpen && ovWhen !== null ? ovWhen : Math.floor(Date.now() / 1000)
+    const nowUnix = Math.floor(Date.now() / 1000)
+    // The contact started when its call was entered: the host's start for this call (`startedAt`,
+    // JS8's), else the moment it was typed or clicked into this strip — and it ends now.
+    const hostStart = startedAt && sameCall(startedAt.call, call) ? startedAt.unix : null
+    const entered = callEnteredRef.current && sameCall(callEnteredRef.current.call, call) ? callEnteredRef.current.unix : null
+    const startUnix = hostStart ?? entered
+    const started = !overrideOpen && startUnix != null ? Math.min(startUnix, nowUnix) : null
+    const whenUnix = overrideOpen && ovWhen !== null ? ovWhen : started ?? nowUnix
+    // A contact logged live ends now (TIME_OFF), as an FT contact's does — Phone, CW, RTTY and PSK
+    // logged none until now. A hand-entered UTC time wins over both: the contact starts and ends at
+    // the time typed.
+    const live = !(overrideOpen && ovWhen !== null)
     const rec: LoggedQso = {
       call,
       grid: logGrid.trim() || null,
@@ -1883,6 +2156,7 @@ export function LogEntry({
       comment: logComment.trim() || null,
       notes: logNotes.trim() || null,
       whenUnix,
+      timeOffUnix: live ? nowUnix : whenUnix,
       confirmed: false,
       awardConfirmed: false,
       // `asksForPark` FIRST: an exchange with no park row sends no park reference, by any
@@ -1915,7 +2189,12 @@ export function LogEntry({
       catch { /* The adapter keeps a visible outcome and the draft. */ }
       return
     }
+    // The draft lets go of the contact as its log starts (see the draft effect); one that fails is
+    // still on screen, and kept again from the next render on.
+    committing.current = true
+    if (draft) writeLogDraft(draft, null)
     const r = await withErrorToast(() => logQso(rec, stateSourceRef.current), t('logEntry.logFailed'))
+    committing.current = false
     if (r) {
       pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
       reset()
@@ -1934,10 +2213,9 @@ export function LogEntry({
 
   /**
    * SPACE ADVANCES THE CONTEST EXCHANGE, because that is the key contest operators already
-   * have in their fingers. N1MM's own keyboard reference puts it in capitals — "SPACE IS THE
-   * PREFERRED TAB CHARACTER" — and N3FJP's help tells operators to "press the space bar to
-   * tab". Both agree, so there is no house style to invent. Tab keeps working exactly as it
-   * did (plain DOM order, no tabIndex anywhere in this file).
+   * have in their fingers: contest loggers tab with the space bar, so there is no house style
+   * to invent. Tab keeps working exactly as it did (plain DOM order), and the one tabIndex in this
+   * file is the optional "RST sent" box's, which Tab skips as Space does (N1MM's Snt).
    *
    * Scoped to the Field Day strip on purpose: a space is legitimate in a name, a park
    * reference or a comment on the ordinary strip, so this belongs to the contest exchange
@@ -1950,11 +2228,14 @@ export function LogEntry({
    * have no space-stripping of their own, so without it a reflexive space would quietly log
    * a class of "3A " or a section of " WI".
    */
-  const onExchangeSpace = (e: React.KeyboardEvent, next: HTMLInputElement | null) => {
+  const onExchangeSpace = (e: React.KeyboardEvent, next: HTMLInputElement | null, prev: HTMLInputElement | null) => {
     if (e.key !== ' ' && e.code !== 'Space') return
     e.preventDefault()
-    next?.focus()
-    next?.select()
+    // SHIFT+SPACE WALKS BACK, the reverse of the same loop (Call ← field₁ ← … ← Call), as Shift+Tab
+    // does in DOM order: a wrong box is corrected without the mouse.
+    const to = e.shiftKey ? prev : next
+    to?.focus()
+    to?.select()
   }
 
   // ⭐ THE SENT SIDE: what the session is composing right now, as a VECTOR. Never a
@@ -2098,6 +2379,50 @@ export function LogEntry({
           : 'none'
   const fdOwnDupe = fdDupe === 'own'
   const fdClubDupe = fdDupe === 'club'
+  // ⭐ THE DUPE BADGE'S "WHEN" — the row the same check matched, so it names the contact that
+  // makes this one a dupe: under a rule that ignores band or mode, the row's own band and mode,
+  // never the dial's. A county line is an own dupe only when every county is one; its first
+  // county's row stands for the line.
+  const fdDupeRow = !fdOwnDupe
+    ? undefined
+    : fdLineDupes === undefined
+      ? contestDupeRow(fieldDay, fdTypedCall, snap.radio.band, fdModeClass, {
+          rx: fdRx,
+          tx: (slot) => composingSlot(fieldDay?.composing, slot),
+        })
+      : contestDupeRow(fieldDay, fdTypedCall, snap.radio.band, fdModeClass, {
+          rx: (slot) => (slot === fdLineBox!.key ? fdLineOwn[0] : fdRx(slot)),
+          tx: (slot) => composingSlot(fieldDay?.composing, slot),
+        })
+  const fdDupeWorked =
+    fdDupeRow === undefined
+      ? ''
+      : fdDupeRow.whenUnix
+        ? t('logEntry.fd.dupe.workedAt', {
+            time: utcHhMm(fdDupeRow.whenUnix),
+            band: fdDupeRow.band,
+            mode: fdDupeRow.submode || fdDupeRow.mode || '',
+          })
+        : t('logEntry.fd.dupe.workedOn', {
+            band: fdDupeRow.band,
+            mode: fdDupeRow.submode || fdDupeRow.mode || '',
+          })
+  // ⭐ THE EARLY "WORKED" WARNING (`contestWorkedRows`): under a rule that keys on a county, the
+  // moment the call is in, a station this position already logged on this band and mode turns the
+  // Call box amber with the counties it was worked from. It is never the DUPE: the county decides
+  // that, and a rover in a new county still scores. A county line is judged county by county above,
+  // so it takes no early warning of its own.
+  const fdWorkedQths =
+    fdDupeRow === undefined && fdLineDupes === undefined
+      ? workedValues(
+          fieldDay,
+          contestWorkedRows(fieldDay, fdTypedCall, snap.radio.band, fdModeClass, {
+            rx: fdRx,
+            tx: (slot) => composingSlot(fieldDay?.composing, slot),
+          }),
+        )
+      : []
+  const fdWorkedLine = fdWorkedQths.length > 0 ? t('logEntry.fd.worked', { qths: fdWorkedQths.join(', ') }) : ''
   // ⭐ WHICH COMPONENTS THE OWN-DUPE SENTENCE MAY NAME — the same two flags `contestDupe` just
   // applied. It has always keyed on exactly what the rule names; the sentence did not, and
   // naming the rig's CURRENT band and mode under a rule that ignores them points the operator
@@ -2163,13 +2488,15 @@ export function LogEntry({
 
   /** A box as ESM reads it: complete only with what the operator gave for THIS contact — typed,
    *  picked or grabbed since the strip last cleared, an untouched default report, a blank
-   *  optional box, or a call-history fill, which counts as copied (rule 10). A value the strip
+   *  optional box, or a fill (call history's, this contest's last contact's, or the log's), which
+   *  counts as copied (rule 10): a station already worked on this band and mode gets no fill but
+   *  the file's, so no fill can make a dupe nobody copied. A value the strip
    *  carried over from the last contact is not one: Field Day's class and section stay in their
    *  boxes after a contact is logged, and read as complete they would make the first Enter on a
    *  new call in S&P send the exchange and log the last station's. */
   const esmGiven = (f: ContestFieldSpec): boolean => {
     const v = fdValue(f)
-    if (!fdFieldOk(f, v, fdLineDomain(f))) return false
+    if (!fdFieldOk(f, v, fdLineDomain(f), logEntity)) return false
     const fill = fillRef.current
     return (
       fill.typed[f.key] === true ||
@@ -2325,6 +2652,7 @@ export function LogEntry({
             {fdEventIsFieldDay ? t('logEntry.fd.chip') : t('logEntry.contest.chip')}
           </span>
           <span className="le-fd-mode">{fdMode ?? 'PH'}</span>
+          {noCreditChip}
           <span className="le-fd-hint">
             {fdEventIsFieldDay
               ? t('logEntry.fd.hint', { band: snap.radio.band })
@@ -2425,6 +2753,13 @@ export function LogEntry({
             {locationWarningText(fieldDay.locationWarning)}
           </div>
         ) : null}
+        {/* The contest journal's writes are failing: the contacts since the last good one are in
+            memory only. Its own line, red, until a write lands. */}
+        {fieldDay?.unsaved ? (
+          <div className="fd-section-warn fd-unsaved" role="alert">
+            {contestUnsavedText(fieldDay.unsaved)}
+          </div>
+        ) : null}
 
         {editRows.length > 0 ? (
           <ContestContactEdit
@@ -2439,10 +2774,28 @@ export function LogEntry({
         ) : (
         <div className="le-fd-big">
           <label className="le-fd-field le-fd-field-call">
-            <span className="le-fd-cap">{t('logEntry.fd.call.label')}</span>
+            {/* ⭐ THE DUPE BADGE rides the Call caption's own line, so it adds no height and sits
+                nowhere near Stop or the ESM switch. The live region is always there, empty for a
+                new call, so a screen reader hears it fill. */}
+            <span className="le-fd-cap le-fd-cap-marked">
+              <span className="le-fd-cap-text">{t('logEntry.fd.call.label')}</span>
+              <span
+                className={`le-fd-dupe${fdWorkedLine ? ' le-fd-dupe-maybe' : ''}`}
+                aria-live="polite"
+                title={fdDupeWorked || fdWorkedLine || undefined}
+              >
+                {fdDupeRow !== undefined && (
+                  <>
+                    <span className="le-fd-dupe-word">{t('logEntry.fd.dupe.badge')}</span>{' '}
+                    {fdDupeWorked}
+                  </>
+                )}
+                {fdWorkedLine}
+              </span>
+            </span>
             <input
               ref={callInputRef}
-              className="settings-input mono le-fd-input le-fd-input-call"
+              className={`settings-input mono le-fd-input le-fd-input-call${fdDupeRow !== undefined ? ' le-fd-input-dupe' : fdWorkedLine ? ' le-fd-input-maybe' : ''}`}
               value={logCall}
               // SPACES ARE DROPPED, not kept: no callsign contains one, and the space bar is
               // the phone position's push-to-talk. An operator who reaches for it out of habit
@@ -2452,11 +2805,14 @@ export function LogEntry({
               onChange={(e) => setLogCall(e.target.value.replace(/\s+/g, '').toUpperCase())}
               onBlur={onCallBlur}
               onKeyDown={(e) => {
-                // SPACE walks Call → field₁, whatever field₁ is.
-                onExchangeSpace(e, fdBoxRefs.current[fdReceives[0]?.key ?? ''] ?? null)
+                // SPACE walks Call → field₁, whatever field₁ is; Shift+Space back to the last.
+                onExchangeSpace(
+                  e,
+                  fdBoxRefs.current[fdReceives[0]?.key ?? ''] ?? null,
+                  fdBoxRefs.current[fdReceives[fdReceives.length - 1]?.key ?? ''] ?? null,
+                )
                 onEnter(e)
               }}
-              placeholder={LOG_EXAMPLES.call}
               autoComplete="off"
               spellCheck={false}
             />
@@ -2465,17 +2821,52 @@ export function LogEntry({
               and the last one back to Call, which is the loop the shipped strip has:
               Call → Class → Section → Call. */}
           {fdReceives.map((f, i) => {
-            // ⭐ MARKED AS FROM CALL HISTORY for exactly as long as the box shows the file's
-            // value: typing over it, or the strip clearing, takes the mark away.
+            // ⭐ MARKED WITH WHERE THE FILL CAME FROM for exactly as long as the box shows the
+            // filled value: typing over it, or the strip clearing, takes the mark away.
             const fromHistory = fillMarks[f.key]?.value === fdValue(f)
+            const fillSource = fillMarks[f.key]?.source
             // What the box holds for this station's role: "County / State" in Illinois.
             const caption = receivedCaption(f, fieldDay?.role)
+            // The "RST sent" box stands just before the received report, sent then received, as
+            // N1MM lays out Snt and Rcv (before the first box, for a contest that receives none).
+            const sentHere = sentRstConst !== undefined && i === Math.max(0, fdReceives.findIndex((r) => r.kind === 'rst'))
+            // Where Shift+Space goes from this box (and from the "RST sent" box before it): the box
+            // before it, or Call from the first. Read at the key press, as the refs are.
+            const prevBox = () => (i > 0 ? (fdBoxRefs.current[fdReceives[i - 1].key] ?? null) : callInputRef.current)
             return (
-            <label className="le-fd-field" key={f.key}>
+            <Fragment key={f.key}>
+            {sentHere && (
+              <label className="le-fd-field le-fd-field-sent">
+                <span className="le-fd-cap">{t('logEntry.fd.rstSent.label')}</span>
+                <input
+                  ref={sentRstRef}
+                  className={`settings-input mono le-fd-input le-fd-input-code${sentRstGood ? '' : ' invalid'}`}
+                  // ⭐ SPACE AND TAB SKIP IT, as N1MM's space bar skips Snt: Space walks Call to the
+                  // received boxes by their own refs, and Tab passes over a -1. A click reaches it,
+                  // and Shift-Tab from the received report (below).
+                  tabIndex={-1}
+                  value={sentRstValue}
+                  aria-invalid={!sentRstGood}
+                  onChange={(e) => {
+                    noteTyped(SENT_RST_KEY)
+                    setFdField(SENT_RST_KEY, e.target.value.replace(/\s+/g, ''))
+                  }}
+                  onKeyDown={(e) => {
+                    onExchangeSpace(e, fdBoxRefs.current[f.key] ?? null, prevBox())
+                    onEnter(e)
+                  }}
+                  placeholder={sentRstDefault}
+                  autoComplete="off"
+                  spellCheck={false}
+                  title={t('logEntry.fd.rstSent.title', { rst: sentRstDefault })}
+                />
+              </label>
+            )}
+            <label className="le-fd-field">
               {fromHistory ? (
                 <span className="le-fd-cap le-fd-cap-marked">
                   <span className="le-fd-cap-text">{caption}</span>
-                  <span className="le-fd-from-history">{t('logEntry.history.mark')}</span>
+                  <span className="le-fd-from-history">{fillMark(fillSource)}</span>
                 </span>
               ) : (
                 <span className="le-fd-cap">{caption}</span>
@@ -2508,9 +2899,17 @@ export function LogEntry({
                   // SPACE leaves the box, so it is where a typed name becomes its code —
                   // before the eye moves on, and before Enter can log anything.
                   if (e.key === ' ' || e.code === 'Space' || e.key === 'Tab') commitFdField(f)
+                  // Shift-Tab from the received report reaches the "RST sent" box beside it, which
+                  // plain Tab order passes over.
+                  if (e.key === 'Tab' && e.shiftKey && sentHere && sentRstRef.current) {
+                    e.preventDefault()
+                    sentRstRef.current.focus()
+                    sentRstRef.current.select()
+                  }
                   onExchangeSpace(
                     e,
                     next ? (fdBoxRefs.current[next.key] ?? null) : callInputRef.current,
+                    prevBox(),
                   )
                   onEnter(e)
                 }}
@@ -2520,12 +2919,12 @@ export function LogEntry({
                   window.clearTimeout(fdHitsCloseTimer.current)
                   fdHitsCloseTimer.current = window.setTimeout(closeFdHits, 150)
                 }}
-                placeholder={f === zoneSlot && zoneHint ? zoneHint : (FD_FIELD_EXAMPLES[f.key] ?? slotExample(f))}
+                placeholder={f === zoneSlot && zoneHint ? zoneHint : undefined}
                 autoComplete="off"
                 spellCheck={false}
                 title={
                   fromHistory
-                    ? t('logEntry.history.title', { file: historyFile?.fileName ?? '' })
+                    ? fillTitle(fillSource, historyFile?.fileName ?? '')
                     : slotTitle(f.key)
                 }
               />
@@ -2555,6 +2954,7 @@ export function LogEntry({
                 </ul>
               )}
             </label>
+            </Fragment>
             )
           })}
           {/* No `gridBlocked` term, and that is not an omission: `asksForGrid`
@@ -2565,7 +2965,7 @@ export function LogEntry({
             type="button"
             className="le-log-btn le-fd-log-btn"
             onClick={logIt}
-            disabled={!logCall.trim() || !fdExchangeOk}
+            disabled={!logCall.trim() || !fdExchangeOk || !sentRstGood}
           >
             {fdEventIsFieldDay ? t('logEntry.fd.log') : t('logEntry.log')}
           </button>
@@ -2735,6 +3135,14 @@ export function LogEntry({
   return (
     <div className="log-entry" onChangeCapture={remoteMode ? rememberRemoteContext : undefined}>
       {titled && <h2>{t('logEntry.title')}</h2>}
+      {onResumeContest && (
+        <p className="le-contest-resume" role="status" aria-label={t('logEntry.contest.notRunning.aria')}>
+          {t('logEntry.contest.notRunning')}{' '}
+          <button type="button" className="export-btn" onClick={onResumeContest}>
+            {t('logEntry.contest.resume')}
+          </button>
+        </p>
+      )}
       {remoteMode && remoteWorkOffer && <div>
         <p role="status">{t('remote.workDraftKept', { call: remoteWorkOffer.call })}</p>
         <div className="remote-actions"><button type="button" className="remote-button" disabled={remote?.pending}
@@ -2812,7 +3220,7 @@ export function LogEntry({
           <input
             ref={rstRef}
             className="settings-input mono le-rst"
-            value={logRstSent}
+            value={rstSentShown}
             onChange={(e) => setLogRstSent(e.target.value)}
             onKeyDown={onEnter}
             placeholder={LOG_EXAMPLES.rst}
@@ -2823,7 +3231,7 @@ export function LogEntry({
           <span className="le-rst-cap">{t('logEntry.rstRcvd.label')}</span>
           <input
             className="settings-input mono le-rst"
-            value={logRstRcvd}
+            value={rstRcvdShown}
             onChange={(e) => setLogRstRcvd(e.target.value)}
             onKeyDown={onEnter}
             placeholder={LOG_EXAMPLES.rst}
@@ -2952,9 +3360,7 @@ export function LogEntry({
             onKeyDown={onEnter}
             onBlur={() => window.setTimeout(() => setParkHits([]), 150)}
             placeholder={
-              logParkProgram === 'SOTA'
-                ? t('logEntry.park.ref.placeholderSota', { example: LOG_EXAMPLES.sotaRef })
-                : t('logEntry.park.ref.placeholderPota', { example: LOG_EXAMPLES.potaRef })
+              logParkProgram === 'SOTA' ? t('logEntry.park.ref.placeholderSota') : t('logEntry.park.ref.placeholderPota')
             }
             title={t('logEntry.park.ref.title')}
             autoComplete="off"
@@ -3143,6 +3549,10 @@ export function LogEntry({
         )}
       </div>
 
+      {/* THE COMMIT BLOCK: the "logs to … as" line and the Log/Spot row below it, as one block. In a
+          cockpit's log pane it sticks to the bottom of the pane's own scroller (`.le-commit`,
+          styles.css), so Log stays on screen while the form overflows. See the commit row below. */}
+      <div className="le-commit">
       <span className="le-hint">
         {overrideBlocked ? (
           <span className="le-ov-warn">
@@ -3184,19 +3594,23 @@ export function LogEntry({
           the pane width and a mid-QSO glance reaching for the lookup could commit a contact
           instead (operator: several logged by accident, 2026-08-02). Here it is a deliberate
           reach, directly under the line that states what will be written, and Spot stays beside
-          it — that adjacency is why spotting happens at all. Plain in-flow row: the pane body is
-          the scroller, this adds no sticky/fixed positioning and no second scroll owner.
+          it — that adjacency is why spotting happens at all. The pane body is the scroller; this
+          row owns no scrolling of its own.
 
-          `position: sticky; bottom: 0` WAS PROPOSED FOR THIS ROW (2026-08-04 density review) and
-          refused — and NOT for the scroll-owner reason above, which does not apply: sticky inside
-          an existing `overflow: auto` box adds no second scroller. It is refused because this row
-          is not the last block in the strip. RecallPanel follows it, so an opaque sticky commit
-          row parks Log over the recall card — its QRZ link included — for the whole scroll, and a
-          reach for something underneath commits a contact instead. That is the 2026-08-02 accident
-          again, from a fixed screen band rather than a wrapping row. It would also cut Log loose
-          from the "logs to the shared logbook as …" line above it, which is the placement's whole
-          point. The fold problem it was aimed at was answered by deleting chrome instead: the
-          heading and the card-in-card padding, 43px of it above this row (LogEntry.density.test). */}
+          A sticky Log row WAS PROPOSED (2026-08-04 density review) and refused: an opaque sticky
+          row would park Log over the recall card that follows it — its QRZ link included — and
+          cut Log loose from the "logs to …" line above it. Deleting chrome (the heading and the
+          card-in-card padding, 43px, LogEntry.density.test) answered the fold then. It did not
+          answer it at 1280×800: in all five cockpits the form still needs more height than the
+          log pane gets, and no legal sizing lever closes the gap (measured 2026-10-19).
+          So the operator ruled (2026-10-19) for the bottom-sticky COMMIT BLOCK, which answers
+          both reasons: `.le-commit` wraps the line AND this row, so they never part; and
+          `bottom: 0` only ever moves the block UP from its natural place, while the recall card
+          sits BELOW that place — when the card scrolls into view the block is back in flow above
+          it, so the card is never covered. What scrolls under the block is the form above it
+          (notes, the override), and only while it is scrolled out past the pane's bottom edge.
+          Sticky inside the pane body's existing `overflow: auto` adds no second scroller, and
+          its parent `.log-entry` bounds it, so it never rides over Recent below the form. */}
       <div className="le-row le-actions">
         <button
           type="button"
@@ -3226,6 +3640,7 @@ export function LogEntry({
             {t('logEntry.spot.label')}
           </button>
         )}
+      </div>
       </div>
 
       {remote ? remote.recall(logCall, { band: effBand, freqMhz: effFreqMhz, mode: effMode }) : <RecallPanel

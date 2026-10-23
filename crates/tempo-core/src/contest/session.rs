@@ -252,7 +252,8 @@ pub struct ContestSession {
     /// partner's log.
     ///
     /// ⚠️ **Nothing is evicted by size, ever.** An entry leaves only when the contact is
-    /// logged, because the row carries the number from then on. Any capacity rule
+    /// logged, because the row carries the number from then on, or when Clear test contacts
+    /// starts the run again ([`restart_serials`](Self::restart_serials)). Any capacity rule
     /// reintroduces exactly the defect this exists to prevent — the station it forgets
     /// is the one that comes back. The cost of never forgetting is a callsign and a
     /// `u32` per half-worked station: ten thousand of them is well under a megabyte, in
@@ -804,6 +805,21 @@ Fill it in on the Contesting tab in Settings."
         self.in_flight = None;
     }
 
+    /// ⭐ **The serial run starts again at 1**: Clear test contacts emptied the log
+    /// ([`FieldDayLog::remove_all`](crate::fieldday::FieldDayLog::remove_all)).
+    ///
+    /// The number in flight and every half-worked station's binding go with it, because they
+    /// belong to the run that was cleared. Kept, the first call committed after the clear would
+    /// be handed the number in flight ([`working`](Self::working)'s first case), and a station
+    /// called during the test would be given its old number again, out of the new run's order. A
+    /// restart holds neither (`issued` is not persisted), so the live run and a restarted one
+    /// agree.
+    pub fn restart_serials(&mut self) {
+        self.next_serial = 1;
+        self.in_flight = None;
+        self.issued.clear();
+    }
+
     /// ⭐ **The serial to SHOW right now** — the one already issued to the contact in
     /// flight, or, with nothing in flight, the next one to be issued, **without
     /// issuing it**. `None` when this exchange declares no serial slot at all (both
@@ -873,10 +889,7 @@ Fill it in on the Contesting tab in Settings."
     /// a contact being logged; a contact edited into another mode class is re-fitted here.
     pub fn fit_sent_rst(&self, tx: &mut [FieldValue], mode_class: &str) {
         for v in tx.iter_mut() {
-            let Some(f) = self.exchange.field(v.key) else {
-                continue;
-            };
-            if f.source != "constant" || !matches!(f.kind, super::FieldKind::Rst { .. }) {
+            if !self.is_constant_rst(v.key) {
                 continue;
             }
             if mode_class.eq_ignore_ascii_case("PH") {
@@ -885,6 +898,53 @@ Fill it in on the Contesting tab in Settings."
                 v.raw = own.raw.clone();
             }
         }
+    }
+
+    /// ⭐ **The sent RST a CW or digital row carries unless the operator types another** — the
+    /// session's own value for the slot its role sends as a `"constant"` RST (`599`), which is
+    /// what [`fit_sent_rst`](Self::fit_sent_rst) stamps on any row but a phone one. `None` when
+    /// the role sends no such slot (both Field Day events): then there is no report to override,
+    /// and the entry strip offers no "RST sent" box.
+    pub fn sent_rst_constant(&self) -> Option<&str> {
+        self.my_exchange
+            .iter()
+            .find(|v| self.is_constant_rst(v.key))
+            .map(|v| v.raw.as_str())
+    }
+
+    /// The slot [`fit_sent_rst`](Self::fit_sent_rst) fits and the "RST sent" box overrides: one
+    /// the ruleset declares `Rst` AND sources as a `"constant"`.
+    fn is_constant_rst(&self, key: &str) -> bool {
+        self.exchange.field(key).is_some_and(|f| {
+            f.source == "constant" && matches!(f.kind, super::FieldKind::Rst { .. })
+        })
+    }
+
+    /// ⭐ **The operator's own sent RST for ONE contact** (the entry strip's optional "RST sent"
+    /// box, N1MM's Snt) in place of the constant on `tx`, a row's sent exchange. It touches
+    /// exactly the slot [`fit_sent_rst`](Self::fit_sent_rst) fits, a `"constant"` RST, and
+    /// nothing else: a serial, a location or a typed value is never rewritten here. The caller
+    /// has already checked the value with [`sent_rst_ok`](Self::sent_rst_ok).
+    pub fn override_sent_rst(&self, tx: &mut [FieldValue], raw: &str) {
+        for v in tx.iter_mut().filter(|v| self.is_constant_rst(v.key)) {
+            v.raw = raw.to_string();
+        }
+    }
+
+    /// Is `raw` a sent RST for a row of `mode_class`: two digits on phone (readability 1–5,
+    /// strength 1–9), three on CW and digital (and tone 1–9) — the digit counts
+    /// [`fit_sent_rst`](Self::fit_sent_rst) gives the constant. Anything else is refused rather
+    /// than logged: a submitted log cannot be corrected after the deadline.
+    pub fn sent_rst_ok(raw: &str, mode_class: &str) -> bool {
+        let digits = if mode_class.eq_ignore_ascii_case("PH") {
+            2
+        } else {
+            3
+        };
+        let b = raw.as_bytes();
+        b.len() == digits
+            && (b'1'..=b'5').contains(&b[0])
+            && b[1..].iter().all(|d| (b'1'..=b'9').contains(d))
     }
 
     /// The contact is logged (or abandoned): nothing is in flight any more.

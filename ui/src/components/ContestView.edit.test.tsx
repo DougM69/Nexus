@@ -21,6 +21,8 @@ vi.mock('../api', () => ({
   contestRemoveLast: vi.fn(),
   contestRestore: vi.fn(),
   contestEdit: vi.fn(),
+  // The country of the call in an edit, which the strip's own rule reads. None unless a test says so.
+  resolveEntity: vi.fn(async () => null),
   // The club block's own commands, there while the screen shows a club.
   fdClubGivePosition: vi.fn(),
   fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
@@ -224,6 +226,47 @@ describe('Edit opens a contact in place', () => {
     fireEvent.click([...editor()!.querySelectorAll('button')].find((b) => b.textContent === 'Cancel')!)
     expect(editor()).toBeNull()
     expect(api.contestEdit).not.toHaveBeenCalled()
+  })
+
+  it('refuses a QTH on no list by the country of the call in the edit, as the log line does', async () => {
+    const country: Record<string, string> = { K9AAA: 'United States', DL1ABC: 'Fed. Rep. of Germany' }
+    api.resolveEntity.mockImplementation(async (call: string) => country[call] ?? null)
+    try {
+      // The Illinois QSO Party's own box: its counties, its states and provinces, and the free-text
+      // arm a DX station's country goes in.
+      await show({
+        ...party(LOG),
+        receives: [
+          { key: 'RST', kind: 'rst', required: true },
+          { key: 'QTH', kind: 'oneOf', required: true, domains: ['il_counties', 'il_mults'] },
+        ],
+      } as unknown as FieldDayStatus)
+      fireEvent.click(editButtons()[0])
+      await settle()
+      type(boxes()[2], 'GERMANY')
+      fireEvent.click(editor()!.querySelector('.contest-edit-save')!)
+      await settle()
+      expect(api.contestEdit).not.toHaveBeenCalled()
+      expect(editor()!.querySelector('.contest-edit-why')?.textContent).toBe(
+        "GERMANY is not a county, state or province on this contest's list.",
+      )
+      // CONTROL: the same value, once the call in the edit is a DX station's.
+      api.contestEdit.mockResolvedValueOnce({ outcome: 'refused', refusal: 'changed' })
+      type(boxes()[0], 'DL1ABC')
+      await settle()
+      await act(async () => {
+        fireEvent.click(editor()!.querySelector('.contest-edit-save')!)
+      })
+      await settle()
+      expect(api.contestEdit).toHaveBeenCalledWith('K9AAA', T0, {
+        call: 'DL1ABC',
+        rows: [[['RST', '599'], ['QTH', 'GERMANY']]],
+        band: '20m',
+        mode: '',
+      })
+    } finally {
+      api.resolveEntity.mockImplementation(async () => null)
+    }
   })
 })
 

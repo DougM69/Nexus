@@ -151,7 +151,10 @@ enum Rows<'a> {
 /// of megabytes Stage 2 exists to stop holding. So a pass names the columns it reads and is
 /// handed records with exactly those filled, by THE decoder ([`record_from_row`], the one
 /// [`LogDb::load_all`] uses). Every other field is left as a record with nothing in it has it:
-/// empty text, `None`, `false`, `0`. The passthrough and the contest exchange are never read.
+/// empty text, `None`, `false`, `0`. The passthrough and the contest exchange are never read,
+/// but for the one passthrough field a search looks in, the SUBMODE, when the pass asks for it
+/// ([`LogDb::each_narrow_with_submode`]), and the ones the award folds name, the CQ zone and
+/// LoTW's DXCC ([`LogDb::each_narrow_with`]).
 #[derive(Debug, Clone, Copy)]
 pub struct Narrow {
     /// The `qso` columns to read, by their names in the schema ([`QSO_COLUMNS`]). The id is
@@ -160,6 +163,46 @@ pub struct Narrow {
     pub columns: &'static [&'static str],
     /// Whether to read the upload stamps (`qso_upload`) as well.
     pub uploads: bool,
+}
+
+/// What a narrow read selects after a row's columns (and stamps) for the SUBMODE a search reads,
+/// and the join it comes through: on `qso_extra`'s own key, `(qso_id, name)`, so one lookup per
+/// row and never a scan of the passthrough.
+const SUBMODE_VALUE: &str = ", s.value";
+const SUBMODE_JOIN: &str = " LEFT JOIN qso_extra s ON s.qso_id = q.id AND s.name = 'SUBMODE'";
+
+/// Put the SUBMODE a narrow row was read with in its passthrough, as a whole row holds it (the
+/// only entry a narrow row's passthrough has, so in name order). Before the row is held in the
+/// log's one form ([`super::canonical`]), which keeps a SUBMODE the row already has, as it does
+/// for a whole row.
+fn with_submode(rec: &mut QsoRecord, submode: Option<String>) {
+    if let Some(value) = submode {
+        rec.extra.push(("SUBMODE".to_string(), value));
+    }
+}
+
+/// What a narrow read selects, and joins, for the passthrough fields `extras` names
+/// ([`LogDb::each_narrow_with`]): one join on `qso_extra`'s own key per field, as the SUBMODE's
+/// is. A name is an ADIF field name — upper-case letters, digits and `_` — or the read is refused,
+/// since it is written into the statement.
+fn extra_columns(extras: &[&str]) -> Result<(String, String)> {
+    let (mut values, mut joins) = (String::new(), String::new());
+    for (i, name) in extras.iter().enumerate() {
+        let adif_name = !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+        if !adif_name {
+            return Err(Error::Sql(rusqlite::Error::InvalidColumnName(
+                (*name).to_string(),
+            )));
+        }
+        values.push_str(&format!(", x{i}.value"));
+        joins.push_str(&format!(
+            " LEFT JOIN qso_extra x{i} ON x{i}.qso_id = q.id AND x{i}.name = '{name}'"
+        ));
+    }
+    Ok((values, joins))
 }
 
 /// Which rows a narrow read visits.
@@ -410,6 +453,10 @@ const INDEXES: [&str; 9] = [
 /// the call index.
 mod query_reads;
 pub use query_reads::{ENTITY_COLUMNS, ORDER_COLUMNS};
+
+/// A store written before contacts were held in one form, read back through every decoder.
+#[cfg(test)]
+mod held_form_tests;
 
 /// Every `qso` column the store writes, **in bind order**.
 ///
@@ -1356,6 +1403,10 @@ impl LogDb {
             if rec.contest.as_deref().is_some_and(contest_is_empty) {
                 rec.contest = None;
             }
+            // A row a build before this stored in its source's spelling is read in the log's one
+            // form (`20M` as `20m`, a sideband in MODE as SSB's SUBMODE) — and left on disk as it
+            // is until a change writes it ([`super::canonical`]).
+            super::canonical::contact(&mut rec);
             out.push(rec);
         }
         Ok(out)
@@ -1461,7 +1512,35 @@ impl LogDb {
         order: Order,
         each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>,
     ) -> Result<()> {
-        self.in_one_snapshot(|db| db.narrow_pass(narrow, scope, order, each))
+        self.in_one_snapshot(|db| db.narrow_pass(narrow, scope, order, false, &[], each))
+    }
+
+    /// [`Self::each_narrow`], each row with its SUBMODE as well: the one passthrough field a
+    /// search of the log looks in beside the MODE, because the log holds a phone contact as `SSB`
+    /// with its sideband there ([`super::canonical`]). Only a search asks for it, so no other
+    /// pass pays for the join.
+    pub fn each_narrow_with_submode(
+        &self,
+        narrow: Narrow,
+        scope: Scope<'_>,
+        order: Order,
+        each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>,
+    ) -> Result<()> {
+        self.in_one_snapshot(|db| db.narrow_pass(narrow, scope, order, true, &[], each))
+    }
+
+    /// [`Self::each_narrow`], each row with the passthrough fields `extras` names as well, in its
+    /// passthrough as a whole row holds them: the CQ zone and LoTW's DXCC the award folds read
+    /// (`super::AWARD_EXTRAS`). Only a pass that asks for them pays for their joins.
+    pub fn each_narrow_with(
+        &self,
+        narrow: Narrow,
+        extras: &[&str],
+        scope: Scope<'_>,
+        order: Order,
+        each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>,
+    ) -> Result<()> {
+        self.in_one_snapshot(|db| db.narrow_pass(narrow, scope, order, false, extras, each))
     }
 
     /// The statement a narrow read runs, and the value its one parameter is bound to, if it has
@@ -1471,6 +1550,8 @@ impl LogDb {
         narrow: Narrow,
         scope: Scope<'_>,
         order: Order,
+        submode: bool,
+        extras: &[&str],
     ) -> Result<(String, Option<rusqlite::types::Value>)> {
         if let Some(unknown) = narrow.columns.iter().find(|c| !QSO_COLUMNS.contains(c)) {
             return Err(Error::Sql(rusqlite::Error::InvalidColumnName(
@@ -1525,29 +1606,42 @@ impl LogDb {
             Order::Log => "",
             Order::NewestFirst => " DESC",
         };
+        let (value, submode_join) = if submode {
+            (SUBMODE_VALUE, SUBMODE_JOIN)
+        } else {
+            ("", "")
+        };
+        let (extra_values, extra_joins) = extra_columns(extras)?;
         let sql = format!(
-            "SELECT {}{stamps}, q.rowid FROM qso q{index}{join}{filter} ORDER BY q.rowid{direction}",
+            "SELECT {}{stamps}{value}{extra_values}, q.rowid FROM qso q{index}{join}{submode_join}\
+             {extra_joins}{filter} ORDER BY q.rowid{direction}",
             projection.join(", ")
         );
         Ok((sql, bound))
     }
 
-    /// [`Self::each_narrow`]'s body, which it runs in one read transaction.
+    /// [`Self::each_narrow`]'s body, which it runs in one read transaction; `submode` reads each
+    /// row's SUBMODE as well ([`Self::each_narrow_with_submode`]), and `extras` the passthrough
+    /// fields it names ([`Self::each_narrow_with`]).
     fn narrow_pass(
         &self,
         narrow: Narrow,
         scope: Scope<'_>,
         order: Order,
+        submode: bool,
+        extras: &[&str],
         each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>,
     ) -> Result<()> {
-        let (sql, bound) = self.narrow_sql(narrow, scope, order)?;
+        let (sql, bound) = self.narrow_sql(narrow, scope, order, submode, extras)?;
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = match &bound {
             Some(v) => stmt.query([v])?,
             None => stmt.query([])?,
         };
         let stamp_at = QSO_COLUMNS.len();
-        let rowid_at = stamp_at + if narrow.uploads { 4 } else { 0 };
+        let submode_at = stamp_at + if narrow.uploads { 4 } else { 0 };
+        let extras_at = submode_at + usize::from(submode);
+        let rowid_at = extras_at + extras.len();
         // The record being assembled: a row with several stamps arrives as several joined rows,
         // one after another, all with its rowid.
         let mut current: Option<(i64, QsoRecord)> = None;
@@ -1564,6 +1658,17 @@ impl LogDb {
                 if rec.contest.as_deref().is_some_and(contest_is_empty) {
                     rec.contest = None;
                 }
+                if submode {
+                    with_submode(&mut rec, row.get(submode_at)?);
+                }
+                for (i, name) in extras.iter().enumerate() {
+                    if let Some(value) = row.get::<_, Option<String>>(extras_at + i)? {
+                        super::set_extra(&mut rec, name, Some(value));
+                    }
+                }
+                // And the same form: the hot index holds narrow rows and compares them with the
+                // whole ones `decode` hands a plan.
+                super::canonical::contact(&mut rec);
                 current = Some((rowid, rec));
             }
             if narrow.uploads {
@@ -2559,6 +2664,51 @@ mod tests {
         (expected, actual, records.len())
     }
 
+    /// Every field the log funnel now fills — the own-station fields and which of them
+    /// Nexus filled itself, the worked station's continent and distance, the space weather —
+    /// survives the store, the app-private mark included (the operator's own log keeps it;
+    /// `round_trip` above compares what goes to the services, which withholds it).
+    #[test]
+    fn the_logged_place_and_space_weather_fields_round_trip_through_the_store() {
+        let own = "<CALL:6>JA1XYZ<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261022<TIME_ON:6>120000\
+                   <OPERATOR:5>K2DEF<MY_GRIDSQUARE:4>FN31<MY_STATE:2>WI<CONT:2>AS<DISTANCE:5>10893\
+                   <K_INDEX:1>3<A_INDEX:1>7<SFI:3>149\
+                   <APP_NEXUS_SELF_FILLED:22>MY_GRIDSQUARE,MY_STATE<EOR>";
+        let mut records = parse_adif(own);
+        records[0].id = Some(RecordId::Provisional {
+            hash: 1,
+            ordinal: 0,
+        });
+        let mut db = LogDb::open_in_memory().expect("open");
+        db.insert_all(records.iter().map(|r| (r, Resolved::default())))
+            .expect("insert");
+        let back = db.load_all().expect("load");
+        assert_eq!(
+            crate::logbook::adif_record_own_log(&back[0]),
+            crate::logbook::adif_record_own_log(&records[0])
+        );
+        assert_eq!(
+            crate::logbook::self_filled(&back[0]),
+            ["MY_GRIDSQUARE", "MY_STATE"]
+        );
+        for (tag, value) in [
+            ("MY_STATE", "WI"),
+            ("CONT", "AS"),
+            ("DISTANCE", "10893"),
+            ("K_INDEX", "3"),
+            ("A_INDEX", "7"),
+            ("SFI", "149"),
+        ] {
+            assert_eq!(
+                crate::logbook::extra_field(&back[0], tag),
+                Some(value),
+                "{tag}"
+            );
+        }
+        assert_eq!(back[0].my_grid.as_deref(), Some("FN31"));
+        assert_eq!(back[0].operator.as_deref(), Some("K2DEF"));
+    }
+
     /// What the stored fixture actually contains, so the proof below cannot pass vacuously.
     ///
     /// ⚠️ A byte-identical round trip over a fixture that never populated `qso_extra` would be
@@ -3219,6 +3369,12 @@ mod tests {
             hash: 2,
             ordinal: 0,
         });
+        // The reader holds that MODE as SSB with the sideband as SUBMODE (`canonical`); the
+        // record here keeps the sideband as its mode, as a build before that held it, because
+        // only such a record shows the plain case fold, the dedup fold and the class apart.
+        assert_eq!(rec.mode, "SSB", "premise: the reader's form");
+        rec.mode = "USB".into();
+        rec.extra.retain(|(k, _)| k != "SUBMODE");
         db.insert(
             &rec,
             Resolved {
@@ -4630,29 +4786,11 @@ mod tests {
     #[test]
     fn each_narrowing_scope_is_answered_from_its_index() {
         let (db, _) = narrow_fixture(50);
-        let plan = |scope: Scope<'_>| -> String {
-            let (sql, bound) = db
-                .narrow_sql(
-                    Narrow {
-                        columns: &["call", "when_unix"],
-                        uploads: true,
-                    },
-                    scope,
-                    Order::Log,
-                )
-                .unwrap();
-            let mut stmt = db
-                .conn
-                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
-                .unwrap();
-            let params: Vec<&rusqlite::types::Value> = bound.iter().collect();
-            let details: Vec<String> = stmt
-                .query_map(params_from_iter(params), |r| r.get::<_, String>(3))
-                .unwrap()
-                .map(|d| d.unwrap())
-                .collect();
-            details.join(" | ")
+        let narrow = Narrow {
+            columns: &["call", "when_unix"],
+            uploads: true,
         };
+        let plan = |scope: Scope<'_>| plan_of(&db, narrow, scope, false);
         let since = plan(Scope::Since(1_700_000_000));
         assert!(since.contains("qso_recent"), "{since}");
         let call = plan(Scope::CallNorm("W1AW"));
@@ -4662,6 +4800,123 @@ mod tests {
             !all.contains("qso_recent") && !all.contains("qso_callhist"),
             "control: {all}"
         );
+    }
+
+    /// How SQLite plans the narrow read of `narrow` over `scope`, step by step.
+    fn plan_of(db: &LogDb, narrow: Narrow, scope: Scope<'_>, submode: bool) -> String {
+        plan_with(db, narrow, scope, submode, &[])
+    }
+
+    /// [`plan_of`], reading the passthrough fields `extras` names as well.
+    fn plan_with(
+        db: &LogDb,
+        narrow: Narrow,
+        scope: Scope<'_>,
+        submode: bool,
+        extras: &[&str],
+    ) -> String {
+        let (sql, bound) = db
+            .narrow_sql(narrow, scope, Order::Log, submode, extras)
+            .unwrap();
+        let mut stmt = db
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        let params: Vec<&rusqlite::types::Value> = bound.iter().collect();
+        let details: Vec<String> = stmt
+            .query_map(params_from_iter(params), |r| r.get::<_, String>(3))
+            .unwrap()
+            .map(|d| d.unwrap())
+            .collect();
+        details.join(" | ")
+    }
+
+    /// The SUBMODE a search reads comes through `qso_extra`'s own key, `(qso_id, name)`: one
+    /// lookup per row, never a scan of the passthrough, whatever the scope and with the stamps'
+    /// join or without it, and each narrowing scope still answered from its index.
+    #[test]
+    fn the_submode_a_search_reads_is_looked_up_by_its_key() {
+        let (db, _) = narrow_fixture(50);
+        for (scope, index) in [
+            (Scope::All, None),
+            (Scope::Since(1_700_000_000), Some("qso_recent")),
+            (Scope::CallNorm("W1AW"), Some("qso_callhist")),
+        ] {
+            for uploads in [false, true] {
+                let narrow = Narrow {
+                    columns: &["call", "mode"],
+                    uploads,
+                };
+                let plan = plan_of(&db, narrow, scope, true);
+                assert!(
+                    plan.contains(
+                        "SEARCH s USING INDEX sqlite_autoindex_qso_extra_1 (qso_id=? AND name=?)"
+                    ) && !plan.contains("SCAN s"),
+                    "{plan}"
+                );
+                assert!(index.is_none_or(|i| plan.contains(i)), "{plan}");
+                // The control: the read a search does not make has no join at all.
+                assert!(!plan_of(&db, narrow, scope, false).contains("qso_extra"));
+            }
+        }
+    }
+
+    /// The award folds' passthrough fields (`AWARD_EXTRAS`: the CQ zone and LoTW's DXCC) reach a
+    /// narrow row as a whole row holds them, in name order — and nothing else of the passthrough
+    /// does. Each comes through `qso_extra`'s own key, one lookup per field per row.
+    #[test]
+    fn a_narrow_read_with_extras_reads_those_fields_and_no_others() {
+        let mut db = LogDb::open_in_memory().unwrap();
+        let mut rec = parse_adif(
+            "<EOH>\n<CALL:3>K1N<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20150210<TIME_ON:6>123400\
+             <DXCC:3>291<CQZ:1>8<APP_NEXUS_LOTW_DXCC:3>182<ITUZ:2>11<EOR>\n",
+        )
+        .remove(0);
+        rec.id = Some(RecordId::Provisional {
+            hash: 1,
+            ordinal: 0,
+        });
+        db.insert_all(std::iter::once((&rec, Resolved::default())))
+            .unwrap();
+        let narrow = Narrow {
+            columns: &["call", "dxcc"],
+            uploads: false,
+        };
+        let read = |extras: &[&str]| {
+            let mut got = Vec::new();
+            let pass = db.each_narrow_with(narrow, extras, Scope::All, Order::Log, &mut |r| {
+                got.push(r.clone());
+                ControlFlow::Continue(())
+            });
+            pass.map(|()| got)
+        };
+        let got = read(super::super::AWARD_EXTRAS).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].call.as_str(), got[0].dxcc), ("K1N", Some(291)));
+        assert_eq!(
+            got[0].extra,
+            [
+                ("APP_NEXUS_LOTW_DXCC".to_string(), "182".to_string()),
+                ("CQZ".to_string(), "8".to_string()),
+            ],
+            "the two fields asked for, and not ITUZ"
+        );
+        // Control: the plain narrow read carries no passthrough at all.
+        assert!(read(&[]).unwrap()[0].extra.is_empty());
+        // A name that is not an ADIF field name is refused, never written into the statement —
+        // where this one would make valid SQL that joins ITUZ as well.
+        assert!(read(&["CQZ' OR x0.name = 'ITUZ"]).is_err());
+
+        let plan = plan_with(&db, narrow, Scope::All, false, super::super::AWARD_EXTRAS);
+        for alias in ["x0", "x1"] {
+            assert!(
+                plan.contains(&format!(
+                    "SEARCH {alias} USING INDEX sqlite_autoindex_qso_extra_1 (qso_id=? AND name=?)"
+                )),
+                "{plan}"
+            );
+        }
+        assert!(!plan.contains("SCAN x"), "{plan}");
     }
 
     // ── a streamed read of whole records ─────────────────────────────────────

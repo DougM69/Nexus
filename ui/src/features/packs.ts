@@ -88,7 +88,7 @@ const DIGITAL_MODES: Pack = {
   description: 'HF digital activity centers beyond FT8/FT4. Conventions, not channels — tune the waterfall.',
   region: 'Worldwide',
   memories: [
-    { name: 'JS8Call 40 m', rxMhz: 7.078, mode: 'JS8', kind: 'digital', notes: 'USB dial. Busiest JS8Call watering hole (evenings/NVIS). Full offsets: 1.842/3.578/7.078/10.130/14.078/18.104/21.078/24.922/28.078/50.318.' },
+    { name: 'JS8Call 40 m', rxMhz: 7.078, mode: 'JS8', kind: 'digital', notes: 'USB dial. Busiest JS8Call watering hole (evenings/NVIS). Full list (JS8Call 3.x): 1.8435/3.578/5.363/7.078/10.130/14.078/18.104/21.078/24.922/28.078/50.318/144.178.' },
     { name: 'JS8Call 20 m', rxMhz: 14.078, mode: 'JS8', kind: 'digital', notes: 'USB dial. Main daytime JS8Call freq; sits between FT8 (14.074) and FT4 (14.080).' },
     { name: 'JS8Call 30 m', rxMhz: 10.13, mode: 'JS8', kind: 'digital', notes: 'USB dial. Low-noise WARC option; data-only worldwide.' },
     { name: 'JS8Call 80 m', rxMhz: 3.578, mode: 'JS8', kind: 'digital', notes: 'USB dial. Regional/NVIS after dark.' },

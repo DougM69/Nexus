@@ -16,13 +16,17 @@ members = [
     "crates/modes",
     "crates/propagation",
     "crates/street-map",
+    "crates/tempo-base",
     "crates/tempo-core",
     "crates/tempo-app",
+    "crates/tempo-codec",
     "crates/tempo-audio",
     "crates/tempo-net",
     "crates/tempo-flexsim",
+    "crates/tempo-tcisim",
     "crates/tempo-sstv",
     "crates/tempo-stream",
+    "crates/tempo-client",
     "crates/deepcw",
 ]
 

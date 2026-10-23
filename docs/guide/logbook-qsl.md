@@ -13,20 +13,24 @@ survives restarts.
 
 *The logbook table in Nexus 1.10.3, sorted newest first.*
 
+Above the table, a 3-D globe puts a dot on every grid square in the log;
+**Settings ▸ Appearance ▸ Map & globe ▸ Logbook globe** turns it off. On a
+computer whose graphics have no WebGL2, the band says so instead of drawing the
+globe, and if the globe stops working the band says that. Either way the table,
+its search, editing and import work as always.
+
 Each row is one QSO. The columns you'll use most:
 
 - **Call, band, mode, date/time, RST** — the contact itself.
 - **Entity / DXCC** — resolved from cty.dat, first-class in the table.
 - **QSL** — *which source* confirmed the contact. It shows one of four things:
-  - **L**, **C**, **E** — LoTW, a paper card, eQSL, joined by `·` when more
-    than one channel confirmed. Hover for the eligibility tooltip.
+  - **L**, **C**, **E**, **Q** — LoTW, a paper card, eQSL, your QRZ logbook,
+    joined by `·` when more than one channel confirmed. Hover for the
+    eligibility tooltip.
   - **✓** — award-confirmed, on an older record that predates the per-channel
     split and so cannot say which channel.
-  - the word **eQSL** in yellow — confirmed, but by nothing that earns award
-    credit. ⚠️ **A QRZ-logbook match also lands here and is labelled eQSL**,
-    which is a mislabel: if the Confirmations card in [Stats](stats.md) shows
-    eQSL at zero while your logbook is full of yellow eQSL marks, those marks
-    are QRZ matches.
+  - the word **eQSL** in yellow — confirmed, but not by LoTW or a card, on a
+    record that does not say which service confirmed it.
   - **—** — not confirmed.
 
   **eQSL is clearly labelled non-award**: it counts as a confirmation but not
@@ -43,7 +47,7 @@ each contact, plus the name, QTH, state, power and operator the compact table
 leaves out. The wider table scrolls sideways. It stays off until you turn it on,
 and Nexus remembers your choice on this computer.
 
-<!-- TODO: capture screenshot — the QSL column tooltip explaining L / C / E eligibility -->
+<!-- TODO: capture screenshot — the QSL column tooltip explaining L / C / E / Q eligibility -->
 
 ## Core workflows
 
@@ -152,6 +156,31 @@ shows a quiet "QSL sent … via …" note. Marking a request sent does **not**
 confirm the contact — it stays in the "needs confirmation" list until the reply
 comes back.
 
+### Set a contact's country by hand
+
+An old log often carries no DXCC number on its contacts, and then a contact counts
+by its callsign. That is wrong for a DXpedition on a 1×1 call: K1N reads as the
+United States, though the 2015 operation was Navassa Island. Click the contact's
+**Country** in the Logbook and pick the entity from the list, searching by name or
+by DXCC number; the deleted entities are in it too. Nexus keeps the entity's
+number on the contact as its ADIF `DXCC`, so every export carries it, and the
+awards, the Needed board and the statistics count the contact as that entity.
+The contact's country goes with the number: its ADIF `COUNTRY` becomes the
+entity's name, and every export and upload names a contact that carries a DXCC
+number by that number, so the two never disagree. The number is followed
+strictly, as ADIF does: a Sicily contact carrying Italy's 248 is shown and
+written as Italy, and so are the other WAE areas carrying their DXCC entity's
+number. The new-entity, new-band and new-mode badges beside a call you type in
+the log form, or pick in Operate, count the same way: a call from a WAE area is
+its DXCC entity there (IT9 is Italy), so every contact with Italy counts,
+including a Sicily contact logged without a number.
+A contact that arrives with a DXCC number and no country, from an import
+or another program, is given the number's entity. **Clear the DXCC number** in
+the same list puts the contact back to counting by its callsign, and its country
+back to the callsign's. Where LoTW confirmed the contact as another entity, LoTW's still
+counts, and the Awards view lists the two side by side. This is set on the
+station; a Remote browser shows the country but cannot change it.
+
 ### Understand why a contact isn't confirmed
 
 A per-QSO **diagnostics** view explains why award credit hasn't landed yet — no
@@ -230,7 +259,7 @@ times, so "my log is missing a QSO" has a place to start. The QRZ Logbook row
 also carries a **Test** button, which does a real round trip and reports what
 came back.
 
-Per contact, the QSL column tells you what came *back* (L / C / E), and the
+Per contact, the QSL column tells you what came *back* (L / C / E / Q), and the
 per-row push buttons are the retry. A **duplicate** answer from any of these
 services is the benign "already there", not a failure.
 

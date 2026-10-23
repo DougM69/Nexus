@@ -92,11 +92,12 @@ const QRZ_LINES: ConfirmationLine[] = [
   line('DL1ABC', { mark: 'qrz', whenUnix: at(3, 8), rowUnix: at(3, 8, 1), siblingUnix: at(3, 8, 1), decisive: false, unticked: 'notReplayed' }),
 ]
 const found = (service: CheckedService, lines: ConfirmationLine[], over: Partial<ConfirmationCheck> = {}): ConfirmationCheck => ({
-  session: 7, service, records: lines.length, lines, gainIds: ['id-W1AW-2'], unreached: 0, outOfScope: 0, uploadsUnreached: 0, uploadsOutOfScope: 0, ...over,
+  session: 7, service, records: lines.length, otherCallRecords: 0, lines, gainIds: ['id-W1AW-2'], unreached: 0, outOfScope: 0, uploadsUnreached: 0, uploadsOutOfScope: 0, ...over,
 })
-/** Each service's check. 18:00 W1AW gains all three services' confirmations, K2GAIN LoTW's. */
+/** Each service's check. 18:00 W1AW gains all three services' confirmations, K2GAIN LoTW's; five of
+ *  LoTW's records are a club call's on the account, which the log holds no contact under. */
 const FOUND: Record<CheckedService, ConfirmationCheck | string> = {
-  lotw: found('lotw', LOTW_LINES, { gainIds: ['id-W1AW-2', 'id-K2GAIN'], unreached: 12, outOfScope: 3, uploadsUnreached: 1 }),
+  lotw: found('lotw', LOTW_LINES, { gainIds: ['id-W1AW-2', 'id-K2GAIN'], unreached: 12, outOfScope: 3, uploadsUnreached: 1, otherCallRecords: 5 }),
   eqsl: found('eqsl', EQSL_LINES, { unreached: 4 }),
   qrz: found('qrz', QRZ_LINES),
 }
@@ -230,12 +231,14 @@ describe('Check confirmations', () => {
       t('logbook.confirmations.unreached', { count: 12, service: 'LoTW' }),
       t('logbook.confirmations.outOfScope', { count: 3, service: 'LoTW' }),
       t('logbook.confirmations.uploadsUnreached', { count: 1 }),
+      t('logbook.confirmations.otherCalls', { count: 5 }),
       t('logbook.confirmations.gains', { count: 1, service: 'eQSL' }),
       t('logbook.confirmations.unreached', { count: 4, service: 'eQSL' }),
       t('logbook.confirmations.gains', { count: 1, service: 'QRZ' }),
     ])
       expect(within(dialog).getByText(said)).toBeTruthy()
     expect(within(dialog).queryByText(t('logbook.confirmations.uploadsOutOfScope', { count: 0 }))).toBeNull()
+    expect(within(dialog).queryByText(t('logbook.confirmations.otherCalls', { count: 0 }))).toBeNull()
     expect(within(dialog).queryByText(t('logbook.confirmations.unreached', { count: 0, service: 'QRZ' }))).toBeNull()
   })
 
@@ -439,5 +442,25 @@ describe('Check confirmations', () => {
     expect(onClose).not.toHaveBeenCalled()
     expect(cancel).not.toHaveBeenCalled()
     expect(rows(dialog).length).toBe(LINES.length)
+  })
+
+  // With thousands of lines, Tab otherwise passes every checkbox before Cancel. The dialog's first
+  // Tab stop skips the lists to its buttons, and is named by them: Check before a check, Change after.
+  it('first Tab stop skips the lists: it puts the keyboard on Cancel and changes nothing', async () => {
+    const unchecked = await opened()
+    expect(within(unchecked.dialog).getByRole('button', { name: 'Skip to Cancel and Check' })).toBeTruthy()
+    cleanup()
+    const { dialog, onClose } = await checked()
+    const stops = [...dialog.querySelectorAll<HTMLElement>('button, input')].filter((e) => e.tabIndex >= 0)
+    const skip = within(dialog).getByRole('button', { name: 'Skip to Cancel and Change' })
+    expect(stops[0], 'the skip comes before every line').toBe(skip)
+    expect(stops.slice(1).every((e) => e.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_PRECEDING)).toBe(true)
+    const ticked = boxes(dialog).map((b) => b.checked)
+    fireEvent.click(skip)
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(apply).not.toHaveBeenCalled()
+    expect(cancel).not.toHaveBeenCalled()
+    expect(boxes(dialog).map((b) => b.checked)).toEqual(ticked)
   })
 })

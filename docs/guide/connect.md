@@ -31,7 +31,8 @@ One **map picker** at the top of the map chooses the view:
 
 - **Globe** — a 2-D globe you can spin and zoom (where a new view starts),
 - **3D** — the shaded WebGL globe (greyed out on a PC whose graphics can't run
-  it),
+  it, or have no WebGL2; if the globe stops working while it is shown, the map
+  says so, and the picker and the rest of Conditions carry on),
 - **Flat** — the world map with shaded relief,
 - **Beam** — an azimuthal-equidistant beam map with true great-circle headings
   from your QTH.
@@ -301,6 +302,7 @@ The panes you can assign:
 | Spots | the [Spots](spots.md) screen's list of every spot on the air, with its search and filters; a click works the station exactly as it does there |
 | POTA / SOTA | the [POTA/SOTA](contesting-pota.md) hunter's list, with its tabs, Hide worked today, Refresh and **HUNT**; its band, mode and sort choices open on its Filter button |
 | Needed | the [Needed](needed-dx.md) board's list of the stations you still need that are on the air now, with its filters; a click works the station exactly as it does there |
+| Operators | while a contest runs, who is at the key and each operator's contacts, points and last-hour rate ([Statistics per operator](contesting-pota.md#statistics-per-operator)); with none, it says so |
 
 The **Spots**, **Needed** and **POTA / SOTA** boxes are those screens' own lists, so a click on a
 spot, a need or **HUNT** does what it does there, and nothing transmits. In Conditions' own window

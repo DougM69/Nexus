@@ -12,10 +12,22 @@ use std::net::IpAddr;
 use std::sync::atomic::AtomicUsize;
 use tokio_tungstenite::tungstenite::Message;
 
+mod afar;
 mod ceremony;
+mod client;
+mod commands;
 mod computer;
 mod drops;
+/// A computer enrolling by its own sign-in to the station's account.
+mod enrol;
 mod hostile;
+/// The station's key for the internet road, said by the station on this network's road.
+mod identity;
+mod link;
+/// A computer signing in with the station's account (`crate::lan_client::account`).
+mod signing;
+mod stop_road;
+mod tunnel;
 
 const STATION: &str = "60000000-0000-4000-8000-000000000001";
 const PEER: &str = "192.168.1.33:50000";
@@ -206,26 +218,37 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
     let public_key = identity.public_key().to_string();
     let book = book_on(&store);
     let (paired, pairing) = book.verifier();
+    let dispatcher =
+        crate::command_dispatch::Dispatcher::new(crate::command_dispatch::ShackStores {
+            engine: engine.clone(),
+        });
     let shared = Shared {
         authority,
         engine,
         feeds: Feeds {
             monitor: crate::remote_monitor::Publisher::default(),
-            spectrum: None,
-            meters: Default::default(),
-            sources: None,
             #[cfg(feature = "radio")]
             audio: None,
             stream: super::super::stream::Host::default(),
         },
         tls: tls::server(&identity, paired, pairing).unwrap(),
-        desk: super::pairing::Desk::new(book, &identity).unwrap(),
+        roster: channel::Roster::lan(&book),
+        desk: Some(super::pairing::Desk::new(book, &identity, Arc::default()).unwrap()),
         identity: Arc::new(identity),
-        network,
+        network: Some(network),
         port: DEFAULT_PORT,
         gate: Arc::new(Gate::default()),
         handshake: channel::HANDSHAKE,
         silence: channel::SILENCE,
+        dispatcher,
+        commands: super::commands::Commands::default(),
+        build: (super::wire::APP, super::wire::contract()),
+        stop_road: None,
+        #[cfg(feature = "radio")]
+        audio_road: None,
+        internet: None,
+        // No pairing with the service: its `opened` names no key.
+        station_key: Arc::new(|| None),
     };
     Shack {
         shared,
@@ -317,8 +340,9 @@ async fn hello(socket: &mut Client, (protocol, stream, operation): (u8, u8, u8))
 }
 
 /// One request and its answer. `stationBusy` is the authority's answer while the engine is held for
-/// a moment (the radio loop, the status line's own read), and a page asks again: so does this, a
-/// bounded number of times, with a fresh request id each time.
+/// a moment (the radio loop, the status line's own read), and `remoteBusy` while another request
+/// holds the authority's own lock; a page asks again after either: so does this, a bounded number
+/// of times, with a fresh request id each time.
 async fn ask(socket: &mut Client, request: Value) -> Value {
     for _ in 0..50 {
         let mut request = request.clone();
@@ -327,7 +351,7 @@ async fn ask(socket: &mut Client, request: Value) -> Value {
         }
         send(socket, json!({"type":"operationRequest","request":request})).await;
         let answer = next(socket).await;
-        if answer["error"] != "stationBusy" {
+        if answer["error"] != "stationBusy" && answer["error"] != "remoteBusy" {
             return answer;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -1287,7 +1311,7 @@ fn stop_on_the_lan_channel_stops_the_station_without_waiting() {
 // ----- The listener, on this box's own private address -----
 
 /// This box's own private IPv4 address, the one its route to the internet leaves by, or `None`.
-fn own_private_address() -> Option<Ipv4Addr> {
+pub(crate) fn own_private_address() -> Option<Ipv4Addr> {
     let probe = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     probe.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
     match probe.local_addr().ok()?.ip() {
@@ -1342,9 +1366,13 @@ fn switch_with(
             engine: s.shared.engine.clone(),
             feeds: s.shared.feeds.clone(),
             book,
+            enrolment: Arc::default(),
             resolve,
             advertise,
             firewall,
+            dispatcher: s.shared.dispatcher.clone(),
+            commands: s.shared.commands.clone(),
+            station_key: s.shared.station_key.clone(),
         },
     )
 }
@@ -1382,6 +1410,20 @@ async fn eventually(lan: &Lan, what: &str, done: impl Fn(&LanStatus) -> bool) ->
             return status;
         }
         assert!(Instant::now() < deadline, "{what}: {status:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The switch kept on disk once `done` holds, within five seconds. A decision is said at once and
+/// kept on disk after, so a status read on another thread can come before the file is written.
+async fn kept_once(path: &std::path::Path, what: &str, done: impl Fn(&Switch) -> bool) -> Switch {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let switch = Switch::load(path);
+        if done(&switch) {
+            return switch;
+        }
+        assert!(Instant::now() < deadline, "{what}: {switch:?}");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
@@ -1513,7 +1555,11 @@ async fn it_turns_itself_off_without_a_key_and_waits_for_a_network_or_its_addres
     })
     .await;
     assert_eq!(status.reason, Some("noKey"));
-    assert_eq!(Switch::load(&scratch.path()).off, Some(Off::NoKey));
+    let kept = kept_once(&scratch.path(), "the off was not kept", |sw| {
+        sw.off.is_some()
+    })
+    .await;
+    assert_eq!(kept.off, Some(Off::NoKey));
 
     let scratch = Scratch::new();
     let lan = switch_for(
@@ -1833,8 +1879,10 @@ async fn a_picked_address_that_goes_and_comes_back_is_listened_at_again() {
 
 /// ★ Off never waits behind Windows' firewall: turned off while the firewall is being read (here a
 /// read that does not come back), after the station has looked at its network again more than
-/// once, the port closes at once and the status says off. CONTROL: the port was open while the
-/// read was under way.
+/// once, the port closes at once and the status says off. The press is made on a thread of its
+/// own, as the shack's command makes it: it answers once the switch is kept, which takes as long as
+/// the disk does, and the port closes before that. CONTROL: the port was open while the read was
+/// under way.
 #[tokio::test]
 async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
     let Some(address) = own_private_address() else {
@@ -1856,14 +1904,14 @@ async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
             .recv_timeout(Duration::from_secs(30));
         Some("public")
     });
-    let lan = switch_with(
+    let lan = Arc::new(switch_with(
         &s,
         &scratch,
         Arc::new(move |_| only(Ok(network))),
         book_of(&s),
         advertise(),
         firewall,
-    );
+    ));
     lan.turn_on(None, Some(port)).unwrap();
     let at = SocketAddr::new(address.into(), port);
     tokio::time::timeout(Duration::from_secs(5), read.recv())
@@ -1875,7 +1923,10 @@ async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
         "the control: not listening while the firewall was read"
     );
     let started = Instant::now();
-    lan.turn_off();
+    let off = {
+        let lan = lan.clone();
+        std::thread::spawn(move || lan.turn_off())
+    };
     // Closed: a connection is no longer taken. Windows retries a refused connection to this
     // computer's own address for about two seconds before it says so, so a connection not taken
     // within a moment is what is asked, on every platform.
@@ -1898,5 +1949,147 @@ async fn off_closes_the_port_at_once_while_the_firewall_is_read() {
         started.elapsed()
     );
     assert!(!lan.status().on);
+    off.join().unwrap();
     let _ = answer.send(());
+}
+
+/// ★ Off never waits for the disk either: turned off while the switch's own save cannot finish
+/// (its file is a FIFO here, which opening for writing waits on until something reads it), the
+/// port closes, the paired computer's control of the station and its over end, and the status
+/// says off, all before the save is through; the save then keeps the switch as off. CONTROL: the
+/// port was open and the computer in control and on the air before the press, and the press was
+/// still saving when all of that had gone.
+#[cfg(unix)]
+#[tokio::test]
+async fn off_closes_the_port_while_its_own_save_is_held() {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = free_port(address);
+    let network = Network::new(address, 32).unwrap();
+    let s = shack(network);
+    let scratch = Scratch::new();
+    let resolve: Resolve = Arc::new(move |_| only(Ok(network)));
+    let lan = Arc::new(switch_for(&s, &scratch, resolve, book_of(&s)));
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    let listening = |st: &LanStatus| st.listening.as_deref() == Some(at.to_string().as_str());
+    eventually(&lan, "never listened", listening).await;
+    assert!(
+        tokio::net::TcpStream::connect(at).await.is_ok(),
+        "the control: not listening before the press"
+    );
+    let (socket, _, _) = keyed_at(&s, at).await;
+    let partial = scratch.path().with_extension("json.partial");
+    let made = tempo_core::process::command("mkfifo")
+        .arg(&partial)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "premise: a FIFO to hold the save on");
+    let off = {
+        let lan = lan.clone();
+        std::thread::spawn(move || lan.turn_off())
+    };
+    // Closed: a connection is refused, while the press saves. On Linux and macOS this computer
+    // refuses one to its own address at once; a connection that only waits is not counted, since
+    // a listener that has stopped accepting fills its queue and leaves the next one waiting.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut closed = false;
+    while !closed && !off.is_finished() && Instant::now() < deadline {
+        let taken = tokio::time::timeout(
+            Duration::from_millis(200),
+            tokio::net::TcpStream::connect(at),
+        )
+        .await;
+        closed = matches!(taken, Ok(Err(_)));
+        if !closed {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    // And the computer's control of the station and its over gone, while the press saves.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut revoked = false;
+    while !revoked && !off.is_finished() && Instant::now() < deadline {
+        revoked = halted(&s) && s.shared.authority.local_status()["controller"].is_null();
+        if !revoked {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    // The status, read on a thread of its own: a read that waited for the save would wait there.
+    let (told, status) = std::sync::mpsc::channel();
+    let reading = lan.clone();
+    std::thread::spawn(move || {
+        let _ = told.send(reading.status().on);
+    });
+    let said = status.recv_timeout(Duration::from_secs(2)).ok();
+    let saving = !off.is_finished();
+    // Let the save through: what it writes is read off the FIFO.
+    let saved = tokio::task::spawn_blocking(move || std::fs::read(&partial))
+        .await
+        .unwrap()
+        .unwrap();
+    off.join().unwrap();
+    drop(socket);
+    assert!(
+        closed && saving,
+        "the port at {at} stayed open while the switch's save was held"
+    );
+    assert!(
+        revoked,
+        "the computer kept control of the station, or its over, while the save was held"
+    );
+    assert_eq!(said, Some(false), "the status while the save was held");
+    let saved: Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(saved["on"], false, "the switch kept as off: {saved}");
+}
+
+/// ★ Presses in a row leave the newest on disk. An Off is held up after it has taken effect (at
+/// the pairing book, as it reads which computers to revoke) while an On is pressed and kept; let
+/// go, the Off keeps the switch as it stands then, on, and never the off it was pressed as, which
+/// after a restart would undo the newest press. CONTROL: the Off had taken effect and was still
+/// held up when the On was pressed.
+#[tokio::test]
+async fn presses_in_a_row_leave_the_newest_on_disk() {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = free_port(address);
+    let network = Network::new(address, 32).unwrap();
+    let s = shack(network);
+    let scratch = Scratch::new();
+    let book = book_of(&s);
+    let resolve: Resolve = Arc::new(move |_| only(Ok(network)));
+    let lan = Arc::new(switch_for(&s, &scratch, resolve, book.clone()));
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    let listening = |st: &LanStatus| st.listening.as_deref() == Some(at.to_string().as_str());
+    eventually(&lan, "never listened", listening).await;
+    let held = book.held();
+    let off = {
+        let lan = lan.clone();
+        std::thread::spawn(move || lan.turn_off())
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while lan.state.switch().on {
+        assert!(Instant::now() < deadline, "the Off never took effect");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        !off.is_finished(),
+        "premise: the Off is held up at the book"
+    );
+    lan.turn_on(None, Some(port)).unwrap();
+    drop(held);
+    off.join().unwrap();
+    let kept = Switch::load(&scratch.path());
+    assert!(
+        kept.on,
+        "the switch kept on disk is not the newest press's: {kept:?}"
+    );
+    assert!(
+        lan.state.switch().on,
+        "the switch is on, as the newest press left it"
+    );
 }

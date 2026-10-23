@@ -156,6 +156,29 @@ pub fn change_ops(
     (made, durability)
 }
 
+/// The DXCC number set — or cleared, `None` — by hand on the contact `id`, with the `COUNTRY` that
+/// goes with it ([`StationCore::dxcc_ops`]), only while it is still the version whose edit key is
+/// `edit_key` — planned with the Engine lock released ([`change_row`]). What it made, or why not.
+pub fn set_dxcc(
+    engine: &Mutex<Engine>,
+    id: RecordId,
+    edit_key: &str,
+    dxcc: Option<u32>,
+) -> (Result<Result<MadeRow, RowRefusal>, String>, Durability) {
+    let (made, durability) = change_row(
+        engine,
+        id,
+        "set_dxcc",
+        |e, row| {
+            let ops = e.station().dxcc_ops(id, edit_key, dxcc, row)?;
+            Ok(station::ops_on(row, &ops))
+        },
+        |_, made| made,
+    );
+    let made = made.map(|made| made.and_then(|made| made.ok_or(RowRefusal::Gone)));
+    (made, durability)
+}
+
 /// The Logbook form's edit of the contact `id`, as ONE change ([`StationCore::edit_ops`]: the
 /// fields, and the QSL-sent and paper-card marks where the form changes them), only while it is
 /// still the version whose edit key is `edit_key` — planned with the Engine lock released. The
@@ -578,8 +601,14 @@ pub fn import_logged_contact(
     (made.map(|(added, _, _)| added), durability)
 }
 
-/// A LoTW confirmation report merged ([`StationCore::merge_lotw_report`]), planned with the Engine
-/// lock released. Its summary.
+/// The call in Settings: the one a LoTW merge takes a contact or a row naming no call of its own
+/// to be under (`tempo_core::reconcile::lotw_own_call`).
+fn settings_call(engine: &Mutex<Engine>) -> String {
+    engine_lock(engine).settings().mycall.clone()
+}
+
+/// A LoTW confirmation report merged ([`StationCore::merge_lotw_report`], with the call in
+/// Settings), planned with the Engine lock released. Its summary.
 pub fn merge_lotw_report(
     engine: &Mutex<Engine>,
     text: &str,
@@ -587,10 +616,11 @@ pub fn merge_lotw_report(
     Result<tempo_core::reconcile::ReconcileSummary, String>,
     Durability,
 ) {
+    let call = settings_call(engine);
     bulk(
         engine,
         "merge_lotw_report",
-        |plan| station::plan_report(plan, text),
+        |plan| station::plan_lotw_report(plan, text, Some(&call)),
         |e, summary| {
             e.station_mut().last_lotw_reconcile = Some(summary.clone());
             summary
@@ -652,17 +682,18 @@ pub fn import_pota_log(
     )
 }
 
-/// LoTW's own-QSO report merged ([`StationCore::merge_lotw_own_echo`]), planned with the Engine
-/// lock released: how many uploads were newly promoted.
+/// LoTW's own-QSO report merged ([`StationCore::merge_lotw_own_echo`], with the call in
+/// Settings), planned with the Engine lock released: how many uploads were newly promoted.
 pub fn merge_lotw_own_echo(
     engine: &Mutex<Engine>,
     text: &str,
     when_unix: i64,
 ) -> (Result<usize, String>, Durability) {
+    let call = settings_call(engine);
     bulk(
         engine,
         "merge_lotw_own_echo",
-        |plan| station::plan_own_echo(plan, text, when_unix),
+        |plan| station::plan_own_echo(plan, text, when_unix, Some(&call)),
         |_, promoted| promoted,
     )
 }
@@ -1039,15 +1070,18 @@ fn merged_for_check(
         Ok(((out, gained), planned))
     }
     match channel {
-        Channel::Lotw => bulk(
-            engine,
-            "merge_lotw_report",
-            |plan| gaining(station::plan_report(plan, text), channel),
-            |e, (summary, gained)| {
-                e.station_mut().last_lotw_reconcile = Some(summary);
-                gained
-            },
-        ),
+        Channel::Lotw => {
+            let call = settings_call(engine);
+            bulk(
+                engine,
+                "merge_lotw_report",
+                |plan| gaining(station::plan_lotw_report(plan, text, Some(&call)), channel),
+                |e, (summary, gained)| {
+                    e.station_mut().last_lotw_reconcile = Some(summary);
+                    gained
+                },
+            )
+        }
         Channel::Eqsl => bulk(
             engine,
             "merge_eqsl_report",

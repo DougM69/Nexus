@@ -16,9 +16,11 @@
 // that would fill the board, and the board component never renders in that state.
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { t } from './i18n'
+import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
-import { setPopupNotifications, withErrorToast } from './toast'
+import { pushToast, setPopupNotifications, withErrorToast } from './toast'
+import { announceMarkersChanged, entryCall, markHere, markerRefusal, MARKERS_CHANGED_KEY } from './features/freqMarkers'
 import { pollSingleFlight } from './singleFlight'
 import { WSPR_WATERFALL_WINDOW, markerWidthHz } from './waterfall'
 import type {
@@ -39,6 +41,7 @@ import {
   getPropagation,
   getSettings,
   getAllSpots,
+  clickTciSpot,
   selectPeer,
   archiveConversation,
   setFrequency,
@@ -72,13 +75,19 @@ import {
   setSidebandOverride,
   getFdRuleset,
   type FdRulesetDto,
+  getFreqMarkers,
+  freqMarkerQsy,
+  removeFreqMarker,
+  type FreqMarker,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
+import { useTciSpots } from './features/tciSpots'
 import { failureToShow, useLatestLogAnswer, useLogStatus } from './features/logSource'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
+import { SpotsPanel } from './components/SpotsPanel'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
 import { BandMap } from './components/BandMap'
 import { ConnectView } from './components/ConnectView'
@@ -96,8 +105,7 @@ import { clubSyncRefusal, clubSyncRefusalText, contestName, isFieldDay } from '.
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
-import { visibleNeeds, boardNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall, ownScreen, workTier, pskSubmode, WORK_SECTION, type OwnScreen } from './features/needs'
-import { spotNeed } from './remote-web/remote-work'
+import { visibleNeeds, boardNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall, ownScreen, workTier, pskSubmode, WORK_SECTION, spotNeed, type OwnScreen } from './features/needs'
 import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { readEnabledModes } from './useFeatures'
@@ -217,6 +225,9 @@ function DetachedShell({ className, children }: { className?: string; children?:
   )
 }
 
+/** The pop-outs a contest is worked from, where Esc is the station's stop (DetachedPanelBody). */
+const CONTEST_ESC_STOP_PANELS = new Set(['contestlog', 'contestscreen', 'fieldday', 'fdclub', 'bandmapCw', 'bandmapPhone'])
+
 function DetachedPanelBody({ panel }: { panel: string }) {
   const [theme] = useTheme()
   // The built-in theme rides on the theme: this document's own writer of `data-skin`.
@@ -282,6 +293,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // Band-map pop-out only: the live spot feed + which calls are in the log (worked).
   const isBandMap = panel === 'bandmapPhone' || panel === 'bandmapCw'
   const [allSpots, setAllSpots] = useState<SpotRow[]>([])
+  // …and the spots programs on the station's TCI server sent, asked when the station says they
+  // changed. A click on one only tunes (`clickTciSpot`).
+  const tciSpots = useTciSpots(isBandMap ? snap?.radio.tciServer?.spots : null)
   // Selection mirrors the shared engine (snap.activePeer), so a station picked in the main
   // window — or in this one — highlights consistently across every window.
   const selected = snap?.activePeer ?? null
@@ -354,8 +368,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   }, [settings?.popupNotifications])
 
   // Band-map pop-out: poll the live spot feed. (The worked set follows the log above.) The
-  // dashboard window polls it too, at the main window's 15 s, for its Spots box: the board's feed.
-  const pollsSpots = isBandMap || panel === 'connect'
+  // dashboard window polls it too, at the main window's 15 s, for its Spots box: the board's feed;
+  // and so does the Spots window, for the board itself.
+  const pollsSpots = isBandMap || panel === 'connect' || panel === 'spots'
   useEffect(() => {
     if (!pollsSpots) return
     let live = true
@@ -370,11 +385,45 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     }
   }, [pollsSpots])
 
+  // Band-map pop-out: the station's frequency markers (features/freqMarkers.ts), asked for and never
+  // in the snapshot. Read every 5 s (a marker whose call was logged is gone at the next read), and at
+  // once when another window says one changed.
+  const [freqMarkers, setFreqMarkers] = useState<FreqMarker[]>([])
+  useEffect(() => {
+    if (!isBandMap) return
+    let live = true
+    const load = () => {
+      getFreqMarkers().then((m) => live && setFreqMarkers(m)).catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 5_000)
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === MARKERS_CHANGED_KEY) load()
+    }
+    window.addEventListener('storage', onStorage)
+    return () => {
+      live = false
+      clearInterval(id)
+      window.removeEventListener('storage', onStorage)
+    }
+  }, [isBandMap])
+
   // Drive a command then mirror the returned snapshot immediately (the 300 ms poll would
   // catch it anyway, but this keeps the cockpit snappy).
   const apply = (p: Promise<AppSnapshot>) => {
     void p.then((s) => s && setSnap(s)).catch(() => {})
   }
+
+  // ESC STOPS TRANSMIT IN THE CONTEST'S WINDOWS TOO (operator, Illinois QSO Party 2026-10-18: working
+  // CW from the Contest screen, Esc did not stop the message). The entry alone in a window, the screen
+  // below it in one of its own, the scoreboards and the band maps are each a document of their own, so
+  // the main window's Esc never hears a key typed here. Each sends the halt the main window's Contest
+  // screen sends (`halt_tx`, which cuts the CW keyer, a voice message and every other over), on the
+  // shared capture listener, so no box, pick list or dialog here can swallow it, and Esc's own meaning
+  // in the window (the Logger window's clear, a dialog's close) still happens on the same press.
+  useEscStop(CONTEST_ESC_STOP_PANELS.has(panel), () => {
+    void withErrorToast(() => haltTx(), t('shell.halt.failed')).then((s) => s && setSnap(s))
+  })
 
   // `freqMhz` is the spot's exact frequency (source of truth — DXpeditions run off the
   // standard dial); fall back to the band's dial only when the spot has no frequency.
@@ -585,6 +634,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           unansweredCalls={unansweredCalls}
           unansweredTitle={workedFailed !== null ? t('logbook.readFailed', { reason: workedFailed }) : t('logbook.reading')}
           onDock={(side) => void dockBandmapWindow(side)}
+          fieldDay={snap.fieldDay ?? null}
           // Tuning from the map (#39). The map is a frequency scale, so it can act as one.
           sideband={snap.radio.sideband || 'USB'}
           tuneEnabled={
@@ -594,6 +644,30 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           onWorkSpot={(s) =>
             onWorkSpot({ call: s.call, band: s.band, mode: s.mode, freqMhz: s.freqMhz })
           }
+          tciSpots={tciSpots}
+          // ⛔ A program's spot only tunes; the station tells every program of the click.
+          onTciSpot={(s) =>
+            void withErrorToast(
+              () => clickTciSpot(s.call, s.freqMhz),
+              t('shell.pounce.qsy.failed', { call: s.call }),
+            ).then((next) => next && setSnap(next))
+          }
+          markers={freqMarkers}
+          // Jumping back is the station's operator QSY, which refuses while anything transmits.
+          onMarkerQsy={(m) =>
+            void freqMarkerQsy(m.id)
+              .then(setSnap)
+              .catch((e) => pushToast(markerRefusal(e), 'error'))
+          }
+          onMarkerDelete={(m) =>
+            void removeFreqMarker(m.id)
+              .then((list) => {
+                setFreqMarkers(list)
+                announceMarkersChanged()
+              })
+              .catch((e) => pushToast(markerRefusal(e), 'error'))
+          }
+          onMarkHere={() => void markHere(entryCall()).then((list) => list && setFreqMarkers(list))}
         />
       </DetachedShell>
     )
@@ -652,6 +726,34 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     return (
       <DetachedShell>
         <NeededPanel {...neededBoard} />
+      </DetachedShell>
+    )
+  }
+
+  // THIS WINDOW'S SPOTS BOARD, one object for the Spots window below and the dashboard window's
+  // Spots box, as `neededBoard` is shared: a box can never be wired differently from its board. A
+  // row works a spot as a need through this window's Needed work, as App's handleWorkSpot does;
+  // Hide worked's rescue asks the band-scoped board needs App hands its own Spots board; and Spot me
+  // names the station this window follows, once there is a snapshot to read it from (one spot per
+  // press, as everywhere).
+  const spotsBoard = {
+    bandPlan,
+    selectedCall: selected,
+    myGrid: snap?.mygrid ?? '',
+    onSelect,
+    onWork: (s: SpotRow) => void workNeed(spotNeed(s)),
+    needAlerts: boardAlerts,
+    spotMe: snap
+      ? { section: snap.radio.operatingMode, sideband: snap.radio.sideband, tier: snap.link.tier }
+      : undefined,
+  }
+
+  if (panel === 'spots') {
+    // The window Pop out opened: it opens on the view's filters as the press handed them over, then keeps its own
+    // (`poppedOut`, here only: the dashboard window's Spots box is a pane with its own copy).
+    return (
+      <DetachedShell>
+        <SpotsPanel spots={allSpots} {...spotsBoard} poppedOut />
       </DetachedShell>
     )
   }
@@ -724,22 +826,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           needAlerts={gatedAlerts}
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
-          // The Spots, POTA/SOTA and Needed boxes, with THIS window's board paths (`workNeed`,
-          // `huntOta`, its Needed board above): the Spots box a spot as a need, as App's
-          // handleWorkSpot does, and the board's own feeds — the spot poll above, and the same
-          // band-scoped needs App hands its Spots board for Hide worked's rescue. The POTA/SOTA box
-          // waits for the first snapshot, as this window's POTA/SOTA arm does.
-          spotsFeed={{
-            rows: allSpots,
-            board: {
-              bandPlan,
-              selectedCall: selected,
-              myGrid: snap?.mygrid ?? '',
-              onSelect,
-              onWork: (s: SpotRow) => void workNeed(spotNeed(s)),
-              needAlerts: boardAlerts,
-            },
-          }}
+          fieldDay={snap?.fieldDay ?? null}
+          // The Spots, POTA/SOTA and Needed boxes, with THIS window's boards (its Spots and
+          // Needed boards above, `huntOta`) and the board's own feed, the spot poll above. The
+          // POTA/SOTA box waits for the first snapshot, as this window's POTA/SOTA arm does.
+          spotsFeed={{ rows: allSpots, board: spotsBoard }}
           otaBoard={snap ? { snap, onHunt: huntOta, onSnap: setSnap } : undefined}
           neededBoard={neededBoard}
           // A slot's tabs may rotate here, the dashboard window, and on the TV page — never in the
@@ -948,6 +1039,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             bands={snap.fieldDay?.bands}
             dupeRule={snap.fieldDay?.dupeRule}
             ownPosid={settings?.fdPositionId}
+            clubLog={{
+              receives: snap.fieldDay?.receives ?? [],
+              role: snap.fieldDay?.role,
+              isWfd: snap.fieldDay?.event === 'wfd',
+            }}
           />
         ) : clubRefusal ? (
           // Switched on for a contest club sync cannot run, so the engine refuses it:

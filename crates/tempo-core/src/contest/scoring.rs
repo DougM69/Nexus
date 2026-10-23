@@ -210,16 +210,24 @@ impl PointsRule {
 /// ⭐ **for an all-digit value, read as its number**, so a CQ zone copied as `05` and one
 /// copied as `5` are one multiplier and not two.
 ///
-/// ⚠️ This is the one normalisation applied anywhere to a copied exchange value, and it
-/// is applied HERE rather than at copy time on purpose: `FieldSpec`'s own header forbids
-/// rewriting what a station actually sent, and `05` is what the operator logged and what
-/// the Cabrillo line must carry. What a bucket is keyed by is a different question from
-/// what was copied. It touches nothing but digits, so no county or section code
-/// (`SB`/`SBEN`, `BEE`, `4U`) is affected — the closest thing to a hazard would be a
-/// domain whose codes are numeric and leading-zero-significant, and no researched
-/// contest has one.
-fn canonical_mult_value(raw: &str) -> String {
+/// ⭐ **…and one province sent in either of its spellings is one bucket**: a value of a
+/// domain listing two spellings of one place counts as the spelling [`SAME_PROVINCE`] names.
+///
+/// ⚠️ These are the only normalisations applied anywhere to a copied exchange value, and
+/// they are applied HERE rather than at copy time on purpose: `FieldSpec`'s own header
+/// forbids rewriting what a station actually sent, and `05` (or `PE`) is what the operator
+/// logged and what the Cabrillo line must carry. What a bucket is keyed by is a different
+/// question from what was copied. The digit fold touches nothing but digits, so no county
+/// or section code (`SB`/`SBEN`, `BEE`, `4U`) is affected — the closest thing to a hazard
+/// would be a domain whose codes are numeric and leading-zero-significant, and no
+/// researched contest has one. The province fold touches only the domain it names.
+fn canonical_mult_value(raw: &str, domain: Option<&str>) -> String {
     let v = raw.trim().to_ascii_uppercase();
+    if let Some(d) = domain {
+        if let Some(sponsors) = same_province_as(d, &v) {
+            return sponsors.to_string();
+        }
+    }
     if v.len() > 1 && v.bytes().all(|b| b.is_ascii_digit()) {
         let stripped = v.trim_start_matches('0');
         return if stripped.is_empty() {
@@ -229,6 +237,30 @@ fn canonical_mult_value(raw: &str) -> String {
         };
     }
     v
+}
+
+/// ⭐ **One province, two spellings, one multiplier** — `(domain, a spelling, the one it counts
+/// as)`.
+///
+/// The Illinois QSO Party publishes no exchange code list. The codes its own records table
+/// carries are the evidence, and they spell Newfoundland `NF` and Prince Edward Island `PEI`;
+/// `il_mults` lists Canada Post's `NL` and `PE` beside them because many loggers send those,
+/// so a VE station may send either. *"VE provinces"* count once each, so a multiplier bucket
+/// is keyed by the sponsor's spelling ([`canonical_mult_value`]); the rules data is left as it
+/// is. Keyed by DOMAIN: in CQ WW RTTY's list `NF` and `LB` are two multipliers, and every other
+/// list carries one spelling of each province.
+///
+/// The multiplier board folds its cells by the same table (`ui/src/features/contestDomains.ts`),
+/// held to this one by a test below.
+const SAME_PROVINCE: &[(&str, &str, &str)] = &[("il_mults", "NL", "NF"), ("il_mults", "PE", "PEI")];
+
+/// The spelling a code of `domain` counts as when [`SAME_PROVINCE`] names it another one, so a
+/// reader outside the scorer (the band map's call-history prediction) folds the same pairs.
+pub fn same_province_as(domain: &str, code: &str) -> Option<&'static str> {
+    SAME_PROVINCE
+        .iter()
+        .find(|(d, spelling, _)| *d == domain && *spelling == code)
+        .map(|(_, _, sponsors)| *sponsors)
 }
 
 /// The points a table gives one relation on one band: a row naming the band wins over a
@@ -350,6 +382,45 @@ pub struct Scoring {
     pub post: &'static [PostMultiplier],
 }
 
+/// The multiplier keys a log has earned, one set per rule of its [`Scoring`]
+/// ([`Scoring::mults_worked`]). Only that `Scoring` can read it.
+#[derive(Debug, Clone, Default)]
+pub struct MultsWorked {
+    seen: Vec<std::collections::HashSet<(String, String)>>,
+}
+
+/// The key one row counts under one multiplier rule — `(scope bucket, value)` — or `None`
+/// when the rule does not count this row. [`Scoring::mult_counts`] and
+/// [`Scoring::new_mults_by_row`] both count through it, so they cannot disagree about
+/// what a multiplier is.
+fn mult_key(m: &MultiplierRule, row: &ScoreRow<'_>) -> Option<(String, String)> {
+    if !(m.roles.is_empty() || m.roles.contains(&row.role)) {
+        return None;
+    }
+    let value = match m.source {
+        MultSource::Field { key, domain } => row
+            .rx
+            .iter()
+            .find(|v| v.key == key && (domain.is_none() || v.domain == domain))
+            .map(|v| canonical_mult_value(&v.raw, v.domain)),
+        MultSource::DxccEntity => row.entity.map(|e| e.to_string()),
+        MultSource::Prefix => row.prefix.map(|p| p.to_string()),
+    };
+    let value = value.filter(|v| !v.is_empty())?;
+    if m.excluding.iter().any(|e| *e == value) {
+        return None;
+    }
+    let bucket = match m.scope {
+        MultScope::PerLog => String::new(),
+        MultScope::PerBand => row.band.to_ascii_uppercase(),
+        MultScope::PerMode => row.mode_class.to_ascii_uppercase(),
+        MultScope::PerBandMode => {
+            format!("{}/{}", row.band.to_ascii_uppercase(), row.mode_class)
+        }
+    };
+    Some((bucket, value))
+}
+
 impl Scoring {
     /// `(qso_pts, powered_pts)` for these rows at the given stored power tier.
     ///
@@ -403,48 +474,83 @@ impl Scoring {
     where
         I: IntoIterator<Item = ScoreRow<'a>>,
     {
-        use std::collections::HashSet;
-        let mut seen: Vec<HashSet<(String, String)>> = vec![HashSet::new(); self.multipliers.len()];
-        for row in rows {
-            for (i, m) in self.multipliers.iter().enumerate() {
-                if !(m.roles.is_empty() || m.roles.contains(&row.role)) {
-                    continue;
-                }
-                let value = match m.source {
-                    MultSource::Field { key, domain } => row
-                        .rx
-                        .iter()
-                        .find(|v| v.key == key && (domain.is_none() || v.domain == domain))
-                        .map(|v| canonical_mult_value(&v.raw)),
-                    MultSource::DxccEntity => row.entity.map(|e| e.to_string()),
-                    MultSource::Prefix => row.prefix.map(|p| p.to_string()),
-                };
-                let Some(value) = value.filter(|v| !v.is_empty()) else {
-                    continue;
-                };
-                if m.excluding.iter().any(|e| *e == value) {
-                    continue;
-                }
-                let bucket = match m.scope {
-                    MultScope::PerLog => String::new(),
-                    MultScope::PerBand => row.band.to_ascii_uppercase(),
-                    MultScope::PerMode => row.mode_class.to_ascii_uppercase(),
-                    MultScope::PerBandMode => {
-                        format!("{}/{}", row.band.to_ascii_uppercase(), row.mode_class)
-                    }
-                };
-                seen[i].insert((bucket, value));
-            }
-        }
         self.multipliers
             .iter()
-            .zip(seen)
+            .zip(self.mults_worked(rows).seen)
             .map(|(m, set)| {
                 // A cap is a ceiling on what may be CLAIMED, not on what may be worked
                 // ([`MultiplierRule::cap`]) — the rows above are all counted, and the
                 // sixth DX entity simply does not raise the number.
                 let n = set.len();
                 (m.id, m.cap.map_or(n, |c| n.min(c as usize)))
+            })
+            .collect()
+    }
+
+    /// ⭐ **The multipliers each row was FIRST to earn**, one entry per row, in the rows' order:
+    /// how many of the [`mult_counts`](Self::mult_counts) keys this row added that no earlier
+    /// row had, under every rule its role counts. A capped rule credits only its first `cap`
+    /// values, as the claimed count does, so the entries always sum to the multipliers
+    /// [`score`](Self::score) claims. This is what a per-operator "new multipliers" figure
+    /// reads: the multiplier belongs to whoever worked it first.
+    pub fn new_mults_by_row<'a, I>(&self, rows: I) -> Vec<u32>
+    where
+        I: IntoIterator<Item = ScoreRow<'a>>,
+    {
+        use std::collections::HashSet;
+        let mut seen: Vec<HashSet<(String, String)>> = vec![HashSet::new(); self.multipliers.len()];
+        rows.into_iter()
+            .map(|row| {
+                let mut new = 0;
+                for (i, m) in self.multipliers.iter().enumerate() {
+                    let Some(key) = mult_key(m, &row) else {
+                        continue;
+                    };
+                    let capped = m.cap.is_some_and(|c| seen[i].len() >= c as usize);
+                    if !capped && seen[i].insert(key) {
+                        new += 1;
+                    }
+                }
+                new
+            })
+            .collect()
+    }
+
+    /// ⭐ **Every multiplier key these rows have earned, rule by rule** — the sets
+    /// [`mult_counts`](Self::mult_counts) counts, kept so that a contact not yet worked can be
+    /// asked about ([`new_mults_of`](Self::new_mults_of)) without walking the log again.
+    pub fn mults_worked<'a, I>(&self, rows: I) -> MultsWorked
+    where
+        I: IntoIterator<Item = ScoreRow<'a>>,
+    {
+        use std::collections::HashSet;
+        let mut seen: Vec<HashSet<(String, String)>> = vec![HashSet::new(); self.multipliers.len()];
+        for row in rows {
+            for (i, m) in self.multipliers.iter().enumerate() {
+                if let Some(key) = mult_key(m, &row) {
+                    seen[i].insert(key);
+                }
+            }
+        }
+        MultsWorked { seen }
+    }
+
+    /// ⭐ **The multipliers `row` would add to a log that has earned `worked`** — `(rule id,
+    /// value)` for each rule that would count a value no counted row has, under the same key
+    /// the score counts by. A rule already at its [`cap`](MultiplierRule::cap) adds nothing,
+    /// as in [`new_mults_by_row`](Self::new_mults_by_row). Empty when the row adds none.
+    pub fn new_mults_of(
+        &self,
+        worked: &MultsWorked,
+        row: &ScoreRow<'_>,
+    ) -> Vec<(&'static str, String)> {
+        self.multipliers
+            .iter()
+            .zip(&worked.seen)
+            .filter_map(|(m, seen)| {
+                let key = mult_key(m, row)?;
+                let capped = m.cap.is_some_and(|c| seen.len() >= c as usize);
+                (!capped && !seen.contains(&key)).then_some((m.id, key.1))
             })
             .collect()
     }
@@ -1077,6 +1183,69 @@ mod tests {
     /// and the operator is allowed to work them — only five may be CLAIMED. So the cap
     /// lives on the rule and is applied where the counting happens, which also keeps
     /// the board the operator reads and the score they submit the same number.
+    /// ⭐ **A multiplier is credited to the row that worked it FIRST**, once, at the rule's own
+    /// scope, and a capped rule credits only its first `cap` values: the per-row figures sum to
+    /// the claimed multiplier count, by value.
+    #[test]
+    fn new_multipliers_go_to_the_first_row_and_sum_to_the_claimed_count() {
+        static RULES: &[MultiplierRule] = &[
+            MultiplierRule {
+                id: "dxcc",
+                source: MultSource::DxccEntity,
+                scope: MultScope::PerLog,
+                excluding: &[],
+                roles: &[],
+                cap: Some(3),
+            },
+            MultiplierRule {
+                id: "band",
+                source: MultSource::DxccEntity,
+                scope: MultScope::PerBand,
+                excluding: &["Spain"],
+                roles: &[],
+                cap: None,
+            },
+        ];
+        let worked = [
+            ("Germany", "20m"),
+            ("France", "20m"),
+            ("Germany", "20m"),
+            ("Germany", "40m"),
+            ("Spain", "20m"),
+            ("Italy", "20m"),
+        ];
+        let rows: Vec<ScoreRow> = worked
+            .iter()
+            .map(|(e, b)| ScoreRow {
+                mode_class: "CW",
+                band: b,
+                role: "",
+                rx: &[],
+                entity: Some(e),
+                prefix: None,
+                relation: None,
+            })
+            .collect();
+        let scoring = Scoring {
+            qso_points: PointsRule::ByModeClass(FD_POINTS),
+            multipliers: RULES,
+            post: &[],
+        };
+        // Germany 20m: dxcc + band. France: dxcc + band. Germany again: nothing. Germany 40m:
+        // band only. Spain: dxcc (the third and last the cap allows); the band rule excludes it.
+        // Italy: the cap is full, so the band rule alone.
+        assert_eq!(
+            scoring.new_mults_by_row(rows.iter().copied()),
+            vec![2, 2, 0, 1, 1, 1]
+        );
+        let claimed: usize = scoring
+            .mult_counts(rows.iter().copied())
+            .iter()
+            .map(|(_, n)| n)
+            .sum();
+        assert_eq!(claimed, 7);
+    }
+
     #[test]
     fn a_capped_multiplier_stops_counting_at_its_cap() {
         static CAPPED: &[MultiplierRule] = &[MultiplierRule {
@@ -1218,6 +1387,46 @@ mod tests {
         ] {
             assert_eq!(FD_POINTS.for_mode(m), want, "mode {m:?}");
         }
+    }
+
+    /// ⭐ **The board folds the cells the scorer folds**: `ui/src/features/contestDomains.ts`
+    /// lights and counts one province under either spelling by its own table, which must be
+    /// this one ([`SAME_PROVINCE`]), or the board and the claimed score disagree.
+    #[test]
+    fn the_boards_province_spellings_are_the_scorers() {
+        let ts = include_str!("../../../../ui/src/features/contestDomains.ts");
+        let decl = "const IL_MULTS_SAME: Record<string, string> = {";
+        let start = ts
+            .find(decl)
+            .expect("contestDomains.ts declares IL_MULTS_SAME")
+            + decl.len();
+        let body = &ts[start..start + ts[start..].find('}').expect("the table closes")];
+        let mut board: Vec<(String, String)> = body
+            .split(',')
+            .filter(|kv| !kv.trim().is_empty())
+            .map(|kv| {
+                let (k, v) = kv.split_once(':').expect("code: 'code'");
+                (
+                    k.trim().to_string(),
+                    v.trim().trim_matches('\'').to_string(),
+                )
+            })
+            .collect();
+        board.sort();
+        assert_eq!(
+            board.len(),
+            2,
+            "parsed {board:?} — the parser is broken, not the mirror"
+        );
+        let mut scorer: Vec<(String, String)> = SAME_PROVINCE
+            .iter()
+            .filter(|(d, _, _)| *d == "il_mults")
+            .map(|(_, a, b)| (a.to_string(), b.to_string()))
+            .collect();
+        scorer.sort();
+        assert_eq!(board, scorer);
+        // …and the board's ILQP list is the one that carries it.
+        assert_eq!(ts.matches("same: IL_MULTS_SAME").count(), 1);
     }
 
     /// An empty log scores zero rather than the power tier — `0 × 5` is still 0, but a

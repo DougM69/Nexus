@@ -31,14 +31,15 @@
 //! # The transmit rule
 //!
 //! Models hold state, a separate encoder turns typed intents into wire text, and every transmit
-//! check sits on the typed intent, never on rendered text (port plan §3.1):
+//! check sits on the typed intent, never on rendered text:
 //!
 //! - A command that can key the radio ([`encode::TxStart`]) is rendered only from an
-//!   [`admission::Admitted`], and only [`admission::admit`] makes one. The decoders, the model,
-//!   the keepalive, the connect sequence, teardown and the reconnect ladder produce no
-//!   `TxStart`; `session::tests::no_input_makes_the_session_originate_a_key` drives the session
-//!   with random input in every state and checks that the only start ever written is the one the
-//!   test asked for.
+//!   [`admission::Admitted`], and only [`admission::admit`] makes one (with
+//!   [`admission::admit_beta`], the same checks under the operator's Beta setting). The
+//!   decoders, the model, the keepalive, the connect sequence, teardown and the reconnect ladder
+//!   produce no `TxStart`; `session::tests::no_input_makes_the_session_originate_a_key` drives
+//!   the session with random input in every state and checks that the only start ever written is
+//!   the one the test asked for.
 //! - Stops ([`encode::TxStop`]) are never gated: a stop asks only "is it ours?", and rigctld's
 //!   `T 0` ends everything of ours ([`session::Session::end_ours`]).
 //! - Keyed is set at the start attempt and cleared only by the readback of its kind; a reply to a
@@ -46,7 +47,8 @@
 //!   operator is told. A tune the radio latches is ended by the session itself at its deadline.
 //! - Each kind has a readback profile, but only `xmit`'s is confirmed on a radio, so admission
 //!   refuses tune, ATU and CWX starts ([`admission::BENCHED`]) until a tester's bench confirms
-//!   theirs.
+//!   theirs, or the operator turns on, for the radio, the Beta setting that admits them anyway
+//!   ([`admission::BETA`]; off by default).
 //! - Where the transmitter takes its audio from (`stream create type=dax_tx`, `transmit set dax`)
 //!   is its own typed kind ([`encode::TxAudio`]) with its own admission: never while anything is
 //!   keyed, never beside another program's DAX transmit stream.

@@ -7,11 +7,10 @@
 // transmit-path batch so the pair cannot be reworded apart. Everything else is in the
 // catalog under `phone.keyer.*` — F-key names, a slot's own label is the operator's words, and
 // both stay in the code.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { VoiceMessage } from '../types'
 import {
   cancelVoiceRecording,
-  clearVoiceMessage,
   getVoiceMessages,
   importVoiceMessage,
   playVoiceMessage,
@@ -20,6 +19,12 @@ import {
   stopVoiceRecording,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import {
+  deleteVoiceSlot,
+  pendingVoiceDeletes,
+  subscribeVoiceDeletes,
+  supersedeVoiceDelete,
+} from '../features/voiceDelete'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -41,9 +46,6 @@ interface Props {
   /** Field Day exchange to read ("3A WI") — when set (FD mode), hint that a slot can be
    * recorded with it for one-key sends. Empty/undefined outside FD. */
   fdExchange?: string | null
-  /** The radio has the mic while Nexus's native Flex audio is on (Phone at the shack), so a
-   * recorded message would not go out: playback is refused and says why. */
-  radioHasMic?: boolean
   /** ENTER SENDS MESSAGE in the Phone cockpit's contest strip: the slot the next Enter plays
    *  glows (`lit`), the keyer lends the strip its recordings and a player (`report`, null when it
    *  goes), its ■ Stop is a stop (`onStop`), and a slot played by hand is reported (`onPlay`), so
@@ -85,7 +87,8 @@ export interface VoiceKeyerForEnter {
  * plays for AGN in a contest), each a recorded 12 kHz mono WAV played to the rig with PTT keyed
  * for the message (the same TX path the soundcard CW keyer uses).
  * Click a slot or press its F-key to play; ● records from the input device; ⤓ imports a
- * `.wav`; ✕ clears; Esc / ■ Stop aborts.
+ * `.wav`; ✕ clears, with an Undo window (features/voiceDelete.ts); Esc / ■ Stop aborts. The three
+ * tools sit on the slot's LEFT, away from its ▶: under it, ✕ was hit reaching for Play.
  *
  * The ■ Stop here IS a control that stops a transmission (stopVoice → Engine::stop_voice: the
  * radio loop flushes the output ring and unkeys) and it GOES AWAY WITH THIS PANE. That is
@@ -97,8 +100,23 @@ export interface VoiceKeyerForEnter {
  * button (two do), not that its unmount cleanup is itself a stop. The cleanup below is not
  * what buys the entry — it is what the entry's note has to WARN ABOUT.
  */
-export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHasMic, esm }: Props) {
-  const [msgs, setMsgs] = useState<VoiceMessage[]>([])
+export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: Props) {
+  const [stored, setMsgs] = useState<VoiceMessage[]>([])
+  // A deleted slot inside its Undo window still has its recording in the backend; everything
+  // here (the slot, its F-key, Enter Sends Message) treats it as empty until Undo or the clear.
+  const [deleting, setDeleting] = useState(pendingVoiceDeletes)
+  useEffect(
+    () =>
+      subscribeVoiceDeletes((list) => {
+        if (list) setMsgs(list)
+        setDeleting(pendingVoiceDeletes())
+      }),
+    [],
+  )
+  const msgs = useMemo(
+    () => stored.map((m) => (deleting.has(m.slot) ? { ...m, file: '' } : m)),
+    [stored, deleting],
+  )
   const [recording, setRecording] = useState<number | null>(null)
   const fileRefs = useRef<Record<number, HTMLInputElement | null>>({})
   // Mirror `recording` into a ref so the unmount cleanup (which captures [] deps) can see
@@ -182,11 +200,9 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
     if (!m || !m.file) return { text: t('phone.keyer.empty', { slot }), ms: 3000 }
     if (recording !== null) return { text: t('phone.keyer.busyRecording'), ms: 2500 }
     if (keyed) return { text: t('phone.keyer.releasePtt'), ms: 3000 }
-    // THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse with a message"). With Nexus's
-    // own Flex client and native audio on, Phone at the shack takes the radio's own mic while a
-    // recorded message goes out over DAX, so the radio would ignore the message and the mic
-    // would carry the over. Nothing is sent, so nothing keys; the engine refuses the same send.
-    if (radioHasMic) return { text: t('phone.keyer.radioHasMic'), ms: 6000 }
+    // The radio having the mic (Nexus's own Flex client, native audio on, Phone at the shack) is
+    // not a refusal since 2026-10-12 ("Change it now"): the station switches the radio to DAX for
+    // the message and back. A message it then drops says why on the status lane.
     if (!txEnabled) {
       // NAME THE CONTROL THAT IS ON THIS SCREEN (#81). "enable transmit" was honest and
       // useless: the Phone cockpit shows no Enable-Tx button — App hides the TopBar's TX
@@ -252,15 +268,18 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
 
   const startRec = (slot: number) => {
     setRecording(slot)
-    void startVoiceRecording().catch(() => {
-      setRecording(null)
-      pushToast(t('phone.keyer.recordFailed'), 'error')
+    // The toast carries the reason, as a play's does: a computer driving a station is refused
+    // Record while its PTT is held, and says so.
+    void withErrorToast(() => startVoiceRecording(), t('phone.keyer.recordFailed')).then((snap) => {
+      if (snap === null) setRecording(null)
     })
   }
 
   const stopRec = async (slot: number) => {
     const label = msgs.find((m) => m.slot === slot)?.label ?? ''
     setRecording(null)
+    // Clicking a deleted slot records over it; the Undo stands until the take is saved.
+    await supersedeVoiceDelete(slot)
     const list = await withErrorToast(
       () => stopVoiceRecording(slot, label),
       t('phone.keyer.saveFailed'),
@@ -274,6 +293,7 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
   const onImport = async (slot: number, file: File) => {
     const label = msgs.find((m) => m.slot === slot)?.label ?? ''
     const bytes = Array.from(new Uint8Array(await file.arrayBuffer()))
+    await supersedeVoiceDelete(slot)
     const list = await withErrorToast(
       () => importVoiceMessage(slot, label, bytes),
       t('phone.keyer.importFailed'),
@@ -284,10 +304,8 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
     }
   }
 
-  const clear = async (slot: number) => {
-    const list = await withErrorToast(() => clearVoiceMessage(slot), t('phone.keyer.clearFailed'))
-    if (list) setMsgs(list)
-  }
+  const clear = (m: VoiceMessage) =>
+    deleteVoiceSlot(m.slot, m.label || t('phone.keyer.slot.unnamed', { slot: m.slot }))
 
   // A slot's F-key plays it from anywhere on the Phone screen, the log line's boxes included, as
   // CW's macros send from anywhere in the CW cockpit (operator, 2026-10-11). F1–F12 are all held,
@@ -316,7 +334,7 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [msgs, txEnabled, keyed, recording, radioHasMic])
+  }, [msgs, txEnabled, keyed, recording])
 
   return (
     <div className="vk">
@@ -351,25 +369,6 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
           const hasFile = !!m.file
           return (
             <div key={m.slot} className={`vk-slot${hasFile ? ' has' : ''}${isRec ? ' rec' : ''}`}>
-              <button
-                type="button"
-                className={`vk-play${esm?.lit.includes(`F${m.slot}`) ? ' esm-lit' : ''}`}
-                onClick={() => (hasFile ? play(m.slot) : startRec(m.slot))}
-                disabled={recording !== null && !isRec}
-                title={
-                  hasFile
-                    ? t('phone.keyer.slot.play.title', { slot: m.slot, label: m.label })
-                    : t('phone.keyer.slot.record.title', { slot: m.slot })
-                }
-              >
-                <span className="vk-fkey">F{m.slot}</span>
-                <span className="vk-label">
-                  {m.label || t('phone.keyer.slot.unnamed', { slot: m.slot })}
-                </span>
-                <span className="vk-state">
-                  {isRec ? REC_PLATE : hasFile ? '▶' : t('phone.keyer.slot.state.record')}
-                </span>
-              </button>
               <div className="vk-tools">
                 {isRec ? (
                   // ⚠️ NOT MIGRATED — this one ends the RECORDER, not an over, but it is the
@@ -401,7 +400,7 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
                     <button
                       type="button"
                       className="vk-tool"
-                      onClick={() => void clear(m.slot)}
+                      onClick={() => clear(m)}
                       disabled={recording !== null || !hasFile}
                       title={t('phone.keyer.clear.title')}
                     >
@@ -423,6 +422,25 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, radioHa
                   }}
                 />
               </div>
+              <button
+                type="button"
+                className={`vk-play${esm?.lit.includes(`F${m.slot}`) ? ' esm-lit' : ''}`}
+                onClick={() => (hasFile ? play(m.slot) : startRec(m.slot))}
+                disabled={recording !== null && !isRec}
+                title={
+                  hasFile
+                    ? t('phone.keyer.slot.play.title', { slot: m.slot, label: m.label })
+                    : t('phone.keyer.slot.record.title', { slot: m.slot })
+                }
+              >
+                <span className="vk-fkey">F{m.slot}</span>
+                <span className="vk-label">
+                  {m.label || t('phone.keyer.slot.unnamed', { slot: m.slot })}
+                </span>
+                <span className="vk-state">
+                  {isRec ? REC_PLATE : hasFile ? '▶' : t('phone.keyer.slot.state.record')}
+                </span>
+              </button>
             </div>
           )
         })}

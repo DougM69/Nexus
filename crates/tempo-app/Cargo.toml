@@ -11,6 +11,9 @@ description = "Nexus UI-facing application logic: wraps tempo-core into serializ
 workspace = true
 
 [dependencies]
+# What Stop's road carries of the engine's state (`mic::{MicEnded, MicStatus}`,
+# `remote_control::ptt_hold::HoldEnd`): below the engine, so that a build without it reads them.
+tempo-base = { path = "../tempo-base" }
 tempo-core = { path = "../tempo-core" }
 modes = { path = "../modes" }
 # JS8 message layer (Station/Reassembler behind the engine adapter in `js8.rs`) and the

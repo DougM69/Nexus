@@ -91,6 +91,8 @@ parentheses). Not exhaustive — `rigctl -l` lists everything your Hamlib knows.
 | FTDX3000 | 1037 |
 | FTDX5000 | 1032 |
 | FT-1000MP | 1024 |
+| FT-1000 | 1002 |
+| FT-1000D | 1003 |
 
 Older rigs (FT-817/818/857/897) that connect through a generic USB-serial cable
 report only the cable's chip, so Detect fills the port and driver but leaves the

@@ -9,10 +9,14 @@
         try {
           var d = document.documentElement
           var t = localStorage.getItem('tempo-theme')
-          // System follows the computer's light/dark setting (useTheme.ts systemTheme): dark
-          // when the platform cannot say. Nothing stored stays the page's own dark.
+          // System follows the computer's light/dark setting (useTheme.ts systemTheme): dark when
+          // the platform cannot say. Nothing stored is System in the desktop app on Windows, where a
+          // computer that never chose follows the computer (useTheme.ts isWindowsDesktop), and the
+          // page's own Dark everywhere else; the removed Amber is Dark, as the hook migrates it.
+          if (t === 'amber') t = 'dark'
+          if (t !== 'light' && t !== 'dark' && t !== 'system') t = navigator.userAgent.indexOf('Windows NT') !== -1 && window.__TAURI_INTERNALS__ !== undefined ? 'system' : 'dark'
           if (t === 'system') t = window.matchMedia && !window.matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark'
-          if (t === 'light' || t === 'dark') d.setAttribute('data-theme', t)
+          d.setAttribute('data-theme', t)
           // Density and text size (#215): the first-paint copies of useDensity and useTextSize,
           // held to them by index-preseed.test.ts. Touch is Comfortable plus data-touch.
           var den = localStorage.getItem('nexus-density')
@@ -56,7 +60,7 @@
           // base; index-preseed.test.ts holds the two copies together theme by theme.
           var SKINS = {
             dark: ['amber-lcd', 'green-lcd', 'blue-vfd', 'midnight', 'slate', 'lagoon', 'ember', 'nebula'],
-            light: ['silver', 'paper'],
+            light: ['paper', 'bright'],
           }
           var base = d.getAttribute('data-theme') || 'dark'
           var skin = localStorage.getItem('nexus-skin')
@@ -93,7 +97,8 @@
           // (the "font is very, very small" band-map field report).
           var NAT = { operate: [1200, 900], bandmapPhone: [380, 520], bandmapCw: [380, 520],
                       waterfall: [560, 200], fieldday: [560, 540], pota: [620, 540],
-                      fdclub: [820, 420], contestlog: [900, 560], contestscreen: [900, 480] }
+                      fdclub: [820, 420], contestlog: [640, 480], contestscreen: [900, 480],
+                      spots: [740, 440] }
           var natW = 1200, natH = 900
           if (panel) {
             var n = Object.prototype.hasOwnProperty.call(NAT, panel) ? NAT[panel] : [640, 520]

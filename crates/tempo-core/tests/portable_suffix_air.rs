@@ -23,7 +23,7 @@
 
 use modes::{make_mode, DecodeRequest, ModeKind, NativeSource, SignalSource};
 use tempo_core::message::Msg;
-use tempo_core::qso::Station;
+use tempo_core::qso::{State, Station};
 
 const FS: f32 = 12_000.0;
 const F0: f32 = 1500.0;
@@ -278,11 +278,144 @@ fn a_nonstandard_call_still_gets_its_report_through_the_hash() {
     over(&mut st, "<PJ4/K1ABC> KD9TAW -07");
 
     st.observe(&[dec("<KD9TAW> PJ4/K1ABC RR73", -7)]);
-    over(&mut st, "<PJ4/K1ABC> KD9TAW 73");
+    over(&mut st, "PJ4/K1ABC <KD9TAW> 73");
     assert_eq!(
         st.dxcall.as_deref(),
         Some("PJ4/K1ABC"),
         "logs the full call"
+    );
+}
+
+#[test]
+fn rr73_and_73_to_a_nonstandard_call_go_out_as_wsjtx_writes_them() {
+    // WSJT-X 3.0.2 closes with a nonstandard call whole and mine hashed, a type 4 message
+    // (`genStdMsgs`, mainwindow.cpp 9701 and 9709: `if(!bHisCall and bMyCall)
+    // t=hisCall + " <" + my_callsign + "> " …`): its RR73, the RRR it sends in place of RR73
+    // (the same expression, 9701) and its 73. `bMyCall` is `stdCall`, which passes `/P`
+    // and `/R`, so a portable call of mine closes the same way. Hashed the other way round,
+    // `<W9XYZ/M> KD9TAW 73` names the same two stations in a type 1 message, not WSJT-X's.
+    for c in ["W9XYZ/M", "PJ4/K1ABC", "YW18FIFA"] {
+        seed_hash(c);
+    }
+    let mut wrong = Vec::new();
+    for my in ["KD9TAW", "KD9TAW/P", "KD9TAW/R"] {
+        for dx in ["W9XYZ/M", "PJ4/K1ABC", "YW18FIFA"] {
+            let roger = Msg::RReport {
+                to: my.into(),
+                de: dx.into(),
+                snr: -7,
+            };
+            let rrr = Station::start(my, "EN52", dx, Some((&roger, -7)), true, false)
+                .pending_text()
+                .unwrap_or_default();
+            let sent = (queued(my, "EN52", dx, 4), rrr, queued(my, "EN52", dx, 5));
+            let want = (
+                format!("{dx} <{my}> RR73"),
+                format!("{dx} <{my}> RRR"),
+                format!("{dx} <{my}> 73"),
+            );
+            if sent != want {
+                wrong.push(format!("{my} × {dx}\n  sent {sent:?}\n  want {want:?}"));
+                continue;
+            }
+            for t in [&sent.0, &sent.1, &sent.2] {
+                assert_eq!(i3_of(t), Some(4), "[{t}] is a type 4 message");
+                assert_on_air(ModeKind::Ft8, t);
+                assert_on_air(ModeKind::Ft4, t);
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+
+    // A whole contact with a WSJT-X station signing W9XYZ/M, each of its overs in WSJT-X's
+    // form: its report and roger with its own call hashed (`t0b`, 9597), its grid-less call
+    // (`t0a`, 9627) and its closes with mine hashed (9702, 9710).
+    let cq = Msg::parse("CQ W9XYZ/M");
+    let mut st = Station::start("KD9TAW", "EN52", "W9XYZ/M", Some((&cq, -7)), false, false);
+    over(&mut st, "<W9XYZ/M> KD9TAW EN52");
+    st.observe(&[dec("KD9TAW <W9XYZ/M> -05", -7)]);
+    over(&mut st, "<W9XYZ/M> KD9TAW R-07");
+    st.observe(&[dec("<KD9TAW> W9XYZ/M RR73", -7)]);
+    over(&mut st, "W9XYZ/M <KD9TAW> 73");
+    assert_eq!(
+        (st.state, st.dxcall.as_deref()),
+        (State::Done, Some("W9XYZ/M")),
+        "answering its CQ"
+    );
+
+    let mut run = Station::calling_cq("KD9TAW", "EN52");
+    over(&mut run, "CQ KD9TAW EN52");
+    run.observe(&[dec("<KD9TAW> W9XYZ/M", -7)]);
+    over(&mut run, "<W9XYZ/M> KD9TAW -07");
+    run.observe(&[dec("KD9TAW <W9XYZ/M> R-05", -7)]);
+    over(&mut run, "W9XYZ/M <KD9TAW> RR73");
+    run.observe(&[dec("<KD9TAW> W9XYZ/M 73", -7)]);
+    assert_eq!(
+        (run.state, run.dxcall.as_deref(), run.rx_report),
+        (State::Done, Some("W9XYZ/M"), Some(-5)),
+        "running"
+    );
+}
+
+#[test]
+fn rr73_and_73_otherwise_go_out_as_before() {
+    // Only a standard call of mine closing to a nonstandard one changes. A nonstandard call of
+    // mine beside a standard one is WSJT-X's other form already (9702, 9710); two nonstandard
+    // calls, and a `/P` beside a `/R`, keep the form they had.
+    for c in ["W9XYZ/M", "PJ4/K1ABC", "F4CYH/R"] {
+        seed_hash(c);
+    }
+    for (my, dx, rr73, bye) in [
+        ("KD9TAW", "W9XYZ", "W9XYZ KD9TAW RR73", "W9XYZ KD9TAW 73"),
+        (
+            "KD9TAW",
+            "W9XYZ/P",
+            "W9XYZ/P KD9TAW RR73",
+            "W9XYZ/P KD9TAW 73",
+        ),
+        (
+            "KD9TAW/P",
+            "W9XYZ/P",
+            "W9XYZ/P KD9TAW/P RR73",
+            "W9XYZ/P KD9TAW/P 73",
+        ),
+        (
+            "KD9TAW/P",
+            "F4CYH/R",
+            "<F4CYH/R> KD9TAW/P RR73",
+            "<F4CYH/R> KD9TAW/P 73",
+        ),
+        (
+            "PJ4/K1ABC",
+            "KD9TAW",
+            "<KD9TAW> PJ4/K1ABC RR73",
+            "<KD9TAW> PJ4/K1ABC 73",
+        ),
+        (
+            "PJ4/K1ABC",
+            "W9XYZ/M",
+            "<W9XYZ/M> PJ4/K1ABC RR73",
+            "<W9XYZ/M> PJ4/K1ABC 73",
+        ),
+        // A call the decoder could not resolve is no callsign to put in full.
+        ("KD9TAW", "<...>", "<...> KD9TAW RR73", "<...> KD9TAW 73"),
+    ] {
+        let sent = (queued(my, "EN52", dx, 4), queued(my, "EN52", dx, 5));
+        assert_eq!(sent, (rr73.to_string(), bye.to_string()), "{my} × {dx}");
+    }
+    // RRR in place of RR73 to a standard call, and the RRR a `/P` call sends as its roger
+    // where no number can ride (Tx3, not Tx4), keep their forms.
+    let roger = Msg::RReport {
+        to: "KD9TAW".into(),
+        de: "W9XYZ".into(),
+        snr: -7,
+    };
+    let st = Station::start("KD9TAW", "EN52", "W9XYZ", Some((&roger, -7)), true, false);
+    assert_eq!(st.pending_text().as_deref(), Some("W9XYZ KD9TAW RRR"));
+    assert_eq!(
+        queued("KD9TAW/P", "EN52", "PJ4/K1ABC", 3),
+        "<PJ4/K1ABC> KD9TAW/P RRR",
+        "a /P call's roger"
     );
 }
 
@@ -352,8 +485,10 @@ fn a_suffixed_operator_working_a_hashed_dx_keeps_tx3_distinguishable() {
             .map(|n| queued(my, "EN52", "PJ4/K1ABC", n))
             .collect();
         for (i, q) in tx.iter().enumerate() {
+            // The DX hashed, or in the RR73 and 73 the DX whole and mine hashed (WSJT-X's).
             assert!(
-                q.starts_with("<PJ4/K1ABC> ") && q.contains(my),
+                (q.starts_with("<PJ4/K1ABC> ") || q.starts_with(&format!("PJ4/K1ABC <{my}> ")))
+                    && q.contains(my),
                 "Tx{} must name both stations: [{q}]",
                 i + 1
             );
@@ -419,13 +554,14 @@ fn every_callsign_class_pair_puts_both_calls_on_the_air_verbatim() {
 
 #[test]
 fn a_hashed_cq_is_never_generated() {
-    // `CQ <F4CYH/P> JN18` PACKS but does not UNPACK — a hashed CQ is unusable, and
-    // generating one would put a frame on the air that nobody can decode. A CQ
-    // therefore always carries the calling station's call in full.
-    let got = on_air(ModeKind::Ft8, "CQ <PJ4/K1ABC> FK52");
+    // A hashed CQ has no frame anybody can decode, so the encoder refuses it and nothing
+    // keys (it once packed into a frame that did not unpack). A CQ therefore always carries
+    // the calling station's call in full.
     assert!(
-        got.is_empty(),
-        "a hashed CQ does not survive the round trip; got {got:?}"
+        make_mode(ModeKind::Ft8)
+            .encode("CQ <PJ4/K1ABC> FK52")
+            .is_empty(),
+        "a hashed CQ must never become an over"
     );
 
     for mycall in ["F4CYH/P", "KD9TAW/R", "PJ4/K1ABC", "YW18FIFA", "KD9TAW/QRP"] {
@@ -437,4 +573,274 @@ fn a_hashed_cq_is_never_generated() {
             "CQ for {mycall} must not be hashed: [{cq}]"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// A nonstandard OWN call beside a plain partner — WSJT-X hashes MY call
+// ---------------------------------------------------------------------------
+
+/// The `i3` (message type) of the 77-bit frame the FT8/FT4 encoders build from `text`, or
+/// `None` where the packer refuses it.
+fn i3_of(text: &str) -> Option<u8> {
+    let mut msg37 = [b' '; 37];
+    for (slot, b) in msg37.iter_mut().zip(text.bytes()) {
+        *slot = b;
+    }
+    let bits = modes::wsjt77::pack::pack(&msg37).ok()??;
+    Some(bits[74] * 4 + bits[75] * 2 + bits[76])
+}
+
+#[test]
+fn a_nonstandard_own_call_hashes_itself_so_the_report_rides() {
+    // Reported on air from OE/PD1SCO: working PA0A, the report over went out as
+    // `<PA0A> OE/PD1SCO` and the roger as a bare `RRR`, so no number ever reached the
+    // other station. WSJT-X 3.0.2 (`genStdMsgs`) hashes MY call when only mine is
+    // nonstandard: PA0A stays a plain c28 call, so the number rides an ordinary Type 1
+    // frame beside the hash, and PA0A reads the full call back from its hash table —
+    // filled by my CQ or my Tx1, which carry it in full.
+    for t in ["PA0A <OE/PD1SCO> -01", "PA0A <OE/PD1SCO> R-01"] {
+        assert_eq!(i3_of(t), Some(1), "[{t}] must be a Type 1 frame");
+        assert_on_air(ModeKind::Ft4, t);
+    }
+
+    // I answer PA0A's CQ.
+    let cq = Msg::parse("CQ PA0A JO22");
+    let mut st = Station::start("OE/PD1SCO", "JN67", "PA0A", Some((&cq, -1)), false, false);
+    over(&mut st, "<PA0A> OE/PD1SCO");
+    st.observe(&[dec("<OE/PD1SCO> PA0A -05", -1)]);
+    assert_eq!(st.rx_report, Some(-5));
+    assert_eq!(
+        st.state,
+        State::AwaitRr73,
+        "a roger that carries the number is an ordinary Tx3, not the closing RRR"
+    );
+    over(&mut st, "PA0A <OE/PD1SCO> R-01");
+    st.observe(&[dec("<OE/PD1SCO> PA0A RR73", -1)]);
+    over(&mut st, "<PA0A> OE/PD1SCO 73");
+    assert_eq!(st.state, State::Done);
+    assert!(!st.report_impossible_exchange(), "both numbers can ride");
+
+    // PA0A answers my CQ.
+    let mut run = Station::calling_cq("OE/PD1SCO", "JN67");
+    over(&mut run, "CQ OE/PD1SCO");
+    run.observe(&[dec("<OE/PD1SCO> PA0A JO22", -1)]);
+    over(&mut run, "PA0A <OE/PD1SCO> -01");
+    run.observe(&[dec("<OE/PD1SCO> PA0A R-05", -1)]);
+    assert_eq!(run.rx_report, Some(-5));
+    over(&mut run, "<PA0A> OE/PD1SCO RR73");
+    run.observe(&[dec("<OE/PD1SCO> PA0A 73", -1)]);
+    assert_eq!(run.state, State::Done);
+    assert!(!run.report_impossible_exchange(), "both numbers can ride");
+}
+
+#[test]
+fn a_plain_station_follows_a_partner_that_hashes_its_own_call() {
+    // What WSJT-X sends a Nexus user today, and what Nexus now sends too: the bracketed
+    // SENDER must match the DX being worked, and the exchange must advance on it.
+    let mut st = Station::answering("PA0A", "JO22", "OE/PD1SCO");
+    over(&mut st, "<OE/PD1SCO> PA0A JO22");
+    st.observe(&[dec("PA0A <OE/PD1SCO> -01", -5)]);
+    assert_eq!(
+        st.rx_report,
+        Some(-1),
+        "the number beside the hash is captured"
+    );
+    assert_eq!(st.state, State::AwaitRr73);
+    over(&mut st, "<OE/PD1SCO> PA0A R-05");
+    st.observe(&[dec("<PA0A> OE/PD1SCO RR73", -5)]);
+    over(&mut st, "OE/PD1SCO <PA0A> 73");
+    assert_eq!(st.state, State::Done);
+    assert_eq!(
+        st.dxcall.as_deref(),
+        Some("OE/PD1SCO"),
+        "logs the full call"
+    );
+
+    // Running CQ, answered by the same station after its Tx1.
+    let mut run = Station::calling_cq("PA0A", "JO22");
+    run.observe(&[dec("<PA0A> OE/PD1SCO", -5)]);
+    assert_eq!(run.dxcall.as_deref(), Some("OE/PD1SCO"));
+    over(&mut run, "<OE/PD1SCO> PA0A -05");
+    run.observe(&[dec("PA0A <OE/PD1SCO> R-01", -5)]);
+    assert_eq!(run.rx_report, Some(-1));
+    assert_eq!(run.state, State::Confirming);
+    over(&mut run, "OE/PD1SCO <PA0A> RR73");
+}
+
+#[test]
+fn only_a_nonstandard_call_beside_a_plain_partner_changes() {
+    // WSJT-X's form needs the partner to be a plain c28 call. Beside a slashed call the
+    // packer refuses Type 1 (`packjt77.f90:1183-1184`) and the frame would go out as
+    // truncated free text; beside another nonstandard call there is no c28 call at all.
+    for t in [
+        "PA0A/P <OE/PD1SCO> -07",
+        "PA0A/R <OE/PD1SCO> R-07",
+        "PJ4/K1ABC <OE/PD1SCO> -07",
+    ] {
+        assert_ne!(i3_of(t), Some(1), "[{t}] cannot be a Type 1 frame");
+        let got = on_air(ModeKind::Ft8, t);
+        assert!(!got.iter().any(|m| m == t), "[{t}] came back as {got:?}");
+    }
+
+    // Every pair's Tx1–Tx5 and every CQ, byte for byte. The two ★ rows are the change:
+    // a nonstandard call beside a plain one sends WSJT-X's report and roger. Every other
+    // row is exactly what was sent before, but for the RR73 and 73 a standard call sends a
+    // nonstandard one (the three PJ4/K1ABC rows of mine), WSJT-X's `PJ4/K1ABC <KD9TAW> RR73`.
+    const ROWS: [(&str, &str, &str); 20] = [
+        ("KD9TAW", "PA0A", "PA0A KD9TAW EN52 | PA0A KD9TAW -07 | PA0A KD9TAW R-07 | PA0A KD9TAW RR73 | PA0A KD9TAW 73"),
+        ("KD9TAW", "PA0A/P", "PA0A/P KD9TAW EN52 | PA0A/P KD9TAW -07 | PA0A/P KD9TAW R-07 | PA0A/P KD9TAW RR73 | PA0A/P KD9TAW 73"),
+        ("KD9TAW", "PA0A/R", "PA0A/R KD9TAW EN52 | PA0A/R KD9TAW -07 | PA0A/R KD9TAW R-07 | PA0A/R KD9TAW RR73 | PA0A/R KD9TAW 73"),
+        ("KD9TAW", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW EN52 | <PJ4/K1ABC> KD9TAW -07 | <PJ4/K1ABC> KD9TAW R-07 | PJ4/K1ABC <KD9TAW> RR73 | PJ4/K1ABC <KD9TAW> 73"),
+        ("KD9TAW/P", "PA0A", "PA0A KD9TAW/P EN52 | PA0A KD9TAW/P -07 | PA0A KD9TAW/P R-07 | PA0A KD9TAW/P RR73 | PA0A KD9TAW/P 73"),
+        ("KD9TAW/P", "PA0A/P", "PA0A/P KD9TAW/P EN52 | PA0A/P KD9TAW/P -07 | PA0A/P KD9TAW/P R-07 | PA0A/P KD9TAW/P RR73 | PA0A/P KD9TAW/P 73"),
+        ("KD9TAW/P", "PA0A/R", "<PA0A/R> KD9TAW/P | <PA0A/R> KD9TAW/P | <PA0A/R> KD9TAW/P RRR | <PA0A/R> KD9TAW/P RR73 | <PA0A/R> KD9TAW/P 73"),
+        ("KD9TAW/P", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P | <PJ4/K1ABC> KD9TAW/P RRR | PJ4/K1ABC <KD9TAW/P> RR73 | PJ4/K1ABC <KD9TAW/P> 73"),
+        ("KD9TAW/R", "PA0A", "PA0A KD9TAW/R EN52 | PA0A KD9TAW/R -07 | PA0A KD9TAW/R R-07 | PA0A KD9TAW/R RR73 | PA0A KD9TAW/R 73"),
+        ("KD9TAW/R", "PA0A/P", "<PA0A/P> KD9TAW/R | <PA0A/P> KD9TAW/R | <PA0A/P> KD9TAW/R RRR | <PA0A/P> KD9TAW/R RR73 | <PA0A/P> KD9TAW/R 73"),
+        ("KD9TAW/R", "PA0A/R", "PA0A/R KD9TAW/R EN52 | PA0A/R KD9TAW/R -07 | PA0A/R KD9TAW/R R-07 | PA0A/R KD9TAW/R RR73 | PA0A/R KD9TAW/R 73"),
+        ("KD9TAW/R", "PJ4/K1ABC", "<PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R | <PJ4/K1ABC> KD9TAW/R RRR | PJ4/K1ABC <KD9TAW/R> RR73 | PJ4/K1ABC <KD9TAW/R> 73"),
+        // ★
+        ("OE/PD1SCO", "PA0A", "<PA0A> OE/PD1SCO | PA0A <OE/PD1SCO> -07 | PA0A <OE/PD1SCO> R-07 | <PA0A> OE/PD1SCO RR73 | <PA0A> OE/PD1SCO 73"),
+        ("OE/PD1SCO", "PA0A/P", "<PA0A/P> OE/PD1SCO | <PA0A/P> OE/PD1SCO | <PA0A/P> OE/PD1SCO RRR | <PA0A/P> OE/PD1SCO RR73 | <PA0A/P> OE/PD1SCO 73"),
+        ("OE/PD1SCO", "PA0A/R", "<PA0A/R> OE/PD1SCO | <PA0A/R> OE/PD1SCO | <PA0A/R> OE/PD1SCO RRR | <PA0A/R> OE/PD1SCO RR73 | <PA0A/R> OE/PD1SCO 73"),
+        ("OE/PD1SCO", "PJ4/K1ABC", "<PJ4/K1ABC> OE/PD1SCO | <PJ4/K1ABC> OE/PD1SCO | <PJ4/K1ABC> OE/PD1SCO RRR | <PJ4/K1ABC> OE/PD1SCO RR73 | <PJ4/K1ABC> OE/PD1SCO 73"),
+        // ★
+        ("YW18FIFA", "PA0A", "<PA0A> YW18FIFA | PA0A <YW18FIFA> -07 | PA0A <YW18FIFA> R-07 | <PA0A> YW18FIFA RR73 | <PA0A> YW18FIFA 73"),
+        ("YW18FIFA", "PA0A/P", "<PA0A/P> YW18FIFA | <PA0A/P> YW18FIFA | <PA0A/P> YW18FIFA RRR | <PA0A/P> YW18FIFA RR73 | <PA0A/P> YW18FIFA 73"),
+        ("YW18FIFA", "PA0A/R", "<PA0A/R> YW18FIFA | <PA0A/R> YW18FIFA | <PA0A/R> YW18FIFA RRR | <PA0A/R> YW18FIFA RR73 | <PA0A/R> YW18FIFA 73"),
+        ("YW18FIFA", "PJ4/K1ABC", "<PJ4/K1ABC> YW18FIFA | <PJ4/K1ABC> YW18FIFA | <PJ4/K1ABC> YW18FIFA RRR | <PJ4/K1ABC> YW18FIFA RR73 | <PJ4/K1ABC> YW18FIFA 73"),
+    ];
+    const CQS: [(&str, &str); 5] = [
+        ("KD9TAW", "CQ KD9TAW EN52"),
+        ("KD9TAW/P", "CQ KD9TAW/P EN52"),
+        ("KD9TAW/R", "CQ KD9TAW/R EN52"),
+        ("OE/PD1SCO", "CQ OE/PD1SCO"),
+        ("YW18FIFA", "CQ YW18FIFA"),
+    ];
+    let mut wrong = Vec::new();
+    for (my, dx, want) in ROWS {
+        let got = (1..=5)
+            .map(|n| queued(my, "EN52", dx, n))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        if got != want {
+            wrong.push(format!("{my} × {dx}\n  sent {got}\n  want {want}"));
+        }
+    }
+    for (my, want) in CQS {
+        let got = Station::calling_cq(my, "EN52").pending_text();
+        if got.as_deref() != Some(want) {
+            wrong.push(format!("CQ {my}\n  sent {got:?}\n  want {want}"));
+        }
+    }
+    assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+}
+
+/// Two stations working each other over the FT8 modem, `first` transmitting first: every
+/// over is what one station queued, packed, transmitted and decoded, and the other station
+/// observes exactly what came back. Each hears the other at a fixed SNR (`first` hears
+/// `second` at `snr_first_hears`), so the reports on the air are known in advance.
+fn ft8_qso(
+    first: &mut Station,
+    second: &mut Station,
+    snr_first_hears: i32,
+    snr_second_hears: i32,
+) -> Vec<String> {
+    let mut air = Vec::new();
+    for slot in 0..12 {
+        let (tx, rx, snr) = if slot % 2 == 0 {
+            (&mut *first, &mut *second, snr_second_hears)
+        } else {
+            (&mut *second, &mut *first, snr_first_hears)
+        };
+        if let Some(text) = tx.pending_text() {
+            let heard = on_air(ModeKind::Ft8, &text);
+            rx.observe(&heard.iter().map(|m| dec(m, snr)).collect::<Vec<_>>());
+            tx.after_tx();
+            air.push(format!("{}: {text}", tx.mycall));
+        }
+        if first.done() && second.done() {
+            break;
+        }
+    }
+    air
+}
+
+#[test]
+fn a_nonstandard_call_and_a_plain_call_exchange_both_reports_both_ways() {
+    // The reported pair, both ways, through the FT8 modem: OE/PD1SCO hears PA0A at -5 and
+    // PA0A hears OE/PD1SCO at -1. Both numbers cross, and each side's RST_RCVD is the
+    // number the other put on the air.
+    let mut oe = Station::calling_cq("OE/PD1SCO", "JN67");
+    let mut pa = Station::answering("PA0A", "JO22", "OE/PD1SCO");
+    let air = ft8_qso(&mut oe, &mut pa, -5, -1);
+    assert_eq!(
+        air,
+        [
+            "OE/PD1SCO: CQ OE/PD1SCO",
+            "PA0A: <OE/PD1SCO> PA0A JO22",
+            "OE/PD1SCO: PA0A <OE/PD1SCO> -05",
+            "PA0A: <OE/PD1SCO> PA0A R-01",
+            "OE/PD1SCO: <PA0A> OE/PD1SCO RR73",
+            "PA0A: OE/PD1SCO <PA0A> 73",
+        ],
+        "my CQ answered"
+    );
+    for (st, rcvd, call) in [(&oe, -1, "PA0A"), (&pa, -5, "OE/PD1SCO")] {
+        assert_eq!(
+            (st.state, st.rx_report),
+            (State::Done, Some(rcvd)),
+            "{call}"
+        );
+        assert_eq!(st.dxcall.as_deref(), Some(call));
+        assert!(!st.report_impossible_exchange());
+    }
+
+    let mut pa = Station::calling_cq("PA0A", "JO22");
+    let mut oe = Station::answering("OE/PD1SCO", "JN67", "PA0A");
+    let air = ft8_qso(&mut pa, &mut oe, -1, -5);
+    assert_eq!(
+        air,
+        [
+            "PA0A: CQ PA0A JO22",
+            "OE/PD1SCO: <PA0A> OE/PD1SCO",
+            "PA0A: <OE/PD1SCO> PA0A -01",
+            "OE/PD1SCO: PA0A <OE/PD1SCO> R-05",
+            "PA0A: OE/PD1SCO <PA0A> RR73",
+            "OE/PD1SCO: <PA0A> OE/PD1SCO 73",
+        ],
+        "me answering his CQ"
+    );
+    for (st, rcvd, call) in [(&oe, -1, "PA0A"), (&pa, -5, "OE/PD1SCO")] {
+        assert_eq!(
+            (st.state, st.rx_report),
+            (State::Done, Some(rcvd)),
+            "{call}"
+        );
+        assert_eq!(st.dxcall.as_deref(), Some(call));
+        assert!(!st.report_impossible_exchange());
+    }
+}
+
+#[test]
+fn an_over_built_outside_the_sequence_keeps_a_nonstandard_call_whole() {
+    // The roger a CQ run re-sends after it has moved on is built outside a running
+    // station. Built bare, a nonstandard call sits in a field that cannot hold it, and
+    // the packer keeps only the base call.
+    let bare = "PA0A OE/PD1SCO RR73";
+    let got = on_air(ModeKind::Ft8, bare);
+    assert!(
+        got.iter().any(|m| m == "PA0A PD1SCO RR73"),
+        "[{bare}] goes out as another call: {got:?}"
+    );
+    let rr73 = |to: &str, de: &str| Msg::Rr73 {
+        to: to.into(),
+        de: de.into(),
+    };
+    let m = Station::on_air_form("OE/PD1SCO", "PA0A", rr73("PA0A", "OE/PD1SCO"));
+    assert_eq!(m.to_text(), "<PA0A> OE/PD1SCO RR73");
+    assert_on_air(ModeKind::Ft8, &m.to_text());
+    // A plain pair is left exactly as built.
+    let m = Station::on_air_form("W9XYZ", "K1ABC", rr73("K1ABC", "W9XYZ"));
+    assert_eq!(m.to_text(), "K1ABC W9XYZ RR73");
 }

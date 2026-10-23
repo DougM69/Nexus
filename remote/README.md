@@ -56,8 +56,9 @@ second station never restarts the first.
 `trial()` reports four distinct states — `none`, `active`, `ended`, `disabled` —
 because `enabled` plus an expiry cannot tell them apart and they are different
 sentences to an operator. Two gates consume them: `requireEligible()` admits
-pairing while a trial runs **or** has never started, and `requireTrial()` guards
-`device`, `ticket`, `renew` and `turn` — that is its only call site. Observation is gated
+pairing while a trial runs **or** has never started, and `requireTrial()` guards the
+browser's `device`, `ticket`, `renew` and `turn` and the native client's `device`, `turn`,
+`pipe` and `renew`, and nothing else. Observation is gated
 separately by `observerDeadline` in the relay, which also expires a session already
 in flight, so neither function is the whole entitlement story on its own.
 
@@ -65,12 +66,32 @@ in flight, so neither function is the whole entitlement story on its own.
 backfilled — `expires_at` minus fourteen days would invent a start date, and an
 invented one cannot afterwards be told from a real one.
 
+## The native client
+
+Nexus on another computer can drive its station over the internet. It signs in through the
+system browser to the tenant's Native application (Authorization Code + PKCE, no secret), and
+the Worker takes that access token on the native client's own routes (`client/…`) alone, only
+with no `Origin` and no cookie, and only when its `azp` is `AUTH0_NATIVE_CLIENT_ID`. No other
+route takes that token, and those routes take no other. A deploy does not set that variable
+yet, so until it does every one of them refuses `serviceNotConfigured`.
+
+The computer is a device of the station, approved at the shack as a browser is and on the same
+terms. Its credential is its key: every request that acts as the device is signed by it over a
+challenge the account was given within the last minute, deleted as it is read, so a signed
+request is taken once. The shack pins the same key when it approves the device, and only a
+Nexus that sends `x-nexus-device-kind: 1` is listed these devices, with their kind and platform.
+
+Its command link runs through the station's room in a pipe (`src/pipe.ts`). The room asks the
+station, over its main socket, to open a second socket, and then passes binary between the two
+unread. Only a station that advertised `x-nexus-pipe-version: 1` is ever asked, so the main
+socket's message shapes are unchanged for every other.
+
 ## Bounds
 
 - Two enabled stations per account; eight non-expired browser enrollments per
   station; four simultaneous observers per station.
 - Pairing codes and pending browser approvals expire after ten minutes. Approved
-  browser cookies last thirty days. One-use WebSocket tickets expire after fifteen
+  browser approvals last until removed; their cookies last 400 days and are re-issued on each use. One-use WebSocket tickets expire after fifteen
   seconds. Credentials and tickets are stored as SHA-256 digests.
 - The stream's relay credentials (`turn`, Cloudflare TURN) last a day at most, the longest a
   stream can run, and never past the account's entitlement. A browser may ask for twelve a
@@ -82,6 +103,11 @@ invented one cannot afterwards be told from a real one.
   allows three seconds for a sample and five for an observer ACK, coalesces
   publications and keeps only the latest frame. Hibernation discards that frame and
   restores bounded authority, order and ACK state from socket attachments.
+- A native device holds one pipe at a time and a station four. A pipe opens only once the
+  station's end has, within ten seconds, and passes binary messages of up to 64 KiB. Its lease
+  is a browser session's, sixty seconds renewed, and while traffic passes the account's
+  entitlement is read again each second, so Remote access switched off by hand ends it as it ends
+  a stream. A signed request's challenge lasts a minute.
 - Revocation updates D1 generations and the live Durable Object. If that fails the
   request fails visibly, and existing leases still expire within sixty seconds.
   Re-enabling a trial or signing in again does not restore revoked device trust.

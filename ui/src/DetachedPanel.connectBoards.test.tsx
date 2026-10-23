@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// THE DASHBOARD WINDOW'S BOXES WORK THROUGH THIS WINDOW'S OWN BOARD PATHS (plan piece H8).
+// THE DASHBOARD WINDOW'S BOXES WORK THROUGH THIS WINDOW'S OWN BOARD PATHS.
 //
 // A pop-out cannot reach the main window's handlers; it has its own, and the main window follows a
 // Work through the engine's workTick. So here "the board's own path" is this window's: the Needed
@@ -86,7 +86,7 @@ vi.mock('./toast', async (importOriginal) => ({
 
 import { DetachedPanel } from './DetachedPanel'
 import * as api from './api'
-import { spotNeed } from './remote-web/remote-work'
+import { spotNeed } from './features/needs'
 import { pastTheSwitch } from './components/ConnectView.testkit'
 
 // THE BUDGET (2026-10-09). The slowest case here, "K1CW: the same backend traffic as the Needed pop-out…", takes

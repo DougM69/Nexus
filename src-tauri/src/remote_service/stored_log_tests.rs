@@ -12,9 +12,7 @@ pub(crate) use tempo_app::test_util::StoredLog;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote_service::query::log_tests::{
-        launch, memory, parse_one, settle, synthetic_log, Dir,
-    };
+    use crate::remote_service::log_tests::{launch, memory, parse_one, settle, synthetic_log, Dir};
     use std::sync::Arc;
     use std::time::Duration;
     use tempo_app::logstore::{Freshness, LogRows};

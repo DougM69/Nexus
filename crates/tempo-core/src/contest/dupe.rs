@@ -82,7 +82,7 @@ pub struct DupeRule {
     ///
     /// ⭐ **`true` for every contest since the operator's ruling of 2026-10-11** — a dupe
     /// typed in, answered with a double-click or a logger's Reply, or calling the run is
-    /// "logged marked as a dupe for 0 points, as N1MM does". It is set where rulesets are
+    /// "logged marked as a dupe for 0 points". It is set where rulesets are
     /// built (`fd_rules::build`), not read from the rules file, because a downloaded file
     /// replaces the seed whole and older builds read the same file. No shipped sponsor's
     /// rules say to remove dupes; the sentences below are why the cross-checked contests

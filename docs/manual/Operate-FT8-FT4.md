@@ -10,7 +10,7 @@ Open the **Operate** section and choose your layout from the toggle in the top-r
 
 **Classic** — Band Activity pane dominates the left; a compact Call Roster sits alongside; the Tx1–Tx6 panel and waterfall strip anchor the right. This is the WSJT-X spatial layout. Operators migrating from WSJT-X should start here.
 
-**Roster** — A full sortable Call Roster takes center stage; Band Activity and the Rx Frequency pane appear as side panels. This is the GridTracker-style layout for operators who prioritize worked-before status and DXCC chase. In Roster mode the Tx1–Tx6 panel is hidden; the QSO strip remains visible in both layouts above the layout-conditional area.
+**Roster** — A full sortable Call Roster takes center stage; Band Activity and the Rx Frequency pane appear as side panels. This is the layout for operators who prioritize worked-before status and DXCC chase. In Roster mode the Tx1–Tx6 panel is hidden; the QSO strip remains visible in both layouts above the layout-conditional area.
 
 Both layouts share the same sequencer, waterfall strip, and decode engine. The toggle is cosmetic; no RF behavior changes with it.
 
@@ -105,6 +105,16 @@ The Tx panel is visible only in Classic layout. It contains:
   Call CQ send what you typed (`CQ QP …` included) through the contest's Running, as WSJT-X does
   with no special activity set. With a compound call (PJ4/K1ABC) every contest CQ is the plain
   `CQ <call>`, as in WSJT-X: FT8 cannot carry such a call beside a contest token or a grid.
+
+**A call FT8 cannot carry whole.** A prefix (`OE/PD1SCO`) or any suffix other than `/P` and `/R`
+(`KD9TAW/M`) does not fit FT8's ordinary call field, so the panel shows, and Nexus sends, what
+WSJT-X sends. Working an ordinary call such as PA0A, Tx1 carries your call in full
+(`<PA0A> OE/PD1SCO`), Tx2 and Tx3 put it in brackets so the report fits (`PA0A <OE/PD1SCO> -01`,
+`PA0A <OE/PD1SCO> R-01`), and RR73 and 73 carry it in full again. The other station reads the
+bracketed call from your CQ or your Tx1, which is why Tx1 is never skipped with such a call.
+When the other station's call has a slash too, `/P` and `/R` included, or is another call FT8
+cannot carry whole, FT8 has no room for a report in either direction: Tx2 is your call alone and
+Tx3 a plain `RRR`.
 
 In Roster layout the equivalent information appears in the modern QSO strip alongside the Call Roster.
 
@@ -241,7 +251,7 @@ At startup Nexus reads compound calls (slashed calls such as `W1AW/7`) from your
 
 - **Fox role** (running a DXpedition as the Fox) is not implemented; Hound only.
 - **SuperFox** is not decoded in this version — the QPC table license bars vendoring the decoder outside WSJT-X. The interface names a SuperFox operation before you call it, in the Operate header and on the DXpeditions board.
-- **Contest modes** (NA VHF, RTTY Roundup, WW Digi) and frequency calibration are not implemented. WSPR, Q65, MSK144, FST4, FST4W and JT65 all transmit and receive — they are set up under [Settings ▸ Digital](../guide/settings-reference.md#digital), not here.
+- **WSJT-X's RTTY Roundup and WW Digi contest modes** and frequency calibration are not implemented; in ARRL Field Day and the ARRL VHF contests FT8 and FT4 send its Field Day and NA VHF Contest messages ([FT8 and FT4 in each contest](../guide/contesting-pota.md#ft8-and-ft4-in-each-contest)). WSPR, Q65, MSK144, FST4, FST4W and JT65 all transmit and receive — they are set up under [Settings ▸ Digital](../guide/settings-reference.md#digital), not here.
 - **F6 / Decode** is native-source only; silently a no-op in Companion mode.
 - **Early decode pass** runs only for FT8 and FT4 in native source mode. TempoFast, TempoDeep, and Companion source decode at the period boundary only.
 - **Waterfall** is a compact horizontal strip (a spectrum glance tool), not a tall scrolling WSJT-X-style column.

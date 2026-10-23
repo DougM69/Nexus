@@ -206,9 +206,16 @@ fn an_edit_reaches_the_cabrillo_the_adif_and_a_merge_made_after_it() {
     let merged = e.stored_log();
     assert_eq!(merged.len(), 1);
     let r = &merged[0];
+    let sub = r.extra.iter().find(|(k, _)| k == "SUBMODE");
     assert_eq!(
-        (r.call.as_str(), r.band.as_str(), r.mode.as_str()),
-        ("K9AAA", "40m", "USB")
+        (
+            r.call.as_str(),
+            r.band.as_str(),
+            r.mode.as_str(),
+            sub.map(|(_, v)| v.as_str())
+        ),
+        ("K9AAA", "40m", "SSB", Some("USB")),
+        "the edited sideband, as the logbook holds it: SSB with USB as its SUBMODE"
     );
     assert_eq!(
         r.contest.as_ref().and_then(|c| c.srx_string.as_deref()),

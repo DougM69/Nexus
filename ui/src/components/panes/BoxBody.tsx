@@ -45,10 +45,10 @@ export function BoxBody({ pane, source, selection }: { pane: PaneId; source: Box
     onPoint: source.onPoint,
     focusBand: selection.focusBand,
     toggleFocusBand: selection.toggleFocusBand,
-    remote: null,
     spotsFeed,
     otaBoard: source.otaBoard,
     neededBoard,
+    fieldDay: source.fieldDay,
     entryCall: source.entryCall,
   })
   return <PaneBody pane={pane} ctx={ctx} />

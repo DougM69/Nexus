@@ -38,7 +38,7 @@
 //                which ends the tune carrier and only that. · the Space bar (window keyup) →
 //                the same setPtt(false) as PTT-release, and ONLY while `lock` is off: both
 //                Space handlers early-return in Lock (hands-free) mode. · Esc (App's window
-//                keydown while Phone is shown, N71) → the same halt_tx as Stop TX; the voice
+//                keydown while Phone is shown) → the same halt_tx as Stop TX; the voice
 //                keyer's own Esc still stops its playback.
 //     · CW     — Stop TX (CockpitHeader) → stopCw + haltTx. · Tune → set_tune (the carrier
 //                only). · Esc (window keydown) → the same abort() Stop TX calls.
@@ -76,11 +76,11 @@
 //                a real stop here for the same reason as RTTY: set_tx_enabled(false) drops
 //                sstv_tx and arms sstv_abort (engine.rs ~7124), which service.rs ~4174 turns
 //                into feed dropped + output flushed + unkey while an image is in flight.
-//                · Esc (App's window keydown while SSTV is shown, N71) → halt_tx, the halt the
+//                · Esc (App's window keydown while SSTV is shown) → halt_tx, the halt the
 //                TX strip's Stop TX sends.
 //     · APRS   — a sixth cockpit with NO vocabulary at all: no ⊞ menu, nothing hideable, so
 //                the rule holds there by construction. Its one stop control is the TX On/Off
-//                latch, and from N71 Esc (App's window keydown while APRS is shown → halt_tx)
+//                latch, and Esc (App's window keydown while APRS is shown → halt_tx)
 //                is a stop there too. set_tx_enabled(false) arms no APRS abort, but the radio loop's TX-off
 //                cut (service.rs `tx_off_cut`) unkeys and flushes a beacon on the air once the
 //                latch is down (measured 2026-09-30), and set_tx_enabled(false) also drops
@@ -1034,6 +1034,44 @@ export function isBoxId(id: string): id is BoxId {
 /** Every entry a box may show. */
 const SHARED_IDS: ReadonlySet<string> = new Set(SHARED_PANES.map((e) => e.id))
 
+/**
+ * THE STATS PANE (2026-10-14: "the DXCC, WAS and WAZ statistics in the same window as I enter a
+ * callsign"): what the log holds for the call typed in the log entry — its DXCC, WAS and WAZ band ×
+ * mode grids, the NEW ONE / NEW BAND / NEW MODE flags and the confirmations held per service
+ * (components/CallStatsPane). One id across every cockpit with a log entry, under that entry, so
+ * nothing about it can move the call field: Phone's and CW's log column under the log form (the form
+ * heads that column), JS8's under its log pane, FT's side rail under the callsign card, and RTTY's and
+ * PSK's foot, under their log strip.
+ *
+ * ON WHERE THERE IS ROOM. Every vocabulary ships it hidden (`defaultRemoved`), so nobody's screen
+ * changes on a window without room for it. Phone, CW and JS8 then read an absent entry as ON on a
+ * window with room for the pane and the log form both (CallStatsPane `withStatsRoom`, `STATS_ROOM`,
+ * measured): a reading of absence, never written, so a tick or an untick the
+ * operator makes wins at every size. FT, RTTY and PSK stay one tick away at every size: FT's side rail
+ * already shares its height between the card and the Stations list, and RTTY's and PSK's two panes are
+ * short of their own floors at the supported floor (PskCockpit's measured table).
+ *
+ * Under THE STOP LINE it is the plainest entry there is: it shows numbers, sends nothing, hosts no
+ * stop control, and its hide ends nothing, so it carries no note and Reset hides or shows it
+ * silently. `stats` is no stop-control word.
+ */
+const STATS_PANEL_ID = 'stats'
+
+/**
+ * THE RECENT CONTACTS PANE (components/RecentQsosPane): the last few contacts in the log, newest
+ * first, each a click into the Logbook's editor. One id across every cockpit with a log entry form,
+ * directly under that form INSIDE the log pane (Phone's, CW's and JS8's log pane, RTTY's and PSK's
+ * log strip), so it takes only the room the form leaves; the Stats pane stands under the log pane. It
+ * is no column member, so no ⊞ Arrange column lists it: it goes where the log pane goes. FT has no log
+ * entry form (it logs through its confirm dialog), so it has no entry.
+ *
+ * Every vocabulary ships it hidden (`defaultRemoved`), as the Stats pane does where it is short of
+ * room, so nobody's screen changes; one tick in ⊞ Panels shows it. Under THE STOP LINE it is a plain
+ * entry: it lists contacts, sends nothing, hosts no stop control and its hide ends nothing, so it
+ * carries no note. `recent` is no stop-control word.
+ */
+const RECENT_PANEL_ID = 'recent'
+
 /** The Operate cockpit's removable panels — the first consumer's vocabulary.
  *
  *  FIVE OF THESE ARE SENDERS, and they are the shipped counter-example that falsified
@@ -1057,6 +1095,8 @@ export const OPERATE_PANEL_IDS = [
   // #204 (KR4FQG): the callsign card, a panel of its own. It neither starts nor stops a
   // transmission — it shows who a station is — so it is hideable under THE STOP LINE with no note.
   'recall',
+  // The Stats pane (STATS_PANEL_ID, above), under the card; shipped hidden here.
+  STATS_PANEL_ID,
   // THE BOXES (BOX_IDS, above), shipped hidden like everywhere else.
   ...BOX_IDS,
 ] as const
@@ -1091,13 +1131,13 @@ export type OperateLayout = 'classic' | 'roster'
  */
 export const OPERATE_ARRANGE: Readonly<Record<OperateLayout, ArrangeSpec<OperatePanelId>>> = {
   classic: {
-    columns: { a: ['bandActivity', 'callRoster'], b: ['rxfreq', 'txmsgs'], log: ['recall', 'stations', ...BOX_IDS] },
+    columns: { a: ['bandActivity', 'callRoster'], b: ['rxfreq', 'txmsgs'], log: ['recall', STATS_PANEL_ID, 'stations', ...BOX_IDS] },
     pinned: [],
     boxes: BOX_IDS,
     extra: ['callRoster'],
   },
   roster: {
-    columns: { a: ['callRoster'], b: [], log: ['recall', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', ...BOX_IDS] },
+    columns: { a: ['callRoster'], b: [], log: ['recall', STATS_PANEL_ID, 'bandActivity', 'rxfreq', 'txmsgs', 'stations', ...BOX_IDS] },
     pinned: [],
     boxes: BOX_IDS,
     cols: ['a', 'log'],
@@ -1108,7 +1148,7 @@ export const OPERATE_ARRANGE: Readonly<Record<OperateLayout, ArrangeSpec<Operate
 export const OPERATE_PANELS: PanelVocabulary<OperatePanelId> = {
   view: 'operate',
   panelIds: OPERATE_PANEL_IDS,
-  defaultRemoved: ['rfScope', ...BOX_IDS],
+  defaultRemoved: ['rfScope', STATS_PANEL_ID, ...BOX_IDS],
   arrangeBy: OPERATE_ARRANGE,
 }
 
@@ -1255,6 +1295,8 @@ export const PHONE_PANEL_IDS = [
   'voiceKeyer',
   'spots',
   'needed',
+  RECENT_PANEL_ID,
+  STATS_PANEL_ID,
   ...BOX_IDS,
 ] as const
 export type PhonePanelId = (typeof PHONE_PANEL_IDS)[number]
@@ -1262,13 +1304,14 @@ export type PhonePanelId = (typeof PHONE_PANEL_IDS)[number]
 export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   view: 'phone',
   panelIds: PHONE_PANEL_IDS,
-  defaultRemoved: ['spots', 'needed', ...BOX_IDS],
+  defaultRemoved: ['spots', 'needed', RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as PhoneCockpit renders it — Band
   // Activity, the voice keyer and Spots lead; the rig strips and Needed in the middle; the log form
-  // (no id) alone in the last column. The scope above the region and the meters in the dock are not
-  // the region's, so they are not here and can never be given a place. THE VOICE KEYER IS PINNED
-  // (D9): it transmits, and a pane that changes column is remounted, which would stop its over and
-  // discard its recording. Below three tracks the feeds follow the rig strips (`stockMerged`).
+  // (no id) heading the last column, the Stats pane under it. The scope above the region and the
+  // meters in the dock are not the region's, so they are not here and can never be given a place.
+  // THE VOICE KEYER IS PINNED (D9): it transmits, and a pane that changes column is remounted,
+  // which would stop its over and discard its recording. Below three tracks the feeds follow the rig
+  // strips (`stockMerged`).
   // THE LEFT SIDE (operator's pick, 2026-10-03): Band Activity, Spots and Needed may stand in a
   // full-height column beside the scope. Never the voice keyer or the log form: the side comes and
   // goes with the window's width (about 1280 px), and a pane that changes parent is remounted, which
@@ -1279,7 +1322,8 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
     columns: {
       a: ['bandActivity', 'voiceKeyer', 'spots', ...BOX_IDS],
       b: ['rigscope', 'receiver', 'transmitter', 'needed'],
-      log: [],
+      // The Stats pane: under the log form, which heads this column (PhoneCockpit).
+      log: [STATS_PANEL_ID],
     },
     pinned: ['voiceKeyer'],
     stockMerged: ['bandActivity', 'voiceKeyer', 'rigscope', 'receiver', 'transmitter', 'spots', 'needed'],
@@ -1300,7 +1344,7 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
  *  the rig's own panadapter, in the region below), and both keep their own box.
  *
  *  `spots` AND `needed` are Phone's two feeds (#345) in CW, the same boards with the same wiring
- *  (plan piece H8, operator's pick "CW gets Phone's Spots/Needed panes"), and they ship the same
+ *  (operator's pick "CW gets Phone's Spots/Needed panes"), and they ship the same
  *  way: HIDDEN (`defaultRemoved`), one tick in ⊞ Panels, so nobody's CW screen changes on update.
  *  Under THE STOP LINE they are Phone's plainest entries again: neither holds a stop control,
  *  neither sends (a row QSYs through the board's own handler and keys nothing), and a hide ends
@@ -1310,6 +1354,10 @@ export const CW_PANEL_IDS = [
   'scopeCtl',
   'dsp',
   'txmeters',
+  // THE TURN CUE: the lamp at the head of the dock's send row and the F-key glow it brings. A
+  // READOUT like the TX meters above it: it lights a key and never sends, so a tick may hide it for
+  // good; the macros and the send bar beside it keep no id. Shown as it ships.
+  'turnCue',
   'rxdsp',
   'bandActivity',
   'copilot',
@@ -1317,6 +1365,8 @@ export const CW_PANEL_IDS = [
   'sent',
   'spots',
   'needed',
+  RECENT_PANEL_ID,
+  STATS_PANEL_ID,
   ...BOX_IDS,
 ] as const
 export type CwPanelId = (typeof CW_PANEL_IDS)[number]
@@ -1324,14 +1374,15 @@ export type CwPanelId = (typeof CW_PANEL_IDS)[number]
 export const CW_PANELS: PanelVocabulary<CwPanelId> = {
   view: 'cw',
   panelIds: CW_PANEL_IDS,
-  defaultRemoved: ['spots', 'needed', ...BOX_IDS],
+  defaultRemoved: ['spots', 'needed', RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as CwCockpit renders it — the decode
   // and the sent echo lead; Band Activity and the copilot in the middle, under the Rig controls
-  // frame; the log form (no id) alone in the last column. The three rig-control groups (`scopeCtl`,
-  // `dsp`, `rxdsp`) share ONE frame, which is not a vocabulary pane: it keeps its place at the head
-  // of the middle column, and is not listed. Nothing here is pinned (CW has no voice keyer; the log
-  // form cannot move). Below three tracks the middle column simply follows the first. The two feeds
-  // take Phone's places: Spots at the foot of the leading column, Needed at the foot of the middle,
+  // frame; the log form (no id) heading the last column, the Stats pane under it. The three
+  // rig-control groups (`scopeCtl`, `dsp`, `rxdsp`) share ONE frame, which is not a vocabulary
+  // pane: it keeps its place at the head of the middle column, and is not listed. Nothing here is
+  // pinned (CW has no voice keyer; the log form cannot move). Below three tracks the middle column
+  // simply follows the first. The two feeds take Phone's places: Spots at the foot of the leading
+  // column, Needed at the foot of the middle,
   // and below three tracks both after every strip (`stockMerged`, Phone's rule), so ticking one never
   // pushes the Rig controls (which CwCockpit keeps ahead of them), Band Activity or the copilot down.
   // THE BOXES (BOX_IDS) stand at the foot of the leading column until ⊞ Arrange puts them elsewhere
@@ -1340,7 +1391,8 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
     columns: {
       a: ['decode', 'sent', 'spots', ...BOX_IDS],
       b: ['bandActivity', 'copilot', 'needed'],
-      log: [],
+      // Phone's: the Stats pane under the log form, which heads this column.
+      log: [STATS_PANEL_ID],
     },
     pinned: [],
     stockMerged: ['decode', 'sent', 'bandActivity', 'copilot', 'spots', 'needed'],
@@ -1368,14 +1420,20 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
  *  allowed, because Stop TX and the TX-enable latch are in the TX strip and the Esc/Stop macro
  *  and the sequencer's Abort are in the dock, none of them with an id. Its hide ENDS nothing
  *  (unmounting the pane calls no wire), so it correctly carries no ⊞ note. This is the pane
- *  that falsified the FOURTH wording a second time — see the header. */
-export const RTTY_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'stream'] as const
+ *  that falsified the FOURTH wording a second time — see the header.
+ *
+ *  `tuning` (2026-10-17) is the crossed-ellipse tuning scope, a square column LEFT of the decoded
+ *  text, shown by default. Display plus two nudges that net the decoder (and with it the AFSK
+ *  transmit tone) by 5 Hz; the nudges are disabled while anything of ours is keyed. It hosts no
+ *  control that stops a transmission and none that starts one, and hiding it ends nothing, so it
+ *  carries no ⊞ note and THE STOP LINE is untouched by it. */
+export const RTTY_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'tuning', 'stream', RECENT_PANEL_ID, STATS_PANEL_ID] as const
 export type RttyPanelId = (typeof RTTY_PANEL_IDS)[number]
 
 export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
   view: 'rtty',
   panelIds: RTTY_PANEL_IDS,
-  defaultRemoved: [RF_SCOPE_PANEL_ID],
+  defaultRemoved: [RF_SCOPE_PANEL_ID, RECENT_PANEL_ID, STATS_PANEL_ID],
 }
 
 /** PSK cockpit's removable panels (Keyboard Modes; TX since Phase 2).
@@ -1396,13 +1454,13 @@ export const RTTY_PANELS: PanelVocabulary<RttyPanelId> = {
  *  with no control pressed: the engine's per-tick gate re-check (`poll_psk_stream`),
  *  which unkeys within one tick on a section change, a QSY out of privileges, a tune,
  *  or a radio handoff. */
-export const PSK_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'stream'] as const
+export const PSK_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'stream', RECENT_PANEL_ID, STATS_PANEL_ID] as const
 export type PskPanelId = (typeof PSK_PANEL_IDS)[number]
 
 export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
   view: 'psk',
   panelIds: PSK_PANEL_IDS,
-  defaultRemoved: [RF_SCOPE_PANEL_ID],
+  defaultRemoved: [RF_SCOPE_PANEL_ID, RECENT_PANEL_ID, STATS_PANEL_ID],
 }
 
 /** JTTY cockpit's removable panels (WSJT-X's keyboard mode, the Keyboard section's other modem).
@@ -1448,13 +1506,13 @@ export const JTTY_PANELS: PanelVocabulary<JttyPanelId> = {
  *  completes), so it is not on the sweep list. The dock's "Drop queue" is a SENDER-class
  *  control (it empties the queue; a frame already keyed finishes) and must never be added to
  *  stopControls. Swept in stop-line.test.tsx's JS8 case, rendered with App's props. */
-export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'activity', 'offsets', 'stations', 'inbox', 'log', ...BOX_IDS] as const
+export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'activity', 'offsets', 'stations', 'inbox', 'log', RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS] as const
 export type Js8PanelId = (typeof JS8_PANEL_IDS)[number]
 
 export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
   view: 'js8',
   panelIds: JS8_PANEL_IDS,
-  defaultRemoved: [RF_SCOPE_PANEL_ID, ...BOX_IDS],
+  defaultRemoved: [RF_SCOPE_PANEL_ID, RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as Js8Cockpit renders it — the two
   // decode surfaces lead, Stations and the inbox in the middle, the log alone in the last column.
   // The RF scope pane, once ticked, heads the leading column: the first pane under the TX strip, as
@@ -1467,7 +1525,8 @@ export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {
     columns: {
       a: [RF_SCOPE_PANEL_ID, 'activity', 'offsets', ...BOX_IDS],
       b: ['stations', 'inbox'],
-      log: ['log'],
+      // The Stats pane under the log pane, as under Phone's and CW's log form.
+      log: ['log', STATS_PANEL_ID],
     },
     pinned: ['log'],
     boxes: BOX_IDS,

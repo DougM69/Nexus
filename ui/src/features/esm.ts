@@ -1,5 +1,5 @@
 // ENTER SENDS MESSAGE — the step table. What Enter in a contest strip would send, what it would
-// log, and what it refuses, as N1MM Logger+'s ESM does it. Pure: no rig, no engine, no DOM.
+// log, and what it refuses. Pure: no rig, no engine, no DOM.
 //
 // ⚠️ NOTHING HERE TRANSMITS. ESM makes Enter a new way to start a transmission (its rules are
 // signed, operator 2026-10-09), so the contest strip gathers its state and the cockpit's transmit
@@ -7,16 +7,15 @@
 // keeps every check it has (`features/esmHost.ts`). Nothing here weakens one: ESM's checks come
 // first, so it can refuse a step before it logs anything, and the send path checks again.
 //
-// ⭐ THE CONTACT LOGS AT THE PRESS, AS N1MM'S DOES (operator, 2026-10-08). The press that sends
+// ⭐ THE CONTACT LOGS AT THE PRESS (operator, 2026-10-08). The press that sends
 // TU (Run) or my exchange (S&P) logs the contact in the same breath; a Stop that cuts the message
 // afterwards takes nothing back. What makes that safe is the other half: a message ESM sent
 // EARLIER in the contact and the operator stopped counts as not sent, so ESM sends it again
 // rather than logging on top of it.
 //
-// ⭐ A DUPE CALLING YOUR RUN GETS QSO B4, ONCE (operator, 2026-10-10: one rule, like N1MM — log it,
-// mark it, score it zero, and with ESM send QSO B4). N1MM's ESM table: "Duplicate Call | Empty or
-// invalid | QSO B4 (F6) | do nothing" — running, and nothing in S&P. Nexus sends it from the key
-// the sets hold it on, once per call, and the next press logs the dupe, sending nothing.
+// ⭐ A DUPE CALLING YOUR RUN GETS QSO B4, ONCE (operator, 2026-10-10: one rule — log it, mark it,
+// score it zero, and with ESM send QSO B4). In S&P a dupe gets nothing. Nexus sends QSO B4 from
+// the key the sets hold it on, once per call, and the next press logs the dupe, sending nothing.
 //
 // The state is session state and never persisted: a remount starts in S&P with nothing sent.
 // When ESM does not know whether the exchange went out, it sends it again rather than logs — at
@@ -63,9 +62,10 @@ export interface EsmStrip {
   /** Every exchange box passes the check the log itself uses, judged after Enter commits the box
    *  it was pressed in, the way Space does — so a county typed by name counts as its code. */
   exchangeComplete: boolean
-  /** A box still shows what call history filled in for this call, nobody having typed over it.
-   *  A fill counts as copied (rule 10), so a complete exchange with one is complete only because
-   *  of it: the file filled it as the call was typed, not the station. */
+  /** A box still shows what a fill put in for this call (call history, this contest's last
+   *  contact with the station, or the log's), nobody having typed over it. A fill counts as copied
+   *  (rule 10), so a complete exchange with one is complete only because of it: the fill came as
+   *  the call was typed, not from the station. */
   fromHistory: boolean
   /** `contestDupe`'s verdict on the call. Only `own` stops ESM: a club dupe is a warning. */
   dupe: ContestDupeVerdict
@@ -91,8 +91,6 @@ export type EsmRefusal =
   | { why: 'recording' }
   /** Phone: the operator is holding PTT. */
   | { why: 'pttHeld' }
-  /** Phone: the radio has the mic (Nexus's own Flex audio), so a recording would not go out. */
-  | { why: 'radioHasMic' }
   /** The set has no message for this step: no key is mapped to it. */
   | { why: 'unmapped'; role: EsmRole }
   /** The key this step is on sends nothing (an empty macro, a voice slot with no recording). */
@@ -159,14 +157,14 @@ export function esmEvent(state: EsmState, event: EsmEvent): EsmState {
  *  only because of a call-history fill, and my call not yet gone to this call → my call, as S2's
  *  first press.
  *
- *  R9 is N1MM's "Duplicate Call (after sending exchange) | Valid | End QSO + Log": a QSO party
- *  keys its dupes on the county, so the dupe shows only once his county is in the box, with the
- *  contact under way. QSO B4 there would answer an exchange already given.
+ *  R9 is a dupe that shows after the exchange went out, with the exchange valid: end the QSO and
+ *  log it. A QSO party keys its dupes on the county, so the dupe shows only once his county is in
+ *  the box, with the contact under way. QSO B4 there would answer an exchange already given.
  *
  *  In Phone, R2 and R4 play nothing: the operator says his call and the exchange (operator,
- *  2026-10-08), as N1MM advises for a live exchange.
+ *  2026-10-08).
  *
- *  S5 is N1MM's order (operator, 2026-10-09). The file fills the boxes as the call is typed,
+ *  S5 is the operator's order (2026-10-09). The file fills the boxes as the call is typed,
  *  before he has sent a thing, so my call goes first and the next press sends my exchange and
  *  logs. An exchange typed or picked is his, and goes at once (S3). */
 export function esmStep(
@@ -239,7 +237,6 @@ export type EsmGuards =
       keyerShown: boolean
       pttHeld: boolean
       recording: boolean
-      radioHasMic: boolean
     } & TxGuards)
 
 /** Why ESM steps aside: Enter logs exactly as it does with ESM off, sends nothing, and the ESM
@@ -264,7 +261,6 @@ export function esmTxRefusal(guards: EsmGuards): EsmRefusal | null {
   if (guards.cockpit === 'phone') {
     if (guards.recording) return { why: 'recording' }
     if (guards.pttHeld) return { why: 'pttHeld' }
-    if (guards.radioHasMic) return { why: 'radioHasMic' }
   }
   return null
 }

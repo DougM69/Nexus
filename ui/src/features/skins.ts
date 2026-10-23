@@ -2,7 +2,7 @@
 // come from the catalog; the ids and the colour values are code.
 //
 // THE BUILT-IN THEMES — "skins" in code, "Theme" in the UI (Settings ▸ Appearance ▸ Theme). Operator
-// picks of 2026-09-27 (tasks/themes-and-layout-spec-2026-09-27.md §4): "All ten", "Keep locked inks",
+// picks of 2026-09-27: "All ten", "Keep locked inks",
 // "Per-theme Night", "HC wins surfaces", "Dark/Light switch", "Yes, on Auto", "Keep these names".
 //
 // A SKIN IS AN AXIS OVER A BASE, NOT A THIRD THEME. Each one rides on `base`, the `data-theme` it
@@ -48,10 +48,11 @@
 // sign 3:1; the well ink 7:1; ΔE 0.15 from the reds, 0.06 to a colour-blind eye; Night warm and
 // dimmer). The values were measured legal by the themes spec before they were written here.
 //
-// ONE DELIBERATE CHANGE FROM THE SPEC'S TABLE: Silver's page, #dfe3e8 → #e2e6eb, and with it its
-// night page, which Night's derivation now makes the standard light night's #eae4da. The Needed
-// board letters its mode cells in the page colour, and #dfe3e8 read 4.45:1 on them by day and
-// 4.09:1 at night (styles-theme-cascade.test.ts); #e2e6eb reads 4.58:1, and 4.54:1 at night.
+// SILVER BECAME THE STANDARD LIGHT (operator, 2026-10-13: "that should classify as the new light
+// mode"). Its values are the light palette's in styles.css now, so the gallery no longer offers it
+// (it would be Light twice), and a stored or restored 'silver' is plain Light (`RETIRED_SKINS`).
+// The bright Light it replaced is the Bright theme, below, value for value: one click away for an
+// operator who prefers it. styles-light-is-silver.test.ts holds both looks.
 
 import type { ColormapName } from '../colormaps'
 import type { MessageKey } from '../i18n'
@@ -61,13 +62,13 @@ export type SkinId =
   | 'amber-lcd'
   | 'green-lcd'
   | 'blue-vfd'
-  | 'silver'
   | 'midnight'
   | 'slate'
   | 'lagoon'
   | 'ember'
   | 'nebula'
   | 'paper'
+  | 'bright'
 
 /** The gallery's two groups: looks that echo real radios, and soft editor-style palettes. */
 export type SkinFamily = 'rig' | 'modern'
@@ -163,6 +164,15 @@ export const STANDARD_SKY: Readonly<Record<SkyToken, string>> = {
   '--map-sun': '#ffd166', // the disc, its rays and its glow: a warm gold
   '--map-moon-lit': '#ece8da', // the lit part of the moon, and the thin line of moonlight on its rim
   '--map-moon-dark': '#3a4150', // the unlit part: slate, a step above the sea so a new moon still shows
+}
+
+/** What the standard Light gives its display wells, by day and at night: Silver's lit keys and digits,
+ *  as a light theme gives its wells its own (`well`, `nightWell`). The rest of a well is the dark
+ *  instrument palette, and a colour-role pick still paints its dark values there. styles.css LIGHT'S
+ *  DISPLAY WELLS paints it. */
+export const STANDARD_LIGHT_WELL: Readonly<{ day: SkinValues; night: SkinValues }> = {
+  day: { '--accent': '#a9c0d8', '--accent-ink': '#0b1a2a', '--focus-ring': '#a9c0d8', '--readout': '#9ccbff' },
+  night: { '--accent': '#879db4', '--accent-ink': '#0b1a2a', '--focus-ring': '#879db4', '--readout': '#78a6d8' },
 }
 
 /** The gallery's order: the rig looks, then the modern ones. */
@@ -267,34 +277,6 @@ export const SKINS: readonly Skin[] = [
       '--map-rim': '#263a5e',
       '--map-ocean-lit': '#1a3660',
       '--map-ocean-deep': '#05091a',
-    },
-  },
-  {
-    id: 'silver',
-    family: 'rig',
-    labelKey: 'theme.silver.label',
-    lineKey: 'theme.silver.line',
-    base: 'light',
-    waterfall: 'viridis',
-    day: {
-      '--bg': '#e2e6eb', '--panel': '#f9fafb', '--bg-elev': '#f9fafb', '--bg-elev-2': '#f3f5f7',
-      '--border': '#9aa3ad', '--border-soft': '#b9c1ca', '--text': '#1b1f24', '--text-dim': '#4a525c',
-      '--text-faint': '#5b636d', '--accent': '#3b5a7a', '--accent-ink': '#ffffff', '--focus-ring': '#3b5a7a',
-      '--bubble-mine': '#3b5a7a', '--bubble-mine-text': '#ffffff', '--bubble-theirs': '#e6e9ed',
-      '--bubble-theirs-text': '#1b1f24', '--readout': '#143d6b',
-    },
-    well: {
-      '--accent': '#a9c0d8', '--accent-ink': '#0b1a2a', '--focus-ring': '#a9c0d8', '--readout': '#9ccbff',
-    },
-    night: {
-      '--bg': '#eae4da', '--panel': '#fcf9f1', '--bg-elev': '#fcf9f1', '--bg-elev-2': '#f8f4ed',
-      '--border': '#a39a90', '--border-soft': '#bfb7ae', '--text': '#201c17', '--text-dim': '#554f48',
-      '--text-faint': '#5f5851', '--accent': '#325171', '--accent-ink': '#ffffff', '--focus-ring': '#325171',
-      '--bubble-mine': '#325171', '--bubble-mine-text': '#ffffff', '--bubble-theirs': '#e2dfdb',
-      '--bubble-theirs-text': '#201c17', '--readout': '#0c3664',
-    },
-    nightWell: {
-      '--accent': '#879db4', '--accent-ink': '#0b1a2a', '--focus-ring': '#879db4', '--readout': '#78a6d8',
     },
   },
   {
@@ -495,7 +477,40 @@ export const SKINS: readonly Skin[] = [
       '--accent': '#5aa0d9', '--accent-ink': '#06222c', '--focus-ring': '#5aa0d9', '--readout': '#5aa0d9',
     },
   },
+  {
+    // The standard Light until 2026-10-13, kept as it was: its wells are the dark palette's own cyan.
+    id: 'bright',
+    family: 'modern',
+    labelKey: 'theme.bright.label',
+    lineKey: 'theme.bright.line',
+    base: 'light',
+    waterfall: 'cividis',
+    day: {
+      '--bg': '#e5eaf0', '--panel': '#fbfcfe', '--bg-elev': '#fbfcfe', '--bg-elev-2': '#f4f6f9',
+      '--border': '#c4cedb', '--border-soft': '#d8dfe9', '--text': '#14202e', '--text-dim': '#46556e',
+      '--text-faint': '#57647a', '--accent': '#0174ab', '--accent-ink': '#ffffff', '--focus-ring': '#0174ab',
+      '--bubble-mine': '#0174ab', '--bubble-mine-text': '#ffffff', '--bubble-theirs': '#eef2f7',
+      '--bubble-theirs-text': '#14202e', '--readout': '#0174ab',
+    },
+    well: {
+      '--accent': '#4cc9f0', '--accent-ink': '#06222c', '--focus-ring': '#4cc9f0', '--readout': '#4cc9f0',
+    },
+    night: {
+      '--bg': '#eae4da', '--panel': '#fcf9f1', '--bg-elev': '#fcf9f1', '--bg-elev-2': '#f8f4ed',
+      '--border': '#c5bcb0', '--border-soft': '#d6cec3', '--text': '#26211a', '--text-dim': '#554f48',
+      '--text-faint': '#5f5851', '--accent': '#006fae', '--accent-ink': '#ffffff', '--focus-ring': '#006fae',
+      '--bubble-mine': '#006fae', '--bubble-mine-text': '#ffffff', '--bubble-theirs': '#efe9df',
+      '--bubble-theirs-text': '#26211a', '--readout': '#006fae',
+    },
+    nightWell: {
+      '--accent': '#42a7c7', '--accent-ink': '#001620', '--focus-ring': '#42a7c7', '--readout': '#42a7c7',
+    },
+  },
 ]
+
+/** Themes the gallery no longer offers. Each one's look became its base's standard theme, so a stored
+ *  or restored one is that standard theme: no attribute and no key (useSkin.ts, appearanceBackup.ts). */
+export const RETIRED_SKINS: readonly string[] = ['silver']
 
 export const skinOf = (id: string | null | undefined): Skin | undefined => SKINS.find((s) => s.id === id)
 

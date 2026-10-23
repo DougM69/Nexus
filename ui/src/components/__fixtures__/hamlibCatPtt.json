@@ -1,0 +1,718 @@
+{
+  "hamlib": "Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit",
+  "catalog": 119,
+  "rigs": [
+    {
+      "model": 1,
+      "name": "Hamlib Dummy",
+      "setPtt": true,
+      "transmitter": false
+    },
+    {
+      "model": 4,
+      "name": "FLRig FLRig",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 5,
+      "name": "TRXManager TRXManager 5.7.630+",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1001,
+      "name": "Yaesu FT-847",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1002,
+      "name": "Yaesu FT-1000",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1003,
+      "name": "Yaesu FT-1000D",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1004,
+      "name": "Yaesu FT-1000MP MARK-V",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1010,
+      "name": "Yaesu FT-736R",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1014,
+      "name": "Yaesu FT-920",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1015,
+      "name": "Yaesu FT-890",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1016,
+      "name": "Yaesu FT-990",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1020,
+      "name": "Yaesu FT-817",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1021,
+      "name": "Yaesu FT-100",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1022,
+      "name": "Yaesu FT-857",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1023,
+      "name": "Yaesu FT-897",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1024,
+      "name": "Yaesu FT-1000MP",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1027,
+      "name": "Yaesu FT-450",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1028,
+      "name": "Yaesu FT-950",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1029,
+      "name": "Yaesu FT-2000",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1030,
+      "name": "Yaesu FTDX-9000",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1032,
+      "name": "Yaesu FTDX-5000",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1034,
+      "name": "Yaesu FTDX-1200",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1035,
+      "name": "Yaesu FT-991",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1036,
+      "name": "Yaesu FT-891",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1037,
+      "name": "Yaesu FTDX-3000",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1040,
+      "name": "Yaesu FTDX-101D",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1041,
+      "name": "Yaesu FT-818",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1042,
+      "name": "Yaesu FTDX-10",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1043,
+      "name": "Yaesu FT-897D",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1044,
+      "name": "Yaesu FTDX-101MP",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1046,
+      "name": "Yaesu FT-450D",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1049,
+      "name": "Yaesu FT-710",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 1051,
+      "name": "Yaesu FTX-1",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2001,
+      "name": "Kenwood TS-50S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2002,
+      "name": "Kenwood TS-440S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2003,
+      "name": "Kenwood TS-450S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2004,
+      "name": "Kenwood TS-570D",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2005,
+      "name": "Kenwood TS-690S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2007,
+      "name": "Kenwood TS-790",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2009,
+      "name": "Kenwood TS-850",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2010,
+      "name": "Kenwood TS-870S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2011,
+      "name": "Kenwood TS-940S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2013,
+      "name": "Kenwood TS-950SDX",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2014,
+      "name": "Kenwood TS-2000",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2016,
+      "name": "Kenwood TS-570S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2021,
+      "name": "Elecraft K2",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2025,
+      "name": "Kenwood TS-140S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2028,
+      "name": "Kenwood TS-480",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2029,
+      "name": "Elecraft K3",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2031,
+      "name": "Kenwood TS-590S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2034,
+      "name": "Kenwood TM-D710(G)",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2035,
+      "name": "Kenwood TM-V71(A)",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2036,
+      "name": "FlexRadio 6xxx",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2037,
+      "name": "Kenwood TS-590SG",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2039,
+      "name": "Kenwood TS-990S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2040,
+      "name": "OpenHPSDR PiHPSDR",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2041,
+      "name": "Kenwood TS-890S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2043,
+      "name": "Elecraft K3S",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2044,
+      "name": "Elecraft KX2",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2045,
+      "name": "Elecraft KX3",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2047,
+      "name": "Elecraft K4",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2048,
+      "name": "FlexRadio/Apache PowerSDR",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2049,
+      "name": "Malachite DSP",
+      "setPtt": false,
+      "transmitter": false
+    },
+    {
+      "model": 2050,
+      "name": "Lab599 TX-500",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2051,
+      "name": "SDRPlay SDRUno",
+      "setPtt": true,
+      "transmitter": false
+    },
+    {
+      "model": 2052,
+      "name": "QRPLabs QCX/QDX",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2053,
+      "name": "BG2FX FX4/C/CR/L",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2054,
+      "name": "TAPR Thetis",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2055,
+      "name": "DL2MAN (tr)uSDX",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2056,
+      "name": "SDR Radio SDRConsole",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 2057,
+      "name": "QRPLabs QMX",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3009,
+      "name": "Icom IC-706",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 3010,
+      "name": "Icom IC-706MkII",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 3011,
+      "name": "Icom IC-706MkIIG",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 3013,
+      "name": "Icom IC-718",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 3014,
+      "name": "Icom IC-725",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 3015,
+      "name": "Icom IC-726",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 3016,
+      "name": "Icom IC-728",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 3017,
+      "name": "Icom IC-729",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 3019,
+      "name": "Icom IC-735",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 3023,
+      "name": "Icom IC-746",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3026,
+      "name": "Icom IC-756",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 3027,
+      "name": "Icom IC-756PRO",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3044,
+      "name": "Icom IC-910",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3046,
+      "name": "Icom IC-746PRO",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3047,
+      "name": "Icom IC-756PROII",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3055,
+      "name": "Icom IC-703",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3056,
+      "name": "Icom IC-7800",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3057,
+      "name": "Icom IC-756PROIII",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3060,
+      "name": "Icom IC-7000",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3061,
+      "name": "Icom IC-7200",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3062,
+      "name": "Icom IC-7700",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3063,
+      "name": "Icom IC-7600",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3067,
+      "name": "Icom IC-7410",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3068,
+      "name": "Icom IC-9100",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3070,
+      "name": "Icom IC-7100",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3073,
+      "name": "Icom IC-7300",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3076,
+      "name": "Xiegu X108G",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3078,
+      "name": "Icom IC-7610",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3081,
+      "name": "Icom IC-9700",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3085,
+      "name": "Icom IC-705",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3087,
+      "name": "Xiegu X6100",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3088,
+      "name": "Xiegu G90",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3089,
+      "name": "Xiegu X5105",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3090,
+      "name": "Icom IC-905",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3091,
+      "name": "Xiegu X6200",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3092,
+      "name": "Icom IC-7760",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 3094,
+      "name": "Icom IC-7300MK2",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 16001,
+      "name": "Ten-Tec TT-550",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 16002,
+      "name": "Ten-Tec TT-538 Jupiter",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 16007,
+      "name": "Ten-Tec TT-516 Argonaut V",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 16008,
+      "name": "Ten-Tec TT-565/566 Orion I/II",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 16009,
+      "name": "Ten-Tec TT-585 Paragon",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 16011,
+      "name": "Ten-Tec TT-588 Omni VII",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 16013,
+      "name": "Ten-Tec TT-599 Eagle",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 17001,
+      "name": "Alinco DX-77",
+      "setPtt": false,
+      "transmitter": true
+    },
+    {
+      "model": 17002,
+      "name": "Alinco DX-SR8",
+      "setPtt": true,
+      "transmitter": true
+    },
+    {
+      "model": 23005,
+      "name": "FlexRadio SmartSDR Slice A",
+      "setPtt": true,
+      "transmitter": true
+    }
+  ],
+  "missing": [],
+  "needsDaemon": [
+    2
+  ]
+}

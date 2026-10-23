@@ -13,7 +13,7 @@
 // accent on its accent tint (4.12:1): they take the reference's look.
 //
 // THEN (the operator, 2026-09-30, "Fix both" and "Measure and fix"): the hunted row's frequency line takes the ink in every
-// theme (4.41:1 on the paper theme, 3.64:1 in the dark one); a small dark batch, as N50's: WORKED TODAY takes the dim ink
+// theme (4.41:1 on the paper theme, 3.64:1 in the dark one); a small dark batch, as before: WORKED TODAY takes the dim ink
 // in every theme (4.47:1 in the dark one) and the hunted row's HUNT takes the ink with the accent on its border (4.20:1 on
 // the Slate theme). Program's Tune and Add buttons share HUNT's look and take its light rule; ADDED keeps its green on its
 // border. Everything else in dark is as it was.
@@ -482,9 +482,10 @@ describe("the POTA / SOTA board's words and Program's HUNT-look buttons read in 
   }, 120_000)
 
   it('FIRES: the board as it shipped is caught in the light theme in every host, at the ratios Chrome measured', () => {
+    // The Light it shipped in is the Bright theme now (Light took Silver's look, 2026-10-13), so it is measured there.
     const shipped: string[] = []
     for (const w of words) {
-      const { fg, bg, ratio } = wordOf(SHIPPED, 'light', w)
+      const { fg, bg, ratio } = wordOf(SHIPPED, 'light skin=bright', w)
       if (ratio < 4.5) shipped.push(`${w.what}: ${hex(fg)} on ${hex(bg)} = ${ratio.toFixed(2)}:1`)
     }
     const has = (re: RegExp) => shipped.some((m) => re.test(m))

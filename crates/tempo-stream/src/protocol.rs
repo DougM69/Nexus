@@ -388,6 +388,13 @@ pub enum StreamReason {
     /// Relay-originated: the page is over the relay's signalling budget. The station never sends
     /// it.
     TryLater,
+    /// A session the service lets use the shack's own network only (`lanOnly` on its signals): the
+    /// station ends or refuses it with this when its media would leave that network, and the relay
+    /// refuses a candidate that is not a private host one with it.
+    LanOnly,
+    /// Relay-originated: a session the service lets use the shack's own network only, offered to a
+    /// station too old to keep it there. The station never sends it.
+    UpdateStation,
 }
 
 /// Page → relay, before the relay stamps it.
@@ -696,7 +703,7 @@ pub enum ControlOut {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<PttReason>,
     },
-    /// The operator's microphone over, as the station holds it (plan S6, the audio design's M1).
+    /// The operator's microphone over, as the station holds it (armed by the hold, keyed by audio).
     /// Sent when any field changes. `armed`: a press (the page's PTT, or one made through the
     /// picture) armed an over; `keyed`: the operator's voice has keyed the rig; `noPowerOut`: the
     /// voice has been arriving for about two seconds and the rig reports no power out, which is
@@ -712,7 +719,7 @@ pub enum ControlOut {
     },
 }
 
-/// Why a microphone over ended, as the page is told (the audio design's §7 captions).
+/// Why a microphone over ended, as the page is told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MicEnded {
@@ -979,13 +986,13 @@ mod tests {
     fn every_signalling_case_round_trips_on_its_hop() {
         assert_eq!(round_trip::<PageToRoom>(SIGNAL, "browserToRoom"), 5);
         assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStation"), 5);
-        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 15);
-        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 15);
+        assert_eq!(round_trip::<StationToRoom>(SIGNAL, "stationToRoom"), 16);
+        assert_eq!(round_trip::<RoomToPage>(SIGNAL, "roomToBrowser"), 16);
         // The relay's own: it ends a station's stream, and it answers a page by itself.
         assert_eq!(round_trip::<RoomToStation>(SIGNAL, "roomToStationEnd"), 2);
         assert_eq!(
             round_trip::<RoomToPage>(SIGNAL, "roomToBrowserFromRelay"),
-            3
+            5
         );
     }
 

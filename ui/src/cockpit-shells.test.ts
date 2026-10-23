@@ -29,8 +29,7 @@ import {
 // cascade does: same-block declaration order incl. the `overflow` shorthand resetting
 // `overflow-y`, then specificity, then source order.
 
-const css = (readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8') + '\n' +
-  readFileSync(fileURLToPath(new URL('./remote-web/application.css', import.meta.url)), 'utf8'))
+const css = readFileSync(fileURLToPath(new URL('./styles.css', import.meta.url)), 'utf8')
   // Strip comments first so prose can't be read as declarations (same trap documented
   // in cockpit-floors.test.ts).
   .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -201,15 +200,6 @@ function winningOverflowY(
   }
   return win && { value: win.value, selector: win.selector }
 }
-
-it('hosted FT scrolls vertical deficits and contains its stacked message column', () => {
-  const native = [new Set(['app']), new Set(['shell']), new Set(['layout', 'single', 'operate-cockpit'])]
-  const remote = [new Set(['app', 'remote-workspace']), ...native.slice(1)]
-  // The desktop's Operate shell scrolls its deficit too since 2026-10-01 (the SHELLS census below).
-  expect(winningOverflowY(native, null)?.value).toBe('auto')
-  expect(winningOverflowY(remote, null)?.value).toBe('auto')
-  expect(winningOverflowY([...remote, new Set(['cockpit-body']), new Set(['cockpit-lower', 'classic']), new Set(['cockpit-qsocol'])], null)?.value).toBe('auto')
-})
 
 /** Every distinct media condition that carries an overflow-declaring rule matching
  *  the element — each is a cascade context the valve must survive. */
@@ -398,62 +388,6 @@ describe('cockpit shells are the deficit valve (winning overflow-y is auto)', ()
   }
 })
 
-/** Final min-height a block computes (in-block declaration order; nothing sets it by
- *  shorthand). Declaration-split, so a `max-height` never answers a `min-height` probe. */
-function blockMinHeight(body: string): string | null {
-  let v: string | null = null
-  for (const decl of body.split(';')) {
-    const m = /^\s*min-height\s*:\s*(\S[^]*?)\s*$/.exec(decl)
-    if (m) v = m[1].replace(/\s+/g, ' ')
-  }
-  return v
-}
-
-describe('the hosted summary column carries its own deficit', () => {
-  // 2026-09-17. The hosted Awards view grew a second content-height strip (Responsiveness)
-  // BELOW the summary. Neither strip shrinks and `.awards-journey` is `flex: 1` — sized from
-  // ZERO — so at 390x844 x1.75 the summary computed to height 0, its tab bar and card scroller
-  // spilled out of that zero-height box, and `elementFromPoint` over an award card returned the
-  // strip painted on top of it: the cards were unreachable, not merely small.
-  //
-  // Two declarations hold it up, and both are COMPUTED here rather than grepped, because a
-  // later or more specific rule quietly taking one back is this sheet's oldest failure mode.
-  // What this cannot see is whether the floor is BIG ENOUGH — that is geometry, and its gate
-  // is `summary content remains reachable` in remote/test/browser.test.mjs, which is where
-  // this regression was caught and where the fix was watched go green.
-  const view = [
-    new Set(['app', 'remote-workspace']),
-    new Set(['shell']),
-    new Set(['remote-insights-view']),
-  ]
-  const journey = [...view, new Set(['awards-journey'])]
-
-  it('.remote-insights-view scrolls its vertical deficit instead of clipping it', () => {
-    const win = winningOverflowY(view, null)
-    expect(win, '.remote-insights-view: no rule declares overflow at all').not.toBeNull()
-    expect(
-      win!.value,
-      `the cascade winner is \`${win!.selector} { overflow-y: ${win!.value} }\` — whatever sits ` +
-        'at the bottom of the column is clipped out of reach on a short window.',
-    ).toBe('auto')
-  })
-
-  it('the summary keeps a floor under those strips, and the floor yields with the window', () => {
-    const win = winningValue(journey, blockMinHeight)
-    expect(win, '.awards-journey in the hosted column declares no min-height').not.toBeNull()
-    expect(
-      win!.value,
-      `the cascade winner is \`${win!.selector} { min-height: ${win!.value} }\` — a zero floor ` +
-        'lets `flex: 1` collapse the summary to nothing between the two content-height strips.',
-    ).not.toMatch(/^0[a-z%]*$/)
-    expect(
-      win!.value,
-      `min-height is \`${win!.value}\` — a floor under a bounded parent is written to yield, ` +
-        'min(Xem, share of var(--vh-eff)). A fixed floor just moves the clip to a taller window.',
-    ).toContain('var(--vh-eff')
-  })
-})
-
 describe('the bespoke lower regions are gone, not just de-floored', () => {
   // This block used to allow `.ph-lower` / `.cw-lower` to exist and merely policed their
   // 18em floors (= 252px at the 14px body font) — the floors that guaranteed a band of
@@ -628,7 +562,10 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
       // frame's inline `min-height: 0`. cockpit-panes.test.ts fences who may set it.
       const v = finalDecl(shell, '--cockpit-fill-min')
       expect(v, `${shell}: --cockpit-fill-min not set — its fill frame floors at 0`).not.toBeNull()
-      expect(/^\d+(\.\d+)?em$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
+      // An em length, or RTTY's tuning-scope knob over one (`var(--rtty-fill-min, 10em)`: the RTTY
+      // shell lowers its log strip's floor to the Call row while the scope is shown; the stock em
+      // value stands wherever nothing sets the knob, as on PSK and SSTV, which share this rule).
+      expect(/^(\d+(\.\d+)?em|var\(--rtty-fill-min, \d+(\.\d+)?em\))$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
     })
   }
 })
@@ -1224,6 +1161,10 @@ function splitTop(s: string): string[] {
  *  passing on a value it could not read. */
 function lengthPx(v: string, g: Geom): number | null {
   const s = v.trim()
+  // A knob with its stock value as the fallback (`var(--rtty-wf-floor, 8em)`): the stock value is
+  // what the rule computes wherever nothing sets the knob, which is every chain computed here.
+  const knob = /^var\(\s*--[\w-]+\s*,\s*([^]*)\)$/.exec(s)
+  if (knob) return lengthPx(knob[1], g)
   for (const [fn, pick] of [
     ['min', Math.min],
     ['max', Math.max],

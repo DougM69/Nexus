@@ -36,10 +36,12 @@ const MID = /^[A-Za-z0-9_-]{1,32}$/
  *  refusals (A5): `deviceNotPinned` for a browser it pinned no key for, `deviceKeyMismatch` for an
  *  offer not signed by the pinned key; the relay says `streamUnavailable` for a station that never
  *  advertised the lane, and `serviceAccessExpired` and `tryLater` for refusals of its own, which the
- *  station never sends. */
+ *  station never sends. A session that may use the shack's own network only (a LAN-only ticket): the
+ *  station and the relay both say `lanOnly` when its media would leave that network, and the relay
+ *  says `updateStation` for a station too old to keep it there. */
 export const STREAM_STATE_REASONS = [
   'notController', 'streamDisabled', 'streamUnavailable', 'streamInUse', 'invalidOffer', 'connectionFailed', 'streamClosed',
-  'remoteOff', 'deviceNotPinned', 'deviceKeyMismatch', 'serviceAccessExpired', 'tryLater',
+  'remoteOff', 'deviceNotPinned', 'deviceKeyMismatch', 'serviceAccessExpired', 'tryLater', 'lanOnly', 'updateStation',
 ] as const
 export type StreamStateReason = (typeof STREAM_STATE_REASONS)[number]
 
@@ -65,6 +67,25 @@ export type ReceivedStreamMessage = { type: 'streamSignal'; payload: StationStre
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const CONTROL = /[\u0000-\u001f\u007f]/
+
+/** A candidate line a LAN-only session may carry: a host candidate on a private IPv4 address (RFC 1918)
+ *  or behind an mDNS `.local` name, which is what a browser shows for its own address. A reflexive,
+ *  peer-reflexive or relay candidate, a public or shared (100.64/10) address, IPv6 and a line that does
+ *  not parse: no. With `a=` or without it, so the same test reads a trickled line and one inside an SDP. */
+export function lanCandidate(line: string): boolean {
+  const words = line.trim().replace(/^a=/, '').split(/\s+/)
+  if (!words[0]?.startsWith('candidate:') || words[6] !== 'typ' || words[7] !== 'host') return false
+  const address = words[4] ?? ''
+  if (/^[0-9a-z-]{1,63}\.local$/i.test(address)) return true
+  const octets = address.split('.')
+  if (octets.length !== 4 || !octets.every(o => /^(0|[1-9][0-9]{0,2})$/.test(o) && Number(o) <= 255)) return false
+  const [a, b] = octets.map(Number)
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+}
+/** Every candidate line an SDP carries is one a LAN-only session may carry (`lanCandidate`). */
+export function lanDescription(description: string): boolean {
+  return description.split(/\r?\n/).filter(line => line.startsWith('a=candidate:')).every(lanCandidate)
+}
 
 function fields(raw: unknown, keys: string[]): Record<string, unknown> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalidStream')
@@ -346,7 +367,7 @@ export type StreamKey = { type: 'key'; action: 'down' | 'up'; key: string; code:
 export type StreamText = { type: 'text'; text: string }
 export type StreamInput = StreamPointer | StreamWheel | StreamKey | StreamText
 /** What the page holds down over the picture, re-asserted on `ptt` every STREAM_HELD_REASSERT_MS
- *  while anything is (the lead's dead-man ruling): each key by its DOM `code`, and the pointer
+ *  while anything is (the dead-man rule): each key by its DOM `code`, and the pointer
  *  buttons as the same mask a pointer event carries. Nexus's window lets go of whatever stops being
  *  re-asserted for STREAM_HELD_GAP_MS - the held PTT's own numbers (S7) - so nothing held over the
  *  stream, a Space that keys PTT in Phone included, outlives a dead link by more than that. It never

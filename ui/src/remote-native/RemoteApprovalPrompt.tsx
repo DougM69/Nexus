@@ -3,7 +3,7 @@ import { getRemoteStationStatus, remoteStationAction } from '../api'
 import { Dialog } from '../components/ui/Dialog'
 import { t } from '../i18n'
 import { shortFingerprint } from '../remote-web/stream-protocol'
-import type { RemoteStationStatus } from './types'
+import { isNative, PLATFORM_NAMES, waitsForApprove, type RemoteStationStatus } from './types'
 
 /** How often the shack looks for a browser asking to stream, while Remote is on. Each look is the
  *  Refresh the Remote access panel makes (one request to the service); with Remote off, none is made. */
@@ -15,7 +15,9 @@ export const APPROVAL_ARM_MS = 1_000
 type Device = RemoteStationStatus['devices'][number]
 /** The browsers asking to stream: a request waiting here, or a browser approved before its key was
  *  pinned (it is refused a stream until approved again). Only with a key: the key is what the
- *  operator compares, and a browser with none could not stream after approval anyway. */
+ *  operator compares, and a browser with none could not stream after approval anyway. A computer
+ *  running Nexus (the native client) asks the same way to connect, and its key is what the tunnel
+ *  through the room is held to once it is pinned. */
 function asking(status: RemoteStationStatus | null, now: number): Device[] {
   if (!status?.stationId) return []
   const pinned = status.pinnedDevices
@@ -28,15 +30,19 @@ const question = (device: Device) => `${device.id}:${device.key}`
  *  at the shack pops up "Let Chrome on Windows stream this station? Key XXXX XXXX" with Approve / Deny
  *  ... No hunting through Settings."). The browser's name and the key it shows on the Remote page.
  *
- *  Approve is exactly Settings ▸ Remote access's approve with its transmit tick off: station controls
- *  and logging, and the key shown here pinned (the station pins it only if the service still lists this
- *  same key). Station controls are all a stream needs, and a streaming browser is the operator at the
- *  shack, transmit included (the operator, 2026-10-03), so the question says so: the tick is only the
- *  Remote page's own FT8/FT4 transmit. It never approves by default: Deny holds the keyboard when it
+ *  Approve is exactly Settings ▸ Remote access's approve: station controls, and the key
+ *  shown here pinned (the station pins it only if the service still lists this same key). Station
+ *  controls are all a stream needs, and a streaming browser is the operator at the shack, transmit
+ *  included (the operator, 2026-10-03), so the question says so. It never approves by default: Deny holds the keyboard when it
  *  opens, so Enter alone denies; Escape or a click outside closes it and answers nothing; and Approve
  *  takes no click for its first second. Deny refuses a waiting request; for a browser approved before,
  *  it leaves its approval exactly as it is (it still cannot stream). Either way it is not asked again
- *  this session for the same browser and key. */
+ *  this session for the same browser and key.
+ *
+ *  A computer running Nexus is asked about the same way, by its name, its platform and its key in
+ *  eight groups, and its Approve is the same press: its key pinned, for the tunnel through the room to
+ *  check. Approving it grants nothing on the relay's lanes:
+ *  what the computer may do once connected is the station's own rules for a computer driving it. */
 export function RemoteApprovalPrompt() {
   const [status, setStatus] = useState<RemoteStationStatus | null>(null)
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set())
@@ -81,7 +87,7 @@ export function RemoteApprovalPrompt() {
     setBusy(true); setFailed(false)
     try {
       const next = await remoteStationAction(approve
-        ? { type: 'device', deviceId: device.id, approve: true, transmit: false, key: device.key ?? undefined }
+        ? { type: 'device', deviceId: device.id, approve: true, key: device.key ?? undefined, kind: device.kind ?? 'browser' }
         : { type: 'device', deviceId: device.id, approve: false })
       if (!mounted.current) return
       setStatus(next); settle(key)
@@ -90,18 +96,29 @@ export function RemoteApprovalPrompt() {
   }
 
   const fingerprint = device?.key ? shortFingerprint(device.key) : ''
+  const platform = device?.platform ? PLATFORM_NAMES[device.platform] : ''
+  // Approved before, here: never a device added by its sign-in that waits for its first Approve here.
+  const again = !!device && device.approved === 1 && !waitsForApprove(status, device.id)
   return <Dialog
     open={!!device}
     // Escape and a click outside: closed, and nothing answered. The request stays in Settings.
     onOpenChange={open => { if (!open && current) settle(current) }}
-    title={device ? t('remote.approval.title', { browser: device.name }) : ''}
-    description={device ? device.approved === 1
-      ? t('remote.approval.bodyAgain', { key: fingerprint })
-      : t('remote.approval.body', { key: fingerprint }) : undefined}
+    title={!device ? '' : isNative(device) ? t('remote.approval.computerTitle', { computer: device.name })
+      : t('remote.approval.title', { browser: device.name })}
+    description={!device ? undefined : isNative(device) ? again
+      ? t('remote.approval.computerBodyAgain', { platform, key: fingerprint })
+      : t('remote.approval.computerBody', { platform, key: fingerprint })
+      : again
+        ? t('remote.approval.bodyAgain', { key: fingerprint })
+        : t('remote.approval.body', { key: fingerprint })}
     className="remote-approval"
   >
     {/* The key again, large, for comparing group by group with the browser's screen. */}
     <p className="remote-approval-key"><code>{fingerprint}</code></p>
+    {/* A computer compares this station's key too, in the same call: its window shows the key it was
+        given for this station, and holds the internet road until the operator says they match. */}
+    {device && isNative(device) && status?.stationKey
+      && <p>{t('remote.thisStationKey', { key: shortFingerprint(status.stationKey) })}</p>}
     {failed && <p role="alert">{t('remote.requestFailed')}</p>}
     <div className="confirm-actions">
       <button type="button" className="settings-refresh" autoFocus disabled={busy} onClick={() => void answer(false)}>{t('remote.approval.deny')}</button>

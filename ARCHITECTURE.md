@@ -34,7 +34,23 @@ session; the shack's LAN key and its paired computers live in the OS keychain. T
 end (`lan_client`) keeps a key of its own for each station beside the station's pinned key,
 signs its offers and checks the station's answers in Rust, and serves its window's page from a
 loopback origin that Tauri treats as remote, behind a launch secret, `Host` and `Origin`; that
-page's pairing dialog offers the stations found by name, through the same socket. Receiver
+page's pairing dialog offers the stations found by name, through the same socket. The
+computer's command link, the two roads beside it and what both ends of them read and write are
+a crate of their own (`crates/tempo-client`, no Tauri and no webview), which client mode drives
+and the shack's listener speaks with. Without its `device` feature it builds on no crate of the
+engine: the app's log and what Stop's road carries of the engine's state are `crates/tempo-base`,
+and the Opus codecs, resamplers and headset rings both ends use are `crates/tempo-codec`. Over the
+internet the two roads beside the link each get a socket of their own at both ends, find their
+pair by ICE (`is`, the agent str0m runs; `tempo-client`'s `ice`) and, at the computer, a relayed
+address from a TURN client of the crate's own (`turn`); their credentials and candidates cross
+inside the command link, each road hears only the pair ICE selected, and its checks go only to an
+address of the internet. The station's room carries the command link itself over the internet as a
+pipe (`remote/src/pipe.ts`): a second station socket it passes binary on unread, asked for only of a
+station that advertised it, so the station's main socket keeps its message shapes. At the station
+(`src-tauri/src/remote_service/tunnel.rs`) the LAN road's own channel runs inside it from its TLS
+on, the station proving its hosted key and taking only a computer approved at the shack by the key
+pinned then (as a computer, under that same approval, until it ends), named from that key and never
+by the service's id, with internet roads in place of the LAN's and nothing that pairs or streams. Receiver
 gestures call native Engine verbs; amplifier commands reach the existing port
 owner with revocable permission and later readback receipts. Frequency and mode intents
 run through the active RadioLoop before normal settings reconciliation: fresh

@@ -114,7 +114,7 @@ pub fn is_us_callsign(call: &str) -> bool {
 pub fn band_plan() -> Vec<BandChannel> {
     vec![
         // --- HF (USB weak-signal, "upper shoulder" of the digital cluster) ---
-        ch("160m", "HF", 1.8460, "USB", "160 m", "above the whole FT8/JS8 cluster (≤1.843) and PSK31 1.838; emission ~1.8475, ~5.5 kHz above JS8 1.842"),
+        ch("160m", "HF", 1.8460, "USB", "160 m", "above the FT8 (1.840) and JS8 (1.8435) watering holes and PSK31 1.838; emission ~1.8475, ~4 kHz above the JS8 dial"),
         ch("80m", "HF", 3.5935, "USB", "80 m", "above the PSK31/RTTY hole 3.580–3.590 (~5 kHz) and below the 3.600 data edge; clear of FT8/FT4 3.573/3.575"),
         ch("40m", "HF", 7.0430, "USB", "40 m", "in the notch between QRP CW 7.040 (~4.5 kHz below emission) and FT4 7.0475 (~3 kHz above); IARU NB segment"),
         ch("30m", "HF", 10.1425, "USB", "30 m", "data half, ~3 kHz above FT4 10.140 / PSK 10.141, ~6 kHz below the 10.150 edge; secondary band — tread lightly"),
@@ -211,7 +211,7 @@ pub fn ft8_band_plan() -> Vec<BandChannel> {
         // 70.154 is inside DL's 70.150–70.210 by 4 kHz and OUTSIDE CT, I and LY
         // altogether — and the US has NO 4 m allocation at any class. The dial is
         // WSJT-X's own R1 default (`models/FrequencyList.cpp`, flagged `preferred`;
-        // it is row 52 of `paritylab/wsjtx_freqs.txt`, the table this plan is
+        // it is row 52 of that default table, the one this plan is
         // generated from, and was simply dropped in transcription — the other three
         // 4 m rows from that file ship in the MSK144/JT65/WSPR plans below). The note
         // is the tooltip an operator reads before keying, so it says so.
@@ -332,7 +332,7 @@ pub fn sstv_band_plan() -> Vec<BandChannel> {
 ///   * JT65 is 14.076 on 20 m, not 14.074.
 ///
 /// The per-mode plans below are GENERATED from WSJT-X's own frequency table —
-/// see `paritylab/parse_wsjtx_freqs.py`, which reads the FrequenciesForRegionModes
+/// by a script that reads the FrequenciesForRegionModes
 /// blob out of a real WSJT-X.ini — rather than typed from memory. Roughly ninety
 /// amateur frequencies is exactly the volume where one transposed digit hides in
 /// a table and looks authoritative.
@@ -455,20 +455,40 @@ pub fn jtty_band_plan() -> Vec<BandChannel> {
     ]
 }
 
-/// **JS8** dial frequencies — JS8Call's own default table (`models/FrequencyList.cpp:29-39`
-/// at js8call/js8call @ a7ff1be0), transcribed as a FACT (NOTICE credits it). 11 rows,
-/// IARU all regions, every one USB: JS8 is an audio-passband mode like FT8 and the
-/// heartbeat sub-band (500–1000 Hz) sits INSIDE the passband, so the dial never moves for
-/// an HB. The plan is what makes JS8 work unconfigured — entering the view retunes to the
-/// row for the current band (`Engine::set_tier`, stay-on-miss like FT8/FT4/FT2).
+/// **JS8** dial frequencies — JS8Call 3.0.3's own default table (`JS8_Main/FrequencyList.cpp:30-43`
+/// at JS8Call-improved `v3.0.3`), transcribed as a FACT (NOTICE credits it). 12 rows, IARU all
+/// regions, every one USB: JS8 is an audio-passband mode like FT8 and the heartbeat sub-band
+/// (500–1000 Hz) sits INSIDE the passband, so the dial never moves for an HB. The plan is what
+/// makes JS8 work unconfigured — entering the view retunes to the row for the current band
+/// (`Engine::set_tier`, stay-on-miss like FT8/FT4/FT2).
 ///
-/// The rows are 4 kHz above the FT8 watering holes on HF (14.078 vs 14.074): the same
-/// "don't share a passband" placement Decodium and Nexus's native plan use.
+/// 3.x changed two rows of the 2.3 table (`models/FrequencyList.cpp:29-39` at js8call/js8call
+/// @ a7ff1be0): 160 m moved from 1.842 up to 1.8435 MHz (3.5 kHz above FT8's 1.840), and 60 m
+/// was added at 5.363 MHz. The rest are unchanged, 4 kHz above the FT8 watering holes on HF
+/// (14.078 vs 14.074): the same "don't share a passband" placement Decodium and Nexus's native
+/// plan use.
+///
+/// An operator's own list (Settings ▸ Digital ▸ JS8, [`js8_plan_from`]) replaces this table
+/// wherever it is read.
 pub fn js8_band_plan() -> Vec<BandChannel> {
-    let n = "JS8Call default dial (from JS8Call's own table, models/FrequencyList.cpp:29-39)";
+    let n = "JS8Call default dial (from JS8Call 3.0.3's own table, JS8_Main/FrequencyList.cpp)";
     vec![
-        ch("160m", "HF", 1.842000, "USB", "160 m · JS8", n),
+        ch("160m", "HF", 1.843500, "USB", "160 m · JS8", n),
         ch("80m", "HF", 3.578000, "USB", "80 m · JS8", n),
+        // 60 m — ⚠️ CHANNELISED in the US and several other administrations, and the channels
+        // and power limits differ country to country. 5.363 + the passband (to ~5.366) lies in
+        // the WRC-15 segment 5351.5–5366.5 kHz, which the US adopted in 2026 (`privileges.rs`);
+        // the note says to check your own plan rather than inheriting the flat `n`, as FT2's
+        // 60 m row does.
+        ch(
+            "60m",
+            "HF",
+            5.363000,
+            "USB",
+            "60 m · JS8",
+            "JS8Call 3.0.3 default dial (JS8_Main/FrequencyList.cpp); 60 m is channelised and \
+             the channels and power limits differ by country - check your own band plan",
+        ),
         ch("40m", "HF", 7.078000, "USB", "40 m · JS8", n),
         // 30 m: the passband (10.130–10.134) sits BELOW the WSPR guard band 10.1399–10.14032
         // MHz that JS8Call itself refuses to transmit in (mainwindow.cpp). Said here so an
@@ -479,7 +499,7 @@ pub fn js8_band_plan() -> Vec<BandChannel> {
             10.130000,
             "USB",
             "30 m · JS8",
-            "JS8Call default dial (models/FrequencyList.cpp:29-39) — stay below the WSPR \
+            "JS8Call default dial (JS8_Main/FrequencyList.cpp) — stay below the WSPR \
              guard band 10.1399–10.14032 MHz, which JS8Call refuses to transmit in",
         ),
         ch("20m", "HF", 14.078000, "USB", "20 m · JS8", n),
@@ -490,6 +510,55 @@ pub fn js8_band_plan() -> Vec<BandChannel> {
         ch("6m", "VHF", 50.318000, "USB", "6 m · JS8", n),
         ch("2m", "VHF", 144.178000, "USB", "2 m · JS8", n),
     ]
+}
+
+/// The JS8 plan JS8 reads: the operator's own list ([`crate::settings::Settings::js8_frequencies`])
+/// when there is one, else JS8Call 3.0.3's table ([`js8_band_plan`]). An own row keeps its list
+/// order (the first row of a band is the one entering JS8 tunes to, as JS8Call's band pick takes
+/// the first working frequency of the band), its band and group come from the dial, its label
+/// carries the description, and the note says it is the operator's. Every row is USB; the
+/// transmit gate still judges each one at key-down.
+pub fn js8_plan_from(own: Option<&[crate::settings::Js8Freq]>) -> Vec<BandChannel> {
+    let Some(own) = own else {
+        return js8_band_plan();
+    };
+    own.iter()
+        .filter(|f| f.mhz.is_finite() && f.mhz > 0.0)
+        .map(|f| {
+            let band = band_for_dial(f.mhz).unwrap_or("");
+            let group = if f.mhz < 30.0 {
+                "HF"
+            } else if f.mhz < 300.0 {
+                "VHF"
+            } else {
+                "UHF"
+            };
+            // "40m" → "40 m", as the stock labels read; centimetre bands stay as they are.
+            let shown = match band.strip_suffix('m') {
+                Some(n) if !band.ends_with("cm") => format!("{n} m"),
+                _ => band.to_string(),
+            };
+            let head = if shown.is_empty() {
+                "JS8".to_string()
+            } else {
+                format!("{shown} · JS8")
+            };
+            // At most 80 characters, as the editor's field holds: a hand-edited file cannot
+            // stretch the band picker.
+            let description: String = f.description.trim().chars().take(80).collect();
+            let label = if description.is_empty() {
+                head
+            } else {
+                format!("{head} · {description}")
+            };
+            let note = if description.is_empty() {
+                "Your own JS8 frequency (Settings ▸ Digital ▸ JS8)".to_string()
+            } else {
+                format!("{description} (your own JS8 frequency, Settings ▸ Digital ▸ JS8)")
+            };
+            ch(band, group, f.mhz, "USB", &label, &note)
+        })
+        .collect()
 }
 
 /// Q65 calling/beacon frequencies, taken verbatim from WSJT-X's own
@@ -683,6 +752,15 @@ pub fn band_for_dial(dial_mhz: f64) -> Option<&'static str> {
     Some(b)
 }
 
+/// Is phone on the LOWER sideband at this dial? The convention is LSB below 10 MHz and USB
+/// from 10 MHz up, with 60 m the exception: it is USB. 47 CFR 97.303(h) sets the J3E carrier
+/// 1.5 kHz below each channel centre with the emission held to 2.8 kHz, which only upper
+/// sideband fits, and the IARU Region 1 and RAC band plans call for USB there too. The 60 m
+/// edges are [`band_for_dial`]'s, so the commanded mode and the band label cannot disagree.
+pub fn phone_is_lsb(dial_mhz: f64) -> bool {
+    dial_mhz < 10.0 && band_for_dial(dial_mhz) != Some("60m")
+}
+
 #[cfg(test)]
 mod tests {
     /// 4 m is the one band Nexus ships that exists ALMOST EVERYWHERE EXCEPT THE US
@@ -701,7 +779,7 @@ mod tests {
                 .map(|c| c.dial_mhz)
         };
         // The four WSJT-X modes with a 70 MHz row in their default table, and only
-        // those four (WSJT-X `models/FrequencyList.cpp`; `paritylab/wsjtx_freqs.txt`).
+        // those four (WSJT-X `models/FrequencyList.cpp`).
         assert_eq!(dial(Tier::Ft8), Some(70.154));
         assert_eq!(dial(Tier::Jt65), Some(70.102));
         assert_eq!(dial(Tier::Msk144), Some(70.230));
@@ -1370,10 +1448,11 @@ mod wsjtx_parity_tests {
         }
     }
 
-    /// JS8Call's default frequency table (`models/FrequencyList.cpp:29-39`, transcribed as
-    /// a fact — NOTICE credits it): the "works unconfigured" watering holes. Every row is
+    /// JS8Call 3.0.3's default frequency table (`JS8_Main/FrequencyList.cpp:30-43`, transcribed
+    /// as a fact — NOTICE credits it): the "works unconfigured" watering holes. Every row is
     /// USB (JS8 is an audio-passband mode like FT8), 20 m is 14.078, and the plan spans
-    /// 160 m–2 m so `stay_on_miss` is the right band-change policy for it.
+    /// 160 m–2 m so `stay_on_miss` is the right band-change policy for it. 3.x moved 160 m up
+    /// to 1.8435 MHz and added 60 m at 5.363 MHz; the rest are the 2.3 table's.
     #[test]
     fn js8_band_plan_is_js8calls_default_table() {
         let plan = js8_band_plan();
@@ -1381,8 +1460,9 @@ mod wsjtx_parity_tests {
         assert_eq!(
             dials,
             vec![
-                ("160m".to_string(), 1.842),
+                ("160m".to_string(), 1.8435),
                 ("80m".to_string(), 3.578),
+                ("60m".to_string(), 5.363),
                 ("40m".to_string(), 7.078),
                 ("30m".to_string(), 10.130),
                 ("20m".to_string(), 14.078),
@@ -1397,12 +1477,78 @@ mod wsjtx_parity_tests {
         assert!(plan
             .iter()
             .all(|c| c.mode == "USB" && c.tx && c.label.ends_with("· JS8")));
-        assert!(plan.iter().take(9).all(|c| c.group == "HF"));
-        assert!(plan.iter().skip(9).all(|c| c.group == "VHF"));
+        assert!(plan.iter().take(10).all(|c| c.group == "HF"));
+        assert!(plan.iter().skip(10).all(|c| c.group == "VHF"));
         assert_eq!(band_plan_for(crate::dto::Tier::Js8), plan);
-        // 30 m: 10.130 sits ABOVE the WSPR guard band 10.1399–10.14032 MHz that JS8Call
+        let note = |band: &str| plan.iter().find(|c| c.band == band).unwrap().note.clone();
+        // 30 m: 10.130 sits BELOW the WSPR guard band 10.1399–10.14032 MHz that JS8Call
         // itself refuses to transmit in; the note must say so.
-        assert!(plan[3].note.contains("WSPR"));
+        assert!(note("30m").contains("WSPR"));
+        // 60 m is channelised and differs by country: the note must say so, as FT2's does.
+        assert!(note("60m").contains("channelised"), "{}", note("60m"));
+    }
+
+    /// The operator's own JS8 list replaces JS8Call's table: in its own order (the first row of a
+    /// band is the one entering JS8 tunes), band and group from the dial, the description in the
+    /// label and the note (at most 80 characters), USB. No list is JS8Call's table; a row with no
+    /// usable dial is left out.
+    #[test]
+    fn js8_plan_from_reads_the_operators_own_list() {
+        use crate::settings::Js8Freq;
+        assert_eq!(js8_plan_from(None), js8_band_plan());
+        let own = vec![
+            Js8Freq {
+                mhz: 7.095,
+                description: " Net ".into(),
+            },
+            Js8Freq {
+                mhz: 7.078,
+                description: String::new(),
+            },
+            Js8Freq {
+                mhz: f64::NAN,
+                description: "bad".into(),
+            },
+            Js8Freq {
+                mhz: 144.178,
+                description: "x".repeat(200),
+            },
+            Js8Freq {
+                mhz: 5.0,
+                description: String::new(),
+            },
+        ];
+        let plan = js8_plan_from(Some(&own));
+        let rows: Vec<(&str, &str, f64, &str)> = plan
+            .iter()
+            .map(|c| {
+                (
+                    c.band.as_str(),
+                    c.group.as_str(),
+                    c.dial_mhz,
+                    c.mode.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("40m", "HF", 7.095, "USB"),
+                ("40m", "HF", 7.078, "USB"),
+                ("2m", "VHF", 144.178, "USB"),
+                ("", "HF", 5.0, "USB"),
+            ]
+        );
+        assert_eq!(plan[0].label, "40 m · JS8 · Net");
+        assert!(plan[0].note.starts_with("Net (your own JS8 frequency"));
+        assert_eq!(plan[1].label, "40 m · JS8");
+        assert_eq!(plan[2].label, format!("2 m · JS8 · {}", "x".repeat(80)));
+        assert_eq!(plan[3].label, "JS8");
+        assert!(plan.iter().all(|c| c.tx));
+        assert!(
+            js8_plan_from(Some(&[])).is_empty(),
+            "an empty own list stays empty"
+        );
     }
 
     /// The regression this whole change exists to prevent: every new tier used to

@@ -1,9 +1,12 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import type { SpotRow, NeedTag, AppSnapshot } from '../types'
+import type { SpotRow, NeedTag, AppSnapshot, FieldDayStatus } from '../types'
+import type { FreqMarker } from '../api'
+import { markerMhz } from '../features/freqMarkers'
 import { bandRangeForLabel } from '../band'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { NEED_CHIP } from '../features/needVisuals'
+import { spotMarkWords, spotMultTag, useContestSpotMarker } from '../features/contestSpotMarks'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
 import { t } from '../i18n'
@@ -31,6 +34,12 @@ interface Props {
   phoneSegHi?: number | null
   /** All live cluster spots (unfiltered); the map picks the ones matching `spotMode` on this band. */
   spots: SpotRow[]
+  /** The spots programs on Nexus's TCI server sent (`features/tciSpots.ts`), drawn as cluster spots
+   *  are, with their source beside the call. Each names its program (`tci`). */
+  tciSpots?: SpotRow[]
+  /** ⛔ A click on a program's spot: it only tunes (`clickTciSpot`). Never `onWorkSpot`, which can
+   *  change the section and arm; without this a program's spot does nothing when clicked. */
+  onTciSpot?: (s: SpotRow) => void
   /** Which spot mode to plot — 'Phone' (SSB, default) or 'CW'. */
   spotMode?: 'Phone' | 'CW'
   /** Work a spotted station — QSY to its exact freq + prefill the log. */
@@ -48,6 +57,9 @@ interface Props {
   /** When set (detached window only), shows Dock L/R buttons that snap this window to the
    *  screen edge as a full-height strip (persisted across launches). */
   onDock?: (side: 'left' | 'right' | 'none') => void
+  /** The running contest, when one runs: a dupe is struck through and dimmed, a station that would
+   *  be a new multiplier wears MULT (`features/contestSpotMarks.ts`). Absent = no marks. */
+  fieldDay?: FieldDayStatus | null
 
   // ── Tuning from the map itself (#39, kr4fqg) ───────────────────────────────────────────
   // The map has always been a frequency SCALE — `yOf` places every tick — so a position on
@@ -65,6 +77,25 @@ interface Props {
   wheelSensitivity?: number
   /** Fresh snapshot after a tune, so the dial marker moves without waiting for a poll. */
   onSnap?: (s: AppSnapshot) => void
+
+  // ── Frequency markers (features/freqMarkers.ts) ─────────────────────────────────────────
+  // The station's, per contest session; the map draws this band's and asks for every change.
+  /** Every marker; the map draws the ones on `band`. */
+  markers?: FreqMarker[]
+  /** A click or Enter on a marker: tune back to it. */
+  onMarkerQsy?: (m: FreqMarker) => void
+  /** Delete on a marker. */
+  onMarkerDelete?: (m: FreqMarker) => void
+  /** A right-click on the track: mark the dial. Absent ⇒ the browser's own menu, as before. */
+  onMarkHere?: () => void
+}
+
+/** The protocol's name, beside a program's spot: a token, the same in every language. */
+const TCI = 'TCI'
+
+/** A program's spot's source, beside its call: the protocol and the program's connection number. */
+function tciSource(program: number): string {
+  return `${TCI} ${program}`
 }
 
 /** Compact "how long ago" for a spot tooltip. The unit letter rides inside the message with
@@ -80,9 +111,10 @@ function ageLabel(secs: number): string {
  * ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
  * string comes from the catalog. What does NOT: the band and mode names, the gridline and dial
  * frequencies, and every value in a spot's tooltip — `modeLabel` is CW/SSB, `detail` is the
- * spot line assembled from data, and `de <spotter>` is the cluster's own shorthand.
+ * spot line assembled from data, `de <spotter>` is the cluster's own shorthand, and `TCI` with a
+ * program's connection number is its source.
  *
- * Vertical N1MM-style band map — the same live cluster spots as `BandStrip`, on a vertical
+ * Vertical band map — the same live cluster spots as `BandStrip`, on a vertical
  * frequency axis (high freq at top) with a labeled gridline scale, COLORED by need/worked exactly
  * like the operating roster (a marker carries `need-${cls}` from `needByCall`, struck through when
  * worked). Click a marker to QSY + prefill the log. Unlike the full-band horizontal strip, the map
@@ -97,6 +129,8 @@ export function BandMap({
   phoneSegLo,
   phoneSegHi,
   spots,
+  tciSpots,
+  onTciSpot,
   spotMode = 'Phone',
   onWorkSpot,
   needByCall,
@@ -105,12 +139,18 @@ export function BandMap({
   unansweredCalls,
   unansweredTitle,
   onDock,
+  fieldDay,
   sideband,
   tuneEnabled,
   stepHz,
   wheelSensitivity,
   onSnap,
+  markers,
+  onMarkerQsy,
+  onMarkerDelete,
+  onMarkHere,
 }: Props) {
+  const marker = useContestSpotMarker(fieldDay)
   // PER-SURFACE (matching BandStrip, which writes the same key): a wide second-monitor
   // board can afford the legend where the docked strip cannot.
   const [showLegend, setShowLegend] = useState(
@@ -149,17 +189,26 @@ export function BandMap({
 
   const inBand = useMemo(
     () =>
-      spots
+      [...spots, ...(tciSpots ?? [])]
         .filter((s) => s.mode === spotMode && s.band === band)
         .sort((a, b) => b.freqMhz - a.freqMhz),
-    [spots, spotMode, band],
+    [spots, tciSpots, spotMode, band],
   )
 
-  // Zoom window: the activity (spots + dial) plus a margin, clamped to the band, with a minimum
+  const bandMarkers = useMemo(
+    () => (markers ?? []).filter((m) => m.band === band.toUpperCase()),
+    [markers, band],
+  )
+
+  // Zoom window: the activity (spots + dial + markers) plus a margin, clamped to the band, with a minimum
   // span. Empty → the whole band. This is what keeps the calls spread out instead of crammed.
   const win = useMemo(() => {
     if (!range) return null
     const anchor = inBand.map((s) => s.freqMhz)
+    for (const m of bandMarkers) {
+      const mhz = m.dialHz / 1e6
+      if (mhz >= range.lo && mhz <= range.hi) anchor.push(mhz)
+    }
     if (dialMhz >= range.lo && dialMhz <= range.hi) anchor.push(dialMhz)
     let lo = range.lo
     let hi = range.hi
@@ -173,7 +222,7 @@ export function BandMap({
       }
     }
     return { lo, hi }
-  }, [range, inBand, dialMhz])
+  }, [range, inBand, bandMarkers, dialMhz])
 
   // % from the TOP for a frequency (high freq → 0% = top, low freq → 100% = bottom), clamped.
   const yOf = useMemo(() => {
@@ -210,7 +259,8 @@ export function BandMap({
       // one means "work this station", never "tune to wherever the label drifted to". Those
       // buttons carry their own onWorkSpot and it already QSYs; tuning as well would fight it
       // with a frequency that is visibly not the spot's.
-      if ((e.target as HTMLElement).closest('.bandmap-spot')) return
+      // A marker likewise carries its own jump back.
+      if ((e.target as HTMLElement).closest('.bandmap-spot, .bandmap-marker')) return
       const el = trackEl.current
       if (!el) return
       const rect = el.getBoundingClientRect()
@@ -333,11 +383,19 @@ export function BandMap({
       <div
         ref={trackRef}
         onClick={onTrackClick}
+        onContextMenu={
+          onMarkHere
+            ? (e) => {
+                e.preventDefault()
+                onMarkHere()
+              }
+            : undefined
+        }
         className={`bandmap-track${tuneEnabled === true ? ' tunable' : ''}`}
         title={
-          tuneEnabled === true
+          (tuneEnabled === true
             ? t('bandMap.track.title.tunable', { band })
-            : t('bandMap.track.title', { band })
+            : t('bandMap.track.title', { band })) + (onMarkHere ? `\n${t('bandMap.track.markHint')}` : '')
         }
       >
         {grid.map((g, k) => (
@@ -365,35 +423,55 @@ export function BandMap({
           const badge = type ? TYPE_BADGE[type] : null
           const worked = workedCalls?.has(cu) ?? false
           const opacity = s.ageSecs < 0 ? 0.95 : Math.max(0.4, 1 - s.ageSecs / 1800)
+          // A beacon is never worked in a contest, so it is never marked.
+          const mark = beacon ? null : (marker?.(s) ?? null)
+          const markWords = spotMarkWords(mark)
+          const multTag = spotMultTag(mark)
+          // A program's spot: its source, the connection Settings ▸ Share by TCI lists it by.
+          const program = s.tci ?? null
           const detail = [
             s.call,
+            ...markWords,
             `${s.freqMhz.toFixed(3)} MHz`,
             ageLabel(s.ageSecs),
             beacon?.word,
             chip?.label,
             badge?.word,
+            program != null && t('bandMap.spot.tci.from', { id: program }),
             s.spotter && `de ${s.spotter}`,
             s.comment,
           ]
             .filter(Boolean)
             .join(' · ')
+          // A program's spot only tunes, and its tooltip says so.
+          const tip = program != null ? t('bandMap.spot.tci.title', { detail }) : t('bandMap.spot.title', { detail })
           const needCls = chip ? ` need-${chip.cls}` : ''
           // The dim POTA colour, by BandStrip's rule: a POTA activator no need colours, read off
           // the P's own entry (operator, 2026-10-03: "Dim POTA color for all").
           const dimCls = !chip && !beacon && type === 'Pota' ? ' pota-dim' : ''
+          // A program's spot is drawn dotted, with its source before the call.
+          const tciCls = program != null ? ' from-tci' : ''
           return (
-            <span key={`${s.call}-${s.freqMhz}-${i}`}>
+            <span key={`${program ?? ''}-${s.call}-${s.freqMhz}-${i}`}>
               {/* tick at the TRUE frequency; the clickable label is de-collided nearby */}
-              <span className={`bandmap-tick${needCls}${dimCls}`} style={{ top: `${freqY}%` }} />
+              <span className={`bandmap-tick${needCls}${dimCls}${tciCls}`} style={{ top: `${freqY}%` }} />
               <button
                 type="button"
-                className={`bandmap-spot${needCls}${dimCls}${worked ? ' worked' : ''}`}
+                className={`bandmap-spot${needCls}${dimCls}${tciCls}${worked ? ' worked' : ''}${mark?.dupe ? ' contest-dupe' : ''}`}
                 style={{ top: `${labelY}%`, opacity }}
-                title={t('bandMap.spot.title', { detail })}
-                onClick={() => onWorkSpot(s)}
+                title={tip}
+                aria-label={mark ? [s.call, ...markWords].join(' · ') : undefined}
+                // ⛔ A program's spot only tunes: never the Work, whatever it names.
+                onClick={() => (program != null ? onTciSpot?.(s) : onWorkSpot(s))}
               >
+                {program != null && <span className="spot-type-badge type-tci">{tciSource(program)}</span>}
                 {beacon && <span className={`spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>}
                 {badge && <span className={`spot-type-badge ${badge.cls}`}>{badge.ch}</span>}
+                {multTag && (
+                  <span className={`spot-mult-tag${multTag === 'predicted' ? ' predicted' : ''}`}>
+                    {multTag === 'predicted' ? t('contestSpot.tag.predicted') : t('contestSpot.tag.mult')}
+                  </span>
+                )}
                 <span className="bandmap-call mono">{s.call}</span>
                 {unansweredCalls?.has(cu) && (
                   <span className="bandmap-call mono" title={unansweredTitle}>
@@ -417,6 +495,34 @@ export function BandMap({
             <span className="bandmap-dial-lbl mono">{dialMhz.toFixed(3)}</span>
           </div>
         )}
+        {bandMarkers.map((m) => {
+          const freq = markerMhz(m)
+          const label = m.call
+            ? t('bandMap.marker.title', { freq, call: m.call })
+            : t('bandMap.marker.titleBare', { freq })
+          return (
+            <button
+              type="button"
+              key={m.id}
+              className="bandmap-marker mono"
+              style={{ top: `${yOf(m.dialHz / 1e6)}%` }}
+              title={label}
+              aria-label={label}
+              onClick={() => onMarkerQsy?.(m)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  onMarkerQsy?.(m)
+                } else if (e.key === 'Delete') {
+                  e.preventDefault()
+                  onMarkerDelete?.(m)
+                }
+              }}
+            >
+              ◆{m.call ? ` ${m.call}` : ''}
+            </button>
+          )
+        })}
         {rows.length === 0 && (
           <div className="bandmap-empty">{t('bandMap.empty.none', { mode: modeLabel, band })}</div>
         )}

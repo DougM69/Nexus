@@ -11,6 +11,8 @@
 //! - [`pskreporter`] — the IPFIX-like UDP spot upload to
 //!   `report.pskreporter.info:4739`, the same one WSJT-X uses to report heard
 //!   stations.
+//! - [`js8net`] — JS8Call's spotting network: JSON datagrams over UDP to
+//!   `spot.js8call.com:50000`, the stations and group commands heard on JS8.
 //! - [`qds`] — the shared Qt `QDataStream` (big-endian) byte codec the WSJT-X
 //!   protocol is framed with.
 //! - [`cluster`] / [`aprsis`] — long-lived telnet sessions against public ham
@@ -24,6 +26,9 @@
 //!   Nothing in the app uses it yet; the shipped Flex path is [`flexcat`] / [`flexvita`].
 //! - [`icom`] — the Icom network (LAN / Wi-Fi) client's protocol core (the packets, the login,
 //!   sequence tracking and the session), ported from Hamlib. Nothing in the app uses it yet.
+//! - [`tci`] — the TCI client's protocol core (Expert Electronics' Transceiver Control Interface
+//!   to an SDR program over one WebSocket): the codecs, the session, the admission a key must
+//!   pass, the reconnect ladder. Written from the MIT-licensed spec. Nothing in the app uses it yet.
 //! - [`wl2k`] — the Winlink CMS telnet transport (`server.winlink.org:8772`). One
 //!   session per operator action, never a reconnect loop and never a poll; the B2F
 //!   protocol it carries lives in `tempo_core::winlink` and is joined to it through
@@ -48,13 +53,16 @@ pub mod flexcat;
 pub mod flexdisc;
 pub mod flexvita;
 pub mod icom;
+pub mod js8net;
 pub mod mqtt;
 pub mod n1mm;
 pub mod n3fjp;
 pub mod pskreporter;
 pub mod qds;
+pub mod sdrconnect;
 pub mod server;
 pub mod sntp;
+pub mod tci;
 pub mod wl2k;
 pub mod wsjtx;
 

@@ -15,8 +15,6 @@ const sample = () => {
   return frame
 }
 const type = name => value => value?.type === name
-const applicationSample = (requestId, command = 'get_snapshot') => ({ type: 'applicationResult', requestId, command,
-  revision: 1, baseRevision: null, ageMs: 0, data: { mycall: 'N0CALL' }, removed: [] })
 
 // DESIGN ONLY. The staging overlap changes pairing and station admission on a live service, which
 // waits for the operator's approval; skipped until then. REMOTE_RUN_PENDING_DESIGN=1 runs it, and
@@ -54,151 +52,6 @@ test('a retired service announces where Remote moved, then refuses new pairings,
     })
   })
 
-test('station lookups require all extensions, preserve v14 refusal and survive hibernation', async () => {
-  const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
-  assert.equal(config.applicationVersion, 18)
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1', 'x-nexus-application-lookups-version':'1' }
-  for (const [missing, expected] of [[null, 15], ['lookups', 14], ['configuration', 13], ['navigation', 12], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 15 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_parks'), expected === 15)
-    assert.equal(capabilities.commands.includes('get_remote_confirmations'), expected === 15)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'parks', cursor: null, search: 'US-0001', unconfirmed: false, after: null })
-    if (expected === 15) {
-      const request = await live.station.take(type('applicationQuery'))
-      assert.equal(request.search, 'US-0001')
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'parks', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'LOOKUPS-FIXTURE' } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'LOOKUPS-FIXTURE')
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
-test('rare-DX alerts require all extensions, leave a v15 station untouched and survive hibernation', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1', 'x-nexus-application-lookups-version':'1', 'x-nexus-application-alerts-version':'1' }
-  for (const [missing, expected] of [[null, 16], ['alerts', 15], ['lookups', 14], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 16 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_pounce'), expected === 16)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'pounce', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 16) {
-      const request = await live.station.take(type('applicationQuery'))
-      assert.equal(request.collection, 'pounce')
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'pounce', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { capturedAgeMs: 0, source: { threshold: 'ALERTS-FIXTURE' } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.threshold, 'ALERTS-FIXTURE')
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
-test('the rotator heading requires all extensions and leaves a v16 station untouched', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1', 'x-nexus-application-lookups-version':'1', 'x-nexus-application-alerts-version':'1', 'x-nexus-application-rotator-version':'1' }
-  for (const [missing, expected] of [[null, 17], ['rotator', 16], ['alerts', 15], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 17 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_rotator'), expected === 17)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'rotator', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 17) {
-      const request = await live.station.take(type('applicationQuery'))
-      assert.equal(request.collection, 'rotator')
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'rotator', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { capturedAgeMs: 0, source: { configured: true, azimuthDeg: 212.5 } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.azimuthDeg, 212.5)
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
-test('a station is asked for activator states only when it and the page both agreed v18', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1', 'x-nexus-application-lookups-version':'1', 'x-nexus-application-alerts-version':'1', 'x-nexus-application-rotator-version':'1', 'x-nexus-application-ota-states-version':'1' }
-  const asked = ['after', 'collection', 'cursor', 'requestId', 'search', 'type', 'unconfirmed']
-  // A new station with a new page; an old page (v17) with a new station; a new page with an old station.
-  for (const [missing, hello, expected] of [[null, 18, 18], [null, 17, 17], ['ota-states', 18, 17]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: hello })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.ok(capabilities.commands.includes('get_remote_ota'))
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
-    const request = await live.station.take(type('applicationQuery'))
-    // A station before v18 refuses a query carrying any key it does not know; a page before v18 refuses
-    // a spot carrying one. So only the pair that both agreed v18 is told, and only it gets states.
-    assert.deepEqual(Object.keys(request).sort(), expected === 18 ? [...asked.slice(0, 3), 'queryVersion', ...asked.slice(3)] : asked)
-    if (expected === 18) assert.equal(request.queryVersion, 18)
-    const spot = { program: 'POTA', reference: 'US-0823', name: 'Fort Union Trading Post', activator: 'K0ND', freqKhz: 14285, mode: 'SSB',
-      spotter: null, comment: null, grid: null, lat: null, lon: null, spotTimeUnix: 1000, newPark: true, bandOpen: false,
-      ...(expected === 18 ? { states: ['US-MT', 'US-ND'], neededStates: ['US-ND'] } : {}) }
-    live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'ota', snapshotId: crypto.randomUUID(),
-      offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { capturedAgeMs: 0, source: {
-        feeds: [{ program: 'POTA', status: 'ready', sourceAgeMs: 0, spots: [spot] }, { program: 'SOTA', status: 'unavailable', sourceAgeMs: null, spots: [] }],
-        activation: { program: null, reference: null, qsoCount: 0 }, hunt: null, parkCount: 0, huntedCount: 0 } } })
-    const page = await live.browser.take(type('applicationPage'))
-    assert.equal(page.requestId, requestId)
-    assert.deepEqual(page.meta.source.feeds[0].spots[0], spot)
-    live.browser.send({ type: 'applicationQueryAck', requestId })
-    live.browser.close(); live.station.close()
-  }
-})
-test('full-log insights require the complete extension advertisement and survive room hibernation', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1', 'x-nexus-application-insights-version': '1' }
-  for (const [missing, expected] of [[null, 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 6 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_insights'), expected === 6)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'awards', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 6) {
-      const request = await live.station.take(type('applicationQuery'))
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'awards', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { logCount: 2301 } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId)
-      assert.equal(page.meta.source.logCount, 2301)
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
 async function admitted(pair, applicationVersion = 0, extensions = {}) {
   const deviceId = await app.approved(pair)
   const station = await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': String(applicationVersion), ...extensions })
@@ -208,214 +61,6 @@ async function admitted(pair, applicationVersion = 0, extensions = {}) {
   const session = await browser.take(type('session'))
   return { station, browser, deviceId, session, ticket }
 }
-test('configuration requires all extensions, preserves v13 refusal and survive hibernation', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1' }
-  for (const [missing, expected] of [[null, 14], ['configuration',13], ['navigation',12], ['station-modes',11], ['js8', 10], ['field-day', 9], ['ota', 8], ['memories', 7], ['dxpeditions', 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 14 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_configuration'), expected === 14)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'settings', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 14) {
-      const request = await live.station.take(type('applicationQuery'))
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'settings', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'CONFIGURATION-FIXTURE' } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'CONFIGURATION-FIXTURE')
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
-test('navigation requires all extensions, preserves v12 refusal and survive hibernation', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1' }
-  for (const [missing, expected] of [[null, 13], ['navigation',12], ['station-modes',11], ['js8', 10], ['field-day', 9], ['ota', 8], ['memories', 7], ['dxpeditions', 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 13 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_navigation'), expected === 13)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'connect', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 13) {
-      const request = await live.station.take(type('applicationQuery'))
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'connect', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'NAVIGATION-FIXTURE' } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'NAVIGATION-FIXTURE')
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
-test('SSTV and APRS require all extensions, preserve v11 refusal and survive hibernation', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1' }
-  for (const [missing, expected] of [[null, 12], ['station-modes',11], ['js8', 10], ['field-day', 9], ['ota', 8], ['memories', 7], ['dxpeditions', 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 12 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_sstv_image'), expected === 12)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'aprs', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 12) {
-      const request = await live.station.take(type('applicationQuery'))
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'aprs', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'APRS-FIXTURE' } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'APRS-FIXTURE')
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
-test('JS8 requires all extensions, preserves v10 refusal and survives hibernation', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1' }
-  for (const [missing, expected] of [[null, 11], ['js8', 10], ['field-day', 9], ['ota', 8], ['memories', 7], ['dxpeditions', 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 11 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_js8_context'), expected === 11)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'js8Context', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 11) {
-      const request = await live.station.take(type('applicationQuery'))
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'js8Context', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'JS8-FIXTURE' } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'JS8-FIXTURE')
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
-test('Field Day requires all extensions, preserves v9 refusal and survives hibernation', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1' }
-  for (const [missing, expected] of [[null, 10], ['field-day', 9], ['ota', 8], ['memories', 7], ['dxpeditions', 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 10 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_field_day'), expected === 10)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'fieldDay', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 10) {
-      const request = await live.station.take(type('applicationQuery'))
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'fieldDay', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'FD-FIXTURE' } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'FD-FIXTURE')
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
-test('POTA/SOTA requires all extensions, preserves v8 refusal and survives hibernation', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1' }
-  for (const [missing, expected] of [[null, 9], ['ota', 8], ['memories', 7], ['dxpeditions', 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 9 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_ota'), expected === 9)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 9) {
-      const request = await live.station.take(type('applicationQuery'))
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'ota', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'OTA-FIXTURE' } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'OTA-FIXTURE')
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
-test('Memories requires all extensions, preserves v7 refusal and survives hibernation', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1' }
-  for (const [missing, expected] of [[null, 8], ['memories', 7], ['dxpeditions', 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 8 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_memories'), expected === 8)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'memories', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 8) {
-      const request = await live.station.take(type('applicationQuery'))
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'memories', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'MEMORY-FIXTURE' } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'MEMORY-FIXTURE')
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
-test('DXpeditions requires all extensions, preserves v6 refusal and survives hibernation', async () => {
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
-    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1' }
-  for (const [missing, expected] of [[null, 7], ['dxpeditions', 6], ['insights', 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 7 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_remote_dxpeditions'), expected === 7)
-    const requestId = crypto.randomUUID()
-    live.browser.send({ type: 'applicationQuery', requestId, collection: 'dxpeditions', cursor: null, search: '', unconfirmed: false, after: null })
-    if (expected === 7) {
-      const request = await live.station.take(type('applicationQuery'))
-      await app.evict(pair.stationId)
-      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'dxpeditions', snapshotId: crypto.randomUUID(),
-        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'DX-FIXTURE' } } })
-      const page = await live.browser.take(type('applicationPage'))
-      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'DX-FIXTURE')
-      live.browser.send({ type: 'applicationQueryAck', requestId })
-    } else await live.browser.take(type('closed'))
-    live.browser.close(); live.station.close()
-  }
-})
 async function publish(station, sequence) {
   const request = await station.take(value => value.type === 'watch' && value.enabled)
   const frame = sample(); frame.sequence = sequence
@@ -423,135 +68,27 @@ async function publish(station, sequence) {
   return frame
 }
 
-test('application reads use approved sockets, survive hibernation and retain observer-only authority', async () => {
-  const pair = await app.paired(), live = await admitted(pair, 1)
-  live.browser.send({ type: 'applicationHello' })
-  const capabilities = await live.browser.take(type('applicationCapabilities'))
-  assert.equal(capabilities.version, 1)
-  assert.deepEqual(capabilities.commands, ['get_snapshot', 'get_settings', 'get_band_plan', 'get_spectrum_row', 'get_meters'])
-  const requestId = crypto.randomUUID()
-  live.browser.send({ type: 'applicationRead', requestId, command: 'get_snapshot', revision: null })
-  const request = await live.station.take(type('applicationRead'))
-  assert.notEqual(request.requestId, requestId, 'the room owns routing IDs')
-  await app.evict(pair.stationId)
-  live.station.send({ type: 'applicationResult', requestId: request.requestId, command: 'get_snapshot',
-    revision: 1, baseRevision: null, ageMs: 0, data: { mycall: 'N0CALL', radio: { dialMhz: 3.573 } }, removed: [] })
-  const result = await live.browser.take(type('applicationResult'))
-  assert.equal(result.requestId, requestId)
-  assert.equal(result.data.radio.dialMhz, 3.573)
-  live.browser.send({ type: 'applicationAck', requestId })
-  await publish(live.station, 1)
-  const observation = await live.browser.take(type('observation'))
-  live.browser.send({ type: 'ack', epoch: observation.frame.epoch, sequence: observation.frame.sequence })
-  live.browser.send({ type: 'applicationRead', requestId: crypto.randomUUID(), command: 'set_tx_enabled', revision: null })
-  assert.equal((await live.browser.take(type('closed'))).code, 1008)
-  const namespace = await app.mf.getDurableObjectNamespace('STATIONS')
-  const status = await roomStatus(namespace.get(namespace.idFromName(pair.stationId)))
-  assert.equal(status.observers, 0, 'application rejection removes the authoritative observer immediately')
-  assert.equal(status.online, true, 'the station survives one browser refusal')
-  await assert.rejects(live.station.take(type('applicationRead'), 100), /timeout/)
-  live.station.close()
-})
-
-test('an older station advertises an update requirement and continues its valid monitor stream', async () => {
-  const pair = await app.paired(), live = await admitted(pair)
-  live.browser.send({ type: 'applicationHello' })
-  assert.deepEqual(await live.browser.take(type('applicationCapabilities')), { type: 'applicationCapabilities', version: 0, commands: [] })
-  live.browser.send({ type: 'applicationRead', requestId: crypto.randomUUID(), command: 'get_snapshot', revision: null })
-  assert.equal((await live.browser.take(type('applicationError'))).error, 'stationUpdateRequired')
-  await assert.rejects(live.station.take(type('applicationRead'), 100), /timeout/)
-  await publish(live.station, 1)
-  const frame = await live.browser.take(type('observation'))
-  assert.equal(frame.frame.sequence, 1)
-  live.browser.close(); live.station.close()
-})
-
-test('v2 subscriptions share native samples across approved browsers and recover full bases after hibernation', async () => {
-  const pair = await app.paired(), live = await admitted(pair, 2)
-  const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`)
-  const second = await pair.browser.open(pair.stationId, ticket.ticket)
-  await second.take(type('session'))
-  for (const browser of [live.browser, second]) {
-    browser.send({ type: 'applicationHello', version: 2 })
-    const capabilities = await browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, 2)
-    assert.ok(capabilities.commands.includes('get_cw_state'))
-    browser.send({ type: 'applicationSubscribe', topics: ['get_snapshot', 'get_scope_snapshot', 'get_cw_state'], requestId: crypto.randomUUID() })
-  }
-  let watch = await live.station.take(type('applicationWatch'))
-  assert.deepEqual(watch.topics, ['get_snapshot', 'get_scope_snapshot', 'get_cw_state'])
-  await assert.rejects(live.station.take(type('applicationWatch'), 100), /timeout/, 'second browser reuses the same native watch')
-  live.station.send({ type: 'applicationBatch', watchId: watch.watchId, requestId: watch.requestId,
-    updates: watch.topics.map(command => applicationSample(watch.requestId, command)) })
-  const frames = await Promise.all([live.browser, second].map(browser => browser.take(type('applicationFrame'))))
-  assert.notEqual(frames[0].requestId, frames[1].requestId)
-  for (const frame of frames) {
-    assert.equal(frame.updates.length, 3)
-    assert.equal(frame.updates[0].data.mycall, 'N0CALL')
-  }
-  const old = await live.station.take(type('applicationCredit'))
-  await app.evict(pair.stationId)
-  live.browser.send({ type: 'applicationFrameAck', requestId: frames[0].requestId, nextRequestId: crypto.randomUUID() })
-  second.send({ type: 'applicationFrameAck', requestId: frames[1].requestId, nextRequestId: crypto.randomUUID() })
-  watch = await live.station.take(type('applicationWatch'))
-  assert.notEqual(watch.watchId, old.watchId)
-  live.station.send({ type: 'applicationBatch', watchId: old.watchId, requestId: old.requestId, updates: [applicationSample(old.requestId)] })
-  await assert.rejects(live.browser.take(type('applicationFrame'), 100), /timeout/, 'retired epoch cannot refresh data')
-  live.station.send({ type: 'applicationBatch', watchId: watch.watchId, requestId: watch.requestId,
-    updates: watch.topics.map(command => applicationSample(watch.requestId, command)) })
-  for (const browser of [live.browser, second]) {
-    const frame = await browser.take(type('applicationFrame'))
-    assert.equal(frame.updates[0].baseRevision, null)
-    browser.send({ type: 'applicationSubscribe', topics: [], requestId: null })
-  }
-  const idle = await live.station.take(value => value.type === 'applicationWatch' && value.topics.length === 0)
-  assert.equal(idle.requestId, null)
-  live.browser.close(); second.close(); live.station.close()
-})
-
-test('keyboard observation needs the complete native advertisement and survives room hibernation', async () => {
+// The read lane is gone from the relay: nothing advertises it, and an `application*` message from
+// either end is outside the contract like any other, closed and never forwarded. The station
+// below still sends every header an older desktop sends, and is never handed one.
+test('the relay carries no application lane: neither end\'s application message is forwarded', async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
-  assert.equal(config.applicationVersion, 18)
-  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
-    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1' }
-  for (const [missing, expected] of [[null, 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {
-    const advertisement = { ...headers }
-    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
-    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
-    live.browser.send({ type: 'applicationHello', version: 5 })
-    const capabilities = await live.browser.take(type('applicationCapabilities'))
-    assert.equal(capabilities.version, expected)
-    assert.equal(capabilities.commands.includes('get_rtty_state'), expected === 5)
-    assert.equal(capabilities.commands.includes('get_psk_state'), expected === 5)
-    if (expected === 5) {
-      const topics = capabilities.commands.filter(command => !['get_remote_page', 'get_remote_recall'].includes(command))
-      assert.equal(topics.length, 9)
-      const requestId = crypto.randomUUID()
-      live.browser.send({ type: 'applicationSubscribe', topics, requestId })
-      let watch = await live.station.take(type('applicationWatch'))
-      assert.deepEqual(watch.topics, topics)
-      live.station.send({ type: 'applicationBatch', watchId: watch.watchId, requestId: watch.requestId,
-        updates: topics.map(command => applicationSample(watch.requestId, command)) })
-      const first = await live.browser.take(type('applicationFrame'))
-      assert.equal(first.updates.length, 9)
-      await app.evict(pair.stationId)
-      live.browser.send({ type: 'applicationFrameAck', requestId, nextRequestId: crypto.randomUUID() })
-      const prior = watch
-      watch = await live.station.take(type('applicationWatch'))
-      assert.notEqual(watch.watchId, prior.watchId)
-      assert.deepEqual(watch.topics, topics)
-      live.station.send({ type: 'applicationBatch', watchId: watch.watchId, requestId: watch.requestId,
-        updates: topics.map(command => applicationSample(watch.requestId, command)) })
-      const resumed = await live.browser.take(type('applicationFrame'))
-      assert.equal(resumed.updates.length, 9)
-      assert.ok(resumed.updates.every(update => update.baseRevision === null))
-      live.browser.send({ type: 'applicationSubscribe', topics: ['psk_type'], requestId: crypto.randomUUID() })
-      assert.equal((await live.browser.take(type('closed'))).code, 1008)
-      const namespace = await app.mf.getDurableObjectNamespace('STATIONS')
-      assert.equal((await roomStatus(namespace.get(namespace.idFromName(pair.stationId)))).online, true)
-    }
-    live.browser.close(); live.station.close()
-  }
+  assert.equal('applicationVersion' in config, false)
+  const all = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1' }
+  const pair = await app.paired(), live = await admitted(pair, 1, all)
+  const pending = await live.station.take(value => value.type === 'watch' && value.enabled)
+  live.browser.send({ type: 'applicationRead', requestId: crypto.randomUUID(), command: 'get_snapshot', revision: null })
+  assert.equal((await live.browser.take(type('closed'))).code, 1008)
+  live.station.send({ type: 'publication', requestId: pending.requestId, frame: sample() })
+  assert.deepEqual(await live.station.take(() => true), { type: 'watch', enabled: false })
+  const namespace = await app.mf.getDurableObjectNamespace('STATIONS')
+  assert.equal((await roomStatus(namespace.get(namespace.idFromName(pair.stationId)))).online, true)
+  const second = await admitted(await app.paired(), 1, all)
+  second.station.send({ type: 'applicationResult', requestId: crypto.randomUUID(), command: 'get_snapshot',
+    revision: 1, baseRevision: null, ageMs: 0, data: {}, removed: [] })
+  assert.equal((await second.station.take(type('closed'))).code, 1008)
+  await assert.rejects(second.browser.take(type('applicationResult'), 300), /timeout/)
+  live.station.close(); second.browser.close()
 })
 
 test('provider signatures, authorized client and exact Origin are required; account creation grants no trial', async () => {
@@ -700,120 +237,156 @@ test('approving a pairing approves the browser that confirmed it, once, and no o
   await app.client(browser.jwt).post(`${path}/ticket`, {}, 403)
 })
 
-// Browser approval lifetime (operator decision 2026-09-14): an approval renews on use, capped at ninety
-// days since the shack approved it. Only a Nexus that binds its remembered grants to the approval
-// generation says so (this header); an approval given by an older Nexus keeps its fixed thirty days,
-// because that Nexus binds its restored grants to the expiry and a renewal would silently drop them.
-const LIFETIME = { 'x-nexus-device-lifetime': '1' }
+// How long an approval lasts (operator decision 2026-10-10, replacing the 2026-09-14 rule of thirty days
+// from last use and ninety at most): until it is removed. An approved device's expiry is the last
+// millisecond of the year 9999, which every Nexus already reads as an approval that does not end. Only a
+// Nexus that binds its remembered grants to the approval generation (this header) has an approval time
+// recorded; an approval an older Nexus gave under the old rule keeps its fixed end, because that Nexus
+// binds its restored grants to the expiry.
+const LIFETIME = { 'x-nexus-device-lifetime': '1' }, KINDS = { 'x-nexus-device-kind': '1' }
 const DAY = 86400000
+const UNTIL_REMOVED = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
 const deviceRow = id => app.db.prepare('SELECT generation,approved,approved_at,expires_at FROM devices WHERE id=?').bind(id).first()
-test('an approval renews on real use from that browser, never moves its generation, and stops at ninety days', async () => {
+test('an approval lasts until removed: unused it never ends, use moves nothing, and Remove ends it at once', async () => {
   const pair = await app.paired(), path = `stations/${pair.stationId}`
   const { value: request, response } = await pair.browser.post(`${path}/device`, { name: 'Travelling browser' })
   pair.browser.setCookie(response.headers.get('set-cookie'))
   await pair.native.post(`${path}/native/approve-device`, { deviceId: request.deviceId }, 200, LIFETIME)
   const approved = await deviceRow(request.deviceId)
   assert.ok(approved.approved_at > Date.now() - 60000, 'the approval time is recorded')
-  // The shack sees the expiry, the approval generation and the end that use cannot move.
+  assert.equal(approved.expires_at, UNTIL_REMOVED, 'until removed')
+  // The shack sees the approval as it always has, an end no clock reaches, and no renewal limit.
   const { value: listed } = await pair.native.post(`${path}/native/devices`, {}, 200, LIFETIME)
   assert.deepEqual(listed.devices.find(d => d.id === request.deviceId), { id: request.deviceId, name: 'Travelling browser',
-    approved: 1, expiresAt: approved.expires_at, generation: approved.generation, renewsUntil: approved.approved_at + 90 * DAY })
+    approved: 1, expiresAt: UNTIL_REMOVED, generation: approved.generation, renewsUntil: null })
   // Without the header, exactly the shape a 1.12.0 desktop parses (it denies unknown fields).
   const { value: legacy } = await pair.native.post(`${path}/native/devices`, {})
   assert.deepEqual(Object.keys(legacy.devices.find(d => d.id === request.deviceId)).sort(), ['approved', 'expiresAt', 'id', 'name'])
-
-  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, request.deviceId).run()
-  // Loading the page is not use, and the page is told both dates.
+  // A Nexus that asks for kinds is told so by name.
+  const { value: named } = await pair.native.post(`${path}/native/devices`, {}, 200, { ...LIFETIME, ...KINDS })
+  assert.equal(named.devices.find(d => d.id === request.deviceId).untilRemoved, 1)
+  // The page is told so too, with no end to warn of.
   const { value: session } = await pair.browser.post('session')
   const shown = session.stations.find(s => s.id === pair.stationId).device
-  assert.equal(shown.renewsUntil, approved.approved_at + 90 * DAY)
-  assert.ok(shown.expires_at < Date.now() + 2 * DAY)
-  assert.ok((await deviceRow(request.deviceId)).expires_at < Date.now() + 2 * DAY, 'a page load renews nothing')
-  // The same account without this browser's credential is refused and renews nothing.
-  await app.client(pair.browser.jwt).post(`${path}/ticket`, {}, 403)
-  assert.ok((await deviceRow(request.deviceId)).expires_at < Date.now() + 2 * DAY, 'another browser renews nothing')
+  assert.deepEqual({ untilRemoved: shown.untilRemoved, renewsUntil: shown.renewsUntil, expires_at: shown.expires_at },
+    { untilRemoved: true, renewsUntil: null, expires_at: UNTIL_REMOVED })
 
-  // Opening the station from this browser moves the expiry thirty days on. Nothing else changes.
+  // Opening the station from this browser changes nothing about the approval.
   const held = pair.browser.headers().cookie
   const { response: opened } = await pair.browser.post(`${path}/ticket`)
-  const renewed = await deviceRow(request.deviceId)
-  assert.ok(renewed.expires_at > Date.now() + 29 * DAY, 'renewed on use')
-  assert.deepEqual({ ...renewed, expires_at: 0 }, { ...approved, expires_at: 0 }, 'generation, approval and approval time unchanged')
-  // The browser's credential lives as long as the approval now does. Same value, never a new one.
+  assert.deepEqual(await deviceRow(request.deviceId), approved, 'generation, approval, approval time and end unchanged')
+  // The browser's credential is re-issued, the same value, for as long as a browser keeps one.
   const refreshed = opened.headers.get('set-cookie')
   assert.equal(refreshed.split(';')[0], held)
   assert.ok(refreshed.includes('HttpOnly') && refreshed.includes('Secure') && refreshed.includes('SameSite=Strict'))
-  const maxAge = Number(/Max-Age=(\d+)/.exec(refreshed)[1])
-  assert.ok(maxAge > 29 * 86400 && maxAge <= 30 * 86400, `cookie lifetime follows the approval: ${maxAge}`)
-  // A live session's renewal is use too.
-  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, request.deviceId).run()
+  assert.equal(Number(/Max-Age=(\d+)/.exec(refreshed)[1]), 400 * 86400)
+  // A live session's renewal is use too, and also moves nothing.
   const station = await pair.native.open(pair.stationId)
   await station.take(value => value.type === 'watch' && value.enabled === false)
   const { value: sessionTicket } = await pair.browser.post(`${path}/ticket`)
   const socket = await pair.browser.open(pair.stationId, sessionTicket.ticket)
   const live = await socket.take(type('session'))
-  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, request.deviceId).run()
-  await pair.browser.post(`${path}/renew`, { sessionId: live.sessionId })
-  assert.ok((await deviceRow(request.deviceId)).expires_at > Date.now() + 29 * DAY, 'session renewal renews the approval')
+  const { response: renewal } = await pair.browser.post(`${path}/renew`, { sessionId: live.sessionId })
+  assert.equal(renewal.headers.get('set-cookie').split(';')[0], held)
+  assert.deepEqual(await deviceRow(request.deviceId), approved, 'a renewal moves nothing')
   socket.close(); station.close()
 
-  // THE CAP. Use can never carry an approval past ninety days from the shack approval.
-  const approvedAt = Date.now() - 89 * DAY
-  await app.db.prepare('UPDATE devices SET approved_at=?, expires_at=? WHERE id=?').bind(approvedAt, Date.now() + 3600000, request.deviceId).run()
-  await pair.browser.post(`${path}/ticket`)
-  assert.equal((await deviceRow(request.deviceId)).expires_at, approvedAt + 90 * DAY, 'renewed only up to the cap')
-  await pair.browser.post(`${path}/ticket`)
-  assert.equal((await deviceRow(request.deviceId)).expires_at, approvedAt + 90 * DAY, 'and never past it')
-  // An approval that has ended is refused, and use cannot revive it.
-  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() - 1, request.deviceId).run()
-  await pair.browser.post(`${path}/ticket`, {}, 403)
-  assert.ok((await deviceRow(request.deviceId)).expires_at < Date.now(), 'an expired approval stays expired')
+  // REFUSED: the same account without this browser's credential, and another account with it.
+  await app.client(pair.browser.jwt).post(`${path}/ticket`, {}, 403)
+  const stranger = await app.owner()
+  stranger.setCookie(held)
+  await stranger.post(`${path}/ticket`, {}, 404)
+  // REFUSED: a browser still waiting for approval gains nothing.
+  const waiting = app.client(pair.browser.jwt)
+  const { value: asked, response: askedResponse } = await waiting.post(`${path}/device`, { name: 'Waiting browser' })
+  waiting.setCookie(askedResponse.headers.get('set-cookie'))
+  const before = await deviceRow(asked.deviceId)
+  assert.ok(before.expires_at <= Date.now() + 600000, 'a request still waits ten minutes')
+  await waiting.post(`${path}/ticket`, {}, 403)
+  assert.deepEqual(await deviceRow(asked.deviceId), before, 'a waiting browser gains nothing')
+
+  // Remove at the shack ends it at once: the next ticket is refused.
+  await pair.native.post(`${path}/native/revoke-device`, { deviceId: request.deviceId }, 200, LIFETIME)
+  const { value: refused } = await pair.browser.post(`${path}/ticket`, {}, 403)
+  assert.equal(refused.error, 'deviceNotApproved')
+  const removed = await deviceRow(request.deviceId)
+  assert.equal(removed.approved, 0)
+  assert.ok(removed.expires_at <= Date.now() && removed.generation === approved.generation + 1)
+  // A browser forgetting itself ends its approval at once too.
+  const other = await app.paired(), otherPath = `stations/${other.stationId}`
+  const otherId = await app.approved(other)
+  assert.equal((await deviceRow(otherId)).expires_at, UNTIL_REMOVED)
+  await other.browser.post(`${otherPath}/ticket`)
+  await other.browser.post(`${otherPath}/forget-device`)
+  await other.browser.post(`${otherPath}/ticket`, {}, 403)
 })
 
-test('renewal never touches an older Nexus approval or a waiting browser; re-approval moves the generation; revoke ends at once', async () => {
-  // A pairing approved by a Nexus that sends the header: its browser renews, and the shack learns the generation.
+test('the pairing browser and an approval an older Nexus gives last until removed too', async () => {
   const browser = await app.owner(), desktop = app.client()
   const { value: enrollment } = await desktop.post('enroll', { name: 'Lifetime pairing' })
   await browser.post('pair/claim', { code: enrollment.code })
   const { response: confirmed } = await browser.post('pair/confirm', { id: enrollment.id })
-  browser.setCookie(confirmed.headers.get('set-cookie'))
+  const cookie = confirmed.headers.get('set-cookie')
+  assert.equal(Number(/Max-Age=(\d+)/.exec(cookie)[1]), 400 * 86400, 'the credential is kept as long as a browser keeps one')
   const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
   const { value: paired } = await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential }, 200, LIFETIME)
-  const pairedRow = await deviceRow(paired.device.id)
-  assert.equal(paired.device.generation, pairedRow.generation)
-  assert.ok(pairedRow.approved_at > 0, 'the pairing browser renews too')
-
-  // An approval given WITHOUT the header (1.12.0 at the shack) keeps its fixed thirty days.
+  assert.equal(paired.device.expiresAt, UNTIL_REMOVED)
+  assert.equal((await deviceRow(paired.device.id)).expires_at, UNTIL_REMOVED)
+  // Approved by a Nexus without the header (1.12.0 at the shack): until removed, with no approval time.
   const pair = await app.paired(), path = `stations/${pair.stationId}`
   const legacyId = await app.approved(pair)
   const legacy = await deviceRow(legacyId)
-  assert.equal(legacy.approved_at, null)
-  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, legacyId).run()
+  assert.deepEqual({ approved_at: legacy.approved_at, expires_at: legacy.expires_at }, { approved_at: null, expires_at: UNTIL_REMOVED })
   await pair.browser.post(`${path}/ticket`)
-  assert.ok((await deviceRow(legacyId)).expires_at < Date.now() + 2 * DAY, 'an older Nexus approval is never renewed')
+  assert.deepEqual(await deviceRow(legacyId), legacy, 'use moves nothing')
+})
 
-  // A browser still waiting for approval cannot renew anything, or approve itself.
-  const waiting = app.client(pair.browser.jwt)
-  const { value: request, response } = await waiting.post(`${path}/device`, { name: 'Waiting browser' })
-  waiting.setCookie(response.headers.get('set-cookie'))
-  const before = await deviceRow(request.deviceId)
-  await waiting.post(`${path}/ticket`, {}, 403)
-  assert.deepEqual(await deviceRow(request.deviceId), before, 'a waiting browser gains nothing')
-
-  // Approving again at the shack is a NEW approval: a new generation and a new ninety days.
-  await pair.native.post(`${path}/native/approve-device`, { deviceId: legacyId }, 200, LIFETIME)
-  const again = await deviceRow(legacyId)
-  assert.equal(again.generation, legacy.generation + 1)
-  assert.ok(again.approved_at > 0)
-  // Revoke ends it at once, even straight after a renewal.
-  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, legacyId).run()
+test('an approval given under the thirty/ninety-day rule lasts until removed from the next connect, listing or use; an ended one stays ended', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}`
+  const { value: request, response } = await pair.browser.post(`${path}/device`, { name: 'Older approval' })
+  pair.browser.setCookie(response.headers.get('set-cookie'))
+  await pair.native.post(`${path}/native/approve-device`, { deviceId: request.deviceId }, 200, LIFETIME)
+  const approved = await deviceRow(request.deviceId)
+  const older = async (expiresAt, approvedAt = Date.now() - 10 * DAY) => {
+    await app.db.prepare('UPDATE devices SET approved_at=?, expires_at=? WHERE id=?').bind(approvedAt, expiresAt, request.deviceId).run()
+    return deviceRow(request.deviceId)
+  }
+  const kept = async what => assert.deepEqual(await deviceRow(request.deviceId),
+    { ...approved, approved_at: (await deviceRow(request.deviceId)).approved_at, expires_at: UNTIL_REMOVED }, what)
+  // The station lists its devices: kept, generation unchanged.
+  await older(Date.now() + DAY)
+  const { value: listed } = await pair.native.post(`${path}/native/devices`, {}, 200, LIFETIME)
+  assert.equal(listed.devices.find(d => d.id === request.deviceId).expiresAt, UNTIL_REMOVED, 'listed as kept')
+  await kept('kept by a listing')
+  // The station connects.
+  await older(Date.now() + DAY)
+  const station = await pair.native.open(pair.stationId)
+  await station.take(type('watch'))
+  station.close()
+  await kept('kept by a connect')
+  // The browser uses it.
+  await older(Date.now() + DAY)
   await pair.browser.post(`${path}/ticket`)
-  assert.ok((await deviceRow(legacyId)).expires_at > Date.now() + 29 * DAY, 'positive control: it renewed')
-  await pair.native.post(`${path}/native/revoke-device`, { deviceId: legacyId }, 200, LIFETIME)
+  await kept('kept by use')
+  // An approval that ended under the old rule is not revived: refused, listed nowhere, ended.
+  const ended = await older(Date.now() - 1)
+  await pair.native.post(`${path}/native/devices`, {}, 200, LIFETIME)
+  const reconnected = await pair.native.open(pair.stationId)
+  await reconnected.take(type('watch'))
+  reconnected.close()
   await pair.browser.post(`${path}/ticket`, {}, 403)
-  const revoked = await deviceRow(legacyId)
-  assert.equal(revoked.approved, 0)
-  assert.ok(revoked.expires_at <= Date.now() && revoked.generation === again.generation + 1)
+  assert.deepEqual(await deviceRow(request.deviceId), ended, 'an ended approval stays ended')
+  // One an older Nexus gave (no approval time) keeps its fixed end: that Nexus binds its grants to it.
+  const fixed = await older(Date.now() + DAY, null)
+  await pair.native.post(`${path}/native/devices`, {}, 200, LIFETIME)
+  await pair.browser.post(`${path}/ticket`)
+  assert.deepEqual(await deviceRow(request.deviceId), fixed, 'an older Nexus approval keeps its end')
+  // A device waiting for approval is never kept.
+  const waiting = app.client(pair.browser.jwt)
+  const { value: asked } = await waiting.post(`${path}/device`, { name: 'Waiting browser' })
+  const before = await deviceRow(asked.deviceId)
+  await pair.native.post(`${path}/native/devices`, {}, 200, LIFETIME)
+  assert.deepEqual(await deviceRow(asked.deviceId), before, 'a waiting device is not kept')
 })
 
 // The browser's device key (security review M1; the stream's A5). The page holds a non-extractable
@@ -1628,8 +1201,9 @@ test('renaming a station is housekeeping: allowed on your own, and survives a la
   await pair.browser.post(`stations/${pair.stationId}/rename`, { name: 'Still mine' })
   const { value: after } = await pair.browser.post('session')
   assert.equal(after.stations[0].name, 'Still mine')
-  // ...while operating is refused, which is the line this sits above.
-  await pair.browser.post(`stations/${pair.stationId}/device`, { name: 'Browser' }, 403)
+  // ...while operating is refused, which is the line this sits above. (Registering a browser is free,
+  // as enrolling is: the relay is the internet's.)
+  assert.equal((await pair.browser.post(`stations/${pair.stationId}/turn`, {}, 403)).value.error, 'trialRequired')
 
   // Somebody else's station is not theirs to rename.
   const other = await app.owner()
@@ -2682,6 +2256,123 @@ test('a revoked entitlement refuses a stream offer at the relay, and a live one 
   live.browser.close(); live.station.close()
 })
 
+// LAN STAYS FREE. An account whose internet use has ended keeps its stations on the shack's own
+// network: it takes a LAN-only ticket (`scope: 'lan'`), and the relay holds that session's stream to
+// the LAN by refusing every candidate that is not a private host one, from either side, and by telling
+// the station `lanOnly` (only one that advertised `x-nexus-stream-lan-version`). The relay route stays
+// refused, and so does every command.
+const LAN_HEADERS = { ...STREAM_HEADERS, ...OPERATION_HEADERS, 'x-nexus-stream-lan-version': '1' }
+const endTrial = pair => app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - 1000, pair.browser.accountId).run()
+async function lanAdmitted(pair, deviceId, extensions = LAN_HEADERS) {
+  const station = await pair.native.open(pair.stationId, undefined, 101, { 'x-nexus-application-version': '1', ...extensions })
+  await station.take(value => value.type === 'watch' && value.enabled === false)
+  const { value: ticket } = await pair.browser.post(`stations/${pair.stationId}/ticket`, { scope: 'lan' })
+  const browser = await pair.browser.open(pair.stationId, ticket.ticket)
+  const session = await browser.take(type('session'))
+  return { station, browser, deviceId, session, ticket }
+}
+const nothing = async (socket, predicate, ms = 700) => { try { await socket.take(predicate, ms); return false } catch { return true } }
+const MDNS = 'candidate (mDNS host; the station ignores what it cannot resolve)'
+/** A live station and a page heartbeating through a stream, as the switch-off test above has them:
+ *  the heartbeats are what make the room re-read the entitlement while a stream runs. */
+function serving(live, leaseId) {
+  const boot = crypto.randomUUID()
+  let on = true
+  live.browser.ackObservations()
+  const loop = (async () => {
+    while (on) {
+      let asked
+      try { asked = await live.station.take(value => (value.type === 'watch' && value.enabled) || value.type === 'operationRequest', 200) } catch { continue }
+      if (asked.type === 'watch') {
+        const frame = sample(); frame.sequence = ++settleSequence
+        live.station.send({ type: 'publication', requestId: asked.requestId, frame })
+      } else live.station.send({ type: 'operationResponse', sessionId: asked.sessionId, requestId: asked.request.requestId,
+        value: { stationBootId: boot, allowed: true, phase: 'controlling', leaseId, revision: 2, commandWindowId: crypto.randomUUID(),
+          nextSequence: 2, leaseRemainingMs: 5000, actions: [], txArmed: false } })
+    }
+  })()
+  const beat = setInterval(() => live.browser.send({ type: 'operationRequest', operationVersion: 4,
+    request: { type: 'heartbeat', requestId: crypto.randomUUID(), leaseId } }), 1000)
+  return async () => { clearInterval(beat); on = false; await loop }
+}
+const SHACK_HOST = 'candidate (host: the shack\'s own LAN address, for a browser on its network)'
+
+test('LAN stays free: an ended trial streams with a LAN-only ticket, held to the LAN, with no relay and no commands', async () => {
+  const pair = await app.paired(), deviceId = await app.approved(pair)
+  await endTrial(pair)
+  // THE CONTROLS: the internet ticket and the relay route refuse an ended trial exactly as before.
+  assert.equal((await pair.browser.post(`stations/${pair.stationId}/ticket`, {}, 403)).value.error, 'trialRequired')
+  assert.equal((await pair.browser.post(`stations/${pair.stationId}/turn`, {}, 403)).value.error, 'trialRequired', 'no TURN for a LAN-only account')
+  assert.equal((await pair.browser.post(`stations/${pair.stationId}/ticket`, { scope: 'internet' }, 400)).value.error, 'invalidRequest')
+  const live = await lanAdmitted(pair, deviceId), sessionId = live.session.sessionId, leaseId = crypto.randomUUID()
+  live.browser.send(pageSignal('offer', leaseId))
+  assert.deepEqual(await live.station.take(typed('streamSignal')), { ...streamCase('roomToStation', 'offer'), sessionId, deviceId, leaseId, lanOnly: true },
+    'the offer reaches the station, told to keep this session on its network')
+  live.browser.send(pageSignal(MDNS, leaseId))
+  assert.deepEqual(await live.station.take(typed('streamSignal')), { ...streamCase('roomToStation', MDNS), sessionId, deviceId, leaseId, lanOnly: true })
+  // A reflexive candidate would agree a path through the internet: refused, never forwarded.
+  live.browser.send(pageSignal('candidate (reflexive)', leaseId))
+  assert.deepEqual(await live.browser.take(typed('streamState')), { type: 'streamState', streaming: false, reason: 'lanOnly' })
+  assert.equal(await nothing(live.station, typed('streamSignal')), true, 'the page\'s reflexive candidate never reached the station')
+  // The station's end, the same: its host candidate goes, its reflexive one does not.
+  live.station.send(stationMessage(SHACK_HOST, sessionId))
+  assert.deepEqual(await live.browser.take(typed('streamSignal')), streamContract.roomToBrowser.find(c => c.name === SHACK_HOST).message)
+  live.station.send(stationMessage('candidate (reflexive)', sessionId))
+  assert.deepEqual(await live.browser.take(value => typed('streamSignal')(value) || typed('streamState')(value)),
+    { type: 'streamState', streaming: false, reason: 'lanOnly' }, 'the station\'s reflexive candidate never reached the page')
+  // A command through the relay is still the internet's, and refused.
+  assert.equal(await commandReachesStation(live), false, 'a LAN-only session commands nothing through the relay')
+  // It streams, and keeps streaming through the entitlement re-reads its heartbeats bring.
+  live.station.send(stationMessage('streaming', sessionId))
+  assert.deepEqual(await live.browser.take(typed('streamState')), { type: 'streamState', streaming: true })
+  const stop = serving(live, leaseId)
+  try { await assert.rejects(live.station.take(typed('streamEnd'), 4000), /timeout/, 'a LAN stream is not ended for the trial') }
+  finally { await stop() }
+  assert.equal(live.station.closed, false, 'and the station is still up, so this observed a live room')
+  // Nor does the station's application data cross the relay to it ('application reads use approved
+  // sockets…' above is the control: an internet session's read reaches the station).
+  live.browser.send({ type: 'applicationHello' })
+  live.browser.send({ type: 'applicationRead', requestId: crypto.randomUUID(), command: 'get_snapshot', revision: null })
+  assert.equal(await nothing(live.station, type('applicationRead')), true, 'a LAN-only session reads nothing through the relay')
+  live.browser.close(); live.station.close()
+})
+
+test('a LAN-only session to a station that cannot hold it to the LAN is refused by name, and survives a hibernation', async () => {
+  const pair = await app.paired(), deviceId = await app.approved(pair)
+  await endTrial(pair)
+  const old = await lanAdmitted(pair, deviceId, { ...STREAM_HEADERS, ...OPERATION_HEADERS })
+  old.browser.send(pageSignal('offer'))
+  assert.deepEqual(await old.browser.take(typed('streamState')), { type: 'streamState', streaming: false, reason: 'updateStation' })
+  assert.equal(await nothing(old.station, typed('streamSignal')), true, 'an older station is never handed the session')
+  old.browser.close(); old.station.close()
+  // A hibernated room still knows the session is LAN-only: the offer goes with `lanOnly`, and a
+  // reflexive candidate is still refused (lost, the session would be refused as an ended trial).
+  const live = await lanAdmitted(pair, deviceId)
+  await app.evict(pair.stationId)
+  live.browser.send(pageSignal('offer'))
+  assert.equal((await live.station.take(typed('streamSignal'))).lanOnly, true)
+  live.browser.send(pageSignal('candidate (reflexive)'))
+  assert.equal((await live.browser.take(typed('streamState'))).reason, 'lanOnly')
+  live.browser.close(); live.station.close()
+})
+
+test('Remote switched off by hand ends a LAN-only stream too, and refuses its ticket', async () => {
+  const pair = await app.paired(), deviceId = await app.approved(pair)
+  await endTrial(pair)
+  const live = await lanAdmitted(pair, deviceId), leaseId = crypto.randomUUID()
+  live.browser.send(pageSignal('offer', leaseId))
+  await live.station.take(typed('streamSignal'))
+  live.station.send(stationMessage('streaming', live.session.sessionId))
+  assert.equal((await live.browser.take(typed('streamState'))).streaming, true)
+  const stop = serving(live, leaseId)
+  try {
+    await app.db.prepare('UPDATE trials SET enabled=0 WHERE account_id=?').bind(pair.browser.accountId).run()
+    assert.deepEqual(await live.station.take(typed('streamEnd'), 5000), { type: 'streamEnd', sessionId: live.session.sessionId, reason: 'remoteOff' })
+  } finally { await stop() }
+  assert.equal((await pair.browser.post(`stations/${pair.stationId}/ticket`, { scope: 'lan' }, 403)).value.error, 'trialRequired')
+  live.browser.close(); live.station.close()
+})
+
 // THE STREAM'S RELAY. `turn` mints Cloudflare Realtime TURN credentials for one stream, for a
 // browser a ticket would be given to, and nobody else. The provider is a fake in every test
 // (runtime.mjs `relay`), and the key id and token below are generated here, never real.
@@ -2830,4 +2521,90 @@ test('S3-M1: a station\'s key is recorded once: the same key is kept, another is
   // Only the station's own credential reaches it: a page (which sends an Origin) cannot.
   await pair.browser.post(path, { publicKey: other }, 403)
   assert.equal(await listed(), first)
+})
+
+// The approvals given under the thirty/ninety-day rule become until removed at once, by a migration run
+// at deploy (operator decision 2026-10-14). It only extends a standing approval of a station that still
+// has access; it drops, deletes, revives and re-generates nothing, and a second run changes nothing.
+test('the until-removed migration extends only standing approvals, revives nothing, and runs twice to the same rows', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}`
+  const browser = async (name, approve = true) => {
+    const holder = app.client(pair.browser.jwt)
+    const { value, response } = await holder.post(`${path}/device`, { name })
+    holder.setCookie(response.headers.get('set-cookie'))
+    if (approve) await pair.native.post(`${path}/native/approve-device`, { deviceId: value.deviceId }, 200, LIFETIME)
+    return { holder, id: value.deviceId }
+  }
+  const set = (id, approvedAt, expiresAt) =>
+    app.db.prepare('UPDATE devices SET approved_at=?, expires_at=? WHERE id=?').bind(approvedAt, expiresAt, id).run()
+  const row = id => app.db.prepare('SELECT id,station_id,generation,approved,approved_at,expires_at FROM devices WHERE id=?').bind(id).first()
+  const now = Date.now()
+  // ACTIVE: approved under the old rule, ten days ago, ending tomorrow.
+  const active = await browser('Old-rule browser')
+  await set(active.id, now - 10 * DAY, now + DAY)
+  // EXPIRED: approved under the old rule, and already ended.
+  const expired = await browser('Lapsed browser')
+  await set(expired.id, now - 40 * DAY, now - 60000)
+  // REMOVED at the shack, and WAITING for approval.
+  const removed = await browser('Removed browser')
+  await pair.native.post(`${path}/native/revoke-device`, { deviceId: removed.id }, 200, LIFETIME)
+  const waiting = await browser('Waiting browser', false)
+  // (Given an approval time, so only its being unapproved keeps it out.)
+  await set(waiting.id, now - DAY, (await row(waiting.id)).expires_at)
+  // A 1.12-era approval: no approval time, a fixed end.
+  const legacy = await browser('Older Nexus browser')
+  await set(legacy.id, null, now + DAY)
+  // REVOKED: a standing old-rule approval on a station whose access was revoked.
+  const gone = await app.paired(), gonePath = `stations/${gone.stationId}`
+  const goneId = await app.approved(gone)
+  await set(goneId, now - 10 * DAY, now + DAY)
+  await gone.native.post(`${gonePath}/native/revoke`, {})
+
+  const all = async () => (await app.db.prepare('SELECT * FROM devices ORDER BY id').all()).results
+  const fixtures = [active.id, expired.id, removed.id, waiting.id, legacy.id, goneId]
+  const before = Object.fromEntries(await Promise.all(fixtures.map(async id => [id, await row(id)])))
+  const count = (await all()).length
+  const migrate = async () => {
+    const sql = (await readFile(new URL('../migrations/0011_until_removed.sql', import.meta.url), 'utf8'))
+      .split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n')
+    for (const statement of sql.split(';').map(s => s.trim()).filter(Boolean)) await app.db.prepare(statement).run()
+  }
+  await migrate()
+  const once = await all()
+  assert.equal(once.length, count, 'no row dropped or added')
+  assert.deepEqual(await row(active.id), { ...before[active.id], expires_at: UNTIL_REMOVED }, 'only the end moves')
+  assert.ok(before[goneId].expires_at < UNTIL_REMOVED && before[goneId].approved === 1, 'premise: a standing approval')
+  for (const id of [expired.id, removed.id, waiting.id, legacy.id, goneId]) assert.deepEqual(await row(id), before[id], id)
+  await migrate()
+  assert.deepEqual(await all(), once, 'a second run changes nothing')
+
+  // At the next ticket: the standing approval opens; the removed, the lapsed, the never-approved and the
+  // revoked station's are still refused, and another account holding the approved browser's cookie too.
+  await active.holder.post(`${path}/ticket`)
+  assert.equal((await removed.holder.post(`${path}/ticket`, {}, 403)).value.error, 'deviceNotApproved')
+  await expired.holder.post(`${path}/ticket`, {}, 403)
+  await waiting.holder.post(`${path}/ticket`, {}, 403)
+  await gone.browser.post(`${gonePath}/ticket`, {}, 404)
+  const stranger = await app.owner()
+  stranger.setCookie(active.holder.headers().cookie)
+  await stranger.post(`${path}/ticket`, {}, 404)
+})
+
+// A 1.17/1.18 desktop (lifetime and key headers, no kinds) cannot be told "until removed": its Settings
+// prints every approval as `Approved until <date> UTC.`, from `new Date(expiresAt).toISOString()
+// .slice(0, 10)`, and warns when `(renewsUntil ?? expiresAt)` is within seven days. The least misleading
+// value it renders is the one it is sent: 9999-12-31, no renewal, so no warning and no "Approve again".
+// A year past 9999 prints garbled ("+010000-01"), and past the Date range its screen throws.
+test('a 1.17/1.18 desktop is listed an until-removed approval in exactly the shape and value it renders as 9999-12-31', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}`
+  const deviceId = await app.approved(pair)
+  await pair.native.post(`${path}/native/approve-device`, { deviceId }, 200, LIFETIME)
+  const { value } = await pair.native.post(`${path}/native/devices`, {}, 200, { ...LIFETIME, ...DEVICE_KEY })
+  const listed = value.devices.find(d => d.id === deviceId)
+  // Its parser denies unknown fields: exactly these keys.
+  assert.deepEqual(Object.keys(listed).sort(), ['approved', 'expiresAt', 'generation', 'id', 'name', 'publicKey', 'renewsUntil'])
+  assert.deepEqual({ expiresAt: listed.expiresAt, renewsUntil: listed.renewsUntil }, { expiresAt: UNTIL_REMOVED, renewsUntil: null })
+  assert.ok(Number.isSafeInteger(listed.expiresAt), 'a u64 it parses')
+  assert.equal(new Date(listed.expiresAt).toISOString().slice(0, 10), '9999-12-31')
+  assert.ok((listed.renewsUntil ?? listed.expiresAt) - Date.now() > 7 * DAY, 'no warning')
 })

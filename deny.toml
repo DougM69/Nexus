@@ -39,6 +39,21 @@ ignore = [
     "RUSTSEC-2025-0081", # unic-char-property
     "RUSTSEC-2025-0098", # unic-ucd-version
     "RUSTSEC-2025-0100", # unic-ucd-ident
+    # zbus 5's helper crates: folded into zbus 6.0 (as its `names`/`wire` modules and
+    # derives), so the standalone crates are flagged unmaintained. Reached only through
+    # notify-rust (tauri-plugin-notification) and tauri-plugin-opener, for D-Bus on
+    # Linux. No vulnerability; goes when those plugins move to zbus 6.
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
+    # ---- A VERSION match where the vulnerable data is not present. ----
+    # webpki-roots 0.26.11 (src-tauri, through tokio-tungstenite) is a semver-trick shim: its
+    # whole content is `pub use parent::TLS_SERVER_ROOTS` from webpki-roots 1.x, which both
+    # lockfiles pin at 1.0.10, the release that removes the distrusted emSign root. The
+    # advisory matches the shim on its version number alone. Valid ONLY while every
+    # webpki-roots 1.x in both lockfiles is 1.0.10 or later; remove it when the advisory
+    # marks the 0.26 shims unaffected or tokio-tungstenite moves to webpki-roots 1.
+    "RUSTSEC-2026-0381", # webpki-roots 0.26.11 shim over 1.0.10
 ]
 
 [licenses]

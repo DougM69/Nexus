@@ -41,6 +41,12 @@ In `kd9taw/Nexus` → Settings → Environments → **production**, add these **
 |---|---|
 | `REMOTE_AUTH0_ISSUER` | `https://YOUR-TENANT.REGION.auth0.com/`, copied from the tenant, with a trailing slash |
 | `REMOTE_AUTH0_CLIENT_ID` | The SPA application's public Client ID |
+| `REMOTE_AUTH0_NATIVE_CLIENT_ID` | Optional: the Native application's public Client ID, for the desktop's account sign-in. Never the SPA's; a deploy refuses that |
+| `REMOTE_TRIAL_IDENTITY_REQUIRED` | Optional: `1`, or unset (below) |
+| `REMOTE_MOVED_TO`, `REMOTE_MOVE_STAGE` | Optional, set together: another environment's origin, and `announce`, `pairing-closed` or `closed` |
+
+An unset variable writes nothing to the Worker; any other value than the ones above stops the
+deploy before it writes. The optional secret `REMOTE_TRIAL_KEY` (below) goes under **secrets**.
 
 The staging API audience is fixed in the tooling. The preflight checks public OIDC
 discovery and signing keys; it cannot read the app's callback list or prove a real
@@ -185,6 +191,30 @@ key; a 503 `relayUnavailable` means Cloudflare refused, answered something unusa
 answer within three seconds. `localStorage.removeItem('nexus.remote.relay')` puts streams back to
 direct first.
 
+## Paid access and trial identity (built, not configured)
+
+Two optional Worker settings, neither in the template's `secrets.required`, so a deploy without them
+behaves as before. A deploy applies them from the GitHub environment: the secret `REMOTE_TRIAL_KEY`
+and the variable `REMOTE_TRIAL_IDENTITY_REQUIRED`. A deploy whose environment holds the key declares it
+in the artifact, applies it like the required secrets and checks it reads back encrypted. A Worker that
+already holds `TRIAL_KEY` is refused before any write while the environment does not supply it.
+
+- `TRIAL_KEY`: the HMAC key trial markers and the US licence copy are kept under. **It can never be
+  rotated**: the callsigns and PC identifiers it was taken over are not kept, so a new key matches no
+  marker and every spent trial becomes available again. Set it, with the licence copy loaded, before
+  any Nexus sends a callsign. Without it, the approve route checks `callsign` and `pc` for shape only.
+- `TRIAL_IDENTITY_REQUIRED=1`: an approval that would start a trial must carry both fields
+  (`updateRequired` otherwise). Turn it on only once the Nexus releases that send them are out.
+
+The relay holds no payment key. It reads `subscriptions`, which only the separate, private billing
+Worker writes (it binds the same D1 database and receives the payment provider's webhook). The relay
+owns every migration, those tables included.
+
+The US licence copy is refreshed by `scripts/uls-import.mjs` from the FCC's public files (weekly full,
+daily changes); it writes SQL to apply with `wrangler d1 execute`. With `TRIAL_KEY` set and the copy
+more than three days old, US callsigns are refused a trial (`serviceUnavailable`) rather than waved
+through. Running the import with the production key is credential handling.
+
 ## Cloudflare and deployment
 
 The workflow `.github/workflows/remote-staging.yml` uses the **production** environment's
@@ -306,3 +336,20 @@ change. Review compatibility before restoring code;
 do not automatically roll back after an ambiguous upload or revive revoked trust.
 The normal Nexus release, marketing Pages site and in-app update feed have their own
 workflows and are outside this staging operation.
+
+## Production (prepared, not created)
+
+`.github/workflows/remote-production.yml` is the same administration aimed at the production row of
+`remote/scripts/staging-common.mjs` (`nexus-remote`, `remote.hamradiotools.io`, issuer exactly
+`https://login.hamradiotools.io/`). Its first job, `remote/scripts/production-guard.mjs`, holds no
+environment and no secret, and stops the run while that row still holds placeholder values or while
+the `remote-production` environment is missing, lets administrators bypass it, lacks the required
+reviewer, or deploys from anything but `main` and `v*` tags. GitHub creates an environment, with no
+protection, the first time a job names one that does not exist, so nothing names `remote-production`
+until the guard passes. It never uses the shared `production` environment. There is no `grant-trial`
+operation in production; trials there go through the Worker's admin route.
+
+Each row also names its private billing Worker (`billing.service`). The relay binds it as `BILLING`
+only once that row's `billing.deployed` is true, and the upload check then demands exactly that
+binding. The relay's no-logs rule covers Logpush and Tail Workers as well as Workers Logs: an upload
+with any of them on fails its own verification.

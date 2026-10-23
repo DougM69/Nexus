@@ -9,7 +9,10 @@ top of the **Contest** screen (the tent in the left bar) or in
 [Contesting ▸ Contest](settings-reference.md#contest), under the picker, because it
 reshapes the app for a weekend most operators are not having. It is one switch for
 whichever contest is picked in [Settings ▸ Contesting ▸ Contest](settings-reference.md#contest),
-Field Day or any other, and it names that contest wherever it is shown.
+Field Day or any other, and it names that contest wherever it is shown: with the
+mode on, the badge with the blue dot at the foot of the left rail reads its short
+name (**ILQP**, **NYQP**, **WFD**, **CQ WW CW**, **JAN VHF**, and **FIELD DAY** for
+ARRL Field Day).
 
 ---
 
@@ -56,7 +59,8 @@ checking** — one laptop covers the whole operation.
 *A Field Day **test event** in Nexus 1.10.3 — a fixture, not a submitted entry. The banner
 names the event and the rules year it is scoring against; the counters and the arithmetic line
 show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), and the sections
-board marks what has been worked out of 83. The per-contact exchange — class and section — is
+board marks what has been worked out of the 83 sections this 1.10.3 build carried (the board
+lists all 85 ARRL/RAC sections from 1.12.0 on). The per-contact exchange — class and section — is
 typed in the cockpit log strips and lists under this panel.*
 
 **The score at a glance**, in every contest. While a contest runs, the CW, Phone, RTTY and PSK
@@ -99,6 +103,16 @@ Logged it with a busted call or exchange, or on the wrong band? **Press Ctrl+Y**
 newest contact in place, or click **Edit** on any row of the contest screen's log. It keeps its
 time and serial, and the score, dupes and exports follow the edit. Not at a club yet: there, take
 it back and log it again. [Edit a Contact](../manual/Field-Day.md#edit-a-contact) has the details.
+
+The spots are marked for the contest too. In the CW and Phone cockpits, the Band activity strip,
+the pop-out band map and the Spots list strike through and dim a station you already worked on that
+band and mode (the same dupe check as the log strip's DUPE badge), and put a **MULT** tag on a
+station that would be a new multiplier; its tooltip names it, for example "new mult: county COOK".
+A country or a WPX prefix is read from the call. A county, section or zone comes from the exchange,
+so it is known only for a station you worked before, from what it sent you then. If you imported a
+call-history file for the contest, a station you have never worked also gets an outlined **MULT?**
+when the county, state, section or zone the file gives it would be new ("predicted from call history:
+county LAKE"); a county-line station is marked for every county that would count.
 
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
 power multiplier + a 16-item ARRL bonus checklist = total. **Winter Field Day
@@ -174,6 +188,35 @@ and drag the window to the logger's monitor. It opens on that monitor again next
 - It logs as this computer's own position, under the mode you are operating (phone, CW, RTTY or
   digital), so club sync, N3FJP and your exports see one station. A Remote viewer sees only the
   main window.
+- **A satellite pass's contacts go on the Satellites screen.** The logger window logs every contact
+  on the band the radio is on, with no satellite, so at ARRL Field Day a pass contact logged there
+  would count as an ordinary 2 m or 70 cm contact. While a satellite's transponder is picked on the
+  Satellites screen, one line under the logger window's title names the bird and says to log its
+  pass contacts there: that screen's log strip takes the band and the satellite from the pass.
+  Nothing is blocked, and a contact logged in the logger window is logged as before.
+
+### Statistics per operator
+
+When more than one operator logs, each contact carries the call in the **Operator** box at the
+moment it was logged, and the Contest screen's score area gains an **Operators** section under the
+multiplier boards: one row per operator, best first.
+
+- **QSOs, Points and New mults**, each with that operator's share of the whole. Points are QSO
+  points before multipliers, power and bonuses. A multiplier counts for the operator who worked it
+  first. Dupes, contacts in a mode the contest does not allow and contacts you removed count for
+  nobody, exactly as they count nothing in the score.
+- **Last 10 min /h and Last 60 min /h**: each operator's rate, in contacts per hour.
+- **Best hour**: the UTC clock hour in which that operator logged the most contacts, and how many.
+- **A band × mode table** for each operator.
+
+Contacts logged with no operator named are a row of their own, shown as **—**. They are never
+counted under the station's call. With a single operator the section is not drawn, since its one
+row would repeat the score above it. The **Summary** export carries the same section, without the
+rates, which describe a moment rather than the contest.
+
+The **Operators** box, picked in any box's picker on Conditions, in the dashboard window or in the
+dashboard rail beside a cockpit, shows who is at the key now and the leaderboard: QSOs, points and
+the last hour's rate. A single operator is one row there. With no contest running, it says so.
 
 ### The Contest screen on another monitor
 
@@ -230,16 +273,29 @@ done that you have not ticked:
   name, Entry category, Entry class, Power category and Unassisted entry that the contest changed,
   shown as it is now and as it was before. Tick the ones you want back.
 
+At a club it also says how many of this laptop's contacts the club's log does not have yet. They
+still go to the host once this laptop is back with it, with the mode on or off, as long as Nexus
+stays open with club sync on. So at the end of a club contest, wait until every laptop's chip reads
+**Synced** before anyone turns the mode off, and on the host export the **Club Cabrillo** before
+**Contest over?**: its button is on the Contest screen only while the mode is on. On the host,
+putting your own call and entry class back changes nothing in the club's files: Club Cabrillo and
+Club ADIF keep the call and class the club was hosted under, even with the mode turned back on to
+reach them. A contact you then log on your own call stays in that laptop's own log and is not sent:
+the club's log takes a contact only on the club's call, and the club block says how many it kept out.
+
 **Turn off** does what you ticked and then turns the mode off. **Not now** changes nothing, and the
 mode stays on. The merge and the export are done before the mode goes off, because they need the
 contest's session; if one of them fails, nothing after it is done, the reason is shown, and the mode
 stays on. With no contacts and nothing changed, the mode goes off at once, as it always did.
 
 "Before" is how each of those settings was the first time one of them changed for this contest, or
-when you turned Contest mode on, whichever came first. So the club call you typed into Settings on
-the Friday is offered back as your own call on the Sunday night. Nexus lets those values go when
-Contest mode goes off, whatever you ticked. A press made through Remote cannot merge or export, as
-on the Contest screen.
+when you turned Contest mode on, whichever came first. A change counts for the contest picked in
+Settings › Contesting from a week before it starts until it ends; with none picked, that is ARRL
+Field Day's week, the contest Contest mode runs then. So the club call you typed into Settings on
+the Friday is offered back as your own call on the Sunday night. Nexus keeps those values until you
+have put them all back, or until the contest is over and the mode is off: turn the mode off after a
+rehearsal with a row left unticked, and **Contest over?** offers it again when you turn the mode off
+at the end. A press made through Remote cannot merge or export, as on the Contest screen.
 
 ### Run the whole club on Nexus (club sync)
 
@@ -290,9 +346,18 @@ a club sync worked.*
 - Every position gets a **club dupe warning while typing** — if another tent
   already worked that call on this band and mode (and, at a QSO party, from
   the county you have typed), you're told before you call. It's a warning, not
-  a lock (N3FJP semantics); your own log's dupes still refuse.
+  a lock; your own log's dupes still refuse.
+- Every laptop's **county or sections board** shows what the whole club has
+  worked, so everyone sees what the club still needs: a county, state or
+  section another position logs turns green with a ✓ on the host's board and
+  on every other laptop's within a second, and this laptop's own are marked ⌂
+  in the colour its name has in the grid below, with a legend over the board
+  and both counts ("34/102 worked · 12 on this laptop"). A laptop or host on an
+  earlier release shows only its own, as before.
 - A live **band board** shows where every position is (band, mode, operator,
-  rate), stale-marked the moment one goes quiet. Above it a grid puts each
+  rate), stale-marked the moment one goes quiet; a position the host removes
+  reads **Removed** after its name on every laptop's board within a heartbeat
+  (5 seconds). Above it a grid puts each
   position's name in the cell of its band and mode, coloured on the host by its
   link (green Connected, amber Reconnecting, red Lost), so a band and mode
   nobody is on is an empty cell. It has its own **Club Board**
@@ -306,8 +371,8 @@ a club sync worked.*
   answers "who's on 20?" too.
 - The sync chip tells the truth: **Synced**, **Behind n**, or **Offline** —
   contacts logged offline are journaled and re-sent automatically on
-  reconnect. If the host PC dies, enable hosting on any other position;
-  everyone re-joins and nothing is lost.
+  reconnect, Contest mode on or off. If the host PC dies, enable hosting on
+  any other position; everyone re-joins and nothing is lost.
 - The host exports the merged **club Cabrillo / ADIF**, deduplicated the way
   the rules score it (earliest contact wins). A contest that wants repeats
   reported, such as the New York QSO Party, keeps them in the file, scoring
@@ -473,8 +538,8 @@ reaches the contact.
   Scandinavian Activity Contest (RS plus a serial number, each station once per
   band) logs as CQ WPX: pick it in Settings ▸ Contesting ▸ Contest, then switch on
   Contest mode. Before you send the log, change the Cabrillo file's `CONTEST:`
-  line to `SAC-SSB` (or `SAC-CW`). The score Nexus shows is WPX's; the sponsor
-  works out its own.
+  line to `SAC-SSB` (or `SAC-CW`) and delete its `CLAIMED-SCORE:` line: the score
+  Nexus shows is WPX's, and the sponsor works out its own.
 - **You can't tell the Field Day log which band a contact was on** — it records
   a band per contact, but always the one the radio is on at the moment you type
   the entry; nothing lets you name a different one. Log as you work, not

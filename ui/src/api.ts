@@ -8,12 +8,17 @@ import type { RemoteStationAction, RemoteStationStatus } from './remote-native/t
 import { remoteApplicationTransport } from './applicationTransport'
 import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
+import { isStreamInput } from './remote-native/stream-input'
+import { clientWords } from './features/clientWords'
 import type { SelfSpotReport } from './selfSpot'
 import type {
   AppSnapshot,
   AudioDevices,
   AwardSummary,
+  DxccEntityOption,
   GeoLogStats,
+  LogTimeline,
+  TimelineRange,
   BandChannel,
   PrivilegeSpans,
   CatTestResult,
@@ -23,6 +28,7 @@ import type {
   SkimHit,
   PskState,
   KeyboardMacroProfile,
+  RttyScope,
   RttyState,
   SstvState,
   ClubLogPushResult,
@@ -33,6 +39,7 @@ import type {
   FdEventBeacon,
   ClubFirewall,
   ClubFirewallPress,
+  FdClubLog,
   FdMergeReport,
   OtaSpot,
   DiagnosticsReport,
@@ -40,9 +47,12 @@ import type {
   ImportStats,
   JourneySummary,
   Js8ComposerPrefill,
+  Js8Filter,
+  Js8Freq,
   Js8State,
   JttySent,
   JttyState,
+  Js8Typeahead,
   Js8InboxState,
   Js8Switch,
   LoggedQso,
@@ -159,6 +169,13 @@ function mutatesCredentials(cmd: string): boolean {
   return /^set_[a-z0-9_]+_(password|key|token|code)$/.test(cmd) || /^clear_[a-z0-9_]+$/.test(cmd)
 }
 
+/** Commands that save or forget one stored password, key, token or code: each at the station's
+ *  own screen only, never through a stream of it ([`invoke`]). Matched by SHAPE, as
+ *  `mutatesCredentials` is, so a new connector's is refused the day it is added. */
+function storesACredential(cmd: string): boolean {
+  return /^(set|clear)_[a-z0-9_]+_(password|key|token|code)$/.test(cmd)
+}
+
 /** The TV entry sets this to its RPC base ('/connect/rpc') before anything invokes.
  *  ⚠️ Deliberately NOT consulted by `bridge()`/`isTauri()`: isTauri() answers "is the
  *  desktop shell here", and desktop-only behaviour (DPI seeding, the external-link
@@ -181,12 +198,22 @@ async function httpInvoke<T>(base: string, cmd: string, args?: Record<string, un
   return (await r.json()) as T
 }
 
+/** The desktop bridge's rejection, with a client-mode refusal put in words; any other error as
+ *  it came. */
+function worded(error: unknown): never {
+  const code = typeof error === 'string' ? /^nexusClient:([A-Za-z]+)$/.exec(error)?.[1] : undefined
+  throw code === undefined ? error : clientWords(code)
+}
+
 /** Invoke a backend command. The desktop IPC bridge when present; the TV page's LAN
  *  RPC when its entry declared one; otherwise a hard error — never fabricated data. */
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  // Only at the station itself: a credential saved or forgotten through a stream is refused, in
+  // words its caller shows. Read before anything awaits, while the stream's dispatch is running.
+  if (storesACredential(cmd) && isStreamInput()) throw t('remote.lan.atShackOnly')
   const tv = typeof window !== 'undefined' ? window.__NEXUS_TV_RPC__ : undefined
   const remote = remoteApplicationTransport()
-  const out = isTauri() ? ((await bridge()(cmd, args)) as T)
+  const out = isTauri() ? ((await bridge()(cmd, args).catch(worded)) as T)
     : remote ? await remote.invoke<T>(cmd, args).catch(error => {
       if (error instanceof Error && error.message === 'applicationUnsupported') {
         throw new Error(t('remote.applicationObserver'))
@@ -216,13 +243,9 @@ export async function getCredentialsStatus(): Promise<import('./types').CredStat
   return invoke('get_credentials_status')
 }
 
-/** Restricted observer read. Runtime validation lives at the monitoring boundary. */
-export async function getRemoteMonitorFrame(): Promise<unknown> {
-  return invoke<unknown>('get_remote_monitor_frame')
-}
-
-export function publishRemoteMemoryBank(generation: string, bank: string | null): Promise<boolean> { return invoke('publish_remote_memory_bank', { generation, bank }) }
 export function getRemoteStationStatus(): Promise<RemoteStationStatus> { return invoke('get_remote_station_status') }
+/** Whether a stream watches this station's screen now; `remote-stream-watched` tells each change. */
+export function getStreamWatched(): Promise<boolean> { return invoke('get_stream_watched') }
 export function remoteStationAction(action: RemoteStationAction): Promise<RemoteStationStatus> { return invoke('remote_station_action', { action }) }
 
 export async function getSnapshot(): Promise<AppSnapshot> {
@@ -726,13 +749,19 @@ export async function notifyErase(window: 0 | 1 | 2): Promise<void> {
  * contest means what by position.
  *
  * ⚠️ `mode` IS THE SCORING CLASS and `submode` IS THE MODE THAT WAS ON THE AIR — see
- * `fdLogManual` below, whose two notes apply here unchanged. */
+ * `fdLogManual` below, whose two notes apply here unchanged.
+ *
+ * `sentRst` is the report typed in the entry's optional "RST sent" box, logged as sent for this
+ * contact only (2 digits on phone, 3 on CW and digital, or the engine refuses it). Omitted when
+ * nothing was typed there, and then the arguments are exactly what they always were; the same on
+ * the two commands below. */
 export async function contestLogManual(
   call: string,
   fields: [string, string][],
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
   entry?: EntryClaim,
+  sentRst?: string,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_log_manual', {
     call,
@@ -740,6 +769,7 @@ export async function contestLogManual(
     mode,
     submode: submode ?? null,
     ...(entry ? { entry } : {}),
+    ...(sentRst ? { sentRst } : {}),
   })
 }
 
@@ -756,14 +786,17 @@ export interface EntryClaim {
 }
 
 /** The contest strip changed in one window while the contest logger window is open: what it now
- *  shows becomes the entry both windows show. Answers the entry's new rev. Rejects with the logger
- *  window closed. Text in memory only — nothing is logged, written or sent. */
+ *  shows becomes the entry both windows show. `contact` is the contact the strip showed as it
+ *  changed (`ContestEntryShared.contact`). Answers the entry's new rev. Rejects with the logger
+ *  window closed, and with `contestEntryLogged` when that contact has since been logged. Text in
+ *  memory only — nothing is logged, written or sent. */
 export async function contestEntryPut(
   call: string,
   fields: Record<string, string>,
   marks: unknown,
+  contact: number,
 ): Promise<number> {
-  return invoke<number>('contest_entry_put', { call, fields, marks })
+  return invoke<number>('contest_entry_put', { call, fields, marks, contact })
 }
 
 /** ⭐ **Log ONE contact as several rows** — a station on a county line, which the Illinois QSO
@@ -779,6 +812,7 @@ export async function contestLogManualRows(
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
   entry?: EntryClaim,
+  sentRst?: string,
 ): Promise<boolean[]> {
   return invoke<boolean[]>('contest_log_manual_rows', {
     call,
@@ -786,6 +820,7 @@ export async function contestLogManualRows(
     mode,
     submode: submode ?? null,
     ...(entry ? { entry } : {}),
+    ...(sentRst ? { sentRst } : {}),
   })
 }
 
@@ -837,6 +872,22 @@ export async function contestRemoveLast(call: string, whenUnix: number): Promise
  *  since on that band and mode. At a club the club puts it back too (`club`). */
 export async function contestRestore(id: number): Promise<ContestRemovalAnswer> {
   return invoke<ContestRemovalAnswer>('contest_restore', { id })
+}
+
+/** What a Clear test contacts came to: how many contacts left the contest log (each now under
+ *  Removed), where any of them had already gone, and at a club whether the club drops them now —
+ *  or why nothing was cleared. */
+export type ContestClearAnswer =
+  | { outcome: 'cleared'; contacts: number; sentTo: ContestSentTo; club?: ContestClubRoute }
+  | { outcome: 'refused'; refusal: ContestRemovalRefusal }
+
+/** ⭐ **Clear test contacts** — every contact of this running out of the contest log, each kept
+ *  under Removed as `contestRemoveLast` keeps one, when the log is still what the screen named
+ *  (`rowCount` rows, the newest contact `call` at `whenUnix`), else `refused: changed`. Club seqs
+ *  stay spent, and the serial run starts again at 1. At a club the club takes each back too (`club`). Answers once the contest
+ *  journal holds the change. Never keys or stops TX. */
+export async function contestClear(rowCount: number, call: string, whenUnix: number): Promise<ContestClearAnswer> {
+  return invoke<ContestClearAnswer>('contest_clear', { rowCount, call, whenUnix })
 }
 
 /** The removed contacts, oldest removal first. */
@@ -925,6 +976,7 @@ export async function contestLogSatellite(
   mode: 'CW' | 'PH' | 'DIG',
   submode?: string,
   entry?: EntryClaim,
+  sentRst?: string,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_log_satellite', {
     call,
@@ -932,6 +984,7 @@ export async function contestLogSatellite(
     mode,
     submode: submode ?? null,
     ...(entry ? { entry } : {}),
+    ...(sentRst ? { sentRst } : {}),
   })
 }
 
@@ -1061,6 +1114,13 @@ export async function clubFirewallPress(action: 'allow' | 'remove'): Promise<Clu
  * Rejects when this instance is not hosting. */
 export async function fdClubExport(format: 'cabrillo' | 'adif'): Promise<string> {
   return invoke<string>('fd_club_export', { format })
+}
+
+/** The host's club log for its own screen: the newest contacts its club merged, newest first,
+ *  each with the position that logged it, and how many the club holds. `null` when this instance
+ *  is not hosting. A read; never on Remote. */
+export async function fdClubLogNewest(): Promise<FdClubLog | null> {
+  return invoke<FdClubLog | null>('fd_club_log_newest')
 }
 
 /** What the host's Give button did: the position given, or why nothing changed. */
@@ -1255,6 +1315,30 @@ export async function setWindowBehind(on: boolean): Promise<WindowBehind> {
   return invoke<WindowBehind>('set_window_behind', { on })
 }
 
+/** Whether the CALLING window offers the pin (the contest logger window), and whether it is
+ *  pinned in front of other windows. */
+export interface WindowOnTop {
+  supported: boolean
+  on: boolean
+}
+
+export async function getWindowOnTop(): Promise<WindowOnTop> {
+  return invoke<WindowOnTop>('get_window_on_top')
+}
+
+/** Pin the calling window in front of other windows (or unpin it): applied now and remembered
+ *  for its next open. Rejects where the window cannot. */
+export async function setWindowOnTop(on: boolean): Promise<WindowOnTop> {
+  return invoke<WindowOnTop>('set_window_on_top', { on })
+}
+
+/** Bring the calling window to the front with the keyboard: the main window, for itself, when a
+ *  contest window sends the operator to a cockpit in it. Rejects where there is no window to move
+ *  (a browser). */
+export async function focusWindow(): Promise<void> {
+  return invoke<void>('focus_window')
+}
+
 /** Switch the Operate mode: 'dx' (FT8/FT4) or 'msg' (Tempo two-way calling).
  * Atomically sets the mode's tier + mode. Returns the fresh snapshot. */
 export async function setArea(area: 'dx' | 'msg'): Promise<AppSnapshot> {
@@ -1364,6 +1448,9 @@ export interface ConfirmationCheck {
   /** How many records the service's download held (LoTW's confirmations, eQSL's cards, QRZ's
    *  book), as the Connections log says them. */
   records: number
+  /** LoTW only: how many of its confirmations are for a call the log holds no contact under (a
+   *  club call on the account, say). They change nothing. */
+  otherCallRecords: number
   lines: ConfirmationLine[]
   /** The contacts the service confirms that lack its confirmation: Apply adds it. */
   gainIds: string[]
@@ -1440,6 +1527,15 @@ export async function resolveEntity(call: string): Promise<string | null> {
  *  placeholder), never a logged value: a station outside its prefix's zone sends its own. */
 export async function contestZoneHint(call: string): Promise<number | null> {
   return invoke<number | null>('contest_zone_hint', { call })
+}
+
+/** What the log last said of `call`'s county or state, for the contest entry's box receiving
+ *  `slot`: this contest's received value on a row of this contest (any year), else a row's
+ *  STATE, with that contact's time; null when no contact with the call says. Raw as logged: the
+ *  strip fills it only if it is one of the box's own codes. Read through the log's per-call
+ *  index in the station, so a big log costs one station's rows. */
+export async function contestLoggedQth(call: string, slot: string): Promise<{ value: string; whenUnix: number } | null> {
+  return invoke<{ value: string; whenUnix: number } | null>('contest_logged_qth', { call, slot })
 }
 
 /** Empty the RETIRED wanted list — its one writer — once its entries are safely on the watch list
@@ -1564,6 +1660,15 @@ export async function setSatTagById(target: RowRef, satName: string | null): Pro
   return invoke<RowAnswer>('set_sat_tag_by_id', { target, satName })
 }
 
+/** Set — or CLEAR — by hand the DXCC entity the contact `target` counts toward (ADIF `DXCC`):
+ *  `dxcc` is the entity's number (`getDxccEntities`), and `null` clears it so the contact counts
+ *  by its call again. LoTW's number for the contact, where the log keeps one, still counts over
+ *  it. Its own command for the satellite tag's reason: a clear has to be an act the operator
+ *  chooses, never a blank box on the edit form. */
+export async function setDxccById(target: RowRef, dxcc: number | null): Promise<RowAnswer> {
+  return invoke<RowAnswer>('set_dxcc_by_id', { target, dxcc })
+}
+
 /** Delete the contact `target`. */
 export async function deleteQsoById(target: RowRef): Promise<RowAnswer> {
   return invoke<RowAnswer>('delete_qso_by_id', { target })
@@ -1581,9 +1686,20 @@ export async function getAwards(): Promise<AwardSummary> {
   return invoke<AwardSummary>('get_awards')
 }
 
+/** The Stats pane: what the log holds for `call`, typed in a log entry on `band` in `mode` —
+ *  counted by the award fold itself, in the station. */
+export async function getCallStats(call: string, band: string, mode: string): Promise<import('./types').CallStats> {
+  return invoke('get_call_stats', { call, band, mode })
+}
+
 /** Geographic log stats — continent / CQ-zone / DX-vs-domestic (cty.dat-resolved per call). */
 export async function getLogStats(): Promise<GeoLogStats> {
   return invoke<GeoLogStats>('get_log_stats')
+}
+
+/** The Statistics view's timeline: contacts per mode over the past day, 30 days or year (UTC). */
+export async function getLogTimeline(range: TimelineRange): Promise<LogTimeline> {
+  return invoke<LogTimeline>('get_log_timeline', { range })
 }
 
 /** The Journey snapshot — the in-app, beginner-first achievement layer (firsts,
@@ -1862,6 +1978,20 @@ export async function getAllSpots(): Promise<import('./types').SpotRow[]> {
   return invoke<import('./types').SpotRow[]>('get_all_spots')
 }
 
+/** The spots programs on Nexus's TCI server sent ("Share by TCI"), for the band map: each a spot
+ *  row whose `tci` names the program. Kept apart from the cluster's (`getAllSpots`), and asked only
+ *  when `radio.tciServer.spots` says they changed (`features/tciSpots.ts`). */
+export async function getTciSpots(): Promise<import('./types').SpotRow[]> {
+  return invoke<import('./types').SpotRow[]>('get_tci_spots')
+}
+
+/** A click on a program's spot on the band map: the station tunes there and tells every program
+ *  on its TCI server, and does nothing else (never a section change, an arm, a QSO). Rejects with
+ *  the station's reason, refused while anything is on the air. */
+export async function clickTciSpot(call: string, freqMhz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('click_tci_spot', { call, freqMhz })
+}
+
 /** Check the release feed (hamradiotools.io, SourceForge as fallback) for a newer Nexus
  * release (Phase 1 update check). Rejects offline / on a
  * fetch error — callers treat that as a silent no-op. */
@@ -1910,6 +2040,12 @@ export async function exportGeneralLog(
   to?: string,
 ): Promise<LogExport> {
   return invoke<LogExport>('export_general_log', { format, from: from || null, to: to || null })
+}
+
+/** Export the contacts selected in the Logbook as ADIF, by their ids (`LoggedQso.id`), each record
+ *  as the whole-log export writes it. */
+export async function exportSelectedLog(ids: string[]): Promise<LogExport> {
+  return invoke<LogExport>('export_selected_log', { ids })
 }
 
 /** The absolute path where the ALL.TXT decode log is written (to show in Settings). */
@@ -2038,6 +2174,11 @@ export async function importPotaLog(text: string): Promise<PotaStampResult> {
   return invoke<PotaStampResult>('import_pota_log', { text })
 }
 
+/** The native title bar's theme on Windows: the operator's pick, or null for System. */
+export async function setTitleBarTheme(theme: 'light' | 'dark' | null): Promise<void> {
+  await invoke('set_title_bar_theme', { theme })
+}
+
 /** Open a station's QRZ.com profile in the system browser (roster/logbook affordance). */
 export async function openQrzPage(call: string): Promise<void> {
   await invoke('open_qrz_page', { call })
@@ -2093,12 +2234,6 @@ export async function sstvDeleteImage(path: string): Promise<void> {
   await invoke('sstv_delete_image', { path })
 }
 
-/** The same delete FROM A BROWSER, which has no station path to name and must never be given one:
- * it names the picture by what its own gallery row showed and the station resolves the file. */
-export async function sstvDeleteImageRemote(finishedUtc: string, mode: string): Promise<void> {
-  await invoke('sstv_delete_image', { finishedUtc, mode })
-}
-
 /** Toggle Skip Tx1 (WSJT-X parity) — a session-only flag, resets each launch. */
 export async function setSkipTx1(enabled: boolean, context?: FtRuntimeGesture): Promise<void> {
   await invoke('set_skip_tx1', { enabled, ...ftRuntimeArgs(context) })
@@ -2114,6 +2249,48 @@ export async function saveTextToDownloads(filename: string, text: string): Promi
  *  on macOS wry cancels `<a download>` navigations outright, so a blob anchor saves nothing. */
 export async function savePngToDownloads(filename: string, base64: string): Promise<string> {
   return invoke<string>('save_png_to_downloads', { filename, base64 })
+}
+
+/** The station folders a computer driving it from afar may fetch from (features/shackFiles.ts). */
+export type ShackFolder = 'recordings' | 'allTxt' | 'sstv'
+
+export interface ShackFile {
+  name: string
+  bytes: number
+  modifiedMs: number
+}
+
+/** The files in one of the station's three shared folders, newest first. */
+export async function shackFileList(folder: ShackFolder): Promise<ShackFile[]> {
+  return invoke<ShackFile[]>('shack_file_list', { folder })
+}
+
+/** One bounded piece of a station file from `offset` (base64), with the file's whole size. */
+export async function shackFileRead(
+  folder: ShackFolder,
+  name: string,
+  offset: number,
+): Promise<{ data: string; offset: number; size: number }> {
+  return invoke('shack_file_read', { folder, name, offset })
+}
+
+/** Where a saved piece went: the file's name in THIS computer's Downloads folder, which the later
+ *  pieces of the same save name, and its full path. */
+export interface ShackSaved {
+  name: string
+  path: string
+}
+
+/** One piece of a station file, written into THIS computer's Downloads folder at `offset`. The
+ *  piece at offset 0 starts a new file, under the next free name (`name (1).ext`) when one of that
+ *  name is there already; each later piece names the file it started. */
+export async function shackFileSave(filename: string, base64: string, offset: number): Promise<ShackSaved> {
+  return invoke<ShackSaved>('shack_file_save', { filename, base64, offset })
+}
+
+/** One received SSTV picture from the station, whole (base64), by its gallery path. */
+export async function shackGalleryImage(path: string): Promise<string> {
+  return invoke<string>('shack_gallery_image', { path })
 }
 
 /** Open an external http(s) link in the system browser. Backing for the app-wide
@@ -2181,10 +2358,11 @@ export async function sstvTune(
 }
 
 /** Park the dial on one of the APP's OWN fixed channels (the ISS SSTV auto-arm's 145.800 FM).
- * Identical to setFrequency on the radio; it differs only in what the per-(band, mode) dial
- * memory makes of it — an app-driven auto-tune is not the operator's dial in that mode, so it
- * is never remembered, and the dial it displaces is banked. Restoring the operator's OWN saved
- * dial afterwards uses setFrequency, because that one IS theirs. */
+ * An FM channel is held in FM, as the SSTV strip's pick of it is, and routed on FM, as a
+ * repeater tune is (neither while a satellite pass owns the dial). The per-(band, mode) dial
+ * memory never takes it — an app-driven auto-tune is not the operator's dial in that mode, so
+ * it is never remembered, and the dial it displaces is banked. Restoring the operator's OWN
+ * saved dial afterwards uses setFrequency, because that one IS theirs. */
 export async function tuneChannel(
   dialMhz: number,
   band: string,
@@ -2209,12 +2387,20 @@ export async function pickBand(band: string, mode?: string): Promise<AppSnapshot
  * on the current band (phone segment / CW segment / FT8 watering hole). Pass false for
  * incidental nav and the Needed click (which sets the spot's exact frequency itself).
  * "keyboard" and "jtty" are the one Keyboard section with PSK or JTTY as its modem, which
- * picks the band plan the section's entry lands on. */
+ * picks the band plan the section's entry lands on.
+ * `keepDial`: the Phone tab pressed on the SSTV screen. With `followFreq` the engine keeps the
+ * dial where Phone may transmit there and homes it where it may not; without, nothing homes.
+ * Either way an FM channel the SSTV screen holds stays FM in Phone. Sent only when true, so every
+ * other entry's wire is unchanged. */
 export async function setOperatingMode(
   mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard' | 'jtty',
   followFreq: boolean,
+  keepDial = false,
 ): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_operating_mode', { mode, followFreq })
+  return invoke<AppSnapshot>(
+    'set_operating_mode',
+    keepDial ? { mode, followFreq, keepDial } : { mode, followFreq },
+  )
 }
 
 /** Work a spotted station (the Needed click): set the operating mode AND QSY to the spot's
@@ -2231,7 +2417,7 @@ export async function workSpot(
   park?: { program: string; reference: string } | null,
 ): Promise<AppSnapshot> {
   // `call` lets the backend look up the spot's pile-up split ("UP 2") and
-  // configure rig split automatically — the N1MM behavior. `tier` is the digital
+  // configure rig split automatically. `tier` is the digital
   // spot's protocol: passing it here makes the tier switch and the QSY ONE atomic
   // backend call — as two calls, the radio loop could command the tier's default
   // dial to the rig in the gap before the spot's exact frequency ("hitting a
@@ -2326,15 +2512,22 @@ export async function setRigFunc(
 }
 
 /** Queue CW to transmit (CAT keyer). `text` is an F-key macro template or literal
- * type-ahead — the engine expands the tokens and the rig keys it. */
-export async function sendCw(text: string): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('send_cw', { text })
+ * type-ahead — the engine expands the tokens and the rig keys it. `reply`: the message answers a
+ * station, so CW speed match may key it at that station's speed (`cwSendsAnswer`). */
+export async function sendCw(text: string, reply = false): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('send_cw', { text, reply })
 }
 
 /** Queue CW for Enter Sends Message. Unlike `sendCw` it NEVER turns TX on: it rejects, with the
  *  reason, while TX is off or any transmit gate refuses, and then nothing was taken. */
-export async function sendCwArmed(text: string): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('send_cw_armed', { text })
+export async function sendCwArmed(text: string, reply = false): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('send_cw_armed', { text, reply })
+}
+
+/** CW speed match on or off: the contest strip's switch, saved alone (never a settings-form save).
+ *  It changes only the speed an answer to a station keys at. */
+export async function setCwSpeedMatch(on: boolean): Promise<void> {
+  await invoke('set_cw_speed_match', { on })
 }
 
 /** The ESM switch in a cockpit's TX dock, saved alone (never a settings-form save). */
@@ -2378,6 +2571,14 @@ export async function setCwKeyer(
 /** Manual PTT for live phone — key (true) / unkey (false) the rig. */
 export async function setPtt(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_ptt', { on })
+}
+
+/** Phone's Lock, re-asserted from a computer driving a station: one hold of its held press on the
+ *  station's Stop road (`src-tauri/src/client_mode.rs`), `stillTalking` the operator's answer to
+ *  "Still talking?". Resolves whether that is asked, and how long is left before the Lock's cap;
+ *  fails once the press has ended (`lockCapped` at the cap). */
+export async function holdPttLock(stillTalking: boolean): Promise<{ ask: boolean; leftMs?: number }> {
+  return invoke<{ ask: boolean; leftMs?: number }>('hold_ptt_lock', { stillTalking })
 }
 
 /** A Phone PTT press made through the Remote stream's picture: ARMS the streamed operator's
@@ -2541,11 +2742,8 @@ export async function getLicensedBandPlan(mode: string): Promise<BandChannel[]> 
 }
 /** The licence-class band edges a scope tints: where the station's class may transmit the section
  * `mode`'s emission ('digital' | 'phone' | 'cw' | 'rtty' | 'keyboard', the snapshot's
- * `radio.operatingMode`), from the transmit gate's own table. Display only. The Remote page's
- * commands are a closed set this is not part of, so there it answers null without asking, and its
- * scopes draw no edges. */
+ * `radio.operatingMode`), from the transmit gate's own table. Display only. */
 export async function getPrivilegeSpans(mode: string): Promise<PrivilegeSpans | null> {
-  if (remoteApplicationTransport()) return null
   return invoke<PrivilegeSpans>('get_privilege_spans', { mode })
 }
 
@@ -2553,6 +2751,13 @@ export async function getPrivilegeSpans(mode: string): Promise<PrivilegeSpans | 
  *  picker's "Other country…" search (F4MQS). */
 export async function getDxccEntityNames(): Promise<string[]> {
   return invoke<string[]>('dxcc_entity_names')
+}
+
+/** Every DXCC entity a contact can be set to count toward, current and deleted, in number
+ *  order — the Logbook's country picker. The station owns the table, so the picker offers
+ *  exactly the numbers `setDxccById` accepts. */
+export async function getDxccEntities(): Promise<DxccEntityOption[]> {
+  return invoke<DxccEntityOption[]>('dxcc_entities')
 }
 
 /** Every cty.dat entity name with its continent code (`[entity, 'EU']`), for band activity's
@@ -2757,11 +2962,26 @@ export interface RadioProfilePatch {
   flexNativeAudio: boolean
   /** This radio's opt-in to Nexus's own Flex client as its CAT (Beta; per-radio, as above). */
   flexNativeCat: boolean
+  /** This radio's Beta setting that lets the Flex client send CW, Tune and ATU before a bench has
+   *  confirmed them (off by default; per-radio, as above). */
+  flexNativeUnbenched: boolean
   /** This radio's address, network user and control port for the Icom network connection (Beta;
    *  per-radio, as above). Its password is never here: the OS keychain holds it. */
   icomLanHost: string
   icomLanUser: string
   icomLanPort: number
+  /** This radio's TCI connection (the "TCI" Connection choice): the SDR program's server address
+   *  and port, which of its transceivers (from 0), its dialect ('auto' | 'expertsdr3' | 'thetis' |
+   *  'pihpsdr'), Nexus's audio over it (both ways), its spectrum and its spots. Rust takes each as
+   *  optional and leaves a stored value alone when absent (a form from before them); this form
+   *  states every one. */
+  tciHost: string
+  tciPort: number
+  tciTrx: number
+  tciDialect: string
+  tciAudio: boolean
+  tciPan: boolean
+  tciSpots: boolean
 }
 
 /** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio
@@ -2861,6 +3081,47 @@ export async function discoverFlex(): Promise<{ model: string; nickname: string;
   return invoke('discover_flex')
 }
 
+/** What one port answered when Find TCI server tried it: an SDR program's TCI server
+ *  (`found`), Nexus's own TCI server (`nexus`, skipped), nothing (`noAnswer`), something that is
+ *  not a TCI server (`notTci`), or a WebSocket server that never finished the TCI handshake
+ *  (`noReady`). */
+export type TciPortOutcome = 'found' | 'nexus' | 'noAnswer' | 'notTci' | 'noReady'
+
+/** The SDR program's TCI server Find TCI server found: what it said about itself before `ready;`,
+ *  as sent. `dialect` is how Nexus will read it: 'expertsdr3', 'expertsdr2', 'thetis', or
+ *  'unknown' for a program this build does not know. */
+export interface TciServerFound {
+  port: number
+  program: string | null
+  version: string | null
+  device: string | null
+  trxCount: number | null
+  dialect: string
+}
+
+/** Find TCI server's answer for one address. `resolved` is false when this computer cannot find
+ *  the address at all (nothing was tried). */
+export interface TciProbeResult {
+  host: string
+  resolved: boolean
+  tried: { port: number; outcome: TciPortOutcome }[]
+  found: TciServerFound | null
+}
+
+/** Look for an SDR program's TCI server at `host`: `port` first, then 50001 and 40001, the ports
+ *  the programs come set to. It reads each server's handshake and closes, writing nothing to it: it
+ *  never keys and never changes the radio. A few seconds at most. At the shack only. */
+export async function tciProbe(host: string, port: number): Promise<TciProbeResult> {
+  return invoke('tci_probe', { host, port })
+}
+
+/** "Share by TCI": the operator's Disconnect for program `id` (its number in
+ *  `radio.tciServer.programs`). What the program keyed ends first, then its connection closes. A
+ *  number no connected program has does nothing. At the shack only. */
+export async function tciServerDisconnect(id: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('tci_server_disconnect', { id })
+}
+
 /** Stop the rotator immediately (rotctld S). */
 export async function stopRotator(): Promise<void> {
   return invoke('stop_rotator')
@@ -2879,7 +3140,6 @@ export async function readRotatorState(): Promise<RotatorState | null> {
 /** Single-signal CW decode of the recent RX audio (live readout: text + estimated WPM).
  * `sensitivity` (0..1, 0.5 = default gates) scales the decoder's presence + SNR gates. */
 export async function cwDecode(sensitivity: number): Promise<CwDecodeResult> {
-  if (remoteApplicationTransport()) return invoke<CwDecodeResult>('get_cw_state')
   return invoke<CwDecodeResult>('cw_decode', { sensitivity })
 }
 
@@ -3137,6 +3397,12 @@ export interface AprsIsStatus {
   gateRejected: number
   /** The most recent refusal reason, for the tooltip. */
   lastReject: string | null
+  /** The session is up for JS8's @APRSIS gateway: what JS8 stations address to @APRSIS goes up
+   * through it. With the feed off, that is why it is up. Desktop only: the Remote page's sample
+   * keeps the nine fields above, which its validator requires exactly. */
+  forJs8?: boolean
+  /** …and JS8's relay listens on it for APRS messages to stations heard on JS8. Desktop only. */
+  forJs8Relay?: boolean
 }
 
 /** Poll the APRS-IS feed's status beside the decoder health. */
@@ -3198,18 +3464,6 @@ export async function repeaterTune(
   return invoke<AppSnapshot>('repeater_tune', { outputMhz, shift, offsetHz, toneHz })
 }
 
-/** Recall a station memory from the hosted page (Remote only; the control transport maps it to
- * the closed recall intent). The installed desktop recalls through Settings + `workSpot`. */
-export async function remoteRecallMemory(args: {
-  section: 'cw' | 'phone' | 'digital'
-  dialMhz: number
-  band: string
-  sideband: 'USB' | 'LSB' | null
-  fm: { shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number } | null
-}): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('remote_recall_memory', args)
-}
-
 /** Arm/disarm the RTTY RX decoder (session-only; RX decode, never TX). */
 export async function rttyArm(on: boolean): Promise<RttyState> {
   return invoke<RttyState>('rtty_arm', { on })
@@ -3234,13 +3488,18 @@ export async function getRttyState(): Promise<RttyState> {
   return invoke<RttyState>('get_rtty_state')
 }
 
+/** The RTTY tuning scope's newest frame (poll while its pane is shown). Receive-only. */
+export async function getRttyScope(): Promise<RttyScope> {
+  return invoke<RttyScope>('get_rtty_scope')
+}
+
 /** Queue RTTY text to transmit — an explicit operator send (the engine validates
  * TX-enable / privileges / RTTY-section ownership and rejects with the reason). */
 export async function rttySend(text: string): Promise<RttyState> {
   return invoke<RttyState>('rtty_send', { text })
 }
 
-/** Continuous TX on/off (the MMTTY "TX" latch): stay keyed and type into a live
+/** Continuous TX on/off (the "TX" latch): stay keyed and type into a live
  * transmission instead of one keyed over per Enter. ON runs the same gate a send
  * runs; OFF lets what was already typed finish keying, then unkeys — it is a mode
  * toggle, not the emergency stop (Stop TX and the TX-enable latch are). */
@@ -3352,7 +3611,7 @@ export async function pskSend(text: string): Promise<PskState> {
   return invoke<PskState>('psk_send', { text })
 }
 
-/** Continuous TX on/off — the PSK cockpit's TX button (the MMTTY-style latch).
+/** Continuous TX on/off — the PSK cockpit's TX button (the same latch RTTY carries).
  * ON runs the same gate a send runs; OFF lets what was typed finish keying.
  * NOT the emergency stop: Stop TX / Esc / the TX-enable latch cut instantly. */
 export async function pskSetLatched(on: boolean): Promise<PskState> {
@@ -3469,16 +3728,44 @@ export async function js8LocatorRefusal(): Promise<string | null> {
   return invoke<string | null>('js8_locator_refusal')
 }
 
-/** Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 Turbo). Persisted; the slot
+/** Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 JS8 40 | 4 JS8 60). Persisted; the slot
  * clock and the boundary decode window follow. Never touches the TX latch. */
 export async function js8SetSpeed(speed: number): Promise<Js8State> {
   return invoke<Js8State>('js8_set_speed', { speed })
 }
 
-/** Select which speeds the receiver decodes (bitmask slow 1 · normal 2 · fast 4 · turbo 8).
+/** Select which speeds the receiver decodes (bitmask slow 1 · normal 2 · fast 4 · turbo 8 · ultra 16).
  * Persisted; a mask that decodes nothing is refused (the engine returns why). */
 export async function js8SetRxSpeeds(mask: number): Promise<Js8State> {
   return invoke<Js8State>('js8_set_rx_speeds', { mask })
+}
+
+/** JS8Call's decode filter (on/off, centre and width in Hz): the waterfall controls and the row
+ *  menus' "Centre filter at …Hz". Receive only. Persisted. */
+export async function js8SetFilter(filter: Js8Filter): Promise<Js8State> {
+  return invoke<Js8State>('js8_set_filter', { filter })
+}
+
+/** JS8Call 3.0.3's own frequency table as rows of the operator's list: what Settings shows while
+ *  no list of the operator's own is kept, and what Reset returns to. */
+export async function js8DefaultFrequencies(): Promise<Js8Freq[]> {
+  return invoke<Js8Freq[]>('js8_default_frequencies')
+}
+
+/** The passband centre "QSY to centre" puts the transmit offset on, Hz. Moves nothing by itself. */
+export async function js8SetQsyCenter(hz: number): Promise<Js8State> {
+  return invoke<Js8State>('js8_set_qsy_center', { hz })
+}
+
+/** JS8Call's QSY: move the dial so the transmit offset sits on the passband centre. MOVES THE RIG;
+ *  refused while anything transmits or a JS8 message is going out (the engine says why). */
+export async function js8QsyToCentre(): Promise<Js8State> {
+  return invoke<Js8State>('js8_qsy_to_centre')
+}
+
+/** Answer a scheduled frequency change's notice: `go` = change now, otherwise cancel (stay). */
+export async function js8HopAnswer(go: boolean): Promise<Js8State> {
+  return invoke<Js8State>('js8_hop_answer', { go })
 }
 
 /** Queue a message to `to` (a callsign, an @GROUP, or null for @ALLCALL). An explicit
@@ -3493,23 +3780,24 @@ export async function js8SendCommand(to: string, cmd: number, arg: string): Prom
   return invoke<Js8State>('js8_send_command', { to, cmd, arg })
 }
 
-/** Call CQ (`idx` = the CQ variant 0..7: "CQ CQ CQ" … "CQ"). */
-export async function js8CallCq(idx: number): Promise<Js8State> {
-  return invoke<Js8State>('js8_call_cq', { idx })
+/** Call CQ with the CQ message from Settings (`js8CqText`, JS8Call's CQ message), its macros
+ * replaced by the station. */
+export async function js8CallCq(): Promise<Js8State> {
+  return invoke<Js8State>('js8_call_cq')
 }
 
-/** The SECOND act of the two-act rule: autoreply | relay | hback (persisted) or hb
+/** The SECOND act of the two-act rule: autoreply | relay | hback | hbnet (persisted) or hb
  * (session-only). Turning a switch on never keys by itself — the session TX latch is the
  * first act, re-checked at plan time on every slot. */
 export async function js8Arm(which: Js8Switch, on: boolean): Promise<Js8State> {
   return invoke<Js8State>('js8_arm', { which, on })
 }
 
-/** Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant to send). Session-only and
- * never persisted, like the HB toggle; the interval is the persisted half (js8CqIntervalMin).
+/** Arm/disarm JS8Call's repeating CQ, which sends the CQ message from Settings. Session-only
+ * and never persisted, like the HB toggle; the interval is the persisted half (js8CqIntervalMin).
  * Arming keys nothing — the session TX latch is the first act. */
-export async function js8CqRepeat(on: boolean, idx: number): Promise<Js8State> {
-  return invoke<Js8State>('js8_cq_repeat', { on, idx })
+export async function js8CqRepeat(on: boolean): Promise<Js8State> {
+  return invoke<Js8State>('js8_cq_repeat', { on })
 }
 
 /** The native cockpit's compose box, both ways: whether it holds text, and the id of the reply
@@ -3517,6 +3805,35 @@ export async function js8CqRepeat(on: boolean, idx: number): Promise<Js8State> {
  * off, as JS8Call fills its compose box), or null. Keys nothing. */
 export async function js8Composer(composing: boolean, taken: number | null): Promise<Js8ComposerPrefill | null> {
   return invoke<Js8ComposerPrefill | null>('js8_composer', { composing, taken })
+}
+
+/** JS8Call's typeahead: what is still to go of the operator's message going out, `sentSeen` the
+ * characters of it the box had seen go. Taken just before the next frame; answered with what the box
+ * shows, or null once nothing of the box's is going out. Native only. */
+export async function js8Typeahead(sentSeen: number, unsent: string): Promise<Js8Typeahead | null> {
+  return invoke<Js8Typeahead | null>('js8_typeahead', { sentSeen, unsent })
+}
+
+/** What the compose box shows of the operator's message going out, or null once it has gone. */
+export async function js8TypeaheadState(): Promise<Js8Typeahead | null> {
+  return invoke<Js8Typeahead | null>('js8_typeahead_state')
+}
+
+/** The compose box's words JS8Call underlines (its word check): one answer per word, in order,
+ * true where the JSC dictionary codes the word in pieces. The dictionary only; nothing keys. */
+export async function js8WordCheck(words: string[]): Promise<boolean[]> {
+  return invoke<boolean[]>('js8_word_check', { words })
+}
+
+/** What JS8Call's right-click offers for an underlined word. */
+export interface Js8WordSuggestions {
+  /** Up to five cheaper words, cheapest first. */
+  words: string[]
+  /** The dictionary holds some prefix of the word: "No suggestions" when `words` is empty. */
+  found: boolean
+}
+export async function js8WordSuggestions(word: string): Promise<Js8WordSuggestions> {
+  return invoke<Js8WordSuggestions>('js8_word_suggestions', { word })
 }
 
 /** The operator's Yes or No to the automatic reply the dock asks about (JS8Call's
@@ -3539,6 +3856,49 @@ export async function js8InboxMark(id: number, state: Js8InboxState): Promise<Js
 /** Delete an inbox row. Journaled. */
 export async function js8InboxDelete(id: number): Promise<Js8State> {
   return invoke<Js8State>('js8_inbox_delete', { id })
+}
+
+/** "Send heartbeat now" (JS8Call's HB button menu): one heartbeat in the next period, the repeat
+ * left as it is. Refused with heartbeat networking off or at a speed with no heartbeats; keys only
+ * with TX on. */
+export async function js8HeartbeatNow(): Promise<Js8State> {
+  return invoke<Js8State>('js8_heartbeat_now')
+}
+
+/** The call in the To box (null when empty): JS8Call's selected call, which the QSO pause reads.
+ * Keys nothing. */
+export async function js8SelectCall(call: string | null): Promise<void> {
+  return invoke<void>('js8_select_call', { call })
+}
+
+/** JS8Call's "Store message…": leave `text` at this station for `to`, handed over when `to` asks
+ * (QUERY MSGS, then QUERY MSG n). Keys nothing. Refused with the reason. Journaled. */
+export async function js8StoreMessage(to: string, text: string): Promise<Js8State> {
+  return invoke<Js8State>('js8_store_message', { to, text })
+}
+
+/** Clear the Inbox's notes of what a cap dropped. Journaled. */
+export async function js8InboxDroppedClear(): Promise<Js8State> {
+  return invoke<Js8State>('js8_inbox_dropped_clear')
+}
+
+/** The JS8 call list's "Block this station": the RX block list (Settings `js8RxBlocklist`), that one
+ *  field, never the settings form. Resolves with the list as saved, for the UI's settings mirror. */
+export async function js8SetRxBlocklist(calls: string[]): Promise<string[]> {
+  return invoke<string[]>('js8_set_rx_blocklist', { calls })
+}
+
+/** The JS8 call list's group joins and leaves (Settings `js8Groups`), that one field, never the
+ *  settings form; refused for @APRSIS and @JS8NET. Resolves with the groups as saved. */
+export async function js8SetGroups(groups: string[]): Promise<string[]> {
+  return invoke<string[]>('js8_set_groups', { groups })
+}
+
+/** The JS8 call list's Remove on @ALLCALL and Add of @ALLCALL (Settings `js8AvoidAllcall`, JS8Call's
+ *  "Do not participate in the @ALLCALL group"), that one field, never the settings form. Resolves
+ *  with the setting as saved. */
+export async function js8SetAvoidAllcall(avoid: boolean): Promise<boolean> {
+  return invoke<boolean>('js8_set_avoid_allcall', { avoid })
 }
 
 /** Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only; RX
@@ -3722,14 +4082,28 @@ export async function setPskMacros(
   return invoke<Settings['macros']>('set_psk_macros', { profiles, active })
 }
 
+/** On a computer driving a station, each settings read comes with the station's revision of what
+ *  it read (`src-tauri/src/client_mode.rs` puts it beside the settings, under this key). It is
+ *  taken off and kept on the copy under a symbol: no field, no JSON and no comparison sees it, yet
+ *  every copy spread from the read carries it, so a save made from that read goes back with its
+ *  revision (and a change made at the station since refuses it, "Changed at the station"),
+ *  whatever else this window read meanwhile. */
+const READ_REVISION = 'nexusRevision'
+const MADE_FROM: unique symbol = Symbol('the station revision this settings copy was read at')
+type Read = Settings & { [MADE_FROM]?: string }
+
 /** Load persisted operator + radio settings. */
 export async function getSettings(): Promise<Settings> {
-  return invoke<Settings>('get_settings')
+  const read = await invoke<Settings & { [READ_REVISION]?: unknown }>('get_settings')
+  if (typeof read?.[READ_REVISION] !== 'string') return read
+  const { [READ_REVISION]: revision, ...settings } = read
+  return { ...settings, [MADE_FROM]: revision as string } as Read
 }
 
 /** Persist operator + radio settings; returns the updated snapshot. */
 export async function setSettings(settings: Settings): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('set_settings', { settings })
+  const base = (settings as Read)[MADE_FROM]
+  return invoke<AppSnapshot>('set_settings', base === undefined ? { settings } : { settings, base })
 }
 
 /** THE writer of the satellite uplink consent pair (VFO mapping + per-radio
@@ -3802,6 +4176,57 @@ export async function postSpot(freqMhz: number, call: string, comment: string): 
  *  Rejects with `contextChanged` if either has moved since, `noActivation` with none on. */
 export async function selfSpot(reference: string, dialHz: number): Promise<SelfSpotReport> {
   return invoke<SelfSpotReport>('self_spot_activation', { reference, dialHz })
+}
+
+/** What the contest screen's Spot me posted (`contest_spot.rs`). */
+export interface ContestSpotPosted {
+  freqKhz: number
+  call: string
+  comment: string
+  cooldownSecs: number
+}
+
+/** The contest screen's Spot me: ONE DX cluster spot of the station's own call on its dial, with
+ *  `comment`. Rejects with a token (`spotNoCall`, `spotNoCluster`, `spotCooldown:<secs>`, …);
+ *  `spotSelfUnconfirmed` for a contest not known to allow self-spotting until `confirmed`. */
+export async function contestSelfSpot(comment: string, confirmed: boolean): Promise<ContestSpotPosted> {
+  return invoke<ContestSpotPosted>('contest_self_spot', { comment, confirmed })
+}
+
+/** The Spots board's Spot me, in any cockpit: the contest screen's press and its ONE cooldown. Outside a
+ *  contest it posts on one press; with Contest mode on it rejects exactly as `contestSelfSpot` does. */
+export async function clusterSelfSpot(comment: string, confirmed: boolean): Promise<ContestSpotPosted> {
+  return invoke<ContestSpotPosted>('cluster_self_spot', { comment, confirmed })
+}
+
+/** A band map frequency marker (`freq_markers.rs`): local to the station, never posted. */
+export interface FreqMarker {
+  id: number
+  dialHz: number
+  /** Uppercase band label, e.g. "20M". */
+  band: string
+  /** Uppercase; empty for a marker made with an empty entry. */
+  call: string
+}
+
+/** This contest session's markers; empty with Contest mode off. */
+export async function getFreqMarkers(): Promise<FreqMarker[]> {
+  return invoke<FreqMarker[]>('get_freq_markers')
+}
+
+/** Mark the station's dial now with `call` (may be empty). Rejects `markerNoContest` with Contest
+ *  mode off. */
+export async function addFreqMarker(call: string): Promise<FreqMarker[]> {
+  return invoke<FreqMarker[]>('add_freq_marker', { call })
+}
+
+export async function removeFreqMarker(id: number): Promise<FreqMarker[]> {
+  return invoke<FreqMarker[]>('remove_freq_marker', { id })
+}
+
+/** Jump back to a marker (an operator QSY). Rejects `markerTransmitting` while anything transmits. */
+export async function freqMarkerQsy(id: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('freq_marker_qsy', { id })
 }
 
 /** Upcoming contests from the WA7BNM calendar (rejects if the feed is unreachable). */
@@ -4109,7 +4534,6 @@ export async function getScopeRow(
   hiHz: number,
   window?: ScopeWindow,
 ): Promise<Spectrum> {
-  if (remoteApplicationTransport()) return invoke<Spectrum>('get_scope_snapshot')
   return invoke<Spectrum>('get_scope_row', { loHz, hiHz, window })
 }
 
@@ -4122,10 +4546,6 @@ export async function getScopeRow(
  * copies of a source that sweeps slower than it polls. Two answers come back whatever `lastSeq`
  * says, because neither means "nothing new": a source that went quiet answers its EMPTY frame, and
  * a row nobody numbered (the Companion path) comes back unsequenced (`seq` 0) on every poll.
- *
- * The Remote application transport has no frame command (its wire carries the row), so there the
- * row comes back as an unsequenced frame, and every answer is a new row, as before. Its scale is
- * what each source's producer states: the audio feed's dBFS axis, a radio's own relative scale.
  */
 export async function getScopeFrame(
   loHz: number,
@@ -4133,20 +4553,6 @@ export async function getScopeFrame(
   window: ScopeWindow | undefined,
   lastSeq: number,
 ): Promise<SpectrumFrameWire | null> {
-  if (remoteApplicationTransport()) {
-    const s = await invoke<Spectrum>('get_scope_snapshot')
-    const source = s.source ?? ''
-    return {
-      seq: 0,
-      tMs: Date.now(),
-      source,
-      // The legacy extent, for a backend too old to report one (PhoneScope's own fallback).
-      loHz: s.loHz ?? 200,
-      hiHz: s.hiHz ?? 2900,
-      scale: source === 'flex' || source === 'civ' || source === 'yaesu' ? { kind: 'relative' } : { kind: 'dbfs', loDb: -120, hiDb: 0 },
-      bins: s.row ?? [],
-    }
-  }
   return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq })
 }
 
@@ -4159,26 +4565,8 @@ export async function getScopeFrame(
  * THE POLL IS THE PANE'S REQUEST. In a data mode the station streams the Icom CI-V scope only while
  * this is being polled (the request lapses two seconds after the last poll), because that stream
  * shares the CAT link with the PTT of every over.
- *
- * The Remote application transport has no frame command: there the station's own scope row comes
- * back as an unsequenced frame when it is a radio's panadapter, and as an empty frame otherwise. A
- * remote viewer asks for nothing — it sees the station's scope only while the station streams it.
  */
 export async function getRfFrame(lastSeq: number): Promise<SpectrumFrameWire | null> {
-  if (remoteApplicationTransport()) {
-    const s = await invoke<Spectrum>('get_scope_snapshot')
-    const source = s.source ?? ''
-    const rf = source === 'flex' || source === 'civ' || source === 'yaesu'
-    return {
-      seq: 0,
-      tMs: Date.now(),
-      source: rf ? source : '',
-      loHz: rf ? s.loHz ?? 0 : 0,
-      hiHz: rf ? s.hiHz ?? 0 : 0,
-      scale: { kind: 'relative' },
-      bins: rf ? s.row ?? [] : [],
-    }
-  }
   return invoke<SpectrumFrameWire | null>('get_rf_frame', { lastSeq })
 }
 
@@ -4312,10 +4700,134 @@ export async function exportChannels(
   return invoke<string>('export_channels', { channels, format, nameCap, attribution })
 }
 
+/** This computer's over, as the station last said it on Stop's road: on the air with its holes so
+ *  far (silences where its audio did not reach the station in time), ended and why, or a press
+ *  held with no word from the station. */
+export type ClientOver =
+  | { phase: 'onAir'; holes: number; holeMs: number }
+  | {
+      phase: 'ended'
+      why:
+        | 'audioGap'
+        | 'pttGap'
+        | 'stopped'
+        | 'presence'
+        | 'ceiling'
+        | 'watchdog'
+        | 'routeChanged'
+        | 'refused'
+    }
+  | { phase: 'noWord' }
+
+/** How this computer drives a paired station, when it does (client mode): where the station is,
+ *  how the link stands, why it was refused, and this computer's over. `null` on a computer
+ *  running its own station. */
+export interface ClientStatus {
+  station: string
+  phase: 'connecting' | 'live' | 'notLive' | 'busy' | 'refused'
+  reason: string | null
+  over?: ClientOver | null
+  /** The link runs over the internet road (Beta), through the station's room. */
+  internet?: boolean
+  /** "Still there?": nothing from the operator here for a quarter of an hour on the internet. */
+  stillThere?: boolean
+  /** On the internet, this network lets no datagram road through: watch, tune and log only. */
+  udpBlocked?: boolean
+  /** A test build's road switch: where it is. A shipped build's status never names it. */
+  bench?: BenchPosition
+  /** This computer's Nexus version. */
+  computerBuild?: string
+  /** The station's Nexus version, as its last welcome said it: null until one has. */
+  stationBuild?: string | null
+  /** The day the station stops taking this computer on its network (seconds since 1970), while that
+   *  is within a week and this computer has not signed in again. */
+  signInBy?: number | null
+  /** Operate's launch is signing in again for the station: the sign-in waits in the browser. */
+  signingAgain?: boolean
+  /** The station is kept by its service id until this computer first reaches it on its network
+   *  (signed in to from elsewhere): the internet road is its only road from here. */
+  away?: boolean
+}
+
+/** The test build's road switch: both roads as they are, or one of them blocked. */
+export type BenchPosition = 'normal' | 'blockLink' | 'blockStopRoad'
+
+/** One of this computer's audio devices: the name kept, and the label shown. */
+export interface ClientAudioDevice {
+  name: string
+  label: string
+}
+
+/** This computer ▸ Audio (client mode): the output the station's audio plays on and the
+ *  microphone, `''` for the system's default, how loud the station is heard here (dB over its own
+ *  level, the hosted page's volume), this computer's devices, whether its headset started at all,
+ *  and why a device would not open. Kept on this computer only. */
+export interface ClientAudio {
+  output: string
+  input: string
+  volumeDb: number
+  outputs: ClientAudioDevice[]
+  inputs: ClientAudioDevice[]
+  available: boolean
+  trouble: { output: string | null; input: string | null }
+}
+
+export async function clientAudio(): Promise<ClientAudio> {
+  return invoke<ClientAudio>('client_audio')
+}
+
+/** Picks this computer's headset for the station's audio; kept in this computer's own file. */
+export async function setClientAudio(output: string, input: string, volumeDb?: number): Promise<ClientAudio> {
+  return invoke<ClientAudio>('set_client_audio', { output, input, volumeDb })
+}
+
+/** The microphone's loudest moment since the last ask, `0` to `1`, keeping it open a moment. */
+export async function clientAudioLevel(): Promise<{
+  level: number
+  open: boolean
+  trouble: string | null
+}> {
+  return invoke('client_audio_level')
+}
+
+/** A test note in this computer's output. */
+export async function clientAudioTest(): Promise<{ played: boolean; trouble?: string | null }> {
+  return invoke('client_audio_test')
+}
+
+/** The operator did something here (a click, a key, the wheel): it answers the internet road's
+ *  "Still there?", and after a link nobody answered it for, connects again. */
+export async function clientStillHere(): Promise<void> {
+  return invoke<void>('client_still_here')
+}
+
+export async function clientStatus(): Promise<ClientStatus | null> {
+  return invoke<ClientStatus | null>('client_status')
+}
+
+/** Moves a test build's road switch: where it is now. Blocking one road while the other is
+ *  blocked is refused (`oneRoadAtATime`); a shipped build has no such command. */
+export async function benchRoadSwitch(to: BenchPosition): Promise<BenchPosition> {
+  return invoke<BenchPosition>('bench_road_switch', { to })
+}
+
+/** Take control from the device holding the station, once the operator confirmed it: that
+ *  device's over ends as its Stop would, and this computer starts with TX off. */
+export async function clientTakeControl(): Promise<void> {
+  return invoke<void>('client_take_control')
+}
+
+/** Leave: this computer's Nexus starts again as itself, the station handed back first. */
+export async function leaveClientMode(): Promise<void> {
+  return invoke<void>('leave_client_mode')
+}
+
 /** Load the durable UI-state store (`ui-state.json`, beside settings.json). See
- *  `features/durableStore.ts` for why some browser-storage keys are mirrored there. */
-export async function uiStateLoad(): Promise<Record<string, string>> {
-  return invoke<Record<string, string>>('ui_state_load')
+ *  `features/durableStore.ts` for why some browser-storage keys are mirrored there. `strict`:
+ *  a file that is there and does not read rejects, instead of reading as an empty store — for a
+ *  flush about to merge its own changes into the file. */
+export async function uiStateLoad(strict?: boolean): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>('ui_state_load', strict ? { strict: true } : undefined)
 }
 
 /** Replace the durable UI-state store. Returns whether the write landed — the caller keeps

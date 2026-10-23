@@ -375,6 +375,55 @@ describe('DetachedPanel POTA/SOTA board', () => {
 })
 
 // ---------------------------------------------------------------------------
+// The torn-off scoreboard is one of the multiplier board's hosts, beside the main window, the
+// logger window and the Contest screen's pop-out (each renders the board through ContestView
+// from its own snapshot), and the one that renders it directly. It is sent the same snapshot, so
+// at a club its board is the club's too, with this laptop's own marked apart.
+// ---------------------------------------------------------------------------
+describe('DetachedPanel torn-off scoreboard', () => {
+  const SNAP = {
+    link: { tier: 'FT8' },
+    radio: {},
+    fieldDay: {
+      running: true,
+      state: 'Idle',
+      qsoCount: 1,
+      sections: 0,
+      points: 2,
+      multCount: 1,
+      event: 'ilqp',
+      log: [],
+      boards: [
+        { id: 'county', slot: 'QTH', domain: 'il_counties', scope: 'perLog', worked: ['COOK'], club: ['COOK', 'WILL'] },
+      ],
+    },
+  } as unknown as import('./types').AppSnapshot
+  const mockedSubscribe = vi.mocked(subscribeSnapshot)
+
+  beforeEach(() => {
+    mockedSubscribe.mockImplementation((cb: (s: import('./types').AppSnapshot) => void) => {
+      cb(SNAP)
+      return () => {}
+    })
+  })
+  afterEach(() => {
+    // Restore the inert default so the suites around stay order-independent.
+    mockedSubscribe.mockImplementation(() => () => {})
+  })
+
+  it('lights what the club worked, this laptop’s own marked apart', async () => {
+    render(<DetachedPanel panel="fieldday" />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const board = screen.getByLabelText('county multiplier board')
+    expect(board.querySelector('[data-board-legend]')).not.toBeNull()
+    expect(board.querySelector('[data-worked="own"]')?.textContent).toBe('⌂COOK')
+    expect(board.querySelector('[data-worked="club"]')?.textContent).toBe('✓WILL')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // THE TOAST HOST. A torn-off window is its own JS realm, and `pushToast` resolves
 // through a module-level bus: with no host mounted in THAT document the call is
 // silently swallowed. It was mounted per-branch, and the Memories pop-out — one of

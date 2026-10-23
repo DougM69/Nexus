@@ -42,11 +42,24 @@
 //! over is refused while Nexus's own write still has the radio on DAX, which nothing feeds then:
 //! never a silent over.
 //!
+//! **The voice keyer in Phone at the shack** (operator ruling, 2026-10-12, "Change it now"): the
+//! radio keeps its mic between messages, and a message switches it to DAX for its own length. The
+//! radio loop gives the routing the message's presence ([`FlexDaemon::sync_tx_routing`]), keys the
+//! message only once the radio reports DAX on Nexus's own stream with nothing keyed
+//! ([`FlexDaemon::takes_voice_dax`]), marks that one key as carrying Nexus's audio, which the shim
+//! then keys only on the radio's DAX ([`FlexDaemon::set_voice_key`]), and drops a message the radio
+//! did not switch for in 2 seconds or that something else keyed before
+//! ([`FlexDaemon::keyed_by_another`]). The mic comes back at a quiet point after the over, its write
+//! refused at the wire until the radio has proved the unkey. Through the keyer's own DAX the radio
+//! still counts as having the mic ([`FlexDaemon::radio_has_mic`], [`FlexDaemon::dax_for_keyer`]).
+//!
 //! ## Not yet
 //! No panadapter stream from this session (the older native pan still opens its own), no
 //! persisted client id (every connect registers as a new GUI client), and no tune carrier, ATU or
 //! CW keyer: the core has a readback profile for each, but its admission refuses those starts
-//! until a tester's bench confirms them. The stops for all of them are in place: `T 0`, teardown
+//! until a tester's bench confirms them, unless the operator has turned on the radio's Beta setting
+//! that lets the client start them before then (`RadioProfile::flex_native_unbenched`, off by
+//! default; [`FlexDaemon::start`]). The stops for all of them are in place: `T 0`, teardown
 //! and the radio loop's belief ([`FlexDaemon::keyed`]) cover a transmission of any kind. The CW
 //! path is built up to that refusal: the WPM control sets the radio's keyer speed (`cw wpm`, which
 //! keys nothing), each word goes to the radio's keyer timed at its speed, and a word the client
@@ -60,6 +73,22 @@
 //! `atu start`, and the screens show the same readouts beside the ATU with the cycle's result, or
 //! why a press started none ([`FlexDaemon::radio_atu`]); until then no ATU button is offered on
 //! this client.
+//!
+//! ## The operator's paddle, and what failed a readback
+//! A paddle touch during the client's CW is handed to the operator only once a tester's bench has
+//! named what the radio reports for it (`tempo_net::flex::ptt_evidence::OPERATOR_KEY`): the session
+//! clears the radio's CW buffer with no unkey and no alarm, and the radio loop drops the rest of the
+//! message ([`FlexDaemon::take_operator_break`]). Until then such a touch fails the readback and
+//! raises the alarm, as any keying the client does not know does. Every readback check that fails
+//! leaves one line in the diagnostic log, naming the check, the kind of start and the radio's own
+//! line ([`watch`]): what the bench sends back. It keys nothing.
+//!
+//! The operator's mic PTT during a voice-keyer message is the same shape, for an over: handed to
+//! the operator only once a tester's bench has named what the radio reports for it
+//! (`tempo_net::flex::ptt_evidence::OPERATOR_MIC`), when the session sends Nexus's own unkey and
+//! stops the message's DAX audio, and the radio loop ends the message as the keyer's Stop does
+//! ([`FlexDaemon::take_operator_mic`]), with no alarm. Until then the mic's PTT fails the readback
+//! and raises the alarm, and the diagnostic line carries what the radio reported for it.
 //!
 //! Nexus's own design, not a port: the protocol core it drives (`tempo_net::flex`) carries the
 //! ported code and its attribution.
@@ -142,6 +171,16 @@ pub(crate) struct ClientState {
     /// ([`FlexDaemon::sync_tx_routing`]), and asked by the shim at `T 1` whether Nexus's own write
     /// leaves the radio on DAX ([`Routing::leaves_dax`]).
     pub(crate) routing: Mutex<Routing>,
+    /// The operator's own key took over our CW since the radio loop last asked
+    /// ([`FlexDaemon::take_operator_break`]).
+    pub(crate) operator_break: AtomicBool,
+    /// The operator's own mic took over our over since the radio loop last asked
+    /// ([`FlexDaemon::take_operator_mic`]).
+    pub(crate) operator_mic: AtomicBool,
+    /// The key being asked for is a voice-keyer message's, which carries Nexus's own audio: the
+    /// shim keys it only while the radio takes its transmit audio from Nexus's DAX
+    /// ([`FlexDaemon::set_voice_key`]). Set by the radio loop around that one key.
+    pub(crate) voice_key: AtomicBool,
 }
 
 /// The mode an over on `slice` goes out in: the one the shim commanded while the radio has not
@@ -311,16 +350,21 @@ pub struct FlexDaemon {
 
 impl FlexDaemon {
     /// Start against the radio at `ip` (its SmartSDR API, port 4992), serving rigctld on
-    /// `127.0.0.1:<tcp_port>`.
-    pub fn start_for_ip(ip: &str, tcp_port: u16) -> std::io::Result<FlexDaemon> {
-        Self::start(radio_addr(ip)?, tcp_port)
+    /// `127.0.0.1:<tcp_port>`, with the radio's Beta setting for CW, Tune and the ATU at `beta`.
+    pub fn start_for_ip(ip: &str, tcp_port: u16, beta: bool) -> std::io::Result<FlexDaemon> {
+        Self::start(radio_addr(ip)?, tcp_port, beta)
     }
 
-    /// Start against the radio at `radio`, serving rigctld on `127.0.0.1:<tcp_port>`.
-    pub fn start(radio: SocketAddr, tcp_port: u16) -> std::io::Result<FlexDaemon> {
+    /// Start against the radio at `radio`, serving rigctld on `127.0.0.1:<tcp_port>`. `beta` is the
+    /// operator's Beta setting for this radio (`RadioProfile::flex_native_unbenched`, off by
+    /// default): on, the session's admission takes the starts no bench has confirmed yet as well
+    /// ([`session::Config::beta`]), and this client tunes with the radio's own carrier, runs its
+    /// ATU and sends CW through its keyer. It is fixed for the session's life.
+    pub fn start(radio: SocketAddr, tcp_port: u16, beta: bool) -> std::io::Result<FlexDaemon> {
         let station = Station::new(STATION).expect("the station name is a safe token");
         let mut config = session::Config::new(station);
         config.previous_handles = previous_handles(radio);
+        config.beta = beta;
         Self::start_with(radio, tcp_port, config)
     }
 
@@ -482,8 +526,9 @@ impl FlexDaemon {
     // ── The radio's own tune carrier (Beta, switched off until a tester's bench) ─────────────
 
     /// Whether Tune is the radio's own carrier on this client (`transmit tune`): its readback is
-    /// switched on ([`tempo_net::flex::admission::BENCHED`]). Until a tester's bench confirms it,
-    /// it is not, and the radio loop tunes as it does over any CAT link: `T 1` and Nexus's tone.
+    /// switched on, by a tester's bench ([`tempo_net::flex::admission::BENCHED`]) or by the radio's
+    /// Beta setting ([`tempo_net::flex::admission::BETA`]). Off, as it ships, the radio loop tunes
+    /// as it does over any CAT link: `T 1` and Nexus's tone.
     pub fn tunes_natively(&self) -> bool {
         self.conn().switched_on(StartKind::Tune)
     }
@@ -512,9 +557,10 @@ impl FlexDaemon {
 
     // ── The radio's own ATU (Beta, switched off until a tester's bench) ──────────────────────
 
-    /// Whether this client runs the radio's own ATU (`atu start`): its readback is switched on
-    /// ([`tempo_net::flex::admission::BENCHED`]). Until a tester's bench confirms it, it is not:
-    /// the shim does not answer `u TUNER`, so no ATU button is offered on this client, as before.
+    /// Whether this client runs the radio's own ATU (`atu start`): its readback is switched on, by
+    /// a tester's bench ([`tempo_net::flex::admission::BENCHED`]) or by the radio's Beta setting
+    /// ([`tempo_net::flex::admission::BETA`]). Off, as it ships, the shim does not answer
+    /// `u TUNER`, so no ATU button is offered on this client.
     pub fn runs_atu(&self) -> bool {
         self.conn().switched_on(StartKind::Atu)
     }
@@ -549,9 +595,27 @@ impl FlexDaemon {
     // ── CW through the radio's keyer (Beta, switched off until a tester's bench) ──────────────
 
     /// Whether this client sends CW through the radio's keyer (`cwx send`): its readback is
-    /// switched on. Until then every word is refused, and says why.
+    /// switched on, by a tester's bench or by the radio's Beta setting
+    /// ([`tempo_net::flex::admission::BETA`]). Off, as it ships, every word is refused, and says
+    /// why.
     pub fn sends_cw(&self) -> bool {
         self.conn().switched_on(StartKind::Cwx)
+    }
+
+    /// Whether the operator's own paddle or key took over our CW since the last call: the session
+    /// has cleared the radio's CW buffer, and the radio loop drops the rest of the message
+    /// (`Engine::cw_operator_break`) before it takes another word. Each take-over once.
+    pub fn take_operator_break(&self) -> bool {
+        self.state.operator_break.swap(false, Ordering::Relaxed)
+    }
+
+    /// Whether the operator's own mic PTT took over our over (a voice-keyer message) since the last
+    /// call: the session has sent our own unkey and carries no more of our audio, and the radio
+    /// loop ends the message as the keyer's Stop does, with no alarm and the TX latch as it was.
+    /// Each take-over once. Only once a tester's bench has named what the radio reports for the
+    /// mic (`tempo_net::flex::ptt_evidence::OPERATOR_MIC`).
+    pub fn take_operator_mic(&self) -> bool {
+        self.state.operator_mic.swap(false, Ordering::Relaxed)
     }
 
     /// The radio's CW speed as it reports it (`transmit speed`), whoever set it. Cheap.
@@ -659,17 +723,59 @@ impl FlexDaemon {
 
     /// Whether the radio has the mic while native audio is on: Nexus is the only program feeding
     /// DAX, and the radio takes its transmit audio from its own mic, as the routing has it for
-    /// Phone at the shack. Audio Nexus makes (a recorded voice message, an APRS packet, an SSTV
-    /// picture) would then go over DAX, which the radio ignores, and the mic would carry the
-    /// over; the voice keyer, APRS and SSTV refuse while this holds (operator rulings,
-    /// 2026-10-04). Beside another program's DAX the flag is not Nexus's to judge, as for the
-    /// digital refusal at `T 1`. Cheap: what the audio control thread last read.
+    /// Phone at the shack. Audio Nexus makes (an APRS packet, an SSTV picture) would then go over
+    /// DAX, which the radio ignores, and the mic would carry the over; APRS and SSTV refuse while
+    /// this holds (operator rulings, 2026-10-04 and 2026-10-12), and a voice-keyer message waits
+    /// for the switch to DAX around it. It still holds while the radio is on DAX only for such a
+    /// message ([`Self::dax_for_keyer`]). Beside another program's DAX the flag is not Nexus's to
+    /// judge, as for the digital refusal at `T 1`. Cheap: what the audio control thread last read,
+    /// and the session's state read in place.
     pub fn radio_has_mic(&self) -> bool {
         self.state.native_audio.load(Ordering::Relaxed)
-            && self
-                .audio
-                .as_ref()
-                .is_some_and(|a| a.radio_dax() == Some(false) && !a.other_feeder())
+            && self.audio.as_ref().is_some_and(|a| {
+                !a.other_feeder() && (a.radio_dax() == Some(false) || self.dax_for_keyer())
+            })
+    }
+
+    /// Whether the radio takes its transmit audio from DAX only for a voice-keyer message: Nexus
+    /// wrote it for the message alone, in place of the mic Phone at the shack has
+    /// ([`Routing::dax_for_keyer`]). Cheap: the session's state read in place.
+    pub fn dax_for_keyer(&self) -> bool {
+        let view = self.conn().read(|s| routing_view(s, &self.state));
+        lock(&self.state.routing).dax_for_keyer(&view)
+    }
+
+    /// Whether a voice-keyer message waiting for DAX may key now: the radio reports taking its
+    /// transmit audio from DAX, Nexus's own DAX transmit stream is there to carry the message (the
+    /// route is up), and nothing of ours is keyed, with the radio seen idle. The radio loop's hold
+    /// before it takes such a message. Cheap: the session's state read in place.
+    pub fn takes_voice_dax(&self) -> bool {
+        self.tx_route_ready()
+            && self.conn().read(|s| {
+                s.model.transmit.dax == Some(true) && s.dax_tx_stream.is_some() && s.transmit_ready
+            })
+    }
+
+    /// Whether the radio reports a transmission nothing of ours has open: keyed (PTT_REQUESTED or
+    /// TRANSMITTING) while this session has no start unconfirmed. The operator's mic PTT on the
+    /// radio, another program, an earlier session of ours: a voice-keyer message waiting for DAX
+    /// is dropped on it, never keyed after it. Cheap: the session's state read in place.
+    pub fn keyed_by_another(&self) -> bool {
+        self.conn().read(|s| {
+            !s.keyed
+                && s.model
+                    .interlock
+                    .sample
+                    .as_ref()
+                    .is_some_and(|i| matches!(i.state.as_str(), "PTT_REQUESTED" | "TRANSMITTING"))
+        })
+    }
+
+    /// Mark the key the radio loop is about to ask for as a voice-keyer message's, which carries
+    /// Nexus's own audio: the shim keys it only while the radio takes its transmit audio from
+    /// Nexus's DAX ([`shim::FlexShim`]). Set just before that one key, cleared just after it.
+    pub fn set_voice_key(&self, on: bool) {
+        self.state.voice_key.store(on, Ordering::SeqCst);
     }
 
     /// Whether Nexus's own write still has the radio taking its transmit audio from DAX in place
@@ -692,9 +798,10 @@ impl FlexDaemon {
     /// Carry out the next step of the transmit audio routing, if any (operator ruling,
     /// 2026-10-03; [`routing`]). **Call it only at a quiet point**: the radio loop calls it at the
     /// end of a tick in which nothing of ours is keyed or about to be, which is what keeps the
-    /// flag out of the keying path. `browser_voice`: the stream's browser voice is live. Returns
-    /// what it did, for the log.
-    pub fn sync_tx_routing(&self, browser_voice: bool) -> Option<String> {
+    /// flag out of the keying path. `browser_voice`: the stream's browser voice is live;
+    /// `voice_keyer`: a voice-keyer message waits to go out over DAX. Returns what it did, for the
+    /// log.
+    pub fn sync_tx_routing(&self, browser_voice: bool, voice_keyer: bool) -> Option<String> {
         let conn = self.conn();
         let snap = conn.snapshot();
         if snap.phase != Phase::Ready {
@@ -703,7 +810,8 @@ impl FlexDaemon {
         let view = routing_view(&snap, &self.state);
         let native = self.state.native_audio.load(Ordering::Relaxed);
         let now = monotonic_ms();
-        let step = lock(&self.state.routing).step(&view, native, browser_voice, now)?;
+        let step =
+            lock(&self.state.routing).step(&view, native, browser_voice, voice_keyer, now)?;
         let (audio, done) = match step {
             Step::CreateDaxTx => {
                 let mut asked = lock(&self.asked_tx_stream);
@@ -885,6 +993,12 @@ impl Drop for FlexDaemon {
     }
 }
 
+/// Where the radio's Beta switch for the client's CW, Tune and ATU is, in the words a refusal shows
+/// while it is off (`RadioProfile::flex_native_unbenched`): its Settings label and place, and the
+/// dummy load a first try belongs on.
+pub(crate) const BETA_SWITCH: &str = "\"Let Nexus send CW, Tune and ATU through the native Flex \
+     client\" in Settings ▸ Radio ▸ Rig & CAT ▸ Advanced (dummy load first)";
+
 /// The PTT line's words for a tune of the radio's own carrier the client did not start
 /// ([`FlexDaemon::tune_on`]): what kept it back, and what to do. `None`: the session has gone.
 pub(crate) fn tune_refusal_words(refusal: Option<&Refusal>) -> String {
@@ -894,6 +1008,10 @@ pub(crate) fn tune_refusal_words(refusal: Option<&Refusal>) -> String {
                                  radio's carrier would sit off the frequency Nexus checked. Turn \
                                  XIT off."
             .to_string(),
+        Some(Refusal::NoReadback(_)) => format!(
+            "Tune not keyed: Tune through the Flex native client is not bench-tested yet. To try \
+             it, turn on {BETA_SWITCH}."
+        ),
         Some(other) => format!("Tune not keyed: {other}."),
     }
 }
@@ -907,6 +1025,10 @@ pub(crate) fn atu_refusal_words(refusal: Option<&Refusal>) -> String {
                                  the radio's carrier would sit off the frequency Nexus checked. \
                                  Turn XIT off."
             .to_string(),
+        Some(Refusal::NoReadback(_)) => format!(
+            "ATU not started: the ATU through the Flex native client is not bench-tested yet. To \
+             try it, turn on {BETA_SWITCH}."
+        ),
         Some(other) => format!("ATU not started: {other}."),
     }
 }
@@ -1058,8 +1180,14 @@ struct Alarm {
 }
 
 /// Drain the session's events, log the ones that matter, and keep what the operator must be told:
-/// the alarms, and why the radio started no ATU cycle for a press. Ends at the session's last
-/// event (`Closed`: nothing follows it), or when the daemon stops.
+/// the alarms, why the radio started no ATU cycle for a press, and the operator's paddle taking
+/// over our CW. Ends at the session's last event (`Closed`: nothing follows it), or when the
+/// daemon stops.
+///
+/// A readback check that failed is one WARN line in the diagnostic log (`nexus-diag.log`), for a
+/// tester's bench to send back: `Flex client (<radio>): readback check failed: <check> on a <kind>
+/// start, Nexus's handle 0x<handle>; the radio's line: <the line, as it arrived>`. It keys nothing
+/// and decides nothing.
 fn watch(
     conn: std::sync::Weak<Connection>,
     radio: SocketAddr,
@@ -1105,6 +1233,35 @@ fn watch(
                 "an earlier Nexus session (0x{handle:08X}) still holds the transmitter; Nexus \
                  will not key until it is released"
             )),
+            Event::ReadbackFailed(failure) => {
+                tempo_core::applog::warn("cat", &format!("Flex client ({radio}): {failure}"));
+            }
+            // The operator's own mic took over our over: no alarm. The radio loop ends the
+            // message.
+            Event::OperatorTookOver {
+                kind: StartKind::Key,
+            } => {
+                tempo_core::applog::info(
+                    "cat",
+                    &format!(
+                        "Flex client ({radio}): the operator's mic took over Nexus's over; Nexus \
+                         sent its own unkey"
+                    ),
+                );
+                state.operator_mic.store(true, Ordering::Relaxed);
+            }
+            // The operator's own key took over our CW: no alarm. The radio loop drops the rest of
+            // the message.
+            Event::OperatorTookOver { .. } => {
+                tempo_core::applog::info(
+                    "cat",
+                    &format!(
+                        "Flex client ({radio}): the operator's key took over Nexus's CW; the \
+                         radio's CW buffer is cleared"
+                    ),
+                );
+                state.operator_break.store(true, Ordering::Relaxed);
+            }
             // The radio did not start a cycle for an ATU press and keyed nothing for it: no
             // alarm, the reason on the ATU line.
             Event::StartRefused {

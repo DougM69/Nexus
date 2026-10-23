@@ -1,10 +1,9 @@
-// THE CONTEST LOG STRIP'S ALT+W AND CTRL+O, as N1MM Logger+'s key list has them (Ctrl+D, the third
-// of its keys here, is `contestRemoval.ts`'s):
+// THE CONTEST LOG STRIP'S ALT+W AND CTRL+O (Ctrl+D, the third of its keys here, is
+// `contestRemoval.ts`'s):
 //
-//   "Ctrl+W or Alt+W = Wipe entry fields. Release a reserved serial number. Ctrl+W is
-//   irreversible, Alt+W can be reversed by typing it again" — Alt+W wipes the log line, and a
-//   second Alt+W right after puts it back (`LogEntry` keeps the line it wiped);
-//   "Ctrl+O = Set operator call" — Ctrl+O takes the caret to the operator box.
+//   Alt+W wipes the log line and releases the serial number in flight, and a second Alt+W right
+//   after puts it back (`LogEntry` keeps the line it wiped);
+//   Ctrl+O sets the operator call: it takes the caret to the operator box.
 //
 // THE OPERATOR BOX IS NOT THE STRIP'S. It is the Contest screen's — on the title line of its large
 // log line while a contest runs (`ContestLargeEntry`), else in its scoreboard (`FieldDayScoreboard`)

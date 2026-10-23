@@ -1,6 +1,6 @@
 //! Remote over this network beside the hosted mode (the operator's ruling of 2026-10-04, "Both at
 //! once"): a computer paired over the network keeps its station control through every hosted
-//! decision that clears the browsers' grants (Turn Remote on, Turn it off, revoking a browser), as
+//! decision that clears the browsers' grants (Turn Remote on, Turn it off), and through revoking a browser, as
 //! `restore` gives approved browsers theirs, and loses it with "End remote control", which turns
 //! LAN off.
 use super::*;
@@ -9,7 +9,7 @@ use crate::remote_service::lan::tests::{only, LanStore, Scratch};
 const LAN_STATION: &str = "60000000-0000-4000-8000-0000000000aa";
 
 /// A credential store holding this station's LAN key and one computer paired with it.
-fn lan_store() -> LanStore {
+pub(super) fn lan_store() -> LanStore {
     let (_, station) = station_key::Signer::generate().unwrap();
     let (computer, _) = station_key::Signer::generate().unwrap();
     let spki = tempo_stream::protocol::hex_bytes(computer.public_key()).unwrap();
@@ -22,7 +22,7 @@ fn lan_store() -> LanStore {
 
 /// The hosted service with its LAN road attached as `Service::new` attaches it, on `store` and a
 /// switch of the test's own, with no network to listen on.
-fn with_lan(
+pub(super) fn with_lan(
     service: Service,
     engine: &crate::SharedEngine,
     store: &LanStore,
@@ -33,19 +33,17 @@ fn with_lan(
         engine.clone(),
         transport::Feeds {
             monitor: crate::remote_monitor::Publisher::default(),
-            spectrum: None,
-            meters: Default::default(),
-            sources: None,
             #[cfg(feature = "radio")]
             audio: None,
             stream: stream::Host::default(),
         },
         Arc::new(lan::Book::new(Arc::new(store.clone()))),
         Arc::new(|_| only(Err(tempo_stream::lan::NoNetwork::Choose))),
+        lan::commands::Commands::default(),
     )
 }
 
-fn fresh_id() -> String {
+pub(super) fn fresh_id() -> String {
     let hex = transport::random_secret().unwrap();
     format!(
         "{}-{}-{}-{}-{}",
@@ -59,8 +57,9 @@ fn fresh_id() -> String {
 
 /// Can `device` take control on the LAN road now? The state and an acquire on a LAN connection
 /// of its own, through the station's operations authority, then the connection closes. The
-/// acquire's phase, or the refusal.
-fn lan_acquire(service: &Service, engine: &crate::SharedEngine, device: &str) -> String {
+/// acquire's phase, or the refusal. The room's tunnel takes the lease exactly so, as the device
+/// its roster names.
+pub(super) fn lan_acquire(service: &Service, engine: &crate::SharedEngine, device: &str) -> String {
     let authority = service.control.lock().unwrap().operations.clone();
     let connection = operations::LanConnection::new(authority.clone());
     let session = fresh_id();
@@ -95,8 +94,8 @@ fn lan_acquire(service: &Service, engine: &crate::SharedEngine, device: &str) ->
     }
 }
 
-/// ★ Hosted Turn on, Turn off, Turn on again and revoking a browser each clear every grant the
-/// station holds, and each leaves the LAN computer able to take control. "End remote control"
+/// ★ Hosted Turn on, Turn off and Turn on again each clear every grant the station holds, revoking
+/// a browser clears that browser's, and each leaves the LAN computer able to take control. "End remote control"
 /// turns LAN off and takes its control with it, and LAN on gives it back. CONTROL: the hosted
 /// browser's own grant goes with Turn off, as it always has.
 #[tokio::test(flavor = "multi_thread")]
@@ -166,8 +165,8 @@ async fn a_lan_computer_keeps_control_through_hosted_turn_off_and_on() {
         .action(Action::Device {
             device_id: BROWSER.into(),
             approve: false,
-            transmit: false,
             key: None,
+            kind: None,
         })
         .await
         .unwrap();
@@ -215,4 +214,54 @@ async fn a_service_without_a_lan_road_says_nothing_of_it() {
     let service = with_lan(service, &engine, &lan_store(), &scratch);
     let status = serde_json::to_value(service.status().unwrap()).unwrap();
     assert_eq!(status["lan"]["on"], false, "control: {status}");
+}
+
+/// ★ The shack's own names for its computers and the service's ids for its devices never meet in
+/// the authority they share. A device the service lists under a LAN computer's id is refused with
+/// the list, so a computer approved here for the room's tunnel can never stand for that LAN
+/// computer there and take its station control.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_listed_under_a_lan_computers_id_never_holds_its_control_through_the_room() {
+    let cloud = fake_cloud().await;
+    let vault = paired_vault(&cloud.origin);
+    let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+    let store = lan_store();
+    let scratch = Scratch::new();
+    let service = with_lan(launch(&cloud, &vault, &engine), &engine, &store, &scratch);
+    service
+        .action(Action::LanOn {
+            address: None,
+            port: None,
+        })
+        .await
+        .unwrap();
+    let status = eventually(&service, "the LAN book was read", |s| {
+        s.lan.as_ref().is_some_and(|lan| !lan.devices.is_empty())
+    })
+    .await;
+    let lan_computer = status.lan.unwrap().devices[0].id.clone();
+    assert_eq!(
+        lan_acquire(&service, &engine, &lan_computer),
+        "controlling",
+        "premise: the LAN computer's control"
+    );
+    service.action(Action::Enable {}).await.unwrap();
+    let key = DeviceKey::new();
+    let mut listed = computer_listed(0, &key);
+    listed["id"] = lan_computer.clone().into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [listed] }).to_string();
+    let refreshed = service.action(Action::Refresh {}).await;
+    let _ = approve_computer(&service, &lan_computer, &key).await;
+    let approved = service.control.lock().unwrap().approved.clone();
+    if let Some(taken) = approved.paired(&key.pin()) {
+        assert_eq!(
+            lan_acquire(&service, &engine, &taken),
+            "localPermissionRequired",
+            "through the room as {taken}, the LAN computer's control"
+        );
+    }
+    assert!(
+        matches!(refreshed, Err("invalidResponse")),
+        "a device under a LAN computer's id was listed"
+    );
 }

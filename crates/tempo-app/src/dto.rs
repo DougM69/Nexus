@@ -135,6 +135,19 @@ pub struct WorkPark {
     pub reference: String,
 }
 
+/// A logger's WSJT-X FreeText as Tx 5 took it ([`AppSnapshot::udp_free_text`]): the text Tx 5
+/// now shows, and why its over was not sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UdpFreeText {
+    /// One more for each FreeText taken, so the cockpit applies each once.
+    pub seq: u32,
+    /// The text Tx 5 shows now; empty clears it, `None` leaves it as it is.
+    pub fill: Option<String>,
+    /// Why the over was not sent, when "send" asked for it.
+    pub refused: Option<String>,
+}
+
 /// One UDP-driven callsign highlight (JTAlert paints wanted/B4 calls).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -504,15 +517,20 @@ impl Tier {
 
 /// The heard-station row, straight from the message layer (serde-derived there).
 pub use js8::proto::station::Heard as Js8Heard;
+/// A held message too long to hand over at the current speed, `{ id, frames, max, fitsAt }`.
+pub use js8::proto::station::HeldTooLong as Js8InboxTooLong;
+/// A message a cap took out of the inbox, `{ atMs, why: "count" | "bytes", entry }`.
+pub use js8::proto::station::InboxDrop as Js8InboxDrop;
 /// One inbox row (UNREAD / READ / STORE / DELIVERED), straight from the message layer.
 pub use js8::proto::station::InboxEntry as Js8InboxEntry;
 /// The inbox row state — lowercase on the wire (`"unread" | "read" | "store" | "delivered"`).
 pub use js8::proto::station::InboxState as Js8InboxState;
 
-/// Which automatic origins may actually key RIGHT NOW: `switch && tx_enabled &&
-/// !idle_tripped`, per origin. The cockpit paints "armed" from THIS, never from the
-/// persisted switch alone — a switch that is on while the TX latch is off must never look
-/// armed (the AprsCockpit rule).
+/// Which automatic origins may actually key RIGHT NOW, per origin: the switch on and nothing
+/// in the station's readiness stopping it (`Station::readiness`: an idle trip, the TX latch,
+/// what the origin needs besides its switch). The cockpit paints "armed" from THIS, never from
+/// the persisted switch alone — a switch that is on while the TX latch is off must never look
+/// armed (the AprsCockpit rule), nor HB ACK while HB is off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Js8Armed {
@@ -520,9 +538,43 @@ pub struct Js8Armed {
     pub relay: bool,
     pub hb_ack: bool,
     pub hb: bool,
-    /// The repeating CQ — armed only when the session switch, the TX latch and a clear idle
-    /// watchdog all agree, exactly like `hb`.
+    /// The repeating CQ — armed only when the session switch, the TX latch, a clear idle
+    /// watchdog and a scheduled call all agree, exactly like `hb`.
     pub cq: bool,
+}
+
+/// Why an armed HB ACK would not answer a heartbeat heard now (`"speed" | "arriving" |
+/// "qsoPause"`), the station's own reason.
+pub use js8::proto::station::HbAckSuppressed as Js8HbAckSuppressed;
+/// Per origin, why it is not armed while its switch is on: `None` when it is armed or off.
+/// The same five camelCase keys as [`Js8Armed`].
+pub use js8::proto::station::Readiness as Js8NotArmed;
+/// Why an automatic origin whose switch is on is not armed, the station's own reason
+/// (`"idle" | "txOff" | "needsHb" | "needsAuto" | "needsHbAndAuto" | "unscheduled"`).
+pub use js8::proto::station::Unarmed as Js8Unarmed;
+
+/// Heartbeat networking, the QSO pause and what holds an HB ACK back, as JS8Call 3.0.3 has them:
+/// the desktop cockpit's, and the Remote page's sample carries it too. That page's parser refuses a
+/// key it does not list, so a page from before this key refuses the sample: the page goes up first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Presence {
+    /// JS8Call's "Enable Heartbeat Networking": the HB button shows only with it on.
+    pub hb_networking: bool,
+    /// The TX speed sends heartbeats ([`js8::proto::station::heartbeat_speed`]).
+    pub hb_speed: bool,
+    /// The QSO pause holds the HB repeat until the To box is cleared.
+    pub hb_paused: bool,
+    /// Why an armed HB ACK would not answer a heartbeat heard now; `None` when it would, or when
+    /// the switch is off or not armed (its chip says why then).
+    pub hb_ack_suppressed: Option<Js8HbAckSuppressed>,
+    /// The stations the 55-minute rule has stopped acknowledging, oldest first.
+    pub hb_ack_rate_blocked: Vec<String>,
+    /// The QSO pause setting, which the cockpit reads to clear its To box when the HB repeat goes
+    /// on (JS8Call clears its selected call).
+    pub qso_pause: bool,
+    /// "Do not participate in the @ALLCALL group".
+    pub avoid_allcall: bool,
 }
 
 /// One activity-pane row: a decoded frame (or a reassembled multi-frame message).
@@ -547,6 +599,21 @@ pub struct Js8ActivityRow {
     pub complete: bool,
     /// Decode quality below JS8Call's 0.17 low-confidence threshold.
     pub low_conf: bool,
+    /// Where the row stands in its message, which the cockpit's RX pane and Band activity join
+    /// frames by (JS8Call's `displayTextForFreq`, mainwindow.cpp:3106-3170), on the desktop and on
+    /// the Remote page. Every row has it; a station from before it sent none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flags: Option<Js8RowFlags>,
+}
+
+/// JS8Call's i3 First and Last bits of the frame a row is (`JS8CallFirst`/`JS8CallLast`), or the
+/// reassembled line of a multi-frame message (`assembled`, never a frame of its own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8RowFlags {
+    pub first: bool,
+    pub last: bool,
+    pub assembled: bool,
 }
 
 /// One outbox row (empty in the receive-only build).
@@ -580,6 +647,30 @@ pub struct Js8ComposerPrefill {
     pub text: String,
 }
 
+/// JS8Call's waterfall controls as stored (the decode filter and the passband centre for QSY to
+/// centre), and the band schedule's change waiting out its notice, if any.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Controls {
+    pub filter: crate::settings::Js8Filter,
+    pub qsy_center_hz: u16,
+    pub hop: Option<Js8HopNotice>,
+}
+
+/// A scheduled JS8 frequency change waiting out its notice (JS8Call's self-destructing
+/// "Scheduled Frequency Change" box): where it goes, when, the row's description, and whether a
+/// transmission is holding it back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8HopNotice {
+    pub mhz: f64,
+    /// When it is made unless cancelled (unix ms); 0 once "Change now" was pressed.
+    pub fires_at_ms: u64,
+    pub description: String,
+    /// Due, and waiting for the station to stop transmitting or the message going out to end.
+    pub held: bool,
+}
+
 /// The live JS8 state the cockpit polls (~500 ms while visible) — `PskRxState`'s role.
 /// Every field is computed from engine truth at poll time; nothing here is cached UI state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -589,6 +680,10 @@ pub struct Js8State {
     pub speed: Js8Speed,
     /// Bitmask of decoded speeds (`Js8Speed::bit()`).
     pub rx_speeds: u8,
+    /// JS8Call's waterfall controls and the band schedule's notice ([`Js8Controls`]), on the
+    /// desktop and on the Remote page. Always set here; a station from before it sent none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls: Option<Js8Controls>,
     pub tx_enabled: bool,
     pub sending: bool,
     pub hb_on: bool,
@@ -605,17 +700,44 @@ pub struct Js8State {
     pub relay: bool,
     pub hb_ack: bool,
     pub armed: Js8Armed,
+    /// Why each origin that is on is not armed, named on its chip.
+    pub not_armed: Js8NotArmed,
     pub idle_minutes: u16,
     pub idle_limit_min: u16,
     pub idle_tripped: bool,
     pub activity: Vec<Js8ActivityRow>,
     pub stations: Vec<Js8Heard>,
     pub inbox: Vec<Js8InboxEntry>,
+    /// What a cap took out of the inbox, oldest first, at most ten, until the operator clears
+    /// the notes: which, and why. Left out while there are none, so a Remote page that does not
+    /// know the key reads the station's sample as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inbox_dropped: Vec<Js8InboxDrop>,
+    /// The held messages too long to hand over at the current speed, which the station does not
+    /// offer: which, the frames each needs, the cap, and the speed it would go at. Left out while
+    /// there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inbox_too_long: Vec<Js8InboxTooLong>,
     pub queue: Vec<Js8QueueRow>,
     pub pending_reply: Option<Js8PendingReply>,
     /// The last refused verb's reason (a send that would not compose, a forbidden
     /// destination), cleared by the next successful verb.
     pub last_error: Option<String>,
+    /// Heartbeat networking and presence ([`Js8Presence`]), on the desktop and on the Remote page.
+    /// Always set here; a station from before it sent none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<Js8Presence>,
+}
+
+/// The JS8 compose box's typeahead, JS8Call's: what has gone of the operator's message going out
+/// and what is still to go, as its frames render, and whether the box may change it (not a MSG or
+/// relay). Native only, never part of [`Js8State`]: the Remote has no compose box.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8Typeahead {
+    pub sent: String,
+    pub unsent: String,
+    pub locked: bool,
 }
 
 /// The live JTTY state the cockpit polls (`get_jtty_state`) — `PskRxState`'s role for WSJT-X's
@@ -1246,6 +1368,11 @@ pub struct SlotKeyRefused {
     /// its transmit audio from: the UI says that in its own words. Absent for every other refusal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flex_audio: Option<FlexAudioRefusal>,
+    /// Set when Nexus kept the key off the air itself because the sound card's transmit audio
+    /// output would not open (`why` is then the sound card's own error): the radio refused
+    /// nothing, so the UI says so in its own words. Absent for every other refusal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tx_audio_failed: bool,
 }
 
 /// What a FlexRadio reports about its own tune carrier, while Nexus's Flex client tunes with it
@@ -1322,6 +1449,27 @@ pub struct PttRefused {
     pub mode: String,
 }
 
+/// A voice-keyer message Nexus's own Flex client dropped without keying the radio
+/// ([`RadioStatus::voice_dropped`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceDropped {
+    /// When, in Unix seconds.
+    pub at: u64,
+    pub cause: VoiceDropCause,
+}
+
+/// Why a voice-keyer message was dropped ([`VoiceDropped`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceDropCause {
+    /// The radio did not report taking its transmit audio from DAX within 2 seconds of the press,
+    /// or no longer took it when the message was to key.
+    NoDax,
+    /// Something else keyed the radio, or held the transmitter, before the message could key.
+    Keyed,
+}
+
 /// A slot over's unkey the radio did not accept ([`RadioStatus::slot_unkey_failed`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1340,6 +1488,19 @@ pub struct SlotUnkeyFailed {
 pub struct SlotAudioLost {
     /// When, in Unix seconds.
     pub at: u64,
+}
+
+/// The last FT8 or FT4 over Nexus dropped because the radio keyed it only after its period had
+/// ended ([`RadioStatus::slot_over_dropped`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotOverDropped {
+    /// When, in Unix seconds.
+    pub at: u64,
+    /// How long after its period had ended the radio keyed it, "1.2 s". Data: shown as it is.
+    pub late: String,
+    /// How many in a row, this one included.
+    pub count: u32,
 }
 
 /// Current radio / slot-timing status.
@@ -1473,6 +1634,13 @@ pub struct RadioStatus {
     pub tx_swr: Option<f32>,
     #[serde(default)]
     pub tx_alc: Option<f32>,
+    /// Where the radio's own ALC zone ends on the `tx_alc` bar: `Some(0.5)` on the FT-991A,
+    /// FT-710 and FTDX10, whose ALC is read on the radio's own full bar and whose zone ends at
+    /// half scale; `None` where 1.0 is the top of the zone (Hamlib's ALC scales, Nexus's own Icom
+    /// CI-V path, the Flex). Display only: the bar's colours follow it, never the bar.
+    /// Left out of the JSON when `None`, so a snapshot without it stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_alc_zone: Option<f32>,
     #[serde(default)]
     pub tx_po_w: Option<f32>,
     #[serde(default)]
@@ -1585,6 +1753,22 @@ pub struct RadioStatus {
     /// transmitting on (field report 2026-08-25). `None` on an old snapshot.
     #[serde(default)]
     pub tx_emission_mhz: Option<f64>,
+    /// Upper sideband is the only phone the licence allows where this radio transmits: 60 m, for
+    /// every US class (`privileges::usb_only_phone`). The Phone cockpit greys its LSB, AM and FM
+    /// picks and says why. Skipped when false, so every other snapshot is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub phone_usb_only: bool,
+    /// The licence lock is the phone MODE alone: the pick is LSB, AM or FM on 60 m, and a USB pick
+    /// would key (`Engine::phone_mode_refused`). `tx_allowed` is false with it, and the cockpit
+    /// names that rule instead of "this frequency is outside your license privileges". Skipped
+    /// when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub phone_mode_refused: bool,
+    /// The rig is held on an FM channel at or above 29 MHz (`Engine::fm_channel`), so FM is
+    /// commanded whatever the section's own policy says: in Phone, the FM channel kept from the
+    /// SSTV screen. The Phone cockpit's AUTO reads FM from it. Skipped when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fm_channel: bool,
     /// Whether the operator is holding a steady tune carrier (for ATU / amp
     /// tuning). While true the radio plays a continuous f0 sine instead of slots.
     #[serde(default)]
@@ -1630,12 +1814,20 @@ pub struct RadioStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_unkey_failed: Option<SlotUnkeyFailed>,
     /// A slot over (FT8, FT4, JS8 and the other timed-slot modes) lost its audio part way through:
-    /// Flex native DAX audio went off under it (the operator, or the receive floor giving up on
-    /// DAX), or its DAX transmit route went. Nexus ended the over there, rather than leave the
-    /// radio keyed and silent for the rest of it, and halted transmit. Cleared by re-enabling TX.
-    /// ABSENT until it happens, so every snapshot before one is byte-identical.
+    /// the route carrying it went (Flex native DAX audio switched off or given up on by the receive
+    /// floor, or the DAX or TCI transmit route lost). Nexus ended the over there, rather than leave
+    /// the radio keyed and silent for the rest of it, and halted transmit. Cleared by re-enabling
+    /// TX. ABSENT until it happens, so every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_audio_lost: Option<SlotAudioLost>,
+    /// The last FT8 or FT4 over Nexus dropped because the radio keyed it only after its period had
+    /// ended (a slow CAT link: Split Operation's commands and the key took the carrier past it): it
+    /// unkeyed at once, sent nothing and left TX on for the next over, as WSJT-X starts no audio
+    /// once its window has closed, however many in a row (the TX watchdog is the only stop, as in
+    /// WSJT-X). Shown while TX is on, until the next over the radio keys in its period or TX is
+    /// turned on again. ABSENT until it happens, so every snapshot before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_over_dropped: Option<SlotOverDropped>,
     /// The operator's last PTT press (Phone) did not key: right after the transmit slice left a
     /// digital mode, or native audio went off, the radio still took its transmit audio from the
     /// DAX Nexus set, not its mic, and Nexus's own Flex client kept the key off the air. Cleared by
@@ -1643,6 +1835,13 @@ pub struct RadioStatus {
     /// every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ptt_refused: Option<PttRefused>,
+    /// The last voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone
+    /// at the shack with native audio on, where a message waits for the radio to take DAX): the
+    /// radio did not take DAX within 2 seconds, or something else keyed it first. Cleared by the
+    /// next message the keyer accepts. ABSENT until it happens, so every snapshot before one is
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_dropped: Option<VoiceDropped>,
     /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — mirrored into the snapshot so the Operate
     /// cockpit can show + change it live (a mid-session CPU/battery lever), not only Settings.
     #[serde(default = "default_decode_depth_dto")]
@@ -1711,6 +1910,11 @@ pub struct RadioStatus {
     /// exactly this, "is not where anyone looks".
     #[serde(default)]
     pub cat_share_error: Option<String>,
+    /// The TCI server ("Share by TCI"): where programs connect, why it is not serving, and the
+    /// programs connected. ABSENT while the server is switched off, so every snapshot without it
+    /// is byte-identical. Written by `src-tauri/src/tci_server.rs` on each of its ticks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tci_server: Option<TciServerStatus>,
     /// A problem with the RF SCOPE source, separate from `audio_error` on purpose: they have
     /// different cures and can be true at once. `None` = nothing to say.
     ///
@@ -2113,6 +2317,39 @@ impl From<tempo_core::logbook::UploadOutcome> for WrlPushResultDto {
     }
 }
 
+/// The TCI server while it is switched on ([`RadioStatus::tci_server`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TciServerStatus {
+    /// The port programs connect to on this computer (`127.0.0.1` and `::1`), while it serves:
+    /// the operator's, or the next one when another Nexus window holds that.
+    pub port: Option<u16>,
+    /// Why it is not serving although switched on, in a sentence; `None` while it serves.
+    pub error: Option<String>,
+    /// The programs connected now, in the order they connected.
+    pub programs: Vec<TciProgramStatus>,
+    /// Moves on with every change to the spots programs sent, so a window asks for them
+    /// (`get_tci_spots`) only when they changed; 0 until the first, and from an older station.
+    #[serde(default)]
+    pub spots: u64,
+}
+
+/// One program connected to the TCI server.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TciProgramStatus {
+    /// Its number, from 1 in the order programs connected; what a Disconnect names.
+    pub id: u64,
+    /// Where it connects from (`127.0.0.1:53412`). TCI carries no program name.
+    pub peer: String,
+    /// It is being sent receive audio.
+    pub audio: bool,
+    /// A key of its was admitted and has not ended.
+    pub keyed: bool,
+    /// The last thing Nexus refused it, in the connection log's words.
+    pub refused: Option<String>,
+}
+
 /// `ClubLogPushResultDto`/`HrdLogPushResultDto` already flatten their result enums.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2351,6 +2588,16 @@ pub struct FieldDayQso {
     /// `"dupe":false` on every ordinary row spends ~28 KB of it saying nothing.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dupe: bool,
+    /// ⭐ **This row was worked in a mode the running contest bans** (FT8 at the Illinois QSO
+    /// Party, the WSJT modes at Winter Field Day): logged and filed, and counted for nothing
+    /// (`LoggedQso::banned_under`), so [`FieldDayStatus::qso_count`] leaves it out.
+    ///
+    /// It is the hosted Remote page's to read: that page recounts the contacts from the rows by
+    /// their marks ([`dupe`](Self::dupe), [`sat`](Self::sat) under `satellite_credit: false`, and
+    /// this) and refuses a capture whose count it cannot reproduce, so a row the count leaves out
+    /// says so here or that page's contest view goes blank. Skipped when false, as `dupe` is.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub banned: bool,
     /// The row's contest seq — what the slot loop's forwarder names a row by when it pushes new
     /// contacts to N3FJP, the N1MM broadcast and WSJT-X listeners. Named, not counted: a
     /// removal and a new contact inside one slot leave the count where it was.
@@ -2359,6 +2606,13 @@ pub struct FieldDayQso {
     /// key it does not know, so a row that serialised this would blank its Field Day view.
     #[serde(skip)]
     pub seq: u64,
+    /// ⭐ **This contact's QSO number** — 1, 2, 3… in every contest, the number the log table
+    /// shows and the submitted ADIF writes as `STX` (`FieldDayLog::qso_numbers`): in a serial
+    /// contest the serial the contact was sent, in every other contest its place in the run. A
+    /// removed contact's number stays spent. `None` (skipped) for a row with no number, and on a
+    /// station older than the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nr: Option<u32>,
 }
 
 /// `skip_serializing_if` for a flag that is false on almost every row. serde needs a path
@@ -2530,6 +2784,12 @@ pub struct FieldDayStatus {
     /// as assistance from raw toggles (it would get cluster/AI-CW gating wrong).
     #[serde(default)]
     pub assistance_on: Vec<String>,
+    /// ⭐ **The entry strip's "RST sent" box**: the report a CW or digital row of this session
+    /// sends unless the operator types another (`599`; a phone row's is `59`). Present only
+    /// while the operator has the box turned on (`Settings::contest_rst_sent_box`) AND the
+    /// contest sends a constant RST, so a snapshot without it is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rst_sent_box: Option<String>,
     pub log: Vec<FieldDayQso>,
     /// Club-sync state (the Nexus↔Nexus event sync) — `None` while neither
     /// hosting nor joined, so a solo Field Day pays nothing for the feature.
@@ -2603,6 +2863,16 @@ pub struct FieldDayStatus {
     /// serialised. The export it is about runs only at the station.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cabrillo_missing: Vec<String>,
+    /// ⭐ **This session sends a serial number** (Sweepstakes, CQ WPX) — `ContestSession::serial_now`
+    /// has a number to give — so Clear test contacts starts the serials again at 001, and only then
+    /// does the Contest screen say so. False for a contest that sends none: both Field Day events and
+    /// the QSO parties that send a county.
+    ///
+    /// ⚠️ **Never sent to Remote**, for `composing_text_phone`'s reason: the hosted page refuses a
+    /// key it does not list, so `leave_out_the_hosts_own` clears it and a false one is not
+    /// serialised. Clear test contacts is not offered there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sends_serial: bool,
     /// The bands this contest runs on (`"20m"`), from the ruleset, as ADVISORY data — the strip
     /// says so when the rig is elsewhere, and nothing refuses a contact over it. Empty when the
     /// ruleset names none, which is every contest before CQ WW RTTY.
@@ -2651,6 +2921,84 @@ pub struct FieldDayStatus {
     /// that takes it is deployed before the release that writes it. Absent when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept_out: Option<FdKeptOutDto>,
+    /// ⭐ **The contest journal's last writes FAILED** — the contacts since the last good one are
+    /// in memory only, and a power cut loses them. The Contest screen and the log strip say so in
+    /// red. `None` when the last write was good. A later good write clears it.
+    ///
+    /// ⚠️ **Never sent to Remote**, for `cabrillo_missing`'s reason: the hosted page refuses a key
+    /// it does not list, so `leave_out_the_hosts_own` empties it. The remedy is at the station.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsaved: Option<FdUnsavedDto>,
+    /// ⭐ **Who is at the key now** — the operator the next contact will be stamped with
+    /// (`FieldDayLog::operator`), `""` when nobody is named.
+    #[serde(default)]
+    pub operator_now: String,
+    /// ⭐ **Per-operator statistics** (`FieldDayLog::operator_stats`), best first: the
+    /// counting rows grouped by the operator stamped on each. Empty with no contacts, and on a
+    /// snapshot from a build older than the field.
+    #[serde(default)]
+    pub operators: Vec<FdOperatorDto>,
+}
+
+/// [`FieldDayStatus::operators`]: one operator's share of the contest log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdOperatorDto {
+    /// The operator stamp; `""` for the contacts that name nobody.
+    pub operator: String,
+    pub qsos: u32,
+    /// QSO points, before multipliers, power and bonuses.
+    pub points: u32,
+    /// The multipliers this operator worked first.
+    pub new_mults: u32,
+    /// Contacts per hour over the last 10 minutes (the count × 6) and over the last hour.
+    pub rate10: u32,
+    pub rate60: u32,
+    /// The best UTC clock hour: its start (Unix seconds) and its contacts. `0`/`0` with none.
+    pub best_hour_start_unix: u64,
+    pub best_hour_qsos: u32,
+    pub band_mode: Vec<FdBandModeDto>,
+}
+
+/// One cell of [`FdOperatorDto::band_mode`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdBandModeDto {
+    pub band: String,
+    /// The scoring class (`CW` / `PH` / `DIG`), as a contest row records it.
+    pub mode: String,
+    pub qsos: u32,
+}
+
+impl From<tempo_core::fieldday::OperatorStats> for FdOperatorDto {
+    fn from(s: tempo_core::fieldday::OperatorStats) -> Self {
+        Self {
+            operator: s.operator,
+            qsos: s.qsos,
+            points: s.points,
+            new_mults: s.new_mults,
+            rate10: s.last_10_min * 6,
+            rate60: s.last_60_min,
+            best_hour_start_unix: s.best_hour.0,
+            best_hour_qsos: s.best_hour.1,
+            band_mode: s
+                .band_mode
+                .into_iter()
+                .map(|(band, mode, qsos)| FdBandModeDto { band, mode, qsos })
+                .collect(),
+        }
+    }
+}
+
+/// [`FieldDayStatus::unsaved`]: the contest journal writes that failed since the last good one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdUnsavedDto {
+    /// Writes that failed in a row.
+    pub failed_writes: u32,
+    /// When the last good write landed (Unix UTC seconds); absent when none has this run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_saved_unix: Option<u64>,
 }
 
 /// [`FieldDayStatus::kept_out`]: the journal's rows of another contest, and of another
@@ -2848,6 +3196,15 @@ pub struct FdBoardDto {
     pub scope: String,
     /// The distinct values worked, sorted.
     pub worked: Vec<String>,
+    /// ⭐ **The distinct values the CLUB has worked**, sorted — every position's contacts, this
+    /// laptop's included: on the host from its club log, on a position from what the host sent
+    /// (`ClubMirror::mults`). The board lights each, and marks this laptop's own (`worked`) apart.
+    ///
+    /// Empty, and not serialised, without club sync and from a host older than the list (the
+    /// board is then this laptop's own, as it always was) — and on everything Remote reads, which
+    /// is sent nothing new (`leave_out_the_hosts_own` in the shell empties it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub club: Vec<String>,
 }
 
 /// The per-session upload control (§18.1).
@@ -2905,13 +3262,14 @@ pub struct FdClubBoardRow {
     pub clock_ms: Option<i64>,
     /// ⭐ **Where this position's link stands, as the HOST's own screen says it**
     /// (`fdevent::PositionLink`): "connected" | "reconnecting" | "lost" | "removed", and "host" for
-    /// the host's own position. Filled on the HOST's board only, from its live club log; `None` on
-    /// a position's.
+    /// the host's own position. Filled on the HOST's board from its live club log; on a
+    /// position's, only "removed", for a position the host's line says its operator removed
+    /// (`fdsync::WireBoardRow::removed`), and `None` otherwise.
     ///
-    /// ⛔ The host's own screen only: the Remote capture and Remote's snapshot leave it out
+    /// ⛔ This Nexus's own screens only: the Remote capture and Remote's snapshot leave it out
     /// (`remote_service::query::field_day::leave_out_the_hosts_own`), so the hosted page's Field
     /// Day check, which refuses a board key it does not know, never meets it; the board every
-    /// position and the TV are sent never carried it.
+    /// position and the TV are sent never carried it (a position's word comes from a flag).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
     /// Seconds since the host last HEARD this position on its own socket (`ClubLog::heard_secs`),
@@ -2994,6 +3352,17 @@ pub struct FdClubDto {
     /// is. Absent when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept_out: Option<FdClubKeptOutDto>,
+    /// ⭐ **The positions sending another county than the club** — the HOST's alone: each
+    /// position whose newest contact in the club's log sent another county, state, province or
+    /// section than the club's own session sends (`fdevent::ClubLog::other_location`), named as
+    /// its line on the board names it, with both values. A warning, never a refusal: its
+    /// contacts are taken as sent. Read off the contacts, so a position is named once it has
+    /// logged one.
+    ///
+    /// ⚠️ **Never sent to Remote**: the hosted page refuses a key it does not list, so
+    /// `leave_out_the_hosts_own` empties it and an empty one is not serialised.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other_location: Vec<FdClubOtherLocationDto>,
     /// ⭐ **This laptop's own club code** (`fdevent::club_code`), on its club line: what the host
     /// compares with the code on its turned-away list before it gives this laptop a position.
     /// Empty, and absent, when this Nexus has no club key.
@@ -3049,6 +3418,12 @@ pub struct ClubLinkDto {
     /// Seconds since this laptop last heard its host, beside [`status`](Self::status).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heard_secs: Option<u64>,
+    /// ⭐ **How many of this laptop's contacts the club's log does not take because they were
+    /// logged on another call than the club's** (`Engine::fd_on_another_call`): each stays in
+    /// this laptop's own log and is never sent, so the club chip does not count it as owed.
+    /// `None` when there are none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_call: Option<u64>,
 }
 
 /// [`ClubLinkDto::hosting`]: whether the club is open, where a position joins it, and who is in.
@@ -3090,6 +3465,73 @@ pub struct ClubLanAddrDto {
 pub struct FdClubKeptOutDto {
     pub total: u32,
     pub latest: Vec<FdClubRefusedDto>,
+}
+
+/// One entry of [`FdClubDto::other_location`]: the position, by what its line on the host's
+/// board says, what its newest contact sent, and what the club sends in that slot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubOtherLocationDto {
+    /// The name the host's board shows it under (`fdevent::ClubLog::shown_names`), empty for a
+    /// position with none.
+    pub pos_name: String,
+    /// Who is at it, as its line on the board says: what an unnamed position reads as.
+    pub operator: String,
+    /// What its newest contact sent.
+    pub sent: String,
+    /// What the club sends there.
+    pub club: String,
+}
+
+/// ⭐ **The host's club log, as its own screen lists it** (`Engine::fd_club_log_newest`): how many
+/// contacts the club holds, and the newest of them, newest first.
+///
+/// ⛔ The host's own screens only, as the answer to a command of its own. It rides nothing else:
+/// not the snapshot (so not Remote's, whose Field Day check refuses a key it does not know), not
+/// the club line every position is sent, not the TV board.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubLogDto {
+    /// Every contact in the club's log, duplicates included: the count the club line says.
+    pub total: u64,
+    /// The newest of them, at most `fdevent::CLUB_LOG_SHOWN`, newest first.
+    pub rows: Vec<FdClubLogRow>,
+}
+
+/// One contact of [`FdClubLogDto`]: the columns of the contest log table, read as
+/// [`FieldDayQso`]'s are, and the position that logged it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubLogRow {
+    pub call: String,
+    /// What they sent, Field Day's two slots ([`FieldDayQso::class`] and `section`)…
+    pub class: String,
+    pub section: String,
+    /// …and, for any other contest, one value per received slot of the club's session, in its
+    /// order (blank where the row has none), as [`FieldDayQso::rcvd`]. Empty for Field Day.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rcvd: Vec<String>,
+    pub band: String,
+    /// Scoring class: "DIG" | "CW" | "PH".
+    pub mode: String,
+    /// The on-air mode behind the class, empty where none was recorded.
+    #[serde(default)]
+    pub submode: String,
+    /// The logging position's clock when it was logged: what the club's files write.
+    pub when_unix: u64,
+    /// The position that logged it, by id: the key of its line on the host's board, never shown.
+    pub posid: String,
+    /// Its seq at that position: `(posid, seq)` is the row's identity in the club's log, and the
+    /// list's key for it. Never shown.
+    pub seq: u64,
+    /// …and by the name the host's board shows it under (`fdevent::ClubLog::shown_names`), empty
+    /// for a position with none: what an unnamed position reads as is the screen's to say.
+    pub pos_name: String,
+    /// ⭐ A later contact of a key the club already holds, by the earliest-wins dedupe the club's
+    /// files are written by (`fdevent::ClubLog::newest`). Skipped when false, as on
+    /// [`FieldDayQso::dupe`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dupe: bool,
 }
 
 /// One entry of [`FdClubDto::refused`], and of [`FdClubKeptOutDto::latest`] (there `call` is
@@ -4254,7 +4696,7 @@ pub struct AppSnapshot {
     /// unless there is one, until the next period of the new band or mode decodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub late_decodes: Option<LateDecodes>,
-    /// JTAlert-style UDP callsign highlights (call → CSS colors) for the
+    /// UDP callsign highlights (call → CSS colors) for the
     /// decode panes. Empty unless a cooperating app sent HighlightCallsign.
     #[serde(default)]
     pub highlights: Vec<HighlightEntry>,
@@ -4275,9 +4717,21 @@ pub struct AppSnapshot {
     /// Cleared on every work; absent from the wire when there is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_park: Option<WorkPark>,
-    /// Bumped by an inbound UDP Clear — the UI erases its panes on change.
+    /// The last worked spot's Work came from afar (a computer driving this station, or Remote's own
+    /// Work) and entered its section without arming Enable TX. A window following the hint opens the
+    /// cockpit without re-asserting the section, which from the station's own screen would arm the
+    /// latch that Work withheld. Absent from the wire for a Work made at the station.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub work_afar: bool,
+    /// Bumped by an inbound UDP Clear of Band Activity — the UI erases that pane on change.
     #[serde(default)]
     pub clear_tick: u32,
+    /// The last FreeText a logger sent (JTAlert, GridTracker), as Tx 5 took it. Absent until one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_free_text: Option<UdpFreeText>,
+    /// Bumped by an inbound UDP Clear of Rx Frequency — the UI erases that pane on change.
+    #[serde(default)]
+    pub rx_freq_clear_tick: u32,
     /// Bumped every time a QSO is logged, by ANY path — the UI fires the
     /// "clear DX call after logging" wipe on change, so a backend auto-log
     /// clears the cockpit's DX fields just like a manual log does.
@@ -4864,8 +5318,15 @@ mod tests {
             assert_eq!(Tier::from_mode_kind(kind), Tier::Js8);
             assert_eq!(Tier::Js8.mode_kind(60, 0, 120, 15, 0, i as u8), Some(kind));
         }
+        assert_eq!(
+            Tier::js8_kind(4),
+            ModeKind::Js8 {
+                speed: Js8Speed::Ultra
+            },
+            "index 4 is JS8 60"
+        );
         // A stale or hand-edited index degrades to Normal instead of refusing to decode.
-        assert_eq!(Tier::js8_kind(4), ModeKind::JS8_NORMAL);
+        assert_eq!(Tier::js8_kind(5), ModeKind::JS8_NORMAL);
         assert_eq!(Tier::js8_kind(255), ModeKind::JS8_NORMAL);
     }
 
@@ -4877,6 +5338,20 @@ mod tests {
         let s = Js8State {
             speed: Js8Speed::Turbo,
             rx_speeds: 15,
+            controls: Some(Js8Controls {
+                filter: crate::settings::Js8Filter {
+                    enabled: true,
+                    center_hz: 1500,
+                    width_hz: 2000,
+                },
+                qsy_center_hz: 1500,
+                hop: Some(Js8HopNotice {
+                    mhz: 7.078,
+                    fires_at_ms: 30_000,
+                    description: "40 m net".to_string(),
+                    held: false,
+                }),
+            }),
             tx_enabled: false,
             sending: false,
             hb_on: false,
@@ -4895,6 +5370,13 @@ mod tests {
                 hb: false,
                 cq: false,
             },
+            not_armed: Js8NotArmed {
+                autoreply: Some(Js8Unarmed::TxOff),
+                relay: Some(Js8Unarmed::TxOff),
+                hb_ack: None,
+                hb: None,
+                cq: Some(Js8Unarmed::TxOff),
+            },
             idle_minutes: 3,
             idle_limit_min: 60,
             idle_tripped: false,
@@ -4910,9 +5392,12 @@ mod tests {
                 mine: false,
                 complete: true,
                 low_conf: false,
+                flags: None,
             }],
             stations: Vec::new(),
             inbox: Vec::new(),
+            inbox_dropped: Vec::new(),
+            inbox_too_long: Vec::new(),
             queue: vec![Js8QueueRow {
                 origin: js8::Origin::HbAck,
                 display: "x".to_string(),
@@ -4921,17 +5406,20 @@ mod tests {
             }],
             pending_reply: None,
             last_error: None,
+            presence: None,
         };
         let json = serde_json::to_string(&s).unwrap();
         for k in [
             "\"speed\":\"turbo\"",
             "\"rxSpeeds\":15",
+            "\"controls\":{\"filter\":{\"enabled\":true,\"centerHz\":1500,\"widthHz\":2000},\"qsyCenterHz\":1500,\"hop\":{\"mhz\":7.078,\"firesAtMs\":30000,\"description\":\"40 m net\",\"held\":false}}",
             "\"txEnabled\":false",
             "\"hbOn\":false",
             "\"hbNextAtMs\":null",
             "\"hbIntervalMin\":0",
             "\"hbAck\":false",
             "\"armed\":{\"autoreply\":false,\"relay\":false,\"hbAck\":false,\"hb\":false,\"cq\":false}",
+            "\"notArmed\":{\"autoreply\":\"txOff\",\"relay\":\"txOff\",\"hbAck\":null,\"hb\":null,\"cq\":\"txOff\"}",
             "\"cqOn\":true",
             "\"cqNextAtMs\":9000",
             "\"cqIntervalMin\":5",
@@ -4952,6 +5440,17 @@ mod tests {
         }
         let back: Js8State = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
+        // Every reason as the chips' titles key on it (`Js8Unarmed` in types.ts).
+        for (why, wire) in [
+            (Js8Unarmed::Idle, "idle"),
+            (Js8Unarmed::TxOff, "txOff"),
+            (Js8Unarmed::NeedsHb, "needsHb"),
+            (Js8Unarmed::NeedsAuto, "needsAuto"),
+            (Js8Unarmed::NeedsHbAndAuto, "needsHbAndAuto"),
+            (Js8Unarmed::Unscheduled, "unscheduled"),
+        ] {
+            assert_eq!(serde_json::to_value(why).unwrap(), wire);
+        }
     }
 
     /// ⭐ An export's wire keys, as `LogExport` in the UI reads them: the file, and each of the
@@ -5383,6 +5882,42 @@ mod receivers_dto_tests {
             got.sort();
             // Parser sanity: a scan that found nothing would pass the comparison vacuously.
             assert!(got.len() >= 5, "{interface}: parsed only {got:?}");
+            assert_eq!(
+                got, want,
+                "ui/src/types.ts {interface} vs the serialized DTO"
+            );
+        }
+    }
+
+    /// The host's club log list: `types.ts` declares exactly the keys the command's answer
+    /// carries, a row's optional ones (`rcvd`, `dupe`) present.
+    #[test]
+    fn the_club_logs_typescript_mirror_declares_exactly_its_keys() {
+        let dto = FdClubLogDto {
+            total: 1,
+            rows: vec![FdClubLogRow {
+                call: "K9AAA".into(),
+                class: String::new(),
+                section: String::new(),
+                rcvd: vec!["599".into(), "COOK".into()],
+                band: "40m".into(),
+                mode: "CW".into(),
+                submode: String::new(),
+                when_unix: 1_792_342_800,
+                posid: "aaaa0001".into(),
+                seq: 3,
+                pos_name: "CW tent".into(),
+                dupe: true,
+            }],
+        };
+        let wire = serde_json::to_value(&dto).unwrap();
+        for (interface, v) in [("FdClubLog", &wire), ("FdClubLogRow", &wire["rows"][0])] {
+            let mut want: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            let mut got = ts_keys(interface);
+            want.sort();
+            got.sort();
+            // Parser sanity, as above: `FdClubLog` has two keys.
+            assert!(got.len() >= 2, "{interface}: parsed only {got:?}");
             assert_eq!(
                 got, want,
                 "ui/src/types.ts {interface} vs the serialized DTO"

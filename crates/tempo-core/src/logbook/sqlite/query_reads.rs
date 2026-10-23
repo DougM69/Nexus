@@ -11,16 +11,23 @@
 //! None of these waits for the writer or fences the Engine lock itself: they run inside a read the
 //! caller took through `LogReader` / the app's `StoreReads`, which do both.
 
-use super::{contest_is_empty, record_from_row, Error, LogDb, Result, Rows, QSO_COLUMNS};
+use super::{
+    contest_is_empty, record_from_row, with_submode, Error, LogDb, Result, Rows, QSO_COLUMNS,
+    SUBMODE_JOIN, SUBMODE_VALUE,
+};
 use crate::logbook::{QsoRecord, RecordId};
 use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
-/// The columns the Logbook's order and search read (`logQuery.ts`): the seven searched fields, the
-/// sort columns, and the four confirmation channels `confirmed` / `award_confirmed` are read from.
+/// The columns the Logbook's order and search read (`logQuery.ts`): the searched fields, the sort
+/// columns, and the four confirmation channels `confirmed` / `award_confirmed` are read from —
+/// with the DXCC number, which decides the entity a row's country column shows and sorts on where
+/// it names another than the call's. The one searched field that is not a column, the SUBMODE, a
+/// search reads besides ([`LogDb::each_narrow_after_with_submode`]).
 pub const ORDER_COLUMNS: &[&str] = &[
     "call",
     "country",
+    "dxcc",
     "grid",
     "band",
     "mode",
@@ -36,9 +43,9 @@ pub const ORDER_COLUMNS: &[&str] = &[
     "qrz_status_raw",
 ];
 
-/// The columns an entity's slots read: the call (its resolved entity), the stored country (the
-/// fallback), and the band, frequency and mode the slots are keyed on.
-pub const ENTITY_COLUMNS: &[&str] = &["call", "country", "band", "freq_mhz", "mode"];
+/// The columns an entity's slots read: the call and the DXCC number (the row's entity), the stored
+/// country (the fallback), and the band, frequency and mode the slots are keyed on.
+pub const ENTITY_COLUMNS: &[&str] = &["call", "dxcc", "country", "band", "freq_mhz", "mode"];
 
 /// A rowid as an order vector holds it. SQLite hands them out from 1 upward; a store whose rowids
 /// have left `u32` is refused rather than mis-numbered.
@@ -81,19 +88,56 @@ impl LogDb {
         after: u32,
         each: &mut dyn FnMut(u32, &QsoRecord),
     ) -> Result<()> {
-        let sql = format!(
-            "SELECT {}, q.rowid FROM qso q WHERE q.rowid > ?1 ORDER BY q.rowid",
+        self.narrow_after(columns, after, false, each)
+    }
+
+    /// [`Self::each_narrow_after`], each row with its SUBMODE as well: what the Logbook's search
+    /// looks in beside the MODE ([`LogDb::each_narrow_with_submode`]). Only a search reads it.
+    pub fn each_narrow_after_with_submode(
+        &self,
+        columns: &[&str],
+        after: u32,
+        each: &mut dyn FnMut(u32, &QsoRecord),
+    ) -> Result<()> {
+        self.narrow_after(columns, after, true, each)
+    }
+
+    /// The statement [`Self::each_narrow_after`] runs, with the SUBMODE joined beside the columns
+    /// when `submode`. Its own function so a test can ask SQLite how it plans exactly this one.
+    fn narrow_after_sql(&self, columns: &[&str], submode: bool) -> Result<String> {
+        let (value, join) = if submode {
+            (SUBMODE_VALUE, SUBMODE_JOIN)
+        } else {
+            ("", "")
+        };
+        Ok(format!(
+            "SELECT {}{value}, q.rowid FROM qso q{join} WHERE q.rowid > ?1 ORDER BY q.rowid",
             self.narrow_projection(columns)?
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
+        ))
+    }
+
+    fn narrow_after(
+        &self,
+        columns: &[&str],
+        after: u32,
+        submode: bool,
+        each: &mut dyn FnMut(u32, &QsoRecord),
+    ) -> Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare(&self.narrow_after_sql(columns, submode)?)?;
         let mut rows = stmt.query([i64::from(after)])?;
-        let rowid_at = QSO_COLUMNS.len();
+        let rowid_at = QSO_COLUMNS.len() + usize::from(submode);
         while let Some(row) = rows.next()? {
             let rowid = rowid_u32(row.get(rowid_at)?)?;
             let mut rec = record_from_row(row)?;
             if rec.contest.as_deref().is_some_and(contest_is_empty) {
                 rec.contest = None;
             }
+            if submode {
+                with_submode(&mut rec, row.get(QSO_COLUMNS.len())?);
+            }
+            crate::logbook::canonical::contact(&mut rec);
             each(rowid, &rec);
         }
         Ok(())
@@ -196,7 +240,7 @@ impl LogDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logbook::query::{order, LogQuery, SortKey};
+    use crate::logbook::query::{order, LogQuery, OrderBuilder, SortKey};
     use crate::logbook::sqlite::Resolved;
     use crate::logbook::{parse_adif, RecordId};
 
@@ -225,6 +269,8 @@ mod tests {
             r.confirmed = r.qsl_rcvd.any();
             r.award_confirmed = r.qsl_rcvd.award();
             r.ota.their_ref = (i % 9 == 0).then(|| format!("US-{:04}", i % 13));
+            // Some records carry a DXCC number of their own, as an import or a hand-set one does.
+            r.dxcc = (i % 4 == 0).then_some(1 + i as u32 % 3);
             records.push(r);
         }
         let mut db = LogDb::open_in_memory().unwrap();
@@ -246,7 +292,7 @@ mod tests {
             search: String::new(),
             needs_confirm_only: false,
         };
-        let expected: Vec<u32> = order(rowids.iter().copied().zip(all.iter()), &default);
+        let expected: Vec<u32> = order(rowids.iter().copied().zip(all.iter()), &default, &|_| None);
         assert_eq!(db.rowids_newest_first().unwrap(), expected);
         let plan: Vec<String> = {
             let mut stmt = db
@@ -288,6 +334,7 @@ mod tests {
                 (
                     r.call.clone(),
                     r.country.clone(),
+                    r.dxcc,
                     r.grid.clone(),
                     r.band.clone(),
                     r.mode.clone(),
@@ -315,6 +362,16 @@ mod tests {
             );
             assert!(narrow.extra.is_empty() && narrow.contest.is_none());
         }
+        // The entity slots' read carries the DXCC number too: with the call, it names the row's
+        // entity.
+        let mut numbers = Vec::new();
+        db.each_narrow_after(ENTITY_COLUMNS, 0, &mut |_, r| numbers.push(r.dxcc))
+            .unwrap();
+        assert_eq!(numbers, all.iter().map(|r| r.dxcc).collect::<Vec<_>>());
+        assert!(
+            numbers.iter().any(Option::is_some),
+            "premise: some rows carry one"
+        );
         // After a rowid: the rows past it only.
         let mut tail = Vec::new();
         db.each_narrow_after(ENTITY_COLUMNS, rowids[29], &mut |rowid, _| tail.push(rowid))
@@ -368,5 +425,101 @@ mod tests {
             .collect();
         assert!(!expected.is_empty(), "premise: the keys name rows");
         assert_eq!(db.rowids_by_call_norm(&keys).unwrap(), expected);
+    }
+
+    /// ★ The Logbook's search looks in a contact's SUBMODE as well as its MODE. A phone contact,
+    /// held as SSB with its sideband as the SUBMODE (`crate::logbook::canonical`), is found by
+    /// `usb` or `lsb`, `ssb` finds all phone, and `vara` the VarAC contact whose MODE is DYNAMIC:
+    /// over the whole rows, and over the narrow read a search makes of the store, where the
+    /// SUBMODE is a row of `qso_extra`. The narrow read a search does not make carries none.
+    #[test]
+    fn a_search_finds_a_contact_by_its_submode() {
+        let records: Vec<QsoRecord> = [
+            ("K1AAA", "<MODE:3>SSB<SUBMODE:3>USB"), // as Log4OM writes phone
+            ("K2BBB", "<MODE:3>LSB"),               // the sideband as the mode
+            ("K3CCC", "<MODE:3>SSB"),
+            ("K4DDD", "<MODE:3>FT8"),
+            ("K5EEE", "<MODE:7>DYNAMIC<SUBMODE:7>VARA HF"), // as VarAC writes it
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, (call, mode))| {
+            let mut r = parse_adif(&format!(
+                "<CALL:5>{call}<BAND:3>20m{mode}<QSO_DATE:8>20261001<TIME_ON:6>12{i:02}00<EOR>"
+            ))
+            .remove(0);
+            r.id = Some(RecordId::Provisional {
+                hash: 20_000 + i as u64,
+                ordinal: 0,
+            });
+            r
+        })
+        .collect();
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert_all(records.iter().map(|r| (r, Resolved::default())))
+            .unwrap();
+        let all = db.load_all().unwrap();
+        let with_submode = all
+            .iter()
+            .filter(|r| r.extra.iter().any(|(k, _)| k == "SUBMODE"))
+            .count();
+        assert_eq!(with_submode, 3, "premise: three contacts carry a SUBMODE");
+        let rowids = db.rowids_in_log_order().unwrap();
+        let calls = |order: Vec<u32>| -> Vec<&str> {
+            order
+                .iter()
+                .map(|h| {
+                    all[rowids.iter().position(|r| r == h).unwrap()]
+                        .call
+                        .as_str()
+                })
+                .collect()
+        };
+        for (search, want) in [
+            ("usb", vec!["K1AAA"]),
+            ("lsb", vec!["K2BBB"]),
+            ("ssb", vec!["K1AAA", "K2BBB", "K3CCC"]),
+            ("vara", vec!["K5EEE"]),
+            ("ft8", vec!["K4DDD"]),
+        ] {
+            let query = LogQuery {
+                sort: SortKey::Call,
+                asc: true,
+                search: search.to_string(),
+                needs_confirm_only: false,
+            };
+            let whole = order(rowids.iter().copied().zip(all.iter()), &query, &|_| None);
+            let mut b = OrderBuilder::new(&query, &|_| None);
+            assert!(b.searches());
+            db.each_narrow_after_with_submode(ORDER_COLUMNS, 0, &mut |rowid, r| b.push(rowid, r))
+                .unwrap();
+            assert_eq!(
+                (calls(whole), calls(b.finish())),
+                (want.clone(), want),
+                "{search}"
+            );
+        }
+        // The control: the read a search does not make carries no SUBMODE.
+        db.each_narrow_after(ORDER_COLUMNS, 0, &mut |_, r| {
+            assert!(r.extra.is_empty(), "{}: {:?}", r.call, r.extra)
+        })
+        .unwrap();
+        // The search's read looks the SUBMODE up by `qso_extra`'s key, one lookup per row.
+        let sql = db.narrow_after_sql(ORDER_COLUMNS, true).unwrap();
+        let mut stmt = db
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        let plan: Vec<String> = stmt
+            .query_map([0], |r| r.get::<_, String>(3))
+            .unwrap()
+            .map(|d| d.unwrap())
+            .collect();
+        let by_key = "SEARCH s USING INDEX sqlite_autoindex_qso_extra_1 (qso_id=? AND name=?)";
+        assert!(
+            plan.iter().any(|p| p.starts_with(by_key))
+                && !plan.iter().any(|p| p.starts_with("SCAN s")),
+            "{plan:?}"
+        );
     }
 }

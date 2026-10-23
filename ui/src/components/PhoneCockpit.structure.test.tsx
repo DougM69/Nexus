@@ -26,6 +26,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
+import { installRecentLog, recentRows, resetRecentLog } from './RecentQsosPane.testkit'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { PHONE_PANEL_IDS, PHONE_PANELS, panelStorageKey, usePanelLayout } from '../features/panelState'
@@ -59,6 +60,7 @@ vi.mock('../api', () => ({
   setSidebandOverride: vi.fn(async () => ({})),
   setFilterWidth: vi.fn(async () => ({})),
   openPanelWindow: vi.fn(async () => {}),
+  getCallStats: vi.fn(async () => null),
 }))
 
 // Structure-irrelevant heavy children → stubs. The stubs keep a testid so "the pane's
@@ -71,8 +73,9 @@ vi.mock('./VoiceKeyer', () => ({ VoiceKeyer: () => <div data-testid="vk-stub" />
 // rather than log behaviour: whether the strip draws its own heading under a frame head that
 // already says LOG. The strip's own half is in LogEntry.density.test.tsx.
 vi.mock('./LogEntry', () => ({
-  LogEntry: (p: { titled?: boolean }) => (
-    <div data-testid="log-stub" data-titled={String(p.titled ?? true)} />
+  // A click stands in for a call settling in the strip (LogEntry `onEntryCall`): the Stats pane's source.
+  LogEntry: (p: { titled?: boolean; mode?: string; onEntryCall?: (call: string) => void }) => (
+    <div data-testid="log-stub" data-titled={String(p.titled ?? true)} data-mode={p.mode} onClick={() => p.onEntryCall?.('W1AW')} />
   ),
 }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
@@ -620,14 +623,15 @@ describe('PhoneCockpit Spots and Needed feeds', () => {
       expect(framesIn(lead).slice(0, 2), `tier ${cols}: band + keyer no longer lead`).toEqual(['bandActivity', 'voiceKeyer'])
       expect(framesIn(lead).slice(-2), `tier ${cols}: the feeds left the leading column`).toEqual(['spots', 'needed'])
       const log = region.querySelector(':scope > .cockpit-col:last-child')!
-      expect(framesIn(log), `tier ${cols}: the log column holds more than the log`).toEqual(['log'])
+      // The log form, and (this fixture docks every id) the Stats pane under it.
+      expect(framesIn(log), `tier ${cols}: the log column holds more than the log`).toEqual(['log', 'stats'])
     }
     await tier(region, 1800)
     expect(region.getAttribute('data-cols')).toBe('3')
     const cols3 = region.querySelectorAll(':scope > .cockpit-col')
     expect(framesIn(cols3[0])).toEqual(['bandActivity', 'voiceKeyer', 'spots'])
     expect(framesIn(cols3[1])).toEqual(['receiver', 'transmitter', 'needed'])
-    expect(framesIn(cols3[2])).toEqual(['log'])
+    expect(framesIn(cols3[2])).toEqual(['log', 'stats'])
     for (const id of ['spots', 'needed']) {
       const f = document.querySelector(`[data-pane="${id}"]`) as HTMLElement
       expect(f.dataset.fit, `${id} is a content strip — a list must be able to use the surplus`).toBe('fill')
@@ -681,19 +685,19 @@ describe('PhoneCockpit Spots and Needed feeds', () => {
     await tier(region, 1800)
     expect(region.getAttribute('data-cols')).toBe('3')
     let cols = region.querySelectorAll(':scope > .cockpit-col')
-    expect([...cols].map(framesIn)).toEqual([['spots'], ['needed'], ['log']])
+    expect([...cols].map(framesIn)).toEqual([['spots'], ['needed'], ['log', 'stats']])
     // Spots alone as well: nothing for a middle track, so an ultrawide stays at two.
     r.rerender(withFeeds(fakePanels(['bandActivity', 'voiceKeyer', 'receiver', 'transmitter', 'needed'])))
     await frame()
     expect(region.getAttribute('data-cols')).toBe('2')
     cols = region.querySelectorAll(':scope > .cockpit-col')
-    expect([...cols].map(framesIn)).toEqual([['spots'], ['log']])
+    expect([...cols].map(framesIn)).toEqual([['spots'], ['log', 'stats']])
     // …and Needed alone, with nothing in the leading track at tier 3: two, Needed leading.
     r.rerender(withFeeds(fakePanels(['bandActivity', 'voiceKeyer', 'receiver', 'transmitter', 'spots'])))
     await frame()
     expect(region.getAttribute('data-cols')).toBe('2')
     cols = region.querySelectorAll(':scope > .cockpit-col')
-    expect([...cols].map(framesIn)).toEqual([['needed'], ['log']])
+    expect([...cols].map(framesIn)).toEqual([['needed'], ['log', 'stats']])
   })
 
   it('without the board wiring (no host to feed them) neither pane renders, ticked or not', () => {
@@ -962,4 +966,164 @@ describe('the TX strip still clears the sticky dock from inside the stage', () =
       expect(shell.style.getPropertyValue('--cockpit-txstrip-h'), 'the scroll padding left the shell').not.toBe('')
     })
   }
+})
+
+// THE STATS PANE (2026-10-14): over the log form, in the log column, content-height, on from the start, and
+// asking for the call the strip reports on the band the radio is on, in the mode the strip logs. The hosted
+// page leaves it out: its transport does not carry the question.
+describe('the Stats pane beside the log form', () => {
+  it('stands under the log form in the log column, its own height, and follows the strip’s call', async () => {
+    const { getCallStats } = await import('../api')
+    vi.mocked(getCallStats).mockClear()
+    renderCockpit({ panels: fakePanels() })
+    const stats = document.querySelector('[data-pane="stats"]')!
+    expect(stats, 'the Stats pane is not on a stock Phone screen').not.toBeNull()
+    expect(stats.getAttribute('data-fit')).toBe('content')
+    expect(stats.previousElementSibling?.getAttribute('data-pane'), 'not directly under the log form').toBe('log')
+    expect(stats.querySelector('.cstats-empty'), 'it asks nothing before a call is typed').not.toBeNull()
+    expect(getCallStats).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('log-stub'))
+    await act(async () => {})
+    const mode = screen.getByTestId('log-stub').getAttribute('data-mode')!
+    expect(mode, 'premise: the strip logs a mode').not.toBe('')
+    expect(getCallStats).toHaveBeenCalledWith('W1AW', '20m', mode)
+  })
+
+  it('is one ⊞ tick: hidden, it is gone and the log form keeps its column', () => {
+    renderCockpit({ panels: fakePanels(['stats']) })
+    expect(document.querySelector('[data-pane="stats"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]')).not.toBeNull()
+  })
+
+  it('the hosted page leaves it out', async () => {
+    const { installApplicationTransport } = await import('../applicationTransport')
+    const off = installApplicationTransport({ kind: 'remote', invoke: async () => null as never })
+    try {
+      renderCockpit({ panels: fakePanels() })
+      expect(document.querySelector('[data-pane="stats"]')).toBeNull()
+      expect(document.querySelector('[data-pane="log"]'), 'control: the log column rendered').not.toBeNull()
+    } finally {
+      off()
+    }
+  })
+})
+
+// ON WHERE THERE IS ROOM (the ruling): with the record saying nothing, the pane stands on a window with room for it
+// and the log form both (STATS_ROOM, effective px as useViewport publishes them: any window that tall, or a wide one
+// a little shorter), and not on one without; a tick or an untick the operator made wins at every size, and nothing is
+// written by the window's size.
+describe('the Stats pane, on where there is room', () => {
+  const eff = (name: '--vh-eff' | '--vw-eff') => (px: number | null) => {
+    if (px == null) document.documentElement.style.removeProperty(name)
+    else document.documentElement.style.setProperty(name, `${px}px`)
+  }
+  const tall = eff('--vh-eff'), wide = eff('--vw-eff')
+  beforeEach(() => {
+    localStorage.clear()
+  })
+  afterEach(() => {
+    tall(null)
+    wide(null)
+  })
+  function Live() {
+    const panels = usePanelLayout(PHONE_PANELS)
+    return <PhoneCockpit snap={makeSnap()} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panels} />
+  }
+  const statsShown = () => document.querySelector('[data-pane="stats"]') != null
+
+  it('stands on a window with room for it, and not on one without, the record untouched', async () => {
+    const { STATS_ROOM } = await import('./CallStatsPane')
+    tall(STATS_ROOM.minVh)
+    render(<Live />)
+    expect(statsShown(), 'a window with room shows it').toBe(true)
+    cleanup()
+    tall(STATS_ROOM.minVh - 1)
+    render(<Live />)
+    expect(statsShown(), 'a window without room shows it').toBe(false)
+    expect(document.querySelector('[data-pane="log"]'), 'control: the log column rendered').not.toBeNull()
+    expect(localStorage.getItem(panelStorageKey('phone')), 'the window’s size wrote to the record').toBeNull()
+  })
+
+  it('a wide window has room a little lower, and only a wide one', async () => {
+    const { STATS_ROOM } = await import('./CallStatsPane')
+    // Below the line for every window, at the wide one's.
+    expect(STATS_ROOM.wide.minVh).toBeLessThan(STATS_ROOM.minVh)
+    wide(STATS_ROOM.wide.minVw)
+    tall(STATS_ROOM.wide.minVh)
+    render(<Live />)
+    expect(statsShown(), 'a wide window at its line shows it').toBe(true)
+    cleanup()
+    wide(STATS_ROOM.wide.minVw - 1)
+    render(<Live />)
+    expect(statsShown(), 'a narrower one at the same height shows it').toBe(false)
+    cleanup()
+    wide(STATS_ROOM.wide.minVw)
+    tall(STATS_ROOM.wide.minVh - 1)
+    render(<Live />)
+    expect(statsShown(), 'a wide window under its line shows it').toBe(false)
+    expect(document.querySelector('[data-pane="log"]'), 'control: the log column rendered').not.toBeNull()
+  })
+
+  it('an operator’s tick and untick win at every size', async () => {
+    const { STATS_ROOM } = await import('./CallStatsPane')
+    localStorage.setItem(panelStorageKey('phone'), JSON.stringify({ v: 1, state: { stats: 'docked' }, share: {} }))
+    tall(STATS_ROOM.wide.minVh - 1)
+    render(<Live />)
+    expect(statsShown(), 'a tick on a short window').toBe(true)
+    cleanup()
+    localStorage.setItem(panelStorageKey('phone'), JSON.stringify({ v: 1, state: { stats: 'removed' }, share: {} }))
+    tall(STATS_ROOM.minVh)
+    render(<Live />)
+    expect(statsShown(), 'an untick on a tall window').toBe(false)
+  })
+})
+
+// THE RECENT CONTACTS PANE (2026-10-18): inside the log pane under the form, above the Stats pane, its own height; a row
+// click opens that contact in the Logbook's editor (the cockpit's `onOpenLogbook`, with the contact's id).
+describe('the Recent contacts pane under the log form', () => {
+  afterEach(resetRecentLog)
+
+  it('ticked, stands inside the log pane under the form, its own height, and a row opens THAT contact', async () => {
+    installRecentLog()
+    const onOpenLogbook = vi.fn()
+    renderCockpit({ panels: fakePanels(), onOpenLogbook })
+    const recent = document.querySelector('[data-pane="recent"]')
+    expect(recent, 'ticked, the Recent contacts pane is not on screen').not.toBeNull()
+    expect(recent!.getAttribute('data-fit')).toBe('content')
+    // INSIDE THE LOG PANE, under the form, in the pane's own scrolling body: all it can take is what the
+    // form leaves, so showing it never moves the form or its Log button (measured in Chrome).
+    const logPane = recent!.closest('[data-pane="log"]')
+    expect(logPane, 'not inside the log pane').not.toBeNull()
+    expect(recent!.parentElement, 'not in the log pane’s scrolling body').toBe(logPane!.querySelector(':scope > .pane-body'))
+    expect(recent!.previousElementSibling?.getAttribute('data-testid'), 'not directly under the log form').toBe('log-stub')
+    expect(recent!.nextElementSibling, 'something stands under it inside the log pane').toBeNull()
+    expect(logPane!.nextElementSibling?.getAttribute('data-pane'), 'the Stats pane is not under the log pane').toBe('stats')
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    const rows = recentRows()
+    expect(rows, 'the newest contacts, newest first').toHaveLength(2)
+    fireEvent.click(rows[1])
+    expect(onOpenLogbook.mock.calls).toEqual([['W1AW', 'id-older']])
+  })
+
+  it('is one ⊞ tick: hidden, it is gone and the log form stays', async () => {
+    renderCockpit({ panels: fakePanels(['recent']) })
+    expect(document.querySelector('[data-pane="recent"]')).toBeNull()
+    expect(document.querySelector('[data-pane="log"]'), 'control: the log rendered').not.toBeNull()
+  })
+})
+
+describe('the Recent contacts pane on the hosted page', () => {
+  it('is left out, as the Stats pane is: that page edits no contact', async () => {
+    const { installApplicationTransport } = await import('../applicationTransport')
+    const off = installApplicationTransport({ kind: 'remote', invoke: async () => null as never })
+    try {
+      renderCockpit({ panels: fakePanels() })
+      expect(document.querySelector('[data-pane="recent"]')).toBeNull()
+      expect(document.querySelector('[data-pane="log"]'), 'control: the log column rendered').not.toBeNull()
+    } finally {
+      off()
+    }
+  })
 })

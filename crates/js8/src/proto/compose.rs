@@ -8,14 +8,14 @@
 //! call": prepended unless the line already starts with it, with @ALLCALL / a CQ or HB word /
 //! a callsign, or with `` ` `` (:2016-2040). A leading "MYCALL:" or "MYCALL " is stripped
 //! (:2001-2004) and plain data is prefixed "MYCALL: " when nothing else identifies the
-//! sender (:2065-2069; Nexus has no avoid_forced_identify — spec invariant 10). The remainder
+//! sender (:2065-2069; Nexus has no avoid_forced_identify). The remainder
 //! after a directed command is left-stripped and, for the checksummed commands, gets
 //! `" " + checksum3(body)` appended (:2148-2172) before it is data-framed. Compound cases
 //! (:2100-2146): when MYCALL or the destination is not base-packable, the frames are
 //! `Compound { mycall, grid }` then `CompoundDirected { to, cmd, num }`.
 //!
 //! WHAT IS REFUSED, and why here: an empty or non-packable MYCALL (`NoCallsign`) — this is the
-//! mode's identity gate below the engine's `structured_tx_ready` (spec TX invariant 2); an
+//! mode's identity gate below the engine's `structured_tx_ready`; an
 //! empty line; and more than `max_frames(speed)` frames (`TooLong`) — frames × period must stay
 //! under 600 s so §97.119 identification holds without inserting a frame a JS8Call receiver
 //! would read as a new message. `@APRSIS` and `@JS8NET` are destinations like any group:
@@ -48,7 +48,7 @@ pub enum ComposeError {
 }
 
 /// §97.119 airtime cap: the largest frame count with frames × period < 600 s
-/// (Slow 19 · Normal 39 · Fast 59 · Turbo 99).
+/// (Slow 19 · Normal 39 · Fast 59 · JS8 40 99 · JS8 60 149).
 pub const fn max_frames(speed: Speed) -> usize {
     (599 / speed.period_s()) as usize
 }
@@ -59,7 +59,7 @@ const NO_DATA: I3 = I3 {
     data: false,
 };
 
-fn normalise(text: &str) -> String {
+pub(crate) fn normalise(text: &str) -> String {
     text.chars()
         .map(|c| {
             if (c as u32) > 0xFF {
@@ -576,6 +576,41 @@ pub fn frame_count_estimate(mycall: &str, to: Option<&CallRef>, text: &str, spee
         .unwrap_or(0)
 }
 
+/// The rest of a message already part way out, framed again as JS8Call frames its typeahead
+/// (`buildMessageFrames` with `forceData`, varicode.cpp:2055-2058): data frames only, with no
+/// heartbeat, compound or directed frame, no selected call put in front and no "MYCALL: ", none
+/// flagged first and the final one flagged last. A leading "MYCALL:" or "MYCALL " is still taken
+/// off (AUTO_REMOVE_MYCALL, :2060-2064), and spaces at the end stay: JS8Call strips none. No
+/// text is no frames. Uncapped: the caller counts the frames already sent against the cap.
+pub fn continuation_frames(mycall: &str, text: &str, speed: Speed) -> Vec<(Frame, I3)> {
+    let mycall = normalise(mycall.trim());
+    let mut line = normalise(text);
+    if !mycall.is_empty()
+        && (line.starts_with(&format!("{mycall}:")) || line.starts_with(&format!("{mycall} ")))
+    {
+        line = lstrip(&line[mycall.len() + 1..]).to_string();
+    }
+    let mut out: Vec<(Frame, I3)> = Vec::new();
+    while !line.is_empty() {
+        let Some((_, i3, n)) = pack_data_prefix(&line, speed) else {
+            break; // nothing packable at the head of the line (upstream would spin)
+        };
+        let taken: String = line.chars().take(n).collect();
+        line = line.chars().skip(n).collect();
+        out.push((
+            Frame::Data {
+                text: taken,
+                dense: i3.data,
+            },
+            i3,
+        ));
+    }
+    if let Some(last) = out.last_mut() {
+        last.1.last = true;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -892,5 +927,36 @@ mod tests {
             frame_count_estimate("KD9TAW", None, &long, Speed::Slow) > 19,
             "the estimate reports the uncapped count"
         );
+    }
+
+    /// Typeahead's rest of a message (JS8Call's `forceData`, varicode.cpp:2055-2058): data frames
+    /// only, whatever the text would parse as, none flagged first and the final one last; no
+    /// "MYCALL: " put in front and the spaces at the end kept; a leading "MYCALL:" taken off.
+    #[test]
+    fn continuation_frames_are_data_only_none_first_and_the_final_one_last() {
+        for speed in Speed::ALL {
+            let v = continuation_frames("KD9TAW", "w1aw snr? cq cq de here ", speed);
+            assert!(!v.is_empty(), "{speed:?}");
+            assert!(
+                v.iter()
+                    .all(|(f, i3)| matches!(f, Frame::Data { .. }) && !i3.first),
+                "{speed:?}: data only, none first: {v:?}"
+            );
+            let (last, rest) = v.split_last().unwrap();
+            assert!(
+                last.1.last && rest.iter().all(|(_, i3)| !i3.last),
+                "{speed:?}"
+            );
+            assert_eq!(
+                data_text(&v),
+                "W1AW SNR? CQ CQ DE HERE ",
+                "{speed:?}: no directed or heartbeat frame, no identity, the end space kept"
+            );
+        }
+        assert_eq!(
+            data_text(&continuation_frames("KD9TAW", "KD9TAW: HI", Speed::Fast)),
+            "HI"
+        );
+        assert!(continuation_frames("KD9TAW", "", Speed::Normal).is_empty());
     }
 }

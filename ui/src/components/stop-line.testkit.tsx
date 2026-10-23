@@ -116,7 +116,7 @@ export const fdStatus = {
   log: [{ call: 'W1AW', band: '20m', mode: 'PH', class: '3A', section: 'EMA', whenUnix: 100 }],
 } as unknown as FieldDayStatus
 
-/** The Spots and Needed boards as App lends them to Phone and CW (#345, plan H8), empty. */
+/** The Spots and Needed boards as App lends them to Phone and CW (#345), empty. */
 export const spotsBoard = { bandPlan: [], selectedCall: null, onSelect: () => {}, onWork: () => {} }
 export const neededBoard = { alerts: [], bandPlan: [], selectedCall: null, onQsy: () => {}, onSelect: () => {} }
 /** What App lends the boxes of Phone, CW and JS8 on the desktop (any pane in any area, 2026-10-07). */

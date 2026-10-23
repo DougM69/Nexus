@@ -72,8 +72,8 @@ pub fn normalize_ref(program: OtaProgram, s: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Local park directory — an importable/downloadable list searched OFFLINE (the
-// HRD workflow a test user asked for: grab the park list once, search it locally).
+// Local park directory — an importable/downloadable list searched OFFLINE (a test
+// user asked for it: grab the park list once, search it locally).
 // ---------------------------------------------------------------------------
 
 /// A park directory entry (from the POTA all-parks export or an operator-imported CSV).

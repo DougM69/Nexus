@@ -97,6 +97,39 @@ GIT_AUTHOR_NAME="LEAKNAME" git commit -qm "chore: n"
 expect BLOCK "leak in commit author NAME (identity kept)" origin metaleak:refs/heads/main
 git checkout -q main; git branch -qD metaleak
 
+# --- 4b/4c: a match in a file holding a NUL byte ---------------------------------
+# Git prints only "Binary files ... differ" for a file with a NUL in its first 8000 bytes, so
+# a scan of `git log -p` or `git diff` without --text never saw one byte of such a file: one
+# NUL carried a match past every content scan. Each scan is pinned on its own. A match that a
+# later commit removes is visible to 4b alone; one introduced BY a merge, to 4c alone. Every
+# case pushes a NEW ref: a hook that wrongly passed one onto main would turn each later case
+# red for a reason that has nothing to do with it (non-fast-forward).
+note "a match in a file holding a NUL byte"
+git checkout -qb nulleak
+printf 'bin\0ary\nfixture LEAKNAME here\n' > nul.dat; git add nul.dat; git commit -qm "add nul.dat"
+expect BLOCK "match after a NUL byte in an added file" origin nulleak:refs/heads/nulleak
+git checkout -q main; git branch -qD nulleak
+
+git checkout -qb nulgone
+printf 'bin\0ary\nfixture LEAKNAME again\n' > nulg.dat; git add nulg.dat; git commit -qm "add nulg.dat"
+git rm -q nulg.dat; git commit -qm "drop nulg.dat"
+expect BLOCK "  ... added then removed mid-range (4b alone)" origin nulgone:refs/heads/nulgone
+git checkout -q main; git branch -qD nulgone
+
+git checkout -qb nulside
+printf 'bin\0ary\nclean\n' > nulm.dat; git add nulm.dat; git commit -qm "add nulm.dat"
+git checkout -q main; git checkout -qb nulmerge
+git merge -q --no-commit --no-ff nulside >/dev/null 2>&1 || true
+printf 'bin\0ary\nfixture LEAKNAME here\n' > nulm.dat; git add nulm.dat; git commit -qm "Merge nulside"
+expect BLOCK "  ... introduced BY a merge (4c alone)" origin nulmerge:refs/heads/nulmerge
+git checkout -q main; git branch -qD nulside nulmerge
+
+# ... and reading such a file is not refusing it: the same file with no match goes out.
+git checkout -qb nulclean
+printf 'bin\0ary\nnothing to see\n' > nul.dat; git add nul.dat; git commit -qm "add a clean nul.dat"
+expect PASS "  ... the same file with no match passes" origin nulclean:refs/heads/nulclean
+git checkout -q main; git branch -qD nulclean
+
 # --- 4b: a SCRUB commit (pattern only on removed lines) must NOT be blocked ------
 note "scrub commits must not be blocked (the 2026-08-05 class)"
 # Put the leak on main via an unhooked push, so it is already-published history.
@@ -212,6 +245,13 @@ mkdir -p crates/x; printf '/*\n * Redistribution and use in source and binary fo
 git add crates/x/b.h; git commit -qm "feat: add b.h"
 expect BLOCK "licence BODY text added outside vendor/, no NOTICE" origin licbody:refs/heads/main
 git checkout -q main; git branch -qD licbody
+
+# The same text after a NUL byte: without --text the guard read "Binary files ... differ".
+git checkout -qb nullic
+mkdir -p crates/x; printf 'bin\0ary\nPermission is hereby granted, free of charge, to any person\n' > crates/x/blob.dat
+git add crates/x/blob.dat; git commit -qm "feat: add blob.dat"
+expect BLOCK "  ... the same text after a NUL byte" origin nullic:refs/heads/nullic
+git checkout -q main; git branch -qD nullic
 
 git checkout -qb selfedit
 # The guard's own marker list is licence phrases; editing the gate must not trip the gate.

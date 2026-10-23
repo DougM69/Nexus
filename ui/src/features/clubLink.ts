@@ -94,9 +94,19 @@ function hostingLines(link: ClubLink): ClubLinkLine[] {
  * The lines for `link`. `inClubBlock`: the Contest screen's club block is beside them, and it
  * already names the event, the host and the club code and quotes a refusal ("Host: …"), so
  * those are not said twice. The host's own position joins it over loopback, so of its link only
- * a refusal is news; its hosting line says the rest.
+ * a refusal is news; its hosting line says the rest. Last, on the host as on any other laptop,
+ * the contacts this laptop logged on another call than the club's, which the club chip does not
+ * count: they stay in its own log.
  */
 export function clubLinkLines(link: ClubLink, inClubBlock = false): ClubLinkLine[] {
+  const lines = linkLines(link, inClubBlock)
+  if (link.otherCall) {
+    lines.push({ key: 'otherCall', text: t('fieldDay.club.link.otherCall', { count: link.otherCall }), alert: true })
+  }
+  return lines
+}
+
+function linkLines(link: ClubLink, inClubBlock: boolean): ClubLinkLine[] {
   const lines = hostingLines(link)
   const addr = link.addr
   // A position that has been in the event says its link in the host board's words: past the

@@ -26,11 +26,11 @@ from collections import Counter, defaultdict
 # file it just wrote. Do not edit them by hand: a pin that disagrees with the CSV beside it
 # reports a translator's untouched file as damaged.
 # >>> make-kit pins
-EXPECTED_ROWS = 7243
-EXPECTED_KEYS_SHA = '6585d0695cddff7e3d7fb4644a5f5d8056d9eac4392c83f0bb51f8f78594b106'
-EXPECTED_ENGLISH_SHA = '4f72a05754b196f81bb561438da1f5eee8af7950641e775235872f5de350da18'
-EXPECTED_DNT_SHA = '85737495cfe0db120c20321e56d364b90fb584998fa95341be621532e37ca441'
-EXPECTED_TIERS = {1: 770, 2: 320, 3: 1118, 4: 479, 5: 3044, 6: 1512}
+EXPECTED_ROWS = 7081
+EXPECTED_KEYS_SHA = '11592141341238c19f344987cb781559449e190507d4299828391cfd08b9f451'
+EXPECTED_ENGLISH_SHA = '764085c8f67add233ed0638cbafe2826054b5e9b5c55ce5ffe52937f4e024a38'
+EXPECTED_DNT_SHA = 'b126bb92a5eebef75594cdcff3b7df76ca58652d02df0554224cbd9c3ffd07c6'
+EXPECTED_TIERS = {1: 770, 2: 320, 3: 1116, 4: 479, 5: 3040, 6: 1356}
 # <<< make-kit pins
 COLUMNS = ['priority', 'key', 'english', 'italian', 'do_not_translate', 'notes']
 
@@ -348,7 +348,7 @@ def main(argv):
 
     print()
     print('No problems found. Every slot, marker and technical term survived. Thank you — send it '
-          'to kd9taw@protonmail.com whenever you are ready.')
+          'to contact@hamradiotools.io whenever you are ready.')
     return 0
 
 

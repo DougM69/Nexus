@@ -38,6 +38,7 @@
 import type { SerialPortInfo } from './api'
 import type { AudioDevices } from './types'
 import { t } from './i18n'
+import { TCI_DEFAULT_HOST, TCI_DEFAULT_PORT } from './tci'
 
 export type RigCheck = { level: 'error' | 'warning'; message: string }
 
@@ -50,6 +51,9 @@ export interface RigFormFacts {
   /** The Icom network connection's radio address and network user. */
   icomLanHost?: string
   icomLanUser?: string
+  /** The TCI connection's server address and port. */
+  tciHost?: string
+  tciPort?: number
   /** Chosen sound-card device NAMES, for the same-radio check. Absent = nothing chosen yet. */
   audioIn?: string
   audioOut?: string
@@ -79,10 +83,28 @@ export function checkRigForm(
   icomLanPasswordSaved?: boolean | null,
 ): RigCheck[] {
   const out: RigCheck[] = []
+  // CAT keying on a radio Hamlib cannot key over CAT (`NO_CAT_PTT_MODELS`): `T 1` answers as if it
+  // keyed and the radio stays on receive, so the station shows TX and nothing goes out. Decided
+  // before the network return below because it is a fact about the MODEL, which rigctld drives over
+  // a network address as it does over a serial port (and over an empty `rigConn`, which an older
+  // settings file loads as and the backend reads as serial). Not OmniRig (its own rig file keys the
+  // radio) and not the Icom network connection (Nexus's own CI-V; none of these radios has one). A
+  // WARNING, never an error: an interface that keys the radio on audio, a SignaLink, transmits
+  // whatever PTT says, and that station must keep saving its CAT setting.
+  if (
+    form.rigConn !== 'omnirig' &&
+    form.rigConn !== 'icomlan' &&
+    form.pttMethod === 'cat' &&
+    NO_CAT_PTT_MODELS.includes(form.rigModel)
+  ) {
+    out.push({ level: 'warning', message: t('settings.radio.check.noCatPtt') })
+  }
   // A network rig has no serial port at all; none of this applies.
   if (form.rigConn === 'network') return out
   // Nor does the Icom network connection: it has its own facts to check.
   if (form.rigConn === 'icomlan') return checkIcomLan(form, icomLanPasswordSaved)
+  // Nor does TCI: no serial port and no Hamlib model, an SDR program's server instead.
+  if (form.rigConn === 'tci') return checkTci(form)
   // Nor does an OmniRig one, and for a stronger reason: OmniRig owns the rig type, the COM
   // port and the baud, so every field these checks read belongs to another program. Blocking a
   // save on "no serial port chosen" would make a correct OmniRig configuration unsaveable —
@@ -232,6 +254,27 @@ function checkIcomLan(form: RigFormFacts, passwordSaved?: boolean | null): RigCh
 }
 
 /**
+ * The TCI connection's checks: an address and a port, because without either Nexus has nowhere to
+ * connect (`tci_reachable` in the settings asks the same two things). An address with a scheme, a
+ * path or a space in it is not one: the port has its own box. Nothing here asks about the model,
+ * which the connection sets itself.
+ */
+function checkTci(form: RigFormFacts): RigCheck[] {
+  const out: RigCheck[] = []
+  // An absent field is what the form shows for it, the default: only a cleared one is missing.
+  const host = (form.tciHost ?? TCI_DEFAULT_HOST).trim()
+  if (host === '' || /[\s/]/.test(host)) {
+    // The example is an invariant token: an address, never catalog text.
+    out.push({ level: 'error', message: t('settings.radio.check.tciHost', { example: '127.0.0.1' }) })
+  }
+  const port = form.tciPort ?? TCI_DEFAULT_PORT
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    out.push({ level: 'error', message: t('settings.radio.check.tciPort', { example: 50001 }) })
+  }
+  return out
+}
+
+/**
  * The Icoms with a network server built in, the only radios the Icom network connection is offered
  * for: IC-7610, IC-9700, IC-705, IC-905, IC-7760, IC-7300MK2.
  *
@@ -240,6 +283,37 @@ function checkIcomLan(form: RigFormFacts, passwordSaved?: boolean | null): RigCh
  * the daemon can serve.
  */
 export const ICOM_LAN_MODELS: readonly number[] = [3078, 3081, 3085, 3090, 3092, 3094]
+
+/**
+ * The radios in the rig list that Hamlib cannot key over CAT: the bundled Hamlib's caps answer
+ * `Can set PTT: N` for each. PTT on CAT keys nothing on them (the IC-706MKIIG's backend declares no
+ * PTT at all, and Hamlib answers its `T 1` with RPRT 0), so the setup wizard never switches one of
+ * them to CAT, and Settings warns when CAT is picked. Malachite DSP SDR, Icom IC-706, IC-706MKII,
+ * IC-706MKIIG, IC-718, IC-725, IC-726, IC-728, IC-729, IC-735, IC-756, Ten-Tec TT-585 Paragon and
+ * Alinco DX-77.
+ *
+ * ⚠️ GENERATED FACTS, not a hand list: `scripts/gen-hamlib-cat-ptt.mjs` dumps every catalog model
+ * into `components/__fixtures__/hamlibCatPtt.json`, and `rigFormChecks.catptt.test.ts` fails unless
+ * this is exactly that fixture's `setPtt: false` rows. NET rigctl (2) is never here: its keying
+ * belongs to the rigctld it reaches.
+ */
+export const NO_CAT_PTT_MODELS: readonly number[] = [
+  2049, 3009, 3010, 3011, 3013, 3014, 3015, 3016, 3017, 3019, 3026, 16009, 17001,
+]
+
+/**
+ * The transceivers among `NO_CAT_PTT_MODELS`: everything on that list except the Malachite DSP SDR
+ * (2049), a receiver. Something other than CAT has to key these, so the setup wizard asks how the
+ * owner's interface keys the radio (VOX, Serial RTS or Serial DTR) with Prove TX beside the answer,
+ * and Settings ▸ Radio explains it under PTT Method whatever the method.
+ *
+ * ⚠️ GENERATED FACTS, like the list above: `scripts/gen-hamlib-cat-ptt.mjs` records whether each
+ * model's `Rig type:` names a Transmitter, and `rigFormChecks.catptt.test.ts` fails unless this is
+ * exactly the fixture's rows with `setPtt: false` and `transmitter: true`.
+ */
+export const NO_CAT_PTT_TRANSCEIVERS: readonly number[] = [
+  3009, 3010, 3011, 3013, 3014, 3015, 3016, 3017, 3019, 3026, 16009, 17001,
+]
 
 /** Convenience: does anything here stop a save? */
 export function blocks(checks: RigCheck[]): boolean {

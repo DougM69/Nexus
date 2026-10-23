@@ -9,6 +9,7 @@
 #   ./scripts/build-windows-cross.sh            # everything (modem exes + GUI)
 #   ./scripts/build-windows-cross.sh --modem    # only the modem exes (fast, fully static)
 #   ./scripts/build-windows-cross.sh --no-gui   # modem + win_smoke, skip Nexus.exe
+#   ./scripts/build-windows-cross.sh --bench-road-switch   # a TEST build for the bench, never shipped
 #
 # Prereqs (Debian/Ubuntu pkg names) — the script checks and reports what's missing:
 #   gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gfortran-mingw-w64-x86-64
@@ -33,11 +34,14 @@ export FFTW_MINGW_PREFIX="$REPO/target/fftw-mingw"   # read by ft1-sys/build.rs
 VPX_VER=1.17.0
 export VPX_MINGW_PREFIX="$REPO/target/vpx-mingw"     # read by crates/tempo-stream/build.rs
 
-GUI=1; MODEM_ONLY=0
+GUI=1; MODEM_ONLY=0; FEATURES=radio,custom-protocol
 for a in "$@"; do
   case "$a" in
     --modem)  MODEM_ONLY=1 ;;
     --no-gui) GUI=0 ;;
+    # A test build only: the switch that blocks one road to the shack at a time, for the bench.
+    # Never a release: src-tauri's tests fail if a release workflow names it.
+    --bench-road-switch) FEATURES+=,bench-road-switch ;;
     -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $a" ;;
   esac
@@ -59,9 +63,23 @@ ok "mingw gcc/g++/gfortran, cmake ($GEN), Rust target $TARGET"
 
 # 2 — FFTW3f for MinGW (built once, cached) ----------------------------------
 bold "2/5  FFTW3f (single precision) for MinGW"
-if [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ]; then
+# SSE2/AVX/AVX2 codelets: WSJT-X's own Windows FFTW has SIMD (the DLL WSJT-X 2.7.0 installs
+# reports fftw-3.3.10-sse2-avx). Built without them, FFTW 3.3.10 has 226 codelets and none SIMD;
+# with them, 978 of which 752 are SIMD. Measured on one Windows PC, the plain build took 20-57 %
+# longer over the early FT8 pass and 1-26 % longer over the full pass, for the same decodes. FFTW
+# chooses codelets by CPUID at run time, so a CPU without AVX runs the SSE2 or plain ones.
+# --with-our-malloc is FFTW's own aligned allocator: Windows' malloc gives 16 bytes of alignment,
+# and AVX wants 32.
+#
+# The stamp records the version and these flags, so a cached build made with other flags (every
+# CI cache and worktree from before SIMD) is rebuilt rather than linked.
+fftw_cfg=(--host=x86_64-w64-mingw32 --enable-float --enable-static --disable-shared
+  --enable-sse2 --enable-avx --enable-avx2 --with-our-malloc)
+fftw_stamp="$FFTW_MINGW_PREFIX/.nexus-fftw"
+if [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ] && [ "$(cat "$fftw_stamp" 2>/dev/null)" = "$FFTW_VER ${fftw_cfg[*]}" ]; then
   ok "cached at $FFTW_MINGW_PREFIX"
 else
+  rm -rf "$FFTW_MINGW_PREFIX"
   tmp="$(mktemp -d)"
   ( cd "$tmp"
     # ⚠️ HTTPS AND A PINNED HASH, because of WHAT this becomes. The `make` two lines below
@@ -86,11 +104,12 @@ else
     echo "$fftw_sha256  fftw.tgz" | sha256sum -c - \
       || die "FFTW checksum mismatch — refusing to build. Someone changed the bytes at $url."
     tar xf fftw.tgz && cd "fftw-${FFTW_VER}"
-    ./configure --host=x86_64-w64-mingw32 --enable-float --enable-static \
-      --disable-shared --prefix="$FFTW_MINGW_PREFIX" >/dev/null
+    ./configure "${fftw_cfg[@]}" --prefix="$FFTW_MINGW_PREFIX" >/dev/null
     make -j"$(nproc)" >/dev/null && make install >/dev/null )
   rm -rf "$tmp"
-  [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ] && ok "built → $FFTW_MINGW_PREFIX" || die "FFTW cross-build failed"
+  [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ] || die "FFTW cross-build failed"
+  echo "$FFTW_VER ${fftw_cfg[*]}" > "$fftw_stamp"
+  ok "built → $FFTW_MINGW_PREFIX"
 fi
 
 # 2b — libvpx (the VP8 encoder of Remote as a stream) for MinGW (built once, cached) --
@@ -137,6 +156,25 @@ else
   echo "$VPX_VER $vpx_sha256" > "$vpx_stamp"
   ok "built → $VPX_MINGW_PREFIX (libvpx $VPX_VER)"
 fi
+
+# BUILD PATHS: from here on, every compiler maps $HOME to `~`. Each one embeds the absolute path
+# of what it compiles: rustc for panic locations (crates.io sources included), gcc for __FILE__,
+# gfortran for its run-time and I/O error messages. Built under a home directory, Nexus.exe carried
+# that path, and with it the account name, more than a thousand times; CI's installers only ever
+# held its runner's. Not set before FFTW and libvpx: FFTW's configure leaves out its own -O3 when
+# CFLAGS is set, and both build in a temporary directory, so neither embeds a home path anyway.
+#   • rustc: --remap-path-prefix in RUSTFLAGS. RUSTFLAGS REPLACES `rustflags` from a cargo config
+#     file rather than adding to it; this repo sets none there.
+#   • gcc (the cc and cmake crates, and CMake's C/C++): -ffile-prefix-map in CFLAGS/CXXFLAGS.
+#   • gfortran ignores -ffile-prefix-map for those paths, so scripts/fortran-remap-home.sh rewrites
+#     them where gfortran reads them, as CMake's Fortran compiler launcher.
+# CMake reads CFLAGS and the launcher only when it first configures a build directory. That is
+# enough: a changed RUSTFLAGS gives every build script a new OUT_DIR, so the libtempo cargo links
+# is configured afresh the first time this runs in an existing tree.
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$HOME=~"
+export CFLAGS="${CFLAGS:+$CFLAGS }-ffile-prefix-map=$HOME=~"
+export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-ffile-prefix-map=$HOME=~"
+export CMAKE_Fortran_COMPILER_LAUNCHER="$REPO/scripts/fortran-remap-home.sh${CMAKE_Fortran_COMPILER_LAUNCHER:+;$CMAKE_Fortran_COMPILER_LAUNCHER}"
 
 # 3 — libtempo modem test exes (proves the native chain on Windows) ------------
 bold "3/5  libtempo Windows test exes"
@@ -212,7 +250,7 @@ if [ "$GUI" = 1 ]; then
   # its build jobs never see the key, and a separate job signs the finished installer. A local
   # build with the key in ~/.nexus-build.env still signs here, as before.
   no_sign=(); [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || no_sign=(--no-sign)
-  ( cd "$REPO/src-tauri" && cargo tauri build --target "$TARGET" --features radio,custom-protocol --bundles nsis "${no_sign[@]}" )
+  ( cd "$REPO/src-tauri" && cargo tauri build --target "$TARGET" --features "$FEATURES" --bundles nsis "${no_sign[@]}" )
   ok "Nexus.exe + installer"
 fi
 

@@ -39,6 +39,9 @@ vi.mock('./api', async (importOriginal) => {
   }
   return {
     ...auto,
+    // A computer running its own station: the backend answers None, and the banner asks once. The
+    // catch-all's `{}` would read as driving a remote station, asked every half second.
+    clientStatus: vi.fn(async () => null),
     askLog: vi.fn(async () => {
       throw new Error('no log in this test')
     }),
@@ -131,14 +134,4 @@ describe('the desktop sends the station its watch list', () => {
     await waitFor(() => expect(station.calls).toEqual([sent, 'board']))
   })
 
-  it('not from a Remote browser', async () => {
-    saveWatchlist(LAUNCH)
-    const { container } = render(
-      <App remote={{ snapshot, settings, bandPlan: [], status: <div data-testid="remote-status">Observer</div> }} />,
-    )
-    // Positive control: the Remote App is up.
-    await waitFor(() => expect(container.querySelector('[data-testid="remote-status"]')).not.toBeNull())
-    await new Promise((r) => setTimeout(r, 50))
-    expect(setWatchList).not.toHaveBeenCalled()
-  })
 })

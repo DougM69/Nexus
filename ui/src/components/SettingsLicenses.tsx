@@ -1,16 +1,17 @@
-// Settings ▸ Licenses, in the panel header beside the build stamp: the license texts of the npm
-// packages built into this app's interface, then those of the Rust crates the app is built from.
-// The desktop build derives the first from its own bundle and emits it as THIRD-PARTY.txt, and
-// emits the second, scripts/gen-rust-licenses.py's licenses/rust/THIRD-PARTY.txt, beside it as
-// rust/THIRD-PARTY.txt (ui/vite.config.ts). The installers carry the same texts as
-// resources/ui/THIRD-PARTY.txt and resources/rust/THIRD-PARTY.txt, beside COPYING and NOTICE.
-// Read when first opened, never at start, and shown only whole: half of them would read as all.
+// Settings ▸ Licenses, in the panel header beside the build stamp: Nexus's own NOTICE, then the
+// license texts of the npm packages built into this app's interface, then those of the Rust
+// crates the app is built from. The desktop build emits the repository's NOTICE as NOTICE.txt,
+// derives the second from its own bundle and emits it as THIRD-PARTY.txt, and emits the third,
+// scripts/gen-rust-licenses.py's licenses/rust/THIRD-PARTY.txt, beside it as rust/THIRD-PARTY.txt
+// (ui/vite.config.ts). The installers carry the same texts as resources/NOTICE,
+// resources/ui/THIRD-PARTY.txt and resources/rust/THIRD-PARTY.txt, beside COPYING.
+// Read when first opened, never at start, and shown only whole: part of them would read as all.
 import { useEffect, useState } from 'react'
 import { useFocusReturn } from '../focusReturn'
 import { t } from '../i18n'
 import { Dialog } from './ui/Dialog'
 
-const FILES = ['THIRD-PARTY.txt', 'rust/THIRD-PARTY.txt']
+const FILES = ['NOTICE.txt', 'THIRD-PARTY.txt', 'rust/THIRD-PARTY.txt']
 
 export function SettingsLicenses() {
   const [open, setOpen] = useState(false)

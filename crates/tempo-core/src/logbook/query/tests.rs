@@ -368,9 +368,11 @@ fn reference_answer(
 ) -> Value {
     let name = |r: &QsoRecord| golden_name(&r.id.expect("an id"));
     let query = || -> LogQuery { serde_json::from_value(q["query"].clone()).expect("a query") };
+    // A row's entity, as the fixture gives it (`q.entity`).
+    let entity = |r: &QsoRecord| entities[&r.id.expect("an id")].clone();
     match q["kind"].as_str().expect("kind") {
         "page" => {
-            let order = reference::order(log, &query());
+            let order = reference::order(log, &query(), &entity);
             let (offset, limit) = (
                 q["offset"].as_u64().unwrap() as usize,
                 q["limit"].as_u64().unwrap() as usize,
@@ -384,7 +386,7 @@ fn reference_answer(
             json!({"total": order.len(), "logSize": log.len(), "offset": offset, "keys": keys})
         }
         "locate" => {
-            let order = reference::order(log, &query());
+            let order = reference::order(log, &query(), &entity);
             let id = q["id"].as_str().unwrap();
             json!({"index": order.iter().position(|&i| name(&log[i]) == id)})
         }
@@ -445,14 +447,7 @@ fn reference_answer(
         "bandsInLog" => json!(reference::fold(log, BandsInLog::default())),
         "lotwBacklog" => json!(reference::fold(log, LotwBacklog::default())),
         // The COUNTS, which the window orders (`finishLogStats`) into the golden answer.
-        "statistics" => {
-            let entity = |call: &str| {
-                log.iter()
-                    .find(|r| r.call == call)
-                    .and_then(|r| entities[&r.id.expect("an id")].clone())
-            };
-            json!(reference::fold(log, LogStatCounter::new(&entity)))
-        }
+        "statistics" => json!(reference::fold(log, LogStatCounter::new(&entity))),
         other => panic!("no reference answer for {other}"),
     }
 }
@@ -488,9 +483,60 @@ fn the_statistics_counts_are_the_uis() {
     assert!(!logs.is_empty(), "premise: the tied log is in the fixture");
     for (log, entities, counts) in logs {
         let entity = |call: &str| entities.get(call).cloned().flatten();
-        let got = json!(reference::fold(&log, LogStatCounter::new(&entity)));
+        let got = json!(reference::fold(
+            &log,
+            LogStatCounter::new(&|r: &QsoRecord| entity(&r.call))
+        ));
         assert_eq!(got, counts, "{} rows", log.len());
     }
+}
+
+/// A row's entity is asked of the resolver once per call AND the record's DXCC numbers, never
+/// once per call: one call is two entities when its records carry two numbers (K1N, Navassa in
+/// 2015 and a US call since), or LoTW's beside the log's (K1B).
+#[test]
+fn the_statistics_ask_each_calls_entity_apart_for_each_records_numbers() {
+    let rec = |call: &str, dxcc: Option<u32>, lotw: Option<&str>| {
+        let mut r = parse_adif("<CALL:1>X<QSO_DATE:8>20240101<TIME_ON:4>1200<EOR>").remove(0);
+        r.call = call.to_string();
+        r.dxcc = dxcc;
+        crate::logbook::set_extra(
+            &mut r,
+            crate::logbook::LOTW_DXCC_FIELD,
+            lotw.map(str::to_string),
+        );
+        r
+    };
+    let log = [
+        rec("K1N", Some(182), None),
+        rec("K1N", None, None),
+        rec("K1B", Some(291), Some("20")),
+        rec("K1B", Some(291), None),
+    ];
+    // As the app names a row's entity: LoTW's number, else the log's, else the call's — all
+    // three calls here are US calls today.
+    let entity = |r: &QsoRecord| {
+        let name = match crate::logbook::record_lotw_dxcc(r).or(r.dxcc) {
+            Some(182) => "Navassa Island",
+            Some(20) => "Baker & Howland Islands",
+            _ => "United States",
+        };
+        Some(name.to_string())
+    };
+    let counts = reference::fold(&log, LogStatCounter::new(&entity));
+    let entities: Vec<(&str, usize)> = counts
+        .entities
+        .iter()
+        .map(|t| (t.label.as_str(), t.count))
+        .collect();
+    assert_eq!(
+        entities,
+        [
+            ("Navassa Island", 1),
+            ("United States", 2),
+            ("Baker & Howland Islands", 1),
+        ]
+    );
 }
 
 /// The WAS gate is the UI's: its three US-family entities and fifty codes, read out of
@@ -509,6 +555,56 @@ fn the_was_lists_are_the_uis() {
     };
     assert_eq!(list("US_ENTITIES"), US_ENTITIES);
     assert_eq!(list("WAS_STATES"), WAS_STATES);
+}
+
+/// ★ BY STATE counts a contact by its DXCC entity, the United States, Alaska or Hawaii, however
+/// its source spelled COUNTRY (LoTW's and DXKeeper's `UNITED STATES OF AMERICA`, or none at all),
+/// and by the stored text only where its call resolves to no entity, as the entities are counted.
+/// A US mailing country on a foreign entity's contact is not a state.
+#[test]
+fn by_state_counts_a_contact_by_its_dxcc_entity() {
+    // (call, the entity its call resolves to, the stored COUNTRY, STATE)
+    let rows: [(&str, Option<&str>, Option<&str>, &str); 7] = [
+        (
+            "W1AW",
+            Some("United States"),
+            Some("UNITED STATES OF AMERICA"),
+            "CT",
+        ),
+        ("K1ABC", Some("United States"), None, "MA"),
+        ("KL7AA", Some("Alaska"), Some("ALASKA"), "AK"),
+        ("KH6AA", Some("Hawaii"), Some("HAWAII"), "HI"),
+        ("KP4AA", Some("Puerto Rico"), Some("United States"), "FL"),
+        // No entity: the stored text decides, as it always has.
+        ("Q0ZZZ", None, Some("United States"), "WI"),
+        ("Q1ZZZ", None, Some("UNITED STATES OF AMERICA"), "NY"),
+    ];
+    let log: Vec<QsoRecord> = rows
+        .iter()
+        .map(|&(call, _, country, state)| {
+            let mut r = parse_adif("<CALL:1>X<QSO_DATE:8>20240101<TIME_ON:4>1200<EOR>").remove(0);
+            r.call = call.to_string();
+            r.country = country.map(str::to_string);
+            r.state = Some(state.to_string());
+            r
+        })
+        .collect();
+    let entity = |call: &str| {
+        rows.iter()
+            .find(|r| r.0 == call)
+            .and_then(|r| r.1)
+            .map(str::to_string)
+    };
+    let counts = reference::fold(&log, LogStatCounter::new(&|r: &QsoRecord| entity(&r.call)));
+    let by_state: Vec<(&str, usize)> = counts
+        .by_state
+        .iter()
+        .map(|t| (t.label.as_str(), t.count))
+        .collect();
+    assert_eq!(
+        by_state,
+        [("CT", 1), ("MA", 1), ("AK", 1), ("HI", 1), ("WI", 1)]
+    );
 }
 
 /// The bands in the log are its own spellings, first seen first: nothing trimmed or folded, and
@@ -622,8 +718,9 @@ fn the_golden_log_exercises_what_it_claims() {
         search: search.to_string(),
         needs_confirm_only: false,
     };
-    assert_eq!(reference::order(&log, &q("z")).len(), 24);
-    let ssb: Vec<String> = reference::order(&log, &q("ssb"))
+    let none = |_: &QsoRecord| None;
+    assert_eq!(reference::order(&log, &q("z"), &none).len(), 24);
+    let ssb: Vec<String> = reference::order(&log, &q("ssb"), &none)
         .into_iter()
         .map(|i| golden_name(&log[i].id.unwrap()))
         .collect();
@@ -637,6 +734,7 @@ fn the_golden_log_exercises_what_it_claims() {
                 search: String::new(),
                 needs_confirm_only: false,
             },
+            &none,
         );
         let at = |n: &str| {
             by_call
@@ -653,4 +751,434 @@ fn the_golden_log_exercises_what_it_claims() {
         reference::worked_calls(&log, &["W1AW".into(), "W1AW ".into()]),
         ["W1AW".to_string()]
     );
+}
+
+/// ★ The country column sorts on the country the Logbook shows: the DXCC entity, so a QRZ
+/// `Germany` and a `Fed. Rep. of Germany` sort together, and the stored text only where the call
+/// resolves to no entity.
+#[test]
+fn the_country_column_sorts_on_the_entity_the_logbook_shows() {
+    // (call, the entity its call resolves to, the stored COUNTRY)
+    let rows: [(&str, Option<&str>, Option<&str>); 5] = [
+        ("DL1ABC", Some("Fed. Rep. of Germany"), Some("Germany")),
+        ("F5ABC", Some("France"), Some("France")),
+        (
+            "DL2XYZ",
+            Some("Fed. Rep. of Germany"),
+            Some("Fed. Rep. of Germany"),
+        ),
+        ("G4ABC", Some("England"), Some("England")),
+        // No entity: the stored text decides.
+        ("Q0ZZZ", None, Some("Freedonia")),
+    ];
+    let log: Vec<QsoRecord> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, &(call, _, country))| {
+            let mut r = parse_adif("<CALL:1>X<QSO_DATE:8>20240101<TIME_ON:4>1200<EOR>").remove(0);
+            r.call = call.to_string();
+            r.country = country.map(str::to_string);
+            r.when_unix += i as u64 * 60;
+            r
+        })
+        .collect();
+    let entity = |q: &QsoRecord| {
+        rows.iter()
+            .find(|r| r.0 == q.call)
+            .and_then(|r| r.1)
+            .map(str::to_string)
+    };
+    let sorted = |asc: bool| -> Vec<&str> {
+        let query = LogQuery {
+            sort: SortKey::Country,
+            asc,
+            search: String::new(),
+            needs_confirm_only: false,
+        };
+        reference::order(&log, &query, &entity)
+            .into_iter()
+            .map(|i| log[i].call.as_str())
+            .collect()
+    };
+    assert_eq!(
+        sorted(true),
+        ["G4ABC", "DL1ABC", "DL2XYZ", "F5ABC", "Q0ZZZ"]
+    );
+    assert_eq!(
+        sorted(false),
+        ["Q0ZZZ", "F5ABC", "DL2XYZ", "DL1ABC", "G4ABC"]
+    );
+}
+
+/// The country column sorts on each ROW's entity, which its record's DXCC number can decide: two
+/// contacts with one call (K1N, in two years) sort apart when one record names another entity —
+/// the entity is asked per call AND number, never once per call.
+#[test]
+fn the_country_column_sorts_each_row_on_its_own_entity() {
+    let row = |when: u64, dxcc: Option<u32>| {
+        let mut r = parse_adif("<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:4>1200<EOR>").remove(0);
+        r.when_unix += when;
+        r.dxcc = dxcc;
+        r
+    };
+    // A US special event first in the log, the 2015 Navassa operation after it, and Mexico.
+    let mut xe = row(120, None);
+    xe.call = "XE1ABC".into();
+    let log = [row(0, None), row(60, Some(182)), xe];
+    let entity = |q: &QsoRecord| {
+        let name = match (q.call.as_str(), q.dxcc) {
+            ("K1N", Some(182)) => "Navassa Island",
+            ("K1N", _) => "United States",
+            _ => "Mexico",
+        };
+        Some(name.to_string())
+    };
+    let query = LogQuery {
+        sort: SortKey::Country,
+        asc: true,
+        search: String::new(),
+        needs_confirm_only: false,
+    };
+    let sorted: Vec<(&str, Option<u32>)> = reference::order(&log, &query, &entity)
+        .into_iter()
+        .map(|i| (log[i].call.as_str(), log[i].dxcc))
+        .collect();
+    assert_eq!(
+        sorted,
+        [("XE1ABC", None), ("K1N", Some(182)), ("K1N", None)],
+        "Mexico, Navassa Island, United States"
+    );
+}
+
+// ── the timeline ────────────────────────────────────────────────────────────────────────────────
+
+/// A contact of `mode` at `when_unix`.
+fn worked(mode: &str, when_unix: u64) -> QsoRecord {
+    let mut r = parse_adif("<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:4>1200<EOR>").remove(0);
+    r.mode = mode.to_string();
+    r.when_unix = when_unix;
+    r
+}
+
+/// The timeline of `log` at `now`: (bucket, count) for each bucket with a contact, by mode.
+fn timeline_of(
+    log: &[QsoRecord],
+    range: TimelineRange,
+    now: u64,
+) -> Vec<(String, Vec<(usize, usize)>)> {
+    reference::fold(log, TimelineCounter::new(range, now))
+        .modes
+        .into_iter()
+        .map(|m| {
+            let hit = m.counts.iter().copied().enumerate().filter(|&(_, c)| c > 0);
+            (m.label, hit.collect())
+        })
+        .collect()
+}
+
+/// 2026-10-14 15:37:12Z.
+const OCT_14_1537: u64 = 1_791_992_232;
+
+/// Each window ends with the current UTC hour, day or month and holds the 24, 30 or 12 before it,
+/// edge by edge — also asked at the first instant of a month, and across a new year.
+#[test]
+fn the_timeline_windows_end_with_the_current_utc_hour_day_and_month() {
+    let day = TimelineRange::PastDay.edges(OCT_14_1537);
+    assert_eq!(day.len(), 25);
+    assert_eq!(day[0], 1_791_907_200, "2026-10-13 16:00Z");
+    assert_eq!(day[23], 1_791_990_000, "the current hour, 15:00Z");
+    assert_eq!(day[24], 1_791_993_600, "its end, 16:00Z");
+    assert!(day.windows(2).all(|w| w[1] - w[0] == 3_600));
+
+    let days = TimelineRange::Past30Days.edges(OCT_14_1537);
+    assert_eq!(days.len(), 31);
+    assert_eq!(days[0], 1_789_430_400, "2026-09-15");
+    assert_eq!(days[29], 1_791_936_000, "today, 2026-10-14");
+    assert_eq!(days[30], 1_792_022_400, "its end, 2026-10-15");
+    assert!(days.windows(2).all(|w| w[1] - w[0] == 86_400));
+
+    // The first of each month from 2025-11 to 2026-11.
+    assert_eq!(
+        TimelineRange::PastYear.edges(OCT_14_1537),
+        [
+            1_761_955_200,
+            1_764_547_200,
+            1_767_225_600,
+            1_769_904_000,
+            1_772_323_200,
+            1_775_001_600,
+            1_777_593_600,
+            1_780_272_000,
+            1_782_864_000,
+            1_785_542_400,
+            1_788_220_800,
+            1_790_812_800,
+            1_793_491_200,
+        ]
+    );
+    // At 2026-11-01 00:00:00Z the new month is the current one.
+    let nov_1 = 1_793_491_200;
+    assert_eq!(TimelineRange::PastDay.edges(nov_1)[23], nov_1);
+    assert_eq!(TimelineRange::Past30Days.edges(nov_1)[29], nov_1);
+    let year = TimelineRange::PastYear.edges(nov_1);
+    assert_eq!(
+        (year[0], year[11], year[12]),
+        (1_764_547_200, nov_1, 1_796_083_200),
+        "2025-12 to 2026-11, ending 2026-12-01"
+    );
+    // 2027-01-15 08:00Z: 2026-02 to 2027-01.
+    let year = TimelineRange::PastYear.edges(1_800_000_000);
+    assert_eq!(
+        (year[0], year[11], year[12]),
+        (1_769_904_000, 1_798_761_600, 1_801_440_000)
+    );
+}
+
+/// A contact counts in the bucket its UTC time falls in: the second before midnight in the old
+/// hour and day, midnight itself in the new ones.
+#[test]
+fn a_contact_is_counted_in_the_utc_hour_and_day_it_was_logged() {
+    let now = 1_791_955_800; // 2026-10-14 05:30Z
+    let log = [
+        worked("FT8", 1_791_935_999), // 2026-10-13 23:59:59Z
+        worked("FT8", 1_791_936_000), // 2026-10-14 00:00:00Z
+        worked("FT8", 1_791_936_001),
+    ];
+    // The hour window starts at 2026-10-13 06:00Z: 23:00Z is its 18th bucket, 00:00Z its 19th.
+    assert_eq!(
+        timeline_of(&log, TimelineRange::PastDay, now),
+        [("FT8".to_string(), vec![(17, 1), (18, 2)])]
+    );
+    // The day window starts at 2026-09-15: the 13th is its 29th day, the 14th (today) its 30th.
+    assert_eq!(
+        timeline_of(&log, TimelineRange::Past30Days, now),
+        [("FT8".to_string(), vec![(28, 1), (29, 2)])]
+    );
+}
+
+/// Across the end of a month: September 30's last second and October 1's first are a day apart in
+/// the 30-day window and a month apart in the year.
+#[test]
+fn a_contact_is_counted_in_the_utc_month_it_was_logged() {
+    let now = 1_791_979_200; // 2026-10-14 12:00Z
+    let log = [
+        worked("CW", 1_790_812_799), // 2026-09-30 23:59:59Z
+        worked("CW", 1_790_812_800), // 2026-10-01 00:00:00Z
+    ];
+    assert_eq!(
+        timeline_of(&log, TimelineRange::Past30Days, now),
+        [("CW".to_string(), vec![(15, 1), (16, 1)])]
+    );
+    // 2025-11 is the first month: September is the 11th, October the 12th.
+    assert_eq!(
+        timeline_of(&log, TimelineRange::PastYear, now),
+        [("CW".to_string(), vec![(10, 1), (11, 1)])]
+    );
+}
+
+/// February 29 is a whole day of its own, and a leap year's February a month of 29 days.
+#[test]
+fn a_leap_day_is_a_day_and_its_february_a_month() {
+    let now = 1_835_863_200; // 2028-03-05 10:00Z
+    let log = [
+        worked("SSB", 1_835_395_199), // 2028-02-28 23:59:59Z
+        worked("SSB", 1_835_395_200), // 2028-02-29 00:00:00Z
+        worked("SSB", 1_835_481_599), // 2028-02-29 23:59:59Z
+        worked("SSB", 1_835_481_600), // 2028-03-01 00:00:00Z
+    ];
+    let days = TimelineRange::Past30Days.edges(now);
+    assert_eq!(
+        (days[0], days[30]),
+        (1_833_321_600, 1_835_913_600),
+        "2028-02-05 to 2028-03-06"
+    );
+    assert_eq!(
+        (days[24], days[25]),
+        (1_835_395_200, 1_835_481_600),
+        "February 29, all day"
+    );
+    assert_eq!(
+        timeline_of(&log, TimelineRange::Past30Days, now),
+        [("SSB".to_string(), vec![(23, 1), (24, 2), (25, 1)])]
+    );
+    let year = TimelineRange::PastYear.edges(now);
+    assert_eq!(year[11] - year[10], 29 * 86_400, "February 2028");
+    assert_eq!(
+        timeline_of(&log, TimelineRange::PastYear, now),
+        [("SSB".to_string(), vec![(10, 3), (11, 1)])]
+    );
+}
+
+/// Each window holds a contact at its first instant and the last second before its end — and not
+/// the second before it starts, nor its end itself (a clock running ahead).
+#[test]
+fn a_window_holds_its_first_instant_and_not_the_second_before_it_or_its_end() {
+    for range in [
+        TimelineRange::PastDay,
+        TimelineRange::Past30Days,
+        TimelineRange::PastYear,
+    ] {
+        let edges = range.edges(OCT_14_1537);
+        let (first, end, last) = (edges[0], edges[edges.len() - 1], edges.len() - 2);
+        let log = [
+            worked("FT8", first - 1),
+            worked("FT8", first),
+            worked("FT4", end - 1),
+            worked("FT4", end),
+        ];
+        assert_eq!(
+            timeline_of(&log, range, OCT_14_1537),
+            [
+                ("FT8".to_string(), vec![(0, 1)]),
+                ("FT4".to_string(), vec![(last, 1)])
+            ],
+            "{range:?}"
+        );
+        assert_eq!(TimelineCounter::new(range, OCT_14_1537).since(), first);
+    }
+}
+
+/// The lines are the "By mode" card's modes: the sidebands fold into SSB, nothing else folds
+/// (case included), and a blank mode is on no line. First seen first.
+#[test]
+fn the_timeline_counts_modes_as_the_by_mode_card_does() {
+    let at = OCT_14_1537 - 60;
+    let log: Vec<QsoRecord> = ["FT8", "usb", " LSB ", "CW", "ft8", "", "  ", "SSB", "FT8"]
+        .iter()
+        .map(|m| worked(m, at))
+        .collect();
+    let timeline = reference::fold(
+        &log,
+        TimelineCounter::new(TimelineRange::PastDay, OCT_14_1537),
+    );
+    let lines: Vec<(&str, usize)> = timeline
+        .modes
+        .iter()
+        .map(|m| (m.label.as_str(), m.counts.iter().sum()))
+        .collect();
+    assert_eq!(lines, [("FT8", 2), ("SSB", 3), ("CW", 1), ("ft8", 1)]);
+    let by_mode: Vec<(String, usize)> =
+        reference::fold(&log, LogStatCounter::new(&|_: &QsoRecord| None))
+            .by_mode
+            .into_iter()
+            .map(|t| (t.label, t.count))
+            .collect();
+    let lines: Vec<(String, usize)> = lines.into_iter().map(|(m, c)| (m.to_string(), c)).collect();
+    assert_eq!(lines, by_mode, "the By mode card's tally");
+}
+
+/// A window with no contact answers its edges and no mode; the answer crosses IPC as the UI
+/// types it (`LogTimeline`), and the range is asked for by its name there.
+#[test]
+fn the_timeline_answers_in_the_uis_shape() {
+    let empty = reference::fold(
+        &[worked("FT8", 1_000_000_000)],
+        TimelineCounter::new(TimelineRange::PastYear, OCT_14_1537),
+    );
+    assert_eq!(empty.edges.len(), 13);
+    assert!(empty.modes.is_empty());
+
+    let one = reference::fold(
+        &[worked("FT8", OCT_14_1537)],
+        TimelineCounter::new(TimelineRange::PastDay, OCT_14_1537),
+    );
+    let mut counts = vec![0; 24];
+    counts[23] = 1;
+    assert_eq!(
+        serde_json::to_value(&one).unwrap(),
+        json!({ "edges": one.edges, "modes": [{ "label": "FT8", "counts": counts }] })
+    );
+    for (name, range) in [
+        ("pastDay", TimelineRange::PastDay),
+        ("past30Days", TimelineRange::Past30Days),
+        ("pastYear", TimelineRange::PastYear),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<TimelineRange>(json!(name)).unwrap(),
+            range
+        );
+    }
+}
+
+/// ★ The search finds a contact by the country the Logbook shows, its DXCC entity, as well as
+/// by its stored text: a QRZ `Germany` row is found by "fed. rep", and still by "germany".
+#[test]
+fn a_search_finds_a_contact_by_the_country_the_logbook_shows() {
+    // (call, the entity its call resolves to, the stored COUNTRY)
+    let rows: [(&str, Option<&str>, Option<&str>); 4] = [
+        ("DL1ABC", Some("Fed. Rep. of Germany"), Some("Germany")),
+        ("TA1XX", Some("Turkey"), Some("Türkiye")),
+        ("G4ABC", Some("England"), Some("England")),
+        ("Q0ZZZ", None, Some("Freedonia")),
+    ];
+    let log: Vec<QsoRecord> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, &(call, _, country))| {
+            let mut r = parse_adif("<CALL:1>X<QSO_DATE:8>20240101<TIME_ON:4>1200<EOR>").remove(0);
+            r.call = call.to_string();
+            r.country = country.map(str::to_string);
+            r.when_unix += i as u64 * 60;
+            r
+        })
+        .collect();
+    let entity = |q: &QsoRecord| {
+        rows.iter()
+            .find(|r| r.0 == q.call)
+            .and_then(|r| r.1)
+            .map(str::to_string)
+    };
+    let found = |search: &str, sort: SortKey| -> Vec<&str> {
+        let query = LogQuery {
+            sort,
+            asc: true,
+            search: search.to_string(),
+            needs_confirm_only: false,
+        };
+        reference::order(&log, &query, &entity)
+            .into_iter()
+            .map(|i| log[i].call.as_str())
+            .collect()
+    };
+    for sort in [SortKey::Call, SortKey::Country, SortKey::Time] {
+        assert_eq!(found("fed. rep", sort), ["DL1ABC"], "{sort:?}");
+        assert_eq!(found("TURKEY", sort), ["TA1XX"], "{sort:?}");
+        // The stored text still finds its contact.
+        assert_eq!(found("germany", sort), ["DL1ABC"], "{sort:?}");
+        assert_eq!(found("türkiye", sort), ["TA1XX"], "{sort:?}");
+        assert_eq!(found("freedonia", sort), ["Q0ZZZ"], "{sort:?}");
+        assert!(found("nowhere", sort).is_empty(), "{sort:?}");
+    }
+}
+
+/// The search finds a contact by the entity its ROW shows, which its record's DXCC number can
+/// decide: the 2015 K1N contact set to Navassa is found by "navassa", and a K1N contact without
+/// a number is not — the entity is asked per call AND number.
+#[test]
+fn a_search_finds_a_contact_by_the_entity_its_record_names() {
+    let row = |when: u64, dxcc: Option<u32>| {
+        let mut r = parse_adif("<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:4>1200<EOR>").remove(0);
+        r.when_unix += when;
+        r.dxcc = dxcc;
+        r
+    };
+    let log = [row(0, None), row(60, Some(182))];
+    let entity = |q: &QsoRecord| {
+        let name = match q.dxcc {
+            Some(182) => "Navassa Island",
+            _ => "United States",
+        };
+        Some(name.to_string())
+    };
+    let query = LogQuery {
+        sort: SortKey::Time,
+        asc: true,
+        search: "navassa".to_string(),
+        needs_confirm_only: false,
+    };
+    let found: Vec<Option<u32>> = reference::order(&log, &query, &entity)
+        .into_iter()
+        .map(|i| log[i].dxcc)
+        .collect();
+    assert_eq!(found, [Some(182)]);
 }

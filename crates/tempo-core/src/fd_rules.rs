@@ -196,6 +196,22 @@ pub struct AssistancePolicy {
     /// key rather than a Winter Field Day branch, so another contest with the same rule
     /// takes it by one line of data.
     pub spots_rf_only: bool,
+    /// May the entrant spot THEMSELVES? Separate from `spotting_allowed` because many contests
+    /// that let an assisted entrant read spots still forbid posting your own call (CQ WW's
+    /// "Self-spotting or asking to be spotted is not permitted."). Set only from the sponsor's
+    /// own words, quoted in the seed's `_provenance.self_spot`; anything not read is `Unknown`.
+    pub self_spot_allowed: SelfSpot,
+}
+
+/// Whether a contest's rules let an entrant spot their own call — three states, because "the
+/// sponsor's text says nothing we could find" is not "allowed".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelfSpot {
+    Allowed,
+    NotAllowed,
+    #[default]
+    Unknown,
 }
 
 /// Which Saturday of the month anchors the event weekend.
@@ -407,12 +423,14 @@ pub struct FdRuleset {
     /// entry picked and never a reading of its rows. `""` writes what `CATEGORY-MODE` in
     /// [`cabrillo_headers`](Self::cabrillo_headers) says (the log's mode), or none.
     pub cabrillo_mode_category: &'static str,
-    /// ⭐ **The header lines the sponsor requires**, from
-    /// [`CABRILLO_REQUIRABLE`]: what the Contest screen names when the entry has left one out,
-    /// before the export (CQ's rules: *"Failure to fill out the header correctly may result in the
-    /// entry being placed in the wrong category or reclassified as a Checklog"*). Never a refusal:
-    /// the file is the entrant's to send. `CATEGORY-TRANSMITTER` and `OPERATORS` are required of a
-    /// `MULTI-OP` entry only, and nothing of a `CHECKLOG`
+    /// ⭐ **The header lines the sponsor requires**: the file's `cabrillo.required`, from
+    /// [`CABRILLO_REQUIRABLE`], then its `cabrillo.entry_required`, from
+    /// [`CABRILLO_ENTRY_REQUIRABLE`] (the Illinois QSO Party's entry class and email). What the
+    /// Contest screen names when the entry has left one out, before the export (CQ's rules:
+    /// *"Failure to fill out the header correctly may result in the entry being placed in the wrong
+    /// category or reclassified as a Checklog"*). Never a refusal: the file is the entrant's to
+    /// send. `CATEGORY-TRANSMITTER` and `OPERATORS` are required of a `MULTI-OP` entry only, and
+    /// nothing of a `CHECKLOG`
     /// ([`FieldDayLog::cabrillo_missing`](crate::fieldday::FieldDayLog::cabrillo_missing)).
     pub cabrillo_required: &'static [&'static str],
     /// `LOCATION` spellings that differ from the exchange's: `(sent QTH, LOCATION)`.
@@ -1175,6 +1193,11 @@ struct CabrilloSpec {
     /// writes.
     #[serde(default)]
     required: Vec<String>,
+    /// The entrant's own lines the sponsor requires, from [`CABRILLO_ENTRY_REQUIRABLE`]; each one
+    /// this ruleset writes. A key of its own, never names in `required`, so a build that predates
+    /// them still loads this file (see [`CABRILLO_ENTRY_REQUIRABLE`]).
+    #[serde(default)]
+    entry_required: Vec<String>,
 }
 
 /// One column of [`CabrilloSpec`].
@@ -1270,6 +1293,19 @@ pub const CABRILLO_REQUIRABLE: &[&str] = &[
     "CATEGORY-TRANSMITTER",
     "OPERATORS",
 ];
+
+/// ⭐ **The entrant's own lines a ruleset's `cabrillo.entry_required` may name**: the sponsor's
+/// entry class and the entrant's email, each written from the entry's own Settings, which is where
+/// the Contest screen points. The Illinois QSO Party's 2026 rules: *"make sure entry class,
+/// personal information, call sign, station location, and club affiliation are correctly shown.
+/// The header information is automatically pulled and used by the processing software."*
+///
+/// ⚠️ **A list and a key of their own, never names in `cabrillo.required`, because the rules file
+/// reaches installed builds.** 1.18.0 refuses the whole file over a `required` line outside its own
+/// [`CABRILLO_REQUIRABLE`] (measured with its loader: *`ruleset ilqp/2026: cabrillo required line
+/// "ENTRY-CLASS" is not one this build can name as missing`*), so every install still on it would
+/// stop receiving rules updates, while every build ignores a key it does not know.
+const CABRILLO_ENTRY_REQUIRABLE: &[&str] = &["EMAIL", "ENTRY-CLASS"];
 
 /// One ADIF tag pair in the rules FILE, one tag per direction.
 ///
@@ -1799,6 +1835,9 @@ struct AssistanceSpec {
     /// restriction, which is what every ruleset before the key means.
     #[serde(default)]
     spots_rf_only: bool,
+    /// See [`AssistancePolicy::self_spot_allowed`]. `#[serde(default)]`: absent is `Unknown`.
+    #[serde(default)]
+    self_spot_allowed: SelfSpot,
 }
 
 fn stats_of(spec: &FileSpec) -> RulesStats {
@@ -2635,6 +2674,29 @@ mode class ({})",
                 }
                 required.push(h);
             }
+            // …and the entrant's own lines, on a key of their own (`CABRILLO_ENTRY_REQUIRABLE`):
+            // each one this build can name, that this ruleset writes, and once.
+            for h in &r.cabrillo.entry_required {
+                if !CABRILLO_ENTRY_REQUIRABLE.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo required entry line {h:?} is not one this build can \
+                         name as missing"
+                    ));
+                }
+                let written = match h.as_str() {
+                    "ENTRY-CLASS" => listed(&r.cabrillo.entry_headers, h),
+                    _ => listed(&r.cabrillo.headers, h),
+                };
+                if !written {
+                    return Err(format!(
+                        "{tag}: cabrillo requires {h:?}, which this ruleset never writes"
+                    ));
+                }
+                if required.contains(&h.as_str()) {
+                    return Err(format!("{tag}: cabrillo requires {h:?} twice"));
+                }
+                required.push(h);
+            }
         }
         // ⭐ A LOCATION ALIAS picks a role, so it must land on a location a role actually
         // lists — otherwise it silently selects nothing — and it must not re-point a code
@@ -3253,7 +3315,7 @@ fn build(spec: FileSpec) -> RulesTable {
                     ),
                     // ⭐ EVERY CONTEST LOGS ITS DUPES, whatever the file says (the operator's
                     // ruling, 2026-10-11: a dupe typed, answered or called is "logged marked as a
-                    // dupe for 0 points, as N1MM does"). No shipped sponsor's rules say to remove
+                    // dupe for 0 points"). No shipped sponsor's rules say to remove
                     // dupes; one that did would be refused here, by its event id.
                     //
                     // ⚠️ Decided in code, not in the file, for two reasons. A downloaded file
@@ -3283,6 +3345,7 @@ fn build(spec: FileSpec) -> RulesTable {
                     cluster_allowed: r.assistance.cluster_allowed,
                     assistance_note_key: leak_str(r.assistance.assistance_note_key),
                     spots_rf_only: r.assistance.spots_rf_only,
+                    self_spot_allowed: r.assistance.self_spot_allowed,
                 },
                 enforcement: leak_str(r.enforcement),
                 score_note_key: leak_str(r.score_note_key),
@@ -3317,7 +3380,14 @@ fn build(spec: FileSpec) -> RulesTable {
                 cabrillo_soapbox: r.cabrillo.soapbox,
                 cabrillo_band_categories: leak_keys(r.cabrillo.band_categories),
                 cabrillo_mode_category: leak_str(r.cabrillo.mode_category),
-                cabrillo_required: leak_keys(r.cabrillo.required),
+                // The lines the Contest screen names: `required`'s, then the entrant's own.
+                cabrillo_required: leak_keys(
+                    r.cabrillo
+                        .required
+                        .into_iter()
+                        .chain(r.cabrillo.entry_required)
+                        .collect(),
+                ),
                 cabrillo_location: Box::leak(
                     r.cabrillo
                         .location
@@ -4944,7 +5014,13 @@ mod tests {
             "CATEGORY-TRANSMITTER",
             "OPERATORS",
         ];
-        const WRITTEN: &[&str] = &["CATEGORY-ASSISTED", "CATEGORY-POWER", "EMAIL", "NAME"];
+        const WRITTEN: &[&str] = &[
+            "CATEGORY-ASSISTED",
+            "CATEGORY-POWER",
+            "CLAIMED-SCORE",
+            "EMAIL",
+            "NAME",
+        ];
         let shipped = build(parse_spec(SEED).expect("the seed parses"));
         let mut cq = 0;
         for rs in shipped.rulesets {
@@ -4975,6 +5051,14 @@ mod tests {
                     );
                     assert_eq!(rs.cabrillo_entry_headers, ["CLUB"]);
                     cq += 1;
+                    continue;
+                }
+                // The Illinois QSO Party declares no category line, and requires the entrant's
+                // own two (`entry_required`): the sponsor's software reads both.
+                "ilqp" => {
+                    let none: &[&str] = &[];
+                    let entrant: &[&str] = &["ENTRY-CLASS", "EMAIL"];
+                    assert_eq!(got, (none, "", entrant), "ilqp");
                     continue;
                 }
                 _ => {
@@ -5062,6 +5146,65 @@ mod tests {
             "required": ["CATEGORY-BAND", "CATEGORY-MODE", "CATEGORY-POWER", "OPERATORS"]
         }))
         .is_ok());
+    }
+
+    /// ⭐ **The entrant's own required lines ride `entry_required`, a key of their own**: each one
+    /// this build can name, that this ruleset writes, and once, each refusal by name; and the
+    /// Contest screen names them after `required`'s. CONTROL: the same names under `required`,
+    /// whose list is 1.18.0's, are refused (which is why they cannot go there).
+    #[test]
+    fn the_entrants_required_lines_ride_a_key_of_their_own() {
+        let with = |cabrillo: serde_json::Value| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["cabrillo"] = cabrillo;
+            parse_spec(&v.to_string())
+        };
+        let refused = |cabrillo: serde_json::Value| with(cabrillo).expect_err("refused");
+        let spec = with(serde_json::json!({
+            "headers": ["CATEGORY-POWER", "EMAIL"],
+            "entry_headers": ["ENTRY-CLASS"],
+            "entry_classes": ["UNLIMITED"],
+            "required": ["CATEGORY-POWER"],
+            "entry_required": ["ENTRY-CLASS", "EMAIL"],
+        }))
+        .expect("the entrant's lines load");
+        assert_eq!(
+            build(spec).rulesets[0].cabrillo_required,
+            ["CATEGORY-POWER", "ENTRY-CLASS", "EMAIL"],
+            "`required`'s lines, then the entrant's"
+        );
+        assert!(
+            refused(serde_json::json!({"soapbox": true, "entry_required": ["SOAPBOX"]})).contains(
+                "cabrillo required entry line \"SOAPBOX\" is not one this build can name as \
+                 missing"
+            )
+        );
+        // Each is written from its own list: EMAIL from `headers`, ENTRY-CLASS from `entry_headers`.
+        assert!(refused(serde_json::json!({
+            "entry_headers": ["ENTRY-CLASS"],
+            "entry_classes": ["UNLIMITED"],
+            "entry_required": ["EMAIL"]
+        }))
+        .contains("cabrillo requires \"EMAIL\", which this ruleset never writes"));
+        assert!(refused(serde_json::json!({
+            "headers": ["EMAIL"],
+            "entry_required": ["ENTRY-CLASS"]
+        }))
+        .contains("cabrillo requires \"ENTRY-CLASS\", which this ruleset never writes"));
+        assert!(refused(serde_json::json!({
+            "headers": ["EMAIL"],
+            "entry_required": ["EMAIL", "EMAIL"]
+        }))
+        .contains("cabrillo requires \"EMAIL\" twice"));
+        // CONTROL: under `required` the same line is refused, as 1.18.0's loader refuses it.
+        assert!(refused(serde_json::json!({
+            "entry_headers": ["ENTRY-CLASS"],
+            "entry_classes": ["UNLIMITED"],
+            "required": ["ENTRY-CLASS"]
+        }))
+        .contains(
+            "cabrillo required line \"ENTRY-CLASS\" is not one this build can name as missing"
+        ));
     }
 
     /// §8(c): a missing block must be a LOUD failure. serde defaults a missing
@@ -5578,6 +5721,66 @@ mod tests {
             assert_eq!(a.assistance_note_key, "");
             assert_eq!(ruleset(e, CURRENT_RULES_YEAR).enforcement, "warn");
         }
+    }
+
+    /// Each value is the sponsor's own sentence, quoted with its URL in the seed's
+    /// `_provenance.self_spot`; a contest whose text says nothing on self-spotting stays unknown.
+    #[test]
+    fn self_spotting_follows_each_sponsors_rules_text() {
+        let self_spot = |id: &str| {
+            ruleset_by_id(id, CURRENT_RULES_YEAR)
+                .unwrap_or_else(|| panic!("{id} is in the seed"))
+                .assistance
+                .self_spot_allowed
+        };
+        for id in [
+            "cqww_cw",
+            "cqww_ssb",
+            "cqww_rtty",
+            "cqwpx_cw",
+            "cqwpx_ssb",
+            "cqp",
+        ] {
+            assert_eq!(self_spot(id), SelfSpot::NotAllowed, "{id}");
+        }
+        for id in [
+            "wfd",
+            "tnqp",
+            "ohqp",
+            "arrlvhf_jan",
+            "arrlvhf_jun",
+            "arrlvhf_sep",
+            // The Illinois QSO Party: the operator's own word (KD9TAW, 2026-10-19); the
+            // sponsor's pages say nothing on spotting yourself.
+            "ilqp",
+        ] {
+            assert_eq!(self_spot(id), SelfSpot::Allowed, "{id}");
+        }
+        for id in ["arrlfd", "arrlss_cw", "arrlss_ssb", "txqp", "nyqp"] {
+            assert_eq!(self_spot(id), SelfSpot::Unknown, "{id}");
+        }
+    }
+
+    #[test]
+    fn self_spot_reads_three_states_and_absent_is_unknown() {
+        let read = |v: serde_json::Value| {
+            serde_json::from_value::<AssistanceSpec>(v).map(|a| a.self_spot_allowed)
+        };
+        let base = |s: Option<&str>| {
+            let mut v = serde_json::json!({"spotting_allowed": true, "cluster_allowed": true});
+            if let Some(s) = s {
+                v["self_spot_allowed"] = s.into();
+            }
+            v
+        };
+        assert_eq!(read(base(None)).unwrap(), SelfSpot::Unknown);
+        assert_eq!(read(base(Some("allowed"))).unwrap(), SelfSpot::Allowed);
+        assert_eq!(
+            read(base(Some("not_allowed"))).unwrap(),
+            SelfSpot::NotAllowed
+        );
+        assert_eq!(read(base(Some("unknown"))).unwrap(), SelfSpot::Unknown);
+        assert!(read(base(Some("yes"))).is_err());
     }
 
     #[test]

@@ -19,7 +19,7 @@ vi.setConfig({ testTimeout: 15_000 })
 
 afterEach(cleanup)
 
-/** An N1MM-style CW set of the operator's own: his call on F5, the exchange alone on F2. */
+/** A CW set of the operator's own: his call on F5, the exchange alone on F2. */
 const OWN_CW = [
   { key: 'F1', text: 'CQ TEST {MYCALL}' },
   { key: 'F2', text: '5NN {EXCH}' },
@@ -55,7 +55,7 @@ describe('the role picker on a set of the operator\'s own', () => {
     expect(onChange).toHaveBeenLastCalledWith({ tu: ['F3'] })
   })
 
-  it('maps two keys to one step, in order — N1MM\'s "F5 followed by F2"', () => {
+  it('maps two keys to one step, in order — F5 then F2', () => {
     const onChange = vi.fn()
     const own: EsmRoleMap = { callExch: ['F5'] }
     render(<EsmRolePicker cockpit="cw" builtIn={null} own={own} slots={OWN_CW} keys={MACRO_KEYS} onChange={onChange} />)

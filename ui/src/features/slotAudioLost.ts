@@ -1,7 +1,7 @@
 // A slot over (FT8, FT4, JS8 and the other timed-slot modes) whose audio stopped reaching the radio
-// part way through, the UI half. Flex native DAX audio went off under it, or its DAX transmit route
-// went, so the station ended the over there rather than leave the radio keyed and silent for the
-// rest of it, halted TX and sends when (crates/tempo-app/src/engine.rs,
+// part way through, the UI half. The route carrying it went (Flex native DAX audio, or Nexus's
+// transmit audio over TCI), so the station ended the over there rather than leave the radio keyed
+// and silent for the rest of it, halted TX and sends when (crates/tempo-app/src/engine.rs,
 // `halt_tx_for_lost_slot_audio`); this is the operator's sentence for it. The status lane keeps it
 // until TX is turned on again.
 

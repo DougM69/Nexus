@@ -11,7 +11,7 @@
 //! `{MODE}_{DEPTH}_{COUNT}.wav` counts were committed ONCE in 2020 against a decoder
 //! that has since been rewritten; the a7ff1be0 oracle actually yields A_2_9 → 8 (name
 //! says 9), A_3_3 → 2 (name says 3), E_2_1 → 1 (name matches). The MEASURED counts are
-//! the lineage pin locked 2026-09-05 in paritylab/js8/stock_selftest.sh; this file uses
+//! the lineage pin locked 2026-09-05 by the lab's self-test; this file uses
 //! THEM (`UPSTREAM.min_count`), never the filename digit (established fact: decode-side
 //! parity A/Bs against THIS binary's actual output).
 //!
@@ -22,18 +22,23 @@
 //! What this file proves for B/C is INTERNAL consistency (our encoder → our
 //! decoder through AWGN at −20/−18 dB, a negative control that shows the
 //! sweep can fail) plus, in the lab, stock `js8` cross-decoding our synthetic
-//! B/C audio (Task B3.11, ~/work/twowayfd/paritylab/js8/results/). On-air
-//! interop at B/C is a NEEDS-BENCH item (B8); the first captured Fast/Turbo
+//! B/C audio. On-air
+//! interop at B/C is a NEEDS-BENCH item; the first captured Fast/Turbo
 //! WAV belongs in fixtures/ beside a count assertion the day it exists.
-//! Lab result 2026-09-06 (paritylab/js8/results/B3-2026-09-06.txt, 60-file
+//! Lab result 2026-09-06 (60-file
 //! corpus): stock js8 cross-decodes our synthetic B/C audio payload-identical
 //! — at −10 dB Fast 3/3 vs 3/3 and Turbo 3/3 vs 3/3, zero payload/dt
 //! mismatches, zero Nexus false decodes, mean SNR offset stock−Nexus −0.33 dB
 //! (B) / −1.67 dB (C) (Slow +1.00 / Normal +0.33), all < 3 dB. The weaker B/C
-//! corpus points sit at/below the knee (0/3 both sides). One yield gap worth
-//! naming: at Normal −20 dB stock decodes 2/3 and Nexus 0/3 — this decoder
-//! runs ~2 dB less sensitive than stock on synthetic AWGN at Normal (it still
-//! reproduces every real off-air Normal decode). Reported, not gated.
+//! corpus points sit at/below the knee (0/3 both sides). One yield gap was
+//! named then: at Normal −20 dB stock decoded 2/3 and Nexus 0/3, read as
+//! "~2 dB less sensitive at Normal". Re-measured 2026-10-15 at 30 seeds a
+//! point, 1 dB apart, on one 1860-file corpus,
+//! the SNR at 50 % decode puts this decoder
+//! within 0.1 dB of JS8Call 3.0.3's own at every speed, JS8 60 included, and
+//! 0.4–0.9 dB behind the 2.x Fortran oracle (+0.5 dB at Normal): the 2 dB was
+//! three seeds. Reported, not gated. The same lab decodes JS8Call 3.0.3's
+//! waves here and these in JS8Call 3.0.3, text identical, at all five speeds.
 //!
 //! Tolerances vs stock: the spec's 1 Hz / 0.02 s PLUS the CLI's print
 //! quantisation — `js8` prints FREQ as an integer (±0.5 Hz) and DT with one
@@ -122,7 +127,7 @@ fn sixbit_of(w: &Word87) -> String {
 }
 
 /// `(file, depth, speed, min_count)` — `min_count` is the MEASURED stock count
-/// (paritylab/js8/stock_selftest.sh, locked 2026-09-05), NOT the stale filename
+/// (the lab's self-test, locked 2026-09-05), NOT the stale filename
 /// digit (A_2_9 → 8 not 9, A_3_3 → 2 not 3, E_2_1 → 1).
 const UPSTREAM: [(&str, u8, Speed, usize); 3] = [
     ("A_2_9.wav", 2, Speed::Normal, 8),
@@ -146,10 +151,10 @@ fn pinned_path(pins: &[(String, std::path::PathBuf)], name: &str) -> std::path::
 
 /// Regenerates fixtures/stock_decodes.txt from the stock `js8` CLI. Ignored by
 /// default (the binary is not in CI); run with
-///   JS8_STOCK_BIN=$HOME/work/twowayfd/paritylab/js8/stock/js8 \
+///   JS8_STOCK_BIN=/path/to/stock/js8 \
 ///   cargo test -p js8 --test decode_parity regenerate_stock_decodes_fixture -- --ignored
 /// Positive control: the parsed line count must equal the MEASURED count for the
-/// file (stock_selftest.sh's pin) — or the parser is not matching the CLI's lines.
+/// file (the self-test's pin) — or the parser is not matching the CLI's lines.
 #[test]
 #[ignore]
 fn regenerate_stock_decodes_fixture() {
@@ -289,11 +294,12 @@ fn every_stock_decode_is_reproduced_within_tolerance() {
 /// one of the 11 stock off-air decodes is reproduced above. The points below
 /// are our own measured majority-of-5 thresholds (2026-09-06 sweep), which sit
 /// AT or just under stock's knees: Slow −22 (4/5), Normal −18 (5/5), Fast −16
-/// (5/5), Turbo −14 (3/5). Normal runs ~2 dB below stock's synthetic knee here
-/// (a synthetic-AWGN / SNR-convention gap — it reproduces stock's real Normal
-/// decodes exactly), the reason its point is not −20. Do NOT deepen these to
-/// the spec numbers to look better; that only makes the gate permanently red
-/// for a decoder that faithfully tracks stock.
+/// (5/5), Turbo −14 (3/5). Normal's point is not −20: at −20 this decoder
+/// yields 8/30 and JS8Call 3.0.3's 8/30 (2.x's Fortran 14/30) on the 2026-10-15
+/// lab corpus. JS8 60's point, −11 dB, is where this decoder and JS8Call
+/// 3.0.3's both decode 26/30 on that corpus (−12: 11/30 and 12/30). Do NOT
+/// deepen these to the spec numbers to look better; that only makes the gate
+/// permanently red for a decoder that faithfully tracks stock.
 #[test]
 fn holds_the_awgn_ladder_at_every_speed() {
     let ladder = [
@@ -301,6 +307,7 @@ fn holds_the_awgn_ladder_at_every_speed() {
         (Speed::Normal, -18.0),
         (Speed::Fast, -16.0),
         (Speed::Turbo, -14.0),
+        (Speed::Ultra, -11.0),
     ];
     for (speed, point) in ladder {
         let w = word("KD9TAWEN52ab");

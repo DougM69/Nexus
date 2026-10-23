@@ -18,7 +18,7 @@
 //   · The window holds the whole section and works as it does in the main window: the contest switch
 //     (whose save the main window follows), Running / S&P, the exports, the club board, the scoreboard,
 //     the county or sections board, the bonuses and the log. Its F-keys are held as the Logger window
-//     holds them, and its Esc sends nothing.
+//     holds them, and its Esc is the station's stop (`halt_tx`), as the main window's is.
 //   · The control is in the main window only: not in the Logger window, in the window itself, or on the
 //     Remote page.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -28,11 +28,6 @@ import { DetachedPanel } from './DetachedPanel'
 import { allFeatureIds } from './features/registry'
 import { pastTheSwitch } from './components/ConnectView.testkit'
 import { CONTEST_SCREEN_SAVED_KEY } from './components/ContestScreenWindow'
-import { RemoteFieldDay } from './remote-web/RemoteFieldDay'
-import { RemoteCollections, RemoteCollectionsContext } from './remote-web/collections'
-import type { ApplicationClient } from './remote-web/application-client'
-import { StationDataContext } from './stationAccess'
-import { fieldDayPage } from './remote-web/__fixtures__/field-day-page'
 import { t } from './i18n'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
 
@@ -219,8 +214,11 @@ function respond(cmd: string): unknown {
   if (cmd === 'app_version') return '0.0.0-test'
   if (cmd === 'radio_launch_info') return { showPicker: false }
   if (/^(get_band_plan|get_licensed_band_plan|log_operators|log_activations|get_all_spots|get_need_alerts|get_dxped_windows|get_sat_schedule|get_voice_messages|get_log|contest_removed|contest_unmerged|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|get_feed_health|get_xray_now|sat_track_status|get_iss_pass|get_tle_status|get_kp_forecast|check_for_update|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|get_feed_health|get_xray_now|sat_track_status|get_iss_pass|get_tle_status|get_kp_forecast|check_for_update|resolve_entity|contest_zone_hint|get_call_history|fd_club_log_newest)$/.test(cmd)) return null
   if (cmd === 'ask_log') throw new Error('no log in this test')
+  // A computer running its own station: the backend answers None, and the banner asks once. The
+  // catch-all's `{}` would read as driving a remote station, asked every half second.
+  if (cmd === 'client_status') return null
   return {}
 }
 
@@ -491,7 +489,7 @@ describe('the contest screen window holds the whole lower section', () => {
     expect(fireEvent.keyDown(document.body, { key: 'F4', code: 'F4', altKey: true }), 'Alt+F4 must still close the window').toBe(true)
   })
 
-  it('its Esc sends nothing: no halt, nothing that transmits — the stop is the main window’s', async () => {
+  it('its Esc is the station’s stop, as the main window’s is: one halt a press, and nothing else that transmits', async () => {
     transmitting = true
     const app = await mountPopOut('contestscreen')
     await settle()
@@ -499,7 +497,7 @@ describe('the contest screen window holds the whole lower section', () => {
     fireEvent.keyDown(app.querySelector('.fd-header')!, { key: 'Escape', code: 'Escape' })
     fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' })
     await settle()
-    expect(keyingSince(from)).toEqual([])
+    expect(keyingSince(from)).toEqual(['halt_tx', 'halt_tx'])
   })
 })
 
@@ -511,21 +509,58 @@ describe('the control is the main window’s alone', () => {
     expect(app.querySelector('.fd-event-banner'), 'control: the Logger window drew the screen’s banner').not.toBeNull()
     expect(popOutControls(app)).toEqual([])
   })
+})
 
-  it('not on the Remote page', async () => {
-    const source = new RemoteCollections({
-      invoke: vi.fn(async (): Promise<unknown> => fieldDayPage()),
-      supports: () => true,
-      getPhase: () => 'ready',
-    } as unknown as ApplicationClient)
-    const { container } = render(
-      <StationDataContext.Provider value={true}>
-        <RemoteCollectionsContext.Provider value={source}>
-          <RemoteFieldDay tier="FT8" />
-        </RemoteCollectionsContext.Provider>
-      </StationDataContext.Provider>,
-    )
-    await waitFor(() => expect(container.querySelector('.fd-event-banner'), 'control: the Remote page drew the screen’s banner').not.toBeNull())
-    expect(popOutControls(container)).toEqual([])
+// ── the save-failure line: once per window ──────────────────────────────────────────────────
+// The contest journal cannot be written: one red line per window, never two. In the main window
+// and the Logger window the entry above the screen carries it, so the screen below draws none;
+// the popped-out screen has no entry, so it draws its own.
+
+describe('a contest journal that cannot be written is said once in each window', () => {
+  const SAVED = T0 - 300
+  const since = t('fieldDay.unsaved.since', { time: new Date(SAVED * 1000).toISOString().slice(11, 16) })
+  const unsavedLines = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>('.fd-unsaved')]
+  beforeEach(() => {
+    fieldDay = { ...ILQP, unsaved: { failedWrites: 2, lastSavedUnix: SAVED } }
+  })
+
+  it('the main Contest screen: one line, on the entry, with the screen below on show', async () => {
+    const host = await mountContestScreen()
+    await settle()
+    expect(host.querySelector('section.panel.fieldday'), 'control: the screen below the entry is on show').not.toBeNull()
+    const lines = unsavedLines(host)
+    expect(lines.map((l) => l.textContent)).toEqual([since])
+    expect(lines[0].closest('.contest-logger-entry'), 'the line is on the entry').not.toBeNull()
+  })
+
+  it('the main Contest screen with its section popped out: still one line, on the entry', async () => {
+    const host = await mountContestScreen()
+    await popOut(host)
+    const lines = unsavedLines(host)
+    expect(lines.map((l) => l.textContent)).toEqual([since])
+    expect(lines[0].closest('.contest-logger-entry')).not.toBeNull()
+  })
+
+  it('the popped-out Contest screen: one line, its own', async () => {
+    const app = await mountPopOut('contestscreen')
+    await settle()
+    const lines = unsavedLines(app)
+    expect(lines.map((l) => l.textContent)).toEqual([since])
+    expect(lines[0].closest('section.panel.fieldday')).not.toBeNull()
+  })
+
+  it('the Logger window: one line, on its entry', async () => {
+    const app = await mountPopOut('contestlog')
+    await settle()
+    const lines = unsavedLines(app)
+    expect(lines.map((l) => l.textContent)).toEqual([since])
+    expect(lines[0].closest('.contest-logger-entry')).not.toBeNull()
+  })
+
+  it('control: a write that lands takes the line away everywhere', async () => {
+    fieldDay = ILQP
+    const host = await mountContestScreen()
+    await settle()
+    expect(unsavedLines(host)).toEqual([])
   })
 })

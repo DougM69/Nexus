@@ -106,6 +106,9 @@ vi.mock('./api', async (importOriginal) => {
   }
   return {
     ...auto,
+    // A computer running its own station: the backend answers None, and the banner asks once. The
+    // catch-all's `{}` would read as driving a remote station, asked every half second.
+    clientStatus: vi.fn(async () => null),
     // The engine's log questions go unanswered here, as the whole-log read (answered `{}`) did.
     askLog: vi.fn(async () => {
       throw new Error('no log in this test')
@@ -277,7 +280,8 @@ describe('the JS8 Stations list takes its callsign aging from Settings', () => {
       await waitFor(
         () =>
           expect(
-            onScreen('[data-pane="stations"] .js8-station-call').map((b) => b.textContent),
+            // The station rows (the call list opens with @ALLCALL and the groups).
+            onScreen('[data-pane="stations"] .js8-station:not(.js8-group) .js8-station-call').map((b) => b.textContent),
             'W0OLD, heard 11 minutes ago, is aged out',
           ).toEqual(['W0NEW']),
         { timeout: 3000 },

@@ -51,6 +51,17 @@ describe('the QSO detail view', () => {
     expect(withoutGrid).not.toContain('Their grid')
   })
 
+  it('names the country as the DXCC entity, and as the stored text when the call resolves to none', () => {
+    // Another logger's "UNITED STATES" and Nexus's own "United States" are one country.
+    const { rerender } = render(
+      <QsoDetail qso={qso({ call: 'K1ABC', country: 'UNITED STATES', entity: 'United States' })} onClose={() => {}} />,
+    )
+    expect(shown()).toContain('United States')
+    expect(shown()).not.toContain('UNITED STATES')
+    rerender(<QsoDetail qso={qso({ call: 'XX9ABC', country: 'Kosovo', entity: null })} onClose={() => {}} />)
+    expect(shown()).toContain('Kosovo')
+  })
+
   it('drops a whole section when nothing in it is recorded', () => {
     // A bare FT8 contact has no QSL, no award credit and no park refs. None of those
     // headings should be on screen.

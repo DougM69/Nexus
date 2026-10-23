@@ -25,7 +25,8 @@
 //! default. A packet leaves only while an over of ours (`xmit 1`) is keyed on the session, never
 //! during a CWX word, a tune or an ATU cycle, on our own transmit stream, and while no other
 //! program feeds DAX: anything queued otherwise is dropped, never held for a later key. The pacer wakes the moment an over is queued, so its first packet leaves
-//! without waiting out an idle tick.
+//! without waiting out an idle tick. Because the rest of the over waits in Nexus until it is due,
+//! a mid-over switch replaces it there ([`crate::backend::TxTee::retune`]).
 //!
 //! Nexus's own design, not a port: the broker and the formats it uses are ported in
 //! `tempo_net::flex::streams`.
@@ -51,8 +52,8 @@ use crate::capture_resample::CaptureResampler;
 
 use super::ClientState;
 
-/// The decoders' rate.
-const MODEM_RATE: u32 = 12_000;
+/// The decoders' rate: the receive audio's, as [`super::FlexDaemon::take_audio`] hands it over.
+pub(crate) const MODEM_RATE: u32 = 12_000;
 /// Per channel, about ten seconds at 12 kHz: a stalled reader loses the oldest audio, never
 /// memory.
 const RING_CAP: usize = 120_000;
@@ -75,8 +76,13 @@ const TX_IDLE_WAIT: Duration = Duration::from_millis(100);
 /// How far behind schedule the pacer may fall before it resyncs instead of catching up: a
 /// descheduled thread must not turn its backlog into a burst at the radio.
 const TX_MAX_CATCHUP: Duration = Duration::from_millis(100);
-/// About twenty seconds at the modem rate; an FT8 over is 12.6 s.
+/// About twenty seconds at the modem rate; an FT8 over is 12.6 s. Past it the oldest audio goes,
+/// so the voice keyer refuses a longer message on this route.
 const TX_QUEUE_CAP: usize = MODEM_RATE as usize * 20;
+const _: () = assert!(
+    TX_QUEUE_CAP == tempo_app::engine::FLEX_VOICE_MAX_SAMPLES,
+    "the voice keyer's longest message on the Flex client is what its DAX queue holds"
+);
 /// Modem-rate samples resampled at a time: one packet's worth.
 const TX_CHUNK: usize = TX_FRAMES_PER_PACKET * MODEM_RATE as usize / DAX_RATE_HZ as usize;
 
@@ -487,6 +493,12 @@ pub struct DaxTx {
     level: AtomicU32,
     queue: Mutex<TxQueue>,
     wake: Condvar,
+    /// The packets the pacer has sent, and how many had gone when it first found the session
+    /// closed ([`crate::backend::TxTee::sent_before_its_session_closed`]).
+    #[cfg(test)]
+    sent: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    sent_when_closed: std::sync::OnceLock<usize>,
 }
 
 struct TxQueue {
@@ -518,6 +530,10 @@ impl DaxTx {
                 samples: VecDeque::new(),
             }),
             wake: Condvar::new(),
+            #[cfg(test)]
+            sent: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            sent_when_closed: std::sync::OnceLock::new(),
         }
     }
 
@@ -565,6 +581,19 @@ impl DaxTx {
         )
     }
 
+    /// The packets sent so far, noted the first time the pacer finds its session closed: before
+    /// each pass, so ahead of any packet it could send after, and as it stops.
+    #[cfg(test)]
+    fn note_if_closed(&self) {
+        if self
+            .conn
+            .upgrade()
+            .is_none_or(|c| c.snapshot().phase == Phase::Closed)
+        {
+            let _ = self.sent_when_closed.set(self.sent.load(Ordering::Relaxed));
+        }
+    }
+
     #[cfg(test)]
     fn queued(&self) -> usize {
         let q = lock(&self.queue);
@@ -602,6 +631,39 @@ impl crate::backend::TxTee for DaxTx {
         q.modem.clear();
         n
     }
+
+    #[cfg(test)]
+    fn sent_before_its_session_closed(&self) -> Option<usize> {
+        self.sent_when_closed.get().copied()
+    }
+
+    /// The rest of the over, played anew (a mid-over switch). What has not left is the queue at
+    /// the modem rate, less the packet's worth the pacer has resampled ahead: the pacer sends in
+    /// real time, so the radio has been handed only what is due. The rebuild is made with the
+    /// queue unlocked, so the pacer keeps sending while it is made, and then replaces what is
+    /// still queued by then, sample for sample at the same place in the over: never more, so the
+    /// over ends when it would have. The resampler runs on through the splice, which makes the
+    /// audio there the resampled splice itself. A queue emptied meanwhile (Stop TX, the key lost)
+    /// stays empty, and one that grew is left as it is (nothing here can tell where its over ends):
+    /// both `false`, as is a queue with nothing left.
+    fn retune(&self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
+        let left = lock(&self.queue).modem.len();
+        if left == 0 {
+            return false;
+        }
+        let rebuilt = tail(left, 0);
+        let mut q = lock(&self.queue);
+        let still = q.modem.len();
+        if still == 0 || still > left {
+            return false;
+        }
+        // `rebuilt` ends where the over ends, as the queue does. Short of what is still queued
+        // (never, from the engine), it plays what it has and the over ends early.
+        let rest = &rebuilt[rebuilt.len().saturating_sub(still)..];
+        q.modem.clear();
+        q.modem.extend(rest);
+        true
+    }
 }
 
 /// The pacer's clock: the next packet is due one packet's airtime after the last due time, so
@@ -619,6 +681,8 @@ fn pace(tx: &DaxTx, stop: &AtomicBool, sock: &UdpSocket, vita: SocketAddr) {
     let mut count = 0u8;
     let mut next_at = Instant::now();
     while !stop.load(Ordering::Relaxed) {
+        #[cfg(test)]
+        tx.note_if_closed();
         // Idle: wait for an over. Waking holds the clock at now, so an idle gap banks no credit
         // that would burst the start of the next one.
         {
@@ -654,9 +718,13 @@ fn pace(tx: &DaxTx, stop: &AtomicBool, sock: &UdpSocket, vita: SocketAddr) {
         if let Some(packet) = streams::dax_tx_packet(stream, count, &samples) {
             count = (count + 1) & 0x0F;
             let _ = sock.send_to(&packet, vita);
+            #[cfg(test)]
+            tx.sent.fetch_add(1, Ordering::Relaxed);
         }
         next_at = advance(now, next_at);
     }
+    #[cfg(test)]
+    tx.note_if_closed();
 }
 
 #[cfg(test)]

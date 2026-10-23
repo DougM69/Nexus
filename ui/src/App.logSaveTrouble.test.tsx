@@ -15,8 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, act, waitFor } from '@testing-library/react'
 import { dismissToast, subscribeToasts, type Toast } from './toast'
 import { t } from './i18n'
-import settingsFixture from './components/__fixtures__/defaultSettings.json'
-import type { AppSnapshot, Settings } from './types'
+import type { AppSnapshot} from './types'
 
 const base = {
   mycall: 'KD9TAW', mygrid: 'EN52', mode: 'Normal',
@@ -29,7 +28,6 @@ const base = {
   stations: [], conversations: [], activePeer: null, qso: null, fieldDay: null,
   recentDecodes: [], harqRescues: 0, logTick: 1,
 } as unknown as AppSnapshot
-
 
 const state = vi.hoisted(() => ({
   snap: null as unknown,
@@ -45,6 +43,9 @@ vi.mock('./api', async (importOriginal) => {
   }
   return {
     ...auto,
+    // A computer running its own station: the backend answers None, and the banner asks once. The
+    // catch-all's `{}` would read as driving a remote station, asked every half second.
+    clientStatus: vi.fn(async () => null),
     getSnapshot: vi.fn(async () => state.snap),
     subscribeSnapshot: vi.fn((next: (s: unknown) => void) => {
       state.push = next
@@ -178,20 +179,4 @@ describe('the logbook database refused a change (C10b)', () => {
     await screen.findByText(retrying())
   })
 
-  it('stays off the Remote page, like the notice that the database could not open', async () => {
-    const snapshot = trouble(1, 1)
-    state.snap = snapshot
-    const page = render(
-      <App remote={{ snapshot, settings: settingsFixture as unknown as Settings, bandPlan: [], status: <div>Observer</div> }} />,
-    )
-    await screen.findByText('Observer')
-    expect(document.querySelector('.app.remote-workspace'), 'premise: the Remote page mounted').not.toBeNull()
-    expect(saying(retrying())).toHaveLength(0)
-    expect(saying(held())).toHaveLength(0)
-    page.unmount()
-    // The control: the same snapshot on the station's own screen does raise both.
-    await openApp()
-    await screen.findByText(retrying())
-    await screen.findByText(held())
-  })
 })

@@ -33,7 +33,7 @@ describe('JS8 api wrappers', () => {
     await api.js8Send(null, 'HELLO')
     await api.js8Send('KD2UWR', 'HELLO')
     await api.js8SendCommand('KD2UWR', 0, '')
-    await api.js8CallCq(0)
+    await api.js8CallCq()
     await api.js8Arm('autoreply', true)
     await api.js8AnswerReply(true, 'KD9TAW: W1AW SNR -07', 1_700_000_089_000)
     await api.js8DropQueue()
@@ -47,7 +47,8 @@ describe('JS8 api wrappers', () => {
       { cmd: 'js8_send', args: { to: null, text: 'HELLO' } },
       { cmd: 'js8_send', args: { to: 'KD2UWR', text: 'HELLO' } },
       { cmd: 'js8_send_command', args: { to: 'KD2UWR', cmd: 0, arg: '' } },
-      { cmd: 'js8_call_cq', args: { idx: 0 } },
+      // The CQ is the CQ message in Settings: the call names nothing else.
+      { cmd: 'js8_call_cq', args: undefined },
       { cmd: 'js8_arm', args: { which: 'autoreply', on: true } },
       // Tauri maps `firesAtMs` to the Rust `fires_at_ms`, as `dialMhz` to `dial_mhz`.
       { cmd: 'js8_answer_reply', args: { yes: true, display: 'KD9TAW: W1AW SNR -07', firesAtMs: 1_700_000_089_000 } },
@@ -63,8 +64,44 @@ describe('JS8 api wrappers', () => {
     expect(s.rxSpeeds).toBe(15)
   })
 
+  it('arms the CQ repeat with the switch alone: it sends the CQ message in Settings', async () => {
+    await api.js8CqRepeat(true)
+    await api.js8CqRepeat(false)
+    expect(calls).toEqual([
+      { cmd: 'js8_cq_repeat', args: { on: true } },
+      { cmd: 'js8_cq_repeat', args: { on: false } },
+    ])
+  })
+
+  it('asks the dictionary about the compose box by its own two commands', async () => {
+    await api.js8WordCheck(['HELLOX', 'TNX'])
+    await api.js8WordSuggestions('HELLOX')
+    expect(calls).toEqual([
+      { cmd: 'js8_word_check', args: { words: ['HELLOX', 'TNX'] } },
+      { cmd: 'js8_word_suggestions', args: { word: 'HELLOX' } },
+    ])
+  })
+
   it('asks the JS8 gate about the locator by its own command, with no arguments', async () => {
     await api.js8LocatorRefusal()
     expect(calls).toEqual([{ cmd: 'js8_locator_refusal', args: undefined }])
+  })
+
+  it('writes the call list’s two settings by their own commands, never the settings form', async () => {
+    await api.js8SetRxBlocklist(['W1AW'])
+    await api.js8SetGroups(['@FUN', '@NET'])
+    expect(calls).toEqual([
+      { cmd: 'js8_set_rx_blocklist', args: { calls: ['W1AW'] } },
+      { cmd: 'js8_set_groups', args: { groups: ['@FUN', '@NET'] } },
+    ])
+  })
+
+  it('writes "Do not participate in the @ALLCALL group" for the call list by its own command, never the settings form', async () => {
+    await api.js8SetAvoidAllcall(true)
+    await api.js8SetAvoidAllcall(false)
+    expect(calls).toEqual([
+      { cmd: 'js8_set_avoid_allcall', args: { avoid: true } },
+      { cmd: 'js8_set_avoid_allcall', args: { avoid: false } },
+    ])
   })
 })

@@ -6,8 +6,8 @@
 // the Tx cycle, the slot countdown, Sync and DT), which takes it from four lines to two. Operate and
 // Tempo keep them: the pills fold into one mode button and the Tx cycle loses its small captions.
 // Larger windows are unchanged. The drop is CSS keyed on `[data-viewport]`, which jsdom never
-// applies, so this file applies it: it reads the two sheets the bar renders under (styles.css and
-// the hosted page's application.css), renders the REAL TopBar with the props App passes on Field
+// applies, so this file applies it: it reads the sheet the bar renders under (styles.css), renders
+// the REAL TopBar with the props App passes on Field
 // Day, Operate and Tempo, and computes at every size class the winning `display` and `visibility`
 // of each item and of every ancestor up to <html> (`!important`, then specificity with
 // :is/:not/:where/:has, then source order), matching through jsdom's own selector engine.
@@ -15,7 +15,7 @@
 // ⚠️ THE TX CLUSTER IS THE POINT. App's `hideDigitalChrome` hides the FT items AND the bar's TX
 // cluster, and on Field Day and every other screen without a cockpit that cluster is the only Stop
 // TX. So the small-size drop has its own flag (`ftScreen`), and the first test is that NO rule in
-// either sheet, conditional or not, hides TX On/Off, Tune, Stop TX or Hold Tx at any size.
+// the sheet, conditional or not, hides TX On/Off, Tune, Stop TX or Hold Tx at any size.
 //
 // WHAT THIS DOES NOT PROVE: geometry. A rule that moved the cluster off screen, shrank it to 0×0 or
 // covered it passes here. The real-browser sweep (the bar's lines on the twelve screens, Stop TX
@@ -174,7 +174,7 @@ function specificity(sel: string): Spec {
   return s
 }
 
-const RULES = parseRules(read('../styles.css') + '\n' + read('../remote-web/application.css')).filter(
+const RULES = parseRules(read('../styles.css')).filter(
   (r) => r.display || r.visibility,
 )
 const BAR_WORDS = /topbar|tier-|tx-period|op-controls|op-btn|slot-clock|timesync|clock-repair|dt-readout|txrx|theme-chip/
@@ -218,7 +218,7 @@ function hidden(el: Element): boolean {
   return false
 }
 
-/** Every rule in either sheet, at-rules included, that matches `el` and would hide it. */
+/** Every rule in the sheet, at-rules included, that matches `el` and would hide it. */
 function anyHider(el: Element): string[] {
   return RULES.filter((r) => matches(el, r) && (r.display?.value === 'none' || r.visibility?.value === 'hidden')).map(
     (r) => (r.cond ? `${r.cond} ` : '') + r.selector,
@@ -306,7 +306,7 @@ afterEach(() => {
 })
 
 describe('the top bar at the small size', () => {
-  it('reads both sheets, and every selector that names a bar class was evaluated', () => {
+  it('reads the sheet, and every selector that names a bar class was evaluated', () => {
     // Control: the parse found the rules this file is about, so a green below is not an empty sheet.
     expect(RULES.some((r) => r.selector.includes('.tier-menu-btn') && r.display?.value === 'none')).toBe(true)
     expect(RULES.some((r) => r.selector.includes(".topbar:not(.topbar--ft)"))).toBe(true)
@@ -315,7 +315,7 @@ describe('the top bar at the small size', () => {
     expect([...unreadable]).toEqual([])
   })
 
-  it('no rule in either sheet hides the TX cluster, at any size: on Field Day it is the only Stop TX', () => {
+  it('no rule in the sheet hides the TX cluster, at any size: on Field Day it is the only Stop TX', () => {
     const { container } = bar('fieldDay')
     const cluster = one(container, 'header.topbar .op-controls')
     const buttons = q(container, 'header.topbar .op-controls button')

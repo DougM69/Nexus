@@ -1836,12 +1836,14 @@ export function PhoneScope({
             {source === 'flex' ? FLEX_RF : CIV_RF}
           </span>
         )}
+        {/* The number stands in a field of its own, as wide as the widest it prints
+            (styles.css `.ph-scope-dyn-val`), so nothing after the chip moves when it changes. */}
         {spanDb != null && (
           <span
             className="ph-scope-dyn"
             title={t('scope.dynamic.title')}
           >
-            ▲{spanDb} {DB}
+            ▲<span className="ph-scope-dyn-val">{spanDb}</span> {DB}
           </span>
         )}
         <label className="ph-scope-gz" title={t('scope.gain.title')}>

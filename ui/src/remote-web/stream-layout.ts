@@ -17,3 +17,21 @@ export function streamLayout(width: number, height: number): StreamLayout {
   if (width <= height && classifyViewport(width) === 'xs') return 'bars'
   return 'header'
 }
+
+/** The rail's width in CSS px: stream.css's `--stream-rail`, the grid column beside the picture. */
+export const RAIL_WIDTH = 120
+/** The header's share of the page's height from which the picture under it counts as small: a short window, or one
+ *  zoomed, where the row wraps (1280 x 720 at 125 %: 174 of 576 px). A 1080p browser's one-line row is 9 % of it. */
+export const HEADER_SHARE_FOR_RAIL = 0.15
+
+type Size = { width: number; height: number }
+/** Whether a window the header layout leaves a small picture in shows the shack's screen larger beside the rail (the
+ *  operator's pick, 2026-10-16). `page` is the page and `stage` the picture's region under the header row, both as laid
+ *  out; `shape` is the shack's screen, width over height. Beside the rail the stage is the page's whole height and its
+ *  width less the rail's, and the picture fits either stage at that shape. */
+export function railShowsMore(page: Size, stage: Size, shape: number): boolean {
+  if (!(page.width > RAIL_WIDTH && page.height > 0 && stage.width > 0 && stage.height > 0 && shape > 0)) return false
+  if (page.height - stage.height < HEADER_SHARE_FOR_RAIL * page.height) return false
+  const pictureWidth = (width: number, height: number) => Math.min(width, height * shape)
+  return pictureWidth(page.width - RAIL_WIDTH, page.height) > pictureWidth(stage.width, stage.height)
+}

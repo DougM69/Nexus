@@ -8,9 +8,6 @@ import { render, waitFor, cleanup, fireEvent, screen } from '@testing-library/re
 import { Logbook } from './Logbook'
 import type { LogQuestion } from '../features/logAnswers'
 import { confirmationCheck } from '../api'
-import { StationControlContext } from '../stationAccess'
-import { RemoteCollectionsContext, type RemoteCollections } from '../remote-web/collections'
-import type { QueryPage } from '../remote-web/application-query-protocol'
 import { t } from '../i18n'
 
 // THE BUDGET (2026-10-09). The slowest case here, "opens only from its button, and downloads nothing until…", takes
@@ -78,22 +75,4 @@ describe('Check confirmations in the Logbook', () => {
     expect(vi.mocked(confirmationCheck)).not.toHaveBeenCalled()
   })
 
-  it('is not offered to a Remote browser, even one holding the station’s control', async () => {
-    const page = (): QueryPage => ({ type: 'applicationPage', requestId: 'r', collection: 'log', snapshotId: 's', offset: 0,
-      total: LOG.length, retained: LOG.length, nextCursor: null, ageMs: 0, meta: {},
-      rows: LOG as unknown as QueryPage['rows'] })
-    const { container } = render(
-      <StationControlContext.Provider value={true}>
-        <RemoteCollectionsContext.Provider value={{ page: async () => page() } as unknown as RemoteCollections}>
-          <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />
-        </RemoteCollectionsContext.Provider>
-      </StationControlContext.Provider>,
-    )
-    expect(
-      await screen.findByRole('button', { name: t('remote.refreshCollection') }),
-      'the Remote log is the one on screen',
-    ).toBeTruthy()
-    expect(container.querySelector('.log-actions'), 'and so is the toolbar the button sits in').not.toBeNull()
-    expect(screen.queryByRole('button', { name: t('logbook.confirmations.button') })).toBeNull()
-  })
 })

@@ -218,8 +218,7 @@ fn the_shim_authors_its_caps_and_answers_the_rest_as_the_broker_does() {
     assert_eq!(caps.rfpower_floor_milli, Some(0));
     assert!(caps.vfo_read_native);
     assert_eq!(caps.split_detect, crate::baud_ladder::SplitDetect::Absent);
-    // Byte for byte the encoder's answers for a backend without the verb. A read between them,
-    // because three unrecognised verbs in a row cost a client its connection, by design.
+    // Byte for byte the encoder's answers for a backend without the verb. A read between them.
     let mock = crate::rigctld_server::tests::MockRig::default();
     for verb in ["l STRENGTH", "J 100", "Z 100", "I 14075000", "R +"] {
         let shared = match crate::rigctld_server::handle_command(verb, &mock) {
@@ -660,16 +659,39 @@ fn a_cw_word_the_client_does_not_send_says_why() {
     let d = daemon(&sim);
     let mut c = Client::connect(&d);
     in_cw(&mut c, &d);
-    assert_eq!(
-        refused(&mut c, &d),
-        Some((
-            "CW not sent: the Flex native client does not send CW yet. For CW, turn the Flex \
-             native client off (SmartSDR CAT sends it), or use the WinKeyer or Soundcard keyer."
-                .to_string(),
-            None
-        ))
-    );
+    assert_eq!(refused(&mut c, &d), Some((CW_BETA_OFF.to_string(), None)));
     assert_eq!(cwx_wire(&sim), Vec::<String>::new());
+}
+
+/// ⭐ The radio's Beta setting (`RadioProfile::flex_native_unbenched`, off by default) is what the
+/// production start hands the client's session. Off, the client neither tunes with the radio's
+/// carrier, runs its ATU nor sends CW, and a word is refused with the words it ships with; on, all
+/// three are switched on, and a word goes out to the radio's keyer through every other check.
+#[test]
+fn the_radios_beta_setting_switches_the_clients_cw_tune_and_atu() {
+    for beta in [false, true] {
+        let sim = simulator(with_mode_echo(), vec![]);
+        let d = FlexDaemon::start(sim.tcp_addr(), 0, beta).expect("the daemon starts");
+        assert_eq!(
+            (d.tunes_natively(), d.runs_atu(), d.sends_cw()),
+            (beta, beta, beta)
+        );
+        let mut c = Client::connect(&d);
+        in_cw(&mut c, &d);
+        let asked = Instant::now();
+        if beta {
+            assert_eq!(c.ask("b CQ", 1), "RPRT 0\n");
+            wait_count(&sim, "cwx send \"CQ\" 1", 1);
+            assert_eq!(cwx_wire(&sim), ["cwx send \"CQ\" 1"]);
+        } else {
+            assert_eq!(c.ask("b CQ", 1), "RPRT -1\n");
+            assert_eq!(
+                d.key_refused_since(asked),
+                Some((CW_BETA_OFF.to_string(), None))
+            );
+            assert_eq!(cwx_wire(&sim), Vec::<String>::new());
+        }
+    }
 }
 
 /// ⭐ A word with a character Nexus has no Morse for is not sent, and the CW line names the
@@ -1415,7 +1437,7 @@ fn a_replacement_daemon_can_stop_the_lost_sessions_stuck_transmitter() {
             radio_stays_keyed: true,
         }],
     );
-    let first = FlexDaemon::start(sim.tcp_addr(), 0).expect("the first daemon starts");
+    let first = FlexDaemon::start(sim.tcp_addr(), 0, false).expect("the first daemon starts");
     let mut c = Client::connect(&first);
     wait_session(&first, "the readback idle", |s| s.transmit_ready);
     assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
@@ -1426,7 +1448,7 @@ fn a_replacement_daemon_can_stop_the_lost_sessions_stuck_transmitter() {
     drop(c);
     drop(first);
     // What the radio loop does with a dead daemon: start another.
-    let second = FlexDaemon::start(sim.tcp_addr(), 0).expect("the second daemon starts");
+    let second = FlexDaemon::start(sim.tcp_addr(), 0, false).expect("the second daemon starts");
     let mut c = Client::connect(&second);
     assert_eq!(
         c.ask("T 1", 1),
@@ -1532,7 +1554,7 @@ fn eventually<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
 /// the wire shows `want`.
 fn route_until(d: &FlexDaemon, sim: &Simulator, browser_voice: bool, want: &str, times: usize) {
     eventually(&format!("{want} x{times}"), || {
-        d.sync_tx_routing(browser_voice);
+        d.sync_tx_routing(browser_voice, false);
         (count(sim, want) >= times).then_some(())
     });
 }
@@ -1541,7 +1563,7 @@ fn route_until(d: &FlexDaemon, sim: &Simulator, browser_voice: bool, want: &str,
 fn route_for(d: &FlexDaemon, browser_voice: bool, ms: u64) {
     let end = Instant::now() + Duration::from_millis(ms);
     while Instant::now() < end {
-        d.sync_tx_routing(browser_voice);
+        d.sync_tx_routing(browser_voice, false);
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -1651,7 +1673,7 @@ fn native_audio_streams_the_served_slice_on_the_one_session() {
 }
 
 /// ⭐ THE REGISTRATION DATAGRAM GOES AFTER REGISTRATION, JUST BEFORE `client udpport`, where
-/// upstream sends it (port plan §4.5, step 7). The radio learns our UDP endpoint from its source,
+/// upstream sends it. The radio learns our UDP endpoint from its source,
 /// which firmware that answers `client udpport` with "not supported" needs. The client sent it
 /// after its whole bring-up, about 46 ms after the command, and then right after the bind, before
 /// the session even connected, to a radio with no client of ours yet.
@@ -1935,6 +1957,232 @@ fn nothing_leaves_without_our_key() {
     eventually("packets once keyed", || {
         (!dax_tx_packets(&sim).is_empty()).then_some(())
     });
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// A tone at the modem rate, at `hz`.
+fn tone_at(seconds: f32, hz: f32, amplitude: f32) -> Vec<f32> {
+    (0..(seconds * 12_000.0) as usize)
+        .map(|i| amplitude * (2.0 * std::f32::consts::PI * hz * i as f32 / 12_000.0).sin())
+        .collect()
+}
+
+/// The 24 kHz audio the route makes of `over` (the pacer's resampler, from its start).
+fn resampled(over: &[f32]) -> Vec<f32> {
+    crate::capture_resample::CaptureResampler::new(12_000, 24_000).process(over)
+}
+
+/// Where `a` and `b` first differ by more than float noise, or `None`.
+fn first_difference(a: &[f32], b: &[f32]) -> Option<usize> {
+    a.iter().zip(b).position(|(x, y)| (x - y).abs() > 1e-6)
+}
+
+/// ⭐ A mid-over switch on the DAX route (WSJT-X's `m_restart`) replaces only what Nexus has not
+/// sent the radio yet. The over leaves paced in real time, so the rest of it waits in Nexus: what
+/// was sent is the first message to the sample, what follows is the second, spliced at one place
+/// as if the over had been built that way, and the over is as long as it was. The rebuild is made
+/// while the pacer keeps sending, and the packets keep their real-time cadence across it.
+#[test]
+fn a_switch_mid_over_on_dax_replaces_only_what_has_not_been_sent() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let tee = d.tx_tee().expect("the route");
+    tee.set_level(1.0);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    let first = tone_at(1.5, 1_000.0, 0.5);
+    let second = tone_at(1.5, 1_500.0, 0.5);
+    tee.feed(&first);
+    eventually("a third of a second sent", || {
+        (dax_tx_packets(&sim).len() >= 60).then_some(())
+    });
+    let sent_before = dax_tx_packets(&sim).len();
+    let mut asked = None;
+    let mut during = 0;
+    let switched = tee.retune(&mut |left, before| {
+        asked = Some((left, before));
+        // Built slowly, so less is queued by the time it lands than when it was asked for.
+        let at = dax_tx_packets(&sim).len();
+        std::thread::sleep(Duration::from_millis(200));
+        during = dax_tx_packets(&sim).len() - at;
+        second[second.len() - left - before..].to_vec()
+    });
+    assert!(switched, "the DAX route switches");
+    let (left, before) = asked.expect("the rest was asked for");
+    assert_eq!(before, 0, "no look-back: the resampler runs on");
+    assert!(
+        left + sent_before * 64 <= first.len(),
+        "only what was not sent is asked for: {left} left, {sent_before} packets sent"
+    );
+    assert!(
+        during >= 20,
+        "the pacer kept sending while the rest was built: {during} packets in 200 ms"
+    );
+    let unswitched = resampled(&first);
+    let total = unswitched.len() / 128;
+    let packets = eventually("the whole over", || {
+        let p = dax_tx_packets(&sim);
+        (p.len() >= total).then_some(p)
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        dax_tx_packets(&sim).len(),
+        total,
+        "the over is as long as it was"
+    );
+    let sent = left_samples(&packets);
+    let splice = first_difference(&sent, &unswitched).expect("the over was switched");
+    assert!(
+        splice >= (sent_before + during) * 128,
+        "what was sent is untouched: first change at {splice}, {} sent",
+        (sent_before + during) * 128
+    );
+    // One splice point, in the modem-rate over, explains every sample sent.
+    let at = (splice / 2).saturating_sub(16)..splice / 2 + 96;
+    let k = at
+        .clone()
+        .find(|&k| {
+            let mut over = first[..k].to_vec();
+            over.extend_from_slice(&second[k..]);
+            first_difference(&sent, &resampled(&over)).is_none()
+        })
+        .unwrap_or_else(|| panic!("no single splice in {at:?} makes what was sent"));
+    assert!(k >= sent_before * 64, "spliced after what was sent: {k}");
+    // The cadence: each packet within the pacer's catch-up window of its real-time slot, so the
+    // radio is never left waiting past it (the switch included).
+    let start = packets[0].0;
+    let mut gaps: Vec<Duration> = packets.windows(2).map(|w| w[1].0 - w[0].0).collect();
+    let late = packets
+        .iter()
+        .enumerate()
+        .map(|(i, (t, _))| (*t - start).saturating_sub(TX_PERIOD * i as u32))
+        .max()
+        .unwrap();
+    gaps.sort();
+    eprintln!(
+        "dax cadence over {total} packets: gap p50 {:?} p99 {:?} max {:?}; latest packet {late:?} behind its slot",
+        gaps[gaps.len() / 2],
+        gaps[gaps.len() * 99 / 100],
+        gaps[gaps.len() - 1]
+    );
+    assert!(
+        late < Duration::from_millis(100),
+        "a packet {late:?} behind its real-time slot"
+    );
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// One DAX TX packet's airtime: 128 frames at 24 kHz.
+const TX_PERIOD: Duration = Duration::from_nanos(128 * 1_000_000_000 / 24_000);
+
+/// ⭐ Stop TX wins over a switch: a Stop that lands while the rest is being built leaves the queue
+/// empty and the switch refused (so nothing is booked as sent), and a Stop just after a switch cuts
+/// the new message as it cuts any over.
+#[test]
+fn stop_tx_cuts_a_dax_over_during_and_after_a_switch() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let tee = d.tx_tee().unwrap();
+    let tx = d.audio.as_ref().unwrap().tx();
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    let second = tone_at(1.5, 1_500.0, 0.5);
+    let settled = |sim: &Simulator| {
+        let mut n = dax_tx_packets(sim).len();
+        loop {
+            std::thread::sleep(Duration::from_millis(100));
+            let now = dax_tx_packets(sim).len();
+            if now == n {
+                return n;
+            }
+            n = now;
+        }
+    };
+    for stop_during in [true, false] {
+        tee.feed(&tone_at(1.5, 1_000.0, 0.5));
+        let base = dax_tx_packets(&sim).len();
+        eventually("the over on the air", || {
+            (dax_tx_packets(&sim).len() >= base + 30).then_some(())
+        });
+        let switched = tee.retune(&mut |left, before| {
+            if stop_during {
+                tee.flush();
+            }
+            second[second.len() - left - before..].to_vec()
+        });
+        assert_eq!(
+            switched, !stop_during,
+            "stop during the build: {stop_during}"
+        );
+        if !stop_during {
+            tee.flush();
+        }
+        let cut = dax_tx_packets(&sim).len();
+        let end = settled(&sim);
+        assert!(
+            end <= cut + 2,
+            "stop during the build: {stop_during}: {} packets after the stop",
+            end - cut
+        );
+        assert_eq!(audio::queued(&tx), 0, "nothing left to send");
+    }
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// Nothing to replace, nothing asked: an empty queue refuses without building anything, and a
+/// queue that grew while the rest was built is left as it is (where its over ends is not known).
+#[test]
+fn a_dax_switch_with_nothing_left_or_a_grown_queue_changes_nothing() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let tee = d.tx_tee().unwrap();
+    let tx = d.audio.as_ref().unwrap().tx();
+    let mut asked = false;
+    assert!(!tee.retune(&mut |_, _| {
+        asked = true;
+        Vec::new()
+    }));
+    assert!(!asked, "nothing queued: nothing built");
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    let first = tone_at(1.5, 1_000.0, 0.5);
+    tee.feed(&first);
+    eventually("the over on the air", || {
+        (dax_tx_packets(&sim).len() >= 10).then_some(())
+    });
+    let extra = vec![0.1f32; 6_000];
+    let mut queued_after_feed = 0;
+    let switched = tee.retune(&mut |left, _| {
+        tee.feed(&extra);
+        queued_after_feed = audio::queued(&tx);
+        vec![0.0; left]
+    });
+    assert!(!switched, "a grown queue is not replaced");
+    let now = audio::queued(&tx);
+    assert!(
+        now + 300 >= queued_after_feed,
+        "the queue left as it was: {now} of {queued_after_feed}"
+    );
+    let mut whole = first.clone();
+    whole.extend_from_slice(&extra);
+    let total = resampled(&whole).len() / 128;
+    let packets = eventually("the over and what was added", || {
+        let p = dax_tx_packets(&sim);
+        (p.len() >= total).then_some(p)
+    });
+    let sent = left_samples(&packets);
+    let unswitched = resampled(&first);
+    assert_eq!(
+        first_difference(&sent[..unswitched.len()], &unswitched),
+        None,
+        "the first over unchanged"
+    );
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
 }
 
@@ -2287,6 +2535,67 @@ fn a_phone_key_is_refused_until_the_radio_has_its_mic_back() {
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
 }
 
+/// ⭐ A VOICE-KEYER MESSAGE ONLY ON DAX (operator ruling, 2026-10-12, "Change it now"). In Phone at
+/// the shack the radio has its mic, with Nexus's DAX transmit stream there from a digital mode
+/// before: a key marked as the keyer's message (Nexus's own audio) is refused, in the shim's words,
+/// until the radio takes DAX; then it keys. While the radio is on that DAX, Nexus's own PTT,
+/// unmarked, is still refused until the mic is back; and the marked message's stop goes out as
+/// every stop does.
+#[test]
+fn a_key_carrying_the_keyers_message_needs_the_radios_dax() {
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+    route_until(&d, &sim, false, "transmit set dax=0", 1);
+    eventually("the mic", || {
+        (d.session().snapshot().model.transmit.dax == Some(false)).then_some(())
+    });
+    d.set_voice_key(true);
+    let asked = Instant::now();
+    let answer = c.ask("T 1", 1);
+    d.set_voice_key(false);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        format!(
+            "answer={answer:?} xmit1={} refused={:?}",
+            count(&sim, "xmit 1"),
+            d.key_refused_since(asked)
+        ),
+        "answer=\"RPRT -1\\n\" xmit1=0 refused=Some((\"not keying the voice keyer's USB message: \
+         the radio takes its transmit audio from its mic input\", Some(FlexAudioRefusal { mode: \
+         \"USB\", cause: NotYetDax })))"
+    );
+
+    // The keyer's DAX: Nexus's own PTT still waits for the mic, and the message keys.
+    let mut keyer = || {
+        d.sync_tx_routing(false, true);
+        (count(&sim, "transmit set dax=1") >= 2).then_some(())
+    };
+    eventually("the keyer's DAX", &mut keyer);
+    eventually("the radio on DAX", || {
+        (d.session().snapshot().model.transmit.dax == Some(true)).then_some(())
+    });
+    let asked = Instant::now();
+    assert_eq!(c.ask("T 1", 1), "RPRT -1\n", "Nexus's own PTT, unmarked");
+    assert_eq!(
+        d.key_refused_since(asked)
+            .and_then(|(_, r)| r)
+            .map(|r| r.cause),
+        Some(tempo_app::dto::FlexAudioCause::MicNotBack)
+    );
+    d.set_voice_key(true);
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n", "the message keys on DAX");
+    assert_eq!(wait_count(&sim, "xmit 1", 1), 1);
+    // Marked or not, the stop is never gated.
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    d.set_voice_key(false);
+    assert_eq!(wait_count(&sim, "xmit 0", 1), 1);
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+}
+
 /// The mode this shim just commanded counts before the radio reports it: right after `M PKTUSB`,
 /// with the radio still reporting USB and the mic as the source, `T 1` is refused.
 #[test]
@@ -2345,4 +2654,45 @@ fn a_refused_dax_transmit_stream_routes_nothing() {
     wait_session(&d, "the readback idle", |s| s.transmit_ready);
     assert_ne!(c.ask("T 1", 1), "RPRT 0\n");
     assert_eq!(count(&sim, "xmit 1"), 0);
+}
+
+/// The CW line's words for a word refused because the radio's Beta switch is off: what it is, and
+/// the switch that turns it on, so the operator can find it from the refusal alone.
+const CW_BETA_OFF: &str =
+    "CW not sent: CW through the Flex native client is not bench-tested yet. \
+     To try it, turn on \"Let Nexus send CW, Tune and ATU through the native Flex client\" in \
+     Settings ▸ Radio ▸ Rig & CAT ▸ Advanced (dummy load first), or turn the Flex native client \
+     off (SmartSDR CAT sends CW), or use the WinKeyer or Soundcard keyer.";
+
+/// ⭐ WITH THE BETA SWITCH OFF, CW, TUNE AND THE ATU EACH SAY WHICH SWITCH TURNS THEM ON. The words
+/// for the `NoReadback` refusal (the switch off) name the switch and where it is, by value; the
+/// other refusals keep their own words (XIT is the control: it reads as it did).
+#[test]
+fn with_the_beta_switch_off_cw_tune_and_the_atu_name_the_switch() {
+    assert_eq!(
+        super::shim::cw_refusal_words(&Refusal::NoReadback(StartKind::Cwx)),
+        CW_BETA_OFF
+    );
+    assert_eq!(
+        super::tune_refusal_words(Some(&Refusal::NoReadback(StartKind::Tune))),
+        "Tune not keyed: Tune through the Flex native client is not bench-tested yet. To try it, \
+         turn on \"Let Nexus send CW, Tune and ATU through the native Flex client\" in Settings ▸ \
+         Radio ▸ Rig & CAT ▸ Advanced (dummy load first)."
+    );
+    assert_eq!(
+        super::atu_refusal_words(Some(&Refusal::NoReadback(StartKind::Atu))),
+        "ATU not started: the ATU through the Flex native client is not bench-tested yet. To try \
+         it, turn on \"Let Nexus send CW, Tune and ATU through the native Flex client\" in \
+         Settings ▸ Radio ▸ Rig & CAT ▸ Advanced (dummy load first)."
+    );
+    assert_eq!(
+        super::tune_refusal_words(Some(&Refusal::XitOn)),
+        "Tune not keyed: XIT is on for the radio's transmit slice, so the radio's carrier would \
+         sit off the frequency Nexus checked. Turn XIT off."
+    );
+    assert_eq!(
+        super::atu_refusal_words(Some(&Refusal::XitOn)),
+        "ATU not started: XIT is on for the radio's transmit slice, so the radio's carrier would \
+         sit off the frequency Nexus checked. Turn XIT off."
+    );
 }

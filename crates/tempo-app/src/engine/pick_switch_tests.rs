@@ -387,3 +387,91 @@ fn a_pick_of_the_contest_already_running_keeps_it() {
     );
     assert_eq!(after.pick, "arrlfd", "and the pick saved");
 }
+
+/// ⭐ THE NEW YORK QSO PARTY, PICKED IN SETTINGS AND SAVED, RUNS ITS OWN RULES, never Field Day's.
+/// The rail's mode badge read FIELD DAY with the party picked, so everything the engine runs and
+/// says is read here by value: the Contest mode the badge shows, the contest the Contest screen's
+/// title and the badge name, the session's contest and exchange, the exchange it sends, the points
+/// (RTTY is three in the party and two at Field Day) and the multipliers Field Day has none of,
+/// and the Cabrillo log's CONTEST line. Both ways in: the master turned on in the same save, and
+/// the party picked while Field Day runs.
+#[test]
+fn the_new_york_qso_party_picked_and_saved_runs_its_own_rules() {
+    for from_field_day in [false, true] {
+        let d = Dir::new("nyqp-picked");
+        let m = if from_field_day {
+            running_field_day(&d, "arrlfd")
+        } else {
+            let mut e = engine_on_store(&d);
+            e.set_fd_log_path(d.0.join("fd.adi"));
+            Mutex::new(e)
+        };
+        let opened = save_with(&m, |s| {
+            s.fd_event = "nyqp".into();
+            s.contest_qth_state = "NY".into();
+            s.contest_qth_county = "ALB".into();
+            s.fd_active = true;
+        });
+        assert_eq!(
+            opened,
+            Ok(true),
+            "from Field Day {from_field_day}: the save opened the party"
+        );
+        let mut e = engine_lock(&m);
+        let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+        // Phone, CW and RTTY, three New York counties.
+        for (call, rst, county, mode, submode) in [
+            ("K2AAA", "59", "SUF", "PH", None),
+            ("K2BBB", "599", "MON", "CW", None),
+            ("K2CCC", "599", "ERI", "DIG", Some("RTTY")),
+        ] {
+            let logged = e.contest_log_manual(
+                call,
+                &[pair("RST", rst), pair("QTH", county)],
+                mode,
+                submode,
+            );
+            assert_eq!(logged, Ok(true), "from Field Day {from_field_day}: {call}");
+        }
+        let snap = e.snapshot();
+        let fd = snap.field_day.clone().expect("a contest runs");
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("from Field Day {from_field_day}: not in the contest");
+        };
+        let session = &station.log.session;
+        let cab = e.export_log("cabrillo").expect("a running contest exports");
+        assert_eq!(
+            (
+                snap.mode,
+                fd.event.as_str(),
+                session.event_id.as_str(),
+                session.contest_id.as_str(),
+                session.exchange.name,
+                session
+                    .exchange
+                    .fields
+                    .iter()
+                    .map(|f| f.key)
+                    .collect::<Vec<_>>(),
+                e.contest_sent_exchange(),
+                (fd.points, fd.mult_count, fd.total_score),
+                cab.lines().find(|l| l.starts_with("CONTEST:")),
+            ),
+            (
+                OpMode::FieldDay,
+                "nyqp",
+                "nyqp",
+                "NY-QSO-PARTY",
+                "nyqp",
+                vec!["RST", "QTH"],
+                // What it sends after the report: its county, where Field Day sends a class and
+                // a section.
+                Some("ALB".to_string()),
+                // 1 + 2 + 3 points; three counties and New York, four multipliers.
+                (6, Some(4), 24),
+                Some("CONTEST: NY-QSO-PARTY"),
+            ),
+            "from Field Day {from_field_day}: the party's rules, every one"
+        );
+    }
+}

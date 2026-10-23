@@ -23,16 +23,30 @@
 // `remoteOff` when the account's Remote access was switched off by hand (operator decision,
 // 2026-09-27: "within about 2 s") and `serviceAccessExpired` otherwise. The station ends that
 // session's transmit presence at once and says its last `streamState` to the page itself.
+//
+// A LAN-ONLY SESSION streams on the shack's own network and nowhere else: Remote there is free, so
+// the relay must not become the way to stream from anywhere without paying. The relay cannot tell a
+// LAN from an IP address, so it holds the negotiation to it instead, inspecting and never editing
+// (the offer and the answer are signed): every candidate either side names, trickled or inside an SDP,
+// must be a host candidate on a private address or an mDNS name (`lanCandidate`), or it is not
+// forwarded and the page is told `lanOnly`. No reflexive or relay candidate crosses, so no path
+// through the internet can be agreed here. The station is told `lanOnly` too and keeps its own end on
+// its subnet; one too old to understand that is never handed the session's signals (`updateStation`).
+// Such a session's deadline is its own (`lanUntil`), so the internet gates above are untouched.
 import type { Peer } from '../remote-monitor/relay'
 import {
-  STREAM_BROWSER_BYTES, STREAM_STATION_BYTES, parseBrowserSignal, parseStationMessage, type StationStreamMessage, type StreamStateReason,
+  STREAM_BROWSER_BYTES, STREAM_STATION_BYTES, lanCandidate, lanDescription, parseBrowserSignal, parseStationMessage,
+  type BrowserStreamPayload, type StationStreamMessage, type StationStreamPayload, type StreamStateReason,
 } from './stream-protocol'
 
 /** `commandUntil` is the room's per-session command deadline (room.ts `commandDeadline`): zero, or
  *  past, means this account may not start commanding the station. `accessOff` says the last reading
  *  of it found Remote access switched off by hand, which is what a stream it ends is told. */
-type Browser = { sessionId: string; deviceId: string; peer: Peer; commandUntil: number; accessOff?: boolean }
-type Station = { peer: Peer; supported: boolean } | null
+/** `lanUntil` is present only for a LAN-only session, and is then its deadline in place of
+ *  `commandUntil`: how long it may stream on the shack's own network (room.ts). */
+type Browser = { sessionId: string; deviceId: string; peer: Peer; commandUntil: number; accessOff?: boolean; lanUntil?: number }
+/** `lanVersion` 1: the station keeps a LAN-only session's media on its own subnet when told `lanOnly`. */
+type Station = { peer: Peer; supported: boolean; lanVersion?: number } | null
 /** A negotiation is one offer plus a handful of candidates each way, and a page that reconnects
  *  after a drop does it again. Forty-eight signals in ten seconds is several whole negotiations; a
  *  page over it is looping, and what it sends is refused with `tryLater`, never forwarded. */
@@ -46,6 +60,14 @@ export const STREAM_RATE_LIMIT = 48
 export const STREAM_ENTITLEMENT_CHECK_MS = 1000
 
 const bytes = (text: string) => new TextEncoder().encode(text).length
+/** Whether a signal names only what a LAN-only session may carry. A close names nothing. */
+const onLan = (payload: BrowserStreamPayload | StationStreamPayload) =>
+  payload.kind === 'candidate' ? lanCandidate(payload.candidate) : 'sdp' in payload ? lanDescription(payload.sdp) : true
+/** Read defensively: an absent deadline is "not entitled", never "entitled forever". */
+const deadline = (browser: Browser) => {
+  const until = browser.lanUntil !== undefined ? browser.lanUntil : browser.commandUntil
+  return Number.isSafeInteger(until) ? until : 0
+}
 
 export class StreamRelay {
   private station: Station = null
@@ -81,11 +103,14 @@ export class StreamRelay {
     // Not a protocol error and not a close: a page that knows the lane may meet a station that does
     // not. Say so and carry on.
     if (!this.station?.supported) { this.refuse(browser.peer, 'streamUnavailable'); return }
-    // Read defensively, as the operation lane does: an absent deadline is "not entitled", never
-    // "entitled forever".
-    const commandUntil = Number.isSafeInteger(browser.commandUntil) ? browser.commandUntil : 0
-    if (signal.payload.kind === 'offer' && now >= commandUntil) { this.refuse(browser.peer, 'serviceAccessExpired'); return }
-    const message = JSON.stringify({ type: 'streamSignal', sessionId, deviceId: browser.deviceId, leaseId: signal.leaseId, payload: signal.payload })
+    const lan = browser.lanUntil !== undefined
+    // A station that cannot hold a session to its own network is never handed one to negotiate. A
+    // close still goes: there is nothing on it to hold.
+    if (lan && signal.payload.kind !== 'close' && this.station.lanVersion !== 1) { this.refuse(browser.peer, 'updateStation'); return }
+    if (signal.payload.kind === 'offer' && now >= deadline(browser)) { this.refuse(browser.peer, 'serviceAccessExpired'); return }
+    if (lan && !onLan(signal.payload)) { this.refuse(browser.peer, 'lanOnly'); return }
+    const message = JSON.stringify({ type: 'streamSignal', sessionId, deviceId: browser.deviceId, leaseId: signal.leaseId, payload: signal.payload,
+      ...(lan && this.station.lanVersion === 1 ? { lanOnly: true } : {}) })
     if (bytes(message) > STREAM_STATION_BYTES) { browser.peer.close(1008, 'invalidStream'); return }
     if (signal.payload.kind === 'close') this.live.delete(sessionId)
     try { this.station.peer.send(message) }
@@ -99,7 +124,7 @@ export class StreamRelay {
   enforce(now: number): void {
     for (const sessionId of [...this.live]) {
       const browser = this.browsers.get(sessionId)
-      if (browser && now >= (Number.isSafeInteger(browser.commandUntil) ? browser.commandUntil : 0)) this.end(sessionId, browser.accessOff ? 'remoteOff' : 'serviceAccessExpired')
+      if (browser && now >= deadline(browser)) this.end(sessionId, browser.accessOff ? 'remoteOff' : 'serviceAccessExpired')
     }
   }
   private end(sessionId: string, reason: 'remoteOff' | 'serviceAccessExpired'): void {
@@ -123,6 +148,12 @@ export class StreamRelay {
     const sessionId = message.sessionId, browser = this.browsers.get(sessionId)
     // A page that has already gone. Dropping is correct: its negotiation went with it.
     if (!browser) { this.dropped++; return }
+    // The station's end of a LAN-only session, held to the network as the page's is.
+    if (browser.lanUntil !== undefined && message.type === 'streamSignal' && !onLan(message.payload)) {
+      this.dropped++
+      this.refuse(browser.peer, 'lanOnly')
+      return
+    }
     try { browser.peer.send(forwarded) }
     catch { this.dropped++ }
     if (message.type !== 'streamState') return

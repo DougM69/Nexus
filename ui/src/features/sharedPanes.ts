@@ -20,8 +20,8 @@
 //     surplus by `weight` (a list or a board that grows with what it holds and scrolls in its box).
 //     Set from what each box draws (2026-10-07).
 //   · `remote` — whether the hosted Remote page has everything the box draws: its copies of the
-//     Conditions feeds (connect/usePaneContext `remoteFeeds`), the station's collections
-//     (remote-web/collections), the streamed snapshot and spectrum, or the clock. False for a box that
+//     Conditions feeds (connect/usePaneContext `remoteFeeds`), the station's collections, the
+//     streamed snapshot and spectrum, or the clock. False for a box that
 //     asks the station for something none of those carry (the Kp outlook, the openings log, the
 //     satellite passes, the contest calendar) and for POTA/SOTA, whose hunt wiring a browser does not
 //     get. Read off the code on 2026-10-07; a box offered on the Remote page is checked there first.
@@ -82,6 +82,9 @@ export const SHARED_PANES: readonly SharedPane[] = [
   { id: 'pota', pane: 'pota', role: 'fill', weight: 1, remote: false },
   // The hosted page has the station's needs (its `needs` collection), as Phone's own Needed pane shows.
   { id: 'neededBoard', pane: 'needed', role: 'fill', weight: 1, remote: true },
+  // Who is at the key and one row per operator: a short table of its own height. Not offered on the
+  // hosted page until the contest status it reads is checked there.
+  { id: 'operators', pane: 'operators', role: 'content', remote: false },
 ]
 
 const BY_ID = new Map<string, SharedPane>(SHARED_PANES.map((e) => [e.id, e]))

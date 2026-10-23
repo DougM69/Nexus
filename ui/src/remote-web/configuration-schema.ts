@@ -37,6 +37,11 @@ export const SETTINGS_KEYS = [
   'js8Info',
   'js8Status',
   'js8Groups',
+  'js8RxBlocklist',
+  'js8AvoidAllcall',
+  'js8HoldPtt',
+  'js8TxOffsetWhileSending',
+  'js8TxDelayMs',
   'rptrOffsetOverrideHz',
   'fdActive',
   'fdClass',
@@ -103,6 +108,7 @@ export const SETTINGS_KEYS = [
   'rttyBaud',
   'rttyShiftHz',
   'rttyReverse',
+  'rttyAfskSideband',
   'aiCwEnabled',
   'unassistedMode',
   'rigctldPort',
@@ -131,6 +137,11 @@ export const SETTINGS_KEYS = [
   'satPassAlertSoundOff',
   'catBroker',
   'catBrokerPort',
+  'tciServer',
+  'tciServerPort',
+  'tciServerTx',
+  'tciServerCw',
+  'tciServerSpots',
   'flexRadioIp',
   'flexNativePan',
   'flexNativeAudio',
@@ -251,6 +262,7 @@ export const SETTINGS_KEYS = [
   'announceVerbosity',
   'soundTxState',
   'soundDecodeTick',
+  'soundCwTurn',
   'bestCaller',
   'bestCallerMinSnr',
   'blockedCalls',
@@ -346,6 +358,27 @@ export const NEWER_SETTINGS = {
   js8AutoreplyAllow: [],
   js8AutoreplyDeny: [],
   js8HbAckDeny: [],
+  // …and one that predates JS8Call's two send options drops PTT after every frame (Hold PTT off)
+  // and lets the TX offset move while a message goes out (the move allowed).
+  js8HoldPtt: false,
+  js8TxOffsetWhileSending: true,
+  // …and one that predates JS8Call's RX block list and its @ALLCALL choice hides nobody's traffic
+  // and takes part in @ALLCALL: an empty list and the choice off.
+  js8RxBlocklist: [],
+  js8AvoidAllcall: false,
+  // …and one that predates JS8Call's TX delay keys each frame on its boundary: no delay.
+  js8TxDelayMs: 0,
+  // A station that predates the RTTY AFSK sideband runs AFSK on LSB, which is that setting's default.
+  rttyAfskSideband: 'lsb',
+  // A station that predates Nexus's TCI server serves no TCI: the server off, so no program
+  // transmits through it, sends it CW or spots, and 40001 is where a server would listen.
+  tciServer: false,
+  tciServerPort: 40001,
+  tciServerTx: false,
+  tciServerCw: false,
+  tciServerSpots: false,
+  // A station that predates the CW turn cue's sound plays none: that setting's default.
+  soundCwTurn: false,
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -426,6 +459,11 @@ export const SETTINGS_SHAPES = {
   "js8Info": "string",
   "js8Status": "string",
   "js8Groups": "array",
+  "js8RxBlocklist": "array",
+  "js8AvoidAllcall": "boolean",
+  "js8HoldPtt": "boolean",
+  "js8TxOffsetWhileSending": "boolean",
+  "js8TxDelayMs": "number",
   "rptrOffsetOverrideHz": "number",
   "fdActive": "boolean",
   "fdClass": "string",
@@ -492,6 +530,7 @@ export const SETTINGS_SHAPES = {
   "rttyBaud": "number",
   "rttyShiftHz": "number",
   "rttyReverse": "boolean",
+  "rttyAfskSideband": "string",
   "aiCwEnabled": "boolean",
   "unassistedMode": "boolean",
   "rigctldPort": "number",
@@ -520,6 +559,11 @@ export const SETTINGS_SHAPES = {
   "satPassAlertSoundOff": "boolean",
   "catBroker": "boolean",
   "catBrokerPort": "number",
+  "tciServer": "boolean",
+  "tciServerPort": "number",
+  "tciServerTx": "boolean",
+  "tciServerCw": "boolean",
+  "tciServerSpots": "boolean",
   "flexRadioIp": "string",
   "flexNativePan": "boolean",
   "flexNativeAudio": "boolean",
@@ -640,6 +684,7 @@ export const SETTINGS_SHAPES = {
   "announceVerbosity": "string",
   "soundTxState": "boolean",
   "soundDecodeTick": "boolean",
+  "soundCwTurn": "boolean",
   "bestCaller": "string",
   "bestCallerMinSnr": "nullable-number",
   "blockedCalls": "array",

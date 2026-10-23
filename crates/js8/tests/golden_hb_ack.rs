@@ -1,5 +1,5 @@
 //! Golden test of the heartbeat acknowledgement (`HEARTBEAT SNR`) against JS8Call's own ALL.TXT
-//! (sanitised, Task B4.1's fixture).
+//! (sanitised).
 //!
 //! The log holds the HB-ACKs JS8Call stations sent to the heartbeats they heard. JS8Call answers
 //! the station as it was heard (`sendHeartbeatAck(d.from, d.snr, extra)`, mainwindow.cpp:9098), so
@@ -48,6 +48,8 @@ fn hb_ack_keyed_by(acker: &str, target: &str, snr: i32, speed: Speed) -> Vec<TxF
         grid: "EN52".into(),
         speed,
         hb_ack: true,
+        // An acknowledgement goes out only with heartbeat networking on, as in JS8Call.
+        hb_networking: true,
         hb_interval_min: 30,
         // The logged replies keyed by themselves, the period after what they answer: those
         // stations did not ask first (JS8Call's AutoreplyConfirmation off).

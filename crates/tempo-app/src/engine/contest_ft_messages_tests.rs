@@ -201,7 +201,7 @@ fn engine_for(contest: &str, grid: &str) -> Engine {
 
 /// The text of the over `plan_tx` planned, if it keyed one — through `commit_tx`, as the
 /// radio loop does.
-fn keyed(e: &mut Engine, slot: u64) -> Option<String> {
+pub(super) fn keyed(e: &mut Engine, slot: u64) -> Option<String> {
     let plan = e.plan_tx(slot)?;
     let text = match &plan.waveform {
         TxWaveform::Native { text, .. }
@@ -217,7 +217,7 @@ fn keyed(e: &mut Engine, slot: u64) -> Option<String> {
 /// FT8 tones back to the 77 message bits (genft8.f90: Costas at 0-6, 36-42 and 72-78; three
 /// Gray-coded bits a data symbol), `None` for the all-zero frame a message the packer refused
 /// leaves behind.
-fn bits77(tones: &[i32]) -> Option<Vec<i8>> {
+pub(super) fn bits77(tones: &[i32]) -> Option<Vec<i8>> {
     const COSTAS: [i32; 7] = [3, 1, 4, 0, 6, 5, 2];
     const INV_GRAY: [i8; 8] = [0, 1, 3, 2, 6, 4, 5, 7];
     if tones.len() != 79 || tones[..7] != COSTAS {
@@ -253,7 +253,7 @@ pub(super) fn air_form(text: &str) -> (String, String) {
 }
 
 /// The tones, as digits, for the byte-for-byte comparison.
-fn tones_of(kind: modes::ModeKind, text: &str) -> String {
+pub(super) fn tones_of(kind: modes::ModeKind, text: &str) -> String {
     modes::make_mode(kind)
         .encode(text)
         .iter()
@@ -1065,8 +1065,9 @@ fn an_ft8_grid_contact_dupes_and_journals_like_a_typed_one() {
 
 /// Field Day's runner answers the caller's RR73 or RRR with 73 and then calls CQ, in ARRL Field
 /// Day on FT8 and FT4, as WSJT-X's Field Day activity does (Tx5, mainwindow.cpp 9210-9215). A
-/// bare 73 from the caller, and a confirmation from anyone else, are answered with nothing, as
-/// before; and FT1 and Winter Field Day close as they always have. One row each time.
+/// bare 73 from the caller is answered with nothing, as before, and FT1 and Winter Field Day
+/// close as they always have: one row each time. A confirmation from anyone else closes nothing
+/// ([`only_the_callers_own_confirmation_closes_a_contest_contact`]).
 #[test]
 fn a_field_day_runner_answers_the_callers_rr73_and_rrr_with_73() {
     let rows = |e: &Engine| match &e.mode {
@@ -1099,7 +1100,6 @@ fn a_field_day_runner_answers_the_callers_rr73_and_rrr_with_73() {
     // Nothing goes back where it never did.
     for (contest, tier, closing) in [
         ("arrlfd", Tier::Ft8, "K1ABC W9XYZ 73"),
-        ("arrlfd", Tier::Ft8, "K1ABC K2DEF RR73"),
         ("arrlfd", Tier::TempoFast, "K1ABC W9XYZ RR73"),
         ("wfd", Tier::Ft8, "K1ABC W9XYZ RR73"),
     ] {
@@ -1111,6 +1111,656 @@ fn a_field_day_runner_answers_the_callers_rr73_and_rrr_with_73() {
             "{what}: straight back to CQ"
         );
         assert_eq!(logged, 1, "{what}");
+    }
+    // Another station's RR73 closes nothing: the caller still gets the rogered exchange.
+    let (_, after, next, logged) = run("arrlfd", Tier::Ft8, "K1ABC K2DEF RR73");
+    assert_eq!(
+        after.as_deref(),
+        Some("W9XYZ K1ABC R 2B EMA"),
+        "K2DEF's RR73"
+    );
+    assert_eq!(after, next, "K2DEF's RR73: and again");
+    assert_eq!(logged, 0, "K2DEF's RR73: nothing logged");
+}
+
+/// The contest's rows, each as its call and the exchange it sent.
+fn rows_of(e: &Engine) -> Vec<String> {
+    match &e.mode {
+        Mode::FieldDay { station, .. } => station
+            .log
+            .qsos()
+            .iter()
+            .map(|q| format!("{} {}", q.call, fields(&q.rx)))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// ⭐ ONLY THE CALLER'S OWN CONFIRMATION CLOSES A CONTEST CONTACT, as WSJT-X acts only on its QSO
+/// partner's message: `processMessage` (mainwindow.cpp 9107-9110) needs the sender to be the DX
+/// call, and answers another station's RR73 with nothing (9315, 9336-9338). With W9XYZ's
+/// exchange in hand and our roger on the air, K2DEF's RR73, RRR or 73 to us logs nothing and
+/// sends K2DEF nothing: the next over is W9XYZ's again. W9XYZ's own RR73 then logs W9XYZ and
+/// closes as before: with 73 in ARRL Field Day on FT8 and FT4, where W9XYZ runs WSJT-X's Field
+/// Day activity, and with nothing on FT1 and in Winter Field Day; then the run calls CQ. Heard in
+/// the same period as W9XYZ's, K2DEF's costs W9XYZ nothing. The ARRL VHF contests' runner and
+/// the standard messages' S&P, which took only their partner's already, are the control.
+#[test]
+fn only_the_callers_own_confirmation_closes_a_contest_contact() {
+    let strangers = ["K1ABC K2DEF RR73", "K1ABC K2DEF RRR", "K1ABC K2DEF 73"];
+    let fd = "W9XYZ CLASS=1D,SECTION=WI";
+    // (contest, tier, W9XYZ's answer to our CQ, our roger, its row, our answer to its RR73)
+    let runs = [
+        (
+            "arrlfd",
+            Tier::Ft8,
+            "K1ABC W9XYZ 1D WI",
+            "W9XYZ K1ABC R 2B EMA",
+            fd,
+            Some("W9XYZ K1ABC 73"),
+        ),
+        (
+            "arrlfd",
+            Tier::Ft4,
+            "K1ABC W9XYZ 1D WI",
+            "W9XYZ K1ABC R 2B EMA",
+            fd,
+            Some("W9XYZ K1ABC 73"),
+        ),
+        (
+            "arrlfd",
+            Tier::TempoFast,
+            "K1ABC W9XYZ 1D WI",
+            "W9XYZ K1ABC R 2B EMA",
+            fd,
+            None,
+        ),
+        (
+            "wfd",
+            Tier::Ft8,
+            "K1ABC W9XYZ 1H WI",
+            "W9XYZ K1ABC R 1H EMA",
+            "W9XYZ CLASS=1H,SECTION=WI",
+            None,
+        ),
+        (
+            "arrlvhf_jan",
+            Tier::Ft8,
+            "K1ABC W9XYZ EN37",
+            "W9XYZ K1ABC R FN42",
+            "W9XYZ GRID=EN37",
+            Some("W9XYZ K1ABC 73"),
+        ),
+    ];
+    for (contest, tier, call, roger, row, answer) in runs {
+        for stranger in strangers {
+            let what = format!("{contest:?} {} {stranger:?}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-run").expect("the run starts");
+            let cq = keyed(&mut e, 0).expect("the CQ");
+            e.ingest_decodes_for_test(&[heard(call)], 2);
+            assert_eq!(keyed(&mut e, 2).as_deref(), Some(roger), "{what}");
+            e.ingest_decodes_for_test(&[heard(stranger)], 4);
+            assert_eq!(rows_of(&e), Vec::<String>::new(), "{what}: nothing logged");
+            assert_eq!(
+                keyed(&mut e, 4).as_deref(),
+                Some(roger),
+                "{what}: W9XYZ's again, nothing to K2DEF"
+            );
+            e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ RR73")], 6);
+            assert_eq!(rows_of(&e), [row], "{what}: W9XYZ's own RR73 logs W9XYZ");
+            assert_eq!(
+                keyed(&mut e, 6).as_deref(),
+                Some(answer.unwrap_or(&cq)),
+                "{what}: and closes as before"
+            );
+            e.ingest_decodes_for_test(&[], 8);
+            assert_eq!(keyed(&mut e, 8), Some(cq), "{what}: then CQ");
+            assert_eq!(rows_of(&e), [row], "{what}: once");
+        }
+    }
+    // K2DEF's RR73 in the same period as W9XYZ's, before it or after it.
+    let stranger = modes::Decode {
+        freq: 1720.0,
+        ..heard("K1ABC K2DEF RR73")
+    };
+    let own = heard("K1ABC W9XYZ RR73");
+    for (order, both) in [
+        ("K2DEF's first", [stranger.clone(), own.clone()]),
+        ("W9XYZ's first", [own, stranger]),
+    ] {
+        let mut e = engine_for("arrlfd", MY_GRID);
+        e.set_tier(Tier::Ft8);
+        e.set_mode("fieldday-run").expect("the run starts");
+        keyed(&mut e, 0).expect("the CQ");
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ 1D WI")], 2);
+        keyed(&mut e, 2).expect("the roger");
+        e.ingest_decodes_for_test(&both, 4);
+        assert_eq!(rows_of(&e), [fd], "{order}");
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("W9XYZ K1ABC 73"),
+            "{order}: W9XYZ still gets its 73"
+        );
+    }
+    // The standard messages' S&P, after its R and report.
+    for stranger in strangers {
+        let what = format!("\"txqp\" S&P {stranger:?}");
+        let mut e = engine_for("txqp", MY_GRID);
+        e.set_tier(Tier::Ft8);
+        e.set_mode("fieldday-sp").expect("S&P starts");
+        e.set_tx_enabled(true);
+        e.ingest_decodes_for_test(&[heard("CQ W9XYZ EN37")], 2);
+        assert_eq!(
+            keyed(&mut e, 2).as_deref(),
+            Some("W9XYZ K1ABC FN42"),
+            "{what}"
+        );
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ -07")], 4);
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("W9XYZ K1ABC R-12"),
+            "{what}"
+        );
+        e.ingest_decodes_for_test(&[heard(stranger)], 6);
+        assert_eq!(rows_of(&e), Vec::<String>::new(), "{what}: nothing logged");
+        assert_eq!(
+            keyed(&mut e, 6).as_deref(),
+            Some("W9XYZ K1ABC R-12"),
+            "{what}: W9XYZ's again"
+        );
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ RR73")], 8);
+        assert_eq!(rows_of(&e), ["W9XYZ "], "{what}: W9XYZ logged");
+        assert_eq!(
+            keyed(&mut e, 8).as_deref(),
+            Some("W9XYZ K1ABC 73"),
+            "{what}"
+        );
+    }
+}
+
+/// ⭐ THE CONTEST'S S&P COMPLETES A FIELD DAY CONTACT ONLY WITH THE STATION IT CALLED, as WSJT-X
+/// acts only on its QSO partner's message: `auto_sequence` passes a message to us on to
+/// `processMessage` only when its sender holds the DX call (mainwindow.cpp 7546-7549), and
+/// `processMessage` acts only on its partner's (9107-9110). With W9XYZ's CQ FD answered, N0ABC's
+/// rogered exchange to us logs nothing and sends N0ABC nothing: our exchange goes to W9XYZ again.
+/// W9XYZ's own then logs W9XYZ and is closed with RR73, as before: in ARRL Field Day on FT8, FT4
+/// and FT1, and in Winter Field Day. Heard in the same period as W9XYZ's, N0ABC's costs W9XYZ
+/// nothing.
+#[test]
+fn the_contests_sp_completes_a_field_day_contact_only_with_the_station_it_called() {
+    // The contest's S&P on `tier`, W9XYZ's CQ FD heard and answered with our exchange, `exch`.
+    let answered = |contest: &str, tier: Tier, exch: &str| {
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-sp").expect("S&P starts");
+        e.set_tx_enabled(true);
+        e.ingest_decodes_for_test(&[heard("CQ FD W9XYZ EN37")], 2);
+        let what = format!("{contest:?} {}", tier_name(tier));
+        assert_eq!(
+            keyed(&mut e, 2).as_deref(),
+            Some(exch),
+            "{what}: the answer"
+        );
+        e
+    };
+    // (contest, tier, our exchange to W9XYZ, the class W9XYZ and N0ABC send)
+    for (contest, tier, exch, class) in [
+        ("arrlfd", Tier::Ft8, "W9XYZ K1ABC 2B EMA", "1D"),
+        ("arrlfd", Tier::Ft4, "W9XYZ K1ABC 2B EMA", "1D"),
+        ("arrlfd", Tier::TempoFast, "W9XYZ K1ABC 2B EMA", "1D"),
+        ("wfd", Tier::Ft8, "W9XYZ K1ABC 1H EMA", "1H"),
+    ] {
+        let what = format!("{contest:?} {}", tier_name(tier));
+        let mut e = answered(contest, tier, exch);
+        e.ingest_decodes_for_test(&[heard(&format!("K1ABC N0ABC R {class} WI"))], 4);
+        assert_eq!(
+            rows_of(&e),
+            Vec::<String>::new(),
+            "{what}: N0ABC's logs nothing"
+        );
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some(exch),
+            "{what}: W9XYZ's again, nothing to N0ABC"
+        );
+        e.ingest_decodes_for_test(&[heard(&format!("K1ABC W9XYZ R {class} WI"))], 6);
+        let row = format!("W9XYZ CLASS={class},SECTION=WI");
+        assert_eq!(rows_of(&e), [row], "{what}: W9XYZ's own logs W9XYZ");
+        assert_eq!(
+            keyed(&mut e, 6).as_deref(),
+            Some("W9XYZ K1ABC RR73"),
+            "{what}: and gets RR73"
+        );
+    }
+    // N0ABC's rogered exchange in the same period as W9XYZ's, before it or after it.
+    let stranger = modes::Decode {
+        freq: 1720.0,
+        ..heard("K1ABC N0ABC R 1D WI")
+    };
+    let own = heard("K1ABC W9XYZ R 1D WI");
+    for (order, both) in [
+        ("N0ABC's first", [stranger.clone(), own.clone()]),
+        ("W9XYZ's first", [own, stranger]),
+    ] {
+        let mut e = answered("arrlfd", Tier::Ft8, "W9XYZ K1ABC 2B EMA");
+        e.ingest_decodes_for_test(&both, 4);
+        assert_eq!(rows_of(&e), ["W9XYZ CLASS=1D,SECTION=WI"], "{order}");
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("W9XYZ K1ABC RR73"),
+            "{order}: W9XYZ gets its RR73"
+        );
+    }
+}
+
+/// ⭐ THE CONTEST LOGS A HASHED CALL WITHOUT ITS BRACKETS in Field Day's messages, as the ARRL VHF
+/// and standard messages do and as WSJT-X logs the call in its DX call box, which a decoded
+/// message fills with the brackets dropped (decodedtext.cpp 66). W9XYZ/M's call is nonstandard, so
+/// its Field Day exchange names it hashed: `K1ABC <W9XYZ/M> R 1D WI` to S&P, `K1ABC <W9XYZ/M> 1D
+/// WI` to the run. In ARRL Field Day on FT8 and FT4 and in Winter Field Day, S&P and Running, the
+/// row and the exported ADIF's CALL are `W9XYZ/M`, and every over is what it was, but RR73 and 73,
+/// which go as WSJT-X writes them (`rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit`).
+#[test]
+fn the_contest_logs_a_hashed_call_without_its_brackets() {
+    // The rows, and every CALL the exported ADIF writes.
+    let logged = |e: &Engine| {
+        let adif = e.export_log("adif").expect("the contest exports");
+        let calls = adif
+            .split("<CALL:")
+            .skip(1)
+            .filter_map(|r| {
+                let (len, rest) = r.split_once('>')?;
+                rest.get(..len.parse().ok()?).map(str::to_string)
+            })
+            .collect::<Vec<_>>();
+        (rows_of(e), calls)
+    };
+    // (contest, tier, our exchange's class, W9XYZ/M's)
+    for (contest, tier, mine, theirs) in [
+        ("arrlfd", Tier::Ft8, "2B", "1D"),
+        ("arrlfd", Tier::Ft4, "2B", "1D"),
+        ("wfd", Tier::Ft8, "1H", "1H"),
+    ] {
+        let row = || {
+            (
+                vec![format!("W9XYZ/M CLASS={theirs},SECTION=WI")],
+                vec!["W9XYZ/M".to_string()],
+            )
+        };
+        let what = format!("{contest:?} {} S&P", tier_name(tier));
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-sp").expect("S&P starts");
+        e.set_tx_enabled(true);
+        e.ingest_decodes_for_test(&[heard("CQ W9XYZ/M")], 2);
+        assert_eq!(
+            keyed(&mut e, 2),
+            Some(format!("W9XYZ/M K1ABC {mine} EMA")),
+            "{what}: the answer"
+        );
+        e.ingest_decodes_for_test(&[heard(&format!("K1ABC <W9XYZ/M> R {theirs} WI"))], 4);
+        assert_eq!(
+            keyed(&mut e, 4).as_deref(),
+            Some("W9XYZ/M <K1ABC> RR73"),
+            "{what}: RR73"
+        );
+        assert_eq!(logged(&e), row(), "{what}: logged");
+
+        let what = format!("{contest:?} {} Running", tier_name(tier));
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        let cq = keyed(&mut e, 0).expect("the CQ");
+        e.ingest_decodes_for_test(&[heard(&format!("K1ABC <W9XYZ/M> {theirs} WI"))], 2);
+        assert_eq!(
+            keyed(&mut e, 2),
+            Some(format!("<W9XYZ/M> K1ABC R {mine} EMA")),
+            "{what}: R and ours"
+        );
+        e.ingest_decodes_for_test(&[heard("K1ABC <W9XYZ/M> RR73")], 4);
+        // ARRL Field Day's runner answers RR73 with 73; Winter Field Day's goes back to CQ.
+        let close = match contest {
+            "arrlfd" => "W9XYZ/M <K1ABC> 73".to_string(),
+            _ => cq,
+        };
+        assert_eq!(keyed(&mut e, 4), Some(close), "{what}: the close");
+        assert_eq!(logged(&e), row(), "{what}: logged");
+    }
+}
+
+/// ⭐ RR73 AND 73 TO A NONSTANDARD CALL ARE WSJT-X 3.0.2'S, BIT FOR BIT. In ARRL Field Day on FT8
+/// and FT4, S&P working a runner signing W9XYZ/M and the run working such a caller: each over
+/// this station keys packs to the 77 bits of the over WSJT-X writes in its place, and on FT4 to
+/// the same tones (`genStdMsgs`, mainwindow.cpp: Tx2 and Tx3 `t0a` and the exchange, 9596,
+/// 9629-9631, 9655-9657; Tx4 and Tx5 `hisCall <my_callsign>`, 9701 and 9709). RR73 and 73 are
+/// type 4 messages. The FT8 encoder is the one the radio loop keys with: WSJT-X's packer,
+/// ported, held to the vendored one by `crates/modes/tests/wsjt77_golden.rs`.
+#[test]
+fn rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit() {
+    let bits = |t: &str| bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t));
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let mut e = engine_for("arrlfd", MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-sp").expect("S&P starts");
+        e.set_tx_enabled(true);
+        e.ingest_decodes_for_test(&[heard("CQ W9XYZ/M")], 2);
+        let tx2 = keyed(&mut e, 2).expect("S&P's answer");
+        e.ingest_decodes_for_test(&[heard("K1ABC <W9XYZ/M> R 1D WI")], 4);
+        let tx4 = keyed(&mut e, 4).expect("S&P's RR73");
+
+        let mut e = engine_for("arrlfd", MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        keyed(&mut e, 0).expect("the CQ");
+        e.ingest_decodes_for_test(&[heard("K1ABC <W9XYZ/M> 1D WI")], 2);
+        let tx3 = keyed(&mut e, 2).expect("the run's R and exchange");
+        e.ingest_decodes_for_test(&[heard("K1ABC <W9XYZ/M> RR73")], 4);
+        let tx5 = keyed(&mut e, 4).expect("the run's 73");
+
+        // (the over, this station's, WSJT-X's, its 77-bit type)
+        for (over, ours, wsjtx, kind) in [
+            ("Tx2", tx2, "<W9XYZ/M> K1ABC 2B EMA", "i3=0 n3=3"),
+            ("Tx3", tx3, "<W9XYZ/M> K1ABC R 2B EMA", "i3=0 n3=3"),
+            ("Tx4", tx4, "W9XYZ/M <K1ABC> RR73", "i3=4"),
+            ("Tx5", tx5, "W9XYZ/M <K1ABC> 73", "i3=4"),
+        ] {
+            let what = format!("{} {over} {ours:?}", tier_name(tier));
+            assert_eq!(air_form(wsjtx).0, kind, "{what}: WSJT-X's packs");
+            assert_eq!(bits(&ours), bits(wsjtx), "{what}: WSJT-X's 77 bits");
+            assert_eq!(
+                tones_of(modes::ModeKind::Ft4, &ours),
+                tones_of(modes::ModeKind::Ft4, wsjtx),
+                "{what}: WSJT-X's FT4 tones"
+            );
+        }
+    }
+}
+
+/// ⭐ RR73 AND 73 TO A NONSTANDARD CALL ARE WSJT-X 3.0.2'S, BIT FOR BIT, IN THE ARRL VHF AND
+/// STANDARD MESSAGES TOO: WSJT-X's Tx4 and Tx5 are the same lines in every activity
+/// (`genStdMsgs`, mainwindow.cpp 9701 and 9709). Running an ARRL VHF contest and one with the
+/// standard messages on FT8 and FT4, a caller signing W9XYZ/M sends its grid (NA VHF's Tx2) or
+/// its report (the standard Tx2) with its call hashed (`t0b`, 9597, 9625-9626, 9655), then its
+/// RR73 with ours hashed (9702), each heard as this station's decoder prints it. The run's roger
+/// is WSJT-X's (`t0a`, 9596, 9629-9631, 9657) and its 73 is `W9XYZ/M <K1ABC> 73`, a type 4
+/// message; a caller that sends its grid and rogers our report gets `W9XYZ/M <K1ABC> RR73`.
+/// Each over keyed packs to WSJT-X's 77 bits and, on FT4, its tones. Before, the 73 was
+/// `W9XYZ/M K1ABC 73`, which goes on the air as `W9XYZ K1ABC 73`: another station's call.
+#[test]
+fn rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit_in_every_set() {
+    // What goes on the air: the 77-bit type and the text a receiving station decodes, the 77
+    // bits, and the FT4 tones.
+    let air = |t: &str| {
+        let bits: String = bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t))
+            .unwrap_or_default()
+            .iter()
+            .map(|b| char::from(b'0' + *b as u8))
+            .collect();
+        (air_form(t), bits, tones_of(modes::ModeKind::Ft4, t))
+    };
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let mut overs = Vec::new();
+        for (contest, call, roger) in [
+            (
+                "arrlvhf_jan",
+                "K1ABC <W9XYZ/M> EN37",
+                "<W9XYZ/M> K1ABC R FN42",
+            ),
+            ("txqp", "K1ABC <W9XYZ/M> -07", "<W9XYZ/M> K1ABC R-12"),
+        ] {
+            let what = format!("{contest:?} {}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-run").expect("the run starts");
+            keyed(&mut e, 0).expect("the CQ");
+            e.ingest_decodes_for_test(&[heard(&air_form(call).1)], 2);
+            let tx3 = keyed(&mut e, 2).expect("the run's roger");
+            e.ingest_decodes_for_test(&[heard(&air_form("<K1ABC> W9XYZ/M RR73").1)], 4);
+            let tx5 = keyed(&mut e, 4).expect("the run's 73");
+            overs.push((format!("{what} Tx3"), tx3, roger, "i3=1"));
+            overs.push((format!("{what} Tx5"), tx5, "W9XYZ/M <K1ABC> 73", "i3=4"));
+        }
+        let what = format!("\"txqp\" {}", tier_name(tier));
+        let mut e = engine_for("txqp", MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        keyed(&mut e, 0).expect("the CQ");
+        e.ingest_decodes_for_test(&[heard(&air_form("K1ABC <W9XYZ/M> EN37").1)], 2);
+        let tx2 = keyed(&mut e, 2).expect("the run's report");
+        e.ingest_decodes_for_test(&[heard(&air_form("K1ABC <W9XYZ/M> R-07").1)], 4);
+        let tx4 = keyed(&mut e, 4).expect("the run's RR73");
+        overs.push((format!("{what} Tx2"), tx2, "<W9XYZ/M> K1ABC -12", "i3=1"));
+        overs.push((format!("{what} Tx4"), tx4, "W9XYZ/M <K1ABC> RR73", "i3=4"));
+
+        for (what, ours, wsjtx, kind) in overs {
+            assert_eq!(air_form(wsjtx).0, kind, "{what}: WSJT-X's packs");
+            assert_eq!(
+                air(&ours),
+                air(wsjtx),
+                "{what} {ours:?}: WSJT-X's on the air"
+            );
+        }
+    }
+}
+
+/// ⭐ THE CONTEST'S RUN CLOSES WITH A CALLER WHOSE CALL IS NONSTANDARD, as WSJT-X 3.0.2 closes
+/// with one. Running WSJT-X, a caller signing W9XYZ/M sends its exchange with its call hashed
+/// (`t0b`, mainwindow.cpp 9597 and 9625-9626) and its RR73 with ours hashed,
+/// `<K1ABC> W9XYZ/M RR73` (9702), each heard here as this station's decoder prints it from the
+/// air. In ARRL Field Day on FT8 and FT4 the run logs W9XYZ/M, bare, answers with WSJT-X's 73,
+/// `W9XYZ/M <K1ABC> 73` (9709), and calls CQ; in Winter Field Day it logs and calls CQ. Before,
+/// the RR73 was not taken: the caller got the R and exchange again, and nothing was logged.
+#[test]
+fn the_contests_run_closes_with_a_caller_whose_call_is_nonstandard() {
+    // (contest, tier, our class, W9XYZ/M's, the run answers RR73 with 73)
+    for (contest, tier, mine, theirs, answers) in [
+        ("arrlfd", Tier::Ft8, "2B", "1D", true),
+        ("arrlfd", Tier::Ft4, "2B", "1D", true),
+        ("wfd", Tier::Ft8, "1H", "1H", false),
+    ] {
+        let what = format!("{contest:?} {}", tier_name(tier));
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        let cq = keyed(&mut e, 0).expect("the CQ");
+        let exch = air_form(&format!("K1ABC <W9XYZ/M> {theirs} WI")).1;
+        e.ingest_decodes_for_test(&[heard(&exch)], 2);
+        assert_eq!(
+            keyed(&mut e, 2),
+            Some(format!("<W9XYZ/M> K1ABC R {mine} EMA")),
+            "{what}: R and ours"
+        );
+        let rr73 = air_form("<K1ABC> W9XYZ/M RR73");
+        assert_eq!(
+            rr73,
+            ("i3=4".to_string(), "<K1ABC> W9XYZ/M RR73".to_string()),
+            "{what}: the caller's RR73, as decoded"
+        );
+        e.ingest_decodes_for_test(&[heard(&rr73.1)], 4);
+        assert_eq!(
+            rows_of(&e),
+            [format!("W9XYZ/M CLASS={theirs},SECTION=WI")],
+            "{what}: logged"
+        );
+        let close = if answers {
+            "W9XYZ/M <K1ABC> 73".to_string()
+        } else {
+            cq.clone()
+        };
+        assert_eq!(keyed(&mut e, 4), Some(close), "{what}: the close");
+        e.ingest_decodes_for_test(&[], 6);
+        assert_eq!(keyed(&mut e, 6), Some(cq), "{what}: then CQ");
+        assert_eq!(rows_of(&e).len(), 1, "{what}: once");
+    }
+}
+
+/// ⭐ A STANDARD-MESSAGES RUN ANSWERS A WSJT-X CALLER'S FIRST CALL, WHICH CARRIES NO GRID, as
+/// WSJT-X running with no activity answers it. A caller signing W9XYZ/M sends its first call as
+/// `t0a` alone, `<K1ABC> W9XYZ/M` (mainwindow.cpp 9627), a type 4 message with no grid; WSJT-X
+/// answers it with Tx2, the report (`processMessage` 9315-9325), `<W9XYZ/M> K1ABC -12` (`t0a` and
+/// the report, 9629-9631, 9655). Its roger `K1ABC <W9XYZ/M> R-07` (`t0b`, 9625-9626, 9656) then
+/// gets WSJT-X's RR73 (9701). In a contest with the standard messages on FT8 and FT4, each over
+/// keyed packs to WSJT-X's 77 bits and FT4 tones, and the contact is logged as W9XYZ/M. Before,
+/// the run kept calling CQ.
+#[test]
+fn a_standard_messages_run_answers_a_wsjtx_callers_first_call_with_no_grid() {
+    let air = |t: &str| {
+        let bits: String = bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t))
+            .unwrap_or_default()
+            .iter()
+            .map(|b| char::from(b'0' + *b as u8))
+            .collect();
+        (air_form(t), bits, tones_of(modes::ModeKind::Ft4, t))
+    };
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let what = format!("\"txqp\" {}", tier_name(tier));
+        let mut e = engine_for("txqp", MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-run").expect("the run starts");
+        keyed(&mut e, 0).expect("the CQ");
+        let call = air_form("<K1ABC> W9XYZ/M");
+        assert_eq!(
+            call,
+            ("i3=4".to_string(), "<K1ABC> W9XYZ/M".to_string()),
+            "{what}: its first call, as decoded"
+        );
+        e.ingest_decodes_for_test(&[heard(&call.1)], 2);
+        let tx2 = keyed(&mut e, 2);
+        assert_eq!(
+            tx2.as_deref(),
+            Some("<W9XYZ/M> K1ABC -12"),
+            "{what}: answered with the report"
+        );
+        e.ingest_decodes_for_test(&[heard(&air_form("K1ABC <W9XYZ/M> R-07").1)], 4);
+        let tx4 = keyed(&mut e, 4);
+        assert_eq!(
+            tx4.as_deref(),
+            Some("W9XYZ/M <K1ABC> RR73"),
+            "{what}: its roger, RR73"
+        );
+        assert_eq!(
+            rows_of(&e)
+                .iter()
+                .map(|r| r.split(' ').next())
+                .collect::<Vec<_>>(),
+            [Some("W9XYZ/M")],
+            "{what}: logged"
+        );
+        for (over, ours, wsjtx, kind) in [
+            ("Tx2", tx2, "<W9XYZ/M> K1ABC -12", "i3=1"),
+            ("Tx4", tx4, "W9XYZ/M <K1ABC> RR73", "i3=4"),
+        ] {
+            let ours = ours.unwrap_or_default();
+            assert_eq!(air_form(wsjtx).0, kind, "{what} {over}: WSJT-X's packs");
+            assert_eq!(
+                air(&ours),
+                air(wsjtx),
+                "{what} {over} {ours:?}: WSJT-X's on the air"
+            );
+        }
+    }
+}
+
+/// ⭐ THE CONTEST'S RUN PASSES BY A CALLER THE DECODER COULD NOT RESOLVE, as WSJT-X's Field Day
+/// activity does: `processMessage` returns at once for a message that carries `<...>`
+/// (mainwindow.cpp 9097-9099). W9XYZ/M's exchange carrying a hash this station's table does not
+/// hold decodes as `K1ABC <...> 1D WI`: in ARRL Field Day on FT8 and FT4 and in Winter Field
+/// Day, it gets no answer and no row, plain or rogered first, and the run calls CQ. Its next,
+/// the call resolved, is worked and logged as before.
+#[test]
+fn the_contests_run_passes_by_a_caller_the_decoder_could_not_resolve() {
+    let bits = |t: &str| {
+        bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t)).expect("the text packs")
+    };
+    let print = |b: &[i8]| tempo_fast::unpack77(b).unwrap_or_default();
+    for (contest, tier, mine, theirs) in [
+        ("arrlfd", Tier::Ft8, "2B", "1D"),
+        ("arrlfd", Tier::Ft4, "2B", "1D"),
+        ("wfd", Tier::Ft8, "1H", "1H"),
+    ] {
+        for roger in ["", "R "] {
+            let what = format!("{contest:?} {} {roger:?}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-run").expect("the run starts");
+            let cq = keyed(&mut e, 0).expect("the CQ");
+            // The second call of a Field Day exchange is bits 28-55; its last bit flipped is a
+            // hash the table does not hold.
+            let mut unknown = bits(&format!("K1ABC <W9XYZ/M> {roger}{theirs} WI"));
+            unknown[55] ^= 1;
+            let heard_as = print(&unknown);
+            assert_eq!(
+                heard_as,
+                format!("K1ABC <...> {roger}{theirs} WI"),
+                "{what}: unresolved"
+            );
+            e.ingest_decodes_for_test(&[heard(&heard_as)], 2);
+            assert_eq!(keyed(&mut e, 2), Some(cq.clone()), "{what}: no answer");
+            assert_eq!(rows_of(&e), Vec::<String>::new(), "{what}: no row");
+            e.ingest_decodes_for_test(&[heard(&format!("K1ABC <W9XYZ/M> {theirs} WI"))], 4);
+            assert_eq!(
+                keyed(&mut e, 4),
+                Some(format!("<W9XYZ/M> K1ABC R {mine} EMA")),
+                "{what}: its next, resolved, is answered"
+            );
+            e.ingest_decodes_for_test(&[heard("<K1ABC> W9XYZ/M RR73")], 6);
+            assert_eq!(
+                rows_of(&e),
+                [format!("W9XYZ/M CLASS={theirs},SECTION=WI")],
+                "{what}: and logged"
+            );
+        }
+    }
+}
+
+/// ⛔ THE ARRL VHF AND STANDARD MESSAGES' RUN PASSES BY A CALLER THE DECODER COULD NOT RESOLVE, as
+/// WSJT-X builds no message to `<...>`: its messages go to the call in its DX call box
+/// (`genStdMsgs`, mainwindow.cpp 9567-9577), which takes only a callsign (`Radio::is_callsign`,
+/// 9402). W9XYZ/M's grid or report carrying a hash this station's table does not hold decodes as
+/// `K1ABC <...> EN37`: on FT8 and FT4 the run keys its CQ again, and the next caller in the same
+/// period, its call resolved, is answered.
+#[test]
+fn the_vhf_and_standard_runs_pass_by_a_caller_the_decoder_could_not_resolve() {
+    let bits = |t: &str| {
+        bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(t)).expect("the text packs")
+    };
+    let print = |b: &[i8]| tempo_fast::unpack77(b).unwrap_or_default();
+    for (contest, over, answer) in [
+        (
+            "arrlvhf_jan",
+            "K1ABC <W9XYZ/M> EN37",
+            "<W9XYZ/M> K1ABC R FN42",
+        ),
+        ("txqp", "K1ABC <W9XYZ/M> EN37", "<W9XYZ/M> K1ABC -12"),
+        ("txqp", "K1ABC <W9XYZ/M> -07", "<W9XYZ/M> K1ABC R-12"),
+    ] {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let what = format!("{contest:?} {} {over:?}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-run").expect("the run starts");
+            let cq = keyed(&mut e, 0).expect("the CQ");
+            // The second call of a standard message is bits 29-56; its last bit flipped is a hash
+            // the table does not hold.
+            let mut unknown = bits(over);
+            unknown[56] ^= 1;
+            let heard_as = print(&unknown);
+            assert_eq!(
+                heard_as,
+                over.replace("<W9XYZ/M>", "<...>"),
+                "{what}: unresolved"
+            );
+            e.ingest_decodes_for_test(&[heard(&heard_as)], 2);
+            assert_eq!(keyed(&mut e, 2), Some(cq.clone()), "{what}: no answer");
+            e.ingest_decodes_for_test(&[heard(&heard_as), heard(over)], 4);
+            assert_eq!(
+                keyed(&mut e, 4).as_deref(),
+                Some(answer),
+                "{what}: the next caller, resolved, is answered"
+            );
+        }
     }
 }
 
@@ -1214,6 +1864,181 @@ fn a_double_click_in_a_contest_that_cannot_start_changes_nothing() {
         "still in FT8 QSO mode, working nobody"
     );
     assert!(!e.tx_enabled, "TX stays off");
+}
+
+/// What the station has queued to send next, in whichever mode it is in.
+fn queued(e: &Engine) -> Option<String> {
+    match &e.mode {
+        Mode::FieldDay { station, .. } => station.outgoing().map(|m| m.to_text()),
+        Mode::Qso { station, .. } => station.outgoing().map(|m| m.to_text()),
+        _ => None,
+    }
+}
+
+/// A CQ from `<K9QQQ/M>` in `contest`'s form, as the FT8 encoder packs it, and that CQ with the
+/// hash of its call changed to one this station's table does not hold: the second call of a
+/// standard message is bits 29-56, and its last bit flipped is another hash.
+fn hashed_cq(cq: &str) -> (Vec<i8>, Vec<i8>) {
+    let sent =
+        bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(&format!("{cq} <K9QQQ/M> EN37")))
+            .expect("the CQ packs");
+    let mut unknown = sent.clone();
+    unknown[56] ^= 1;
+    (sent, unknown)
+}
+
+/// The contests with a CQ that carries a hashed call, one for each set of messages, the CQ's
+/// form there, and the answer to it once the call is resolved.
+const HASHED_CQS: [(&str, &str, &str); 3] = [
+    ("arrlfd", "CQ FD", "<K9QQQ/M> K1ABC 2B EMA"),
+    ("arrlvhf_jan", "CQ TEST", "<K9QQQ/M> K1ABC FN42"),
+    ("txqp", "CQ TEST", "<K9QQQ/M> K1ABC FN42"),
+];
+
+/// ⛔ A DOUBLE-CLICK ON A CQ FROM A CALL THE DECODER COULD NOT RESOLVE ANSWERS NOTHING, as
+/// WSJT-X's does. WSJT-X takes a CQ's call from the word after it (`deCallAndGrid`,
+/// decodedtext.cpp 212-224), which `...` cannot be, and puts only a callsign into its DX call box
+/// (`Radio::is_callsign`, mainwindow.cpp 9402), so it builds no message to `<...>`. A CQ whose call
+/// this station's hash table does not hold decodes as `CQ FD <...> EN37`. In ARRL Field Day, an
+/// ARRL VHF contest and a contest with the standard messages, on FT8 and FT4, from QSO mode and
+/// from the contest's S&P as the contest switch leaves it, a double-click on that CQ and a
+/// logger's Reply to it are refused and change nothing: the mode, what is queued, TX (off), and
+/// the RX and TX offsets are as they were, and nothing keys. Its next CQ, heard with the call
+/// resolved, is worked as before.
+#[test]
+fn a_double_click_on_a_cq_from_an_unresolved_call_answers_nothing() {
+    let print = |b: &[i8]| tempo_fast::unpack77(b).unwrap_or_default();
+    // Where the station is, what it has queued, TX, and the RX and TX offsets.
+    let state = |e: &Engine| {
+        (
+            mode_line(e),
+            queued(e),
+            e.tx_enabled,
+            (e.rx_offset_hz, e.tx_offset_hz),
+        )
+    };
+    for (contest, cq, answer) in HASHED_CQS {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            for from_qso in [true, false] {
+                let from = if from_qso {
+                    "QSO mode"
+                } else {
+                    "the contest's S&P"
+                };
+                let what = format!("{contest:?} {} from {from}", tier_name(tier));
+                let mut e = engine_for(contest, MY_GRID);
+                e.set_tier(tier);
+                if from_qso {
+                    e.set_mode("qso-monitor").expect("QSO mode");
+                }
+                let (sent, unknown) = hashed_cq(cq);
+                let unresolved = print(&unknown);
+                assert_eq!(unresolved, format!("{cq} <...> EN37"), "{what}: unresolved");
+                e.ingest_decodes_for_test(&[heard(&unresolved)], 2);
+                let before = state(&e);
+                let click =
+                    e.work_station("<...>", None, Some(&unresolved), Some(DX_SNR), Some(1234.0));
+                let reply = e.answer_udp_reply("<...>", &unresolved, DX_SNR, Some(1234.0));
+                assert_eq!(
+                    (click.is_ok(), reply.is_ok(), state(&e), keyed(&mut e, 4)),
+                    (false, false, before.clone(), None),
+                    "{what}: no answer"
+                );
+                if from_qso {
+                    assert_eq!(before.1, None, "{what}: nothing queued");
+                }
+                let resolved = print(&sent);
+                assert_eq!(resolved, format!("{cq} <K9QQQ/M> EN37"), "{what}: resolved");
+                e.ingest_decodes_for_test(&[heard(&resolved)], 6);
+                e.work_station(
+                    "<K9QQQ/M>",
+                    None,
+                    Some(&resolved),
+                    Some(DX_SNR),
+                    Some(1234.0),
+                )
+                .expect("its next CQ is taken");
+                assert_eq!(
+                    keyed(&mut e, 8).as_deref(),
+                    Some(answer),
+                    "{what}: its next CQ, resolved, is answered"
+                );
+            }
+        }
+    }
+}
+
+/// The control: a double-click on a CQ whose hashed call the decoder resolved works the station
+/// as it always has, in each set of messages, on FT8 and FT4, from QSO mode and from the
+/// contest's S&P.
+#[test]
+fn a_double_click_on_a_cq_from_a_resolved_hashed_call_works_as_before() {
+    for (contest, cq, answer) in HASHED_CQS {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            for from_qso in [true, false] {
+                let what = format!("{contest:?} {} from_qso={from_qso}", tier_name(tier));
+                let mut e = engine_for(contest, MY_GRID);
+                e.set_tier(tier);
+                if from_qso {
+                    e.set_mode("qso-monitor").expect("QSO mode");
+                }
+                let resolved = tempo_fast::unpack77(&hashed_cq(cq).0).unwrap_or_default();
+                assert_eq!(resolved, format!("{cq} <K9QQQ/M> EN37"), "{what}: resolved");
+                e.ingest_decodes_for_test(&[heard(&resolved)], 2);
+                e.work_station(
+                    "<K9QQQ/M>",
+                    None,
+                    Some(&resolved),
+                    Some(DX_SNR),
+                    Some(1234.0),
+                )
+                .expect("the CQ is taken");
+                assert!(e.tx_enabled, "{what}: TX on");
+                assert_eq!(
+                    keyed(&mut e, 4).as_deref(),
+                    Some(answer),
+                    "{what}: answered"
+                );
+            }
+        }
+    }
+}
+
+/// ⛔ THE CONTEST'S S&P PASSES BY A CQ FROM A CALL THE DECODER COULD NOT RESOLVE, with TX on, in
+/// every set of messages, as WSJT-X builds no message to `<...>`: it takes a CQ's call from the
+/// word after it (`deCallAndGrid`, decodedtext.cpp 212-224), which `...` cannot be, and puts only
+/// a callsign into its DX call box (`Radio::is_callsign`, mainwindow.cpp 9402). In ARRL Field Day
+/// (which passed it by already), an ARRL VHF contest and a contest with the standard messages, on
+/// FT8 and FT4, `CQ … <...> EN37` queues nothing and keys nothing; the station's next CQ, its
+/// call resolved, is answered as before.
+#[test]
+fn the_contests_sp_passes_by_a_cq_from_an_unresolved_call() {
+    let print = |b: &[i8]| tempo_fast::unpack77(b).unwrap_or_default();
+    for (contest, cq, answer) in HASHED_CQS {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let what = format!("{contest:?} {}", tier_name(tier));
+            let mut e = engine_for(contest, MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-sp").expect("S&P starts");
+            e.set_tx_enabled(true);
+            let (sent, unknown) = hashed_cq(cq);
+            let unresolved = print(&unknown);
+            assert_eq!(unresolved, format!("{cq} <...> EN37"), "{what}: unresolved");
+            e.ingest_decodes_for_test(&[heard(&unresolved)], 2);
+            assert_eq!(
+                (queued(&e), keyed(&mut e, 2)),
+                (None, None),
+                "{what}: passed by"
+            );
+            assert!(listening(&e), "{what}: still listening");
+            e.ingest_decodes_for_test(&[heard(&print(&sent))], 4);
+            assert_eq!(
+                keyed(&mut e, 4).as_deref(),
+                Some(answer),
+                "{what}: its next CQ, resolved, is answered"
+            );
+        }
+    }
 }
 
 /// The cockpit's other clicks, and every click where the contest's own FT8/FT4 messages do not

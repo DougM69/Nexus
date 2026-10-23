@@ -50,8 +50,6 @@ export function esmRefusalText(refusal: EsmRefusal): string {
       return t('contest.esm.refused.recording')
     case 'pttHeld':
       return t('contest.esm.refused.pttHeld')
-    case 'radioHasMic':
-      return t('contest.esm.refused.radioHasMic')
     case 'unmapped':
       return t('contest.esm.refused.unmapped', { step: esmStepName(refusal.role) })
     case 'empty':

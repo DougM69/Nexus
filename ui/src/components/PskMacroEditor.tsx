@@ -17,6 +17,7 @@ import {
   MacroButton,
   MacroEditor as SharedMacroEditor,
   MacroSetSwitch,
+  type MacroEditorFocus,
   type MacroEditorLabels,
   type MacroSetSwitchLabels,
 } from './MacroEditor'
@@ -48,7 +49,7 @@ interface ButtonProps {
   editing: boolean
   title: string
   onSend: () => void
-  onEdit: () => void
+  onEdit: (focus: MacroEditorFocus) => void
 }
 
 /** One F-key macro, captioned from PSK's catalog. */
@@ -63,6 +64,7 @@ export function PskMacroButton({ slot, control, editing, title, onSend, onEdit }
       emptyLabel={t('psk.macro.empty.label')}
       emptyTitle={t('psk.macro.empty.title', { key: slot.key })}
       editAria={t('psk.macro.edit.aria', { key: slot.key })}
+      editTitle={t('psk.macro.edit.title', { key: slot.key })}
       onSend={onSend}
       onEdit={onEdit}
     />
@@ -73,7 +75,9 @@ interface EditorProps {
   slot: PskMacroSlot
   left: number
   saving: boolean
+  focus: MacroEditorFocus
   onSave: (label: string, text: string) => void
+  onSendOnce: (text: string) => void
   onCancel: () => void
   onReset: () => void
 }
@@ -82,7 +86,7 @@ interface EditorProps {
  *  not one shared sentence with RTTY's: PSK31's varicode carries a brace perfectly, so an
  *  unknown token is not mangled — it goes out reading exactly as it was typed, which is never
  *  what the operator meant by writing one. */
-export function PskMacroEditor({ slot, left, saving, onSave, onCancel, onReset }: EditorProps) {
+export function PskMacroEditor({ slot, left, saving, focus, onSave, onSendOnce, onCancel, onReset }: EditorProps) {
   const labels: MacroEditorLabels = {
     aria: t('psk.macroEditor.aria', { key: slot.key }),
     titleLabel: t('psk.macroEditor.title.label'),
@@ -92,6 +96,8 @@ export function PskMacroEditor({ slot, left, saving, onSave, onCancel, onReset }
     stopTitle: t('psk.macroEditor.stopTitle'),
     unknownToken: (token) => t('psk.macroEditor.unknownToken', { token }),
     save: t('psk.macroEditor.save'),
+    sendOnce: t('psk.macroEditor.sendOnce'),
+    sendOnceTitle: t('psk.macroEditor.sendOnce.title'),
     cancel: t('psk.macroEditor.cancel'),
     resetButton: t('psk.macroEditor.resetButton'),
   }
@@ -102,7 +108,9 @@ export function PskMacroEditor({ slot, left, saving, onSave, onCancel, onReset }
       saving={saving}
       labels={labels}
       unknownTokens={unknownPskTokens}
+      focus={focus}
       onSave={onSave}
+      onSendOnce={onSendOnce}
       onCancel={onCancel}
       onReset={onReset}
     />

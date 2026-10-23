@@ -808,9 +808,10 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
             continue;
         }
         log.band = r.band.trim().to_string();
-        // ⭐ Unique is "written, and not marked a dupe": every contest logs its dupes now
+        // ⭐ Unique is "written, and counted": every contest logs its dupes now
         // (`DupeRule::log_dupes`), so a repeat is written too, marked, and the bool alone no
-        // longer says the row counts. The loops below read the same mark.
+        // longer says the row counts; nor does a contact in a mode the event bans (Winter Field
+        // Day's WSJT modes), written and worth nothing. The loops below ask the log the same.
         let written = log.log_submode_at(
             &r.call,
             &r.class,
@@ -820,7 +821,7 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
             0,
             r.when_unix,
         );
-        unique[i] = written && log.qsos().last().is_some_and(|q| !q.dupe);
+        unique[i] = written && log.qsos().last().is_some_and(|q| log.counts(q));
     }
 
     let (qso_points, powered) = rs.scoring.qso_and_powered(log.score_rows(), d.power_mult);
@@ -875,11 +876,11 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
         }
     };
 
-    // Rates + hourly buckets over the COUNTING (deduped) QSOs.
+    // Rates + hourly buckets over the COUNTING QSOs.
     let counted: Vec<u64> = log
         .qsos()
         .iter()
-        .filter(|q| !q.dupe)
+        .filter(|q| log.counts(q))
         .map(|q| q.when_unix)
         .collect();
     let rate_hour = counted
@@ -960,7 +961,7 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
 
     // Band × mode grid over the counting QSOs, longest wavelength first.
     let mut bands: BTreeMap<String, BandModeRow> = BTreeMap::new();
-    for q in log.qsos().iter().filter(|q| !q.dupe) {
+    for q in log.qsos().iter().filter(|q| log.counts(q)) {
         let e = bands.entry(q.band.clone()).or_insert_with(|| BandModeRow {
             band: q.band.clone(),
             ph: 0,
@@ -1290,7 +1291,8 @@ fn build_contest_core(d: &FdBoardData, c: &ContestBoard, now_unix: u64) -> Strin
     // Each counting contact, attributed to the row it was built from — the club log's
     // own answer (`unique_log_rows`), never a second dedupe. A log that is not one row
     // per contact (it cannot be: the club never refuses a row it exports) attributes
-    // nothing rather than the wrong position.
+    // nothing rather than the wrong position. The rows walked are the ones the scorer is
+    // handed (`FieldDayLog::counts`), so each takes its own scored row.
     let from = club.unique_log_rows();
     let aligned = from.len() == log.qsos().len();
     let mut scored_rows = log.score_rows();
@@ -1298,7 +1300,7 @@ fn build_contest_core(d: &FdBoardData, c: &ContestBoard, now_unix: u64) -> Strin
     let mut counted: Vec<u64> = Vec::new();
     let mut bands: BTreeMap<String, BandModeRow> = BTreeMap::new();
     for (k, q) in log.qsos().iter().enumerate() {
-        if q.dupe {
+        if !log.counts(q) {
             continue;
         }
         let row = scored_rows.next();
@@ -1404,7 +1406,7 @@ fn build_contest_core(d: &FdBoardData, c: &ContestBoard, now_unix: u64) -> Strin
     // The multiplier universes: the scorer's own counts, and what each has worked.
     let counts = rs.scoring.mult_counts(log.score_rows());
     let counting: Vec<&tempo_core::fieldday::LoggedQso> =
-        log.qsos().iter().filter(|q| !q.dupe).collect();
+        log.qsos().iter().filter(|q| log.counts(q)).collect();
     let mults: Vec<MultRow> = counted_rules(rs, session)
         .into_iter()
         .map(|m| {
@@ -1997,8 +1999,10 @@ mod tests {
         );
         let v = parse(&json);
         assert_eq!(v["score"]["model"], "objectives");
-        assert_eq!(v["score"]["qso_points"], 6);
-        // The headline is the CLAIMED total, the sponsor's QSO points × (OM + 1): 6 × (7 + 1).
+        // CW 2 + PH 1 + PH 1: the fixture's FT8 contact is worth nothing at Winter Field Day,
+        // which allows "All modes, except WSJT modes".
+        assert_eq!(v["score"]["qso_points"], 4);
+        // The headline is the CLAIMED total, the sponsor's QSO points × (OM + 1): 4 × (7 + 1).
         // Three objectives completed (the two ticked and the one 100% alternative power
         // brings); the ARRL bonus ids the fixture also claims are worth nothing here.
         assert_eq!(
@@ -2009,7 +2013,7 @@ mod tests {
                 v["score"]["bonus_points"].as_u64(),
                 v["score"].get("projected_at_submission").is_some(),
             ),
-            (Some(48), Some(7), Some(3), Some(0), false),
+            (Some(32), Some(7), Some(3), Some(0), false),
             "(total, OM, objectives completed, bonus points, the old projection): {json}"
         );
         assert_eq!(
@@ -2032,8 +2036,8 @@ mod tests {
     /// band and mode from the start; the spectator page showed label,
     /// operator, QSOs and points only — so the one board the whole tent can
     /// see could not answer the question a multi-station club runs the board
-    /// for (operator report, 2026-08-30: "programs like N3FJP has a board to
-    /// show where everyone is in on the bands").
+    /// for (operator report, 2026-08-30: a board "to show where everyone is in
+    /// on the bands").
     #[test]
     fn positions_say_which_band_and_mode_each_one_is_running() {
         let (d, now) = fixture(FdEvent::ArrlFd);
@@ -2717,6 +2721,157 @@ mod tests {
         );
     }
 
+    /// What the party board makes of the scripted club plus W9OAB worked from Lake on 20 m in
+    /// the digital mode `sub`, from the second tent: `(total, the counties worked, W9OAB
+    /// worked, contacts, 10-minute rate, hourly, 20 m's digital column, the SSB tent's
+    /// (rows, credited, points), ticker rows)`.
+    #[allow(clippy::type_complexity)] // one tuple, read whole by one assertion
+    fn ilqp_board_with_w9oab(
+        sub: &str,
+    ) -> (
+        u64,
+        serde_json::Value,
+        bool,
+        u64,
+        u64,
+        serde_json::Value,
+        u64,
+        (u64, u64, u64),
+        usize,
+    ) {
+        let (mut d, now) = ilqp_board();
+        let t = ilqp().event_window(2026).start_unix;
+        let mut q = ilqp_wire("bbbb0002", 3, "W9OAB", "20m", "DIG", "LAKE", t + 480);
+        q.sub = sub.into();
+        d.contest
+            .as_mut()
+            .expect("a party board")
+            .rows
+            .push(MergedRow::from_wire(&q));
+        let v = parse(&build_data_core(&d, now));
+        let ssb = v["positions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["label"] == "SSB tent")
+            .expect("the SSB tent's line");
+        (
+            v["score"]["total"].as_u64().unwrap(),
+            v["mults"][0]["worked"].clone(),
+            v["bonus_stations"][1]["worked"].as_bool().unwrap(),
+            v["qsos"]["count"].as_u64().unwrap(),
+            v["qsos"]["rate_10min"].as_u64().unwrap(),
+            v["qsos"]["hourly"].clone(),
+            v["band_mode"][1]["dig"].as_u64().unwrap(),
+            (
+                ssb["qsos_raw"].as_u64().unwrap(),
+                ssb["qsos_unique"].as_u64().unwrap(),
+                ssb["points"].as_u64().unwrap(),
+            ),
+            v["ticker"].as_array().unwrap().len(),
+        )
+    }
+
+    /// ⭐ **The TV claims nothing for a contact in a mode the party bans** — *"FT4 and FT8
+    /// contacts will receive no contact credit"* — and shows it in the ticker like any contact.
+    /// The score, the county map, the bonus stations, the contact count and rates, the band
+    /// grid and the tent's credited count and points are the club file's, which counts none of
+    /// it.
+    #[test]
+    fn an_ilqp_board_claims_nothing_for_a_banned_mode_contact() {
+        assert_eq!(
+            ilqp_board_with_w9oab("FT8"),
+            (
+                115,
+                serde_json::json!(["COOK", "MCDN", "WILL"]),
+                false,
+                3,
+                3,
+                serde_json::json!([3]),
+                0,
+                (3, 1, 1),
+                6
+            ),
+            "(total, counties, W9OAB worked, contacts, 10-minute rate, hourly, 20 m digital, \
+             the SSB tent's (rows, credited, points), ticker rows): the scripted club's own"
+        );
+        // CONTROL: on RTTY W9OAB is 2 more points, Lake and the 100: (5 + 2) × 4 + 200.
+        assert_eq!(
+            ilqp_board_with_w9oab("RTTY"),
+            (
+                228,
+                serde_json::json!(["COOK", "LAKE", "MCDN", "WILL"]),
+                true,
+                4,
+                4,
+                serde_json::json!([4]),
+                1,
+                (3, 2, 3),
+                6
+            )
+        );
+    }
+
+    /// ⭐ **…and so does a Winter Field Day club's** — the sponsor allows *"All modes, except
+    /// WSJT modes"*, so the shared fixture's FT8 contact (VE3AAA on 20 m, the CW tent's) is in
+    /// the ticker and nowhere else: not in the QSO points, the contact count, the hourly
+    /// buckets, the band grid, the sections or the tent's credited count and points.
+    /// CONTROL: ARRL Field Day bans no mode and counts it.
+    #[test]
+    fn a_wfd_board_counts_nothing_for_a_wsjt_mode_contact() {
+        let board = |event: FdEvent| {
+            let (d, now) = fixture(event);
+            let v = parse(&build_data_core(&d, now));
+            let cw = v["positions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["label"] == "CW tent")
+                .expect("the CW tent's line")
+                .clone();
+            (
+                v["score"]["qso_points"].as_u64().unwrap(),
+                v["qsos"]["count"].as_u64().unwrap(),
+                v["qsos"]["hourly"].clone(),
+                v["band_mode"][1]["dig"].as_u64().unwrap(),
+                v["sections_worked"].clone(),
+                (
+                    cw["qsos_raw"].as_u64().unwrap(),
+                    cw["qsos_unique"].as_u64().unwrap(),
+                    cw["points"].as_u64().unwrap(),
+                ),
+                v["ticker"][0]["call"].as_str().unwrap().to_string(),
+            )
+        };
+        assert_eq!(
+            board(FdEvent::WinterFd),
+            (
+                4,
+                3,
+                serde_json::json!([2, 1, 0]),
+                0,
+                serde_json::json!(["EMA", "STX"]),
+                (2, 1, 2),
+                "VE3AAA".to_string()
+            ),
+            "Winter Field Day: (QSO points, contacts, hourly, 20 m digital, sections, the CW \
+             tent's (rows, credited, points), the newest ticker row)"
+        );
+        assert_eq!(
+            board(FdEvent::ArrlFd),
+            (
+                6,
+                4,
+                serde_json::json!([2, 2, 0]),
+                1,
+                serde_json::json!(["EMA", "ONE", "STX"]),
+                (2, 2, 4),
+                "VE3AAA".to_string()
+            ),
+            "ARRL Field Day"
+        );
+    }
+
     /// The party's meta: the universes the in-state role counts, each with its values and
     /// their names from the rules data, and the one the map draws.
     #[test]
@@ -2789,8 +2944,11 @@ mod tests {
     /// ⭐ **The two Field Days keep every number they show.** ARRL Field Day's whole
     /// payload and its meta (bar the rules file's own stamp) byte for byte, and Winter
     /// Field Day's contacts, rates, band grid, sections, positions and ticker byte for
-    /// byte, as they were before the board learned any other contest. (Winter Field
-    /// Day's score block and ticks follow its own scoring rule, pinned above.)
+    /// byte, as they were before the board learned any other contest, but for the
+    /// fixture's FT8 contact: a WSJT mode, which Winter Field Day does not allow, so it is
+    /// in the ticker and counts for nothing else
+    /// (`a_wfd_board_counts_nothing_for_a_wsjt_mode_contact`). (Winter Field Day's score
+    /// block and ticks follow its own scoring rule, pinned above.)
     #[test]
     fn the_field_day_payloads_keep_every_number_they_show() {
         let (d, now) = fixture(FdEvent::ArrlFd);
@@ -3076,9 +3234,9 @@ mod tests {
     const ARRL_FD_CORE_GOLDEN: &str = r##"{"event":{"kind":"arrlfd","name":"ARRL Field Day","year":2026,"start_unix":1782583200,"end_unix":1782680400,"call":"W9ABC","class":"3A","section":"WI"},"score":{"model":"powered","qso_points":6,"bonus_points":150,"power_mult":2,"powered_points":12,"total":162},"qsos":{"count":4,"rate_hour":1,"rate_10min":1,"hourly":[2,2,0]},"ticker":[{"when_unix":1782590200,"call":"VE3AAA","class":"2A","section":"ONE","band":"20m","mode":"DIG","submode":"FT8","position":"CW tent","operator":"W9AAA"},{"when_unix":1782587200,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"CW","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782586900,"call":"W5XYZ","class":"2A","section":"STX","band":"40m","mode":"PH","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782583400,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"PH","submode":"","position":"Phone tent","operator":"W9BBB"},{"when_unix":1782583300,"call":"K1ABC","class":"2A","section":"EMA","band":"20m","mode":"CW","submode":"","position":"CW tent","operator":"W9AAA"}],"band_mode":[{"band":"40m","ph":1,"cw":0,"dig":0},{"band":"20m","ph":1,"cw":1,"dig":1}],"sections_worked":["EMA","ONE","STX"],"positions":[{"id":"aaaa1111","label":"CW tent","operator":"W9AAA","band":"20m","mode":"CW","stale":false,"qsos_raw":2,"qsos_unique":2,"points":4,"last_qso_unix":1782590200},{"id":"bbbb2222","label":"Phone tent","operator":"W9BBB","band":"40m","mode":"PH","stale":true,"qsos_raw":3,"qsos_unique":2,"points":2,"last_qso_unix":1782587200}],"claimed":["emergency-power","web-submission"]}"##;
     const ARRL_FD_SECTION_CODES_GOLDEN: &str = r##"DE EPA MDC NNY SNJ WNY WPA IL IN WI MN ND SD AR LA MS TN KY MI OH ENY NLI NNJ IA KS MO NE CT EMA ME NH RI VT WMA AK EWA ID MT OR WWA EB NV PAC SCV SF SJV SV NC SC VA WV CO NM UT WY AL GA NFL PR SFL VI WCF AZ LAX ORG SB SDG NTX OK STX WTX NL NB NS PE QC ONE ONN ONS GH MB SK AB BC TER"##;
     const ARRL_FD_META_GOLDEN: &str = r##"{"bonuses":[{"id":"emergency-power","label":"100% emergency power","points":100},{"id":"media-publicity","label":"Media publicity","points":100},{"id":"public-location","label":"Public location","points":100},{"id":"public-info-table","label":"Public information table","points":100},{"id":"nts-message","label":"Message to ARRL SM/SEC","points":100},{"id":"w1aw-bulletin","label":"W1AW bulletin copied","points":100},{"id":"natural-power","label":"Natural power QSOs","points":100},{"id":"site-visit-official","label":"Site visit: elected official","points":100},{"id":"site-visit-agency","label":"Site visit: agency representative","points":100},{"id":"gota","label":"GOTA station max","points":100},{"id":"youth","label":"Youth participation","points":100},{"id":"web-submission","label":"Web submission","points":50},{"id":"safety-officer","label":"Safety officer","points":100},{"id":"social-media","label":"Social media","points":100},{"id":"educational","label":"Educational activity","points":100},{"id":"satellite","label":"Satellite QSO","points":100}],"event":{"call":"W9ABC","class":"3A","end_unix":1782680400,"kind":"arrlfd","name":"ARRL Field Day","section":"WI","start_unix":1782583200,"year":2026},"rules_year":2026,"scoring_model":"powered"}"##;
-    const WFD_CORE_GOLDEN: &str = r##"qsos={"count":4,"hourly":[2,2,0],"rate_10min":1,"rate_hour":1}
-band_mode=[{"band":"40m","cw":0,"dig":0,"ph":1},{"band":"20m","cw":1,"dig":1,"ph":1}]
-sections_worked=["EMA","ONE","STX"]
-positions=[{"band":"20m","id":"aaaa1111","label":"CW tent","last_qso_unix":1769277400,"mode":"CW","operator":"W9AAA","points":4,"qsos_raw":2,"qsos_unique":2,"stale":false},{"band":"40m","id":"bbbb2222","label":"Phone tent","last_qso_unix":1769274400,"mode":"PH","operator":"W9BBB","points":2,"qsos_raw":3,"qsos_unique":2,"stale":true}]
+    const WFD_CORE_GOLDEN: &str = r##"qsos={"count":3,"hourly":[2,1,0],"rate_10min":0,"rate_hour":0}
+band_mode=[{"band":"40m","cw":0,"dig":0,"ph":1},{"band":"20m","cw":1,"dig":0,"ph":1}]
+sections_worked=["EMA","STX"]
+positions=[{"band":"40m","id":"bbbb2222","label":"Phone tent","last_qso_unix":1769274400,"mode":"PH","operator":"W9BBB","points":2,"qsos_raw":3,"qsos_unique":2,"stale":true},{"band":"20m","id":"aaaa1111","label":"CW tent","last_qso_unix":1769277400,"mode":"CW","operator":"W9AAA","points":2,"qsos_raw":2,"qsos_unique":1,"stale":false}]
 ticker=[{"band":"20m","call":"VE3AAA","class":"2A","mode":"DIG","operator":"W9AAA","position":"CW tent","section":"ONE","submode":"FT8","when_unix":1769277400},{"band":"20m","call":"K1ABC","class":"2A","mode":"CW","operator":"W9BBB","position":"Phone tent","section":"EMA","submode":"","when_unix":1769274400},{"band":"40m","call":"W5XYZ","class":"2A","mode":"PH","operator":"W9BBB","position":"Phone tent","section":"STX","submode":"","when_unix":1769274100},{"band":"20m","call":"K1ABC","class":"2A","mode":"PH","operator":"W9BBB","position":"Phone tent","section":"EMA","submode":"","when_unix":1769270600},{"band":"20m","call":"K1ABC","class":"2A","mode":"CW","operator":"W9AAA","position":"CW tent","section":"EMA","submode":"","when_unix":1769270500}]"##;
 }

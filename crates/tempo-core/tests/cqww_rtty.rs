@@ -877,3 +877,51 @@ fn a_field_day_merge_claims_no_state_and_invents_no_report() {
         "Field Day's exchange has no report to copy"
     );
 }
+
+/// ⭐ **A single-band entry claims no score when its log holds another band.** X.2: *"Single band
+/// entrants are required to include all contacts made during the contest period, even if on other
+/// bands. Only contacts made on the band specified in the Cabrillo header will be considered for
+/// scoring purposes."* The screen scores every band, so with a contact off the declared band its
+/// total is more than the sponsor will credit, and the file claims nothing rather than that.
+#[test]
+fn a_single_band_entry_with_a_contact_on_another_band_claims_no_score() {
+    let twenty = CabrilloEntrant {
+        band: "20M".into(),
+        ..Default::default()
+    };
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("W9XYZ", "4", "IL")), "20m");
+    let ve3 = [("RST", "599"), ("ZN", "4"), ("QTH", "ON")];
+    assert!(work_on(&mut log, "20m", 14_080, "VE3XYZ", &ve3, 1));
+    assert!(work_on(
+        &mut log,
+        "20m",
+        14_082,
+        "JA1ABC",
+        &[("RST", "599"), ("ZN", "25")],
+        3
+    ));
+    // CONTROL: every contact on the band declared, so the screen's score is the whole score.
+    let cab = log.cabrillo_with(14_080, &twenty).expect("one entry");
+    assert!(cab.lines().any(|l| l == "CATEGORY-BAND: 20M"), "{cab}");
+    assert!(cab.lines().any(|l| l == "CLAIMED-SCORE: 25"), "{cab}");
+
+    let k2 = [("RST", "599"), ("ZN", "5"), ("QTH", "NY")];
+    assert!(work_on(&mut log, "40m", 7_080, "K2DEF", &k2, 5));
+    let cab = log.cabrillo_with(14_080, &twenty).expect("one entry");
+    assert!(cab.lines().any(|l| l == "CATEGORY-BAND: 20M"), "{cab}");
+    assert!(
+        !cab.contains("CLAIMED-SCORE"),
+        "a 20M entry with a 40 m contact claims no score:\n{cab}"
+    );
+    // CONTROL: the same log entered ALL is scored on every band, and claims the screen's total.
+    let all = CabrilloEntrant {
+        band: "ALL".into(),
+        ..Default::default()
+    };
+    let total = log.ruleset().scoring.score(log.score_rows(), 1).3;
+    let cab = log.cabrillo_with(14_080, &all).expect("one entry");
+    assert!(
+        cab.lines().any(|l| l == format!("CLAIMED-SCORE: {total}")),
+        "{cab}"
+    );
+}

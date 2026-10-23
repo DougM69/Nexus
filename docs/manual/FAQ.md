@@ -67,7 +67,9 @@ If you get it on the air, honest decode reports (band, dial, distance, condition
 
 ### Why does eQSL not count toward DXCC here?
 
-ARRL's DXCC rules accept only LoTW, paper QSL, and approved bureau cards for award credit. eQSL cards are not an accepted confirmation source. Nexus enforces this correctly: an eQSL confirmation sets `confirmed = true` (you did make the contact) but `award_confirmed = false` (it does not count toward DXCC, WAZ, WAS, Honor Roll, or Challenge). Award tallies use `award_confirmed` exclusively, so eQSL-confirmed contacts never inflate your DXCC count. This is the technically correct behaviour — most logging software uses a single confirmed flag and silently over-counts.
+ARRL's DXCC rules accept only LoTW, paper QSL, and approved bureau cards for award credit. eQSL cards are not an accepted confirmation source for DXCC or for any other ARRL award. Nexus enforces this correctly: an eQSL confirmation sets `confirmed = true` (you did make the contact) but `award_confirmed = false` (it does not count toward DXCC, WAS, Honor Roll, or Challenge). Award tallies use `award_confirmed` exclusively, so eQSL-confirmed contacts never inflate your DXCC count. This is the technically correct behaviour — most logging software uses a single confirmed flag and silently over-counts.
+
+CQ's awards are different. CQ accepts eQSLs from Authenticity Guaranteed (AG) members for WAZ and WPX. Nexus does not count AG eQSLs toward WAZ yet, so an eQSL user's WAZ total here can be lower than the one CQ would credit.
 
 ---
 
@@ -101,7 +103,7 @@ SuperFox mode is **permanently removed**: the QPC table file carries a license t
 
 Nexus ships a dedicated **Field Day** mode for ARRL FD (June) and Winter Field Day (January): dupe-checked all-mode log, correct per-QSO scoring (CW/digital = 2 pts, phone = 1 pt), 15-bonus checklist, N3FJP TCP push, N1MM+ UDP broadcast, Cabrillo 3.0 and ADIF export. The TempoFast digital exchange sequence is auto-handled once you initiate; fully unattended operation is intentionally not implemented.
 
-Other contest modes (NA VHF, RTTY Roundup, WW Digi, ARRL Sweepstakes, etc.) are not yet implemented. Serial-number exchange fields, contest-specific dupe logic, and Cabrillo profiles for those events are not present. See [Field Day](Field-Day.md).
+The same Contest mode runs the other contests on the Settings → Contesting ▸ Contest picker: Sweepstakes, the ARRL VHF contests, CQ World-Wide DX and WPX, the CQ World-Wide RTTY DX Contest and six state QSO parties, each with its own exchange (serial numbers where the contest has them), dupe rules, scoring and Cabrillo file. WSJT-X's RTTY Roundup and WW Digi contest modes are not implemented; on FT8 and FT4 Nexus sends its Field Day and NA VHF Contest messages. See [Field Day](Field-Day.md#other-contests-and-cq-ww-rtty).
 
 ---
 

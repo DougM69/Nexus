@@ -6,6 +6,10 @@
 // Auth0 issuer and client ID VALUES are not here: they arrive from the GitHub environment's
 // variables (REMOTE_AUTH0_ISSUER, REMOTE_AUTH0_CLIENT_ID). What the row pins is the RULE an issuer
 // must satisfy and the exact API audience.
+//
+// `billing` names the private billing Worker the relay reaches through a `BILLING` service binding.
+// The binding is written only once `deployed` is true, a reviewed one-line change made after that
+// Worker exists: until then the relay's deploys carry no binding and verify that none is present.
 export const TARGETS = Object.freeze({
   staging: Object.freeze({
     target: 'staging',
@@ -16,6 +20,7 @@ export const TARGETS = Object.freeze({
     audience: 'https://remote-staging.hamradiotools.io/api',
     tag: 'nexus-remote-observation-staging',
     issuer: Object.freeze({ hostSuffix: '.auth0.com' }),
+    billing: Object.freeze({ service: 'nexus-billing-staging', deployed: false }),
   }),
   // PLACEHOLDER. None of these resources exist, and the hostname and sign-in domain are proposals
   // still awaiting the operator's decisions. `deployable()` refuses this row everywhere a script
@@ -31,6 +36,7 @@ export const TARGETS = Object.freeze({
     audience: 'https://remote.hamradiotools.io/api',
     tag: 'nexus-remote-production',
     issuer: Object.freeze({ exact: 'https://login.hamradiotools.io/' }),
+    billing: Object.freeze({ service: 'nexus-billing', deployed: false }),
   }),
 })
 export const STAGING = TARGETS.staging
@@ -72,6 +78,10 @@ export function deployable(row) {
   return row
 }
 
+export function billingServices(row) {
+  return row.billing.deployed ? [{ binding: 'BILLING', service: row.billing.service }] : []
+}
+
 export function databaseId(value) {
   requireValue(typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
     && !/^0+$/.test(value.replaceAll('-', '')), 'A provisioned D1 UUID is required')
@@ -82,6 +92,9 @@ export function revision(value) {
   requireValue(typeof value === 'string' && /^[0-9a-f]{40}$/.test(value) && !/^0+$/.test(value), 'A full source commit SHA is required')
   return value
 }
+
+// An unset GitHub variable reaches a step as an empty string.
+const given = value => value !== undefined && value !== ''
 
 export function identity(values, row = target()) {
   let issuer
@@ -95,12 +108,60 @@ export function identity(values, row = target()) {
   requireValue(typeof values.clientId === 'string' && /^[A-Za-z0-9_-]{8,128}$/.test(values.clientId)
     && values.clientId !== 'unconfigured', 'A public Auth0 SPA client ID is required')
   requireValue(values.audience === row.audience, `The ${row.target} API audience must match the documented identifier`)
-  return { issuer: issuer.href, clientId: values.clientId, audience: values.audience }
+  const ids = { issuer: issuer.href, clientId: values.clientId, audience: values.audience }
+  // The desktop's Native application, optional: without it the account routes answer 503. Never the
+  // SPA's own id, which authority.ts refuses at run time; refusing it here stops it before a deploy.
+  if (given(values.nativeClientId)) {
+    requireValue(typeof values.nativeClientId === 'string' && /^[A-Za-z0-9_-]{8,128}$/.test(values.nativeClientId)
+      && values.nativeClientId !== 'unconfigured', 'REMOTE_AUTH0_NATIVE_CLIENT_ID is not a public Auth0 Native client ID')
+    requireValue(values.nativeClientId !== values.clientId, 'REMOTE_AUTH0_NATIVE_CLIENT_ID must differ from the SPA client ID')
+    ids.nativeClientId = values.nativeClientId
+  }
+  return ids
+}
+
+// Worker settings a deploy writes only when the GitHub environment sets them. Each is refused by
+// value, so a typo cannot reach a Worker as a setting that silently reads as off.
+export const MOVE_STAGES = Object.freeze(['announce', 'pairing-closed', 'closed'])
+export function optionalVars(values, row = target()) {
+  const vars = {}
+  if (given(values.trialIdentityRequired)) {
+    requireValue(values.trialIdentityRequired === '1', 'REMOTE_TRIAL_IDENTITY_REQUIRED must be 1 or unset')
+    vars.TRIAL_IDENTITY_REQUIRED = '1'
+  }
+  // The overlap after a move: where this service went, and how far its retirement has got.
+  requireValue(given(values.movedTo) === given(values.moveStage), 'REMOTE_MOVED_TO and REMOTE_MOVE_STAGE are set together or not at all')
+  if (given(values.movedTo)) {
+    requireValue(Object.values(TARGETS).some(other => other !== row && other.origin === values.movedTo),
+      'REMOTE_MOVED_TO must be the origin of another Remote environment')
+    requireValue(MOVE_STAGES.includes(values.moveStage), `REMOTE_MOVE_STAGE must be one of ${MOVE_STAGES.join(', ')}`)
+    vars.REMOTE_MOVED_TO = values.movedTo
+    vars.REMOTE_MOVE_STAGE = values.moveStage
+  }
+  return vars
+}
+
+// Worker secrets a deploy applies only when the GitHub environment supplies them. One that is supplied
+// joins the artifact's `secrets.required`, so the deploy treats it exactly like the required ones: the
+// preflight demands it, the upload applies it through --secrets-file, and the post-upload check counts
+// it and demands it encrypted. TRIAL_KEY can never be rotated (STAGING.md), so it is never generated here.
+export const OPTIONAL_SECRETS = Object.freeze(['TRIAL_KEY'])
+export function optionalSecrets(names = []) {
+  requireValue(Array.isArray(names) && names.every(name => OPTIONAL_SECRETS.includes(name)), 'Unknown optional Worker secret')
+  return OPTIONAL_SECRETS.filter(name => names.includes(name))
 }
 
 export function identityFromEnv(env = process.env, row = target(env)) {
   return identity({ issuer: env.REMOTE_AUTH0_ISSUER, clientId: env.REMOTE_AUTH0_CLIENT_ID,
-    audience: env.REMOTE_AUTH0_AUDIENCE || row.audience }, row)
+    audience: env.REMOTE_AUTH0_AUDIENCE || row.audience, nativeClientId: env.REMOTE_AUTH0_NATIVE_CLIENT_ID }, row)
+}
+
+// Everything a deploy configuration is built from that the GitHub environment holds: the identity,
+// the optional vars, and the NAMES of the optional secrets it supplies (presence only, never a value).
+export function settingsFromEnv(env = process.env, row = target(env)) {
+  return { ...identityFromEnv(env, row),
+    trialIdentityRequired: env.REMOTE_TRIAL_IDENTITY_REQUIRED, movedTo: env.REMOTE_MOVED_TO, moveStage: env.REMOTE_MOVE_STAGE,
+    secrets: OPTIONAL_SECRETS.filter(name => secretSupplied(env, name)) }
 }
 
 export function stagingConfig(template, values, row = target()) {
@@ -114,12 +175,18 @@ export function stagingConfig(template, values, row = target()) {
   config.d1_databases[0].database_name = row.database
   config.vars = { PUBLIC_REMOTE_ORIGIN: row.origin, AUTH0_ISSUER: ids.issuer,
     AUTH0_CLIENT_ID: ids.clientId, AUTH0_AUDIENCE: ids.audience,
+    ...(ids.nativeClientId ? { AUTH0_NATIVE_CLIENT_ID: ids.nativeClientId } : {}),
+    ...optionalVars(values, row),
     REMOTE_BUILD_REVISION: values.revision ? revision(values.revision) : 'local' }
+  const secrets = optionalSecrets(values.secrets)
+  if (secrets.length > 0) config.secrets = { ...config.secrets, required: [...(config.secrets?.required ?? []), ...secrets] }
   config.d1_databases[0].database_id = databaseId(values.databaseId)
   config.routes = [{ pattern: new URL(row.origin).hostname, custom_domain: true }]
   config.workers_dev = false
   config.preview_urls = false
   config.observability = { enabled: false }
+  const services = billingServices(row)
+  if (services.length > 0) config.services = services
   return config
 }
 

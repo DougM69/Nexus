@@ -9,12 +9,14 @@
 // and a report the operator typed is kept for the contact it was typed for, and only that one.
 //
 // The engine is stood in for by `engine` below, as in LogEntry.sharedEntry.test.tsx: a put replaces
-// the entry, a log moves it on and keeps its boxes. A poll is a re-render with the snapshot the engine
-// would hand both windows; when it lands against a strip's own clear is chosen here, by the test.
+// the entry (one made on a contact already logged is refused), a log moves it on to the next contact
+// and keeps its boxes. A poll is a re-render with the snapshot the engine would hand both windows;
+// when it lands against a strip's own clear is chosen here, by the test.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act, within } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
 import type { AppSnapshot, ContestEntryShared, FieldDayQso, FieldDayStatus } from '../types'
+import { ENTRY_LOGGED } from '../features/contestEntryShare'
 
 vi.mock('../api', () => ({
   contestLogManual: vi.fn(),
@@ -76,13 +78,14 @@ const party = (log: FieldDayQso[]): FieldDayStatus =>
 
 const engine = {
   open: true,
-  entry: { rev: 1, call: '', fields: {}, marks: null } as ContestEntryShared,
+  entry: { rev: 1, contact: 0, call: '', fields: {}, marks: null } as ContestEntryShared,
   log: [] as FieldDayQso[],
   /** What each log asked for, by value: the call, the received vector and the mode class. */
   logged: [] as { call: string; ex: [string, string][]; mode: string }[],
-  put(call: string, fields: Record<string, string>, marks: unknown): number {
+  put(call: string, fields: Record<string, string>, marks: unknown, contact: number): number {
     if (!this.open) throw new Error('contestEntryClosed')
-    this.entry = { rev: this.entry.rev + 1, call, fields, marks }
+    if (contact < this.entry.contact) throw ENTRY_LOGGED
+    this.entry = { rev: this.entry.rev + 1, contact: this.entry.contact, call, fields, marks }
     return this.entry.rev
   },
   write(call: string, ex: [string, string][], mode: string): void {
@@ -92,7 +95,7 @@ const engine = {
       { call, class: '', section: '', band: '40m', mode, submode: mode === 'PH' ? 'SSB' : '', whenUnix: T0 + this.log.length * 60, rcvd: ex.map(([, v]) => v) } as FieldDayQso,
     ]
     // `consume`: the call and the marks go; the boxes stay until a window puts the next contact's.
-    if (this.open) this.entry = { ...this.entry, rev: this.entry.rev + 1, call: '', marks: null }
+    if (this.open) this.entry = { ...this.entry, rev: this.entry.rev + 1, contact: this.entry.contact + 1, call: '', marks: null }
   },
 }
 
@@ -137,7 +140,7 @@ function Windows({ snap, section, logger = true }: { snap: AppSnapshot; section:
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
 const inWindow = (w: string) => within(screen.getByTestId(w))
-const callIn = (w: string) => inWindow(w).getByPlaceholderText('W1AW') as HTMLInputElement
+const callIn = (w: string) => inWindow(w).getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }) as HTMLInputElement
 const rstIn = (w: string) => inWindow(w).getByLabelText('RST') as HTMLInputElement
 const qthIn = (w: string) => inWindow(w).getByLabelText('County / State') as HTMLInputElement
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
@@ -145,11 +148,12 @@ const lastLogged = () => engine.logged[engine.logged.length - 1]
 
 beforeEach(() => {
   engine.open = true
-  engine.entry = { rev: 1, call: '', fields: {}, marks: null }
+  engine.entry = { rev: 1, contact: 0, call: '', fields: {}, marks: null }
   engine.log = []
   engine.logged = []
-  api.contestEntryPut.mockImplementation((call: string, fields: Record<string, string>, marks: unknown) =>
-    Promise.resolve(engine.put(call, fields, marks)),
+  api.contestEntryPut.mockImplementation(
+    (call: string, fields: Record<string, string>, marks: unknown, contact: number) =>
+      Promise.resolve(engine.put(call, fields, marks, contact)),
   )
   api.contestLogManual.mockImplementation((call: string, ex: [string, string][], mode: string) => {
     engine.write(call, ex, mode)

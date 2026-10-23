@@ -2,7 +2,7 @@
 //
 // The while-typing FD dupe verdict in the log strip — zero IPC, computed from
 // data already on the snapshot: the OWN log (the hard block fdLogManual will
-// refuse) and the club-sync block's club-ONLY keys (N3FJP semantics: a warning,
+// refuse) and the club-sync block's club-ONLY keys (a warning,
 // never a lock). The two must be told apart, and a clean call shows neither.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
@@ -72,7 +72,7 @@ function typeCall(call: string) {
       fdMode="PH"
     />,
   )
-  fireEvent.change(screen.getByPlaceholderText('W1AW'), { target: { value: call } })
+  fireEvent.change(screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { target: { value: call } })
 }
 
 afterEach(() => cleanup())

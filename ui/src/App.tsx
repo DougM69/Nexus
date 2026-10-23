@@ -1,9 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
-import { StationDataContext, useStationCapability } from './stationAccess'
 import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
-import { QuickNavigation, useRemotePresentation } from './remote-web/presentation'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { isOnAir } from './types'
 import { rigModeTransition, RIG_MODE_BY_VIEW, type RigMode } from './rigModeForView'
@@ -32,6 +29,9 @@ import {
   setFrequency as apiSetFrequency,
   sstvTune as apiSstvTune,
   setBlockedCalls as apiSetBlockedCalls,
+  js8SetRxBlocklist,
+  js8SetGroups,
+  js8SetAvoidAllcall,
   tuneChannel as apiTuneChannel,
   aprsTune,
   setMode as apiSetMode,
@@ -49,14 +49,12 @@ import {
   setBeacon as apiSetBeacon,
   setRxOffset as apiSetRxOffset,
   setTxOffset as apiSetTxOffset,
-  setBothOffsets as apiSetBothOffsets,
   setHoldTxFreq as apiSetHoldTxFreq,
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications } from './toast'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
-import { useReceiverSettings } from './remote-web/useReceiverSettings'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
 import { doubleBeep, processDecodes, txEarcon } from './alerts'
@@ -85,7 +83,7 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
-import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall, ownScreen, workTier, pskSubmode, workHintView, WORK_SECTION, type OwnScreen } from './features/needs'
+import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall, ownScreen, workTier, pskSubmode, workHintView, WORK_SECTION, spotNeed, type OwnScreen } from './features/needs'
 import { useAlertGeoScope } from './features/alertGeoScope'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, JTTY_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
@@ -117,8 +115,9 @@ import { CwCockpit } from './components/CwCockpit'
 import { PhoneCockpit } from './components/PhoneCockpit'
 import { RttyCockpit } from './components/RttyCockpit'
 import { PskCockpit } from './components/PskCockpit'
-import { Js8Cockpit } from './components/Js8Cockpit'
+import { Js8Cockpit, type Js8ListSettings } from './components/Js8Cockpit'
 import { JttyCockpit } from './components/JttyCockpit'
+import { js8ComposeConfig } from './js8Compose'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
@@ -134,19 +133,21 @@ import {
   getNeedAlerts,
   setWatchList,
   getAllSpots,
+  clickTciSpot,
   getSatSchedule,
   getSatTrackStatus,
+  getSatTransponder,
   getIssPass,
   getTleStatus,
   sstvArm,
   sstvAutoDisarm,
   setSettings as apiSetSettings,
   setContestEsm,
+  setCwSpeedMatch,
   setFdOperator,
   setSidebandOverride,
   testCat,
   setOperatingMode,
-  remoteRecallMemory,
   workSpot,
   getLicensedBandPlan,
   getPskState,
@@ -162,6 +163,7 @@ import {
   resendChat,
   type RadioLaunchInfo,
   getOtaMapSpots,
+  focusWindow,
 } from './api'
 import {
   hotkeyRecallTarget,
@@ -187,10 +189,13 @@ import { parsecStopLane } from './features/parsecPresence'
 import { slotKeyRefusedLane } from './features/slotKeyRefused'
 import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
 import { slotAudioLostLane } from './features/slotAudioLost'
+import { slotOverDroppedLane } from './features/slotOverDropped'
 import { pttRefusedLane } from './features/pttRefused'
+import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { audioErrorLane } from './features/audioError'
 import { askAgainWhileSaving } from './features/notAnswered'
+import { useTciSpots } from './features/tciSpots'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
 import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
@@ -200,7 +205,9 @@ import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { ContestView } from './components/ContestView'
 import { ContestLargeEntry } from './components/ContestLogger'
+import { openContestLogger } from './features/contestLoggerLayout'
 import { ContestScreenAway, useContestScreenWindow } from './components/ContestScreenWindow'
+import { useWorkInRequests } from './features/contestWorkIn'
 import { useContestSwitch } from './contestSwitch'
 import { useOperatorBoxAsk } from './features/contestKeys'
 import { OperateDecodes } from './components/OperateDecodes'
@@ -214,6 +221,7 @@ import { LogbookSaving } from './components/LogbookSaving'
 import { OnboardingBanner } from './components/OnboardingBanner'
 import { PounceBanner } from './components/PounceBanner'
 import { UpdateBanner } from './components/UpdateBanner'
+import { ClientBanner } from './components/ClientBanner'
 import { useSelfUpdate } from './useSelfUpdate'
 import { usePounce, type PounceAlert } from './usePounce'
 import { RevealNudge } from './components/RevealNudge'
@@ -291,34 +299,9 @@ const OPERATE_TIERS: Tier[] = [
 /** The screens whose Esc App binds to the top bar's halt while one is on show (see the listener in
  *  App). The other operating screens bind their own Esc; stop-control-wiring.test.tsx presses Esc
  *  on every section in the registry and holds each to what it sends. Connect is here because it draws
- *  no top bar, so no Stop TX of its own (N65, the operator's 2026-10-01 ruling). */
+ *  no top bar, so no Stop TX of its own (the operator's 2026-10-01 ruling). */
 const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'jtty', 'sstv', 'aprs', 'sats', 'connect'])
-/** On the hosted page only, App binds these four to the same halt: in a browser each one's Stop TX
- *  is the TX strip's remote stop, which is this halt, and their own Esc needs local control. */
-const HOSTED_ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['cw', 'rtty', 'psk', 'js8'])
-
-export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; status: ReactNode; stale?: boolean; /** The stale DISPLAY, after hysteresis; defaults to `stale`. */ staleShown?: boolean; cwPhone?: boolean; keyboard?: boolean; collections?: boolean; insights?: boolean; dxpeditions?: boolean; memories?: boolean; ota?: boolean; fieldDay?: boolean; js8?: boolean; stationModes?: boolean; navigation?: boolean; configuration?: boolean }
-import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
-import { RemoteInsights } from './remote-web/RemoteInsights'
-import { RemoteDxpeditions } from './remote-web/RemoteDxpeditions'
-import { remoteWorkable, spotNeed } from './remote-web/remote-work'
-import { remoteRecallArgs } from './remote-web/remote-recall'
-import { controlFailureMessage } from './remote-web/control-failure'
-import { RemoteFieldDay } from './remote-web/RemoteFieldDay'
-import { RemoteOta } from './remote-web/RemoteOta'
-import { RemoteMemories } from './remote-web/RemoteMemories'
-
-function App({ remote }: { remote?: BrowserWorkspace } = {}) {
-  const remoteWorkAllowed = useStationCapability('workSpot')
-  const remoteDigitalWorkAllowed = useStationCapability('workDigitalSpot')
-  const remoteRttyWorkAllowed = useStationCapability('workRttySpot')
-  const remoteRotatorAllowed = useStationCapability('rotator')
-  const remoteRecallAllowed = useStationCapability('memoryRecall')
-  const display = useRemotePresentation()
-  const quick = !!remote && display?.presentation === 'quick'
-  const needsRead = useRemoteCollection('needs')
-  const spotsRead = useRemoteCollection('spots')
-  const [remoteSelection, setRemoteSelection] = useState<string | null>(null)
+function App() {
   const [theme, setTheme, themeChoice] = useTheme()
   // The built-in themes (Settings ▸ Appearance ▸ Theme): App is the one writer of `data-skin`,
   // and Settings is handed the theme and the setter, the same way it gets the theme.
@@ -362,7 +345,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const reveal = useReveals(features)
   // First-run setup wizard (goal-driven). Only on a genuinely fresh install.
   const [showWizard, setShowWizard] = useState<boolean>(
-    () => !remote && features.firstRun && storageWritable() && !wizardSeen(),
+    () => features.firstRun && storageWritable() && !wizardSeen(),
   )
   // Getting started guide — Help ▸ Getting started, and the wizard's optional
   // walkthrough offer. Pure documentation: it writes nothing and is never
@@ -371,16 +354,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
   const { leftW, rightW, leftMax, rightMax, commitLeft, commitRight, resetLeft, resetRight, resetWidths } =
     usePaneWidths(scale)
-  const [snap, setSnap] = useState<AppSnapshot | null>(remote?.snapshot ?? null)
+  const [snap, setSnap] = useState<AppSnapshot | null>(null)
   // Night (Settings ▸ Appearance ▸ Theme): App is its one writer. Auto goes by the sun at the
   // station's grid square, which arrives with the snapshot — until then Auto has no grid and stays off.
   const { night, setNight, gridKnown: nightGridKnown } = useNight(snap?.mygrid ?? '')
-  // Routes a typed or clicked RX offset; kept through a brief control lapse so a commit made then
-  // still takes the FT runtime path (the transport sends it only once control is current).
-  const ftRuntimeControl = useStationCapability('ftRuntime', true)
-  const receiverSettings = useReceiverSettings(snap, snap?.link.tier)
-  const receiverSettingsRef = useRef(receiverSettings)
-  receiverSettingsRef.current = receiverSettings
   // Two-radio launch picker: shown only when simultaneous-radios is on, ≥2 radios are configured,
   // and this window launched without a profile. `null` = not a picker launch (the common case),
   // so a single-radio station never sees any of this.
@@ -421,10 +398,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Roam settings panel (inside the Tempo cockpit) open/closed.
   const [roamOpen, setRoamOpen] = useState(false)
   const [view, setView] = useState<View>(() => {
-    if (remote) {
-      const mode = remote.snapshot.radio.operatingMode
-      return remote.js8 && remote.snapshot.link.tier === 'JS8' ? 'js8' : mode === 'phone' ? 'phone' : mode === 'cw' ? 'cw' : mode === 'rtty' ? 'rtty' : mode === 'keyboard' ? 'psk' : mode === 'digital' && ['TempoFast', 'TempoDeep'].includes(remote.snapshot.link.tier) ? 'chat' : 'operate'
-    }
     // Deeplink > legacy merged-section deeplink > persisted view > profile landing —
     // the precedence and the clamp live in resolveBootView (pure, test-pinned): a
     // deeplink or restored view is honored only if it is an enabled section of THIS
@@ -445,6 +418,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       features.landing,
     )
   })
+  // Live mirror of the screen in front of the operator, for the app-wide 30 s poll effect (empty
+  // deps): the ISS SSTV auto-arm may take the radio only while SSTV or Satellites is that screen.
+  const viewRef = useRef(view)
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
   // Bird handed off from a map satellite click — the Satellites section opens on it.
   const [satFocus, setSatFocus] = useState<string | null>(null)
   // Callsign handed off from a cockpit recall card's previous-contact row (#192) — the Logbook
@@ -452,7 +431,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // is the reason: the operator can type over the Logbook's search box, go back to the cockpit
   // and click the same call again, and a bare `string | null` would not refire for that. Cleared
   // once the Logbook has consumed it, so a later trip through the nav opens unfiltered.
-  const [logFocus, setLogFocus] = useState<{ call: string; ts: number } | null>(null)
+  const [logFocus, setLogFocus] = useState<{ call: string; ts: number; editId?: string | null } | null>(null)
   // Bumped when the wizard closes: remounts SettingsPanel so a stale full-struct
   // form under the modal can't Save over what the wizard just persisted.
   const [wizardGen, setWizardGen] = useState(0)
@@ -478,12 +457,21 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // whole reasoning; do not merge these back together.
   const lastOpModeRef = useRef<RigMode>('digital')
   const lastHomedModeRef = useRef<RigMode>('digital')
+  // The cockpit a Work from afar opened, named by the work-hint follow below for the rig-mode effect
+  // alone. That Work (`workAfar`: a computer driving this station) entered its section WITHOUT
+  // arming Enable TX, and the effect's re-assert, from this screen, would arm the latch for Phone,
+  // CW, RTTY and PSK: the authority the Work withheld. Read and cleared on every run, so it holds
+  // back only the one entry it names.
+  const afarEntryRef = useRef<View | null>(null)
   // Guard refs for the rig-mode effect below. `opModeSeeded` is set once, by whichever comes
   // first: the persisted-operating-mode seed (that effect lives further down, where `settings`
   // is in scope) or a genuine view change — an operator's click outranks any seed, because the
   // click IS the intent.
   const opModeSeeded = useRef(false)
   const didMountOpMode = useRef(false)
+  // The screen being LEFT, for the one entry that depends on it: Phone from SSTV keeps the dial
+  // (`rigModeForView.ts`). Starts as the restored view, so the first click after launch knows it.
+  const prevViewRef = useRef(view)
 
   // Remember the section for next launch (read back in the `view` initializer above). One
   // effect rather than 16 `setView` call sites — every navigation path, present and future,
@@ -494,9 +482,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
 
   useEffect(() => {
     // ── LAUNCH IS A READ-ONLY ACT ──────────────────────────────────────────────────
-    // Hosted observers inspect panels without asserting a station mode. The
-    // native mount guard and native operating transitions below stay intact.
-    if (remote) return
     // This effect also runs on mount, where `view` is merely the restored/landing section —
     // NOT a statement of operator intent. Letting it fire commanded the rig into DATA at every
     // launch and PERSISTED that over the operator's real saved mode (set_operating_mode saves
@@ -507,11 +492,15 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     // This is a MOUNT guard, NOT the same-value guard the comment below rightly forbids —
     // every subsequent view change still re-asserts unconditionally. A re-assert after Stop TX,
     // Esc, TX Off or the watchdog leaves TX off: the engine arms only where nothing stopped it.
+    const from = prevViewRef.current
+    prevViewRef.current = view
     if (!didMountOpMode.current) {
       didMountOpMode.current = true
       return
     }
     opModeSeeded.current = true // an explicit view change outranks the booted-mode seed
+    const fromAfar = afarEntryRef.current === view
+    afarEntryRef.current = null
     // The map, the home-on-entry rule and the guard bookkeeping all live in
     // `rigModeForView.ts` — pure, so the SEQUENCE of views can be tested. That matters:
     // #143 was a sequence bug (CW → Tempo → FT left FT8 on the CW dial) and no single
@@ -523,11 +512,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     // and the Needed click set the mode without going through here), which left the rig stuck
     // in the wrong mode while the VFO read-back kept working. The backend is idempotent and
     // re-arms an immediate retune, so re-asserting is cheap.
-    const { mode, followFreq, nextHomed } = rigModeTransition(view, lastHomedModeRef.current)
+    const { mode, followFreq, keepDial, nextHomed } = rigModeTransition(view, lastHomedModeRef.current, from)
     lastHomedModeRef.current = nextHomed
     if (!mode) return
     lastOpModeRef.current = mode // every assert advances THIS one, including Tempo
-    void setOperatingMode(mode, followFreq)
+    // A cockpit a Work from afar opened is not re-asserted from here: that Work entered its section
+    // and left Enable TX as it was (`afarEntryRef`).
+    if (fromAfar) return
+    void setOperatingMode(mode, followFreq, keepDial)
       .then((s) => s && setSnap(s))
       .catch(() => {})
   }, [view])
@@ -589,7 +581,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // the cockpit; Connect/Map/Prop/Logbook/Awards are GLOBAL views selected from the
   // sidebar (they never retune the radio). Default FT8/FT4 (the 80% case).
   const [area, setArea] = useState<'dx' | 'msg'>(() => {
-    if (remote) return ['TempoFast', 'TempoDeep'].includes(remote.snapshot.link.tier) ? 'msg' : 'dx'
     try {
       // coerceArea (test-pinned) also migrates the retired 'connect' area to
       // FT8/FT4 (Connect is now a global view).
@@ -601,7 +592,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Sync the engine to the persisted mode once on load (atomic tier+mode).
   const areaSyncedRef = useRef(false)
   useEffect(() => {
-    if (remote || areaSyncedRef.current || !snap) return
+    if (areaSyncedRef.current || !snap) return
     areaSyncedRef.current = true
     void apiSetArea(area).then((s) => s && setSnap(s))
     // Reconcile the cockpit view with the mode (a persisted Tempo mode must not
@@ -621,7 +612,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // or dismissed. Later launches never show the wizard, so they are unchanged.
   const neededPoppedRef = useRef(false)
   useEffect(() => {
-    if (remote || neededPoppedRef.current || !snap || showWizard) return
+    if (neededPoppedRef.current || !snap || showWizard) return
     if (features.enabled.needed === false) return
     neededPoppedRef.current = true
     try {
@@ -641,7 +632,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
     // Switching mode lands on that mode's cockpit (FT8/FT4 → Operate, Tempo → Chat).
     setView(w === 'dx' ? 'operate' : 'chat')
-    if (remote) return // browser navigation does not command the shack's mode
     void withErrorToast(() => apiSetArea(w), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
     })
@@ -726,46 +716,59 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
 
   // Parsec presence mode stopped a transmission because the operator's Parsec session dropped.
   // The lane, not a toast: the operator was not there to see a toast, so the reason must still be
-  // on screen when they reconnect. The station keeps the report until they transmit again. Not on
-  // the Remote page, like the log notices above: a station-side feature, and that page is frozen.
+  // on screen when they reconnect. The station keeps the report until they transmit again.
   useEffect(() => {
-    setStatus('parsecStop', remote ? null : parsecStopLane(snap?.parsecPresence))
-  }, [snap?.parsecPresence?.stoppedAt, snap?.parsecPresence?.stopped.join(','), remote])
+    setStatus('parsecStop', parsecStopLane(snap?.parsecPresence))
+  }, [snap?.parsecPresence?.stoppedAt, snap?.parsecPresence?.stopped.join(',')])
 
   // A slot over (FT8, FT4, JS8 …) the radio did not accept PTT for: the station dropped it and
   // halted TX, as WSJT-X halts on a rig failure. The lane says so until TX is turned on again. Not
   // on the Remote page, like the Parsec stop above: that page is frozen.
   useEffect(() => {
-    setStatus('slotKeyRefused', remote ? null : slotKeyRefusedLane(snap?.radio.slotKeyRefused))
-  }, [snap?.radio.slotKeyRefused?.at, snap?.radio.slotKeyRefused?.why, remote])
+    setStatus('slotKeyRefused', slotKeyRefusedLane(snap?.radio.slotKeyRefused))
+  }, [snap?.radio.slotKeyRefused?.at, snap?.radio.slotKeyRefused?.why])
 
   // …and one whose unkey the radio did not accept: the station halted TX the same way and keeps
   // sending the unkey until the radio takes it. The lane says so until TX is turned on again; not
   // on the Remote page either.
   useEffect(() => {
-    setStatus('slotUnkeyFailed', remote ? null : slotUnkeyFailedLane(snap?.radio.slotUnkeyFailed))
-  }, [snap?.radio.slotUnkeyFailed?.at, snap?.radio.slotUnkeyFailed?.why, remote])
+    setStatus('slotUnkeyFailed', slotUnkeyFailedLane(snap?.radio.slotUnkeyFailed))
+  }, [snap?.radio.slotUnkeyFailed?.at, snap?.radio.slotUnkeyFailed?.why])
 
-  // …and one the station ended part way through because its audio stopped reaching the radio (Flex
-  // native DAX audio went off under it): TX halted the same way, and the lane says so until TX is
-  // turned on again; not on the Remote page either.
+  // …and one the station ended part way through because its audio stopped reaching the radio (the
+  // route carrying it, Flex native DAX or TCI, went): TX halted the same way, and the lane says so
+  // until TX is turned on again; not on the Remote page either.
   useEffect(() => {
-    setStatus('slotAudioLost', remote ? null : slotAudioLostLane(snap?.radio.slotAudioLost))
-  }, [snap?.radio.slotAudioLost?.at, remote])
+    setStatus('slotAudioLost', slotAudioLostLane(snap?.radio.slotAudioLost))
+  }, [snap?.radio.slotAudioLost?.at])
+
+  // …and an FT8 or FT4 over the radio keyed only after its period had ended (a slow CAT link): the
+  // station dropped that over and left TX on, however many in a row, as WSJT-X does, so the lane is
+  // its own, a warning, until the next over keys in time. Not on the Remote page either.
+  useEffect(() => {
+    setStatus('slotOverDropped', slotOverDroppedLane(snap?.radio.slotOverDropped))
+  }, [snap?.radio.slotOverDropped?.at, snap?.radio.slotOverDropped?.late])
 
   // The operator's PTT press that Nexus's own Flex client kept off the air, the radio still on the
   // DAX Nexus set and not on its mic: the lane says so, in place of the PTT advice, until a press
   // keys; not on the Remote page either.
   useEffect(() => {
-    setStatus('pttRefused', remote ? null : pttRefusedLane(snap?.radio.pttRefused))
-  }, [snap?.radio.pttRefused?.at, snap?.radio.pttRefused?.mode, remote])
+    setStatus('pttRefused', pttRefusedLane(snap?.radio.pttRefused))
+  }, [snap?.radio.pttRefused?.at, snap?.radio.pttRefused?.mode])
+
+  // A voice-keyer message Nexus's own Flex client dropped before the radio took DAX for it (Phone at
+  // the shack, native audio on): the lane says why, since the keyer's toast answered the press
+  // before the drop, until the next message the keyer accepts; not on the Remote page either.
+  useEffect(() => {
+    setStatus('voiceDropped', voiceDroppedLane(snap?.radio.voiceDropped))
+  }, [snap?.radio.voiceDropped?.at, snap?.radio.voiceDropped?.cause])
 
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
   // station starts no transmission, and the lane says so on every screen while it lasts. Not on
   // the Remote page either: that page is frozen.
   useEffect(() => {
-    setStatus('clockRepairHold', remote ? null : clockRepairHoldLane(snap?.radio.clockRepairTxHeld))
-  }, [snap?.radio.clockRepairTxHeld, remote])
+    setStatus('clockRepairHold', clockRepairHoldLane(snap?.radio.clockRepairTxHeld))
+  }, [snap?.radio.clockRepairTxHeld])
 
   // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend
   // log funnel; the engine bumps uploadTick per outcome and we toast it here —
@@ -785,11 +788,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // The logbook database could not be opened at launch, so this session keeps the log in
   // log.adi. Said ONCE a session, sticky until the operator dismisses it, and never in the way
   // (a toast, not a dialog); the ref, not the snapshot, is what stops every poll re-raising it.
-  // Not on the Remote: the remedy lives in the station's own Settings, which the Remote hides.
   const logStoreNoticeShown = useRef(false)
   useEffect(() => {
     const problem = snap?.logStoreProblem
-    if (!problem || remote || logStoreNoticeShown.current) return
+    if (!problem || logStoreNoticeShown.current) return
     logStoreNoticeShown.current = true
     pushToast(
       problem.networkFolder
@@ -798,31 +800,29 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       'error',
       0,
     )
-  }, [snap?.logStoreProblem, remote])
+  }, [snap?.logStoreProblem])
 
   // A file the station could not read and kept rather than save over (a torn journal, or one a
   // newer Nexus wrote): each said ONCE a session, sticky until dismissed, as the notice above
-  // is. Not on the Remote: its snapshot never carries these paths, which are this computer's.
+  // is.
   const keptFilesShown = useRef(new Set<string>())
   useEffect(() => {
-    if (remote) return
     for (const file of snap?.keptFiles ?? []) {
       const said = `${file.store}\n${file.path}`
       if (keptFilesShown.current.has(said)) continue
       keptFilesShown.current.add(said)
       pushToast(keptFileMessage(file), 'error', 0)
     }
-  }, [snap?.keptFiles, remote])
+  }, [snap?.keptFiles])
 
   // The logbook database refused a change (C10b). The station keeps it in memory — sending it
   // again while the refusal can pass, holding it for the quit when it cannot — and the screen
   // says so while it lasts (operator, 2026-09-23: "Never silently lose a contact"): one sticky
   // toast when the trouble starts, one more if a change is refused for good, and when every
   // change is saved again both go, with a word that it is. The ref, not the snapshot, stops each
-  // poll re-raising them. Not on the Remote, like the notice above.
+  // poll re-raising them.
   const logSaveToasts = useRef<{ retrying?: number; held?: number }>({})
   useEffect(() => {
-    if (remote) return
     const trouble = snap?.logSaveTrouble
     const shown = logSaveToasts.current
     if (trouble) {
@@ -839,7 +839,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     if (shown.held !== undefined) dismissToast(shown.held)
     logSaveToasts.current = {}
     pushToast(t('shell.logSave.saved'), 'success', 8000)
-  }, [snap?.logSaveTrouble, remote])
+  }, [snap?.logSaveTrouble])
 
 
   // Per-(band,mode) last-alert time so a band coming alive toasts once, not every
@@ -900,27 +900,62 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // flight unwinds — the disabled path ignores the pass.
           // `tuneChannel` for the 145.800 ARM (the app's own channel — never remembered as
           // the operator's 2 m dial); `setFrequency` for the LOS restore, which puts back a
-          // dial that really is theirs.
+          // dial that really is theirs. The screen goes with every tick, read when the tick
+          // runs: on any screen but SSTV or Satellites the radio is in use, and the pass is
+          // only announced (issAutoArm.ts).
           const issDeps = {
             tuneChannel: handleTuneChannel,
             setFrequency: handleSetFrequency,
             sstvArm,
             sstvAutoDisarm,
           }
+          // The radio in use is the station's only enabled radio: with its probed coverage,
+          // that is how the tick knows 145.800 cannot be received here at all. Read when the
+          // tick runs, as the screen is.
+          const soleRadio = () =>
+            !(settingsRef.current?.radios ?? []).some(
+              (r) => r.enabled && r.id !== snapRef.current?.activeRadioId,
+            )
           if (settingsRef.current?.issSstvAutoArm === true) {
-            getIssPass()
-              .then((issPass) =>
-                tickIssAutoArm(issPass, snapRef.current?.radio, true, issDeps, Date.now() / 1000),
+            // A satellite pass holding the dial (a transponder held) has the radio as another
+            // screen has it: the tick only announces the ISS. A failed read is no hold, as before.
+            Promise.all([getIssPass(), getSatTransponder().catch(() => null)])
+              .then(([issPass, held]) =>
+                tickIssAutoArm(
+                  issPass,
+                  snapRef.current?.radio,
+                  true,
+                  issDeps,
+                  Date.now() / 1000,
+                  viewRef.current,
+                  soleRadio(),
+                  held != null,
+                ),
               )
               // Rejection is a ROUTINE state (elements past 30 d make
               // get_iss_pass refuse) — it must still tick with no pass, or an
               // arm in flight when the refusal begins never unwinds and the
               // rig strands on 145.800 with SSTV armed (review catch).
               .catch(() =>
-                tickIssAutoArm(null, snapRef.current?.radio, true, issDeps, Date.now() / 1000),
+                tickIssAutoArm(
+                  null,
+                  snapRef.current?.radio,
+                  true,
+                  issDeps,
+                  Date.now() / 1000,
+                  viewRef.current,
+                  soleRadio(),
+                ),
               )
           } else {
-            tickIssAutoArm(null, snapRef.current?.radio, false, issDeps, Date.now() / 1000)
+            tickIssAutoArm(
+              null,
+              snapRef.current?.radio,
+              false,
+              issDeps,
+              Date.now() / 1000,
+              viewRef.current,
+            )
           }
           // One-shot alert when a band comes alive, TIERED by propagation mode:
           // Es/F2/aurora loud (rare + fleeting, aurora with operating guidance),
@@ -1072,33 +1107,34 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const refreshNeeds = useCallback(() => {
     askAgainWhileSaving(getNeedAlerts)
       .then((alerts) => setNeedAlerts(alerts))
-      .catch(() => { if (remote) setNeedAlerts([]) })
+      .catch(() => {})
   }, [])
   useEffect(() => {
-    if (remote?.stale) { setNeedAlerts([]); return }
     refreshNeeds()
     const id = setInterval(refreshNeeds, 30_000)
     return () => clearInterval(id)
-  }, [refreshNeeds, remote?.stale])
+  }, [refreshNeeds])
   // Raw spot firehose for the Spots panel (ungated, all modes). Polled faster than needs
   // since it's a live "what's on the air" view; the backend command just reads the buffer.
   const [allSpots, setAllSpots] = useState<SpotRow[]>([])
+  // The spots programs on the station's TCI server sent, for the cockpits' band strips: asked when
+  // the station says they changed. A click on one only tunes (`handleTciSpot`).
+  const tciSpots = useTciSpots(snap?.radio.tciServer?.spots)
   useEffect(() => {
-    if (remote?.stale) { setAllSpots([]); return }
     let live = true
     const load = () =>
       getAllSpots()
         .then((s) => {
           if (live) setAllSpots(s)
         })
-        .catch(() => { if (live && remote) setAllSpots([]) })
+        .catch(() => {})
     load()
     const id = setInterval(load, 15_000)
     return () => {
       live = false
       clearInterval(id)
     }
-  }, [remote?.stale])
+  }, [])
   // Gate CW/Phone needs by the operator's enabled modes — the backend emits voice/CW
   // needs unconditionally, visibility is the frontend's call. A pure-digital op's board,
   // roster colouring, and map highlight all derive from THIS gated set, so they stay
@@ -1120,7 +1156,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     const tick = snap?.workTick ?? 0
     // Native pop-outs share this hint. Independent browser drafts/navigation
     // follow only their own confirmed Work action, never a station broadcast.
-    if (remote) { workNavRef.current = tick; return }
     if (workNavRef.current === null) {
       workNavRef.current = tick
       return
@@ -1148,6 +1183,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     // holds the screen's RIG mode: PSK's is 'keyboard', JS8's is Digital's.
     lastOpModeRef.current = RIG_MODE_BY_VIEW[target] ?? 'digital'
     lastHomedModeRef.current = lastOpModeRef.current
+    // A Work from afar entered its section without arming Enable TX: open its cockpit, and let the
+    // rig-mode effect leave the section as that Work left it (`afarEntryRef`).
+    afarEntryRef.current = snap?.workAfar === true ? target : null
     setView(target)
     // Prefill the log Call from a work action fired in ANOTHER window (e.g. the pop-out band
     // map), matching the prefill an in-window click gets via handleWorkNeeded. Digital
@@ -1158,15 +1196,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     if (wc && (target === 'cw' || target === 'phone')) {
       setPendingWork({ call: wc, view: target, ts: Date.now(), park: snap?.workPark ?? null })
     }
-  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, jttyEnabled, js8Enabled, remote])
+  }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, jttyEnabled, js8Enabled])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
-  const [settings, setSettings] = useState<Settings | null>(remote?.settings ?? null)
-  useEffect(() => {
-    if (remote) setSettings(remote.settings)
-  }, [remote?.settings])
-  // #391: the corner pop-ups follow the setting. A settings file without it (and the Remote page,
-  // which is never sent it) keeps them on, as they always were.
+  const [settings, setSettings] = useState<Settings | null>(null)
+  // #391: the corner pop-ups follow the setting. A settings file without it keeps them on, as they
+  // always were.
   useEffect(() => {
     setPopupNotifications(settings?.popupNotifications !== false)
   }, [settings?.popupNotifications])
@@ -1222,10 +1257,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // the roster's "sort by need"). From the GATED alerts, so a disabled mode never colours a
   // station the board hides.
   const needByCall = useMemo(() => topNeedByCall(needAlertsByCall), [needAlertsByCall])
-  const [bandPlan, setBandPlan] = useState<BandChannel[]>(remote?.bandPlan ?? [])
-  useEffect(() => {
-    if (remote) setBandPlan(remote.bandPlan)
-  }, [remote?.bandPlan])
+  const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
   // Operators this log has already seen (#25) — the seat-swap roster. Refreshed when the
   // operator changes, which is the moment a new name can have entered the log.
   const [opRoster, setOpRoster] = useState<string[]>([])
@@ -1294,23 +1326,20 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     return () => window.removeEventListener('nexus:watchlist-changed', resync)
   }, [])
   // The retired "Wanted watch list" setting joins the watch list, once (operator, 2026-09-24:
-  // "One list"; features/watchlistFold). The desktop only: this computer's watch list is the one
-  // the entries belong on — a Remote browser's list is its own.
+  // "One list"; features/watchlistFold).
   useEffect(() => {
-    if (remote) return
     void foldRetiredWantedList()
-  }, [remote])
-  // The station puts the watch list's stations first on the Needed board — this window's and every
-  // Remote browser's (operator, 2026-09-24: "watched counts as needed") — so it is sent the list on
+  }, [])
+  // The station puts the watch list's stations first on the Needed board (operator, 2026-09-24:
+  // "watched counts as needed") — so it is sent the list on
   // launch and after every edit, and the board is read again. One send at a time, in order: the
   // station keeps whichever list reaches it last, so an earlier send finishing late would restore
   // an entry the operator has just removed.
   const watchSent = useRef<Promise<unknown>>(Promise.resolve())
   useEffect(() => {
-    if (remote) return
     const entries = watchlist.map(({ kind, value }) => ({ kind, value }))
     watchSent.current = watchSent.current.then(() => setWatchList(entries)).then(refreshNeeds, () => {})
-  }, [watchlist, remote, refreshNeeds])
+  }, [watchlist, refreshNeeds])
   const [onboardDismissed, setOnboardDismissed] = useState<boolean>(
     () => localStorage.getItem(ONBOARD_KEY) === '1',
   )
@@ -1332,8 +1361,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // initial load + live subscription
   useEffect(() => {
     let mounted = true
-    const firstSnapshot = getSnapshot().then((s) => mounted && setSnap(s))
-    if (remote) void firstSnapshot.catch(() => {}) // the hosted session owns loss/reconnect UI
+    getSnapshot().then((s) => mounted && setSnap(s))
     getBandPlan()
       .then((b) => mounted && setBandPlan(b))
       .catch(() => {})
@@ -1363,7 +1391,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
   }, [activeTier])
 
-  const activePeer = remote ? remoteSelection ?? snap?.activePeer ?? null : snap?.activePeer ?? null
+  const activePeer = snap?.activePeer ?? null
 
   // mark the active conversation as read whenever it updates
   useEffect(() => {
@@ -1417,18 +1445,16 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [snap, activePeer])
 
   const handleSelect = useCallback((call: string) => {
-    if (remote) { setRemoteSelection(call); return }
     void withErrorToast(() => apiSelectPeer(call), t('shell.error.selectStation')).then(
       (s) => s && setSnap(s),
     )
-  }, [!!remote])
+  }, [])
 
   // Confirm here rather than in StationList so every host (cockpit, detached panel) gets
   // the same guard. Unconditional is right: the recents list only renders threads that
   // have messages, so there is no empty-thread case to skip. The copy names the
   // non-obvious consequence — deleting also cancels still-queued outbound traffic.
   const handleArchive = useCallback(async (peer: string) => {
-    if (remote) return
     if (
       !(await confirmDialog({
         title: t('shell.conversation.delete.title', { peer }),
@@ -1442,7 +1468,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       () => apiArchiveConversation(peer),
       t('shell.conversation.delete.failed'),
     ).then((s) => s && setSnap(s))
-  }, [!!remote])
+  }, [])
 
   // The Map and the roster share ONE selection: the active peer. Clicking a map
   // dot selects (or, if already selected, clears) that station — and the roster
@@ -1754,6 +1780,34 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     [],
   )
 
+  // THE JS8 LISTS' SETTINGS (Settings ▸ JS8) for the cockpit, and its call list's three writes: each
+  // one field through its own verb, never the settings form, and the mirror patched with what was
+  // saved. The hosted page writes neither.
+  const js8Lists: Js8ListSettings | undefined = settings
+    ? {
+        rxBlocklist: settings.js8RxBlocklist ?? [],
+        highlightPrimary: settings.js8HighlightPrimary ?? [],
+        highlightSecondary: settings.js8HighlightSecondary ?? [],
+        eot: settings.js8Eot ?? '\u2662',
+        mfi: settings.js8Mfi ?? '\u2026\u2026',
+        sounds: settings.js8Sounds ?? [],
+        groups: settings.js8Groups ?? [],
+        avoidAllcall: settings.js8AvoidAllcall ?? false,
+        setRxBlocklist: async (calls: string[]) => {
+          const saved = await withErrorToast(() => js8SetRxBlocklist(calls), t('js8.lists.saveFailed'))
+          if (saved) setSettings((prev) => (prev ? { ...prev, js8RxBlocklist: saved } : prev))
+        },
+        setGroups: async (groups: string[]) => {
+          const saved = await withErrorToast(() => js8SetGroups(groups), t('js8.lists.saveFailed'))
+          if (saved) setSettings((prev) => (prev ? { ...prev, js8Groups: saved } : prev))
+        },
+        setAvoidAllcall: async (avoid: boolean) => {
+          const saved = await withErrorToast(() => js8SetAvoidAllcall(avoid), t('js8.lists.saveFailed'))
+          if (saved !== null) setSettings((prev) => (prev ? { ...prev, js8AvoidAllcall: saved } : prev))
+        },
+      }
+    : undefined
+
   const handleSstvTune = useCallback(
     (dialMhz: number, band: string, mode: string) => {
       void withErrorToast(
@@ -1783,15 +1837,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // must be put in FM explicitly — otherwise it keeps the prior section's DATA/USB mode and the
   // 2 m packet never demodulates. Clearing the mode override is handled backend-side on the next QSY.
   const handleAprsTune = useCallback((dialMhz: number) => {
-    // A browser's refusal carries data, not operator text: name it plainly.
-    if (remote) {
-      void aprsTune(dialMhz).then((s) => { if (s) setSnap(s) }).catch((e) => pushToast(controlFailureMessage(e), 'error', 4000))
-      return
-    }
     void withErrorToast(() => aprsTune(dialMhz), t('shell.aprs.tune.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [!!remote])
+  }, [])
 
   const handleSetTxEnabled = useCallback((enabled: boolean) => {
     void withErrorToast(
@@ -1899,20 +1948,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Waterfall click: left-click sets RX only; shift/right-click sets TX;
   // Ctrl/Command sets both. Hold Tx belongs to decode/QSO selection, not this click.
   const handleTune = useCallback((hz: number, target: 'tx' | 'rx' | 'both') => {
-    if (remote) {
-      if (target === 'rx') {
-        if (ftRuntimeControl && snap?.remoteFtRuntime) {
-          const context = { expectedTier: snap.link.tier, expected: snap.remoteFtRuntime }
-          void withErrorToast(() => apiSetRxOffset(hz, context), t('shell.offset.failed')).then(s => { if (s) setSnap(s) })
-        } else receiverSettingsRef.current.tuneRx(hz)
-      }
-      else {
-        const context = snap ? { expectedTier: snap.link.tier, expected: snap.remoteFtSettings } : undefined
-        void withErrorToast(() => target === 'tx' ? apiSetTxOffset(hz, context) : apiSetBothOffsets(hz, context), t('shell.offset.failed'))
-          .then(s => { if (s) setSnap(s) })
-      }
-      return
-    }
     // Stock WSJT-X gestures (Waterfall dispatches): 'rx' = click, 'tx' = Shift, 'both' = Ctrl.
     const call =
       target === 'rx'
@@ -1923,7 +1958,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     void withErrorToast(call, t('shell.offset.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [remote, snap, ftRuntimeControl])
+  }, [])
 
   // QSY from the Needed panel: move the rig to that band's channel and listen.
   const handleQsy = useCallback(
@@ -1959,29 +1994,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // retunes (same behavior as the Needed board's work-click).
   const recallMemory = useCallback(
     (m: Memory) => {
-      if (remote) {
-        // A browser recall: the station applies the memory (section, exact dial, phone mode, FM
-        // machine, sideband) as one transaction. No Settings write and no browser bank write here,
-        // and the station never arms transmit for it.
-        const request = remoteRecallAllowed ? remoteRecallArgs(m) : null
-        if (!request) return
-        const target = request.view
-        if ((target === 'cw' && !cwEnabled) || (target === 'phone' && !phoneEnabled)) {
-          pushToast(t('shell.recall.sectionOff', { section: target === 'cw' ? 'CW' : 'Phone' }), 'info', 4000)
-          return
-        }
-        void remoteRecallMemory(request.args)
-          .then((s) => {
-            if (s) setSnap(s)
-            const opMode = request.args.section
-            lastOpModeRef.current = opMode
-            lastHomedModeRef.current = opMode // recalled to an EXACT dial — do not re-home
-            setView(target)
-            pushToast(t('shell.recall.done', { name: m.name, freq: request.args.dialMhz.toFixed(3), mode: m.mode }), 'success', 2500)
-          })
-          .catch((e) => pushToast(controlFailureMessage(e), 'error', 4000))
-        return
-      }
       const plan = planRecall(m)
       const target = plan.view
       const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
@@ -2061,7 +2073,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         }
       })()
     },
-    [cwEnabled, phoneEnabled, !!remote, remoteRecallAllowed],
+    [cwEnabled, phoneEnabled],
   )
 
   // Global quick-recall hotkeys: Ctrl+1..9 (or ⌘+1..9 — the native chord on macOS, where
@@ -2119,7 +2131,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     return () => window.clearInterval(id)
   }, [recallMemory])
 
-  // Click-to-work ANY needed spot (CW / Phone / Digital): N1MM-style single click that
+  // Click-to-work ANY needed spot (CW / Phone / Digital): a single click that
   // changes the band, mode, AND frequency to exactly the spot's — in ONE atomic backend call
   // (`workSpot`) so the rig can never end up in the new mode at the old dial (no wrong-mode
   // flash) and the UI never sees a half-applied mode/freq state. Then open the matching
@@ -2150,28 +2162,16 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         3000,
       )
     } catch (e) {
-      pushToast(remote ? controlFailureMessage(e) : typeof e === 'string' ? e : t('shell.rotator.failed', { call }), 'error', 4000)
+      pushToast(typeof e === 'string' ? e : t('shell.rotator.failed', { call }), 'error', 4000)
     }
-  }, [!!remote])
-
-  const canRemoteWork = useCallback((alert: NeedAlert) => remoteWorkable(alert, bandPlan,
-    { workSpot: remoteWorkAllowed, workDigitalSpot: remoteDigitalWorkAllowed, workRttySpot: remoteRttyWorkAllowed,
-      cwEnabled, phoneEnabled, rttyEnabled }),
-  [remoteWorkAllowed, remoteDigitalWorkAllowed, remoteRttyWorkAllowed, bandPlan, cwEnabled, phoneEnabled, rttyEnabled])
-  const canRemoteWorkSpot = useCallback((s: SpotRow) => canRemoteWork(spotNeed(s)), [canRemoteWork])
+  }, [])
 
   // resolvable frequency at all falls back to a plain band QSY.
   const handleWorkNeeded = useCallback(
     async (alert: NeedAlert) => {
-      if (remote && !canRemoteWork(alert)) {
-        // The map and DXpedition Work buttons reach here for every spot; say why nothing moved.
-        pushToast(t('remote.b1.workUnavailable'), 'info', 4000)
-        return
-      }
-      // A row heard in JS8, JTTY or a PSK mode works on that mode's own screen (`ownScreen`) while it
-      // is switched on, at the row's own frequency or that screen's channel for the band. A browser
-      // has no Work for any of them, so its rows keep the target they always had.
-      const screen = remote ? null : ownScreen(alert)
+      // A row heard in JS8, JTTY or a PSK mode works on that mode's own screen (`ownScreen`) while it is
+      // switched on, at the row's own frequency or that screen's channel for the band.
+      const screen = ownScreen(alert)
       let own: OwnScreen | null = null
       if (screen && (screen === 'js8' ? js8Enabled : screen === 'jtty' ? jttyEnabled : pskEnabled)) {
         const plan = await withErrorToast(
@@ -2215,7 +2215,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // operator watching the QSY land, working the park, and logging it with no reference at
       // all. The work still proceeds on a failed tag — the station is real and the operator can
       // add the reference by hand; refusing the QSY would be the bigger surprise.
-      const park = remote ? null : (alert.park ?? null)
+      const park = alert.park ?? null
       const fillsLogLine = (target.view === 'cw' && cwEnabled) || (target.view === 'phone' && phoneEnabled)
       if (park && !fillsLogLine) {
         await withErrorToast(
@@ -2255,8 +2255,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         // JS8's screen rides the same call as the JS8 tier.
         let tier: 'FT8' | 'FT4' | 'JS8' | undefined
         const named = target.view === 'js8' ? 'JS8' : target.view === 'operate' ? workTier(alert) : null
-        // A browser always names the tier: its Work intent carries no implicit current tier.
-        if (named && (remote || tierRef.current !== named)) tier = named
+        if (named && tierRef.current !== named) tier = named
         // The park rides the work too, so the work hint below says the same as this click, as it
         // does for a pop-out board's: the snapshot's echo of a park row must not hand the log line
         // the call alone.
@@ -2297,7 +2296,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         )
       })()
     },
-    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, jttyEnabled, js8Enabled, remote, canRemoteWork],
+    [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, jttyEnabled, js8Enabled],
   )
 
   // Work a spot double-clicked on the MAP — the same atomic path as the Needed
@@ -2395,7 +2394,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // act: go to that cockpit.
   const handleWorkSpotHere = useCallback(
     (cockpit: 'phone' | 'cw') => (s: SpotRow) => {
-      if (remote && !remoteWorkAllowed) return
       const kind = cockpit
       void withErrorToast(
         () => workSpot(kind as 'digital' | 'phone' | 'cw', s.freqMhz, s.band, s.call),
@@ -2403,7 +2401,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       ).then((snap) => {
         if (!snap) return
         setSnap(snap)
-        if (remote) setPendingWork({ call: s.call, view: cockpit, ts: Date.now() })
         pushToast(
           t('shell.work.here', { call: s.call, band: s.band, freq: s.freqMhz.toFixed(3) }),
           'success',
@@ -2411,9 +2408,21 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         )
       })
     },
-    [remote, remoteWorkAllowed],
+    [],
   )
   const workSpotHerePhone = useMemo(() => handleWorkSpotHere('phone'), [handleWorkSpotHere])
+  // ⛔ A click on a program's spot (Share by TCI) in a cockpit's band strip: the station tunes there
+  // and tells every program, and that is all. Never the Work above, whose section entry arms.
+  const handleTciSpot = useCallback((s: SpotRow) => {
+    void withErrorToast(
+      () => clickTciSpot(s.call, s.freqMhz),
+      t('shell.pounce.qsy.failed', { call: s.call }),
+    ).then((next) => {
+      if (!next) return
+      setSnap(next)
+      pushToast(t('shell.work.here', { call: s.call, band: s.band, freq: s.freqMhz.toFixed(3) }), 'success', 3000)
+    })
+  }, [])
   const workSpotHereCw = useMemo(() => handleWorkSpotHere('cw'), [handleWorkSpotHere])
 
   const handleWorkSpot = useCallback(
@@ -2434,7 +2443,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [])
 
   const handleSetMode = useCallback((mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null) => {
-    void withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
+    return withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
       // A contest that starts about to send the DX exchange from a US or Canadian call says so,
       // loudly and once, as it starts (the strip keeps saying it). Never a refusal.
@@ -2487,11 +2496,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     undefined,
   )
 
+  // The contest re-entry an opened screen asked for, until the engine answers. Until then the snapshot
+  // still shows the station out of the contest, and the CW and Phone log lines must not call it stopped.
+  const [contestReentering, setContestReentering] = useState(false)
+
   const handleView = useCallback(
     (next: View) => {
       setView(next)
       if (next !== 'settings') setSettingsTarget(undefined)
-      if (remote) return // Opening an observed screen does not change the station mode.
       // Passive-first: entering QSO / Field Day starts in Search-&-Pounce
       // (listen + answer), never auto-calling CQ. The operator hits "Call CQ" /
       // "Running" in the panel to start transmitting.
@@ -2503,11 +2515,29 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // from inside the contest stopped a run's CQs and dropped the contact being worked —
       // every time the operator looked at the score. A station already in the contest keeps
       // its role.
-      else if (next === 'fieldDay' && settings?.fdActive === true && snap?.mode !== 'fieldDay')
-        handleSetMode('fieldday-sp')
+      // The CW and Phone screens too: their log line IS the contest's while the session runs, and
+      // with the mode on and the session dropped (a trip to Chat, a tier switch) it fell back to the
+      // everyday form, with no exchange boxes and no dupe check.
+      else if (
+        (next === 'fieldDay' || next === 'cw' || next === 'phone') &&
+        settings?.fdActive === true &&
+        snap?.mode !== 'fieldDay'
+      ) {
+        setContestReentering(true)
+        void handleSetMode('fieldday-sp').finally(() => setContestReentering(false))
+      }
     },
-    [handleSetMode, !!remote, settings?.fdActive, snap?.mode],
+    [handleSetMode, settings?.fdActive, snap?.mode],
   )
+
+  // ⭐ "WORK THIS CONTEST IN CW / IN PHONE" FROM A CONTEST WINDOW (features/contestWorkIn): the same switch
+  // as the rail's, so the contest's S&P is entered where the session dropped and a station already in
+  // the contest keeps its role, and then this window comes to the front, where the operator asked to be.
+  // The Contest screen here passes `handleView` itself.
+  useWorkInRequests((next) => {
+    handleView(next)
+    void focusWindow().catch(() => {})
+  })
 
   // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): the Contest screen, with an ask its
   // operator box answers by taking the caret. Only the view changes. A key in a log line leaves the
@@ -2608,7 +2638,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         /* ignore */
       }
       setView('operate')
-      if (remote) return
       // The codec tier (FT8/FT4) is INDEPENDENT of the rig's CAT mode — switching tiers does
       // NOT command the Yaesu into DATA-U. Assert the digital rig mode explicitly here:
       // clicking a Digital sub-mode while already on the Operate screen doesn't change `view`,
@@ -2725,23 +2754,20 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // the top of it: hidden while the mode is off, the screen could only ever turn the mode off.
   // What the mode reveals still follows the persisted master switch (settings.fdActive) and
   // nothing else: the Class/Section exchange in every cockpit, the Club Board button, and
-  // entering the contest when the screen opens (`handleView`). A Remote observer, who cannot
-  // press the switch, keeps the old rule: the screen only while the station's mode is on.
+  // entering the contest when the screen opens (`handleView`).
   const fdActive = settings?.fdActive === true
-  const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: remote ? fdActive : true }
+  const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: true }
   const isViewEnabled = (v: View): boolean => navEnabled[v as FeatureId] !== false
-  // A visible navigation item is not evidence that its station API is connected.
-  // In particular, never mount SettingsPanel with the projected operating view:
-  // it expects complete configuration and could display absent values as defaults.
-  const isRemoteViewAvailable = (v: View): boolean => !remote || v === 'operate' || v === 'chat' || (!!remote.collections && ['needed', 'spots', 'logbook'].includes(v)) || (!!remote.cwPhone && (v === 'cw' || v === 'phone')) || (!!remote.keyboard && (v === 'rtty' || v === 'psk')) || (!!remote.insights && (v === 'awards' || v === 'stats')) || (!!remote.dxpeditions && v === 'dxped') || (!!remote.memories && v === 'memories') || (!!remote.ota && v === 'pota') || (!!remote.fieldDay && v === 'fieldDay') || (!!remote.js8 && v === 'js8') || (!!remote.stationModes && (v === 'sstv' || v === 'aprs')) || (!!remote.navigation && (v === 'connect' || v === 'sats')) || (!!remote.configuration && (v === 'settings' || v === 'program'))
 
   // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
   // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
   // section is switched off in this build, which is what keeps the row from advertising a
-  // navigation that would go nowhere. Every cockpit that mounts a recall card gets it.
+  // navigation that would go nowhere. Every cockpit that mounts a recall card gets it. Given a
+  // contact's id (a recall row, a recent contact, an Awards row) the Logbook also opens its editor on
+  // that contact: the one editor, and the one write path.
   const openLogbookFor = isViewEnabled('logbook')
-    ? (call: string) => {
-        setLogFocus({ call, ts: Date.now() })
+    ? (call: string, id?: string | null) => {
+        setLogFocus({ call, ts: Date.now(), editId: id ?? null })
         setView('logbook')
       }
     : undefined
@@ -2753,24 +2779,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // the master is off) → operate.
   const fallbackView: View = isViewEnabled(features.landing) ? features.landing : 'operate'
   const effectiveView: View = isViewEnabled(view) ? view : fallbackView
-  // The remote contact forms stay in their original component tree while the
-  // operator checks a needed station or the log. Mount only after first use;
-  // hidden hosts lose data interest and gesture authority, not the QSO draft.
-  // The native cockpit lifecycle (including its TX cleanup) is unchanged.
-  const [remoteContacts, setRemoteContacts] = useState({ cw: false, phone: false })
-  useEffect(() => {
-    if (!remote?.cwPhone || (effectiveView !== 'cw' && effectiveView !== 'phone')) return
-    setRemoteContacts((seen) => seen[effectiveView] ? seen : { ...seen, [effectiveView]: true })
-  }, [remote?.cwPhone, effectiveView])
   // Where the crash panel's escape button goes. The landing view normally — unless the
   // landing view is the one that just crashed (a vhf profile lands on Connect), in which
   // case Operate: it is a core section, so it can never be the disabled one.
   const crashEscape: View = fallbackView === effectiveView ? 'operate' : fallbackView
   // The section the dashboard rail stands beside, when the view on screen is an operating cockpit.
-  // Never on the hosted Remote page: the rail's feeds are not on its read list, and its boxes are the
-  // Connect page's there.
   const { isOn: railIsOn, setOn: setRailOn } = dashRail
-  const railSection: DashRailSection | null = !remote && isDashRailSection(effectiveView) ? effectiveView : null
+  const railSection: DashRailSection | null = isDashRailSection(effectiveView) ? effectiveView : null
   const railShown = railSection != null && railFits && railIsOn(railSection)
   // ON A WINDOW TOO SMALL FOR IT (the operator's "They move into the columns"): beside FT, Phone, CW and
   // JS8 the rail's boxes stand in the cockpit's columns instead, until the window is wide enough again.
@@ -2832,31 +2847,20 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Satellites draw no stop control (the top bar's is hidden there) — so App sends that halt while
   // one of them is on show, on the shared listener the cockpits' own Esc rides too (useEscStop:
   // capture phase, never preventDefault, stop authority only). So on the same press a menu or dialog
-  // still closes, Satellites still closes the bird detail, the voice keyer still stops itself, and
-  // an observer's Esc on the hosted page is no halt at all.
+  // still closes, Satellites still closes the bird detail, and the voice keyer still stops itself.
   // JTTY TOO: its TX strip's Stop TX is the plain halt (it transmits nothing of its own yet), so App
   // binds its Esc here, as Phone's and SSTV's.
-  // CONNECT TOO (N65, the operator's ruling 2026-10-01: "remove all radio control from connect, reclaim that space"): the
+  // CONNECT TOO (the operator's ruling 2026-10-01: "remove all radio control from connect, reclaim that space"): the
   // top bar is not drawn on Connect, so its Stop TX went with it; without this nothing there could cut an over that Operate's
   // background sequence is still keying. 'connect' is in ESC_HALT_VIEWS, so it is this same call, stop authority included.
-  // ON THE HOSTED PAGE, CW, RTTY, PSK AND JS8 TOO (2026-10-02). Their own Esc binds only with local
-  // control, which a browser never has, so it did nothing there while their Stop TX stopped the
-  // station: in a browser that button is the TX strip's remote stop, this same haltTx (their own
-  // verbs have no remote route). App sends it while one of them, with its Stop TX, is on show. The
-  // desktop is unchanged: there `remote` is unset and each binds its own.
   // THE CONTEST SCREEN TOO, WHILE ITS ENTRY SHOWS (2026-10-11). With a contest running the screen
   // takes contacts in the logger window's large entry (`ContestLargeEntry`, in the workspace switch
   // below), a contest strip in this window, so its Esc is this window's: the halt, as in the Phone
-  // LOG pane, and the entry keeps what it holds (the logger window's own Esc clears, because nothing
-  // there transmits). With no contest running there is no entry, and Esc there is as it was. Not on
-  // the hosted page, whose Contest screen is an observation with no entry.
-  const contestEntryShown = !remote && effectiveView === 'fieldDay' && snap?.fieldDay != null
-  useEscStop(
-    ESC_HALT_VIEWS.has(effectiveView) ||
-      (!!remote && HOSTED_ESC_HALT_VIEWS.has(effectiveView) && isRemoteViewAvailable(effectiveView)) ||
-      contestEntryShown,
-    handleHaltTx,
-  )
+  // LOG pane, and the entry keeps what it holds (the logger window's own Esc halts and clears:
+  // DetachedPanel binds the halt in every contest window). With no contest running there is no entry,
+  // and Esc there is as it was.
+  const contestEntryShown = effectiveView === 'fieldDay' && snap?.fieldDay != null
+  useEscStop(ESC_HALT_VIEWS.has(effectiveView) || contestEntryShown, handleHaltTx)
   // …AND ITS F-KEYS DO NOTHING, as in the logger window: nothing on that entry sends a message, and
   // the webview's own F-key actions are held too, so an F5 reached for out of habit cannot reload the
   // window in the middle of a contact. With Alt, Ctrl or Cmd held a key is the system's (Alt+F4
@@ -2880,6 +2884,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   if (!snap) {
     return (
       <div className="app loading">
+        {/* On a computer driving another station, what it waits for: connecting, control held
+            elsewhere, or why the station did not take it. Nothing on a station's own screen. */}
+        <ClientBanner />
         <span>{t('shell.loading')}</span>
       </div>
     )
@@ -3003,6 +3010,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         rxOffsetHz={snap.radio.rxOffsetHz}
         band={snap.radio.band}
         tier={snap.link.tier}
+        periodSecs={snap.link.periodSecs}
         harqRescues={snap.harqRescues}
         onCall={handleCall}
         needAlertsByCall={needAlertsByCall}
@@ -3063,11 +3071,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     myGrid: snap.mygrid,
     onSelect: handleSelect,
     onWork: handleWorkSpot,
-    canWork: remote ? canRemoteWorkSpot : undefined,
     // The BOARD's feed (band scopes honoured, mode-feature neutral), because the panel asks
     // it exactly what the Needed board would say: is this station still needed on the band
     // and mode it is spotted on? If so, Hide worked leaves it alone.
     needAlerts: boardAlerts,
+    // The Spot me in the board's head (SpotsSpotMe): the station's mode, which its comment names.
+    spotMe: { section: snap.radio.operatingMode, sideband: snap.radio.sideband, tier },
   }
   const neededBoard = {
     // Un-gated by MODE FEATURE — the board's own per-mode toggles decide what shows,
@@ -3081,9 +3090,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     onQsy: (a: NeedAlert) => handleQsy(a.band, a.freqMhz ?? undefined),
     onSelect: handleSelect,
     onWork: handleWorkNeeded,
-    canWork: remote ? canRemoteWork : undefined,
     onPoint:
-      (!remote || remoteRotatorAllowed) && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
+      ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
         ? handlePointAntenna
         : undefined,
     onOpenSettings: openSettingsAt,
@@ -3110,14 +3118,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     needAlerts: visibleAlerts,
     amp: snap.radio.amp ?? null,
     rigBand: snap.radio.band ?? null,
+    fieldDay: snap.fieldDay ?? null,
     onWorkSpot: handleWorkMapSpot,
     onPoint: (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined,
     spotsFeed: { rows: allSpots, board: spotsBoard },
     otaBoard: { snap, onHunt: handleHuntSpot, onSnap: setSnap },
     neededBoard,
   }
-  // The cockpits' boxes are the desktop's: the Remote page keeps its own panes.
-  const cockpitBoxes = remote ? undefined : boxSource
+  const cockpitBoxes = boxSource
   // ONCE PER SCREEN, ACROSS THE COCKPIT AND THE RAIL BESIDE IT (the operator's "Once per screen"): one reading
   // of what the two show, made here, where both records live. The cockpit's own Spots and Needed panes come
   // first, then the rail's slots, then the cockpit's boxes: a slot whose board the cockpit shows as a pane of
@@ -3190,10 +3198,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }
   /** ENTER SENDS MESSAGE's switch for one cockpit, as Settings holds it, and the TX dock switch's
    *  save: that one field (`set_contest_esm`), never a settings-form save, which would clear the
-   *  transmit queues mid-contest. Shown at once and put back if the save fails. Never on the
-   *  hosted page: ESM is the station's own window's. */
+   *  transmit queues mid-contest. Shown at once and put back if the save fails. */
   const esmSettingFor = (cockpit: 'cw' | 'rtty' | 'phone'): EsmSetting | undefined => {
-    if (remote) return undefined
     const field = cockpit === 'cw' ? 'contestEsmCw' : cockpit === 'rtty' ? 'contestEsmRtty' : 'contestEsmPhone'
     return {
       on: settings?.[field] === true,
@@ -3208,10 +3214,32 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       },
     }
   }
+  // CW speed match's switch in the CW contest strip: saved alone, as ESM's is.
+  const cwSpeedMatch = {
+    on: settings?.cwSpeedMatch === true,
+    onSwitch: (on: boolean) => {
+      setSettings((prev) => (prev ? { ...prev, cwSpeedMatch: on } : prev))
+      setCwSpeedMatch(on).catch(() => {
+        setSettings((prev) => (prev ? { ...prev, cwSpeedMatch: !on } : prev))
+        pushToast(t('cw.speedMatch.failed'), 'error')
+      })
+    },
+  }
+  // CONTEST MODE ON, THE CONTEST NOT RUNNING: the CW and Phone log lines say so, with Resume, which enters
+  // the contest's S&P (never a CQ). Opening either screen re-enters on its own (`handleView`); this is for
+  // a session that did not come back, or dropped while the screen was open. Not while that re-entry is
+  // still on its way: the line would flash for the one snapshot before it lands.
+  const resumeContest =
+    settings?.fdActive === true && snap.mode !== 'fieldDay' && !contestReentering
+      ? () => void handleSetMode('fieldday-sp')
+      : undefined
   const cwWorkspace = (
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
-      active={!remote || (effectiveView === 'cw' && !remote.stale)}
+      speedMatch={cwSpeedMatch}
+      turnSound={settings?.soundCwTurn === true}
+      announceVerbosity={settings?.announceVerbosity ?? 'needed'}
+      onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
@@ -3223,6 +3251,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       onSnap={setSnap}
       fieldDay={snap.fieldDay}
       spots={allSpots}
+      tciSpots={tciSpots}
+      onTciSpot={handleTciSpot}
       needByCall={needByCall}
       typeByCall={typeByCall}
       onWorkSpot={workSpotHereCw}
@@ -3238,7 +3268,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const phoneWorkspace = (
     <PhoneCockpit
       esmSetting={esmSettingFor('phone')}
-      active={!remote || (effectiveView === 'phone' && !remote.stale)}
+      onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}
       snap={snap}
@@ -3251,6 +3281,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       phoneMode={settings?.phoneMode}
       wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
       spots={allSpots}
+      tciSpots={tciSpots}
+      onTciSpot={handleTciSpot}
       needByCall={needByCall}
       typeByCall={typeByCall}
       onWorkSpot={workSpotHerePhone}
@@ -3315,7 +3347,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // on its banner, here and nowhere else (not the logger window's copy, nor the Remote page's);
       // while the window is open, one line stands where the screen was, with Bring it back, and the
       // entry, its operator box and Ctrl+O stay this window's. ContestScreenWindow.tsx has the rest.
-      workspace = remote ? <RemoteFieldDay tier={tier} /> : (
+      workspace = (
         <div className="contest-screen">
           {snap.fieldDay && (
             <ContestLargeEntry
@@ -3328,6 +3360,19 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               onSaveOperator={handleSetOperator}
               operatorAsk={operatorAsk}
               onOperatorFocused={() => setOperatorAsk(0)}
+              barEnd={
+                // ⭐ THE ENTRY ALONE IN A WINDOW (the operator: the screen is cluttered): the contest
+                // logger window in its entry-only layout, sharing this entry as that window always does.
+                <button
+                  type="button"
+                  className="contest-logger-toggle"
+                  title={t('contestScreen.entry.popOut.title')}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => void openContestLogger('entry')}
+                >
+                  {t('contestScreen.entry.popOut.label')}
+                </button>
+              }
             />
           )}
           <main className="layout single">
@@ -3348,7 +3393,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 operatorAsk={operatorAsk}
                 onOperatorFocused={() => setOperatorAsk(0)}
                 operatorBoxAbove={snap.fieldDay != null}
+                entryAbove={snap.fieldDay != null}
                 onPopOut={contestScreen.popOut}
+                onWorkIn={handleView}
               />
             )}
           </main>
@@ -3395,35 +3442,36 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       break
     case 'needed':
       workspace = (
-        <NeededPanel {...neededBoard} onPopOut={remote ? undefined : () => void openPanelWindow('needed')} />
+        <NeededPanel {...neededBoard} onPopOut={() => void openPanelWindow('needed')} />
       )
       break
     case 'spots':
-      workspace = <SpotsPanel spots={allSpots} {...spotsBoard} />
+      workspace = (
+        <SpotsPanel spots={allSpots} {...spotsBoard} onPopOut={() => void openPanelWindow('spots')} />
+      )
       break
     case 'awards':
       // Awards + Journey combined: one section, tabbed (Journey + Official Awards).
-      workspace = remote ? <RemoteInsights kind="awards" showGamification={features.isOn('gamification')} /> : (
+      workspace = (
         <AwardsJourney
           showGamification={features.isOn('gamification')}
           onOpenSettings={openSettingsAt}
+          onOpenLogbook={openLogbookFor}
         />
       )
       break
     case 'stats':
       // Descriptive logbook analytics — the log sliced by band/mode/year/hour/entity.
-      workspace = remote ? <RemoteInsights kind="statistics" /> : <StatsView />
+      workspace = <StatsView />
       break
     case 'cw':
-      if (remote) workspace = null
-      else workspace = cwWorkspace
+      workspace = cwWorkspace
       break
     case 'phone':
-      if (remote) workspace = null
-      else workspace = phoneWorkspace
+      workspace = phoneWorkspace
       break
     case 'pota':
-      workspace = remote ? <RemoteOta snap={snap} onHunt={handleHuntSpot} /> : (
+      workspace = (
         <main className="layout single">
           <PotaSotaView
             snap={snap}
@@ -3465,6 +3513,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onThemeChange={setTheme}
             skin={skin}
             onSkinChange={setSkin}
+            paintedTheme={theme}
             fieldMode={fieldMode}
             onFieldModeChange={setFieldMode}
             highContrast={highContrast}
@@ -3517,25 +3566,26 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           selectedCall={activePeer}
           onSelectCall={handleMapSelect}
           needByCall={needByCall}
-          onWorkSpot={remote && !remoteWorkAllowed && !remoteDigitalWorkAllowed && !remoteRttyWorkAllowed ? undefined : handleWorkMapSpot}
+          onWorkSpot={handleWorkMapSpot}
           needAlerts={visibleAlerts}
           // The amplifier rides the snapshot App already polls at 300 ms — no fourth poller,
           // no new command. Absent when none is configured, and the pane then renders nothing.
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
+          fieldDay={snap?.fieldDay ?? null}
           // The Spots, POTA/SOTA and Needed boxes are the boards themselves: the Spots view's own
           // `spotsBoard` and feed, the POTA/SOTA view's own hunt wiring and the Needed view's own
           // `neededBoard`, handed over whole so a Work or a HUNT from a box is the view's act. A
           // browser's POTA/SOTA board is RemoteOta, a different surface, so a browser's box gets no
           // hunt wiring (its one line); and the Needed box is the desktop's for now (2026-10-07).
           spotsFeed={{ rows: allSpots, board: spotsBoard }}
-          otaBoard={remote ? undefined : { snap, onHunt: handleHuntSpot, onSnap: setSnap }}
-          neededBoard={remote ? undefined : neededBoard}
+          otaBoard={{ snap, onHunt: handleHuntSpot, onSnap: setSnap }}
+          neededBoard={neededBoard}
           // Rotor is configured EITHER by picking a model (Nexus launches the
           // bundled rotctld) OR by the advanced external host — host-only was
           // the pre-rotctld gate and silently disabled point-at for model users.
           onPoint={
-            (!remote || remoteRotatorAllowed) && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
+            ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
               ? handlePointAntenna
               : undefined
           }
@@ -3557,7 +3607,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       )
       break
     case 'dxped':
-      workspace = remote ? <RemoteDxpeditions onWorkSpot={remoteWorkAllowed || remoteDigitalWorkAllowed || remoteRttyWorkAllowed ? handleWorkMapSpot : undefined} /> : (
+      workspace = (
         <main className="layout single">
           <DxpeditionsView
             snap={prop}
@@ -3588,7 +3638,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     case 'memories':
       // A manager view — never touches the rig on entry; only an explicit
       // Tune (recallMemory) retunes + switches cockpit.
-      workspace = remote ? <RemoteMemories myGrid={settings?.mygrid ?? ''} onRecall={recallMemory} /> : (
+      workspace = (
         <main className="layout single">
           <MemoriesView
             onPopOut={() => void openPanelWindow('memories')}
@@ -3735,24 +3785,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       break
   }
 
-  if (!isRemoteViewAvailable(effectiveView)) workspace = (
-    <main className="layout single">
-      <section className="panel remote-view-unavailable" role="status">
-        <h2>{featureById(effectiveView)?.label ?? t('features.settings.label')}</h2>
-        <p>{t('remote.viewUnavailable')}</p>
-      </section>
-    </main>
-  )
-
-  if (remote?.collections && ((effectiveView === 'needed' && needsRead?.phase !== 'ready') || (effectiveView === 'spots' && spotsRead?.phase !== 'ready'))) {
-    const unavailable = remote.stale || (effectiveView === 'needed' ? needsRead : spotsRead)?.phase === 'unavailable'
-    workspace = <main className="layout single"><p role="status">{unavailable ? t('remote.collectionUnavailable') : t('remote.collectionLoading')}</p></main>
-  }
-
   return (
-    <div className={`app${remote ? ' remote-workspace' : ''}${quick ? ' remote-quick-workspace' : ''}`} data-remote-presentation={remote ? display?.presentation ?? 'full' : undefined} data-remote-view={remote ? effectiveView : undefined} data-remote-stale={(remote?.staleShown ?? remote?.stale) || undefined}>
-      {remote?.status}
-      {remote?.collections && (effectiveView === 'needed' || effectiveView === 'spots') && <div className="remote-application-status"><CollectionStatus name={effectiveView === 'needed' ? 'needs' : 'spots'} /></div>}
+    <div className="app">
+      <ClientBanner />
       {/* ⚠️ NOT ON CONNECT, by the operator's ruling (2026-10-01): "at very top, its the frequency, the
           band dropdown, tx off, tune, stop tx.  That bar doenst need to live in connect/conditions",
           then "remove all radio control from connect, reclaim that space". So the whole bar goes on
@@ -3853,7 +3888,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           defers a retune while a slot is actively transmitting (rigs reject VFO/mode changes
           mid-TX), so a click during our own over is applied at the next safe moment rather than
           keying across it. This removes a UI refusal, not a TX-path guard.
-          Still notify-never-act ([[feedback-alerts-notify-never-act]]): Nexus does not move the
+          Still notify-never-act: Nexus does not move the
           radio on its own here — this is a button the operator presses. */}
       <PounceBanner alert={pounceAlert} onDismiss={dismissPounce} onWork={handlePounceWork} myGrid={snap.mygrid} />
 
@@ -3879,7 +3914,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         feedHealth={feedHealth}
         connectEnabled={features.isOn('connect')}
         dxpedEnabled={features.isOn('dxped')}
-        needsAvailable={!remote || (needsRead?.phase === 'ready' && !remote.stale)}
+        needsAvailable
         onNavigate={handleView}
         // Profile-declared chip emphasis (dangling since the profiles landed).
         // A hand-blended feature set is tagged 'custom' (no profile) → default order.
@@ -3909,11 +3944,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // master switch (`clubBoard`) and NOT club sync — the board used to be
           // reachable only from inside ContestView once sync was already on, which is
           // exactly why nobody found it.
-          onClubBoard={remote ? undefined : () => void openPanelWindow('fdclub')}
+          onClubBoard={() => void openPanelWindow('fdclub')}
           clubBoard={fdActive}
           // The Contest item's tooltip names the picked contest; a blank pick is ARRL Field
           // Day, as it is to the engine.
           contest={settings ? contestName(settings.fdEvent?.trim() || 'arrlfd') : undefined}
+          // The mode badge names the contest the engine runs: the session's, never the pick, which
+          // the engine runs as ARRL Field Day when the loaded rules do not carry it.
+          runningContest={snap.fieldDay?.event}
         />
         {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
             A render throw in a view used to unmount the ENTIRE root (0.24.6 field
@@ -4000,26 +4038,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               boxes={boxesFor('operate')}
             />
           </div>
-          {remote?.cwPhone && isViewEnabled('cw') && (remoteContacts.cw || effectiveView === 'cw') && (
-            <div className="remote-contact-host" hidden={effectiveView !== 'cw'}>
-              <StationDataContext.Provider value={effectiveView === 'cw' && !remote.stale}>
-                {cwWorkspace}
-              </StationDataContext.Provider>
-            </div>
-          )}
-          {remote?.cwPhone && isViewEnabled('phone') && (remoteContacts.phone || effectiveView === 'phone') && (
-            <div className="remote-contact-host" hidden={effectiveView !== 'phone'}>
-              <StationDataContext.Provider value={effectiveView === 'phone' && !remote.stale}>
-                {phoneWorkspace}
-              </StationDataContext.Provider>
-            </div>
-          )}
           {/* RTTY + SSTV keep-alive hosts (same pattern as .operate-host): the decoded
               RTTY stream and the always-armed SSTV VIS receiver keep accumulating in
               the backend while the operator is on another section; `active` gates only
               each view's display poll (the OperateCockpit pattern). Gated on the
               feature toggle so a disabled section mounts nothing. */}
-          {isRemoteViewAvailable('rtty') && isViewEnabled('rtty') && (
+          {isViewEnabled('rtty') && (
             <div className="rtty-host" hidden={effectiveView !== 'rtty'}>
               <RttyCockpit
                 esmSetting={esmSettingFor('rtty')}
@@ -4029,7 +4053,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 onSnap={setSnap}
                 active={effectiveView === 'rtty'}
                 onSetFrequency={handleSetFrequency}
-                onSetTxEnabled={remote ? undefined : handleSetTxEnabled}
+                onSetTxEnabled={handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
@@ -4039,7 +4063,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               />
             </div>
           )}
-          {isRemoteViewAvailable('psk') && isViewEnabled('psk') && (
+          {isViewEnabled('psk') && (
             <div className="psk-host" hidden={effectiveView !== 'psk'}>
               <PskCockpit
                 onOpenLogbook={openLogbookFor}
@@ -4048,7 +4072,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 onSnap={setSnap}
                 active={effectiveView === 'psk'}
                 onSetFrequency={handleSetFrequency}
-                onSetTxEnabled={remote ? undefined : handleSetTxEnabled}
+                onSetTxEnabled={handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={pskPanels}
@@ -4060,8 +4084,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           )}
           {/* JTTY keep-alive host — the .psk-host contract: the engine keeps decoding while the
               operator is elsewhere, `active` gates the display poll and fires the auto-arm on the
-              rising edge. Not on the hosted page: JTTY has no Remote surface. */}
-          {isRemoteViewAvailable('jtty') && isViewEnabled('jtty') && (
+              rising edge. */}
+          {isViewEnabled('jtty') && (
             <div className="jtty-host" hidden={effectiveView !== 'jtty'}>
               <JttyCockpit
                 onOpenLogbook={openLogbookFor}
@@ -4069,14 +4093,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 onSnap={setSnap}
                 active={effectiveView === 'jtty'}
                 onSetFrequency={handleSetFrequency}
-                onSetTxEnabled={remote ? undefined : handleSetTxEnabled}
+                onSetTxEnabled={handleSetTxEnabled}
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={jttyPanels}
               />
             </div>
           )}
-          {isRemoteViewAvailable('sstv') && isViewEnabled('sstv') && (
+          {isViewEnabled('sstv') && (
             <div className="sstv-host" hidden={effectiveView !== 'sstv'}>
               <SstvView
                 snap={snap}
@@ -4098,7 +4122,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               />
             </div>
           )}
-          {isRemoteViewAvailable('aprs') && isViewEnabled('aprs') && (
+          {isViewEnabled('aprs') && (
             <div className="aprs-host" hidden={effectiveView !== 'aprs'}>
               <AprsCockpit
                 theme={theme}
@@ -4129,7 +4153,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
               gates the display poll and fires js8_enter on the rising edge. Gated on the
               feature toggle (JS8 ships ON, so this mounts unless the operator turned it off).
               `onSetTxEnabled` is the header pill — the only TX latch in this view. */}
-          {isRemoteViewAvailable('js8') && isViewEnabled('js8') && (
+          {isViewEnabled('js8') && (
             <div className="js8-host" hidden={effectiveView !== 'js8'}>
               <Js8Cockpit
                 onOpenLogbook={openLogbookFor}
@@ -4143,9 +4167,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 callsignAgingMin={settings?.js8CallsignAgingMin ?? 0}
                 activityAgingMin={settings?.js8ActivityAgingMin ?? 0}
+                txOffsetWhileSending={settings?.js8TxOffsetWhileSending === true}
                 panels={js8Panels}
                 onOpenSettings={openSettingsAt}
                 boxes={boxesFor('js8')}
+                compose={js8ComposeConfig(settings)}
+                onSavedMessages={(js8SavedMessages) => setSettings((prev) => (prev ? { ...prev, js8SavedMessages } : prev))}
+                lists={js8Lists}
               />
             </div>
           )}
@@ -4176,17 +4204,16 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         )}
       </div>
 
-      {remote && <QuickNavigation view={effectiveView} onSelect={handleView} available={(v) => isViewEnabled(v) && isRemoteViewAvailable(v)} />}
       <Toasts />
       {/* Destructive actions confirm through this, not window.confirm — which is inert in the
           macOS webview and silently answered "no" to every one of them. See src/confirm.tsx. */}
       <ConfirmHost />
       {/* Quitting while the logbook is still saving: the station holds this window and says so
-          here (src-tauri quit.rs). The desktop's alone — a browser has no quit to report. */}
-      {!remote && <LogbookSaving />}
+          here (src-tauri quit.rs). */}
+      <LogbookSaving />
       {/* A browser asking to stream this station: Nexus asks here, with the browser's key, wherever
           the operator is in the app (src/remote-native/RemoteApprovalPrompt.tsx). The shack's alone. */}
-      {!remote && <RemoteApprovalPrompt />}
+      <RemoteApprovalPrompt />
       <Announcer />
 
       {radioPicker?.showPicker && (
@@ -4217,9 +4244,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       {showGuide && (
         <GettingStartedGuide
           onClose={() => setShowGuide(false)}
-          // Not on the Remote page: Settings there does not render Integrations & Feeds, the
-          // section the guide's WSJT-X note links to, so the link would open onto nothing.
-          onOpenSettings={remote ? undefined : openSettingsAt}
+          onOpenSettings={openSettingsAt}
         />
       )}
 
@@ -4230,7 +4255,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         // and Log filed that call onto the wrong station.
         <LogConfirm
           key={snap.pendingQsoLogKey ?? undefined}
-          onStop={remote ? handleHaltTx : undefined}
           record={snap.pendingLog}
           waiting={snap.pendingLogsWaiting ?? 0}
           autoLogged={snap.pendingLogsAutoLogged ?? 0}
@@ -4242,10 +4266,6 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   )
 }
 
-// Memoised on its one prop. In the browser workspace the host (BrowserApplication) re-renders
-// itself every 500 ms to re-read the sample age and again on every observation poll, and this
-// component sat under it unmemoised, so every one of those was a full reconciliation of the
-// whole workspace with nothing to show for it - six a second at idle, measured. `remote` is
-// the only prop and its identity already changes only when its contents do; everything else
-// App reads arrives through context, which memo never blocks, so no genuine update is lost.
+// Memoised: App takes no props, so whatever re-renders above it never reconciles the whole
+// workspace; everything App reads arrives through context, which memo never blocks.
 export default memo(App)
