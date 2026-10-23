@@ -1582,7 +1582,7 @@ mod tests {
     /// receiver grows one message across them), and a line break ends a message. Each segment
     /// shows in the window and gets an ALL.TXT `Tx` line as it starts on the air.
     ///
-    /// (What a receiver makes of a line longer than 80 characters is WSJT-X 3.3.0-beta1's own
+    /// (What a receiver makes of a line longer than 80 characters is WSJT-X 3.3.0-beta4's own
     /// limit, not this sender's: its decoder keeps 16 frames and 80 characters of a message, ours
     /// and stock `rjtty` alike — measured in the lab, so it is not asserted here.)
     #[test]

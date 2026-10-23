@@ -432,7 +432,7 @@ pub fn ft2_band_plan() -> Vec<BandChannel> {
 
 /// **JTTY** (WSJT-X's keyboard mode): WSJT-X's own frequency list, taken as it is (operator ruling,
 /// 2026-10-08) — the eleven `Modes::JTTY` rows of `models/FrequencyList.cpp` at WSJT-X
-/// 3.3.0-beta1, one worldwide table with no region split. Interoperating with WSJT-X's stations is
+/// 3.3.0-beta4, one worldwide table with no region split. Interoperating with WSJT-X's stations is
 /// the point of the mode, so no dial here moves for any other reason. Dials are USB (the Keyboard
 /// section's PKTUSB); the signal sits at the audio offset above the dial, about 125 Hz wide.
 ///
@@ -1039,7 +1039,7 @@ mod tests {
     }
 
     /// The JTTY plan IS WSJT-X's frequency list (`models/FrequencyList.cpp`, the `Modes::JTTY`
-    /// rows at 3.3.0-beta1), dial for dial, all USB, every band once, every dial inside its band.
+    /// rows at 3.3.0-beta4), dial for dial, all USB, every band once, every dial inside its band.
     #[test]
     fn the_jtty_plan_is_wsjtxs_frequency_list() {
         let plan = jtty_band_plan();

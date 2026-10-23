@@ -432,7 +432,7 @@ fn dump_what_the_loop_plays_for_the_lab() {
                 ),
             ],
         ),
-        // Past 16 frames: WSJT-X 3.3.0-beta1's receiver keeps 16 frames of one message.
+        // Past 16 frames: WSJT-X 3.3.0-beta4's receiver keeps 16 frames of one message.
         (
             "live_long",
             vec![

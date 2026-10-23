@@ -116,4 +116,30 @@ describe('−B4 on this band only (#409)', () => {
     fireEvent.change(scope(), { target: { value: 'band' } })
     expect(shown('PD2BS'), 'the Rx Frequency pane kept the old scope').toBe(true)
   })
+
+  it("the Rx Frequency pane's −B4 says when it hides only this band's", () => {
+    const rxPane = () =>
+      render(
+        <OperateDecodes
+          decodes={[]}
+          slot={100}
+          rxOffsetHz={1200}
+          band="20m"
+          tier="FT8"
+          harqRescues={0}
+          onCall={() => {}}
+          title="Rx Frequency"
+          lockedFilter="rx"
+          compact
+        />,
+      )
+    const chip = () => screen.getByRole('button', { name: '−B4' })
+    rxPane()
+    expect(screen.queryByRole('combobox'), 'premise: the pane has no scope menu').toBeNull()
+    expect(chip().title, 'control: any band reads as −B4 always did').toBe(t('operate.decodes.hideB4.title'))
+    cleanup()
+    localStorage.setItem('nexus.decodes.hideB4Scope', 'band')
+    rxPane()
+    expect(chip().title).toBe(t('operate.decodes.hideB4.title.band'))
+  })
 })

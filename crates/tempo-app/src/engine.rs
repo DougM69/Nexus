@@ -2022,6 +2022,9 @@ pub struct DecodeJob {
     /// next period's early-pass moment ([`DecodeJob::with_rescue_give_up_at`]); `None` runs it to
     /// its end.
     rescue_give_up_at: Option<Instant>,
+    /// The engine's decode epoch as it is now ([`Engine::live_decode_epoch`]), read while the pass
+    /// runs: a pass whose result will be dropped as stale gives its rescue up.
+    live_epoch: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl DecodeJob {
@@ -2155,6 +2158,9 @@ struct JobSink<'a> {
     epoch: u64,
     give_up_at: Option<Instant>,
     rescue_give_up_at: Option<Instant>,
+    live_epoch: Arc<std::sync::atomic::AtomicU64>,
+    /// Whether the result is shown should the epoch move: it carries what it was heard on.
+    shown_late: bool,
 }
 
 impl modes::DecodeSink for JobSink<'_> {
@@ -2172,8 +2178,16 @@ impl modes::DecodeSink for JobSink<'_> {
     }
     fn give_up_rescue(&mut self) -> bool {
         self.progress.candidate();
-        self.rescue_give_up_at
-            .is_some_and(|at| Instant::now() >= at)
+        // A period nobody will see — built in a decode context a band, mode or tier change has
+        // since left, and not one shown under what it was heard on — is dropped when it lands, so
+        // its rescue only keeps the decoder from the new context. One that will be shown late
+        // keeps its rescue, as WSJT-X shows the whole period.
+        let dropped = !self.shown_late
+            && self.live_epoch.load(std::sync::atomic::Ordering::Relaxed) != self.epoch;
+        dropped
+            || self
+                .rescue_give_up_at
+                .is_some_and(|at| Instant::now() >= at)
     }
 }
 
@@ -2417,6 +2431,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         ctx,
         give_up_at,
         rescue_give_up_at,
+        live_epoch,
     } = job;
     let mut sink = JobSink {
         progress,
@@ -2425,6 +2440,8 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         epoch,
         give_up_at,
         rescue_give_up_at,
+        live_epoch,
+        shown_late: heard_on.is_some(),
     };
     // Hold the decoder lock across the ENTIRE decode: this is the single lock that
     // serializes the a7 table, the packjt77 hash table and the FT1 IR-HARQ buffers
@@ -3200,6 +3217,9 @@ pub struct Engine {
     /// [`clear_decode_context`]: Engine::clear_decode_context
     /// [`apply_decode_result`]: Engine::apply_decode_result
     decode_epoch: u64,
+    /// [`decode_epoch`](Self::decode_epoch), shared with the decodes in flight, which read it
+    /// while they run ([`DecodeJob::live_epoch`]).
+    live_decode_epoch: Arc<std::sync::atomic::AtomicU64>,
     /// The decode epoch the IN-PROGRESS slot capture began under (#103). The epoch
     /// guard above only catches jobs already in flight when the context switches; a
     /// mid-slot band change leaves the capture ring holding the OLD band's air, and
@@ -6313,6 +6333,7 @@ impl Engine {
             next_source: NextSource::default(),
             source_label: default_source_label,
             decode_epoch: 0,
+            live_decode_epoch: Arc::default(),
             capture_epoch: 0,
             late: None,
             late_early_seen: None,
@@ -7871,7 +7892,8 @@ impl Engine {
     /// the radio loop swaps to it on the next tick), and restores the new radio's last band/freq.
     /// The LIGHT path — deliberately does NOT touch Mode / TX queues / identity (unlike
     /// `apply_settings`), so swinging radios mid-session never resets the operator to Chat. No-op if
-    /// `id` isn't a configured radio or is already active.
+    /// `id` isn't a configured radio, is disabled (its port is released for another program, and
+    /// making it active would open it again), or is already active.
     pub fn set_active_radio(&mut self, id: u32) {
         self.set_active_radio_with_reset(id, reset_ft8_a7_without_waiting);
     }
@@ -7885,7 +7907,9 @@ impl Engine {
     }
 
     fn set_active_radio_with_reset(&mut self, id: u32, reset: impl FnOnce()) {
-        if id == self.settings.active_radio || !self.settings.radios.iter().any(|p| p.id == id) {
+        if id == self.settings.active_radio
+            || !self.settings.radios.iter().any(|p| p.id == id && p.enabled)
+        {
             return;
         }
         self.remote_readings.invalidate();
@@ -13272,7 +13296,11 @@ impl Engine {
         // The station it was made with, captured now, while the contact is the one just made: the
         // confirm can come hours later, after Settings changed, and must log these, not the
         // station at the confirm or nothing ([`Self::stamp_station_now`]). A contact restored from
-        // the journal already carries what its hold captured.
+        // the journal already carries what its hold captured. The station call first, as the log
+        // funnel stamps it: with nobody at the key named, the operator is that call.
+        if held.record.station_callsign.is_none() {
+            held.record.station_callsign = self.station_callsign_now();
+        }
         self.stamp_station_now(&mut held.record);
         if self.pending_logs.is_empty() {
             self.replace_pending_log(Some(held));
@@ -17521,6 +17549,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // worker (built in the OLD context) lands stale and is dropped — its slot
         // indices / AP context are meaningless after the switch.
         self.decode_epoch = self.decode_epoch.wrapping_add(1);
+        self.live_decode_epoch
+            .store(self.decode_epoch, std::sync::atomic::Ordering::Relaxed);
         // The over owed to a partner the run has already left (#170, #153) is owed on THIS
         // band, in THIS mode. Slot indices from the old context are meaningless for its
         // deadline, and answering a station worked before the switch on the tier or band we
@@ -28313,6 +28343,7 @@ contact yourself."
                 ctx: None,
                 give_up_at: None,
                 rescue_give_up_at: None,
+                live_epoch: self.live_decode_epoch.clone(),
             };
         }
         if self.app.tier() == Tier::TempoDeep {
@@ -28341,6 +28372,7 @@ contact yourself."
                 ctx: None,
                 give_up_at: None,
                 rescue_give_up_at: None,
+                live_epoch: self.live_decode_epoch.clone(),
             };
         }
         // Native tiers (FT1/FT8/FT4) decode through the active SignalSource with
@@ -28481,6 +28513,7 @@ contact yourself."
             ctx: None,
             give_up_at: None,
             rescue_give_up_at: None,
+            live_epoch: self.live_decode_epoch.clone(),
         }
     }
 
@@ -45744,6 +45777,35 @@ mod tests {
         );
     }
 
+    /// The same, for a held contact that arrives with no station call: the hold stamps the call
+    /// in force, so with "Operator at the key" blank the operator is that call, however late the
+    /// confirm. Every builder stamps the call itself; this holds the hold to it.
+    #[test]
+    fn a_held_contact_without_a_station_call_still_logs_its_operator_hours_later() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        let mut rec = e.qso_record("W9XYZ".into(), None, None);
+        rec.station_callsign = None;
+        e.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
+        for held in e.pending_logs.iter_mut() {
+            held.record.when_unix -= 4 * 3600;
+            held.record.time_off_unix = held.record.time_off_unix.map(|t| t - 4 * 3600);
+        }
+        let journal = remote_logging::pending_qso_queue_json(&e.pending_logs).unwrap();
+        let mut later = Engine::new("W6R", "EM10", 0);
+        later.settings.prompt_to_log = true;
+        later.settings.fd_operator = "K9OP".into();
+        later.load_pending_qso_json(&journal);
+        let sent = later.snapshot().pending_log.expect("the hold comes back");
+        assert!(confirm_held(&mut later, sent.into()));
+        let r = QsoRecord::clone(&later.stored_log()[0]);
+        assert_eq!(
+            (r.station_callsign.as_deref(), r.operator.as_deref()),
+            (Some("K2DEF"), Some("K2DEF")),
+            "the call and operator it was made with, not none and not the confirm's"
+        );
+    }
+
     /// A TCI radio's model name is the protocol's, "TCI". Its contacts carry the radio the
     /// SDR program's TCI server named, and nothing — never "TCI" — before it has named one.
     #[test]
@@ -59688,6 +59750,34 @@ mod tests {
         assert!(profile(&e).enabled, "enabled again");
     }
 
+    /// ⭐ A DISABLED RADIO CANNOT BE MADE ACTIVE, by any caller: its port is released for another
+    /// program, and making it active would open it again. The refusal changes nothing — the radio
+    /// in use, its settings and its transmit state stay as they were. Enabled again, it switches.
+    #[test]
+    fn a_disabled_radio_cannot_be_made_active() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        let r1 = e.add_radio();
+        assert!(e.set_radio_enabled(r1, false));
+        e.set_tx_enabled(true);
+        e.take_slot_tx_abort();
+        let before = serde_json::to_value(e.settings()).unwrap();
+
+        assert!(
+            e.preview_radio_selection(r1).is_none(),
+            "no selection to prepare"
+        );
+        e.set_active_radio(r1);
+        assert_eq!(e.settings.active_radio, 0, "still the radio in use");
+        assert_eq!(serde_json::to_value(e.settings()).unwrap(), before);
+        assert!(e.tx_enabled(), "transmit left as it was");
+        assert!(!e.take_slot_tx_abort(), "and nothing cut");
+
+        assert!(e.set_radio_enabled(r1, true));
+        e.set_active_radio(r1);
+        assert_eq!(e.settings.active_radio, r1, "control: enabled, it switches");
+    }
+
     #[test]
     fn the_switcher_lists_no_disabled_radio_but_always_the_one_being_operated() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -59707,8 +59797,8 @@ mod tests {
         );
 
         // A radio still in use stays listed even when its profile says disabled (a settings file
-        // written that way, or a Remote selection of a disabled radio): the switcher never hides
-        // the radio on the air, and nothing here switches away from it.
+        // written that way): the switcher never hides the radio on the air, and nothing here
+        // switches away from it.
         e.settings
             .radios
             .iter_mut()

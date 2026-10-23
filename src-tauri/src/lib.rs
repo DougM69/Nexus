@@ -38361,10 +38361,17 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
             let eng = handle.state::<SharedEngine>().inner().clone();
             let ota = d.ota_spots.clone();
             let app = handle.clone();
-            std::thread::Builder::new()
+            let started = std::thread::Builder::new()
                 .name("nexus-fresh-parks".into())
-                .spawn(move || watch_fresh_parks(eng, ota, app))
-                .expect("spawn the new-activation alert");
+                .spawn(move || watch_fresh_parks(eng, ota, app));
+            // A thread the system would not give is no reason to stop Nexus opening: it opens
+            // without the new-activation alert, and says so in the log.
+            if let Err(e) = started {
+                tempo_core::applog::warn(
+                    "startup",
+                    &format!("the new-activation alert not started ({e})"),
+                );
+            }
         });
     }
     // Nexus's needed spots for a TCI radio's own panadapter: read from the Needed board's list
