@@ -263,6 +263,10 @@ interface Props {
   theme: string
   /** CW sidetone pitch (Hz) — the scope's zero-beat marker. */
   pitchHz?: number
+  /** A pitch the operator set here, for App's copy of the settings — the copy `pitchHz` comes from,
+   *  which nothing else refreshes, so without it the cockpit came back on the old pitch after a page
+   *  switch while the engine kept the new one. */
+  onPitch?: (hz: number) => void
   /** Wheel-tune sensitivity (from Settings) — applied to the scope + readout wheel-tune. */
   wheelSensitivity?: number
   /** Click-to-work handoff from the Needed board: the callsign to prefill the log with.
@@ -454,6 +458,7 @@ export function CwCockpit({
   snap,
   theme,
   pitchHz = 600,
+  onPitch,
   wheelSensitivity,
   pendingWork,
   onConsumeWork,
@@ -1040,6 +1045,7 @@ export function CwCockpit({
     if (!control) return
     const p = Math.max(300, Math.min(1200, Math.round(v)))
     setPitch(p)
+    onPitch?.(p)
     void setCwKeyer(keyer, p).then((s) => s && onSnap?.(s))
   }
 

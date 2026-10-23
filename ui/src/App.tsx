@@ -3264,6 +3264,7 @@ function App() {
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
+      onPitch={(cwPitchHz) => setSettings((prev) => (prev ? { ...prev, cwPitchHz } : prev))}
       wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
       snap={snap}
       theme={theme}

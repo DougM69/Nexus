@@ -132,6 +132,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between. The box now keeps what you type, applies it once it is a pitch in range, and puts an out-of-range entry
   back into range when you press Enter or leave the box. The decoder passband's F low and F high boxes in
   Settings ▸ Digital had the same fault and are fixed the same way.
+- **CW: the cockpit no longer comes back on your old pitch.** After you changed the pitch in the CW cockpit,
+  the radio kept the new one, but going to another page and back showed the pitch you had before, with the
+  scope marker on it. The cockpit now shows the pitch you set.
 - **WSJT-X UDP: a logger's Replay gets back everything Band Activity holds.** When JTAlert, GridTracker or a
   logger asks Nexus to replay the decodes, as it does when it starts while Nexus is running, Nexus sent only the
   last period's. It now sends every decode Band Activity still holds, oldest first, each with the start of the
