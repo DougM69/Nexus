@@ -2379,8 +2379,6 @@ export function SettingsPanel({
     )
   }
 
-  // Wanted watch list: comma-separated exact calls or trailing-* wildcard prefixes
-  // (e.g. "VP8*, 3Y0J") that raise a loud alert even on a worked station.
   /** WSJT-X Split Operation (none | rig | fakeit). */
   const setSplitMode = (m: NonNullable<Settings['splitMode']>) => {
     markDirty()

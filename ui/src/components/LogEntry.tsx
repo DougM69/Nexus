@@ -525,8 +525,7 @@ export function LogEntry({
   const remoteMode = remote != null
   // THE STATION'S OWN WINDOW, where the hunt tag's ✕ can end a hunt. Not the hosted Remote page,
   // which mounts this strip under `StationControlContext` false, with its adapter in the cockpits
-  // and without it in Satellites: it cannot make that call, and a browser ends a hunt on the POTA /
-  // SOTA view, by its own change under the logging grant (RemoteOta).
+  // and without it in Satellites: it cannot make that call.
   const stationOwn = useStationControl()
   type DraftContext = { band: string; freqMhz: number; mode: string }
   const [remoteDraftContext, setRemoteDraftContext] = useState<DraftContext | null>(null)

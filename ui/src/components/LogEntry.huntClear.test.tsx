@@ -7,8 +7,7 @@
 // way that view does, so the tag and the banner go at once. The park the hunt's prefill put in the box
 // goes with it; a park the operator typed, or one a Needed click handed over, is theirs and stays.
 //
-// Not on the hosted Remote page: there the form's one station write is Log, and a browser ends a hunt
-// on the POTA / SOTA view, through its own change under the logging grant (RemoteOta).
+// Not on the hosted Remote page, which cannot make that call.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor, act, within } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
