@@ -31,6 +31,7 @@ pub mod logfill;
 pub mod logstore;
 pub mod logwrite;
 pub mod mic;
+pub mod needed_alert;
 pub mod presence;
 pub mod privileges;
 pub mod remote_control;
