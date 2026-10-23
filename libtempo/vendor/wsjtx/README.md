@@ -156,7 +156,18 @@ Upstream's tests, not compiled into `libtempo` (20 files, 3,542 lines): the Fort
   `tests/unit/jtty/test_jtty_replay_ownership.cpp`, `tests/unit/jtty/test_jtty_spectrum.cpp`,
   `tests/unit/jtty/test_jtty_transmit_queue.cpp`, `tests/unit/jtty/test_jtty_tx_lifecycle.cpp`,
   `tests/unit/jtty/test_jtty_txstream.cpp`, `tests/unit/jtty/test_jtty_waterfall.cpp` and
-  `tests/unit/jtty/test_mmttyif.cpp`; and upstream's build file `tests/unit/jtty/CMakeLists.txt`.
+  `tests/unit/jtty/test_mmttyif.cpp`, `tests/unit/jtty/test_jtty_filler.cpp`,
+  `tests/unit/jtty/test_jtty_transmit_encoder.cpp`, `tests/unit/jtty/test_jtty_transmit_host.cpp`,
+  `tests/unit/jtty/test_jtty_transmit_text.cpp`, `tests/unit/jtty/test_wsjt_codec_encode.cpp` and
+  `tests/unit/jtty/test_wsjt_codec_jtty.cpp`; and upstream's build file
+  `tests/unit/jtty/CMakeLists.txt`.
+- Files added upstream in 3.3.0-beta2 to beta4 that carry a per-file licence header,
+  `SPDX-License-Identifier: GPL-3.0-or-later`, unlike the files vendored here: the Fortran tests
+  `tests/unit/jtty/test_jtty_genjtty_text.f90`, `tests/unit/jtty/test_jtty_display_layout.f90` and
+  `tests/unit/jtty/test_jtty_final_window.f90`; `lib/jtty/jtty_filler.f90`, a port of the GUI's
+  rule for live-entry filler in received text that only upstream's own receive code uses; and the
+  C++ transmit code `lib/jtty/JttyTransmit.cpp`, `lib/jtty/JttyTransmit.hpp`,
+  `lib/jtty/JttyTransmitHost.cpp`, `lib/jtty/JttyTransmitHost.hpp` and `lib/jtty/JttyUnicode.cpp`.
 - WSJT-X's Qt/C++ JTTY code (in `widgets/`, `Modulator/` and the top-level `Jtty*` files), its
   integration tests (`tests/integration/jtty/`) and its sample recording (`samples/JTTY/`).
 

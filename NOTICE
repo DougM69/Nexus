@@ -234,8 +234,9 @@ at that commit: nothing in them is changed and nothing is added to them.
   single-signal decoder (`jtty_decode.f90`).
 
 Upstream's own Fortran unit tests for these files are vendored with them, under
-`libtempo/vendor/wsjtx/tests/`: 19 of the 20 in WSJT-X's `tests/unit/jtty/` (the twentieth
-needs WSJT-X's Qt code), and the message list one of them reads,
+`libtempo/vendor/wsjtx/tests/`: 19 of the 23 in WSJT-X's `tests/unit/jtty/` (one of the other
+four needs WSJT-X's Qt code; three, added in 3.3.0-beta2 to beta4, carry a licence header of
+their own and are not taken), and the message list one of them reads,
 `tests/fixtures/jtty/jtty_msgs.txt`. They test the modem and are not part of the program.
 
 The files carry no per-file copyright or licence header, like the rest of WSJT-X's `lib/`.

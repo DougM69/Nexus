@@ -718,8 +718,9 @@ target_link_libraries(ft8_callsign_roundtrip PRIVATE tempo_static m gfortran)
 
 # ---------------------------------------------------------------------------
 # Verification I: WSJT-X's own Fortran unit tests for the JTTY modem, vendored
-# unchanged under vendor/wsjtx/tests/ (19 of upstream's 20; the twentieth needs
-# WSJT-X's Qt code). They run against THIS libtempo, so they are also the check
+# unchanged under vendor/wsjtx/tests/ (19 of upstream's 23: one needs WSJT-X's
+# Qt code; three carry a licence header of their own and are not taken; see
+# vendor/wsjtx/README.md). They run against THIS libtempo, so they are also the check
 # that the JTTY codec still round-trips through Nexus's own 3.0.2 packjt77.
 #
 # EXCLUDE_FROM_ALL: neither cargo (which builds tempo_static only) nor a plain
