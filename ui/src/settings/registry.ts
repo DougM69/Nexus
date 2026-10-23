@@ -213,6 +213,15 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'sidetone out', 'passthrough'],
   },
   {
+    id: 'scope-source',
+    label: 'Scope source',
+    tab: 'radio',
+    // An operator with an SDRplay receiver searches for the hardware or the program, not for
+    // "scope source".
+    keywords: ['sdrplay', 'sdrconnect', 'rsp', 'rspduo', 'rsp1a', 'rsp1b', 'rspdx', 'sdr',
+      'panadapter', 'rx out', 'external receiver', 'second receiver', 'waterfall source'],
+  },
+  {
     id: 'satellite-doppler',
     label: 'Satellite Doppler',
     tab: 'radio',

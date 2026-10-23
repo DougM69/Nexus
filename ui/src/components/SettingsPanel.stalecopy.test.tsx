@@ -317,6 +317,7 @@ describe('an edit made in any section of Settings is saved', () => {
     { section: 'rig-advanced', ...field('dataModesPlainSsb', false, false, true), edit: opened('rig-advanced', clickIn('rig-advanced', 'switch', /^Data modes use plain SSB/)) },
     { section: 'audio', ...field('rxGain', 1, 2, 3), edit: setIn('audio', 'slider', 'RX capture gain', '3') },
     { section: 'headphone-monitor', ...field('monitorEnabled', false, false, true), edit: clickIn('headphone-monitor', 'checkbox', 'Play receive audio on this computer') },
+    { section: 'scope-source', ...field('scopeSource', 'radio', 'radio', 'sdrconnect'), edit: setIn('scope-source', 'combobox', /^Draw the scope from/, 'sdrconnect') },
     { section: 'satellite-doppler', ...field('satDopplerOff', false, false, true), edit: clickIn('satellite-doppler', 'checkbox', 'Enable satellite Doppler correction') },
     {
       section: 'rotator',

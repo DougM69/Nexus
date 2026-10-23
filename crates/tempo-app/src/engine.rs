@@ -269,6 +269,9 @@ struct FeedRows {
     /// When the RF scope pane last read the RF slot — its standing request for the radio's own
     /// panadapter. See [`SpectrumFeed::rf_frame_after`]: it rides the read and expires on its own.
     rf_req: Option<Instant>,
+    /// The one source the operator picked for the RF slot, when they picked one over the radio's
+    /// own: see [`SpectrumFeed::claim_rf`].
+    rf_owner: Option<&'static str>,
 }
 
 impl FeedRows {
@@ -548,16 +551,50 @@ impl SpectrumFeed {
     }
     /// [`Self::publish_rf`] with what the producer knows about the row: what its values mean,
     /// and which receiver's span it is. One call is one frame — the feed stamps the next `seq`.
+    ///
+    /// While another source owns the slot ([`Self::claim_rf`]) a row from any other source is
+    /// dropped: the radio's own panadapter keeps streaming, but the operator chose to see the other.
     pub fn publish_rf_frame(&self, row: Spectrum, scale: SpectrumScale, slice: Option<u8>) {
         if let Ok(mut g) = self.rows.lock() {
+            if g.rf_owner.is_some_and(|owner| owner != row.source) {
+                return;
+            }
             let frame = g.stamp(row, scale, slice);
             g.rf = Some((frame, Instant::now()));
         }
     }
     /// Drop the native row so the audio FFT takes over immediately (DATA mode / scope off).
+    /// Not while another source owns the slot ([`Self::claim_rf`]): the row there is not the
+    /// caller's to drop.
     pub fn clear_rf(&self) {
         if let Ok(mut g) = self.rows.lock() {
-            g.rf = None;
+            if g.rf_owner.is_none() {
+                g.rf = None;
+            }
+        }
+    }
+    /// Give the RF slot to one source (`Some(label)`, the label its rows carry) or back to
+    /// whichever publishes (`None`): the operator's "Scope source" when it is not the radio. The
+    /// slot is emptied whenever its owner changes, so a row from before is never shown as the new
+    /// source's.
+    pub fn claim_rf(&self, owner: Option<&'static str>) {
+        if let Ok(mut g) = self.rows.lock() {
+            if g.rf_owner != owner {
+                g.rf_owner = owner;
+                g.rf = None;
+            }
+        }
+    }
+    /// Drop the RF row if it is `source`'s: the owner's own [`Self::clear_rf`], which no other
+    /// source's rows can be caught by.
+    pub fn clear_rf_of(&self, source: &str) {
+        if let Ok(mut g) = self.rows.lock() {
+            if g.rf
+                .as_ref()
+                .is_some_and(|(frame, _)| frame.source == source)
+            {
+                g.rf = None;
+            }
         }
     }
     /// The row to display. This precedence is moved VERBATIM from the old
@@ -56579,6 +56616,49 @@ mod tests {
             vec![0.8],
             "the native row is shown as the rig sent it, not power-averaged on its dB axis"
         );
+    }
+
+    /// The operator's chosen scope source owns the RF slot: the radio's own panadapter keeps
+    /// publishing (and clearing) and is neither shown nor able to wipe the chosen source's row,
+    /// and handing the slot back lets the radio's rows through again.
+    #[test]
+    fn a_claimed_rf_slot_shows_only_its_owners_rows() {
+        let feed = SpectrumFeed::default();
+        let row = |source: &str, v: f32| Spectrum {
+            row: vec![v],
+            lo_hz: 14_000_000.0,
+            hi_hz: 14_350_000.0,
+            source: source.into(),
+        };
+        feed.publish_rf(row("civ", 0.1));
+        feed.claim_rf(Some("sdrconnect"));
+        assert!(
+            feed.row().is_none(),
+            "the radio's row from before the claim is not shown as the new source's"
+        );
+        feed.publish_rf(row("sdrconnect", 0.5));
+        feed.publish_rf(row("civ", 0.9));
+        assert_eq!(feed.row().expect("published").source, "sdrconnect");
+        assert_eq!(feed.row().expect("published").row, vec![0.5]);
+        feed.clear_rf();
+        assert_eq!(
+            feed.row().map(|r| r.source),
+            Some("sdrconnect".to_string()),
+            "another source's clear does not wipe the owner's row"
+        );
+        feed.clear_rf_of("civ");
+        assert!(
+            feed.row().is_some(),
+            "a clear of another source's row is a no-op"
+        );
+        feed.clear_rf_of("sdrconnect");
+        assert!(
+            feed.row().is_none(),
+            "the owner's own clear empties the slot"
+        );
+        feed.claim_rf(None);
+        feed.publish_rf(row("civ", 0.3));
+        assert_eq!(feed.row().expect("published").source, "civ");
     }
 
     /// Nobody reading the audio slot (a native panadapter is driving the display, or no

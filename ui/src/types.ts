@@ -4640,6 +4640,16 @@ export interface Settings {
   /** Programs' spots on the band map, and a click on a spot told back to them. On by default; a
    *  spot or a click never transmits. */
   tciServerSpots?: boolean
+  /** Where the RF scope's picture comes from: `radio` (the radio's own panadapter, the default) or
+   *  `sdrconnect` (an SDRplay receiver through SDRplay's SDRconnect). Any other word reads as
+   *  `radio`. The station's, like the TCI server's. */
+  scopeSource?: string
+  /** The computer SDRconnect runs on (default 127.0.0.1). */
+  sdrconnectHost?: string
+  /** SDRconnect's WebSocket API port (default 5454). */
+  sdrconnectPort?: number
+  /** How the SDR's centre follows the rig's dial: `centre` (default) or `scroll`. */
+  sdrconnectFollow?: string
   /** The rig's serial HANDSHAKE as the operator DECLARES it (`cat_serial_handshake`):
    *  `auto` | `none` | `hardware` | `xonxoff`. `auto` (the default) is today's behaviour to the
    *  byte — Nexus infers it exactly as before. Anything else REPLACES that inference.

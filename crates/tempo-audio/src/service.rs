@@ -3936,6 +3936,13 @@ struct RadioLoop {
     /// `(rig_model, is_network, flex_radio_ip)` — the ADDRESS is part of the key, see
     /// `reconcile_spectrum_source`.
     spectrum_src_key: Option<(u32, bool, String)>,
+    /// The SDRconnect scope source, while the operator's scope source is SDRconnect: the host and
+    /// port it was started for, and the scope (`crate::sdrconnect`). Reconciled each step by
+    /// `reconcile_sdrconnect`; an address change stops it and starts another.
+    sdrconnect: Option<(String, u16, crate::sdrconnect::SdrconnectScope)>,
+    /// The sentence the SDRconnect scope last put on the scope's status line, so it is written
+    /// only when it changes and cleared only when it is this source's.
+    sdrconnect_said: Option<String>,
     /// FORK-LOCAL: the FT-710's own RF spectrum, read off its internal FT4222 USB→SPI bridge.
     /// Same lifecycle as `spectrum_src` above — held beside a KEY so a rig switch stops this
     /// reader before the new radio's starts, which is what keeps a scope from streaming the
@@ -4554,6 +4561,8 @@ impl RadioLoop {
             audio_rebuild_floor: 0.0,
             spectrum_src: None,
             spectrum_src_key: None,
+            sdrconnect: None,
+            sdrconnect_said: None,
             dax_started: None,
             dax_last_audio: None,
             dax_tee_id: None,
@@ -5549,6 +5558,55 @@ impl RadioLoop {
                 )));
             }
             self.err_owner = ErrOwner::Dax;
+        }
+    }
+
+    /// The SDRconnect scope source, every step: started while the operator's scope source is
+    /// SDRconnect (its RF slot then takes no other source's rows), stopped when it is the radio
+    /// again, restarted on an address change; told the dial and whether the station is on the air;
+    /// and its trouble said on the scope's status line. One engine lock; nothing here waits on
+    /// SDRconnect.
+    fn reconcile_sdrconnect(&mut self, engine: &Arc<Mutex<Engine>>) {
+        use crate::sdrconnect::{Follow, SdrconnectScope};
+        let (target, dial_hz, follow, on_air) = {
+            let e = engine_lock(engine);
+            let s = e.settings();
+            let dial_hz = (s.dial_mhz * 1_000_000.0).round();
+            let dial_hz = if dial_hz.is_finite() && dial_hz > 0.0 {
+                dial_hz as u64
+            } else {
+                0
+            };
+            (
+                s.sdrconnect_target(),
+                dial_hz,
+                Follow::from_setting(&s.sdrconnect_follow),
+                e.on_air(),
+            )
+        };
+        let same = match (&self.sdrconnect, &target) {
+            (Some((host, port, _)), Some((h, p))) => host == h && port == p,
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            // The old one first: its drop hands the RF slot back before the new one takes it.
+            self.sdrconnect = None;
+            if let Some((host, port)) = target {
+                self.sdrconnect = SdrconnectScope::start(&host, port, &self.spectrum_feed)
+                    .map(|scope| (host, port, scope));
+            }
+        }
+        let said = self.sdrconnect.as_ref().and_then(|(host, port, scope)| {
+            scope.want(dial_hz, follow, on_air);
+            scope.status().state.problem(&format!("{host}:{port}"))
+        });
+        if said != self.sdrconnect_said {
+            // Over a sentence of ours, or to say one; never clearing another source's.
+            if said.is_some() || self.sdrconnect_said.is_some() {
+                engine_lock(engine).set_scope_error(said.clone());
+            }
+            self.sdrconnect_said = said;
         }
     }
 
@@ -8153,6 +8211,9 @@ impl RadioLoop {
             // capability — cheap (a key compare) unless it just gained/lost/changed a native scope.
             let (scope_model, scope_net) = (self.applied.rig_model, self.applied.is_network());
             self.reconcile_spectrum_source(engine, scope_model, scope_net);
+            // The operator's other scope source, SDRconnect, when chosen: it takes the RF slot from
+            // the radio's own panadapter (`crate::sdrconnect`).
+            self.reconcile_sdrconnect(engine);
             // The TCI radio's own panadapter (its IQ): renewed for the active radio's client every
             // tick, so a client a switch left behind lapses by itself (`crate::tci::iq`). Not on a
             // switch the handoff has not seen (W0): `rigctld_proc` is the radio being left.
@@ -17700,6 +17761,7 @@ mod tests {
     mod refused_key;
     mod remote_radio;
     mod rf_pane;
+    mod sdrconnect_scope;
     mod split_overs;
     mod tci;
     mod tci_cw;

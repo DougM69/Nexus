@@ -111,6 +111,10 @@ pub mod rttyrx;
 pub mod runtime;
 pub mod rxdsp;
 pub mod rxtap;
+/// An SDRplay receiver in the RF scope through SDRplay's SDRconnect, over its WebSocket API.
+/// Receive only. Needs tempo-net, so it rides the `device` feature like the TCI client.
+#[cfg(feature = "device")]
+pub mod sdrconnect;
 pub mod serial_keyer;
 pub mod slot;
 /// SSTV image/gallery persistence helpers (BMP writer, preview downscale,

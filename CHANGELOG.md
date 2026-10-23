@@ -5,6 +5,23 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **An SDRplay receiver as the scope's source, through SDRconnect (needs a bench check).** Settings ▸ Radio has a
+  new **Scope source** section: **The radio** (as before, and as it comes) or **SDRconnect (SDRplay)**. With an
+  SDRplay RSP fed from the rig's RX OUT (or a splitter with transmit protection) and SDRplay's own SDRconnect
+  program running with its WebSocket API on, the RF scope pane and the Phone and CW scopes draw the receiver's whole
+  span, each station at its own frequency, with the dial, the passband and spots on it as usual. The receiver's
+  centre follows the rig's dial, on every change or only when the dial nears the edge of the span. Nexus only reads
+  the receiver's IQ and sets its centre frequency: it never transmits through SDRconnect and sends it no CAT.
+  SDRconnect is a separate, free, closed-source program from SDRplay that you install; Nexus ships and loads nothing
+  of SDRplay's. When SDRconnect is not running, sends no IQ, or sends IQ at a rate other than the one it reports,
+  the scope's status line says which and Nexus keeps trying. Built and tested against the published SDRconnect
+  WebSocket API 1.0.3 only: it has not yet been run with a real RSP and SDRconnect, so treat it as untested on real
+  hardware until a bench check confirms the IQ rate, where a carrier is drawn, retuning while the knob turns, and
+  whether RX OUT stays quiet while you transmit.
+
 ## [1.20.0] — 2026-10-22
 
 ### Added
