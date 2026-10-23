@@ -25,9 +25,9 @@ use std::path::Path;
 /// The upstream repository.
 const UPSTREAM: &str = "https://github.com/WSJTX/wsjtx";
 /// The upstream tag the files were taken at.
-const UPSTREAM_TAG: &str = "v3.3.0-beta1";
-/// The commit that tag names (2026-10-07).
-const UPSTREAM_COMMIT: &str = "57ba9337fa020065dc0ceee2c4ef85e433ea32d4";
+const UPSTREAM_TAG: &str = "v3.3.0-beta4";
+/// The commit that tag names (2026-10-21).
+const UPSTREAM_COMMIT: &str = "0f7d5928449ec747c3d1f6da1306f8c94404c3a9";
 
 /// The vendored WSJT-X tree, from the repository root.
 const VENDOR: &str = "libtempo/vendor/wsjtx/";
@@ -39,7 +39,7 @@ const JTTY_DIRS: &[&str] = &["lib/jtty/", "tests/unit/jtty/", "tests/fixtures/jt
 const VENDORED: &[(&str, &str)] = &[
     (
         "lib/77bit/packjt77_grammar.f90",
-        "a31d0c463af9abddbf61d5002838813cc3b66fe2",
+        "fb6939a9d2ba35d4c00cba3d1f9233b148a2e026",
     ),
     (
         "lib/jtty/ana64a.f90",
@@ -55,7 +55,7 @@ const VENDORED: &[(&str, &str)] = &[
     ),
     (
         "lib/jtty/genjtty.f90",
-        "65294a150f2274aa3548fcfafbe96eba0faa2c44",
+        "6ad719fe92118a7d81e229d9ad9a7cf50353dd84",
     ),
     (
         "lib/jtty/jtty_block_pow.f90",
@@ -71,7 +71,7 @@ const VENDORED: &[(&str, &str)] = &[
     ),
     (
         "lib/jtty/jtty_mdecode.f90",
-        "8af7f3f666c5e61d00de09a834772ff2c93dd233",
+        "381eea0e47d0e24503d3cd914a5074aa65582ae9",
     ),
     (
         "lib/jtty/jtty_mod.f90",
@@ -87,11 +87,11 @@ const VENDORED: &[(&str, &str)] = &[
     ),
     (
         "lib/jtty/jtty_receive_context.f90",
-        "aeb43cb5910b6fe7d82faa1a77edba5c97de68d5",
+        "08ca347978c939c0c9af86949549e175c1913a75",
     ),
     (
         "lib/jtty/jtty_source_codec.f90",
-        "0a3f6193c6077f35f672c94607d2ab50c3213732",
+        "1c1058a9c75765876244823527c7f12e34e9f01c",
     ),
     (
         "lib/jtty/jtty_tbcc_code_profile.f90",
@@ -632,7 +632,7 @@ fn world() -> World {
         files,
         notice: format!(
             "## Upstream lineage\n\n{NOTICE_HEADING}\n<{UPSTREAM}>, taken at the tag \
-             `{UPSTREAM_TAG}`, commit `57ba9337`.\n\nVendored at `{DIR}`: the codec \
+             `{UPSTREAM_TAG}`, commit `0f7d5928`.\n\nVendored at `{DIR}`: the codec \
              (`jtty_mod.f90`, with\n`packjt77_grammar.f90`), and its test.\n\n{PRE_RELEASE}.\n\n\
              Nexus is {NOT_ENDORSED}\nTeam.\n\n### Next entry\nNames `other.f90`.\n"
         ),
@@ -724,7 +724,7 @@ fn the_checker_fires_on_each_kind_of_gap() {
         assert!(
             fires(
                 &p,
-                "lib/jtty/jtty_mod.f90 is not upstream's file at 57ba9337"
+                "lib/jtty/jtty_mod.f90 is not upstream's file at 0f7d5928"
             ),
             "{p:?}"
         );
@@ -759,8 +759,8 @@ fn the_checker_fires_on_each_kind_of_gap() {
     assert!(fires(&check(&w), "NOTICE has no"));
     for (part, what) in [
         (UPSTREAM, "the upstream repository"),
-        ("`v3.3.0-beta1`", "the tag"),
-        ("`57ba9337`", "the commit"),
+        ("`v3.3.0-beta4`", "the tag"),
+        ("`0f7d5928`", "the commit"),
         (DIR, "the directory"),
     ] {
         let mut w = world();
@@ -803,12 +803,12 @@ fn the_checker_fires_on_each_kind_of_gap() {
     w.notice = w.notice.replace("general release carries JTTY", "x");
     assert!(fires(
         &check(&w),
-        "v3.3.0-beta1 is a pre-release, but NOTICE's entry does not say"
+        "v3.3.0-beta4 is a pre-release, but NOTICE's entry does not say"
     ));
     let mut w = world();
     w.tag = "v3.4.0";
-    w.notice = w.notice.replace("v3.3.0-beta1", "v3.4.0");
-    w.vendor_readme = w.vendor_readme.replace("v3.3.0-beta1", "v3.4.0");
+    w.notice = w.notice.replace("v3.3.0-beta4", "v3.4.0");
+    w.vendor_readme = w.vendor_readme.replace("v3.3.0-beta4", "v3.4.0");
     let p = check(&w);
     assert!(
         fires(
@@ -828,7 +828,7 @@ fn the_checker_fires_on_each_kind_of_gap() {
     w.vendor_readme = w.vendor_readme.replace(VENDOR_README_HEADING, "## JTTY");
     assert!(fires(&check(&w), "the vendor README has no"));
     for (part, what) in [
-        ("`v3.3.0-beta1`", "the tag"),
+        ("`v3.3.0-beta4`", "the tag"),
         (UPSTREAM_COMMIT, "the commit"),
     ] {
         let mut w = world();
@@ -909,7 +909,7 @@ fn the_checker_fires_on_each_kind_of_gap() {
     w.readme = w.readme.replace(", from a WSJT-X pre-release", "");
     assert!(fires(
         &check(&w),
-        "README's JTTY credit and the tag v3.3.0-beta1 disagree"
+        "README's JTTY credit and the tag v3.3.0-beta4 disagree"
     ));
 
     // 9. each entry and section ends at its next heading: a name in the NEXT one is not this

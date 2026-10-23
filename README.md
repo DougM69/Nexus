@@ -426,7 +426,7 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   foreign-function interface, and the FT8/FT4 transmit encoder is also translated into Rust from
   those sources (`crates/modes/src/wsjt77/`; see **[NOTICE](NOTICE)** for the full lineage and marked
   modifications). The **JTTY** keyboard-mode modem sources, by K1JT, K9AN and **David Christle
-  KD0BTO**, are vendored at `libtempo/vendor/wsjtx/lib/jtty/` from the WSJT-X 3.3.0-beta1
+  KD0BTO**, are vendored at `libtempo/vendor/wsjtx/lib/jtty/` from the WSJT-X 3.3.0-beta4
   pre-release, and are taken again from the first WSJT-X general release that carries JTTY. Nexus
   interoperates with their ecosystem over the standard WSJT-X UDP protocol;
   its auto-sequencer is original Rust modeled on WSJT-X's on-air behavior.

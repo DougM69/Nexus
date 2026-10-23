@@ -463,7 +463,7 @@ set(LIBTEMPO_SOURCES
     # --- JTTY modem (lib/jtty) : WSJT-X's untimed keyboard mode ---
     #     4-GFSK at 31.25 baud, 1.888 s frames of 34-bit atoms protected by a
     #     CRC-12 and a K=10 tail-biting convolutional code. Taken unchanged from
-    #     the WSJT-X 3.3.0-beta1 pre-release (NOTICE and vendor/wsjtx/README.md
+    #     the WSJT-X 3.3.0-beta4 pre-release (NOTICE and vendor/wsjtx/README.md
     #     say where and why; crates/tempo-fast-sys/tests/jtty_provenance.rs holds
     #     every file to its upstream blob, so a local edit here fails that test).
     #
@@ -509,7 +509,7 @@ set(LIBTEMPO_SOURCES
     ${LIB}/77bit/packjt77.f90             # module packjt77
     ${LIB}/77bit/packjt77_grammar.f90     # module packjt77_grammar: the grammar tables
                                           #   JTTY reads (the ARRL/RAC sections), from
-                                          #   WSJT-X 3.3.0-beta1; packjt77.f90 above is
+                                          #   WSJT-X 3.3.0-beta4; packjt77.f90 above is
                                           #   Nexus's 3.0.2 copy and does not use it
 
     # --- misc shared (lib) ---
@@ -718,8 +718,9 @@ target_link_libraries(ft8_callsign_roundtrip PRIVATE tempo_static m gfortran)
 
 # ---------------------------------------------------------------------------
 # Verification I: WSJT-X's own Fortran unit tests for the JTTY modem, vendored
-# unchanged under vendor/wsjtx/tests/ (19 of upstream's 20; the twentieth needs
-# WSJT-X's Qt code). They run against THIS libtempo, so they are also the check
+# unchanged under vendor/wsjtx/tests/ (19 of upstream's 23: one needs WSJT-X's
+# Qt code; three carry a licence header of their own and are not taken; see
+# vendor/wsjtx/README.md). They run against THIS libtempo, so they are also the check
 # that the JTTY codec still round-trips through Nexus's own 3.0.2 packjt77.
 #
 # EXCLUDE_FROM_ALL: neither cargo (which builds tempo_static only) nor a plain

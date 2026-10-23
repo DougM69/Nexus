@@ -9,7 +9,7 @@
 //! message as it grows.
 //!
 //! ⚠️ **Not offered in any release.** The modem comes from a WSJT-X pre-release
-//! (3.3.0-beta1; see NOTICE). This crate is the FFI and the live receive driver
+//! (3.3.0-beta4; see NOTICE). This crate is the FFI and the live receive driver
 //! ([`Live`]); the app's receive side (`tempo-app`'s `jtty_rx`) is its only caller,
 //! and nothing here keys a transmitter: [`gen_wave`] returns audio samples and stops
 //! there.

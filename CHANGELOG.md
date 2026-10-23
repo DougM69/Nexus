@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   though WSJT-X's does not. Stop TX, Esc and the dock's Esc/Stop cut it at once, and leaving the JTTY screen
   stops it. Opening JTTY turns TX on as opening PSK does, but not after a Stop. A call becomes clickable, is
   spotted to PSK Reporter and reaches the Needed board only once it has been decoded in two separate messages. JTTY
-  comes from the WSJT-X 3.3.0-beta1 test release and no WSJT-X general release has it yet, so the other station
+  comes from the WSJT-X 3.3.0-beta4 test release and no WSJT-X general release has it yet, so the other station
   needs a WSJT-X 3.2 or 3.3 test release. Not yet tried on the air: a bench check should confirm keying, power and
   ALC at your data power, and that a WSJT-X station copies what Nexus sends.
 - **JTTY contacts log as JTTY, the way WSJT-X logs them.** TQSL does not know the JTTY mode yet and would drop
