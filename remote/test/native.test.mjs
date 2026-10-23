@@ -34,7 +34,7 @@ async function deviceKey() {
 }
 
 // The old Remote page's FT8/FT4 and held-contact actions are gone from the station. A browser that
-// still holds what an older build granted it (logging and station control, and a lease) and sends one
+// still holds station control and a lease and sends one
 // anyway, as a stale page could, is answered `stationUnsupported` through the real relay and the real
 // station: nothing keys, nothing is logged, and its lease, its socket and its Stop are untouched.
 test('actual native: the old page\'s FT8/FT4 and held-contact actions are refused, and the lease and Stop stay', { timeout: 60000 }, async () => {
@@ -56,10 +56,8 @@ test('actual native: the old page\'s FT8/FT4 and held-contact actions are refuse
     for (let i = 0; i < 30 && !(await roomStatus(room)).online; i++) await delay(100)
     assert.equal((await roomStatus(room)).online, true)
     await probe.send({ type: 'refresh' })
-    for (const type of ['loggingPermission', 'stationPermission']) {
-      const result = await probe.send({ type, deviceId: device.deviceId, allow: true })
-      assert.equal(result.ok, true, `${type}: ${result.error}`)
-    }
+    const result = await probe.send({ type: 'stationPermission', deviceId: device.deviceId, allow: true })
+    assert.equal(result.ok, true, `stationPermission: ${result.error}`)
     assert.deepEqual(await probe.send({ type: 'seedLogging' }), { count: 0, adif: '', txEnabled: false })
     assert.equal((await probe.send({ type: 'seedFt', tier: 'FT8' })).txEnabled, false)
     const ticket = (await browser.post(`stations/${stationId}/ticket`)).value
@@ -115,7 +113,7 @@ test('actual native: the old page\'s FT8/FT4 and held-contact actions are refuse
 })
 
 // One approval through workerd (operator decisions 2026-09-13 and 2026-09-14): approving the pairing
-// turns Remote on and grants the browser that confirmed it station control and logging. Both come back
+// turns Remote on and grants the browser that confirmed it station control. It comes back
 // after a restart with the TX-enable latch still off, and a later Turn off Remote is remembered.
 test('actual native one approval: pairing turns Remote on, grants the pairing browser, keeps its grants across a restart with TX off', { timeout: 60000 }, async () => {
   assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
@@ -136,7 +134,7 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
     const granted = async label => {
       for (let i = 0; i < 100; i++) {
         const { status } = await probe.send({ type: 'status' })
-        if ([status.stationPermissions, status.loggingPermissions].every(p => p?.includes(device.deviceId))) return status
+        if (status.stationPermissions?.includes(device.deviceId)) return status
         await delay(100)
       }
       assert.fail(`${label}: the pairing browser's grants never appeared`)
@@ -145,7 +143,7 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
     assert.equal((await probe.send({ type: 'ftEvidence' })).txEnabled, false)
     // An approval lasts until removed (operator decision 2026-10-10). One given under the old thirty-day
     // rule is kept on use: the service moves the expiry but never the generation, so the restart below
-    // still restores control and logging, with the latch off.
+    // still restores control, with the latch off.
     const UNTIL_REMOVED = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
     const deviceRow = () => app.db.prepare('SELECT generation,approved_at,expires_at FROM devices WHERE id=?').bind(device.deviceId).first()
     const approval = await deviceRow()
@@ -172,6 +170,7 @@ test('actual native one approval: pairing turns Remote on, grants the pairing br
     for (let i = 0; i < 50 && !status?.stationId; i++) { status = (await probe.send({ type: 'status' })).status; if (!status.stationId) await delay(100) }
     assert.equal(status.phase, 'disabled', 'Turn off Remote is remembered')
     assert.equal(status.transmitPermissions, undefined, 'no FT8/FT4 transmit permission is kept or shown')
+    assert.equal(status.loggingPermissions, undefined, 'no remote logging permission is kept or shown')
     assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
     try { await probe.stop() } finally { await app.mf.dispose() }
@@ -300,9 +299,7 @@ test('actual native: a computer running Nexus is listed to the station as one, a
     const approved = await probe.send({ type: 'device', deviceId: registered.deviceId, approve: true, key: fingerprint, kind: 'computer' })
     assert.equal(approved.ok, true, approved.error)
     assert.deepEqual(approved.status.pinnedDevices, [registered.deviceId], 'its key is pinned, as a browser\'s is')
-    for (const lane of ['loggingPermissions', 'stationPermissions']) {
-      assert.equal(approved.status[lane]?.includes(registered.deviceId), false, `nothing on the relay's lanes: ${lane}`)
-    }
+    assert.equal(approved.status.stationPermissions?.includes(registered.deviceId), false, 'nothing on the relay\'s lanes')
     assert.ok(approved.status.stationPermissions?.length, 'control: the pairing\'s browser holds station control')
     assert.equal(await probe.stop(), 0, 'native probe must exit successfully')
   } finally {
@@ -495,7 +492,7 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
 })
 
 
-// v4 gets a bigger clock than the rest, and it is a BUDGET, not a slackened assertion. v1-v3 run
+// v4 gets a bigger clock than the rest, and it is a BUDGET, not a slackened assertion. v2-v3 run
 // 4-6 s; v4 runs the stop-anything section (three local keyings, each behind the relay's 1.1 s Stop
 // window), the preference save, and the whole FT8+FT4 settings/CQ/runtime sweep. MEASURED on an
 // idle box (load 2.55): 61.9 s against the old 60 s — it was failing by 3%. That clock was set when
@@ -512,7 +509,9 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
 // it on the live client's own 30 s wall clock, which puts the budget on the GAP between renewals
 // (measured max 30.3 s against 60 s) instead of on the length of the block, so adding operations
 // here no longer walks toward that cliff. The node clock above still bounds the whole run.
-for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native operations v${operationVersion} hold the lease, take Stop and refuse local takeover`, {timeout:operationVersion>=4?180000:60000},async()=>{
+// v1 is not run: it carries no station control, and with the remote logging permission gone nothing
+// admits a v1 browser to a lease.
+for (const operationVersion of [2, 3, 4]) test(`actual cloud and native operations v${operationVersion} hold the lease, take Stop and refuse local takeover`, {timeout:operationVersion>=4?180000:60000},async()=>{
  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
  const app=await runtime(),probe=await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY,app.origin)
  let socket
@@ -556,14 +555,14 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   // back from its receipt, and as of the fix in `operations.rs` that no longer needs the Engine at all.
   const allowed=async(first,again=first)=>{let sent=await first();if(sent.response.error==='stationBusy'){console.log('stationBusy, retrying once:',sent.request.type,sent.request.action?.action??'');await delay(300);sent=await again()}return sent}
 
-  // The approval granted station control and logging; Turn on restores them once the service lists
-  // the browser. Then RESTRICT the browser with the switches at the shack: that is what must still
+  // The approval granted station control; Turn on restores it once the service lists
+  // the browser. Then RESTRICT the browser with the switch at the shack: that is what must still
   // refuse it a lease, exactly as a browser without permission always was.
-  for(let i=0;i<50;i++){const {status}=await probe.send({type:'status'});if(status.loggingPermissions?.includes(device.deviceId)&&status.stationPermissions?.includes(device.deviceId))break;await delay(100)}
+  for(let i=0;i<50;i++){const {status}=await probe.send({type:'status'});if(status.stationPermissions?.includes(device.deviceId))break;await delay(100)}
   let state=(await allowed(()=>operation({type:'state'}))).response.value;assert.equal(state.phase,'available','the approval allowed this browser')
-  for(const type of ['loggingPermission','stationPermission']){const restricted=await probe.send({type,deviceId:device.deviceId,allow:false});assert.equal(restricted.ok,true,restricted.error)}
+  const restricted=await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:false});assert.equal(restricted.ok,true,restricted.error)
   state=(await allowed(()=>operation({type:'state'}))).response.value;assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
-  await probe.send({type:'refresh'});const permission=await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal(permission.ok,true,permission.error);assert.deepEqual(permission.status.loggingPermissions,[device.deviceId])
+  await probe.send({type:'refresh'});const permission=await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true});assert.equal(permission.ok,true,permission.error);assert.deepEqual(permission.status.stationPermissions,[device.deviceId])
   state=(await allowed(()=>operation({type:'acquire',stationBootId:state.stationBootId}))).response.value;assert.equal(state.phase,'controlling');assert.equal(state.txArmed,false)
   const heartbeat=()=>allowed(()=>operation({type:'heartbeat',leaseId:state.leaseId}))
   const evidence=await probe.send({type:'loggingEvidence'});assert.deepEqual(evidence,{count:0,adif:'',txEnabled:false})
@@ -616,7 +615,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
      assert.equal(after.phase,'controlling')
      assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    }
-  }else assert.equal(Object.hasOwn(state,'controls'),false)
+  }
   const current=(await heartbeat()).response.value;assert.equal(current.phase,'controlling')
   // End remote control (operator decision 2026-10-10) drops everyone and holds until Remote is turned on
   // again: the browser's socket is closed by the station going offline, and nothing reaches the log.
@@ -628,12 +627,12 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   leaving(socket)
   // Turned on again, the approved browser has what its approval gave, with no approval again.
   await probe.send({type:'enable'});for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100);assert.equal((await roomStatus(room)).online,true)
-  let restored=null;for(let i=0;i<100&&!restored;i++){const {status}=await probe.send({type:'status'});if(status.loggingPermissions?.includes(device.deviceId))restored=status;else await delay(100)}
-  assert.ok(restored,'the browser\'s logging did not come back at Turn on')
+  let restored=null;for(let i=0;i<100&&!restored;i++){const {status}=await probe.send({type:'status'});if(status.stationPermissions?.includes(device.deviceId))restored=status;else await delay(100)}
+  assert.ok(restored,'the browser\'s station control did not come back at Turn on')
   const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();observing(socket,session=(await socket.take(v=>v.type==='session')).sessionId)
   leaving(socket);socket=null
   // Remote remembers being on (operator decision 2026-09-13). Restarting the actual native controller
-  // turns Remote back on and gives remote logging and station control (v4) back to a browser the
+  // turns Remote back on and gives station control back to a browser the
   // actual service still lists at the same approval. No lease survives the restart, the TX-enable
   // latch is off, and a restored grant arms nothing on a fresh lease.
   if(operationVersion===4){
@@ -641,8 +640,8 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   }
   await delay(200)
   let restarted=await probe.send({type:'restart'});assert.notEqual(restarted.status.phase,'disabled');assert.ok(restarted.status.observationGeneration)
-  for(let i=0;i<50&&!restarted.status.loggingPermissions.includes(device.deviceId);i++){await delay(100);restarted=await probe.send({type:'status'})}
-  assert.deepEqual(restarted.status.loggingPermissions,[device.deviceId]);assert.equal(restarted.status.loggingController,null)
+  for(let i=0;i<50&&!restarted.status.stationPermissions.includes(device.deviceId);i++){await delay(100);restarted=await probe.send({type:'status'})}
+  assert.deepEqual(restarted.status.stationPermissions,[device.deviceId]);assert.equal(restarted.status.controller,null)
   const idle=await probe.send({type:'ftEvidence'});assert.equal(idle.txEnabled,false,'the TX-enable latch is off after the restart');assert.equal(idle.owned,false)
   if(operationVersion===4){
    assert.deepEqual(restarted.status.stationPermissions,[device.deviceId])

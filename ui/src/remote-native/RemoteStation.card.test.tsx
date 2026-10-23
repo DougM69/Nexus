@@ -45,7 +45,7 @@ it('one card: the sign-in status, then each browser with its key and the one thi
       { id: pinned, name: 'Chrome on Windows', approved: 1, expiresAt: now + 30 * day, key: fingerprint('a') },
       { id: unpinned, name: 'Laptop', approved: 1, expiresAt: now + 30 * day, key: fingerprint('b') },
       { id: waiting, name: 'Firefox on Android', approved: 0, expiresAt: now + 600000, key: fingerprint('c') },
-    ], pinnedDevices: [pinned], loggingPermissions: [pinned], stationPermissions: [pinned] })
+    ], pinnedDevices: [pinned], stationPermissions: [pinned] })
   const list = await screen.findByRole('list')
   expect(screen.getByRole('status').textContent).toBe('Connected to the Remote service')
   const rows = within(list).getAllByRole('listitem')
@@ -67,7 +67,7 @@ it('one card: the sign-in status, then each browser with its key and the one thi
   const advanced = document.querySelector('details.remote-native-advanced') as HTMLDetailsElement
   expect(advanced.open).toBe(false)
   expect(advanced.querySelector('summary')?.textContent).toBe('Advanced')
-  for (const name of ['Revoke logging permission', 'Revoke station controls', 'Refresh browser requests',
+  for (const name of ['Revoke station controls', 'Refresh browser requests',
     'Revoke station access', 'Approve browser', 'Approve again', 'Revoke browser approval']) {
     expect(within(advanced).getAllByRole('button', { name }).length, `${name} is kept under Advanced`).toBeGreaterThan(0)
     expect(within(main()).queryByRole('button', { name }), `${name} is not in the card itself`).toBeNull()

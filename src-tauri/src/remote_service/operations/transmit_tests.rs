@@ -25,7 +25,6 @@ fn armed() -> (Fixture, Instant, Value) {
 fn transmit_revocation_is_synchronous_even_while_engine_is_busy() {
     for cause in [
         "stationGrant",
-        "loggingGrant",
         "disconnect",
         "connection",
         "invalidate",
@@ -38,9 +37,6 @@ fn transmit_revocation_is_synchronous_even_while_engine_is_busy() {
         match cause {
             "stationGrant" => {
                 f.authority.permit_station(DEVICE, false).unwrap();
-            }
-            "loggingGrant" => {
-                f.authority.permit(DEVICE, false).unwrap();
             }
             "disconnect" => f.authority.disconnect_session(SESSION),
             "connection" => {
@@ -260,30 +256,13 @@ fn a_controlling_browser_stops_any_local_transmission() {
 #[test]
 fn a_browser_without_station_control_is_refused_and_stops_nothing() {
     let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
-    for scene in ["noLease", "loggingOnly", "controlRevoked", "otherDevice"] {
+    for scene in ["noLease", "controlRevoked", "otherDevice"] {
         let f = Fixture::new();
         let now = Instant::now();
         let state = match scene {
             "noLease" => {
                 f.authority.permit_station(DEVICE, true).unwrap();
                 control_state_version(&f, now, 4)
-            }
-            "loggingOnly" => {
-                f.authority.permit(DEVICE, true).unwrap();
-                let boot = control_state_version(&f, now, 4)["stationBootId"].clone();
-                f.authority
-                    .handle_version(
-                        (f.connection, 4),
-                        SESSION,
-                        DEVICE,
-                        &Request::Acquire {
-                            request_id: id(),
-                            station_boot_id: boot.as_str().unwrap().into(),
-                        },
-                        &f.engine,
-                        now,
-                    )
-                    .unwrap()
             }
             "controlRevoked" => {
                 acquire_controls_version(&f, now, 4);
@@ -297,16 +276,6 @@ fn a_browser_without_station_control_is_refused_and_stops_nothing() {
             }
             _ => unreachable!(),
         };
-        if scene == "loggingOnly" {
-            assert_eq!(
-                state["phase"], "controlling",
-                "positive control: a logging lease is held"
-            );
-            assert!(
-                state["transmitEpoch"].is_null(),
-                "logging alone holds no stop token"
-            );
-        }
         key_locally(&mut f.engine.lock().unwrap(), "ptt");
         let request = Request::StopTransmit {
             request_id: id(),

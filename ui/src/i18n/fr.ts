@@ -34,8 +34,6 @@ import type { PartialCatalog } from './index'
 
 export const FR: PartialCatalog = {
   "remote.configurationLocal": "Gérez les comptes, sauvegardes et accès distant dans Nexus à la station, sur place ou en direct dans ce navigateur.",
-  "remote.loggingLocalHint": "Autoriser un navigateur lui permet aussi de saisir des contacts. Pour limiter un navigateur, révoquez ici la saisie. Elle n’autorise aucune commande radio ni émission.",
-  "remote.loggingTakeOver": "Arrêter la saisie distante : tout le monde déconnecté jusqu’à ce que Remote soit réactivé",
   "remote.controlRequestFailed": "La commande n’a pas été confirmée. Vérifiez l’autorisation de contrôle de la station et les mesures actuelles.",
   "remote.controlLocalHint": "Autoriser un navigateur lui donne le contrôle de la station : les fonctions prises en charge du récepteur, de la radio et de l’amplificateur, ainsi que Stop TX, qui arrête toute émission de la station. Avec le direct activé, il peut aussi voir cette fenêtre en direct et utiliser Nexus comme vous le feriez ici, émission comprise. Pour limiter un navigateur, révoquez-le ici. Cela met aussi fin à son direct.",
   // remote parity batch 1
@@ -45,9 +43,6 @@ export const FR: PartialCatalog = {
   "remote.controlActive": "Contrôle de la station actif",
   "amp.strip.statusUnknown": "État de l’amplificateur indisponible",
   "remote.controlTakeOver": "Terminer le contrôle à distance : tout le monde déconnecté jusqu’à ce que Remote soit réactivé",
-  "remote.loggingAllow": "Autoriser la saisie distante",
-  "remote.loggingRevoke": "Révoquer l’autorisation de saisie",
-  "remote.loggingController": "Ce navigateur contrôle la saisie distante.",
   // remote parity batch 2
   // remote parity batch 3
   "remote.audio.start": "Écouter",

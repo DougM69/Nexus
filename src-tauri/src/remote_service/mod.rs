@@ -53,9 +53,9 @@ pub struct Status {
     devices: Vec<Device>,
     error: Option<&'static str>,
     observation_generation: Option<String>,
-    logging_permissions: Vec<String>,
     station_permissions: Vec<String>,
-    logging_controller: Option<String>,
+    /// The device holding the station's lease, if any.
+    controller: Option<String>,
     /// A5: the browsers whose listed device key is the one pinned at the radio, the ones that can
     /// stream. An approved browser listed with a key and missing here is approved again to stream.
     pinned_devices: Vec<String>,
@@ -314,11 +314,6 @@ impl Approval {
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 // Empty struct variants preserve deny_unknown_fields; Serde unit variants ignore extra fields.
 pub enum Action {
-    LoggingPermission {
-        #[serde(rename = "deviceId")]
-        device_id: String,
-        allow: bool,
-    },
     StationPermission {
         #[serde(rename = "deviceId")]
         device_id: String,
@@ -418,8 +413,8 @@ type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// and the record has to fit the smallest OS credential blob (Windows).
 const MAX_REMEMBERED: usize = 8;
 /// A decision a restart must remember. Operator decisions 2026-09-13: Remote remembers being on;
-/// approving a browser grants it station control and logging, and each is kept for as long as that
-/// approval stands, until revoked.
+/// approving a browser grants it station control, kept for as long as that approval stands, until
+/// revoked.
 ///
 /// Every decision is applied to `Control::remembered` under the `Control` lock at the moment it is
 /// made, so the record always holds the operator's decisions in the order they were made, and Turn
@@ -447,12 +442,12 @@ enum Persist {
     Browser {
         device_id: String,
         approval: Option<Approval>,
-        logging: Option<bool>,
         control: Option<bool>,
     },
     /// The approvals the service lists right now. A grant remembered against any other approval
-    /// (a browser revoked, re-approved, expired or gone) is forgotten; the rest are rebound to the
-    /// approval as listed. So is a pin for a browser no longer approved.
+    /// (a browser revoked, re-approved, expired or gone) is forgotten, as is one without station
+    /// control; the rest are rebound to the approval as listed. So is a pin for a browser no longer
+    /// approved.
     Approvals(Vec<(String, Approval)>),
     /// The pairing was removed.
     Removed,
@@ -567,7 +562,6 @@ impl Remembered {
             Persist::Browser {
                 device_id,
                 approval,
-                logging,
                 control,
             } => {
                 let at = state.grants.iter().position(|g| g.device_id == device_id);
@@ -580,17 +574,16 @@ impl Remembered {
                         device_id,
                         expires_at: approval.expires_at,
                         generation: approval.generation,
-                        logging: false,
                         control: false,
+                        retired_logging: Default::default(),
                         retired_transmit: Default::default(),
                     },
                     (Some(grant), None) => grant,
                     // Nothing remembered for this browser, and no approval to bind a grant to.
                     (None, None) => return None,
                 };
-                grant.logging = logging.unwrap_or(grant.logging);
                 grant.control = control.unwrap_or(grant.control);
-                let keep = grant.logging || grant.control;
+                let keep = grant.control;
                 match at {
                     Some(i) if keep => state.grants[i] = grant,
                     Some(i) => {
@@ -607,7 +600,8 @@ impl Remembered {
                 if let Some((_, approval)) = listed {
                     approval.bind(g);
                 }
-                listed.is_some()
+                // A grant holding nothing (an older build's remote logging alone) goes too.
+                listed.is_some() && g.control
             }),
             Persist::Bound(..) | Persist::Removed | Persist::Pin { .. } | Persist::Listed(_) => {
                 return None
@@ -692,13 +686,11 @@ impl Control {
     /// whole authority is cleared instead, as it was before: fail closed.
     fn revoke_browser(&mut self, device_id: &str) {
         let operations = self.operations.clone();
-        let taken = operations.permit(device_id, false).is_ok()
-            && operations.permit_station(device_id, false).is_ok();
+        let taken = operations.permit_station(device_id, false).is_ok();
         if taken {
             self.remember(Persist::Browser {
                 device_id: device_id.to_string(),
                 approval: None,
-                logging: Some(false),
                 control: Some(false),
             });
         } else {
@@ -1074,9 +1066,7 @@ impl Service {
         let control = self.control.lock().map_err(|_| "serviceUnavailable")?;
         let enabled = control.enabled;
         let operations = control.operations.local_status();
-        status.logging_permissions =
-            serde_json::from_value(operations["devices"].clone()).unwrap_or_default();
-        status.logging_controller = operations["controller"].as_str().map(str::to_string);
+        status.controller = operations["controller"].as_str().map(str::to_string);
         status.station_permissions =
             serde_json::from_value(operations["controlDevices"].clone()).unwrap_or_default();
         status.pinned_devices = status
@@ -1112,8 +1102,7 @@ impl Service {
     }
     pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
         match &action {
-            Action::LoggingPermission { device_id, allow }
-            | Action::StationPermission { device_id, allow } => {
+            Action::StationPermission { device_id, allow } => {
                 // Keep admission and grant under the same local control lock
                 // as Disable/Take over. A prior status snapshot must not install
                 // a new grant after that local authority has been stopped.
@@ -1135,24 +1124,13 @@ impl Service {
                     };
                     approval = Some(device.approval());
                 }
-                // These are the restrict switches: each allows or revokes one permission for one
-                // browser, live first, and the record follows only what took effect.
-                let operations = control.operations.clone();
-                let (logging, station) = match &action {
-                    Action::StationPermission { .. } => {
-                        operations.permit_station(device_id, *allow)?;
-                        (None, Some(*allow))
-                    }
-                    _ => {
-                        operations.permit(device_id, *allow)?;
-                        (Some(*allow), None)
-                    }
-                };
+                // The restrict switch: it allows or revokes station control for one browser, live
+                // first, and the record follows only what took effect.
+                control.operations.permit_station(device_id, *allow)?;
                 control.remember(Persist::Browser {
                     device_id: device_id.clone(),
                     approval,
-                    logging,
-                    control: station,
+                    control: Some(*allow),
                 });
                 drop(control);
                 return self.status();
@@ -1586,7 +1564,6 @@ impl Controller {
                 .collect()
         };
         let grants = operations::DurableGrants {
-            logging: ids(|g| g.logging),
             control: ids(|g| g.control),
         };
         let operations = control.operations.clone();
@@ -1863,9 +1840,9 @@ impl Controller {
         }
         Ok((binding, token))
     }
-    /// ONE APPROVAL (operator decision 2026-09-13): approving a browser grants it station control
-    /// and logging. With Remote on they take
-    /// effect at once; with Remote off they wait in the record for Turn on. A local decision made
+    /// ONE APPROVAL (operator decision 2026-09-13): approving a browser grants it station control.
+    /// With Remote on it takes
+    /// effect at once; with Remote off it waits in the record for Turn on. A local decision made
     /// after the approval was asked for (Turn off or on, take over) wins, and nothing is granted;
     /// revoking this device does too (the revoke is taken again after this, `Controller::handle`).
     ///
@@ -1908,15 +1885,12 @@ impl Controller {
         // the tunnel through the room checks. A browser is granted only if it was shown as one.
         let browser = as_shown && device.kind == Kind::Browser;
         if control.enabled && browser {
-            let operations = control.operations.clone();
-            operations.permit(&device_id, true)?;
-            operations.permit_station(&device_id, true)?;
+            control.operations.permit_station(&device_id, true)?;
         }
         if browser {
             control.remember(Persist::Browser {
                 device_id: device_id.clone(),
                 approval: Some(approval),
-                logging: Some(true),
                 control: Some(true),
             });
         }
@@ -2191,8 +2165,8 @@ impl Controller {
         }
     }
     /// What an Approve press grants a device the operator was shown, for one the station vouched
-    /// for on its own proof, by its role: a browser that operates gets station control and logging,
-    /// one that listens gets neither, and every device gets its pin ([`Device::pin`]). Station
+    /// for on its own proof, by its role: a browser that operates gets station control,
+    /// one that listens does not, and every device gets its pin ([`Device::pin`]). Station
     /// control and the pin are all a stream needs (`Authority::stream_admitted`), and a streaming
     /// browser uses the station's own window, transmit included, as any browser approved here does.
     /// With Remote on the grants take effect at
@@ -2227,15 +2201,12 @@ impl Controller {
             return Ok(false);
         }
         if control.enabled && browser {
-            let operations = control.operations.clone();
-            operations.permit(&device.id, operate)?;
-            operations.permit_station(&device.id, operate)?;
+            control.operations.permit_station(&device.id, operate)?;
         }
         if browser {
             control.remember(Persist::Browser {
                 device_id: device.id.clone(),
                 approval: Some(device.approval()),
-                logging: Some(operate),
                 control: Some(operate),
             });
         }
@@ -2347,8 +2318,7 @@ impl Controller {
         epoch: u64,
     ) -> Result<(), &'static str> {
         match action {
-            Action::LoggingPermission { .. }
-            | Action::StationPermission { .. }
+            Action::StationPermission { .. }
             | Action::TakeOverLogging {}
             | Action::LanOn { .. }
             | Action::LanOff {}
@@ -2558,7 +2528,6 @@ impl Controller {
                         control.remember(Persist::Browser {
                             device_id: device_id.clone(),
                             approval: Some(approval),
-                            logging: Some(true),
                             control: Some(true),
                         });
                         // A5, operator ruling D4 (2026-09-28): that browser's key is pinned on first

@@ -142,7 +142,6 @@ struct Core {
     connection: u64,
     lease_epoch: u64,
     boot: Option<String>,
-    grants: BTreeSet<String>,
     control_grants: BTreeSet<String>,
     lease: Option<Lease>,
     revision: u64,
@@ -156,7 +155,6 @@ impl Default for Core {
             connection: 0,
             lease_epoch: 0,
             boot: snapshot_id().ok(),
-            grants: BTreeSet::new(),
             control_grants: BTreeSet::new(),
             lease: None,
             revision: 0,
@@ -165,18 +163,11 @@ impl Default for Core {
         }
     }
 }
-/// Grants remembered from before a restart or a Turn on, per browser: remote logging and station
-/// control. See `Authority::restore`.
+/// Grants remembered from before a restart or a Turn on, per browser: station control. See
+/// `Authority::restore`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DurableGrants {
-    pub logging: Vec<String>,
     pub control: Vec<String>,
-}
-/// A grant a local revoke removes without waiting for Core (#318).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Grant {
-    Logging,
-    Station,
 }
 #[derive(Default)]
 pub struct Authority {
@@ -191,9 +182,9 @@ pub struct Authority {
     /// authority when a lease ends, which stops everything at the station on the next tick.
     presence: TransmitAuthority,
     stop_owner: Mutex<Option<transmit_stop::Owner>>,
-    /// Logging and station-control revokes, queued so a revoke never waits for Core; see
+    /// Station-control revokes, by device, queued so a revoke never waits for Core; see
     /// `revoke_grant_device`.
-    grant_revocations: Mutex<BTreeSet<(Grant, String)>>,
+    grant_revocations: Mutex<BTreeSet<String>>,
     /// The LAN road's open connections. Its own lock, never held while another is taken, so
     /// asking whether a connection is open can wait on nothing.
     lan: Mutex<LanRoad>,
@@ -381,7 +372,6 @@ impl Authority {
         }
         if c.epoch != epoch {
             c.epoch = epoch;
-            c.grants.clear();
             c.control_grants.clear();
             c.lease = None;
             c.windows.clear();
@@ -410,15 +400,8 @@ impl Authority {
                 .map_err(|_| "authorityUnavailable")?,
         );
         let mut controller_revoked = false;
-        for (grant, device) in grants_revoked {
-            match grant {
-                Grant::Logging => {
-                    c.grants.remove(&device);
-                }
-                Grant::Station => {
-                    c.control_grants.remove(&device);
-                }
-            }
+        for device in grants_revoked {
+            c.control_grants.remove(&device);
             controller_revoked |= c.lease.as_ref().is_some_and(|l| l.device == device);
         }
         if controller_revoked {
@@ -455,7 +438,7 @@ impl Authority {
     }
     /// The epoch every local grant belongs to. Any local decision that clears permissions
     /// (Turn off Remote, take over, turning Remote on again) moves it. Revoking one browser does not:
-    /// it takes that browser's grants alone (`permit`, `permit_station`).
+    /// it takes that browser's grant alone (`permit_station`).
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::SeqCst)
     }
@@ -472,11 +455,6 @@ impl Authority {
         if c.epoch != epoch || self.epoch.load(Ordering::SeqCst) != epoch {
             return Ok(false);
         }
-        for device in grants.logging.iter().filter(|d| identifier(d)) {
-            if c.grants.len() < 16 {
-                c.grants.insert(device.clone());
-            }
-        }
         for device in grants.control.iter().filter(|d| identifier(d)) {
             if c.control_grants.len() < 16 {
                 c.control_grants.insert(device.clone());
@@ -492,35 +470,12 @@ impl Authority {
     }
     /// A revoke never waits for Core (#318): it is queued for `reconcile`, which applies it
     /// before anything else consumes Core. A grant may still be refused `remoteBusy`.
-    pub fn permit(&self, device: &str, allow: bool) -> Result<(), &'static str> {
-        if !identifier(device) {
-            return Err("invalidRequest");
-        }
-        if !allow {
-            self.revoke_grant_device(Grant::Logging, device)?;
-        }
-        let mut c = match self.core.try_lock() {
-            Ok(c) => c,
-            Err(std::sync::TryLockError::WouldBlock) if !allow => return Ok(()),
-            Err(_) => return Err("remoteBusy"),
-        };
-        self.reconcile(&mut c, Instant::now())?;
-        if allow {
-            if c.grants.len() >= 16 && !c.grants.contains(device) {
-                return Err("remoteBusy");
-            }
-            c.grants.insert(device.to_string());
-        }
-        self.sync_stop_owner(&c, Instant::now());
-        Ok(())
-    }
-    /// Like `permit`, a revoke never waits.
     pub fn permit_station(&self, device: &str, allow: bool) -> Result<(), &'static str> {
         if !identifier(device) {
             return Err("invalidRequest");
         }
         if !allow {
-            self.revoke_grant_device(Grant::Station, device)?;
+            self.revoke_grant_device(device)?;
         }
         let mut c = match self.core.try_lock() {
             Ok(c) => c,
@@ -540,10 +495,7 @@ impl Authority {
     /// May this browser listen to the station's receive audio right now?
     ///
     /// Two things, and both are the operator's: the local **control** grant, and this
-    /// browser's own live lease. A logging-only browser holds `grants` and a perfectly
-    /// valid lease and is refused here — hearing a shack is not a consequence of being
-    /// allowed to write to its log, and the two permissions are given separately at the
-    /// radio precisely so they can be withheld separately.
+    /// browser's own live lease.
     ///
     /// Nothing here can key anything. It is a read of permission state, and the caller
     /// it serves holds no transmit authority at all.
@@ -663,7 +615,7 @@ impl Authority {
         self.presence.revoke();
     }
 
-    /// Any admitted browser departure ends the shared logging lease. This is
+    /// Any admitted browser departure ends the shared lease. This is
     /// deliberately conservative and cannot wait behind a file append. Grants
     /// survive; a controller must explicitly acquire a fresh lease afterward.
     pub fn disconnect_session(&self, session: &str) {
@@ -681,7 +633,7 @@ impl Authority {
         if self.reconcile(&mut c, Instant::now()).is_err() {
             return json!({"devices":[],"controller":null});
         }
-        json!({"devices":c.grants,"controlDevices":c.control_grants,"controller":c.lease.as_ref().map(|l|l.device.as_str())})
+        json!({"controlDevices":c.control_grants,"controller":c.lease.as_ref().map(|l|l.device.as_str())})
     }
     fn context(
         &self,
@@ -724,8 +676,7 @@ impl Authority {
         control: Option<(u8, station::Context, bool)>,
     ) -> Result<Value, &'static str> {
         self.sync_stop_owner(c, now);
-        let allowed =
-            c.grants.contains(device) || (control.is_some() && c.control_grants.contains(device));
+        let allowed = control.is_some() && c.control_grants.contains(device);
         let owned = allowed
             && c.lease
                 .as_ref()
@@ -774,7 +725,7 @@ impl Authority {
                     // heard of it never offers a listen control, and a station built
                     // without the audio lane never advertises it, so nobody is ever
                     // asked for something the other end cannot do. It is under the
-                    // CONTROL grant, not the logging one — see `audio_admitted`.
+                    // control grant — see `audio_admitted`.
                     #[cfg(feature = "radio")]
                     capabilities.push("audioListen");
                 }
@@ -856,8 +807,7 @@ impl Authority {
             Request::Acquire {
                 station_boot_id, ..
             } => {
-                if !(c.grants.contains(device) || version >= 2 && c.control_grants.contains(device))
-                {
+                if !(version >= 2 && c.control_grants.contains(device)) {
                     return Err("localPermissionRequired");
                 }
                 if c.boot.as_deref() != Some(station_boot_id.as_str()) {
@@ -904,8 +854,7 @@ impl Authority {
             Request::TakeControl {
                 station_boot_id, ..
             } => {
-                if !(c.grants.contains(device) || version >= 2 && c.control_grants.contains(device))
-                {
+                if !(version >= 2 && c.control_grants.contains(device)) {
                     return Err("localPermissionRequired");
                 }
                 if lan_road(connection).is_none() {
@@ -950,7 +899,7 @@ impl Authority {
 fn permitted(c: &Core, version: u8, device: &str, request: &Request) -> bool {
     match request {
         Request::Acquire { .. } | Request::TakeControl { .. } => {
-            c.grants.contains(device) || version >= 2 && c.control_grants.contains(device)
+            version >= 2 && c.control_grants.contains(device)
         }
         _ => true,
     }

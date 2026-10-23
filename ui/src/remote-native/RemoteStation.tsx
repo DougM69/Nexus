@@ -280,8 +280,7 @@ export function RemoteStation() {
         <div className="remote-actions">
           <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'refresh' })}>{t('remote.refreshDevices')}</button>
         </div>
-        {status.loggingPermissions && <><p>{t('remote.loggingLocalHint')}</p><button type="button" className="remote-button" onClick={()=>void act({type:'takeOverLogging'})}>{status.stationPermissions ? t('remote.controlTakeOver') : t('remote.loggingTakeOver')}</button></>}
-        {status.stationPermissions && <p>{t('remote.controlLocalHint')}</p>}
+        {status.stationPermissions && <><p>{t('remote.controlLocalHint')}</p><button type="button" className="remote-button" onClick={()=>void act({type:'takeOverLogging'})}>{t('remote.controlTakeOver')}</button></>}
         <h3>{t('remote.browserApprovals')}</h3><p>{t('remote.browserMatch')}</p>
         {browsers.map(device => { const key = device.key ?? undefined
           // A5: approved, with a key the service lists, and that key not the one pinned here (approved
@@ -291,8 +290,8 @@ export function RemoteStation() {
           return <div key={device.id}>
           {/* The browser's key beside its name: the page shows the same one, for the operator to compare. */}
           <p>{device.name} <code>{device.id.slice(-6)}</code>{key && <> <span>{t('remote.browserKey', { key: shortFingerprint(key) })}</span></>}</p>
-          {/* One approval: approving grants station controls and logging. The switches below then only
-              restrict (or give back) what an approved browser holds. */}
+          {/* One approval: approving grants station controls. The switch below then only
+              restricts (or gives back) what an approved browser holds. */}
           {device.approved === 1
             ? <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.revokeBrowser')}</button>
             : <button type="button" className="remote-button" disabled={busy}
@@ -301,7 +300,7 @@ export function RemoteStation() {
             ? t('remote.browserRenewsUntil', { until: utcDate(device.expiresAt), limit: utcDate(device.renewsUntil) })
             : t('remote.browserApprovedUntil', { until: utcDate(device.expiresAt) })}</p>}
           {/* The last week before the end that use cannot move, or a key not pinned here. Approving again
-              is a NEW approval: it grants station controls and logging again, and pins the key shown
+              is a NEW approval: it grants station controls again, and pins the key shown
               above. */}
           {(ending || unpinned) && <>
             {ending && <p className="remote-warning">{t('remote.browserApprovalEnding', { until: utcDate(device.renewsUntil ?? device.expiresAt) })}</p>}
@@ -309,9 +308,8 @@ export function RemoteStation() {
             <button type="button" className="remote-button" disabled={busy}
               onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, key, kind: device.kind ?? 'browser' })}>{t('remote.approveAgain')}</button>
           </>}
-          {device.approved===1&&status.loggingPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'loggingPermission',deviceId:device.id,allow:!status.loggingPermissions!.includes(device.id)})}>{status.loggingPermissions.includes(device.id)?t('remote.loggingRevoke'):t('remote.loggingAllow')}</button>}
           {device.approved===1&&status.stationPermissions&&<button type="button" className="remote-button" disabled={busy||!connected} onClick={()=>void act({type:'stationPermission',deviceId:device.id,allow:!status.stationPermissions!.includes(device.id)})}>{status.stationPermissions.includes(device.id)?t('remote.controlRevoke'):t('remote.controlAllow')}</button>}
-          {status.loggingController===device.id&&<p role="status">{status.stationPermissions?.includes(device.id)?t('remote.controlActive'):t('remote.loggingController')}</p>}
+          {status.controller===device.id&&<p role="status">{t('remote.controlActive')}</p>}
         </div> })}
         <details><summary>{t('remote.stationAccess')}</summary><p>{t('remote.revokeHint')}</p>
           <button type="button" className="remote-button" disabled={busy} onClick={() => void act({ type: 'forget' })}>{t('remote.revokeStation')}</button>

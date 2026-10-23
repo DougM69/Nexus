@@ -12,8 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   station no longer takes FT8/FT4 or held-contact commands from a browser, and Settings ▸ Remote access no
   longer offers **Also allow FT8/FT4 transmit from the Remote page** or the switch to allow or revoke it. A
   browser streaming the station is unchanged: it operates Nexus as you would at the shack, transmit included,
-  and its Stop TX works as before. A browser you approved with that permission keeps its station controls and
-  logging after you update; only the old permission is dropped.
+  and its Stop TX works as before. A browser you approved with that permission keeps its station controls
+  after you update; only the old permission is dropped.
+- **Nexus Remote: the remote logging permission.** It was for the old Remote page's Log QSO form, which is
+  gone; all it still did was let a browser take control without station controls. Settings ▸ Remote access no
+  longer shows **Allow remote logging** or **Revoke logging permission**, approving a browser gives it station
+  controls only, and a browser now needs station controls to take control. **End remote control** works as
+  before. A browser streaming the station logs with Nexus's own log form, as you would at the shack. A browser
+  that had only remote logging left after an update has nothing; approve it again or allow its station
+  controls to give it control.
 
 ## [1.20.0] — 2026-10-22
 

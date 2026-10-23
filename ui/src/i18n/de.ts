@@ -19,8 +19,6 @@ import type { PartialCatalog } from './index'
 
 export const DE: PartialCatalog = {
   "remote.configurationLocal": "Konten, Sicherungen und Fernzugriff in Nexus an der Station verwalten, vor Ort oder als Stream in diesem Browser.",
-  "remote.loggingLocalHint": "Wenn du einen Browser freigibst, darf er auch Kontakte loggen. Um einen Browser einzuschränken, entziehe ihm hier das Loggen. Loggen erlaubt keine Funkgeräte- oder Sendesteuerung.",
-  "remote.loggingTakeOver": "Fernprotokollierung beenden: alle getrennt, bis Remote wieder eingeschaltet wird",
   "remote.controlRequestFailed": "Der Befehl wurde nicht bestätigt. Prüfen Sie die Berechtigung zur Stationssteuerung und die aktuellen Messwerte.",
   "remote.controlLocalHint": "Wenn du einen Browser freigibst, erhält er die Stationssteuerung: unterstützte Empfänger-, Funkgeräte- und Verstärkerfunktionen sowie Stop TX, das jede Aussendung der Station beendet. Ist Streamen eingeschaltet, kann er damit auch dieses Fenster streamen und Nexus so nutzen, wie du es hier tun würdest, Senden eingeschlossen. Um einen Browser einzuschränken, entziehe sie ihm hier; das beendet auch seinen Stream.",
   // remote parity batch 1
@@ -30,9 +28,6 @@ export const DE: PartialCatalog = {
   "remote.controlActive": "Stationssteuerung aktiv",
   "amp.strip.statusUnknown": "Verstärkerstatus nicht verfügbar",
   "remote.controlTakeOver": "Fernsteuerung beenden: alle getrennt, bis Remote wieder eingeschaltet wird",
-  "remote.loggingAllow": "Fernprotokollierung erlauben",
-  "remote.loggingRevoke": "Protokollierungsberechtigung widerrufen",
-  "remote.loggingController": "Dieser Browser steuert die Fernprotokollierung.",
   // remote parity batch 2
   // remote parity batch 3
   "remote.audio.start": "Mithören",

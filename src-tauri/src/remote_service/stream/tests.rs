@@ -265,7 +265,7 @@ fn an_offer_without_control_or_a_live_lease_is_refused_first() {
         admit(&f.station, &offer(&f.lease), later),
         Err(StreamReason::NotController)
     );
-    // A logging-only browser: a perfectly good lease, and no control grant.
+    // A browser whose control grant was revoked after it took its lease.
     let f = fixture(now);
     f.station.authority.permit_station(DEVICE, false).unwrap();
     assert_eq!(

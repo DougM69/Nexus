@@ -24,8 +24,6 @@ import type { PartialCatalog } from './index'
 
 export const JA: PartialCatalog = {
   "remote.configurationLocal": "アカウント、バックアップ、リモートアクセスは局側の Nexus で管理してください。シャックで直接、またはこのブラウザーへのライブで操作できます。",
-  "remote.loggingLocalHint": "ブラウザーを承認すると、そのブラウザーは交信のログ記入もできます。制限する場合は、ここでログ記入の許可を取り消してください。この許可では無線機や送信を操作できません。",
-  "remote.loggingTakeOver": "リモートログ記入を終了（Remote を再びオンにするまで全員切断）",
   "remote.controlRequestFailed": "コマンドの実行を確認できませんでした。局の操作許可と現在の測定値を確認してください。",
   "remote.controlLocalHint": "ブラウザーを承認すると、局の操作（対応する受信機、無線機、アンプの操作）と、局のあらゆる送信を止める Stop TX が許可されます。ライブがオンなら、このウィンドウをライブで見て、ここと同じように Nexus を使うこともできます（送信を含む）。制限する場合は、ここで取り消してください。取り消すとライブも終了します。",
   // remote parity batch 1
@@ -35,9 +33,6 @@ export const JA: PartialCatalog = {
   "remote.controlActive": "局の操作中",
   "amp.strip.statusUnknown": "アンプの状態を取得できません",
   "remote.controlTakeOver": "リモート操作を終了（Remote を再びオンにするまで全員切断）",
-  "remote.loggingAllow": "リモートログ記入を許可",
-  "remote.loggingRevoke": "ログ記入の許可を取り消す",
-  "remote.loggingController": "このブラウザーがリモートログ記入を制御しています。",
   // remote parity batch 2
   // remote parity batch 3
   "remote.audio.start": "受信音を聞く",

@@ -30,7 +30,7 @@ const question = (device: Device) => `${device.id}:${device.key}`
  *  at the shack pops up "Let Chrome on Windows stream this station? Key XXXX XXXX" with Approve / Deny
  *  ... No hunting through Settings."). The browser's name and the key it shows on the Remote page.
  *
- *  Approve is exactly Settings ▸ Remote access's approve: station controls and logging, and the key
+ *  Approve is exactly Settings ▸ Remote access's approve: station controls, and the key
  *  shown here pinned (the station pins it only if the service still lists this same key). Station
  *  controls are all a stream needs, and a streaming browser is the operator at the shack, transmit
  *  included (the operator, 2026-10-03), so the question says so. It never approves by default: Deny holds the keyboard when it

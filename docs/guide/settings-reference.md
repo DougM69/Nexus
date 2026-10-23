@@ -104,19 +104,16 @@ say yes.
 
 **What a browser may do** is decided here at the station. Approving a browser gives it
 station controls, which is all a stream needs: with streaming on, they let a browser stream
-this window and use Nexus as you would here, transmit included. Approving also gives it
-remote logging, which nothing on the Remote page uses now (below). Both are kept when Nexus
+this window and use Nexus as you would here, transmit included. They are kept when Nexus
 restarts, until you revoke them, for as long as that browser stays approved: a browser whose
-approval was revoked, or given again, starts with nothing kept. The switches under each
-approved browser, under **Advanced**, limit it, or give a permission back. Without station
+approval was revoked, or given again, starts with nothing kept. The switch under each
+approved browser, under **Advanced**, limits it, or gives station controls back. Without station
 controls a browser cannot stream this station.
 
 - **Allow station controls** — tuning, band and mode changes, receiver filters and
   DSP, RF power and mic gain, decoder settings, the amplifier, and which radio is
   active. One browser holds control at a time. Revoking them also ends that browser's stream.
-- **Allow remote logging** — was for the Remote page's own Log QSO form, which the page no
-  longer has. A browser streaming this station logs with Nexus's own log form, as you would
-  here, and does not need it.
+  A browser streaming this station logs with Nexus's own log form, as you would here.
 
 **Stream this station from my browser** is off by default, and on Windows only for
 now. With it on, a browser approved for station controls, while it holds control, can be

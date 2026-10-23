@@ -34,8 +34,6 @@ import type { PartialCatalog } from './index'
 
 export const ES: PartialCatalog = {
   "remote.configurationLocal": "Gestiona las cuentas, copias de seguridad y el acceso remoto en Nexus en la estación, en persona o en directo en este navegador.",
-  "remote.loggingLocalHint": "Al autorizar un navegador, también puede registrar contactos. Para limitar un navegador, revoca aquí el registro. Este permiso no autoriza el control del equipo ni la transmisión.",
-  "remote.loggingTakeOver": "Finalizar el registro remoto: todos fuera hasta que se vuelva a activar Remote",
   "remote.controlRequestFailed": "El comando no se confirmó. Comprueba el permiso de control de estación y las lecturas actuales.",
   "remote.controlLocalHint": "Al autorizar un navegador, recibe el control de la estación: las funciones compatibles del receptor, la radio y el amplificador, y Stop TX, que detiene cualquier transmisión de la estación. Con el directo activado, también puede ver esta ventana en directo y usar Nexus como lo harías tú aquí, incluida la transmisión. Para limitar un navegador, revócalo aquí. Eso también termina su directo.",
   // remote parity batch 1
@@ -45,9 +43,6 @@ export const ES: PartialCatalog = {
   "remote.controlActive": "Control de estación activo",
   "amp.strip.statusUnknown": "Estado del amplificador no disponible",
   "remote.controlTakeOver": "Finalizar control remoto: todos fuera hasta que se vuelva a activar Remote",
-  "remote.loggingAllow": "Permitir el registro remoto",
-  "remote.loggingRevoke": "Revocar el permiso de registro",
-  "remote.loggingController": "Este navegador controla el registro remoto.",
   // remote parity batch 2
   // remote parity batch 3
   "remote.audio.start": "Escuchar",

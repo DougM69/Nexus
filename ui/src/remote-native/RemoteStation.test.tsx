@@ -49,45 +49,27 @@ it('renders local pairing and device approval through only the isolated Remote c
   expect([...document.querySelectorAll('button')].every(button => button.type === 'button')).toBe(true)
 })
 
-it('keeps logging approval local, per browser, and provides immediate local takeover',async()=>{
+it('keeps station control permission local, per browser, and offers no logging permission; takeover clears it',async()=>{
  const deviceId=crypto.randomUUID(),actions:RemoteStationAction[]=[]
- let status:RemoteStationStatus={phase:'connected',origin:'https://remote-staging.hamradiotools.io',stationId:crypto.randomUUID(),accountId:crypto.randomUUID(),pairingId:null,pairingCode:null,expiresAt:null,devices:[{id:deviceId,name:'Approved browser',approved:1,expiresAt:Date.now()+600000}],error:null,loggingPermissions:[],loggingController:null}
- window.__TAURI_INTERNALS__={invoke:(async(command:string,input:unknown)=>{
-  if(command==='get_remote_station_status')return status
-  if(command!=='remote_station_action')throw Error('unexpectedCommand')
-  const action=(input as {action:RemoteStationAction}).action;actions.push(action)
-  if(action.type==='loggingPermission')status={...status,loggingPermissions:action.allow?[deviceId]:[]}
-  if(action.type==='takeOverLogging')status={...status,loggingPermissions:[],loggingController:null}
-  return status
- }) as NonNullable<Window['__TAURI_INTERNALS__']>['invoke']}
- render(<RemoteStation/>);fireEvent.click(await screen.findByRole('button',{name:'Allow remote logging'}))
- await screen.findByRole('button',{name:'Revoke logging permission'})
- fireEvent.click(screen.getByRole('button',{name:'End remote logging: everyone off until Remote is turned on again'}))
- await screen.findByRole('button',{name:'Allow remote logging'})
- expect(actions).toEqual([{type:'loggingPermission',deviceId,allow:true},{type:'takeOverLogging'}])
-})
-
-it('keeps station control permission separate from logging and clears both on takeover',async()=>{
- const deviceId=crypto.randomUUID(),actions:RemoteStationAction[]=[]
- let status:RemoteStationStatus={phase:'connected',origin:'https://remote-staging.hamradiotools.io',stationId:crypto.randomUUID(),accountId:crypto.randomUUID(),pairingId:null,pairingCode:null,expiresAt:null,devices:[{id:deviceId,name:'Approved browser',approved:1,expiresAt:Date.now()+600000}],error:null,loggingPermissions:[],stationPermissions:[],loggingController:null}
+ let status:RemoteStationStatus={phase:'connected',origin:'https://remote-staging.hamradiotools.io',stationId:crypto.randomUUID(),accountId:crypto.randomUUID(),pairingId:null,pairingCode:null,expiresAt:null,devices:[{id:deviceId,name:'Approved browser',approved:1,expiresAt:Date.now()+600000}],error:null,stationPermissions:[],controller:null}
  window.__TAURI_INTERNALS__={invoke:(async(command:string,input:unknown)=>{
   if(command==='get_remote_station_status')return status
   if(command!=='remote_station_action')throw Error('unexpectedCommand')
   const action=(input as {action:RemoteStationAction}).action;actions.push(action)
   if(action.type==='stationPermission')status={...status,stationPermissions:action.allow?[deviceId]:[]}
-  if(action.type==='takeOverLogging')status={...status,stationPermissions:[],loggingPermissions:[],loggingController:null}
+  if(action.type==='takeOverLogging')status={...status,stationPermissions:[],controller:null}
   return status
  }) as NonNullable<Window['__TAURI_INTERNALS__']>['invoke']}
  render(<RemoteStation/>);fireEvent.click(await screen.findByRole('button',{name:'Allow station controls'}))
  await screen.findByRole('button',{name:'Revoke station controls'})
- expect(screen.getByRole('button',{name:'Allow remote logging'})).toBeTruthy()
+ expect(screen.queryAllByRole('button').filter(button=>/logging/i.test(button.textContent??''))).toEqual([])
  fireEvent.click(screen.getByRole('button',{name:'End remote control: everyone off until Remote is turned on again'}))
  await screen.findByRole('button',{name:'Allow station controls'})
  expect(actions).toEqual([{type:'stationPermission',deviceId,allow:true},{type:'takeOverLogging'}])
 })
 
 // One approval (operator decisions 2026-09-13 and 2026-09-14): approving the pairing turns Remote on
-// and approves the browser that paired; approving any browser grants station controls and logging.
+// and approves the browser that paired; approving any browser grants station controls.
 // No approval offers the old Remote page's FT8/FT4 transmit any more: there is no tick to give it.
 it('approves the pairing and each browser in one step, with no transmit tick', async () => {
   const accountId = crypto.randomUUID(), pairingId = crypto.randomUUID(), first = crypto.randomUUID(), second = crypto.randomUUID()
@@ -133,7 +115,7 @@ it('tells the operator approved browsers keep their access across a restart', as
   const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
     stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null,
     devices: [{ id: deviceId, name: 'FT browser', approved: 1, expiresAt: Date.now() + 600000 }], error: null,
-    loggingPermissions: [], stationPermissions: [deviceId] }
+    stationPermissions: [deviceId] }
   const invoke = async (command: string) => {
     if (command === 'get_remote_station_status') return status
     throw new Error('unexpectedCommand')
@@ -157,7 +139,7 @@ it('says a streaming browser uses Nexus as you would here, transmit included, an
     stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null,
     devices: [{ id: deviceId, name: 'Streaming browser', approved: 1, expiresAt: Date.now() + 30 * 86400000 },
       { id: crypto.randomUUID(), name: 'Waiting browser', approved: 0, expiresAt: Date.now() + 600000 }], error: null,
-    loggingPermissions: [], stationPermissions: [deviceId] }
+    stationPermissions: [deviceId] }
   const invoke = async (command: string) => {
     if (command === 'get_remote_station_status') return status
     throw new Error('unexpectedCommand')
@@ -434,7 +416,7 @@ it('a computer running Nexus is listed apart from the browsers, by its name, its
     accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, error: null,
     devices: [{ id: browserId, name: 'Chrome on Windows', approved: 1, expiresAt: Date.now() + 86400000, kind: 'browser', platform: null },
       { id: computerId, name: 'Shack laptop', approved: 0, expiresAt: Date.now() + 600000, key, kind: 'computer', platform: 'windows' }],
-    loggingPermissions: [browserId], stationPermissions: [browserId], pinnedDevices: [] }
+    stationPermissions: [browserId], pinnedDevices: [] }
   window.__TAURI_INTERNALS__ = { invoke: (async (command: string, input: unknown) => {
     if (command === 'get_remote_station_status') return status
     if (command !== 'remote_station_action') throw Error('unexpectedCommand')

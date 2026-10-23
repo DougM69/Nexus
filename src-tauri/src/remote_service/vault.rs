@@ -2,16 +2,19 @@
 //! no connector settings, logbook passwords or fallback files are accessed.
 //!
 //! A second entry remembers what a restart must restore: whether Remote was on, and each approved
-//! browser's station-control and remote-logging grants. It is a SEPARATE entry,
+//! browser's station-control grant. It is a SEPARATE entry,
 //! not a new field on the pairing record, because that record is `deny_unknown_fields`: an older
 //! Nexus reading a pairing that had grown a field would lose its pairing, and then could not even
 //! revoke it. It is bound to the pairing it was written for, so an orphan left behind by a failed
 //! delete is ignored by any other pairing.
 //!
 //! An older build also remembered the old Remote page's FT8/FT4 transmit, as `transmit` on a grant,
-//! written only when granted. That page and its grant are gone: this build reads such a record as
-//! it reads any other, drops the field, and never writes it, so the record a browser ticked for
-//! still restores its station control and logging, and nothing else.
+//! written only when granted, and its remote logging, as `logging` on every grant. Both permissions
+//! are gone: this build reads such a record as it reads any other and acts on neither field, so the
+//! record still restores each browser's station control, and nothing else. A browser that held only
+//! logging is restored nothing and forgotten at the next write. `transmit` is never written.
+//! `logging` is written, always `false`: every earlier build requires it on a grant, and a record
+//! without it would read there as unreadable and leave Remote off when the operator moves back.
 //!
 //! A third entry holds the device keys the operator pinned at the radio (security test A5): per
 //! browser, the SHA-256 of the public key it signs its stream offers with. It is its OWN entry, not
@@ -127,12 +130,23 @@ pub struct Grant {
     /// holding it reads as unreadable on 1.12.0, which leaves Remote off with nothing restored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<u64>,
-    pub logging: bool,
+    /// The old remote logging permission, as an older build wrote it on every grant: read past, so
+    /// that record still loads under `deny_unknown_fields`, and written `false` for an earlier build
+    /// to read. See the module note.
+    #[serde(rename = "logging", default, serialize_with = "never_granted")]
+    pub retired_logging: serde::de::IgnoredAny,
     pub control: bool,
     /// The old Remote page's FT8/FT4 transmit, as an older build wrote it: read past, so that record
     /// still loads under `deny_unknown_fields`, and never written. See the module note.
     #[serde(rename = "transmit", default, skip_serializing)]
     pub retired_transmit: serde::de::IgnoredAny,
+}
+/// A retired permission, as an earlier build reads it: never granted.
+fn never_granted<S: serde::Serializer>(
+    _: &serde::de::IgnoredAny,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_bool(false)
 }
 /// What a restart restores, for exactly one pairing.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

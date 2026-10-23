@@ -47,24 +47,19 @@ impl Owner {
 }
 
 impl Authority {
-    /// A logging or station-control revoke (#318). `reconcile` removes the grant, and ends the
-    /// device's lease if it holds one, before any later request consumes Core.
-    pub(super) fn revoke_grant_device(
-        &self,
-        grant: Grant,
-        device: &str,
-    ) -> Result<(), &'static str> {
+    /// A station-control revoke (#318). `reconcile` removes the grant, and ends the device's
+    /// lease if it holds one, before any later request consumes Core.
+    pub(super) fn revoke_grant_device(&self, device: &str) -> Result<(), &'static str> {
         {
             let mut pending = self
                 .grant_revocations
                 .lock()
                 .map_err(|_| "authorityUnavailable")?;
-            let entry = (grant, device.to_owned());
             // This local-only queue is bounded independently of a blocked file.
-            if pending.len() >= 64 && !pending.contains(&entry) {
+            if pending.len() >= 64 && !pending.contains(device) {
                 return Err("remoteBusy");
             }
-            pending.insert(entry);
+            pending.insert(device.to_owned());
         }
         let owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
         if owner.as_ref().is_some_and(|o| o.device == device) {

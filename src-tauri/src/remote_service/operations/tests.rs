@@ -344,7 +344,7 @@ impl Fixture {
         self.run(&Request::State { request_id: id() }, now).unwrap()
     }
     fn acquire(&self, now: Instant) -> Value {
-        self.authority.permit(DEVICE, true).unwrap();
+        self.authority.permit_station(DEVICE, true).unwrap();
         self.run(
             &Request::Acquire {
                 request_id: id(),
@@ -493,7 +493,7 @@ fn a_revoked_device_gets_local_permission_required_even_while_the_engine_is_busy
         match revoke {
             "takeover" => f.authority.invalidate(),
             _ => {
-                f.authority.permit(DEVICE, false).unwrap();
+                f.authority.permit_station(DEVICE, false).unwrap();
             }
         }
         // A refusal for permission never depends on Engine contention.
@@ -511,52 +511,37 @@ fn a_revoked_device_gets_local_permission_required_even_while_the_engine_is_busy
         );
     }
 }
-/// #318: a logging or station-control revoke must not fail because Core is busy — it used to
+/// #318: a station-control revoke must not fail because Core is busy — it used to
 /// return `remoteBusy` and leave the grant standing.
 #[test]
-fn a_logging_or_station_revoke_does_not_wait_for_a_busy_core() {
-    for grant in ["logging", "station"] {
-        let f = Fixture::new();
-        let now = Instant::now();
-        let state = if grant == "logging" {
-            f.acquire(now)
-        } else {
-            acquire_controls_version(&f, now, 4)
-        };
-        let command = Request::Acquire {
-            request_id: id(),
-            station_boot_id: state["stationBootId"].as_str().unwrap().into(),
-        };
-        assert_eq!(state["phase"], "controlling", "{grant}: holds the lease");
-        let transmit = f.authority.transmit.permit(now + LEASE).unwrap();
+fn a_station_revoke_does_not_wait_for_a_busy_core() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let state = acquire_controls_version(&f, now, 4);
+    let command = Request::Acquire {
+        request_id: id(),
+        station_boot_id: state["stationBootId"].as_str().unwrap().into(),
+    };
+    assert_eq!(state["phase"], "controlling", "holds the lease");
+    let transmit = f.authority.transmit.permit(now + LEASE).unwrap();
 
-        let core = f.authority.core.lock().unwrap(); // an operation in flight
-        let revoke = match grant {
-            "logging" => f.authority.permit(DEVICE, false),
-            _ => f.authority.permit_station(DEVICE, false),
-        };
-        assert_eq!(revoke, Ok(()), "{grant}: revoke must not fail");
-        // A grant still may, and must not widen anything.
-        assert_eq!(f.authority.permit(OTHER, true), Err("remoteBusy"));
-        if grant == "station" {
-            assert!(
-                !transmit.valid(now),
-                "the controller's in-flight transmit permit ends at once"
-            );
-        }
-        drop(core);
+    let core = f.authority.core.lock().unwrap(); // an operation in flight
+    let revoke = f.authority.permit_station(DEVICE, false);
+    assert_eq!(revoke, Ok(()), "revoke must not fail");
+    // A grant still may, and must not widen anything.
+    assert_eq!(f.authority.permit_station(OTHER, true), Err("remoteBusy"));
+    assert!(
+        !transmit.valid(now),
+        "the controller's in-flight transmit permit ends at once"
+    );
+    drop(core);
 
-        // The device's next command is refused, and its lease is gone.
-        assert_eq!(
-            f.run(&command, now),
-            Err("localPermissionRequired"),
-            "{grant}"
-        );
-        let status = f.authority.local_status();
-        assert_eq!(status["controller"], Value::Null, "{grant}: lease ended");
-        assert_eq!(status["devices"], json!([]), "{grant}: OTHER not granted");
-        assert!(!transmit.valid(now), "{grant}");
-    }
+    // The device's next command is refused, and its lease is gone.
+    assert_eq!(f.run(&command, now), Err("localPermissionRequired"));
+    let status = f.authority.local_status();
+    assert_eq!(status["controller"], Value::Null, "lease ended");
+    assert_eq!(status["controlDevices"], json!([]), "OTHER not granted");
+    assert!(!transmit.valid(now));
 }
 
 #[test]

@@ -469,7 +469,6 @@ async fn a_browser_signed_in_as_the_owner_waits_for_approve_at_the_station() {
         "shown waiting for Approve"
     );
     assert_eq!(status.station_permissions, Vec::<String>::new(), "control");
-    assert_eq!(status.logging_permissions, Vec::<String>::new(), "logging");
     assert_eq!(status.pinned_devices, Vec::<String>::new(), "pinned");
     assert!(status.account.added.is_empty(), "a notice of it");
     assert_eq!(vault.device_cache().unwrap(), None, "kept for the LAN");
@@ -568,7 +567,7 @@ async fn an_invited_guests_computer_waits_for_approve_at_the_station() {
 /// ★ With sign-in grants on ([`launch_granting_on_sign_in`]), a browser signed in as the station's
 /// owner: the service approved it, and the station, having checked its proof itself, grants it what
 /// an Approve press grants and pins its key, with no press; the notice names it, and the LAN keeps
-/// it under its key's pin. What it grants is station control and logging: station control and the
+/// it under its key's pin. What it grants is station control: station control and the
 /// pin are what a stream needs, and a streaming browser uses the station's own window, transmit
 /// included.
 #[tokio::test(flavor = "multi_thread")]
@@ -586,13 +585,12 @@ async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no
         shown.contains(r#""addedBy":"account""#),
         "CONTROL: the row itself is shown"
     );
-    assert_eq!(status.logging_permissions, vec![BROWSER.to_string()]);
     assert_eq!(
         status.pinned_devices,
         vec![BROWSER.to_string()],
         "with station control, all a stream needs"
     );
-    // What a restart restores is the same: control and logging.
+    // What a restart restores is the same: control.
     let mut remembered = None;
     for _ in 0..100 {
         remembered = vault.state().unwrap().map(|state| state.grants);
@@ -604,13 +602,9 @@ async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no
     let remembered: Vec<_> = remembered
         .unwrap()
         .iter()
-        .map(|g| (g.device_id.clone(), g.logging, g.control))
+        .map(|g| (g.device_id.clone(), g.control))
         .collect();
-    assert_eq!(
-        remembered,
-        vec![(BROWSER.to_string(), true, true)],
-        "logging, control"
-    );
+    assert_eq!(remembered, vec![(BROWSER.to_string(), true)], "control");
     let added: Vec<_> = status
         .account
         .added
@@ -677,7 +671,6 @@ async fn a_proof_the_station_cannot_confirm_grants_nothing() {
             "{proof}"
         );
         assert!(status.station_permissions.is_empty(), "{proof}");
-        assert!(status.logging_permissions.is_empty(), "{proof}");
         assert!(status.pinned_devices.is_empty(), "{proof}");
         assert!(status.account.added.is_empty(), "{proof}");
         assert_eq!(vault.device_cache().unwrap(), None, "{proof}");
@@ -708,7 +701,6 @@ async fn granting_on_sign_in_an_invited_guests_computer_is_pinned_by_the_invitat
     .await;
     assert_eq!(status.account.unconfirmed, BTreeMap::new());
     assert_eq!(status.pinned_devices, vec![COMPUTER_ID.to_string()]);
-    assert!(status.logging_permissions.is_empty());
     let added: Vec<_> = status
         .account
         .added

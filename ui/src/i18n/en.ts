@@ -105,8 +105,6 @@ export const EN = {
   "remote.supportDetails": "Support details",
   "remote.signOut": "Sign out",
   "remote.notConfigured": "The Remote service has not been configured yet.",
-  "remote.loggingLocalHint": "Approving a browser also lets it log contacts. To limit a browser, revoke logging here. Logging never grants radio or transmit control.",
-  "remote.loggingTakeOver": "End remote logging: everyone off until Remote is turned on again",
   "remote.controlRequestFailed": "The command was not confirmed. Check station control permission and the current readings.",
   "remote.controlLocalHint": "Approving a browser gives it station controls: supported receiver, radio and amplifier controls, and Stop TX, which stops any transmission at the station. With streaming on, they also let it stream this window and use Nexus as you would here, transmit included. To limit a browser, revoke them here, which also ends its stream.",
   // remote parity batch 1
@@ -116,9 +114,6 @@ export const EN = {
   "remote.controlActive": "Station control active",
   "amp.strip.statusUnknown": "Amplifier status unavailable",
   "remote.controlTakeOver": "End remote control: everyone off until Remote is turned on again",
-  "remote.loggingAllow": "Allow remote logging",
-  "remote.loggingRevoke": "Revoke logging permission",
-  "remote.loggingController": "This browser controls remote logging.",
   // remote parity batch 2
   "remote.requestFailed": "The request could not be completed. Check the connection and your service access, then try again.",
   "remote.accountMatch": "Match this account ID on both screens:",
