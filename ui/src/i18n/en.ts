@@ -3737,6 +3737,13 @@ export const EN = {
   'settings.alerts.popups.label': 'Pop-up notifications',
   'settings.alerts.popups.hint':
     'The messages in the bottom-right corner. Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
+  // #321. The pop-up's own time is set where it is raised (4 s for most, longer for errors and
+  // alerts); the choice can only make a pop-up stay longer, never shorter.
+  'settings.alerts.popupDwell.label': 'Keep pop-ups up for at least',
+  'settings.alerts.popupDwell.own': "Each pop-up's own time",
+  'settings.alerts.popupDwell.secs': '{{secs}} seconds',
+  'settings.alerts.popupDwell.hint':
+    'Most pop-ups go after 4 seconds, errors after 12. Pick a longer time if you look away and miss them. A pop-up that stays until you close it still does.',
   'settings.alerts.myCall.label': 'My call',
   'settings.alerts.myCall.hint': 'Beep + flash when someone directs a call at you.',
   'settings.alerts.confirmTier.label': 'Confirmation opportunities',

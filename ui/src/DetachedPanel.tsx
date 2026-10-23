@@ -19,7 +19,7 @@ import { t } from './i18n'
 import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
-import { pushToast, setPopupNotifications, withErrorToast } from './toast'
+import { pushToast, setPopupMinSeconds, setPopupNotifications, withErrorToast } from './toast'
 import { announceMarkersChanged, entryCall, markHere, markerRefusal, MARKERS_CHANGED_KEY } from './features/freqMarkers'
 import { pollSingleFlight } from './singleFlight'
 import { WSPR_WATERFALL_WINDOW, markerWidthHz } from './waterfall'
@@ -366,6 +366,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   useEffect(() => {
     setPopupNotifications(settings?.popupNotifications !== false)
   }, [settings?.popupNotifications])
+  // #321: and how long they stay, at least. Absent is 0, each pop-up's own time.
+  useEffect(() => {
+    setPopupMinSeconds(settings?.popupMinSecs ?? 0)
+  }, [settings?.popupMinSecs])
 
   // Band-map pop-out: poll the live spot feed. (The worked set follows the log above.) The
   // dashboard window polls it too, at the main window's 15 s, for its Spots box: the board's feed;

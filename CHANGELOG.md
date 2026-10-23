@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there is logged as the contact's comment (ADIF COMMENT), so a note no longer means editing the
   contact on QRZ afterwards. The box opens with the comment the contact already has, such as the
   dB reports when you log those to comments; leave it alone and that is logged as before.
+- **Choose how long the pop-ups in the bottom-right corner stay.** Settings ▸ Spots & Alerts ▸
+  Alerts has a new **Keep pop-ups up for at least** menu: each pop-up's own time (as before, and
+  as it comes), 10, 20, 30 or 60 seconds. It only makes a pop-up stay longer: an error still
+  stays at least 12 seconds, and one that stays until you close it still does.
 
 ### Changed
 - **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the

@@ -440,6 +440,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // notifications in the bottom right". The search is punctuation-blind, so 'popup' covers
       // 'pop-up' too.
       'popup', 'popups', 'notification', 'notifications', 'toast', 'toasts', 'bottom right',
+      // …and how long they stay (#321): "I look over sometimes and miss a notification".
+      'dwell', 'how long', 'seconds', 'miss',
       // The new DXCC / grid alert's own switch, and the three band menus the Needed boards
       // follow. Searched for by what they do: the beep, or what the board lists.
       'beep', 'needed board'],

@@ -52,7 +52,7 @@ import {
   setHoldTxFreq as apiSetHoldTxFreq,
   subscribeSnapshot,
 } from './api'
-import { withErrorToast, pushToast, dismissToast, setPopupNotifications } from './toast'
+import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
 import { t } from './i18n'
@@ -1201,6 +1201,10 @@ function App() {
   useEffect(() => {
     setPopupNotifications(settings?.popupNotifications !== false)
   }, [settings?.popupNotifications])
+  // #321: and how long they stay, at least. Absent is 0, each pop-up's own time.
+  useEffect(() => {
+    setPopupMinSeconds(settings?.popupMinSecs ?? 0)
+  }, [settings?.popupMinSecs])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
   // the master switch off), so the fetch just re-runs when the configured event changes —
