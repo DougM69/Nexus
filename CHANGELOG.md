@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Log space weather on each contact (off by default).** Settings ▸ Logging & Connectors ▸
+  Integrations & Feeds ▸ Propagation has a new switch. On, every contact you log carries the
+  planetary K index, A index and solar flux (ADIF K_INDEX, A_INDEX, SFI) from the latest reading
+  Nexus fetched, and nothing when that reading is more than 3 hours old.
+- **Each contact logs the worked station's continent and the distance to it** (ADIF CONT, and
+  DISTANCE in km from your grid to theirs when both are known).
+
 ### Changed
 - **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the
   Logbook's add-a-contact form used to show a sample in grey, such as W1AW in Call, 1D and WI in Field Day's Class
@@ -75,6 +83,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   different arguments, wait at once; a Stop past them is answered busy, so varying the arguments no longer makes
   the waiting list or the work grow. Every Stop still ends the computer's transmit permission the moment it arrives. Questions about what became of earlier calls are answered one after another on
   one thread.
+- **Phone, CW, RTTY, PSK and Satellites contacts now log when they started and ended.** A contact
+  logged from the entry strip starts when its call was entered, typed or clicked in, and ends when
+  you press Log, as a JS8 contact already did; until now both were the moment you pressed Log. A
+  contact typed in under "Logged on another radio" with its own UTC time starts and ends at the
+  time you typed.
+- **Every contact names its operator.** With Operator at the key left blank, your station call is
+  logged as the operator (ADIF OPERATOR), as the box's hint always said. The N3FJP push now sends
+  the contact's own operator instead of always your station call.
+- **Your grid and state are logged on each contact.** New contacts carry your grid from Settings ▸
+  Station (ADIF MY_GRIDSQUARE) and, on everyday contacts, your State (MY_STATE); a park or summit
+  activation still logs the park's state, never your home one. QRZ, Club Log, eQSL, HRDLog,
+  Cloudlog/Wavelog and the ADIF export receive them. Your LoTW uploads leave out a grid or state
+  Nexus filled in itself, so TQSL keeps signing from your Station Location exactly as before; a
+  grid that came with the contact (from WSJT-X, typed in the Logbook, or imported) goes to LoTW as
+  it always did.
+- **Contest and Field Day contacts keep their radio, power and grid, and gain an end time, in the
+  Logbook.** Each contest contact records the radio, station power and grid in use when it was
+  logged, keeps them across a restart, and carries them, with its time as its end time, when the
+  contest is merged into the Logbook. As on everyday contacts, your LoTW uploads leave that grid
+  out; in a VHF contest the grid you sent in the exchange is the one logged.
+- **A contact logged for an earlier time is not given today's station details.** A contact whose
+  start is more than 3 hours before you log it (typed in afterwards with its own UTC time, or
+  added in the Logbook) gets no grid, state, operator, rig or power from your current settings,
+  since they may not be what you used then; fill them in yourself if you want them. Anything you
+  enter on the contact is kept, and contacts you log as you make them are unchanged. A contact
+  waiting for your confirm (Prompt before logging) keeps the station details from the moment it
+  was made, however late you confirm it and whatever you changed in Settings meanwhile.
+- **A TCI radio's contacts name the radio.** The rig logged for a contact made on a TCI radio is
+  the radio the SDR program reports, such as SunSDR2DX, instead of "TCI".
+- **Your station power is logged on every contact.** The watts in Settings ▸ Station power go on
+  each new contact as its power (ADIF TX_PWR), and out with it to QRZ, Club Log, eQSL, HRDLog,
+  Cloudlog/Wavelog and the WSJT-X UDP messages your logger reads. Leave it blank and contacts
+  are logged without a power, as before. A contact that already carries a power keeps it.
+- **A contest's contacts keep their operator and station call in the Logbook.** Merging a
+  contest into the Logbook dropped the "Operator at the key" each contact was logged with, and
+  stamped the station call in use at the merge rather than the one the contact was made on.
+- **The WSJT-X QSOLogged message carries the contact's power** in its Tx power field, so N1MM,
+  HRD and Log4OM receive it.
 
 ## [1.20.0] — 2026-10-22
 

@@ -4715,6 +4715,9 @@ export interface Settings {
   /** Station transmit power in WATTS (RF out) — unlocks the Journey miles-per-watt
    * + QRP feats. `null` until set (those feats stay gated). */
   stationPowerW?: number | null
+  /** Log the space weather on each contact (ADIF K_INDEX, A_INDEX, SFI) from a reading no more
+   *  than 3 h old. Off by default. */
+  logSpaceWeather?: boolean
   /** Display units: 'auto' (OS locale) | 'metric' | 'imperial'. Display-only (F4MQS). */
   units?: string
   /** Per-mode RF-power CEILING (0.0–1.0 fraction of the rig's max) — a SAFETY cap for

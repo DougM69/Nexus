@@ -3863,6 +3863,9 @@ pub(crate) mod tests {
     fn lotw_adif_before(recs: &[QsoRecord], adif_loc: bool, call: &str, grid: &str) -> String {
         let mut out = tempo_core::logbook::adif_header();
         for r in recs {
+            // The station fields Nexus filled itself never go to LoTW — the one rule the
+            // builder gained since; everything else is the pre-C15 builder as it was.
+            let r = &tempo_core::logbook::without_self_filled(r);
             if adif_loc {
                 out.push_str(&tempo_core::logbook::adif_record_with_station(
                     r, call, grid,
@@ -7373,6 +7376,8 @@ pub(crate) mod tests {
                         r.freq_mhz = freq;
                         r.mode = MODES[g.below(MODES.len())].into();
                         r.station_callsign = Some("K2DEF".into());
+                        r.operator = Some("K2DEF".into());
+                        r.my_grid = Some("FN31".into());
                         r
                     }
                 };

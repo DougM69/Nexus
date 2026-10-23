@@ -11349,6 +11349,26 @@ export function SettingsPanel({
                   </span>
                 </div>
 
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">
+                      {t('settings.integrations.logSpaceWeather.label')}
+                    </span>
+                    <button disabled={remote}
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.logSpaceWeather}
+                      className={`toggle${form.logSpaceWeather ? ' on' : ''}`}
+                      onClick={() => updateBool('logSpaceWeather', !form.logSpaceWeather)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    {t('settings.integrations.logSpaceWeather.hint')}
+                  </span>
+                </div>
+
                 <label className="settings-field">
                   <span className="settings-label">
                     {t('settings.integrations.propEngine.label')}

@@ -1527,6 +1527,8 @@ fn the_ft_auto_log_logs_what_the_scan_and_the_contact_say() {
                     r.mode = MODES[g.below(MODES.len())].into();
                     // Every field the funnel would fill is given, so what it logs is this.
                     r.station_callsign = Some("K2DEF".into());
+                    r.operator = Some("K2DEF".into());
+                    r.my_grid = Some("FN31".into());
                     r.my_rig = Some("TEST RIG".into());
                     r
                 }

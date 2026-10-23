@@ -549,6 +549,23 @@ export function LogEntry({
   // read once as the strip mounts, and never into a contest strip: the draft effect says why.
   const [kept] = useState(() => (draft && !fdActive ? readLogDraft(draft) : undefined))
   const [logCall, setLogCall] = useState(kept?.call ?? '')
+  // When the call in the strip was entered — typed or clicked in — which is the contact's start
+  // (TIME_ON): the rule JS8's host already gives the strip (`startedAt`), for every cockpit. The
+  // first keystroke is the start, so a call typed or corrected a key at a time keeps it; another
+  // call is another contact, and a cleared strip has none. A draft brings it back with the call.
+  const callEnteredRef = useRef<{ call: string; unix: number } | null>(
+    kept?.call.trim() && kept.enteredUnix != null
+      ? { call: kept.call.trim().toUpperCase(), unix: kept.enteredUnix }
+      : null,
+  )
+  useEffect(() => {
+    const c = logCall.trim().toUpperCase()
+    const prev = callEnteredRef.current
+    if (!c) callEnteredRef.current = null
+    else if (!prev || !(c.startsWith(prev.call) || prev.call.startsWith(c))) {
+      callEnteredRef.current = { call: c, unix: Math.floor(Date.now() / 1000) }
+    } else if (prev.call !== c) callEnteredRef.current = { call: c, unix: prev.unix }
+  }, [logCall])
   // The two reports as set for THIS contact (typed, or the CW decoder's read of theirs), or null for
   // a box nobody has touched, which shows the report of the mode the strip logs under NOW, as a
   // contest strip's report box does (`fdValue`). One strip lives across a mode change (the Satellites
@@ -1773,6 +1790,7 @@ export function LogEntry({
             parkFor: parkForRef.current,
             workPark,
             enrichedFor: enrichedForRef.current,
+            enteredUnix: callEnteredRef.current?.unix ?? null,
           }
         : null,
     )
@@ -2112,9 +2130,17 @@ export function LogEntry({
     // Override open → the hand-entered UTC instant (one that is not a real date and time held
     // Log above); closed → now, exactly as before.
     const nowUnix = Math.floor(Date.now() / 1000)
-    // The host's start for this call (`startedAt`), and then the contact ends now.
-    const started = !overrideOpen && startedAt && sameCall(startedAt.call, call) ? Math.min(startedAt.unix, nowUnix) : null
+    // The contact started when its call was entered: the host's start for this call (`startedAt`,
+    // JS8's), else the moment it was typed or clicked into this strip — and it ends now.
+    const hostStart = startedAt && sameCall(startedAt.call, call) ? startedAt.unix : null
+    const entered = callEnteredRef.current && sameCall(callEnteredRef.current.call, call) ? callEnteredRef.current.unix : null
+    const startUnix = hostStart ?? entered
+    const started = !overrideOpen && startUnix != null ? Math.min(startUnix, nowUnix) : null
     const whenUnix = overrideOpen && ovWhen !== null ? ovWhen : started ?? nowUnix
+    // A contact logged live ends now (TIME_OFF), as an FT contact's does — Phone, CW, RTTY and PSK
+    // logged none until now. A hand-entered UTC time wins over both: the contact starts and ends at
+    // the time typed.
+    const live = !(overrideOpen && ovWhen !== null)
     const rec: LoggedQso = {
       call,
       grid: logGrid.trim() || null,
@@ -2130,7 +2156,7 @@ export function LogEntry({
       comment: logComment.trim() || null,
       notes: logNotes.trim() || null,
       whenUnix,
-      ...(started != null ? { timeOffUnix: nowUnix } : {}),
+      timeOffUnix: live ? nowUnix : whenUnix,
       confirmed: false,
       awardConfirmed: false,
       // `asksForPark` FIRST: an exchange with no park row sends no park reference, by any

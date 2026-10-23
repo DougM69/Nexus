@@ -170,6 +170,7 @@
   "monitorDevice": "",
   "monitorLevel": 0.5,
   "stationPowerW": null,
+  "logSpaceWeather": false,
   "swrStopEnabled": false,
   "swrStopThreshold": 2.5,
   "parsecPresenceStop": false,

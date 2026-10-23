@@ -36,18 +36,24 @@ Your operator identity, license privileges, and default frequency.
 - **Callsign** — "Your station callsign (required)." Everything keys off this.
 - **Grid** — "Maidenhead locator. All 6 characters — 4 measures every distance
   and bearing from the middle of a ~100-mile square." Drives satellite passes,
-  propagation anchoring, and distance math.
+  propagation anchoring, and distance math. Every contact you log carries it as
+  your grid (ADIF `MY_GRIDSQUARE`) unless the contact arrived with one of its own
+  (WSJT-X's, or one typed in the Logbook). Your LoTW uploads leave a grid Nexus
+  filled in itself out, so TQSL keeps signing from your Station Location; every
+  other service receives it.
 - **Operator name** — "Used by the CW `{NAME}` macro and logging."
 - **Operator at the key** — for multi-operator only: the callsign of whoever is
   actually running the station, when that is not the station call. It is stamped
   on every contact you log (ADIF `OPERATOR`), so a shared activation can be split
   per operator afterwards — POTA and Field Day both want each operator to submit
-  their own. Blank means single-op and nothing is stamped. Change it when you swap
-  seats. It is the same setting as **Operator at the key** under
+  their own. Blank means single-op: your station call is logged as the operator.
+  Change it when you swap seats. It is the same setting as **Operator at the key** under
   [Who's who at this event](#whos-who-at-this-event); editing either one moves
   both.
 - **State** — your US state or province for everyday contacts: the CW `{MYSTATE}`
-  macro and the QTH an RTTY ragchew sends. A contest has a box of its own,
+  macro, the QTH an RTTY ragchew sends, and your state on each contact you log
+  (ADIF `MY_STATE`). A park or summit activation logs the park's state instead,
+  never this one, and LoTW uploads leave it out as they do the grid. A contest has a box of its own,
   **State or province** under [Your station data](#your-station-data) on the
   Contesting tab, because a contest entry can be somewhere else: a portable or mobile
   entry types where it is operating there, and this one stays as it is.
@@ -1149,10 +1155,12 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   set the machine's clock instead. Turn the check off for fully-offline operation
   (no network calls) — the last measurement then keeps steering until it ages
   out, and the bar says when it has.
-- **Station power (W)** — "Your transmit power in watts — unlocks the Journey
-  miles-per-watt & QRP feats." It also feeds the P.533 link budget. Leave blank
-  if unknown. This is what you actually run, for the record — it commands
-  nothing; the rig's power lives on the cockpit **Pwr** slider.
+- **Station power (W)** — "Your transmit power in watts — logged on every
+  contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt &
+  QRP feats." It also feeds the P.533 link budget. Leave blank if unknown, and
+  contacts are logged with no power. This is what you actually run, for the
+  record — it commands nothing; the rig's power lives on the cockpit **Pwr**
+  slider.
 
 Units used to be the last field in this row; it is now on the Station tab under
 [Operator & Radio](#operator--radio).
@@ -1886,6 +1894,10 @@ Nexus connects to all of them and merges what they report.*
 - **Near-region opening watch** — "Watch VHF/10 m activity near your QTH (not
   just your own contacts) so openings flag 'open around you' before you've worked
   anyone." Takes effect on restart.
+- **Log space weather on each contact** — off by default. On, every contact you
+  log carries the planetary K index, A index and solar flux (ADIF `K_INDEX`,
+  `A_INDEX`, `SFI`) from the latest reading Nexus fetched from NOAA SWPC, and
+  nothing when that reading is more than 3 hours old.
 - **Prediction engine** — Modelled (fast heuristic) or ITU-R P.533 (full
   physics). "P.533 is the real circuit-reliability method (validated against the
   ITU reference; ~0.1 s per prediction, uses your station power). **Live spots

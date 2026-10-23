@@ -4001,6 +4001,9 @@ struct RadioLoop {
     /// ([`RadioLoop::reconcile_tci_audio`]): the session it comes from, the receive tap's ring it
     /// feeds, and the receive floor's clocks.
     tci_rx: Option<TciRx>,
+    /// The radio name the active radio's TCI server reported, as last handed to the engine
+    /// ([`RadioLoop::note_tci_device`]), so the engine is told only when it changes.
+    tci_device: Option<String>,
     /// The session whose receive audio starved (the receive floor fired): not taken again until
     /// the TCI client is another session (a reconnect, a saved change, a switch).
     tci_rx_failed: Option<std::sync::Weak<crate::tci::audio::Receive>>,
@@ -4579,6 +4582,7 @@ impl RadioLoop {
             flex_client_audio: false,
             flex_client_audio_failed: false,
             tci_rx: None,
+            tci_device: None,
             tci_rx_failed: None,
             flex_mic_off_pushed: None,
             flex_radio_has_mic_pushed: None,
@@ -5701,6 +5705,25 @@ impl RadioLoop {
             let mut eng = engine_lock(engine);
             eng.halt_tx();
             eng.set_cat_status(self.cat_ok, format!("TCI: {why}."));
+        }
+    }
+
+    /// The radio the active radio's TCI server named, handed to the engine when it changes: a
+    /// contact made on a TCI radio logs it as its rig (`MY_RIG`), where the radio's model only
+    /// says "TCI". `None` once no TCI session serves the active radio. Not on a switch the
+    /// handoff has not seen: `rigctld_proc` is then the radio being left.
+    fn note_tci_device(&mut self, engine: &Arc<Mutex<Engine>>) {
+        if self.switch_unhanded {
+            return;
+        }
+        let device = self
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::tci)
+            .and_then(crate::tci::TciDaemon::device);
+        if device != self.tci_device {
+            self.tci_device = device.clone();
+            engine_lock(engine).set_tci_device(device);
         }
     }
 
@@ -8187,6 +8210,7 @@ impl RadioLoop {
             );
             self.reconcile_flex_client_audio(engine);
             self.take_tci_halts(engine);
+            self.note_tci_device(engine);
             self.reconcile_tci_audio(engine, &*backend);
             // Nexus's spots on the TCI radio's own panadapter, and the clicks on them: renewed for
             // the active radio's client every tick, so a client a switch left behind lapses by
@@ -13011,6 +13035,9 @@ impl RadioLoop {
             };
             for q in &logged_qsos {
                 let time_on = q.when_unix as i64;
+                // Spelled as the ADIF writer spells `TX_PWR`, so the two messages of one contact
+                // agree; `""` when none was recorded, as WSJT-X sends an empty Tx power box.
+                let tx_power = q.tx_power.map(|p| format!("{p}")).unwrap_or_default();
                 send_logged_contact(
                     server,
                     &WsjtxQso {
@@ -13024,7 +13051,7 @@ impl RadioLoop {
                         mode: &q.mode,
                         report_sent: q.rst_sent.as_deref().unwrap_or(""),
                         report_recvd: q.rst_rcvd.as_deref().unwrap_or(""),
-                        tx_power: "",
+                        tx_power: &tx_power,
                         comments: q.comment.as_deref().unwrap_or(""),
                         name: q.name.as_deref().unwrap_or(""),
                         time_on,
@@ -19231,6 +19258,73 @@ mod tests {
             }
             other => panic!("expected LoggedAdif, got {other:?}"),
         }
+    }
+
+    /// The contact's transmit power rides the QSOLogged datagram's own `Tx power` field,
+    /// as WSJT-X fills it from its Log QSO dialog. The record carried it and the datagram said
+    /// `""` — N1MM, HRD and Log4OM log from this message, so the power never reached them.
+    #[test]
+    fn a_logged_contacts_power_rides_the_qso_logged_datagram() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let logged = |adif: &str| tempo_core::logbook::parse_adif(adif).remove(0);
+        {
+            let mut e = engine.lock().unwrap();
+            e.log_qso(logged(
+                "<CALL:4>W1AW<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260910<TIME_ON:6>120000\
+                 <TX_PWR:2>50<EOR>",
+            ));
+            e.log_qso(logged(
+                "<CALL:5>K1ABC<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260910<TIME_ON:6>121000<EOR>",
+            ));
+        }
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let mut powers = Vec::new();
+        let mut buf = [0u8; 4096];
+        while let Ok((n, _)) = listener.recv_from(&mut buf) {
+            if let Some(WsjtxInbound::QsoLogged { qso, .. }) =
+                tempo_net::wsjtx::parse_inbound(&buf[..n])
+            {
+                powers.push((qso.dx_call, qso.tx_power));
+            }
+        }
+        assert_eq!(
+            powers,
+            vec![
+                ("W1AW".to_string(), "50".to_string()),
+                ("K1ABC".to_string(), String::new()),
+            ],
+            "the recorded power, and nothing where none was recorded"
+        );
     }
 
     #[test]

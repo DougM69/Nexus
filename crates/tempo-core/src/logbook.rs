@@ -215,11 +215,11 @@ pub struct QsoRecord {
     /// logged it (multi-op and club logs depend on the distinction).
     pub operator: Option<String>,
     pub station_callsign: Option<String>,
-    /// ADIF `MY_GRIDSQUARE` — the operator's OWN grid square for this contact (#239). Modelled so
-    /// the log can show and edit it; it arrives from an import or the edit form. Deliberately NOT
-    /// stamped from the live setting at log time: in named-location mode the LoTW batch sends
-    /// each record's own fields to TQSL (`-a compliant`), so stamping every contact would change
-    /// what TQSL is asked to sign — an operator decision, not a side effect of showing a column.
+    /// ADIF `MY_GRIDSQUARE` — the operator's OWN grid square for this contact (#239). It arrives
+    /// from WSJT-X, an import or the edit form, or the log funnel fills it from Settings at log
+    /// time — and then marks it as its own ([`SELF_FILLED_FIELD`]), because in named-location mode
+    /// TQSL (`-a compliant`) checks every record's own fields against the Station Location, so the
+    /// LoTW batch leaves a grid Nexus filled out ([`without_self_filled`]).
     pub my_grid: Option<String>,
     /// ADIF `MY_RIG` — the station's radio for this contact (#239), stamped from the active radio
     /// profile at log time when the record does not already carry one.
@@ -288,6 +288,90 @@ pub fn record_lotw_dxcc(r: &QsoRecord) -> Option<u32> {
 /// qualifies the record's eQSL confirmation and means nothing without one.
 pub fn record_eqsl_ag(r: &QsoRecord) -> bool {
     extra_value(r, EQSL_AG_FIELD).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
+}
+
+/// A passthrough field's value, by its (uppercased) ADIF name — [`QsoRecord::extra`] read the way
+/// the award folds read it, for the log funnel's fills.
+pub fn extra_field<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
+    extra_value(r, name)
+}
+
+/// Set a passthrough field the record does not carry yet; one it carries is left alone. Returns
+/// whether it was set.
+pub fn fill_extra(r: &mut QsoRecord, name: &str, value: String) -> bool {
+    if r.extra.iter().any(|(k, _)| k == name) {
+        return false;
+    }
+    set_extra(r, name, Some(value));
+    true
+}
+
+/// ⭐ **Which of the record's own-station fields Nexus filled in itself from Settings** at log
+/// time — `MY_GRIDSQUARE`, `MY_STATE` — as a comma-separated list of their ADIF names.
+///
+/// It exists for the LoTW upload alone ([`without_self_filled`]). An operator who signs with a
+/// named TQSL Station Location has TQSL (`-a compliant`) check every `MY_*` field a record
+/// carries against that location and silently skip a contact that disagrees; so a field Nexus
+/// put there by itself is left out of the LoTW batch, and TQSL signs from the location exactly as
+/// it did before Nexus filled anything. A field the operator typed, or another program logged
+/// (WSJT-X over UDP, an import), is not in this list and goes to LoTW as it always has.
+///
+/// App-private: it rides the operator's own log (`log.adi`, the store, an export they re-import)
+/// so the distinction survives a restart, and is withheld from everything Nexus sends off the
+/// machine ([`Audience::Outbound`]). An edit that changes the grid takes the grid off the list
+/// ([`edited`]): the operator has said what it is.
+pub const SELF_FILLED_FIELD: &str = "APP_NEXUS_SELF_FILLED";
+
+/// The fields [`SELF_FILLED_FIELD`] names on this record.
+pub fn self_filled(r: &QsoRecord) -> Vec<&str> {
+    extra_value(r, SELF_FILLED_FIELD)
+        .map(|v| {
+            v.split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Rewrite the [`SELF_FILLED_FIELD`] list — sorted and deduplicated, and gone when empty.
+fn set_self_filled(r: &mut QsoRecord, mut tags: Vec<String>) {
+    tags.sort();
+    tags.dedup();
+    let value = (!tags.is_empty()).then(|| tags.join(","));
+    set_extra(r, SELF_FILLED_FIELD, value);
+}
+
+/// Note that Nexus filled the field `tag` itself ([`SELF_FILLED_FIELD`]).
+pub fn mark_self_filled(r: &mut QsoRecord, tag: &str) {
+    let mut tags: Vec<String> = self_filled(r).into_iter().map(str::to_string).collect();
+    tags.push(tag.to_string());
+    set_self_filled(r, tags);
+}
+
+/// Take `tag` off the [`SELF_FILLED_FIELD`] list: it is the operator's value now.
+fn unmark_self_filled(r: &mut QsoRecord, tag: &str) {
+    let tags: Vec<String> = self_filled(r)
+        .into_iter()
+        .filter(|t| *t != tag)
+        .map(str::to_string)
+        .collect();
+    set_self_filled(r, tags);
+}
+
+/// The record as the LoTW upload sends it: without the own-station fields Nexus filled in itself
+/// ([`SELF_FILLED_FIELD`]), so TQSL signs it from the Station Location (or, in ADIF-location mode,
+/// from the live setting) exactly as it did before Nexus filled them.
+pub fn without_self_filled(r: &QsoRecord) -> QsoRecord {
+    let mut out = r.clone();
+    for tag in self_filled(r) {
+        if tag == "MY_GRIDSQUARE" {
+            out.my_grid = None;
+        }
+        set_extra(&mut out, tag, None);
+    }
+    set_extra(&mut out, SELF_FILLED_FIELD, None);
+    out
 }
 
 /// Set (or with `None` remove) a passthrough field, keeping [`QsoRecord::extra`] in name order
@@ -2808,6 +2892,12 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
             rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
         }
     }
+    // A grid Nexus filled in itself that the operator has now changed is the operator's grid: it
+    // goes to LoTW like one they typed ([`SELF_FILLED_FIELD`]).
+    let grid_of = |g: &Option<String>| g.as_deref().map(|g| g.trim().to_ascii_uppercase());
+    if grid_of(&rec.my_grid) != grid_of(&old.my_grid) {
+        unmark_self_filled(&mut rec, "MY_GRIDSQUARE");
+    }
     // The same resurrection, for a park. A side's OTHER programme's reference rides
     // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
     // `take_ota_side`), and it described the reference the side HAD. An edit that
@@ -3370,6 +3460,11 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     let sideband_written = ssb_sideband(r).is_some();
     for (k, v) in &r.extra {
         if sideband_written && k == "SUBMODE" {
+            continue;
+        }
+        // Which own-station fields Nexus filled itself is for its own LoTW upload, never a
+        // service's business ([`SELF_FILLED_FIELD`]).
+        if audience == Audience::Outbound && k == SELF_FILLED_FIELD {
             continue;
         }
         out.push_str(&field(k, v));
@@ -6916,6 +7011,85 @@ mod tests {
         let signed = adif_record_with_station(first, "KD9TAW", "FN31");
         assert_eq!(signed.matches("MY_GRIDSQUARE").count(), 1, "{signed}");
         assert!(signed.contains("<MY_GRIDSQUARE:6>EN52XA"), "{signed}");
+    }
+
+    /// Which own-station fields Nexus filled itself survives the operator's own log (so a
+    /// restart still knows to keep them out of LoTW), is withheld from what goes to the services,
+    /// and the LoTW copy drops exactly those fields — a grid somebody else put there stays.
+    #[test]
+    fn a_self_filled_station_field_survives_the_own_log_and_stays_out_of_lotw() {
+        let mut filled = rec("W1AW", "20m", 1_700_000_000);
+        filled.my_grid = Some("EN52XA".into());
+        mark_self_filled(&mut filled, "MY_GRIDSQUARE");
+        assert!(fill_extra(&mut filled, "MY_STATE", "WI".into()));
+        mark_self_filled(&mut filled, "MY_STATE");
+        assert!(
+            !fill_extra(&mut filled, "MY_STATE", "IL".into()),
+            "a field the record has is kept"
+        );
+        assert_eq!(self_filled(&filled), ["MY_GRIDSQUARE", "MY_STATE"]);
+
+        let own = adif_record_own_log(&filled);
+        assert!(
+            own.contains("<APP_NEXUS_SELF_FILLED:22>MY_GRIDSQUARE,MY_STATE"),
+            "{own}"
+        );
+        let reborn = &parse_adif(&own)[0];
+        assert_eq!(self_filled(reborn), ["MY_GRIDSQUARE", "MY_STATE"]);
+        assert_eq!(reborn.my_grid.as_deref(), Some("EN52XA"));
+        assert_eq!(extra_field(reborn, "MY_STATE"), Some("WI"));
+
+        let sent = adif_record(&filled);
+        assert!(!sent.contains("SELF_FILLED"), "{sent}");
+        assert!(sent.contains("<MY_GRIDSQUARE:6>EN52XA"), "{sent}");
+        assert!(sent.contains("<MY_STATE:2>WI"), "{sent}");
+
+        let lotw = adif_record(&without_self_filled(reborn));
+        assert!(
+            !lotw.contains("MY_GRIDSQUARE") && !lotw.contains("MY_STATE"),
+            "{lotw}"
+        );
+        // …and in ADIF-location mode the live grid is stamped as it always was.
+        let signed = adif_record_with_station(&without_self_filled(reborn), "KD9TAW", "FN31");
+        assert!(signed.contains("<MY_GRIDSQUARE:4>FN31"), "{signed}");
+
+        // POSITIVE CONTROL: a grid the operator or WSJT-X put there carries no mark and goes.
+        let mut theirs = rec("W1AW", "20m", 1_700_000_000);
+        theirs.my_grid = Some("FN20".into());
+        let lotw = adif_record(&without_self_filled(&theirs));
+        assert!(lotw.contains("<MY_GRIDSQUARE:4>FN20"), "{lotw}");
+    }
+
+    /// An edit that CHANGES a grid Nexus filled makes it the operator's — it then goes to
+    /// LoTW like a typed one — and an edit that leaves it alone keeps the mark.
+    #[test]
+    fn an_edit_of_a_self_filled_grid_makes_it_the_operators() {
+        let mut lb = Logbook::new();
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.my_grid = Some("EN52XA".into());
+        mark_self_filled(&mut r, "MY_GRIDSQUARE");
+        assert!(fill_extra(&mut r, "MY_STATE", "WI".into()));
+        mark_self_filled(&mut r, "MY_STATE");
+        lb.add(r);
+
+        let mut name_only = lb.records()[0].as_ref().clone();
+        name_only.name = Some("Hiram".into());
+        name_only.extra = Vec::new();
+        name_only.my_grid = Some("en52xa".into());
+        assert!(lb.update_record(0, name_only));
+        assert_eq!(
+            self_filled(&lb.records()[0]),
+            ["MY_GRIDSQUARE", "MY_STATE"],
+            "the same grid, retyped in another case, is still Nexus's"
+        );
+
+        let mut moved = lb.records()[0].as_ref().clone();
+        moved.extra = Vec::new();
+        moved.my_grid = Some("EN61".into());
+        assert!(lb.update_record(0, moved));
+        let r = &lb.records()[0];
+        assert_eq!(self_filled(r), ["MY_STATE"]);
+        assert!(adif_record(&without_self_filled(r)).contains("<MY_GRIDSQUARE:4>EN61"));
     }
 
     /// The cost ruling, pinned: the contest block costs ONE POINTER on a record that
