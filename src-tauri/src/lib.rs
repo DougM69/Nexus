@@ -16053,9 +16053,23 @@ mod rotctld_supervisor_tests {
 
     #[test]
     fn a_command_that_reaches_no_rotctld_says_what_to_check() {
-        let gone = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-        let addr = gone.local_addr().expect("its address").to_string();
-        drop(gone);
+        // A port below the ephemeral range, so no `:0` bind in another test can be handed it.
+        let addr = crate::lan_client::tests::where_nothing_listens(std::net::Ipv4Addr::LOCALHOST)
+            .to_string();
+        // A rotctld another test in this module spawns while that port's listener was still open
+        // keeps a copy of it until it execs, and a connection there is reset, not refused. Wait
+        // for the refusal this test is about (a port that stays taken fails here at 5 s).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::net::TcpStream::connect(&addr).map_or_else(
+            |e| e.kind() != std::io::ErrorKind::ConnectionRefused,
+            |_| true,
+        ) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{addr} still answers 5 s after its listener was let go"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         let refused = || tempo_audio::rotator::stop(&addr).expect_err("nothing is listening");
         let words = rotator_error(refused(), "");
         assert!(
