@@ -4835,6 +4835,86 @@
      ]
     }
    ]
+  },
+  {
+   "name": "a park that drops off the feed is not carried forward: its return is a new spot",
+   "ticks": [
+    {
+     "refs": [
+      "US-0001"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0002"
+     ],
+     "sounds": [
+      880,
+      1320
+     ]
+    },
+    {
+     "refs": [
+      "US-0001"
+     ],
+     "sounds": [
+      880,
+      1320
+     ]
+    },
+    {
+     "refs": [
+      "US-0001"
+     ],
+     "sounds": []
+    }
+   ]
+  },
+  {
+   "name": "a park already known never sounds again, in any order; a new one beside it does",
+   "ticks": [
+    {
+     "refs": [
+      "US-0001",
+      "US-0002"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0001",
+      "US-0002"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0002",
+      "US-0001"
+     ],
+     "sounds": []
+    },
+    {
+     "refs": [
+      "US-0001",
+      "US-0002",
+      "US-0003"
+     ],
+     "sounds": [
+      880,
+      1320
+     ]
+    },
+    {
+     "refs": [
+      "US-0001",
+      "US-0002",
+      "US-0003"
+     ],
+     "sounds": []
+    }
+   ]
   }
  ]
 }
