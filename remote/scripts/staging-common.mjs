@@ -7,9 +7,11 @@
 // variables (REMOTE_AUTH0_ISSUER, REMOTE_AUTH0_CLIENT_ID). What the row pins is the RULE an issuer
 // must satisfy and the exact API audience.
 //
-// `billing` names the private billing Worker the relay reaches through a `BILLING` service binding.
-// The binding is written only once `deployed` is true, a reviewed one-line change made after that
-// Worker exists: until then the relay's deploys carry no binding and verify that none is present.
+// `billing` names the private billing Worker the relay reaches through a `BILLING` service binding to
+// its `BillingService` entrypoint (the RPC methods checkout and portal; its public route is the webhook
+// alone). The binding is written only once `deployed` is true, a reviewed one-line change made after that
+// Worker exists: until then the relay's deploys carry no binding and verify that none is present, its
+// billing routes answer `billingNotAvailable`, and the page shows no Subscribe or Manage button.
 export const TARGETS = Object.freeze({
   staging: Object.freeze({
     target: 'staging',
@@ -78,8 +80,9 @@ export function deployable(row) {
   return row
 }
 
+export const BILLING_ENTRYPOINT = 'BillingService'
 export function billingServices(row) {
-  return row.billing.deployed ? [{ binding: 'BILLING', service: row.billing.service }] : []
+  return row.billing.deployed ? [{ binding: 'BILLING', service: row.billing.service, entrypoint: BILLING_ENTRYPOINT }] : []
 }
 
 export function databaseId(value) {

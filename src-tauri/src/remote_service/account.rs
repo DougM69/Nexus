@@ -56,9 +56,11 @@ const ANSWER_LIMIT: usize = 16384;
 /// station's network; it is shown waiting for Approve at the shack (`approveAtStation`), as a
 /// device added with a code waits, and Approve there grants it what Approve grants any device. The
 /// computer that signed in says its internet road waits for that Approve
-/// (`crate::lan_client::account`). It stays off until a new device's transmit hold and the notice
-/// email to the station's owner are built. A computer that enrols on the station's own network by
-/// its sign-in (`super::lan::enrol`) is taken there as before.
+/// (`crate::lan_client::account`). It stays off until the notice email to the station's owner is
+/// built. No transmit hold for a new device is planned: with this off, every device that operates
+/// over the internet is approved by a press at the shack, with its key shown there to compare. A
+/// computer that enrols on the station's own network by its sign-in (`super::lan::enrol`) is taken
+/// there as before.
 pub(crate) const GRANTS_ON_SIGN_IN: bool = false;
 
 /// The account's side of the Remote service and its issuer.

@@ -383,3 +383,77 @@ test('the relay serves no payment webhook, even with payment keys configured', a
     assert.equal((await session(owner)).state, 'none')
   } finally { await app.mf.dispose() }
 })
+
+// ---------------------------------------------------------------------------------------------------
+// SUBSCRIBE AND MANAGE: the relay's two billing routes, which reach the private billing Worker through its
+// BILLING binding. Every deploy carries none until that Worker is deployed, and the routes say so.
+
+test('with no billing Worker bound, Subscribe and Manage are not available yet, and the page is told so', async () => {
+  const config = async app => (await app.mf.dispatchFetch(`${app.origin}/api/remote/config`)).json()
+  assert.equal((await config(plain)).billing, false)
+  const owner = await person(plain)
+  assert.deepEqual((await owner.post('billing/checkout', { plan: 'monthly' }, 503)).value, { error: 'billingNotAvailable' })
+  assert.deepEqual((await owner.post('billing/portal', {}, 503)).value, { error: 'billingNotAvailable' })
+  // Still behind the sign-in: a request with no account gets nothing about billing at all.
+  assert.deepEqual((await plain.client().post('billing/checkout', { plan: 'monthly' }, 403)).value, { error: 'originDenied' })
+  // Positive control: the same config route says true where the billing Worker is bound.
+  const bound = await runtime({ billing: () => ({ error: 'serviceUnavailable', status: 503 }) })
+  try { assert.equal((await config(bound)).billing, true) } finally { await bound.mf.dispose() }
+})
+
+test('with the billing Worker bound, checkout and the portal pass only the signed-in account and hand back the provider page', async () => {
+  const calls = []
+  let answer = null
+  const app = await runtime({ billing: (method, args) => {
+    calls.push({ method, args })
+    if (answer) return answer(method)
+    return method === 'checkout' ? { url: 'https://checkout.stripe.com/c/pay/cs_test_fixture' } : { url: 'https://billing.stripe.com/p/session/fixture' }
+  } })
+  try {
+    const owner = await person(app)
+    assert.deepEqual((await owner.post('billing/checkout', { plan: 'annual' })).value, { url: 'https://checkout.stripe.com/c/pay/cs_test_fixture' })
+    assert.deepEqual((await owner.post('billing/portal', {})).value, { url: 'https://billing.stripe.com/p/session/fixture' })
+    assert.deepEqual(calls, [{ method: 'checkout', args: [owner.accountId, 'annual'] }, { method: 'portal', args: [owner.accountId] }])
+    // Opening a checkout buys nothing: only the webhook's write, read by the one entitlement read, does.
+    assert.equal((await session(owner)).state, 'none')
+
+    // The page cannot name another account, or a plan that is not ours; nothing reaches the billing Worker.
+    calls.length = 0
+    assert.deepEqual((await owner.post('billing/checkout', { plan: 'weekly' }, 400)).value, { error: 'invalidRequest' })
+    assert.deepEqual((await owner.post('billing/checkout', { plan: 'monthly', accountId: crypto.randomUUID() }, 400)).value, { error: 'invalidRequest' })
+    assert.deepEqual((await owner.post('billing/portal', { accountId: crypto.randomUUID() }, 400)).value, { error: 'invalidRequest' })
+    assert.deepEqual((await app.client().post('billing/portal', {}, 403)).value, { error: 'originDenied' })
+    assert.deepEqual(calls, [])
+
+    // Its refusals are passed on by name; anything else it says, or a page anywhere else, is not.
+    const cases = [
+      [{ error: 'alreadySubscribed', status: 409 }, 409, 'alreadySubscribed'],
+      [{ error: 'noSubscription', status: 404 }, 404, 'noSubscription'],
+      [{ error: 'secret detail rk_test_fixture', status: 400 }, 503, 'serviceUnavailable'],
+      [{ error: 'alreadySubscribed', status: 200 }, 503, 'serviceUnavailable'],
+      [{ url: 'https://example.invalid/pay' }, 503, 'serviceUnavailable'],
+    ]
+    for (const [given, status, error] of cases) {
+      answer = () => given
+      for (const [path, value] of [['billing/checkout', { plan: 'monthly' }], ['billing/portal', {}]]) {
+        assert.deepEqual((await (await person(app)).post(path, value, status)).value, { error }, `${path} ${JSON.stringify(given)}`)
+      }
+    }
+    // Each route takes only its own provider page: a portal answering with a checkout page is refused, and the reverse.
+    answer = method => ({ url: method === 'checkout' ? 'https://billing.stripe.com/p/session/fixture' : 'https://checkout.stripe.com/c/pay/cs_test_fixture' })
+    assert.deepEqual((await owner.post('billing/checkout', { plan: 'monthly' }, 503)).value, { error: 'serviceUnavailable' })
+    assert.deepEqual((await owner.post('billing/portal', {}, 503)).value, { error: 'serviceUnavailable' })
+    // The billing Worker failing outright is a plain 503 too.
+    answer = () => { throw new Error('billing Worker down') }
+    assert.deepEqual((await owner.post('billing/checkout', { plan: 'monthly' }, 503)).value, { error: 'serviceUnavailable' })
+
+    // Each one is a call to the payment provider: ten a minute an account.
+    answer = null
+    const busy = await person(app)
+    for (let i = 0; i < 10; i++) await busy.post('billing/portal', {})
+    assert.deepEqual((await busy.post('billing/checkout', { plan: 'monthly' }, 429)).value, { error: 'tryLater' })
+
+    // Bound or not, the relay still serves no webhook.
+    assert.deepEqual((await owner.post('billing/webhook', {}, 404)).value, { error: 'notFound' })
+  } finally { await app.mf.dispose() }
+})
