@@ -77,6 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Chat** (Tempo's TempoFast/TempoDeep chat) under Operate, like the ones for RTTY, SSTV and the
   other modes. It is on, as before, unless you turn it off; off, Tempo leaves the menu, and if
   Nexus was last in Tempo it starts in FT8/FT4 instead.
+- **Nexus Remote: download your data or delete your account from the Remote page.** The Your account card has
+  Download my data, and Delete account, which deletes only after you type DELETE. A paid plan is cancelled first, and
+  nothing is deleted if it cannot be. Your stations, devices and invitations go; the sign-in record is removed on
+  request.
 
 ### Changed
 - **FT8: the full decode starts from the audio the early decode has already cleared, as in WSJT-X, and still finds
