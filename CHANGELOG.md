@@ -60,6 +60,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus was last in Tempo it starts in FT8/FT4 instead.
 
 ### Changed
+- **FT8: the full decode starts from the audio the early decode has already cleared, as in WSJT-X, and still finds
+  every station the old way found (needs a check on the air).** At 13.5 seconds into the period Nexus now takes the
+  stations the early decode found at 11.8 seconds out of the audio, as WSJT-X does, and the full decode at 14.4
+  seconds searches what is left. It no longer finds those stations again first: what they hid comes out in its first
+  search, and only new decodes reach the decode list and the QSO sequencer. On a busy band this is what puts a weak
+  reply on your frequency in the decision for your next over: with 80 stations in the period it arrives about 14.6
+  seconds into the period instead of 15.1, after your over had started. Taking the stations out can damage a few weak
+  ones right beside them, which WSJT-X then misses; Nexus searches the original audio once more after the full
+  decode and adds only the stations the period has not shown yet, so on busy test recordings it finds about 3 % more
+  stations than before and none fewer. That second search runs after the first, so the decoder is busy about twice
+  as long after 14.4 seconds, and the few stations only it finds show up about a second later than they used to; on
+  a computer too slow for it, it stops in time for the next period's decoding. FT4 has no early decode, in WSJT-X or
+  in Nexus, and is unchanged.
 - **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the
   Logbook's add-a-contact form used to show a sample in grey, such as W1AW in Call, 1D and WI in Field Day's Class
   and Section, a county in a QSO party's county box, and FN31, 20m and a park reference in the Logbook form. A

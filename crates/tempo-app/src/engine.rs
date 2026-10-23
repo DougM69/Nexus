@@ -144,6 +144,10 @@ mod restore_session_tests;
 #[cfg(test)]
 mod rtty_sideband_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
+/// WSJT-X's FT8 47 step as a decode job: it decodes and folds nothing, and the full pass after it
+/// hands on no early decode again.
+#[cfg(test)]
+mod residual_pass_tests;
 #[cfg(all(test, debug_assertions))]
 mod session_tests;
 pub mod slices;
@@ -1911,6 +1915,11 @@ pub enum DecodePass {
         speed: modes::Js8Speed,
         cycle_start_ms: u64,
     },
+    /// WSJT-X's FT8 47 step (`lib/ft8_decode.f90:124-149`, at 47 half-symbols, 13.536 s): the
+    /// period's early decodes subtracted from its first 13.536 s, so the full pass starts from the
+    /// residual and finds new decodes first ([`modes::SignalSource::subtract_early`]). It decodes
+    /// nothing and folds nothing; it gives up at WSJT-X's 14.3 s (`:140-145`).
+    Residual,
 }
 
 impl DecodePass {
@@ -2001,6 +2010,12 @@ pub struct DecodeJob {
     /// at WSJT-X's 13.4 s into the period ([`DecodeJob::with_give_up_at`]); `None`, every other
     /// pass, runs to its end.
     give_up_at: Option<Instant>,
+    /// When FT8's rescue pass after a full pass from the early pass's residual gives up
+    /// ([`modes::DecodeSink::give_up_rescue`]): past it the rescue is not started, or stops at its
+    /// next sync candidate with what it found. The radio loop sets it on the FT8 full pass, at the
+    /// next period's early-pass moment ([`DecodeJob::with_rescue_give_up_at`]); `None` runs it to
+    /// its end.
+    rescue_give_up_at: Option<Instant>,
 }
 
 impl DecodeJob {
@@ -2020,6 +2035,19 @@ impl DecodeJob {
     pub fn with_give_up_at(mut self, at: Instant) -> Self {
         self.give_up_at = Some(at);
         self
+    }
+
+    /// Give FT8's rescue pass up at `at` (see [`DecodeJob::rescue_give_up_at`]): the FT8 full
+    /// pass, at the next period's early-pass moment, so a slow computer never runs the rescue into
+    /// the next period's decoding; given up before it starts, the full pass's result stands alone.
+    pub fn with_rescue_give_up_at(mut self, at: Instant) -> Self {
+        self.rescue_give_up_at = Some(at);
+        self
+    }
+
+    /// When FT8's rescue pass gives up ([`DecodeJob::with_rescue_give_up_at`]), if it does.
+    pub fn rescue_give_up_at(&self) -> Option<Instant> {
+        self.rescue_give_up_at
     }
 
     /// Which pass this job is.
@@ -2120,6 +2148,7 @@ struct JobSink<'a> {
     slot: u64,
     epoch: u64,
     give_up_at: Option<Instant>,
+    rescue_give_up_at: Option<Instant>,
 }
 
 impl modes::DecodeSink for JobSink<'_> {
@@ -2134,6 +2163,11 @@ impl modes::DecodeSink for JobSink<'_> {
     fn give_up(&mut self) -> bool {
         self.progress.candidate();
         self.give_up_at.is_some_and(|at| Instant::now() >= at)
+    }
+    fn give_up_rescue(&mut self) -> bool {
+        self.progress.candidate();
+        self.rescue_give_up_at
+            .is_some_and(|at| Instant::now() >= at)
     }
 }
 
@@ -2376,6 +2410,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         heard_on,
         ctx,
         give_up_at,
+        rescue_give_up_at,
     } = job;
     let mut sink = JobSink {
         progress,
@@ -2383,6 +2418,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         slot,
         epoch,
         give_up_at,
+        rescue_give_up_at,
     };
     // Hold the decoder lock across the ENTIRE decode: this is the single lock that
     // serializes the a7 table, the packjt77 hash table and the FT1 IR-HARQ buffers
@@ -2423,6 +2459,16 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
                 modes::reset_ft8_a7();
             }
             let iwave = channel::capture_to_i16(&frame);
+            // The 47 step: the source subtracts this period's early decodes for its full pass.
+            // Nothing is decoded.
+            if pass == DecodePass::Residual {
+                let req = modes::DecodeRequest {
+                    ndepth,
+                    ..modes::DecodeRequest::full_band(&iwave)
+                };
+                src.subtract_early(&req, &mut sink);
+                return Vec::new();
+            }
             let req = modes::DecodeRequest {
                 iwave: &iwave,
                 nfa,
@@ -28028,9 +28074,10 @@ contact yourself."
         // (#103). Redecode replays `last_rx`, whose fold is display-only and gated by
         // its own history filter, so it keeps the live epoch (unchanged behavior).
         let epoch = match pass {
-            DecodePass::Boundary | DecodePass::Early | DecodePass::Js8Multi { .. } => {
-                self.capture_epoch
-            }
+            DecodePass::Boundary
+            | DecodePass::Early
+            | DecodePass::Js8Multi { .. }
+            | DecodePass::Residual => self.capture_epoch,
             DecodePass::Redecode => self.decode_epoch,
         };
         // Companion: decodes arrive over UDP; the audio is irrelevant. Drain the
@@ -28059,6 +28106,7 @@ contact yourself."
                 heard_on: None,
                 ctx: None,
                 give_up_at: None,
+                rescue_give_up_at: None,
             };
         }
         if self.app.tier() == Tier::TempoDeep {
@@ -28086,6 +28134,7 @@ contact yourself."
                 heard_on: None,
                 ctx: None,
                 give_up_at: None,
+                rescue_give_up_at: None,
             };
         }
         // Native tiers (FT1/FT8/FT4) decode through the active SignalSource with
@@ -28225,6 +28274,7 @@ contact yourself."
             // `DecodeJob::with_ctx`. `None` keeps the shipped path byte-identical.
             ctx: None,
             give_up_at: None,
+            rescue_give_up_at: None,
         }
     }
 
@@ -28353,6 +28403,8 @@ contact yourself."
             }
             // The F6 redecode runs its own display-only fold in `redecode`, not here.
             DecodePass::Redecode => DecodeApplied::Stale,
+            // The 47 step decodes nothing: there is nothing to fold.
+            DecodePass::Residual => DecodeApplied::Stale,
         }
     }
 

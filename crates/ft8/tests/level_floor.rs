@@ -99,6 +99,7 @@ fn run(audio: &[i16], pass: Pass, nutc: i32) -> (Vec<Decode>, usize) {
             match p {
                 Progress::Candidate => candidates += 1,
                 Progress::Found(d) => streamed.push(d.message.clone()),
+                Progress::Rescue => {}
             }
             false
         },

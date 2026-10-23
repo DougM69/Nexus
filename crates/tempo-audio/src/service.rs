@@ -3405,6 +3405,16 @@ const DAX_STARVE_AFTER: Duration = Duration::from_secs(6);
 /// sync candidate, the decodes found so far kept.
 const FT8_EARLY_GIVE_UP_MS: f64 = 13_400.0;
 
+/// WSJT-X's third FT8 moment, `m_earlyDecode2` = 47 half-symbols of 3456 samples: the 47 step
+/// subtracts the early pass's decodes from the period's first 13.536 s for the full pass
+/// (`lib/ft8_decode.f90:124-149`; `DecodePass::Residual`). Its audio, in samples at 12 kHz.
+const FT8_RESIDUAL_SAMPLES: usize = 47 * 3456;
+
+/// When WSJT-X's 47 step bails out, in ms into the period: `lib/ft8_decode.f90:140-145`
+/// (`tseq.ge.14.3d0`), checked after each early decode, what was subtracted kept; the full pass
+/// subtracts the rest (`:157-160`).
+const FT8_RESIDUAL_GIVE_UP_MS: f64 = 14_300.0;
+
 /// The receive tap's ring for TCI audio: about 2.7 s at the modem rate, many times what the
 /// waterfall's thread drains in one of its 20 ms ticks.
 const TCI_TAP_RING_CAP: usize = 1 << 15;
@@ -4057,6 +4067,14 @@ struct RadioLoop {
     /// frame. Its decodes are already folded; the boundary named here runs its TX decision and
     /// housekeeping with it, and any other boundary drops it unused.
     full_pass_frame: Option<(u64, Vec<f32>)>,
+    /// Where the slot's FT8 early pass took its audio from: (slot, the ring position of the frame's
+    /// first sample). The 47 step and the full pass take theirs from the same sample, so the three
+    /// frames of a period line up sample for sample, as WSJT-X's passes all read one buffer from
+    /// the period's start; a residual made from one frame is then valid in the next.
+    ft8_anchor: Option<(u64, u64)>,
+    /// Slot index whose FT8 47 step (`DecodePass::Residual`) was dispatched or passed over: once
+    /// per RX slot.
+    residual_done_slot: Option<u64>,
     /// MSK144's repeating early passes: (slot, index of the last 2 s interval decoded).
     /// One fixed early pass per slot is right for FT8/FT4 (callers appear before the TX
     /// window opens) and wrong for meteor scatter, where a ping lands at ANY moment and is
@@ -4604,6 +4622,8 @@ impl RadioLoop {
             early_done_slot: None,
             full_done_slot: None,
             full_pass_frame: None,
+            ft8_anchor: None,
+            residual_done_slot: None,
             early_msk_done: None,
             js8_done: [None; Js8Speed::ALL.len()],
             js8_multi_worker: DecodeWorker::spawn_with("nexus-js8-multi", run_worker_job),
@@ -13834,6 +13854,8 @@ impl RadioLoop {
             self.early_done_slot = None;
             self.full_done_slot = None;
             self.full_pass_frame = None;
+            self.ft8_anchor = None;
+            self.residual_done_slot = None;
             self.early_msk_done = None;
             self.js8_done = [None; Js8Speed::ALL.len()];
             self.boundary_keyed = None;
@@ -14061,9 +14083,12 @@ impl RadioLoop {
         // - FT4's only pass at `m_hsymStop` = 21 steps = 6.048 s (:2226), the whole FT4 frame.
         // The full pass is the period's authoritative decode: it replaces the boundary's, and
         // the boundary keys with its decodes when it has finished. WSJT-X's third FT8 moment
-        // (`m_earlyDecode2` = 47, :2223) decodes nothing new (ft8_decode.f90:124-150: it
-        // subtracts the early decodes for the full pass) and has no counterpart here: the full
-        // pass's own multi-pass subtraction covers it.
+        // (`m_earlyDecode2` = 47 steps = 13.536 s, :2223) decodes nothing: it subtracts the early
+        // pass's decodes so the full pass starts from the residual, finds what they hid in its
+        // first subtraction pass and hands new decodes on first (ft8_decode.f90:124-162). Here it
+        // is the `Residual` job, and the source keeps the residual for the full pass
+        // (`modes::PassCarry`). All three FT8 frames of a period are taken from the early frame's
+        // first sample (`ft8_anchor`), as WSJT-X's passes read one buffer from the period's start.
         if self.tx_until_ms.is_none()
             && !self.prev_slot_was_tx
             && self.full_done_slot != Some(slot)
@@ -14101,11 +14126,18 @@ impl RadioLoop {
                 }
                 _ => None,
             };
-            // The full pass once its moment has come (it supersedes an early pass not yet run),
-            // else the early pass.
+            // FT8's 47 step, once the early pass has run (WSJT-X's `m_earlyDecode2`).
+            let residual_at_ms = (tier_now == Tier::Ft8
+                && self.early_done_slot == Some(slot)
+                && self.residual_done_slot != Some(slot))
+            .then_some(47.0 * HSYM_MS);
+            // The full pass once its moment has come (it supersedes an early pass or a 47 step not
+            // yet run), else the early pass, else the 47 step.
             let due = match full_at_ms {
                 Some(at) if elapsed_now >= at => Some((at, DecodePass::Boundary)),
-                _ => early_at_ms.map(|at| (at, DecodePass::Early)),
+                _ => early_at_ms
+                    .map(|at| (at, DecodePass::Early))
+                    .or(residual_at_ms.map(|at| (at, DecodePass::Residual))),
             };
             if let Some((at, pass)) = due {
                 let slot_ms = eng.active_slot_secs() * 1000.0;
@@ -14116,7 +14148,14 @@ impl RadioLoop {
                 // Native FT8/FT4 only, and only when the worker is free — the early
                 // result must fold in (setting `early_seen`) before the same-slot
                 // boundary decode, so we never let two decodes race the one worker.
-                if elapsed_ms >= at
+                if pass == DecodePass::Residual {
+                    if elapsed_ms >= at
+                        && !self.decode_in_flight
+                        && eng.source_kind() == SourceKind::Native
+                    {
+                        self.dispatch_ft8_residual(&eng, slot, elapsed_ms);
+                    }
+                } else if elapsed_ms >= at
                     && elapsed_ms < slot_ms
                     && !self.rx.is_empty()
                     && !self.decode_in_flight
@@ -14138,7 +14177,18 @@ impl RadioLoop {
                     // start, tail-padded — a rolling tail of the previous slot
                     // (or front-padding) would wreck the decoder's dt alignment.
                     let n = ((elapsed_ms / 1000.0) * tempo_fast::SAMPLE_RATE as f64) as usize;
-                    let frame = self.rx.frame_latest_padded(n);
+                    // FT8: the early frame's first sample anchors the period's later frames; the
+                    // full pass takes its frame from there while the ring still holds it.
+                    if tier_now == Tier::Ft8 && pass == DecodePass::Early {
+                        self.ft8_anchor = Some((slot, self.rx.latest_start(n)));
+                    }
+                    let anchored = match self.ft8_anchor {
+                        Some((s, start)) if tier_now == Tier::Ft8 && s == slot => {
+                            self.rx.frame_from(start, n)
+                        }
+                        _ => None,
+                    };
+                    let frame = anchored.unwrap_or_else(|| self.rx.frame_latest_padded(n));
                     // ⭐ BUILD THE NEXT OVER BEFORE THIS DECODE TAKES THE MODEM. The decode
                     // holds `MODEM_LOCK` for its whole length, and building an over needed it
                     // too, so an early decode still running at the boundary made the key wait
@@ -14173,6 +14223,18 @@ impl RadioLoop {
                     if tier_now == Tier::Ft8 && pass == DecodePass::Early {
                         let left_ms = (FT8_EARLY_GIVE_UP_MS - elapsed_ms).max(0.0);
                         job = job.with_give_up_at(
+                            std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0),
+                        );
+                    }
+                    // The rescue pass after an FT8 full pass from the early pass's residual (the
+                    // full pass once more on the raw audio, for the few decodes the residual
+                    // loses) is the period's lowest-value work: it gives up at the next period's
+                    // early-pass moment, 11.808 s into it, so a slow computer never runs it into
+                    // that period's decoding. Given up before it starts, the full pass's result
+                    // stands alone.
+                    if tier_now == Tier::Ft8 && pass == DecodePass::Boundary {
+                        let left_ms = (slot_ms + 41.0 * HSYM_MS - elapsed_ms).max(0.0);
+                        job = job.with_rescue_give_up_at(
                             std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0),
                         );
                     }
@@ -14509,6 +14571,44 @@ impl RadioLoop {
     /// Which JS8 speeds are due for a decode right now (see [`js8_due_speeds`]).
     fn js8_multi_decode_due(&mut self, now_ms: u64, enabled: u8) -> Vec<(Js8Speed, u64)> {
         js8_due_speeds(&mut self.js8_done, now_ms, enabled)
+    }
+
+    /// WSJT-X's FT8 47 step for `slot` (`DecodePass::Residual`), the decoder being free, `elapsed_ms`
+    /// into the period: the period's first 13.536 s, taken from the early frame's first sample, so
+    /// the source subtracts the early decodes for the full pass (`lib/ft8_decode.f90:124-149`).
+    ///
+    /// WSJT-X's moment is a sample count (its 47th half-symbol of audio), so the step waits for
+    /// those samples. It is passed over for the slot when it can no longer start before its 14.3 s
+    /// bail-out, or the early frame's samples are no longer held: the full pass then decodes the
+    /// raw audio, as before. Never dispatched later than that, so it cannot hold the decoder at
+    /// the full pass's 14.4 s; given up at 14.3 s like WSJT-X's.
+    fn dispatch_ft8_residual(&mut self, eng: &Engine, slot: u64, elapsed_ms: f64) {
+        let start = match self.ft8_anchor {
+            Some((s, start)) if s == slot => Some(start),
+            _ => None,
+        };
+        let held = start.and_then(|start| self.rx.held_from(start));
+        let (Some(start), Some(held)) = (start, held) else {
+            self.residual_done_slot = Some(slot);
+            return;
+        };
+        if elapsed_ms >= FT8_RESIDUAL_GIVE_UP_MS {
+            self.residual_done_slot = Some(slot);
+            return;
+        }
+        if held < FT8_RESIDUAL_SAMPLES {
+            return;
+        }
+        self.residual_done_slot = Some(slot);
+        let Some(frame) = self.rx.frame_from(start, FT8_RESIDUAL_SAMPLES) else {
+            return;
+        };
+        let left_ms = (FT8_RESIDUAL_GIVE_UP_MS - elapsed_ms).max(0.0);
+        let job = eng
+            .build_decode_job(frame, slot + 1, DecodePass::Residual)
+            .with_give_up_at(std::time::Instant::now() + Duration::from_secs_f64(left_ms / 1000.0));
+        self.decode.dispatch(WorkerJob::Slot(job));
+        self.decode_in_flight = true;
     }
 
     /// Finish a slot boundary once its RX decode is folded in: run the deferred
@@ -17816,6 +17916,7 @@ mod tests {
     mod filter_width;
     mod flex_audio;
     mod ft_midover;
+    mod ft_residual;
     mod ft_streaming;
     mod ft_window;
     mod ic905_ten_ghz;
