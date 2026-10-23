@@ -963,6 +963,8 @@ impl AppState {
             // Set by the engine from the logbook (worked-before); default false here.
             worked: false,
             worked_band: false,
+            worked_ago_secs: None,
+            worked_today_utc: false,
             // Resolved by the engine from the DXCC resolver; None at this layer.
             country: None,
             tier: h.mode.map(Tier::from_mode_kind),

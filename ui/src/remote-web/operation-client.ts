@@ -1,7 +1,5 @@
 import type { ReceiptStorage } from './operation-storage'
-import type { ControlStorage, PendingControl } from './control-storage'
-import { actionCapability, controlContext, stationAction, type StationAction, type ControlOutcome, type ControlContext } from './station-operation'
-import { controlVersion, type OperationVersion } from './operation-version'
+import type { OperationVersion } from './operation-version'
 import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
 import {
   OPERATION_EXPORT_RESPONSE_BYTES,
@@ -10,7 +8,6 @@ import {
   logChange,
   logChangeCapabilities,
   manualRecord,
-  operationEvent,
   operationId,
   operationRequest,
   operationResponse,
@@ -36,7 +33,6 @@ export class OperationFailure extends Error {
     super(message)
   }
 }
-export type ControlFailure = { code: string; sent: boolean; busy: boolean }
 /** Only a reply that came back from the station can say it was busy. */
 const stationWasBusy = (code: string, sent: boolean) => sent && code === 'stationBusy'
 /** How long a gesture committed during a brief control lapse waits for control to be current again
@@ -57,13 +53,8 @@ export type OperationView = {
   resolved: OperationOutcome | LogChangeOutcome | null
   dismissed: string | null
   error: string | null
-  controlPending: PendingControl | null
-  controlSending: boolean
   /** An automatic read (heartbeat/state) is the request in flight — Release and acquire wait it out. */
   reading: boolean
-  controlResult: ControlOutcome | null
-  controlError: ControlFailure | null
-  controlRefreshing?: boolean
   stopSending?: boolean
   stopAvailable?: boolean
   stopError?: string | null
@@ -87,7 +78,6 @@ export type OperationView = {
    * between heartbeats; commands still require `fresh`. */
   leaseHeld?: boolean
 }
-type CapturedControl = { state: OperationState; until: number }
 type Pending = {
   request: OperationRequest
   started: number
@@ -111,11 +101,7 @@ export class OperationClient {
     resolved: null,
     dismissed: null,
     error: null,
-    controlPending: null,
-    controlSending: false,
     reading: false,
-    controlResult: null,
-    controlError: null,
     retainedState: null,
     leaseHeld: false
   }
@@ -127,11 +113,6 @@ export class OperationClient {
    * runs out — expired-lease stop, 2026-09-15) and any one `stopTarget`. Cleared only on
    * disconnect. */
   private stopLeaseId: string | null = null
-  /** The epoch an FT gesture may still leave under: the stop token's, until a Stop from this browser
-   * is accepted. Apart from `stopTarget` because only arming retires on a Stop now — the station
-   * honours a Stop whatever its token's age (operator ruling, 2026-10-03), so the Stop keeps its
-   * token, while a gesture captured before the Stop must still never leave after it. */
-  private armEpoch: string | null = null
   /** When this browser's last Stop was accepted. The relay holds a session to two Stops a second, its
    * own limit, so a `remoteBusy` for a press sent within that second of an acceptance is the limit, not
    * a refusal to stop: the station is already stopping, and that acceptance stands (2026-10-03). */
@@ -143,24 +124,17 @@ export class OperationClient {
   private timer: ReturnType<typeof setInterval> | undefined
   private stateUntil = 0
   private leaseUntil = 0
-  private controlRefreshUntil = 0
   private polledAt = 0
   private finished: OperationOutcome | null = null
   private loggingIntent = false
-  private controlIntent = false
   private resultIntent: object | null = null
-  private controlPolledAt = -Infinity
-  /** How many times the operator has stood the transmitter down (a Stop, or TX off). A transmit
-   * gesture held through a lapse is refused if this moved while it waited - see `holdTransmit`. */
-  private transmitStand = 0
   private requestBudget: { requestId: string; until: number }[] = []
   constructor(
     private send: (message: string) => void,
     readonly enabled: boolean,
     private now = () => performance.now(),
     private receiptStorage?: ReceiptStorage,
-    readonly operationVersion: OperationVersion = 1,
-    private controlStorage?: ControlStorage
+    readonly operationVersion: OperationVersion = 1
   ) {
     try {
       const id = receiptStorage?.read()
@@ -173,8 +147,6 @@ export class OperationClient {
     } catch {
       this.view = { ...this.view, error: 'receiptStorageUnavailable' }
     }
-    try { this.view = { ...this.view, controlPending: controlStorage?.read() ?? null } }
-    catch { this.view = { ...this.view, error: 'receiptStorageUnavailable' } }
   }
   subscribe = (f: () => void) => {
     this.listeners.add(f)
@@ -195,11 +167,9 @@ export class OperationClient {
       ...this.view,
       ...value,
       requestReady: (value.connected ?? this.view.connected) && this.requestCount() < OPERATION_RATE_LIMIT,
-      controlSending: this.pending?.request.type === 'stationControl',
       reading: this.automaticReadInFlight(),
       stopSending: !!this.pendingStop,
       stopAvailable: this.operationVersion >= 4 && !!this.stopTarget && (value.connected ?? this.view.connected),
-      ...((value.error || value.connected === false || value.state) ? { controlRefreshing: false } : {}),
       ...(value.unresolved === null ? { pendingDraft: null } : {}),
       ...(value.state ? { retainedState: value.state } : {}),
       leaseHeld: this.now() < this.leaseUntil
@@ -219,7 +189,6 @@ export class OperationClient {
     this.resultIntent = null
     this.stopTarget = null
     this.stopLeaseId = null
-    this.armEpoch = null
     this.stopAcceptedAt = -Infinity
     this.heartbeatLeaseId = null
     const stop = this.pendingStop
@@ -242,7 +211,6 @@ export class OperationClient {
   private tick() {
     const now = this.now(),
       fresh = !!this.view.state && now < this.stateUntil
-    if (this.view.controlRefreshing && now >= this.controlRefreshUntil) this.update({ controlRefreshing: false })
     if (fresh !== this.view.fresh) this.update({ fresh })
     if ((now < this.leaseUntil) !== this.view.leaseHeld) this.update({})
     if ((this.view.connected && this.requestCount() < OPERATION_RATE_LIMIT) !== this.view.requestReady) this.update({})
@@ -250,7 +218,6 @@ export class OperationClient {
       !this.view.connected ||
       this.pending ||
       this.loggingIntent ||
-      (this.controlIntent && !this.view.controlPending) ||
       this.resultIntent ||
       this.view.error === 'stationUnsupported'
     )
@@ -264,15 +231,9 @@ export class OperationClient {
     // Automatic reads leave one ordinary slot for an explicit operator action.
     // After a mutation, controls remain unavailable until a fresh state can be
     // read within this budget. Stop never enters the ordinary budget.
-    const readLimit = this.view.controlPending || this.view.unresolved ? OPERATION_RATE_LIMIT : OPERATION_RATE_LIMIT - 1
+    const readLimit = this.view.unresolved ? OPERATION_RATE_LIMIT : OPERATION_RATE_LIMIT - 1
     if (this.requestCount() >= readLimit) return
-    if (now - this.polledAt < 1000) {
-      if (this.view.controlPending && this.view.controlResult?.outcome !== 'unknown' && now - this.controlPolledAt >= 1000) {
-        this.controlPolledAt = now
-        void this.refreshControl().catch(() => {})
-      }
-      return
-    }
+    if (now - this.polledAt < 1000) return
     this.polledAt = now
     const request: OperationRequest =
       this.heartbeatLeaseId
@@ -310,7 +271,7 @@ export class OperationClient {
           this.heartbeatLeaseId = null
           this.leaseUntil = 0
           this.finishBudget(request.requestId)
-          const mutation = request.type === 'logManual' || request.type === 'stationControl' || request.type === 'logChange'
+          const mutation = request.type === 'logManual' || request.type === 'logChange'
           this.update({
             busy: false,
             submitting: false,
@@ -370,7 +331,6 @@ export class OperationClient {
     if (!this.view.connected) return Promise.reject(new Error('stationUnavailable'))
     if (this.pendingStop) return Promise.reject(new Error('remoteBusy'))
     if (!this.stopTarget) return Promise.reject(new Error('localPermissionRequired'))
-    this.transmitStand++
     const request: OperationRequest = { type: 'stopTransmit', requestId: crypto.randomUUID(), ...this.stopTarget }
     operationRequest(request)
     return new Promise((resolve, reject) => {
@@ -413,9 +373,7 @@ export class OperationClient {
         this.update({ stopError: r.error, stopAccepted: false })
         stop.reject(new Error(r.error))
       } else {
-        // ACCEPTANCE, never a claim that RF stopped — see `stopAccepted`. It retires arming on the
-        // token it used (`armEpoch`), never the Stop's own: see `stopTransmit`.
-        this.armEpoch = null
+        // ACCEPTANCE, never a claim that RF stopped — see `stopAccepted`.
         this.stopAcceptedAt = this.now()
         this.polledAt = -Infinity
         this.update({ stopError: null, stopAccepted: true })
@@ -437,7 +395,7 @@ export class OperationClient {
       if ('stop' in r.value) throw Error('invalidOperation')
       const asked = p.request.type === 'activationExport' || p.request.type === 'programExport'
       if (exported !== asked || (exported && exportOperation !== p.request.type)) throw Error('invalidOperation')
-      const expectsOutcome = p.request.type === 'logManual' || p.request.type === 'stationControl' || p.request.type === 'logChange' || p.request.type === 'result'
+      const expectsOutcome = p.request.type === 'logManual' || p.request.type === 'logChange' || p.request.type === 'result'
       if (expectsOutcome !== 'outcome' in r.value) throw new Error('invalidOperation')
       if (
         'outcome' in r.value &&
@@ -446,9 +404,8 @@ export class OperationClient {
       )
         throw new Error('invalidOperation')
       if ('outcome' in r.value) {
-        const control = p.request.type === 'stationControl' ||
-          (p.request.type === 'result' && p.request.operationId === this.view.controlPending?.operationId)
-        if (control !== ('operation' in r.value && r.value.operation === 'stationControl')) throw Error('invalidOperation')
+        // This page sends no station control, so no reply may carry a control's outcome.
+        if ('operation' in r.value && r.value.operation === 'stationControl') throw Error('invalidOperation')
         const change = 'operation' in r.value && r.value.operation === 'logChange'
         if ((p.request.type === 'logChange' && !change) || (p.request.type === 'logManual' && 'operation' in r.value)) throw Error('invalidOperation')
       }
@@ -482,9 +439,6 @@ export class OperationClient {
       this.leaseUntil = 0
       const write = p.request.type === 'logManual' || p.request.type === 'logChange'
       const unknown = write && r.error === 'operationUnknown'
-      if (p.request.type === 'stationControl' && r.error !== 'operationUnknown') {
-        try { this.controlStorage?.write(null); this.update({ controlPending: null }) } catch {}
-      }
       this.update({
         busy: false,
         submitting: false,
@@ -515,59 +469,11 @@ export class OperationClient {
       })
       this.polledAt = -Infinity
     } else if ('operation' in r.value) {
-      // An export reply returned above, so what reaches here is a station control outcome.
-      const result = r.value as ControlOutcome
-      if (p.request.type === 'logManual') throw Error('invalidOperation')
-      // Operation v5: the station's event can outrun this reply - the outcome it carried has
-      // settled this very control and the state it carried is already installed and fresh. This
-      // reply is then the OLDER word on both: it neither spends that state nor demotes the
-      // outcome to the `pending` it was built with.
-      const settledByEvent = p.request.type === 'stationControl' && this.view.controlResult?.operationId === result.operationId &&
-        this.view.controlResult.outcome !== 'pending'
-      if (settledByEvent) {
-        // This reply holds the storage lock the event could not take (`clearReceipt` failed
-        // against it): a terminal outcome's receipt is cleared here, inside it.
-        const outcome = this.view.controlResult!
-        let cleared = false
-        if ((outcome.outcome === 'applied' || outcome.outcome === 'rejected') && this.view.controlPending?.operationId === outcome.operationId) {
-          try { this.controlStorage?.write(null); cleared = true } catch {}
-        }
-        this.update({ busy: false, submitting: false, error: null, ...(cleared ? { controlPending: null } : {}) })
-        p.resolve(outcome)
-        return
-      }
-      const terminal = result.outcome === 'applied' || result.outcome === 'rejected'
-      let cleared = false
-      if (terminal) {
-        try { this.controlStorage?.write(null); cleared = true } catch {}
-      }
-      const refreshing = result.outcome === 'applied' && (p.request.type === 'stationControl' || !this.view.state)
-      if (refreshing) this.controlRefreshUntil = this.now() + 1200
-      // A command CONSUMES its window: the station clears every command window when it answers a
-      // control, so the held state's window, revision and sequence are spent. The state itself is
-      // kept — it still says this browser is controlling, so every held control stays lit while the
-      // re-read confirms (operator ruling 2026-09-16; nulling it greyed them all out for a second
-      // after every click). What refuses a second command from the spent window is `stateUntil`:
-      // zeroed here, so `fresh` is false and the 250 ms tick cannot revive it, and every command
-      // path checks that before anything leaves. A command made now is a lapse (`lapsed()`): it
-      // waits for the re-read's state and is sent once on that new window, or refused as not sent.
-      if (p.request.type === 'stationControl') this.stateUntil = 0
-      this.update({ busy: false, submitting: false, controlResult: result, controlError: null,
-        controlRefreshing: refreshing,
-        ...(cleared ? { controlPending: null } : {}),
-        ...(p.request.type === 'stationControl' ? { fresh: false } : {}), error: null })
-      if (p.request.type === 'stationControl') {
-        // Operation v5: a station that pushes (`pushed`) sends the outcome AND the fresh state the
-        // moment the control settles (`receiveEvent`), so neither the immediate state re-read nor
-        // the result poll is started here. Both stay as the fallback, one second on:
-        // `controlPolledAt` makes the tick ask for the result then, and the heartbeat re-reads the
-        // state on its own cadence, so a lost event costs the old cadence and never the outcome.
-        // Any other station - older, or this page below v5 - gets the immediate re-read as before.
-        if (this.pushed()) this.controlPolledAt = this.now()
-        else this.polledAt = -Infinity
-      }
+      // An export reply returned above and a control outcome was refused there: nothing else carries
+      // an operation.
+      throw Error('invalidOperation')
     } else {
-      if (p.request.type === 'stationControl' || p.request.type === 'logChange') throw Error('invalidOperation')
+      if (p.request.type === 'logChange') throw Error('invalidOperation')
       this.finished = r.value
       const retain =
         r.value.outcome === 'unknown' ||
@@ -587,21 +493,10 @@ export class OperationClient {
     }
     p.resolve(r.value)
   }
-  /** Will THIS station push a control's outcome? Negotiated, never assumed from this page's own
-   * version: the station names `outcomePush` in the state it sends only when the relay agreed v5
-   * for the request, so a v5 page on an older station keeps the immediate re-read - and during a
-   * rollout the page and the desktop are updated at different times, so that pair is the common
-   * one. Read from the state held at the moment of the reply, which a control does not clear. */
-  private pushed(): boolean {
-    return this.operationVersion >= 5 && !!this.view.state?.controls?.capabilities.includes('outcomePush')
-  }
-  /** A state from the station: a reply's, or (operation v5) the one an event carries. One rule
-   * keeps the two lanes from ever disagreeing on this page - the station's revision only grows,
-   * so a state arriving with a LOWER revision than the one held for the same boot was computed
-   * earlier, whichever lane brought it, and is discarded; equal or higher is installed. Nothing
-   * here is the browser's own word: both are the station's, and this only keeps the newer. Returns
-   * whether it installed. `started` is when the state was asked for (a reply) or arrived (an event):
-   * freshness is measured from there. */
+  /** A state from a station reply. The station's revision only grows, so a state arriving with a
+   * LOWER revision than the one held for the same boot was computed earlier and is discarded;
+   * equal or higher is installed. Returns whether it installed. `started` is when the state was
+   * asked for: freshness is measured from there. */
   private installState(value: OperationState, started: number): boolean {
     const held = this.view.state
     if (held && held.stationBootId === value.stationBootId && value.revision < held.revision) return false
@@ -616,7 +511,6 @@ export class OperationClient {
     if (value.phase === 'controlling' && value.leaseId) this.stopLeaseId = value.leaseId
     this.stopTarget = this.operationVersion >= 4 && this.stopLeaseId && value.transmitEpoch
       ? { stationBootId: value.stationBootId, leaseId: this.stopLeaseId, transmitEpoch: value.transmitEpoch } : null
-    this.armEpoch = this.stopTarget?.transmitEpoch ?? null
     this.stateUntil = started + Math.min(1200, value.leaseRemainingMs ?? 1200)
     this.leaseUntil = value.phase === 'controlling' && value.leaseRemainingMs != null ? started + value.leaseRemainingMs : 0
     this.update({
@@ -628,45 +522,6 @@ export class OperationClient {
       error: null
     })
     return true
-  }
-  /** Operation v5. The station's unprompted word that a control settled: its outcome, applied
-   * exactly as a `result` reply for the pending control would be, and the state a `state` read
-   * would return now, installed as fresh from this moment. That is the whole lag: the browser no
-   * longer discovers either by asking. Never load-bearing - a lost event leaves the tick's own
-   * result poll and heartbeat to bring the same two things a second later. */
-  receiveEvent(raw: unknown, bytes = 0) {
-    if (bytes > OPERATION_RESPONSE_BYTES) throw Error('invalidOperation')
-    const e = operationEvent(raw)
-    // This page never asked at v5, so no station could have pushed for it: a protocol error.
-    if (this.operationVersion < 5) throw Error('invalidOperation')
-    if (!this.view.connected) return
-    if (this.view.controlPending?.operationId === e.operationId) {
-      const terminal = e.value.outcome === 'applied' || e.value.outcome === 'rejected'
-      // The outcome at once: the control's waiter reads it here. An UNKNOWN outcome keeps the
-      // receipt, for the operator to acknowledge after checking the station.
-      this.update({ controlResult: e.value, controlError: null })
-      // A terminal outcome clears the receipt, UNDER THE STORAGE LOCK. Cleared bare, as a reply's
-      // clear is, the write was refused (it is only allowed inside `exclusive`, which every
-      // polled clear holds by construction) and the refusal swallowed: the receipt outlived the
-      // event by a second, until the fallback poll cleared it — every held control dead for that
-      // second and the wheel refusing steps, so a v5 page accepted FEWER steps than a v4 one.
-      if (terminal) this.clearReceipt(e.operationId)
-    }
-    this.installState(e.state, this.now())
-  }
-  /** Clear the pending-control receipt for `operationId` under the storage lock, where a receipt
-   * write is allowed. The lock is `ifAvailable`: held — by a fallback poll or by the control's own
-   * reply still in flight — this fails at once, swallowed, and THAT holder clears the receipt when
-   * its reply lands (a poll through its terminal outcome, the control's reply through
-   * `settledByEvent`), so the receipt never outlives the event by more than that round trip and
-   * the reply's crossed-reply check always finds the receipt it expects. */
-  private clearReceipt(operationId: string) {
-    if (!this.controlStorage) { this.update({ controlPending: null }); return }
-    void this.controlStorage.exclusive(() => {
-      if (this.view.controlPending?.operationId !== operationId) return
-      this.controlStorage!.write(null)
-      this.update({ controlPending: null })
-    }).catch(() => {})
   }
   async acquire() {
     // Waits out an automatic read first, as `release()` does and for the same reason: `request()`
@@ -729,7 +584,7 @@ export class OperationClient {
    * the operator needs at once. Anything else keeps its own refusal. */
   private lapsed(): boolean {
     return !this.view.fresh && this.view.connected && this.view.state?.phase === 'controlling' &&
-      !this.view.controlPending && !this.view.unresolved
+      !this.view.unresolved
   }
   /** A gesture committed during a brief control lapse is sent only once control is current again.
    * Resolves at once while current. Otherwise waits, at most CONTROL_RESUME_MS, for a later state
@@ -750,27 +605,6 @@ export class OperationClient {
       const timer = setTimeout(finish, maxMs)
       const unsubscribe = this.subscribe(() => { if (current() || !held()) finish() })
     })
-  }
-  /** THE FT HOLD (operator approval 2026-09-17). An FT gesture made while the last command is still
-   * confirming waits that re-read out exactly as an ordinary command does, at most
-   * CONTROL_RESUME_MS, instead of being refused at once on a control that is still lit. What leaves
-   * the browser is unchanged: `executeControl` re-checks the epoch against the state that arrives
-   * (and against the stop token), so a station that moved on refuses it there.
-   *
-   * WHAT THIS ADDS is the cancel the wait needs. While a gesture waits, the operator can say "not
-   * now" — a Stop, or TX off — and a transmission armed after that would be one they had just
-   * stopped. Every stand-down bumps a counter; a gesture that finishes waiting on a different
-   * count is refused as `staleContext` with nothing sent. It is deliberately not the epoch: the
-   * epoch moves when the STATION says so, which is later and, for TX off, not at all. */
-  async holdTransmit(): Promise<void> {
-    const stand = this.transmitStand
-    await this.awaitCurrent()
-    if (stand !== this.transmitStand) throw new OperationFailure('staleContext', false)
-  }
-  /** The operator standing the transmitter down: TX off here, a Stop in `stopTransmit`. Counted when
-   * the gesture is MADE, not when it is sent, so it cancels anything already waiting behind it. */
-  private standDown(action: StationAction): void {
-    if (action.action === 'ft.txEnabled' && action.on === false) this.transmitStand++
   }
   private waitForHeartbeat(until: number): Promise<void> {
     if (!this.pending) return Promise.resolve()
@@ -819,7 +653,7 @@ export class OperationClient {
   async log(record: ManualRecord, onSubmitted?: (id: string) => void): Promise<OperationOutcome> {
     const attempt = { sent: false }
     try {
-      // The lapse rule of controlFrom: the entry as submitted, sent once control is current again.
+      // A lapse: the entry as submitted, sent once control is current again.
       const entry = structuredClone(record)
       if (this.lapsed()) await this.awaitCurrent()
       return await this.submitLog(entry, onSubmitted, attempt)
@@ -902,7 +736,6 @@ export class OperationClient {
     const s = this.view.state,
       until = this.stateUntil
     if (this.view.unresolved) throw new Error('operationUnknown')
-    if (this.view.controlPending || this.controlIntent) throw new Error('operationUnknown')
     if (this.loggingIntent) throw new Error('remoteBusy')
     if (
       !s ||
@@ -964,101 +797,5 @@ export class OperationClient {
   }
   getLastOutcome() {
     return this.finished
-  }
-  /** A coalesced gesture keeps its original authority while its target is being
-   * formed. The returned sender cannot borrow a newer heartbeat or lease. */
-  prepareControl(displayed?: ControlContext): (action: StationAction) => Promise<ControlOutcome> {
-    if (!this.view.state || !this.view.fresh) throw new OperationFailure('notController', false)
-    const captured = { state: structuredClone(this.view.state), until: this.stateUntil }
-    const context = displayed && structuredClone(displayed)
-    return action => this.controlFrom(action, context, captured)
-  }
-  async control(action: StationAction, displayed?: ControlContext): Promise<ControlOutcome> {
-    return this.controlFrom(action, displayed)
-  }
-  private async controlFrom(action: StationAction, displayed?: ControlContext, captured?: CapturedControl): Promise<ControlOutcome> {
-    const attempt = { sent: false }
-    this.update({ controlError: null })
-    try {
-      // A command made during a brief control lapse waits for current control and is sent once, or is
-      // refused as not sent (operator decision 2026-09-14); executeControl still requires fresh state.
-      // An FT gesture waits the same way (operator approval 2026-09-17 - see `holdTransmit`); it was
-      // refused at once before, which an operator read as "Not sent" on a control that was still lit.
-      // Never a captured gesture: it keeps the window it was prepared with, so its own caller waits
-      // (`holdTransmit` in control-transport) before the window is captured.
-      this.standDown(action)
-      if (!captured && this.lapsed()) await ('transmitEpoch' in action ? this.holdTransmit() : this.awaitCurrent())
-      return await this.executeControl(action, displayed, captured, attempt)
-    }
-    catch (error) {
-      const code = error instanceof Error ? error.message : 'stationUnavailable'
-      const busy = stationWasBusy(code, attempt.sent)
-      this.update({ controlError: { code, sent: attempt.sent, busy } })
-      throw new OperationFailure(code, attempt.sent, busy)
-    }
-  }
-  private async executeControl(action: StationAction, displayed: ControlContext | undefined, captured: CapturedControl | undefined, attempt: { sent: boolean }): Promise<ControlOutcome> {
-    const s = captured?.state ?? this.view.state, until = captured?.until ?? this.stateUntil, intent = structuredClone(stationAction(action))
-    if (this.operationVersion < controlVersion(intent)) throw Error('stationUnsupported')
-    if (!this.controlStorage) throw Error('receiptStorageUnavailable')
-    if (this.view.unresolved || this.view.controlPending || this.controlIntent || this.loggingIntent) throw Error('operationUnknown')
-    const capability = actionCapability(intent)
-    if ('transmitEpoch' in intent && intent.transmitEpoch !== s?.transmitEpoch) throw Error('staleContext')
-    if (!s || !this.view.fresh || s.phase !== 'controlling' || !s.leaseId || !s.commandWindowId || s.nextSequence === null || !s.controls?.capabilities.includes(capability)) throw Error('notController')
-    const context = structuredClone(controlContext(displayed ?? s.controls.context))
-    const sameConnection = (current: ControlContext | undefined) => !!current &&
-      context.radioId === current.radioId && context.radioConnection === current.radioConnection && context.ampConnection === current.ampConnection
-    if (!sameConnection(s.controls.context)) throw Error('staleContext')
-    const request: OperationRequest = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: s.stationBootId,
-      leaseId: s.leaseId, expectedRevision: s.revision, commandWindowId: s.commandWindowId, clientSequence: s.nextSequence,
-      context, action: intent }
-    this.controlIntent = true
-    try {
-      const first = await this.controlStorage.exclusive(async () => {
-        if (this.pending) await this.waitForHeartbeat(until)
-        if (this.now() >= until) throw Error('windowExpired')
-        if (this.view.state?.leaseId !== s.leaseId || this.view.state.revision !== s.revision) throw Error('staleContext')
-        if (!sameConnection(this.view.state.controls?.context)) throw Error('staleContext')
-        if ('transmitEpoch' in intent && (intent.transmitEpoch !== this.view.state.transmitEpoch || intent.transmitEpoch !== this.armEpoch)) throw Error('staleContext')
-        this.requireRequestCapacity()
-        const saved = { operationId: request.requestId, action: intent }
-        this.controlStorage!.write(saved)
-        this.update({ controlPending: saved, controlResult: null })
-        const result = await this.request(request, () => { attempt.sent = true })
-        if (!('operation' in result) || result.operation !== 'stationControl') throw Error('invalidOperation')
-        return result
-      })
-      if (first.outcome !== 'pending') return first
-      return await new Promise<ControlOutcome>((resolve, reject) => {
-        const finish = (result?: ControlOutcome) => { clearTimeout(timer); unsubscribe(); result ? resolve(result) : reject(Error('operationUnknown')) }
-        const timer = setTimeout(() => finish(), 7500)
-        const check = () => {
-          const r = this.view.controlResult
-          if (r?.operationId === request.requestId && r.outcome !== 'pending') finish(r)
-          else if (!this.view.connected) finish()
-        }
-        const unsubscribe = this.subscribe(check)
-        check()
-      })
-    } finally { this.controlIntent = false }
-  }
-  async refreshControl(): Promise<ControlOutcome> {
-    const entry = this.view.controlPending
-    if (!entry || !this.controlStorage) throw Error('resultExpired')
-    return this.withResultIntent(current => this.controlStorage!.exclusive(async () => {
-      current()
-      if (this.view.controlPending?.operationId !== entry.operationId) throw Error('resultExpired')
-      const result = await this.request({ type: 'result', requestId: crypto.randomUUID(), operationId: entry.operationId })
-      if (!('operation' in result) || result.operation !== 'stationControl') throw Error('invalidOperation')
-      return result
-    }))
-  }
-  async acknowledgeControl() {
-    if (this.view.busy || !this.view.controlPending || !this.controlStorage) return
-    await this.controlStorage.exclusive(() => {
-      if (this.view.busy) throw Error('remoteBusy')
-      this.controlStorage!.write(null)
-      this.update({ controlPending: null, controlResult: null, controlError: null, error: null })
-    })
   }
 }

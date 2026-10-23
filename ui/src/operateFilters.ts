@@ -19,6 +19,7 @@
 
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { DECODE_FILTERS, type DecodeFilter } from './decodeHistory'
+import { isWorkedWindow, type WorkedWindow } from './components/WorkedWindowSelect'
 
 /** The Call Roster's visibility checkboxes and its distance cap. */
 export interface RosterFilters {
@@ -32,6 +33,10 @@ export interface RosterFilters {
    *  the picker shows it in the operator's own units. ABSENT = no limit, the default, so a value
    *  stored before the cap existed reads exactly as it did. */
   maxDistanceKm?: number
+  /** #324 — how far back Hide worked reaches, the Spots panel's windows. ABSENT = any time, the
+   *  behaviour Hide worked always had here, so a value stored before the window existed reads
+   *  exactly as it did. */
+  workedWindow?: WorkedWindow
 }
 
 /** Both off — the behaviour every build so far has started with, so an operator who never
@@ -120,6 +125,8 @@ export function loadRosterFilters(): RosterFilters {
       // Only a real distance is a cap. Anything else (a zero, a string, a number too big to be
       // finite) is no limit — the key left out, not set to a value the picker cannot show.
       ...(typeof km === 'number' && Number.isFinite(km) && km > 0 ? { maxDistanceKm: km } : {}),
+      // An unknown window is any time: the key left out, never a window the picker cannot show.
+      ...(isWorkedWindow(o.workedWindow) ? { workedWindow: o.workedWindow } : {}),
     }
   } catch {
     return { ...DEFAULT_ROSTER_FILTERS }

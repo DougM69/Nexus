@@ -60,6 +60,14 @@ pub struct Station {
     /// second, stronger B4 scope (its `Highlight::CallBand` beside `Highlight::Call`).
     #[serde(default)]
     pub worked_band: bool,
+    /// Seconds since the most recent contact with this station, on any band or mode, matched
+    /// on the base call — the spot row's field of the same name, for the roster's timed Hide
+    /// worked. `None` when the log holds no contact with it.
+    #[serde(default)]
+    pub worked_ago_secs: Option<i64>,
+    /// That contact fell on today's UTC day, by the station's clock.
+    #[serde(default)]
+    pub worked_today_utc: bool,
     /// DXCC entity name (country), resolved from the callsign — DX chasers scan
     /// the roster by country. `None` unless a DXCC resolver is wired.
     #[serde(default)]

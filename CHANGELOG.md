@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nexus fetched, and nothing when that reading is more than 3 hours old.
 - **Each contact logs the worked station's continent and the distance to it** (ADIF CONT, and
   DISTANCE in km from your grid to theirs when both are known).
+- **Disable a second radio without deleting it.** With two or more radios, each card in Settings ▸ Radio has a
+  **Disable** button. A disabled radio keeps its whole setup, but Nexus stops watching it and lets go of its CAT
+  port, so another program on the same computer can use that rig. Auto band-routing skips it. **Enable** brings it
+  back. The radio you are operating can't be disabled: make another radio active first.
+- **The Call Roster's Hide worked can reach back a set time.** Beside Hide worked on the FT8/FT4 Call Roster is
+  the same window picker the Spots panel has: Any time (the default, and what Hide worked did before), Until 0000Z,
+  1 h, 4 h, 24 h or 7 days. A station you last worked before the window shows again, which suits special-event
+  calls such as 13 Colonies and Route 66 that are on the air all week. Nexus remembers the choice.
+- **Callsigns on the FT8/FT4 waterfall.** Each station decoded in the last period is labelled along the top of the
+  waterfall, over its own audio frequency, and the station in the DX Call box is shown in red. When the labels crowd,
+  they stack in up to three rows, a station calling you and then the strongest first, and a count says how many had
+  no room. Clicking a label moves your RX offset there, as clicking the waterfall does. The **Calls** button in the
+  waterfall's header turns the labels off.
 
 ### Changed
 - **The log-entry boxes no longer show made-up example values.** An empty box in the contest log line and in the

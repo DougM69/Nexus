@@ -231,7 +231,9 @@
       "state": null,
       "tier": "FT4",
       "worked": false,
-      "workedBand": false
+      "workedAgoSecs": null,
+      "workedBand": false,
+      "workedTodayUtc": false
     }
   ],
   "uploadNote": null,

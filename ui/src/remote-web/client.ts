@@ -1,5 +1,4 @@
 import { pendingLogStorage } from './operation-storage'
-import { pendingControlStorage } from './control-storage'
 import { OperationClient } from './operation-client'
 import { OPERATION_EXPORT_RESPONSE_BYTES, OPERATION_REQUEST_BYTES } from './operation-protocol'
 import { advertisedOperationVersion, parseOperationVersion } from './operation-version'
@@ -272,7 +271,7 @@ export class HostedConnection {
       const lane = this.device && !(value.request?.type === 'stopTransmit' || value.request?.type === 'state') ? OPERATION_LANE : null
       if(!this.applicationMode||this.socket?.readyState!==WebSocket.OPEN||this.socket.bufferedAmount+new TextEncoder().encode(message).length+(lane?LANE_PROOF_BYTES:0)>OPERATION_REQUEST_BYTES)throw new RemoteError(503)
       this.lane(this.socket, message, value, lane)
-    },applicationMode&&client.operationVersion>=1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId),parseOperationVersion(client.operationVersion)??1,pendingControlStorage(()=>localStorage,stationId))
+    },applicationMode&&client.operationVersion>=1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId),parseOperationVersion(client.operationVersion)??1)
     this.audio = new AudioLink(message => {
       const text = JSON.stringify(message)
       // Its own budget, deliberately small: a listen request is ~130 bytes and this is
@@ -522,8 +521,9 @@ export class HostedConnection {
           // the stream, never the session - and the lease the session holds.
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('stream')) { this.stream.receive(message); return }
           if(this.applicationMode&&message.type==='operationResponse'){reason='invalidOperation';const bytes=new TextEncoder().encode(event.data).length;if(bytes>OPERATION_EXPORT_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message,bytes);return}
-          // Operation v5: a settled control, pushed by the station. Same lane, same strictness.
-          if (this.applicationMode && message.type === 'operationEvent') { reason = 'invalidOperation'; this.operations.receiveEvent(message, new TextEncoder().encode(event.data).length); return }
+          // Operation v5's pushed outcome of a settled control. This page sends no control, so the
+          // station has nothing to push to it: a protocol error, as it always was below v5.
+          if (this.applicationMode && message.type === 'operationEvent') { reason = 'invalidOperation'; throw new Error('unexpectedOperationEvent') }
           // This page never asks for the application lane, so anything from it is unrequested.
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('application')) {
             reason = 'invalidApplication'; throw new Error('unexpectedApplicationResult')

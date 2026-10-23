@@ -89,6 +89,7 @@ import {
   addRadio,
   removeRadio,
   renameRadio,
+  setRadioEnabled,
   setActiveRadio,
   setRadioBands,
   setRoutingRules,
@@ -2633,6 +2634,11 @@ export function SettingsPanel({
   const handleRenameRadio = (id: number, name: string) => {
     void withErrorToast(() => renameRadio(id, name), t('settings.radios.rename.failed')).then((s) => s && reloadRadios())
   }
+  const handleRadioEnabled = (id: number, enabled: boolean) => {
+    void withErrorToast(() => setRadioEnabled(id, enabled), t('settings.radios.enabled.failed')).then(
+      (s) => s && reloadRadios(),
+    )
+  }
   const handleToggleRadioBand = (id: number, band: string) => {
     const radio = form?.radios?.find((r) => r.id === id)
     if (!radio) return
@@ -5085,6 +5091,14 @@ export function SettingsPanel({
                           {t('settings.radios.active.badge')}
                         </span>
                       )}
+                      {!r.enabled && (
+                        <span
+                          className="radio-disabled-badge"
+                          title={t('settings.radios.disabled.title')}
+                        >
+                          {t('settings.radios.disabled.badge')}
+                        </span>
+                      )}
                       {isEditing && !isActive && (
                         <span
                           className="radio-editing-badge"
@@ -5111,6 +5125,26 @@ export function SettingsPanel({
                           title={t('settings.radios.makeActive.title')}
                         >
                           {t('settings.radios.makeActive.action')}
+                        </button>
+                      )}
+                      {multi && (
+                        // Disabled on the operating radio's card for Remove's reason below.
+                        <button
+                          type="button"
+                          className="settings-refresh"
+                          onClick={() => handleRadioEnabled(r.id, !r.enabled)}
+                          disabled={remote || (isActive && r.enabled)}
+                          title={
+                            !r.enabled
+                              ? t('settings.radios.enable.title')
+                              : isActive
+                                ? t('settings.radios.disable.title.blocked')
+                                : t('settings.radios.disable.title')
+                          }
+                        >
+                          {r.enabled
+                            ? t('settings.radios.disable.action')
+                            : t('settings.radios.enable.action')}
                         </button>
                       )}
                       {multi && (

@@ -26581,6 +26581,79 @@ mod tests {
         );
     }
 
+    /// ★ A DISABLED RADIO'S PORT IS FREE. The monitor holds every other enabled radio's CAT port
+    /// through its daemon, which is what kept a second rig out of another program on the same
+    /// computer. Disabling the radio must close that daemon on the monitor's next pass, and no
+    /// pass after it may open the radio again until it is enabled. The stand-in daemon is a live
+    /// process, as the real one is: the port is free when that process is gone.
+    #[cfg(unix)]
+    #[test]
+    fn disabling_a_radio_closes_its_monitor_daemon_and_never_reopens_it() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let r1 = s.add_radio_profile();
+        s.radios.iter_mut().find(|p| p.id == r1).unwrap().rig_model = 1035;
+        let engine = Arc::new(Mutex::new(Engine::with_settings(s)));
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
+        let pids = std::cell::RefCell::new(Vec::new());
+        let open = |_: &Transport| {
+            let child = std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .unwrap();
+            pids.borrow_mut().push(child.id());
+            (
+                Rig::vox(),
+                Some(CatDaemon::Spawned(
+                    crate::rigctld_proc::RigctldProc::from_child_for_test(child),
+                )),
+                Some(true),
+            )
+        };
+        let alive = |pid: u32| {
+            std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        };
+        let pass = || {
+            let (active, want) = monitor_want(engine.lock().unwrap().settings());
+            reconcile_pool_with_open(&pool, &want, active, &engine, 0.0, &open);
+        };
+
+        pass();
+        let daemon = pids.borrow()[0];
+        assert!(
+            alive(daemon),
+            "premise: the monitor holds radio {r1} through a live daemon"
+        );
+
+        assert!(engine.lock().unwrap().set_radio_enabled(r1, false));
+        pass();
+        assert!(
+            pool.lock().unwrap().is_empty(),
+            "the disabled radio left the pool"
+        );
+        assert!(!alive(daemon), "its daemon is gone, so its port is free");
+        pass();
+        assert_eq!(
+            pids.borrow().len(),
+            1,
+            "a disabled radio is never opened again"
+        );
+
+        assert!(engine.lock().unwrap().set_radio_enabled(r1, true));
+        pass();
+        assert_eq!(
+            pids.borrow().len(),
+            2,
+            "enabled again, it is monitored again"
+        );
+        pool.lock().unwrap().clear();
+    }
+
     #[test]
     fn contended_switch_never_commands_the_old_rig_with_the_new_radios_settings() {
         // While a switch is pending (deferred), the OLD rig must receive NO retune — the

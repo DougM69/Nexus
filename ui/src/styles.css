@@ -15077,6 +15077,17 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: 999px;
   padding: 3px var(--space-2);
 }
+.radio-disabled-badge {
+  flex: 0 0 auto;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid color-mix(in srgb, var(--text-faint) 45%, transparent);
+  border-radius: 999px;
+  padding: 3px var(--space-2);
+}
 .radio-card-meta {
   margin-top: 6px;
   font-size: calc(11px * var(--text-scale));
@@ -16601,6 +16612,24 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   line-height: 1.4;
   white-space: nowrap;
   cursor: pointer;
+}
+/* The station being worked, red as WSJT-X marks it. */
+.wf-tag.selected {
+  border-color: var(--tx);
+  color: var(--tx);
+}
+/* How many tags found no row (`tagLanes`): a count at the right of the top row. */
+.wf-tag-more {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  pointer-events: auto;
+  padding: 0 var(--space-1);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  color: var(--text-faint);
+  font-size: calc(10px * var(--text-scale));
+  line-height: 1.4;
 }
 .wf-tag.dim {
   color: var(--text-faint);
@@ -21323,8 +21352,10 @@ button.cq-skiptx1.on {
 }
 /* #386 — the distance cap, a compact picker among the filters, in Band Activity's sort picker's
    look (`.od-sort select`). The `select` base rule owns the arrow (background-image and
-   padding-right, both !important); this sets the face, the ink and the box. */
-.or-distance {
+   padding-right, both !important); this sets the face, the ink and the box. #324's worked window
+   beside Hide worked wears the same face. */
+.or-distance,
+.or-worked-window {
   background: var(--bg-elev);
   color: var(--text);
   border: 1px solid var(--border);

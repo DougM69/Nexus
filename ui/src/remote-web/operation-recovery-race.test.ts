@@ -4,7 +4,7 @@ import type { OperationState } from './operation-protocol'
 
 afterEach(() => vi.useRealTimers())
 
-function fixture(control = false) {
+function fixture() {
   vi.useFakeTimers()
   let now = 1000, unlock!: () => void
   const gate = new Promise<void>(resolve => { unlock = resolve })
@@ -12,21 +12,19 @@ function fixture(control = false) {
   const operationId = crypto.randomUUID(), sent: { request: { type: string; requestId: string; operationId?: string } }[] = []
   let saved: string | null = operationId
   const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now,
-    control ? undefined : { read: () => saved, write: value => { saved = value }, exclusive }, 3,
-    control ? { read: () => ({ operationId, action: { action: 'amplifier.operate', expectedOperate: false, operate: true } }), write: () => {}, exclusive } : undefined)
+    { read: () => saved, write: value => { saved = value }, exclusive }, 3)
   const state: OperationState = { stationBootId: crypto.randomUUID(), allowed: true, phase: 'available', leaseId: null,
     revision: 1, commandWindowId: null, nextSequence: null, leaseRemainingMs: null, actions: ['log.manual'], txArmed: false }
   const reply = (value: unknown) => client.receive({ type: 'operationResponse', requestId: sent[sent.length - 1]!.request.requestId, value })
   client.open(); reply(state)
-  const resolve = () => control ? client.refreshControl() : client.resolve()
+  const resolve = () => client.resolve()
   return { client, sent, operationId, unlock, reply, resolve, state,
     advance: async () => { now += 1000; await vi.advanceTimersByTimeAsync(1000) },
-    outcome: control ? { operation: 'stationControl', operationId, outcome: 'applied', evidence: 'amplifierReadback' }
-      : { operationId, outcome: 'applied', evidence: 'fileSynced', uploads: 'stationPipeline' } }
+    outcome: { operationId, outcome: 'applied', evidence: 'fileSynced', uploads: 'stationPipeline' } }
 }
 
-it.each([false, true])('keeps a background poll from overtaking the explicit result check while its browser lock opens (control=%s)', async control => {
-  const h = fixture(control), checked = h.resolve()
+it('keeps a background poll from overtaking the explicit result check while its browser lock opens', async () => {
+  const h = fixture(), checked = h.resolve()
   void checked.catch(() => {})
   try {
     await h.advance()
@@ -42,8 +40,8 @@ it.each([false, true])('keeps a background poll from overtaking the explicit res
   } finally { h.client.disconnected(); h.unlock(); await checked.catch(() => {}) }
 })
 
-it.each([false, true])('does not send a delayed result gesture through a reopened connection (control=%s)', async control => {
-  const h = fixture(control), checked = h.resolve()
+it('does not send a delayed result gesture through a reopened connection', async () => {
+  const h = fixture(), checked = h.resolve()
   void checked.catch(() => {})
   try {
     h.client.disconnected(); await h.advance(); h.client.open(); h.reply(h.state)

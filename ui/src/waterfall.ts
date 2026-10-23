@@ -1412,3 +1412,40 @@ export function tuneTarget(
   if (shiftKey) return 'tx'
   return 'rx'
 }
+
+/** A label to stack on the picture: its centre (px from the left), its width (px) and its rank
+ *  (lower is kept first). */
+export interface LaneTagIn {
+  x: number
+  w: number
+  rank: number
+}
+
+/**
+ * Callsign tags stacked in rows along the top of the picture, each centred over its own
+ * frequency. FT8 puts dozens of signals in one slot, so labels side by side would pile up; taken
+ * in rank order, each goes in the first row where it clears every label already there by `gapPx`,
+ * and one that fits in none of `lanes` rows is left out and counted. A label never moves off its
+ * frequency, so its row is the only thing the crowding changes. `null` = not drawn.
+ */
+export function laneTags(
+  tags: readonly LaneTagIn[],
+  widthPx: number,
+  lanes: number,
+  gapPx: number,
+): { lane: (number | null)[]; hidden: number } {
+  const rows: [number, number][][] = Array.from({ length: Math.max(0, lanes) }, () => [])
+  const lane: (number | null)[] = tags.map(() => null)
+  const order = tags.map((_, i) => i).sort((a, b) => tags[a].rank - tags[b].rank || tags[a].x - tags[b].x)
+  for (const i of order) {
+    const { x, w } = tags[i]
+    // Kept inside the picture, as the label is drawn.
+    const l = Math.min(Math.max(0, x - w / 2), Math.max(0, widthPx - w))
+    const r = l + w
+    const k = rows.findIndex((row) => row.every(([a, b]) => r + gapPx <= a || l >= b + gapPx))
+    if (k < 0) continue
+    rows[k].push([l, r])
+    lane[i] = k
+  }
+  return { lane, hidden: lane.filter((k) => k == null).length }
+}
