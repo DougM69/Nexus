@@ -13,7 +13,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent, waitFor, within } from '@testing-library/react'
 import { JttyCockpit } from './JttyCockpit'
-import { StationControlContext } from '../stationAccess'
 import type { AppSnapshot, JttyLine, JttyState } from '../types'
 import * as api from '../api'
 
@@ -83,9 +82,7 @@ async function mount() {
   vi.mocked(api.getJttyState).mockResolvedValue(STATE)
   vi.mocked(api.jttyAutoArm).mockResolvedValue(STATE)
   render(
-    <StationControlContext.Provider value={true}>
-      <JttyCockpit snap={snap} active onSetTxEnabled={() => {}} />
-    </StationControlContext.Provider>,
+    <JttyCockpit snap={snap} active onSetTxEnabled={() => {}} />,
   )
   await act(async () => {
     await Promise.resolve()

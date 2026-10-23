@@ -43,7 +43,6 @@ import { pushToast } from '../toast'
 import { pollSingleFlight } from '../singleFlight'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
-import { useStationControl } from '../stationAccess'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { jttyAllPane, jttyPaneText, jttyRxPane, jttySegments, type JttyLineOptions } from '../features/jttyLines'
 import { useRegionCols, type RegionCols } from '../useRegionCols'
@@ -118,12 +117,10 @@ function JttyPaneLines({
   lines,
   options,
   onCall,
-  control,
 }: {
   lines: JttyLine[]
   options: JttyLineOptions
   onCall: (call: string) => void
-  control: boolean
 }) {
   return (
     <>
@@ -135,7 +132,6 @@ function JttyPaneLines({
                 key={i}
                 type="button"
                 className="jtty-call"
-                disabled={!control}
                 onClick={() => onCall(seg.call!)}
                 title={t('jtty.call.title', { call: seg.call })}
               >
@@ -173,7 +169,6 @@ function JttyPaneLines({
  * it off signs off and lets what is queued go out.
  */
 export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
-  const control = useStationControl()
   const host = panels
     ? panelHost(panels, { menu: JTTY_PANEL_IDS, side: [], main: 'all', labels: jttyPanelLabels(), shipsHidden: JTTY_PANELS.defaultRemoved })
     : null
@@ -187,7 +182,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // decoding while it is hidden, and the first tick on return catches the display up.
   const [jtty, setJtty] = useState<JttyState | null>(null)
   useEffect(() => {
-    if (!active || !control) return
+    if (!active) return
     return pollSingleFlight('jtty state', 500, (owns) =>
       getJttyState()
         .then((s) => {
@@ -195,7 +190,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         })
         .catch(() => {}),
     )
-  }, [active, control])
+  }, [active])
 
   // Arm the decoder on ENTERING the view (the PSK/APRS/SSTV doctrine): the rising edge of
   // `active`, not mount. RX ONLY, and the engine is what guarantees it: `jtty_auto_arm` only
@@ -203,7 +198,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // the Settings opt-out. Arming a decoder keys nothing.
   const autoArmed = useRef(false)
   useEffect(() => {
-    if (!control || !active) {
+    if (!active) {
       autoArmed.current = false
       return
     }
@@ -212,11 +207,10 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     void jttyAutoArm()
       .then(setJtty)
       .catch(() => {})
-  }, [active, control])
+  }, [active])
 
   const armed = jtty?.armed === true
   const toggleArm = () => {
-    if (!control) return
     void jttyArm(!armed)
       .then(setJtty)
       .catch(() => pushToast(t('jtty.arm.failed'), 'error'))
@@ -227,7 +221,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const rxHz = jtty?.rxHz ?? 1500
   const ftolHz = jtty?.ftolHz ?? 20
   const setRx = (rx: number, ftol: number) => {
-    if (!control) return
     void jttySetRx(rx, ftol)
       .then(setJtty)
       .catch((e) => pushToast(String(e), 'error'))
@@ -260,11 +253,10 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // The JTTY channels for the band control (WSJT-X's JTTY frequency list).
   const [plan, setPlan] = useState<BandChannel[]>([])
   useEffect(() => {
-    if (control) void getLicensedBandPlan('jtty').then(setPlan).catch(() => {})
-  }, [control])
+    void getLicensedBandPlan('jtty').then(setPlan).catch(() => {})
+  }, [])
 
   const commitDial = (mhz: number) => {
-    if (!control) return
     onSetFrequency?.(mhz, bandLabelForMhz(mhz), snap?.radio.sideband || 'USB')
   }
 
@@ -277,7 +269,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // same halt, bound by App while this screen is on show (its ESC_HALT_VIEWS, as Phone's and
   // SSTV's, whose Stop TX is the plain halt too).
   const stop = () => {
-    if (!control) return
     void haltTx()
       .then((s) => s && onSnap?.(s))
       .catch(() => {})
@@ -286,7 +277,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // ---- THE TRANSMITTER (the dock). The ENGINE is the authority on every send — it checks every TX
   // gate and says why a send was refused (a toast). ----
   const tx = jtty?.tx
-  const canSend = control
   const live = tx?.live === true
   // On the air, queued, or in a live session: the Esc/Stop key's predicate (PSK's `sending ||
   // latched`), live from the instant a session starts, before its first frame.
@@ -321,7 +311,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     if (r.sent) setCommitted((c) => c + r.sent)
   }
   const sendWith = (f: () => Promise<JttySent | null>, fromBox: boolean) => {
-    if (!canSend) return
     chain.current = chain.current
       .then(f)
       .then((r) => applySent(r, fromBox))
@@ -365,7 +354,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     [],
   )
   const stopJtty = () => {
-    if (!control) return
     if (idle.current != null) window.clearTimeout(idle.current)
     void jttyStop()
       .then(setJtty)
@@ -374,7 +362,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // Tx (WSJT-X's Tx spin box) and the serial: drafts committed on Enter or leaving the box.
   const [txDraft, setTxDraft] = useState<string | null>(null)
   const commitTx = (hz: number) => {
-    if (!control || !Number.isFinite(hz)) return
+    if (!Number.isFinite(hz)) return
     void jttySetTx(Math.min(TX_MAX_HZ, Math.max(TX_MIN_HZ, Math.round(hz))))
       .then(setJtty)
       .catch((e) => pushToast(String(e), 'error'))
@@ -390,7 +378,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     if (serialDraft == null) return
     const v = Math.round(Number(serialDraft))
     setSerialDraft(null)
-    if (!control || !Number.isFinite(v) || v === serial) return
+    if (!Number.isFinite(v) || v === serial) return
     void jttySetSerial(Math.min(SERIAL_MAX, Math.max(SERIAL_MIN, v)))
       .then(setJtty)
       .catch((e) => pushToast(String(e), 'error'))
@@ -398,19 +386,19 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // F1–F8 on the keyboard, while this is the VISIBLE view (the cockpit stays mounted in its
   // keep-alive host): the same send a click makes, one press one message, never with Alt, Ctrl or
   // Cmd (the system's), and the webview's own F-key actions cancelled here.
-  const keys = useRef({ sendFkey, canSend })
-  keys.current = { sendFkey, canSend }
+  const keys = useRef({ sendFkey })
+  keys.current = { sendFkey }
   useEffect(() => {
-    if (!control || !active) return
+    if (!active) return
     const onKey = (e: KeyboardEvent) => {
       const n = FKEY_NAMES.indexOf(e.key)
       if (n < 0 || e.altKey || e.ctrlKey || e.metaKey) return
       e.preventDefault()
-      if (!e.repeat && keys.current.canSend) keys.current.sendFkey(n + 1)
+      if (!e.repeat) keys.current.sendFkey(n + 1)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [active, control])
+  }, [active])
   // The line under the dock: the transmitter's notice, else why a send would be refused right now
   // (the engine's words), else how to send.
   const dockHint = tx?.notice ?? tx?.refusal ?? t('jtty.compose.hint')
@@ -421,7 +409,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const allPin = usePinnedScroll<HTMLDivElement>()
   const rxPin = usePinnedScroll<HTMLDivElement>()
   const erase = () => {
-    if (!control) return
     void jttyClear()
       .then(setJtty)
       .catch(() => {})
@@ -454,7 +441,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         <div className="cw-decode-head">
           <span className="cw-decode-label">{RX_PLATE}</span>
           <button
-            disabled={!control}
             type="button"
             className={`rtty-arm${armed ? ' on' : ''}`}
             aria-pressed={armed}
@@ -481,13 +467,13 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           >
             {t('jtty.includeTime.label')}
           </button>
-          <button disabled={!control} type="button" className="cw-decode-clear" onClick={erase} title={t('jtty.erase.title')}>
+          <button type="button" className="cw-decode-clear" onClick={erase} title={t('jtty.erase.title')}>
             {t('jtty.erase.label')}
           </button>
         </div>
         <div className="cw-decode-text jtty-lines" ref={allPin.ref} onScroll={allPin.onScroll}>
           {allLines.length > 0 ? (
-            <JttyPaneLines lines={allLines} options={options} onCall={setGrabbed} control={control} />
+            <JttyPaneLines lines={allLines} options={options} onCall={setGrabbed} />
           ) : (
             <span className="cw-decode-idle">{armed ? t('jtty.all.listening') : t('jtty.all.idle')}</span>
           )}
@@ -502,7 +488,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       <div className="cw-decode jtty-pane" title={t('jtty.pane.rx.hint')}>
         <div className="cw-decode-text jtty-lines" ref={rxPin.ref} onScroll={rxPin.onScroll}>
           {rxLines.length > 0 ? (
-            <JttyPaneLines lines={rxLines} options={options} onCall={setGrabbed} control={control} />
+            <JttyPaneLines lines={rxLines} options={options} onCall={setGrabbed} />
           ) : (
             <span className="cw-decode-idle">{t('jtty.rx.empty')}</span>
           )}
@@ -522,24 +508,22 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       actions={snap.fieldDay ? <ContestScoreChip place="head" fieldDay={snap.fieldDay} /> : undefined}
       weight={1.5}
     >
-      {control && (
-        <LogEntry
-          onOpenLogbook={onOpenLogbook}
-          snap={snap}
-          mode={MODE_NAME}
-          defaultRst="599"
-          exchange="terrestrial"
-          titled={false}
-          cwLive={grabbed ? { call: grabbed, rst: null, name: null, confirmed: true } : null}
-          onReset={() => setGrabbed(null)}
-          onSnap={onSnap}
-          fieldDay={snap.fieldDay ?? null}
-          scoreChip={false}
-          active={active}
-          fdMode="DIG"
-          fdSubmode={MODE_NAME}
-        />
-      )}
+      <LogEntry
+        onOpenLogbook={onOpenLogbook}
+        snap={snap}
+        mode={MODE_NAME}
+        defaultRst="599"
+        exchange="terrestrial"
+        titled={false}
+        cwLive={grabbed ? { call: grabbed, rst: null, name: null, confirmed: true } : null}
+        onReset={() => setGrabbed(null)}
+        onSnap={onSnap}
+        fieldDay={snap.fieldDay ?? null}
+        scoreChip={false}
+        active={active}
+        fdMode="DIG"
+        fdSubmode={MODE_NAME}
+      />
     </CockpitPaneFrame>
   ) : null
 
@@ -572,7 +556,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             </span>
           }
           bandControl={
-            control && onSetFrequency ? (
+            onSetFrequency ? (
               <FrequencyControl
                 channels={plan}
                 dialMhz={snap.radio.dialMhz}
@@ -589,7 +573,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               </span>
             )
           }
-          onCommitDial={control && onSetFrequency ? commitDial : undefined}
+          onCommitDial={onSetFrequency ? commitDial : undefined}
           digitTune={onSetFrequency != null}
           wheelSensitivity={wheelSensitivity}
           actions={
@@ -614,7 +598,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                 min={RX_MIN_HZ}
                 max={RX_MAX_HZ}
                 step={1}
-                disabled={!control}
                 aria-label={t('jtty.rx.aria')}
                 value={rxDraft ?? String(Math.round(rxHz))}
                 onFocus={() => setRxDraft(String(Math.round(rxHz)))}
@@ -637,7 +620,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                 min={TX_MIN_HZ}
                 max={TX_MAX_HZ}
                 step={1}
-                disabled={!control || going}
+                disabled={going}
                 aria-label={t('jtty.tx.aria')}
                 value={txDraft ?? String(Math.round(txHz))}
                 onFocus={() => setTxDraft(String(Math.round(txHz)))}
@@ -656,7 +639,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               <span>{FTOL_LABEL}</span>
               <select
                 className="settings-input jtty-ftol-select"
-                disabled={!control}
                 aria-label={t('jtty.ftol.aria')}
                 value={String(Math.round(ftolHz))}
                 onChange={(e) => setRx(rxHz, Number(e.target.value))}
@@ -696,16 +678,11 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               { hz: txHz, color: 'var(--tx)', label: 'TX' },
             ]}
             hint={t('jtty.waterfall.hint')}
-            onTune={
-              control
-                ? (hz, target) => {
-                    if (target !== 'rx') commitTx(hz)
-                    if (target !== 'tx') setRx(Math.min(RX_MAX_HZ, Math.max(RX_MIN_HZ, Math.round(hz))), ftolHz)
-                  }
-                : undefined
-            }
+            onTune={(hz, target) => {
+              if (target !== 'rx') commitTx(hz)
+              if (target !== 'tx') setRx(Math.min(RX_MAX_HZ, Math.max(RX_MIN_HZ, Math.round(hz))), ftolHz)
+            }}
             onViewChange={(lo, hi) => {
-              if (!control) return
               void jttySetBand(Math.floor(lo), Math.ceil(hi))
                 .then(setJtty)
                 .catch(() => {})
@@ -729,14 +706,12 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {snap && (
         <CockpitTxStrip
           radio={snap.radio}
-          onSnap={onSnap}
           onStopTx={stop}
-          onSetTxEnabled={control ? onSetTxEnabled : undefined}
+          onSetTxEnabled={onSetTxEnabled}
           onTune={(on) => {
-            if (control) void setTune(on).then((s) => onSnap?.(s))
+            void setTune(on).then((s) => onSnap?.(s))
           }}
           onAtuTune={() =>
-            control &&
             void atuTune()
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
@@ -765,7 +740,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           (the compose box, Send and Esc/Stop), and a line under it for what the transmitter did or
           would refuse. No ⊞ id; Stop TX, Tune and the latch are up in the TX strip, and Esc/Stop
           here, at the end of the compose row, is on the stop line too (THE STOP LINE). */}
-      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
+      <div className="cockpit-txdock">
         <div className="rtty-dock-keys jtty-dock-keys">
           <div className="cw-macros rtty-macros jtty-macros" role="group" aria-label={t('jtty.macros.aria')}>
             {FKEY_TEMPLATES.map((template, i) => (
@@ -773,7 +748,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                 key={FKEY_NAMES[i]}
                 type="button"
                 className="cw-macro"
-                disabled={!canSend}
                 onClick={() => sendFkey(i + 1)}
                 title={t('jtty.fkey.title', { key: FKEY_NAMES[i], template })}
               >
@@ -784,7 +758,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           </div>
           <div className="rtty-dock-row jtty-dock-row">
             <input
-              disabled={!control}
               className="settings-input rtty-hiscall"
               value={hisCall}
               onChange={(e) => setHisCall(e.target.value.toUpperCase())}
@@ -801,7 +774,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                 min={SERIAL_MIN}
                 max={SERIAL_MAX}
                 step={1}
-                disabled={!control}
                 aria-label={t('jtty.serial.aria')}
                 value={serialDraft ?? String(serial)}
                 onFocus={() => setSerialDraft(String(serial))}
@@ -817,7 +789,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             </label>
             {/* A SENDER, not a stop: clicking it off signs off and lets what is queued go out. */}
             <button
-              disabled={!canSend}
               type="button"
               className={`cw-macro rtty-tx-latch jtty-live${live ? ' on' : ''}`}
               aria-pressed={live}
@@ -836,7 +807,6 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             </span>
           )}
           <input
-            disabled={!canSend}
             className="settings-input cw-type"
             value={draft}
             onChange={(e) => onDraft(e.target.value)}
@@ -855,7 +825,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             type="button"
             className="cw-send-btn"
             onClick={sendTyped}
-            disabled={!canSend || !draft.trim()}
+            disabled={!draft.trim()}
             title={tx?.pending ? t('jtty.compose.pending.title', { text: tx.pending }) : t('jtty.compose.send.title')}
           >
             {(tx?.left ?? 0) > 0 ? t('jtty.compose.send.left', { n: tx?.left ?? 0 }) : t('jtty.compose.send.label')}
@@ -864,7 +834,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             type="button"
             className="cw-macro rtty-stop jtty-stop"
             onClick={stopJtty}
-            disabled={!control || !going}
+            disabled={!going}
             title={t('jtty.stop.title')}
           >
             <span className="cw-macro-key">{ESC_KEY}</span>

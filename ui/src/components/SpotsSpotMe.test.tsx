@@ -24,7 +24,6 @@ vi.mock('../toast', async (importOriginal) => ({
 }))
 
 import { SpotsPanel } from './SpotsPanel'
-import { StationControlContext } from '../stationAccess'
 
 type Station = { section?: string; sideband?: string; tier?: string }
 
@@ -232,11 +231,7 @@ describe('Spot me on the Spots board', () => {
     })
   })
 
-  it('is not on a page that only watches, nor on a board its host gave no station', () => {
-    render(<StationControlContext.Provider value={false}>{board({ section: 'cw' })}</StationControlContext.Provider>)
-    expect(screen.queryByRole('button', { name: 'Spot me' })).toBeNull()
-    expect(screen.queryByRole('textbox', { name: 'Spot comment' })).toBeNull()
-    cleanup()
+  it('is not on a board its host gave no station', () => {
     render(board(undefined))
     expect(screen.queryByRole('button', { name: 'Spot me' })).toBeNull()
     // Positive control: the same board with control and a station shows it.

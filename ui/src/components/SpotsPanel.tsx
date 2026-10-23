@@ -1,4 +1,3 @@
-import { useStationControl } from '../stationAccess'
 // The raw "Spots" board — every recent cluster/RBN spot (CW/Phone/Digital, all sources),
 // NOT needs-gated. This is the firehose view: see everything,
 // filter client-side. The Needed board stays the curated "what to work" list; this is the
@@ -72,8 +71,7 @@ export interface SpotsPanelProps {
   onSelect: (call: string) => void
   /** Work the spot — QSY to its freq/mode and open the matching cockpit. */
   onWork: (spot: SpotRow) => void
-  /** A browser Work for this row; the desktop leaves it unset and works every row. */
-  canWork?: (spot: SpotRow) => boolean
+
   onPopOut?: () => void
   /** The operator's own square — origin for the beam heading beside each entity. A
    * cluster/RBN spot carries no grid, so that heading is always the entity centre. */
@@ -222,8 +220,7 @@ function adoptPopOutFilters(): void {
   }
 }
 
-export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts, pane, fieldDay, spotMe, poppedOut }: SpotsPanelProps) {
-  const control = useStationControl()
+export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, onPopOut, myGrid = '', needAlerts, pane, fieldDay, spotMe, poppedOut }: SpotsPanelProps) {
   const marker = useContestSpotMarker(fieldDay)
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
   const centroids = useEntityCentroids()
@@ -491,9 +488,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
         {!pane && <h2>{t('spots.title')}</h2>}
         <span className="np-count">{rows.length}</span>
         {spots.length !== rows.length && <span className="np-count np-count-filtered">{t('spots.countFiltered', { count: spots.length })}</span>}
-        {/* Not in a pane: "every spot on the air" is untrue of a filtered pane, and its host
-            shows the collection's own status on Remote. */}
-        {!pane && <span className="np-hint">{control ? t('spots.hint') : t('remote.collectionObserver')}</span>}
+        {/* Not in a pane: "every spot on the air" is untrue of a filtered pane. */}
+        {!pane && <span className="np-hint">{t('spots.hint')}</span>}
         <span className="np-search">
           <input
             type="search"
@@ -525,8 +521,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
         </button>
         {/* Spot me: one cluster spot of this station per press (SpotsSpotMe.tsx). Not on a page that
             only watches. */}
-        {control && spotMe && <SpotsSpotMe {...spotMe} />}
-        {control && onPopOut && (
+        {spotMe && <SpotsSpotMe {...spotMe} />}
+        {onPopOut && (
           <button
             type="button"
             className="np-popout"
@@ -736,8 +732,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
           </div>
         ) : (
           rows.map((s) => {
-            const workable = control || !!canWork?.(s)
-            const canQsy = workable && knownBands.has(s.band)
+            const canQsy = knownBands.has(s.band)
             // Worked inside the window the chip is set to — so the badge below answers for the
             // rows Hide worked would drop, and says nothing about a contact from last month.
             const workedAge =
@@ -768,7 +763,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                 title={markWords.length > 0 ? [rowTitle, ...markWords].join(' · ') : rowTitle}
                 onClick={() => {
                   onSelect(s.call)
-                  if (workable) onWork(s)
+                  onWork(s)
                 }}
               >
                 <span className="np-age">{ageLabel(s.ageSecs)}</span>

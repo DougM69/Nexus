@@ -163,8 +163,6 @@ it('says a streaming browser uses Nexus as you would here, transmit included, an
 it('in every language the switch, the card and the question say transmit included', () => {
   type Locale = 'en' | 'de' | 'es' | 'fr' | 'ja'
   const INCLUDED: Record<Locale, string> = { en: 'transmit included', de: 'Senden eingeschlossen', es: 'incluida la transmisión', fr: 'émission comprise', ja: '送信を含む' }
-  const STREAMED: Record<Locale, string> = { en: 'streamed to this browser', de: 'als Stream in diesem Browser', es: 'en directo en este navegador',
-    fr: 'en direct dans ce navigateur', ja: 'このブラウザーへのライブ' }
   const OLD_LIMIT: Record<Locale, string> = { en: 'Starting a transmission needs its own permission', de: 'Eine Aussendung zu starten erfordert eine eigene Berechtigung',
     es: 'Iniciar una transmisión requiere un permiso independiente', fr: 'Lancer une émission nécessite une autorisation distincte', ja: '送信を始めるには別の許可が必要です' }
   const catalogs = { en: EN, de: DE, es: ES, fr: FR, ja: JA } as Record<Locale, Record<string, unknown>>
@@ -172,8 +170,6 @@ it('in every language the switch, the card and the question say transmit include
     const say = (key: string) => String(catalogs[loc][key])
     for (const key of ['settings.remoteStream.hint', 'remote.controlLocalHint', 'remote.approval.body', 'remote.approval.bodyAgain'])
       expect(say(key), `${loc} ${key}`).toContain(INCLUDED[loc])
-    for (const key of ['remote.configurationLocal'])
-      expect(say(key), `${loc} ${key}`).toContain(STREAMED[loc])
     expect(say('remote.controlLocalHint'), `${loc} still says a transmission needs its own permission`).not.toContain(OLD_LIMIT[loc])
   }
 })

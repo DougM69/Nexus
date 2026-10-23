@@ -40,7 +40,6 @@ const TOKEN_HINTS: { token: string; hintKey: MessageKey }[] = [
 
 interface ButtonProps {
   slot: MacroSlot
-  control: boolean
   editing: boolean
   /** The next Enter in the contest strip sends this key (Enter Sends Message). */
   lit?: boolean
@@ -52,14 +51,13 @@ interface ButtonProps {
 }
 
 /** One F-key macro, captioned from CW's catalog. */
-export function CwMacroButton({ slot, control, editing, lit, cue, title, onSend, onEdit }: ButtonProps) {
+export function CwMacroButton({ slot, editing, lit, cue, title, onSend, onEdit }: ButtonProps) {
   return (
     <MacroButton
       slot={slot}
       lit={lit}
       cue={cue}
       slotAttr={CW_SLOT_ATTR}
-      control={control}
       editing={editing}
       title={title}
       emptyLabel={t('cw.macro.empty.label')}

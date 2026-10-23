@@ -14,7 +14,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, act, fireEvent, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { JttyCockpit } from './JttyCockpit'
-import { StationControlContext } from '../stationAccess'
 import type { AppSnapshot, JttyLine, JttyState } from '../types'
 import * as api from '../api'
 import { t } from '../i18n'
@@ -104,9 +103,7 @@ async function mount(s: JttyState, active = true) {
   m('jttyClear').mockResolvedValue(state({ lines: [] }))
   m('getLicensedBandPlan').mockResolvedValue([])
   const r = render(
-    <StationControlContext.Provider value={true}>
-      <JttyCockpit snap={snap} active={active} onSetTxEnabled={() => {}} />
-    </StationControlContext.Provider>,
+    <JttyCockpit snap={snap} active={active} onSetTxEnabled={() => {}} />,
   )
   await act(async () => {
     await Promise.resolve()
@@ -190,15 +187,11 @@ describe('the JTTY cockpit drives the engine’s receive controls, and nothing t
     const r = await mount(state(), false)
     expect(m('jttyAutoArm')).not.toHaveBeenCalled()
     r.rerender(
-      <StationControlContext.Provider value={true}>
-        <JttyCockpit snap={snap} active={true} onSetTxEnabled={() => {}} />
-      </StationControlContext.Provider>,
+      <JttyCockpit snap={snap} active={true} onSetTxEnabled={() => {}} />,
     )
     await waitFor(() => expect(m('jttyAutoArm')).toHaveBeenCalledTimes(1))
     r.rerender(
-      <StationControlContext.Provider value={true}>
-        <JttyCockpit snap={snap} active={true} onSetTxEnabled={() => {}} />
-      </StationControlContext.Provider>,
+      <JttyCockpit snap={snap} active={true} onSetTxEnabled={() => {}} />,
     )
     expect(m('jttyAutoArm')).toHaveBeenCalledTimes(1)
   })

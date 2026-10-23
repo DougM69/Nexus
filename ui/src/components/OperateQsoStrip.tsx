@@ -1,5 +1,4 @@
 import { FtStopControl } from './FtStopControl'
-import { useStationControl, useStationCapability } from '../stationAccess'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and the part
 // that is deferred is deliberate: STOP TX, TUNE, ATU and the TX On/Off tooltip stay written
 // here. The first three cut or key a carrier — Stop TX and Tune are on this cockpit's
@@ -37,24 +36,17 @@ interface Props {
    * the snapshot carries it there, not in `qso`. */
   contestRunning?: boolean
   /** Switch the sequencer role (Call CQ / Monitor S&P). */
-  onSetMode: (mode: ModeRequest, expectedQso?: import('../types').QsoStatus | null) => void
+  onSetMode: (mode: ModeRequest) => void
   /** Start a PLAIN CQ run (clears any sticky directed token — the labelled
    * "Call CQ" button must never silently transmit a leftover "CQ DX"). The
    * DIRECTED machine lives in the Tx panel's editable Tx6. */
   onCallCq?: () => void
   /** Re-arm the current message (re-transmit a stalled/uncopied step). */
-  onResend: (expectedQso?: import('../types').QsoStatus | null) => void
+  onResend: () => void
   /** Send in-QSO free text (WSJT-X Tx5). */
-  onFreetext: (text: string, expectedQso?: import('../types').QsoStatus | null) => void | Promise<boolean>
+  onFreetext: (text: string) => void
   /** Log the active QSO now (inline "Log QSO" button). */
   onLog: () => void
-  /** The station's key for the QSO this strip is showing (`AppSnapshot.currentQsoLogKey`). A
-   * BROWSER's Log gesture is built from it — it is the "log the QSO I am looking at" token the
-   * station checks — so the button waits for the sample that carries it. `dxcall` alone is not
-   * that signal: the sample before this QSO became loggable already had one, and a click on it
-   * built a gesture the page's own validator refused ("Could not log QSO"). The desktop needs no
-   * key: there the engine decides what is loggable. */
-  logKey?: string | null
   /** TX controls consolidated beside CQ/S&P (operator request: one cluster,
    * no mousing to the top bar). Present only in the digital cockpit. */
   radio?: RadioStatus
@@ -91,8 +83,6 @@ interface Props {
   // strip, and relocation must not change behaviour.
   /** Transmit-period control (TX AUTO / 1st / 2nd) — rendered when BOTH handlers
    *  and `radio` are present. */
-  remoteFtRuntime?: boolean
-  remoteFtSettings?: boolean
   onSetTxEven?: (even: boolean) => void
   onSetTxCycleAuto?: (auto: boolean) => void
   /** Skip Tx1 (WSJT-X parity) — rendered when the handler is present. */
@@ -131,7 +121,6 @@ export function OperateQsoStrip({
   onResend,
   onFreetext,
   onLog,
-  logKey,
   radio,
   onSetTxEnabled,
   onSetTune,
@@ -140,8 +129,6 @@ export function OperateQsoStrip({
   onSetHoldTxFreq,
   rxOnly,
   beacon,
-  remoteFtRuntime = false,
-  remoteFtSettings = false,
   onSetTxEven,
   onSetTxCycleAuto,
   skipTx1,
@@ -151,12 +138,6 @@ export function OperateQsoStrip({
   rotor,
   telemetry,
 }: Props) {
-  const logging = useStationCapability('qsoLogging')
-  const control = useStationControl(), ftControl = useStationCapability('ftOperate'), ftExchange = useStationCapability('ftExchange')
-  const runtimeCapability = useStationCapability('ftRuntime')
-  const runtimeControl = control || (remoteFtRuntime && runtimeCapability)
-  const settingsCapability = useStationCapability('ftSettings')
-  const ftSettings = control || (remoteFtSettings && settingsCapability)
   // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
   // engine's own comment at call_station_ctx says so) and nothing clears it after the QSO —
   // so this strip lit Call CQ solid through every S&P contact and forever after, and the
@@ -193,7 +174,7 @@ export function OperateQsoStrip({
   // The strip's ON AIR wash and "▲ TRANSMITTING" read the arbiter the header's sign reads, never
   // the FT slot flag alone: that said "▼ Receiving" through this cockpit's own Tune, a key held at
   // the radio and an over another screen started. Paint only — no control here keys, enables or
-  // routes on it (Stop TX's authority is `useStationStopControl()`).
+  // routes on it.
   const onAir = radio ? isOnAir(radio) : false
   const filterHz = radio?.filterWidthHz ?? null
   const narrowFilter = filterHz != null && filterHz > 0 && filterHz < NARROW_FILTER_HZ
@@ -201,12 +182,9 @@ export function OperateQsoStrip({
   const [free, setFree] = useState('')
   const sendFree = () => {
     const t = free.trim()
-    if (!t || !ftExchange) return
-    const sent = control ? onFreetext(t) : onFreetext(t, qso)
-    if (control) setFree('')
-    else if (sent) void sent.then(accepted => {
-      if (accepted) setFree(current => current.trim() === t ? '' : current)
-    }).catch(() => {})
+    if (!t) return
+    onFreetext(t)
+    setFree('')
   }
 
   return (
@@ -223,7 +201,7 @@ export function OperateQsoStrip({
           className={`cq-role cq-call${running ? ' active' : ''}`}
           aria-pressed={running}
           onClick={() => (onCallCq ? onCallCq() : onSetMode('qso-run'))}
-          disabled={!ftControl || (noQso)}
+          disabled={noQso}
           title={noQso ? noQsoWhy : t('operate.strip.callCq.title')}
         >
           {t('operate.strip.callCq.label')}
@@ -232,8 +210,8 @@ export function OperateQsoStrip({
           type="button"
           className={`cq-role${!running ? ' active' : ''}`}
           aria-pressed={!running}
-          onClick={() => control ? onSetMode('qso-monitor') : onSetMode('qso-monitor', qso)}
-          disabled={!ftExchange || (noQso)}
+          onClick={() => onSetMode('qso-monitor')}
+          disabled={noQso}
           title={noQso ? noQsoWhy : t('operate.strip.sandp.title')}
         >
           {t('operate.strip.sandp.label')}
@@ -250,7 +228,7 @@ export function OperateQsoStrip({
             className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
             aria-pressed={radio.txEnabled}
             onClick={() => onSetTxEnabled?.(!radio.txEnabled)}
-            disabled={!ftControl || (noTx)}
+            disabled={noTx}
             title={
               noTx
                 ? noTxWhy
@@ -266,7 +244,7 @@ export function OperateQsoStrip({
             className={`op-btn tune${radio.tuning ? ' keyed' : ''}`}
             aria-pressed={radio.tuning}
             onClick={() => onSetTune?.(!radio.tuning)}
-            disabled={!control || (noTx)}
+            disabled={noTx}
             title={noTx ? noTxWhy : 'Key a tune carrier'}
           >
             Tune
@@ -279,7 +257,7 @@ export function OperateQsoStrip({
               type="button"
               className="op-btn atu"
               onClick={onAtuTune}
-              disabled={!control || noTx || !!radio.atuStartTuneUnsupported}
+              disabled={noTx || !!radio.atuStartTuneUnsupported}
               title={
                 noTx
                   ? noTxWhy
@@ -293,8 +271,8 @@ export function OperateQsoStrip({
               ATU
             </button>
           )}
-          <FtStopControl onHaltTx={onHaltTx} radio={radio} />
-          <button disabled={!ftSettings}
+          <FtStopControl onHaltTx={onHaltTx} />
+          <button
             type="button"
             className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
             aria-pressed={radio.holdTxFreq}
@@ -378,8 +356,8 @@ export function OperateQsoStrip({
         <button
           type="button"
           className="cq-resend"
-          onClick={() => control ? onResend() : onResend(qso)}
-          disabled={!ftExchange || (!txNow)}
+          onClick={onResend}
+          disabled={!txNow}
           title={t('operate.strip.resend.title')}
         >
           ↻
@@ -393,7 +371,7 @@ export function OperateQsoStrip({
           sendFree()
         }}
       >
-        <input disabled={!ftExchange}
+        <input
           type="text"
           value={free}
           maxLength={13}
@@ -403,7 +381,7 @@ export function OperateQsoStrip({
         />
         <button
           type="submit"
-          disabled={!ftExchange || (!free.trim() || noQso)}
+          disabled={!free.trim() || noQso}
           title={noQso ? noQsoWhy : t('operate.strip.send.title')}
         >
           {t('operate.strip.send.label')}
@@ -412,7 +390,7 @@ export function OperateQsoStrip({
           type="button"
           className="cq-log"
           onClick={onLog}
-          disabled={!logging || !dxcall || (!control && !logKey)}
+          disabled={!dxcall}
           title={t('operate.strip.log.title')}
         >
           {t('operate.strip.log.label')}
@@ -424,7 +402,7 @@ export function OperateQsoStrip({
       {specialOpBadge}
       {rotor}
       {radio && onSetTxEven && onSetTxCycleAuto && (
-        <button disabled={!ftSettings}
+        <button
           type="button"
           className={`cq-period${radio.txCycleAuto ? ' is-auto' : ''}`}
           onClick={() => {
@@ -445,7 +423,7 @@ export function OperateQsoStrip({
         </button>
       )}
       {onSkipTx1 && (
-        <button disabled={!runtimeControl}
+        <button
           type="button"
           className={`cq-skiptx1${skipTx1 ? ' on' : ''}`}
           aria-pressed={skipTx1 ?? false}

@@ -11,7 +11,6 @@ import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import { TopBar } from './TopBar'
 import type { RadioStatus } from '../types'
 import { EN } from '../i18n'
-import { StationControlContext } from '../stationAccess'
 import { repairClock } from '../api'
 import { pushToast } from '../toast'
 
@@ -57,30 +56,28 @@ const base = {
   clockRepairAvailable: true,
 } as unknown as RadioStatus
 
-function renderBar(radio: Record<string, unknown> = {}, control = true) {
+function renderBar(radio: Record<string, unknown> = {}) {
   const noop = () => {}
   return render(
-    <StationControlContext.Provider value={control}>
-      <TopBar
-        mycall="KD9TAW"
-        mygrid="EN52xa"
-        radio={{ ...base, ...radio } as RadioStatus}
-        link={{ tier: 'FT8' } as never}
-        bandPlan={[]}
-        onSetFrequency={noop}
-        onSetTxEnabled={noop}
-        onSetTune={noop}
-        onHaltTx={noop}
-        onSetTxEven={noop}
-        onSetTxCycleAuto={noop}
-        onSetHoldTxFreq={noop}
-        tier="FT8"
-        onTierChange={noop}
-        onOpenGuide={noop}
-        field={false}
-        onFieldChange={noop}
-      />
-    </StationControlContext.Provider>,
+    <TopBar
+      mycall="KD9TAW"
+      mygrid="EN52xa"
+      radio={{ ...base, ...radio } as RadioStatus}
+      link={{ tier: 'FT8' } as never}
+      bandPlan={[]}
+      onSetFrequency={noop}
+      onSetTxEnabled={noop}
+      onSetTune={noop}
+      onHaltTx={noop}
+      onSetTxEven={noop}
+      onSetTxCycleAuto={noop}
+      onSetHoldTxFreq={noop}
+      tier="FT8"
+      onTierChange={noop}
+      onOpenGuide={noop}
+      field={false}
+      onFieldChange={noop}
+    />,
   )
 }
 
@@ -105,15 +102,6 @@ describe('when Repair clock is drawn', () => {
     cleanup()
     renderBar({ clockRepairAvailable: undefined })
     expect(button()).toBeNull()
-  })
-
-  it('not for a browser without station control: the prompt would wait on the station screen', () => {
-    renderBar({}, false)
-    expect(button()).toBeNull()
-    // The control: the same bar with control draws it.
-    cleanup()
-    renderBar({}, true)
-    expect(button()).not.toBeNull()
   })
 })
 

@@ -73,7 +73,6 @@ export function RttyTuningScope({
   active,
   armed,
   keyed,
-  control,
   markHz,
   spaceHz,
   onNet,
@@ -85,8 +84,6 @@ export function RttyTuningScope({
   armed: boolean
   /** Our own over, a latched stream or a tune — the cockpit's `keyed`. Nudges are off. */
   keyed: boolean
-  /** This screen may move the station's decoder (`useStationCapability('decoder')`). */
-  control: boolean
   markHz: number
   spaceHz: number
   /** Net the decoder (and the AFSK transmitter) onto a new centre — `rtty_net`. */
@@ -234,7 +231,7 @@ export function RttyTuningScope({
   // ◀ ▶ with hold-to-repeat. The target accumulates across a hold (each step is 5 Hz from the
   // last one asked for, not from a centre the poll has yet to bring back).
   const centre = (markHz + spaceHz) / 2
-  const nudgeOff = keyed || !control || !armed
+  const nudgeOff = keyed || !armed
   const target = useRef<number | null>(null)
   const timer = useRef<number | null>(null)
   const keyedRef = useRef(keyed)

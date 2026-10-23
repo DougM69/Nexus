@@ -20,7 +20,6 @@ import { OperateCockpit } from './OperateCockpit'
 import type { AppSnapshot } from '../types'
 import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
-import { StationControlContext } from '../stationAccess'
 
 const startCq = vi.fn(async () => null)
 const startRunning = vi.fn(async (_dir?: string | null): Promise<null> => null)
@@ -329,15 +328,6 @@ describe('the Tx6 row while a contest runs', () => {
     fireEvent.click(cqButton())
     await waitFor(() => expect(startCq).toHaveBeenCalledWith('POTA'))
     expect(startRunning).not.toHaveBeenCalled()
-  })
-
-  it('on the Remote page the row keeps its own CQ', () => {
-    render(
-      <StationControlContext.Provider value={false}>{cockpit(inContest())}</StationControlContext.Provider>,
-    )
-    expect(tx6Box().value).toBe(`CQ ${MYCALL} EN61`)
-    expect(tx6Box().readOnly).toBe(false)
-    expect(tx6Box().getAttribute('aria-label')).toBe('Tx6 Call CQ (edit for a directed CQ)')
   })
 })
 

@@ -6,7 +6,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
-import { useStationControl, useStationCapability, useStationData } from '../stationAccess'
 import { useRovingList } from '../useRovingList'
 import { usePinnedScroll } from '../usePinnedScroll'
 import type { DecodeRow, LateDecodes, NeedAlert, Tier } from '../types'
@@ -275,11 +274,6 @@ export function OperateDecodes({
   hideExcludedCountries = true,
   myGrid = '',
 }: Props) {
-  const control = useStationControl()
-  const callControl = useStationCapability('ftCall')
-  const rxControl = useStationCapability('receiverSettings')
-  const available = useStationData()
-  const selectControl = control || available
   // Cockpit-owned history when provided (survives layout remounts); private otherwise.
   const localHistRef = useRef<DecodeHistory | null>(null)
   if (history == null && localHistRef.current == null) {
@@ -548,7 +542,7 @@ export function OperateDecodes({
     histRef.current.erase()
     repin()
     setTick((t) => t + 1)
-    if (control) onErase?.()
+    onErase?.()
   }
 
   const selectedUp = selectedCall?.trim().toUpperCase() || null
@@ -560,15 +554,15 @@ export function OperateDecodes({
     // QSO on the band or mode it was not heard on.
     if (!d.from || d.heard) return
     if (e.altKey) {
-      if (control) onToggleIgnore?.(d.from)
+      onToggleIgnore?.(d.from)
       return
     }
     if (e.ctrlKey || e.metaKey) {
-      if (selectControl) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
-      if (rxControl) onSetRx?.(d.freqHz)
+      onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+      onSetRx?.(d.freqHz)
       return
     }
-    if (callControl) onCall(d.from, undefined, d.message, d.snr, d.freqHz)
+    onCall(d.from, undefined, d.message, d.snr, d.freqHz)
   }
 
   // Keyboard: arrow through rows, Enter selects, Shift+Enter works the station,
@@ -576,9 +570,9 @@ export function OperateDecodes({
   const roving = useRovingList(drawn.length, (i, mods) => {
     const d = drawn[i]
     if (!d?.from || d.heard) return
-    if (mods.alt) { if (control) onToggleIgnore?.(d.from) }
-    else if (mods.shift) { if (callControl) onCall(d.from, undefined, d.message, d.snr, d.freqHz) }
-    else if (selectControl) onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+    if (mods.alt) onToggleIgnore?.(d.from)
+    else if (mods.shift) onCall(d.from, undefined, d.message, d.snr, d.freqHz)
+    else onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
   })
 
   const eraseBtn = (
@@ -847,14 +841,14 @@ export function OperateDecodes({
                 style={hlStyle}
                 onClick={() => {
                   roving.setActive(i)
-                  if (selectControl && d.from && !d.heard)
+                  if (d.from && !d.heard)
                     onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
                 }}
                 onDoubleClick={(e) => handleDouble(e, d)}
                 title={
                   d.heard
                     ? t('operate.decodes.row.heard.title', { band: d.heard.band, mode: d.heard.tier })
-                    : !callControl ? d.message : ignoredRow
+                    : ignoredRow
                     ? t('operate.row.ignored.title')
                     : d.from
                       ? t('operate.decodes.row.title', { call: d.from, highlight: hlTip })

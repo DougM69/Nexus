@@ -5,7 +5,6 @@
 import { useState } from 'react'
 import type { LoggedQso } from '../types'
 import { t } from '../i18n'
-import { useStationCapability } from '../stationAccess'
 import { FtStopControl } from './FtStopControl'
 
 interface Props {
@@ -28,7 +27,6 @@ interface Props {
  * completes and the operator has asked to review before logging. Pre-fills the
  * exchanged details; the call/grid/reports and the comment stay editable. */
 export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogged = 0, onStop }: Props) {
-  const allowed = useStationCapability('qsoLogging')
   const [call, setCall] = useState(record.call)
   const [grid, setGrid] = useState(record.grid ?? '')
   const [rstSent, setRstSent] = useState(record.rstSent?.toString() ?? '')
@@ -44,7 +42,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
   }
 
   const confirm = () => {
-    if (!allowed || !call.trim()) return
+    if (!call.trim()) return
     onConfirm({
       ...record,
       call: call.trim().toUpperCase(),
@@ -133,10 +131,10 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
 
         <div className="logconfirm-actions">
           {onStop && <FtStopControl onHaltTx={onStop} />}
-          <button type="button" className="logconfirm-discard" disabled={!allowed} onClick={() => { if (allowed) onDiscard() }}>
+          <button type="button" className="logconfirm-discard" onClick={onDiscard}>
             {t('logPrompt.discard')}
           </button>
-          <button type="button" className="logconfirm-log" onClick={confirm} disabled={!allowed || !call.trim()}>
+          <button type="button" className="logconfirm-log" onClick={confirm} disabled={!call.trim()}>
             {t('logPrompt.log')}
           </button>
         </div>

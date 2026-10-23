@@ -60,7 +60,6 @@ import { RecallPanel } from './RecallPanel'
 import { ContestScoreChip } from './ContestScoreChip'
 import { pushToast, withErrorToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
-import { useStationControl } from '../stationAccess'
 
 // ---------------------------------------------------------------------------
 // THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
@@ -523,10 +522,6 @@ export function LogEntry({
   onResumeContest,
 }: Props) {
   const remoteMode = remote != null
-  // THE STATION'S OWN WINDOW, where the hunt tag's ✕ can end a hunt. Not the hosted Remote page,
-  // which mounts this strip under `StationControlContext` false, with its adapter in the cockpits
-  // and without it in Satellites: it cannot make that call.
-  const stationOwn = useStationControl()
   type DraftContext = { band: string; freqMhz: number; mode: string }
   const [remoteDraftContext, setRemoteDraftContext] = useState<DraftContext | null>(null)
   const [remoteWorkOffer, setRemoteWorkOffer] = useState<({ call: string; ts: number } & { context: DraftContext }) | null>(null)
@@ -3165,17 +3160,15 @@ export function LogEntry({
           {!huntMatches && logCall.trim() !== '' && (
             <span className="le-hunt-warn"> {t('logEntry.hunt.mismatch')}</span>
           )}
-          {stationOwn && (
-            <button
-              type="button"
-              className="le-hunt-clear"
-              onClick={() => void endHunt(hunt.reference)}
-              title={t('ota.hunt.clear')}
-              aria-label={t('ota.hunt.clear')}
-            >
-              <X aria-hidden="true" />
-            </button>
-          )}
+          <button
+            type="button"
+            className="le-hunt-clear"
+            onClick={() => void endHunt(hunt.reference)}
+            title={t('ota.hunt.clear')}
+            aria-label={t('ota.hunt.clear')}
+          >
+            <X aria-hidden="true" />
+          </button>
         </div>
       )}
 
