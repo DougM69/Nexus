@@ -152,13 +152,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or JTAlert: the decodes of all those periods come back with their own times and no new alerts. Erase Band
   Activity and restart the program: nothing comes back until the next period is decoded.
 - **WSJT-X UDP: a logger's free text goes into Tx 5, and out as Tx 5, as in WSJT-X.** Free text from JTAlert,
-  GridTracker or a logger became a chat broadcast, which the FT8 and FT4 screen never sent (and on FT8 in Chat a
+  GridTracker or a logger became a chat broadcast, which the FT8 and FT4 screen never sent (and on FT8 in Tempo a
   piece of it could go out reading as another station's call). Now the text goes into Tx 5. When the program asks
   for it to be sent, it is your next over, as when you click Tx 5, and an over on the air switches to it, as in
   WSJT-X; an empty text that is not sent clears Tx 5. It goes out only while TX is on, and it never turns TX on or
   restarts the TX watchdog. When it does not go out, Tx 5 still shows it and Nexus says why: TX is off, it is
   text FT8 or FT4 cannot encode (as for the free text you type), the contest screen sends its own exchange, or
-  the program asked to send Tx 5 without its text. Chat sends it as a chat broadcast, as before, on the Tempo
+  the program asked to send Tx 5 without its text. Tempo sends it as a chat broadcast, as before, on the Tempo
   tiers only. NEEDS-BENCH: FT8 into a dummy load with TX on and the UDP feed on, and WSJT-X's message_aggregator
   example (or GridTracker) connected: type `TNX 73` in its free-text box and Tx 5 follows each key; press Enter
   and the next over is `TNX 73`, which a WSJT-X station decodes; press Enter during an over and the rest of it
@@ -195,10 +195,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you press Log, as a JS8 contact already did; until now both were the moment you pressed Log. A
   contact typed in under "Logged on another radio" with its own UTC time starts and ends at the
   time you typed.
-- **Every contact names its operator.** With Operator at the key left blank, your station call is
+- **Every new contact names its operator.** With Operator at the key left blank, your station call is
   logged as the operator (ADIF OPERATOR), as the box's hint always said. The N3FJP push now sends
   the contact's own operator instead of always your station call.
-- **Your grid and state are logged on each contact.** New contacts carry your grid from Settings ▸
+- **Your grid and state are logged on each new contact.** New contacts carry your grid from Settings ▸
   Station (ADIF MY_GRIDSQUARE) and, on everyday contacts, your State (MY_STATE); a park or summit
   activation still logs the park's state, never your home one. QRZ, Club Log, eQSL, HRDLog,
   Cloudlog/Wavelog and the ADIF export receive them. Your LoTW uploads leave out a grid or state
@@ -219,7 +219,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was made, however late you confirm it and whatever you changed in Settings meanwhile.
 - **A TCI radio's contacts name the radio.** The rig logged for a contact made on a TCI radio is
   the radio the SDR program reports, such as SunSDR2DX, instead of "TCI".
-- **Your station power is logged on every contact.** The watts in Settings ▸ Station power go on
+- **Your station power is logged on every new contact.** The watts in Settings ▸ Digital ▸ Station
+  Housekeeping ▸ Station power go on
   each new contact as its power (ADIF TX_PWR), and out with it to QRZ, Club Log, eQSL, HRDLog,
   Cloudlog/Wavelog and the WSJT-X UDP messages your logger reads. Leave it blank and contacts
   are logged without a power, as before. A contact that already carries a power keeps it.
