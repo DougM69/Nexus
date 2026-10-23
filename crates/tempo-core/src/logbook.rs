@@ -322,6 +322,11 @@ pub fn fill_extra(r: &mut QsoRecord, name: &str, value: String) -> bool {
 /// list ([`edited`]): the operator has said what it is.
 pub const SELF_FILLED_FIELD: &str = "APP_NEXUS_SELF_FILLED";
 
+/// The fields Nexus fills in itself and marks ([`mark_self_filled`]): the only names in a
+/// [`SELF_FILLED_FIELD`] list the LoTW upload honours. The list rides files the operator imports,
+/// so a name outside these strips nothing.
+const SELF_FILLED_TAGS: [&str; 2] = ["MY_GRIDSQUARE", "MY_STATE"];
+
 /// The fields [`SELF_FILLED_FIELD`] names on this record.
 pub fn self_filled(r: &QsoRecord) -> Vec<&str> {
     extra_value(r, SELF_FILLED_FIELD)
@@ -365,6 +370,9 @@ fn unmark_self_filled(r: &mut QsoRecord, tag: &str) {
 pub fn without_self_filled(r: &QsoRecord) -> QsoRecord {
     let mut out = r.clone();
     for tag in self_filled(r) {
+        if !SELF_FILLED_TAGS.contains(&tag) {
+            continue;
+        }
         if tag == "MY_GRIDSQUARE" {
             out.my_grid = None;
         }
@@ -7145,6 +7153,34 @@ mod tests {
         theirs.my_grid = Some("FN20".into());
         let lotw = adif_record(&without_self_filled(&theirs));
         assert!(lotw.contains("<MY_GRIDSQUARE:4>FN20"), "{lotw}");
+    }
+
+    /// A Nexus export re-imported leaves out of LoTW exactly the fields Nexus filled, as before;
+    /// a marker in an imported file that names any other field strips nothing but itself.
+    #[test]
+    fn only_the_fields_nexus_fills_are_left_out_of_lotw() {
+        let mut filled = rec("W1AW", "20m", 1_700_000_000);
+        filled.my_grid = Some("EN52XA".into());
+        mark_self_filled(&mut filled, "MY_GRIDSQUARE");
+        assert!(fill_extra(&mut filled, "MY_STATE", "WI".into()));
+        mark_self_filled(&mut filled, "MY_STATE");
+        assert!(fill_extra(&mut filled, "MY_CNTY", "WI,DANE".into()));
+        let reborn = parse_adif(&adif_record_own_log(&filled)).remove(0);
+        let mut want = reborn.clone();
+        want.my_grid = None;
+        set_extra(&mut want, "MY_STATE", None);
+        set_extra(&mut want, SELF_FILLED_FIELD, None);
+        assert_eq!(without_self_filled(&reborn), want);
+
+        let imported = parse_adif(
+            "<CALL:4>W1AW<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8\
+             <MY_GRIDSQUARE:4>EN52<MY_STATE:2>WI<MY_CNTY:7>WI,DANE<MY_SIG_INFO:6>K-1234\
+             <APP_NEXUS_SELF_FILLED:50>CALL,QSO_DATE,BAND,MODE,MY_CNTY,MY_SIG_INFO,MY_RIG<EOR>",
+        )
+        .remove(0);
+        let mut want = imported.clone();
+        set_extra(&mut want, SELF_FILLED_FIELD, None);
+        assert_eq!(without_self_filled(&imported), want);
     }
 
     /// An edit that CHANGES a grid Nexus filled makes it the operator's — it then goes to
