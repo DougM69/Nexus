@@ -2140,6 +2140,11 @@ pub trait DecodeProgress {
     /// An FT8 sync candidate has been tried; the pass then asks whether to give up
     /// ([`DecodeJob::with_give_up_at`]).
     fn candidate(&mut self) {}
+    /// The clock that question is answered from: the wall clock. A test drives the give-up
+    /// with a clock of its own.
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
 }
 
 /// A [`DecodeProgress`] that keeps nothing: the decodes arrive in the [`DecodeResult`] only.
@@ -2174,7 +2179,7 @@ impl modes::DecodeSink for JobSink<'_> {
     }
     fn give_up(&mut self) -> bool {
         self.progress.candidate();
-        self.give_up_at.is_some_and(|at| Instant::now() >= at)
+        self.give_up_at.is_some_and(|at| self.progress.now() >= at)
     }
     fn give_up_rescue(&mut self) -> bool {
         self.progress.candidate();
@@ -2187,7 +2192,7 @@ impl modes::DecodeSink for JobSink<'_> {
         dropped
             || self
                 .rescue_give_up_at
-                .is_some_and(|at| Instant::now() >= at)
+                .is_some_and(|at| self.progress.now() >= at)
     }
 }
 
