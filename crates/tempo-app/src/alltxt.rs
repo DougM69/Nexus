@@ -86,11 +86,11 @@ pub(crate) fn q_round(d: f32) -> i32 {
     }
 }
 
-/// One ALL.TXT line for a finished JTTY message, as WSJT-X 3.3.0-beta1 writes it. WSJT-X
+/// One ALL.TXT line for a finished JTTY message, as WSJT-X 3.3.0-beta4 writes it. WSJT-X
 /// logs the message's decode-pane line through the same `MainWindow::write_all` every mode
-/// uses, with a JTTY branch (`widgets/mainwindow.cpp` 15922-15995; the pane line is
-/// `Jtty::formatJttyDecodeLine`, `widgets/JttyMessages.hpp` 954-966, and the branch reads it
-/// back with `Jtty::parseDecodeLine`, 897-918). Described here, not transcribed:
+/// uses, with a JTTY branch (`widgets/mainwindow.cpp` 16191-16264; the pane line is
+/// `Jtty::formatJttyDecodeLine`, `widgets/JttyMessages.hpp` 473-485, and the branch reads it
+/// back with `Jtty::parseDecodeLine`, 416-437). Described here, not transcribed:
 ///
 /// 1. The pane line: the frequency rounded and right-aligned in 4, a space, the SNR
 ///    right-aligned in 3, two spaces, the text.

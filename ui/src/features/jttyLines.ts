@@ -1,5 +1,5 @@
 // The JTTY receive window as WSJT-X prints it in its two panes — pure, so the rules are tested
-// without a cockpit. WSJT-X 3.3.0-beta1: `JttyReceiveLine::formatted` (the two display options)
+// without a cockpit. WSJT-X 3.3.0-beta4: `JttyReceiveLine::formatted` (the two display options)
 // and `MainWindow::renderLine` (All Decodes chronological, QSO Frequency in arrival order).
 // No prose here: a decoded line is the station's text and WSJT-X's columns, never translated.
 //
