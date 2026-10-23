@@ -657,7 +657,101 @@ fn default_tci_server_port() -> u16 {
     TCI_SERVER_DEFAULT_PORT
 }
 
+/// Where the RF scope's picture comes from ([`Settings::scope_source`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeSource {
+    /// The radio's own panadapter (Flex, Icom CI-V, the FT-710's, a TCI program's), or the sound
+    /// card's audio where it has none. The default.
+    Radio,
+    /// An SDRplay receiver through SDRplay's SDRconnect program, over its WebSocket API.
+    Sdrconnect,
+}
+
+impl ScopeSource {
+    /// The word [`Settings::scope_source`] stores for it.
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            ScopeSource::Radio => "radio",
+            ScopeSource::Sdrconnect => "sdrconnect",
+        }
+    }
+
+    /// A stored [`Settings::scope_source`]. Case and surrounding space do not matter, and any
+    /// other word is the radio's own, so a file from a later build never moves the scope.
+    pub fn from_setting(word: &str) -> ScopeSource {
+        if word.trim().eq_ignore_ascii_case("sdrconnect") {
+            ScopeSource::Sdrconnect
+        } else {
+            ScopeSource::Radio
+        }
+    }
+}
+
+/// How the SDR's centre follows the rig's dial ([`Settings::sdrconnect_follow`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdrconnectFollow {
+    /// The centre is retuned to the dial on every change. The default.
+    Centre,
+    /// The centre is retuned to the dial only when the dial leaves the middle of the span.
+    Scroll,
+}
+
+impl SdrconnectFollow {
+    /// The word [`Settings::sdrconnect_follow`] stores for it.
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            SdrconnectFollow::Centre => "centre",
+            SdrconnectFollow::Scroll => "scroll",
+        }
+    }
+
+    /// A stored [`Settings::sdrconnect_follow`]: any word but `scroll` is the default.
+    pub fn from_setting(word: &str) -> SdrconnectFollow {
+        if word.trim().eq_ignore_ascii_case("scroll") {
+            SdrconnectFollow::Scroll
+        } else {
+            SdrconnectFollow::Centre
+        }
+    }
+}
+
+/// SDRconnect's WebSocket API port as SDRplay ships it.
+pub const SDRCONNECT_DEFAULT_PORT: u16 = 5454;
+
+fn default_scope_source() -> String {
+    ScopeSource::Radio.as_setting().to_string()
+}
+
+fn default_sdrconnect_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_sdrconnect_port() -> u16 {
+    SDRCONNECT_DEFAULT_PORT
+}
+
+fn default_sdrconnect_follow() -> String {
+    SdrconnectFollow::Centre.as_setting().to_string()
+}
+
 impl Settings {
+    /// Where the scope's SDRconnect lives, when the operator chose it as the scope source: the host
+    /// (this computer when left blank) and the port (SDRconnect's default when 0). `None` while
+    /// the scope source is the radio.
+    pub fn sdrconnect_target(&self) -> Option<(String, u16)> {
+        if ScopeSource::from_setting(&self.scope_source) != ScopeSource::Sdrconnect {
+            return None;
+        }
+        let host = self.sdrconnect_host.trim();
+        let host = if host.is_empty() { "127.0.0.1" } else { host };
+        let port = if self.sdrconnect_port == 0 {
+            SDRCONNECT_DEFAULT_PORT
+        } else {
+            self.sdrconnect_port
+        };
+        Some((host.to_string(), port))
+    }
+
     /// Is the RECEIVE dial Doppler's to correct?
     ///
     /// The operator's off switch, and the one mapping that claims the dial for
@@ -2216,6 +2310,25 @@ pub struct Settings {
     /// transmits.
     #[serde(default = "default_true")]
     pub tci_server_spots: bool,
+
+    /// Where the RF scope's picture comes from ([`ScopeSource`]): `"radio"`, the radio's own
+    /// panadapter as today (the default), or `"sdrconnect"`, an SDRplay receiver through SDRplay's
+    /// SDRconnect program, fed from the rig's RX OUT or a protected splitter. Stored as a word and
+    /// read by [`ScopeSource::from_setting`], so a word this build does not know is the radio's.
+    /// The station's, like the TCI server's: the SDR follows whichever radio is in use.
+    #[serde(default = "default_scope_source")]
+    pub scope_source: String,
+    /// The computer SDRconnect runs on, for its WebSocket API: this one unless the operator says.
+    #[serde(default = "default_sdrconnect_host")]
+    pub sdrconnect_host: String,
+    /// SDRconnect's WebSocket API port ([`SDRCONNECT_DEFAULT_PORT`] unless moved in SDRconnect).
+    #[serde(default = "default_sdrconnect_port")]
+    pub sdrconnect_port: u16,
+    /// How the SDR's centre follows the rig's dial ([`SdrconnectFollow`]): `"centre"`, retuned to
+    /// the dial on every change (the default), or `"scroll"`, retuned only when the dial leaves
+    /// the middle of the span, which moves SDRconnect's own display far less.
+    #[serde(default = "default_sdrconnect_follow")]
+    pub sdrconnect_follow: String,
 
     /// A FlexRadio's IP address for the SmartSDR Ethernet API (port 4992), used by the native
     /// panadapter worker. Distinct from the CAT `rig_addr` (which for the SmartSDR-CAT model 2036
@@ -5622,6 +5735,11 @@ impl Default for Settings {
             tci_server_tx: false,
             tci_server_cw: true,
             tci_server_spots: true,
+            // The radio's own panadapter, as before the choice existed.
+            scope_source: default_scope_source(),
+            sdrconnect_host: default_sdrconnect_host(),
+            sdrconnect_port: SDRCONNECT_DEFAULT_PORT,
+            sdrconnect_follow: default_sdrconnect_follow(),
             flex_radio_ip: String::new(),
             flex_native_pan: false,
             flex_native_audio: false,
@@ -9249,6 +9367,60 @@ mod tests {
             wrong.push(format!("the default ports are {ports:?}, not {want:?}"));
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The scope source's settings on a fresh station and in every older file, by their wire
+    /// keys: the radio's own panadapter, and SDRconnect on this computer at its shipped port.
+    #[test]
+    fn the_scope_source_defaults_to_the_radio_in_a_fresh_and_an_older_file() {
+        let want = serde_json::json!({
+            "scopeSource": "radio", "sdrconnectHost": "127.0.0.1", "sdrconnectPort": 5454,
+            "sdrconnectFollow": "centre",
+        });
+        let fresh = serde_json::to_value(Settings::default()).expect("serializes");
+        let older: Settings = serde_json::from_str("{}").expect("an older file loads");
+        let older = serde_json::to_value(older).expect("serializes");
+        for (what, v) in [("fresh", &fresh), ("older", &older)] {
+            for key in [
+                "scopeSource",
+                "sdrconnectHost",
+                "sdrconnectPort",
+                "sdrconnectFollow",
+            ] {
+                assert_eq!(v[key], want[key], "{what} file, {key}");
+            }
+        }
+        assert_eq!(Settings::default().sdrconnect_target(), None);
+    }
+
+    /// The stored words are read leniently, and a word this build does not know leaves the
+    /// scope on the radio; a blank host or a zero port reads as SDRconnect's own default.
+    #[test]
+    fn the_scope_source_words_read_leniently_and_fall_back_to_the_radio() {
+        assert_eq!(
+            ScopeSource::from_setting(" SDRconnect "),
+            ScopeSource::Sdrconnect
+        );
+        assert_eq!(ScopeSource::from_setting("tci"), ScopeSource::Radio);
+        assert_eq!(ScopeSource::from_setting(""), ScopeSource::Radio);
+        assert_eq!(
+            SdrconnectFollow::from_setting("Scroll"),
+            SdrconnectFollow::Scroll
+        );
+        assert_eq!(
+            SdrconnectFollow::from_setting("fixed"),
+            SdrconnectFollow::Centre
+        );
+        let mut s = Settings {
+            scope_source: "sdrconnect".into(),
+            sdrconnect_host: "  ".into(),
+            sdrconnect_port: 0,
+            ..Settings::default()
+        };
+        assert_eq!(s.sdrconnect_target(), Some(("127.0.0.1".into(), 5454)));
+        s.sdrconnect_host = " shack-pc ".into();
+        s.sdrconnect_port = 5455;
+        assert_eq!(s.sdrconnect_target(), Some(("shack-pc".into(), 5455)));
     }
 
     /// The TCI server's settings by their wire keys.

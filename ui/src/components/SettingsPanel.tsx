@@ -716,6 +716,11 @@ type WorkingFrequency = NonNullable<Settings['workingFrequencies']>[number]
 
 /** The worldwide 60 m FT8 dial (#175) — `bandplan::SIXTY_M_FT8_WORLDWIDE_MHZ` on the Rust side, which
  *  the band button tunes for a non-US callsign. Shown beside the US row below. */
+// SDRconnect as SDRplay ships it: on this computer, its WebSocket API on 5454. The same values as
+// the backend's `default_sdrconnect_host` / `SDRCONNECT_DEFAULT_PORT` (settings.rs).
+const SDRCONNECT_DEFAULT_HOST = '127.0.0.1'
+const SDRCONNECT_DEFAULT_PORT = 5454
+
 const SIXTY_M_FT8_WORLDWIDE_MHZ = 5.357
 
 /** The stock WSJT-X working-frequency table, shown read-only for reference.
@@ -1807,6 +1812,9 @@ export function SettingsPanel({
   const [tciFinding, setTciFinding] = useState(false)
   const [tciFindNote, setTciFindNote] = useState('')
   const onTci = form?.rigConn === 'tci'
+  // The scope source as the backend reads it (`ScopeSource::from_setting`): any word but
+  // `sdrconnect` is the radio's own.
+  const scopeFromSdrconnect = (form?.scopeSource ?? '').trim().toLowerCase() === 'sdrconnect'
   useEffect(() => {
     setTciFindNote('')
   }, [onTci, editingRadioId])
@@ -6928,6 +6936,76 @@ export function SettingsPanel({
                   {t('settings.headphoneMonitor.level.hint')}
                 </span>
               </label>
+            </div>
+          </fieldset>
+
+          {/* ---- Scope source: the radio's own panadapter, or an SDRplay receiver through
+              SDRconnect. The station's, not a radio's: the SDR follows whichever radio is in use.
+              Receive only — nothing here reaches the transmitter or the rig's CAT. ---- */}
+          <fieldset className="settings-section" id="settings-scope-source">
+            <legend>{t('settings.scopeSource.legend')}</legend>
+            <p className="settings-note">{t('settings.scopeSource.note')}</p>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.scopeSource.source.label')}</span>
+                <select disabled={remote}
+                  className="settings-input"
+                  value={scopeFromSdrconnect ? 'sdrconnect' : 'radio'}
+                  onChange={(e) => update('scopeSource', e.target.value)}
+                >
+                  <option value="radio">{t('settings.scopeSource.source.radio')}</option>
+                  <option value="sdrconnect">{t('settings.scopeSource.source.sdrconnect')}</option>
+                </select>
+                <span className="settings-hint">{t('settings.scopeSource.source.hint')}</span>
+              </label>
+              {scopeFromSdrconnect && (
+                <>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.scopeSource.host.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="text"
+                      value={form.sdrconnectHost ?? SDRCONNECT_DEFAULT_HOST}
+                      placeholder={SDRCONNECT_DEFAULT_HOST}
+                      onChange={(e) => update('sdrconnectHost', e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <span className="settings-hint">{t('settings.scopeSource.host.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.scopeSource.port.label')}</span>
+                    <input disabled={remote}
+                      className="settings-input"
+                      type="number"
+                      inputMode="numeric"
+                      min="1"
+                      max="65535"
+                      value={String(form.sdrconnectPort ?? SDRCONNECT_DEFAULT_PORT)}
+                      placeholder={String(SDRCONNECT_DEFAULT_PORT)}
+                      onChange={(e) => updateNum('sdrconnectPort', Number(e.target.value))}
+                      autoComplete="off"
+                    />
+                    <span className="settings-hint">{t('settings.scopeSource.port.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.scopeSource.follow.label')}</span>
+                    <select disabled={remote}
+                      className="settings-input"
+                      value={(form.sdrconnectFollow ?? '').trim().toLowerCase() === 'scroll' ? 'scroll' : 'centre'}
+                      onChange={(e) => update('sdrconnectFollow', e.target.value)}
+                    >
+                      <option value="centre">{t('settings.scopeSource.follow.centre')}</option>
+                      <option value="scroll">{t('settings.scopeSource.follow.scroll')}</option>
+                    </select>
+                    <span className="settings-hint">{t('settings.scopeSource.follow.hint')}</span>
+                  </label>
+                  {/* Across the whole row: the one line here about the operator's hardware. */}
+                  <p className="settings-note" data-sdrconnect-rf-safety>
+                    {t('settings.scopeSource.rfSafety')}
+                  </p>
+                </>
+              )}
             </div>
           </fieldset>
 

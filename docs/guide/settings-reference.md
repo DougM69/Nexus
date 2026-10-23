@@ -628,6 +628,31 @@ from the labels. (The search still knows it — look for "monitor" and you will 
   device": playing the received band into the transmitter would put it back on the air.
 - **Listening level** — playback volume, with no effect on transmit.
 
+### Scope source
+
+Where the RF scope's picture comes from. **The radio** (as it comes) is the radio's own
+panadapter — Flex, Icom CI-V, the FT-710's, a TCI program's — or the sound card's audio where the
+radio has none. **SDRconnect (SDRplay)** draws an SDRplay RSP receiver instead, through SDRplay's
+own SDRconnect program over its WebSocket API: the receiver's whole span, each station at its own
+frequency, with the dial, the passband and spots drawn on it as usual.
+
+- SDRconnect is a separate, free, closed-source program from SDRplay. Install it, turn its
+  WebSocket API on, and leave it running (with its window, or headless). Nexus ships nothing of
+  SDRplay's and loads none of its code. It serves every RSP except the original RSP1.
+- **SDRconnect computer** and **WebSocket API port** — 127.0.0.1 and 5454 unless SDRconnect runs
+  elsewhere or you moved its port.
+- **Follow the dial** — the receiver's centre is set from the rig's dial: on every change (*Keep
+  the dial in the centre*), or only when the dial nears the edge of the span (*Retune only when
+  the dial nears the edge*), which moves SDRconnect's own display far less. A retune in
+  SDRconnect's window is drawn where it went; Nexus retunes again only when the dial moves.
+- Pick the receiver, and an RSPduo's tuner mode, in SDRconnect. Nexus uses the primary tuner.
+- Receive only: Nexus never transmits through SDRconnect and sends it no CAT. Clicking a spot on
+  the scope tunes the rig through Nexus's normal CAT path.
+- When SDRconnect is not running, sends no IQ, or sends IQ at a rate other than the one it
+  reports, the scope's status line says which, and Nexus keeps trying.
+- **Feed the receiver from the rig's RX OUT, or from a splitter with transmit protection** —
+  never a plain T-piece on the transmit line. An RSP takes at most 0 dBm; 100 W is +50 dBm.
+
 ### Satellite Doppler
 
 Corrects both legs of a pass — the downlink you listen on and the uplink you

@@ -7112,6 +7112,40 @@ export const EN = {
   'settings.headphoneMonitor.level.hint':
     'Headphone listening volume (does not affect TX).',
 
+  // ── Settings ▸ Radio ▸ Scope source ─────────────────────────────────────────────────
+  // SDRconnect, SDRplay, RSP, RSP1, RX OUT, CAT, WebSocket API, 127.0.0.1, 5454, 0 dBm, 100 W and
+  // +50 dBm are names and quantities: never translated, never locale-formatted.
+  'settings.scopeSource.legend':
+    "Scope source",
+  'settings.scopeSource.note':
+    "Where the RF scope's picture comes from: the radio's own panadapter (or the sound card's audio where the radio has none), or an SDRplay RSP receiver through SDRconnect. SDRconnect is SDRplay's own program, free and closed-source, which you install and run beside Nexus with its WebSocket API turned on; it serves every RSP except the original RSP1.",
+  'settings.scopeSource.source.label':
+    "Draw the scope from",
+  'settings.scopeSource.source.radio':
+    "The radio",
+  'settings.scopeSource.source.sdrconnect':
+    "SDRconnect (SDRplay)",
+  'settings.scopeSource.source.hint':
+    "SDRconnect draws the receiver's whole span with each station at its own frequency, centred on the rig's dial. Receive only: Nexus never transmits through it and sends it no CAT.",
+  'settings.scopeSource.host.label':
+    "SDRconnect computer",
+  'settings.scopeSource.host.hint':
+    "127.0.0.1 is this computer. Put the name or address of another computer if SDRconnect runs there.",
+  'settings.scopeSource.port.label':
+    "WebSocket API port",
+  'settings.scopeSource.port.hint':
+    "SDRconnect's WebSocket API port: 5454 unless you moved it in SDRconnect.",
+  'settings.scopeSource.follow.label':
+    "Follow the dial",
+  'settings.scopeSource.follow.centre':
+    "Keep the dial in the centre",
+  'settings.scopeSource.follow.scroll':
+    "Retune only when the dial nears the edge",
+  'settings.scopeSource.follow.hint':
+    "How the receiver's centre follows the rig's dial. Retuning only near the edge moves SDRconnect's own display far less.",
+  'settings.scopeSource.rfSafety':
+    "Feed the receiver from the rig's RX OUT, or from a splitter with transmit protection, never from a plain T-piece on the transmit line: an RSP takes at most 0 dBm, and 100 W is +50 dBm.",
+
   // ── Settings ▸ Radio ▸ Satellite Doppler ────────────────────────────────────────────
   // ⚠️ The MAPPING LABELS are not here — they live in `features/satVfo.ts` beside the wire
   // value each one stores, because the Satellites readiness rail shows the same list and two
