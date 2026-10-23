@@ -226,3 +226,32 @@ describe('the roster Disable button', () => {
     await waitFor(() => expect(api.get('setRadioEnabled')).toHaveBeenLastCalledWith(1, true))
   })
 })
+
+describe('a disabled radio cannot be made active', () => {
+  it('renders Make active disabled on its card, saying to enable it first', async () => {
+    api
+      .get('getSettings')
+      .mockImplementation(() =>
+        Promise.resolve(settingsWith([FTDX10, { ...IC9700, enabled: false }])),
+      )
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+
+    const makeActive = (await screen.findByRole('button', {
+      name: 'Make active',
+    })) as HTMLButtonElement
+    expect(makeActive.disabled).toBe(true)
+    expect(makeActive.title).toMatch(/enable it first/i)
+    fireEvent.click(makeActive)
+    expect(api.get('setActiveRadio')).not.toHaveBeenCalled()
+  })
+
+  it('leaves Make active usable on an enabled radio', async () => {
+    renderPanel()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    const makeActive = (await screen.findByRole('button', {
+      name: 'Make active',
+    })) as HTMLButtonElement
+    expect(makeActive.disabled).toBe(false)
+  })
+})

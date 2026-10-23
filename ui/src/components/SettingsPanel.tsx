@@ -5116,11 +5116,16 @@ export function SettingsPanel({
                         </button>
                       )}
                       {!isActive && (
-                        <button disabled={!canSelectRadio}
+                        // A disabled radio is enabled first, so its port is never opened by a click here.
+                        <button disabled={!canSelectRadio || !r.enabled}
                           type="button"
                           className="settings-refresh"
                           onClick={() => handleMakeActive(r.id)}
-                          title={t('settings.radios.makeActive.title')}
+                          title={
+                            r.enabled
+                              ? t('settings.radios.makeActive.title')
+                              : t('settings.radios.makeActive.title.disabled')
+                          }
                         >
                           {t('settings.radios.makeActive.action')}
                         </button>

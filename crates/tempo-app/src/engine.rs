@@ -26784,10 +26784,13 @@ contact yourself."
             },
         };
         if self.settings.radios.len() > 1 {
+            // A radio disabled in its profile gets no pill: its port stays free and nothing here
+            // can switch to it. The radio being operated is always listed, whatever its flag says.
             s.radios = self
                 .settings
                 .radios
                 .iter()
+                .filter(|p| p.enabled || p.id == self.settings.active_radio)
                 .map(|p| {
                     if p.id == self.settings.active_radio {
                         RadioSummary {
@@ -59593,6 +59596,44 @@ mod tests {
 
         assert!(e.set_radio_enabled(r1, true));
         assert!(profile(&e).enabled, "enabled again");
+    }
+
+    #[test]
+    fn the_switcher_lists_no_disabled_radio_but_always_the_one_being_operated() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        let r1 = e.add_radio();
+        let r2 = e.add_radio();
+        let listed = |e: &Engine| e.snapshot().radios.iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(listed(&e), vec![0, r1, r2]);
+
+        assert!(e.set_radio_enabled(r1, false));
+        assert_eq!(listed(&e), vec![0, r2], "a disabled radio has no pill");
+        assert!(e.set_radio_enabled(r1, true));
+        assert_eq!(
+            listed(&e),
+            vec![0, r1, r2],
+            "enabling it brings the pill back"
+        );
+
+        // A radio still in use stays listed even when its profile says disabled (a settings file
+        // written that way, or a Remote selection of a disabled radio): the switcher never hides
+        // the radio on the air, and nothing here switches away from it.
+        e.settings
+            .radios
+            .iter_mut()
+            .find(|p| p.id == 0)
+            .unwrap()
+            .enabled = false;
+        let snap = e.snapshot();
+        assert_eq!(snap.active_radio_id, 0);
+        assert_eq!(
+            snap.radios
+                .iter()
+                .map(|r| (r.id, r.is_active))
+                .collect::<Vec<_>>(),
+            vec![(0, true), (r1, false), (r2, false)]
+        );
     }
 
     #[test]

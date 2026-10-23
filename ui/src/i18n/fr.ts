@@ -6908,6 +6908,7 @@ export const FR: PartialCatalog = {
   "settings.radios.makeActive.confirm.body": "La porteuse est coupée avant la bascule. Les modifications non enregistrées de la radio en cours de modification sont perdues.",
   "settings.radios.makeActive.confirm.title": "Abandonner les modifications non enregistrées et changer de radio active ?",
   "settings.radios.makeActive.title": "En faire votre radio active (bascule de radio ; coupe d'abord toute porteuse).",
+  "settings.radios.makeActive.title.disabled": "Cette radio est désactivée — activez-la d'abord, puis faites-en votre radio active.",
   "settings.radios.name.placeholder": "Nom de la radio",
   "settings.radios.remove.action": "Retirer",
   "settings.radios.remove.confirm.action": "Retirer la radio",

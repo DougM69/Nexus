@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Disable** button. A disabled radio keeps its whole setup, but Nexus stops watching it and lets go of its CAT
   port, so another program on the same computer can use that rig. Auto band-routing skips it. **Enable** brings it
   back. The radio you are operating can't be disabled: make another radio active first.
+- **A disabled radio leaves the radio switcher.** Its pill is gone from the header's radio switcher, and its
+  **Make active** button in Settings ▸ Radio is greyed out until you enable it, so a click can't open its port
+  again. Enable it and the pill comes back. With only one radio left enabled, the switcher hides as it does for a
+  one-radio station.
 - **The Call Roster's Hide worked can reach back a set time.** Beside Hide worked on the FT8/FT4 Call Roster is
   the same window picker the Spots panel has: Any time (the default, and what Hide worked did before), Until 0000Z,
   1 h, 4 h, 24 h or 7 days. A station you last worked before the window shows again, which suits special-event

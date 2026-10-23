@@ -1373,6 +1373,7 @@ export const DE: PartialCatalog = {
   "settings.radios.edit.title": "CAT / Audio dieses Geräts unten bearbeiten — OHNE das aktive Funkgerät zu wechseln (kein Umschalten, kein abgeschalteter Träger).",
   "settings.radios.makeActive.action": "Aktivieren",
   "settings.radios.makeActive.title": "Dieses Gerät zum aktiven Funkgerät machen (wechselt das Gerät; schaltet vorher den Träger ab).",
+  "settings.radios.makeActive.title.disabled": "Dieses Funkgerät ist deaktiviert — zuerst aktivieren, dann zum aktiven Gerät machen.",
   "settings.radios.remove.action": "Entfernen",
   "settings.radios.remove.title": "Dieses Funkgerät aus der Liste entfernen",
   "settings.radios.remove.title.blocked": "Das ist das aktive Funkgerät — erst ein anderes aktivieren, dann dieses entfernen.",

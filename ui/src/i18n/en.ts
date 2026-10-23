@@ -6669,6 +6669,8 @@ export const EN = {
   'settings.radios.makeActive.action': 'Make active',
   'settings.radios.makeActive.title':
     'Make this your operating radio (swaps rigs; drops any carrier first).',
+  'settings.radios.makeActive.title.disabled':
+    'This radio is disabled — enable it first, then make it active.',
   'settings.radios.remove.action': 'Remove',
   'settings.radios.remove.title': 'Remove this radio from the roster',
   'settings.radios.remove.title.blocked':

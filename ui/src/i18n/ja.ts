@@ -4317,6 +4317,7 @@ export const JA: PartialCatalog = {
   "settings.radios.edit.title": "この無線機のCAT/オーディオを下で編集します — 運用中の無線機は変わりません（切り替えなし、キャリア断なし）。",
   "settings.radios.makeActive.action": "アクティブにする",
   "settings.radios.makeActive.title": "この無線機を運用機にします（無線機を切り替え、先にキャリアを停止します）。",
+  "settings.radios.makeActive.title.disabled": "この無線機は無効です — 先に有効にしてから運用機にしてください。",
   "settings.radios.remove.action": "削除",
   "settings.radios.remove.title": "この無線機を一覧から削除",
   "settings.radios.remove.title.blocked": "これは運用中の無線機です — 先に別の無線機をアクティブにしてから削除してください。",

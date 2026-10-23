@@ -6908,6 +6908,7 @@ export const ES: PartialCatalog = {
   "settings.radios.makeActive.confirm.body": "La portadora se corta antes del cambio. Se pierden las ediciones sin guardar del equipo que estabas editando.",
   "settings.radios.makeActive.confirm.title": "¿Descartar los cambios sin guardar y cambiar el equipo en uso?",
   "settings.radios.makeActive.title": "Pasar a operar con este equipo (cambia de equipo; corta antes cualquier portadora).",
+  "settings.radios.makeActive.title.disabled": "Este equipo está desactivado — actívalo primero y luego pásate a operar con él.",
   "settings.radios.name.placeholder": "Nombre del equipo",
   "settings.radios.remove.action": "Quitar",
   "settings.radios.remove.confirm.action": "Quitar equipo",
