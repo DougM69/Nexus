@@ -4744,7 +4744,24 @@ export interface ClientStatus {
   /** The station is kept by its service id until this computer first reaches it on its network
    *  (signed in to from elsewhere): the internet road is its only road from here. */
   away?: boolean
+  /** Why a press of PTT on this computer would not key the station, or `null`/absent when a press
+   *  would (or did) key. Recorded by the station's own arming path — display only; the UI never
+   *  decides whether a press keys. Absent on a station build older than the one that added it. */
+  pttRefusal?: PttRefusal | null
 }
+
+/** The reasons a client PTT press does not key, as the station's arming path records them. The
+ *  names are a backend contract (`client_status`), matched one-for-one by `ClientBanner`. */
+export type PttRefusal =
+  | 'notPhone'
+  | 'txDisabled'
+  | 'outsideLicence'
+  | 'tuning'
+  | 'otherOwner'
+  | 'clockRepair'
+  | 'noPresence'
+  | 'noFeed'
+  | 'noAudio'
 
 /** The test build's road switch: both roads as they are, or one of them blocked. */
 export type BenchPosition = 'normal' | 'blockLink' | 'blockStopRoad'

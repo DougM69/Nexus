@@ -329,11 +329,12 @@ it('offers start at sign-in once, only when the operator turns Remote on, and re
   expect(screen.queryByRole('button', { name: 'Start Nexus when I sign in' })).toBeNull()
   expect(settings.launchAtLogin).toBe(false)
   expect(calls).not.toContain('set_launch_at_login')
-  // Answered once: off and on again does not ask again.
+  // Answered once: off and on again does not ask again. Three get_settings in all: one on mount
+  // (the station-name prefill reads the callsign) and one per enable; the re-enable adds no more.
   fireEvent.click(await screen.findByRole('button', { name: 'Turn off Remote' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Turn on Remote' }))
   await screen.findByRole('button', { name: 'Turn off Remote' })
-  await waitFor(() => expect(calls.filter(c => c === 'get_settings').length).toBe(2))
+  await waitFor(() => expect(calls.filter(c => c === 'get_settings').length).toBe(3))
   expect(screen.queryByRole('button', { name: 'Start Nexus when I sign in' })).toBeNull()
 })
 

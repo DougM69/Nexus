@@ -87,6 +87,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request.
 
 ### Changed
+- **Remote has its own Settings tab.** The sign-in, pairing and device-approval card that used to sit at the bottom
+  of the Station tab now lives on a dedicated **Remote** tab, next to Station, so it is easier to find. Nothing on
+  the card changed, and every switch keeps its setting; the Icom-network and rig-sharing settings on the Radio tab,
+  and the "Conditions on a TV" setting on the Appearance tab, stay where they are.
+- **Signing a station in to Remote no longer starts with a dead button.** The station-name box on the Remote card
+  fills in with your callsign on arrival, so **Sign in** and **Pair a station** work straight away (you can still
+  change the name). If you have not set a callsign yet, a short line beside the box says to type a name.
 - **The station decides every decode alert, so every screen hears the same ones.** Someone calling you, a new DXCC
   entity or grid (a rare grid loudly), a watch-list station, an opted-in CQ and a park newly on the air are now
   decided once, at the station, from your alert settings, your watch list (its CQ-only, minimum SNR and label with

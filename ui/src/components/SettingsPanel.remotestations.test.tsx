@@ -71,8 +71,8 @@ function renderPanel() {
   return render(panel)
 }
 
-async function openStationTab() {
-  fireEvent.click(await screen.findByRole('tab', { name: 'Station' }))
+async function openRemoteTab() {
+  fireEvent.click(await screen.findByRole('tab', { name: 'Remote' }))
   await waitFor(() => expect(document.getElementById('settings-remote-access')).toBeTruthy())
 }
 
@@ -103,7 +103,7 @@ afterEach(cleanup)
 describe('on Windows', () => {
   it('is offered at the end of Remote access, after the streaming switch, and says what F11 and Esc do', async () => {
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     const button = await waitFor(() => theButton()!)
     expect(card().contains(button)).toBe(true)
     const streaming = screen.getByRole('switch', { name: EN['settings.remoteStream.label'] })
@@ -117,7 +117,7 @@ describe('on Windows', () => {
     let finish: () => void = () => {}
     opens().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     const button = await waitFor(() => theButton()!)
     fireEvent.click(button)
     expect(opens()).toHaveBeenCalledTimes(1)
@@ -131,7 +131,7 @@ describe('on Windows', () => {
   it('says so in words when the window could not be opened, and lets the operator try again', async () => {
     opens().mockImplementation(() => Promise.reject(new Error('remoteUnreachable')))
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     const button = await waitFor(() => theButton()!)
     fireEvent.click(button)
     const alert = await screen.findByRole('alert')
@@ -148,7 +148,7 @@ describe('where the window is not offered', () => {
   it('says to use a browser on Linux and macOS, with no button', async () => {
     platform.windows = false
     renderPanel()
-    await openStationTab()
+    await openRemoteTab()
     await waitFor(() => expect(screen.getByText(EN['settings.remoteStations.unavailable'])).toBeTruthy())
     expect(card().contains(screen.getByText(EN['settings.remoteStations.unavailable']))).toBe(true)
     expect(theButton()).toBeNull()

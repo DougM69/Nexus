@@ -29,6 +29,7 @@
  * supported 1024×768 floor, so labels stay short. */
 export type SettingsTabId =
   | 'station'
+  | 'remote'
   | 'radio'
   | 'phone'
   | 'cw'
@@ -49,6 +50,10 @@ export interface SettingsTabDef {
  * `##` headings equal these labels IN ORDER, so this array and the manual move together. */
 export const SETTINGS_TABS: SettingsTabDef[] = [
   { id: 'station', label: 'Station' },
+  // The core Remote card — sign-in, pairing, browser/computer approvals — lives on its own tab
+  // (operator, 2026-10-23), next to Station. The Radio-tab rig-share/Icom-network settings and the
+  // Appearance-tab Conditions-on-a-TV setting are a different concern and stay where they are.
+  { id: 'remote', label: 'Remote' },
   { id: 'radio', label: 'Radio' },
   // The three mode tabs mirror the nav rail's own top-level shape (Phone · CW · Digital), which
   // is the taxonomy the operator already navigates. It is also the only axis that can house SSTV
@@ -106,8 +111,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'temperature', 'fahrenheit', 'celsius', 'wind speed'],
   },
 
+  // ---- Remote ------------------------------------------------------------------
+  // The one core Remote card, on its own tab (operator, 2026-10-23). The id stays `remote-access`
+  // — it is a public deep-link anchor and the manual's slug — so every existing pointer still
+  // lands; only the tab it sits on changed.
   {
-    id: 'remote-access', label: 'Remote access', tab: 'station',
+    id: 'remote-access', label: 'Remote access', tab: 'remote',
     keywords: ['browser', 'shack', 'pairing', 'account', 'device approval', 'observation', 'internet',
       // Remote as a stream: the words for sending this window to a browser.
       'stream', 'streaming', 'screen sharing', 'video',

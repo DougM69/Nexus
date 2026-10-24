@@ -517,3 +517,37 @@ describe('a station kept by its service id (signed in to from elsewhere)', () =>
     )
   })
 })
+
+describe('why a PTT press here did not key the station (the client-status refusal reason)', () => {
+  it('renders a plain message for each refusal value, beside the over line', async () => {
+    const cases: Array<[NonNullable<ClientStatus['pttRefusal']>, string]> = [
+      ['notPhone', EN['client.ptt.refusal.notPhone']],
+      ['txDisabled', EN['client.ptt.refusal.txDisabled']],
+      ['outsideLicence', EN['client.ptt.refusal.outsideLicence']],
+      ['tuning', EN['client.ptt.refusal.tuning']],
+      ['otherOwner', EN['client.ptt.refusal.otherOwner']],
+      ['clockRepair', EN['client.ptt.refusal.clockRepair']],
+      ['noPresence', EN['client.ptt.refusal.noPresence']],
+      ['noFeed', EN['client.ptt.refusal.noFeed']],
+      ['noAudio', EN['client.ptt.refusal.noAudio']],
+    ]
+    for (const [refusal, text] of cases) {
+      mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, pttRefusal: refusal })
+      const container = await shown()
+      const line = container.querySelector(`.client-banner-over[data-ptt-refusal="${refusal}"]`)
+      expect(line?.textContent, refusal).toBe(text)
+      cleanup()
+    }
+  })
+
+  it('shows nothing when a press would key (null) or the station build does not send the field', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, pttRefusal: null })
+    let container = await shown()
+    expect(container.querySelector('[data-ptt-refusal]')).toBeNull()
+    cleanup()
+    // Older station build: the field is simply absent.
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null })
+    container = await shown()
+    expect(container.querySelector('[data-ptt-refusal]')).toBeNull()
+  })
+})

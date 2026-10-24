@@ -29,7 +29,7 @@ revoked at any time while it is.
 | **Second PC on your network** | Another Windows PC on the shack's network | The full Nexus screens for the shack's radio, its receive audio, your microphone, Phone PTT, CW from the keyboard and macros, FT8/FT4, JS8, APRS, SSTV, Chat, Tune and ATU | **Remote over this network** on at the shack; nothing on the internet |
 | **Second PC over the internet** | A Windows PC anywhere | The same as on your network, through the Nexus Remote service | A Nexus Remote account, and the PC approved at the shack |
 
-### At the shack: Settings ▸ Station ▸ Remote access
+### At the shack: Settings ▸ Remote ▸ Remote access
 
 Everything about who may use the station is set here, at the station, and nowhere else. The
 card holds:
@@ -84,7 +84,7 @@ Stop always wins, from either end:
 
 ### Set up the shack
 
-1. At the shack, open **Settings ▸ Station ▸ Remote access**.
+1. At the shack, open **Settings ▸ Remote ▸ Remote access**.
 2. Press **Sign in to Nexus Remote**. Your web browser opens on the Nexus Remote sign-in.
 3. Sign in, or make an account. The card then shows the station as linked to your account.
 4. Press **Turn on Remote**. The card shows the station connected to the Remote service, and
