@@ -2594,16 +2594,31 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
     </Fragment>
   )
 
-  // THE TX STRIP — FT's cluster (2026-10-01): the TX-enable latch READ-ONLY (Phone arms TX
-  // itself — the mode change arms it and the PTT offers to), Tune, the rig's ATU and Stop TX
-  // (→ halt_tx), sticky so they never leave the window. A shell child with no ⊞ id: under the
+  // THE TX STRIP — FT's cluster (2026-10-01): the TX-enable latch READ-ONLY at the station (Phone
+  // arms TX itself — the mode change arms it and the PTT offers to), Tune, the rig's ATU and Stop TX
+  // (→ halt_tx), sticky so they never leave the window. ON A COMPUTER DRIVING A STATION the latch is
+  // a button: entering Phone from afar arms nothing, so it reads TX Off, and one click is one
+  // `set_tx_enabled` under every guard the station applies to a start from afar; a refusal is shown.
+  // A refused Tune or ATU is shown too, wherever this screen runs. A shell child with no ⊞ id: under the
   // scope, or after the contact in the hosted Quick presentation (below). Space as PTT is a WINDOW
   // listener and stays one: with focus on a strip button, Space still goes to the PTT handler,
   // which calls preventDefault, so the focused button does not click.
   const txStrip = (
     <CockpitTxStrip
       radio={snap.radio}
-      onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+      onSetTxEnabled={
+        driving
+          ? (on) =>
+              void setTxEnabled(on)
+                .then((s) => onSnap?.(s))
+                .catch((e) => pushToast(String(e), 'error'))
+          : undefined
+      }
+      onTune={(on) =>
+        void setTune(on)
+          .then((s) => onSnap?.(s))
+          .catch((e) => pushToast(String(e), 'error'))
+      }
       onAtuTune={() =>
         void atuTune()
           .then((s) => onSnap?.(s))

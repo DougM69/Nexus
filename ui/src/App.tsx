@@ -301,6 +301,15 @@ const OPERATE_TIERS: Tier[] = [
  *  on every section in the registry and holds each to what it sends. Connect is here because it draws
  *  no top bar, so no Stop TX of its own (the operator's 2026-10-01 ruling). */
 const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'jtty', 'sstv', 'aprs', 'sats', 'connect'])
+/** The screen of each section the station reports (`radio.operatingMode`), for a computer driving
+ *  it to follow. 'keyboard' is PSK's screen, the section's own landing. */
+const SCREEN_BY_SECTION: Partial<Record<string, View>> = {
+  digital: 'operate',
+  phone: 'phone',
+  cw: 'cw',
+  rtty: 'rtty',
+  keyboard: 'psk',
+}
 function App() {
   const [theme, setTheme, themeChoice] = useTheme()
   // The built-in themes (Settings ▸ Appearance ▸ Theme): App is the one writer of `data-skin`,
@@ -457,8 +466,9 @@ function App() {
   // whole reasoning; do not merge these back together.
   const lastOpModeRef = useRef<RigMode>('digital')
   const lastHomedModeRef = useRef<RigMode>('digital')
-  // The cockpit a Work from afar opened, named by the work-hint follow below for the rig-mode effect
-  // alone. That Work (`workAfar`: a computer driving this station) entered its section WITHOUT
+  // A screen entered without asserting its section, named for the rig-mode effect alone: the screen
+  // a computer driving a station follows it to, or goes back to when the station refuses a section
+  // change (both below), and the cockpit a Work from afar opened, named by the work-hint follow below. That Work (`workAfar`: a computer driving this station) entered its section WITHOUT
   // arming Enable TX, and the effect's re-assert, from this screen, would arm the latch for Phone,
   // CW, RTTY and PSK: the authority the Work withheld. Read and cleared on every run, so it holds
   // back only the one entry it names.
@@ -512,6 +522,8 @@ function App() {
     // and the Needed click set the mode without going through here), which left the rig stuck
     // in the wrong mode while the VFO read-back kept working. The backend is idempotent and
     // re-arms an immediate retune, so re-asserting is cheap.
+    const prevOp = lastOpModeRef.current
+    const prevHomed = lastHomedModeRef.current
     const { mode, followFreq, keepDial, nextHomed } = rigModeTransition(view, lastHomedModeRef.current, from)
     lastHomedModeRef.current = nextHomed
     if (!mode) return
@@ -521,7 +533,18 @@ function App() {
     if (fromAfar) return
     void setOperatingMode(mode, followFreq, keepDial)
       .then((s) => s && setSnap(s))
-      .catch(() => {})
+      .catch((why) => {
+        // At the station a refusal stays quiet, as it always has. A computer driving a station
+        // says why, and goes back to the screen it came from, which is still the station's
+        // section; the way back sends nothing (`afarEntryRef`).
+        if (!drivesAnotherStation()) return
+        pushToast(String(why), 'error')
+        if (viewRef.current !== view) return
+        lastOpModeRef.current = prevOp
+        lastHomedModeRef.current = prevHomed
+        afarEntryRef.current = from
+        setView(from)
+      })
   }, [view])
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
   // DXpeditions ON THE AIR NOW that announced SuperFox — a format this version of Nexus has no
@@ -1222,6 +1245,28 @@ function App() {
       setPendingWork({ call: wc, view: target, ts: Date.now(), park: snap?.workPark ?? null })
     }
   }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled, pskEnabled, jttyEnabled, js8Enabled])
+  // A COMPUTER DRIVING A STATION SHOWS THE STATION'S SECTION. The screen restored at launch is this
+  // computer's last, and the station may be in another section: Phone drawn over a station in FT8
+  // sent its band picks as phone bands to the digital section, and the rig came up in DATA. So on
+  // an operating screen the view follows the section the station reports, READ-ONLY: nothing is
+  // sent, on connect or after, and a station running FT8 is never moved by a computer connecting.
+  // Keyed on the station's value alone, so the operator's own pick (sent by the rig-mode effect)
+  // is never pulled back by a snapshot taken before the station answered it. A screen with no
+  // section of its own (Map, Logbook…) stays put, as does a section whose screen is switched off.
+  const stationSection = snap?.radio.operatingMode
+  useEffect(() => {
+    if (!drivesAnotherStation() || !stationSection) return
+    const own = RIG_MODE_BY_VIEW[viewRef.current]
+    if (!own) return
+    if ((own === 'jtty' ? 'keyboard' : own) === stationSection) return
+    const target = SCREEN_BY_SECTION[stationSection]
+    if (!target || !features.isOn(target)) return
+    lastOpModeRef.current = RIG_MODE_BY_VIEW[target] ?? 'digital'
+    lastHomedModeRef.current = lastOpModeRef.current
+    afarEntryRef.current = target
+    setView(target)
+    // The station's section alone: a re-run on the screen changing would pull the operator's pick back.
+  }, [stationSection])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
   const [settings, setSettings] = useState<Settings | null>(null)

@@ -15,7 +15,8 @@ import { RadioTuneNote } from './RadioTuneNote'
 export interface CockpitTxStripProps {
   radio: RadioStatus
   /** Arm/disarm TX (WSJT-X "Enable Tx"). Omit ⇒ the first slot shows the latch READ-ONLY (Phone
-   *  and CW arm it themselves: the mode change arms it, Phone's PTT offers to). */
+   *  and CW arm it themselves: the mode change arms it, Phone's PTT offers to). Phone passes it on
+   *  a computer driving a station, where entering the section arms nothing. */
   onSetTxEnabled?: (on: boolean) => void
   /** Tune (key a steady carrier). */
   onTune?: (on: boolean) => void
