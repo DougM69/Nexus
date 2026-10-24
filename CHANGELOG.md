@@ -96,6 +96,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Download my data, and Delete account, which deletes only after you type DELETE. A paid plan is cancelled first, and
   nothing is deleted if it cannot be. Your stations, devices and invitations go; the sign-in record is removed on
   request.
+- **Your own signed-in devices pair with your station automatically, over your network and over the internet.**
+  When you sign a computer, phone or browser in to your Nexus Remote account, it is granted control of your
+  station without a trip to the shack to approve it — on your home network and across the internet alike. Code
+  pairing and approving a device at the radio still work exactly as before. For safety, a device added this way
+  cannot transmit for its first 15 minutes: it can listen and take control at once, but transmitting waits out the
+  hold (Stop is never held). The hold lifts at once when the device signs in with two-factor, or when it joins on
+  your own network, and the moment you approve it at the shack. A password-only internet device can also transmit
+  once its 15 minutes pass — but only after the email telling you it was added has actually been sent to your
+  account; until then it stays held, so approve it at the shack, or sign it in with two-factor, to let it transmit
+  sooner. That email names the device, the station and when, and how to remove it if it was not you.
 
 ### Changed
 - **The phone scope starts snappier.** The phone panadapter and waterfall now default to the Fast analysis

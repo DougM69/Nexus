@@ -9,7 +9,7 @@ use super::transport::identifier;
 use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Mutex,
@@ -147,6 +147,27 @@ struct Core {
     revision: u64,
     context: Option<Vec<u8>>,
     windows: VecDeque<Window>,
+    /// The transmit WAIVER STATE the station recorded for each sign-in auto-granted device (the
+    /// 2026-10-23 sign-in decision), by device id. FAIL-CLOSED: this map does not decide whether a
+    /// device is sign-in-granted — the durable service list does, through
+    /// [`Authority::signin_devices`] — it only records a POSITIVE outcome. A sign-in-granted device
+    /// with an entry here is held or waived per the entry; a sign-in-granted device with NO entry is
+    /// held (its grant never recorded a positive waiver/window). Written by
+    /// `Controller::grant_vouched` (held with its window) and
+    /// `grant_approved` (waived at the shack); cleared on revoke. The engine's arm gate is set from
+    /// the CONTROLLING device's state at each lease event ([`Authority::apply_tx_hold`]). Monotonic,
+    /// not persisted — a restart re-vouches a device afresh and, until it does, holds it.
+    tx_grants: BTreeMap<String, TxGrant>,
+}
+/// What the station recorded for a sign-in auto-granted device's transmit (the 2026-10-23 sign-in
+/// decision). Presence of a value is a POSITIVE record; its absence for a sign-in-granted device is
+/// a hold (fail-closed).
+#[derive(Clone, Copy)]
+enum TxGrant {
+    /// Held from transmit until this monotonic moment (its 15-minute window); past it, free.
+    Held { until: Instant },
+    /// Waived: an Approve at the shack. Free to transmit.
+    Waived,
 }
 impl Default for Core {
     fn default() -> Self {
@@ -160,6 +181,7 @@ impl Default for Core {
             revision: 0,
             context: None,
             windows: VecDeque::new(),
+            tx_grants: BTreeMap::new(),
         }
     }
 }
@@ -202,6 +224,20 @@ pub struct Authority {
     /// The computers approved for the room's tunnel, who hold station control while hosted Remote
     /// is on (see `hold_tunnel_devices`). Unset in a build of the service without the tunnel.
     tunnel_devices: std::sync::OnceLock<LanDevices>,
+    /// The device ids the service lists as added by a sign-in (`addedBy == "account"`): the
+    /// PROVENANCE a transmit hold keys to (the 2026-10-23 sign-in decision). The controller replaces
+    /// it from the durable service list on every list, so it does not depend on any station write
+    /// surviving — that is what makes a sign-in-granted device fail CLOSED (held) when its waiver
+    /// record is missing. Empty (no list heard yet) names nobody, so nobody is held. Its own leaf
+    /// lock, only ever taken alone (the controller's replace) or after Core (the gate's read).
+    /// `None` until the first list is heard — the UNKNOWN state, which holds an account-road
+    /// controller fail-closed rather than reading an empty set as "not sign-in-added".
+    signin_devices: Mutex<Option<BTreeSet<String>>>,
+    /// The subset of [`Authority::signin_devices`] the service confirms a durable owner-notice
+    /// record exists for (the 2026-10-23 sign-in decision). A HELD sign-in device's transmit lifts
+    /// (once its window elapses) only while it is here; a device not confirmed is held even past
+    /// its window. Replaced from the durable list on every list, beside `signin_devices`.
+    notified_devices: Mutex<BTreeSet<String>>,
 }
 /// The device ids of the LAN road's paired computers while LAN is on, and none while it is off.
 /// Called under Core: it may take no lock that is ever held while Core is taken.
@@ -267,6 +303,149 @@ impl Authority {
             .filter_map(|devices| devices.get())
             .any(|devices| devices().iter().any(|d| d == device))
     }
+    /// Replace the set of device ids the service lists as added by a sign-in (`addedBy ==
+    /// "account"`): the provenance a transmit hold keys to (the 2026-10-23 sign-in decision). The
+    /// controller calls this from the durable list on every list it hears, so the provenance cannot
+    /// be lost by a station write failing. See [`Authority::signin_devices`].
+    pub fn set_signin_devices(&self, devices: BTreeSet<String>) {
+        if let Ok(mut held) = self.signin_devices.lock() {
+            *held = Some(devices);
+        }
+    }
+    /// Forget the sign-in provenance list, back to the pre-list (`None`) state: for a test to
+    /// exercise the restart/startup window where an account-road controller is held fail-closed.
+    #[cfg(test)]
+    pub(crate) fn forget_signin_devices(&self) {
+        if let Ok(mut held) = self.signin_devices.lock() {
+            *held = None;
+        }
+    }
+    /// Whether `device` is a computer the station paired or enrolled on its OWN network (the LAN
+    /// book). RECORDED provenance (the book), not the lease's transport: a genuinely on-network
+    /// device, so its transmit is never held (the 2026-10-23 sign-in decision's LAN-enrolment
+    /// waiver). The tunnel's approved computers are NOT included here — a tunnelled connection can
+    /// never take the LAN waiver, even presenting a LAN marker.
+    fn is_lan_device(&self, device: &str) -> bool {
+        self.lan_devices
+            .get()
+            .is_some_and(|devices| devices().iter().any(|d| d == device))
+    }
+    /// Replace the subset of sign-in devices the service confirms a durable owner-notice record for
+    /// (the 2026-10-23 sign-in decision). The controller calls this from the list beside
+    /// `set_signin_devices`. See [`Authority::notified_devices`].
+    pub fn set_notified_devices(&self, devices: BTreeSet<String>) {
+        if let Ok(mut held) = self.notified_devices.lock() {
+            *held = devices;
+        }
+    }
+    /// Whether the service confirms a durable owner-notice record exists for `device`: the
+    /// precondition a held sign-in device's transmit lifts against.
+    fn is_notified(&self, device: &str) -> bool {
+        self.notified_devices
+            .lock()
+            .is_ok_and(|devices| devices.contains(device))
+    }
+    /// Record that a sign-in auto-granted `device` is HELD from transmit until `until` (its
+    /// 15-minute window). A positive record; absence of one for a sign-in device also holds (the
+    /// 2026-10-23 sign-in decision, fail-closed).
+    pub fn hold_transmit_until(&self, device: &str, until: Instant) {
+        self.set_tx_grant(device, TxGrant::Held { until });
+    }
+    /// Record that a sign-in auto-granted `device` is WAIVED (an Approve at the shack): free to
+    /// transmit.
+    pub fn waive_transmit(&self, device: &str) {
+        self.set_tx_grant(device, TxGrant::Waived);
+    }
+    /// Record the station's POSITIVE transmit outcome for a sign-in auto-granted `device` (the
+    /// 2026-10-23 sign-in decision): `Held { until }` for its 15-minute window, or `Waived` for an
+    /// Approve at the shack. Writing nothing here for a sign-in-granted
+    /// device leaves it HELD (fail-closed): the gate reads `is_signin_granted` and finds no waiver.
+    fn set_tx_grant(&self, device: &str, grant: TxGrant) {
+        if let Ok(mut c) = self.core.lock() {
+            // Kept, never pruned: an elapsed `Held` is still a positive record (granted, window
+            // passed) and must stay distinct from "no record" — dropping it would turn an
+            // elapsed-and-notified device back into the fail-closed held case. The map is at most
+            // the station's device count.
+            c.tx_grants.insert(device.to_string(), grant);
+        }
+    }
+    /// Whether the station holds `device` from transmit at `now`. Every controller is asked here;
+    /// candidacy comes from RECORDED provenance, never the connection's transport: a device in the
+    /// LAN book (`is_lan_device`) is never held. FAIL-CLOSED on every uncertainty:
+    /// - a positive local `Waived` record (an Approve at the shack) frees
+    ///   at once, even before the provenance list has loaded;
+    /// - the list UNKNOWN (`None`, no list heard yet) → HELD: an empty set must not read as "not
+    ///   sign-in-added", so an account-road controller waits until the list confirms it;
+    /// - the list loaded and this device NOT in it → free (confirmed not sign-in-added);
+    /// - in it, `Held` → held until the window has elapsed AND the owner notice is confirmed durable
+    ///   (the 2026-10-23 sign-in decision: an absent/unconfirmed notice holds it even past 15 min);
+    ///   in it with NO record → HELD; a poisoned lock → HELD.
+    fn tx_held_for(&self, device: &str, grants: &BTreeMap<String, TxGrant>, now: Instant) -> bool {
+        // A device paired or enrolled on the station's OWN network (the LAN book) is locally
+        // trusted — recorded provenance, not transport — so it is never held, even before the
+        // account list loads. A local positive waiver (an Approve at the shack) likewise frees at
+        // once.
+        if self.is_lan_device(device) || matches!(grants.get(device), Some(TxGrant::Waived)) {
+            return false;
+        }
+        match self.signin_devices.lock().as_deref() {
+            Ok(Some(set)) if !set.contains(device) => false,
+            Ok(Some(_)) => match grants.get(device) {
+                Some(TxGrant::Waived) => false,
+                Some(TxGrant::Held { until }) => now < *until || !self.is_notified(device),
+                None => true,
+            },
+            Ok(None) => true,
+            Err(_) => true,
+        }
+    }
+    /// Whether the station holds the controller from transmit now: for a test to read what the
+    /// grants and the sign-in provenance decide, without driving the engine.
+    #[cfg(test)]
+    pub(crate) fn tx_held(&self, device: &str, now: Instant) -> bool {
+        let grants = self.core.lock().unwrap().tx_grants.clone();
+        self.tx_held_for(device, &grants, now)
+    }
+
+    /// Set the engine's transmit-arm gate from the CONTROLLING device's fail-closed hold state
+    /// (the 2026-10-23 sign-in decision). Called at every lease event under the Engine lock, so the
+    /// gate always reflects who holds the station now: a held device's hold never leaks onto the
+    /// next controller or the local operator, and a sign-in controller without a positive waiver
+    /// cannot arm. With no controller nobody is held. The hold itself stops and disarms nothing —
+    /// the engine side refuses only an ARM.
+    fn apply_tx_hold(&self, c: &Core, engine: &mut tempo_app::engine::Engine, now: Instant) {
+        // EVERY controller goes through `tx_held_for`: the decision is a pure function of RECORDED
+        // provenance, never the lease's transport (a tunnelled connection that looks LAN must not
+        // skip the hold — the 2026-10-23 sign-in decision). With no controller, nobody is held.
+        let held = c
+            .lease
+            .as_ref()
+            .is_some_and(|l| self.tx_held_for(&l.device, &c.tx_grants, now));
+        engine.set_remote_transmit_held(held);
+    }
+
+    /// Whether the device driving the station from afar is held from transmit right now — the value
+    /// [`Self::apply_tx_hold`] sets, re-derived from the live lease so the engine's hold can track
+    /// the CURRENT controller on the radio loop's own tick (the 2026-10-23 sign-in decision). It
+    /// reconciles first, so a lease ended WITHOUT a further request — Remote turned off, a retired
+    /// connection, a revoke, or expiry — is cleared here and the hold lifts; a still-controlling
+    /// held device keeps its lease and stays held. Returns `None` while a request holds Core (it is
+    /// setting the gate itself), so the tick leaves the flag be; it never blocks the radio loop and
+    /// cannot deadlock a request, which takes Core then the engine with the same `try` discipline.
+    pub fn current_transmit_hold(&self, now: Instant) -> Option<bool> {
+        let mut c = self.core.try_lock().ok()?;
+        // Authority unavailable (Remote off past the counter, or saturated): no device can operate
+        // the station, so none is held and the local operator is free.
+        if self.reconcile(&mut c, now).is_err() {
+            return Some(false);
+        }
+        Some(
+            c.lease
+                .as_ref()
+                .is_some_and(|l| self.tx_held_for(&l.device, &c.tx_grants, now)),
+        )
+    }
+
     /// Synchronous invalidation does not wait for an in-flight file operation.
     /// Its epoch is reconciled before any next request or local grant.
     pub fn invalidate(&self) {
@@ -803,7 +982,10 @@ impl Authority {
             | Request::StationControl { .. } => {
                 unreachable!("handled before ordinary operations")
             }
-            Request::State { .. } => self.state(&mut c, session, device, now, control),
+            Request::State { .. } => {
+                self.apply_tx_hold(&c, &mut engine, now);
+                self.state(&mut c, session, device, now, control)
+            }
             Request::Acquire {
                 station_boot_id, ..
             } => {
@@ -829,6 +1011,7 @@ impl Authority {
                     });
                     self.advance(&mut c)?;
                 }
+                self.apply_tx_hold(&c, &mut engine, now);
                 self.state(&mut c, session, device, now, control)
             }
             Request::Heartbeat { lease_id, .. } => {
@@ -838,6 +1021,7 @@ impl Authority {
                 }
                 l.until = now + LEASE;
                 engine.poll_remote_transmit(now);
+                self.apply_tx_hold(&c, &mut engine, now);
                 self.state(&mut c, session, device, now, control)
             }
             Request::Release { lease_id, .. } => {
@@ -849,6 +1033,7 @@ impl Authority {
                     c.windows.clear();
                     self.advance(&mut c)?;
                 }
+                self.apply_tx_hold(&c, &mut engine, now);
                 self.state(&mut c, session, device, now, control)
             }
             Request::TakeControl {
@@ -888,6 +1073,7 @@ impl Authority {
                     });
                     self.advance(&mut c)?;
                 }
+                self.apply_tx_hold(&c, &mut engine, now);
                 self.state(&mut c, session, device, now, control)
             }
         }

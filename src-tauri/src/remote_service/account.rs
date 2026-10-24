@@ -27,7 +27,8 @@
 //!
 //! A device the service lists with a proof (`x-nexus-device-proof`) is checked here against the
 //! owner and the people invited, for exactly the keys the list names; while [`GRANTS_ON_SIGN_IN`]
-//! is off it is granted nothing on that alone, and waits for Approve at the shack. Each list the
+//! is on it is granted CONTROL on that alone (the 2026-10-23 sign-in decision), with a 15-minute transmit hold
+//! ([`TX_HOLD`]) unless the sign-in waives it, and an email to the owner. Each list the
 //! station hears sweeps the devices it keeps for the LAN: one the service no longer lists as
 //! approved is taken out, and its pin returned, before any LAN session is admitted.
 //!
@@ -49,19 +50,31 @@ use super::vault::{AccountKeys, AccountVault, DevicesHeld};
 /// The most of a service or issuer answer read.
 const ANSWER_LIMIT: usize = 16384;
 
-/// ⛔ SIGN-IN GRANTS NOTHING YET. Whether the station grants a device the service approved on its
-/// own sign-in (its owner's, or that of someone the station invited) what its role says, with no
-/// press at the shack, once its proof holds here (`Controller::grant_vouched`). Off: its proof is
-/// checked as before, and it is granted nothing, pinned for nothing and kept for nothing on the
-/// station's network; it is shown waiting for Approve at the shack (`approveAtStation`), as a
-/// device added with a code waits, and Approve there grants it what Approve grants any device. The
-/// computer that signed in says its internet road waits for that Approve
-/// (`crate::lan_client::account`). It stays off until the notice email to the station's owner is
-/// built. No transmit hold for a new device is planned: with this off, every device that operates
-/// over the internet is approved by a press at the shack, with its key shown there to compare. A
-/// computer that enrols on the station's own network by its sign-in (`super::lan::enrol`) is taken
-/// there as before.
-pub(crate) const GRANTS_ON_SIGN_IN: bool = false;
+/// ⛔ A SIGN-IN GRANTS CONTROL, NOT TRANSMIT YET (the 2026-10-23 sign-in decision). Whether the station grants a device
+/// the service approved on its own sign-in (its owner's, or that of someone the station invited)
+/// what its role says, with no press at the shack, once its proof holds here
+/// (`Controller::grant_vouched`). On (since the 2026-10-23 sign-in decision built the full hold and email): a signed-in
+/// device of the account is admitted for CONTROL — it may connect, operate the receiver and hold
+/// station control — on both roads, LAN and internet, with no Approve press. Code pairing and an
+/// explicit Approve at the shack still work exactly as before (this is additive, not a
+/// replacement). The computer that signed in no longer waits for that Approve on its internet road
+/// (`crate::lan_client::account`).
+///
+/// TRANSMIT, though, is held: a device whose control came from a sign-in carries a 15-minute
+/// transmit hold ([`TX_HOLD`]) enforced at the engine's arming gate
+/// (`tempo_app::engine::Engine::remote_transmit_held`)— it may hold control and operate the
+/// receiver, but no transmit ARM starts until the window passes. Stop, and the off half of a
+/// switch, are never held. The hold is WAIVED for one Approved at the shack
+/// (`Controller::grant_approved`) and for one that enrols on the station's own network by its sign-in (`super::lan::enrol` records
+/// no hold — standing at the shack's LAN is the shack tap's equal). Adding a device by sign-in also
+/// notifies the station's owner by email, which the service sends (the station keeps no address);
+/// the provider secret is a credential gate the operator wires (gate 5).
+pub(crate) const GRANTS_ON_SIGN_IN: bool = true;
+
+/// How long a device auto-granted control by a sign-in is held off transmit (the 2026-10-23 sign-in decision), from when
+/// the station first grants it. An ADDITIVE transmit guard: the engine refuses every arm within it
+/// and never a Stop or a disarm ([`GRANTS_ON_SIGN_IN`]).
+pub(crate) const TX_HOLD: Duration = Duration::from_secs(15 * 60);
 
 /// The account's side of the Remote service and its issuer.
 pub(crate) struct Service {

@@ -139,6 +139,10 @@ pub mod remote_selection;
 mod remote_settings;
 pub mod remote_stream;
 pub mod remote_transmit;
+/// A sign-in auto-granted device holds transmit (the 2026-10-23 sign-in decision): every arm refused for its window,
+/// Stop and disarming never touched.
+#[cfg(test)]
+mod remote_transmit_hold_tests;
 /// A restored backup opens its contest session as a settings save does. Debug builds only, like
 /// `session_tests`: they read the debug build's counters.
 #[cfg(all(test, debug_assertions))]
@@ -1804,6 +1808,10 @@ pub const CLOCK_REPAIR_HOLDS_TX: &str =
 /// later, like every other refused send.
 const CLOCK_REPAIR_DROPPED: &str = "Not sent: a clock repair was in progress, so it was \
      dropped, not held for later. Send it again when the repair has finished.";
+/// The CW cockpit's warning line when a newly signed-in device's transmit hold (the 2026-10-23 sign-in decision)
+/// dropped a send: dropped, not held for later, as a refused send is.
+const REMOTE_HOLD_DROPPED: &str = "Not sent: this device was signed in moments ago and cannot \
+     transmit for the first 15 minutes. Send it again once the hold has passed.";
 
 /// How long past the word's own length (its word space included) a CW word the radio loop handed
 /// a keyer still owns the transmitter if the loop's end of it never arrives
@@ -3776,6 +3784,12 @@ pub struct Engine {
     /// `engine/remote_stream.rs`.
     afar_started: Option<u64>,
     remote_ptt_hold: Option<crate::remote_control::ptt_hold::PttHold>,
+    /// The source the radio loop re-derives the sign-in transmit hold (`remote_transmit_held`) from
+    /// on every `poll_remote_transmit` tick, so the hold tracks the CURRENT controller: it lifts the
+    /// instant a held controller stops controlling by any path, and holds a still-controlling one.
+    /// Installed once by the Remote service; `None` in a build without it (the hold then stays as
+    /// the last request set it). See [`remote_transmit::RemoteTxHoldSource`].
+    remote_tx_hold_source: Option<remote_transmit::RemoteTxHoldSource>,
     /// The streamed operator's microphone over, and what it needs: see `engine/remote_mic.rs`.
     mic: crate::mic::MicLatch,
     mic_feed: Option<crate::mic::MicFeed>,
@@ -6481,6 +6495,7 @@ impl Engine {
             presence_bound: Vec::new(),
             afar_started: None,
             remote_ptt_hold: None,
+            remote_tx_hold_source: None,
             mic: crate::mic::MicLatch::default(),
             mic_feed: None,
             mic_presence: None,
@@ -10290,6 +10305,15 @@ impl Engine {
             );
             return false;
         }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision): voice-memory playback keys
+        // the rig without the TX-enable latch, so refuse it here as well ([`Self::remote_transmit_held`]).
+        if self.remote_transmit_held() {
+            tempo_core::applog::info(
+                "tx",
+                "voice memory not played: a newly signed-in device is on hold (refused)",
+            );
+            return false;
+        }
         self.pending_voice_mem = Some(VoiceMemCmd::Play(ch));
         self.pending_voice_mem_stand_down = self.remote_transmit_stand_down.generation();
         true
@@ -11166,6 +11190,17 @@ impl Engine {
                 "CW not keyed: a clock repair is in progress (dropped)",
             );
             self.cw_keyer_error = Some(CLOCK_REPAIR_DROPPED.to_string());
+            return;
+        }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision): a CW send self-arms the
+        // latch, so the arm gate in `set_tx_enabled` does not see it — refuse it here, before it
+        // arms or queues anything ([`Self::remote_transmit_held`]).
+        if !expanded.trim().is_empty() && self.remote_transmit_held() {
+            tempo_core::applog::info(
+                "tx",
+                "CW not keyed: a newly signed-in device is on hold (dropped)",
+            );
+            self.cw_keyer_error = Some(REMOTE_HOLD_DROPPED.to_string());
             return;
         }
         // ⛔ So is a message the radio's own keyer would not take whole
@@ -19294,6 +19329,25 @@ Pick the one you operate from on the Contesting tab in Settings.",
             }
             return;
         }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT ([`Self::remote_transmit_held`], the
+        // 2026-10-23 sign-in decision): a new over is refused for its 15-minute window, through
+        // every arm path, which all funnel here. An arm already up stays up and disarming is always
+        // honoured — additive to
+        // the clock-repair hold above, it refuses a start and never stops anything.
+        if on && !was && self.remote_transmit_held() {
+            if !self.quiet_tx_log {
+                let at = std::panic::Location::caller();
+                tempo_core::applog::info(
+                    "tx",
+                    &format!(
+                        "transmit ARM refused (a newly signed-in device is on hold) for {}:{}",
+                        at.file(),
+                        at.line()
+                    ),
+                );
+            }
+            return;
+        }
         if was != on && !self.quiet_tx_log {
             let at = std::panic::Location::caller();
             tempo_core::applog::info(
@@ -21329,6 +21383,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // A clock repair holds transmit: a new tune is refused and changes nothing, and a carrier
         // already up is never dropped by it ([`Self::hold_tx_for_clock_repair`]).
         if on && !self.tuning && self.clock_repair_holds_tx() {
+            return;
+        }
+        // A sign-in auto-granted device holds transmit (the 2026-10-23 sign-in decision): a new tune carrier is refused
+        // the same way, since tune is the one keying path that bypasses the TX-enable latch
+        // ([`Self::remote_transmit_held`]). Stopping a tune is never refused.
+        if on && !self.tuning && self.remote_transmit_held() {
             return;
         }
         // Nor onto a CW word ([`Self::cw_sending`]); stopping a tune is never refused.
@@ -31288,6 +31348,21 @@ contact yourself."
     pub fn clock_repair_holds_tx(&self) -> bool {
         self.station
             .clock_repair_holds_tx(std::time::Instant::now())
+    }
+
+    /// Set whether the device driving from afar is held from transmit (the 2026-10-23 sign-in
+    /// decision): an ADDITIVE guard that refuses every transmit ARM, never a Stop or a disarm. The
+    /// service decides it FAIL-CLOSED (a sign-in-granted controller is held unless positively
+    /// waived) and re-asserts it at each lease event. See
+    /// [`crate::station::Station::remote_transmit_held`].
+    pub fn set_remote_transmit_held(&mut self, held: bool) {
+        self.station.set_remote_transmit_held(held);
+    }
+
+    /// Whether a sign-in transmit hold refuses an arm right now
+    /// ([`Self::set_remote_transmit_held`]).
+    pub fn remote_transmit_held(&self) -> bool {
+        self.station.remote_transmit_held()
     }
 
     /// Is anything on the air right now?

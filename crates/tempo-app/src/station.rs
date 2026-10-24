@@ -2066,6 +2066,15 @@ pub struct StationCore {
     /// Station-wide, because there is one PC clock. On the monotonic clock,
     /// because the repair is what may step the wall clock.
     pub(crate) clock_repair_tx_hold_until: Option<std::time::Instant>,
+    /// Whether the device currently driving the station from afar is held from transmit (the
+    /// 2026-10-23 sign-in decision): a device the account signed in and was auto-granted control to
+    /// may connect, operate the receiver and hold station control, but no transmit ARM starts while
+    /// this is set. Additive to every existing transmit guard; Stop and disarming are never touched
+    /// ([`crate::engine::Engine::set_remote_transmit_held`]). The engine cannot tell one remote
+    /// device from another, so the SERVICE decides — FAIL-CLOSED: a sign-in-granted controller is
+    /// held unless a positive, still-valid waiver says otherwise — and sets this at each lease
+    /// event; it is off whenever a device not under a hold (or none) controls.
+    pub(crate) remote_transmit_held: bool,
     /// WSJT-X-format ALL.TXT decode lines pending flush to disk (when
     /// `settings.write_all_txt`). The engine is I/O-free, so the shell drains this via
     /// [`Self::take_all_txt_pending`] and appends to the log file. Capped so a
@@ -2285,6 +2294,7 @@ impl StationCore {
             clock_owner_note: String::new(),
             clock_repair_available: false,
             clock_repair_tx_hold_until: None,
+            remote_transmit_held: false,
             all_txt_pending: Vec::new(),
             pending_uploads: VecDeque::new(),
             dropped_uploads: Vec::new(),
@@ -4730,6 +4740,19 @@ impl StationCore {
     pub fn clock_repair_holds_tx(&self, now: std::time::Instant) -> bool {
         self.clock_repair_tx_hold_until
             .is_some_and(|until| now < until)
+    }
+
+    /// Set whether the device driving from afar is held from transmit (the 2026-10-23 sign-in
+    /// decision). `true` refuses every transmit ARM; `false` lifts it. Stop and disarming are never
+    /// held — this only ever refuses a start. The service re-asserts it at each lease event from the
+    /// controller's fail-closed waiver state.
+    pub fn set_remote_transmit_held(&mut self, held: bool) {
+        self.remote_transmit_held = held;
+    }
+
+    /// Whether a sign-in transmit hold refuses an arm right now.
+    pub fn remote_transmit_held(&self) -> bool {
+        self.remote_transmit_held
     }
 
     /// Set the offset directly, bypassing the probe. `Some` publishes it as a

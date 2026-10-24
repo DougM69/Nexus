@@ -123,6 +123,9 @@ impl tempo_stream::keep_awake::Power for AwakeRecorder {
 
 fn fixture(now: Instant) -> Fixture {
     let authority = Arc::new(Authority::default());
+    // Normal operating state: the account's device list has been heard and names no sign-in device,
+    // so an ordinary controller is free (the sign-in transmit hold keys on that list).
+    authority.set_signin_devices(std::collections::BTreeSet::new());
     let mut engine = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
     engine.set_remote_transmit_revocation(authority.transmit_revocation());
     let ptt = PttHold::default();

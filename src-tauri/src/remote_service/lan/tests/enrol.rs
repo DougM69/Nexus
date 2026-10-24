@@ -1148,6 +1148,7 @@ fn every_writer_of_the_device_cache_waits_for_one_held_between_its_read_and_its_
         role: Role::Operate,
         guest: false,
         issued_at: issued_at(),
+        mfa: false,
     };
     let writers: Vec<(&str, Writer, Vec<&String>)> = vec![
         (
@@ -1386,6 +1387,7 @@ fn each_writer_holds_the_cache_from_its_read_to_its_save() {
                 role: Role::Operate,
                 guest: false,
                 issued_at: issued_at(),
+                mfa: false,
             };
             let pin = tempo_client::hex(&pin);
             Controller::keep_for_lan(vault, SERVICE_STATION, &vouched, pin, fixture_now()).unwrap();

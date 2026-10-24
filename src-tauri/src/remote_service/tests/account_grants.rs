@@ -1,8 +1,9 @@
 //! The station's account, wired into the shack: signing in there binds the station with no code, and
 //! a device the service approved on its own proof is granted only once the station has checked that
-//! proof itself, then only as its role says. While the station grants nothing on a sign-in
-//! (`account::GRANTS_ON_SIGN_IN`, off in every build) such a device waits for Approve at the shack;
-//! what a grant on a sign-in is, is tested with it on ([`launch_granting_on_sign_in`]).
+//! proof itself, then only as its role says. Since the 2026-10-23 sign-in decision the station grants control on a
+//! sign-in (`account::GRANTS_ON_SIGN_IN`, on in every build) with a transmit hold; the off-switch
+//! branch — a device waiting for Approve at the shack — is kept tested with it explicitly off
+//! ([`launch_not_granting_on_sign_in`]).
 //!
 //! The proofs are tempo-client's account fixture (tokens minted once by throwaway keys that never
 //! left a scratch process), read at the fixture's own time. The service is the fake cloud on
@@ -430,8 +431,9 @@ fn launch_owned_at(origin: &str, vault: &MemoryVault) -> Service {
     )
 }
 /// [`launch_owned`] in a build whose station grants a device what its role says on its own
-/// sign-in (`account::GRANTS_ON_SIGN_IN` on): what such a grant is, and what still holds one back,
-/// kept tested while every build has it off.
+/// sign-in (`account::GRANTS_ON_SIGN_IN` on): what such a grant is, and what still holds one back.
+/// Since the 2026-10-23 sign-in decision every build has it on, so this is the default launcher's behaviour too; it is
+/// kept as its own helper for the tests that name the grant.
 fn launch_granting_on_sign_in(cloud: &FakeCloud, vault: &MemoryVault) -> Service {
     let (bind, _) = binder(Vec::new());
     launch_with(
@@ -439,6 +441,24 @@ fn launch_granting_on_sign_in(cloud: &FakeCloud, vault: &MemoryVault) -> Service
         vault,
         Accounts {
             grants_on_sign_in: true,
+            ..accounts(vault, bind)
+        },
+    )
+}
+
+/// [`launch_owned`] with the sign-in grant switched OFF (`grants_on_sign_in: false`): a device the
+/// service approved on its own sign-in is granted nothing and waits for Approve at the shack. The
+/// 2026-10-23 sign-in decision made every shipping build grant on a sign-in, so this is no longer a
+/// build that ships; it keeps the off-switch branch tested, as [`launch_granting_on_sign_in`] kept
+/// the on branch tested
+/// while every build was off.
+fn launch_not_granting_on_sign_in(cloud: &FakeCloud, vault: &MemoryVault) -> Service {
+    let (bind, _) = binder(Vec::new());
+    launch_with(
+        cloud,
+        vault,
+        Accounts {
+            grants_on_sign_in: false,
             ..accounts(vault, bind)
         },
     )
@@ -452,16 +472,17 @@ fn road_pin() -> [u8; 32] {
         .unwrap()
 }
 
-/// ⛔ SIGN-IN GRANTS NOTHING YET (`account::GRANTS_ON_SIGN_IN`). A browser signed in as the
+/// ⛔ WITH THE SIGN-IN GRANT SWITCHED OFF (`account::GRANTS_ON_SIGN_IN`). A browser signed in as the
 /// station's owner, its proof checked here and holding: granted nothing and pinned for nothing,
 /// nothing kept for the LAN on it, and no notice that it was added; it is shown waiting for Approve
 /// at the station, through the next list too. Approve here then grants it what Approve grants any
-/// browser, and pins it.
+/// browser, and pins it. (Every shipping build has the switch on since the 2026-10-23 sign-in decision — see
+/// [`granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no_press`].)
 #[tokio::test(flavor = "multi_thread")]
 async fn a_browser_signed_in_as_the_owner_waits_for_approve_at_the_station() {
     let cloud = fake_cloud().await;
     let vault = owned_vault(&cloud.origin, Vec::new());
-    let service = launch_owned(&cloud, &vault);
+    let service = launch_not_granting_on_sign_in(&cloud, &vault);
     let status = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
     assert_eq!(
         status.account.unconfirmed,
@@ -493,11 +514,12 @@ async fn a_browser_signed_in_as_the_owner_waits_for_approve_at_the_station() {
     assert_eq!(approved.account.unconfirmed, BTreeMap::new());
 }
 
-/// ⛔ …and a computer signed in by someone the station invited to operate: its proof and its
-/// invitation hold here, but it is pinned for nothing, so the room's tunnel does not take it, and
-/// nothing is kept for the LAN on it; it waits for Approve at the station. Approve here pins it and
-/// the tunnel takes it. CONTROL: invited only to listen it is refused as it was, and someone not
-/// invited gets nothing.
+/// ⛔ WITH THE SIGN-IN GRANT SWITCHED OFF: a computer signed in by someone the station invited to
+/// operate: its proof and its invitation hold here, but it is pinned for nothing, so the room's
+/// tunnel does not take it, and nothing is kept for the LAN on it; it waits for Approve at the
+/// station. Approve here pins it and the tunnel takes it. CONTROL: invited only to listen it is
+/// refused as it was, and someone not invited gets nothing. (The on-switch default is
+/// [`granting_on_sign_in_an_invited_guests_computer_is_pinned_by_the_invitations_role`].)
 #[tokio::test(flavor = "multi_thread")]
 async fn an_invited_guests_computer_waits_for_approve_at_the_station() {
     let invited = |role| {
@@ -508,7 +530,7 @@ async fn an_invited_guests_computer_waits_for_approve_at_the_station() {
     };
     let cloud = fake_cloud().await;
     let vault = owned_vault(&cloud.origin, invited(Role::Operate));
-    let service = launch_owned(&cloud, &vault);
+    let service = launch_not_granting_on_sign_in(&cloud, &vault);
     let tunnel = || service.control.lock().unwrap().approved.paired(&road_pin());
     let status = listed(
         &service,
@@ -636,6 +658,27 @@ async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no
         .unwrap();
     assert!(dismissed.account.added.is_empty());
     assert_eq!(dismissed.station_permissions, vec![BROWSER.to_string()]);
+}
+
+/// ★ THE 2026-10-23 SIGN-IN DECISION: a device granted control on its sign-in carries a 15-minute
+/// transmit hold. The grant records a `Held` against the device, and the service lists it as
+/// sign-in-added, so the engine's arm gate holds it while it controls (proved end to end in the
+/// operations transmit tests). A sign-in never waives it; only an Approve at the shack does.
+#[tokio::test(flavor = "multi_thread")]
+async fn granting_on_sign_in_holds_the_devices_transmit() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let _ = listed(&service, &cloud, vec![browser_row(&token("browser"))]).await;
+    assert!(
+        service
+            .control
+            .lock()
+            .unwrap()
+            .operations
+            .tx_held(BROWSER, std::time::Instant::now()),
+        "a sign-in-granted device is held from transmit"
+    );
 }
 
 /// ★ A proof the station cannot confirm grants nothing, whatever the service says: no permission,

@@ -41,6 +41,13 @@
 //! takes out only an entry still past its age once it holds the cache: a computer enrolled again
 //! since it was found expired is in the book again, held to its new proof.
 //!
+//! **The sign-in transmit hold is WAIVED here (the 2026-10-23 sign-in decision).** A computer that signs in over the
+//! INTERNET and is auto-granted control carries a 15-minute transmit hold
+//! (`super::super::account::GRANTS_ON_SIGN_IN`). A computer enrolling on the station's OWN network
+//! is different: it is on the shack's LAN, which stands in for the shack tap the hold is waived by,
+//! so [`admit`] records no hold — it never touches `operations::Authority::hold_transmit_until`, and
+//! the engine's arm gate holds a LAN-enrolled computer not at all.
+//!
 //! Nothing here writes a log line, and no proof is kept: the cache holds the key's pin, the role
 //! and the proof's signing time.
 use std::sync::{Arc, Mutex};

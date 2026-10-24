@@ -151,9 +151,9 @@ fn proof_given(cloud: &Cloud) -> String {
 /// enrolment on TLS proved by the LAN key, with the road key and the same proof; and what is kept
 /// is the station's record on its network (its LAN key pinned, the ids it gave, where it answered),
 /// its internet road (the service's ids and the station key the account listed) and when the proof
-/// was signed. The staged keys go. The road waits for Approve at the station, which grants nothing
-/// on a sign-in yet (`remote_service::account::GRANTS_ON_SIGN_IN`), as every road a sign-in adds
-/// below does.
+/// was signed. The staged keys go. The service approved the road, and since the 2026-10-23 sign-in decision the station
+/// grants control on a sign-in (`remote_service::account::GRANTS_ON_SIGN_IN`), so the road does not
+/// wait for Approve at the station — as every approved road a sign-in adds below does not.
 #[tokio::test(flavor = "multi_thread")]
 async fn one_sign_in_adds_the_station_on_its_network_and_over_the_internet() {
     let Some(station) = standing(LAN_STATION, None).await else {
@@ -179,7 +179,7 @@ async fn one_sign_in_adds_the_station_on_its_network_and_over_the_internet() {
         signed,
         Ok(Signed {
             station: LAN_STATION.into(),
-            waiting: true,
+            waiting: false,
             away: false,
             key: last_shown(&cloud)
         })
@@ -394,7 +394,7 @@ async fn another_machine_at_the_stations_address_never_hears_the_proof() {
         signed,
         Ok(Signed {
             station: SERVICE_STATION.into(),
-            waiting: true,
+            waiting: false,
             away: true,
             key: last_shown(&cloud)
         })
@@ -672,7 +672,7 @@ async fn a_station_paired_with_a_code_is_linked_in_place() {
         signed,
         Ok(Signed {
             station: LAN_STATION.into(),
-            waiting: true,
+            waiting: false,
             away: false,
             key: last_shown(&cloud)
         })
@@ -759,7 +759,7 @@ async fn a_code_paired_station_with_an_old_road_is_linked_with_a_new_road_key() 
         signed,
         Ok(Signed {
             station: LAN_STATION.into(),
-            waiting: true,
+            waiting: false,
             away: false,
             key: last_shown(&cloud)
         })

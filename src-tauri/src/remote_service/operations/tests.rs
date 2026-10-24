@@ -264,7 +264,7 @@ fn test_bodies(src: &str) -> Vec<(String, String)> {
     out
 }
 struct Fixture {
-    authority: Authority,
+    authority: Arc<Authority>,
     engine: crate::SharedEngine,
     connection: u64,
     dir: std::path::PathBuf,
@@ -291,8 +291,13 @@ impl Fixture {
         settings.save_qso_wav = false;
         engine.apply_settings(settings);
         engine.set_log_path(dir.join("contacts.adi"));
-        let authority = Authority::default();
-        // Wired exactly as `Service::new` wires it, so a stand-down at the shack retires
+        let authority = Arc::new(Authority::default());
+        // The normal operating state: the station has heard the account's device list and it names
+        // no sign-in device, so an ordinary controller is free. A test about the sign-in transmit
+        // hold overrides this with `set_signin_devices`, or clears it with `forget_signin_devices`
+        // to exercise the pre-list (restart) window.
+        authority.set_signin_devices(std::collections::BTreeSet::new());
+        // Wired exactly as `Service::start` wires it, so a stand-down at the shack retires
         // remote transmit here too — a fixture that skipped this would prove nothing.
         engine.set_remote_transmit_revocation(authority.transmit_revocation());
         let connection = authority.start_connection();
@@ -353,6 +358,16 @@ impl Fixture {
             now,
         )
         .unwrap()
+    }
+    /// Install the real radio-loop hold source, exactly as `Service::start` does, so a
+    /// `poll_remote_transmit` tick re-derives the sign-in transmit hold from the live lease. Used by
+    /// the tests that model a held controller DEPARTING with no further request.
+    fn wire_tx_hold(&self) {
+        let authority = self.authority.clone();
+        self.engine
+            .lock()
+            .unwrap()
+            .set_remote_tx_hold_source(Arc::new(move |now| authority.current_transmit_hold(now)));
     }
 }
 /// ★ THE FOLDER GOES LAST. Since SPEC-2 v3 C19 (D1-A) a session on the 1.13 path writes its

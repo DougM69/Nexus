@@ -365,6 +365,11 @@ pub struct Vouched {
     pub role: Role,
     pub guest: bool,
     pub issued_at: u64,
+    /// Whether the sign-in used a second factor: its signature-verified `amr` claim names `mfa`.
+    /// Read from the proof `verify_proof` already checked, never from an unverified parse, so a
+    /// forged or unsigned MFA claim can never set it. The station waives the new device's transmit
+    /// hold on this (the 2026-10-23 sign-in decision): an MFA sign-in is trusted to transmit at once.
+    pub mfa: bool,
 }
 
 /// Whether a device's proof admits it at this station, and as what. The proof must hold
@@ -394,12 +399,14 @@ pub fn vouched(
         nonce: &nonce,
     };
     let claims = verify_proof(proof, &keys.jwks(), &expected, now_s)?;
+    let mfa = claims.methods.iter().any(|method| method == "mfa");
     if claims.subject == owner.subject {
         return Ok(Vouched {
             subject: claims.subject,
             role: Role::Operate,
             guest: false,
             issued_at: claims.issued_at,
+            mfa,
         });
     }
     let invited = claims
@@ -414,6 +421,7 @@ pub fn vouched(
             role: invite.role,
             guest: true,
             issued_at: claims.issued_at,
+            mfa,
         }),
         None => Err("proofNotYours"),
     }
@@ -824,6 +832,7 @@ mod tests {
                 role: Role::Operate,
                 guest: false,
                 issued_at: case.issued(),
+                mfa: false,
             })
         );
         // A browser's proof is for the page's application.
