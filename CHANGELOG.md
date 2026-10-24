@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Allow to transmit, at the shack.** A device added by signing in is held from transmitting until
+  you let it. Settings ▸ Remote access now shows such a device, browser or computer, as "Waiting for
+  your approval to transmit" with an **Allow to transmit** button beside it; one press lifts the hold.
+  The button works only on the station's own screen: a remote computer or browser can never press it,
+  so a held device cannot allow itself. Stop is never held.
 - **Spot a station from anywhere — now on the phone cockpit and on every Spots row.** The one-click
   Spot button, which opens the review popup that posts a DX-cluster spot from your station's login,
   used to live only on the Operate and DXpedition screens. It now also sits on the phone/SSB

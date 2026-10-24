@@ -3813,3 +3813,39 @@ fn a_save_never_writes_the_set_at_the_station_list() {
         assert!(save.unknown.get(SET_AT_THE_STATION).is_none(), "{afar:?}");
     }
 }
+
+#[test]
+fn allow_to_transmit_is_refused_from_afar_so_a_held_device_never_allows_itself() {
+    // A device added by its own sign-in is held from transmit until the operator allows it at the
+    // shack. That press is `remote_station_action` with this action: from another computer it is
+    // refused at both ends, by the controller too, so the held device can never lift its own hold.
+    let args = json!({ "action": { "type": "allowTransmit", "deviceId": "dev-held" } });
+    let action: crate::remote_service::Action =
+        serde_json::from_value(args["action"].clone()).expect("the press as the screen sends it");
+    assert!(
+        matches!(&action, crate::remote_service::Action::AllowTransmit { device_id } if device_id == "dev-held"),
+        "premise: these are the arguments of Allow to transmit"
+    );
+    assert_eq!(class_of("remote_station_action"), Some(Class::RefusedHere));
+    assert_eq!(
+        route("remote_station_action", &args),
+        Route::Refused(Refusal::ShackOnly),
+        "it is never sent"
+    );
+    assert_eq!(
+        crate::client_mode::way("remote_station_action", &args),
+        crate::client_mode::Way::Refused(Refusal::ShackOnly),
+        "client mode refuses it on the other computer"
+    );
+    let shack = shack();
+    let admission = shack.admit(&controller(), call(1, "remote_station_action", args));
+    assert_eq!(
+        kind(&admission),
+        refused(Refusal::ShackOnly),
+        "the controlling device at the shack"
+    );
+    // The control: the same controller is admitted for a command that runs at the shack, so the
+    // refusal above is the class's, not a caller the dispatcher turns away anyway.
+    let control = shack.admit(&controller(), call(2, "get_snapshot", json!({})));
+    assert_eq!(kind(&control), "run");
+}

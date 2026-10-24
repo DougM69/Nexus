@@ -441,11 +441,13 @@ impl Authority {
             Err(_) => true,
         }
     }
-    /// Whether the station holds the controller from transmit now: for a test to read what the
-    /// grants and the sign-in provenance decide, without driving the engine.
-    #[cfg(test)]
+    /// Whether the station holds `device` from transmit at `now`, as the grants and the sign-in
+    /// provenance decide, without driving the engine: what the shack shows as held.
     pub(crate) fn tx_held(&self, device: &str, now: Instant) -> bool {
-        let grants = self.core.lock().unwrap().tx_grants.clone();
+        // A poisoned lock holds, as `tx_held_for` does.
+        let Ok(grants) = self.core.lock().map(|c| c.tx_grants.clone()) else {
+            return true;
+        };
         self.tx_held_for(device, &grants, now)
     }
 
