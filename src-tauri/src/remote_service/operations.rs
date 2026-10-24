@@ -937,7 +937,7 @@ impl Authority {
                 Value::Null
             };
         }
-        if let Some((version, context, tx_owned)) = control {
+        if let Some((version, context, tx_on)) = control {
             let mut capabilities = vec![];
             if version >= 4 {
                 if c.control_grants.contains(device) {
@@ -950,7 +950,10 @@ impl Authority {
                     #[cfg(feature = "radio")]
                     capabilities.push("audioListen");
                 }
-                value["txArmed"] = json!(owned && tx_owned);
+                // The station's TX-enable latch, for display only: nothing on either end decides a
+                // transmission on it. Only with the lease and the stop token beside it, as the page
+                // requires of a `txArmed` that is true.
+                value["txArmed"] = json!(owned && tx_on && value["transmitEpoch"].is_string());
             }
             value["controls"] = json!({"context":context,"capabilities":capabilities});
         }
@@ -1015,7 +1018,7 @@ impl Authority {
             (
                 version,
                 station::Context::capture(&engine),
-                engine.remote_ft_tx_owned(),
+                engine.tx_enabled(),
             )
         });
         match request {
