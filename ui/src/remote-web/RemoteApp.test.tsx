@@ -104,7 +104,7 @@ it('tells a signed-out visitor about the emailed sign-up code, and drops the hin
 it('a signed-in account with no trial yet can start pairing, and is told the clock has not started', async () => {
   client(account(false)); render(<RemoteApp />)
   // Said in the service's own words, not inferred from enabled plus an expiry against our clock.
-  await screen.findByText(/pair a station from the shack/i, { selector: '[role="status"]' })
+  await screen.findByText(/sign your station in from the shack/i, { selector: '[role="status"]' })
   // The self-serve path: the pairing form has to be reachable by exactly the account that has
   // never had a trial. Gating it on entitlement made it unreachable for those people.
   expect(await screen.findByLabelText('Pairing code')).toBeTruthy()

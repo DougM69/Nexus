@@ -108,6 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to remove it if it was not you.
 
 ### Changed
+- **The Nexus Remote page explains itself before you sign in.** Signed out, it shows how to get
+  started, what works and what does not yet, who can transmit and how Stop works, and where to send a
+  report (contact@hamradiotools.io, with `nexus-diag.log`). It says Remote is free during the beta.
+  Signed in with no station yet, it lists the three steps at the shack. Its messages that named
+  Settings ▸ Station ▸ Remote access now name Settings ▸ Remote, where the card lives.
 - **The phone scope starts snappier.** The phone panadapter and waterfall now default to the Fast analysis
   window (85 ms, was 171 ms), so a signal appearing or a fading one dropping shows about twice as fast. Voice is
   wide enough that the slightly coarser frequency resolution is not visible; if you want the finer Balanced or Sharp

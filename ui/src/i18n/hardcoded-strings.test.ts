@@ -65,6 +65,8 @@ const MIGRATED = [
   'remote-web/BetaNote.tsx',
   'remote-web/browser-label.ts',
   'remote-native/RemoteApprovalPrompt.tsx',
+  // The Remote site's first visit and its empty state — born migrated.
+  'remote-web/RemoteLanding.tsx',
   // The Remote stations window's entry in Settings (2026-10-04) — born migrated: its label, button,
   // hint and failure line.
   'remote-native/RemoteStationsWindow.tsx',

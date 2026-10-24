@@ -10,6 +10,7 @@ import { deviceKey } from './device-key'
 import { acceptStationKey, forgetStationKey, stationKeyView, type StationKeyView } from './station-key'
 import { browserLabel } from './browser-label'
 import { BetaNote } from './BetaNote'
+import { AddStation, RemoteLanding } from './RemoteLanding'
 import { shortFingerprint } from './stream-protocol'
 import type { AccountSession } from './client'
 import '../remote-monitor/monitor.css'
@@ -341,7 +342,8 @@ export function RemoteApp() {
       </div>
         {/* After confirming the email, Auth0 shows its own "verified" page and does not send the
             operator back here, so the way back is said before they leave. */}
-        <p>{t('remote.signUpHint')}</p></>}
+        <p>{t('remote.signUpHint')}</p>
+        <RemoteLanding betaChannel={BETA_CHANNEL} /></>}
       {session && <>
         {/* The account id is only an instruction while there is something to pair. Once stations
             are approved it is support detail, not a step, and a raw UUID presented as a standing
@@ -361,6 +363,7 @@ export function RemoteApp() {
         {trial?.state === 'ended' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'disabled' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialDisabled')}</p>}
         {lanOnly && session.stations.length > 0 && <p className="remote-site-status" role="status">{t('remote.lanFree')}</p>}
+        {session.stations.length === 0 && !session.pending && <AddStation />}
         {/* No price here: the provider's checkout shows it, with the tax, before anything is paid. The
             renewal terms sit beside Subscribe, and checkout repeats them beside its own pay button. */}
         {client?.billing && trial && trial.state !== 'disabled' && <section className="rm-card remote-section remote-billing">
