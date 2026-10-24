@@ -47,7 +47,8 @@ In `kd9taw/Nexus` → Settings → Environments → **production**, add these **
 | `REMOTE_BETA_FREE` | Optional, staging only: `1` while Remote is free during the beta, or unset (below) |
 
 An unset variable writes nothing to the Worker; any other value than the ones above stops the
-deploy before it writes. The optional secret `REMOTE_TRIAL_KEY` (below) goes under **secrets**.
+deploy before it writes. The optional secrets `REMOTE_TRIAL_KEY`, `REMOTE_OWNER_NOTICE_API_KEY` and
+`REMOTE_OWNER_NOTICE_FROM` (below) go under **secrets**.
 
 The staging API audience is fixed in the tooling. The preflight checks public OIDC
 discovery and signing keys; it cannot read the app's callback list or prove a real
@@ -219,6 +220,24 @@ The US licence copy is refreshed by `scripts/uls-import.mjs` from the FCC's publ
 daily changes); it writes SQL to apply with `wrangler d1 execute`. With `TRIAL_KEY` set and the copy
 more than three days old, US callsigns are refused a trial (`serviceUnavailable`) rather than waved
 through. Running the import with the production key is credential handling.
+
+## New-device email notice (optional)
+
+When a sign-in adds a device to an account, the Worker emails the account owner through Resend. It
+needs two Worker secrets, both optional; with either one unset no mail is sent and nothing else
+changes. A device added then stays unable to transmit past its 15 minutes until the owner approves it
+at the shack, because the notice is what lets that hold lift.
+
+- `OWNER_NOTICE_API_KEY`: a Resend API key with permission to send. Create it in the Resend dashboard
+  under API Keys.
+- `OWNER_NOTICE_FROM`: the address the notice is sent as, on a domain verified in Resend, for example
+  `Nexus Remote <noreply@your-domain>`.
+
+Add them in the same GitHub environment as the other secrets, as `REMOTE_OWNER_NOTICE_API_KEY` and
+`REMOTE_OWNER_NOTICE_FROM`. They are carried exactly like `REMOTE_TRIAL_KEY`: a deploy whose
+environment holds one declares it in the artifact, applies it as an encrypted secret, and checks it
+reads back encrypted. Set both or neither. A Worker that already holds either one is refused before
+any write while the environment does not supply it.
 
 ## Cloudflare and deployment
 

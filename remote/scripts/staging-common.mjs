@@ -155,7 +155,9 @@ export function optionalVars(values, row = target()) {
 // joins the artifact's `secrets.required`, so the deploy treats it exactly like the required ones: the
 // preflight demands it, the upload applies it through --secrets-file, and the post-upload check counts
 // it and demands it encrypted. TRIAL_KEY can never be rotated (STAGING.md), so it is never generated here.
-export const OPTIONAL_SECRETS = Object.freeze(['TRIAL_KEY'])
+// OWNER_NOTICE_API_KEY and OWNER_NOTICE_FROM are the email provider's key and the verified sender the
+// new-device notice goes out with (authority.ts `deviceAddedNotice`); with either unset it sends nothing.
+export const OPTIONAL_SECRETS = Object.freeze(['TRIAL_KEY', 'OWNER_NOTICE_API_KEY', 'OWNER_NOTICE_FROM'])
 export function optionalSecrets(names = []) {
   requireValue(Array.isArray(names) && names.every(name => OPTIONAL_SECRETS.includes(name)), 'Unknown optional Worker secret')
   return OPTIONAL_SECRETS.filter(name => names.includes(name))
