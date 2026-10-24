@@ -176,6 +176,10 @@ const LASTING: [&str; 7] = [
     "notThisStation",
     "notStation",
 ];
+/// The refusals only a new pairing ends: the station no longer knows this computer, or answers
+/// with another key. After one, a cold launch does not drive that station again by itself; it
+/// offers to pair again with it instead ([`pair_again`]).
+const PAIR_AGAIN: [&str; 2] = ["notPaired", "keyChanged"];
 /// How long the main window waits for the shack's state before it shows without it.
 const SHOW_BY: Duration = Duration::from_secs(10);
 /// The feeds the screens' polls are answered from.
@@ -265,6 +269,10 @@ struct Target {
     /// absent when none was typed (the station is found by its record or by name instead).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     at: Option<String>,
+    /// Why the station last refused this computer, when that was one of [`PAIR_AGAIN`]; cleared by
+    /// the next link that opens ([`note_refusal_at`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refused: Option<String>,
 }
 
 /// Read the kept target at `path`: `None` when there is no sound one — no file, one this build
@@ -280,17 +288,42 @@ fn read_target_at(path: &Path) -> Option<Target> {
 /// the station actually driven. A write that does not land is logged, not fatal: the only cost is
 /// that a cold launch does not reconnect.
 fn keep_target_at(path: &Path, station: &str, typed: Option<&Typed>) {
-    let target = Target {
-        station: station.to_string(),
-        at: typed.map(Typed::to_string),
-    };
-    match serde_json::to_string_pretty(&target) {
+    write_target_at(
+        path,
+        &Target {
+            station: station.to_string(),
+            at: typed.map(Typed::to_string),
+            refused: None,
+        },
+    );
+}
+
+fn write_target_at(path: &Path, target: &Target) {
+    match serde_json::to_string_pretty(target) {
         Ok(text) if crate::write_json_atomic(path, &text) => {}
         _ => tempo_core::applog::warn(
             "client",
             "could not keep the last client target; a cold launch will not reconnect to it",
         ),
     }
+}
+
+/// Note beside the kept target at `path` why its station `station` last refused this computer,
+/// when that is one of [`PAIR_AGAIN`], or that a link to it opened (`None`), which clears the note.
+/// Any other refusal leaves the note as it is: it says nothing of the pairing. A target that names
+/// another station is left as it is.
+fn note_refusal_at(path: &Path, station: &str, refused: Option<&str>) {
+    if refused.is_some_and(|reason| !PAIR_AGAIN.contains(&reason)) {
+        return;
+    }
+    let Some(mut target) = read_target_at(path) else {
+        return;
+    };
+    if target.station != station || target.refused.as_deref() == refused {
+        return;
+    }
+    target.refused = refused.map(str::to_string);
+    write_target_at(path, &target);
 }
 
 /// Forget this computer's last client target, so a cold launch boots as this computer's own
@@ -331,6 +364,11 @@ fn resolve_target(
         return None;
     }
     let target = target?;
+    // The station last refused this computer in a way only a new pairing ends: never driven again
+    // by itself, so the operator is not dropped into a refusing client mode on every start.
+    if target.refused.is_some() {
+        return None;
+    }
     known(&target.station).then(|| {
         let typed = target.at.as_deref().and_then(Typed::read);
         (target.station, typed)
@@ -358,6 +396,47 @@ pub(crate) fn auto_requested() -> Option<(String, Option<Typed>)> {
         read_target_at(&target_path()),
         |id| station_known(&stations, id),
     )
+}
+
+/// The station to offer to pair again with, once, on a launch that is not in client mode: the kept
+/// target's, when its station last refused this computer in a way only a new pairing ends
+/// ([`PAIR_AGAIN`]) and is still known here. The target is then forgotten, as Leave forgets it,
+/// so the offer is made once and the next cold launch boots as this computer's own station. Never
+/// in a radio window (`profile`).
+fn pair_again_at(
+    path: &Path,
+    profile: Option<&str>,
+    known: impl FnOnce(&str) -> bool,
+) -> Option<String> {
+    if profile.is_some() {
+        return None;
+    }
+    let target = read_target_at(path).filter(|target| target.refused.is_some())?;
+    if !known(&target.station) {
+        return None;
+    }
+    clear_target_at(path);
+    tempo_core::applog::info(
+        "client",
+        &format!(
+            "the station this computer last drove refused it ({}): offering to pair again \
+             instead of connecting",
+            target.refused.as_deref().unwrap_or_default()
+        ),
+    );
+    Some(target.station)
+}
+
+/// [`pair_again_at`] in this computer's own [`target_path`], for the window that opens: the
+/// Stations on this network window, offering Pair again for that station.
+pub(crate) fn pair_again() -> Option<String> {
+    let stations =
+        crate::lan_client::Stations::new(Arc::new(crate::remote_service::vault::SystemVault))
+            .typed_in(crate::lan_client::typed_path())
+            .signed_in(crate::lan_client::signed_path());
+    pair_again_at(&target_path(), crate::active_profile(), |id| {
+        station_known(&stations, id)
+    })
 }
 
 // --- Where each command goes -------------------------------------------------------------------
@@ -905,6 +984,9 @@ pub(crate) struct Client {
     /// Where an address the operator typed is kept once Operate opened there; nowhere when none
     /// was given.
     keep: OnceLock<Arc<dyn Keep>>,
+    /// The kept client target, where why the station last refused this computer is noted
+    /// ([`note_refusal_at`]); nowhere when none was given.
+    target: OnceLock<PathBuf>,
     timing: Mutex<Timing>,
     /// The link there is now runs over the internet.
     on_internet: AtomicBool,
@@ -968,6 +1050,7 @@ impl Client {
             afar: OnceLock::new(),
             lookup: OnceLock::new(),
             keep: OnceLock::new(),
+            target: OnceLock::new(),
             timing: Mutex::new(Timing::default()),
             on_internet: AtomicBool::new(false),
             udp_blocked: AtomicBool::new(false),
@@ -998,6 +1081,19 @@ impl Client {
     /// the next launch. Given once, before [`Client::drive`].
     pub(crate) fn keep_typed_with(&self, keep: Arc<dyn Keep>) {
         let _ = self.keep.set(keep);
+    }
+
+    /// Where the kept client target is, so a refusal only a new pairing ends is noted beside it,
+    /// and cleared by the next link that opens. Given once, before [`Client::drive`].
+    pub(crate) fn note_refusals_in(&self, target: PathBuf) {
+        let _ = self.target.set(target);
+    }
+
+    /// [`note_refusal_at`] in the target given, if one was.
+    fn note_refusal(&self, refused: Option<&str>) {
+        if let Some(path) = self.target.get() {
+            note_refusal_at(path, &self.station_id, refused);
+        }
     }
 
     /// Where `typed` is now: an address as it is, a host name looked up again, each time it is
@@ -1870,6 +1966,7 @@ impl Client {
                             tokio::task::spawn_blocking(move || keep.keep(&id, &typed));
                         }
                     }
+                    self.note_refusal(None);
                     self.on_the_link(&app, Arc::new(link), &shown, internet, (&find, typing))
                         .await;
                     if !self.idle_ended.load(Ordering::SeqCst) {
@@ -1887,6 +1984,17 @@ impl Client {
                     };
                     let lasting =
                         LASTING.contains(&reason) || crate::lan_client::internet::lasting(reason);
+                    // What the station told this computer, once each time it changes: the
+                    // reason alone, never a key.
+                    if lock(&self.status).reason.as_deref() != Some(reason) {
+                        tempo_core::applog::warn(
+                            "client",
+                            &format!(
+                                "client mode: the station did not take this computer ({reason})"
+                            ),
+                        );
+                    }
+                    self.note_refusal(Some(reason));
                     let phase = if !lasting && self.live_once.load(Ordering::SeqCst) {
                         Phase::NotLive
                     } else {
@@ -2525,15 +2633,30 @@ impl Client {
     }
 }
 
-/// Leave: this computer's Nexus starts again as itself, the station handed back first.
+/// Leave: this computer's Nexus starts again as itself, the station handed back first. With
+/// `pair_again`, asked from the banner while the station refuses this computer in a way only a new
+/// pairing ends ([`PAIR_AGAIN`]): the refusal stays noted beside the target, so the start that
+/// follows opens Stations on this network offering Pair again for that station ([`pair_again`]).
 #[tauri::command]
-pub(crate) fn leave_client_mode(app: tauri::AppHandle) -> Result<(), String> {
-    if app.try_state::<Arc<Client>>().is_none() {
+pub(crate) fn leave_client_mode(
+    app: tauri::AppHandle,
+    pair_again: Option<bool>,
+) -> Result<(), String> {
+    let Some(client) = app.try_state::<Arc<Client>>() else {
         return Err("notClient".to_string());
+    };
+    let refused = lock(&client.status)
+        .reason
+        .clone()
+        .filter(|reason| PAIR_AGAIN.contains(&reason.as_str()));
+    match refused {
+        Some(reason) if pair_again == Some(true) => {
+            note_refusal_at(&target_path(), &client.station_id, Some(&reason));
+        }
+        // The operator asked to come back to this computer's own station: forget the last client
+        // target so the next cold launch boots as itself, not back into the station just left.
+        _ => clear_target(),
     }
-    // The operator asked to come back to this computer's own station: forget the last client
-    // target so the next cold launch boots as itself, not back into the station just left.
-    clear_target();
     start_again(&app, Vec::new());
     Ok(())
 }
@@ -2622,6 +2745,7 @@ pub(crate) fn run(station: String, typed: Option<Typed>) {
         headset.rings().set_volume_db(this.volume_db);
     }
     let client = Arc::new(Client::new(station, this));
+    client.note_refusals_in(target_path());
     match headset {
         Some(headset) => client.hear_with(headset),
         None => tempo_core::applog::warn(

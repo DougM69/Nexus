@@ -4,7 +4,12 @@
 // operator opens (the operator's ruling of 2026-10-04, "Window only in v1"). A station signed in to
 // from elsewhere (a laptop away from home, a guest who lives elsewhere) is listed apart,
 // by its name: Operate drives it over the internet until a sign-in on its row, made on its network,
-// adds it there. Served from this computer's own loopback origin, so it reaches no Nexus command;
+// adds it there. Each sign-in is named by what it does (adding a station, linking a code-paired one
+// to the account, adding one signed in to from elsewhere on this network), and says how it went
+// under its own button. A station that no longer knows this computer, or answers with another key,
+// offers Pair again on its row, with its address filled in; so does the window opened with
+// `pairAgain` (`client_mode::pair_again`), once. Served from this computer's own loopback origin,
+// so it reaches no Nexus command;
 // everything it does goes on its one socket to this computer's Nexus, which signs in, holds the keys
 // and the station records and does the cryptography (src-tauri/src/lan_client.rs).
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -87,6 +92,7 @@ function signInSentence(reason: SignInReason): string {
     case 'signInPortBusy': return t('lanWindow.internet.reason.signInPortBusy')
     case 'signInTimedOut': return t('lanWindow.internet.reason.signInTimedOut')
     case 'signInRefused': return t('lanWindow.internet.reason.signInRefused')
+    case 'emailUnverified': return t('lanWindow.internet.reason.emailUnverified')
     case 'signInUnderWay': return t('lanWindow.internet.reason.signInUnderWay')
     case 'accountNotReady':
     case 'internetNotReady': return t('lanWindow.internet.reason.internetNotReady')
@@ -151,6 +157,14 @@ function openSocket(url: string): PageSocket {
 
 type Road = { connection: LanConnection; station: LanStation }
 
+/** The refusals only a new pairing ends: the row offers Pair again. */
+const PAIR_AGAIN: readonly ConnectReason[] = ['notPaired', 'keyChanged']
+
+/** The station the window was opened to pair again with (`?pairAgain=<id>`), or none. */
+function pairAgainIn(page: string): string | null {
+  try { return new URL(page).searchParams.get('pairAgain') } catch { return null }
+}
+
 export function LanApp({ open = openSocket, page = typeof location === 'undefined' ? '' : location.href, environment = lanStream }: {
   /** Where the page's socket comes from; a test's own. */
   open?: (url: string) => PageSocket
@@ -180,7 +194,9 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const [code, setCode] = useState('')
   const [name, setName] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [said, setSaid] = useState<{ text: string; alert: boolean } | null>(null)
+  // What the last action said, and where: `at` is the station whose row it belongs on, or `add` for
+  // the add button; none, above the list. One line at a time, under the action that made it.
+  const [said, setSaid] = useState<{ text: string; alert: boolean; at?: string } | null>(null)
   const [road, setRoad] = useState<Road | null>(null)
   const current = useRef<Road | null>(null)
   const [forgetting, setForgetting] = useState<string | null>(null)
@@ -205,6 +221,14 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const [another, setAnother] = useState<{ id: string; address: string } | null>(null)
   const [resume, setResume] = useState(0)
   const connecting = useRef<string | null>(null)
+  // The station Operate or the stream was last asked for, for the row its refusal is said on.
+  const reaching = useRef<string | null>(null)
+  // The station whose row offers Pair again.
+  const [pairAgain, setPairAgain] = useState<string | null>(null)
+  // The station the window was opened to pair again with: offered once, when the list first names it.
+  const pairAgainAsked = useRef(pairAgainIn(page))
+  // The stations as last told, for a sign-in's answer to read.
+  const listed = useRef<{ stations: LanStation[]; away: LanAway[]; account: LanSigned[] }>({ stations: [], away: [], account: [] })
 
   const say = useCallback((value: Record<string, unknown>) => {
     try { socket.current?.send(JSON.stringify(value)) } catch { setPhase('lost') }
@@ -219,6 +243,14 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
       setRoad(null)
     }
     ws.onopen = () => { setPhase('open'); ws.send(JSON.stringify({ type: 'stations' })) }
+    // The pairing card, for `station` at its address: the code pairing, proven at the shack.
+    const pairWith = (station: LanStation) => {
+      setPairing(true); setAddress(station.addresses[0]); setPairAgain(null)
+      setFound(null)
+      ws.send(JSON.stringify({ type: 'find' }))
+    }
+    // Where a sign-in's answer is said: under the button that started it.
+    const signedAt = () => signingFor.current ?? 'add'
     ws.onclose = () => { setPhase('lost'); setBusy(null); setChoosing(null); setWhere(null); leave() }
     ws.onmessage = event => {
       if (typeof event.data !== 'string') return
@@ -233,8 +265,14 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           setStationKeys(told.stationKeys ?? [])
           setComputer(told.computer)
           setStoreFailed(told.error !== null)
+          listed.current = { stations: told.stations, away: told.away, account: told.account }
           if (told.forgetUnreached !== null) setSaid({ text: t('lanWindow.internet.forgetUnreached'), alert: true })
           if (told.dropUnreached !== undefined) setSaid({ text: t('lanWindow.internet.dropRoadUnreached'), alert: true })
+          if (pairAgainAsked.current !== null) {
+            const again = told.stations.find(station => station.id === pairAgainAsked.current)
+            pairAgainAsked.current = null
+            if (again) { pairWith(again); setSaid({ text: t('lanWindow.pairAgainHint'), alert: false }) }
+          }
           return
         case 'found':
           setFound({ shacks: told.shacks, available: told.available })
@@ -258,9 +296,11 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
         }
         case 'connectRefused':
           setBusy(null)
-          setSaid({ text: sentence(told.reason), alert: true })
+          setSaid({ text: sentence(told.reason), alert: true, ...(reaching.current ? { at: reaching.current } : {}) })
           // Nothing answered where the station was: it may have moved, so offer to type where it is.
           if ((told.reason === 'unreachable' || lanUnreached(told.reason)) && connecting.current) setAnother({ id: connecting.current, address: '' })
+          // Refused in a way only a new pairing ends: its row offers to pair again.
+          if (PAIR_AGAIN.includes(told.reason) && reaching.current) setPairAgain(reaching.current)
           return
         case 'closed':
           leave()
@@ -274,7 +314,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           setSaid({ text: t('lanWindow.operating'), alert: false })
           return
         case 'signingIn':
-          setSaid({ text: t('lanWindow.internet.signingIn'), alert: false })
+          setSaid({ text: t('lanWindow.internet.signingIn'), alert: false, at: signedAt() })
           return
         case 'chooseStation':
           setChoosing(told.stations)
@@ -290,7 +330,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           const again = signingFor.current !== null && renewing.current.has(signingFor.current)
           setBusy(null); setChoosing(null); setWhere(null)
           setSaid({ text: told.waiting ? t('lanWindow.internet.waiting', { key: shortFingerprint(told.key) }) : told.away ? t('lanWindow.away.added')
-            : again ? t('lanWindow.signIn.renewed') : t('lanWindow.signIn.done'), alert: false })
+            : again ? t('lanWindow.signIn.renewed') : t('lanWindow.signIn.done'), alert: false, at: signedAt() })
           say({ type: 'stations' })
           return
         }
@@ -298,7 +338,19 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           // A station signed in to from elsewhere, still not found on this network, stays as it was.
           const stillAway = told.reason === 'notOnThisNetwork' && signingFor.current !== null && awayIds.current.has(signingFor.current)
           setBusy(null); setChoosing(null); setWhere(null)
-          setSaid({ text: stillAway ? t('lanWindow.away.stillAway') : signInSentence(told.reason), alert: true })
+          // Adding the account's station, found here already: when it is the one station on this
+          // computer and paired with a code, that is the station, so the sign-in goes on to link it,
+          // from its row. With more than one, the sentence names the button on its row.
+          const { stations: here, away: elsewhere, account: signed } = listed.current
+          const only = here.length === 1 && elsewhere.length === 0 ? here[0] : null
+          if (told.reason === 'alreadyHere' && signingFor.current === null && only && !signed.some(entry => entry.stationId === only.id)) {
+            signingFor.current = only.id
+            setBusy('signIn')
+            setSaid({ text: t('lanWindow.signIn.linking'), alert: false, at: only.id })
+            ws.send(JSON.stringify({ type: 'signIn', stationId: only.id }))
+            return
+          }
+          setSaid({ text: stillAway ? t('lanWindow.away.stillAway') : signInSentence(told.reason), alert: true, at: signedAt() })
           return
         }
         case 'station':
@@ -356,6 +408,8 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
 
   const connect = (id: string, typed?: string) => {
     connecting.current = id
+    reaching.current = id
+    setPairAgain(null)
     setBusy(`connect:${id}`)
     setSaid(null)
     say(typed ? { type: 'connect', stationId: id, address: typed } : { type: 'connect', stationId: id })
@@ -367,6 +421,9 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
       disconnect={() => say({ type: 'disconnect' })} />
   }
 
+  // The last action's line, under the action that made it.
+  const saidLine = said && <p className={said.alert ? 'rm-warning' : 'remote-site-status'} role={said.alert ? 'alert' : 'status'}>{said.text}</p>
+  const saidAt = (at: string) => said?.at === at && saidLine
   const shownName = name ?? computer
   const pairReady = !busy && phase === 'open' && address.trim() !== '' && codeShaped(code) && shownName.trim() !== ''
   // A station's internet road, by the station's key it is pinned to, in the eight groups the station
@@ -410,7 +467,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
       {phase === 'opening' && <p className="remote-site-status" role="status">{t('lanWindow.opening')}</p>}
       {phase === 'lost' && <p className="rm-warning" role="alert">{t('lanWindow.lost')}</p>}
       {storeFailed && <p className="rm-warning" role="alert">{t('lanWindow.reason.storeUnavailable')}</p>}
-      {said && <p className={said.alert ? 'rm-warning' : 'remote-site-status'} role={said.alert ? 'alert' : 'status'}>{said.text}</p>}
+      {said && !said.at && saidLine}
       {choosing && <section className="rm-card remote-section remote-site-card--action" aria-label={t('lanWindow.internet.chooseTitle')}>
         <h2>{t('lanWindow.internet.chooseTitle')}</h2>
         <p>{signingFor.current === null ? t('lanWindow.signIn.choose') : t('lanWindow.internet.choose')}</p>
@@ -463,7 +520,8 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
             <p className="remote-warning">{t('lanWindow.operateConfirm')}</p>
             <div className="remote-actions">
               <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'} onClick={() => {
-                setOperating(null); setBusy(`operate:${station.id}`); setSaid(null)
+                setOperating(null); setBusy(`operate:${station.id}`); setSaid(null); setPairAgain(null)
+                reaching.current = station.id
                 say(operateAt ? { type: 'operate', stationId: station.id, address: operateAt } : { type: 'operate', stationId: station.id })
               }}>{t('lanWindow.operateYes')}</button>
               <button type="button" className="remote-button remote-button--quiet" onClick={() => setOperating(null)}>{t('lanWindow.operateNo')}</button>
@@ -508,10 +566,16 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
               {settled && <div className="remote-actions">
                 <button type="button" className="remote-button remote-button--quiet" disabled={!!busy || phase !== 'open'} title={t('lanWindow.internet.hint')}
                   onClick={() => signIn(station.id)}>
-                  {busy === 'signIn' && signingFor.current === station.id ? t('lanWindow.internet.adding') : t('lanWindow.signIn')}</button>
+                  {busy === 'signIn' && signingFor.current === station.id ? t('lanWindow.internet.adding') : t('lanWindow.signIn.link')}</button>
               </div>}
             </>
           })()}
+          {saidAt(station.id)}
+          {/* Refused in a way only a new pairing ends: the code pairing, with this station's address. */}
+          {pairAgain === station.id && forgetting !== station.id && operating !== station.id && <div className="remote-actions">
+            <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'}
+              onClick={() => { setSaid(null); setPairAgain(null); setPairing(true); setAddress(station.addresses[0]); look() }}>{t('lanWindow.pairAgain')}</button>
+          </div>}
           {/* Kept once Operate opened there, and tried first by Operate from then on: changed or cleared here. */}
           {station.typedAddress !== undefined && forgetting !== station.id && operating !== station.id && (changing?.id === station.id
             ? <form onSubmit={event => {
@@ -567,6 +631,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
             <div className="remote-actions">
               <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'} onClick={() => {
                 setOperating(null); setBusy(`operate:${station.id}`); setSaid(null)
+                reaching.current = station.id
                 say({ type: 'operate', stationId: station.id })
               }}>{t('lanWindow.operateYes')}</button>
               <button type="button" className="remote-button remote-button--quiet" onClick={() => setOperating(null)}>{t('lanWindow.operateNo')}</button>
@@ -576,10 +641,11 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
             <div className="remote-actions">
               <button type="button" className="remote-button remote-button--primary" disabled={!!busy || phase !== 'open'} onClick={() => setOperating(station.id)}>{t('lanWindow.operate')}</button>
               <button type="button" className="remote-button remote-button--quiet" disabled={!!busy || phase !== 'open'} onClick={() => signIn(station.id)}>
-                {busy === 'signIn' && signingFor.current === station.id ? t('lanWindow.internet.adding') : t('lanWindow.signIn')}</button>
+                {busy === 'signIn' && signingFor.current === station.id ? t('lanWindow.internet.adding') : t('lanWindow.away.signIn')}</button>
               <button type="button" className="remote-button remote-button--quiet" disabled={!!busy} onClick={() => setForgetting(station.id)}>{t('lanWindow.forget')}</button>
             </div>
           </>}
+          {saidAt(station.id)}
         </div>)}
         {/* Signing in is how a station is added. A code stays for a station whose owner has not signed
             in to Nexus Remote at the station, until every station has. */}
@@ -587,6 +653,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           <button type="button" className="remote-button remote-button--primary" disabled={!!busy || phase !== 'open'} onClick={() => signIn(null)}>
             {busy === 'signIn' && signingFor.current === null ? t('lanWindow.internet.adding') : t('lanWindow.signIn')}</button>
         </div>
+        {saidAt('add')}
         <p className="settings-hint">{t('lanWindow.signInHint')}</p>
         {!pairing && <>
           <div className="remote-actions">

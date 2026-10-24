@@ -38494,6 +38494,23 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
         let _ = splash.close();
     }
     tempo_core::applog::info("startup", "main window shown");
+    // The station this computer last drove refused it in a way only a new pairing ends: its window
+    // opens offering Pair again, rather than client mode refusing on every start.
+    if let Some(station) = client_mode::pair_again() {
+        let app = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let origin = app.state::<remote_window::LanOrigin>();
+            let opened =
+                remote_window::open_lan_stations_window(app.clone(), origin, None, Some(station))
+                    .await;
+            if let Err(why) = opened {
+                tempo_core::applog::warn(
+                    "client",
+                    &format!("could not open Stations on this network to pair again: {why}"),
+                );
+            }
+        });
+    }
     // The window is up: the country and state the logbook store lacks are written now, in the
     // background, once per resolver-data version (SPEC-2 v3 D2-A).
     spawn_log_fill(handle.state::<SharedEngine>().inner().clone());

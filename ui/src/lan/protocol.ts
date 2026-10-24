@@ -64,9 +64,11 @@ export type ClosedReason = (typeof CLOSED_REASONS)[number]
 /** The station's answer did not hold here, and the page was never handed it (S3-M1). */
 export const ANSWER_REFUSALS = ['stationKeyMismatch', 'stationNotSigned'] as const
 
-/** Why a sign-in added nothing (`lan_client::account`). A reason this page does not know reads as
- *  `signInFailed`: a sign-in that ended is always said to have ended. */
-export const SIGN_IN_REASONS = ['signInPortBusy', 'signInTimedOut', 'signInRefused', 'signInFailed', 'signInUnderWay',
+/** Why a sign-in added nothing (`lan_client::account`). `signInRefused` is the operator's own
+ *  cancel; `emailUnverified`, the issuer refusing an address not confirmed yet
+ *  (`tempo_client::native::callback`). A reason this page does not know reads as `signInFailed`: a
+ *  sign-in that ended is always said to have ended. */
+export const SIGN_IN_REASONS = ['signInPortBusy', 'signInTimedOut', 'signInRefused', 'emailUnverified', 'signInFailed', 'signInUnderWay',
   'accountNotReady', 'internetNotReady', 'internetNotIncluded', 'serviceUnavailable', 'issuerUnavailable', 'tryLater',
   'rateLimited', 'accessDenied', 'notApprovedThere', 'waitingApproval', 'trialDisabled', 'deviceLimit',
   'stationUnavailable', 'stationKeyMissing', 'stationNotChosen', 'stationsFull', 'storeUnavailable', 'unknownStation',

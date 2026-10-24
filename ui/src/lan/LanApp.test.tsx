@@ -430,9 +430,9 @@ describe('Signing in', () => {
     socket.tell({ type: 'stations', computer: 'DEN-PC', internet, account,
       stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
   const card = () => screen.getByText(EN['lanWindow.stationAt'].replace('{{address}}', '192.168.1.20:42075')).closest('.lan-station') as HTMLElement
-  /** The window's own Sign in, beside the stations: the one that adds a station. */
-  const addButton = () => screen.getAllByRole('button', { name: EN['lanWindow.signIn'] })
-    .find(button => !button.closest('.lan-station')) as HTMLButtonElement
+  /** The window's own Sign in, beside the stations: the one that adds a station, and the only one
+   *  so named. */
+  const addButton = () => screen.getByRole('button', { name: EN['lanWindow.signIn'] }) as HTMLButtonElement
 
   it('is how a station is added: one press, the sign-in waits in the browser, and the station is said added', () => {
     page()
@@ -469,7 +469,7 @@ describe('Signing in', () => {
     expect(shown).toBe('9F8E 7D6C 5B4A 3928 9F8E 7D6C 5B4A 3928')
     page()
     told()
-    fireEvent.click(within(card()).getByRole('button', { name: EN['lanWindow.signIn'] }))
+    fireEvent.click(within(card()).getByRole('button', { name: EN['lanWindow.signIn.link'] }))
     socket.tell({ type: 'signedIn', stationId: STATION, waiting: true, away: false, key: ROAD_KEY })
     expect(screen.getByRole('status').textContent).toBe(EN['lanWindow.internet.waiting'].replace('{{key}}', shown))
     told([], [{ id: STATION, key: ROAD_KEY }])
@@ -540,7 +540,7 @@ describe('Signing in', () => {
   it('CONTROL: signing in from the row of a station on this network, the where-card keeps Cancel', () => {
     page()
     told([], [{ id: STATION, key: ROAD_KEY }])
-    fireEvent.click(within(card()).getByRole('button', { name: EN['lanWindow.signIn'] }))
+    fireEvent.click(within(card()).getByRole('button', { name: EN['lanWindow.signIn.link'] }))
     socket.tell({ type: 'stationAddress', name: '' })
     const where = screen.getByRole('region', { name: EN['lanWindow.signIn.whereTitle'] })
     expect(within(where).queryByRole('button', { name: EN['lanWindow.signIn.notHere'] })).toBeNull()
@@ -554,7 +554,7 @@ describe('Signing in', () => {
     page()
     told([], [{ id: STATION, key: ROAD_KEY }])
     expect(within(card()).getByText(EN['lanWindow.internet.added'])).toBeTruthy()
-    const link = within(card()).getByRole('button', { name: EN['lanWindow.signIn'] })
+    const link = within(card()).getByRole('button', { name: EN['lanWindow.signIn.link'] })
     expect(link.classList.contains('remote-button--quiet')).toBe(true)
     fireEvent.click(link)
     expect(last(socket.sent)).toEqual({ type: 'signIn', stationId: STATION })
@@ -570,7 +570,7 @@ describe('Signing in', () => {
     // 1 802 592 000 s is 2027-02-14 UTC.
     told([{ stationId: STATION, until: 1_802_592_000, renew: false }], [{ id: STATION, key: ROAD_KEY }])
     expect(within(card()).getByText(EN['lanWindow.signIn.until'].replace('{{date}}', '2027-02-14'))).toBeTruthy()
-    expect(within(card()).queryByRole('button', { name: EN['lanWindow.signIn'] }), 'signed in: nothing to link').toBeNull()
+    expect(within(card()).queryByRole('button', { name: EN['lanWindow.signIn.link'] }), 'signed in: nothing to link').toBeNull()
     expect(within(card()).queryByRole('button', { name: EN['remote.account.signInAgain'] }), 'not yet').toBeNull()
     told([{ stationId: STATION, until: 1_802_592_000, renew: true }], [{ id: STATION, key: ROAD_KEY }])
     expect(within(card()).getByText(EN['lanWindow.signIn.renew'].replace('{{date}}', '2027-02-14'))).toBeTruthy()
@@ -599,7 +599,8 @@ describe('Signing in', () => {
     socket.tell({ type: 'signInRefused', reason: 'stationNotProven' })
     expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.signIn.reason.stationNotProven'])
     expect(addButton().disabled).toBe(false)
-    for (const reason of SIGN_IN_REASONS) {
+    // `alreadyHere` with the one station here paired with a code goes on to link it: its own tests.
+    for (const reason of SIGN_IN_REASONS.filter(reason => reason !== 'alreadyHere')) {
       socket.tell({ type: 'signInRefused', reason })
       const said = screen.getByRole('alert').textContent ?? ''
       expect(said.length, reason).toBeGreaterThan(10)
@@ -611,6 +612,118 @@ describe('Signing in', () => {
       expect(said.length, reason).toBeGreaterThan(10)
       expect(said, reason).not.toContain('lanWindow.')
     }
+  })
+
+  it('says to confirm the email address when the issuer refused one not confirmed yet, never that the sign-in was cancelled', () => {
+    page()
+    told()
+    fireEvent.click(addButton())
+    socket.tell({ type: 'signInRefused', reason: 'emailUnverified' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.internet.reason.emailUnverified'])
+    // CONTROL: the operator's own cancel is still said as one.
+    fireEvent.click(addButton())
+    socket.tell({ type: 'signInRefused', reason: 'signInRefused' })
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.internet.reason.signInRefused'])
+  })
+
+  it('names each sign-in by what it does, and says how each went under its own button, never under another', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [], account: [],
+      stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }],
+      away: [{ id: AWAY, name: 'Shack', key: 'fedcba9876543210'.repeat(4) }] })
+    const names = [EN['lanWindow.signIn'], EN['lanWindow.signIn.link'], EN['lanWindow.away.signIn']]
+    expect(new Set(names).size).toBe(3)
+    for (const name of names) expect(screen.getAllByRole('button', { name }), name).toHaveLength(1)
+    const away = () => screen.getByText('Shack').closest('.lan-station') as HTMLElement
+    // The code-paired row's link: its line on its row alone.
+    fireEvent.click(within(card()).getByRole('button', { name: EN['lanWindow.signIn.link'] }))
+    socket.tell({ type: 'signInRefused', reason: 'signInFailed' })
+    expect(within(card()).getByRole('alert').textContent).toBe(EN['lanWindow.internet.reason.signInFailed'])
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    // The add: its line by the add button, and the row's is gone.
+    fireEvent.click(addButton())
+    socket.tell({ type: 'signInRefused', reason: 'stationNotProven' })
+    expect(within(card()).queryByRole('alert')).toBeNull()
+    expect(within(away()).queryByRole('alert')).toBeNull()
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(addButton().parentElement?.parentElement?.contains(screen.getByRole('alert'))).toBe(true)
+  })
+
+  it('adding a station that is here already, paired with a code, goes on to link it when it is the one station here', () => {
+    page()
+    told()
+    fireEvent.click(addButton())
+    socket.tell({ type: 'signInRefused', reason: 'alreadyHere' })
+    expect(last(socket.sent)).toEqual({ type: 'signIn', stationId: STATION })
+    expect(within(card()).getByRole('status').textContent).toBe(EN['lanWindow.signIn.linking'])
+    socket.tell({ type: 'signedIn', stationId: STATION, waiting: false, away: false, key: ROAD_KEY })
+    expect(within(card()).getByRole('status').textContent).toBe(EN['lanWindow.signIn.done'])
+  })
+
+  it('CONTROL: with more than one station here, adding one that is here already says which button links it, and signs in no more', () => {
+    page()
+    socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [], account: [], stations: [
+      { id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) },
+      { id: '60000000-0000-4000-8000-000000000009', addresses: ['192.168.1.21:42075'], key: 'fedcba9876543210'.repeat(4) }] })
+    fireEvent.click(addButton())
+    const sent = socket.sent.length
+    socket.tell({ type: 'signInRefused', reason: 'alreadyHere' })
+    expect(socket.sent.length).toBe(sent)
+    expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.signIn.reason.alreadyHere'])
+    expect(EN['lanWindow.signIn.reason.alreadyHere']).toContain(EN['lanWindow.signIn.link'].replace('…', ''))
+  })
+})
+
+describe('pairing again', () => {
+  const told = () => socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [], account: [],
+    stations: [{ id: STATION, addresses: ['192.168.1.20:42075'], key: '0123456789abcdef'.repeat(4) }] })
+  const card = () => screen.getByText(EN['lanWindow.stationAt'].replace('{{address}}', '192.168.1.20:42075')).closest('.lan-station') as HTMLElement
+
+  it('offers Pair again on the row of a station that no longer knows this computer, or answers with another key, with its address filled in', () => {
+    for (const reason of ['notPaired', 'keyChanged'] as const) {
+      cleanup()
+      page()
+      told()
+      fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.streamInstead'] }))
+      socket.tell({ type: 'connectRefused', reason })
+      expect(within(card()).getByRole('alert').textContent, reason).toBe(EN[`lanWindow.reason.${reason}`])
+      fireEvent.click(within(card()).getByRole('button', { name: EN['lanWindow.pairAgain'] }))
+      const pairing = screen.getByRole('region', { name: EN['lanWindow.pairTitle'] })
+      expect((within(pairing).getByLabelText(EN['lanWindow.address']) as HTMLInputElement).value, reason).toBe('192.168.1.20:42075')
+      expect(last(socket.sent), 'it looks by name, as the pairing card always does').toEqual({ type: 'find' })
+      fireEvent.change(within(pairing).getByLabelText(EN['lanWindow.code']), { target: { value: '0123 4567 89ab cdef' } })
+      fireEvent.click(within(pairing).getByRole('button', { name: EN['lanWindow.pairSubmit'] }))
+      expect(last(socket.sent)).toEqual({ type: 'pair', address: '192.168.1.20:42075', code: '0123 4567 89ab cdef', name: 'DEN-PC' })
+    }
+  })
+
+  it('CONTROL: a station that did not answer is not offered Pair again', () => {
+    page()
+    told()
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.streamInstead'] }))
+    socket.tell({ type: 'connectRefused', reason: 'noAnswer' })
+    expect(screen.queryByRole('button', { name: EN['lanWindow.pairAgain'] })).toBeNull()
+  })
+
+  it('opened to pair again with a station, opens the pairing card with that station’s address, once', () => {
+    socket = new FakeSocket()
+    render(<LanApp page={`${PAGE}&pairAgain=${STATION}`} open={() => socket} />)
+    act(() => { socket.onopen?.() })
+    told()
+    const pairing = screen.getByRole('region', { name: EN['lanWindow.pairTitle'] })
+    expect((within(pairing).getByLabelText(EN['lanWindow.address']) as HTMLInputElement).value).toBe('192.168.1.20:42075')
+    expect(screen.getByText(EN['lanWindow.pairAgainHint'])).toBeTruthy()
+    fireEvent.click(within(pairing).getByRole('button', { name: EN['lanWindow.cancel'] }))
+    told()
+    expect(screen.queryByRole('region', { name: EN['lanWindow.pairTitle'] }), 'once').toBeNull()
+  })
+
+  it('CONTROL: opened to pair again with a station not listed here, opens nothing', () => {
+    socket = new FakeSocket()
+    render(<LanApp page={`${PAGE}&pairAgain=60000000-0000-4000-8000-0000000000ff`} open={() => socket} />)
+    act(() => { socket.onopen?.() })
+    told()
+    expect(screen.queryByRole('region', { name: EN['lanWindow.pairTitle'] })).toBeNull()
   })
 })
 
@@ -626,7 +739,7 @@ describe('a station signed in to from elsewhere', () => {
     expect(within(row()).getByText(EN['lanWindow.stationKey'].replace('{{key}}', '0123 4567 89AB CDEF 0123 4567 89AB CDEF'))).toBeTruthy()
     expect(within(row()).getByText(EN['lanWindow.away.status'])).toBeTruthy()
     const buttons = within(row()).getAllByRole('button')
-    expect(buttons.map(b => b.textContent)).toEqual([EN['lanWindow.operate'], EN['lanWindow.signIn'], EN['lanWindow.forget']])
+    expect(buttons.map(b => b.textContent)).toEqual([EN['lanWindow.operate'], EN['lanWindow.away.signIn'], EN['lanWindow.forget']])
     expect(buttons.filter(b => b.classList.contains('remote-button--primary')).map(b => b.textContent)).toEqual([EN['lanWindow.operate']])
     expect(within(row()).queryByRole('button', { name: EN['lanWindow.streamInstead'] }), 'not on this network: no stream').toBeNull()
     fireEvent.click(buttons[0])
@@ -649,7 +762,7 @@ describe('a station signed in to from elsewhere', () => {
   it('signs in for it from its row: not found, it says it stays over the internet; on its network, it is signed in there', () => {
     page()
     told()
-    fireEvent.click(within(row()).getByRole('button', { name: EN['lanWindow.signIn'] }))
+    fireEvent.click(within(row()).getByRole('button', { name: EN['lanWindow.away.signIn'] }))
     expect(last(socket.sent)).toEqual({ type: 'signIn', stationId: AWAY })
     socket.tell({ type: 'signingIn' })
     socket.tell({ type: 'stationAddress', name: 'Shack' })
@@ -658,7 +771,7 @@ describe('a station signed in to from elsewhere', () => {
     expect(last(socket.sent)).toEqual({ type: 'stationAddress', address: null })
     socket.tell({ type: 'signInRefused', reason: 'notOnThisNetwork' })
     expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.away.stillAway'])
-    fireEvent.click(within(row()).getByRole('button', { name: EN['lanWindow.signIn'] }))
+    fireEvent.click(within(row()).getByRole('button', { name: EN['lanWindow.away.signIn'] }))
     socket.tell({ type: 'signedIn', stationId: STATION, waiting: false, away: false, key: ROAD_KEY })
     expect(screen.getByRole('status').textContent).toBe(EN['lanWindow.signIn.done'])
     expect(last(socket.sent)).toEqual({ type: 'stations' })

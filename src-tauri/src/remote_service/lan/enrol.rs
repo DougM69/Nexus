@@ -128,7 +128,21 @@ impl Enrolment {
     fn read(&self, vault: &dyn AccountVault, _held: &DevicesHeld<'_>) {
         let read = match vault.device_cache() {
             Ok(cache) => cache.map(|cache| cache.devices).unwrap_or_default(),
-            Err(_) => return,
+            Err(_) => {
+                // Never read yet, nobody is admitted (`admits`): the cause of a refusal to say.
+                let first = self.enrolled.lock().is_ok_and(|held| held.is_none());
+                tempo_core::applog::warn(
+                    "remote",
+                    if first {
+                        "on this network: the signed-in computers' list did not read; until it \
+                         does, no paired computer is taken"
+                    } else {
+                        "on this network: the signed-in computers' list did not read again; the \
+                         last one read stays"
+                    },
+                );
+                return;
+            }
         };
         self.hold(read);
     }
