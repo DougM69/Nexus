@@ -39408,7 +39408,8 @@ fn remote_service_for(
     // A paired computer's calls (the command lane of Remote over this network) run through this
     // app's own command handler, as its main window's screen runs them; and each event that
     // crosses to that computer is heard here as the screen hears it, and handed on.
-    // An unkey from that computer voids its starts still in flight by the Engine's own counter.
+    // An unkey from any computer voids every start from afar still in flight, by the Engine's own
+    // counter: one for the whole station.
     let commands = remote_service::lan::commands::Commands::new(
         command_dispatch::tauri_runner(handle.clone()),
         engine_lock(&d.engine).remote_starts_voided(),

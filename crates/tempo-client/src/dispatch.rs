@@ -368,9 +368,10 @@ pub fn runs_as_stop(class: Option<Class>, cmd: &str, args: &Value) -> bool {
 
 /// ⛔ Whether a call under Stop's rules only unkeys: the off half of a transmit switch
 /// ([`OFF_HALVES`]). An unkey goes by the link alone, ahead of everything, and ends its own over at
-/// once, as at the shack's own screen. It voids every start its computer made before it, as a Stop
-/// does, but halts nothing else: what other starts from afar began goes on. A command that stops a
-/// transmission is a Stop, by both roads, and halts everything at the station.
+/// once, as at the shack's own screen. It voids every start from afar the station took before it,
+/// whichever computer made it (the counter is the station's), as a Stop does, but halts nothing
+/// else: what other starts from afar began goes on. A command that stops a transmission is a Stop,
+/// by both roads, and halts everything at the station.
 pub fn is_unkey(cmd: &str, args: &Value) -> bool {
     OFF_HALVES.iter().any(|(name, arg, off)| {
         *name == cmd

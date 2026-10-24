@@ -27,6 +27,7 @@ vi.mock('../api', () => ({
 
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
   stopVoice.mockClear()
   playVoiceMessage.mockClear()
 })
@@ -64,10 +65,81 @@ describe('the voice keyer leaving the screen', () => {
   it('sends nothing once the message it played has ended', async () => {
     const { container, rerender, unmount } = await renderKeyer()
     await playF1(container)
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
     rerender(<VoiceKeyer txEnabled keyed transmitting />)
     rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
     unmount()
     expect(stopVoice).not.toHaveBeenCalled()
+  })
+
+  // The rig unkeying is not this pane's message ending unless the rig keyed AFTER the send.
+  it('stops a message pressed while the last one was still on the air', async () => {
+    const { container, rerender, unmount } = await renderKeyer()
+    await playF1(container)
+    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    // Pressed again before the first message ends: the next one waits for it.
+    await playF1(container)
+    expect(playVoiceMessage).toHaveBeenCalledTimes(2)
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    // The first one's end, long enough ago to count, and the second has not keyed yet.
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
+    unmount()
+    expect(stopVoice, 'the end of the message before it ended the guard of this one').toHaveBeenCalledTimes(1)
+  })
+
+  it('stops a message the rig keyed for again after the last one ended', async () => {
+    const { container, rerender, unmount } = await renderKeyer()
+    await playF1(container)
+    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    await playF1(container)
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
+    unmount()
+    expect(stopVoice).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refusal of an earlier press does not clear the message sent after it', async () => {
+    const { container, unmount } = await renderKeyer()
+    let refuse: (e: Error) => void = () => {}
+    playVoiceMessage.mockImplementationOnce(
+      () => new Promise((_, reject) => (refuse = reject)),
+    )
+    await playF1(container)
+    await playF1(container)
+    await act(async () => refuse(new Error('refused')))
+    unmount()
+    expect(stopVoice, "the first press's refusal cleared the second").toHaveBeenCalledTimes(1)
+  })
+
+  // One snapshot reading the rig unkeyed mid-message (a stale one after a link hiccup) is no end.
+  it('stops a message after a snapshot briefly read the rig unkeyed', async () => {
+    const { container, rerender, unmount } = await renderKeyer()
+    await playF1(container)
+    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    // Still keyed, long after the brief unkeyed reading.
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
+    unmount()
+    expect(stopVoice, 'a brief unkeyed snapshot ended the guard').toHaveBeenCalledTimes(1)
+  })
+
+  it('stops a message hidden while a snapshot reads the rig unkeyed', async () => {
+    const { container, rerender, unmount } = await renderKeyer()
+    await playF1(container)
+    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    unmount()
+    expect(stopVoice, 'one unkeyed snapshot counted as the end').toHaveBeenCalledTimes(1)
   })
 })
 
