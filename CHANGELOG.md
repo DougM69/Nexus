@@ -94,6 +94,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settles and falls back faster — its averaging default drops from 250 to 100 ms and its peak-hold from 250 to
   150 ms — so the trace tracks the band more like a live SDR panadapter instead of lagging behind it. Only the
   phone scope changed; CW, the digital waterfalls and the radio's own RF panadapter are untouched.
+- **A FlexRadio panadapter updates twice as often (needs a bench check on a real Flex).** Nexus now asks a
+  FlexRadio to stream its panadapter at 30 frames a second instead of 15, so the scope and waterfall from a Flex
+  move about twice as live, closer to SmartSDR's own feel. It roughly doubles the data the radio sends over the
+  network (still modest). Not yet run against a real Flex: a bench check should confirm the higher rate does not
+  disturb a second radio sharing the connection before this is relied on.
 - **The station decides every decode alert, so every screen hears the same ones.** Someone calling you, a new DXCC
   entity or grid (a rare grid loudly), a watch-list station, an opted-in CQ and a park newly on the air are now
   decided once, at the station, from your alert settings, your watch list (its CQ-only, minimum SNR and label with
