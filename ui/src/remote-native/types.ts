@@ -18,6 +18,9 @@ export type RemoteStationStatus = {
   controller?: string | null
   /** A5: the browsers whose listed key is the one pinned here, the ones that can stream. */
   pinnedDevices?: string[]
+  /** The devices added by their own sign-in that the station holds from transmit now: each shown with Allow
+   *  to transmit. Absent from an older station. */
+  heldDevices?: string[]
   /** S3-M1: the service holds another signing key for this station, so browsers refuse its stream
    *  until it is paired again. */
   keyRefused?: boolean
@@ -106,5 +109,7 @@ export type RemoteStationAction =
   /** End signing in again; unlike `cancel`, which is a stop, it leaves Remote as it was. */
   | { type: 'cancelSignInAgain' }
   | { type: 'dismissAdded'; deviceId: string }
+  /** Allow to transmit: lifts the hold on a device added by its own sign-in. Only ever pressed at the shack. */
+  | { type: 'allowTransmit'; deviceId: string }
   | { type: 'invite'; email: string; role: AccountRole }
   | { type: 'uninvite'; email: string }
