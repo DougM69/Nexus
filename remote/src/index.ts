@@ -1,5 +1,5 @@
 // Same-origin browser API, the native client's API, and outbound station admission. No radio command router.
-import { account, access, body, bodyBytes, browserOrigin, caller, caller as callerKey, CHALLENGE_MS, cookie, device, deviceCookie, deviceKeys, deviceNonce, digest,
+import { account, access, body, bodyBytes, browserOrigin, caller, caller as callerKey, CHALLENGE_MS, cookie, device, deviceAddedNotice, deviceCookie, deviceKeys, deviceNonce, digest,
   deviceKinds, fieldsOf, id, keepApprovals, label, lifetime, mailbox, mailboxHash, memberRole, native, nativeAccount, nativeDevice, nativeKind, proof, publicKey, rate, readEntitlement, Refusal, requireAdmin,
   lanEntitlement, requireMayPair, requireTrial, requireUnspentIdentity, requireValue, secret, signedBy, station, stationNonce, TRIAL_MS, UNTIL_REMOVED, untilRemoved, uuid, verifyProof } from './authority'
 import type { AccountEntitlement, DeviceRow, RemoteEnv, Role, StationRow } from './authority'
@@ -342,7 +342,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // it was added, its proof and a computer's LAN key: the proof's nonce covers both of its keys.
       const key = (deviceKeys(request) ? ',public_key AS publicKey' : '') +
         (kinds ? ",COALESCE(kind,'browser') AS kind,platform,CASE WHEN approved=1 AND expires_at>=? THEN 1 ELSE 0 END AS untilRemoved" : '') +
-        (request.headers.get('x-nexus-device-proof') === '1' ? ",COALESCE(role,'operate') AS role,COALESCE(added_by,'shack') AS addedBy,proof,lan_key AS lanKey" : '')
+        (request.headers.get('x-nexus-device-proof') === '1' ? ",COALESCE(role,'operate') AS role,COALESCE(added_by,'shack') AS addedBy,proof,lan_key AS lanKey,EXISTS(SELECT 1 FROM notices n WHERE n.device_id=devices.id) AS notified" : '')
       const forever = kinds ? [UNTIL_REMOVED] : []
       const only = kinds ? '' : ' AND kind IS NULL'
       const devices = lifetime(request)
@@ -410,8 +410,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   // into relay socket state, and the provider subject has no business travelling with it.
   // `verified` is destructured off for the same reason `subject` is: `identity` is spread into
   // the browser identity and on into relay socket state, and how this account was identified is
-  // not something the wire needs to carry.
-  const { subject, verified, ...identity } = await account(request, env, now)
+  // not something the wire needs to carry. `email` likewise — it is kept nowhere (only its hashes
+  // are), and is read here only transiently to notify the owner when a device is added by sign-in.
+  const { subject, verified, email, ...identity } = await account(request, env, now)
   await rate(env, `account:${identity.accountId}`, now, 120)
   const entitlement = await readEntitlement(env, identity.accountId, now)
   // The only privileged write in the service. It exists because every trial in a closed beta is
@@ -653,6 +654,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // One still waiting is approved in place by a sign-in for its key.
       if (approveAs && current.approved !== 1) {
         await approveByAccount(env, row.id, current.id, approveAs, input.proof as string, null, identity.accountId, now)
+        // The 2026-10-23 sign-in decision: notify the owner that a device was added by sign-in (a no-op without the
+        // provider secret). Once: this branch runs only on the waiting→approved transition.
+        await deviceAddedNotice(env, { accountId: identity.accountId, stationId: row.id, deviceId: current.id,
+          toEmail: email, stationName: row.name, deviceName: name, kind: 'browser' }, now)
         return json({ deviceId: current.id, approved: true })
       }
       return json({ deviceId: current.id, approved: current.approved === 1 })
@@ -664,7 +669,12 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       .bind(deviceId, row.id, identity.accountId, name, await digest(credential), approveAs ? UNTIL_REMOVED : now + 600000, key,
         approveAs ? 1 : 0, approveAs ? now : null, approveAs, approveAs ? 'account' : null, approveAs ? input.proof : null, row.id, now).first()
     requireValue(inserted, 'deviceLimit', 409)
-    if (approveAs) await bumpPolicy(env, row.id, now)
+    if (approveAs) {
+      await bumpPolicy(env, row.id, now)
+      // The 2026-10-23 sign-in decision: notify the owner a device was added by sign-in (a no-op without the secret).
+      await deviceAddedNotice(env, { accountId: identity.accountId, stationId: row.id, deviceId,
+        toEmail: email, stationName: row.name, deviceName: name, kind: 'browser' }, now)
+    }
     return json({ deviceId, approved: approveAs !== null }, 200, { 'set-cookie': cookie(row.id, credential) })
   }
   // What the station's use runs on: the owner's own entitlement, which a guest uses too
@@ -1094,6 +1104,9 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     // One still waiting is approved in place by a sign-in for its keys.
     if (current && approveAs && current.approved !== 1) {
       await approveByAccount(env, row.id, current.id, approveAs, input.proof as string, lanKey, caller.accountId, now)
+      // The 2026-10-23 sign-in decision: notify the owner a device was added by sign-in (a no-op without the secret).
+      await deviceAddedNotice(env, { accountId: caller.accountId, stationId: row.id, deviceId: current.id,
+        toEmail: caller.email, stationName: row.name, deviceName: name, kind }, now)
       return json({ deviceId: current.id, approved: true, expiresAt: UNTIL_REMOVED, renewsUntil: null })
     }
     if (current) return json({ deviceId: current.id, approved: current.approved === 1, expiresAt: current.expires_at, renewsUntil: null })
@@ -1108,7 +1121,12 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
       .bind(deviceId, row.id, caller.accountId, name, await digest(secret()), expiresAt, key, kind, platform, lanKey,
         approveAs ? 1 : 0, approveAs ? now : null, approveAs, approveAs ? 'account' : null, approveAs ? input.proof : null, row.id, now).first()
     requireValue(inserted, 'deviceLimit', 409)
-    if (approveAs) await bumpPolicy(env, row.id, now)
+    if (approveAs) {
+      await bumpPolicy(env, row.id, now)
+      // The 2026-10-23 sign-in decision: notify the owner a device was added by sign-in (a no-op without the secret).
+      await deviceAddedNotice(env, { accountId: caller.accountId, stationId: row.id, deviceId,
+        toEmail: caller.email, stationName: row.name, deviceName: name, kind }, now)
+    }
     return json({ deviceId, approved: approveAs !== null, expiresAt, renewsUntil: null })
   }
   await internet(verb === 'turn')
@@ -1143,7 +1161,7 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
 // thirty a minute an IPv4 address or IPv6 /64, sixty an IPv6 /48, then a hundred and twenty for the
 // device. One network can so spend at most half of a device's minute; taking all of it needs two /48s
 // or four IPv4 addresses at once, which is a distributed attacker and a job for an edge rule.
-async function reopener(request: Request, env: RemoteEnv, match: RegExpExecArray | null, now: number): Promise<Identity & { subject: string; verified: boolean }> {
+async function reopener(request: Request, env: RemoteEnv, match: RegExpExecArray | null, now: number): Promise<Identity & { subject: string; verified: boolean; email: string | null }> {
   requireValue(!request.headers.has('origin') && !request.headers.has('cookie'), 'originDenied')
   requireValue(nativeClientId(env), 'serviceNotConfigured', 503)
   requireValue(match, 'signInRequired', 401)
@@ -1159,7 +1177,9 @@ async function reopener(request: Request, env: RemoteEnv, match: RegExpExecArray
     WHERE id=? AND station_id=? AND kind IS NOT NULL AND expires_at>?`).bind(id(deviceId), row.id, now)
     .first<{ account_id: string; approved: number; expires_at: number; public_key: string | null }>()
   requireValue(current?.public_key && current.approved === 1, 'signInRequired', 401)
-  return { accountId: current.account_id, expiresAt: Math.min(current.expires_at, now + 3600000), subject: '', verified: false }
+  // A reopening request carries no fresh sign-in, so no verified address: the owner notice never
+  // fires on it (it only ever fires when a device is first added by a sign-in).
+  return { accountId: current.account_id, expiresAt: Math.min(current.expires_at, now + 3600000), subject: '', verified: false, email: null }
 }
 
 // The Native application's client id, or null while the service has none: unset, or the page's own.

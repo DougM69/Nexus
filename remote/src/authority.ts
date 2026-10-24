@@ -37,6 +37,16 @@ export interface RemoteEnv {
    *  scripts/staging-common.mjs); until then it is absent, the billing routes answer `billingNotAvailable`
    *  and the page shows no Subscribe or Manage button. */
   BILLING?: BillingService
+  /** The email provider's API key for the owner-device notice (the 2026-10-23 sign-in decision), a Worker secret. ⛔ A
+   *  CREDENTIAL GATE the operator wires in production; UNSET in every build today, so
+   *  `deviceAddedNotice` sends nothing (a no-op, never an error). Never commit a real key. */
+  OWNER_NOTICE_API_KEY?: string
+  /** The From address the owner-device notice is sent as (the tenant's verified sender, e.g.
+   *  `Nexus Remote <noreply@hamradiotools.io>`). Unset disables the notice with the key. */
+  OWNER_NOTICE_FROM?: string
+  /** Where the owner-device notice is POSTed. Defaults to the provider's endpoint; set only to
+   *  point a test's capture server at it. Production leaves it unset (the default). */
+  OWNER_NOTICE_ENDPOINT?: string
 }
 /** The billing Worker's RPC methods, as that Worker defines them: each answers `{ url }` (`cancel`:
  *  `{ cancelled }`) or `{ error, status }`. */
@@ -152,6 +162,65 @@ export function mailbox(address: string): string {
   return `${local}@${domain}`
 }
 
+/** What a newly signed-in device is, for the owner notice (the 2026-10-23 sign-in decision): who it belongs to, which
+ *  station, and how to recognise it. `toEmail` is the account holder's verified address from the
+ *  sign-in that added the device, read transiently and never stored; `null` when this sign-in
+ *  carried no verified address, which turns the notice into a no-op. */
+export interface DeviceAddedNotice {
+  accountId: string
+  stationId: string
+  deviceId: string
+  toEmail: string | null
+  stationName: string
+  deviceName: string
+  kind: string
+}
+/** Email the account holder that a device was added to their Nexus Remote account by a sign-in
+ *  (the 2026-10-23 sign-in decision). The durable `notices` row is written FIRST and is the
+ *  precondition the station's transmit hold lifts against; delivery (who/when/which station, how to
+ *  revoke) is its gated second half.
+ *
+ *  ⛔ CREDENTIAL GATE (gate 5): the provider key (`OWNER_NOTICE_API_KEY`) and sender
+ *  (`OWNER_NOTICE_FROM`) are production Worker secrets the operator wires. With either unset — the
+ *  case in every build today — or with no verified address on this sign-in, the row is still
+ *  written but no mail is sent and `sent_at` stays null. The path is built and the payload shaped;
+ *  the real key is never committed and no live mail is sent here. The address is used for the one
+ *  request and dropped. */
+export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotice, now: number): Promise<void> {
+  // The DURABLE ENQUEUE comes first: one `notices` row a device, the record the station's transmit
+  // hold lifts against (the native list surfaces its existence as `notified`). A store error leaves
+  // no row — the device is added but stays held (fail-closed) — and never fails the registration.
+  try {
+    await env.DB.prepare(`INSERT INTO notices(id, account_id, station_id, device_id, created_at)
+      SELECT ?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM notices WHERE device_id=?)`)
+      .bind(uuid(), notice.accountId, notice.stationId, notice.deviceId, now, notice.deviceId).run()
+  } catch {
+    return
+  }
+  const key = env.OWNER_NOTICE_API_KEY, from = env.OWNER_NOTICE_FROM
+  if (!key || !from || !notice.toEmail) return
+  const manage = `${env.PUBLIC_REMOTE_ORIGIN}/remote/`
+  const text =
+    `A device was just added to your Nexus Remote account by signing in.\n\n` +
+    `Device: ${notice.deviceName} (${notice.kind})\n` +
+    `Station: ${notice.stationName}\n` +
+    `When: ${new Date(now).toISOString()}\n\n` +
+    `It can control your station, but it cannot transmit for the first 15 minutes.\n` +
+    `If this was not you, remove it now at ${manage}`
+  await fetch(env.OWNER_NOTICE_ENDPOINT || 'https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      from,
+      to: notice.toEmail,
+      subject: 'A device was added to your Nexus Remote account',
+      text,
+    }),
+  })
+  await env.DB.prepare('UPDATE notices SET sent_at=? WHERE device_id=? AND sent_at IS NULL')
+    .bind(now, notice.deviceId).run()
+}
+
 let jwks: { issuer: string; keys: ReturnType<typeof createRemoteJWKSet> } | undefined
 /** The provider's signing keys, fetched from the configured issuer and cached for this isolate. */
 function keySet(env: RemoteEnv): ReturnType<typeof createRemoteJWKSet> {
@@ -166,7 +235,7 @@ function keySet(env: RemoteEnv): ReturnType<typeof createRemoteJWKSet> {
  *  identifying anyone again. STAGING.md carries the Action to paste. */
 const CLAIM_NS = 'https://nexus.hamradiotools.io/'
 
-export async function account(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean }> {
+export async function account(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean; email: string | null }> {
   browserOrigin(request, env)
   return signedIn(request, env, now, env.AUTH0_CLIENT_ID)
 }
@@ -178,14 +247,14 @@ export async function account(request: Request, env: RemoteEnv, now: number): Pr
  *  It carries no Origin and holds no cookie. A request with either came from a browser, so it is
  *  refused before its token is read: that is what keeps every native route out of a page's reach
  *  (no CSRF, whatever credential the page holds), as `native()` keeps the station's. */
-export async function nativeAccount(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean }> {
+export async function nativeAccount(request: Request, env: RemoteEnv, now: number): Promise<Identity & { subject: string; verified: boolean; email: string | null }> {
   requireValue(!request.headers.has('origin') && !request.headers.has('cookie'), 'originDenied')
   const clientId = env.AUTH0_NATIVE_CLIENT_ID || 'unconfigured'
   // Never the SPA's own id, which would let the page's tokens in here.
   requireValue(clientId !== env.AUTH0_CLIENT_ID, 'serviceNotConfigured', 503)
   return signedIn(request, env, now, clientId)
 }
-async function signedIn(request: Request, env: RemoteEnv, now: number, clientId: string): Promise<Identity & { subject: string; verified: boolean }> {
+async function signedIn(request: Request, env: RemoteEnv, now: number, clientId: string): Promise<Identity & { subject: string; verified: boolean; email: string | null }> {
   requireValue(env.AUTH0_ISSUER.startsWith('https://') && env.AUTH0_ISSUER.endsWith('/') &&
     clientId !== 'unconfigured', 'serviceNotConfigured', 503)
   let subject: string, until: number, email: string | null = null
@@ -235,10 +304,13 @@ async function signedIn(request: Request, env: RemoteEnv, now: number, clientId:
   const row = await env.DB.prepare('SELECT id FROM accounts WHERE issuer=? AND subject=?')
     .bind(env.AUTH0_ISSUER, subject).first<{ id: string }>()
   requireValue(row, 'serviceUnavailable', 503)
-  // `subject` rides alongside Identity rather than inside it. The caller destructures it off, so
-  // it never reaches the object that index.ts spreads into the browser identity and on into relay
-  // socket state - the provider subject is not something the wire needs to carry.
-  return { accountId: row.id, expiresAt: until, subject, verified: email !== null }
+  // `subject` and `email` ride alongside Identity rather than inside it. The caller destructures
+  // them off, so neither reaches the object that index.ts spreads into the browser identity and on
+  // into relay socket state - the provider subject is not something the wire needs to carry, and
+  // the plaintext address is kept NOWHERE (only its hashes are stored): `email` is handed to the
+  // caller transiently for the owner-device notice (the 2026-10-23 sign-in decision) and must be used and dropped there,
+  // never stored or sent to the wire.
+  return { accountId: row.id, expiresAt: until, subject, verified: email !== null, email }
 }
 
 /** How long after its sign-in a proof is taken, and how far ahead of this service's clock its signing

@@ -541,3 +541,52 @@ test('a bound station\'s trial starts at its first internet use, never on the LA
   assert.equal(b2.value.approved, true)
   assert.equal(await errorOf(second.page.post(`stations/${s2.stationId}/ticket`, {}, 403)), 'trialActiveElsewhere')
 })
+
+// --- Owner-device notice (the 2026-10-23 sign-in decision) ----------------------------------------------------------
+
+test('a device added by sign-in emails the owner exactly once, with who/which-station/how-to-revoke', async () => {
+  const main = app, sent = []
+  const rt = await runtime({
+    bindings: { AUTH0_NATIVE_CLIENT_ID: NATIVE, OWNER_NOTICE_API_KEY: 'test-key',
+      OWNER_NOTICE_FROM: 'Nexus Remote <noreply@test.invalid>', OWNER_NOTICE_ENDPOINT: 'https://email.test.invalid/send' },
+    outbound: async request => { sent.push({ url: request.url, auth: request.headers.get('authorization'), body: await request.json() }); return Response.json({ id: 'ok' }) },
+  })
+  app = rt // the helpers (person/bind/browser) use the module `app`; point them at this runtime.
+  try {
+    const owner = await person(), shack = await bind(owner), b = await browser(owner, shack.stationId)
+    assert.equal(b.value.approved, true, 'granted on its sign-in')
+    assert.equal(sent.length, 1, 'the owner notice fired exactly once on add')
+    assert.equal(sent[0].url, 'https://email.test.invalid/send')
+    assert.equal(sent[0].auth, 'Bearer test-key')
+    assert.equal(sent[0].body.from, 'Nexus Remote <noreply@test.invalid>')
+    assert.equal(sent[0].body.to, owner.email, 'to the account holder')
+    assert.match(sent[0].body.text, /Chrome on Windows/, 'names the device')
+    assert.match(sent[0].body.text, /Shack/, 'names the station')
+    assert.match(sent[0].body.text, /remove it now/, 'says how to revoke')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
+test('with no provider secret the notice is a no-op for mail, but the durable record is still written', async () => {
+  const main = app, sent = []
+  const rt = await runtime({
+    bindings: { AUTH0_NATIVE_CLIENT_ID: NATIVE },
+    outbound: async request => { sent.push(request.url); return Response.json({}) },
+  })
+  app = rt
+  try {
+    const owner = await person(), shack = await bind(owner), b = await browser(owner, shack.stationId)
+    assert.equal(b.value.approved, true, 'the device is added as before')
+    assert.equal(sent.length, 0, 'no email is sent without the provider secret')
+    // The precondition the station's transmit hold lifts against is written regardless of provider.
+    const row = await rt.db.prepare('SELECT COUNT(*) AS n, MAX(sent_at) AS sent FROM notices WHERE device_id=?')
+      .bind(b.deviceId).first()
+    assert.equal(row.n, 1, 'the durable owner-notice row is written as the precondition')
+    assert.equal(row.sent, null, 'and left unsent (no provider configured)')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})

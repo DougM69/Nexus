@@ -51,7 +51,7 @@ export default { fetch() { return new Response('not found', { status: 404 }) } }
 // `origin` stands the service up on another public origin - an https:// one is the hosted service.
 // Every helper but `open()` still works there, because dispatchFetch delivers any URL to workerd;
 // `open()` is a real TCP socket and needs the local http:// origin.
-export async function runtime({ bindings = {}, port: requestedPort, origin: publicOrigin, relay, billing } = {}) {
+export async function runtime({ bindings = {}, port: requestedPort, origin: publicOrigin, relay, billing, outbound } = {}) {
   const port = requestedPort ?? await freePortOutsideEphemeralRange()
   const origin = publicOrigin ?? `http://127.0.0.1:${port}`, issuer = 'https://identity.remote-test.invalid/'
   const { privateKey, publicKey } = await generateKeyPair('RS256', { extractable: true })
@@ -72,6 +72,9 @@ export async function runtime({ bindings = {}, port: requestedPort, origin: publ
     },
     outboundService: async request => {
       if (relay && request.url.startsWith(RELAY_API)) return relay(request)
+      // A test may capture other outbound requests (the owner-device email notice); without a
+      // capturer the JWKS endpoint is still the only outbound call any Worker path may make.
+      if (outbound && request.url !== `${issuer}.well-known/jwks.json`) return outbound(request)
       assert.equal(request.url, `${issuer}.well-known/jwks.json`, 'only the pinned JWKS endpoint may be fetched')
       jwksReads++
       return Response.json({ keys: [publicJwk] })

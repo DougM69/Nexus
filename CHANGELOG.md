@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Your own signed-in devices pair with your station automatically, over your network and over the internet.**
+  When you sign a computer, phone or browser in to your Nexus Remote account, it is granted control of your
+  station without a trip to the shack to approve it — on your home network and across the internet alike. Code
+  pairing and approving a device at the radio still work exactly as before. For safety, a device added this way
+  cannot transmit for its first 15 minutes: it can listen and take control at once, but transmitting waits out the
+  hold (Stop is never held). The hold is waived when the device signs in with two-factor, when it joins on your own
+  network, or the moment you approve it at the shack. Whenever a device is added by sign-in, the account owner gets
+  an email naming the device, the station and when, and how to remove it if it was not you.
 - **An SDRplay receiver as the scope's source, through SDRconnect (needs a bench check).** Settings ▸ Radio has a
   new **Scope source** section: **The radio** (as before, and as it comes) or **SDRconnect (SDRplay)**. With an
   SDRplay RSP fed from the rig's RX OUT (or a splitter with transmit protection) and SDRplay's own SDRconnect

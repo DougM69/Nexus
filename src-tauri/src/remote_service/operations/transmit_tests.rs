@@ -780,3 +780,305 @@ fn a_stand_down_at_the_shack_retires_a_held_browser_transmit_epoch() {
         "the browser could not re-arm after the stand-down"
     );
 }
+
+/// The device's own heartbeat, which re-asserts the engine's arm gate from its current state.
+fn heartbeat(f: &Fixture, lease_id: &str, now: Instant) {
+    f.authority
+        .handle_version(
+            (f.connection, 3),
+            SESSION,
+            DEVICE,
+            &Request::Heartbeat {
+                request_id: id(),
+                lease_id: lease_id.into(),
+            },
+            &f.engine,
+            now,
+        )
+        .unwrap();
+}
+
+/// Mark DEVICE as a sign-in-added device of the account (what the durable service list does).
+fn signed_in(f: &Fixture) {
+    f.authority
+        .set_signin_devices(std::collections::BTreeSet::from([DEVICE.to_string()]));
+}
+
+/// ★ THE 2026-10-23 SIGN-IN DECISION: a device whose control came from a sign-in is refused
+/// transmit while it controls, for its 15-minute window, yet keeps control and the receiver. The
+/// station records the hold; the lease the device takes sets the engine's arm gate
+/// (`apply_tx_hold`): the engine refuses an arm and nothing keys. A waiver — here an Approve at the
+/// shack — reconciled on the next heartbeat, lets it transmit.
+#[test]
+fn a_sign_in_held_device_is_refused_transmit_while_it_controls() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    // The service lists it as sign-in-added, and the station recorded its 15-minute hold.
+    signed_in(&f);
+    f.authority
+        .hold_transmit_until(DEVICE, now + Duration::from_secs(15 * 60));
+    // It takes control with no shack press; the lease sets the engine's arm gate.
+    let state = acquire_controls_version(&f, now, 3);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(e.remote_transmit_held(), "the controlling device is held");
+        e.set_tx_enabled(true);
+        assert!(!e.tx_enabled(), "transmit arm refused while held");
+    }
+    // Approve at the shack waives it; the next heartbeat reconciles the engine gate.
+    f.authority.waive_transmit(DEVICE);
+    heartbeat(&f, state["leaseId"].as_str().unwrap(), now);
+    let mut e = f.engine.lock().unwrap();
+    assert!(!e.remote_transmit_held(), "the waiver lifted the hold");
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "control: it transmits once waived");
+}
+
+/// ★ FAIL-CLOSED: a device the service lists as sign-in-added but for which NO waiver record exists
+/// is HELD from transmit while it controls — the default is held, never open.
+#[test]
+fn a_sign_in_device_with_no_record_is_held_fail_closed() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    // Listed as sign-in-added, but the station recorded no hold or waiver for it.
+    signed_in(&f);
+    let _ = acquire_controls_version(&f, now, 3);
+    let mut e = f.engine.lock().unwrap();
+    assert!(
+        e.remote_transmit_held(),
+        "a sign-in device with no record is held, not open"
+    );
+    e.set_tx_enabled(true);
+    assert!(
+        !e.tx_enabled(),
+        "transmit arm refused with no waiver record"
+    );
+}
+
+/// ★ A sign-in device with a positive WAIVED record transmits at once.
+#[test]
+fn a_waived_sign_in_device_may_transmit() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    signed_in(&f);
+    f.authority.waive_transmit(DEVICE);
+    let _ = acquire_controls_version(&f, now, 3);
+    let mut e = f.engine.lock().unwrap();
+    assert!(!e.remote_transmit_held(), "a waived device is not held");
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it may arm when waived");
+}
+
+/// ★ A controller the LOADED service list CONFIRMS is not sign-in-added is never held, whatever
+/// stale record it carries — the hold keys only to confirmed sign-in provenance.
+#[test]
+fn a_controller_confirmed_not_sign_in_is_never_held() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    // The list is LOADED (heard) and does not name DEVICE, even though a stale hold is recorded.
+    f.authority
+        .set_signin_devices(std::collections::BTreeSet::new());
+    f.authority
+        .hold_transmit_until(DEVICE, now + Duration::from_secs(15 * 60));
+    let _ = acquire_controls_version(&f, now, 3);
+    let mut e = f.engine.lock().unwrap();
+    assert!(
+        !e.remote_transmit_held(),
+        "a controller the loaded list confirms is not sign-in-added is not held"
+    );
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it may arm");
+}
+
+/// ★ FAIL-CLOSED STARTUP: before the provenance list is heard (`None`, not an empty set), an
+/// account-road controller is HELD — an empty/unknown list must never read as "not sign-in-added".
+/// Once the list loads and confirms the device is not sign-in-added, it is freed.
+#[test]
+fn an_account_road_controller_is_held_until_the_list_loads() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    // Back to the pre-list state (as after a restart, before the first list sync).
+    f.authority.forget_signin_devices();
+    let state = acquire_controls_version(&f, now, 3);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(
+            e.remote_transmit_held(),
+            "an account-road controller is held while the list is unknown"
+        );
+        e.set_tx_enabled(true);
+        assert!(
+            !e.tx_enabled(),
+            "transmit arm refused before the list is heard"
+        );
+    }
+    // The list loads and does not name this device: now it is confirmed not sign-in-added, and free.
+    f.authority
+        .set_signin_devices(std::collections::BTreeSet::new());
+    heartbeat(&f, state["leaseId"].as_str().unwrap(), now);
+    let mut e = f.engine.lock().unwrap();
+    assert!(!e.remote_transmit_held(), "freed once the list confirms it");
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it may arm once confirmed");
+}
+
+/// Confirm DEVICE's durable owner-notice record (what the service list's `notified` does).
+fn notified(f: &Fixture) {
+    f.authority
+        .set_notified_devices(std::collections::BTreeSet::from([DEVICE.to_string()]));
+}
+
+/// ★ THE NOTIFICATION PRECONDITION (the 2026-10-23 sign-in decision, point 3): a sign-in device
+/// whose owner-notice record the service has NOT confirmed stays HELD even once its 15-minute
+/// window has elapsed. Only when the notice is confirmed does the elapsed window free it.
+#[test]
+fn a_held_device_stays_held_past_its_window_until_the_notice_is_confirmed() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    signed_in(&f);
+    // A window already elapsed against the fixture clock (the real clock is an hour behind it).
+    f.authority.hold_transmit_until(DEVICE, Instant::now());
+    let state = acquire_controls_version(&f, now, 3);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(
+            e.remote_transmit_held(),
+            "held past its window while the notice is unconfirmed"
+        );
+        e.set_tx_enabled(true);
+        assert!(
+            !e.tx_enabled(),
+            "transmit arm refused until the notice is confirmed"
+        );
+    }
+    // The service confirms the durable notice row; the next heartbeat lifts the elapsed hold.
+    notified(&f);
+    heartbeat(&f, state["leaseId"].as_str().unwrap(), now);
+    let mut e = f.engine.lock().unwrap();
+    assert!(
+        !e.remote_transmit_held(),
+        "control: the elapsed window frees it once the notice is confirmed"
+    );
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it transmits once confirmed and elapsed");
+}
+
+/// ★ NO OVER-HOLD OF A LOCAL CONTROLLER: a code-paired / LAN-enrolled controller (recorded in the
+/// LAN book) is FREE even before the account list has loaded (`None`). Its own recorded provenance
+/// clears it ahead of the fail-closed `None` arm — a normal local operator is never held in any
+/// list state.
+#[test]
+fn a_lan_book_controller_is_free_even_before_the_list_loads() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    f.authority.forget_signin_devices(); // no account list heard yet
+    f.authority
+        .hold_lan_devices(Box::new(|| vec![DEVICE.to_string()])); // recorded on-network provenance
+    let _ = acquire_controls_version(&f, now, 3);
+    let mut e = f.engine.lock().unwrap();
+    assert!(
+        !e.remote_transmit_held(),
+        "a LAN-book controller is free even with the list unknown"
+    );
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "it may arm");
+}
+
+/// A sign-in-held device in control, with the real radio-loop hold source wired (as `Service::start`
+/// wires it) so a `poll_remote_transmit` tick re-derives the gate off the live lease. Asserts the
+/// premise and the CONTROL: it is held while it controls, and a tick while it is STILL controlling
+/// keeps it held — the local operator cannot arm, the hold never fails open. Returns the lease state
+/// for the test to make the device DEPART.
+fn held_controller(f: &Fixture, now: Instant) -> Value {
+    f.wire_tx_hold();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    signed_in(f);
+    f.authority
+        .hold_transmit_until(DEVICE, now + Duration::from_secs(15 * 60));
+    let state = acquire_controls_version(f, now, 3);
+    let mut e = f.engine.lock().unwrap();
+    assert!(e.remote_transmit_held(), "premise: held while it controls");
+    // CONTROL: a tick while the held device is STILL controlling must keep the hold on.
+    e.poll_remote_transmit(now);
+    assert!(
+        e.remote_transmit_held(),
+        "a still-controlling held device stays held across a radio-loop tick"
+    );
+    e.set_tx_enabled(true);
+    assert!(
+        !e.tx_enabled(),
+        "the local operator cannot arm while the held device controls"
+    );
+    e.set_tx_enabled(false);
+    drop(e);
+    state
+}
+
+/// The local operator can arm transmit at their own radio again, once the held controller is gone.
+fn arms_locally(f: &Fixture) {
+    let mut e = f.engine.lock().unwrap();
+    assert!(
+        !e.remote_transmit_held(),
+        "the hold lifted once the held controller stopped controlling"
+    );
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "the local operator arms at their own radio");
+}
+
+/// ★ B1 — REMOTE TURNED OFF. A held sign-in device is the controller; the operator turns Remote off
+/// (`invalidate`, the single thing `Control::stop` does to the authority), which brings no further
+/// request. The radio loop's next tick re-derives the gate off the now-cleared lease, and the local
+/// operator can arm again. REDDENS before the fix: the gate stuck on and locked the local operator out.
+#[test]
+fn the_sign_in_hold_lifts_when_remote_is_turned_off() {
+    let f = Fixture::new();
+    let now = f.now();
+    let _ = held_controller(&f, now);
+    f.authority.invalidate();
+    f.engine.lock().unwrap().poll_remote_transmit(now);
+    arms_locally(&f);
+}
+
+/// ★ B1 — THE CONNECTION IS RETIRED. The held controller's socket drops (`retire_connection`) with
+/// no further request; the next tick re-derives the gate off the ended lease.
+#[test]
+fn the_sign_in_hold_lifts_when_the_connection_is_retired() {
+    let f = Fixture::new();
+    let now = f.now();
+    let _ = held_controller(&f, now);
+    f.authority.retire_connection(f.connection);
+    f.engine.lock().unwrap().poll_remote_transmit(now);
+    arms_locally(&f);
+}
+
+/// ★ B1 — THE SESSION DISCONNECTS. The held controller's session goes (`disconnect_session`) with no
+/// further request; the next tick re-derives the gate off the ended lease.
+#[test]
+fn the_sign_in_hold_lifts_when_the_session_disconnects() {
+    let f = Fixture::new();
+    let now = f.now();
+    let _ = held_controller(&f, now);
+    f.authority.disconnect_session(SESSION);
+    f.engine.lock().unwrap().poll_remote_transmit(now);
+    arms_locally(&f);
+}
+
+/// ★ B1 — THE CONTROLLER IS REPLACED (revoked at the shack). The held controller's station grant is
+/// taken (`permit_station(.., false)`), which ends its lease but brings no request of its own; the
+/// next tick re-derives the gate off the now-controllerless station.
+#[test]
+fn the_sign_in_hold_lifts_when_the_controller_is_revoked() {
+    let f = Fixture::new();
+    let now = f.now();
+    let _ = held_controller(&f, now);
+    f.authority.permit_station(DEVICE, false).unwrap();
+    f.engine.lock().unwrap().poll_remote_transmit(now);
+    arms_locally(&f);
+}

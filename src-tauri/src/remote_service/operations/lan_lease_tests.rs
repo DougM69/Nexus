@@ -605,3 +605,38 @@ fn taking_control_ends_a_live_satellite_track() {
         "the dial is the operator's again"
     );
 }
+
+/// ★ THE LAN WAIVER IS RECORDED PROVENANCE, NOT TRANSPORT (the 2026-10-23 sign-in decision,
+/// finding 3): a device the station paired/enrolled on its OWN network — recorded in the LAN book —
+/// is never held, even when the account lists it as sign-in-added with no waiver record, and even
+/// when it connects over the relay. A sign-in device that is NOT in the book is held regardless of
+/// a LAN-looking transport: a tunnelled connection can never take the LAN waiver.
+#[test]
+fn the_lan_waiver_keys_on_the_book_not_the_transport() {
+    // In the LAN book + listed sign-in-added + no record, but FREE: the book is the waiver.
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    f.authority
+        .set_signin_devices(std::collections::BTreeSet::from([LAN_DEVICE.to_string()]));
+    f.authority
+        .hold_lan_devices(Box::new(|| vec![LAN_DEVICE.to_string()]));
+    control_on(&f, f.connection, (LAN_SESSION, LAN_DEVICE), now).unwrap();
+    assert!(
+        !f.engine.lock().unwrap().remote_transmit_held(),
+        "a device in the LAN book is free, sign-in-added or not, over any road"
+    );
+
+    // CONTROL (finding 3): a sign-in device NOT in the book, over a LAN-LOOKING transport, is still
+    // held — the transport marker grants no waiver.
+    let g = Fixture::new();
+    g.engine.lock().unwrap().set_tx_enabled(false);
+    g.authority
+        .set_signin_devices(std::collections::BTreeSet::from([LAN_DEVICE.to_string()]));
+    let lan = g.authority.start_lan_connection();
+    control_on(&g, lan, (LAN_SESSION, LAN_DEVICE), now).unwrap();
+    assert!(
+        g.engine.lock().unwrap().remote_transmit_held(),
+        "a sign-in device not in the book is held even on a LAN-looking transport"
+    );
+}

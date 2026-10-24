@@ -22,9 +22,10 @@
 //!    station's network). The operator picks one when more than one can take this computer.
 //! 4. **The internet road**, registered in the same step, and free: the road key as a device of that
 //!    station, with the LAN key and the proof (`client/device`, signed by the road key). The service
-//!    approves it on the proof, and the station checks the same proof itself; it grants it nothing
-//!    on that alone while `remote_service::account::GRANTS_ON_SIGN_IN` is off, and the road then
-//!    waits for Approve at the station ([`Signed`]).
+//!    approves it on the proof, and the station checks the same proof itself; since the 2026-10-23 sign-in decision it
+//!    grants control on that alone (`remote_service::account::GRANTS_ON_SIGN_IN`), so an approved
+//!    road does not wait for Approve at the station ([`Signed`]) — it holds control at once, with a
+//!    transmit hold the station enforces. A road the service has not approved still waits.
 //! 5. **First contact on the station's network** ([`enrol`]): where a look by name finds it (an
 //!    advert whose key tag starts its LAN key's fingerprint), else where the operator says it is.
 //!    TLS with this computer's LAN key and the station's pinned, so no other machine ever hears the
@@ -225,8 +226,11 @@ pub(crate) struct Signed {
 }
 
 /// Whether a road this sign-in registered waits for Approve at the station: one the service did not
-/// approve, and while the station grants nothing on a sign-in
-/// (`crate::remote_service::account::GRANTS_ON_SIGN_IN`), every one.
+/// approve. Since the 2026-10-23 sign-in decision the station grants control on a sign-in
+/// (`crate::remote_service::account::GRANTS_ON_SIGN_IN`), so an approved road no longer waits — it
+/// is admitted for control, with a transmit hold the station enforces (see that constant); only one
+/// the service has not approved waits. (A build with the switch off makes every road wait, as
+/// before.)
 fn waits(approved: bool) -> bool {
     !approved || !crate::remote_service::account::GRANTS_ON_SIGN_IN
 }

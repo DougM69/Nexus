@@ -164,6 +164,12 @@ struct Device {
     /// A computer's LAN key, SPKI as lowercase hex, which its proof names beside its own key.
     #[serde(default, skip_serializing)]
     lan_key: Option<String>,
+    /// 1 when the service has a durable owner-notice record for this device (the 2026-10-23 sign-in
+    /// decision): the precondition a sign-in device's transmit hold lifts against. Listed only to a
+    /// Nexus that checks proofs itself. 0 (the default) from a service before notices, or for a
+    /// device whose notice row is not yet written — which holds the device FAIL-CLOSED.
+    #[serde(default)]
+    notified: u8,
 }
 /// A device's kind, held to the service's own values: a browser, or Nexus itself on another
 /// computer or a phone (the native client). Approving a native device grants nothing on the
@@ -995,6 +1001,15 @@ impl Service {
         // …and the page's microphone, which the stream decodes and the engine's microphone over
         // plays, only while that press has armed it (`engine/remote_mic.rs`).
         tempo_app::engine::engine_lock(&engine).set_remote_mic_feed(feeds.stream.mic.clone());
+        // The sign-in transmit hold (the 2026-10-23 sign-in decision) is re-derived from the live
+        // lease on every radio-loop tick, so it tracks the CURRENT controller: it lifts the instant
+        // a held controller stops controlling by any path — Remote turned off, a disconnect, a
+        // retired or expired lease — and holds a still-controlling device. A request's own
+        // `apply_tx_hold` still sets it immediately on the request path; this is the backstop for
+        // the departures that bring no further request.
+        let hold_source = operations.clone();
+        tempo_app::engine::engine_lock(&engine)
+            .set_remote_tx_hold_source(Arc::new(move |now| hold_source.current_transmit_hold(now)));
         let control = Arc::new(Mutex::new(Control {
             operations,
             vault_writer,
@@ -1905,6 +1920,10 @@ impl Controller {
             });
         }
         control.remember(Persist::Listed(approved));
+        // An Approve at the shack WAIVES the sign-in transmit hold (the 2026-10-23 sign-in decision):
+        // the operator stood at the radio and let this device in, which is the shack tap the hold is
+        // waived by. A positive waiver, so a sign-in device the operator approved transmits at once.
+        control.operations.waive_transmit(&device_id);
         control.remember(Persist::Pin {
             device_id,
             key: pin,
@@ -2091,6 +2110,31 @@ impl Controller {
     /// Once pinned, a device is left to the operator's own decisions.
     async fn vouch(&self, devices: &[Device], at: (u64, u64)) {
         let now = now_ms();
+        // The sign-in PROVENANCE the transmit hold keys to (the 2026-10-23 sign-in decision): every
+        // device the service lists as added by a sign-in, approved and unexpired. Pushed from the
+        // durable list on every list, so a sign-in device is held FAIL-CLOSED even if its own grant
+        // record is missing (`Authority::tx_held_for`).
+        if let Ok(control) = self.control.lock() {
+            let signed_in: Vec<&Device> = devices
+                .iter()
+                .filter(|d| {
+                    d.added_by.as_deref() == Some("account")
+                        && d.approved == 1
+                        && d.expires_at > now
+                })
+                .collect();
+            let signin = signed_in.iter().map(|d| d.id.clone()).collect();
+            // The subset the service confirms it has a durable owner-notice record for (the
+            // 2026-10-23 sign-in decision): a sign-in device's transmit hold lifts only once it is
+            // here, so a device whose notice row is missing stays held even past its window.
+            let notified = signed_in
+                .iter()
+                .filter(|d| d.notified == 1)
+                .map(|d| d.id.clone())
+                .collect();
+            control.operations.set_signin_devices(signin);
+            control.operations.set_notified_devices(notified);
+        }
         let waiting: Vec<&Device> = {
             let Ok(control) = self.control.lock() else {
                 return;
@@ -2225,6 +2269,22 @@ impl Controller {
             device_id: device.id.clone(),
             key: Some(pin),
         });
+        // ⛔ A 15-MINUTE TRANSMIT HOLD (the 2026-10-23 sign-in decision): a device whose control came
+        // from a sign-in may hold control and operate the receiver, but no transmit ARM starts for
+        // `account::TX_HOLD` — the engine's gate refuses it while this device controls
+        // (`Authority::apply_tx_hold`). This records a POSITIVE outcome; FAIL-CLOSED, a sign-in
+        // device with no record stays held (`Authority::tx_held_for` keys on the durable service
+        // list, not on this write). WAIVED on a SIGNATURE-VERIFIED second factor at sign-in
+        // (`vouched.mfa`, read from the proof `account::vouched` already checked): an MFA sign-in is
+        // trusted to transmit at once. An Approve at the shack waives it (`grant_approved`); a LAN
+        // enrolment never records one (`lan::enrol`). Stop and disarming are never held.
+        if vouched.mfa {
+            control.operations.waive_transmit(&device.id);
+        } else {
+            control
+                .operations
+                .hold_transmit_until(&device.id, std::time::Instant::now() + account::TX_HOLD);
+        }
         Ok(true)
     }
     /// Keeps a device the station vouched for in the LAN's entry in `vault`, by the pin the LAN
