@@ -431,7 +431,9 @@ export type Plan = { kind: 'trial' | 'manual' | 'subscription' | null; status: s
  *  `plan` is what the page needs to say why. */
 export type AccountEntitlement = Entitlement & { access: 'internet' | 'lan' | 'none'; plan: Plan }
 export type EntitlementRow = { enabled: number | null; expires_at: number | null; started_at: number | null; source: string | null
-  status: string | null; plan: string | null; period_end: number | null; cancel_at_period_end: number | null }
+  status: string | null; plan: string | null; period_end: number | null; cancel_at_period_end: number | null
+  /** 1 when the account was deleted (its subject renamed `deleted:<id>`); the beta never extends it. */
+  deleted?: number | null }
 
 /** Until when a subscription in this status allows internet use; 0 when it does not. A subscription
  *  that is not on one of our prices has no plan, and pays for nothing. */
@@ -447,7 +449,9 @@ export function entitlementOf(accountId: string, row: EntitlementRow, now: numbe
   const disabled = row.enabled !== null && row.enabled !== 1
   // The beta keeps a trial or a grant running past its date. Only one the account already holds: an
   // account that never had one still starts it through the same gates (`requireMayPair`).
-  const trialUntil = row.enabled === 1 ? beta ? Math.max(row.expires_at ?? 0, now + BETA_LEASE_MS) : row.expires_at ?? 0 : 0
+  // Never for a deleted account: deletion ended its trial, and the beta must not quietly restart it.
+  const extend = beta && row.deleted !== 1
+  const trialUntil = row.enabled === 1 ? extend ? Math.max(row.expires_at ?? 0, now + BETA_LEASE_MS) : row.expires_at ?? 0 : 0
   const until = disabled ? 0 : Math.max(trialUntil, paidUntil(row))
   const internet = until > now
   // Four distinct situations, named. Callers must never re-derive these from enabled+expiresAt:
@@ -463,7 +467,8 @@ export function entitlementOf(accountId: string, row: EntitlementRow, now: numbe
 
 export async function readEntitlement(env: RemoteEnv, accountId: string, now: number): Promise<AccountEntitlement> {
   const row = await env.DB.prepare(`SELECT t.enabled, t.expires_at, t.started_at, t.source,
-    s.status, s.plan, s.period_end, s.cancel_at_period_end
+    s.status, s.plan, s.period_end, s.cancel_at_period_end,
+    (SELECT CASE WHEN acc.subject LIKE 'deleted:%' THEN 1 ELSE 0 END FROM accounts acc WHERE acc.id=a.id) AS deleted
     FROM (SELECT ? AS id) a LEFT JOIN trials t ON t.account_id=a.id LEFT JOIN subscriptions s ON s.account_id=a.id`)
     .bind(accountId).first<EntitlementRow>()
   requireValue(row, 'serviceUnavailable', 503)
