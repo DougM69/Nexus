@@ -763,3 +763,37 @@ fn removing_a_club_position_or_letting_one_back_is_refused_from_afar() {
         "CONTROL: a request the page sends"
     );
 }
+
+/// The state's `txArmed` is the station's TX-enable latch, by value, for the browser holding the
+/// lease: on → true, off → false. Another browser watching the same station is not told (the
+/// page refuses a `txArmed` without the lease), and neither is one older than the stop token.
+#[test]
+fn tx_armed_reports_the_stations_tx_latch_to_the_controller() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let state = acquire_controls_version(&f, now, 4);
+    assert_eq!(state["phase"], "controlling");
+    assert_eq!(state["txArmed"], false, "TX is off at the start");
+    for on in [true, false, true] {
+        f.engine.lock().unwrap().set_tx_enabled(on);
+        assert_eq!(f.engine.lock().unwrap().tx_enabled(), on, "premise");
+        let state = control_state_version(&f, now, 4);
+        assert_eq!(state["txArmed"], on, "the latch is {on}");
+        assert!(state["transmitEpoch"].is_string());
+    }
+    f.authority.permit_station(OTHER, true).unwrap();
+    let watching = f
+        .authority
+        .handle_version(
+            (f.connection, 4),
+            OTHER,
+            OTHER,
+            &Request::State { request_id: id() },
+            &f.engine,
+            now,
+        )
+        .unwrap();
+    assert_eq!(watching["phase"], "occupied");
+    assert_eq!(watching["txArmed"], false, "only the controller is told");
+    assert_eq!(control_state_version(&f, now, 3)["txArmed"], false);
+}

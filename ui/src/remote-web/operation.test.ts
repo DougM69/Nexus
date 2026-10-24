@@ -67,6 +67,11 @@ it('closes the logging grammar around plain QSO fields and no arbitrary action',
   // granted, and never refuses the state (that refusal broke control for every older page).
   expect((operationValue({ ...s, actions: ['tx'] }) as OperationState).actions).toEqual([])
 })
+it("reads the station's TX latch from txArmed by value, only beside the lease and stop token", () => {
+  const s = { ...state(true), transmitEpoch: '000000000000002a' }
+  for (const txArmed of [true, false]) expect((operationValue({ ...s, txArmed }) as OperationState).txArmed).toBe(txArmed)
+  expect(() => operationValue({ ...s, txArmed: true, transmitEpoch: null })).toThrow()
+})
 it('tolerates a future station action type without widening what this page may send', () => {
   const s = state(true)
   const future = operationValue({ ...s, actions: ['log.manual', 'log.edit', 'otaHunt'] }) as OperationState
