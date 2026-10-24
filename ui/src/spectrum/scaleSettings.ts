@@ -96,7 +96,7 @@ export const CW_AVERAGE_DEFAULT_MS = 0
  * (`tempo-core::spectrum::WindowN`). Voice occupies ~2.7 kHz, so Fast's 46.9 Hz lobe costs nothing a
  * phone operator can see while halving the onset latency; 2048's 23.4 Hz resolution is for pulling a
  * carrier out of the noise, which is the expert's opt-IN, not the default
- * (`feedback-easy-and-powerful-defaults` — the right value follows from the signal). Every other
+ * (the right value follows from the signal). Every other
  * cockpit (CW, the digital waterfalls, the RF pane) stays BALANCED. The operator's window control is
  * unchanged; this moves only the starting point.
  */
