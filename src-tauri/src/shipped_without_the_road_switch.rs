@@ -403,6 +403,7 @@ fn without_the_feature_there_is_no_switch() {
             "internet",
             "over",
             "phase",
+            "pttRefusal",
             "reason",
             "signInBy",
             "signingAgain",
