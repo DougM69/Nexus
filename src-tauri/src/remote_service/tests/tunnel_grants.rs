@@ -74,6 +74,26 @@ async fn a_tunnel_computer_holds_station_control_whenever_remote_is_on() {
     );
 }
 
+/// A computer approved here, the service listing it as added at the shack, is never held from
+/// transmit on the room's tunnel: its tunnel name stands for a device the list names as not
+/// signed in, as its service id does.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tunnel_computer_approved_here_is_not_held_from_transmit() {
+    let cloud = fake_cloud().await;
+    let engine = engine();
+    let service = on_at(&cloud, &engine).await;
+    let key = DeviceKey::new();
+    let named = approved_computer(&service, &cloud, &key).await;
+    service.action(Action::Refresh {}).await.unwrap();
+    let operations = service.control.lock().unwrap().operations.clone();
+    let past = Instant::now() + account::TX_HOLD + Duration::from_secs(60);
+    assert!(
+        !operations.tx_held(COMPUTER, past),
+        "premise: its service id is free"
+    );
+    assert!(!operations.tx_held(&named, Instant::now()), "held");
+}
+
 /// ★ Removed here, a tunnel computer loses station control at once, before the next request; a
 /// computer still waiting, one the service lists with a key other than the one pinned, and one
 /// never approved here are never held.

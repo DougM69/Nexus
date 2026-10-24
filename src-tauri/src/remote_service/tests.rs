@@ -26,11 +26,17 @@ pub(super) struct MemoryVault {
     devices: Arc<Mutex<()>>,
     /// The entries a store refuses alone, read and written, as `fail` refuses every one.
     refusing: Arc<Mutex<std::collections::BTreeSet<&'static str>>>,
+    /// The remembered entries (`state`, `pins`, `waivers`) asked to be saved or removed, in order,
+    /// refused or not.
+    written: Arc<Mutex<Vec<&'static str>>>,
 }
 impl MemoryVault {
     /// Whether the store refuses `entry`: every entry while `fail` is set, or this one alone.
     fn refuses(&self, entry: &str) -> bool {
         self.fail.load(Ordering::Relaxed) || self.refusing.lock().unwrap().contains(entry)
+    }
+    fn wrote(&self, entry: &'static str) {
+        self.written.lock().unwrap().push(entry);
     }
     fn account_entry<T: serde::de::DeserializeOwned>(
         &self,
@@ -169,6 +175,7 @@ impl Vault for MemoryVault {
             .and_then(|v| serde_json::from_str(v).ok()))
     }
     fn save_state(&self, state: &vault::State) -> Result<(), &'static str> {
+        self.wrote("state");
         if self.fail.load(Ordering::Relaxed) {
             return Err("credentialStoreUnavailable");
         }
@@ -179,6 +186,7 @@ impl Vault for MemoryVault {
         Ok(())
     }
     fn remove_state(&self) -> Result<(), &'static str> {
+        self.wrote("state");
         self.values.lock().unwrap().remove("state");
         Ok(())
     }
@@ -194,6 +202,7 @@ impl Vault for MemoryVault {
             .and_then(|v| serde_json::from_str(v).ok()))
     }
     fn save_pins(&self, pins: &vault::Pins) -> Result<(), &'static str> {
+        self.wrote("pins");
         if self.fail.load(Ordering::Relaxed) {
             return Err("credentialStoreUnavailable");
         }
@@ -204,6 +213,7 @@ impl Vault for MemoryVault {
         Ok(())
     }
     fn remove_pins(&self) -> Result<(), &'static str> {
+        self.wrote("pins");
         self.values.lock().unwrap().remove("pins");
         Ok(())
     }
@@ -219,6 +229,7 @@ impl Vault for MemoryVault {
             .and_then(|v| serde_json::from_str(v).ok()))
     }
     fn save_waivers(&self, waivers: &vault::Waivers) -> Result<(), &'static str> {
+        self.wrote("waivers");
         if self.refuses("waivers") {
             return Err("credentialStoreUnavailable");
         }
@@ -229,6 +240,7 @@ impl Vault for MemoryVault {
         Ok(())
     }
     fn remove_waivers(&self) -> Result<(), &'static str> {
+        self.wrote("waivers");
         if self.refuses("waivers") {
             return Err("credentialStoreUnavailable");
         }
@@ -4517,4 +4529,123 @@ fn every_decision_that_ends_an_approval_ends_its_kept_waiver() {
             .any(|w| matches!(w, super::Write::SaveWaivers(_)));
         assert_eq!((removes, saves), (!kept, false), "{what}: written");
     }
+}
+
+/// A pairing's remembered state granting the owner's browser station control, and the waiver kept
+/// beside it.
+fn waived_browser() -> Remembered {
+    let mut remembered = Remembered::default();
+    let _ = remembered.apply(Persist::Bound(
+        Binding {
+            origin: "https://remote.test.invalid".into(),
+            station_id: STATION.into(),
+            account_id: ACCOUNT.into(),
+        },
+        None,
+        None,
+        None,
+    ));
+    let _ = remembered.apply(Persist::Browser {
+        device_id: BROWSER.into(),
+        approval: Some(Approval {
+            expires_at: APPROVED_UNTIL,
+            generation: Some(2),
+        }),
+        control: Some(true),
+    });
+    let _ = remembered.apply(Persist::Waive {
+        device_id: BROWSER.into(),
+    });
+    remembered
+}
+
+/// ★ THE WAIVERS ARE WRITTEN FIRST: station control taken back queues the waiver's removal ahead of
+/// the state, and the writer writes the waivers ahead of the state in a batch whatever order they
+/// came in, so a crash between the two leaves the device held, never a waiver beside a grant the
+/// station took back.
+#[test]
+fn the_waivers_are_written_before_the_state() {
+    let mut remembered = waived_browser();
+    let state = remembered.state.clone().unwrap();
+    let writes = remembered.apply(Persist::Browser {
+        device_id: BROWSER.into(),
+        approval: None,
+        control: Some(false),
+    });
+    assert!(
+        matches!(
+            writes.as_slice(),
+            [super::Write::RemoveWaivers, super::Write::Save(_)]
+        ),
+        "the restrict queues the state first"
+    );
+
+    let vault = MemoryVault::default();
+    let (queue, writes) = mpsc::unbounded_channel();
+    queue.send(super::Write::Save(state)).unwrap();
+    queue.send(super::Write::RemoveWaivers).unwrap();
+    drop(queue);
+    super::write_remembered(Arc::new(vault.clone()), writes);
+    assert_eq!(
+        *vault.written.lock().unwrap(),
+        ["waivers", "state"],
+        "the writer writes the state first"
+    );
+}
+
+/// ★ A WAIVERS WRITE THAT DID NOT LAND IS TRIED AGAIN, AND HOLDS THE STATE BACK: while the store
+/// refuses the waivers entry, a waiver the station took back stays in it, so a state saved beside it
+/// would hand that waiver a grant again at the next launch. The state is removed instead, each time,
+/// and the waivers write is tried again ahead of every later batch; once it lands, the state is
+/// saved again.
+#[test]
+fn a_waivers_write_that_did_not_land_is_tried_again_and_holds_the_state_back() {
+    let state = waived_browser().state.unwrap();
+    let vault = MemoryVault::default();
+    vault
+        .values
+        .lock()
+        .unwrap()
+        .insert("waivers".into(), "kept".into());
+    vault.refusing.lock().unwrap().insert("waivers");
+    let (queue, writes) = mpsc::unbounded_channel();
+    let writer = {
+        let vault = vault.clone();
+        std::thread::spawn(move || super::write_remembered(Arc::new(vault), writes))
+    };
+    // Each write, once the writer has asked the store for `entries` in all, or after a while.
+    let write = |write: super::Write, entries: usize| {
+        queue.send(write).unwrap();
+        for _ in 0..500 {
+            if vault.written.lock().unwrap().len() >= entries {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    let has = |entry: &str| vault.values.lock().unwrap().contains_key(entry);
+
+    write(super::Write::RemoveWaivers, 1);
+    assert!(has("waivers"), "premise: refused");
+    write(super::Write::Save(state.clone()), 3);
+    assert_eq!(
+        vault.written.lock().unwrap()[1..],
+        ["waivers", "state"],
+        "the waivers write was not tried again"
+    );
+    assert!(
+        !has("state"),
+        "a state saved beside a waiver the station took back"
+    );
+
+    vault.refusing.lock().unwrap().clear();
+    write(super::Write::RemovePins, 5);
+    assert!(!has("waivers"), "the waivers write never landed");
+    write(super::Write::Save(state), 6);
+    assert!(
+        has("state"),
+        "the state is still held back once the waivers landed"
+    );
+    drop(queue);
+    writer.join().unwrap();
 }

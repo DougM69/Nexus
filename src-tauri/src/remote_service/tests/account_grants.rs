@@ -785,6 +785,97 @@ async fn granting_on_sign_in_an_invited_guests_computer_is_pinned_by_the_invitat
     }
 }
 
+/// ★ A SIGN-IN COMPUTER ON THE ROOM'S TUNNEL IS HELD AS ITS SERVICE ID IS: granted on its own sign-in,
+/// it holds the tunnel's lease under the shack's name for its key, never the service's id, and the
+/// station holds that name from transmit once the list is heard, as it holds the service id: held
+/// with no end while its owner notice is not confirmed, shown held at the shack under its service
+/// id, and freed under both names by Allow to transmit there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_computer_on_the_tunnel_is_held_under_its_tunnel_name() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let mut row = computer_row(&token("computer"), "operate");
+    row["notified"] = 0.into();
+    let status = listed(&service, &cloud, vec![row]).await;
+    assert_eq!(
+        status.pinned_devices,
+        vec![COMPUTER_ID.to_string()],
+        "premise: granted on its sign-in"
+    );
+    let named = lan::tunnel_device_id(&road_pin());
+    let operations = service.control.lock().unwrap().operations.clone();
+    // Its lease, held by a connection kept open through the test.
+    let engine = engine();
+    let connection = operations::LanConnection::new(operations.clone());
+    let ask = |request: operations::Request| loop {
+        match operations.handle_version(
+            (connection.id, 4),
+            "50000000-0000-4000-8000-0000000000c1",
+            &named,
+            &request,
+            &engine,
+            std::time::Instant::now(),
+        ) {
+            Err("stationBusy" | "remoteBusy") => std::thread::sleep(Duration::from_millis(20)),
+            answer => return answer.unwrap(),
+        }
+    };
+    let boot = ask(operations::Request::State {
+        request_id: super::lan_grants::fresh_id(),
+    })["stationBootId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let acquired = ask(operations::Request::Acquire {
+        request_id: super::lan_grants::fresh_id(),
+        station_boot_id: boot,
+    });
+    assert_eq!(
+        acquired["phase"], "controlling",
+        "premise: it holds the tunnel's lease"
+    );
+    assert!(
+        tempo_app::engine::engine_lock(&engine).remote_transmit_held(),
+        "the engine's gate lets it start a transmission"
+    );
+    assert!(
+        operations.tx_held(COMPUTER_ID, past_the_window()),
+        "premise: its service id is held"
+    );
+    assert!(
+        operations.tx_held(&named, std::time::Instant::now()),
+        "its tunnel name is free"
+    );
+    assert!(
+        operations.tx_held(&named, past_the_window()),
+        "its tunnel name is free past the window"
+    );
+    assert_eq!(
+        operations.current_transmit_hold(std::time::Instant::now()),
+        Some(true),
+        "the radio loop's tick lets it start a transmission"
+    );
+    let status = service.status().unwrap();
+    assert_eq!(
+        status.held_devices,
+        vec![COMPUTER_ID.to_string()],
+        "not shown held at the shack"
+    );
+
+    service.action(allow(COMPUTER_ID)).await.unwrap();
+    assert!(
+        !operations.tx_held(&named, past_the_window()),
+        "Allow to transmit left its tunnel name held"
+    );
+    assert!(!operations.tx_held(COMPUTER_ID, past_the_window()));
+    assert_eq!(
+        service.status().unwrap().held_devices,
+        Vec::<String>::new(),
+        "still shown held"
+    );
+}
+
 /// A station whose owner is not known here (paired by code, or bound as another station) vouches
 /// for nobody: the owner's own browser waits for a press, as it does today.
 #[tokio::test(flavor = "multi_thread")]
@@ -2415,16 +2506,16 @@ async fn a_restricted_device_is_not_freed_by_a_waiver_left_behind() {
             })
             .await
             .unwrap();
+        // Kept as no grant remembered: the state saved without it, or, while the store refuses to
+        // take the waiver back, removed.
+        let kept = || vault.state().unwrap().is_none_or(|s| s.grants.is_empty());
         for _ in 0..100 {
-            if vault.state().unwrap().is_some_and(|s| s.grants.is_empty()) {
+            if kept() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(
-            vault.state().unwrap().unwrap().grants.is_empty(),
-            "{what}: premise: the restrict was kept"
-        );
+        assert!(kept(), "{what}: premise: the restrict was kept");
         drop(service);
         if what == "crash" {
             vault.values.lock().unwrap().insert("waivers".into(), entry);
@@ -2463,6 +2554,52 @@ async fn a_restricted_device_is_not_freed_by_a_waiver_left_behind() {
             "{what}: the next restart"
         );
     }
+}
+
+/// ★ A RESTRICT WHOSE WAIVER THE STORE REFUSED TO TAKE BACK, ALLOWED AGAIN IN THE SAME RUN, FREES
+/// NOTHING AT THE NEXT LAUNCH: the waiver stays in the store, so the station control allowed again
+/// is never saved beside it, and after a restart, with the store taking the entry again, the device
+/// is held.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restrict_the_store_refused_then_allowed_again_frees_nothing_after_a_restart() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = allowed(&cloud, &vault).await;
+    vault.refusing.lock().unwrap().insert("waivers");
+    for allow in [false, true] {
+        service
+            .action(Action::StationPermission {
+                device_id: BROWSER.into(),
+                allow,
+            })
+            .await
+            .unwrap();
+    }
+    assert!(held_at(&service, past_the_window()), "premise: held now");
+    // Until the writer has written the allow: the state removed, or (as it was) saved with control.
+    for _ in 0..100 {
+        if vault
+            .state()
+            .unwrap()
+            .is_none_or(|s| s.grants.iter().any(|g| g.control))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(service);
+    vault.refusing.lock().unwrap().clear();
+    assert!(
+        vault.values.lock().unwrap().contains_key("waivers"),
+        "premise: the waiver outlived the restrict"
+    );
+
+    let service = restarted(&cloud, &vault).await;
+    let _ = listed(&service, &cloud, rows()).await;
+    assert!(
+        held_at(&service, past_the_window()),
+        "freed after the restart"
+    );
 }
 
 /// ★ A DEVICE APPROVED AGAIN LOSES ITS KEPT WAIVER WITH ITS GRANT: after a restart the service lists

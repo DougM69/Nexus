@@ -1051,6 +1051,40 @@ fn a_lan_book_controller_is_free_even_before_the_list_loads() {
     assert!(e.tx_enabled(), "it may arm");
 }
 
+/// ★ A TUNNEL COMPUTER IS ASKED UNDER THE SERVICE'S ID FOR IT: the name the room's tunnel takes it
+/// as is held exactly as that id is, and freed by that id's waiver; one standing for a device the
+/// list names as not signed in is free. FAIL-CLOSED: a name the tunnel takes whose service id is not
+/// known is held, whatever the list says.
+#[test]
+fn a_tunnel_name_is_held_as_the_service_id_it_stands_for() {
+    const TUNNEL: &str = "60000000-0000-8000-8000-000000000001";
+    let f = Fixture::new();
+    let now = f.now();
+    signed_in(&f);
+    f.authority
+        .hold_tunnel_devices(Box::new(|| vec![TUNNEL.to_string()]));
+    assert!(
+        f.authority.tx_held(TUNNEL, now),
+        "a tunnel name whose service id is not known"
+    );
+    let stands_for = |id: &str| {
+        f.authority
+            .set_tunnel_owners(BTreeMap::from([(TUNNEL.to_string(), id.to_string())]))
+    };
+    stands_for(OTHER);
+    assert!(
+        !f.authority.tx_held(TUNNEL, now),
+        "CONTROL: one standing for a device not signed in"
+    );
+    stands_for(DEVICE);
+    assert!(
+        f.authority.tx_held(TUNNEL, now),
+        "one standing for a sign-in device"
+    );
+    f.authority.waive_transmit(DEVICE);
+    assert!(!f.authority.tx_held(TUNNEL, now), "its service id's waiver");
+}
+
 /// A sign-in-held device in control, with the real radio-loop hold source wired (as `Service::start`
 /// wires it) so a `poll_remote_transmit` tick re-derives the gate off the live lease. Asserts the
 /// premise and the CONTROL: it is held while it controls, and a tick while it is STILL controlling

@@ -243,6 +243,12 @@ pub struct Authority {
     /// (once its window elapses) only while it is here; a device not confirmed is held even past
     /// its window. Replaced from the durable list on every list, beside `signin_devices`.
     notified_devices: Mutex<BTreeSet<String>>,
+    /// The service's id for each computer (or phone) on the room's tunnel, by the name the tunnel
+    /// takes it as (`lan::tunnel_device_id`): one device under two names. The transmit hold, its
+    /// records and the sign-in provenance all key by the service id, so the hold reads a tunnel name
+    /// as that id ([`Authority::hold_name`]). Replaced beside the tunnel's own list
+    /// (`Control::sync_approved`). Its own leaf lock, taken alone or after Core.
+    tunnel_owners: Mutex<BTreeMap<String, String>>,
 }
 /// The device ids of the LAN road's paired computers while LAN is on, and none while it is off.
 /// Called under Core: it may take no lock that is ever held while Core is taken.
@@ -342,6 +348,27 @@ impl Authority {
         if let Ok(mut held) = self.notified_devices.lock() {
             *held = devices;
         }
+    }
+    /// Replace the service's id for each computer on the room's tunnel, by its tunnel name. See
+    /// [`Authority::tunnel_owners`].
+    pub fn set_tunnel_owners(&self, owners: BTreeMap<String, String>) {
+        if let Ok(mut held) = self.tunnel_owners.lock() {
+            *held = owners;
+        }
+    }
+    /// The name the transmit hold keys `device` by: a computer on the room's tunnel by the service's
+    /// id for it, so its tunnel name is held exactly as that id is; any other device by its own.
+    /// FAIL-CLOSED: `None`, which holds, for a name the tunnel takes whose service id is not known,
+    /// and while the map's lock is poisoned.
+    fn hold_name(&self, device: &str) -> Option<String> {
+        if let Some(owner) = self.tunnel_owners.lock().ok()?.get(device) {
+            return Some(owner.clone());
+        }
+        let tunnel = self
+            .tunnel_devices
+            .get()
+            .is_some_and(|devices| devices().iter().any(|d| d == device));
+        (!tunnel).then(|| device.to_string())
     }
     /// Whether the service confirms a durable owner-notice record exists for `device`: the
     /// precondition a held sign-in device's transmit lifts against.
@@ -447,12 +474,22 @@ impl Authority {
     /// - in it, `Held` → held until the window has elapsed AND the owner notice is confirmed durable
     ///   (the 2026-10-23 sign-in decision: an absent/unconfirmed notice holds it even past 15 min);
     ///   in it with NO record → HELD; a poisoned lock → HELD.
+    ///
+    /// A computer on the room's tunnel is asked under the service's id for it ([`Self::hold_name`]),
+    /// whatever name holds the lease; one whose service id is not known is HELD.
     fn tx_held_for(&self, device: &str, grants: &BTreeMap<String, TxGrant>, now: Instant) -> bool {
         // A device paired or enrolled on the station's OWN network (the LAN book) is locally
         // trusted — recorded provenance, not transport — so it is never held, even before the
-        // account list loads. A local positive waiver (an Approve at the shack) likewise frees at
-        // once.
-        if self.is_lan_device(device) || matches!(grants.get(device), Some(TxGrant::Waived)) {
+        // account list loads.
+        if self.is_lan_device(device) {
+            return false;
+        }
+        let Some(device) = self.hold_name(device) else {
+            return true;
+        };
+        let device = device.as_str();
+        // A local positive waiver (an Approve at the shack) frees at once.
+        if matches!(grants.get(device), Some(TxGrant::Waived)) {
             return false;
         }
         match self.signin_devices.lock().as_deref() {

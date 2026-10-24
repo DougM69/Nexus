@@ -535,7 +535,8 @@ impl Remembered {
         self.apply_waivers(&decision);
         let state = self.apply_state(decision);
         let waivers = self.keep_waivers(&before, rewrite);
-        state.into_iter().chain(pins).chain(waivers).collect()
+        // The waivers first, as the writer writes them, whether or not it takes them in one batch.
+        waivers.into_iter().chain(state).chain(pins).collect()
     }
     fn apply_waivers(&mut self, decision: &Persist) {
         match decision {
@@ -848,22 +849,41 @@ impl Control {
     /// approval, approved as a computer). Never a browser, whatever its pin. Each is named from the
     /// key pinned for it (`lan::tunnel_device_id`), never by the service's id, so it can stand for
     /// no other device in the authority it shares with the relay's road and the LAN's.
+    ///
+    /// The transmit hold is told the service's id for each name first (`set_tunnel_owners`), so a
+    /// name the tunnel takes is never one the hold cannot place.
     fn sync_approved(&self) {
-        let keys = self
-            .natives
-            .iter()
-            .filter(|(id, native)| self.remembered.pins.get(*id) == Some(&native.pin))
-            .filter_map(|(_, native)| {
-                let pin: [u8; 32] = tempo_stream::protocol::hex_bytes(&native.key)?
-                    .try_into()
-                    .ok()?;
-                Some((pin, (lan::tunnel_device_id(&pin), native.until)))
-            })
-            .collect();
+        let (mut keys, mut owners) = (BTreeMap::new(), BTreeMap::new());
+        for (id, pin, name, until) in self.on_tunnel() {
+            owners.insert(name.clone(), id.clone());
+            keys.insert(pin, (name, until));
+        }
+        self.operations.set_tunnel_owners(owners);
         // A computer no longer on it loses station control at once, after it is off the holder.
         for name in self.approved.set(keys) {
             let _ = self.operations.permit_station(&name, false);
         }
+    }
+    /// Each computer the room's tunnel takes ([`Control::sync_approved`]), by the service's id: the
+    /// key pinned for it, the name the tunnel takes it as, and when its approval ends.
+    fn on_tunnel(&self) -> impl Iterator<Item = (&String, [u8; 32], String, u64)> + '_ {
+        self.natives
+            .iter()
+            .filter(|(id, native)| self.remembered.pins.get(*id) == Some(&native.pin))
+            .filter_map(|(id, native)| {
+                let pin: [u8; 32] = tempo_stream::protocol::hex_bytes(&native.key)?
+                    .try_into()
+                    .ok()?;
+                Some((id, pin, lan::tunnel_device_id(&pin), native.until))
+            })
+    }
+    /// Whether `device_id` holds station control in `granted` (the authority's `controlDevices`):
+    /// under the service's id, or, for a computer on the room's tunnel, under its tunnel name.
+    fn holds_control(&self, device_id: &str, granted: &[String]) -> bool {
+        granted.iter().any(|g| g == device_id)
+            || self
+                .on_tunnel()
+                .any(|(id, _, name, _)| id == device_id && granted.contains(&name))
     }
 }
 /// A computer (or phone) the service lists as approved: the pin approving it as listed makes, the
@@ -1216,7 +1236,7 @@ impl Service {
                 allows_transmit(
                     &control,
                     d,
-                    status.station_permissions.contains(&d.id),
+                    control.holds_control(&d.id, &status.station_permissions),
                     status.account.removals.contains(&d.id),
                     status.account.unconfirmed.contains_key(&d.id),
                 )
@@ -1404,7 +1424,8 @@ impl Drop for Service {
 
 /// Whether the shack offers Allow to transmit for `device`, and runs it: only for a device the
 /// service lists as added by its own sign-in, approved and unexpired, that holds station control now
-/// (`granted`) and that the station holds from transmit now. Never for one removed here and the
+/// (`granted`: a computer on the room's tunnel under its tunnel name, [`Control::holds_control`])
+/// and that the station holds from transmit now. Never for one removed here and the
 /// service not told yet (`removed`), one whose proof the station could not confirm or that waits
 /// for an Approve here (`unconfirmed`), or one whose key is not pinned here (it is offered the
 /// Approve, which waives the hold itself). Read under the control lock.
@@ -2172,11 +2193,14 @@ impl Controller {
         }
         // Granted station control now, as the status reads it: unknown while the authority is busy.
         let operations = control.operations.local_status();
-        let granted = operations
-            .get("controlDevices")
-            .ok_or("remoteBusy")?
-            .as_array()
-            .is_some_and(|granted| granted.iter().any(|d| d == device_id));
+        let granted: Vec<String> = serde_json::from_value(
+            operations
+                .get("controlDevices")
+                .ok_or("remoteBusy")?
+                .clone(),
+        )
+        .unwrap_or_default();
+        let granted = control.holds_control(device_id, &granted);
         // Exactly the devices the shack offers it for (`Status::held_devices`): any other collects
         // no waiver it could carry into a later grant.
         if !devices
@@ -3206,9 +3230,14 @@ impl Controller {
 /// is followed by deleting the record: a record that could not be updated must not survive to be
 /// restored. No state record means Remote stays off at the next launch; no pins record means every
 /// browser is approved again at the radio before it streams.
+///
+/// A waivers write that did not land, its fallback removal included, is tried again ahead of every
+/// later batch, and until it lands no state is saved, only removed: a grant of station control kept
+/// beside a waiver the station meant to take back would bring that waiver back at the next launch.
 fn write_remembered(vault: Arc<dyn Vault>, mut writes: mpsc::UnboundedReceiver<Write>) {
+    let mut unwritten = None;
     while let Some(first) = writes.blocking_recv() {
-        let (mut state, mut pins, mut waivers) = (None, None, None);
+        let (mut state, mut pins, mut waivers) = (None, None, unwritten.take());
         let mut next = Some(first);
         while let Some(write) = next {
             match write {
@@ -3223,7 +3252,7 @@ fn write_remembered(vault: Arc<dyn Vault>, mut writes: mpsc::UnboundedReceiver<W
         for write in [waivers, state, pins].into_iter().flatten() {
             match write {
                 Write::Save(state) => {
-                    if vault.save_state(&state).is_err() {
+                    if unwritten.is_some() || vault.save_state(&state).is_err() {
                         let _ = vault.remove_state();
                     }
                 }
@@ -3240,12 +3269,14 @@ fn write_remembered(vault: Arc<dyn Vault>, mut writes: mpsc::UnboundedReceiver<W
                 }
                 // A waiver that could not be kept must not survive to be restored.
                 Write::SaveWaivers(waivers) => {
-                    if vault.save_waivers(&waivers).is_err() {
-                        let _ = vault.remove_waivers();
+                    if vault.save_waivers(&waivers).is_err() && vault.remove_waivers().is_err() {
+                        unwritten = Some(Write::SaveWaivers(waivers));
                     }
                 }
                 Write::RemoveWaivers => {
-                    let _ = vault.remove_waivers();
+                    if vault.remove_waivers().is_err() {
+                        unwritten = Some(Write::RemoveWaivers);
+                    }
                 }
             }
         }

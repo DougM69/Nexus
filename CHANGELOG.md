@@ -214,6 +214,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change gives USB or LSB, never DATA; picking a mode is sent to the shack, and a refusal is shown
   instead of switching. The TX On/Off button beside Tune in Phone now works from there, through all
   of the shack's transmit checks, and a refused Tune is shown.
+- **A computer or phone added by signing in is now held from transmitting over the internet too.** The
+  hold on a device added by signing in did not apply to a computer or phone driving the station over the
+  internet, so it could transmit at once. It is now held like a browser until you press **Allow to
+  transmit** or **Approve** at the shack, and it shows there as waiting. Stop is never held, and
+  computers paired on your own network are unaffected.
 - **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
   paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
   opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping
