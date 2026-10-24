@@ -4759,6 +4759,7 @@ export type PttRefusal =
   | 'tuning'
   | 'otherOwner'
   | 'clockRepair'
+  | 'onHold'
   | 'noPresence'
   | 'noFeed'
   | 'noAudio'

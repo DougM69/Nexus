@@ -128,6 +128,7 @@ function refusalLine(refusal: PttRefusal): string {
     case 'tuning': return t('client.ptt.refusal.tuning')
     case 'otherOwner': return t('client.ptt.refusal.otherOwner')
     case 'clockRepair': return t('client.ptt.refusal.clockRepair')
+    case 'onHold': return t('client.ptt.refusal.onHold')
     case 'noPresence': return t('client.ptt.refusal.noPresence')
     case 'noFeed': return t('client.ptt.refusal.noFeed')
     case 'noAudio': return t('client.ptt.refusal.noAudio')

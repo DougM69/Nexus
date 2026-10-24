@@ -114,6 +114,9 @@ pub enum Refusal {
     Owner,
     /// The clock repair holds transmit (item 7).
     ClockRepair,
+    /// A device signed in moments ago holds transmit until it is approved at the station (item 7,
+    /// the 2026-10-23 sign-in decision).
+    OnHold,
     /// Not a section this command may use (item 8).
     Section,
     /// A `tci` key in the Digital section (item 8): FT8, FT4 and the other slot-timed modes go out
@@ -164,6 +167,7 @@ impl Refusal {
             Refusal::Licence => "outside the licence",
             Refusal::Owner => "something else is transmitting",
             Refusal::ClockRepair => "the clock is being repaired",
+            Refusal::OnHold => "a device just signed in and holds transmit",
             Refusal::Section => "not in this section",
             Refusal::SlotTimed => {
                 "FT8, FT4 and other slot-timed modes may not transmit through TCI yet, and a \

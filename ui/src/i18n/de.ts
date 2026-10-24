@@ -559,6 +559,7 @@ export const DE: PartialCatalog = {
   "client.ptt.refusal.tuning": "Die Station stimmt gerade ab.",
   "client.ptt.refusal.otherOwner": "Ein anderes Gerät hat den Sender belegt.",
   "client.ptt.refusal.clockRepair": "Die Station stellt gerade ihre Uhr.",
+  "client.ptt.refusal.onHold": "Dieses Gerät muss an der Station freigegeben werden, bevor es senden kann.",
   "client.ptt.refusal.noPresence": "Die Verbindung zur Station ist abgerissen.",
   "client.ptt.refusal.noFeed": "Auf diesem Computer ist kein Mikrofon eingestellt.",
   "client.ptt.refusal.noAudio": "Es kommt kein Mikrofonton an der Station an.",
