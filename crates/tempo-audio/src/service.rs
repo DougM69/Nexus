@@ -7107,6 +7107,10 @@ impl RadioLoop {
             if self.tx_until_ms.is_some() {
                 self.tx_until_ms = Some(now);
             }
+            // A playing voice message's own deadline is on the same dead timebase.
+            if self.voice_until_ms.is_some() {
+                self.voice_until_ms = Some(now);
+            }
             engine_lock(engine).clear_clock_offset(true);
         }
 
@@ -11952,7 +11956,7 @@ impl RadioLoop {
                         backend.play(&buf);
                         let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
-                        self.voice_until_ms = self.tx_until_ms;
+                        self.voice_until_ms = Some(until);
                         if dax {
                             self.flex_voice_until_ms = self.tx_until_ms;
                         }
@@ -32697,8 +32701,36 @@ mod tests {
                     press_during(&mut s, MIC_PRESS, 240.0, 600.0),
                     "{name}: a press after the stop did not arm"
                 );
+            } else {
+                // Stop TX ends the over by the hard-stop, after the tick's voice report: the
+                // message reads as ended one tick later, not at its own deadline.
+                s.step(240.0);
+                let snap = s.engine.lock().unwrap().snapshot();
+                assert!(!snap.radio.voice_playing, "{name}: still reads as playing");
+                assert_eq!(snap.radio.tx_busy_reason, None, "{name}: still owns TX");
             }
         }
+    }
+
+    /// A wall-clock step mid-message expires the message's own deadline with the PTT hold's, so
+    /// the message reads as ended in the tick the step is seen, not on the old timebase.
+    #[test]
+    fn a_wall_clock_step_ends_a_playing_voice_message_in_that_tick() {
+        let mut s = MicScene::new();
+        s.engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05; 12_000])
+            .unwrap();
+        s.step(0.0);
+        s.step(200.0);
+        assert!(s.rig.keyed, "premise: the message is on the air");
+        let playing = |s: &MicScene| s.engine.lock().unwrap().snapshot().radio.voice_playing;
+        assert!(playing(&s), "premise: it reads as playing");
+        stage_clock_step(&mut s.state, -3_600_000.0);
+        s.step(220.0);
+        assert!(!s.rig.keyed, "the transmitter is unkeyed, not held");
+        assert!(!playing(&s), "the message still reads as playing");
     }
 
     /// ★ R4 (the operator's ruling of 2026-09-27, "Top up to 40 ms"): each tick tops the ring up to
