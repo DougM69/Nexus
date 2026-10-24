@@ -817,7 +817,7 @@ function App() {
   // the latch stays dark, so the lane says why while the hold stands — where to approve it at the
   // shack, that this device must be approved on a computer driving the station.
   useEffect(() => {
-    setStatus('txOnHeld', txOnHeldLane(snap?.radio.txOnHeld, drivesAnotherStation()))
+    setStatus('txOnHeld', txOnHeldLane(snap?.radio.txOnHeld, drivesAnotherStation(), snap?.radio.txHold))
   }, [snap?.radio.txOnHeld])
 
   // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend

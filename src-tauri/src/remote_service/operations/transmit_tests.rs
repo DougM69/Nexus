@@ -933,6 +933,55 @@ fn notified(f: &Fixture) {
         .set_notified_devices(std::collections::BTreeSet::from([DEVICE.to_string()]));
 }
 
+/// ★ What the remote PC is told of its hold (`radio.txHold`, display only): held in its window,
+/// the owner notice unconfirmed, no time is given, since only Allow to transmit lifts it then; once
+/// the notice is confirmed, the time left in the window; with the provenance list unknown, held
+/// but no time, since the window's end would not lift it; allowed at the shack, nothing. The
+/// radio loop's tick carries it into the snapshot.
+#[test]
+fn the_hold_shown_to_the_remote_pc_gives_the_time_only_after_a_notice() {
+    use tempo_app::dto::TxHold;
+    let f = Fixture::new();
+    f.wire_tx_hold();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    signed_in(&f);
+    f.authority
+        .hold_transmit_until(DEVICE, now + Duration::from_secs(15 * 60));
+    let _ = acquire_controls_version(&f, now, 3);
+    let shown = || {
+        let mut e = f.engine.lock().unwrap();
+        e.poll_remote_transmit(now);
+        (e.remote_transmit_held(), e.snapshot().radio.tx_hold)
+    };
+    let not_notified = TxHold {
+        owner_notified: false,
+        left_secs: None,
+    };
+    assert_eq!(shown(), (true, Some(not_notified)), "no notice: no time");
+
+    notified(&f);
+    let counting = TxHold {
+        owner_notified: true,
+        left_secs: Some(15 * 60),
+    };
+    assert_eq!(shown(), (true, Some(counting)), "notified: the time left");
+
+    f.authority.forget_signin_devices();
+    let unlisted = TxHold {
+        owner_notified: true,
+        left_secs: None,
+    };
+    assert_eq!(shown(), (true, Some(unlisted)), "list unknown: no time");
+
+    f.authority.waive_transmit(DEVICE);
+    assert_eq!(
+        shown(),
+        (false, None),
+        "allowed: nothing held, nothing shown"
+    );
+}
+
 /// ★ THE NOTIFICATION PRECONDITION (the 2026-10-23 sign-in decision, point 3): a sign-in device
 /// whose owner-notice record the service has NOT confirmed stays HELD even once its 15-minute
 /// window has elapsed. Only when the notice is confirmed does the elapsed window free it.

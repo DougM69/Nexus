@@ -281,6 +281,31 @@ fn a_refused_voice_message_is_not_played() {
     assert_eq!(s.banner(), None);
 }
 
+/// ⭐ THE SNAPSHOT SAYS A VOICE MESSAGE IS PLAYING FOR AS LONG AS THE LOOP PLAYS IT
+/// (`radio.voicePlaying`, which the voice keyer reads to know its message ended), and no longer;
+/// a message the radio refused never reads as playing once the loop has refused it.
+#[test]
+fn the_snapshot_says_a_voice_message_plays_until_its_over_ends() {
+    let send = |e: &mut Engine| {
+        phone(e);
+        e.send_voice(vec![0.05; 12_000]).unwrap();
+    };
+    let playing = |s: &Scene| s.engine.lock().unwrap().snapshot().radio.voice_playing;
+    let mut s = Scene::new(Key::Accepts, send);
+    assert!(playing(&s), "queued");
+    s.run_to(600.0);
+    assert!(s.keys() >= 1, "premise: keyed");
+    assert!(playing(&s), "mid-message");
+    s.run_to(3_000.0);
+    assert_eq!(s.backend.played.len(), 12_000, "premise: played whole");
+    assert!(!playing(&s), "the over ended");
+
+    let mut s = Scene::new(Key::Refuses, send);
+    s.run_to(2_000.0);
+    assert!(s.backend.played.is_empty(), "premise: refused");
+    assert!(!playing(&s), "a refused message never ended");
+}
+
 /// ⭐ AN SSTV PICTURE THE RADIO REFUSES IS NOT SENT. It was fed into the receiving radio for its
 /// whole length.
 #[test]

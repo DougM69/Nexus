@@ -1359,6 +1359,13 @@ export interface ReceiversStatus {
   set?: ReceiverStatus[]
 }
 
+/** The controlling device's transmit hold, as the station's snapshot says it (`radio.txHold`). */
+export interface TxHold {
+  ownerNotified: boolean
+  /** Seconds, rounded up, until the hold lifts by itself; absent unless the owner was notified. */
+  leftSecs?: number
+}
+
 export interface RadioStatus {
   dialMhz: number
   band: string
@@ -1735,6 +1742,15 @@ export interface RadioStatus {
    *  station, and that hold still stands. Display only: the status lane says why the latch did
    *  not light. Absent when false, and on an older station build. */
   txOnHeld?: boolean
+  /** The device driving the station from afar is held from transmit, in any mode, or absent when
+   *  it is not. Display only: the station's own authority decides every transmission. `leftSecs`
+   *  is there only when the station would lift the hold by itself (its owner notified, the window
+   *  all that holds it); otherwise only Allow to transmit at the shack lifts it. */
+  txHold?: TxHold | null
+  /** A voice-keyer message is queued or on the air at the station. Display only. Absent when
+   *  false, and on an older station build, which never shows the voice keyer a message start, so
+   *  none of its messages reads as ended. */
+  voicePlaying?: boolean
   /** Where decodes come from: the native engine or a WSJT-X/JTDX/MSHV companion. */
   source: SourceKind
   /** Human-readable source label, e.g. "Native (FT8)" or "WSJT-X UDP". */

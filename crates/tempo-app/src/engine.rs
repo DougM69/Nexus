@@ -3811,6 +3811,9 @@ pub struct Engine {
     /// Installed once by the Remote service; `None` in a build without it (the hold then stays as
     /// the last request set it). See [`remote_transmit::RemoteTxHoldSource`].
     remote_tx_hold_source: Option<remote_transmit::RemoteTxHoldSource>,
+    /// The controlling device's hold as the last `poll_remote_transmit` tick heard it from that
+    /// source, for the snapshot's `radio.txHold` only. DISPLAY ONLY: no gate reads it.
+    remote_tx_hold_shown: Option<crate::dto::TxHold>,
     /// The streamed operator's microphone over, and what it needs: see `engine/remote_mic.rs`.
     mic: crate::mic::MicLatch,
     mic_feed: Option<crate::mic::MicFeed>,
@@ -4325,6 +4328,10 @@ pub struct Engine {
     /// held), keys PTT, plays it, and drops PTT when it's out — the same path the soundcard CW
     /// keyer uses. Set by `send_voice`.
     voice_tx: Option<Vec<f32>>,
+    /// The radio loop is playing a voice-keyer message it took from `voice_tx`: set as the loop
+    /// takes it ([`Engine::poll_voice`]) and then as the loop reports it each tick
+    /// ([`Engine::set_voice_on_air`]). For the snapshot's `radio.voicePlaying` only.
+    voice_on_air: bool,
     /// When the pending message was queued for Nexus's own Flex client's DAX switch, the radio
     /// having the mic: the radio loop asks the radio for DAX, keys only once it reports it, and
     /// drops the message when that has not happened 2 seconds after the press, or something else
@@ -6519,6 +6526,7 @@ impl Engine {
             afar_started: None,
             remote_ptt_hold: None,
             remote_tx_hold_source: None,
+            remote_tx_hold_shown: None,
             mic: crate::mic::MicLatch::default(),
             mic_feed: None,
             mic_presence: None,
@@ -6643,6 +6651,7 @@ impl Engine {
             broker_ptt: false,
             broker_context_hold: false,
             voice_tx: None,
+            voice_on_air: false,
             voice_dax: None,
             voice_dropped: None,
             voice_abort: false,
@@ -12953,7 +12962,16 @@ impl Engine {
             self.voice_tx = None;
             return None;
         }
+        // On the air from here until the loop says otherwise, so the snapshot never reads the
+        // message as ended between the take and the loop's next report.
+        self.voice_on_air = true;
         self.voice_tx.take()
+    }
+
+    /// The radio loop's word, each tick, on whether a voice-keyer message it took is still on the
+    /// air (its over not yet ended, stopped or refused). Display only (`radio.voicePlaying`).
+    pub fn set_voice_on_air(&mut self, on_air: bool) {
+        self.voice_on_air = on_air;
     }
 
     /// When the pending message was queued, if it waits for Nexus's own Flex client to switch the
@@ -26781,6 +26799,13 @@ contact yourself."
         // Why a streamed operator's held PTT would not key right now (display only): the first gate
         // `arm_remote_mic` would hit, for the Phone cockpit and the client banner to word.
         s.radio.ptt_refusal = self.ptt_refusal(std::time::Instant::now());
+        // The controlling device's hold, for the remote PC's banner and lane (display only): shown
+        // only while the gate itself holds, so a lifted hold never lingers here.
+        s.radio.tx_hold = self
+            .remote_tx_hold_shown
+            .filter(|_| self.remote_transmit_held());
+        // A voice-keyer message queued or on the air at the station (display only).
+        s.radio.voice_playing = self.voice_tx.is_some() || self.voice_on_air;
         s.radio.rig_keyed = self.rig_keyed;
         // HRD link: Some(true) delivered, Some(false) HRD unreachable (contacts queued),
         // None nothing sent yet. Only meaningful when HRD forwarding is on.
@@ -34609,6 +34634,32 @@ mod tests {
         assert_eq!(e.rtty_state().seq_state, "idle");
         assert!(e.take_rtty_abort(), "abort unkeys the over in flight");
         assert_eq!(e.poll_rtty_one(), None, "the queue was dropped");
+    }
+
+    /// ★ `radio.voicePlaying` says a voice-keyer message is queued or on the air: from the send,
+    /// through the radio loop's take, for as long as the loop says it is on the air, and no
+    /// longer. A message refused at the take was never on the air.
+    #[test]
+    fn the_snapshot_says_a_voice_message_is_playing_until_the_loop_says_it_ended() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tx_enabled(true);
+        assert!(!e.snapshot().radio.voice_playing, "nothing sent");
+        e.send_voice(vec![0.1; 16]).unwrap();
+        assert!(e.snapshot().radio.voice_playing, "queued");
+        assert!(e.poll_voice().is_some(), "premise: the loop takes it");
+        assert!(e.snapshot().radio.voice_playing, "taken, not yet reported");
+        e.set_voice_on_air(true);
+        assert!(e.snapshot().radio.voice_playing, "on the air");
+        e.set_voice_on_air(false);
+        assert!(!e.snapshot().radio.voice_playing, "the loop says it ended");
+
+        e.send_voice(vec![0.1; 16]).unwrap();
+        e.set_tx_enabled(false);
+        assert!(e.poll_voice().is_none(), "premise: refused at the take");
+        assert!(
+            !e.snapshot().radio.voice_playing,
+            "a dropped message never played"
+        );
     }
 
     #[test]

@@ -1975,3 +1975,32 @@ fn the_launch_signs_in_again_in_the_last_week_before_the_station_stops_taking_th
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// ★ The banner's status carries the station's `radio.txHold` beside `pttRefusal`, as the station
+/// sent it, in any section: with its seconds left, without them, and absent when the station says
+/// none (or is a build that does not say).
+#[test]
+fn the_status_carries_the_stations_transmit_hold() {
+    let dir = scratch("tx-hold");
+    let shack = FakeShack::new();
+    let client = client_in(&dir, &shack);
+    let hold = |client: &Client| serde_json::to_value(client.status()).unwrap()["txHold"].clone();
+    shack.feeds("snapshot/1", 1, json!({ "radio": {} }));
+    assert_eq!(hold(&client), Value::Null, "no hold said");
+    shack.feeds(
+        "snapshot/1",
+        2,
+        json!({ "radio": { "txHold": { "ownerNotified": true, "leftSecs": 540 } } }),
+    );
+    assert_eq!(
+        hold(&client),
+        json!({ "ownerNotified": true, "leftSecs": 540 })
+    );
+    shack.feeds(
+        "snapshot/1",
+        3,
+        json!({ "radio": { "txHold": { "ownerNotified": false } } }),
+    );
+    assert_eq!(hold(&client), json!({ "ownerNotified": false }));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

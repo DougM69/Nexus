@@ -290,6 +290,8 @@ impl AppState {
                 stream_mic: None,
                 // The engine recomputes this from `ptt_refusal()` every snapshot.
                 ptt_refusal: None,
+                tx_hold: None,
+                voice_playing: false,
                 slot: 0,
                 next_slot_ms: 0,
                 // Optimistic until the engine has seen decodes to judge from

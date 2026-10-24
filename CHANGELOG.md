@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *Laptop* to transmit?" with the device's key, and **Allow to transmit** or **Not now**. Not now leaves
   it listening and tuning only, and the button stays in Settings ▸ Remote access. The held computer
   now says the same: listening and tuning only, until Allow to transmit is pressed at the shack.
+- **A held remote computer sees its hold in every mode**, with "or about N min" when the station would lift it by itself; a voice message cut short by leaving Phone is now announced.
 - **Approvals given at the shack now last across a station restart.** A browser added by signing in
   that you let transmit (with **Approve** or **Allow to transmit**) stays allowed after Nexus or the
   station restarts, once the station has heard the device list again, and so do your own computers and

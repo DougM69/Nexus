@@ -268,3 +268,65 @@ fn an_unheld_tx_on_says_nothing() {
         "a TX Off is not a refused TX On"
     );
 }
+
+/// A hold source answering `hold` on every tick, as the Remote service installs its own.
+fn source(hold: remote_transmit::RemoteTxHold) -> remote_transmit::RemoteTxHoldSource {
+    std::sync::Arc::new(move |_| Some(hold))
+}
+
+/// ★ The hold is shown (`radio.txHold`) whenever the source holds the controlling device, in any
+/// section, with the seconds left only when its owner was notified; unheld, nothing is shown.
+#[test]
+fn the_hold_is_shown_with_the_time_left_only_after_a_notice() {
+    let left = Some(std::time::Duration::from_millis(90_500));
+    for section in ["phone", "cw"] {
+        let mut e = station_in(section);
+        for (owner_notified, want) in [(true, Some(91)), (false, None)] {
+            e.set_remote_tx_hold_source(source(remote_transmit::RemoteTxHold {
+                held: true,
+                owner_notified,
+                left,
+            }));
+            e.poll_remote_transmit(std::time::Instant::now());
+            assert_eq!(
+                e.snapshot().radio.tx_hold,
+                Some(crate::dto::TxHold {
+                    owner_notified,
+                    left_secs: want
+                }),
+                "{section}, notified {owner_notified}"
+            );
+        }
+        e.set_remote_tx_hold_source(source(remote_transmit::RemoteTxHold {
+            held: false,
+            owner_notified: true,
+            left,
+        }));
+        e.poll_remote_transmit(std::time::Instant::now());
+        assert_eq!(e.snapshot().radio.tx_hold, None, "{section}: not held");
+    }
+}
+
+/// ★ THE GATE NEVER READS THE DISPLAY COPY. With the copy saying the opposite of the gate, a TX On
+/// follows the gate both ways, and the snapshot shows no hold the gate does not stand behind.
+#[test]
+fn the_transmit_gate_ignores_the_shown_hold() {
+    let mut e = ft8();
+    e.set_remote_transmit_held(true);
+    e.remote_tx_hold_shown = None;
+    e.set_tx_enabled(true);
+    assert!(!e.tx_enabled(), "held with nothing shown: still refused");
+
+    e.set_remote_transmit_held(false);
+    e.remote_tx_hold_shown = Some(crate::dto::TxHold {
+        owner_notified: true,
+        left_secs: Some(600),
+    });
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "unheld with a hold shown: arms");
+    assert_eq!(
+        e.snapshot().radio.tx_hold,
+        None,
+        "a hold the gate lifted is not shown"
+    );
+}

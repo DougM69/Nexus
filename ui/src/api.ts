@@ -79,6 +79,7 @@ import type {
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
+import type { TxHold } from './types'
 import type { SliceIntent } from './types'
 import type { FieldDayQso } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
@@ -4748,6 +4749,10 @@ export interface ClientStatus {
    *  would (or did) key. Recorded by the station's own arming path — display only; the UI never
    *  decides whether a press keys. Absent on a station build older than the one that added it. */
   pttRefusal?: PttRefusal | null
+  /** The station holds this computer from transmit, in any mode, as its snapshot says it: with
+   *  `leftSecs` only when the station would lift the hold by itself. Display only. Absent/null when
+   *  not held, and on a station build older than the one that added it. */
+  txHold?: TxHold | null
 }
 
 /** The reasons a client PTT press does not key, as the station's arming path records them. The

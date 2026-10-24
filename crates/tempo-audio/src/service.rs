@@ -3648,6 +3648,10 @@ struct RadioLoop {
     /// that deadline whatever PTT the operator holds, since the radio's DAX would not carry the
     /// operator's voice. Matches `tx_until_ms` only while that over is the one held.
     flex_voice_until_ms: Option<f64>,
+    /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last keyed, by
+    /// any route. Matches `tx_until_ms` only while that over is the one held: what the loop tells
+    /// the engine each tick ([`Engine::set_voice_on_air`]), for the voice keyer to see it end.
+    voice_until_ms: Option<f64>,
     /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last handed
     /// whole to the DAX tee of Nexus's Flex client at its key: through the switch to DAX in Phone
     /// (`flex_voice_until_ms`), or over the DAX a digital slice already takes. The tee going takes
@@ -4523,6 +4527,7 @@ impl RadioLoop {
             slot_audio_stop: None,
             window_unkeyed: None,
             flex_voice_until_ms: None,
+            voice_until_ms: None,
             voice_tee_until_ms: None,
             tuning_keyed: false,
             tune_native: false,
@@ -11884,6 +11889,9 @@ impl RadioLoop {
                 if mic_took_over {
                     eng.stop_voice();
                 }
+                eng.set_voice_on_air(
+                    self.voice_until_ms.is_some() && self.voice_until_ms == self.tx_until_ms,
+                );
                 (
                     eng.take_voice_abort(),
                     // Held, not dropped, while the loop doesn't own the operator's radio
@@ -11937,6 +11945,7 @@ impl RadioLoop {
                         backend.play(&buf);
                         let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        self.voice_until_ms = self.tx_until_ms;
                         if dax {
                             self.flex_voice_until_ms = self.tx_until_ms;
                         }

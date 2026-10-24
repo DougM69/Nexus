@@ -410,6 +410,7 @@ fn without_the_feature_there_is_no_switch() {
             "station",
             "stationBuild",
             "stillThere",
+            "txHold",
             "udpBlocked"
         ]
     );
