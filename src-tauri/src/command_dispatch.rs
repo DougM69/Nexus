@@ -525,6 +525,7 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
             | Wired::Tune
             | Wired::Rtty
             | Wired::Psk
+            | Wired::Jtty
             | Wired::Aprs
             | Wired::Sstv
             | Wired::Chat)
@@ -1173,6 +1174,7 @@ fn class_refusal(
                 | Wired::Tune
                 | Wired::Rtty
                 | Wired::Psk
+                | Wired::Jtty
                 | Wired::Aprs
                 | Wired::Sstv
                 | Wired::Chat,

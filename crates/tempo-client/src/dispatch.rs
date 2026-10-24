@@ -197,6 +197,11 @@ pub enum Wired {
     /// One of the PSK cockpit's starts: a send, and continuous TX switched on and typed into, under
     /// the same per-tick gates as RTTY's.
     Psk,
+    /// One of the JTTY cockpit's starts: a send, an F-key, live entry started and typed into, and
+    /// the sign-off. The shack's JTTY gate decides each when it is planned and again when it is
+    /// queued, and the radio loop re-checks every transmit gate on each frame; a live session keeps
+    /// its own ceiling and the watchdog there.
+    Jtty,
     /// APRS: a beacon or a message, which the shack renders and keys behind its own APRS gates, or
     /// Monitor armed by hand, which lets the shack's automatic ack key. That ack ends when the
     /// computer that armed it is no longer there (src-tauri's `command_dispatch::PRESENCE_BOUND`).
@@ -219,8 +224,10 @@ pub enum Wired {
 /// the yes to an automatic reply. The CW rows are keyboard CW and the macros, sent as text for the
 /// shack's keyer. The tune rows are the tune carrier and the rig's own tuner; the RTTY and PSK rows
 /// are the two keyboard cockpits' sends, continuous TX switched on and typed into, and RTTY's auto
-/// CQ and answer. Continuous TX and an auto run go on transmitting after the press, so each ends
-/// with the rest when the computer's presence lapses (the shack's halt ends the latch and the run).
+/// CQ and answer. The JTTY rows are its cockpit's send, F-keys, live entry started and typed into,
+/// and sign-off. Continuous TX, JTTY's live entry and an auto run go on transmitting after the
+/// press, so each ends with the rest when the computer's presence lapses (the shack's halt ends the
+/// latch, the live session and the run).
 /// The APRS, SSTV and chat rows are each cockpit's sends and what it turns on that transmits by
 /// itself, which ends with the presence of the computer that turned it on. Phone's PTT and its Lock
 /// are each a held press on Stop's road, never a command at the shack.
@@ -241,6 +248,11 @@ pub const WIRED: &[(&str, Wired)] = &[
     ("js8_send", Wired::Js8),
     ("js8_send_command", Wired::Js8),
     ("js8_typeahead", Wired::Js8),
+    ("jtty_fkey", Wired::Jtty),
+    ("jtty_live_commit", Wired::Jtty),
+    ("jtty_live_start", Wired::Jtty),
+    ("jtty_send", Wired::Jtty),
+    ("jtty_sign_off", Wired::Jtty),
     ("override_next_tx", Wired::Ft),
     ("play_voice_message", Wired::VoiceKeyer),
     ("psk_send", Wired::Psk),

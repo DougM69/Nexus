@@ -289,6 +289,16 @@ const RTTY_STARTS: [&str; 5] = [
 /// [`FT_STARTS`] is.
 const PSK_STARTS: [&str; 3] = ["psk_send", "psk_set_latched", "psk_type"];
 
+/// The JTTY cockpit's starts: a send, an F-key, live entry started and typed into, and the
+/// sign-off. Written here, as [`FT_STARTS`] is.
+const JTTY_STARTS: [&str; 5] = [
+    "jtty_fkey",
+    "jtty_live_commit",
+    "jtty_live_start",
+    "jtty_send",
+    "jtty_sign_off",
+];
+
 /// APRS's starts, as at the shack: Monitor armed by hand, which lets the automatic ack key, a
 /// beacon, and a message. Written here, as [`FT_STARTS`] is.
 const APRS_STARTS: [&str; 3] = ["aprs_arm", "aprs_send_beacon", "aprs_send_message"];
@@ -308,8 +318,8 @@ const CHAT_STARTS: [&str; 6] = [
 ];
 
 /// Every start that runs as a command from afar: [`FT_STARTS`], [`JS8_STARTS`], [`CW_STARTS`],
-/// [`TUNE_STARTS`], [`RTTY_STARTS`], [`PSK_STARTS`], [`APRS_STARTS`], [`SSTV_STARTS`],
-/// [`CHAT_STARTS`] and the voice keyer's play.
+/// [`TUNE_STARTS`], [`RTTY_STARTS`], [`PSK_STARTS`], [`JTTY_STARTS`], [`APRS_STARTS`],
+/// [`SSTV_STARTS`], [`CHAT_STARTS`] and the voice keyer's play.
 fn starts_run_from_afar() -> Vec<&'static str> {
     FT_STARTS
         .into_iter()
@@ -318,6 +328,7 @@ fn starts_run_from_afar() -> Vec<&'static str> {
         .chain(TUNE_STARTS)
         .chain(RTTY_STARTS)
         .chain(PSK_STARTS)
+        .chain(JTTY_STARTS)
         .chain(APRS_STARTS)
         .chain(SSTV_STARTS)
         .chain(CHAT_STARTS)
@@ -346,7 +357,7 @@ const FT_KEYING_NOTHING: [&str; 14] = [
 ];
 
 /// ★ The starts wired from afar are exactly the FT buttons' starts, the JS8 sends, keyboard CW and
-/// its macros, the tune carrier and the rig's tuner, the RTTY and PSK starts, the voice keyer's
+/// its macros, the tune carrier and the rig's tuner, the RTTY, PSK and JTTY starts, the voice keyer's
 /// play, and the PTT as a held press; the table says so by value.
 /// CONTROL: the table holds no row that is not a start.
 #[test]
@@ -359,6 +370,7 @@ fn the_starts_wired_from_afar_are_the_ft_buttons_the_voice_keyer_and_the_held_pr
     expected.extend(TUNE_STARTS.iter().map(|n| (*n, Wired::Tune)));
     expected.extend(RTTY_STARTS.iter().map(|n| (*n, Wired::Rtty)));
     expected.extend(PSK_STARTS.iter().map(|n| (*n, Wired::Psk)));
+    expected.extend(JTTY_STARTS.iter().map(|n| (*n, Wired::Jtty)));
     expected.extend(APRS_STARTS.iter().map(|n| (*n, Wired::Aprs)));
     expected.extend(SSTV_STARTS.iter().map(|n| (*n, Wired::Sstv)));
     expected.extend(CHAT_STARTS.iter().map(|n| (*n, Wired::Chat)));
@@ -590,6 +602,7 @@ fn no_ft_command_from_afar_carries_a_time() {
         .chain(TUNE_STARTS)
         .chain(RTTY_STARTS)
         .chain(PSK_STARTS)
+        .chain(JTTY_STARTS)
         .chain(APRS_STARTS)
         .chain(SSTV_STARTS)
         .chain(CHAT_STARTS)

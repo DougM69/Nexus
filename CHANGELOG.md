@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **JTTY sends from a remote computer.** Driving a station from another computer, JTTY's Send,
+  F-keys, live typing and sign-off now transmit, under the same guards and Stop as the other remote
+  modes.
 - **Allow to transmit, at the shack.** A device added by signing in is held from transmitting until
   you let it. Settings ▸ Remote access now shows such a device, browser or computer, once it has
   station control, as "Waiting for your approval to transmit" with an **Allow to transmit** button

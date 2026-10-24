@@ -20,7 +20,9 @@
 //! - **Rendering** (the encoder and the waveform both take the modem's `MODEM_LOCK`, which a
 //!   decode can hold for seconds) runs with the engine lock RELEASED and off the radio loop: a
 //!   send is planned under the lock, rendered without it, and committed under it again, refused
-//!   if anything stopped JTTY in between ([`JttyTx::gen`]). FT8's plan/build/commit.
+//!   if anything stopped JTTY in between ([`JttyTx::gen`]). FT8's plan/build/commit. A send from a
+//!   computer driving the station is also asked, in both holds, whether it still holds
+//!   ([`run_bound`]).
 //! - **The radio loop** asks for audio a frame at a time and keeps at most ONE frame ahead
 //!   ([`crate::keyboard::JTTY`]); every gate is re-checked on every tick while anything is queued
 //!   or on the air, and a gate going down drops all of it and cuts the audio.
@@ -1380,7 +1382,25 @@ fn run(
     engine: &Mutex<Engine>,
     plan: impl FnOnce(&mut Engine) -> Result<JttyPlan, String>,
 ) -> Result<JttySent, String> {
-    let plan = plan(&mut engine_lock(engine))?;
+    run_bound(engine, plan, |_| Ok(()), |_| {})
+}
+
+/// ⛔ A send whose caller binds it: `bound` is asked first in each of the two holds of the engine
+/// lock, the plan's and the commit's, and refuses the send with its error, so nothing is queued
+/// once it has stopped holding (a computer driving the station that pressed before a Stop or the
+/// loss of its permission to transmit). `started` runs after the commit, in the same hold. A plan
+/// that queues nothing commits nothing, and `started` is not run.
+pub fn run_bound(
+    engine: &Mutex<Engine>,
+    plan: impl FnOnce(&mut Engine) -> Result<JttyPlan, String>,
+    bound: impl Fn(&Engine) -> Result<(), String>,
+    started: impl FnOnce(&mut Engine),
+) -> Result<JttySent, String> {
+    let plan = {
+        let mut e = engine_lock(engine);
+        bound(&e)?;
+        plan(&mut e)?
+    };
     let done = JttySent {
         consumed: plan.consumed,
         sent: plan.sent.clone(),
@@ -1389,7 +1409,10 @@ fn run(
         return Ok(done);
     }
     let rendered = render(&plan)?;
-    engine_lock(engine).jtty_commit(plan, rendered)?;
+    let mut e = engine_lock(engine);
+    bound(&e)?;
+    e.jtty_commit(plan, rendered)?;
+    started(&mut e);
     Ok(done)
 }
 
@@ -1502,6 +1525,67 @@ mod tests {
             .filter(|l| l.tx)
             .map(|l| l.text)
             .collect()
+    }
+
+    /// ⛔ A BOUND SEND QUEUES NOTHING ONCE ITS BINDING LAPSES, even while it renders. Bound to the
+    /// transmit stand-down as it was when pressed: the stand-down revoked after the plan, while the
+    /// engine lock is released for rendering, refuses the commit with the binding's own error, and
+    /// nothing is queued, owned or noted as started; revoked before the plan, nothing is planned.
+    /// CONTROL: with the stand-down kept, the same send queues and is noted as started.
+    #[test]
+    fn a_bound_send_queues_nothing_once_its_binding_lapses_while_it_renders() {
+        use crate::remote_control::transmit::TransmitAuthority;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        const LAPSED: &str = "stopped since it was pressed";
+        for lapse in ["while it renders", "before it is planned", "never"] {
+            let e = jtty_engine();
+            let transmit = TransmitAuthority::default();
+            engine_lock(&e).set_remote_transmit_revocation(transmit.revocation());
+            let pressed = engine_lock(&e).remote_transmit_stand_down_generation();
+            let bound = |e: &Engine| {
+                if e.remote_transmit_stand_down_generation() == pressed {
+                    Ok(())
+                } else {
+                    Err(LAPSED.to_string())
+                }
+            };
+            if lapse == "before it is planned" {
+                transmit.revoke();
+            }
+            let planned = AtomicBool::new(false);
+            let started = AtomicBool::new(false);
+            let sent = run_bound(
+                &e,
+                |g| {
+                    planned.store(true, Ordering::SeqCst);
+                    let plan = g.jtty_plan_send("CQ W9XYZ", "");
+                    if lapse == "while it renders" {
+                        transmit.revoke();
+                    }
+                    plan
+                },
+                bound,
+                |_| started.store(true, Ordering::SeqCst),
+            );
+            let mut g = engine_lock(&e);
+            let left = g.jtty_tx_state().left;
+            if lapse == "never" {
+                assert!(sent.is_ok(), "CONTROL: {sent:?}");
+                assert_eq!(left, 1, "CONTROL: queued");
+                assert!(started.load(Ordering::SeqCst), "CONTROL: noted as started");
+                continue;
+            }
+            assert_eq!(sent, Err(LAPSED.to_string()), "{lapse}");
+            assert_eq!(
+                planned.load(Ordering::SeqCst),
+                lapse == "while it renders",
+                "{lapse}: planned"
+            );
+            assert_eq!(left, 0, "{lapse}: queued");
+            assert_eq!(g.tx_owner(), None, "{lapse}: the transmitter owned");
+            assert_eq!(g.poll_jtty(true, 0.0), JttyTick::Idle, "{lapse}: keyed");
+            assert!(!started.load(Ordering::SeqCst), "{lapse}: noted as started");
+        }
     }
 
     /// ⛔ THE TX-ENABLE LATCH. Off, every way to send is refused with the latch's own words, and
