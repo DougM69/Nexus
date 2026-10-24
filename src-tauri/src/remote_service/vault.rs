@@ -117,6 +117,7 @@ const ACCOUNT_DEVICES: &str = "account-devices";
 const ACCOUNT_PEOPLE: &str = "account-people";
 const ACCOUNT_REVOKES: &str = "account-revokes";
 const ACCOUNT_UNINVITES: &str = "account-uninvites";
+const ACCOUNT_NOTIFIED: &str = "account-notified";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -397,6 +398,18 @@ pub struct Uninvites {
     pub people: Vec<String>,
 }
 
+/// The sign-in devices of the station the service knows as `station_id`, bound for `account_id`,
+/// whose owner notice the service had confirmed, each with the end of its transmit window in unix
+/// seconds (0 once it had elapsed). Only a confirmation the service gave is kept, and each list
+/// replaces it: a restart restores the windows, never a confirmation the next list does not give.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Notified {
+    pub station_id: String,
+    pub account_id: String,
+    pub windows: std::collections::BTreeMap<String, u64>,
+}
+
 /// The station's account entries (see the header), kept apart from [`Vault`]'s and the LAN's.
 pub trait AccountVault: Send + Sync {
     fn owner(&self) -> Result<Option<tempo_client::account::Owner>, &'static str>;
@@ -419,6 +432,8 @@ pub trait AccountVault: Send + Sync {
     fn save_revokes(&self, revokes: &Revokes) -> Result<(), &'static str>;
     fn uninvites(&self) -> Result<Option<Uninvites>, &'static str>;
     fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str>;
+    fn notified(&self) -> Result<Option<Notified>, &'static str>;
+    fn save_notified(&self, notified: &Notified) -> Result<(), &'static str>;
 }
 
 /// The LAN's device cache (`account-devices`) held by one writer from its read to its save. It has
@@ -835,6 +850,12 @@ impl AccountVault for SystemVault {
     }
     fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str> {
         save_account_entry(ACCOUNT_UNINVITES, uninvites)
+    }
+    fn notified(&self) -> Result<Option<Notified>, &'static str> {
+        account_entry(ACCOUNT_NOTIFIED)
+    }
+    fn save_notified(&self, notified: &Notified) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_NOTIFIED, notified)
     }
 }
 

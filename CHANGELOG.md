@@ -105,7 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shack lifts its hold at once. A device signed in over the internet can also transmit once its 15 minutes pass —
   but only after the email telling you it was added has actually been sent to your account; until then it stays
   held, so approve it at the shack to let it transmit. That email names the device, the station and when, and how
-  to remove it if it was not you.
+  to remove it if it was not you. Restarting Nexus does not start a device's hold over: once the service has
+  confirmed that email, the station remembers it, and after a restart the device is held only for what was left of
+  its 15 minutes, once your account's device list confirms it again.
 
 ### Changed
 - **Nexus Remote is free during the beta, with no 14-day limit.** Where the service runs the beta, the Remote

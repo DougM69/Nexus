@@ -16,7 +16,7 @@ use super::super::enrol as lan_enrol;
 use super::*;
 use crate::remote_service::tests::MemoryVault;
 use crate::remote_service::vault::{
-    AccountKeys, AccountVault, DevicesHeld, People, Revokes, Uninvites,
+    AccountKeys, AccountVault, DevicesHeld, Notified, People, Revokes, Uninvites,
 };
 use crate::remote_service::{account, Controller};
 use std::sync::atomic::AtomicU64;
@@ -761,6 +761,12 @@ impl AccountVault for Refusing {
     fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str> {
         self.inner.save_uninvites(uninvites)
     }
+    fn notified(&self) -> Result<Option<Notified>, &'static str> {
+        self.inner.notified()
+    }
+    fn save_notified(&self, notified: &Notified) -> Result<(), &'static str> {
+        self.inner.save_notified(notified)
+    }
 }
 
 /// `computer` paired again at the shack `s`, a window opened for it with the code then shown: the
@@ -950,6 +956,12 @@ impl AccountVault for Holding {
     }
     fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str> {
         self.inner.save_uninvites(uninvites)
+    }
+    fn notified(&self) -> Result<Option<Notified>, &'static str> {
+        self.inner.notified()
+    }
+    fn save_notified(&self, notified: &Notified) -> Result<(), &'static str> {
+        self.inner.save_notified(notified)
     }
 }
 
