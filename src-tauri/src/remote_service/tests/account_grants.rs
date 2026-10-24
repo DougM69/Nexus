@@ -1813,3 +1813,222 @@ async fn a_device_whose_removal_is_waiting_is_not_kept() {
         "a removal waiting here: not kept"
     );
 }
+
+// ---- Allow to transmit, at the shack -------------------------------------------------------------
+
+fn allow(device_id: &str) -> Action {
+    Action::AllowTransmit {
+        device_id: device_id.into(),
+    }
+}
+
+/// ★ ALLOW TO TRANSMIT LIFTS THE HOLD: a device added by its own sign-in whose owner notice the
+/// service never confirmed is held past its window, with no end; the shack lists it as held. Allow
+/// to transmit, pressed at the shack, waives it: free now and past the window, and listed held no
+/// more. Its station control is as it was.
+#[tokio::test(flavor = "multi_thread")]
+async fn allow_to_transmit_at_the_shack_lifts_a_held_devices_hold() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let before = listed(&service, &cloud, vec![notified_row(0)]).await;
+    assert!(
+        held_at(&service, past_the_window()),
+        "premise: held with no end"
+    );
+    assert_eq!(before.held_devices, vec![BROWSER.to_string()], "shown held");
+
+    let after = service.action(allow(BROWSER)).await.unwrap();
+    assert!(!held_at(&service, std::time::Instant::now()), "free now");
+    assert!(!held_at(&service, past_the_window()), "and after");
+    assert_eq!(
+        after.held_devices,
+        Vec::<String>::new(),
+        "shown held no more"
+    );
+    assert_eq!(after.station_permissions, before.station_permissions);
+}
+
+/// ★ KEPT LIKE AN APPROVE: for a device whose notice the service confirmed, what the station keeps
+/// for a restart is its window ended (0) once it is allowed, as an Approve at the shack keeps it.
+#[tokio::test(flavor = "multi_thread")]
+async fn allow_to_transmit_is_kept_for_a_restart_as_an_approve_is() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let _ = listed(&service, &cloud, vec![notified_row(1)]).await;
+    assert_ne!(
+        kept_notified(&vault).await.windows.get(BROWSER),
+        Some(&0),
+        "premise: a window still running"
+    );
+    service.action(allow(BROWSER)).await.unwrap();
+    assert_eq!(
+        vault.notified().unwrap().unwrap().windows.get(BROWSER),
+        Some(&0)
+    );
+}
+
+/// ★ ONLY A SIGN-IN DEVICE THIS STATION LISTS: a device the service lists as added at the shack, a
+/// device it does not list at all, and one removed here whose removal still waits for the service
+/// are each refused, and nothing is waived: the held sign-in device beside them stays held.
+#[tokio::test(flavor = "multi_thread")]
+async fn allow_to_transmit_is_refused_for_any_other_device() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let mut shack = computer_row(&token("computer"), "operate");
+    shack["addedBy"] = "shack".into();
+    let rows = vec![notified_row(0), shack];
+    let _ = listed(&service, &cloud, rows.clone()).await;
+    assert!(held_at(&service, past_the_window()), "premise: held");
+    for (device, why, what) in [
+        (COMPUTER_ID, "notSignInDevice", "added at the shack"),
+        (
+            "10000000-0000-4000-8000-0000000000ff",
+            "notSignInDevice",
+            "not listed",
+        ),
+        ("not an id", "invalidRequest", "not an id"),
+    ] {
+        let refused = service.action(allow(device)).await;
+        assert_eq!(refused.err(), Some(why), "{what}: refused");
+        assert!(held_at(&service, past_the_window()), "{what}: still held");
+    }
+
+    cloud.refusing_removals.store(true, Ordering::SeqCst);
+    let removed = service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        removed.account.removals,
+        vec![BROWSER.to_string()],
+        "premise"
+    );
+    assert_eq!(
+        removed.held_devices,
+        Vec::<String>::new(),
+        "a removal waiting here: not offered"
+    );
+    *cloud.devices.lock().unwrap() = json!({ "devices": rows }).to_string();
+    assert_eq!(
+        service.action(allow(BROWSER)).await.err(),
+        Some("notSignInDevice"),
+        "a removal waiting here"
+    );
+    assert!(held_at(&service, past_the_window()), "removed: still held");
+}
+
+/// ★ NEVER A WAIVER FOR A DEVICE THE STATION GRANTED NOTHING: a sign-in device whose proof the
+/// station could not confirm, and one waiting for an Approve here, are held from transmit but hold no
+/// station control. Neither is offered Allow to transmit, and a press for either is refused and
+/// waives nothing: still held past any window. Granted later on a proof that holds, the device is
+/// held for its window as any sign-in grant is.
+#[tokio::test(flavor = "multi_thread")]
+async fn allow_to_transmit_is_refused_for_a_device_granted_nothing() {
+    for (granting, proof, why) in [
+        (true, "browserNativeAud", "tokenAudience"),
+        (false, "browser", "approveAtStation"),
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        let service = if granting {
+            launch_granting_on_sign_in(&cloud, &vault)
+        } else {
+            launch_not_granting_on_sign_in(&cloud, &vault)
+        };
+        let mut row = browser_row(&token(proof));
+        row["notified"] = 1.into();
+        let status = listed(&service, &cloud, vec![row]).await;
+        assert_eq!(
+            status.account.unconfirmed,
+            BTreeMap::from([(BROWSER.to_string(), why)]),
+            "{why}: premise"
+        );
+        assert_eq!(status.station_permissions, Vec::<String>::new(), "{why}");
+        assert!(held_at(&service, past_the_window()), "{why}: premise: held");
+        assert_eq!(
+            status.held_devices,
+            Vec::<String>::new(),
+            "{why}: not offered"
+        );
+        assert_eq!(
+            service.action(allow(BROWSER)).await.err(),
+            Some("notSignInDevice"),
+            "{why}: refused"
+        );
+        assert!(
+            held_at(&service, past_the_window()),
+            "{why}: nothing waived"
+        );
+    }
+
+    // Granted later, on its own proof: held for its window, then free.
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let mut row = browser_row(&token("browserNativeAud"));
+    row["notified"] = 1.into();
+    let _ = listed(&service, &cloud, vec![row]).await;
+    assert!(service.action(allow(BROWSER)).await.is_err(), "premise");
+    let granted = listed(&service, &cloud, vec![notified_row(1)]).await;
+    assert_eq!(granted.station_permissions, vec![BROWSER.to_string()]);
+    assert!(
+        held_at(&service, std::time::Instant::now()),
+        "granted later: held for its window"
+    );
+    assert_eq!(granted.held_devices, vec![BROWSER.to_string()], "offered");
+    assert!(!held_at(&service, past_the_window()), "then free");
+}
+
+/// ★ A LOCAL DECISION AFTER THE PRESS WINS: Allow to transmit is pressed, and Remote is taken over or
+/// turned off at the shack before the station has run the press (it waits on the service's list).
+/// The press is answered and waives nothing: the device is still held, now and past its window.
+#[tokio::test(flavor = "multi_thread")]
+async fn allow_to_transmit_overtaken_by_a_take_over_or_turn_off_leaves_the_device_held() {
+    for (what, decision) in [
+        ("take over", Action::TakeOverLogging {}),
+        ("Turn off", Action::Disable {}),
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        let service = launch_granting_on_sign_in(&cloud, &vault);
+        let before = listed(&service, &cloud, vec![notified_row(0)]).await;
+        assert_eq!(
+            before.held_devices,
+            vec![BROWSER.to_string()],
+            "{what}: premise"
+        );
+
+        cloud.holding_lists.store(true, Ordering::SeqCst);
+        let mut press = std::pin::pin!(service.action(allow(BROWSER)));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut press)
+                .await
+                .is_err(),
+            "{what}: premise: the press waits on the service's list"
+        );
+        // Taken at once; a Turn off is in force at once and waits for its reply behind the press.
+        let mut decided = std::pin::pin!(service.action(decision));
+        let at_once = tokio::time::timeout(Duration::from_millis(200), &mut decided).await;
+        cloud.holding_lists.store(false, Ordering::SeqCst);
+        assert_eq!(press.await.err(), None, "{what}: the press is answered");
+        if at_once.is_err() {
+            let _ = decided.await;
+        }
+        assert!(
+            held_at(&service, std::time::Instant::now()),
+            "{what}: still held now"
+        );
+        assert!(
+            held_at(&service, past_the_window()),
+            "{what}: and past its window"
+        );
+    }
+}

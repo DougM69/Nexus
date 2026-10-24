@@ -154,3 +154,46 @@ it('offers no second sign-in while the proof still holds, and names a sign-in by
   await screen.findByText(EN['remote.account.notOwner'])
   expect(screen.queryByRole('button', { name: EN['remote.account.signInAgain'] })).toBeNull()
 })
+
+it('shows a held sign-in device waiting to transmit with Allow to transmit, a browser and a computer alike, and then as it was', async () => {
+  const browser = crypto.randomUUID(), computer = crypto.randomUUID(), free = crypto.randomUUID()
+  const pinned = (id: string, name: string, kind: 'browser' | 'computer', key: string) => ({ id, name, approved: 1, expiresAt: Date.now() + 86_400_000,
+    untilRemoved: 1, key, kind, platform: kind === 'computer' ? 'windows' as const : null, role: 'operate' as const, addedBy: 'account' as const })
+  const devices = [pinned(browser, 'Owner phone', 'browser', 'aa'.repeat(32)), pinned(computer, 'DESKTOP-7Q', 'computer', 'bb'.repeat(32)),
+    pinned(free, 'Free browser', 'browser', 'cc'.repeat(32))]
+  const actions = shack({ ...bound({}, devices), pinnedDevices: [browser, computer, free], heldDevices: [browser, computer] },
+    (action, status) => action.type === 'allowTransmit'
+      ? { ...status, heldDevices: (status.heldDevices ?? []).filter(id => id !== action.deviceId) } : status)
+  await screen.findAllByText('Owner phone')
+  expect(screen.getAllByText(EN['remote.account.waitingToTransmit'])).toHaveLength(2)
+  const allows = screen.getAllByRole('button', { name: EN['remote.account.allowTransmit'] })
+  expect(allows).toHaveLength(2)
+  fireEvent.click(allows[0])
+  await waitFor(() => expect(screen.getAllByRole('button', { name: EN['remote.account.allowTransmit'] })).toHaveLength(1))
+  fireEvent.click(screen.getByRole('button', { name: EN['remote.account.allowTransmit'] }))
+  await waitFor(() => expect(screen.queryByText(EN['remote.account.waitingToTransmit'])).toBeNull())
+  expect(screen.queryByRole('button', { name: EN['remote.account.allowTransmit'] })).toBeNull()
+  // Each then shows as it did: approved, with Remove beside it.
+  expect(screen.getAllByRole('button', { name: EN['remote.native.remove'] })).toHaveLength(3)
+  expect(actions).toEqual([{ type: 'allowTransmit', deviceId: browser }, { type: 'allowTransmit', deviceId: computer }])
+})
+
+it('offers Allow to transmit only on a held row with no Approve: never one asking, waiting for Approve, unpinned, unconfirmed or removed here', async () => {
+  const held = crypto.randomUUID(), asking = crypto.randomUUID(), waits = crypto.randomUUID(), unpinned = crypto.randomUUID(),
+    unconfirmed = crypto.randomUUID(), removed = crypto.randomUUID()
+  const row = (id: string, name: string, key: string) => ({ id, name, approved: 1, expiresAt: Date.now() + 86_400_000, untilRemoved: 1,
+    key, kind: 'browser' as const, role: 'operate' as const, addedBy: 'account' as const })
+  const devices = [row(held, 'Held browser', 'aa'.repeat(32)), row(waits, 'Waiting browser', 'bb'.repeat(32)),
+    row(unpinned, 'Unpinned browser', 'cc'.repeat(32)), row(unconfirmed, 'Unconfirmed browser', 'dd'.repeat(32)),
+    row(removed, 'Removed browser', 'ee'.repeat(32)), { ...row(asking, 'Asking browser', 'ff'.repeat(32)), approved: 0 }]
+  // As a station that named every one of them held would show them: the card still offers Allow on the held row alone.
+  const actions = shack({ ...bound({ unconfirmed: { [waits]: 'approveAtStation', [unconfirmed]: 'tokenAudience' }, removals: [removed] }, devices),
+    pinnedDevices: [held, asking, waits, unconfirmed, removed], heldDevices: [held, asking, waits, unpinned, unconfirmed, removed] })
+  await screen.findAllByText('Held browser')
+  expect(screen.getAllByText(EN['remote.account.waitingToTransmit'])).toHaveLength(1)
+  const allows = screen.getAllByRole('button', { name: EN['remote.account.allowTransmit'] })
+  expect(allows).toHaveLength(1)
+  expect(screen.getAllByRole('button', { name: EN['remote.approve'] }).length, 'the rows that ask keep their Approve').toBeGreaterThan(0)
+  fireEvent.click(allows[0])
+  await waitFor(() => expect(actions).toEqual([{ type: 'allowTransmit', deviceId: held }]))
+})

@@ -98,6 +98,12 @@ export function RemoteStation() {
   const computers = status?.devices?.filter(isNative) ?? []
   const account = status?.account
   const roleName = (role: AccountRole) => role === 'listen' ? t('remote.account.role.listen') : t('remote.account.role.operate')
+  // A device added by its own sign-in that the station holds from transmit (`heldDevices`) is allowed here, and
+  // only where its row offers no Approve: never one waiting for Approve or with its key not pinned here (the
+  // Approve waives the hold itself), one on a proof the station could not confirm, or one removed here.
+  const offersAllow = (device: RemoteStationStatus['devices'][number]) => !!status?.heldDevices?.includes(device.id)
+    && device.approved === 1 && !(device.key && !status.pinnedDevices?.includes(device.id))
+    && !account?.unconfirmed?.[device.id] && !account?.removals?.includes(device.id)
   // What the station knows of a device beyond its approval: added by its own sign-in, a proof the station
   // could not confirm (never granted), or a removal the service has not heard yet. A device added by its
   // sign-in that waits for Approve here was confirmed, so it says only how it was added.
@@ -106,7 +112,11 @@ export function RemoteStation() {
     {account?.unconfirmed?.[device.id] && !waitsForApprove(status, device.id)
       && <span className="remote-warning">{t('remote.account.unconfirmed')}</span>}
     {account?.removals?.includes(device.id) && <span>{t('remote.account.removalWaiting')}</span>}
+    {offersAllow(device) && <span className="remote-warning">{t('remote.account.waitingToTransmit')}</span>}
   </>
+  const allowTransmit = (device: RemoteStationStatus['devices'][number]) => offersAllow(device)
+    && <button type="button" className="remote-button" disabled={busy}
+      onClick={() => void act({ type: 'allowTransmit', deviceId: device.id })}>{t('remote.account.allowTransmit')}</button>
   // One card (the operator, 2026-10-02: "Settings ▸ Remote access becomes one card"): where this
   // station stands with the Remote service and the one thing to do next, then the browsers with their
   // keys. Everything else the panel had folds under Advanced, unchanged: the same state, the same
@@ -147,6 +157,7 @@ export function RemoteStation() {
       : issue === 'stationLimit' ? t('remote.account.stationLimit')
       : issue === 'inviteLimit' ? t('remote.account.inviteLimit')
       : issue === 'noKey' ? t('remote.vaultFailed')
+      : issue === 'notSignInDevice' ? t('remote.account.allowTransmitGone')
       : t('remote.requestFailed')}</p>}
     {/* S3-M1: browsers check this station's stream against the key the service recorded for it at
         pairing. Another one there is not fixed by waiting, so it gets its own line until it is. */}
@@ -236,6 +247,7 @@ export function RemoteStation() {
             <span className="remote-actions">
               {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
                 onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, key, kind: device.kind ?? 'browser' })}>{t('remote.approve')}</button>}
+              {allowTransmit(device)}
               {device.approved === 1 && <button type="button" className="remote-button" disabled={busy}
                 onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.native.remove')}</button>}
             </span>
@@ -259,6 +271,7 @@ export function RemoteStation() {
               <span className="remote-actions">
                 {(device.approved !== 1 || unpinned) && <button type="button" className="remote-button" disabled={busy}
                   onClick={() => void act({ type: 'device', deviceId: device.id, approve: true, key, kind: device.kind ?? 'browser' })}>{t('remote.approve')}</button>}
+                {allowTransmit(device)}
                 {device.approved === 1 && <button type="button" className="remote-button" disabled={busy}
                   onClick={() => void act({ type: 'device', deviceId: device.id, approve: false })}>{t('remote.native.remove')}</button>}
               </span>

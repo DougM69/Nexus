@@ -59,6 +59,10 @@ pub struct Status {
     /// A5: the browsers whose listed device key is the one pinned at the radio, the ones that can
     /// stream. An approved browser listed with a key and missing here is approved again to stream.
     pinned_devices: Vec<String>,
+    /// The devices added by their own sign-in that the station holds from transmit now, each shown
+    /// at the shack with Allow to transmit: only those granted station control and not removed
+    /// here, waiting for an Approve, or on a proof not confirmed ([`allows_transmit`]).
+    held_devices: Vec<String>,
     /// S3-L1: SHA-256 of this station's own signing key, lowercase hex, worked out as a page works out
     /// the key the service lists: shown as "This station's key" for the operator to compare with the
     /// key the page kept. Its public half only. `None` while there is no pairing or no key.
@@ -410,6 +414,14 @@ pub enum Action {
     },
     /// The operator has seen the notice of a device the station granted on its own proof.
     DismissAdded {
+        #[serde(rename = "deviceId")]
+        device_id: String,
+    },
+    /// Allow to transmit, pressed at the shack for a device added by its own sign-in and held from
+    /// transmit: the shack's waiver, as an Approve here gives it. ⛔ The shack's own screen only:
+    /// `remote_station_action` is refused from afar at both ends (`command_classes`), so a held
+    /// device can never allow itself.
+    AllowTransmit {
         #[serde(rename = "deviceId")]
         device_id: String,
     },
@@ -1103,6 +1115,20 @@ impl Service {
             })
             .map(|d| d.id.clone())
             .collect();
+        status.held_devices = status
+            .devices
+            .iter()
+            .filter(|d| {
+                allows_transmit(
+                    &control,
+                    d,
+                    status.station_permissions.contains(&d.id),
+                    status.account.removals.contains(&d.id),
+                    status.account.unconfirmed.contains_key(&d.id),
+                )
+            })
+            .map(|d| d.id.clone())
+            .collect();
         status.station_key = control
             .station_key
             .as_ref()
@@ -1282,6 +1308,34 @@ impl Drop for Service {
     }
 }
 
+/// Whether the shack offers Allow to transmit for `device`, and runs it: only for a device the
+/// service lists as added by its own sign-in, approved and unexpired, that holds station control now
+/// (`granted`) and that the station holds from transmit now. Never for one removed here and the
+/// service not told yet (`removed`), one whose proof the station could not confirm or that waits
+/// for an Approve here (`unconfirmed`), or one whose key is not pinned here (it is offered the
+/// Approve, which waives the hold itself). Read under the control lock.
+fn allows_transmit(
+    control: &Control,
+    device: &Device,
+    granted: bool,
+    removed: bool,
+    unconfirmed: bool,
+) -> bool {
+    let pinned = device.key.is_none()
+        || device
+            .pin()
+            .is_some_and(|pin| control.remembered.pins.get(&device.id) == Some(&pin));
+    device.added_by.as_deref() == Some("account")
+        && device.approved == 1
+        && device.expires_at > now_ms()
+        && granted
+        && !removed
+        && !unconfirmed
+        && pinned
+        && control
+            .operations
+            .tx_held(&device.id, std::time::Instant::now())
+}
 struct Pending {
     id: String,
     proof: String,
@@ -1950,6 +2004,63 @@ impl Controller {
             device_id,
             key: pin,
         });
+        Ok(())
+    }
+    /// Allow to transmit, pressed at the shack: waives the sign-in transmit hold of `device_id` (the
+    /// 2026-10-23 sign-in decision), as an Approve here does ([`Controller::grant_approved`]), and
+    /// grants nothing else. Only for a device the service lists now as added by its own sign-in,
+    /// approved and unexpired, not removed here, and offered it at the shack now
+    /// ([`allows_transmit`]): any other is refused (`notSignInDevice`) and nothing is waived. A local decision made after the press (Turn off or on, take over) wins,
+    /// and nothing is waived. Reached only from the shack's own screen (`Action::AllowTransmit`).
+    fn allow_transmit(
+        &self,
+        devices: &[Device],
+        device_id: &str,
+        (generation, epoch): (u64, u64),
+    ) -> Result<(), &'static str> {
+        let now = now_ms();
+        // Removals unreadable: none can be ruled out, so nothing is waived.
+        let removed = self
+            .removals
+            .as_ref()
+            .is_none_or(|removals| removals.iter().any(|id| id == device_id));
+        let signed_in = devices.iter().any(|d| {
+            d.id == device_id
+                && d.added_by.as_deref() == Some("account")
+                && d.approved == 1
+                && d.expires_at > now
+        });
+        if removed || !signed_in {
+            return Err("notSignInDevice");
+        }
+        let unconfirmed = self
+            .status
+            .lock()
+            .map_err(|_| "serviceUnavailable")?
+            .account
+            .unconfirmed
+            .contains_key(device_id);
+        let control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+        if control.generation != generation || control.operations.epoch() != epoch {
+            return Ok(());
+        }
+        // Granted station control now, as the status reads it: unknown while the authority is busy.
+        let operations = control.operations.local_status();
+        let granted = operations
+            .get("controlDevices")
+            .ok_or("remoteBusy")?
+            .as_array()
+            .is_some_and(|granted| granted.iter().any(|d| d == device_id));
+        // Exactly the devices the shack offers it for (`Status::held_devices`): any other collects
+        // no waiver it could carry into a later grant.
+        if !devices
+            .iter()
+            .find(|d| d.id == device_id)
+            .is_some_and(|d| allows_transmit(&control, d, granted, removed, unconfirmed))
+        {
+            return Err("notSignInDevice");
+        }
+        control.operations.waive_transmit(device_id);
         Ok(())
     }
     /// The keys and credential this station binds with: those staged for it already, or new ones,
@@ -2922,6 +3033,21 @@ impl Controller {
                     }
                     granted?;
                 }
+            }
+            Action::AllowTransmit { device_id } => {
+                if !identifier(&device_id) {
+                    return Err("invalidRequest");
+                }
+                // The list as the service holds it now: the device is checked on it, and what the
+                // station keeps for a restart is written from it after the waiver (`vouch`).
+                let devices = self.list().await?;
+                let allowed = self.allow_transmit(&devices, &device_id, (generation, epoch));
+                self.listed(&devices);
+                self.vouch(&devices, (generation, epoch)).await;
+                if let Ok(mut status) = self.status.lock() {
+                    status.devices = devices;
+                }
+                allowed?;
             }
         }
         Ok(())
