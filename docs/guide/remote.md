@@ -68,6 +68,19 @@ While the second PC drives the station, a banner across the top says which stati
 link stands (connecting, live, not live, or another device in control) and offers **Leave**,
 which starts Nexus again as this PC's own station.
 
+### Who can transmit
+
+Nexus at the shack decides, and nothing set from afar changes it.
+
+- **A computer on the shack's own network**, paired there with a code or added by signing in on
+  that network, transmits at once. It is never held.
+- **A browser or PC that signs in over the internet** can listen and take control at once, but
+  cannot transmit until you approve it at the shack, under Remote access, with its key.
+- **A browser or PC you approved at the shack** transmits from anywhere. Each one is approved on
+  its own.
+- Nexus does not email you when something signs in yet. Until it does, a computer that signs in
+  stays unable to transmit until you approve it.
+
 ### What stops a transmission
 
 Stop always wins, from either end:
@@ -215,13 +228,12 @@ callsign and shack computer, and your trial dates) and the billing records the l
 | Second PC paired with a code | Works with no internet and no account | — |
 | Second PC added by signing in | Works; signs in again every 30 days, which needs the Nexus Remote service | Through the Nexus Remote service |
 | Browser stream | Stream and Listen from an approved browser on the same network stay free | Through the Nexus Remote service |
-| Cost | Free | A 14-day trial, then a paid plan (coming) |
+| Cost | Free | Free during the Beta; paid plans are coming |
 
-The 14-day trial of the internet road starts at the station's first use over the internet (for a
-station paired with a code, when you approve the pairing at the shack). Paid plans are **coming**:
-they are not on sale during the Beta, and this page will say how to subscribe once they are. When
-an account has no internet use left, the shack's own network keeps working: the second PC and an
-approved browser on the same network still operate the station.
+Nexus Remote is free during the Beta. Paid plans for use over the internet are **coming**: they
+are not on sale during the Beta, and this page will say how to subscribe once they are. On the
+shack's own network Remote stays free. When an account has no internet use left, the second PC
+and an approved browser on the same network still operate the station.
 
 ## Troubleshooting
 
@@ -232,7 +244,7 @@ approved browser on the same network still operate the station.
 | **This reply was not signed with your station's key** | Something other than your station answered | Nothing connected; check the station's key at the shack |
 | **This computer waits for approval at the station, under Remote access** | The PC is not approved for the internet road yet | Approve it at the shack, checking its key |
 | **The internet road waits until you check the station's key** | You have not pressed **It matches** | [Check the station's key](#check-the-stations-key) |
-| **The internet road is part of Nexus Remote's paid service, and your account does not include it now** | The trial is over, or the plan lapsed | Operate on the shack's own network, which stays free |
+| **The internet road is part of Nexus Remote's paid service, and your account does not include it now** | This account's internet use has ended | Operate on the shack's own network, which stays free |
 | **This network lets no audio or second Stop road through** | A hotel or office network blocks the datagrams Stop's own road and audio need | Watch, tune and log; transmitting from here is off |
 | **This computer runs Nexus … and the station runs Nexus …** | The two PCs run different versions | Update the one the banner names |
 | **The station has eight devices already** | Eight browsers and computers are approved | Remove one at the shack |
@@ -251,8 +263,11 @@ For a stuck transmission, see [Scenarios & troubleshooting](scenarios.md).
 - **Both PCs must run the same Nexus version.** The banner says which one to update.
 - **Passwords and remote-access settings stay at the shack.** Approving, inviting, pairing and
   network settings cannot be changed through a stream or from a second PC.
-- **A sign-in alone never lets anyone transmit over the internet.** Every device that operates
-  over the internet is approved at the shack, by you, with its key.
+- **A sign-in gives control, not transmit.** A browser or PC that signs in over the internet can
+  listen and take control, and transmits only once you approve it at the shack, with its key. A
+  computer paired on the shack's own network is never held. Stop always works, from every device.
+- **No email notices yet.** Nexus does not yet email you when a browser or PC signs in to your
+  station.
 - **The station's licence class is the one checked.** Nexus at the shack applies the licence
   class set there, not a guest's. Someone you invite to operate transmits under your callsign.
 - **A PC added by signing in needs the Nexus Remote service every 30 days** to stay on the
