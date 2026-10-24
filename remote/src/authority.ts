@@ -212,7 +212,7 @@ export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotic
   // Mark the notice sent ONLY when the provider ACCEPTS it (a 2xx). `notified` — the precondition
   // the station's transmit hold lifts against — is `sent_at IS NOT NULL`, so a rejection (401/422/
   // a 5xx) or a network failure leaves `sent_at` null and the device held past its window until a
-  // shack Approve or a verified-MFA sign-in ("no email, no unlock", operator 2026-10-24).
+  // shack Approve ("no email, no unlock", operator 2026-10-24).
   let accepted = false
   try {
     const res = await fetch(env.OWNER_NOTICE_ENDPOINT || 'https://api.resend.com/emails', {

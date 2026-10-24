@@ -2274,17 +2274,13 @@ impl Controller {
         // `account::TX_HOLD` — the engine's gate refuses it while this device controls
         // (`Authority::apply_tx_hold`). This records a POSITIVE outcome; FAIL-CLOSED, a sign-in
         // device with no record stays held (`Authority::tx_held_for` keys on the durable service
-        // list, not on this write). WAIVED on a SIGNATURE-VERIFIED second factor at sign-in
-        // (`vouched.mfa`, read from the proof `account::vouched` already checked): an MFA sign-in is
-        // trusted to transmit at once. An Approve at the shack waives it (`grant_approved`); a LAN
-        // enrolment never records one (`lan::enrol`). Stop and disarming are never held.
-        if vouched.mfa {
-            control.operations.waive_transmit(&device.id);
-        } else {
-            control
-                .operations
-                .hold_transmit_until(&device.id, std::time::Instant::now() + account::TX_HOLD);
-        }
+        // list, not on this write). Only an Approve at the shack waives it (`grant_approved`); a LAN
+        // enrolment never records one (`lan::enrol`). A second factor at sign-in does NOT waive it:
+        // that exemption is held for later (operator, 2026-10-24), so an MFA sign-in is held like any
+        // other. Stop and disarming are never held.
+        control
+            .operations
+            .hold_transmit_until(&device.id, std::time::Instant::now() + account::TX_HOLD);
         Ok(true)
     }
     /// Keeps a device the station vouched for in the LAN's entry in `vault`, by the pin the LAN

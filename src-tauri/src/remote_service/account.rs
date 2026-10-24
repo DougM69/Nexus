@@ -64,9 +64,8 @@ const ANSWER_LIMIT: usize = 16384;
 /// transmit hold ([`TX_HOLD`]) enforced at the engine's arming gate
 /// (`tempo_app::engine::Engine::remote_transmit_held`)— it may hold control and operate the
 /// receiver, but no transmit ARM starts until the window passes. Stop, and the off half of a
-/// switch, are never held. The hold is WAIVED for a device signed in with MFA
-/// (`tempo_client::account::used_mfa`), for one Approved at the shack (`Controller::grant_approved`),
-/// and for one that enrols on the station's own network by its sign-in (`super::lan::enrol` records
+/// switch, are never held. The hold is WAIVED for one Approved at the shack
+/// (`Controller::grant_approved`) and for one that enrols on the station's own network by its sign-in (`super::lan::enrol` records
 /// no hold — standing at the shack's LAN is the shack tap's equal). Adding a device by sign-in also
 /// notifies the station's owner by email, which the service sends (the station keeps no address);
 /// the provider secret is a credential gate the operator wires (gate 5).

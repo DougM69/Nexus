@@ -674,7 +674,7 @@ test('a guest sign-in emails nobody and the guest device stays un-notified', asy
     const g = await enrol(guest, shack.stationId)
     assert.equal(g.value.approved, true, 'the guest is approved by their invite and sign-in')
     // The owner's address is not available on a guest's sign-in, so nothing is sent (the guest is
-    // never emailed), and the device stays held until a shack Approve or a verified-MFA sign-in.
+    // never emailed), and the device stays held until a shack Approve.
     assert.equal(sent.length, 0, 'no email is sent on a guest sign-in')
     const row = await rt.db.prepare('SELECT COUNT(*) AS n, MAX(sent_at) AS sent FROM notices WHERE device_id=?').bind(g.deviceId).first()
     assert.equal(row.n, 1, 'the durable row is written regardless')

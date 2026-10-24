@@ -153,7 +153,7 @@ struct Core {
     /// [`Authority::signin_devices`] — it only records a POSITIVE outcome. A sign-in-granted device
     /// with an entry here is held or waived per the entry; a sign-in-granted device with NO entry is
     /// held (its grant never recorded a positive waiver/window). Written by
-    /// `Controller::grant_vouched` (held with its window, or waived on verified MFA) and
+    /// `Controller::grant_vouched` (held with its window) and
     /// `grant_approved` (waived at the shack); cleared on revoke. The engine's arm gate is set from
     /// the CONTROLLING device's state at each lease event ([`Authority::apply_tx_hold`]). Monotonic,
     /// not persisted — a restart re-vouches a device afresh and, until it does, holds it.
@@ -166,7 +166,7 @@ struct Core {
 enum TxGrant {
     /// Held from transmit until this monotonic moment (its 15-minute window); past it, free.
     Held { until: Instant },
-    /// Waived: a verified second factor at sign-in, or an Approve at the shack. Free to transmit.
+    /// Waived: an Approve at the shack. Free to transmit.
     Waived,
 }
 impl Default for Core {
@@ -351,14 +351,14 @@ impl Authority {
     pub fn hold_transmit_until(&self, device: &str, until: Instant) {
         self.set_tx_grant(device, TxGrant::Held { until });
     }
-    /// Record that a sign-in auto-granted `device` is WAIVED (a signature-verified second factor at
-    /// sign-in, or an Approve at the shack): free to transmit.
+    /// Record that a sign-in auto-granted `device` is WAIVED (an Approve at the shack): free to
+    /// transmit.
     pub fn waive_transmit(&self, device: &str) {
         self.set_tx_grant(device, TxGrant::Waived);
     }
     /// Record the station's POSITIVE transmit outcome for a sign-in auto-granted `device` (the
-    /// 2026-10-23 sign-in decision): `Held { until }` for its 15-minute window, or `Waived` for a
-    /// verified second factor or an Approve at the shack. Writing nothing here for a sign-in-granted
+    /// 2026-10-23 sign-in decision): `Held { until }` for its 15-minute window, or `Waived` for an
+    /// Approve at the shack. Writing nothing here for a sign-in-granted
     /// device leaves it HELD (fail-closed): the gate reads `is_signin_granted` and finds no waiver.
     fn set_tx_grant(&self, device: &str, grant: TxGrant) {
         if let Ok(mut c) = self.core.lock() {
@@ -372,7 +372,7 @@ impl Authority {
     /// Whether the station holds `device` from transmit at `now`. Every controller is asked here;
     /// candidacy comes from RECORDED provenance, never the connection's transport: a device in the
     /// LAN book (`is_lan_device`) is never held. FAIL-CLOSED on every uncertainty:
-    /// - a positive local `Waived` record (a verified MFA sign-in, or an Approve at the shack) frees
+    /// - a positive local `Waived` record (an Approve at the shack) frees
     ///   at once, even before the provenance list has loaded;
     /// - the list UNKNOWN (`None`, no list heard yet) → HELD: an empty set must not read as "not
     ///   sign-in-added", so an account-road controller waits until the list confirms it;
@@ -383,8 +383,8 @@ impl Authority {
     fn tx_held_for(&self, device: &str, grants: &BTreeMap<String, TxGrant>, now: Instant) -> bool {
         // A device paired or enrolled on the station's OWN network (the LAN book) is locally
         // trusted — recorded provenance, not transport — so it is never held, even before the
-        // account list loads. A local positive waiver (verified MFA, or an Approve at the shack)
-        // likewise frees at once.
+        // account list loads. A local positive waiver (an Approve at the shack) likewise frees at
+        // once.
         if self.is_lan_device(device) || matches!(grants.get(device), Some(TxGrant::Waived)) {
             return false;
         }

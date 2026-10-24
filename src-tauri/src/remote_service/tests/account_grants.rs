@@ -663,7 +663,7 @@ async fn granting_on_sign_in_a_browser_signed_in_as_the_owner_is_granted_with_no
 /// ★ THE 2026-10-23 SIGN-IN DECISION: a device granted control on its sign-in carries a 15-minute
 /// transmit hold. The grant records a `Held` against the device, and the service lists it as
 /// sign-in-added, so the engine's arm gate holds it while it controls (proved end to end in the
-/// operations transmit tests). The fixture's proof carries no MFA, so it is held, not waived.
+/// operations transmit tests). A sign-in never waives it; only an Approve at the shack does.
 #[tokio::test(flavor = "multi_thread")]
 async fn granting_on_sign_in_holds_the_devices_transmit() {
     let cloud = fake_cloud().await;
@@ -677,7 +677,7 @@ async fn granting_on_sign_in_holds_the_devices_transmit() {
             .unwrap()
             .operations
             .tx_held(BROWSER, std::time::Instant::now()),
-        "a sign-in-granted device with no MFA is held from transmit"
+        "a sign-in-granted device is held from transmit"
     );
 }
 
