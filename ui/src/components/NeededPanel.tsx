@@ -261,6 +261,14 @@ export interface NeededPanelProps {
   /** Open Settings at a section id (see settings/registry.ts). Omitted in the pop-out window
    * (no cross-window nav) → the phone-source line stays plain text there. */
   onOpenSettings?: (target: string) => void
+  /** A contest is running (the engine's `fieldDay.running`, the one contest-active signal) — the
+   *  moment the demand gate works against the operator: contesting wants everyone on the air, not
+   *  only unworked needs. Shows the "all spots" bar below; absent/false, nothing changes. */
+  contestActive?: boolean
+  /** Surface the un-gated Spots view (all spots on the air, where SSB on the band is one chip
+   *  away). Wired by the host — the view/pane switch to Spots. Shown only with `contestActive`;
+   *  omit it and the bar never renders. */
+  onShowAllSpots?: () => void
   /** Hosted as a PANE of another screen rather than as the Needed view or its pop-out — see
    *  NeededPane. Both of those pass none and are exactly as they were. */
   pane?: NeededPane
@@ -333,6 +341,8 @@ export function NeededPanel({
   onPopOut,
   phoneSource,
   onOpenSettings,
+  contestActive,
+  onShowAllSpots,
   pane,
 }: NeededPanelProps) {
   // An evidence line's distances ("heard by K9LC (EN52, 26 km)") in the operator's units.
@@ -548,6 +558,26 @@ export function NeededPanel({
           <span>{t('needed.autoPop.label')}</span>
         </label>}
       </div>
+
+      {/* CONTEST SHOW-ALL-SSB. During a contest the board's demand gate — only stations
+          you still NEED surface — hides exactly what a contester is scanning for: everyone on the
+          air. Rather than relax the gate here (this board only ever holds needs, not the firehose),
+          this bar, shown only while a contest runs, points one click at the un-gated Spots view,
+          where "Phone" is a chip. It is a visible, understandable mode, not a silent swap; outside a
+          contest it does not render and the board is exactly as it was. */}
+      {contestActive && onShowAllSpots && (
+        <div className="np-phone-src">
+          {t('needed.contest.allSpots.note')}{' '}
+          <button
+            type="button"
+            className="np-popout"
+            onClick={onShowAllSpots}
+            title={t('needed.contest.allSpots.title')}
+          >
+            {t('needed.contest.allSpots.label')}
+          </button>
+        </div>
+      )}
 
       {/* Phone-source liveness — Phone needs come ONLY from the human DX-cluster node, so a
           dead/absent source explains an empty Phone column at a glance (RBN covers CW/digital). */}

@@ -20681,7 +20681,7 @@ button.cq-skiptx1.on {
 /* Spots panel — the raw firehose table (9 cols: age · call · entity · state · band · freq ·
    mode · spotter · comment). Reuses the Needed board's row chrome, own column template. */
 .sp-grid .np-row {
-  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr);
+  grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(70px, 1fr) minmax(110px, 1.6fr) 32px;
 }
 /* ── THE TWO BOARDS AS PHONE AND CW PANES (#345) ──────────────────────────────────────────
    The Spots and Needed boards render inside a CockpitPaneFrame on the Phone and CW cockpits, as
@@ -20768,7 +20768,19 @@ button.cq-skiptx1.on {
   text-overflow: ellipsis;
 }
 .np-board .sp-grid .np-row {
-  grid-template-columns: 40px minmax(72px, 1fr) minmax(64px, 1.2fr) 30px 42px 60px 52px minmax(0, 0.8fr) minmax(0, 1.4fr);
+  grid-template-columns: 40px minmax(72px, 1fr) minmax(64px, 1.2fr) 30px 42px 60px 52px minmax(0, 0.8fr) minmax(0, 1.4fr) 30px;
+}
+/* The per-row Spot action (📢 → SpotDialog) sits in its own trailing cell. The compact
+   Connect box (`.cn-spots`, which drops columns to fit a rail) has no room for it and its grid
+   templates do not include the column, so the action is hidden there — the board's view and the
+   Phone/CW panes carry it. */
+.cn-spots [data-col='spot'] {
+  display: none;
+}
+.sp-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 /* ── THE SPOTS BOARD AS A CONNECT BOX (components/connect/SpotsBox.tsx) ───────────────────
    The same board as a pane (`.np-board`, above), in a Connect slot: a rail from 200 to 720 px
