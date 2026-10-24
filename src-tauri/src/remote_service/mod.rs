@@ -441,7 +441,12 @@ const MAX_REMEMBERED: usize = 8;
 /// store can block (a locked keychain can prompt).
 enum Persist {
     /// The controller loaded or created this pairing; later decisions apply to it.
-    Bound(Binding, Option<vault::State>, Option<Box<vault::Pins>>),
+    Bound(
+        Binding,
+        Option<vault::State>,
+        Option<Box<vault::Pins>>,
+        Option<Box<vault::Waivers>>,
+    ),
     /// Remote was turned on and is connecting.
     Enabled,
     /// Remote went off for a reason that ends access: Revoke station access, a cancelled pairing,
@@ -478,6 +483,12 @@ enum Persist {
     },
     /// The browsers the service lists as approved right now: a pin for any other is forgotten.
     Listed(Vec<String>),
+    /// The operator waived this sign-in device's transmit hold at the shack (Approve, or Allow to
+    /// transmit). Kept for a restart until the device is revoked, removed or no longer listed.
+    Waive { device_id: String },
+    /// The devices the service lists now as added by their own sign-in, approved and unexpired,
+    /// less any removed here and not yet told to the service: a waiver for any other is forgotten.
+    SignedIn(Vec<String>),
 }
 /// What the vault must hold next. Each write is a whole record, so only the latest of each matters.
 enum Write {
@@ -486,6 +497,9 @@ enum Write {
     /// The pins' own entry (A5).
     SavePins(vault::Pins),
     RemovePins,
+    /// The shack's waivers' own entry.
+    SaveWaivers(vault::Waivers),
+    RemoveWaivers,
 }
 /// The record for the current pairing, kept in step with every decision.
 #[derive(Default)]
@@ -497,18 +511,78 @@ struct Remembered {
     /// permission's: the switches, take over and Turn off leave it; approving at the radio sets it
     /// and revoking the browser removes it.
     pins: BTreeMap<String, String>,
+    /// The sign-in devices whose transmit hold the operator waived at the shack, kept in the vault's
+    /// waivers entry. Only an explicit waiver adds one; whatever ends the approval it came with takes
+    /// it out: a revoke, a removal, a list that no longer names the device as a sign-in device
+    /// (expired, replaced, removed at the service), a pairing removed or replaced, and an off that
+    /// ends access. Turn off and take over only pause, and leave it, as they leave the grants.
+    waivers: std::collections::BTreeSet<String>,
 }
 impl Remembered {
     /// Apply one decision. Returns the writes it calls for: at most one for each entry, and none
     /// when nothing changed.
     fn apply(&mut self, decision: Persist) -> Vec<Write> {
         let pins = self.apply_pins(&decision);
-        self.apply_state(decision).into_iter().chain(pins).collect()
+        let waivers = self.apply_waivers(&decision);
+        self.apply_state(decision)
+            .into_iter()
+            .chain(pins)
+            .chain(waivers)
+            .collect()
+    }
+    fn apply_waivers(&mut self, decision: &Persist) -> Option<Write> {
+        let before = self.waivers.clone();
+        match decision {
+            Persist::Bound(bound, _, _, waivers) => {
+                self.waivers = waivers
+                    .as_ref()
+                    .filter(|w| w.binding == *bound)
+                    .map(|w| w.devices.clone())
+                    .unwrap_or_default();
+                return None;
+            }
+            Persist::Removed => {
+                self.waivers.clear();
+                return Some(Write::RemoveWaivers);
+            }
+            Persist::Off | Persist::ClearGrants => self.waivers.clear(),
+            Persist::Browser {
+                device_id,
+                control: Some(false),
+                ..
+            } => {
+                self.waivers.remove(device_id);
+            }
+            // At most what the service lists for a station: past that, a waiver is not kept, and the
+            // device is held after a restart.
+            Persist::Waive { device_id } if self.waivers.len() < MAX_REMEMBERED => {
+                self.waivers.insert(device_id.clone());
+            }
+            Persist::Listed(approved) | Persist::SignedIn(approved) => {
+                self.waivers.retain(|id| approved.contains(id))
+            }
+            Persist::Approvals(approvals) => self
+                .waivers
+                .retain(|id| approvals.iter().any(|(listed, _)| listed == id)),
+            _ => return None,
+        }
+        if self.waivers == before {
+            return None;
+        }
+        let binding = self.binding.clone()?;
+        Some(if self.waivers.is_empty() {
+            Write::RemoveWaivers
+        } else {
+            Write::SaveWaivers(vault::Waivers {
+                binding,
+                devices: self.waivers.clone(),
+            })
+        })
     }
     fn apply_pins(&mut self, decision: &Persist) -> Option<Write> {
         let before = self.pins.clone();
         match decision {
-            Persist::Bound(bound, _, pins) => {
+            Persist::Bound(bound, _, pins, _) => {
                 self.pins = pins
                     .as_ref()
                     .filter(|p| p.binding == *bound)
@@ -550,7 +624,7 @@ impl Remembered {
     }
     fn apply_state(&mut self, decision: Persist) -> Option<Write> {
         match decision {
-            Persist::Bound(bound, state, _) => {
+            Persist::Bound(bound, state, ..) => {
                 self.state = state.filter(|s| s.binding == bound);
                 self.binding = Some(bound);
                 return None;
@@ -560,7 +634,10 @@ impl Remembered {
                 self.state = None;
                 return Some(Write::Remove);
             }
-            Persist::Pin { .. } | Persist::Listed(_) => return None,
+            Persist::Pin { .. }
+            | Persist::Listed(_)
+            | Persist::Waive { .. }
+            | Persist::SignedIn(_) => return None,
             _ => {}
         }
         let bound = self.binding.clone()?;
@@ -621,9 +698,12 @@ impl Remembered {
                 // A grant holding nothing (an older build's remote logging alone) goes too.
                 listed.is_some() && g.control
             }),
-            Persist::Bound(..) | Persist::Removed | Persist::Pin { .. } | Persist::Listed(_) => {
-                return None
-            }
+            Persist::Bound(..)
+            | Persist::Removed
+            | Persist::Pin { .. }
+            | Persist::Listed(_)
+            | Persist::Waive { .. }
+            | Persist::SignedIn(_) => return None,
         }
         if self.state.as_ref() == Some(&state) {
             return None;
@@ -1544,7 +1624,7 @@ impl Controller {
             }),
             Err(error) => {
                 if let Ok(mut control) = self.control.lock() {
-                    control.remember(Persist::Bound(binding, None, None));
+                    control.remember(Persist::Bound(binding, None, None, None));
                 }
                 self.reflect("disabled");
                 phase(&self.status, "disabled", Some(error));
@@ -1560,6 +1640,30 @@ impl Controller {
                     .iter()
                     .all(|(id, key)| identifier(id) && pin_shape(key))
         });
+        // The waivers given at the shack before the restart. One that is locked, unreadable, out of
+        // shape or another pairing's waives nothing; nor does it for a device removed here and not
+        // yet told to the service (or with the removals unreadable), nor for one this station no
+        // longer remembers granting, by its station control or its pin. The list still decides each
+        // one before it is free (`Authority::tx_held_for`).
+        let waivers = self.vault.waivers().ok().flatten().filter(|w| {
+            w.binding == binding
+                && w.devices.len() <= MAX_REMEMBERED
+                && w.devices.iter().all(|id| identifier(id))
+        });
+        let waivers = waivers.map(|mut w| {
+            w.devices.retain(|id| {
+                let granted = remembered
+                    .as_ref()
+                    .is_some_and(|s| s.grants.iter().any(|g| g.device_id == *id && g.control))
+                    || pins.as_ref().is_some_and(|p| p.keys.contains_key(id));
+                let removed = self
+                    .removals
+                    .as_ref()
+                    .is_none_or(|removals| removals.contains(id));
+                granted && !removed
+            });
+            w
+        });
         // S3-M1: this pairing's signing key, made here once for a pairing from before it existed.
         let (key, identity) = self.station_key(&binding);
         // Decide under the lock BEFORE the pairing becomes visible, so a Turn off that arrives
@@ -1572,7 +1676,17 @@ impl Controller {
             control.station_key = key;
             control.station_identity = identity;
             control.key_refused = false;
-            control.remember(Persist::Bound(binding, remembered, pins.map(Box::new)));
+            if let Some(waivers) = &waivers {
+                control
+                    .operations
+                    .restore_transmit_waivers(waivers.devices.iter().cloned());
+            }
+            control.remember(Persist::Bound(
+                binding,
+                remembered,
+                pins.map(Box::new),
+                waivers.map(Box::new),
+            ));
             if enabled {
                 control.start();
                 Some(control.generation)
@@ -2000,6 +2114,12 @@ impl Controller {
         // the operator stood at the radio and let this device in, which is the shack tap the hold is
         // waived by. A positive waiver, so a sign-in device the operator approved transmits at once.
         control.operations.waive_transmit(&device_id);
+        // Kept for a restart, for a device the hold applies to: one added by its own sign-in.
+        if device.added_by.as_deref() == Some("account") {
+            control.remember(Persist::Waive {
+                device_id: device_id.clone(),
+            });
+        }
         control.remember(Persist::Pin {
             device_id,
             key: pin,
@@ -2040,7 +2160,7 @@ impl Controller {
             .account
             .unconfirmed
             .contains_key(device_id);
-        let control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+        let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
         if control.generation != generation || control.operations.epoch() != epoch {
             return Ok(());
         }
@@ -2061,6 +2181,9 @@ impl Controller {
             return Err("notSignInDevice");
         }
         control.operations.waive_transmit(device_id);
+        control.remember(Persist::Waive {
+            device_id: device_id.to_string(),
+        });
         Ok(())
     }
     /// The keys and credential this station binds with: those staged for it already, or new ones,
@@ -2142,7 +2265,7 @@ impl Controller {
             control.station_key = key;
             control.station_identity = identity;
             control.key_refused = false;
-            control.remember(Persist::Bound(binding.clone(), None, None));
+            control.remember(Persist::Bound(binding.clone(), None, None, None));
         }
         self.binding = Some(binding);
         self.pending = None;
@@ -2248,7 +2371,7 @@ impl Controller {
         // durable list on every list, so a sign-in device is held FAIL-CLOSED even if its own grant
         // record is missing (`Authority::tx_held_for`).
         let mut confirmed = None;
-        if let Ok(control) = self.control.lock() {
+        if let Ok(mut control) = self.control.lock() {
             let signed_in: Vec<&Device> = devices
                 .iter()
                 .filter(|d| {
@@ -2266,8 +2389,20 @@ impl Controller {
                 .filter(|d| d.notified == 1)
                 .map(|d| d.id.clone())
                 .collect();
+            // A waiver kept for a restart lasts only while its device is one of these, and not
+            // removed here; with the removals unreadable, none does.
+            let waivable = signed_in
+                .iter()
+                .filter(|d| {
+                    self.removals
+                        .as_ref()
+                        .is_some_and(|removals| !removals.contains(&d.id))
+                })
+                .map(|d| d.id.clone())
+                .collect();
             control.operations.set_signin_devices(signin);
             control.operations.set_notified_devices(notified.clone());
+            control.remember(Persist::SignedIn(waivable));
             confirmed = Some(notified);
         }
         let waiting: Vec<&Device> = {
@@ -2772,7 +2907,7 @@ impl Controller {
                     control.station_identity = identity;
                     control.key_refused = false;
                     // A new pairing starts with nothing remembered: off, no grants, no pins.
-                    control.remember(Persist::Bound(binding.clone(), None, None));
+                    control.remember(Persist::Bound(binding.clone(), None, None, None));
                     if let Some((device_id, approval, key)) = paired {
                         control.remember(Persist::Browser {
                             device_id: device_id.clone(),
@@ -3061,16 +3196,17 @@ impl Controller {
 /// browser is approved again at the radio before it streams.
 fn write_remembered(vault: Arc<dyn Vault>, mut writes: mpsc::UnboundedReceiver<Write>) {
     while let Some(first) = writes.blocking_recv() {
-        let (mut state, mut pins) = (None, None);
+        let (mut state, mut pins, mut waivers) = (None, None, None);
         let mut next = Some(first);
         while let Some(write) = next {
             match write {
                 Write::Save(_) | Write::Remove => state = Some(write),
                 Write::SavePins(_) | Write::RemovePins => pins = Some(write),
+                Write::SaveWaivers(_) | Write::RemoveWaivers => waivers = Some(write),
             }
             next = writes.try_recv().ok();
         }
-        for write in [state, pins].into_iter().flatten() {
+        for write in [state, pins, waivers].into_iter().flatten() {
             match write {
                 Write::Save(state) => {
                     if vault.save_state(&state).is_err() {
@@ -3087,6 +3223,15 @@ fn write_remembered(vault: Arc<dyn Vault>, mut writes: mpsc::UnboundedReceiver<W
                 }
                 Write::RemovePins => {
                     let _ = vault.remove_pins();
+                }
+                // A waiver that could not be kept must not survive to be restored.
+                Write::SaveWaivers(waivers) => {
+                    if vault.save_waivers(&waivers).is_err() {
+                        let _ = vault.remove_waivers();
+                    }
+                }
+                Write::RemoveWaivers => {
+                    let _ = vault.remove_waivers();
                 }
             }
         }

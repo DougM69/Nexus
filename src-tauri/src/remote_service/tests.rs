@@ -201,6 +201,31 @@ impl Vault for MemoryVault {
         self.values.lock().unwrap().remove("pins");
         Ok(())
     }
+    fn waivers(&self) -> Result<Option<vault::Waivers>, &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        Ok(self
+            .values
+            .lock()
+            .unwrap()
+            .get("waivers")
+            .and_then(|v| serde_json::from_str(v).ok()))
+    }
+    fn save_waivers(&self, waivers: &vault::Waivers) -> Result<(), &'static str> {
+        if self.fail.load(Ordering::Relaxed) {
+            return Err("credentialStoreUnavailable");
+        }
+        self.values
+            .lock()
+            .unwrap()
+            .insert("waivers".into(), serde_json::to_string(waivers).unwrap());
+        Ok(())
+    }
+    fn remove_waivers(&self) -> Result<(), &'static str> {
+        self.values.lock().unwrap().remove("waivers");
+        Ok(())
+    }
     fn station_key(&self) -> Result<Option<vault::StationKey>, &'static str> {
         if self.fail.load(Ordering::Relaxed) {
             return Err("credentialStoreUnavailable");

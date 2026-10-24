@@ -88,6 +88,12 @@
 //! forgotten. Its own entry, not a field on the station's, for the same reason as the held roads'
 //! ([`PairedStation`] is `deny_unknown_fields`). It holds no secret. One that is missing or does not
 //! read names no station, so a station reads as paired with a code only while this entry says so.
+//!
+//! One more belongs to the pairing, as the pins do: the devices whose sign-in transmit hold the
+//! operator waived at the shack (Approve, or Allow to transmit), so a restart does not hold them
+//! again. Its own entry for the same reason as the pins, and bound to its pairing like them. It is
+//! only ever a waiver: a held device is never written to it. One that is missing, locked or does
+//! not read waives nothing, and every sign-in device is then held as it would be with no record.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -96,6 +102,7 @@ const ACCOUNT: &str = "pairing";
 const STATE: &str = "state";
 const PINS: &str = "pins";
 const STATION_KEY: &str = "station-key";
+const WAIVERS: &str = "waivers";
 const LAN_KEY: &str = "lan-key";
 const LAN_DEVICES: &str = "lan-devices";
 const PAIRED_STATIONS: &str = "lan-stations";
@@ -186,6 +193,15 @@ pub struct State {
 pub struct Pins {
     pub binding: Binding,
     pub keys: BTreeMap<String, String>,
+}
+
+/// The devices whose sign-in transmit hold the operator waived at the shack, for exactly one
+/// pairing, by device id.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Waivers {
+    pub binding: Binding,
+    pub devices: std::collections::BTreeSet<String>,
 }
 
 /// The station's signing key for exactly one pairing (S3-M1): its PKCS#8 document, lowercase hex.
@@ -476,6 +492,9 @@ pub trait Vault: Send + Sync {
     fn pins(&self) -> Result<Option<Pins>, &'static str>;
     fn save_pins(&self, pins: &Pins) -> Result<(), &'static str>;
     fn remove_pins(&self) -> Result<(), &'static str>;
+    fn waivers(&self) -> Result<Option<Waivers>, &'static str>;
+    fn save_waivers(&self, waivers: &Waivers) -> Result<(), &'static str>;
+    fn remove_waivers(&self) -> Result<(), &'static str>;
     fn station_key(&self) -> Result<Option<StationKey>, &'static str>;
     fn save_station_key(&self, key: &StationKey) -> Result<(), &'static str>;
     fn remove_station_key(&self) -> Result<(), &'static str>;
@@ -576,6 +595,26 @@ impl Vault for SystemVault {
     }
     fn remove_pins(&self) -> Result<(), &'static str> {
         match entry(PINS)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn waivers(&self) -> Result<Option<Waivers>, &'static str> {
+        match entry(WAIVERS)?.get_password() {
+            // Unreadable waivers waive nothing: every sign-in device is held.
+            Ok(value) => Ok(serde_json::from_str(&value).ok()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("credentialStoreUnavailable"),
+        }
+    }
+    fn save_waivers(&self, waivers: &Waivers) -> Result<(), &'static str> {
+        let value = serde_json::to_string(waivers).map_err(|_| "credentialStoreUnavailable")?;
+        entry(WAIVERS)?
+            .set_password(&value)
+            .map_err(|_| "credentialStoreUnavailable")
+    }
+    fn remove_waivers(&self) -> Result<(), &'static str> {
+        match entry(WAIVERS)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err("credentialStoreUnavailable"),
         }

@@ -2032,3 +2032,278 @@ async fn allow_to_transmit_overtaken_by_a_take_over_or_turn_off_leaves_the_devic
         );
     }
 }
+
+// ---- A shack waiver across a restart -------------------------------------------------------------
+
+/// The owner's browser, its notice never confirmed, beside a computer added at the shack: the
+/// service then answers an Approve with the list as it was, the device approved.
+fn rows() -> Vec<serde_json::Value> {
+    let mut shack = computer_row(&token("computer"), "operate");
+    shack["addedBy"] = "shack".into();
+    vec![notified_row(0), shack]
+}
+/// The devices the shack's waivers entry in `vault` names, once the vault writer (its own thread)
+/// has written `want`; what it names after a while otherwise.
+async fn waivers_become(vault: &MemoryVault, want: &[&str]) -> Vec<String> {
+    let names = || -> Vec<String> {
+        Vault::waivers(vault)
+            .unwrap()
+            .map(|w| w.devices.into_iter().collect())
+            .unwrap_or_default()
+    };
+    for _ in 0..100 {
+        if names() == want {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    names()
+}
+/// Launch again from `vault`, granting on a sign-in, and wait until the pairing has loaded.
+async fn restarted(cloud: &FakeCloud, vault: &MemoryVault) -> Service {
+    let service = launch_granting_on_sign_in(cloud, vault);
+    eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+    service
+}
+
+/// ★ A WAIVER AT THE SHACK OUTLASTS A RESTART: a sign-in device whose owner notice the service never
+/// confirmed is held with no end. Allow to transmit, or Approve, at the shack waives that hold, and
+/// after the station restarts the device is still free once the service lists it as before.
+/// CONTROL: with no waiver it is held after the restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_waiver_given_at_the_shack_outlasts_a_restart() {
+    for how in ["none", "allow", "approve"] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        let first = if how == "approve" {
+            launch_not_granting_on_sign_in(&cloud, &vault)
+        } else {
+            launch_granting_on_sign_in(&cloud, &vault)
+        };
+        let _ = listed(&first, &cloud, rows()).await;
+        assert!(held_at(&first, past_the_window()), "{how}: premise: held");
+        match how {
+            "allow" => {
+                first.action(allow(BROWSER)).await.unwrap();
+            }
+            "approve" => {
+                first
+                    .action(Action::Device {
+                        device_id: BROWSER.into(),
+                        approve: true,
+                        key: Some(sha256(&key("browser"))),
+                        kind: Some(Kind::Browser),
+                    })
+                    .await
+                    .unwrap();
+            }
+            _ => {}
+        }
+        let waived = how != "none";
+        assert_eq!(!held_at(&first, past_the_window()), waived, "{how}: before");
+        // Only a waiver is kept: a device held, here in no window at all, never is.
+        let want: &[&str] = if waived { &[BROWSER] } else { &[] };
+        assert_eq!(waivers_become(&vault, want).await, want, "{how}: kept");
+        drop(first);
+
+        let service = restarted(&cloud, &vault).await;
+        let _ = listed(&service, &cloud, rows()).await;
+        assert_eq!(
+            !held_at(&service, past_the_window()),
+            waived,
+            "{how}: after the restart"
+        );
+    }
+}
+
+/// A sign-in browser allowed to transmit at the shack, its waiver kept in `vault`.
+async fn allowed(cloud: &FakeCloud, vault: &MemoryVault) -> Service {
+    let service = launch_granting_on_sign_in(cloud, vault);
+    let _ = listed(&service, cloud, rows()).await;
+    service.action(allow(BROWSER)).await.unwrap();
+    assert_eq!(
+        waivers_become(vault, &[BROWSER]).await,
+        [BROWSER],
+        "premise"
+    );
+    service
+}
+
+/// ★ FAIL-CLOSED ON WHAT WAS KEPT: a waivers entry that does not read, is out of shape, belongs to
+/// another station, account or service, or names another device, restores no waiver, and the
+/// device is held after the restart; nothing panics. CONTROL: the entry as the station kept it
+/// frees the device.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_waivers_entry_that_does_not_hold_restores_nothing() {
+    type Entry = fn(&mut serde_json::Value) -> String;
+    let cases: [(&str, Entry); 9] = [
+        ("as kept", |w| w.to_string()),
+        ("unreadable", |_| "{\"binding\":".into()),
+        ("not JSON", |_| "waived".into()),
+        ("devices not a list", |w| {
+            w["devices"] = "all".into();
+            w.to_string()
+        }),
+        ("a field it does not know", |w| {
+            w["held"] = json!([]);
+            w.to_string()
+        }),
+        ("another station", |w| {
+            w["binding"]["stationId"] = "20000000-0000-4000-8000-000000000001".into();
+            w.to_string()
+        }),
+        ("another account", |w| {
+            w["binding"]["accountId"] = "30000000-0000-4000-8000-000000000001".into();
+            w.to_string()
+        }),
+        ("another device", |w| {
+            w["devices"] = json!(["10000000-0000-4000-8000-0000000000ff"]);
+            w.to_string()
+        }),
+        ("not a device id", |w| {
+            w["devices"] = json!(["10000000-0000-4000-8000-00000000000b", "not an id"]);
+            w.to_string()
+        }),
+    ];
+    for (what, entry) in cases {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        drop(allowed(&cloud, &vault).await);
+        let mut kept: serde_json::Value =
+            serde_json::from_str(&vault.values.lock().unwrap()["waivers"]).unwrap();
+        let entry = entry(&mut kept);
+        vault.values.lock().unwrap().insert("waivers".into(), entry);
+        let service = restarted(&cloud, &vault).await;
+        let _ = listed(&service, &cloud, rows()).await;
+        assert_eq!(
+            held_at(&service, past_the_window()),
+            what != "as kept",
+            "{what}"
+        );
+    }
+}
+
+/// ★ CHECKED AGAIN AT LOAD AGAINST WHAT THE STATION REMEMBERS: a kept waiver restores nothing for a
+/// device whose removal here still waits for the service, nor for one the station no longer
+/// remembers granting (no station control and no pin kept for it). Held after the restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_kept_waiver_is_checked_against_the_device_at_load() {
+    for what in ["as kept", "removal waiting", "nothing granted"] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        drop(allowed(&cloud, &vault).await);
+        match what {
+            "removal waiting" => {
+                vault
+                    .save_revokes(&vault::Revokes {
+                        station_id: STATION.into(),
+                        devices: vec![BROWSER.into()],
+                    })
+                    .unwrap();
+                cloud.refusing_removals.store(true, Ordering::SeqCst);
+            }
+            "nothing granted" => {
+                let mut values = vault.values.lock().unwrap();
+                values.remove("pins");
+                let mut state: serde_json::Value = serde_json::from_str(&values["state"]).unwrap();
+                state["grants"] = json!([]);
+                values.insert("state".into(), state.to_string());
+            }
+            _ => {}
+        }
+        let service = restarted(&cloud, &vault).await;
+        let _ = listed(&service, &cloud, rows()).await;
+        assert_eq!(
+            held_at(&service, past_the_window()),
+            what != "as kept",
+            "{what}"
+        );
+    }
+}
+
+/// ★ WHAT ENDS AN APPROVAL ENDS ITS KEPT WAIVER: revoking the browser's station control, removing
+/// it, a list that no longer names it as a sign-in device (added at the shack, expired, or not
+/// approved), Cancel, and Revoke station access each take the waiver out of what the station keeps,
+/// so a restart cannot bring it back; where the pairing remains, the device is held after the
+/// restart. Turn off only pauses, as it pauses the grants: the waiver is kept (the control).
+#[tokio::test(flavor = "multi_thread")]
+async fn whatever_ends_an_approval_ends_its_kept_waiver() {
+    let relisted = |field: &'static str, value: serde_json::Value| {
+        move || {
+            let mut rows = rows();
+            rows[0][field] = value.clone();
+            rows
+        }
+    };
+    for what in [
+        "Turn off",
+        "revoke station control",
+        "remove",
+        "remove, the service unreachable",
+        "added at the shack",
+        "expired",
+        "not approved",
+        "Cancel",
+        "Revoke station access",
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        let service = allowed(&cloud, &vault).await;
+        let remove = Action::Device {
+            device_id: BROWSER.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        };
+        match what {
+            "Turn off" => {
+                service.action(Action::Disable {}).await.unwrap();
+            }
+            "revoke station control" => {
+                service
+                    .action(Action::StationPermission {
+                        device_id: BROWSER.into(),
+                        allow: false,
+                    })
+                    .await
+                    .unwrap();
+            }
+            "remove" => {
+                service.action(remove).await.unwrap();
+            }
+            "remove, the service unreachable" => {
+                cloud.refusing_removals.store(true, Ordering::SeqCst);
+                service.action(remove).await.unwrap();
+            }
+            "Cancel" => {
+                let _ = service.action(Action::Cancel {}).await;
+            }
+            "Revoke station access" => {
+                service.action(Action::Forget {}).await.unwrap();
+            }
+            listed_as => {
+                let rows = match listed_as {
+                    "added at the shack" => relisted("addedBy", "shack".into())(),
+                    "expired" => relisted("expiresAt", 1.into())(),
+                    _ => relisted("approved", 0.into())(),
+                };
+                *cloud.devices.lock().unwrap() = json!({ "devices": rows }).to_string();
+                service.action(Action::Refresh {}).await.unwrap();
+            }
+        }
+        let kept = what == "Turn off";
+        let want: &[&str] = if kept { &[BROWSER] } else { &[] };
+        assert_eq!(waivers_become(&vault, want).await, want, "{what}: kept");
+        drop(service);
+        if what == "Revoke station access" {
+            continue;
+        }
+        let service = restarted(&cloud, &vault).await;
+        let _ = listed(&service, &cloud, rows()).await;
+        assert_eq!(
+            held_at(&service, past_the_window()),
+            !kept,
+            "{what}: after the restart"
+        );
+    }
+}

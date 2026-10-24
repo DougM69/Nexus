@@ -154,10 +154,11 @@ struct Core {
     /// with an entry here is held or waived per the entry; a sign-in-granted device with NO entry is
     /// held (its grant never recorded a positive waiver/window). Written by
     /// `Controller::grant_vouched` (held with its window) and
-    /// `grant_approved` (waived at the shack); cleared on revoke. The engine's arm gate is set from
-    /// the CONTROLLING device's state at each lease event ([`Authority::apply_tx_hold`]). Monotonic;
-    /// a restart restores only the windows of the devices the service had confirmed it notified
-    /// ([`Authority::restore_transmit_windows`]), and every other sign-in device is held.
+    /// `grant_approved` (waived at the shack); a waiver is cleared on revoke. The engine's arm gate is
+    /// set from the CONTROLLING device's state at each lease event ([`Authority::apply_tx_hold`]). A
+    /// restart restores only the windows of the devices the service had confirmed it notified
+    /// ([`Authority::restore_transmit_windows`]) and the waivers given at the shack
+    /// ([`Authority::restore_transmit_waivers`]), and every other sign-in device is held.
     tx_grants: BTreeMap<String, TxGrant>,
 }
 /// What the station recorded for a sign-in auto-granted device's transmit (the 2026-10-23 sign-in
@@ -169,6 +170,9 @@ enum TxGrant {
     Held { until: Instant },
     /// Waived: an Approve at the shack. Free to transmit.
     Waived,
+    /// Waived at the shack before a restart, and kept for it (`vault::Waivers`). Free to transmit
+    /// only once the service's list is heard (`tx_held_for`): held until then.
+    Restored,
 }
 impl Default for Core {
     fn default() -> Self {
@@ -387,7 +391,7 @@ impl Authority {
             .filter_map(|device| {
                 let left = match c.tx_grants.get(device)? {
                     TxGrant::Held { until } => until.saturating_duration_since(now),
-                    TxGrant::Waived => Duration::ZERO,
+                    TxGrant::Waived | TxGrant::Restored => Duration::ZERO,
                 };
                 Some((device.clone(), left))
             })
@@ -411,11 +415,23 @@ impl Authority {
             }
         }
     }
+    /// Restore, at launch, the waivers given at the shack before the restart for `devices`, each
+    /// already checked against what the station remembers of it (`Controller::resume`). Over the
+    /// window kept with it, since the waiver came after that window. Each waits for the list
+    /// ([`TxGrant::Restored`]).
+    pub fn restore_transmit_waivers(&self, devices: impl IntoIterator<Item = String>) {
+        if let Ok(mut c) = self.core.lock() {
+            for device in devices {
+                c.tx_grants.insert(device, TxGrant::Restored);
+            }
+        }
+    }
     /// Whether the station holds `device` from transmit at `now`. Every controller is asked here;
     /// candidacy comes from RECORDED provenance, never the connection's transport: a device in the
     /// LAN book (`is_lan_device`) is never held. FAIL-CLOSED on every uncertainty:
     /// - a positive local `Waived` record (an Approve at the shack) frees
-    ///   at once, even before the provenance list has loaded;
+    ///   at once, even before the provenance list has loaded; one restored after a restart
+    ///   (`Restored`) frees only once the list has loaded;
     /// - the list UNKNOWN (`None`, no list heard yet) → HELD: an empty set must not read as "not
     ///   sign-in-added", so an account-road controller waits until the list confirms it;
     /// - the list loaded and this device NOT in it → free (confirmed not sign-in-added);
@@ -433,7 +449,7 @@ impl Authority {
         match self.signin_devices.lock().as_deref() {
             Ok(Some(set)) if !set.contains(device) => false,
             Ok(Some(_)) => match grants.get(device) {
-                Some(TxGrant::Waived) => false,
+                Some(TxGrant::Waived | TxGrant::Restored) => false,
                 Some(TxGrant::Held { until }) => now < *until || !self.is_notified(device),
                 None => true,
             },
@@ -625,6 +641,14 @@ impl Authority {
         let mut controller_revoked = false;
         for device in grants_revoked {
             c.control_grants.remove(&device);
+            // A revoke ends a waiver given at the shack with the grant (its record forgets it too,
+            // `Persist::Browser`): granted again, the device is held until it is waived again.
+            if matches!(
+                c.tx_grants.get(&device),
+                Some(TxGrant::Waived | TxGrant::Restored)
+            ) {
+                c.tx_grants.remove(&device);
+            }
             controller_revoked |= c.lease.as_ref().is_some_and(|l| l.device == device);
         }
         if controller_revoked {

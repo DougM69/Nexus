@@ -969,6 +969,66 @@ fn a_held_device_stays_held_past_its_window_until_the_notice_is_confirmed() {
     assert!(e.tx_enabled(), "it transmits once confirmed and elapsed");
 }
 
+/// ★ A WAIVER KEPT ACROSS A RESTART WAITS FOR THE LIST: restored at launch, it frees the device only
+/// once the service's list is heard and names it as a sign-in device; before that it is held, as
+/// any account-road controller is. CONTROL: a waiver given in this run frees at once.
+#[test]
+fn a_restored_waiver_frees_only_once_the_list_is_heard() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().set_tx_enabled(false);
+    let now = f.now();
+    f.authority.forget_signin_devices();
+    f.authority.restore_transmit_waivers([DEVICE.to_string()]);
+    let state = acquire_controls_version(&f, now, 3);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(e.remote_transmit_held(), "restored, list not heard: held");
+        e.set_tx_enabled(true);
+        assert!(!e.tx_enabled(), "transmit arm refused before the list");
+    }
+    signed_in(&f);
+    heartbeat(&f, state["leaseId"].as_str().unwrap(), now);
+    {
+        let mut e = f.engine.lock().unwrap();
+        assert!(!e.remote_transmit_held(), "the list names it: free");
+        e.set_tx_enabled(true);
+        assert!(e.tx_enabled(), "it may arm once the list is heard");
+    }
+
+    let control = Fixture::new();
+    control.authority.forget_signin_devices();
+    control.authority.waive_transmit(DEVICE);
+    assert!(
+        !control.authority.tx_held(DEVICE, control.now()),
+        "CONTROL: a waiver given in this run frees at once"
+    );
+}
+
+/// ★ A REVOKE ENDS A WAIVER: station control revoked and given back, a waived sign-in device (given
+/// in this run or restored) is held again until it is waived again. CONTROL: given back with no
+/// revoke between, it stays free.
+#[test]
+fn a_revoke_ends_a_waiver() {
+    for (restored, revoke) in [(false, false), (false, true), (true, true)] {
+        let f = Fixture::new();
+        signed_in(&f);
+        if restored {
+            f.authority.restore_transmit_waivers([DEVICE.to_string()]);
+        } else {
+            f.authority.waive_transmit(DEVICE);
+        }
+        if revoke {
+            f.authority.permit_station(DEVICE, false).unwrap();
+        }
+        f.authority.permit_station(DEVICE, true).unwrap();
+        assert_eq!(
+            f.authority.tx_held(DEVICE, f.now()),
+            revoke,
+            "restored {restored}, revoked {revoke}"
+        );
+    }
+}
+
 /// ★ NO OVER-HOLD OF A LOCAL CONTROLLER: a code-paired / LAN-enrolled controller (recorded in the
 /// LAN book) is FREE even before the account list has loaded (`None`). Its own recorded provenance
 /// clears it ahead of the fail-closed `None` arm — a normal local operator is never held in any

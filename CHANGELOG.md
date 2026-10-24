@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *Laptop* to transmit?" with the device's key, and **Allow to transmit** or **Not now**. Not now leaves
   it listening and tuning only, and the button stays in Settings ▸ Remote access. The held computer
   now says the same: listening and tuning only, until Allow to transmit is pressed at the shack.
+- **Approvals given at the shack now last across a station restart.** A device added by signing in
+  that you let transmit (with **Approve** or **Allow to transmit**) stays allowed after Nexus or the
+  station restarts, once the station has heard the device list again. Revoking its station control,
+  removing it, the device expiring or no longer being listed, cancelling, or revoking station access
+  ends that approval for good, and the device is held again until you allow it. Turning Remote off
+  only pauses it, as it pauses the device's other grants. Devices on your own network are unaffected.
 - **Spot a station from anywhere — now on the phone cockpit and on every Spots row.** The one-click
   Spot button, which opens the review popup that posts a DX-cluster spot from your station's login,
   used to live only on the Operate and DXpedition screens. It now also sits on the phone/SSB
