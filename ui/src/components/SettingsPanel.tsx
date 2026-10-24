@@ -809,6 +809,7 @@ const ROUTE_MODE_LABEL: Record<RouteMode, string> = Object.fromEntries(ROUTE_MOD
 // to read; `settings/registry.test.ts` cross-checks the two instead.
 type SettingsTab =
   | 'station'
+  | 'remote'
   | 'radio'
   | 'phone'
   | 'cw'
@@ -828,6 +829,7 @@ type SettingsTab =
 // every language.
 const SETTINGS_TABS: { id: SettingsTab; label: string; labelKey?: MessageKey }[] = [
   { id: 'station', label: 'Station', labelKey: 'settings.tabs.station' },
+  { id: 'remote', label: 'Remote', labelKey: 'settings.tabs.remote' },
   { id: 'radio', label: 'Radio', labelKey: 'settings.tabs.radio' },
   { id: 'phone', label: 'Phone' },
   { id: 'cw', label: 'CW' },
@@ -4924,7 +4926,7 @@ export function SettingsPanel({
           />
           )}
 
-          {tab === 'station' && (
+          {tab === 'remote' && (
           <fieldset className="settings-section" id="settings-remote-access">
             <legend>{t('remote.settingsLegend')}</legend>
             {/* One card (the operator, 2026-10-02): the streaming switch first, with the beta line beside

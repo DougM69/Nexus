@@ -38,6 +38,24 @@ export function RemoteStation() {
     }, 5000)
     return () => { mounted.current = false; requestEpoch.current++; pending.current = false; clearInterval(timer) }
   }, [])
+  // The sign-in / pairing buttons are dead until a station name is typed, and the field starts
+  // empty — so on arrival there is nothing to do and no hint that there should be. Prefill the
+  // field with the operator's callsign (the first-hour setting every station already has) so the
+  // buttons are live at once; the operator can still edit it, and if there is no callsign the
+  // inline hint in the unpaired block asks for a name. Done once, and only while the field is
+  // still untouched, so it never overwrites an edit.
+  const prefilled = useRef(false)
+  useEffect(() => {
+    void (async () => {
+      try {
+        const settings = await getSettings()
+        if (!mounted.current || prefilled.current) return
+        prefilled.current = true
+        const call = settings.mycall?.trim()
+        if (call) setName(prev => (prev === '' ? call : prev))
+      } catch { /* no settings: the hint covers an empty field */ }
+    })()
+  }, [])
   async function act(action: RemoteStationAction) {
     // Disable cancels the native socket even while an HTTP request is pending.
     if (pending.current && action.type !== 'disable' && action.type !== 'takeOverLogging') return
@@ -160,6 +178,9 @@ export function RemoteStation() {
         not linked. */}
     {phase === 'unpaired' && <>
       <label>{t('remote.stationName')}<input value={name} maxLength={48} onChange={event => setName(event.target.value)} /></label>
+      {/* The buttons below need a name; prefill usually supplies one, but when the station has no
+          callsign yet the field is empty, so say what to do rather than leave a dead button. */}
+      {!name.trim() && <p className="settings-hint">{t('remote.stationNameHint')}</p>}
       {/* Signing in binds the station with no code; pairing with a code stays beside it. */}
       {account?.signingIn ? <>
         <p role="status">{t('remote.account.signingIn')}</p>

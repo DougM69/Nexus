@@ -45,6 +45,7 @@ import {
   type BenchPosition,
   type ClientOver,
   type ClientStatus,
+  type PttRefusal,
 } from '../api'
 import { t } from '../i18n'
 import { lanReachLine } from '../remote-native/lanReach'
@@ -113,6 +114,23 @@ function endedLine(why: Extract<ClientOver, { phase: 'ended' }>['why']): string 
     case 'watchdog': return t('client.over.ended.watchdog')
     case 'routeChanged': return t('client.over.ended.routeChanged')
     case 'refused': return t('client.over.ended.refused')
+  }
+}
+
+/** Why a press of PTT here would not key the station, in a plain sentence. Literal calls, so the
+ *  catalog guard can see each key. The station decides whether a press keys; this only explains a
+ *  refusal the station reported, so the operator is not left pressing a dead key with no reason. */
+function refusalLine(refusal: PttRefusal): string {
+  switch (refusal) {
+    case 'notPhone': return t('client.ptt.refusal.notPhone')
+    case 'txDisabled': return t('client.ptt.refusal.txDisabled')
+    case 'outsideLicence': return t('client.ptt.refusal.outsideLicence')
+    case 'tuning': return t('client.ptt.refusal.tuning')
+    case 'otherOwner': return t('client.ptt.refusal.otherOwner')
+    case 'clockRepair': return t('client.ptt.refusal.clockRepair')
+    case 'noPresence': return t('client.ptt.refusal.noPresence')
+    case 'noFeed': return t('client.ptt.refusal.noFeed')
+    case 'noAudio': return t('client.ptt.refusal.noAudio')
   }
 }
 
@@ -294,6 +312,14 @@ export function ClientBanner() {
       {over && (
         <span className="client-banner-over" data-over={status.over?.phase}>
           {over}
+        </span>
+      )}
+      {/* Why a PTT press here would not key the station, from the client status. Beside the over
+          line, the banner's own place for what the station says of transmitting; it never covers
+          Stop. Absent on an older station build, so nothing shows then. */}
+      {status.pttRefusal && (
+        <span className="client-banner-over" data-ptt-refusal={status.pttRefusal}>
+          {refusalLine(status.pttRefusal)}
         </span>
       )}
       {status.udpBlocked && <span className="client-banner-over">{t('client.banner.udpBlocked')}</span>}

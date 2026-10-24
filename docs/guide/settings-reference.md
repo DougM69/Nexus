@@ -1,6 +1,6 @@
 # Settings reference
 
-Settings is organized into ten tabs. Only the active tab renders, so typing in
+Settings is organized into eleven tabs. Only the active tab renders, so typing in
 one field doesn't lag the whole panel. **Save** at the bottom applies your
 changes; most take effect live (a few say "takes effect on restart", and a few
 apply the instant you touch them — those say so too).
@@ -11,8 +11,8 @@ leaving a dead button with no reason and no fix.
 
 The tabs, in the order they appear:
 
-[Station](#station) · [Radio](#radio) · [Phone](#phone) · [CW](#cw) ·
-[Digital](#digital) · [Spots & Alerts](#spots--alerts) ·
+[Station](#station) · [Remote](#remote) · [Radio](#radio) · [Phone](#phone) ·
+[CW](#cw) · [Digital](#digital) · [Spots & Alerts](#spots--alerts) ·
 [Logging & Connectors](#logging--connectors) · [Contesting](#contesting) ·
 [Appearance](#appearance) · [Config](#config)
 
@@ -74,6 +74,14 @@ Your operator identity, license privileges, and default frequency.
 *The right-hand half of Operator & Radio in Nexus 1.10.3 — callsign, grid and
 operator name sit to the left of these. The values shown are one station's, not
 recommendations.*
+
+---
+
+## Remote
+
+Signing this station in to Nexus Remote, pairing it with a browser or another computer, and
+approving the devices that connect. One card, with the older pairing and permission options
+folded under **Advanced**.
 
 ### Remote access
 
@@ -2848,7 +2856,7 @@ folder on Linux. It is off unless you turn it on, and it changes nothing else. N
 listening, with transmit off, exactly as if you had opened it yourself.
 
 This is what lets Remote come back after the computer itself restarts, so the first time you
-turn Remote on (Station ▸ Remote access), Nexus offers to switch this on. The offer is made
+turn Remote on (Remote ▸ Remote access), Nexus offers to switch this on. The offer is made
 once, and your answer is remembered either way. If your computer will not let Nexus start at
 sign-in, the switch stays off and says so.
 
