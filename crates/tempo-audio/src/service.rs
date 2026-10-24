@@ -3649,8 +3649,9 @@ struct RadioLoop {
     /// operator's voice. Matches `tx_until_ms` only while that over is the one held.
     flex_voice_until_ms: Option<f64>,
     /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last keyed, by
-    /// any route. Matches `tx_until_ms` only while that over is the one held: what the loop tells
-    /// the engine each tick ([`Engine::set_voice_on_air`]), for the voice keyer to see it end.
+    /// any route, until the keyer's Stop or the end of the over by any route clears it: what the
+    /// loop tells the engine each tick ([`Engine::set_voice_on_air`]), for the voice keyer to see
+    /// it end and for the transmit arbiter to keep every other start off the air under it.
     voice_until_ms: Option<f64>,
     /// Deadline (same clock as `tx_until_ms`) of the voice-keyer message this loop last handed
     /// whole to the DAX tee of Nexus's Flex client at its key: through the switch to DAX in Phone
@@ -11889,11 +11890,17 @@ impl RadioLoop {
                 if mic_took_over {
                     eng.stop_voice();
                 }
-                eng.set_voice_on_air(
-                    self.voice_until_ms.is_some() && self.voice_until_ms == self.tx_until_ms,
-                );
+                // The keyer's Stop, taken before the report, so the message reads as ended in the
+                // tick that flushes it; an over ended by any other route has no deadline left.
+                let abort = eng.take_voice_abort();
+                if abort || self.tx_until_ms.is_none() {
+                    self.voice_until_ms = None;
+                }
+                // On the air until its OWN deadline: a later over that moves the shared one
+                // neither ends it early nor keeps it on after its end.
+                eng.set_voice_on_air(self.voice_until_ms.is_some_and(|until| now < until));
                 (
-                    eng.take_voice_abort(),
+                    abort,
                     // Held, not dropped, while the loop doesn't own the operator's radio
                     // ([`Self::may_key`]) — `poll_voice` TAKES the message, so skipping the
                     // call is what keeps it for the rig it was recorded to go out on.
@@ -32591,6 +32598,106 @@ mod tests {
                 played,
                 "{name}: audio fed after the stop"
             );
+        }
+    }
+
+    /// A press of the streamed operator's PTT, `id`, held and fed from `from` to `to` ms: whether
+    /// it armed the microphone at any tick.
+    fn press_during(s: &mut MicScene, id: &str, from: f64, to: f64) -> bool {
+        let mut armed = false;
+        let mut t = from;
+        while t <= to {
+            s.hold.hold(id, s.mono(t));
+            let _ = s.frame(t, 0.5);
+            s.step(t);
+            armed |= s.engine.lock().unwrap().mic_armed();
+            t += 20.0;
+        }
+        armed
+    }
+
+    /// ⛔ ONE OWNER WHILE A VOICE MESSAGE PLAYS. The radio loop takes the voice keyer's message
+    /// from the engine at its key; the streamed operator's press is still refused for as long as
+    /// the message's over lasts, so the two never key together. CONTROL: a press after the over
+    /// has ended arms and keys.
+    #[test]
+    fn a_remote_mic_press_is_refused_while_a_voice_message_plays() {
+        let mut s = MicScene::new();
+        s.engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05; 12_000])
+            .unwrap();
+        s.step(0.0);
+        assert!(s.rig.keyed, "premise: the message keyed the rig");
+        let message = s.backend.played.len();
+        assert!(
+            !press_during(&mut s, MIC_PRESS, 20.0, 1_000.0),
+            "a press armed the microphone under a playing voice message"
+        );
+        assert_eq!(
+            s.backend.played.len(),
+            message,
+            "the operator's voice went out with the message"
+        );
+        // The message's over ends (its second, plus the tail); a fresh press then keys.
+        let mut t = 1_020.0;
+        while s.state.tx_until_ms.is_some() {
+            s.step(t);
+            t += 20.0;
+        }
+        assert!(!s.rig.keyed, "premise: the message's over ended");
+        let again = "10000000-0000-4000-8000-00000000000b";
+        assert!(
+            press_during(&mut s, again, t, t + 400.0),
+            "control: a press after the message did not arm"
+        );
+        assert!(s.rig.keyed, "control: the press did not key");
+    }
+
+    /// ★ Stop still ends a playing voice message at once: the keyer's own Stop and Stop TX each
+    /// flush and unkey it within a tick. The keyer's Stop frees the transmitter in that same tick,
+    /// so a press right after it arms; Stop TX turns transmit off, as it always has.
+    #[test]
+    fn stop_ends_a_playing_voice_message_within_a_tick() {
+        for (name, keyer) in [("the keyer's Stop", true), ("Stop TX", false)] {
+            let mut s = MicScene::new();
+            s.engine
+                .lock()
+                .unwrap()
+                .send_voice(vec![0.05; 12_000])
+                .unwrap();
+            s.step(0.0);
+            s.step(200.0);
+            assert!(s.rig.keyed, "{name}: premise: the message is on the air");
+            s.backend.flush_calls = 0;
+            {
+                let mut e = s.engine.lock().unwrap();
+                if keyer {
+                    e.stop_voice();
+                } else {
+                    e.halt_tx();
+                }
+            }
+            s.step(220.0);
+            assert!(!s.rig.keyed, "{name}: still keyed a tick later");
+            assert!(
+                s.backend.flush_calls > 0,
+                "{name}: the message was not flushed"
+            );
+            assert!(
+                s.state.tx_until_ms.is_none(),
+                "{name}: the PTT hold survived"
+            );
+            if keyer {
+                let snap = s.engine.lock().unwrap().snapshot();
+                assert!(!snap.radio.voice_playing, "{name}: still reads as playing");
+                assert_eq!(snap.radio.tx_busy_reason, None, "{name}: still owns TX");
+                assert!(
+                    press_during(&mut s, MIC_PRESS, 240.0, 600.0),
+                    "{name}: a press after the stop did not arm"
+                );
+            }
         }
     }
 

@@ -4330,7 +4330,9 @@ pub struct Engine {
     voice_tx: Option<Vec<f32>>,
     /// The radio loop is playing a voice-keyer message it took from `voice_tx`: set as the loop
     /// takes it ([`Engine::poll_voice`]) and then as the loop reports it each tick
-    /// ([`Engine::set_voice_on_air`]). For the snapshot's `radio.voicePlaying` only.
+    /// ([`Engine::set_voice_on_air`]). For the snapshot's `radio.voicePlaying`, and for the
+    /// transmit arbiter ([`Engine::tx_owner`]), which counts the message as the transmitter's
+    /// owner until its over ends.
     voice_on_air: bool,
     /// When the pending message was queued for Nexus's own Flex client's DAX switch, the radio
     /// having the mic: the radio loop asks the radio for DAX, keys only once it reports it, and
@@ -12969,7 +12971,8 @@ impl Engine {
     }
 
     /// The radio loop's word, each tick, on whether a voice-keyer message it took is still on the
-    /// air (its over not yet ended, stopped or refused). Display only (`radio.voicePlaying`).
+    /// air (its over not yet ended, stopped or refused). Shown as `radio.voicePlaying`, and the
+    /// arbiter refuses every other start while it is up ([`Self::tx_owner`]).
     pub fn set_voice_on_air(&mut self, on_air: bool) {
         self.voice_on_air = on_air;
     }
@@ -22808,23 +22811,28 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// different subset — the SSTV gate's field list was the only complete one,
     /// and this generalises it.
     ///
-    /// Engine-visible only: a one-shot over already PLAYING (APRS/voice audio
-    /// mid-buffer) is fenced by the radio loop's `tx_until_ms` + physical-PTT
-    /// guards, which are the loop's own state, not the engine's. The APRS queue
-    /// is pending work, not ownership — it keys only through `poll_aprs_tx`,
-    /// behind this arbiter.
+    /// Engine-visible only: an APRS frame already PLAYING (audio mid-buffer) is
+    /// fenced by the radio loop's `tx_until_ms` + physical-PTT guards, which are
+    /// the loop's own state, not the engine's. The APRS queue is pending work, not
+    /// ownership — it keys only through `poll_aprs_tx`, behind this arbiter.
+    ///
+    /// ⛔ A voice-keyer message owns the transmitter from its send until its over
+    /// ends: queued (`voice_tx`), and then on the air as the radio loop reports it
+    /// (`voice_on_air`), after the loop has taken it. Counting only the queued
+    /// message let a Remote microphone press or a TCI program key under a message
+    /// still playing, two sources in one output ring.
     pub fn tx_owner(&self) -> Option<TxOwner> {
-        self.tx_owner_with(self.voice_tx.is_some())
+        self.tx_owner_with(self.voice_tx.is_some() || self.voice_on_air)
     }
 
-    /// [`Self::tx_owner`] apart from the voice keyer's own pending message: what ELSE holds the
-    /// transmitter. Asked for a message that waits for Nexus's own Flex client to switch the radio
-    /// to DAX, at its send and while it waits: anything here refuses or drops it.
+    /// [`Self::tx_owner`] apart from the voice keyer's own message, pending or playing: what ELSE
+    /// holds the transmitter. Asked for a message that waits for Nexus's own Flex client to switch
+    /// the radio to DAX, at its send and while it waits: anything here refuses or drops it.
     pub fn tx_owner_beside_voice(&self) -> Option<TxOwner> {
         self.tx_owner_with(false)
     }
 
-    /// The arbiter's one chain, with the voice keyer's pending message as `voice`.
+    /// The arbiter's one chain, with the voice keyer's message, pending or playing, as `voice`.
     fn tx_owner_with(&self, voice: bool) -> Option<TxOwner> {
         if self.app.radio.transmitting {
             Some(TxOwner::Slot)
@@ -31514,20 +31522,20 @@ contact yourself."
     /// transmission.
     ///
     /// ⚠️ ONE GAP, KNOWN AND LEFT (the operator's ruling, 2026-10-06: "Leave it, note it"): a
-    /// voice message or an APRS frame that the radio loop is still playing. (The last word of a
-    /// CW send is no longer in it: the loop reports that word's window, and [`Self::tx_owner`]
-    /// counts it.) The engine has handed it over (`poll_voice` took the message, `poll_aprs_tx`
-    /// popped the frame) and keeps nothing of it, and while the
+    /// beacon or other APRS frame that the radio loop is still playing. (The last word of a CW
+    /// send and a voice message are no longer in it: the loop reports that word's window and the
+    /// message's over, and [`Self::tx_owner`] counts both.) The engine has handed it over
+    /// (`poll_aprs_tx` popped the frame) and keeps nothing of it, and while the
     /// loop holds the key on its own deadline (`tx_until_ms`) it reads no PTT back from the rig
     /// and keeps `rig_keyed` down. So this reads idle and a press goes ahead; the hold refuses
     /// only starts, so the over plays out. (RTTY, PSK and SSTV report their playback to the
-    /// engine, so [`Self::tx_owner`] sees those.) Neither is timed to the clock, so a
+    /// engine, so [`Self::tx_owner`] sees those.) It is not timed to the clock, so a
     /// step under one mistimes nothing; the most a step can do is end the over early. One of
     /// more than 250 ms trips the loop's clock-jump guard, which expires that deadline: what is
     /// left to play is flushed and the key dropped at once. A smaller step moves the deadline by
     /// as much, into the over's 250 ms tail or past it. Nothing keys and nothing is left keyed.
-    /// Seeing these overs would need the loop to report its playback to the engine, plumbing on
-    /// the transmit path that is not added here.
+    /// Seeing these frames would need the loop to report their playback to the engine, as it does
+    /// a voice message's, plumbing on the transmit path that is not added here.
     pub fn on_air(&self) -> bool {
         self.app.transmitting() || self.rig_keyed || self.tuning() || self.tx_owner().is_some()
     }

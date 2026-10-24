@@ -215,6 +215,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone
+  press or a program on TCI could start transmitting over a message still going out. Both are now
+  refused until the message ends, and Stop still ends it at once.
 - **Driving the shack from another computer: the screen now shows the shack's own mode.** It follows
   the shack's Phone, CW or FT section instead of the last one this computer showed, so a Phone band
   change gives USB or LSB, never DATA; picking a mode is sent to the shack, and a refusal is shown

@@ -1846,6 +1846,40 @@ mod tests {
         assert_eq!(try_key(&mut e, P1, Try::Over(true)), Err(Refusal::Owner));
     }
 
+    /// ⛔ ONE OWNER WHILE A VOICE MESSAGE PLAYS: the radio loop takes the voice keyer's message
+    /// from the engine at its key, and the message still owns the transmitter until the loop says
+    /// its over ended, so no program's key is admitted under it. CONTROL: the same key, once the
+    /// over has ended, is admitted.
+    #[test]
+    fn a_programs_key_is_refused_while_a_voice_message_plays() {
+        for t in [Try::Over(true), Try::Mic, Try::Tune] {
+            let mut e = phone();
+            e.send_voice(vec![0.25; 12_000]).unwrap();
+            assert!(
+                e.poll_voice().is_some(),
+                "premise: the loop takes the message"
+            );
+            assert_eq!(
+                try_key(&mut e, P1, t),
+                Err(Refusal::Owner),
+                "{t:?}: admitted between the take and the loop's report"
+            );
+            e.set_voice_on_air(true);
+            assert_eq!(
+                try_key(&mut e, P1, t),
+                Err(Refusal::Owner),
+                "{t:?}: admitted under a playing message"
+            );
+            assert_eq!(e.tx_owner(), Some(TxOwner::Voice));
+            e.set_voice_on_air(false);
+            assert_eq!(
+                try_key(&mut e, P1, t),
+                Ok(()),
+                "control: {t:?} once the message's over ended"
+            );
+        }
+    }
+
     /// A program's admission moves the transmit gate's generation, as every change of who may
     /// transmit does, so an over Nexus planned before it never keys (`commit_tx`); its re-assert
     /// moves nothing.
