@@ -1760,3 +1760,56 @@ async fn forgetting_the_pairing_forgets_the_confirmed_notices() {
     service.action(Action::Forget {}).await.unwrap();
     assert_eq!(vault.notified().unwrap().unwrap().windows, BTreeMap::new());
 }
+
+/// ★ A restored window is never longer than the hold itself, however far ahead the kept end says:
+/// an end of `u64::MAX` (a corrupt but readable entry) restores at most one 15-minute window, and
+/// starting the station with it does not fail.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restored_window_is_capped_at_the_hold() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let far = serde_json::to_string(&notified_entry(STATION, ACCOUNT, u64::MAX)).unwrap();
+    let service = restarted_with(&cloud, &vault, Some(&far), 1).await;
+    assert!(
+        held_at(&service, std::time::Instant::now()),
+        "inside the capped window: held"
+    );
+    assert!(
+        !held_at(&service, past_the_window()),
+        "past one whole window: free, not held for the far end"
+    );
+}
+
+/// ★ A device removed at the shack, whose removal is still waiting for the service, is dropped from
+/// what the station keeps of confirmed notices, though the service still lists it confirmed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_whose_removal_is_waiting_is_not_kept() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let _ = listed(&service, &cloud, vec![notified_row(1)]).await;
+    assert_eq!(kept_notified(&vault).await.windows.len(), 1, "premise");
+
+    cloud.refusing_removals.store(true, Ordering::SeqCst);
+    let removed = service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        removed.account.removals,
+        vec![BROWSER.to_string()],
+        "premise: waiting"
+    );
+    *cloud.devices.lock().unwrap() = json!({ "devices": [notified_row(1)] }).to_string();
+    let _ = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        vault.notified().unwrap().unwrap().windows,
+        BTreeMap::new(),
+        "a removal waiting here: not kept"
+    );
+}
