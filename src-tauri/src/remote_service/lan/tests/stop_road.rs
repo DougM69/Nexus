@@ -1696,6 +1696,12 @@ fn voice(encoder: &mut MicEncoder, frame: u32) -> Vec<u8> {
 /// This computer's press `press`, spoken into for `frames` frames of 20 ms on the audio road from
 /// frame `first`, and held again on the road every 100 ms while `held` says so of the frame: what
 /// a screen and its headset send while PTT is down. When each hold went.
+///
+/// Each frame goes at its own moment on the media clock, `start` plus 20 ms a frame, as a headset's
+/// does, so a test starved for a while catches up rather than falling behind for good: voice that
+/// drifts later than the station plays it is refused as late, and the over then ends on its 200 ms
+/// audio gap, not on whatever the test was timing. Each hold is noted as it was about to go, so
+/// the station can never have taken it before the moment noted.
 async fn speak(
     seat: &Seat,
     encoder: &mut MicEncoder,
@@ -1705,10 +1711,11 @@ async fn speak(
     held: impl Fn(u32) -> bool,
 ) -> Vec<Instant> {
     let mut holds = Vec::new();
+    let start = tokio::time::Instant::now();
     for frame in first..first + frames {
         if (frame - first).is_multiple_of(5) && held(frame) {
-            seat.road.say(&Up::Hold { press, stops: 0 }).await;
             holds.push(Instant::now());
+            seat.road.say(&Up::Hold { press, stops: 0 }).await;
         }
         let packet = voice(encoder, frame);
         seat.audio
@@ -1718,7 +1725,7 @@ async fn speak(
                 packet,
             })
             .await;
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep_until(start + Duration::from_millis(20) * (frame - first + 1)).await;
     }
     holds
 }
@@ -1948,12 +1955,8 @@ async fn the_held_press_ends_200_ms_after_its_last_reassertion() {
         off.saturating_duration_since(last),
         before.saturating_duration_since(last),
     );
-    assert!(off >= last + GAP, "ended before the gap");
-    assert!(
-        off < last + GAP + TICK + Duration::from_millis(30),
-        "ended {:?} after the last hold",
-        off.saturating_duration_since(last)
-    );
+    // How it ended first: an over ended another way (its voice refused as late, then its audio
+    // gap) is that, not an early lapse.
     assert!(
         said.contains(&Down::Press {
             press: 9,
@@ -1961,6 +1964,12 @@ async fn the_held_press_ends_200_ms_after_its_last_reassertion() {
             end: Some(HoldEnd::Lapsed)
         }),
         "the road said it lapsed: {said:?}"
+    );
+    assert!(off >= last + GAP, "ended before the gap");
+    assert!(
+        off < last + GAP + TICK + Duration::from_millis(30),
+        "ended {:?} after the last hold",
+        off.saturating_duration_since(last)
     );
     assert!(
         r.counts().mic_refused.load(Ordering::SeqCst) > 0,
