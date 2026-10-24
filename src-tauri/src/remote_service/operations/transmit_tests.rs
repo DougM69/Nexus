@@ -1071,10 +1071,7 @@ fn a_tunnel_name_is_held_as_the_service_id_it_stands_for() {
     let stands_for = |id: &str| {
         f.authority.set_tunnel_owners(BTreeMap::from([(
             TUNNEL.to_string(),
-            TunnelName {
-                owners: BTreeSet::from([id.to_string()]),
-                ..TunnelName::default()
-            },
+            BTreeSet::from([id.to_string()]),
         )]))
     };
     stands_for(OTHER);

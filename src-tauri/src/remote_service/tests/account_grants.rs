@@ -918,12 +918,14 @@ async fn a_computer_granted_again_on_its_sign_in_is_held_before_the_tunnel_takes
     );
 }
 
-/// ★ A COMPUTER PAIRED BY CODE AT THE SHACK AND SIGNED IN IS NOT HELD ON THE TUNNEL: the proof its
-/// sign-in was granted on, checked here, names the LAN key the shack paired by code, so its tunnel
-/// name stands for a computer the shack paired, and is free. One kept on the LAN by its sign-in alone
-/// (the LAN's device cache holds it) is held, and so is one removed at the shack.
+/// ★ PAIRING ON THE STATION'S OWN NETWORK FREES THAT ROAD ONLY: a computer added by its own sign-in
+/// and paired by code at the shack (in the LAN book, and not kept there by a sign-in) is still held
+/// when it drives the station over the internet. Nothing the station can check proves that the key
+/// it holds for the tunnel and the LAN key the shack paired are one computer's: the proof that
+/// names both does not show the LAN key's private half. Allow to transmit frees it, as for any
+/// other sign-in computer.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_computer_paired_by_code_at_the_shack_and_signed_in_is_not_held_on_the_tunnel() {
+async fn a_computer_paired_by_code_at_the_shack_and_signed_in_is_held_on_the_tunnel() {
     use crate::remote_service::lan::tests::{LanStore, Scratch};
     const LAN_STATION: &str = "60000000-0000-4000-8000-0000000000aa";
     let cloud = fake_cloud().await;
@@ -960,54 +962,39 @@ async fn a_computer_paired_by_code_at_the_shack_and_signed_in_is_not_held_on_the
             control.lan.clone().unwrap(),
         )
     };
-    // In the LAN's device cache (kept there by its sign-in), or out of it (paired by code since).
-    let cached = |kept: bool| {
+    // Paired by code at the shack since: out of the LAN's device cache.
+    {
         let held = DevicesHeld::take(&vault);
         let mut cache = vault
             .device_cache()
             .unwrap()
             .unwrap_or_else(|| tempo_client::account::DeviceCache::new(STATION));
-        if kept {
-            cache
-                .keep(CachedDevice {
-                    pin: lan_pin.clone(),
-                    role: Role::Operate,
-                    guest: false,
-                    issued_at: cases()["issuedAt"].as_u64().unwrap(),
-                    confirmed_at: 0,
-                })
-                .unwrap();
-        } else {
-            cache.forget(&lan_pin);
-        }
+        cache.forget(&lan_pin);
         vault.save_device_cache(&held, &cache).unwrap();
-        drop(held);
-        enrolment.reread();
-    };
-    let held_now = || operations.tx_held(&named, std::time::Instant::now());
-
-    cached(false);
-    let mut freed = false;
-    for _ in 0..250 {
-        freed = !held_now();
-        if freed {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(freed, "paired by code at the shack and signed in: held");
+    enrolment.reread();
     assert!(
-        operations.tx_held(COMPUTER_ID, past_the_window()),
-        "premise: its service id is held"
+        vault
+            .device_cache()
+            .unwrap()
+            .is_none_or(|cache| cache.find(&lan_pin).is_none()),
+        "premise: not kept on the LAN by a sign-in"
+    );
+    assert!(
+        operations.tx_held(&named, past_the_window()),
+        "paired by code at the shack: free on the tunnel"
     );
 
-    cached(true);
-    assert!(held_now(), "kept on the LAN by its sign-in alone: free");
-
-    cached(false);
-    assert!(!held_now(), "CONTROL: paired by code again");
-    lan.revoke(&lan::device_id(&pin)).unwrap();
-    assert!(held_now(), "removed at the shack: free");
+    service.action(allow(COMPUTER_ID)).await.unwrap();
+    assert!(
+        !operations.tx_held(&named, past_the_window()),
+        "CONTROL: Allow to transmit frees it"
+    );
+    assert_eq!(
+        lan.revoke(&lan::device_id(&pin)),
+        Ok(()),
+        "premise: the LAN book held it"
+    );
 }
 
 /// A station whose owner is not known here (paired by code, or bound as another station) vouches

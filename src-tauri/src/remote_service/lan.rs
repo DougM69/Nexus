@@ -464,13 +464,6 @@ impl Lan {
                 .filter(|state| state.on.load(Ordering::SeqCst))
                 .map_or_else(Vec::new, |state| state.book.ids())
         }));
-        // And which of them the shack paired by code: in the book, and not kept there by a sign-in.
-        let held = Arc::downgrade(&state);
-        deps.authority.hold_code_paired(Box::new(move |pin| {
-            held.upgrade().is_some_and(|state| {
-                state.book.paired(pin).is_some() && !state.enrolment.enrolled(pin)
-            })
-        }));
         let running = state.clone();
         let spawned = std::thread::Builder::new()
             .name("nexus-remote-lan".into())

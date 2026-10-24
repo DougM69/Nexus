@@ -222,8 +222,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   internet, so it could transmit at once. It is now held like a browser, and shows at the shack as
   waiting. The hold lifts by itself 15 minutes after it signs in, once the station knows you were told
   it was added, or at once when you press **Allow to transmit** or **Approve**. Stop is never held, and
-  computers on your own network are unaffected. A computer you paired with a code at the shack after it
-  last signed in is not held over the internet either.
+  computers on your own network are unaffected.
 - **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
   paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
   opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping

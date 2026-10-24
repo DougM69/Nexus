@@ -763,11 +763,6 @@ struct Control {
     /// The computers (and phones) the service lists as approved and not yet ended, by device id:
     /// what a pin is compared with.
     natives: BTreeMap<String, Native>,
-    /// The pin of the LAN key that the proof of each computer (or phone) granted on its own sign-in
-    /// in this run names, checked here (`account::vouch_listed`), by device id, beside the pin that
-    /// grant made: it counts only while that pin is the one approving it as listed
-    /// ([`Control::sync_approved`]).
-    vouched_lan: BTreeMap<String, (String, [u8; 32])>,
     /// What the room's tunnel serves its computers with: the LAN road's authority, feeds and
     /// command lane. `None` in a build of the service without the LAN road.
     tunnel: Option<lan::TunnelDeps>,
@@ -859,23 +854,13 @@ impl Control {
     /// name the tunnel takes is never one the hold cannot place; a name that leaves it is one the
     /// hold no longer places, and so held, until its revoke lands. Two listed devices that share a
     /// key share its name, and the hold keeps both ids for it.
-    ///
-    /// A computer whose sign-in's proof, checked here, named a LAN key the shack paired by code is
-    /// not held on the tunnel (the operator's ruling); the hold is told those LAN keys beside the
-    /// ids, and asks the LAN book itself whether each is still so paired.
     fn sync_approved(&self) {
         let (mut keys, mut owners) = (BTreeMap::new(), BTreeMap::new());
         for (id, pin, name, until) in self.on_tunnel() {
-            let owner: &mut operations::TunnelName = owners.entry(name.clone()).or_default();
-            owner.owners.insert(id.clone());
-            // The LAN key its sign-in's proof named, under the approval pinned for it then.
-            if let Some((_, lan)) = self
-                .vouched_lan
-                .get(id)
-                .filter(|(at, _)| self.remembered.pins.get(id) == Some(at))
-            {
-                owner.lan.insert(*lan);
-            }
+            owners
+                .entry(name.clone())
+                .or_insert_with(std::collections::BTreeSet::new)
+                .insert(id.clone());
             keys.insert(pin, (name, until));
         }
         self.operations.set_tunnel_owners(owners);
@@ -2508,7 +2493,7 @@ impl Controller {
                 .collect();
             for (device, result) in waiting.into_iter().zip(results) {
                 match result.and_then(|(vouched, lan)| {
-                    let granted = self.grant_vouched(device, &vouched, &lan, &approved, at)?;
+                    let granted = self.grant_vouched(device, &vouched, &approved, at)?;
                     Ok(granted.then_some((vouched, lan)))
                 }) {
                     Ok(Some((vouched, lan))) => {
@@ -2609,7 +2594,6 @@ impl Controller {
         &self,
         device: &Device,
         vouched: &tempo_client::account::Vouched,
-        lan: &str,
         approved: &[String],
         (generation, epoch): (u64, u64),
     ) -> Result<bool, &'static str> {
@@ -2651,12 +2635,6 @@ impl Controller {
                 approval: Some(device.approval()),
                 control: Some(operate),
             });
-        }
-        // The LAN key its proof names, for the tunnel, before the tunnel takes it.
-        if let Some(lan) = lan::pairing::hex32(lan).filter(|_| !browser) {
-            control
-                .vouched_lan
-                .insert(device.id.clone(), (pin.clone(), lan));
         }
         control.remember(Persist::Listed(approved.to_vec()));
         control.remember(Persist::Pin {
