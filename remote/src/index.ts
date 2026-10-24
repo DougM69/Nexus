@@ -342,7 +342,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // it was added, its proof and a computer's LAN key: the proof's nonce covers both of its keys.
       const key = (deviceKeys(request) ? ',public_key AS publicKey' : '') +
         (kinds ? ",COALESCE(kind,'browser') AS kind,platform,CASE WHEN approved=1 AND expires_at>=? THEN 1 ELSE 0 END AS untilRemoved" : '') +
-        (request.headers.get('x-nexus-device-proof') === '1' ? ",COALESCE(role,'operate') AS role,COALESCE(added_by,'shack') AS addedBy,proof,lan_key AS lanKey,EXISTS(SELECT 1 FROM notices n WHERE n.device_id=devices.id) AS notified" : '')
+        (request.headers.get('x-nexus-device-proof') === '1' ? ",COALESCE(role,'operate') AS role,COALESCE(added_by,'shack') AS addedBy,proof,lan_key AS lanKey,EXISTS(SELECT 1 FROM notices n WHERE n.device_id=devices.id AND n.sent_at IS NOT NULL) AS notified" : '')
       const forever = kinds ? [UNTIL_REMOVED] : []
       const only = kinds ? '' : ' AND kind IS NULL'
       const devices = lifetime(request)
@@ -654,10 +654,13 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       // One still waiting is approved in place by a sign-in for its key.
       if (approveAs && current.approved !== 1) {
         await approveByAccount(env, row.id, current.id, approveAs, input.proof as string, null, identity.accountId, now)
-        // The 2026-10-23 sign-in decision: notify the owner that a device was added by sign-in (a no-op without the
-        // provider secret). Once: this branch runs only on the waiting→approved transition.
+        // The 2026-10-23 sign-in decision: notify the STATION OWNER that a device was added by
+        // sign-in. The notice goes to the owner's own address, which we have only when the caller IS
+        // the owner (`role === 'owner'`); a guest's sign-in carries the guest's address, not the
+        // owner's, so it sends nothing and the device stays held. A no-op too without the provider
+        // secret. Once: this branch runs only on the waiting→approved transition.
         await deviceAddedNotice(env, { accountId: identity.accountId, stationId: row.id, deviceId: current.id,
-          toEmail: email, stationName: row.name, deviceName: name, kind: 'browser' }, now)
+          toEmail: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
         return json({ deviceId: current.id, approved: true })
       }
       return json({ deviceId: current.id, approved: current.approved === 1 })
@@ -671,9 +674,11 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     requireValue(inserted, 'deviceLimit', 409)
     if (approveAs) {
       await bumpPolicy(env, row.id, now)
-      // The 2026-10-23 sign-in decision: notify the owner a device was added by sign-in (a no-op without the secret).
+      // The 2026-10-23 sign-in decision: notify the STATION OWNER a device was added by sign-in —
+      // to the owner's own address, which we have only when the caller is the owner (a guest's
+      // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
       await deviceAddedNotice(env, { accountId: identity.accountId, stationId: row.id, deviceId,
-        toEmail: email, stationName: row.name, deviceName: name, kind: 'browser' }, now)
+        toEmail: role === 'owner' ? email : null, stationName: row.name, deviceName: name, kind: 'browser' }, now)
     }
     return json({ deviceId, approved: approveAs !== null }, 200, { 'set-cookie': cookie(row.id, credential) })
   }
@@ -1104,9 +1109,11 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     // One still waiting is approved in place by a sign-in for its keys.
     if (current && approveAs && current.approved !== 1) {
       await approveByAccount(env, row.id, current.id, approveAs, input.proof as string, lanKey, caller.accountId, now)
-      // The 2026-10-23 sign-in decision: notify the owner a device was added by sign-in (a no-op without the secret).
+      // The 2026-10-23 sign-in decision: notify the STATION OWNER a device was added by sign-in —
+      // to the owner's own address, which we have only when the caller is the owner (a guest's
+      // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
       await deviceAddedNotice(env, { accountId: caller.accountId, stationId: row.id, deviceId: current.id,
-        toEmail: caller.email, stationName: row.name, deviceName: name, kind }, now)
+        toEmail: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
       return json({ deviceId: current.id, approved: true, expiresAt: UNTIL_REMOVED, renewsUntil: null })
     }
     if (current) return json({ deviceId: current.id, approved: current.approved === 1, expiresAt: current.expires_at, renewsUntil: null })
@@ -1123,9 +1130,11 @@ async function client(request: Request, env: RemoteEnv, path: string, match: Reg
     requireValue(inserted, 'deviceLimit', 409)
     if (approveAs) {
       await bumpPolicy(env, row.id, now)
-      // The 2026-10-23 sign-in decision: notify the owner a device was added by sign-in (a no-op without the secret).
+      // The 2026-10-23 sign-in decision: notify the STATION OWNER a device was added by sign-in —
+      // to the owner's own address, which we have only when the caller is the owner (a guest's
+      // sign-in sends nothing, the device stays held); a no-op too without the provider secret.
       await deviceAddedNotice(env, { accountId: caller.accountId, stationId: row.id, deviceId,
-        toEmail: caller.email, stationName: row.name, deviceName: name, kind }, now)
+        toEmail: role === 'owner' ? caller.email : null, stationName: row.name, deviceName: name, kind }, now)
     }
     return json({ deviceId, approved: approveAs !== null, expiresAt, renewsUntil: null })
   }

@@ -163,9 +163,10 @@ export function mailbox(address: string): string {
 }
 
 /** What a newly signed-in device is, for the owner notice (the 2026-10-23 sign-in decision): who it belongs to, which
- *  station, and how to recognise it. `toEmail` is the account holder's verified address from the
- *  sign-in that added the device, read transiently and never stored; `null` when this sign-in
- *  carried no verified address, which turns the notice into a no-op. */
+ *  station, and how to recognise it. `toEmail` is the STATION OWNER's verified address, read
+ *  transiently and never stored; `null` when the owner's address is not available on this sign-in —
+ *  a guest's sign-in carries the guest's address, not the owner's — which turns the notice into a
+ *  no-op (nothing is sent, `sent_at` stays null, the device stays held: "no email, no unlock"). */
 export interface DeviceAddedNotice {
   accountId: string
   stationId: string
@@ -182,10 +183,11 @@ export interface DeviceAddedNotice {
  *
  *  ⛔ CREDENTIAL GATE (gate 5): the provider key (`OWNER_NOTICE_API_KEY`) and sender
  *  (`OWNER_NOTICE_FROM`) are production Worker secrets the operator wires. With either unset — the
- *  case in every build today — or with no verified address on this sign-in, the row is still
- *  written but no mail is sent and `sent_at` stays null. The path is built and the payload shaped;
- *  the real key is never committed and no live mail is sent here. The address is used for the one
- *  request and dropped. */
+ *  case in every build today — or with no owner address on this sign-in, the row is still written
+ *  but no mail is sent and `sent_at` stays null. `sent_at` is set ONLY when the provider accepts the
+ *  send (a 2xx); a rejection or a network failure leaves it null. Since `notified` is `sent_at IS
+ *  NOT NULL`, each of these leaves the device held ("no email, no unlock", operator 2026-10-24). The
+ *  real key is never committed and no live mail is sent here; the address is used once and dropped. */
 export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotice, now: number): Promise<void> {
   // The DURABLE ENQUEUE comes first: one `notices` row a device, the record the station's transmit
   // hold lifts against (the native list surfaces its existence as `notified`). A store error leaves
@@ -207,16 +209,27 @@ export async function deviceAddedNotice(env: RemoteEnv, notice: DeviceAddedNotic
     `When: ${new Date(now).toISOString()}\n\n` +
     `It can control your station, but it cannot transmit for the first 15 minutes.\n` +
     `If this was not you, remove it now at ${manage}`
-  await fetch(env.OWNER_NOTICE_ENDPOINT || 'https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      from,
-      to: notice.toEmail,
-      subject: 'A device was added to your Nexus Remote account',
-      text,
-    }),
-  })
+  // Mark the notice sent ONLY when the provider ACCEPTS it (a 2xx). `notified` — the precondition
+  // the station's transmit hold lifts against — is `sent_at IS NOT NULL`, so a rejection (401/422/
+  // a 5xx) or a network failure leaves `sent_at` null and the device held past its window until a
+  // shack Approve or a verified-MFA sign-in ("no email, no unlock", operator 2026-10-24).
+  let accepted = false
+  try {
+    const res = await fetch(env.OWNER_NOTICE_ENDPOINT || 'https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        from,
+        to: notice.toEmail,
+        subject: 'A device was added to your Nexus Remote account',
+        text,
+      }),
+    })
+    accepted = res.ok
+  } catch {
+    accepted = false
+  }
+  if (!accepted) return
   await env.DB.prepare('UPDATE notices SET sent_at=? WHERE device_id=? AND sent_at IS NULL')
     .bind(now, notice.deviceId).run()
 }

@@ -590,3 +590,98 @@ test('with no provider secret the notice is a no-op for mail, but the durable re
     await rt.mf.dispose()
   }
 })
+
+// --- "No email, no unlock" (operator 2026-10-24): notified only when the owner's mail was accepted ---
+
+// The provider secrets, wired, for the tests below. The endpoint is the stubbed capturer's.
+const NOTICE_BINDINGS = {
+  AUTH0_NATIVE_CLIENT_ID: NATIVE, OWNER_NOTICE_API_KEY: 'test-key',
+  OWNER_NOTICE_FROM: 'Nexus Remote <noreply@test.invalid>', OWNER_NOTICE_ENDPOINT: 'https://email.test.invalid/send',
+}
+/** `notified` as the station reads it off the device list (the precondition its transmit hold lifts
+ *  against): 1 only when the durable row exists AND the owner's mail was accepted. */
+const notifiedOf = async (shack, stationId, deviceId) =>
+  (await shack.shack.post(`stations/${stationId}/native/devices`, {}, 200, { ...KINDS, ...LIFETIME, ...PROOF }))
+    .value.devices.find(d => d.id === deviceId)?.notified
+
+test('with the provider wired and the send accepted, the device lists as notified', async () => {
+  const main = app
+  const rt = await runtime({ bindings: NOTICE_BINDINGS, outbound: async () => Response.json({ id: 'ok' }) })
+  app = rt
+  try {
+    const owner = await person(), shack = await bind(owner), c = await enrol(owner, shack.stationId)
+    assert.equal(c.value.approved, true, 'granted on its sign-in')
+    const row = await rt.db.prepare('SELECT sent_at FROM notices WHERE device_id=?').bind(c.deviceId).first()
+    assert.notEqual(row.sent_at, null, 'the accepted send marks the notice sent')
+    assert.equal(await notifiedOf(shack, shack.stationId, c.deviceId), 1, 'so the station is told it is notified')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
+test('a provider rejection (non-2xx) leaves the device un-notified, the row still written', async () => {
+  const main = app, sent = []
+  const rt = await runtime({
+    bindings: NOTICE_BINDINGS,
+    outbound: async request => { sent.push(request.url); return new Response('rejected', { status: 422 }) },
+  })
+  app = rt
+  try {
+    const owner = await person(), shack = await bind(owner), c = await enrol(owner, shack.stationId)
+    assert.equal(c.value.approved, true, 'the device is still added')
+    assert.equal(sent.length, 1, 'the send was attempted')
+    const row = await rt.db.prepare('SELECT COUNT(*) AS n, MAX(sent_at) AS sent FROM notices WHERE device_id=?').bind(c.deviceId).first()
+    assert.equal(row.n, 1, 'the durable row is written regardless')
+    assert.equal(row.sent, null, 'but a rejected send is NOT marked sent')
+    assert.equal(await notifiedOf(shack, shack.stationId, c.deviceId), 0, 'so the station holds it')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
+test('a send that throws (network failure) leaves the device un-notified, the row still written', async () => {
+  const main = app
+  const rt = await runtime({
+    bindings: NOTICE_BINDINGS,
+    outbound: async () => { throw new Error('network down') },
+  })
+  app = rt
+  try {
+    const owner = await person(), shack = await bind(owner), c = await enrol(owner, shack.stationId)
+    assert.equal(c.value.approved, true, 'the device is still added — a failed notice never fails registration')
+    const row = await rt.db.prepare('SELECT COUNT(*) AS n, MAX(sent_at) AS sent FROM notices WHERE device_id=?').bind(c.deviceId).first()
+    assert.equal(row.n, 1, 'the durable row is written regardless')
+    assert.equal(row.sent, null, 'and a thrown send is NOT marked sent')
+    assert.equal(await notifiedOf(shack, shack.stationId, c.deviceId), 0, 'so the station holds it')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
+
+test('a guest sign-in emails nobody and the guest device stays un-notified', async () => {
+  const main = app, sent = []
+  const rt = await runtime({
+    bindings: NOTICE_BINDINGS,
+    outbound: async request => { sent.push({ to: (await request.json()).to }); return Response.json({ id: 'ok' }) },
+  })
+  app = rt
+  try {
+    const owner = await person(), shack = await bind(owner), guest = await person()
+    await shack.shack.post(`stations/${shack.stationId}/native/invite`, { email: guest.email, role: 'operate' })
+    const g = await enrol(guest, shack.stationId)
+    assert.equal(g.value.approved, true, 'the guest is approved by their invite and sign-in')
+    // The owner's address is not available on a guest's sign-in, so nothing is sent (the guest is
+    // never emailed), and the device stays held until a shack Approve or a verified-MFA sign-in.
+    assert.equal(sent.length, 0, 'no email is sent on a guest sign-in')
+    const row = await rt.db.prepare('SELECT COUNT(*) AS n, MAX(sent_at) AS sent FROM notices WHERE device_id=?').bind(g.deviceId).first()
+    assert.equal(row.n, 1, 'the durable row is written regardless')
+    assert.equal(row.sent, null, 'but it is left unsent')
+    assert.equal(await notifiedOf(shack, shack.stationId, g.deviceId), 0, 'so the station holds the guest device')
+  } finally {
+    app = main
+    await rt.mf.dispose()
+  }
+})
