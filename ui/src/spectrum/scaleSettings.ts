@@ -86,6 +86,15 @@ export const CW_AVERAGE_DEFAULT_MS = 0
  *
  * The detector defaults to PEAK, which is what every scope and waterfall draws today (`resampleRow`);
  * deskHPSDR's default is AVERAGE.
+ *
+ * Phone defaults the analysis window to FAST (1024, 85 ms) rather than BALANCED (2048, 171 ms): the
+ * phone scope's job is to track the band live, and the window is that display's only temporal smear
+ * (`tempo-core::spectrum::WindowN`). Voice occupies ~2.7 kHz, so Fast's 46.9 Hz lobe costs nothing a
+ * phone operator can see while halving the onset latency; 2048's 23.4 Hz resolution is for pulling a
+ * carrier out of the noise, which is the expert's opt-IN, not the default
+ * (`feedback-easy-and-powerful-defaults` — the right value follows from the signal). Every other
+ * cockpit (CW, the digital waterfalls, the RF pane) stays BALANCED. The operator's window control is
+ * unchanged; this moves only the starting point.
  */
 export function scaleDefaults(cockpit: ScopeCockpit): ScaleSettings {
   return {
@@ -93,7 +102,7 @@ export function scaleDefaults(cockpit: ScopeCockpit): ScaleSettings {
     detector: 'peak',
     gain: 0,
     zero: 0,
-    window: 'balanced',
+    window: cockpit === 'phone' ? 'fast' : 'balanced',
   }
 }
 

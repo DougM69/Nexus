@@ -87,6 +87,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request.
 
 ### Changed
+- **The phone scope starts snappier.** The phone panadapter and waterfall now default to the Fast analysis
+  window (85 ms, was 171 ms), so a signal appearing or a fading one dropping shows about twice as fast. Voice is
+  wide enough that the slightly coarser frequency resolution is not visible; if you want the finer Balanced or Sharp
+  window back, the scope's window button still sets it, and your choice is remembered. Only the phone scope's
+  starting point changed — CW, the digital waterfalls and the radio's own RF panadapter are untouched.
 - **The station decides every decode alert, so every screen hears the same ones.** Someone calling you, a new DXCC
   entity or grid (a rare grid loudly), a watch-list station, an opted-in CQ and a park newly on the air are now
   decided once, at the station, from your alert settings, your watch list (its CQ-only, minimum SNR and label with
