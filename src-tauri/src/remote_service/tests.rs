@@ -24,8 +24,14 @@ pub(super) struct MemoryVault {
     values: Arc<Mutex<HashMap<String, String>>>,
     fail: Arc<AtomicBool>,
     devices: Arc<Mutex<()>>,
+    /// The entries a store refuses alone, read and written, as `fail` refuses every one.
+    refusing: Arc<Mutex<std::collections::BTreeSet<&'static str>>>,
 }
 impl MemoryVault {
+    /// Whether the store refuses `entry`: every entry while `fail` is set, or this one alone.
+    fn refuses(&self, entry: &str) -> bool {
+        self.fail.load(Ordering::Relaxed) || self.refusing.lock().unwrap().contains(entry)
+    }
     fn account_entry<T: serde::de::DeserializeOwned>(
         &self,
         name: &str,
@@ -152,7 +158,7 @@ impl Vault for MemoryVault {
     }
     // A locked store refuses the remembered state the same way it refuses the credential.
     fn state(&self) -> Result<Option<vault::State>, &'static str> {
-        if self.fail.load(Ordering::Relaxed) {
+        if self.refuses("state") {
             return Err("credentialStoreUnavailable");
         }
         Ok(self
@@ -202,7 +208,7 @@ impl Vault for MemoryVault {
         Ok(())
     }
     fn waivers(&self) -> Result<Option<vault::Waivers>, &'static str> {
-        if self.fail.load(Ordering::Relaxed) {
+        if self.refuses("waivers") {
             return Err("credentialStoreUnavailable");
         }
         Ok(self
@@ -213,7 +219,7 @@ impl Vault for MemoryVault {
             .and_then(|v| serde_json::from_str(v).ok()))
     }
     fn save_waivers(&self, waivers: &vault::Waivers) -> Result<(), &'static str> {
-        if self.fail.load(Ordering::Relaxed) {
+        if self.refuses("waivers") {
             return Err("credentialStoreUnavailable");
         }
         self.values
@@ -223,6 +229,9 @@ impl Vault for MemoryVault {
         Ok(())
     }
     fn remove_waivers(&self) -> Result<(), &'static str> {
+        if self.refuses("waivers") {
+            return Err("credentialStoreUnavailable");
+        }
         self.values.lock().unwrap().remove("waivers");
         Ok(())
     }
@@ -4426,4 +4435,86 @@ fn s3l1_the_shack_and_the_page_fingerprint_a_key_alike() {
         Some("a8ddd2ffad4930ac6b77647b8de0d37935aaeb9fb957326da6370df67205dc77")
     );
     assert_eq!(fingerprint("not a key"), None, "control: refused");
+}
+
+/// ★ EVERY DECISION THAT ENDS AN APPROVAL ENDS ITS KEPT WAIVER, in the record and in the vault: an
+/// off that ends access, a removal that clears every grant (`ClearGrants`), a restrict, a list or
+/// approvals that no longer name the device, a grant on its own sign-in again (`Hold`), a pairing
+/// removed, and a pairing loaded or made with no waivers. CONTROL: Turn off and a list that still
+/// names the device keep it, and write nothing.
+#[test]
+fn every_decision_that_ends_an_approval_ends_its_kept_waiver() {
+    let binding = || Binding {
+        origin: "https://remote.test.invalid".into(),
+        station_id: STATION.into(),
+        account_id: ACCOUNT.into(),
+    };
+    let approval = Approval {
+        expires_at: APPROVED_UNTIL,
+        generation: Some(2),
+    };
+    let cases: Vec<(&str, Persist, bool)> = vec![
+        ("Turn off", Persist::Paused, true),
+        ("listed", Persist::Listed(vec![BROWSER.into()]), true),
+        ("off", Persist::Off, false),
+        ("ClearGrants", Persist::ClearGrants, false),
+        (
+            "restrict",
+            Persist::Browser {
+                device_id: BROWSER.into(),
+                approval: None,
+                control: Some(false),
+            },
+            false,
+        ),
+        ("not listed", Persist::Listed(Vec::new()), false),
+        ("not signed in", Persist::SignedIn(Vec::new()), false),
+        ("no approvals", Persist::Approvals(Vec::new()), false),
+        (
+            "approved again",
+            Persist::Approvals(vec![(
+                BROWSER.into(),
+                Approval {
+                    generation: Some(3),
+                    ..approval
+                },
+            )]),
+            false,
+        ),
+        (
+            "held again",
+            Persist::Hold {
+                device_id: BROWSER.into(),
+            },
+            false,
+        ),
+        ("removed", Persist::Removed, false),
+        (
+            "bound afresh",
+            Persist::Bound(binding(), None, None, None),
+            false,
+        ),
+    ];
+    for (what, decision, kept) in cases {
+        let mut remembered = Remembered::default();
+        let _ = remembered.apply(Persist::Bound(binding(), None, None, None));
+        let _ = remembered.apply(Persist::Browser {
+            device_id: BROWSER.into(),
+            approval: Some(approval),
+            control: Some(true),
+        });
+        let _ = remembered.apply(Persist::Waive {
+            device_id: BROWSER.into(),
+        });
+        assert!(remembered.waivers.contains(BROWSER), "{what}: premise");
+        let writes = remembered.apply(decision);
+        assert_eq!(remembered.waivers.contains(BROWSER), kept, "{what}");
+        let removes = writes
+            .iter()
+            .any(|w| matches!(w, super::Write::RemoveWaivers));
+        let saves = writes
+            .iter()
+            .any(|w| matches!(w, super::Write::SaveWaivers(_)));
+        assert_eq!((removes, saves), (!kept, false), "{what}: written");
+    }
 }

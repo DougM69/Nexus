@@ -426,6 +426,15 @@ impl Authority {
             }
         }
     }
+    /// Forget each waiver restored at launch whose device is not in `kept`: what the station keeps of
+    /// its waivers now (`Controller::vouch`). A waiver given in this run is left as it is.
+    pub fn keep_restored(&self, kept: &BTreeSet<String>) {
+        if let Ok(mut c) = self.core.lock() {
+            c.tx_grants.retain(|device, grant| {
+                !matches!(grant, TxGrant::Restored) || kept.contains(device)
+            });
+        }
+    }
     /// Whether the station holds `device` from transmit at `now`. Every controller is asked here;
     /// candidacy comes from RECORDED provenance, never the connection's transport: a device in the
     /// LAN book (`is_lan_device`) is never held. FAIL-CLOSED on every uncertainty:

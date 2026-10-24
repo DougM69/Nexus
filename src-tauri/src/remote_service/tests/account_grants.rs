@@ -2180,15 +2180,58 @@ async fn a_waivers_entry_that_does_not_hold_restores_nothing() {
             what != "as kept",
             "{what}"
         );
+        // Nor is it left in the vault for a later restart to read.
+        if what != "as kept" {
+            assert!(waivers_entry_removed(&vault).await, "{what}: entry removed");
+        }
     }
 }
 
+/// Whether `vault` holds no waivers entry at all, once the vault writer has had a while to remove it.
+async fn waivers_entry_removed(vault: &MemoryVault) -> bool {
+    for _ in 0..100 {
+        if !vault.values.lock().unwrap().contains_key("waivers") {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
+}
+/// Whether the station holds any transmit record for the owner's browser: before a list, with no
+/// window kept for it, only a waiver restored at launch.
+fn recorded(service: &Service) -> bool {
+    service
+        .control
+        .lock()
+        .unwrap()
+        .operations
+        .transmit_windows(
+            &std::collections::BTreeSet::from([BROWSER.to_string()]),
+            std::time::Instant::now(),
+        )
+        .contains_key(BROWSER)
+}
+/// Change the state entry kept in `vault`.
+fn edit_state(vault: &MemoryVault, edit: impl FnOnce(&mut serde_json::Value)) {
+    let mut values = vault.values.lock().unwrap();
+    let mut state: serde_json::Value = serde_json::from_str(&values["state"]).unwrap();
+    edit(&mut state);
+    values.insert("state".into(), state.to_string());
+}
+
 /// ★ CHECKED AGAIN AT LOAD AGAINST WHAT THE STATION REMEMBERS: a kept waiver restores nothing for a
-/// device whose removal here still waits for the service, nor for one the station no longer
-/// remembers granting (no station control and no pin kept for it). Held after the restart.
+/// device whose removal here still waits for the service, nor for one whose station control the
+/// station no longer remembers, its pin kept or not. Nothing is restored at launch, the entry is
+/// rewritten to what was restored, and the device is held after the list. Remote is off at the
+/// restart and nothing is granted on a sign-in, so no list or grant can stand in for the check.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_kept_waiver_is_checked_against_the_device_at_load() {
-    for what in ["as kept", "removal waiting", "nothing granted"] {
+    for what in [
+        "as kept",
+        "removal waiting",
+        "nothing granted",
+        "only a pin",
+    ] {
         let cloud = fake_cloud().await;
         let vault = owned_vault(&cloud.origin, Vec::new());
         drop(allowed(&cloud, &vault).await);
@@ -2203,21 +2246,24 @@ async fn a_kept_waiver_is_checked_against_the_device_at_load() {
                 cloud.refusing_removals.store(true, Ordering::SeqCst);
             }
             "nothing granted" => {
-                let mut values = vault.values.lock().unwrap();
-                values.remove("pins");
-                let mut state: serde_json::Value = serde_json::from_str(&values["state"]).unwrap();
-                state["grants"] = json!([]);
-                values.insert("state".into(), state.to_string());
+                vault.values.lock().unwrap().remove("pins");
+                edit_state(&vault, |state| state["grants"] = json!([]));
             }
+            "only a pin" => edit_state(&vault, |state| state["grants"] = json!([])),
             _ => {}
         }
-        let service = restarted(&cloud, &vault).await;
+        edit_state(&vault, |state| state["enabled"] = false.into());
+        let kept = what == "as kept";
+        let service = launch_not_granting_on_sign_in(&cloud, &vault);
+        eventually(&service, "the pairing loaded", |s| s.station_id.is_some()).await;
+        assert_eq!(recorded(&service), kept, "{what}: restored at launch");
+        if kept {
+            assert_eq!(waivers_become(&vault, &[BROWSER]).await, [BROWSER]);
+        } else {
+            assert!(waivers_entry_removed(&vault).await, "{what}: entry removed");
+        }
         let _ = listed(&service, &cloud, rows()).await;
-        assert_eq!(
-            held_at(&service, past_the_window()),
-            what != "as kept",
-            "{what}"
-        );
+        assert_eq!(held_at(&service, past_the_window()), !kept, "{what}");
     }
 }
 
@@ -2306,4 +2352,167 @@ async fn whatever_ends_an_approval_ends_its_kept_waiver() {
             "{what}: after the restart"
         );
     }
+}
+
+/// ★ A WAIVER LEFT BEHIND IS NEVER RESTORED BY A GRANT GIVEN WITHOUT THE SHACK: the station kept a
+/// waiver, but not the grant or the pin it came with (a crash between the vault's writes, a write
+/// the store refused, an older build). After a restart the list grants the device again on its own
+/// sign-in, held for its window, and the waiver is gone: held after this restart and the next.
+/// CONTROL: kept as it was, the waiver frees the device after both.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_waiver_left_behind_is_never_restored_by_a_grant_given_without_the_shack() {
+    for what in ["as kept", "grant and pin lost", "pin lost"] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        drop(allowed(&cloud, &vault).await);
+        match what {
+            "grant and pin lost" => {
+                vault.values.lock().unwrap().remove("pins");
+                edit_state(&vault, |state| state["grants"] = json!([]));
+            }
+            "pin lost" => {
+                vault.values.lock().unwrap().remove("pins");
+            }
+            _ => {}
+        }
+        let kept = what == "as kept";
+        for restart in ["first", "second"] {
+            let service = restarted(&cloud, &vault).await;
+            let _ = listed(&service, &cloud, rows()).await;
+            assert_eq!(
+                held_at(&service, past_the_window()),
+                !kept,
+                "{what}: {restart} restart"
+            );
+            if !kept {
+                assert!(
+                    waivers_entry_removed(&vault).await,
+                    "{what}: {restart} restart: entry removed"
+                );
+            }
+        }
+    }
+}
+
+/// ★ A RESTRICTED DEVICE IS NOT FREED BY A WAIVER LEFT BEHIND: restricting a sign-in device's station
+/// control ends its waiver but keeps its pin. Should the waiver outlive the restrict (a crash
+/// between the vault's writes, or the store refusing to remove it), the restart restores nothing
+/// from it, allowing station control again frees nothing, and the next restart is held too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restricted_device_is_not_freed_by_a_waiver_left_behind() {
+    for what in ["crash", "the store refusing"] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        let service = allowed(&cloud, &vault).await;
+        let entry = vault.values.lock().unwrap()["waivers"].clone();
+        if what == "the store refusing" {
+            vault.refusing.lock().unwrap().insert("waivers");
+        }
+        service
+            .action(Action::StationPermission {
+                device_id: BROWSER.into(),
+                allow: false,
+            })
+            .await
+            .unwrap();
+        for _ in 0..100 {
+            if vault.state().unwrap().is_some_and(|s| s.grants.is_empty()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            vault.state().unwrap().unwrap().grants.is_empty(),
+            "{what}: premise: the restrict was kept"
+        );
+        drop(service);
+        if what == "crash" {
+            vault.values.lock().unwrap().insert("waivers".into(), entry);
+        } else {
+            assert_eq!(
+                vault.values.lock().unwrap()["waivers"],
+                entry,
+                "premise: the waiver outlived the restrict"
+            );
+            vault.refusing.lock().unwrap().clear();
+        }
+        assert!(
+            vault.pins().unwrap().unwrap().keys.contains_key(BROWSER),
+            "{what}: premise: the pin is kept"
+        );
+
+        let service = restarted(&cloud, &vault).await;
+        let _ = listed(&service, &cloud, rows()).await;
+        assert!(held_at(&service, past_the_window()), "{what}: restarted");
+        service
+            .action(Action::StationPermission {
+                device_id: BROWSER.into(),
+                allow: true,
+            })
+            .await
+            .unwrap();
+        assert!(
+            held_at(&service, past_the_window()),
+            "{what}: allowed station control again"
+        );
+        drop(service);
+        let service = restarted(&cloud, &vault).await;
+        let _ = listed(&service, &cloud, rows()).await;
+        assert!(
+            held_at(&service, past_the_window()),
+            "{what}: the next restart"
+        );
+    }
+}
+
+/// ★ A DEVICE APPROVED AGAIN LOSES ITS KEPT WAIVER WITH ITS GRANT: after a restart the service lists
+/// the device at another approval, so the grant kept for it is not given back, and the waiver kept
+/// beside that grant goes with it: held, also once allowed station control again. CONTROL: listed
+/// at the same approval, the waiver is kept.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_approved_again_loses_its_kept_waiver_with_its_grant() {
+    for generation in [2, 3] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        drop(allowed(&cloud, &vault).await);
+        let mut rows = rows();
+        rows[0]["generation"] = generation.into();
+        *cloud.devices.lock().unwrap() = json!({ "devices": rows.clone() }).to_string();
+        let service = restarted(&cloud, &vault).await;
+        let _ = listed(&service, &cloud, rows).await;
+        let kept = generation == 2;
+        let want: &[&str] = if kept { &[BROWSER] } else { &[] };
+        assert_eq!(
+            waivers_become(&vault, want).await,
+            want,
+            "generation {generation}: kept"
+        );
+        if !kept {
+            service
+                .action(Action::StationPermission {
+                    device_id: BROWSER.into(),
+                    allow: true,
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            held_at(&service, past_the_window()),
+            !kept,
+            "generation {generation}"
+        );
+    }
+}
+
+/// ★ A STATE THAT WILL NOT READ AT LOAD RESTORES NO WAIVER AND KEEPS NONE: Remote stays off, and the
+/// waivers entry is removed, so a later launch that reads the state cannot restore it either.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_state_that_will_not_read_removes_the_kept_waivers() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    drop(allowed(&cloud, &vault).await);
+    vault.refusing.lock().unwrap().insert("state");
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    assert!(waivers_entry_removed(&vault).await, "entry removed");
+    assert!(!recorded(&service), "nothing restored");
 }
