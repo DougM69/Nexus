@@ -1804,6 +1804,12 @@ const SSTV_RADIO_HAS_MIC: &str = "SSTV can't send while the radio has the mic: w
 /// the desktop. English at the engine, like the gates' other answers.
 pub const CLOCK_REPAIR_HOLDS_TX: &str =
     "A clock repair is in progress — nothing starts transmitting until it finishes.";
+/// …and the same answer when a newly signed-in device holds transmit (the 2026-10-23 sign-in
+/// decision): a start is refused through every up-front TX gate until the device is approved at the
+/// station. Additive to the clock-repair hold; it refuses a start and never stops anything.
+pub const REMOTE_HOLD_HOLDS_TX: &str =
+    "A device signed in moments ago holds transmit — nothing starts transmitting until it is \
+     approved at the station.";
 /// …and the warning line of a cockpit whose queued send the hold dropped: dropped, not held for
 /// later, like every other refused send.
 const CLOCK_REPAIR_DROPPED: &str = "Not sent: a clock repair was in progress, so it was \
@@ -11274,6 +11280,12 @@ impl Engine {
         if self.clock_repair_holds_tx() {
             return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
         }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision): an
+        // Enter send queues CW under the already-armed latch, so the arm gate in `set_tx_enabled`
+        // never sees it — refuse it here, before anything is queued ([`Self::remote_transmit_held`]).
+        if self.remote_transmit_held() {
+            return Err(REMOTE_HOLD_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err(CW_ARMED_TX_OFF.to_string());
         }
@@ -11528,6 +11540,10 @@ impl Engine {
     pub fn poll_cw_word(&mut self) -> Option<(String, u32, bool)> {
         let refused = if self.clock_repair_holds_tx() {
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
+        } else if self.remote_transmit_held() {
+            // ⛔ A newly signed-in device holds transmit (the 2026-10-23 sign-in decision): the
+            // same drop as the clock-repair hold, before any further word keys.
+            Some(("a newly signed-in device is on hold", REMOTE_HOLD_DROPPED))
         } else if !self.tx_enabled {
             Some(("transmit is off", CW_REFUSED_TX_OFF))
         } else if let Some(why) = self.connection_tx_refusal() {
@@ -11694,6 +11710,12 @@ impl Engine {
         if on && !self.manual_ptt && self.clock_repair_holds_tx() {
             return;
         }
+        // ⛔ Nor while a newly signed-in device holds transmit (the 2026-10-23 sign-in decision): a
+        // new key is refused under the already-armed latch, one already held is never dropped by it
+        // ([`Self::remote_transmit_held`]). The release is never refused.
+        if on && !self.manual_ptt && self.remote_transmit_held() {
+            return;
+        }
         // Nor onto a CW word ([`Self::cw_sending`]); the release is never refused.
         if on && !self.manual_ptt && self.cw_sending() {
             return;
@@ -11756,6 +11778,9 @@ impl Engine {
             || !self.tx_allowed()
             || (!re_assert && self.tx_owner().is_some())
             || (!re_assert && self.clock_repair_holds_tx())
+            // …nor while a newly signed-in device holds transmit (the 2026-10-23 sign-in
+            // decision), except the re-assert of a key already held, which the hold never drops.
+            || (!re_assert && self.remote_transmit_held())
         {
             return false;
         }
@@ -12564,6 +12589,11 @@ impl Engine {
         if self.clock_repair_holds_tx() {
             return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
         }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision): an ATU
+        // tune keys a carrier, so it is refused while the hold stands ([`Self::remote_transmit_held`]).
+        if self.remote_transmit_held() {
+            return Err(REMOTE_HOLD_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err("TX is off — enable TX first".to_string());
         }
@@ -12793,6 +12823,16 @@ impl Engine {
             );
             return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
         }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision): the
+        // voice keyer plays under the already-armed latch, so it is refused while the hold stands
+        // ([`Self::remote_transmit_held`]).
+        if self.remote_transmit_held() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer message refused: a newly signed-in device is on hold",
+            );
+            return Err(REMOTE_HOLD_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             tempo_core::applog::info("tx", "voice-keyer message refused: transmit is off");
             return Err(
@@ -12872,6 +12912,9 @@ impl Engine {
         self.voice_tx.as_ref()?;
         let refused = if self.clock_repair_holds_tx() {
             Some("a clock repair is in progress")
+        } else if self.remote_transmit_held() {
+            // ⛔ A newly signed-in device holds transmit (the 2026-10-23 sign-in decision).
+            Some("a newly signed-in device is on hold")
         } else if !self.tx_enabled {
             Some("transmit is off")
         } else if let Some(why) = self.connection_tx_refusal() {
@@ -22281,6 +22324,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.clock_repair_holds_tx() {
             return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
         }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision): an APRS
+        // beacon keys the rig, so it is refused while the hold stands ([`Self::remote_transmit_held`]).
+        if self.remote_transmit_held() {
+            return Err(REMOTE_HOLD_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err("TX is off — enable TX first".to_string());
         }
@@ -22641,6 +22689,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         let refused = if self.clock_repair_holds_tx() {
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
+        } else if self.remote_transmit_held() {
+            // ⛔ A newly signed-in device holds transmit (the 2026-10-23 sign-in decision): the
+            // same drop as the clock-repair hold, before any further word keys.
+            Some(("a newly signed-in device is on hold", REMOTE_HOLD_DROPPED))
         } else if !self.tx_enabled {
             Some(("transmit is off", APRS_REFUSED_TX_OFF))
         } else if let Some(why) = self.connection_tx_refusal() {
@@ -23195,6 +23247,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.clock_repair_holds_tx() {
             return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
         }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision): refused
+        // while the hold stands, before anything is encoded ([`Self::remote_transmit_held`]).
+        if self.remote_transmit_held() {
+            return Err(REMOTE_HOLD_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err(
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
@@ -23249,6 +23306,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let in_section = self.psk_section();
         let refused = if self.clock_repair_holds_tx() {
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
+        } else if self.remote_transmit_held() {
+            // ⛔ A newly signed-in device holds transmit (the 2026-10-23 sign-in decision): the
+            // same drop as the clock-repair hold, before any further word keys.
+            Some(("a newly signed-in device is on hold", REMOTE_HOLD_DROPPED))
         } else if !self.tx_enabled {
             Some(("transmit is off", PSK_REFUSED_TX_OFF))
         } else if let Some(why) = self.connection_tx_refusal().filter(|_| in_section) {
@@ -23518,6 +23579,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.clock_repair_holds_tx() {
             return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
         }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision): refused
+        // while the hold stands, before anything is encoded ([`Self::remote_transmit_held`]).
+        if self.remote_transmit_held() {
+            return Err(REMOTE_HOLD_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err(
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
@@ -23637,6 +23703,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let in_section = self.settings.operating_mode == OperatingMode::Rtty;
         let refused = if self.clock_repair_holds_tx() {
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
+        } else if self.remote_transmit_held() {
+            // ⛔ A newly signed-in device holds transmit (the 2026-10-23 sign-in decision): the
+            // same drop as the clock-repair hold, before any further word keys.
+            Some(("a newly signed-in device is on hold", REMOTE_HOLD_DROPPED))
         } else if !self.tx_enabled {
             Some(("transmit is off", RTTY_REFUSED_TX_OFF))
         } else if let Some(why) = self.connection_tx_refusal().filter(|_| in_section) {
@@ -24855,6 +24925,11 @@ contact yourself."
         if self.clock_repair_holds_tx() {
             return Err(CLOCK_REPAIR_HOLDS_TX.to_string());
         }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision): refused
+        // while the hold stands, before anything waits ([`Self::remote_transmit_held`]).
+        if self.remote_transmit_held() {
+            return Err(REMOTE_HOLD_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err(
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
@@ -24952,6 +25027,10 @@ contact yourself."
         let in_section = self.settings.operating_mode == OperatingMode::Phone;
         let refused = if self.clock_repair_holds_tx() {
             Some(("a clock repair is in progress", CLOCK_REPAIR_DROPPED))
+        } else if self.remote_transmit_held() {
+            // ⛔ A newly signed-in device holds transmit (the 2026-10-23 sign-in decision): the
+            // same drop as the clock-repair hold, before any further word keys.
+            Some(("a newly signed-in device is on hold", REMOTE_HOLD_DROPPED))
         } else if !self.tx_enabled {
             Some(("transmit is off", SSTV_REFUSED_TX_OFF))
         } else if let Some(why) = self.connection_tx_refusal().filter(|_| in_section) {
@@ -27521,6 +27600,10 @@ contact yourself."
             || self.cw_sending()
             || !self.tx_allowed()
             || self.clock_repair_holds_tx()
+            // ⛔ Nor while a newly signed-in device holds transmit (the 2026-10-23 sign-in
+            // decision): an armed run misses its overs until the device is approved, and keeps its
+            // arm for the ones after, exactly as under a clock repair ([`Self::remote_transmit_held`]).
+            || self.remote_transmit_held()
             || self.tci_holds_tx()
             || self.broker_ptt
         {

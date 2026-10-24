@@ -574,6 +574,7 @@ export const FR: PartialCatalog = {
   "client.ptt.refusal.tuning": "La station est en cours d'accord.",
   "client.ptt.refusal.otherOwner": "Un autre appareil occupe l'émetteur.",
   "client.ptt.refusal.clockRepair": "La station règle son horloge.",
+  "client.ptt.refusal.onHold": "Cet appareil doit être approuvé à la station avant de pouvoir émettre.",
   "client.ptt.refusal.noPresence": "La liaison avec la station a été perdue.",
   "client.ptt.refusal.noFeed": "Aucun microphone n'est configuré sur cet ordinateur.",
   "client.ptt.refusal.noAudio": "Aucun son de microphone n'atteint la station.",

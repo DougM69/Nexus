@@ -102,6 +102,8 @@ const REFUSED_LOOP: &str = "JTTY stopped: the radio was busy (switching, or held
      what was still queued was dropped. Send it again when you are ready.";
 const REFUSED_CLOCK: &str = "JTTY stopped: a clock repair started, so what was still queued was \
      dropped. Send it again when the repair has finished.";
+const REFUSED_HOLD: &str = "JTTY stopped: a device signed in moments ago and holds transmit, so \
+     what was still queued was dropped. Send it again once it is approved at the station.";
 /// WSJT-X 3.3.0-beta4's words when a segment will not encode (`execute_jtty_tx`,
 /// `widgets/mainwindow_jtty.cpp` 413-416): the whole send is refused.
 const REFUSED_TOO_LONG: &str = "JTTY text not sent: a line does not fit in one message once \
@@ -727,6 +729,11 @@ impl Engine {
         if self.clock_repair_holds_tx() {
             return Err(super::CLOCK_REPAIR_HOLDS_TX.to_string());
         }
+        // ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision): refused
+        // while the hold stands, before anything is encoded ([`Engine::remote_transmit_held`]).
+        if self.remote_transmit_held() {
+            return Err(super::REMOTE_HOLD_HOLDS_TX.to_string());
+        }
         if !self.tx_enabled {
             return Err(
                 "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
@@ -1174,6 +1181,12 @@ impl Engine {
         }
         if self.clock_repair_holds_tx() {
             self.jtty_drop(REFUSED_CLOCK);
+            return JttyTick::Idle;
+        }
+        // ⛔ A newly signed-in device holds transmit (the 2026-10-23 sign-in decision): dropped,
+        // the same as under a clock repair ([`Engine::remote_transmit_held`]).
+        if self.remote_transmit_held() {
+            self.jtty_drop(REFUSED_HOLD);
             return JttyTick::Idle;
         }
         let gates = KbGates {

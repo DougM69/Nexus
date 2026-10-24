@@ -75,6 +75,10 @@ impl Engine {
             || self.tuning
             || self.tx_owner().is_some()
             || self.clock_repair_holds_tx()
+            // ⛔ A newly signed-in device holds transmit (the 2026-10-23 sign-in decision): the
+            // held PTT arms nothing under the already-armed latch until the device is approved
+            // ([`Engine::remote_transmit_held`]).
+            || self.remote_transmit_held()
         {
             return false;
         }
@@ -130,6 +134,9 @@ impl Engine {
         }
         if self.clock_repair_holds_tx() {
             return Some(PttRefusal::ClockRepair);
+        }
+        if self.remote_transmit_held() {
+            return Some(PttRefusal::OnHold);
         }
         if !self.remote_presence.as_ref().is_some_and(|p| p.valid(now)) {
             return Some(PttRefusal::NoPresence);
@@ -1026,6 +1033,35 @@ mod tests {
         );
         e.set_remote_mic_feed(MicFeed::default());
         assert!(e.arm_remote_mic(t0), "control: with a feed it arms");
+    }
+
+    /// ★ A newly signed-in device's held PTT arms nothing under the already-armed latch (the
+    /// 2026-10-23 sign-in decision): the hold refuses the arm though everything else a press needs
+    /// is in place, and `ptt_refusal` names it. Lifted, the same press arms — the control.
+    #[test]
+    fn a_sign_in_hold_refuses_the_mic_arm_under_an_armed_latch() {
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.set_remote_mic_feed(MicFeed::default());
+        e.set_operating_mode("phone", false);
+        assert!(e.tx_enabled(), "premise: entering Phone armed the latch");
+        let t0 = Instant::now();
+        e.hold_remote_presence(
+            TransmitAuthority::default().permit(t0 + PRESENCE).unwrap(),
+            t0,
+        );
+        e.set_remote_transmit_held(true);
+        assert!(
+            !e.arm_remote_mic(t0),
+            "held: the mic arms nothing under the armed latch"
+        );
+        assert!(!e.mic_armed(), "and nothing is armed");
+        assert_eq!(e.ptt_refusal(t0), Some(PttRefusal::OnHold));
+
+        e.set_remote_transmit_held(false);
+        assert!(
+            e.arm_remote_mic(t0),
+            "control: the arm takes once the hold is off"
+        );
     }
 
     // ── Why a press would not key (pttRefusal, display only) ──────────────────────────────────

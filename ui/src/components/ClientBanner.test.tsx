@@ -527,6 +527,7 @@ describe('why a PTT press here did not key the station (the client-status refusa
       ['tuning', EN['client.ptt.refusal.tuning']],
       ['otherOwner', EN['client.ptt.refusal.otherOwner']],
       ['clockRepair', EN['client.ptt.refusal.clockRepair']],
+      ['onHold', EN['client.ptt.refusal.onHold']],
       ['noPresence', EN['client.ptt.refusal.noPresence']],
       ['noFeed', EN['client.ptt.refusal.noFeed']],
       ['noAudio', EN['client.ptt.refusal.noAudio']],

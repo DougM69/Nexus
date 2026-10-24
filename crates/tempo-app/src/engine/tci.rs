@@ -23,7 +23,7 @@
 //! | 4 | the radio's connection can transmit; for a `tci` over, a radio that takes the audio Nexus plays, not its own microphone | `Connection`, `RadioMic` |
 //! | 5 | the licence: a `tci` over across its whole passband, a microphone key as Nexus's own, Tune at its carrier, CW as Nexus's own CW | `Licence` |
 //! | 6 | nothing else owns the transmitter (a program re-asserting its own key passes, and its CW queues behind its own) | `Owner` |
-//! | 7 | no clock repair holds transmit (nor drops a key already held; CW is never admitted under one) | `ClockRepair` |
+//! | 7 | no clock repair and no sign-in transmit hold (neither drops a key already held; CW is never admitted under either) | `ClockRepair`, `OnHold` |
 //! | 8 | the section: a `tci` over or a microphone key in Phone, CW in CW, Tune in any; a `tci` over in Digital not yet, nor in any section from a program whose last `modulation:` asked a data mode; and a `tci` over only from a program whose last `modulation:` asked a voice mode | `Section`, `SlotTimed`, `VoiceMode` |
 //! | 9 | a `tci` over has the program's audio stream started | `AudioStream` |
 //!
@@ -263,6 +263,12 @@ impl Engine {
         // lasts (`poll_cw_word`), so a program's CW is never queued under one, its own included.
         if (!again || ask == Ask::Cw) && self.clock_repair_holds_tx() {
             return Err(Refusal::ClockRepair);
+        }
+        // …nor while a newly signed-in device holds transmit (the 2026-10-23 sign-in decision): a
+        // program's key is refused under the already-armed latch until the device is approved,
+        // except the re-assert of a key already held, as with the clock repair.
+        if (!again || ask == Ask::Cw) && self.remote_transmit_held() {
+            return Err(Refusal::OnHold);
         }
         // A data-mode over from a program is held like FT8, in any section (module header).
         if ask == Ask::Over && self.tci_asked(program) == Some(Asked::Data) {

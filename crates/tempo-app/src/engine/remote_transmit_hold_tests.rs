@@ -149,3 +149,79 @@ fn disarming_is_honoured_while_held() {
     e.set_tx_enabled(false);
     assert!(!e.tx_enabled(), "TX Off is honoured while held");
 }
+
+// ── The hold under an ALREADY-ARMED latch ───────────────────────────────────────────────────────
+//
+// The gates above all catch the ARM (`set_tx_enabled`, which every section's entry and Call CQ
+// funnel through). These catch a start that keys UNDER a latch that was already up when a held
+// device took control — the paths the arm gate never sees. Each starts with the latch armed and
+// the hold NOT yet set, so the refusal is the hold's own and not the latch's; the second try, with
+// the hold lifted, is the control.
+
+/// ★ An FT over cannot START under the already-armed latch while held: `plan_tx` refuses the over
+/// and leaves the arm up, exactly as under a clock repair. The over goes with no hold — the control.
+#[test]
+fn an_ft_over_is_refused_under_an_armed_latch() {
+    let mut e = Engine::new("K2DEF", "FN31", 0);
+    e.set_tx_enabled(true);
+    e.broadcast("CQ K2DEF FN31");
+    e.set_remote_transmit_held(true);
+    assert!(
+        e.plan_tx(0).is_none(),
+        "held: the FT over is refused under the armed latch"
+    );
+    assert!(
+        e.tx_enabled(),
+        "the latch is left armed — the hold refuses a start, never a disarm"
+    );
+
+    let mut c = Engine::new("K2DEF", "FN31", 0);
+    c.set_tx_enabled(true);
+    c.broadcast("CQ K2DEF FN31");
+    assert!(
+        c.plan_tx(0).is_some(),
+        "control: the over plans with no hold"
+    );
+}
+
+/// ★ A keyboard-mode (RTTY) send under the already-armed latch is refused while held — the send
+/// gate's own answer — and goes once the hold is off.
+#[test]
+fn a_keyboard_send_is_refused_under_an_armed_latch() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    e.set_operating_mode("rtty", false);
+    assert!(e.tx_enabled(), "premise: entering RTTY armed the latch");
+    e.set_remote_transmit_held(true);
+    assert_eq!(
+        e.rtty_send_text("\r\nCQ TEST W9XYZ "),
+        Err(REMOTE_HOLD_HOLDS_TX.to_string()),
+        "held: the RTTY send is refused under the armed latch"
+    );
+
+    e.set_remote_transmit_held(false);
+    assert!(
+        e.rtty_send_text("\r\nCQ TEST W9XYZ ").is_ok(),
+        "control: the send goes once the hold is off"
+    );
+}
+
+/// ★ A manual phone PTT key under the already-armed latch is refused while held (a new key only;
+/// a release is never refused), and keys once the hold is off.
+#[test]
+fn a_manual_ptt_key_is_refused_under_an_armed_latch() {
+    let mut e = station_in("phone");
+    assert!(e.tx_enabled(), "premise: the phone latch is already armed");
+    e.set_remote_transmit_held(true);
+    e.set_ptt(true);
+    assert!(
+        !e.manual_ptt(),
+        "held: the manual key is refused under the armed latch"
+    );
+
+    e.set_remote_transmit_held(false);
+    e.set_ptt(true);
+    assert!(
+        e.manual_ptt(),
+        "control: the key takes once the hold is off"
+    );
+}

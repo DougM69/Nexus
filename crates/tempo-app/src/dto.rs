@@ -1351,6 +1351,9 @@ pub enum PttRefusal {
     OtherOwner,
     /// The station is repairing its clock, which holds transmit.
     ClockRepair,
+    /// This device signed in moments ago and is held from transmit until it is approved at the
+    /// station (the 2026-10-23 sign-in decision).
+    OnHold,
     /// There is no live transmit presence for this computer (the link dropped).
     NoPresence,
     /// No microphone feed is set up on this computer for the audio to come from.
