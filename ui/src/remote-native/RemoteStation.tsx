@@ -155,6 +155,8 @@ export function RemoteStation() {
       : issue === 'inviteLimit' ? t('remote.account.inviteLimit')
       : issue === 'noKey' ? t('remote.vaultFailed')
       : issue === 'notSignInDevice' ? t('remote.account.allowTransmitGone')
+      // Removed on every road the station could link it to; the other list may still hold it.
+      : issue === 'removeElsewhere' ? t('remote.removeElsewhere')
       : t('remote.requestFailed')}</p>}
     {/* S3-M1: browsers check this station's stream against the key the service recorded for it at
         pairing. Another one there is not fixed by waiting, so it gets its own line until it is. */}

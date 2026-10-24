@@ -357,6 +357,7 @@ export const JA: PartialCatalog = {
   "remote.account.allowTransmitGone": "この機器は送信を待っていません。削除されたか、サインインで追加されたものではありません。",
   "remote.account.unconfirmed": "Remote サービスはこの端末があなたのものだとしていますが、Nexus は確認できませんでした。自分で追加した場合にだけ承認してください。",
   "remote.account.removalWaiting": "ここで削除しました。この局がオンラインに戻ると Remote サービスに伝わります。",
+  "remote.removeElsewhere": "削除しました。このコンピューターが「あなたのコンピューター」または「ペアリング済みのコンピューター」にもあるかどうかを Nexus は確認できませんでした。両方の一覧を確認し、あればそこでも削除してください。",
   "remote.account.people": "メンバー",
   "remote.account.peopleHint": "サインインに使うアドレスで招待します。その人がサインインすると端末が追加されます。操作に招待した人は、あなたの局からあなたのコールサインで送信します。免許人としての責任はあなたにあります。",
   "remote.account.noPeople": "招待した人はいません。",

@@ -448,6 +448,7 @@ export const EN = {
   "remote.account.allowTransmitGone": "That device is no longer waiting to transmit. It was removed, or it was not added by signing in.",
   "remote.account.unconfirmed": "The Remote service says this device is yours, but Nexus could not confirm it. Approve it only if you added it yourself.",
   "remote.account.removalWaiting": "Removed here. The Remote service hears of it when this station is back online.",
+  "remote.removeElsewhere": "Removed. Nexus could not confirm whether this computer is also under “Your computers” or “Paired computers”. Check both lists, and remove it there too if it is.",
   "remote.account.people": "People",
   "remote.account.peopleHint": "Invite someone by the address they sign in with. Their devices are added when they sign in. Someone invited to operate transmits with your station, under your callsign: you stay responsible as its licensee.",
   "remote.account.noPeople": "Nobody is invited.",

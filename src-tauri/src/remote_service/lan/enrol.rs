@@ -258,6 +258,26 @@ impl Enrolment {
         Arc::new(move || pairing() || enrolment.open())
     }
 
+    /// Whether `proof` holds for a device of `kind` with exactly `keys` (its internet key, then its
+    /// LAN key), as an enrolment's must, checked against what the station keeps now: the one
+    /// record that says a listed computer and a computer in the book are the same one, so a Remove
+    /// at the shack ends both (`remote_service::Control::roads`). Never while unarmed.
+    pub(crate) fn vouches(&self, proof: &str, kind: &str, keys: &[&[u8]]) -> bool {
+        self.ready().is_some_and(|ready| {
+            account::vouched(
+                proof,
+                kind,
+                keys,
+                &ready.keys,
+                ready.tenant,
+                &ready.owner,
+                &ready.invites,
+                (ready.now_s)(),
+            )
+            .is_ok()
+        })
+    }
+
     /// The people it takes, while armed: for a test to read.
     #[cfg(test)]
     pub(crate) fn invites(&self) -> Option<Vec<Invite>> {

@@ -72,6 +72,8 @@ function errorLine(error: string): string {
     case 'credentialStoreUnavailable': return t('remote.lan.vaultFailed')
     case 'lanFull': return t('remote.lan.full')
     case 'noKey': return t('remote.lan.reason.noKey')
+    // Out of this list, and of every road the station could link it to: the other list may still hold it.
+    case 'removeElsewhere': return t('remote.removeElsewhere')
   }
   return t('remote.lan.failed')
 }

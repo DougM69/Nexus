@@ -344,6 +344,8 @@ pub enum Action {
     Enable {},
     Disable {},
     Forget {},
+    /// Approve a device the service lists, at the shack, or remove it (`approve: false`): removed,
+    /// it is gone on every road the station can link it to ([`Control::roads`]).
     Device {
         #[serde(rename = "deviceId")]
         device_id: String,
@@ -380,13 +382,14 @@ pub enum Action {
     /// Close the pairing window early.
     LanCancel {},
     /// Remove a paired computer, at the shack: out at once, its station control and its session
-    /// with it.
+    /// with it, and gone on its internet road too where the station can link the two
+    /// ([`Control::roads`]).
     LanRevoke {
         #[serde(rename = "deviceId")]
         device_id: String,
     },
     /// Reset this station's network identity, at the shack: a new LAN key, and every paired
-    /// computer removed.
+    /// computer removed, each on every road as Remove takes it.
     LanReset {},
     /// Sign in to Nexus Remote, at the shack: the station named `name` is bound to the account the
     /// operator signs in to through the system browser, with no code (`account`). Remote turns on
@@ -891,6 +894,142 @@ impl Control {
                 .any(|(id, _, name, _)| id == device_id && granted.contains(&name))
     }
 }
+/// Where a Remove at the shack was pressed: on a device the service lists, by its id, or on a
+/// computer in the LAN book, by its LAN id.
+#[derive(Clone, Copy)]
+enum Road<'a> {
+    Listed(&'a str),
+    Lan(&'a str),
+}
+/// Every road one device takes to this station, as [`Control::roads`] links them: what a Remove at
+/// the shack ends, all of them at once.
+#[derive(Default)]
+struct Roads {
+    /// Its ids in the service's list: each its station control, its pin, its waiver and its place
+    /// on the room's tunnel, and its listing at the service.
+    listed: std::collections::BTreeSet<String>,
+    /// Its ids in the LAN book.
+    lan: std::collections::BTreeSet<String>,
+    /// The other list may hold it under a link nothing the station keeps proves: a listed computer
+    /// naming its LAN key with no proof that holds, or one of the same name. Left as it is, and the
+    /// shack told to look there too.
+    unconfirmed: bool,
+}
+impl Roads {
+    fn extend(&mut self, other: Roads) {
+        self.listed.extend(other.listed);
+        self.lan.extend(other.lan);
+        self.unconfirmed |= other.unconfirmed;
+    }
+}
+impl Control {
+    /// The roads of the device a Remove was pressed on (`start`): linked only through what the
+    /// station holds. A listed computer and a computer in the LAN `book` (id, name) are one when the
+    /// LAN key it is listed with is the book's and its proof, checked here as an enrolment's is
+    /// (`lan::enrol::Enrolment::vouches`), names that key beside its internet key; two listed ids
+    /// are one computer when the room's tunnel takes both by one name ([`Control::on_tunnel`]: one
+    /// key, pinned here for each). `devices` is the service's last list. A key the list names with
+    /// no proof that holds links nothing.
+    fn roads(&self, devices: &[Device], book: &[(String, String)], start: Road) -> Roads {
+        let in_book = |id: &str| book.iter().any(|(b, _)| b == id);
+        // Listed as approved now: a listing that reaches the station, the only kind worth a word.
+        let now = now_ms();
+        let live = |d: &Device| d.approved == 1 && d.expires_at > now;
+        // (listed id, LAN id), proven or not.
+        let (mut proven, mut unproven) = (Vec::new(), Vec::new());
+        for d in devices.iter().filter(|d| d.kind != Kind::Browser) {
+            let Some(lan_key) = d.lan_key.as_deref() else {
+                continue;
+            };
+            let Some(lan_id) = fingerprint(lan_key)
+                .and_then(|pin| tempo_stream::protocol::hex_bytes(&pin))
+                .and_then(|pin| <[u8; 32]>::try_from(pin).ok())
+                .map(|pin| lan::device_id(&pin))
+                .filter(|id| in_book(id))
+            else {
+                continue;
+            };
+            let kind = if d.kind == Kind::Phone {
+                "phone"
+            } else {
+                "computer"
+            };
+            let keys = d
+                .public_key
+                .as_deref()
+                .and_then(tempo_stream::protocol::hex_bytes)
+                .zip(tempo_stream::protocol::hex_bytes(lan_key));
+            let holds = d
+                .proof
+                .as_deref()
+                .zip(keys)
+                .is_some_and(|(proof, (key, lan))| {
+                    self.enrolment.vouches(proof, kind, &[&key, &lan])
+                });
+            if holds {
+                proven.push((d.id.clone(), lan_id));
+            } else if live(d) {
+                unproven.push((d.id.clone(), lan_id));
+            }
+        }
+        let tunnel: Vec<(String, String)> = self
+            .on_tunnel()
+            .map(|(id, _, name, _)| (id.clone(), name))
+            .collect();
+        let mut roads = Roads::default();
+        match start {
+            Road::Listed(id) => roads.listed.insert(id.to_string()),
+            Road::Lan(id) => roads.lan.insert(id.to_string()),
+        };
+        loop {
+            let before = roads.listed.len() + roads.lan.len();
+            for (listed, lan) in &proven {
+                if roads.listed.contains(listed) || roads.lan.contains(lan) {
+                    roads.listed.insert(listed.clone());
+                    roads.lan.insert(lan.clone());
+                }
+            }
+            for (id, name) in &tunnel {
+                if tunnel
+                    .iter()
+                    .any(|(other, same)| same == name && roads.listed.contains(other))
+                {
+                    roads.listed.insert(id.clone());
+                }
+            }
+            if roads.listed.len() + roads.lan.len() == before {
+                break;
+            }
+        }
+        // Said, never acted on: a link no proof makes, and a computer of the same name in the other
+        // list.
+        let names = |ids: &std::collections::BTreeSet<String>, lan: bool| -> Vec<String> {
+            ids.iter()
+                .filter_map(|id| match lan {
+                    true => book.iter().find(|(b, _)| b == id).map(|(_, n)| n.clone()),
+                    false => devices
+                        .iter()
+                        .find(|d| d.id == *id && d.kind != Kind::Browser && live(d))
+                        .map(|d| d.name.clone()),
+                })
+                .collect()
+        };
+        let (listed_names, lan_names) = (names(&roads.listed, false), names(&roads.lan, true));
+        roads.unconfirmed = unproven
+            .iter()
+            .any(|(listed, lan)| roads.listed.contains(listed) != roads.lan.contains(lan))
+            || devices.iter().any(|d| {
+                d.kind != Kind::Browser
+                    && live(d)
+                    && !roads.listed.contains(&d.id)
+                    && lan_names.contains(&d.name)
+            })
+            || book
+                .iter()
+                .any(|(id, name)| !roads.lan.contains(id) && listed_names.contains(name));
+        roads
+    }
+}
 /// A computer (or phone) the service lists as approved: the pin approving it as listed makes, the
 /// fingerprint of the key listed for it, and when its approval ends.
 struct Native {
@@ -1356,23 +1495,121 @@ impl Service {
                 if !identifier(device_id) {
                     return Err("invalidRequest");
                 }
-                let (lan, device) = (self.lan()?.ok_or("serviceUnavailable")?, device_id.clone());
-                // Off this thread, since the credential store can block. Inside, the computer is
-                // out and its control revoked before the store is written.
-                tokio::task::spawn_blocking(move || lan.revoke(&device))
-                    .await
-                    .map_err(|_| "serviceUnavailable")??;
+                self.lan()?.ok_or("serviceUnavailable")?;
+                // Gone on every road: its internet road too, where the station can link it.
+                let roads = self.roads(Road::Lan(device_id))?;
+                self.end_roads(&roads).await?;
                 return self.status();
             }
             Action::LanReset {} => {
                 let lan = self.lan()?.ok_or("serviceUnavailable")?;
-                tokio::task::spawn_blocking(move || lan.reset())
+                // Each paired computer's other roads, read before the book forgets them.
+                let mut roads = Roads::default();
+                for computer in lan.status().devices {
+                    roads.extend(self.roads(Road::Lan(&computer.id))?);
+                }
+                roads.lan.clear();
+                let reset = tokio::task::spawn_blocking(move || lan.reset())
                     .await
-                    .map_err(|_| "serviceUnavailable")??;
+                    .map_err(|_| "serviceUnavailable")
+                    .and_then(|reset| reset);
+                let ended = self.end_roads(&roads).await;
+                reset?;
+                ended?;
+                return self.status();
+            }
+            // Remove at the shack, wherever the device shows: gone on every road the station can
+            // link it to. A request out of shape is refused by the controller, as before.
+            Action::Device {
+                device_id,
+                approve: false,
+                key,
+                ..
+            } if identifier(device_id) && key.as_deref().is_none_or(pin_shape) => {
+                let roads = self.roads(Road::Listed(device_id))?;
+                self.end_roads(&roads).await?;
                 return self.status();
             }
             _ => {}
         }
+        self.queued(action).await?;
+        self.status()
+    }
+    /// The roads `start` links to ([`Control::roads`]), as the station knows them now: the service's
+    /// last list and who the LAN book holds.
+    fn roads(&self, start: Road) -> Result<Roads, &'static str> {
+        let devices = self
+            .status
+            .lock()
+            .map_err(|_| "serviceUnavailable")?
+            .devices
+            .clone();
+        let control = self.control.lock().map_err(|_| "serviceUnavailable")?;
+        let book: Vec<(String, String)> = control.lan.as_deref().map_or_else(Vec::new, |lan| {
+            lan.status()
+                .devices
+                .into_iter()
+                .map(|computer| (computer.id, computer.name))
+                .collect()
+        });
+        Ok(control.roads(&devices, &book, start))
+    }
+    /// Ends every road in `roads`. Out at the station first: each listed id's station control, pin,
+    /// waiver and place on the room's tunnel at once, then each LAN id out of the book. Then the
+    /// service is told of each listed id, or the removal kept for it ([`Controller::queue_removal`]).
+    /// FAIL CLOSED: every road is ended whatever another answers, so a failure leaves less access,
+    /// never more, and the first failure is what the shack is shown; with none, `removeElsewhere`
+    /// when the other list may hold it under a link the station could not prove.
+    async fn end_roads(&self, roads: &Roads) -> Result<(), &'static str> {
+        if let Ok(mut control) = self.control.lock() {
+            for id in &roads.listed {
+                control.revoke_browser(id);
+            }
+        }
+        let mut failed = None;
+        let lan = match roads.lan.is_empty() {
+            true => None,
+            false => self.lan().unwrap_or_else(|error| {
+                failed = Some(error);
+                None
+            }),
+        };
+        if let Some(lan) = lan {
+            let ids = roads.lan.clone();
+            // Off this thread, since the credential store can block. Inside, each computer is out
+            // and its control revoked before the store is written.
+            let out = tokio::task::spawn_blocking(move || {
+                let mut out = Ok(());
+                for id in &ids {
+                    out = out.and(lan.revoke(id));
+                }
+                out
+            })
+            .await
+            .map_err(|_| "serviceUnavailable")
+            .and_then(|out| out);
+            failed = out.err();
+        }
+        for id in &roads.listed {
+            let told = self
+                .queued(Action::Device {
+                    device_id: id.clone(),
+                    approve: false,
+                    key: None,
+                    kind: None,
+                })
+                .await;
+            failed = failed.or(told.err());
+        }
+        match failed {
+            Some(error) => Err(error),
+            None if roads.unconfirmed => Err("removeElsewhere"),
+            None => Ok(()),
+        }
+    }
+    /// An action for the controller, behind its queue, with what must be decided at the press
+    /// decided here first.
+    async fn queued(&self, action: Action) -> Result<(), &'static str> {
         let (reply, response) = oneshot::channel();
         {
             let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
@@ -1415,8 +1652,7 @@ impl Service {
                 reply,
             ));
         }
-        response.await.map_err(|_| "serviceUnavailable")??;
-        self.status()
+        response.await.map_err(|_| "serviceUnavailable")?
     }
 }
 impl Drop for Service {

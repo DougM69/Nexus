@@ -367,6 +367,7 @@ export const FR: PartialCatalog = {
   "remote.account.allowTransmitGone": "Cet appareil n’attend plus pour émettre. Il a été retiré, ou il n’a pas été ajouté par connexion.",
   "remote.account.unconfirmed": "Le service Remote dit que cet appareil est le vôtre, mais Nexus n’a pas pu le confirmer. Ne l’approuvez que si vous l’avez ajouté vous-même.",
   "remote.account.removalWaiting": "Retiré ici. Le service Remote en sera informé quand cette station sera de nouveau en ligne.",
+  "remote.removeElsewhere": "Retiré. Nexus n’a pas pu confirmer si cet ordinateur figure aussi dans « Vos ordinateurs » ou « Ordinateurs associés ». Vérifiez les deux listes et retirez-le aussi là s’il y figure.",
   "remote.account.people": "Personnes",
   "remote.account.peopleHint": "Invitez quelqu’un par l’adresse avec laquelle il se connecte. Ses appareils sont ajoutés quand il se connecte. Une personne invitée à opérer émet avec votre station, sous votre indicatif : vous restez responsable en tant que titulaire de la licence.",
   "remote.account.noPeople": "Personne n’est invité.",

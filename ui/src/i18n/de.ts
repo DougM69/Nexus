@@ -352,6 +352,7 @@ export const DE: PartialCatalog = {
   "remote.account.allowTransmitGone": "Dieses Gerät wartet nicht mehr auf das Senden. Es wurde entfernt oder nicht durch Anmeldung hinzugefügt.",
   "remote.account.unconfirmed": "Der Remote-Dienst sagt, dieses Gerät gehöre dir, aber Nexus konnte das nicht bestätigen. Gib es nur frei, wenn du es selbst hinzugefügt hast.",
   "remote.account.removalWaiting": "Hier entfernt. Der Remote-Dienst erfährt davon, sobald diese Station wieder online ist.",
+  "remote.removeElsewhere": "Entfernt. Nexus konnte nicht bestätigen, ob dieser Computer auch unter „Deine Computer“ oder „Gekoppelte Computer“ steht. Prüfe beide Listen und entferne ihn dort ebenfalls, falls er dort steht.",
   "remote.account.people": "Personen",
   "remote.account.peopleHint": "Lade jemanden mit der Adresse ein, mit der er sich anmeldet. Seine Geräte werden hinzugefügt, wenn er sich anmeldet. Wer zum Bedienen eingeladen ist, sendet mit deiner Station unter deinem Rufzeichen: Du bleibst als Lizenzinhaber verantwortlich.",
   "remote.account.noPeople": "Niemand ist eingeladen.",
