@@ -36,6 +36,16 @@ async function approve(app, owner, extra = {}, expected = 200) {
   return { value, stationId: enrollment.id }
 }
 const session = async owner => (await owner.post('session')).value.entitlement
+/** `approve`, keeping the cookie the confirming browser is given: it is approved with the pairing. */
+async function approveHere(app, owner) {
+  const desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Shack' })
+  await owner.post('pair/claim', { code: enrollment.code })
+  const { response } = await owner.post('pair/confirm', { id: enrollment.id })
+  owner.setCookie(response.headers.get('set-cookie'))
+  await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential: credential() })
+  return enrollment.id
+}
 const trialRow = (app, accountId) => app.db.prepare('SELECT * FROM trials WHERE account_id=?').bind(accountId).first()
 const markers = (app, accountId) => app.db.prepare('SELECT kind,value_hmac,proven,method FROM trial_markers WHERE account_id=? ORDER BY kind')
   .bind(accountId).all().then(r => r.results)
@@ -134,6 +144,86 @@ test('a subscriber pairs whatever a sibling sign-in spent, and paying starts no 
   await subscribe(plain, payer.accountId, 'active', Date.now() + 30 * DAY)
   await approve(plain, payer)
   assert.equal(await trialRow(plain, payer.accountId), null)
+})
+
+// ---------------------------------------------------------------------------------------------------
+// FREE DURING THE BETA: REMOTE_BETA_FREE='1' takes away the trial's end, and nothing else.
+
+test('with the beta on, an account past its fourteen days keeps internet use; off, it ends as today', async () => {
+  const beta = await runtime({ bindings: { REMOTE_BETA_FREE: '1' } })
+  try {
+    for (const [app, on] of [[beta, true], [plain, false]]) {
+      const owner = await person(app)
+      const stationId = await approveHere(app, owner)
+      const started = await trialRow(app, owner.accountId)
+      assert.equal(started.source, 'trial', `${on}: approval still starts the one trial`)
+      assert.equal(started.expires_at - started.started_at, 14 * DAY, `${on}: the row keeps its fourteen days`)
+      // Thirty days on: the trial row says it ended sixteen days ago.
+      await app.db.prepare('UPDATE trials SET started_at=?, expires_at=? WHERE account_id=?')
+        .bind(Date.now() - 30 * DAY, Date.now() - 16 * DAY, owner.accountId).run()
+      const { value } = await owner.post('session')
+      assert.equal(value.beta, on, `${on}: the page is told`)
+      if (on) {
+        assert.equal(value.entitlement.state, 'active')
+        assert.equal(value.entitlement.access, 'internet')
+        assert.equal(value.entitlement.plan.kind, 'trial')
+        assert.ok(value.entitlement.expiresAt > Date.now(), 'a date ahead, so every session deadline still has one')
+        // The paired browser is approved with the pairing, so the ticket is the internet gate itself.
+        assert.equal(typeof (await owner.post(`stations/${stationId}/ticket`, {})).value.ticket, 'string')
+      } else {
+        assert.equal(value.entitlement.state, 'ended')
+        assert.equal(value.entitlement.access, 'lan')
+        assert.equal((await owner.post(`stations/${stationId}/ticket`, {}, 403)).value.error, 'trialRequired')
+      }
+    }
+  } finally { await beta.mf.dispose() }
+})
+
+test('the beta removes the expiry only: a ban, the one-trial-per-person rule and deletion still refuse', async () => {
+  const beta = await runtime({ bindings: { REMOTE_BETA_FREE: '1' } })
+  try {
+    // An operator's ban outranks the beta, on the internet and the LAN alike.
+    const banned = await person(beta)
+    const stationId = await approveHere(beta, banned)
+    assert.equal(typeof (await banned.post(`stations/${stationId}/ticket`, {})).value.ticket, 'string', 'positive control: before the ban')
+    await beta.db.prepare('UPDATE trials SET enabled=0 WHERE account_id=?').bind(banned.accountId).run()
+    const ban = await session(banned)
+    assert.deepEqual([ban.state, ban.access, ban.enabled], ['disabled', 'none', false])
+    assert.equal((await banned.post(`stations/${stationId}/ticket`, {}, 403)).value.error, 'trialRequired')
+    assert.equal((await banned.post(`stations/${stationId}/ticket`, { scope: 'lan' }, 403)).value.error, 'trialRequired')
+
+    // One trial per person: a second sign-in on the same mailbox is refused, and told the first is
+    // still running (it is, with no end), where today it would hear that the trial ended.
+    for (const [app, code] of [[beta, 'trialActiveElsewhere'], [plain, 'trialEnded']]) {
+      const address = `op-${crypto.randomUUID()}@example.invalid`
+      const first = await person(app, address)
+      await approve(app, first)
+      await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - DAY, first.accountId).run()
+      const second = await person(app, address)
+      const { value: enrollment } = await app.client().post('enroll', { name: 'Second shack' })
+      assert.equal((await second.post('pair/claim', { code: enrollment.code }, 403)).value.error, code)
+      assert.equal(await trialRow(app, second.accountId), null)
+    }
+
+    // Deletion: the account's stations, devices and sign-in go, and signing in again makes a new account
+    // that the same mailbox cannot start a second trial on. Its deleted sibling's trial is not "running".
+    const address = `op-${crypto.randomUUID()}@example.invalid`, subject = `auth0|${crypto.randomUUID()}`
+    const signIn = async () => {
+      const browser = beta.client(await beta.token(subject, { email: address, email_verified: true }))
+      return { ...browser, accountId: (await browser.post('session')).value.accountId }
+    }
+    const gone = await signIn()
+    const stationId2 = await approveHere(beta, gone)
+    await beta.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now() - DAY, gone.accountId).run()
+    assert.equal(typeof (await gone.post(`stations/${stationId2}/ticket`, {})).value.ticket, 'string', 'positive control: past its days, in use')
+    assert.deepEqual((await gone.post('account/delete', { confirm: 'DELETE' })).value, { ok: true })
+    assert.equal((await gone.post(`stations/${stationId2}/ticket`, {}, 404)).value.error, 'stationUnavailable')
+    const again = await signIn()
+    assert.notEqual(again.accountId, gone.accountId)
+    assert.equal((await session(again)).state, 'none')
+    const { value: enrollment } = await beta.client().post('enroll', { name: 'Shack again' })
+    assert.equal((await again.post('pair/claim', { code: enrollment.code }, 403)).value.error, 'trialEnded')
+  } finally { await beta.mf.dispose() }
 })
 
 // ---------------------------------------------------------------------------------------------------

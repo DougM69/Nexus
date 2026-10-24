@@ -32,6 +32,10 @@ export interface RemoteEnv {
   /** '1' once every Nexus that pairs sends its callsign and PC: an approve without them is refused
    *  `updateRequired` instead of starting a trial guarded by the mailbox alone. */
   TRIAL_IDENTITY_REQUIRED?: string
+  /** '1' while Remote is free during the beta: a trial or a grant that has run out still allows
+   *  internet use (`entitlementOf`). It takes away the END only: who may start one, a ban, deletion,
+   *  the rate limits and the LAN rules are all as they are without it. Unset is today's trial. */
+  REMOTE_BETA_FREE?: string
   /** The private billing Worker's `BillingService` entrypoint, which holds the payment keys this relay never
    *  does. Bound only once that environment's billing Worker is deployed (`billing.deployed` in
    *  scripts/staging-common.mjs); until then it is absent, the billing routes answer `billingNotAvailable`
@@ -414,6 +418,10 @@ export const TRIAL_MS = 14 * 24 * 60 * 60 * 1000
  *  the provider is still retrying it. */
 export const PAID_GRACE_MS = 24 * 60 * 60 * 1000
 export const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000
+/** During the beta, how far ahead an account's internet use is dated. Every session takes the nearer of
+ *  this and its own lease, so switching the beta off ends internet use within a day at most, as the
+ *  trial's own date would have. */
+export const BETA_LEASE_MS = 24 * 60 * 60 * 1000
 
 export type Plan = { kind: 'trial' | 'manual' | 'subscription' | null; status: string | null; periodEnd: number | null; renews: boolean }
 /** The one answer to "what may this account do now", from its trial and its subscription together.
@@ -434,10 +442,13 @@ function paidUntil(row: EntitlementRow): number {
   return 0
 }
 
-export function entitlementOf(accountId: string, row: EntitlementRow, now: number): AccountEntitlement {
+export function entitlementOf(accountId: string, row: EntitlementRow, now: number, beta = false): AccountEntitlement {
   // A disabled trials row is an operator's ban, and outranks anything paid: no internet, no LAN.
   const disabled = row.enabled !== null && row.enabled !== 1
-  const until = disabled ? 0 : Math.max(row.enabled === 1 ? row.expires_at ?? 0 : 0, paidUntil(row))
+  // The beta keeps a trial or a grant running past its date. Only one the account already holds: an
+  // account that never had one still starts it through the same gates (`requireMayPair`).
+  const trialUntil = row.enabled === 1 ? beta ? Math.max(row.expires_at ?? 0, now + BETA_LEASE_MS) : row.expires_at ?? 0 : 0
+  const until = disabled ? 0 : Math.max(trialUntil, paidUntil(row))
   const internet = until > now
   // Four distinct situations, named. Callers must never re-derive these from enabled+expiresAt:
   // that is the arithmetic this field exists to stop two separate consumers from guessing at.
@@ -456,7 +467,7 @@ export async function readEntitlement(env: RemoteEnv, accountId: string, now: nu
     FROM (SELECT ? AS id) a LEFT JOIN trials t ON t.account_id=a.id LEFT JOIN subscriptions s ON s.account_id=a.id`)
     .bind(accountId).first<EntitlementRow>()
   requireValue(row, 'serviceUnavailable', 503)
-  return entitlementOf(accountId, row, now)
+  return entitlementOf(accountId, row, now, env.REMOTE_BETA_FREE === '1')
 }
 
 /** The account as a LAN-only session sees it (a ticket of scope 'lan'): usable on the shack's own
@@ -522,14 +533,16 @@ export async function requireUnspentIdentity(env: RemoteEnv, accountId: string, 
   const self = await env.DB.prepare('SELECT email_hash, mailbox_hash FROM accounts WHERE id=?')
     .bind(accountId).first<{ email_hash: string | null; mailbox_hash: string | null }>()
   if (!self?.email_hash && !self?.mailbox_hash) return
-  const spent = await env.DB.prepare(`SELECT t.expires_at FROM trials t
+  const spent = await env.DB.prepare(`SELECT t.expires_at, t.enabled, a.subject LIKE 'deleted:%' AS deleted FROM trials t
     JOIN accounts a ON a.id = t.account_id
     WHERE a.id != ? AND (a.mailbox_hash = ? OR a.email_hash IN (?, ?)) LIMIT 1`)
-    .bind(accountId, self.mailbox_hash, self.email_hash, self.mailbox_hash).first<{ expires_at: number }>()
+    .bind(accountId, self.mailbox_hash, self.email_hash, self.mailbox_hash).first<{ expires_at: number; enabled: number; deleted: number }>()
   if (!spent) return
   // A sibling account is still RUNNING a trial: that is the same person with two sign-ins, not a
   // second entitlement, so point them at the one they already have rather than starting another.
-  throw new Refusal(spent.expires_at > now ? 'trialActiveElsewhere' : 'trialEnded')
+  // During the beta a sibling's trial runs on past its date unless that account was deleted.
+  const running = spent.expires_at > now || (env.REMOTE_BETA_FREE === '1' && spent.enabled === 1 && spent.deleted !== 1)
+  throw new Refusal(running ? 'trialActiveElsewhere' : 'trialEnded')
 }
 export type StationRow = { id: string; account_id: string; name: string; enabled: number; generation: number; policy_version: number }
 export async function station(env: RemoteEnv, stationId: string): Promise<StationRow> {

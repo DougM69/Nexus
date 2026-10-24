@@ -485,8 +485,10 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     // is false whenever the token carried no verified address - which is exactly the state in which
     // that check silently protects nothing. Without it there is no way to tell the two apart from
     // outside, and a provider that never sends the claim looks identical to one that does.
+    // `beta`: Remote is free during the beta (authority.ts `REMOTE_BETA_FREE`), so the page says that
+    // instead of counting a trial's days.
     return json({ accountId: identity.accountId, entitlement, stations, pending,
-      identityVerified: verified, serverNow: now })
+      identityVerified: verified, serverNow: now, beta: env.REMOTE_BETA_FREE === '1' })
   }
   // SUBSCRIBE AND MANAGE, through the private billing Worker, which holds the payment keys. Above the
   // entitlement, as `session` is: an account whose trial has ended is exactly the one that subscribes, and
