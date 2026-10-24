@@ -36263,8 +36263,14 @@ pub fn run() {
     // ⛔ A computer that drives another station opens nothing of its own station: no settings
     // opened for writing, no logbook, no Engine, no radio, no daemon, no listener and no feed.
     // So it branches here, before the first of them (`client_mode`).
-    if let Some(station) = client_mode::requested() {
-        client_mode::run(station);
+    // A warm relaunch carries `--client <id>` (`requested`); a COLD launch (the icon, with no
+    // argument) connects again to the station this computer last drove, when it still knows it
+    // (`auto_requested`), so the operator is not dropped out of the shack they were driving.
+    let client = client_mode::requested()
+        .map(|station| (station, client_mode::typed_in(std::env::args().skip(1))))
+        .or_else(client_mode::auto_requested);
+    if let Some((station, typed)) = client {
+        client_mode::run(station, typed);
         return;
     }
 

@@ -87,6 +87,7 @@
     "phoneSegLo": null,
     "preampDb": null,
     "preampStepsDb": null,
+    "pttRefusal": "noFeed",
     "qsoRecording": false,
     "radioConfigWarning": null,
     "ratedWatts": 100,

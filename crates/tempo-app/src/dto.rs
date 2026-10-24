@@ -1331,6 +1331,34 @@ pub enum StreamMic {
     Keyed,
 }
 
+/// Why a streamed Remote operator's held PTT would not key the station right now, as the Phone
+/// cockpit and the client banner show it beside the PTT control. DISPLAY ONLY: it names the first
+/// gate [`crate::engine::Engine::arm_remote_mic`] would hit, in that order, and once a press is
+/// armed and keyed it is `None`. Nothing keys, refuses or releases on it — it only explains a
+/// press that did nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PttRefusal {
+    /// The station is not in Phone.
+    NotPhone,
+    /// Transmit is not enabled at the station (the Enable-TX latch is off).
+    TxDisabled,
+    /// The emitted frequency is outside this station's licence privileges here.
+    OutsideLicence,
+    /// The station is sending a tune carrier.
+    Tuning,
+    /// Another source holds the transmitter (a key at the shack, an FT over, the voice keyer…).
+    OtherOwner,
+    /// The station is repairing its clock, which holds transmit.
+    ClockRepair,
+    /// There is no live transmit presence for this computer (the link dropped).
+    NoPresence,
+    /// No microphone feed is set up on this computer for the audio to come from.
+    NoFeed,
+    /// The over is armed, but no microphone audio has arrived to key it.
+    NoAudio,
+}
+
 /// Which kind of problem the station's audio-error line reports ([`RadioStatus::audio_error_kind`]).
 /// Named by the line's writer beside its sentence, so the UI never reads the sentence to learn what
 /// it is about. The words, and how loudly each is shown, are the UI's.
@@ -1803,6 +1831,11 @@ pub struct RadioStatus {
     /// (`tx_busy_reason`), and nothing keys, refuses or releases on this.
     #[serde(default)]
     pub stream_mic: Option<StreamMic>,
+    /// Why a streamed Remote operator's held PTT would not key right now, or `None` when a press
+    /// would (or did) key. DISPLAY ONLY ([`PttRefusal`]): the Phone cockpit and the client banner
+    /// show it beside the PTT control so a press that did nothing is explained.
+    #[serde(default)]
+    pub ptt_refusal: Option<PttRefusal>,
     /// Whether the transmit watchdog has tripped (continuous-TX limit reached)
     /// and auto-halted transmit. Cleared by re-enabling TX.
     #[serde(default)]

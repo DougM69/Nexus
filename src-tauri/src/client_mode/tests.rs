@@ -13,6 +13,8 @@ use tauri::test::MockRuntime;
 mod lock;
 /// The held press against presence as heard here.
 mod reassert;
+/// A cold launch connects again to the station this computer last drove.
+mod reconnect;
 /// The recorder and the held press.
 mod record;
 /// What each call and each hold says of the Stops pressed before it.
@@ -867,6 +869,9 @@ const MAY_REACH: &[&str] = &[
     "crate::ui_state_read",
     "crate::ui_state_path",
     "crate::settings_path",
+    // Where the last client target is kept, beside the default profile's settings: a path. It
+    // resolves a directory and opens nothing.
+    "crate::config_dir_for",
     "crate::write_json_atomic",
     "crate::active_profile",
     "crate::send_main_window_to_the_app",
@@ -954,7 +959,7 @@ fn client_mode_reaches_nothing_of_a_station() {
         );
     }
     let run = &source[source
-        .find("pub(crate) fn run(station: String)")
+        .find("pub(crate) fn run(station: String")
         .expect("run")..];
     let managed: Vec<&str> = run
         .match_indices(".manage(")
@@ -987,7 +992,7 @@ fn run_branches_off_before_anything_of_the_station_opens() {
     let run = &lib[lib.find("\npub fn run() {").expect("run")..];
     let run = &run[..run.find("\n}\n").expect("the end of run")];
     let branch = run
-        .find("if let Some(station) = client_mode::requested() {")
+        .find("let client = client_mode::requested()")
         .expect("the branch");
     for opens in [
         "converting_elsewhere(",
@@ -1006,7 +1011,7 @@ fn run_branches_off_before_anything_of_the_station_opens() {
     }
     assert!(
         run[branch..].starts_with(
-            "if let Some(station) = client_mode::requested() {\n        client_mode::run(station);\n        return;"
+            "let client = client_mode::requested()\n        .map(|station| (station, client_mode::typed_in(std::env::args().skip(1))))\n        .or_else(client_mode::auto_requested);\n    if let Some((station, typed)) = client {\n        client_mode::run(station, typed);\n        return;"
         ),
         "and goes no further into run()"
     );

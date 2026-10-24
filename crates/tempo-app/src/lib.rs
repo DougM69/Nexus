@@ -288,6 +288,8 @@ impl AppState {
                 // from `tx_owner()` every snapshot.
                 tx_busy_reason: None,
                 stream_mic: None,
+                // The engine recomputes this from `ptt_refusal()` every snapshot.
+                ptt_refusal: None,
                 slot: 0,
                 next_slot_ms: 0,
                 // Optimistic until the engine has seen decodes to judge from

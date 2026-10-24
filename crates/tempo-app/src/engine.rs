@@ -26617,6 +26617,9 @@ contact yourself."
         } else {
             None
         };
+        // Why a streamed operator's held PTT would not key right now (display only): the first gate
+        // `arm_remote_mic` would hit, for the Phone cockpit and the client banner to word.
+        s.radio.ptt_refusal = self.ptt_refusal(std::time::Instant::now());
         s.radio.rig_keyed = self.rig_keyed;
         // HRD link: Some(true) delivered, Some(false) HRD unreachable (contacts queued),
         // None nothing sent yet. Only meaningful when HRD forwarding is on.

@@ -140,6 +140,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
+  paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
+  opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping
+  you out of the shack you were driving. Now a fresh launch connects again to the station you last drove, at the
+  address you reached it at; the connecting banner and Leave are still there to come back to this computer's own
+  station, or to wait, if that station is off or gone. Press Leave, or Operate a different station, and that is what
+  the next launch opens. A station you have since removed is not reconnected to.
 - **No more empty window flashing on screen as Nexus starts, on Windows, when it last closed maximised.** Before the
   splash gave way to the app, a launch that reopened a maximised window showed an empty full-screen frame for a
   moment and took it away again. The window is now maximised out of sight and appears once, when the app is ready.
