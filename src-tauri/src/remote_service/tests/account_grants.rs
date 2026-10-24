@@ -1911,6 +1911,11 @@ async fn allow_to_transmit_is_refused_for_any_other_device() {
         vec![BROWSER.to_string()],
         "premise"
     );
+    assert_eq!(
+        removed.held_devices,
+        Vec::<String>::new(),
+        "a removal waiting here: not offered"
+    );
     *cloud.devices.lock().unwrap() = json!({ "devices": rows }).to_string();
     assert_eq!(
         service.action(allow(BROWSER)).await.err(),
@@ -1918,6 +1923,68 @@ async fn allow_to_transmit_is_refused_for_any_other_device() {
         "a removal waiting here"
     );
     assert!(held_at(&service, past_the_window()), "removed: still held");
+}
+
+/// ★ NEVER A WAIVER FOR A DEVICE THE STATION GRANTED NOTHING: a sign-in device whose proof the
+/// station could not confirm, and one waiting for an Approve here, are held from transmit but hold no
+/// station control. Neither is offered Allow to transmit, and a press for either is refused and
+/// waives nothing: still held past any window. Granted later on a proof that holds, the device is
+/// held for its window as any sign-in grant is.
+#[tokio::test(flavor = "multi_thread")]
+async fn allow_to_transmit_is_refused_for_a_device_granted_nothing() {
+    for (granting, proof, why) in [
+        (true, "browserNativeAud", "tokenAudience"),
+        (false, "browser", "approveAtStation"),
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        let service = if granting {
+            launch_granting_on_sign_in(&cloud, &vault)
+        } else {
+            launch_not_granting_on_sign_in(&cloud, &vault)
+        };
+        let mut row = browser_row(&token(proof));
+        row["notified"] = 1.into();
+        let status = listed(&service, &cloud, vec![row]).await;
+        assert_eq!(
+            status.account.unconfirmed,
+            BTreeMap::from([(BROWSER.to_string(), why)]),
+            "{why}: premise"
+        );
+        assert_eq!(status.station_permissions, Vec::<String>::new(), "{why}");
+        assert!(held_at(&service, past_the_window()), "{why}: premise: held");
+        assert_eq!(
+            status.held_devices,
+            Vec::<String>::new(),
+            "{why}: not offered"
+        );
+        assert_eq!(
+            service.action(allow(BROWSER)).await.err(),
+            Some("notSignInDevice"),
+            "{why}: refused"
+        );
+        assert!(
+            held_at(&service, past_the_window()),
+            "{why}: nothing waived"
+        );
+    }
+
+    // Granted later, on its own proof: held for its window, then free.
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let mut row = browser_row(&token("browserNativeAud"));
+    row["notified"] = 1.into();
+    let _ = listed(&service, &cloud, vec![row]).await;
+    assert!(service.action(allow(BROWSER)).await.is_err(), "premise");
+    let granted = listed(&service, &cloud, vec![notified_row(1)]).await;
+    assert_eq!(granted.station_permissions, vec![BROWSER.to_string()]);
+    assert!(
+        held_at(&service, std::time::Instant::now()),
+        "granted later: held for its window"
+    );
+    assert_eq!(granted.held_devices, vec![BROWSER.to_string()], "offered");
+    assert!(!held_at(&service, past_the_window()), "then free");
 }
 
 /// ★ A LOCAL DECISION AFTER THE PRESS WINS: Allow to transmit is pressed, and Remote is taken over or
