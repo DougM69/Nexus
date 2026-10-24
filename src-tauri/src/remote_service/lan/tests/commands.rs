@@ -89,7 +89,8 @@ impl Drop for LetGo {
 /// A shack whose calls run on `app`.
 pub(super) fn running(app: &App) -> Shack {
     let mut s = shack(home());
-    s.shared.commands = Commands::new(app.runner());
+    let voided = s.shared.engine.lock().unwrap().remote_starts_voided();
+    s.shared.commands = Commands::new(app.runner(), voided);
     s
 }
 
@@ -700,7 +701,8 @@ async fn a_burst_of_stops_starts_one_task_per_stop_command_and_none_is_lost() {
     }
     let open = Open(gate.clone());
     let mut s = shack(home());
-    s.shared.commands = Commands::new(runner);
+    let voided = s.shared.engine.lock().unwrap().remote_starts_voided();
+    s.shared.commands = Commands::new(runner, voided);
     let (_stop, stop) = watch::channel(false);
     let (_task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
     let mut socket = socket.unwrap();
@@ -792,7 +794,8 @@ async fn stops_of_one_command_with_arguments_of_their_own_wait_as_a_few_runs() {
     }
     let open = Open(gate.clone());
     let mut s = shack(home());
-    s.shared.commands = Commands::new(runner);
+    let voided = s.shared.engine.lock().unwrap().remote_starts_voided();
+    s.shared.commands = Commands::new(runner, voided);
     let (_stop, stop) = watch::channel(false);
     let (_task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
     let mut socket = socket.unwrap();

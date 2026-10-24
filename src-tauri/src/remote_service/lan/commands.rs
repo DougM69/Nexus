@@ -9,7 +9,9 @@
 //!   (`command_dispatch::admit_stop`), and run at once, behind no other call, its answer ahead of
 //!   everything waiting to be written. It needs no lease and takes no slot. It moves the transmit
 //!   stand-down generation there and then, an atomic step, so every start read before it is void
-//!   wherever it waits. Each Stop command has one thread at work at most, never one per Stop,
+//!   wherever it waits. An unkey (`command_dispatch::is_unkey`: the off half of a switch, or a stop
+//!   of its own over) moves the starts-voided generation instead, which voids them the same way and
+//!   halts nothing. Each Stop command has one thread at work at most, never one per Stop,
 //!   as the Stop road's stopper has: a Stop runs at once when none of its command is running,
 //!   and Stops of that command that land while one runs are run once more after it, after all of
 //!   them have landed, each answered from that run. A Stop of another command never waits behind it.
@@ -34,11 +36,12 @@
 //! presence is read again: a start that ran after presence lapsed is stopped at once.
 //!
 //! ⛔ Stop wins over a start that was in flight. A start is bound, as the reading task reads it, to
-//! the transmit stand-down generation (`command_dispatch::Afar`), written into its arguments; its
-//! handler runs it only if that generation still stands under the Engine lock it runs in
-//! (`command_dispatch::still_bound`). A Stop read after it on this link, a Stop on its road, presence
-//! lapsing, or any halt at the station moves the generation, so a start that waited behind one of
-//! them never runs, and is answered `stopped`. The other computer cannot say it: anything it sends
+//! the transmit stand-down generation and the starts-voided generation (`command_dispatch::Afar`),
+//! written into its arguments; its handler runs it only if both still stand under the Engine lock
+//! it runs in (`command_dispatch::still_bound`). A Stop read after it on this link, a Stop on its
+//! road, presence lapsing, or any halt at the station moves the stand-down, and an unkey read after
+//! it moves the starts-voided generation, so a start that waited behind one of them never runs, and
+//! is answered `stopped`. The other computer cannot say it: anything it sends
 //! under that argument goes before the call is looked at.
 //!
 //! A Stop pressed after a start can also reach the shack first: by the second road, which on the
@@ -69,8 +72,8 @@ use super::stop_road::Ready;
 use super::wire::{self, Assembly, Feed, Whole};
 use crate::command_classes::{class_of, Class};
 use crate::command_dispatch::{
-    admit_stop, forwards, takes_afar, Admission, Afar, Answer, Call, Caller, CallerKey, Dispatcher,
-    Outcome, Profile, Refusal, Reply, Runner, ShackStores, AFAR, STOPPED_SINCE,
+    admit_stop, forwards, is_unkey, takes_afar, Admission, Afar, Answer, Call, Caller, CallerKey,
+    Dispatcher, Outcome, Profile, Refusal, Reply, Runner, ShackStores, AFAR, STOPPED_SINCE,
 };
 use tempo_app::remote_control::Revocation;
 
@@ -99,19 +102,23 @@ pub(crate) struct Event {
     pub(crate) data: String,
 }
 
-/// What the lane takes from the app: how a call runs, and the events raised.
+/// What the lane takes from the app: how a call runs, the events raised, and the Engine's
+/// starts-voided counter (`Engine::remote_starts_voided`), which an unkey moves.
 #[derive(Clone)]
 pub(crate) struct Commands {
     pub(crate) runner: Runner,
     pub(crate) events: broadcast::Sender<Event>,
+    pub(crate) voided: Revocation,
 }
 
 impl Commands {
-    /// The app's handler and a fresh event channel: what the app hands the service.
-    pub(crate) fn new(runner: Runner) -> Self {
+    /// The app's handler, the Engine's starts-voided counter and a fresh event channel: what the
+    /// app hands the service.
+    pub(crate) fn new(runner: Runner, voided: Revocation) -> Self {
         Self {
             runner,
             events: broadcast::channel(EVENTS).0,
+            voided,
         }
     }
 
@@ -131,9 +138,12 @@ impl Default for Commands {
     /// No handler: every call is answered with an error, and no event is raised. A service built
     /// without the app (a test's) has nothing to run.
     fn default() -> Self {
-        Self::new(Arc::new(|_: String, _: Value, answer: Answer| {
-            answer(Err("This station runs no commands.".to_string()))
-        }))
+        Self::new(
+            Arc::new(|_: String, _: Value, answer: Answer| {
+                answer(Err("This station runs no commands.".to_string()))
+            }),
+            Revocation::default(),
+        )
     }
 }
 
@@ -150,6 +160,9 @@ struct Context {
     /// The transmit stand-down generation (the authority's, which every halt at the station moves
     /// too): what a start is bound to as it is read, and what a Stop moves as it is read.
     transmit: Revocation,
+    /// The starts-voided generation (the Engine's): what a start is bound to as it is read too, and
+    /// what an unkey moves as it is read, in place of the stand-down.
+    voided: Revocation,
 }
 
 impl Context {
@@ -243,6 +256,7 @@ impl Lane {
             dispatcher: opening.dispatcher,
             runner: opening.commands.runner,
             transmit: opening.authority.transmit_revocation(),
+            voided: opening.commands.voided,
             authority: opening.authority,
             connection: opening.connection,
             device: opening.device.clone(),
@@ -292,9 +306,16 @@ impl Lane {
             Ok(stop) => {
                 // ⛔ STOP WINS: noted by its number first, where a start read after it is judged;
                 // then every start read before this Stop is void from now, an atomic step taken
-                // before the Stop waits for anything, as the road's Stop takes it.
+                // before the Stop waits for anything, as the road's Stop takes it. ⛔ An unkey
+                // voids them by its own generation and halts nothing: moving the stand-down would
+                // end everything started from afar on the radio loop's next tick
+                // (`Engine::poll_remote_transmit`), the TX latch included.
                 self.context.took_stop(stops);
-                self.context.transmit.revoke();
+                if is_unkey(&stop.cmd, &stop.args) {
+                    self.context.voided.revoke();
+                } else {
+                    self.context.transmit.revoke();
+                }
                 let (context, cmd) = (self.context.clone(), stop.cmd.clone());
                 let turns = self.stops.entry(stop.cmd).or_default();
                 let args = stop.args;
@@ -334,6 +355,7 @@ impl Lane {
         // Read here, on the reading task: a Stop read after this call moves it after this read.
         let afar = takes_afar(&call.cmd).then(|| Afar {
             stand_down: self.context.transmit.generation(),
+            starts_voided: self.context.voided.generation(),
         });
         // ⛔ Then the Stops that overtook it: one pressed after this start that reached the shack
         // first, by the road or ahead of it on the link. Read after the generation, as each Stop is

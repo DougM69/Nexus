@@ -3767,6 +3767,12 @@ pub struct Engine {
     /// with no Remote service revokes a counter nobody reads rather than needing an `Option`.
     /// `halt_tx` moves it — see there for why.
     remote_transmit_stand_down: crate::remote_control::Revocation,
+    /// Moved by an unkey from a computer driving the station (the off half of a transmit switch,
+    /// or a stop that ends only its own over), so a start from afar read before it never runs
+    /// (`command_dispatch::still_bound` in the app). Unlike the stand-down it halts nothing: an
+    /// unkey ends its own over, as at the shack's own screen. The command lane holds the same
+    /// counter (an `Arc` inside, [`Self::remote_starts_voided`]).
+    remote_starts_voided: crate::remote_control::Revocation,
     /// The operator's watch list, as the desktop's main window last sent it — what the Needed
     /// board puts first ([`crate::watchlist`]) and the watch-list alert reads, gates and all. Not
     /// a setting: the list is the desktop's, kept in its ui-state.json, and sent again on every
@@ -6493,6 +6499,7 @@ impl Engine {
             remote_receiver_gen: 0,
             remote_actuation: Default::default(),
             remote_transmit_stand_down: Default::default(),
+            remote_starts_voided: Default::default(),
             watch_list: Vec::new(),
             needed_alerts: crate::needed_alert::NeededAlerts::new(),
             remote_amp_command: None,
@@ -15878,6 +15885,18 @@ impl Engine {
     /// so a stand-down can be asserted to move it without reaching through the Remote service.
     pub fn remote_transmit_stand_down_generation(&self) -> u64 {
         self.remote_transmit_stand_down.generation()
+    }
+
+    /// The counter an unkey from afar moves to void the starts read before it: the command lane
+    /// moves it, a start's handler reads it ([`Self::remote_starts_voided_generation`]).
+    pub fn remote_starts_voided(&self) -> crate::remote_control::Revocation {
+        self.remote_starts_voided.clone()
+    }
+
+    /// The generation a start from afar was read under besides the stand-down: read under the
+    /// Engine lock the start runs in, so an unkey taken since has already moved it.
+    pub fn remote_starts_voided_generation(&self) -> u64 {
+        self.remote_starts_voided.generation()
     }
 
     /// A local amplifier gesture supersedes pending Remote hardware work. This

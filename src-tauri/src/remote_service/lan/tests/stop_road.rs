@@ -65,6 +65,8 @@ mod relayed;
 mod stand_down;
 /// Stop wins over a start or a press that a later Stop overtook on the way.
 mod stop_count;
+/// An unkey from afar ends its own over and nothing else.
+mod unkey;
 
 /// The design's bound for a Stop on this road, flood or no flood.
 const ACKNOWLEDGED: Duration = Duration::from_millis(20);
@@ -1367,7 +1369,7 @@ fn each_road_alone_stops_each_kind_of_over() {
             let app = App::new();
             let mut r = roadside(&app);
             let engine = r.s.shared.engine.clone();
-            r.s.shared.commands = super::super::commands::Commands::new(Arc::new(
+            let runner: crate::command_dispatch::Runner = Arc::new(
                 move |cmd: String, _args: Value, answer: crate::command_dispatch::Answer| {
                     let mut e = engine.lock().unwrap();
                     match cmd.as_str() {
@@ -1382,7 +1384,9 @@ fn each_road_alone_stops_each_kind_of_over() {
                     }
                     answer(Ok(json!({ "ran": cmd })))
                 },
-            ));
+            );
+            let voided = r.s.shared.engine.lock().unwrap().remote_starts_voided();
+            r.s.shared.commands = super::super::commands::Commands::new(runner, voided);
             let mut seat = seated(&r).await;
             key_locally(&mut r.s.shared.engine.lock().unwrap(), kind);
             for (n, cmd) in cockpit_stop(kind).into_iter().enumerate() {
@@ -2592,11 +2596,13 @@ fn the_audio_road_names_nothing_of_the_engine_or_stops_road() {
 async fn an_unchanged_snapshot_is_pushed_every_300_ms_with_a_new_number() {
     let app = App::new();
     let mut r = roadside(&app);
-    r.s.shared.commands = super::super::commands::Commands::new(Arc::new(
+    let runner: crate::command_dispatch::Runner = Arc::new(
         |_cmd: String, _args: Value, answer: crate::command_dispatch::Answer| {
             answer(Ok(json!({"unchanged": true})))
         },
-    ));
+    );
+    let voided = r.s.shared.engine.lock().unwrap().remote_starts_voided();
+    r.s.shared.commands = super::super::commands::Commands::new(runner, voided);
     let mut seat = seated(&r).await;
     let started = Instant::now();
     let mut seen: Vec<(u64, Instant)> = Vec::new();
@@ -2835,7 +2841,7 @@ fn held_on_the_engine(r: &mut Roadside, gate: Gate, held: &'static str) -> Arc<M
     use crate::command_dispatch::{still_bound, Afar, AFAR};
     let ran = Arc::new(Mutex::new(Vec::new()));
     let (engine, record) = (r.s.shared.engine.clone(), ran.clone());
-    r.s.shared.commands = super::super::commands::Commands::new(Arc::new(
+    let runner: crate::command_dispatch::Runner = Arc::new(
         move |cmd: String, args: Value, answer: crate::command_dispatch::Answer| {
             if cmd == "get_snapshot" {
                 return answer(Ok(json!({})));
@@ -2910,7 +2916,9 @@ fn held_on_the_engine(r: &mut Roadside, gate: Gate, held: &'static str) -> Arc<M
             };
             answer(done.map(|()| json!({ "ran": cmd })))
         },
-    ));
+    );
+    let voided = r.s.shared.engine.lock().unwrap().remote_starts_voided();
+    r.s.shared.commands = super::super::commands::Commands::new(runner, voided);
     ran
 }
 

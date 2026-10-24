@@ -29,10 +29,14 @@
 //! Stop wins over a start that was in flight. The command link binds each start to the transmit
 //! stand-down generation as it reads it ([`Afar`]), and its handler checks that generation under the
 //! Engine lock it then runs in ([`still_bound`]): a Stop taken in between, by either road, or any
-//! halt at the station, has moved it, and the start does not run ([`Refusal::Stopped`]). A Stop that
-//! overtook the start on the way (by the second road, or ahead of it on the link) is caught by its
-//! number: every call says how many Stops its computer had pressed when it was made ([`Call`]), and
-//! a start made before a Stop the shack has taken is refused as it is read.
+//! halt at the station, has moved it, and the start does not run ([`Refusal::Stopped`]). An unkey
+//! (the off half of a switch, or a stop that ends only its own over:
+//! `tempo_client::dispatch::is_unkey`) voids the starts read before it the same way, by a
+//! generation of its own, but halts nothing: it ends its own over, as at the shack's own screen,
+//! and what other starts from afar began goes on. A Stop, or an unkey, that overtook the start on
+//! the way (by the second road, or ahead of it on the link) is caught by its number: every call
+//! says how many Stops its computer had pressed when it was made ([`Call`]), and a start made
+//! before a Stop the shack has taken is refused as it is read.
 //!
 //! From afar only those starts arm transmit. A section change, a spot worked or an SSTV channel
 //! picked runs at the shack as its own screen's does, but the lane writes [`Afar`] into it too, and
@@ -102,11 +106,12 @@ use std::time::{Duration, Instant};
 pub(crate) use tempo_client::dispatch::contract_text;
 use tempo_client::dispatch::{argument_refusal, runs_as_stop, Access, STORES};
 pub(crate) use tempo_client::dispatch::{
-    forwards, is_stop, join_ui_state, press_from_afar, route, split_ui_state, store_access,
-    transmit_from_afar, Outcome, Profile, Refusal, Route, Store, Wired, FORWARDED_EVENTS,
+    forwards, is_stop, is_unkey, join_ui_state, press_from_afar, route, split_ui_state,
+    store_access, transmit_from_afar, Outcome, Profile, Refusal, Route, Store, Wired,
+    FORWARDED_EVENTS,
 };
 #[cfg(test)]
-pub(crate) use tempo_client::dispatch::{off_args, Off, OFF_HALVES, STATION_KEYS, WIRED};
+pub(crate) use tempo_client::dispatch::{off_args, Off, OFF_HALVES, STATION_KEYS, UNKEYS, WIRED};
 
 #[cfg(test)]
 mod tests;
@@ -134,14 +139,20 @@ const ERROR_BYTES: usize = 512;
 
 /// What the shack's command lane writes into a call it admitted from another computer that a
 /// handler must run as from afar, under the argument [`AFAR`]: the transmit stand-down generation
-/// as the lane read the call off the link. A start runs only under it ([`still_bound`]); a section
-/// entry arms nothing with it ([`ENTRIES`]). The lane alone writes it; anything the other computer
-/// sends under that name goes before any call is admitted. The shack's own screen never sends it,
-/// so its calls are as they always were.
+/// and the starts-voided generation as the lane read the call off the link. A start runs only under
+/// both ([`still_bound`]); a section entry arms nothing with it ([`ENTRIES`]). The lane alone
+/// writes it; anything the other computer sends under that name goes before any call is admitted.
+/// The shack's own screen never sends it, so its calls are as they always were.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Afar {
+    /// Moved by a Stop on either road and by every halt at the station: what a start from afar
+    /// that has run is ended by ([`started_from_afar`]).
     pub(crate) stand_down: u64,
+    /// Moved by an unkey from afar, which halts nothing (`Engine::remote_starts_voided`). Absent
+    /// reads as the first generation, so once any unkey is taken a start without it is refused.
+    #[serde(default)]
+    pub(crate) starts_voided: u64,
 }
 
 /// The argument [`Afar`] goes under: the name each handler that takes it gives its parameter.
@@ -536,19 +547,23 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
-/// stand-down generation is the one the command lane read it under ([`Afar`]). Asked by the
-/// start's own handler, first, under the Engine lock the start then runs in: a Stop on either road,
-/// the off half of a switch on the link, presence lapsing, or any halt at the station, taken after
-/// the start was read, has moved it, so the start does not run at all. One taken once the start has
-/// run waits for the same lock, and stops what it began. Asked before the start's own work, so a
-/// start whose work halts (a QSY's change of context) never trips on itself. `None`, the shack's own
-/// screen, runs as it always has.
+/// stand-down generation and the starts-voided generation are the ones the command lane read it
+/// under ([`Afar`]). Asked by the start's own handler, first, under the Engine lock the start then
+/// runs in: a Stop on either road, presence lapsing, or any halt at the station has moved the
+/// stand-down, and an unkey on the link (the off half of a switch, or a stop of its own over) has
+/// moved the starts-voided generation, so a start read before either does not run at all. One taken
+/// once the start has run waits for the same lock, and stops what it began. Asked before the
+/// start's own work, so a start whose work halts (a QSY's change of context) never trips on itself.
+/// `None`, the shack's own screen, runs as it always has.
 pub(crate) fn still_bound(
     engine: &tempo_app::engine::Engine,
     afar: Option<&Afar>,
 ) -> Result<(), String> {
     match afar {
-        Some(afar) if engine.remote_transmit_stand_down_generation() != afar.stand_down => {
+        Some(afar)
+            if engine.remote_transmit_stand_down_generation() != afar.stand_down
+                || engine.remote_starts_voided_generation() != afar.starts_voided =>
+        {
             Err(STOPPED_SINCE.to_string())
         }
         _ => Ok(()),
@@ -557,8 +572,9 @@ pub(crate) fn still_bound(
 
 /// ⛔ Note at the station that a start from afar ran under its stand-down, so a revocation of that
 /// stand-down with no halt (the computer's permission to transmit withdrawn) still ends what it
-/// started, queued or turned on, on the radio loop's next tick. `None`, the shack's own screen,
-/// notes nothing. Called after the start's work, in the same hold as [`still_bound`].
+/// started, queued or turned on, on the radio loop's next tick. The starts-voided generation is not
+/// noted: an unkey ends its own over, never what other starts began. `None`, the shack's own
+/// screen, notes nothing. Called after the start's work, in the same hold as [`still_bound`].
 pub(crate) fn started_from_afar(engine: &mut tempo_app::engine::Engine, afar: Option<&Afar>) {
     if let Some(afar) = afar {
         engine.note_started_from_afar(afar.stand_down);

@@ -1624,32 +1624,43 @@ fn this_computers_audio_is_kept_here_and_never_sent() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// ★ Only a Stop press takes the road: the off half of a switch (TX off, PTT up with no press held)
-/// goes by the link alone, as it always has, since TX off lets an FT over finish and a Stop does
-/// not. CONTROL: each stop command does take it.
+/// ★ Only a Stop press takes the road, whose Stop halts everything at the shack: an unkey goes by
+/// the link alone. That is the off half of every switch (TX off, PTT up with no press held, which
+/// Phone's Lock and leaving Phone send too, Tune off, the contest screen's S&P chip), since TX off
+/// lets an FT over finish and a Stop does not; and the voice keyer's stop, which its leaving the
+/// screen sends too, and which ends its own over as at the shack's own screen. CONTROL: each other
+/// stop command does take it.
 #[test]
 fn only_a_stop_press_takes_the_road() {
     let (shack, end) = shack_with_a_road();
     let dir = scratch("road-only-stops");
     let client = client_in(&dir, &shack);
     let screens = screens(&client);
-    for (cmd, args) in [
-        ("set_tx_enabled", json!({"enabled": false})),
-        ("set_ptt", json!({"on": false})),
-        ("set_tune", json!({"on": false})),
-    ] {
+    let unkeys = crate::command_dispatch::OFF_HALVES
+        .iter()
+        .map(|(cmd, ..)| (*cmd, crate::command_dispatch::off_args(cmd).unwrap()))
+        .chain([("set_mode", json!({"mode": "fieldday-sp"}))])
+        .chain(
+            crate::command_dispatch::UNKEYS
+                .iter()
+                .map(|cmd| (*cmd, json!({}))),
+        );
+    for (cmd, args) in unkeys {
         assert!(ask(&screens.main, cmd, args).is_ok(), "{cmd}");
     }
     std::thread::sleep(Duration::from_millis(200));
     assert!(
         lock(&end.heard).is_empty(),
-        "an off half takes the link alone"
+        "an unkey takes the link alone: {:?}",
+        lock(&end.heard)
     );
     let stops: Vec<&str> = crate::command_classes::classes()
-        .filter(|(_, class)| *class == Class::StopsTx)
+        .filter(|(cmd, class)| {
+            *class == Class::StopsTx && !crate::command_dispatch::UNKEYS.contains(cmd)
+        })
         .map(|(cmd, _)| cmd)
         .collect();
-    assert_eq!(stops.len(), 9);
+    assert_eq!(stops.len(), 8);
     for cmd in &stops {
         assert!(ask(&screens.main, cmd, json!({})).is_ok(), "{cmd}");
     }

@@ -73,14 +73,17 @@
 //! second road or ahead of it on the link, still wins: the shack refuses a start or a press made
 //! before a Stop it has taken.
 //!
-//! A Stop press (a command of the stop class) also goes by Stop's second road
+//! A Stop press (a command of the stop class that is no unkey) also goes by Stop's second road
 //! (`crate::lan_client::stop_road`): the handler writes it on that road's socket itself, before it
 //! hands the call to the link, and returns. The road's own thread sends it again until the shack
 //! acknowledges it. Each link's road outlives its link by a minute, so a Stop pressed as a link
-//! drops still goes. The road's heartbeat names the last snapshot the main window fetched, kept here
-//! per window, so a window that hangs lets presence lapse at the shack. The Stop press also ends
-//! this computer's own press, after the Stop is written and with an atomic store, so the audio road
-//! (`crate::lan_client::audio_road`) stops sending without the Stop ever waiting for it.
+//! drops still goes. The road's Stop halts everything at the shack, so an unkey (the off half of a
+//! switch, or a stop of its own over: `is_unkey`) goes by the link alone, and ends its own over as
+//! the shack's own screen ends it. The road's heartbeat names the last snapshot the main window
+//! fetched, kept here per window, so a window that hangs lets presence lapse at the shack. The Stop
+//! press also ends this computer's own press, after the Stop is written and with an atomic store,
+//! so the audio road (`crate::lan_client::audio_road`) stops sending without the Stop ever waiting
+//! for it.
 //!
 //! ## The link and the lease
 //!
@@ -133,8 +136,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::command_classes::{class_of, Class};
 use crate::command_dispatch::{
-    is_stop, join_ui_state, route, split_ui_state, store_access, transmit_from_afar, Refusal,
-    Route, Store, Wired, IN_FLIGHT, PER_COMMAND,
+    is_stop, is_unkey, join_ui_state, route, split_ui_state, store_access, transmit_from_afar,
+    Refusal, Route, Store, Wired, IN_FLIGHT, PER_COMMAND,
 };
 use crate::lan_client::audio_road::{
     self, Headset, Recording, ThisHeadset, CUSHION_MS, INTERNET_CUSHION_MS,
@@ -1418,10 +1421,11 @@ impl Client {
                     self.stops.load(Ordering::SeqCst)
                 };
                 // A Stop press goes by the second road first, written here before the call is
-                // handed to the link, so a link that is stuck or gone holds nothing back. The off
-                // half of a switch is not a Stop press: it goes by the link alone, but the PTT's
-                // off half lets the held press go on its road first.
-                if stop && class_of(&cmd) == Some(Class::StopsTx) {
+                // handed to the link, so a link that is stuck or gone holds nothing back. ⛔ An
+                // unkey is not a Stop press: the road's Stop halts everything at the shack, so it
+                // goes by the link alone, but the PTT's off half lets the held press go on its
+                // road first.
+                if stop && !is_unkey(&cmd, &args) {
                     self.stop_on_the_roads(stops);
                 }
                 if stop && cmd == "set_ptt" {

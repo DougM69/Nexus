@@ -11,7 +11,7 @@
 //!   split by key ([`split_ui_state`], [`join_ui_state`], [`STATION_KEYS`]).
 //! - **The starts wired from afar** ([`WIRED`], [`transmit_from_afar`]) and **Stop's rules**
 //!   ([`is_stop`]: a command that stops a transmission, or the off half of a transmit switch,
-//!   [`OFF_HALVES`]).
+//!   [`OFF_HALVES`]), and which of those only unkey ([`is_unkey`]).
 //! - **The stores** a whole save replaces ([`STORES`]), **the events that cross** ([`forwards`]),
 //!   **the kinds of client** ([`Profile`]), and all of it as **the contract's text**
 //!   ([`contract_text`]), so two builds that differ in any table are two builds.
@@ -363,17 +363,34 @@ pub fn is_stop(cmd: &str, args: &Value) -> bool {
 /// Whether a call runs under Stop's rules: its command stops a transmission, or it is the off half
 /// of a transmit switch.
 pub fn runs_as_stop(class: Option<Class>, cmd: &str, args: &Value) -> bool {
-    class == Some(Class::StopsTx)
-        || OFF_HALVES.iter().any(|(name, arg, off)| {
-            *name == cmd
-                && match (off, args.get(*arg)) {
-                    (Off::False, Some(Value::Bool(false))) => true,
-                    (Off::OneOf(values), Some(Value::String(value))) => {
-                        values.contains(&value.as_str())
-                    }
-                    _ => false,
+    class == Some(Class::StopsTx) || off_half(cmd, args)
+}
+
+/// Whether a call is the off half of a transmit switch ([`OFF_HALVES`]).
+fn off_half(cmd: &str, args: &Value) -> bool {
+    OFF_HALVES.iter().any(|(name, arg, off)| {
+        *name == cmd
+            && match (off, args.get(*arg)) {
+                (Off::False, Some(Value::Bool(false))) => true,
+                (Off::OneOf(values), Some(Value::String(value))) => {
+                    values.contains(&value.as_str())
                 }
-        })
+                _ => false,
+            }
+    })
+}
+
+/// The stops that end only their own over, as the shack's own screen's do: from afar each is an
+/// unkey ([`is_unkey`]), never a Stop of everything.
+pub const UNKEYS: &[&str] = &["stop_voice"];
+
+/// ⛔ Whether a call under Stop's rules only unkeys: the off half of a transmit switch, or one of
+/// [`UNKEYS`]. An unkey goes by the link alone, ahead of everything, and ends its own over at once,
+/// as at the shack's own screen. It voids every start its computer made before it, as a Stop does,
+/// but halts nothing else: what other starts from afar began goes on. Anything else under Stop's
+/// rules is a Stop, by both roads, and halts everything at the station.
+pub fn is_unkey(cmd: &str, args: &Value) -> bool {
+    UNKEYS.contains(&cmd) || off_half(cmd, args)
 }
 
 // --- Stores and their revisions ------------------------------------------------------------------
@@ -554,6 +571,9 @@ pub fn contract_text() -> String {
     }
     for (cmd, arg, off) in OFF_HALVES {
         let _ = writeln!(text, "off {cmd} {arg} {off:?}");
+    }
+    for cmd in UNKEYS {
+        let _ = writeln!(text, "unkey {cmd}");
     }
     for (cmd, store, access) in STORES {
         let _ = writeln!(text, "store {cmd} {store:?} {access:?}");
