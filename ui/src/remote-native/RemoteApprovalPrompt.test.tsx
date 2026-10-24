@@ -293,3 +293,17 @@ it('asks to allow only where the card offers Allow to transmit: never a device n
   await wait(APPROVAL_POLL_MS)
   expect(screen.getByRole('dialog', { name: 'Allow Free to transmit?' })).toBeTruthy()
 })
+
+// The remote PC's own line while it is held (shown by the client banner): it says it can listen and tune, and names the
+// shack's act by the pop-up's name. It offers no time in any language: the station sends none, and a hold whose owner
+// email was never confirmed never lifts by itself, so no time may ever read as a coming unlock.
+it('the held remote PC is told it listens and tunes, and that transmit waits for Allow to transmit at the shack, with no time', async () => {
+  const { DE } = await import('../i18n/de'), { ES } = await import('../i18n/es'), { FR } = await import('../i18n/fr'), { JA } = await import('../i18n/ja')
+  expect(EN['client.ptt.refusal.onHold']).toContain(EN['remote.account.allowTransmit'])
+  expect(EN['client.ptt.refusal.onHold']).toMatch(/listening and tuning/i)
+  for (const catalog of [EN, DE, ES, FR, JA] as Record<string, unknown>[]) {
+    const line = catalog['client.ptt.refusal.onHold'] as string
+    expect(line).toContain(catalog['remote.account.allowTransmit'] as string)
+    expect(line, 'no time, no countdown').not.toMatch(/\d|\{\{/)
+  }
+})

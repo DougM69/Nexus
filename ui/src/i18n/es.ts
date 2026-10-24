@@ -614,7 +614,7 @@ export const ES: PartialCatalog = {
   "client.ptt.refusal.tuning": "La estación está sintonizando.",
   "client.ptt.refusal.otherOwner": "Otro dispositivo tiene el transmisor.",
   "client.ptt.refusal.clockRepair": "La estación está ajustando su reloj.",
-  "client.ptt.refusal.onHold": "Este dispositivo debe ser aprobado en la estación antes de poder transmitir.",
+  "client.ptt.refusal.onHold": "Solo escuchar y sintonizar. La transmisión espera a que se pulse «Permitir transmitir» en la estación.",
   "client.ptt.refusal.noPresence": "Se ha perdido el enlace con la estación.",
   "client.ptt.refusal.noFeed": "No hay micrófono configurado en este ordenador.",
   "client.ptt.refusal.noAudio": "No llega audio del micrófono a la estación.",
