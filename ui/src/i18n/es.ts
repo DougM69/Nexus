@@ -7747,6 +7747,8 @@ export const ES: PartialCatalog = {
   "shell.lane.voiceDropped.keyed": "Nexus no reprodujo el mensaje de voz a las {{time}} UTC: otra cosa ya transmitía o puso la radio en transmisión antes (tu micrófono o el PTT, una portadora de Tune, otro programa), así que no se transmitió nada. El mensaje se descartó, no se retuvo.",
   "shell.lane.clockRepairHold.message": "REPARACIÓN DEL RELOJ — TX EN ESPERA",
   "shell.lane.clockRepairHold.detail": "Nexus está reparando el reloj de este ordenador. Ninguna transmisión empieza hasta que termine la reparación, dos minutos como máximo, para que el reloj no se mueva en mitad de una pasada.",
+  "shell.lane.txOnHeld.message": "TX EN ESPERA — FALTA APROBACIÓN",
+  "shell.lane.txOnHeld.detail": "Un dispositivo Remote recién conectado espera tu aprobación. Apruébalo en Ajustes ▸ Remoto para transmitir.",
   "shell.lane.txPowerZero.detail": "El equipo indica 0% de potencia y la transmisión está armada — activará el PTT y no saldrá nada al aire. Revisa el deslizador Pwr y la potencia del propio equipo para ESTE modo: los Yaesu guardan un nivel distinto para SSB, DATA, CW y AM.",
   "shell.lane.txPowerZero.message": "SIN POTENCIA RF",
   "shell.loading": "Conectando con Nexus…",

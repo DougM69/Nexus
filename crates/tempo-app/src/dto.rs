@@ -2081,6 +2081,13 @@ pub struct RadioStatus {
     /// The status lane says so.
     #[serde(default)]
     pub clock_repair_tx_held: bool,
+    /// A TX On was refused because a newly signed-in device that is not yet approved controls the
+    /// station, and that hold still stands (`Engine::set_remote_transmit_held`). DISPLAY ONLY: the
+    /// status lane says why the latch did not light; the refusal itself is the engine's and
+    /// nothing keys, refuses or releases on this. Skipped when false, so every other snapshot is
+    /// byte for byte what it was.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tx_on_held: bool,
     /// Where decodes come from: the native engine or a WSJT-X/JTDX/MSHV companion.
     #[serde(default)]
     pub source: SourceKind,

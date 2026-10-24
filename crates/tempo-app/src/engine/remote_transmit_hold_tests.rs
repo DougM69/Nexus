@@ -225,3 +225,46 @@ fn a_manual_ptt_key_is_refused_under_an_armed_latch() {
         "control: the key takes once the hold is off"
     );
 }
+
+/// ★ A TX On the hold refused is said in the snapshot (`tx_on_held`, the status lane's line) for
+/// as long as the hold stands, and only then: no refusal, no line; the hold lifted, no line; held
+/// again, no line until a TX On is refused again.
+#[test]
+fn a_refused_tx_on_is_said_while_the_hold_stands() {
+    let mut e = ft8();
+    e.set_remote_transmit_held(true);
+    assert!(!e.snapshot().radio.tx_on_held, "held, nothing refused yet");
+
+    e.set_tx_enabled(true);
+    assert!(!e.tx_enabled(), "premise: refused");
+    assert!(e.snapshot().radio.tx_on_held, "the refusal is said");
+
+    e.set_remote_transmit_held(false);
+    assert!(
+        !e.snapshot().radio.tx_on_held,
+        "the hold lifted: nothing to say"
+    );
+
+    e.set_remote_transmit_held(true);
+    assert!(
+        !e.snapshot().radio.tx_on_held,
+        "held again: no refusal of this hold yet"
+    );
+}
+
+/// ★ The control: unheld, TX On arms and nothing is said; TX Off is never a refusal either.
+#[test]
+fn an_unheld_tx_on_says_nothing() {
+    let mut e = ft8();
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled(), "premise: armed");
+    assert!(!e.snapshot().radio.tx_on_held);
+
+    e.set_remote_transmit_held(true);
+    e.set_tx_enabled_by_operator(false);
+    assert!(!e.tx_enabled(), "TX Off is honoured while held");
+    assert!(
+        !e.snapshot().radio.tx_on_held,
+        "a TX Off is not a refused TX On"
+    );
+}

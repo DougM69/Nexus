@@ -633,6 +633,8 @@ const MIGRATED = [
   'features/voiceDropped.ts',
   // …and of a clock repair holding transmit — migrated from birth.
   'features/clockRepairHold.ts',
+  // …and of a TX On the sign-in hold refused — migrated from birth.
+  'features/txOnHeld.ts',
   // …and the headline for the station's audio-error line, by the kind the station names —
   // migrated from birth. The sentence passes through as data.
   'features/audioError.ts',

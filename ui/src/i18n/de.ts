@@ -7739,6 +7739,8 @@ export const DE: PartialCatalog = {
   "shell.lane.voiceDropped.keyed": "Nexus hat die Sprachnachricht um {{time}} UTC nicht abgespielt: Etwas anderes sendete bereits oder hat das Funkgerät zuerst getastet (Ihr Mikrofon oder die PTT, ein Tune-Träger, ein anderes Programm), daher wurde nichts getastet. Die Nachricht wurde verworfen, nicht zurückgehalten.",
   "shell.lane.clockRepairHold.message": "UHRREPARATUR — TX PAUSIERT",
   "shell.lane.clockRepairHold.detail": "Nexus repariert die Uhr dieses Computers. Bis die Reparatur fertig ist, höchstens zwei Minuten lang, beginnt keine Aussendung, damit sich die Uhr nicht mitten in einem Durchgang verstellt.",
+  "shell.lane.txOnHeld.message": "TX PAUSIERT — FREIGABE NÖTIG",
+  "shell.lane.txOnHeld.detail": "Ein neu angemeldetes Remote-Gerät wartet auf Ihre Freigabe. Geben Sie es unter Einstellungen ▸ Fernzugriff frei, um zu senden.",
   "shell.lane.prop.offline.message": "Ausbreitung: keine Livedaten",
   "shell.lane.prop.offline.detail": "Noch keine Live-Ausbreitungsdaten — Rufzeichen in den Einstellungen setzen und die Internetverbindung prüfen.",
   "shell.lane.prop.cached.message": "Ausbreitung: Cache {{minutes}}m",
