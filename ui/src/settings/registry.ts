@@ -709,12 +709,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'spectrum', 'panadapter', 'wide graph', 'scope colours', 'scope colors'],
   },
   {
-    // The Logbook's globe, and where the Connect map's own choices live.
+    // The Logbook's globe and its saved columns, and where the Connect map's own choices live.
     id: 'map-globe',
     label: 'Map & globe',
     tab: 'appearance',
     keywords: ['globe', 'logbook globe', '3d globe', 'map', 'world map', 'projection', 'layers',
-      'greyline', 'grayline'],
+      'greyline', 'grayline', 'logbook columns', 'columns', 'column width', 'more columns'],
   },
   {
     // Motion: animations and fades, and the switch for a slow computer.

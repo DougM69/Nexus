@@ -73,7 +73,12 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-async function openMapGlobe() {
+async function openMapGlobe(over: Record<string, unknown> = {}) {
+  if (Object.keys(over).length) {
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve({ ...defaultSettings, ...RADIO, mycall: 'KD9TAW', mygrid: 'EN52', activeRadio: 0, radios: [RADIO], ...over }),
+    )
+  }
   render(
     <SettingsPanel
       activeRadioId={0}
@@ -105,5 +110,26 @@ describe('Logbook globe switch (D#278)', () => {
     expect(localStorage.getItem(LOGBOOK_GLOBE_KEY)).toBe('off')
     fireEvent.click(box)
     expect(localStorage.getItem(LOGBOOK_GLOBE_KEY)).toBe('on')
+  })
+})
+
+describe('Logbook columns reset', () => {
+  it('sits beside the globe, is off with nothing saved, and puts back the default table through the one writer', async () => {
+    let section = await openMapGlobe()
+    let reset = screen.getByRole('button', { name: 'Reset' }) as HTMLButtonElement
+    expect(section?.contains(reset), 'the reset is not inside the Map & globe section').toBe(true)
+    expect(reset.disabled, 'nothing saved: nothing to reset').toBe(true)
+    cleanup()
+
+    localStorage.setItem('nexus.logbook.moreColumns', '1')
+    section = await openMapGlobe({ logbookColumns: { shown: ['iota'], hidden: [], widths: { call: 90 } } })
+    reset = screen.getByRole('button', { name: 'Reset' }) as HTMLButtonElement
+    expect(reset.disabled).toBe(false)
+    fireEvent.click(reset)
+    expect(api.get('setLogbookColumns')).toHaveBeenCalledWith(null)
+    // Never through the settings form, which would also move the transmit gate's generation.
+    expect(api.get('setSettings')).not.toHaveBeenCalled()
+    // …and the browser's old "More columns" switch with it, or it would come back.
+    expect(localStorage.getItem('nexus.logbook.moreColumns')).toBe('0')
   })
 })

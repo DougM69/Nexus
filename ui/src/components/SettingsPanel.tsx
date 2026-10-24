@@ -176,7 +176,9 @@ import {
   setUnassistedMode,
   setBetaUpdates,
   setLaunchAtLogin,
+  setLogbookColumns,
 } from '../api'
+import { forgetLegacyMoreColumns } from '../features/logColumns'
 import { AssistanceNote } from './AssistanceNote'
 import { clearCallHistory, getCallHistoryStatus, getScpStatus, importCallHistory, scpEnsure } from '../api'
 import type { CallHistoryStatus, ScpStatus } from '../types'
@@ -2650,6 +2652,14 @@ export function SettingsPanel({
   // just stop arriving — so it gets the writer that a stale form cannot reach. Optimistic, then
   // reconciled from the backend, so the switch does not lag a round-trip; `savedRef` moves with
   // it because this is already persisted and must not read as an unsaved edit.
+  // The Logbook's column choice back to the default table, through its one writer. The Logbook
+  // makes the choice; this is the way back to the defaults from where settings are looked for.
+  const resetLogbookColumns = () => {
+    forgetLegacyMoreColumns()
+    setForm((prev) => (prev ? { ...prev, logbookColumns: null } : prev))
+    if (savedRef.current) savedRef.current = { ...savedRef.current, logbookColumns: null }
+    void withErrorToast(() => setLogbookColumns(null), t('logbook.columns.saveFailed')).then(() => onSaved?.())
+  }
   const toggleBetaUpdates = (on: boolean) => {
     setForm((prev) => (prev ? { ...prev, betaUpdates: on } : prev))
     if (savedRef.current) savedRef.current = { ...savedRef.current, betaUpdates: on }
@@ -4636,6 +4646,20 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.workspace.logbookGlobe.hint')}</span>
                 </span>
               </label>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.workspace.logbookColumns.label')}</span>
+                <span className="settings-input-row">
+                  <button
+                    type="button"
+                    className="settings-test-btn"
+                    onClick={resetLogbookColumns}
+                    disabled={!form.logbookColumns}
+                  >
+                    {t('settings.workspace.logbookColumns.reset')}
+                  </button>
+                  <span className="settings-hint">{t('settings.workspace.logbookColumns.hint')}</span>
+                </span>
+              </div>
               {/* STREET MAPS: shown only once the street map is offered (features/streetMaps.ts), and
                   never on the Remote page — a pack lives on the station's disk. */}
               <SettingsStreetMaps myGrid={form.mygrid} />

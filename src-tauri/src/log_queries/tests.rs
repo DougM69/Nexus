@@ -531,6 +531,54 @@ fn a_page_names_its_query_its_revisions_and_its_rows() {
     }
 }
 
+/// ★ The Logbook's added columns read what the STORE holds. A page row, read from a real store,
+/// carries everything those columns print: the contest block (on the row since the columns came),
+/// the IOTA reference, the passthrough tags — county, zones, continent, distance, the QSL
+/// received dates — and each service's upload stamp. `ui/src/components/Logbook.columns.test.tsx`
+/// renders a row of this shape.
+#[test]
+fn a_page_row_carries_what_the_logbook_columns_show() {
+    let mut records = tempo_core::logbook::parse_adif(
+        "<CALL:6>DL1ABC<QSO_DATE:8>20250102<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW<FREQ:6>14.025\
+         <CONTEST_ID:8>CQ-WW-CW<STX:2>12<SRX:3>345<SRX_STRING:2>14<IOTA:6>EU-005\
+         <CNTY:12>MA,MIDDLESEX<CQZ:2>14<ITUZ:2>28<CONT:2>EU<DISTANCE:6>6512.4\
+         <QSLRDATE:8>20250105<LOTW_QSLRDATE:8>20250203<EQSL_QSLRDATE:8>20250304<EOR>",
+    );
+    records[0].upload.lotw = Some(accepted(1_736_000_000));
+    let d = Dir::new("logbook-columns");
+    let engine = on_store(&d, &records);
+    let a = ask(
+        &LogQueries::default(),
+        &engine,
+        json!({"kind": "page", "query": {"sort": "time", "asc": false, "search": "",
+            "needsConfirmOnly": false}, "offset": 0, "limit": 5}),
+        &|_| None,
+    );
+    let row = &a["rows"][0];
+    assert_eq!(row["call"], "DL1ABC", "premise: the contact is on the page");
+    assert_eq!(row["contest"]["contestId"], "CQ-WW-CW");
+    assert_eq!(row["contest"]["stx"], 12);
+    assert_eq!(row["contest"]["srx"], 345);
+    assert_eq!(row["contest"]["srxString"], "14");
+    assert_eq!(row["ota"]["iota"], "EU-005");
+    assert_eq!(row["upload"]["lotw"]["outcome"], "accepted");
+    let extra: HashMap<String, String> = serde_json::from_value(row["extra"].clone())
+        .map(|v: Vec<(String, String)>| v.into_iter().collect())
+        .expect("extra pairs");
+    for (tag, value) in [
+        ("CNTY", "MA,MIDDLESEX"),
+        ("CQZ", "14"),
+        ("ITUZ", "28"),
+        ("CONT", "EU"),
+        ("DISTANCE", "6512.4"),
+        ("QSLRDATE", "20250105"),
+        ("LOTW_QSLRDATE", "20250203"),
+        ("EQSL_QSLRDATE", "20250304"),
+    ] {
+        assert_eq!(extra.get(tag).map(String::as_str), Some(value), "{tag}");
+    }
+}
+
 /// Whether a change by id with the edit key `key` would be taken now: the contact `id` is still
 /// the version whose key it is — asked of the store with the Engine lock released, as a change
 /// asks it.

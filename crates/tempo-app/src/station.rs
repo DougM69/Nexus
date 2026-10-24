@@ -4004,6 +4004,8 @@ impl StationCore {
             return Ok(Err(refusal));
         }
         let sent = edit.qsl_sent_change(stored)?;
+        // An IOTA box holding something that is not a reference: refused, never stored as junk.
+        edit.iota()?;
         let card = edit.qsl_card_change(stored);
         let mut rec = edit.record(stored);
         // Keep country populated on edits, as `update_qso` does: the form does not carry it. It

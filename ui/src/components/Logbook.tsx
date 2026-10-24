@@ -4,7 +4,7 @@
 // prints — callsign, band, mode, frequency, RST, park reference, QSL letters. Those are wire
 // formats, identical in every language. See the invariant-token rule in `i18n/index.ts`.
 
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, lazy, Suspense, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmDialog } from '../confirm'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -26,6 +26,28 @@ import { SpotDialog } from './SpotDialog'
 import { ParkStateReview } from './ParkStateReview'
 import { ConfirmationReview } from './ConfirmationReview'
 import { LogCountryPicker } from './LogCountryPicker'
+import { LogColumnsMenu } from './LogColumnsMenu'
+import { useViewportClass, useViewportSize } from '../useViewport'
+import {
+  addedColumnText,
+  clampLogColumns,
+  columnName,
+  DEFAULT_LOG_COLUMNS,
+  forgetLegacyMoreColumns,
+  loadLegacyMoreColumns,
+  legacyLogColumns,
+  LOG_COLUMNS,
+  logGridTemplate,
+  logTableMinWidth,
+  renderedColumns,
+  uploadMark,
+  uploadOf,
+  uploadWord,
+  withColumnWidth,
+  type LogColumn,
+  type LogColumnsSaved,
+  type UploadMark,
+} from '../features/logColumns'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
 // Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
@@ -78,6 +100,10 @@ interface Props {
   /** The engine's `logTick` (desktop only): the list reloads when it moves, so a Remote
    *  browser's delete or edit reaches this view instead of leaving it on rows that have moved. */
   logTick?: number
+  /** The saved column choice (`settings.json` → `logbookColumns`); absent = nothing saved yet. */
+  columns?: LogColumnsSaved | null
+  /** A changed column choice, to save — `null` forgets it (the default table). */
+  onColumnsChange?: (columns: LogColumnsSaved | null) => void
 }
 
 interface DraftQso {
@@ -116,10 +142,13 @@ interface DraftQso {
   /** POTA/SIG park references: the worked station's park (`ota.theirRef`, the hunter case) and
    * your own activation (`ota.myRef`). Editable so a park can be viewed, corrected or added on
    * an existing QSO (#60). Only these two of the five `Ota` fields are exposed; the loaded
-   * program (POTA/SOTA/WWFF) and any `iota` ride through `submit` from the stored record so an
-   * edit never clobbers a non-POTA program or drops an island reference. */
+   * program (POTA/SOTA/WWFF) rides through `submit` from the stored record so an edit never
+   * clobbers a non-POTA program. */
   parkTheirRef: string
   parkMyRef: string
+  /** The worked station's IOTA reference ("NA-001"). Blank on an edit leaves the stored one, as
+   * the park boxes do; anything else must be a reference (`IOTA_RE`). */
+  iota: string
   /** #239: your own grid square and rig for this contact (ADIF MY_GRIDSQUARE / MY_RIG). */
   myGrid: string
   myRig: string
@@ -133,8 +162,6 @@ interface DraftQso {
  * against what they type, so it is a token and not prose — translating it would move the gate. */
 const PURGE_WORD = 'DELETE'
 
-/** #239 "More columns" — a per-viewer convenience, so browser storage; any failure reads as off. */
-const MORE_COLUMNS_KEY = 'nexus.logbook.moreColumns'
 /** One contact by its id, with the edit key a change to it must send: read as the list reads its rows,
  *  a page of the order the Logbook opens on. The order can move between the two questions (a contact
  *  logged meanwhile), so a page whose row is not this one is asked again; null when the log no longer
@@ -147,21 +174,6 @@ async function keyedRow(id: string): Promise<{ row: LoggedQso; editKey: string }
     if (page.keys[0] === id && page.rows[0]) return { row: page.rows[0], editKey: page.editKeys[0] }
   }
   return null
-}
-
-function loadMoreColumns(): boolean {
-  try {
-    return window.localStorage.getItem(MORE_COLUMNS_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-function saveMoreColumns(on: boolean): void {
-  try {
-    window.localStorage.setItem(MORE_COLUMNS_KEY, on ? '1' : '0')
-  } catch {
-    /* unavailable — the choice still holds for this session */
-  }
 }
 
 /**
@@ -216,6 +228,17 @@ const WRL_LABEL = 'WRL'
 const QSL_MENU_LABEL = 'QSL▸'
 /** The satellite tag menu. `SAT` is the ADIF `PROP_MODE` value itself, not a word. */
 const SAT_MENU_LABEL = 'SAT▸'
+/** The QSL column's header is the Q-code itself, not a word for it. */
+const QSL_HEADER = 'QSL'
+/** An upload column's mark, a glyph per state; its words are in the tooltip. */
+const UPLOAD_MARK: Record<UploadMark, string> = { done: '✓', waiting: '…', failed: '✗', none: '—' }
+/** An IOTA reference as the log stores one (tempo-core `valid_iota`): a continent, a hyphen and
+ *  three digits. */
+const IOTA_RE = /^(AF|AN|AS|EU|NA|OC|SA)-\d{3}$/
+/** The added columns the edit form has a box for (so its read-only line leaves them out). */
+const FORM_EDITS: ReadonlySet<string> = new Set(['grid', 'iota'])
+/** One Alt+←/→ on a column header: a column's width moves this far. */
+const RESIZE_STEP_PX = 16
 
 function fmtReport(v: string | null): string {
   return v && v.trim() !== '' ? v : '—'
@@ -292,6 +315,8 @@ export function Logbook({
   focusCall,
   onConsumeFocusCall,
   logTick,
+  columns,
+  onColumnsChange,
 }: Props) {
   // The desktop asks `LogSource` for the pages of the list it shows (below, after the sort and
   // search state they are cut by). The source follows `logTick`, so the list moves when the log
@@ -328,6 +353,7 @@ export function Logbook({
     txPower: '',
     parkTheirRef: '',
     parkMyRef: '',
+    iota: '',
     myGrid: '',
     myRig: '',
     qslSentVia: '',
@@ -414,8 +440,31 @@ export function Logbook({
     pickAnchor.current = null
     setPicked((was) => (was.size ? new Set() : was))
   }, [deferredSearch, needsConfirmOnly])
-  // #239: the wide table, off unless this viewer turned it on.
-  const [moreColumns, setMoreColumns] = useState(loadMoreColumns)
+  // THE COLUMNS (features/logColumns.ts). The choice is the one this view just made, else the saved
+  // one, else — nothing saved yet — the table this browser had ("More columns", #239). Clamped on
+  // every read against the window it is shown on, never only when it was dragged.
+  const [madeColumns, setMadeColumns] = useState<LogColumnsSaved | null>(null)
+  const viewport = useViewportClass()
+  const windowPx = useViewportSize()?.width ?? null
+  const narrowWindow = viewport === 'sm' || viewport === 'xs'
+  const colChoice = useMemo(
+    () => clampLogColumns(madeColumns ?? columns ?? legacyLogColumns(loadLegacyMoreColumns()), windowPx),
+    [madeColumns, columns, windowPx],
+  )
+  const cols = useMemo(() => renderedColumns(colChoice, narrowWindow), [colChoice, narrowWindow])
+  const gridTemplate = logGridTemplate(cols, colChoice, narrowWindow)
+  const tableMinW = logTableMinWidth(cols, colChoice)
+  const changeColumns = (next: LogColumnsSaved) => {
+    setMadeColumns(next)
+    onColumnsChange?.(next)
+  }
+  const resetColumns = () => {
+    // The default table, and the browser's old switch with it, or it would bring "More columns"
+    // back the next time nothing is saved.
+    forgetLegacyMoreColumns()
+    setMadeColumns(DEFAULT_LOG_COLUMNS)
+    onColumnsChange?.(null)
+  }
   // "Check park states": the operator-run review of hunted contacts whose park names another
   // state (ParkStateReview). Opened only by its button; it changes nothing until Apply.
   const [showParkStates, setShowParkStates] = useState(false)
@@ -652,6 +701,7 @@ export function Logbook({
       txPower: q.txPower != null ? String(q.txPower) : '',
       parkTheirRef: q.ota?.theirRef ?? '',
       parkMyRef: q.ota?.myRef ?? '',
+      iota: q.ota?.iota ?? '',
       myGrid: q.myGrid ?? '',
       myRig: q.myRig ?? '',
       qslSentVia: q.qslSent?.sent ? (q.qslSent.via ?? 'SENT') : '',
@@ -1573,19 +1623,24 @@ export function Logbook({
     const existing = editing?.row
     const parkTheirRef = draft.parkTheirRef.trim().toUpperCase() || null
     const parkMyRef = draft.parkMyRef.trim().toUpperCase() || null
-    // Only the two park REFS are editable. The program (POTA/SOTA/WWFF) and any IOTA reference
-    // ride through from the stored record: a park-only `ota` would trip the backend's ota-preserve
-    // guard, which tests only the four park fields and would silently drop `iota`. With both refs
-    // blank we send no `ota` at all, so that guard restores the stored `ota` untouched (which is
-    // also why clearing a park to REMOVE it does not take effect — a separate backend change).
+    // The IOTA reference: refused unless it is one, rather than stored as junk no award counts.
+    const iota = draft.iota.trim().toUpperCase() || null
+    if (iota && !IOTA_RE.test(iota)) {
+      setErr(t('logbook.form.iotaInvalid'))
+      return
+    }
+    // The two park REFS and the IOTA reference are editable. The program (POTA/SOTA/WWFF) rides
+    // through from the stored record. With every box blank we send no `ota` at all, so the
+    // backend's ota-preserve guard restores the stored `ota` untouched (which is also why clearing
+    // a park or an IOTA reference to REMOVE it does not take effect — blank means leave alone).
     const ota: LoggedQso['ota'] =
-      parkTheirRef || parkMyRef
+      parkTheirRef || parkMyRef || iota
         ? {
             theirRef: parkTheirRef,
             theirProgram: parkTheirRef ? existing?.ota?.theirProgram || 'POTA' : null,
             myRef: parkMyRef,
             myProgram: parkMyRef ? existing?.ota?.myProgram || 'POTA' : null,
-            iota: existing?.ota?.iota ?? null,
+            iota: iota ?? existing?.ota?.iota ?? null,
           }
         : undefined
     const startUnix = when ?? (existing ? existing.whenUnix : Math.floor(Date.now() / 1000))
@@ -1671,6 +1726,8 @@ export function Logbook({
           myRef: ota?.myRef ?? null,
           theirProgram: ota?.theirProgram ?? null,
           theirRef: ota?.theirRef ?? null,
+          // Blank leaves the stored reference; the backend keeps it.
+          iota,
         },
         myGrid: record.myGrid ?? null,
         myRig: record.myRig ?? null,
@@ -1701,7 +1758,7 @@ export function Logbook({
       }
       pushToast(t('logbook.form.updated', { call: record.call }), 'success')
       cancelForm()
-      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
+      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', iota: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
       load()
       return
     }
@@ -1709,17 +1766,106 @@ export function Logbook({
     if (snap) {
       load()
       setShowForm(false)
-      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', myGrid: '', myRig: '' }))
+      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', iota: '', myGrid: '', myRig: '' }))
       // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
       // (every log path, the engine auto-log included); outcomes toast via the
       // snapshot uploadTick.
     }
   }
 
+  // RESIZING A COLUMN. The handle is the right edge of its header: dragged, the column takes a px
+  // width (clamped as a saved one is) and the choice is saved once, on release; double-clicked, it
+  // goes back to its share. Alt+←/→ on a focused header does the same from the keyboard, a step at
+  // a time. The handle is not a control of its own: it sits inside the sort button, so a sort
+  // header stays the one tab stop it was, and a drag never sorts (the click it ends is the
+  // handle's, which goes no further).
+  const resizeStart = useRef<{ id: string; x: number; px: number; zoom: number } | null>(null)
+  const widthOf = (c: LogColumn, cell: HTMLElement | null) => colChoice.widths[c.id] ?? cell?.offsetWidth ?? c.minPx
+  const resizeHandle = (c: LogColumn) =>
+    c.id === 'actions' ? null : (
+      <span
+        className="log-col-resize"
+        aria-hidden="true"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return
+          e.preventDefault()
+          e.stopPropagation()
+          e.currentTarget.setPointerCapture?.(e.pointerId)
+          // Pointer travel is in window px; a width is in the zoomed table's own px.
+          const z = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom'))
+          resizeStart.current = {
+            id: c.id,
+            x: e.clientX,
+            px: widthOf(c, e.currentTarget.parentElement),
+            zoom: Number.isFinite(z) && z > 0 ? z : 1,
+          }
+        }}
+        onPointerMove={(e) => {
+          const r = resizeStart.current
+          if (!r || r.id !== c.id) return
+          setMadeColumns(withColumnWidth(colChoice, c.id, r.px + (e.clientX - r.x) / r.zoom, windowPx))
+        }}
+        onPointerUp={() => {
+          if (resizeStart.current?.id !== c.id) return
+          resizeStart.current = null
+          changeColumns(colChoice)
+        }}
+        onPointerCancel={() => (resizeStart.current = null)}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => {
+          e.stopPropagation()
+          changeColumns(withColumnWidth(colChoice, c.id, null, windowPx))
+        }}
+      />
+    )
+  const resizeByKey = (e: React.KeyboardEvent<HTMLElement>, c: LogColumn) => {
+    if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') || c.id === 'actions') return
+    e.preventDefault()
+    e.stopPropagation()
+    const step = e.key === 'ArrowLeft' ? -RESIZE_STEP_PX : RESIZE_STEP_PX
+    changeColumns(withColumnWidth(colChoice, c.id, widthOf(c, e.currentTarget) + step, windowPx))
+  }
+  const columnLabel = (c: LogColumn) => (c.id === 'qsl' ? QSL_HEADER : columnName(c))
+  // The edit form's read-only line: the added columns the form has no box for, where the contact
+  // holds a value.
+  const alsoStored: [string, string][] = editing
+    ? LOG_COLUMNS.filter((c) => !c.base && !c.more && !FORM_EDITS.has(c.id)).flatMap((c): [string, string][] => {
+        const v =
+          c.group === 'uploads'
+            ? (() => {
+                const st = uploadOf(editing.row, c.id)
+                return st ? uploadWord(uploadMark(st)) : null
+              })()
+            : addedColumnText(editing.row, c.id)
+        return v ? [[columnName(c), v]] : []
+      })
+    : []
+  // A column the table did not have before the chooser: its text, or the upload mark.
+  const addedCell = (c: LogColumn, q: LoggedQso) => {
+    if (c.group === 'uploads') {
+      const st = uploadOf(q, c.id)
+      const mark = uploadMark(st)
+      const word = uploadWord(mark)
+      const title = st?.whenUnix ? t('logbook.upload.title', { state: word, date: fmtUtc(st.whenUnix) }) : word
+      return (
+        <span className={`log-cell log-upload ${mark}`} title={title} aria-label={title}>
+          {UPLOAD_MARK[mark]}
+        </span>
+      )
+    }
+    const v = addedColumnText(q, c.id)
+    return (
+      <span className="log-cell mono" title={v ?? ''}>
+        {v ?? '—'}
+      </span>
+    )
+  }
+
   // A clickable, sort-toggling column header. Clicking the active column flips direction;
   // clicking a new column jumps to its sensible default direction.
-  const th = (label: string, k: SortKey) => (
+  const th = (c: LogColumn, k: SortKey) => (
     <button
+      key={c.id}
       type="button"
       className={`log-cell log-th${sortKey === k ? ' sorted' : ''}`}
       role="columnheader"
@@ -1731,9 +1877,11 @@ export function Logbook({
           setSortAsc(defaultAsc(k))
         }
       }}
+      onKeyDown={(e) => resizeByKey(e, c)}
     >
-      {label}
+      {columnLabel(c)}
       {sortKey === k ? (sortAsc ? ' ▲' : ' ▼') : ''}
+      {resizeHandle(c)}
     </button>
   )
 
@@ -2271,6 +2419,19 @@ export function Logbook({
               />
             </label>
             <label className="logbook-field">
+              <span>{t('logbook.field.iota.label')}</span>
+              <input
+                className="settings-input"
+                value={draft.iota}
+                onChange={(e) => setField('iota', e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={6}
+                aria-invalid={!!draft.iota.trim() && !IOTA_RE.test(draft.iota.trim().toUpperCase())}
+                title={t('logbook.field.iota.title')}
+              />
+            </label>
+            <label className="logbook-field">
               <span>{t('logbook.field.name.label')}</span>
               <input className="settings-input" value={draft.name} onChange={(e) => setField('name', e.target.value)} autoComplete="off" />
             </label>
@@ -2349,6 +2510,22 @@ export function Logbook({
                 rows={3}
               />
             </label>
+            {/* What the contact carries that no box here edits — the zones, the county, the QSL
+                dates, the upload state and the contest exchange — shown so an edit is made with
+                the whole contact in view. Read-only: each is the record's or a service's. */}
+            {alsoStored.length > 0 && (
+              <div className="logbook-field logbook-field-wide logbook-also">
+                <span>{t('logbook.form.alsoStored')}</span>
+                <dl>
+                  {alsoStored.map(([label, value]) => (
+                    <div key={label}>
+                      <dt>{label}</dt>
+                      <dd className="mono">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            )}
           </div>
           <div className="logbook-form-actions">
             {err && <span className="settings-error" role="alert">{err}</span>}
@@ -2363,7 +2540,10 @@ export function Logbook({
       )}
 
       <div
-        className={`log-table logbook-table${moreColumns ? ' wide' : ''}`}
+        className={`log-table logbook-table${tableMinW ? ' wide' : ''}`}
+        // The one template the header and every row take (`.logbook-table .logbook-row`), and a
+        // wide table's floor: cut from the same column list the cells are.
+        style={{ '--log-cols': gridTemplate, ...(tableMinW ? { '--log-min-w': tableMinW } : {}) } as React.CSSProperties}
         role="grid"
         aria-multiselectable
         aria-rowcount={listTotal + 1}
@@ -2421,20 +2601,9 @@ export function Logbook({
         >
           {t('logbook.filter.needsConfirmation.label')}
         </button>
-        <button
-          type="button"
-          className={`log-filter-chip${moreColumns ? ' active' : ''}`}
-          onClick={() =>
-            setMoreColumns((v) => {
-              saveMoreColumns(!v)
-              return !v
-            })
-          }
-          aria-pressed={moreColumns}
-          title={t('logbook.columns.more.title')}
-        >
-          {t('logbook.columns.more.label')}
-        </button>
+        {/* The column chooser (features/logColumns.ts). It took the place of "More columns" (#239),
+            which showed eight extra columns or none. */}
+        <LogColumnsMenu choice={colChoice} onChange={changeColumns} onReset={resetColumns} />
         {search.trim() && (
           <button type="button" className="log-search-clear" onClick={() => setSearch('')} title={t('logbook.search.clear')}>
             ✕
@@ -2442,41 +2611,32 @@ export function Logbook({
         )}
       </div>
         <div className="log-row logbook-row head" role="row" aria-rowindex={1}>
-          {th(t('logbook.column.call'), 'call')}
-          {th(t('logbook.column.country'), 'country')}
-          {th(t('logbook.column.band'), 'band')}
-          {th(t('logbook.column.freq'), 'freq')}
-          {th(t('logbook.column.mode'), 'mode')}
-          {th(t('logbook.column.sent'), 'sent')}
-          {th(t('logbook.column.rcvd'), 'rcvd')}
-          {/* #239 (swinn): "put the time and dates in their own fields". One column printed the
-              whole instant, so a column of dates could not be read down and the time of day sat
-              wherever the date's width left it. Both headers sort on the SAME key, because a
-              record carries ONE instant: there is no ordering by time of day that ignores the
-              date, and a header that looks like its neighbours while doing nothing is worse
-              than two that say they order the same thing. */}
-          {th(t('logbook.column.date'), 'time')}
-          {th(t('logbook.column.time'), 'time')}
-          {th(t('logbook.column.park'), 'park')}
-          {/* The QSL column's header is the Q-code itself, not a word for it. */}
-          {th('QSL', 'qsl')}
-          {/* Not sortable: free text, and sorting a log by remark answers no question an
-              operator asks. Plain header cell, same shape as the actions column's. */}
-          {/* #239 "More columns": your side of the contact, and what the compact table leaves out. */}
-          {moreColumns && (
-            <>
-              <span className="log-cell" role="columnheader">{t('logbook.column.end')}</span>
-              <span className="log-cell" role="columnheader">{t('logbook.column.myGrid')}</span>
-              <span className="log-cell" role="columnheader">{t('logbook.column.myRig')}</span>
-              <span className="log-cell" role="columnheader">{t('logbook.column.name')}</span>
-              <span className="log-cell" role="columnheader">{t('logbook.column.qth')}</span>
-              <span className="log-cell" role="columnheader">{t('logbook.column.state')}</span>
-              <span className="log-cell" role="columnheader">{t('logbook.column.power')}</span>
-              <span className="log-cell" role="columnheader">{t('logbook.column.operator')}</span>
-            </>
+          {/* #239 (swinn): "put the time and dates in their own fields". Both the Date and the
+              Time header sort on the SAME key, because a record carries ONE instant: there is no
+              ordering by time of day that ignores the date, and a header that looks like its
+              neighbours while doing nothing is worse than two that say they order the same thing.
+              Free-text and added columns do not sort: sorting a log by remark answers no question
+              an operator asks, and a tag the log keeps only as passthrough has no index to sort by. */}
+          {cols.map((c) =>
+            c.sort ? (
+              th(c, c.sort)
+            ) : c.id === 'actions' ? (
+              <span key={c.id} className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
+            ) : (
+              <span
+                key={c.id}
+                className="log-cell"
+                role="columnheader"
+                // An added column's header takes the keyboard's resize (Alt+←/→); a default one
+                // keeps the tab order it always had.
+                tabIndex={c.base ? undefined : 0}
+                onKeyDown={(e) => resizeByKey(e, c)}
+              >
+                {columnLabel(c)}
+                {resizeHandle(c)}
+              </span>
+            ),
           )}
-          <span className="log-cell" role="columnheader">{t('logbook.column.notes')}</span>
-          <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
           </div>
           {listSays === 'failed' && (
@@ -2537,6 +2697,492 @@ export function Logbook({
                   )
                 const { q, key, ref } = row
                 const isPicked = !!q.id && picked.has(q.id)
+                // One cell per column the table shows (features/logColumns.ts): the header and the
+                // template are cut from the same list, so a cell cannot go without its track.
+                const rowCell = (c: LogColumn) => {
+                  switch (c.id) {
+                    case 'call':
+                      return (
+                        <>
+                          <span className="log-cell mono">
+                            <button
+                              type="button"
+                              className="qrz-link-call"
+                              onClick={() =>
+                                void withErrorToast(
+                                  () => openQrzPage(q.call),
+                                  t('callbook.qrzPage.failed', { call: q.call }),
+                                )
+                              }
+                              title={t('callbook.qrzPage.title', { call: q.call })}
+                            >
+                              {q.call}
+                            </button>
+                          </span>
+                        </>
+                      )
+                    case 'country':
+                      return (
+                        <>
+                          {/* The country is the DXCC entity the contact is shown under (`q.entity`): the one
+                              its call resolves to, or the one its record's DXCC number names where that is
+                              another — a DXpedition on a 1×1 call, a deleted entity, a number set here by
+                              hand. Imported contacts carry their logger's own spelling of it ("UNITED
+                              STATES"), and they read as the same country as Nexus's own. The stored text
+                              stays on the tooltip, and shows where neither names an entity. On the station
+                              the cell is the picker that sets the number (LogCountryPicker). */}
+                          <span className="log-cell log-country" title={q.country ?? ''}>
+                            {ref ? (
+                              <LogCountryPicker q={q} onPick={(dxcc) => void onSetDxcc(q, ref, dxcc)} />
+                            ) : (
+                              (q.entity ?? q.country ?? '—')
+                            )}
+                          </span>
+                        </>
+                      )
+                    case 'band':
+                      return (
+                        <>
+                          <span className="log-cell">{q.band}</span>
+                        </>
+                      )
+                    case 'freq':
+                      return (
+                        <>
+                          <span className="log-cell mono">{q.freqMhz.toFixed(4)}</span>
+                        </>
+                      )
+                    case 'mode':
+                      return (
+                        <>
+                          <span className="log-cell">{q.mode}</span>
+                        </>
+                      )
+                    case 'sent':
+                      return (
+                        <>
+                          <span className="log-cell mono">{fmtReport(q.rstSent)}</span>
+                        </>
+                      )
+                    case 'rcvd':
+                      return (
+                        <>
+                          <span className="log-cell mono">{fmtReport(q.rstRcvd)}</span>
+                        </>
+                      )
+                    case 'date':
+                      return (
+                        <>
+                          <span className="log-cell mono">{utcDate(q.whenUnix)}</span>
+                        </>
+                      )
+                    case 'time':
+                      return (
+                        <>
+                          {/* #239: the time of day, no `Z` — the header says UTC and the End column
+                              (#329) next door already prints a bare `utcTime`.
+                              ⚠️ `timeKnown: false` is an imported record whose source carried a DATE and
+                              no time; `whenUnix` anchors it at midnight FOR ORDERING and its clock
+                              reading is an artefact. The combined column printed that artefact as fact —
+                              a column of its own cannot. `QsoDetail` already refuses the same thing, and
+                              a bare 00:00 read as fact is what leaves those contacts unmatched at LoTW
+                              and eQSL forever. */}
+                          <span
+                            className="log-cell mono"
+                            title={q.timeKnown === false ? t('logbook.row.time.dateOnly') : ''}
+                          >
+                            {q.timeKnown === false ? '—' : utcTime(q.whenUnix)}
+                          </span>
+                        </>
+                      )
+                    case 'park':
+                      return (
+                        <>
+                          <span
+                            className="log-cell mono log-park"
+                            title={
+                              q.ota?.theirRef
+                                ? t('logbook.row.park.worked', {
+                                    program: q.ota.theirProgram ?? 'POTA',
+                                    ref: q.ota.theirRef,
+                                  })
+                                : q.ota?.myRef
+                                  ? t('logbook.row.park.mine', {
+                                      program: q.ota.myProgram ?? 'POTA',
+                                      ref: q.ota.myRef,
+                                    })
+                                  : ''
+                            }
+                          >
+                            {/* Before the reference, so a narrow Park column clips the reference and
+                                never the mark. */}
+                            {needsParkState(q) && (
+                              <span
+                                className="log-park-nostate"
+                                role="img"
+                                aria-label={t('logbook.row.park.noState')}
+                                title={t('logbook.row.park.noState')}
+                              />
+                            )}
+                            {q.ota?.theirRef ?? (q.ota?.myRef ? `@${q.ota.myRef}` : '—')}
+                          </span>
+                        </>
+                      )
+                    case 'qsl':
+                      return (
+                        <>
+                          <span className="log-cell">
+                            {q.qslRcvd &&
+                            (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl || q.qslRcvd.qrz) ? (
+                              // Per-source detail: which channel(s) actually confirmed. QRZ has its own
+                              // letter: a QRZ-only confirmation fell through to the yellow eQSL word below.
+                              <span
+                                className={`log-qsl ${q.awardConfirmed ? 'ok' : 'eqsl'}`}
+                                title={[
+                                  q.qslRcvd.lotw ? t('logbook.row.qsl.lotw') : null,
+                                  q.qslRcvd.card ? t('logbook.row.qsl.card') : null,
+                                  q.qslRcvd.eqsl ? t('logbook.row.qsl.eqsl') : null,
+                                  q.qslRcvd.qrz ? t('logbook.row.qsl.qrz') : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(' · ')}
+                              >
+                                {[
+                                  q.qslRcvd.lotw ? 'L' : null,
+                                  q.qslRcvd.card ? 'C' : null,
+                                  q.qslRcvd.eqsl ? 'E' : null,
+                                  q.qslRcvd.qrz ? 'Q' : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join('·')}
+                              </span>
+                            ) : q.awardConfirmed ? (
+                              <span className="log-qsl ok" title={t('logbook.row.qsl.confirmed')}>
+                                ✓
+                              </span>
+                            ) : q.confirmed ? (
+                              <span className="log-qsl eqsl" title={t('logbook.row.qsl.eqslOnly')}>
+                                {EQSL_LABEL}
+                              </span>
+                            ) : (
+                              <span className="log-qsl none" title={t('logbook.row.qsl.none')}>
+                                —
+                              </span>
+                            )}
+                            {/* A request is NOT a confirmation — this rides alongside the QSL
+                                state as a quiet muted marker so the row stays "needs conf". */}
+                            {q.qslSent?.sent && (
+                              <span
+                                style={{ marginLeft: 4, opacity: 0.6, fontSize: '0.85em' }}
+                                title={fmtQslSent(q.qslSent)}
+                                aria-label={fmtQslSent(q.qslSent)}
+                              >
+                                ✉{q.qslSent.via ?? ''}
+                              </span>
+                            )}
+                          </span>
+                        </>
+                      )
+                    case 'end':
+                      return (
+                        <>
+                              {/* #329: the contact's end time. The cell shows the time of day only —
+                                  the date is already in the Date column — so the tooltip carries the
+                                  full UTC instant for a contact that ran past midnight. */}
+                              <span className="log-cell mono" title={q.timeOffUnix != null ? fmtUtc(q.timeOffUnix) : ''}>
+                                {q.timeOffUnix != null ? utcTime(q.timeOffUnix) : '—'}
+                              </span>
+                        </>
+                      )
+                    case 'myGrid':
+                      return (
+                        <>
+                              <span className="log-cell mono">{q.myGrid ?? '—'}</span>
+                        </>
+                      )
+                    case 'myRig':
+                      return (
+                        <>
+                              <span className="log-cell" title={q.myRig ?? ''}>{q.myRig ?? '—'}</span>
+                        </>
+                      )
+                    case 'name':
+                      return (
+                        <>
+                              <span className="log-cell" title={q.name ?? ''}>{q.name ?? '—'}</span>
+                        </>
+                      )
+                    case 'qth':
+                      return (
+                        <>
+                              <span className="log-cell" title={q.qth ?? ''}>{q.qth ?? '—'}</span>
+                        </>
+                      )
+                    case 'state':
+                      return (
+                        <>
+                              <span className="log-cell mono">{q.state ?? '—'}</span>
+                        </>
+                      )
+                    case 'power':
+                      return (
+                        <>
+                              <span className="log-cell mono">{q.txPower ?? '—'}</span>
+                        </>
+                      )
+                    case 'operator':
+                      return (
+                        <>
+                              <span className="log-cell mono">{q.operator ?? '—'}</span>
+                        </>
+                      )
+                    case 'notes':
+                      return (
+                        <>
+                          {/* Comment + private note. Both were WRITE-ONLY here until 2026-08-23: the edit
+                              form took them and the table never showed them back, so the only way to see
+                              a note was to open the row you already had to guess held one (operator:
+                              "how else do you remember the things you talked about in the last QSOs?").
+                              The comment is short by design and shows inline; the private note is
+                              multi-line and gets a 📝 marker with the text in the tooltip, the same
+                              idiom the callsign-recall card already uses. */}
+                          <span
+                            className={`log-cell log-note${openComments.has(key) ? ' expanded' : ''}`}
+                            title={[
+                              (q.comment ?? '').trim() && `${t('logbook.row.notes.title')}: ${(q.comment ?? '').trim()}`,
+                              (q.notes ?? '').trim() && `${t('logbook.row.notes.private')}: ${(q.notes ?? '').trim()}`,
+                            ]
+                              .filter(Boolean)
+                              .join('\n\n')}
+                          >
+                            {/* #162: so is the 📝 flag. The private note was a marker and a tooltip and
+                                nothing else — the one thing in this cell with no way to read it in the
+                                row, which is the half of the issue the comment fix left open. It opens
+                                the same cell the comment does, because the cell is the clip container:
+                                one row, one open state, and a row holding both shows both. */}
+                            {(q.notes ?? '').trim() && (
+                              <button
+                                type="button"
+                                className="log-note-flag"
+                                aria-expanded={openComments.has(key)}
+                                aria-label={t('logbook.row.notes.readAria')}
+                                onClick={() => toggleComment(key)}
+                              >
+                                📝
+                              </button>
+                            )}
+                            {/* #162: the comment is its own toggle — its text is the accessible name, and
+                                aria-expanded says whether the row shows it whole. */}
+                            {(q.comment ?? '').trim() ? (
+                              <button
+                                type="button"
+                                className="log-note-text"
+                                aria-expanded={openComments.has(key)}
+                                onClick={() => toggleComment(key)}
+                              >
+                                {(q.comment ?? '').trim()}
+                              </button>
+                            ) : (q.notes ?? '').trim() ? (
+                              ''
+                            ) : (
+                              '—'
+                            )}
+                            {/* #162: the note itself, and only when the cell is open. Collapsed it is
+                                not rendered at all, so the single line the column gets still belongs to
+                                the comment — the note is multi-line free text and would win a fight for
+                                it. Open, it takes a line of its own below (`flex: 1 0 100%`). */}
+                            {openComments.has(key) && (q.notes ?? '').trim() && (
+                              <span className="log-note-private">{(q.notes ?? '').trim()}</span>
+                            )}
+                          </span>
+                        </>
+                      )
+                    case 'actions':
+                      return (
+                        <>
+                          <span className="log-cell log-rowactions">
+                            <button
+                              type="button"
+                              className="log-rowbtn"
+                              onClick={() => setSpotSeed({ call: q.call, freq: q.freqMhz, mode: q.mode })}
+                              title={t('logbook.row.spot.title', { call: q.call })}
+                              aria-label={t('logbook.row.spot.aria', { call: q.call })}
+                            >
+                              📢
+                            </button>
+                            <button
+                              type="button"
+                              className="log-rowbtn"
+                              onClick={() => void onPushQrz(q)}
+                              title={t('logbook.row.pushQrz.title', { call: q.call })}
+                              aria-label={t('logbook.row.pushQrz.aria', { call: q.call })}
+                            >
+                              {/* #270: this was a bare ↥, and an operator looking for "Upload to QRZ"
+                                  reported the button as gone. Named like its CL / HL / WRL siblings. */}
+                              {QRZ_LABEL}
+                            </button>
+                            <button
+                              type="button"
+                              className="log-rowbtn"
+                              onClick={() => void onCorrectQrz(q)}
+                              title={t('logbook.row.qrzCorrect.title', { call: q.call })}
+                              aria-label={t('logbook.row.qrzCorrect.aria', { call: q.call })}
+                            >
+                              {QRZ_CORRECT_LABEL}
+                            </button>
+                            <button
+                              type="button"
+                              className="log-rowbtn"
+                              onClick={() => void onPushClublog(q)}
+                              title={t('logbook.row.pushClublog.title', { call: q.call })}
+                              aria-label={t('logbook.row.pushClublog.aria', { call: q.call })}
+                            >
+                              {CLUBLOG_LABEL}
+                            </button>
+                            <button
+                              type="button"
+                              className="log-rowbtn"
+                              onClick={() => void onPushHrdlog(q)}
+                              title={t('logbook.row.pushHrdlog.title', { call: q.call })}
+                              aria-label={t('logbook.row.pushHrdlog.aria', { call: q.call })}
+                            >
+                              {HRDLOG_LABEL}
+                            </button>
+                            <button
+                              type="button"
+                              className="log-rowbtn"
+                              onClick={() => void onPushWrl(q)}
+                              title={t('logbook.row.pushWrl.title', { call: q.call })}
+                              aria-label={t('logbook.row.pushWrl.aria', { call: q.call })}
+                            >
+                              {WRL_LABEL}
+                            </button>
+                            {/* QSL handling for the row: mark a request SENT (once), and record the
+                                paper card that came BACK. Operator-declared, not a confirmation.
+                                
+                                ⚠️ THE GATE USED TO BE `needsConfirmOnly && !q.qslSent?.sent`, and both
+                                halves were wrong (#152, reported again after the 1.8.0 fix shipped).
+                                
+                                The filter half hid the whole menu unless the "needs confirmation" chip
+                                happened to be on, so the reporter looked in the ordinary Logbook — where
+                                anyone handling a stack of cards is — and found nothing. A fix nobody can
+                                reach is not a fix.
+                                
+                                The sent half is worse: a paper QSL is a ROUND TRIP. You send, you wait
+                                months, a card arrives. Removing the menu the moment you marked one sent
+                                deleted the control for the arrival, so the very card the feature exists
+                                to record could never be recorded. `q.qslSent?.sent` now hides only the
+                                three SEND entries — you still cannot send twice — while the inbound
+                                entries stay reachable for the life of the contact. */}
+                            <select
+                              className="log-rowbtn"
+                              style={{ fontSize: '0.85em' }}
+                              value=""
+                              onChange={(e) => {
+                                const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | 's' | ''
+                                // R/r/s are NOT ADIF letters — they are this menu's own entries for
+                                // the RECEIVED card (#152), which has no QSL_SENT_VIA code because it
+                                // is not a send at all, and for CLEARING the send (#180). Kept in the
+                                // same menu because an operator handling a card thinks about one row,
+                                // not two controls.
+                                if (v === 'R') void onMarkQslCard(q, ref, true)
+                                else if (v === 'r') void onMarkQslCard(q, ref, false)
+                                else if (v === 's') void onMarkQslSent(q, ref, null)
+                                else if (v) void onMarkQslSent(q, ref, v as 'B' | 'D' | 'E')
+                              }}
+                              title={t('logbook.row.qslSent.title', { call: q.call })}
+                              aria-label={t('logbook.row.qslSent.aria', { call: q.call })}
+                            >
+                              {/* The VALUES are the ADIF QSL_SENT_VIA letters; only the labels are prose. */}
+                              <option value="">{QSL_MENU_LABEL}</option>
+                              {/* Sending is once-only; the arrival below is not. */}
+                              {!q.qslSent?.sent && (
+                                <>
+                                  <option value="B">{t('logbook.row.qslSent.bureau')}</option>
+                                  <option value="D">{t('logbook.row.qslSent.direct')}</option>
+                                  <option value="E">{t('logbook.row.qslSent.electronic')}</option>
+                                </>
+                              )}
+                              {/* ...and the way back out of it (#180). It has to be shown on exactly
+                                  the condition that HIDES the three above: a clear that disappears
+                                  once sent would be the same trap with an extra step in it. */}
+                              {q.qslSent?.sent && (
+                                <option value="s">{t('logbook.row.qslSent.clear')}</option>
+                              )}
+                              {/* INBOUND: the paper card that arrived. Nothing on the internet can
+                                  report this, so the operator is the only source — and it is
+                                  award-eligible (card OR LoTW), which is why its absence understated
+                                  the awards view. The clear entry exists for a mis-tick. */}
+                              <option value="R">{t('logbook.row.qslRcvd.card')}</option>
+                              {q.qslRcvd?.card && (
+                                <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
+                              )}
+                            </select>
+                            {/* SATELLITE TAG (PROP_MODE=SAT + SAT_NAME). The guide used to send an
+                                operator who mis-tagged a contact out of the app — close Nexus, open
+                                log.adi in a text editor — because the edit form carries neither field.
+                                It still does not, deliberately: a blank field there means LEAVE ALONE,
+                                which is what stops a busted-call fix stripping a tag the contact earned.
+                                So the repair lives here, where choosing "Clear" is unmistakably a
+                                decision and not a blank box submitted with everything else.
+
+                                Both halves of the pair move together in the backend: TQSL rejects a lone
+                                member and takes the batch with it. */}
+                            {satNames.length > 0 && (
+                              <select
+                                className="log-rowbtn"
+                                style={{ fontSize: '0.85em' }}
+                                value=""
+                                onChange={(e) => {
+                                  const v = e.target.value
+                                  // '' is the PLACEHOLDER — the state the select sits in when nothing
+                                  // has been chosen. A non-choice must never clear a tag, so only the
+                                  // explicit 'clear' entry passes null.
+                                  if (v === 'clear') void onSetSatTag(q, ref, null)
+                                  else if (v) void onSetSatTag(q, ref, v)
+                                }}
+                                title={t('logbook.row.sat.title', { call: q.call })}
+                                aria-label={t('logbook.row.sat.aria', { call: q.call })}
+                              >
+                                <option value="">{SAT_MENU_LABEL}</option>
+                                {satNames.map((n) => (
+                                  <option key={n} value={n}>
+                                    {n}
+                                  </option>
+                                ))}
+                                {/* Shown when EITHER field is set: a record carrying a lone PROP_MODE=SAT
+                                    or a lone SAT_NAME is the half-pair TQSL rejects, and clearing it is
+                                    exactly the repair that record needs. */}
+                                {(q.propMode || q.satName) && (
+                                  <option value="clear">{t('logbook.row.sat.clear')}</option>
+                                )}
+                              </select>
+                            )}
+                            <button
+                              type="button"
+                              className="log-rowbtn"
+                              onClick={() => startEdit(q, key, ref)}
+                              title={t('logbook.row.edit', { call: q.call })}
+                              aria-label={t('logbook.row.edit', { call: q.call })}
+                            >
+                              ✎
+                            </button>
+                            <button
+                              type="button"
+                              className="log-rowbtn danger"
+                              onClick={() => onDelete(q, key, ref)}
+                              title={t('logbook.row.delete', { call: q.call })}
+                              aria-label={t('logbook.row.delete', { call: q.call })}
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        </>
+                      )
+                    default:
+                      return addedCell(c, q)
+                  }
+                }
                 return (
                   <div
                     className={`log-row logbook-row${editingKey === key ? ' editing' : ''}`}
@@ -2581,383 +3227,9 @@ export function Logbook({
                           : 'transparent',
                     }}
                   >
-                <span className="log-cell mono">
-                  <button
-                    type="button"
-                    className="qrz-link-call"
-                    onClick={() =>
-                      void withErrorToast(
-                        () => openQrzPage(q.call),
-                        t('callbook.qrzPage.failed', { call: q.call }),
-                      )
-                    }
-                    title={t('callbook.qrzPage.title', { call: q.call })}
-                  >
-                    {q.call}
-                  </button>
-                </span>
-                {/* The country is the DXCC entity the contact is shown under (`q.entity`): the one
-                    its call resolves to, or the one its record's DXCC number names where that is
-                    another — a DXpedition on a 1×1 call, a deleted entity, a number set here by
-                    hand. Imported contacts carry their logger's own spelling of it ("UNITED
-                    STATES"), and they read as the same country as Nexus's own. The stored text
-                    stays on the tooltip, and shows where neither names an entity. On the station
-                    the cell is the picker that sets the number (LogCountryPicker). */}
-                <span className="log-cell log-country" title={q.country ?? ''}>
-                  {ref ? (
-                    <LogCountryPicker q={q} onPick={(dxcc) => void onSetDxcc(q, ref, dxcc)} />
-                  ) : (
-                    (q.entity ?? q.country ?? '—')
-                  )}
-                </span>
-                <span className="log-cell">{q.band}</span>
-                <span className="log-cell mono">{q.freqMhz.toFixed(4)}</span>
-                <span className="log-cell">{q.mode}</span>
-                <span className="log-cell mono">{fmtReport(q.rstSent)}</span>
-                <span className="log-cell mono">{fmtReport(q.rstRcvd)}</span>
-                <span className="log-cell mono">{utcDate(q.whenUnix)}</span>
-                {/* #239: the time of day, no `Z` — the header says UTC and the End column
-                    (#329) next door already prints a bare `utcTime`.
-                    ⚠️ `timeKnown: false` is an imported record whose source carried a DATE and
-                    no time; `whenUnix` anchors it at midnight FOR ORDERING and its clock
-                    reading is an artefact. The combined column printed that artefact as fact —
-                    a column of its own cannot. `QsoDetail` already refuses the same thing, and
-                    a bare 00:00 read as fact is what leaves those contacts unmatched at LoTW
-                    and eQSL forever. */}
-                <span
-                  className="log-cell mono"
-                  title={q.timeKnown === false ? t('logbook.row.time.dateOnly') : ''}
-                >
-                  {q.timeKnown === false ? '—' : utcTime(q.whenUnix)}
-                </span>
-                <span
-                  className="log-cell mono log-park"
-                  title={
-                    q.ota?.theirRef
-                      ? t('logbook.row.park.worked', {
-                          program: q.ota.theirProgram ?? 'POTA',
-                          ref: q.ota.theirRef,
-                        })
-                      : q.ota?.myRef
-                        ? t('logbook.row.park.mine', {
-                            program: q.ota.myProgram ?? 'POTA',
-                            ref: q.ota.myRef,
-                          })
-                        : ''
-                  }
-                >
-                  {/* Before the reference, so a narrow Park column clips the reference and
-                      never the mark. */}
-                  {needsParkState(q) && (
-                    <span
-                      className="log-park-nostate"
-                      role="img"
-                      aria-label={t('logbook.row.park.noState')}
-                      title={t('logbook.row.park.noState')}
-                    />
-                  )}
-                  {q.ota?.theirRef ?? (q.ota?.myRef ? `@${q.ota.myRef}` : '—')}
-                </span>
-                <span className="log-cell">
-                  {q.qslRcvd &&
-                  (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl || q.qslRcvd.qrz) ? (
-                    // Per-source detail: which channel(s) actually confirmed. QRZ has its own
-                    // letter: a QRZ-only confirmation fell through to the yellow eQSL word below.
-                    <span
-                      className={`log-qsl ${q.awardConfirmed ? 'ok' : 'eqsl'}`}
-                      title={[
-                        q.qslRcvd.lotw ? t('logbook.row.qsl.lotw') : null,
-                        q.qslRcvd.card ? t('logbook.row.qsl.card') : null,
-                        q.qslRcvd.eqsl ? t('logbook.row.qsl.eqsl') : null,
-                        q.qslRcvd.qrz ? t('logbook.row.qsl.qrz') : null,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    >
-                      {[
-                        q.qslRcvd.lotw ? 'L' : null,
-                        q.qslRcvd.card ? 'C' : null,
-                        q.qslRcvd.eqsl ? 'E' : null,
-                        q.qslRcvd.qrz ? 'Q' : null,
-                      ]
-                        .filter(Boolean)
-                        .join('·')}
-                    </span>
-                  ) : q.awardConfirmed ? (
-                    <span className="log-qsl ok" title={t('logbook.row.qsl.confirmed')}>
-                      ✓
-                    </span>
-                  ) : q.confirmed ? (
-                    <span className="log-qsl eqsl" title={t('logbook.row.qsl.eqslOnly')}>
-                      {EQSL_LABEL}
-                    </span>
-                  ) : (
-                    <span className="log-qsl none" title={t('logbook.row.qsl.none')}>
-                      —
-                    </span>
-                  )}
-                  {/* A request is NOT a confirmation — this rides alongside the QSL
-                      state as a quiet muted marker so the row stays "needs conf". */}
-                  {q.qslSent?.sent && (
-                    <span
-                      style={{ marginLeft: 4, opacity: 0.6, fontSize: '0.85em' }}
-                      title={fmtQslSent(q.qslSent)}
-                      aria-label={fmtQslSent(q.qslSent)}
-                    >
-                      ✉{q.qslSent.via ?? ''}
-                    </span>
-                  )}
-                </span>
-                {/* Comment + private note. Both were WRITE-ONLY here until 2026-08-23: the edit
-                    form took them and the table never showed them back, so the only way to see
-                    a note was to open the row you already had to guess held one (operator:
-                    "how else do you remember the things you talked about in the last QSOs?").
-                    The comment is short by design and shows inline; the private note is
-                    multi-line and gets a 📝 marker with the text in the tooltip, the same
-                    idiom the callsign-recall card already uses. */}
-                {moreColumns && (
-                  <>
-                    {/* #329: the contact's end time. The cell shows the time of day only —
-                        the date is already in the Date column — so the tooltip carries the
-                        full UTC instant for a contact that ran past midnight. */}
-                    <span className="log-cell mono" title={q.timeOffUnix != null ? fmtUtc(q.timeOffUnix) : ''}>
-                      {q.timeOffUnix != null ? utcTime(q.timeOffUnix) : '—'}
-                    </span>
-                    <span className="log-cell mono">{q.myGrid ?? '—'}</span>
-                    <span className="log-cell" title={q.myRig ?? ''}>{q.myRig ?? '—'}</span>
-                    <span className="log-cell" title={q.name ?? ''}>{q.name ?? '—'}</span>
-                    <span className="log-cell" title={q.qth ?? ''}>{q.qth ?? '—'}</span>
-                    <span className="log-cell mono">{q.state ?? '—'}</span>
-                    <span className="log-cell mono">{q.txPower ?? '—'}</span>
-                    <span className="log-cell mono">{q.operator ?? '—'}</span>
-                  </>
-                )}
-                <span
-                  className={`log-cell log-note${openComments.has(key) ? ' expanded' : ''}`}
-                  title={[
-                    (q.comment ?? '').trim() && `${t('logbook.row.notes.title')}: ${(q.comment ?? '').trim()}`,
-                    (q.notes ?? '').trim() && `${t('logbook.row.notes.private')}: ${(q.notes ?? '').trim()}`,
-                  ]
-                    .filter(Boolean)
-                    .join('\n\n')}
-                >
-                  {/* #162: so is the 📝 flag. The private note was a marker and a tooltip and
-                      nothing else — the one thing in this cell with no way to read it in the
-                      row, which is the half of the issue the comment fix left open. It opens
-                      the same cell the comment does, because the cell is the clip container:
-                      one row, one open state, and a row holding both shows both. */}
-                  {(q.notes ?? '').trim() && (
-                    <button
-                      type="button"
-                      className="log-note-flag"
-                      aria-expanded={openComments.has(key)}
-                      aria-label={t('logbook.row.notes.readAria')}
-                      onClick={() => toggleComment(key)}
-                    >
-                      📝
-                    </button>
-                  )}
-                  {/* #162: the comment is its own toggle — its text is the accessible name, and
-                      aria-expanded says whether the row shows it whole. */}
-                  {(q.comment ?? '').trim() ? (
-                    <button
-                      type="button"
-                      className="log-note-text"
-                      aria-expanded={openComments.has(key)}
-                      onClick={() => toggleComment(key)}
-                    >
-                      {(q.comment ?? '').trim()}
-                    </button>
-                  ) : (q.notes ?? '').trim() ? (
-                    ''
-                  ) : (
-                    '—'
-                  )}
-                  {/* #162: the note itself, and only when the cell is open. Collapsed it is
-                      not rendered at all, so the single line the column gets still belongs to
-                      the comment — the note is multi-line free text and would win a fight for
-                      it. Open, it takes a line of its own below (`flex: 1 0 100%`). */}
-                  {openComments.has(key) && (q.notes ?? '').trim() && (
-                    <span className="log-note-private">{(q.notes ?? '').trim()}</span>
-                  )}
-                </span>
-                <span className="log-cell log-rowactions">
-                  <button
-                    type="button"
-                    className="log-rowbtn"
-                    onClick={() => setSpotSeed({ call: q.call, freq: q.freqMhz, mode: q.mode })}
-                    title={t('logbook.row.spot.title', { call: q.call })}
-                    aria-label={t('logbook.row.spot.aria', { call: q.call })}
-                  >
-                    📢
-                  </button>
-                  <button
-                    type="button"
-                    className="log-rowbtn"
-                    onClick={() => void onPushQrz(q)}
-                    title={t('logbook.row.pushQrz.title', { call: q.call })}
-                    aria-label={t('logbook.row.pushQrz.aria', { call: q.call })}
-                  >
-                    {/* #270: this was a bare ↥, and an operator looking for "Upload to QRZ"
-                        reported the button as gone. Named like its CL / HL / WRL siblings. */}
-                    {QRZ_LABEL}
-                  </button>
-                  <button
-                    type="button"
-                    className="log-rowbtn"
-                    onClick={() => void onCorrectQrz(q)}
-                    title={t('logbook.row.qrzCorrect.title', { call: q.call })}
-                    aria-label={t('logbook.row.qrzCorrect.aria', { call: q.call })}
-                  >
-                    {QRZ_CORRECT_LABEL}
-                  </button>
-                  <button
-                    type="button"
-                    className="log-rowbtn"
-                    onClick={() => void onPushClublog(q)}
-                    title={t('logbook.row.pushClublog.title', { call: q.call })}
-                    aria-label={t('logbook.row.pushClublog.aria', { call: q.call })}
-                  >
-                    {CLUBLOG_LABEL}
-                  </button>
-                  <button
-                    type="button"
-                    className="log-rowbtn"
-                    onClick={() => void onPushHrdlog(q)}
-                    title={t('logbook.row.pushHrdlog.title', { call: q.call })}
-                    aria-label={t('logbook.row.pushHrdlog.aria', { call: q.call })}
-                  >
-                    {HRDLOG_LABEL}
-                  </button>
-                  <button
-                    type="button"
-                    className="log-rowbtn"
-                    onClick={() => void onPushWrl(q)}
-                    title={t('logbook.row.pushWrl.title', { call: q.call })}
-                    aria-label={t('logbook.row.pushWrl.aria', { call: q.call })}
-                  >
-                    {WRL_LABEL}
-                  </button>
-                  {/* QSL handling for the row: mark a request SENT (once), and record the
-                      paper card that came BACK. Operator-declared, not a confirmation.
-                      
-                      ⚠️ THE GATE USED TO BE `needsConfirmOnly && !q.qslSent?.sent`, and both
-                      halves were wrong (#152, reported again after the 1.8.0 fix shipped).
-                      
-                      The filter half hid the whole menu unless the "needs confirmation" chip
-                      happened to be on, so the reporter looked in the ordinary Logbook — where
-                      anyone handling a stack of cards is — and found nothing. A fix nobody can
-                      reach is not a fix.
-                      
-                      The sent half is worse: a paper QSL is a ROUND TRIP. You send, you wait
-                      months, a card arrives. Removing the menu the moment you marked one sent
-                      deleted the control for the arrival, so the very card the feature exists
-                      to record could never be recorded. `q.qslSent?.sent` now hides only the
-                      three SEND entries — you still cannot send twice — while the inbound
-                      entries stay reachable for the life of the contact. */}
-                  <select
-                    className="log-rowbtn"
-                    style={{ fontSize: '0.85em' }}
-                    value=""
-                    onChange={(e) => {
-                      const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | 's' | ''
-                      // R/r/s are NOT ADIF letters — they are this menu's own entries for
-                      // the RECEIVED card (#152), which has no QSL_SENT_VIA code because it
-                      // is not a send at all, and for CLEARING the send (#180). Kept in the
-                      // same menu because an operator handling a card thinks about one row,
-                      // not two controls.
-                      if (v === 'R') void onMarkQslCard(q, ref, true)
-                      else if (v === 'r') void onMarkQslCard(q, ref, false)
-                      else if (v === 's') void onMarkQslSent(q, ref, null)
-                      else if (v) void onMarkQslSent(q, ref, v as 'B' | 'D' | 'E')
-                    }}
-                    title={t('logbook.row.qslSent.title', { call: q.call })}
-                    aria-label={t('logbook.row.qslSent.aria', { call: q.call })}
-                  >
-                    {/* The VALUES are the ADIF QSL_SENT_VIA letters; only the labels are prose. */}
-                    <option value="">{QSL_MENU_LABEL}</option>
-                    {/* Sending is once-only; the arrival below is not. */}
-                    {!q.qslSent?.sent && (
-                      <>
-                        <option value="B">{t('logbook.row.qslSent.bureau')}</option>
-                        <option value="D">{t('logbook.row.qslSent.direct')}</option>
-                        <option value="E">{t('logbook.row.qslSent.electronic')}</option>
-                      </>
-                    )}
-                    {/* ...and the way back out of it (#180). It has to be shown on exactly
-                        the condition that HIDES the three above: a clear that disappears
-                        once sent would be the same trap with an extra step in it. */}
-                    {q.qslSent?.sent && (
-                      <option value="s">{t('logbook.row.qslSent.clear')}</option>
-                    )}
-                    {/* INBOUND: the paper card that arrived. Nothing on the internet can
-                        report this, so the operator is the only source — and it is
-                        award-eligible (card OR LoTW), which is why its absence understated
-                        the awards view. The clear entry exists for a mis-tick. */}
-                    <option value="R">{t('logbook.row.qslRcvd.card')}</option>
-                    {q.qslRcvd?.card && (
-                      <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
-                    )}
-                  </select>
-                  {/* SATELLITE TAG (PROP_MODE=SAT + SAT_NAME). The guide used to send an
-                      operator who mis-tagged a contact out of the app — close Nexus, open
-                      log.adi in a text editor — because the edit form carries neither field.
-                      It still does not, deliberately: a blank field there means LEAVE ALONE,
-                      which is what stops a busted-call fix stripping a tag the contact earned.
-                      So the repair lives here, where choosing "Clear" is unmistakably a
-                      decision and not a blank box submitted with everything else.
-
-                      Both halves of the pair move together in the backend: TQSL rejects a lone
-                      member and takes the batch with it. */}
-                  {satNames.length > 0 && (
-                    <select
-                      className="log-rowbtn"
-                      style={{ fontSize: '0.85em' }}
-                      value=""
-                      onChange={(e) => {
-                        const v = e.target.value
-                        // '' is the PLACEHOLDER — the state the select sits in when nothing
-                        // has been chosen. A non-choice must never clear a tag, so only the
-                        // explicit 'clear' entry passes null.
-                        if (v === 'clear') void onSetSatTag(q, ref, null)
-                        else if (v) void onSetSatTag(q, ref, v)
-                      }}
-                      title={t('logbook.row.sat.title', { call: q.call })}
-                      aria-label={t('logbook.row.sat.aria', { call: q.call })}
-                    >
-                      <option value="">{SAT_MENU_LABEL}</option>
-                      {satNames.map((n) => (
-                        <option key={n} value={n}>
-                          {n}
-                        </option>
-                      ))}
-                      {/* Shown when EITHER field is set: a record carrying a lone PROP_MODE=SAT
-                          or a lone SAT_NAME is the half-pair TQSL rejects, and clearing it is
-                          exactly the repair that record needs. */}
-                      {(q.propMode || q.satName) && (
-                        <option value="clear">{t('logbook.row.sat.clear')}</option>
-                      )}
-                    </select>
-                  )}
-                  <button
-                    type="button"
-                    className="log-rowbtn"
-                    onClick={() => startEdit(q, key, ref)}
-                    title={t('logbook.row.edit', { call: q.call })}
-                    aria-label={t('logbook.row.edit', { call: q.call })}
-                  >
-                    ✎
-                  </button>
-                  <button
-                    type="button"
-                    className="log-rowbtn danger"
-                    onClick={() => onDelete(q, key, ref)}
-                    title={t('logbook.row.delete', { call: q.call })}
-                    aria-label={t('logbook.row.delete', { call: q.call })}
-                  >
-                    ✕
-                  </button>
-                </span>
+                {cols.map((c) => (
+                  <Fragment key={c.id}>{rowCell(c)}</Fragment>
+                ))}
               </div>
                 )
               })}

@@ -1807,6 +1807,16 @@ pub struct Settings {
     /// save for the same stale-snapshot reason as `beta_updates`.
     #[serde(default)]
     pub remote_autostart_offer_answered: bool,
+    /// The Logbook's column choice (`ui/src/features/logColumns.ts`): the default columns turned
+    /// off, the others turned on, and dragged widths. `None` — the key absent — is the default
+    /// table, so a file that never chose columns writes exactly what it did before.
+    ///
+    /// ONE WRITER: `set_logbook_columns`, the moment the operator makes a choice in the Logbook;
+    /// kept live across a form save for the same stale-snapshot reason as `beta_updates`. Only the
+    /// window reads it, and it clamps each width against the window it is shown on, so nothing
+    /// here bounds a width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logbook_columns: Option<LogbookColumns>,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -5524,6 +5534,23 @@ fn default_js8_api_udp_port() -> u16 {
     crate::engine::js8_api::DEFAULT_UDP_PORT
 }
 
+/// The Logbook's column choice as `settings.json` keeps it: deltas from the default table, so a
+/// column added to the defaults later still shows for an operator who chose before it existed.
+/// Column ids are the window's (`LOG_COLUMNS`); one it does not know is ignored there.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogbookColumns {
+    /// Columns shown that the default table does not show.
+    #[serde(default)]
+    pub shown: Vec<String>,
+    /// Default columns turned off.
+    #[serde(default)]
+    pub hidden: Vec<String>,
+    /// Dragged widths, in CSS px, by column id.
+    #[serde(default)]
+    pub widths: std::collections::BTreeMap<String, u32>,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -5682,6 +5709,7 @@ impl Default for Settings {
             beta_updates: false, // stable channel by default; MUST match the serde default (false)
             launch_at_login: false, // nothing starts itself unasked; MUST match the serde default
             remote_autostart_offer_answered: false,
+            logbook_columns: None, // the default table
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),
@@ -13025,6 +13053,61 @@ mod tests {
         assert!(back.fd_scoreboard);
         assert_eq!(back.fd_scoreboard_port, 7474);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The Logbook's column choice survives the file round trip under the key the UI sends
+    /// (`logbookColumns`, with `shown`/`hidden`/`widths` inside), and nothing saved is no key at
+    /// all — an upgrade, and every settings file that never chose columns, keep the default table
+    /// and write byte for byte what they wrote before.
+    #[test]
+    fn logbook_columns_round_trip_and_nothing_saved_writes_nothing() {
+        let older: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(older.logbook_columns, None, "an upgrade has chosen nothing");
+        let none = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            !none.contains("logbookColumns"),
+            "nothing chosen, no key: {none}"
+        );
+
+        let dir = std::env::temp_dir().join(format!("tempo_logcols_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"mycall":"KD9TAW","logbookColumns":{"shown":["iota","county"],"hidden":["freq"],"widths":{"country":210,"county":140}}}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        let want = LogbookColumns {
+            shown: vec!["iota".into(), "county".into()],
+            hidden: vec!["freq".into()],
+            widths: [("country".to_string(), 210), ("county".to_string(), 140)]
+                .into_iter()
+                .collect(),
+        };
+        assert_eq!(
+            loaded.logbook_columns.as_ref(),
+            Some(&want),
+            "loaded under the UI's keys"
+        );
+        loaded.save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).logbook_columns,
+            Some(want),
+            "an ordinary save dropped it"
+        );
+        // A file written with only part of the choice reads the rest as empty.
+        let partial: Settings =
+            serde_json::from_str(r#"{"logbookColumns":{"hidden":["mode"]}}"#).unwrap();
+        assert_eq!(
+            partial.logbook_columns,
+            Some(LogbookColumns {
+                hidden: vec!["mode".into()],
+                ..LogbookColumns::default()
+            })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ⛔ **Start at sign-in and Remote's one-time offer default OFF, survive the file round trip

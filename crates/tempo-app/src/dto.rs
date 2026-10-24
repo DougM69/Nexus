@@ -3863,6 +3863,58 @@ pub struct LoggedQso {
     pub my_rig: Option<String>,
     #[serde(default)]
     pub extra: Vec<(String, String)>,
+    /// The contest block of a contact logged in a contest, for the Logbook to SHOW (its contest
+    /// and exchange columns, the detail view). OUTBOUND ONLY: the reverse conversion ignores it,
+    /// as it always set `contest: None`, and the edit policy restores the stored block
+    /// (`Logbook::update_record`) — the window has no control that edits one, and this carries
+    /// only part of it (no session, no merge identity), so it must never become a write path.
+    ///
+    /// Skipped when absent, so every ordinary contact — and every golden of one — serializes
+    /// byte for byte as before. ⚠️ `engine/remote_logging.rs`'s `PendingRecord` flattens this
+    /// type beside its own `gridSource`; it has no sidecar named `contest`, so the held-contact
+    /// journal keeps one key per name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contest: Option<LoggedContestDto>,
+}
+
+/// A contest contact's contest fields as the Logbook shows them — a display mirror of the part of
+/// `tempo_core::logbook::ContestFields` an operator reads: the contest, the serials, the ADIF
+/// exchange strings and the exchange as logged, field by field.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoggedContestDto {
+    /// ADIF `CONTEST_ID`.
+    #[serde(default)]
+    pub contest_id: String,
+    /// ADIF `STX` / `SRX`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stx: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srx: Option<u32>,
+    /// ADIF `STX_STRING` / `SRX_STRING`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stx_string: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srx_string: Option<String>,
+    /// The exchange sent and received, `(field, value)` in the order it is rendered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sent: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rcvd: Vec<(String, String)>,
+}
+
+impl From<tempo_core::logbook::ContestFields> for LoggedContestDto {
+    fn from(c: tempo_core::logbook::ContestFields) -> Self {
+        LoggedContestDto {
+            contest_id: c.contest_id,
+            stx: c.stx,
+            srx: c.srx,
+            stx_string: c.stx_string,
+            srx_string: c.srx_string,
+            sent: c.sent,
+            rcvd: c.rcvd,
+        }
+    }
 }
 
 /// On-the-air (POTA/SOTA) references for a QSO — serde mirror of `tempo_core::logbook::Ota`.
@@ -4005,6 +4057,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             my_grid: r.my_grid,
             my_rig: r.my_rig,
             extra: r.extra,
+            contest: r.contest.map(|c| LoggedContestDto::from(*c)),
         }
     }
 }
@@ -4121,6 +4174,8 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             my_grid: q.my_grid,
             my_rig: q.my_rig,
             extra: q.extra,
+            // `q.contest` is a display copy and deliberately dropped: an edit keeps the stored
+            // block (`Logbook::update_record`), and a new contact from the window has none.
             contest: None,
         }
     }

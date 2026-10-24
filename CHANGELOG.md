@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Logbook columns.** A Columns button replaces "More columns": show or hide each column, drag a column's edge to resize it, and the choice is kept in your settings. New columns show what the log already stored: their grid, IOTA, county, CQ and ITU zones, continent, distance, the QSL sent and received dates, each service's upload state and the contest exchange; IOTA can now be edited, and the contact view shows these too.
 - **JTTY sends from a remote computer.** Driving a station from another computer, JTTY's Send,
   F-keys, live typing and sign-off now transmit, under the same guards and Stop as the other remote
   modes.

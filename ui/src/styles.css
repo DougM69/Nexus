@@ -17552,7 +17552,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-3);
   margin-top: var(--space-3);
 }
-.logbook-row {
+.logbook-table .logbook-row {
   /* Last track (row actions) gets a fixed floor, not a bare 0.8fr: the fractional share
      shrinks below the button cluster and .log-cell{overflow:hidden} + justify-end clip the
      leading QRZ/ClubLog push buttons off the LEFT, unclickable. A deterministic px floor (not
@@ -17578,8 +17578,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      neighbour gives up a share and the tail floor is untouched. The one real cost is a
      thirteenth track's worth of `.log-row`'s `gap: 10px`: 10px more fixed overhead per row,
      taken off the fr pool, which at the 384px floor's worst case (1366px) is ~1% of the
-     row. Not measured in a browser — arithmetic off the sheet. */
-  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(384px, 0.8fr);
+     row. Not measured in a browser — arithmetic off the sheet.
+
+     THE TRACKS NOW COME FROM THE COLUMN MODEL (ui/src/features/logColumns.ts). The Logbook sets
+     `--log-cols` on `.logbook-table`, cut from the same list of columns its header and rows
+     render, so a cell without a track cannot be written; the tail is still the measured floor
+     above (`ACTIONS_TRACK`). The defaults are the compact template this rule used to hold. Two
+     classes, not one: `[data-viewport='sm'] .log-row` (two classes too, earlier in the sheet)
+     would otherwise win at the narrow sizes and put the four-track generic log template back. */
+  grid-template-columns: var(--log-cols);
 }
 .log-note {
   /* Flex so the comment toggle (#162) can ellipsize beside the 📝 flag: a <button> is an atomic
@@ -17792,81 +17799,106 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-faint);
 }
 
-/* Narrow (EFFECTIVE width — the old raw @media hid six columns at the 900-px
-   Tauri minimum where all eleven fit, and never fired under pinned zoom where
-   they don't): keep Call, Country, Band, QSL, Notes, actions; hide
-   Freq/Mode/Sent/Rcvd/Time/Park.
-
-   SIX TRACKS, AND THE COUNT IS THE POINT. This was five, written 2026-06-07 when five cells
-   survived the hide list. The Notes column landed 2026-08-23 and is not in that list, so the
-   row has had SIX visible cells and five tracks ever since — and grid-auto-flow being `row`,
-   the sixth cell (the action cluster) was auto-placed onto a second GRID ROW, under the
-   callsign, on every narrow window and at every pinned zoom that produces one. That is the
-   1024×768 supported floor and 1366 at 125%. It also left the cluster in an implicit `auto`
-   track where no floor from this sheet could reach it. The tail track carries the same
-   measured floor as the wide template above; styles-logbook-actions.test.tsx checks the track
-   count against the cells the component actually renders, so a seventh column cannot do this
-   again silently. */
-[data-viewport='sm'] .logbook-row,
-[data-viewport='xs'] .logbook-row {
-  grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 1fr minmax(384px, 0.8fr);
-}
-/* Freq, mode, sent, rcvd, DATE, TIME, park. #239 split one Time column into two, so this list
-   grew by one and the template below did NOT: the narrow row shows the same six cells it
-   always did — call, country, band, QSL, notes, actions. 1024×768, the supported floor, is
-   `sm` (classifyViewport: < 1100), so the new column costs that width nothing. */
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(4),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(5),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(6),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(7),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(8),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(9),
-[data-viewport='sm'] .logbook-row .log-cell:nth-child(10),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(4),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(5),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(6),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(7),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(8),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(9),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(10) {
-  display: none;
-}
+/* Narrow (EFFECTIVE width): the fitted table keeps Call, Country, Band, QSL, Notes and the
+   actions, and leaves the rest out. That choice is the column model's now (`narrow` in
+   ui/src/features/logColumns.ts): the Logbook renders only those cells at `sm`/`xs` and cuts the
+   template from the same list. The old rules here hid cells by POSITION (`:nth-child`), which is
+   wrong the moment a column can be hidden, and kept a second six-track template that had to be
+   counted against them by hand (it was one short from 2026-08-23, and the action cluster wrapped
+   under the callsign). A table showing columns beyond the defaults keeps every one at every
+   width and scrolls sideways, as "More columns" did. */
 /* keep edit/delete reachable on touch (no hover) */
 [data-viewport='sm'] .logbook-row .log-rowbtn,
 [data-viewport='xs'] .logbook-row .log-rowbtn {
   opacity: 1;
 }
-/* #239 "More columns": the wide log. `.log-scroll` stays the ONE scroll owner and only gains
-   the horizontal axis in this mode; the sticky search + header ride inside it, so header and
-   rows scroll sideways together. 21 tracks = the 13 above with eight inserted before Notes
-   (end time, my grid, rig, name, QTH, state, power, operator). The floor is on the scroller's
-   CONTENT,
-   so nothing is clipped — it scrolls. Off, none of this applies and the compact table and its
-   narrow-viewport column rules are exactly as they were; on, every column shows at any width,
-   because the point of the mode is to see them all. */
+/* The wide log: any column beyond the defaults shown (#239's "More columns" was the first).
+   `.log-scroll` stays the ONE scroll owner and only gains the horizontal axis in this mode; the
+   sticky search + header ride inside it, so header and rows scroll sideways together. The floor is
+   on the scroller's CONTENT, so nothing is clipped — it scrolls. Off, none of this applies and the
+   fitted table is exactly as it was; on, every chosen column shows at any width, because the point
+   of choosing them is to see them. */
 .logbook-table.wide .log-scroll {
   overflow-x: auto;
 }
 .logbook-table.wide .log-sticky,
 .logbook-table.wide .log-rows {
-  /* 118rem held 19 tracks; the end-time column (#329) adds a 0.9fr one, and the floor moves
-     with it so the block keeps the share it was sized for instead of squeezing its
-     neighbours. #239's Date/Time split does NOT move it again: the pair divides the 1.6fr the
-     single column had, so the row's fr total is what this number was taken against. */
-  min-width: 123rem;
+  /* `--log-min-w` is the column model's (`logTableMinWidth`): each shown column's share at the
+     rate "More columns" was sized at (its 21 tracks, 18fr, held 123rem — so that table is the
+     width it always was), plus any dragged px width. */
+  min-width: var(--log-min-w, 123rem);
 }
-.logbook-table.wide .logbook-row {
-  /* Second line = the "More columns" block. Its first track is the contact's END time
-     (#329), sized like the Time column it mirrors. `styles-logbook-actions.test.tsx` holds
-     this list to one track per cell the component renders. */
-  grid-template-columns:
-    1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr
-    0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr
-    1.4fr minmax(384px, 0.8fr);
+/* A column's resize handle: the right edge of its header cell. Inside the cell (which clips), so
+   it never takes a grid track or a tab stop of its own. */
+.logbook-row.head > .log-cell {
+  position: relative;
 }
-[data-viewport='sm'] .logbook-table.wide .logbook-row .log-cell,
-[data-viewport='xs'] .logbook-table.wide .logbook-row .log-cell {
-  display: block;
+.log-col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.log-col-resize:hover {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* An upload column's mark: the state in a glyph, its words in the tooltip. */
+.log-upload.done {
+  color: var(--state-good);
+}
+.log-upload.waiting,
+.log-upload.none {
+  color: var(--text-faint);
+}
+.log-upload.failed {
+  color: var(--state-weak);
+}
+/* The column chooser: portaled (its box measures the real window), long, so it scrolls inside
+   the room Radix says it has. */
+.log-columns-menu {
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
+}
+.log-columns-hint {
+  max-width: 22rem;
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.log-columns-group {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+.log-columns-check {
+  display: inline-block;
+  width: 1em;
+}
+.log-columns-sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border-soft);
+}
+/* The edit form's read-only line: what the contact carries that no box there edits. */
+.logbook-also dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+}
+.logbook-also dt {
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+.logbook-also dd {
+  margin: 0;
 }
 
 /* scrollbars */
