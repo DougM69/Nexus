@@ -521,6 +521,49 @@ fn an_address_that_is_not_sdrconnect_is_said() {
     let _ = server.join();
 }
 
+/// A new address is taken without waiting for the old connection: teardown, which the radio loop
+/// runs when the operator changes the host or port, returns at once though the scope's thread is
+/// still in a connect that hangs. That thread still ends by itself and closes its socket, and it
+/// never connects again.
+#[test]
+fn teardown_does_not_wait_for_a_connect_that_hangs() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+    let port = listener.local_addr().expect("addr").port();
+    let feed = SpectrumFeed::default();
+    let scope = SdrconnectScope::start_with("127.0.0.1", port, &feed, short()).expect("starts");
+    // The stand-in takes the connection and says nothing: the scope waits on its handshake.
+    let (mut held, _) = listener.accept().expect("the scope connects");
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(scope.status().connections, 0, "still in the connect");
+    let started = Instant::now();
+    drop(scope);
+    let took = started.elapsed();
+    assert!(
+        took < Duration::from_millis(50),
+        "teardown took {took:?}: it must not wait on the connect"
+    );
+    // The old thread gives up its connect by itself and closes the socket.
+    use std::io::Read;
+    held.set_read_timeout(Some(tempo_net::sdrconnect::CONNECT_TIMEOUT + WAIT))
+        .expect("timeout");
+    let mut buf = [0u8; 4096];
+    let closed = loop {
+        match held.read(&mut buf) {
+            Ok(0) => break true,
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break true,
+            Err(_) => break false,
+        }
+    };
+    assert!(closed, "the old thread closes its socket");
+    listener.set_nonblocking(true).expect("non-blocking");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        listener.accept().is_err(),
+        "the old thread does not connect again"
+    );
+}
+
 /// Whatever SDRconnect sends, the scope does not panic, counts what it cannot use, and draws on.
 #[test]
 fn whatever_sdrconnect_sends_never_panics_the_scope() {

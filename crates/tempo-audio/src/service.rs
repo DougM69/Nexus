@@ -4097,6 +4097,8 @@ struct RadioLoop {
     js8_multi_pending: usize,
     /// When `Engine::js8_tick` last ran (unix ms) — once a second at `Tier::Js8`.
     js8_last_tick_ms: u64,
+    /// The WSJT-X Replays answered in the last [`REPLAY_GAP_MS`]: the sender's id and when (ms).
+    replays_answered: Vec<(String, u64)>,
     /// A slot whose boundary TX decision already ran AT the boundary (the WSJT-X
     /// key-at-boundary ordering, taken when the just-ended slot's early decode had
     /// folded): the slot, whether it actually keyed, and the pre-key dial for the
@@ -4634,6 +4636,7 @@ impl RadioLoop {
             js8_multi_worker: DecodeWorker::spawn_with("nexus-js8-multi", run_worker_job),
             js8_multi_pending: 0,
             js8_last_tick_ms: 0,
+            replays_answered: Vec::new(),
             boundary_keyed: None,
             js8_lead: js8_lead::Js8Lead::default(),
             rig_asserted: false, // read-only launch: nothing asserted until a real command
@@ -13623,9 +13626,14 @@ impl RadioLoop {
         // and every Tauri command queued behind it — for as long as it kept
         // sending. The overflow is not dropped, just deferred one 20 ms tick.
         if let Some(server) = sinks.wsjtx {
-            // One Replay per tick: it re-sends all of Band Activity (thousands of datagrams on a
-            // busy band) with the engine lock held, so a burst of them is answered once.
+            // One Replay per tick, and one per logger per REPLAY_GAP_MS: it re-sends all of Band
+            // Activity (thousands of datagrams on a busy band) with the engine lock held, so a
+            // burst of them is answered once. At most REPLAY_SOURCES loggers are answered in a gap,
+            // so a sender changing its id each time is bounded too.
             let mut replayed = false;
+            let now_ms = now.max(0.0) as u64;
+            self.replays_answered
+                .retain(|(_, at)| now_ms.abs_diff(*at) < REPLAY_GAP_MS);
             for inb in server.drain(tempo_net::server::INBOUND_PER_TICK) {
                 match inb {
                     WsjtxInbound::HaltTx { .. } => {
@@ -13644,8 +13652,13 @@ impl RadioLoop {
                         // parity / history) is not a window and stays intact.
                         eng.apply_udp_clear(window);
                     }
-                    WsjtxInbound::Replay { .. } if !replayed => {
+                    WsjtxInbound::Replay { id }
+                        if !replayed
+                            && self.replays_answered.len() < REPLAY_SOURCES
+                            && !self.replays_answered.iter().any(|(who, _)| *who == id) =>
+                    {
                         replayed = true;
+                        self.replays_answered.push((id, now_ms));
                         // A consumer that just connected wants every decode Band Activity
                         // holds, as WSJT-X re-sends its window (`replayDecodes`, mainwindow.cpp
                         // 13374-13396), each stamped with its own period's start. NO PSK spots
@@ -15635,6 +15648,11 @@ fn js8_due_speeds(
 /// FT decoder is not running), and its Status says JTTY there. Nexus's FT decoder keeps running
 /// under the Keyboard section, so its lines are held off the wire there rather than sent beside a
 /// Status that names another mode. PSK Reporter still hears them: they were decoded.
+/// The least time between two answers to one logger's WSJT-X Replay (ms).
+const REPLAY_GAP_MS: u64 = 1_000;
+/// The most loggers whose Replay is answered within one [`REPLAY_GAP_MS`].
+const REPLAY_SOURCES: usize = 4;
+
 fn udp_decodes_allowed(eng: &Engine) -> bool {
     !eng.jtty_section()
 }
@@ -19438,6 +19456,108 @@ mod tests {
         assert_eq!(f[21], sent.tx.tx_message, "the Tx message rides along");
         tick(140.0);
         assert!(statuses().is_empty(), "nothing changed, nothing sent");
+    }
+
+    /// A logger's Replay gets all of Band Activity at once, but a source repeating it within a
+    /// second is not answered again: each answer re-sends every decode with the engine locked.
+    /// Another logger's first Replay is still answered at once.
+    #[test]
+    fn a_replay_is_answered_at_most_once_a_second_per_logger() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_tier(Tier::Ft8);
+            e.fold_heard_for_test("CQ K1ABC FN42", 10);
+            e.fold_heard_for_test("CQ W2DEF FN20", 10);
+            e.fold_heard_for_test("CQ N3GHI FM19", 10);
+        }
+        assert_eq!(engine.lock().unwrap().band_activity().count(), 3);
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let to = server.local_addr().unwrap();
+        let replay = |id: &str| {
+            let mut w = tempo_net::qds::QdsWriter::new();
+            w.put_u32(0xADBC_CBDA)
+                .put_u32(2)
+                .put_u32(7)
+                .put_utf8(Some(id));
+            listener.send_to(&w.into_bytes(), to).unwrap();
+        };
+        let decodes = || {
+            let mut n = 0;
+            let mut buf = [0u8; 4096];
+            while let Ok((len, _)) = listener.recv_from(&mut buf) {
+                let mut r = tempo_net::qds::QdsReader::new(&buf[..len]);
+                r.read_u32();
+                r.read_u32();
+                if r.read_u32() == Some(2) {
+                    n += 1;
+                }
+            }
+            n
+        };
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = |now: f64| {
+            // Let the datagram reach the server's socket before the tick drains it.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        tick(100.0);
+        let _ = decodes();
+        replay("logger-a");
+        tick(120.0);
+        assert_eq!(decodes(), 3, "the first Replay gets all of Band Activity");
+        replay("logger-a");
+        tick(140.0);
+        assert_eq!(
+            decodes(),
+            0,
+            "the same logger again within a second: no answer"
+        );
+        replay("logger-b");
+        tick(160.0);
+        assert_eq!(decodes(), 3, "another logger's first Replay is answered");
+        replay("logger-a");
+        tick(1_200.0);
+        assert_eq!(
+            decodes(),
+            3,
+            "a second later the first logger is answered again"
+        );
+        // A sender changing its id each time is answered for at most REPLAY_SOURCES ids a second.
+        for (i, now) in [1_220.0, 1_240.0, 1_260.0, 1_280.0].into_iter().enumerate() {
+            replay(&format!("renamed-{i}"));
+            tick(now);
+            let want = if i < REPLAY_SOURCES - 1 { 3 } else { 0 };
+            assert_eq!(decodes(), want, "id {i}");
+        }
     }
 
     /// The slot boundary sends a Status and keeps it, as the one the next change is told

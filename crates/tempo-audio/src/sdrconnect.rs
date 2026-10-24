@@ -50,7 +50,6 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tempo_app::engine::SpectrumFeed;
@@ -94,10 +93,6 @@ pub const METER_PAUSE_MS: u64 = 250;
 /// How far the measured rate may be from the reported one: arrival jitter is far smaller, a
 /// decimated stream (a half or less) far larger.
 pub const RATE_TOLERANCE: f64 = 0.2;
-
-/// How long teardown waits for the scope's thread before leaving it to finish by itself (a connect
-/// in flight takes up to [`tempo_net::sdrconnect::CONNECT_TIMEOUT`]).
-const JOIN_WAIT: Duration = Duration::from_millis(300);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -359,10 +354,14 @@ pub(crate) fn target(
 }
 
 /// The SDRconnect scope source: one thread on one SDRconnect, for as long as it is held.
+///
+/// Dropping it tells the thread to quit and does not wait for it: the radio loop drops it when the
+/// operator changes the address, and the thread may be in a connect for up to
+/// [`tempo_net::sdrconnect::CONNECT_TIMEOUT`]. The thread then ends by itself, closing its socket,
+/// and publishes nothing more to the feed.
 pub struct SdrconnectScope {
     shared: Arc<Shared>,
     feed: SpectrumFeed,
-    thread: Option<JoinHandle<()>>,
 }
 
 impl SdrconnectScope {
@@ -392,10 +391,9 @@ impl SdrconnectScope {
             .name("sdrconnect-scope".into())
             .spawn(move || run(&thread_shared, &host, port, &thread_feed));
         match thread {
-            Ok(handle) => Some(SdrconnectScope {
+            Ok(_) => Some(SdrconnectScope {
                 shared,
                 feed: feed.clone(),
-                thread: Some(handle),
             }),
             Err(e) => {
                 feed.claim_rf(None);
@@ -431,17 +429,7 @@ impl Drop for SdrconnectScope {
             let _guard = lock(&self.shared.sleep);
             self.shared.wake.notify_all();
         }
-        if let Some(handle) = self.thread.take() {
-            // The thread looks at its quit flag every LOOK_MS; one in a connect finishes by
-            // itself and is not waited for.
-            let deadline = Instant::now() + JOIN_WAIT;
-            while !handle.is_finished() && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            if handle.is_finished() {
-                let _ = handle.join();
-            }
-        }
+        // Not joined: the thread looks at its quit flag every LOOK_MS and ends by itself.
         self.feed.claim_rf(None);
     }
 }
@@ -619,7 +607,7 @@ fn session(shared: &Shared, mut link: Link, feed: &SpectrumFeed) -> (bool, Strin
             }
         } else {
             rows.restart();
-            if drawing {
+            if drawing && !shared.quitting() {
                 // The rows left in the slot are no longer the band.
                 feed.clear_rf_of(SOURCE);
             }
@@ -636,7 +624,10 @@ fn session(shared: &Shared, mut link: Link, feed: &SpectrumFeed) -> (bool, Strin
         status.skipped = rows.skipped;
         status.other = other;
     };
-    feed.clear_rf_of(SOURCE);
+    // At teardown the slot was handed back already, and may be the next scope's.
+    if !shared.quitting() {
+        feed.clear_rf_of(SOURCE);
+    }
     (drew, end)
 }
 
