@@ -4063,6 +4063,7 @@ export const ES: PartialCatalog = {
   "operate.strip.sandp.title": "Monitor — buscar y llamar (S&P)",
   "operate.strip.send.label": "Enviar",
   "operate.strip.send.title": "Enviar en la próxima transmisión",
+  "operate.strip.skipTx1.failed": "No se cambió Saltar Tx1",
   "operate.strip.skipTx1.label": "Saltar Tx1",
   "operate.strip.skipTx1.title": "Saltar Tx1 — al responder a un CQ, empieza con tu reporte de señal (Tx2) en vez de tu locator (Tx1), y te ahorras un ciclo. Solo con indicativos estándar (uno compuesto sigue enviando su locator). Se restablece en cada arranque, como en WSJT-X.",
   "operate.strip.state.receiving": "▼ Recibiendo",

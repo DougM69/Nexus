@@ -4063,6 +4063,7 @@ export const FR: PartialCatalog = {
   "operate.strip.sandp.title": "Écoute — search & pounce",
   "operate.strip.send.label": "Envoyer",
   "operate.strip.send.title": "Envoyer au prochain passage",
+  "operate.strip.skipTx1.failed": "Sauter Tx1 n'a pas été modifié",
   "operate.strip.skipTx1.label": "Sauter Tx1",
   "operate.strip.skipTx1.title": "Sauter Tx1 — quand vous répondez à un CQ, commencez par votre report (Tx2) au lieu de votre locator (Tx1), ce qui économise un cycle. Indicatifs standard uniquement (un indicatif composé envoie quand même son locator). Remis à zéro à chaque lancement, comme WSJT-X.",
   "operate.strip.state.receiving": "▼ En réception",

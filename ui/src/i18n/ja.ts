@@ -6394,6 +6394,7 @@ export const JA: PartialCatalog = {
   "operate.strip.period.auto.second": "TX AUTO / 2nd",
   "operate.strip.period.first": "TX 1st / 偶数",
   "operate.strip.period.second": "TX 2nd / 奇数",
+  "operate.strip.skipTx1.failed": "Tx1 スキップを変更できませんでした",
   "operate.strip.skipTx1.label": "Tx1 スキップ",
   "operate.strip.skipTx1.title": "Tx1 をスキップ — CQ に応答するとき、グリッド（Tx1）ではなくレポート（Tx2）から始めて 1 サイクル節約します。標準コールサインのみ（複合コールはグリッドを送ります）。WSJT-X と同様、起動のたびにリセットされます。",
   "operate.strip.nextSlot.label": "次 {{secs}}s",

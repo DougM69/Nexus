@@ -156,6 +156,9 @@ mod rtty_sideband_tests;
 mod residual_pass_tests;
 #[cfg(all(test, debug_assertions))]
 mod session_tests;
+/// Skip Tx1 is the station's own setting in the snapshot; the first over it queues, by value.
+#[cfg(test)]
+mod skip_tx1_tests;
 pub mod slices;
 #[cfg(test)]
 mod stop_hold_tests;
@@ -26968,6 +26971,7 @@ contact yourself."
         }
         .to_string();
         s.radio.hold_tx_freq = self.hold_tx_freq;
+        s.radio.skip_tx1 = self.skip_tx1;
         // ⭐ THE RECEIVERS, beside the flat fields above — built from the engine's one receiver
         // model, never a second copy (dual-receiver programme, the DTO stage; ADDITIVE).
         s.radio.receivers = Some(self.receivers_dto());

@@ -2041,6 +2041,11 @@ pub struct RadioStatus {
     /// Keep TX offset fixed when RX changes (WSJT-X "Hold Tx Freq").
     #[serde(default)]
     pub hold_tx_freq: bool,
+    /// Skip Tx1: answering a CQ opens with the report instead of the grid. The
+    /// station's own session flag, carried here so a computer driving the station draws the box
+    /// from the station's value; absent (an older station) reads off, the launch value.
+    #[serde(default)]
+    pub skip_tx1: bool,
     /// Real PC-clock-vs-UTC offset in ms from an NTP probe, or `None` when the
     /// probe is disabled / offline (then the UI falls back to DT-derived health).
     ///
