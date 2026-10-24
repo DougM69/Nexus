@@ -596,10 +596,14 @@ export function PhoneScope({
     const latch = new RowFetchLatch('scope')
     let acc = 0
     let last = performance.now()
-    // ~20 Hz — plenty smooth for a scope, and the row is now cached engine-side (computed once per
-    // audio feed in the radio loop) so each poll is a cheap read, not a Goertzel recompute under
-    // the lock. Fewer + lighter polls = no more contention stutter (the "choppy" report).
-    const ROW_MS = 50
+    // ~30 Hz (operator ruling 2026-10-23). The row is cached engine-side (computed once per audio
+    // feed in the radio loop) so each poll is a cheap read, not a Goertzel recompute under the lock,
+    // and the draw itself is cheap: the per-frame commit+draw was measured at the scope's sizes in a
+    // real browser under 4×/8× CPU throttling (the weak-hardware canvas-2D path — WebKitGTK routes
+    // Linux/Pi there), p95 ≤ ~8 ms and worst case ≤ ~13 ms at the supported 1024–1920 widths, well
+    // inside the 33 ms frame budget; WebGL2 is ~0. So the faster poll is free at the sizes that
+    // matter. (The FT waterfall keeps its own slower cadence; this is the rig scope's loop only.)
+    const ROW_MS = 33
     const ROW_MS_REDUCED = 120 // gentler under reduced-motion
     const AGC_ALPHA = 0.4 // snappy attack/release — a rig scope, not a slow FT8 noise floor
     const TRACE_FRAC = 0.45 // top fraction = panadapter trace; rest = waterfall

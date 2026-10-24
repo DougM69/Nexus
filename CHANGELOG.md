@@ -91,9 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window (85 ms, was 171 ms), so a signal appearing or a fading one dropping shows about twice as fast. Voice is
   wide enough that the slightly coarser frequency resolution is not visible; if you want the finer Balanced or Sharp
   window back, the scope's window button still sets it, and your choice is remembered. The passband trace also
-  settles and falls back faster — its averaging default drops from 250 to 100 ms and its peak-hold from 250 to
-  150 ms — so the trace tracks the band more like a live SDR panadapter instead of lagging behind it. Only the
-  phone scope changed; CW, the digital waterfalls and the radio's own RF panadapter are untouched.
+  settles and falls back faster on phone — its averaging default drops from 250 to 100 ms and its peak-hold from
+  250 to 150 ms — so the trace tracks the band more like a live SDR panadapter instead of lagging behind it.
+  Separately, the rig scope and the radio's RF panadapter pane now refresh about 30 times a second instead of
+  20 (the window, averaging and peak-hold changes above are the phone scope's alone; CW, the digital waterfalls
+  and the RF panadapter keep their own trace settings). The faster refresh pairs with the FlexRadio change below.
 - **A FlexRadio panadapter updates twice as often (needs a bench check on a real Flex).** Nexus now asks a
   FlexRadio to stream its panadapter at 30 frames a second instead of 15, so the scope and waterfall from a Flex
   move about twice as live, closer to SmartSDR's own feel. It roughly doubles the data the radio sends over the
