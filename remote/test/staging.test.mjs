@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { STAGING, TARGETS, billingServices, deployable, identity, settingsFromEnv, stagingConfig, target, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
+import { STAGING, TARGETS, billingServices, deployable, identity, optionalVars, settingsFromEnv, stagingConfig, target, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
 import { MODES, cloudflare, relayKeyCheck, workerDigest } from '../scripts/cloudflare-staging.mjs'
 import { createArtifact, verifyArtifact, verifyLive, verifyLiveSettled, verifyPublicSource } from '../scripts/staging-artifact.mjs'
 import { runtime } from './runtime.mjs'
@@ -665,18 +665,18 @@ test('the billing Worker is bound only once its row says it is deployed, and the
 const nativeClientId = 'synthetic-native-client-id'
 const movedTo = TARGETS.production.origin
 const optional = { native: { nativeClientId }, trialIdentity: { trialIdentityRequired: '1' },
-  move: { movedTo, moveStage: 'announce' }, trialKey: { secrets: ['TRIAL_KEY'] } }
+  move: { movedTo, moveStage: 'announce' }, trialKey: { secrets: ['TRIAL_KEY'] }, beta: { betaFree: '1' } }
 optional.all = Object.assign({}, ...Object.values(optional))
 test('each optional Worker setting is written only when set, and refused by value', () => {
   const plain = stagingConfig(template, ids)
   assert.deepEqual(Object.keys(plain.vars), ['PUBLIC_REMOTE_ORIGIN', 'AUTH0_ISSUER', 'AUTH0_CLIENT_ID', 'AUTH0_AUDIENCE', 'REMOTE_BUILD_REVISION'])
   assert.deepEqual(plain.secrets, template.secrets, 'nothing set: the configuration is what it was')
   // An unset GitHub variable arrives as an empty string, and means unset.
-  assert.deepEqual(stagingConfig(template, { ...ids, nativeClientId: '', trialIdentityRequired: '', movedTo: '', moveStage: '', secrets: [] }), plain)
+  assert.deepEqual(stagingConfig(template, { ...ids, nativeClientId: '', trialIdentityRequired: '', movedTo: '', moveStage: '', betaFree: '', secrets: [] }), plain)
 
   const all = stagingConfig(template, { ...ids, ...optional.all })
   assert.deepEqual(all.vars, { ...plain.vars, AUTH0_NATIVE_CLIENT_ID: nativeClientId, TRIAL_IDENTITY_REQUIRED: '1',
-    REMOTE_MOVED_TO: movedTo, REMOTE_MOVE_STAGE: 'announce' })
+    REMOTE_MOVED_TO: movedTo, REMOTE_MOVE_STAGE: 'announce', REMOTE_BETA_FREE: '1' })
   assert.deepEqual(all.secrets.required, [...template.secrets.required, 'TRIAL_KEY'])
   assert.deepEqual(template.secrets.required, ['ADMIN_SUBJECT', 'TURN_KEY_ID', 'TURN_KEY_TOKEN'], 'the template is not changed')
   for (const moveStage of ['announce', 'pairing-closed', 'closed'])
@@ -692,17 +692,22 @@ test('each optional Worker setting is written only when set, and refused by valu
     ...[STAGING.origin, `${movedTo}/`, 'https://elsewhere.example', 'http://remote.hamradiotools.io'].map(other =>
       [{ movedTo: other, moveStage: 'announce' }, /REMOTE_MOVED_TO must be the origin of another Remote environment/]),
     ...['open', 'Announce', 'closed '].map(moveStage => [{ movedTo, moveStage }, /REMOTE_MOVE_STAGE must be one of announce, pairing-closed, closed/]),
+    ...['0', 'true', 'yes', ' 1', 1].map(betaFree => [{ betaFree }, /REMOTE_BETA_FREE must be 1 or unset/]),
     [{ secrets: ['STRIPE_KEY'] }, /Unknown optional Worker secret/], [{ secrets: 'TRIAL_KEY' }, /Unknown optional Worker secret/],
   ]) assert.throws(() => stagingConfig(template, { ...ids, ...change }), message, JSON.stringify(change))
+  // Free during the beta is staging's alone: production refuses it, whatever its environment holds.
+  assert.throws(() => optionalVars({ betaFree: '1' }, TARGETS.production), /REMOTE_BETA_FREE is for staging only/)
+  assert.deepEqual(optionalVars({ betaFree: '' }, TARGETS.production), {}, 'unset is nothing, on production too')
+  assert.deepEqual(optionalVars({ betaFree: '1' }, STAGING), { REMOTE_BETA_FREE: '1' }, 'positive control')
 })
 
 test('the environment names reach the configuration, and an optional secret by its presence only', () => {
   const env = { REMOTE_TARGET: 'staging', REMOTE_AUTH0_ISSUER: ids.issuer, REMOTE_AUTH0_CLIENT_ID: ids.clientId,
     REMOTE_AUTH0_NATIVE_CLIENT_ID: nativeClientId, REMOTE_TRIAL_IDENTITY_REQUIRED: '1', REMOTE_MOVED_TO: movedTo,
-    REMOTE_MOVE_STAGE: 'closed', REMOTE_TRIAL_KEY_PRESENT: 'true' }
+    REMOTE_MOVE_STAGE: 'closed', REMOTE_BETA_FREE: '1', REMOTE_TRIAL_KEY_PRESENT: 'true' }
   const settings = settingsFromEnv(env)
   assert.deepEqual(settings, { issuer: ids.issuer, clientId: ids.clientId, audience: STAGING.audience, nativeClientId,
-    trialIdentityRequired: '1', movedTo, moveStage: 'closed', secrets: ['TRIAL_KEY'] })
+    trialIdentityRequired: '1', movedTo, moveStage: 'closed', betaFree: '1', secrets: ['TRIAL_KEY'] })
   for (const present of [{ REMOTE_TRIAL_KEY_PRESENT: 'false' }, { REMOTE_TRIAL_KEY_PRESENT: '' }, { REMOTE_TRIAL_KEY_PRESENT: undefined }])
     assert.deepEqual(settingsFromEnv({ ...env, ...present }).secrets, [], JSON.stringify(present))
   assert.throws(() => settingsFromEnv({ ...env, REMOTE_AUTH0_NATIVE_CLIENT_ID: ids.clientId }), /must differ/)
@@ -804,6 +809,10 @@ test('both workflows hand the optional settings to the steps that build, check a
     for (const name of ['Check deploy preconditions', 'Apply ']) assert.ok(step(name).includes(present), `${file}: ${name}`)
     assert.ok(step('Upload the verified Worker').includes('REMOTE_TRIAL_KEY: ${{ secrets.REMOTE_TRIAL_KEY }}'), file)
     assert.equal(text.match(/secrets\.REMOTE_TRIAL_KEY }}/g).length, 1, `${file}: the key's value reaches the upload step only`)
+    // Free during the beta reaches staging's two configuration steps, and production's workflow never names it.
+    const beta = 'REMOTE_BETA_FREE: ${{ vars.REMOTE_BETA_FREE }}'
+    if (file === 'remote-staging.yml') for (const name of ['Package the tested bytes', 'Recover ownership']) assert.ok(step(name).includes(beta), `${file}: ${name}`)
+    else assert.ok(!text.includes('REMOTE_BETA_FREE'), file)
   }
 })
 

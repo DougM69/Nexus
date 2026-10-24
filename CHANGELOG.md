@@ -108,6 +108,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to remove it if it was not you.
 
 ### Changed
+- **Nexus Remote is free during the beta, with no 14-day limit.** Where the service runs the beta, the Remote
+  page says "Free during the beta" instead of counting a trial's days, internet use no longer runs out, and
+  attaching a station no longer promises a trial. Everything else about who may use Remote is unchanged.
 - **The Nexus Remote page explains itself before you sign in.** Signed out, it shows how to get
   started, what works and what does not yet, who can transmit and how Stop works, and where to send a
   report (contact@hamradiotools.io, with `nexus-diag.log`). It says Remote is free during the beta.

@@ -44,6 +44,7 @@ In `kd9taw/Nexus` → Settings → Environments → **production**, add these **
 | `REMOTE_AUTH0_NATIVE_CLIENT_ID` | Optional: the Native application's public Client ID, for the desktop's account sign-in. Never the SPA's; a deploy refuses that |
 | `REMOTE_TRIAL_IDENTITY_REQUIRED` | Optional: `1`, or unset (below) |
 | `REMOTE_MOVED_TO`, `REMOTE_MOVE_STAGE` | Optional, set together: another environment's origin, and `announce`, `pairing-closed` or `closed` |
+| `REMOTE_BETA_FREE` | Optional, staging only: `1` while Remote is free during the beta, or unset (below) |
 
 An unset variable writes nothing to the Worker; any other value than the ones above stops the
 deploy before it writes. The optional secret `REMOTE_TRIAL_KEY` (below) goes under **secrets**.
@@ -205,6 +206,10 @@ already holds `TRIAL_KEY` is refused before any write while the environment does
   any Nexus sends a callsign. Without it, the approve route checks `callsign` and `pc` for shape only.
 - `TRIAL_IDENTITY_REQUIRED=1`: an approval that would start a trial must carry both fields
   (`updateRequired` otherwise). Turn it on only once the Nexus releases that send them are out.
+- `REMOTE_BETA_FREE=1` (staging only; a production deploy refuses it): free during the beta. A trial or
+  a grant no longer ends; the page says "Free during the beta" instead of counting days. Everything
+  else is unchanged: an account still starts its one trial through the same checks, and a ban,
+  deletion, the rate limits and the LAN rules still apply. Unset it to bring the trial's own end back.
 
 The relay holds no payment key. It reads `subscriptions`, which only the separate, private billing
 Worker writes (it binds the same D1 database and receives the payment provider's webhook). The relay

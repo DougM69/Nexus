@@ -132,6 +132,13 @@ export function optionalVars(values, row = target()) {
     requireValue(values.trialIdentityRequired === '1', 'REMOTE_TRIAL_IDENTITY_REQUIRED must be 1 or unset')
     vars.TRIAL_IDENTITY_REQUIRED = '1'
   }
+  // Free during the beta: the trial's end taken away (authority.ts). Staging's alone, so production can
+  // only ever have it through a reviewed change to this line, never by a variable set in its environment.
+  if (given(values.betaFree)) {
+    requireValue(row === STAGING, 'REMOTE_BETA_FREE is for staging only')
+    requireValue(values.betaFree === '1', 'REMOTE_BETA_FREE must be 1 or unset')
+    vars.REMOTE_BETA_FREE = '1'
+  }
   // The overlap after a move: where this service went, and how far its retirement has got.
   requireValue(given(values.movedTo) === given(values.moveStage), 'REMOTE_MOVED_TO and REMOTE_MOVE_STAGE are set together or not at all')
   if (given(values.movedTo)) {
@@ -164,6 +171,7 @@ export function identityFromEnv(env = process.env, row = target(env)) {
 export function settingsFromEnv(env = process.env, row = target(env)) {
   return { ...identityFromEnv(env, row),
     trialIdentityRequired: env.REMOTE_TRIAL_IDENTITY_REQUIRED, movedTo: env.REMOTE_MOVED_TO, moveStage: env.REMOTE_MOVE_STAGE,
+    betaFree: env.REMOTE_BETA_FREE,
     secrets: OPTIONAL_SECRETS.filter(name => secretSupplied(env, name)) }
 }
 

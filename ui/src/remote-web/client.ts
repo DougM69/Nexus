@@ -27,6 +27,9 @@ export type AccountSession = {
   /** The service's clock. Dates are derived from this, never the browser's own, so a laptop
    *  with the wrong time still shows the right number of days remaining. */
   serverNow: number
+  /** True while Remote is free during the beta: no trial runs out, so the page counts no days and
+   *  promises no trial. Absent from an older service. */
+  beta?: boolean
   /** `expires_at` is when this browser's approval ends; `untilRemoved` is true for an approval that lasts
    *  until it is removed at the shack (every approval since 2026-10-10), whose `expires_at` is no date to
    *  show. `renewsUntil` is the end that use cannot move under the older rule, or null. */

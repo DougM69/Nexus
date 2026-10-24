@@ -147,6 +147,8 @@ jobs:
           REMOTE_TRIAL_IDENTITY_REQUIRED: ${{ vars.REMOTE_TRIAL_IDENTITY_REQUIRED }}
           REMOTE_MOVED_TO: ${{ vars.REMOTE_MOVED_TO }}
           REMOTE_MOVE_STAGE: ${{ vars.REMOTE_MOVE_STAGE }}
+          # Free during the beta (staging only): 1, or unset for the trial's own end.
+          REMOTE_BETA_FREE: ${{ vars.REMOTE_BETA_FREE }}
           # Presence only: the artifact declares the optional TRIAL_KEY when this environment holds it.
           REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}
           REMOTE_RECOVERY_REVISION: ${{ inputs.recovery_revision }}
@@ -228,6 +230,8 @@ jobs:
           REMOTE_TRIAL_IDENTITY_REQUIRED: ${{ vars.REMOTE_TRIAL_IDENTITY_REQUIRED }}
           REMOTE_MOVED_TO: ${{ vars.REMOTE_MOVED_TO }}
           REMOTE_MOVE_STAGE: ${{ vars.REMOTE_MOVE_STAGE }}
+          # Free during the beta (staging only): 1, or unset for the trial's own end.
+          REMOTE_BETA_FREE: ${{ vars.REMOTE_BETA_FREE }}
           # Presence only: the artifact declares the optional TRIAL_KEY when this environment holds it.
           REMOTE_TRIAL_KEY_PRESENT: ${{ secrets.REMOTE_TRIAL_KEY != '' }}
           REMOTE_D1_DATABASE_ID: ${{ steps.database.outputs.database_id }}

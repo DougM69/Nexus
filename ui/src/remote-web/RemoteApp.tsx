@@ -231,12 +231,14 @@ export function RemoteApp() {
   // An account that has never held a trial may pair - that is the self-serve path, and gating
   // the pairing form on `entitled` made it unreachable for exactly the people who need it.
   const canPair = trial?.state === 'active' || trial?.state === 'none'
+  // Free during the beta: the service keeps a trial running past its date, so there are no days to count.
+  const beta = session?.beta === true
   // Subscribe and Manage, only where the service has billing on. A subscription that has not ended is
   // changed or cancelled in the provider's portal; one that has ended can be bought again, and its
   // invoices are still in the portal.
   const plan = trial?.plan
   const subscribed = plan?.kind === 'subscription' && !['canceled', 'incomplete_expired'].includes(plan.status ?? '')
-  const trialLeft = trial?.state === 'active' && plan?.kind === 'trial' && session ? trial.expiresAt - session.serverNow : null
+  const trialLeft = trial?.state === 'active' && plan?.kind === 'trial' && session && !beta ? trial.expiresAt - session.serverNow : null
   const goToBilling = (kind: 'checkout' | 'portal', body: { plan: 'monthly' | 'annual' } | Record<string, never> = {}) =>
     void act(async () => { if (client) window.location.assign(await client.billingPage(kind, body)) })
   const daysLeft = trial && session
@@ -292,7 +294,7 @@ export function RemoteApp() {
     // Rate limits on the browser's routes reset within a minute (account) or ten (claim, attach).
     : code === 'tryLater' ? t('remote.tryLater')
     // Set by the page, not the service: an open session whose next ticket was refused.
-    : code === 'sessionEnded' ? t('remote.sessionEnded')
+    : code === 'sessionEnded' ? (beta ? t('remote.sessionEndedBeta') : t('remote.sessionEnded'))
     : code === 'alreadySubscribed' ? t('remote.billing.alreadySubscribed')
     : code === 'noSubscription' ? t('remote.billing.noSubscription')
     : code === 'billingNotAvailable' ? t('remote.billing.notAvailable')
@@ -357,7 +359,7 @@ export function RemoteApp() {
         {/* The pilot branch must survive: an absent start stays absent and is NEVER computed as
             expiresAt minus fourteen days. Migration 0002 deliberately did not backfill, because an
             invented start cannot afterwards be told from a real one. */}
-        {trial?.state === 'active' && <p className="remote-site-status remote-site-status--active" role="status">{trial.startedAt === null
+        {trial?.state === 'active' && <p className="remote-site-status remote-site-status--active" role="status">{beta ? t('remote.betaFree') : trial.startedAt === null
           ? t('remote.trialUnknownStart', { until: utcDate(trial.expiresAt) })
           : t('remote.trialRunning', { days: daysLeft, from: utcDate(trial.startedAt), until: utcDate(trial.expiresAt) })}</p>}
         {trial?.state === 'ended' && <p className="remote-site-status remote-site-status--stopped" role="status">{t('remote.trialEnded', { until: utcDate(trial.expiresAt) })}</p>}
@@ -475,7 +477,7 @@ export function RemoteApp() {
                 minutes: Math.max(0, Math.ceil((session.pending.expiresAt - session.serverNow) / 60000)),
               })}</p>
             : <>
-                <p role="status">{t('remote.confirmAttachPrompt', { station: session.pending.name })}</p>
+                <p role="status">{beta ? t('remote.confirmAttachPromptBeta', { station: session.pending.name }) : t('remote.confirmAttachPrompt', { station: session.pending.name })}</p>
                 <p className="remote-warning">{t('remote.confirmAttachWarning')}</p>
                 {/* Through act(), like every other service call here: outside it a refused attach
                     showed nothing at all and the rejection went unhandled. */}
