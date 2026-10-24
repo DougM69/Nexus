@@ -465,11 +465,14 @@ fn start_recheck(spots: &SharedSpots, health: &SharedHealth) {
             };
             cursor = cursor.wrapping_add(1);
             let Some(node) = target else { continue };
-            if let Some(outcome) = probe_greeting(node.host) {
+            match probe_greeting(node.host) {
                 // The same path a live feed's attempt takes: the offline guard still applies (a
                 // failure with nothing else delivering says nothing about the node), the skip is
                 // recorded and persisted, and a demotion of an idle node changes no live feed.
-                on_outcome(&spots, &health, node.host, &outcome);
+                Some(outcome) => on_outcome(&spots, &health, node.host, &outcome),
+                // Still greeting: not a failure, so it breaks any run the skip rule is counting,
+                // and it proves no login, so nothing else about the node changes.
+                None => lock(&HEALTH).pool.greeted(node.host),
             }
         }
     });
