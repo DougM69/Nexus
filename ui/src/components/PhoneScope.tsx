@@ -161,6 +161,12 @@ const HISTORY_ROWS = 1024
  *  and averaging are the onset levers; this is the decay one. */
 const PHONE_TRACE_HOLD_MS = 150
 
+/** The trace peak-hold a scope takes when its caller passes none: phone 150 ms, every other
+ *  cockpit (the RF pane) the `normal` preset. CW always passes `fast` itself. */
+export function defaultTraceHoldMs(cockpit: 'phone' | 'cw' | 'rfpan' | undefined): number {
+  return cockpit === 'phone' ? PHONE_TRACE_HOLD_MS : TRACE_HOLD_MS.normal
+}
+
 /** A frame drawn on an axis that runs against its row (LSB on the carrier-centred axis): bins
  *  reversed, span negated, so the frame says what it means on the axis it is drawn on. */
 function mirrorFrame(f: SpectrumFrame): SpectrumFrame {
@@ -455,7 +461,7 @@ export function PhoneScope({
   const cwPitchRefRef = useRef(cwPitchRefDial)
   const interactiveRef = useRef(interactive)
   // Phone defaults to PHONE_TRACE_HOLD_MS (150 ms); the RF pane keeps `normal` (250 ms); CW passes `fast`.
-  const effTraceHoldMs = traceHoldMs ?? (cockpit === 'phone' ? PHONE_TRACE_HOLD_MS : TRACE_HOLD_MS.normal)
+  const effTraceHoldMs = traceHoldMs ?? defaultTraceHoldMs(cockpit)
   const traceHoldRef = useRef(effTraceHoldMs)
   const lastRowRef = useRef<{ row: number[]; rowLo: number; rowHi: number } | null>(null)
   // `mirrored` = the drawn axis runs against the row (LSB on a carrier-centered axis), so
