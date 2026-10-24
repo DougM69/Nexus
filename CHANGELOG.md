@@ -199,6 +199,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **Driving the shack from another computer: the screen now shows the shack's own mode.** It follows
+  the shack's Phone, CW or FT section instead of the last one this computer showed, so a Phone band
+  change gives USB or LSB, never DATA; picking a mode is sent to the shack, and a refusal is shown
+  instead of switching. The TX On/Off button beside Tune in Phone now works from there, through all
+  of the shack's transmit checks, and a refused Tune is shown.
 - **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
   paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
   opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping
