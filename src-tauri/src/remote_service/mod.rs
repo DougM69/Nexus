@@ -1460,6 +1460,28 @@ impl Controller {
         };
         self.reflect_removals();
         self.reflect_people();
+        // The transmit windows kept for the sign-in devices the service had confirmed it notified
+        // their owner about (`keep_notified`), so a restart does not hold them afresh: only this
+        // station's, for this account. An entry that is locked, does not read, or names anything
+        // but a device id restores nothing, and those devices are held as any sign-in device with
+        // no record is. The next list still decides each one (`Authority::tx_held_for`).
+        let kept = self.accounts.vault.notified().ok().flatten().filter(|k| {
+            k.station_id == binding.station_id
+                && k.account_id == binding.account_id
+                && k.windows.keys().all(|id| identifier(id))
+        });
+        if let (Some(kept), Ok(control)) = (kept, self.control.lock()) {
+            let now_s = now_ms() / 1000;
+            control.operations.restore_transmit_windows(
+                kept.windows.into_iter().map(|(id, ends)| {
+                    (
+                        id,
+                        std::time::Duration::from_secs(ends.saturating_sub(now_s)),
+                    )
+                }),
+                std::time::Instant::now(),
+            );
+        }
         let remembered = match self.vault.state() {
             Ok(state) => state.filter(|s| {
                 s.binding == binding
@@ -2114,6 +2136,7 @@ impl Controller {
         // device the service lists as added by a sign-in, approved and unexpired. Pushed from the
         // durable list on every list, so a sign-in device is held FAIL-CLOSED even if its own grant
         // record is missing (`Authority::tx_held_for`).
+        let mut confirmed = None;
         if let Ok(control) = self.control.lock() {
             let signed_in: Vec<&Device> = devices
                 .iter()
@@ -2127,13 +2150,14 @@ impl Controller {
             // The subset the service confirms it has a durable owner-notice record for (the
             // 2026-10-23 sign-in decision): a sign-in device's transmit hold lifts only once it is
             // here, so a device whose notice row is missing stays held even past its window.
-            let notified = signed_in
+            let notified: std::collections::BTreeSet<String> = signed_in
                 .iter()
                 .filter(|d| d.notified == 1)
                 .map(|d| d.id.clone())
                 .collect();
             control.operations.set_signin_devices(signin);
-            control.operations.set_notified_devices(notified);
+            control.operations.set_notified_devices(notified.clone());
+            confirmed = Some(notified);
         }
         let waiting: Vec<&Device> = {
             let Ok(control) = self.control.lock() else {
@@ -2216,6 +2240,54 @@ impl Controller {
             if let Some(reproof) = reproof {
                 status.account.reproof = reproof;
             }
+        }
+        if let Some(confirmed) = confirmed {
+            self.keep_notified(&confirmed);
+        }
+    }
+    /// Keeps, for a restart, what is left of the transmit window of each sign-in device this list
+    /// confirmed the service notified its owner about (`confirmed`), bound to this station and its
+    /// account: the next launch restores those windows (`resume`) rather than holding the devices
+    /// afresh. Each list replaces it, so a device the list no longer confirms, no longer names as
+    /// added by a sign-in, or that was removed here and the service not told yet, is dropped at
+    /// once; with the removals unreadable, every device is. Written only when it changed.
+    fn keep_notified(&self, confirmed: &std::collections::BTreeSet<String>) {
+        let Some(binding) = &self.binding else {
+            return;
+        };
+        let kept = confirmed
+            .iter()
+            .filter(|d| self.removals.as_ref().is_some_and(|r| !r.contains(*d)))
+            .cloned()
+            .collect();
+        let windows = match self.control.lock() {
+            Ok(control) => control
+                .operations
+                .transmit_windows(&kept, std::time::Instant::now()),
+            Err(_) => return,
+        };
+        // Its end in unix seconds, rounded up; 0 once it has elapsed.
+        let now_s = now_ms() / 1000;
+        let notified = vault::Notified {
+            station_id: binding.station_id.clone(),
+            account_id: binding.account_id.clone(),
+            windows: windows
+                .into_iter()
+                .map(|(d, left)| {
+                    (
+                        d,
+                        if left.is_zero() {
+                            0
+                        } else {
+                            now_s + left.as_secs() + 1
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let vault = &self.accounts.vault;
+        if vault.notified().ok().flatten().as_ref() != Some(&notified) {
+            let _ = vault.save_notified(&notified);
         }
     }
     /// What an Approve press grants a device the operator was shown, for one the station vouched
@@ -2771,6 +2843,12 @@ impl Controller {
                     .post(&station_path(&binding, "revoke"), Some(&token), empty())
                     .await?;
                 self.vault.remove(&binding)?;
+                // What it kept of its confirmed owner notices goes with it.
+                let _ = self.accounts.vault.save_notified(&vault::Notified {
+                    station_id: binding.station_id.clone(),
+                    account_id: binding.account_id.clone(),
+                    windows: BTreeMap::new(),
+                });
                 // The pairing's key goes with it: a new pairing makes its own.
                 let _ = self.vault.remove_station_key();
                 if let Ok(mut control) = self.control.lock() {

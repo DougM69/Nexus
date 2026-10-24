@@ -90,6 +90,15 @@ impl AccountVault for Store {
     ) -> Result<(), &'static str> {
         Ok(())
     }
+    fn notified(&self) -> Result<Option<crate::remote_service::vault::Notified>, &'static str> {
+        Ok(None)
+    }
+    fn save_notified(
+        &self,
+        _: &crate::remote_service::vault::Notified,
+    ) -> Result<(), &'static str> {
+        Ok(())
+    }
 }
 
 /// What the stand-in saw.

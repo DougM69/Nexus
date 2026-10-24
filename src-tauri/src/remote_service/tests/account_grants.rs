@@ -1565,3 +1565,198 @@ async fn an_uninvite_waits_only_for_an_unreachable_service() {
         .await;
     assert_eq!(unkept.err(), Some("credentialStoreUnavailable"));
 }
+
+// ---- A confirmed owner notice across a restart ---------------------------------------------------
+
+/// The owner's browser as the service lists it with its owner notice `notified` (1) or not (0).
+fn notified_row(notified: u8) -> serde_json::Value {
+    let mut row = browser_row(&token("browser"));
+    row["notified"] = notified.into();
+    row
+}
+/// Whether the station holds the owner's browser from transmit at `at`.
+fn held_at(service: &Service, at: std::time::Instant) -> bool {
+    service
+        .control
+        .lock()
+        .unwrap()
+        .operations
+        .tx_held(BROWSER, at)
+}
+/// A moment past any transmit window the station could have recorded since this test began.
+fn past_the_window() -> std::time::Instant {
+    std::time::Instant::now() + account::TX_HOLD + Duration::from_secs(60)
+}
+/// The confirmed-notice entry a run kept in `vault`, once it is there.
+async fn kept_notified(vault: &MemoryVault) -> vault::Notified {
+    for _ in 0..100 {
+        if let Ok(Some(kept)) = vault.notified() {
+            return kept;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("no confirmed-notice entry was kept");
+}
+/// The station's own confirmed-notice entry: the owner's browser, its window `ended_s` (unix
+/// seconds, 0 when it had elapsed), for `station_id` and `account_id`.
+fn notified_entry(station_id: &str, account_id: &str, ended_s: u64) -> vault::Notified {
+    vault::Notified {
+        station_id: station_id.into(),
+        account_id: account_id.into(),
+        windows: BTreeMap::from([(BROWSER.to_string(), ended_s)]),
+    }
+}
+/// A browser granted on its sign-in, then restarted from `vault` holding `entry`, and listed by the
+/// service with its notice `notified`.
+async fn restarted_with(
+    cloud: &FakeCloud,
+    vault: &MemoryVault,
+    entry: Option<&str>,
+    notified: u8,
+) -> Service {
+    let first = launch_granting_on_sign_in(cloud, vault);
+    let _ = listed(&first, cloud, vec![notified_row(1)]).await;
+    let _ = kept_notified(vault).await;
+    drop(first);
+    if let Some(entry) = entry {
+        vault
+            .values
+            .lock()
+            .unwrap()
+            .insert("account-notified".into(), entry.into());
+    }
+    let service = launch_granting_on_sign_in(cloud, vault);
+    let _ = listed(&service, cloud, vec![notified_row(notified)]).await;
+    service
+}
+
+/// ★ A sign-in device the service confirmed its owner was told about is not held afresh by a
+/// restart: the station keeps that confirmation with the end of its transmit window, so after the
+/// restart it is held until that window ends, as before, and then transmits, once the list
+/// confirms the notice again. Before, a restart left it with no record and held it for good.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_confirmed_device_is_held_only_for_its_window_after_a_restart() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let first = launch_granting_on_sign_in(&cloud, &vault);
+    let _ = listed(&first, &cloud, vec![notified_row(1)]).await;
+    // CONTROL: before the restart it is held in its window and free past it.
+    assert!(
+        held_at(&first, std::time::Instant::now()),
+        "premise: in its window"
+    );
+    assert!(!held_at(&first, past_the_window()), "premise: free past it");
+    let kept = kept_notified(&vault).await;
+    assert_eq!(kept.station_id, STATION);
+    assert_eq!(kept.account_id, ACCOUNT);
+    assert_eq!(kept.windows.keys().collect::<Vec<_>>(), vec![BROWSER]);
+    let ends = kept.windows[BROWSER];
+    let now_s = now_ms() / 1000;
+    assert!(
+        ends > now_s && ends <= now_s + account::TX_HOLD.as_secs() + 1,
+        "the window's end, {ends}, kept as it is: about 15 minutes from {now_s}"
+    );
+    drop(first);
+
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let _ = listed(&service, &cloud, vec![notified_row(1)]).await;
+    assert!(
+        held_at(&service, std::time::Instant::now()),
+        "still in its window after the restart: held"
+    );
+    assert!(
+        !held_at(&service, past_the_window()),
+        "past its window and confirmed: free, not held afresh"
+    );
+}
+
+/// ★ FAIL-CLOSED: a confirmed-notice entry that does not read restores nothing, and the device is
+/// held; the same entry, readable, frees it (the control).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_confirmed_notice_entry_holds_the_device() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let readable = serde_json::to_string(&notified_entry(STATION, ACCOUNT, 0)).unwrap();
+    let control = restarted_with(&cloud, &vault, Some(&readable), 1).await;
+    assert!(
+        !held_at(&control, past_the_window()),
+        "CONTROL: readable, free"
+    );
+    drop(control);
+
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = restarted_with(&cloud, &vault, Some("{\"stationId\":"), 1).await;
+    assert!(held_at(&service, past_the_window()), "unreadable: held");
+}
+
+/// ★ THE LIVE LIST WINS: a device the next list no longer confirms was notified is held, whatever
+/// the station kept, and is dropped from what it keeps at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_list_that_no_longer_confirms_the_notice_holds_and_drops_it() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let readable = serde_json::to_string(&notified_entry(STATION, ACCOUNT, 0)).unwrap();
+    let service = restarted_with(&cloud, &vault, Some(&readable), 0).await;
+    assert!(held_at(&service, past_the_window()), "not confirmed: held");
+    let mut kept = None;
+    for _ in 0..100 {
+        kept = vault.notified().unwrap();
+        if kept.as_ref().is_some_and(|k| k.windows.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(kept.unwrap().windows, BTreeMap::new(), "dropped at once");
+
+    // And a device the list stops naming as added by a sign-in is dropped too.
+    *cloud.devices.lock().unwrap() = json!({ "devices": [notified_row(1)] }).to_string();
+    let _ = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        kept_notified(&vault).await.windows.len(),
+        1,
+        "CONTROL: confirmed, kept"
+    );
+    let mut shack = notified_row(1);
+    shack["addedBy"] = "shack".into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [shack] }).to_string();
+    let _ = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        vault.notified().unwrap().unwrap().windows,
+        BTreeMap::new(),
+        "no longer a sign-in device: dropped"
+    );
+}
+
+/// ★ BOUND TO THIS STATION'S ACCOUNT: an entry kept for another station, or for another account,
+/// restores nothing, and the device is held; the station's own frees it (the control).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_confirmed_notice_entry_for_another_station_or_account_is_ignored() {
+    for (station_id, account_id, held) in [
+        (STATION, ACCOUNT, false),
+        ("20000000-0000-4000-8000-000000000001", ACCOUNT, true),
+        (STATION, "30000000-0000-4000-8000-000000000001", true),
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        let entry = serde_json::to_string(&notified_entry(station_id, account_id, 0)).unwrap();
+        let service = restarted_with(&cloud, &vault, Some(&entry), 1).await;
+        assert_eq!(
+            held_at(&service, past_the_window()),
+            held,
+            "{station_id} / {account_id}"
+        );
+    }
+}
+
+/// Forgetting the pairing forgets what the station kept of its confirmed notices.
+#[tokio::test(flavor = "multi_thread")]
+async fn forgetting_the_pairing_forgets_the_confirmed_notices() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let _ = listed(&service, &cloud, vec![notified_row(1)]).await;
+    assert_eq!(kept_notified(&vault).await.windows.len(), 1, "premise");
+    service.action(Action::Forget {}).await.unwrap();
+    assert_eq!(vault.notified().unwrap().unwrap().windows, BTreeMap::new());
+}

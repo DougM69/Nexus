@@ -155,8 +155,9 @@ struct Core {
     /// held (its grant never recorded a positive waiver/window). Written by
     /// `Controller::grant_vouched` (held with its window) and
     /// `grant_approved` (waived at the shack); cleared on revoke. The engine's arm gate is set from
-    /// the CONTROLLING device's state at each lease event ([`Authority::apply_tx_hold`]). Monotonic,
-    /// not persisted — a restart re-vouches a device afresh and, until it does, holds it.
+    /// the CONTROLLING device's state at each lease event ([`Authority::apply_tx_hold`]). Monotonic;
+    /// a restart restores only the windows of the devices the service had confirmed it notified
+    /// ([`Authority::restore_transmit_windows`]), and every other sign-in device is held.
     tx_grants: BTreeMap<String, TxGrant>,
 }
 /// What the station recorded for a sign-in auto-granted device's transmit (the 2026-10-23 sign-in
@@ -367,6 +368,47 @@ impl Authority {
             // elapsed-and-notified device back into the fail-closed held case. The map is at most
             // the station's device count.
             c.tx_grants.insert(device.to_string(), grant);
+        }
+    }
+    /// What is left at `now` of the transmit window the station recorded for each of `devices`
+    /// that has one: zero once it has elapsed, and for an Approve at the shack. A device with no
+    /// record is left out. What the station keeps across a restart for the sign-in devices the
+    /// service confirmed it notified ([`Authority::restore_transmit_windows`]).
+    pub fn transmit_windows(
+        &self,
+        devices: &BTreeSet<String>,
+        now: Instant,
+    ) -> BTreeMap<String, Duration> {
+        let Ok(c) = self.core.lock() else {
+            return BTreeMap::new();
+        };
+        devices
+            .iter()
+            .filter_map(|device| {
+                let left = match c.tx_grants.get(device)? {
+                    TxGrant::Held { until } => until.saturating_duration_since(now),
+                    TxGrant::Waived => Duration::ZERO,
+                };
+                Some((device.clone(), left))
+            })
+            .collect()
+    }
+    /// Restore, after a restart, the transmit window kept for each sign-in device the service had
+    /// confirmed it notified: held for what was `left` of it from `now`, never longer than a whole
+    /// window (`account::TX_HOLD`). Only ever a `Held` — an
+    /// Approve at the shack comes back as an elapsed window, which still waits for the list to
+    /// confirm the device and its notice (`tx_held_for`) — and never over a record this run made.
+    pub fn restore_transmit_windows(
+        &self,
+        windows: impl IntoIterator<Item = (String, Duration)>,
+        now: Instant,
+    ) {
+        if let Ok(mut c) = self.core.lock() {
+            for (device, left) in windows {
+                c.tx_grants.entry(device).or_insert(TxGrant::Held {
+                    until: now + left.min(super::account::TX_HOLD),
+                });
+            }
         }
     }
     /// Whether the station holds `device` from transmit at `now`. Every controller is asked here;

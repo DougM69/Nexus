@@ -99,6 +99,12 @@ impl vault::AccountVault for MemoryVault {
     fn save_uninvites(&self, uninvites: &vault::Uninvites) -> Result<(), &'static str> {
         self.save_account_entry("account-uninvites", uninvites)
     }
+    fn notified(&self) -> Result<Option<vault::Notified>, &'static str> {
+        self.account_entry("account-notified")
+    }
+    fn save_notified(&self, notified: &vault::Notified) -> Result<(), &'static str> {
+        self.save_account_entry("account-notified", notified)
+    }
 }
 impl Vault for MemoryVault {
     fn binding(&self) -> Result<Option<Binding>, &'static str> {
