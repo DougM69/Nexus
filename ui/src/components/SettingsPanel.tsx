@@ -4967,16 +4967,27 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.remoteStream.unavailable')}</span>
               </div>
             )}
-            <RemoteStation />
-            {/* Remote over this network (the operator, 2026-10-04): this station's own listener, for Nexus on
-                another computer on the same network with no internet. Windows only, as the stream it
-                serves is; never on the Remote page, and every press on it is the shack's own. */}
-            {IS_WINDOWS && <LanStation />}
-            {!IS_WINDOWS && (
+            {/* A computer driving a station: this station's Remote and its network listener are the
+                station's, set up on its own screen, and every read of them from here is refused. One
+                line says so, in place of a card that could only say the read failed. */}
+            {drivesAnotherStation() ? (
               <div className="settings-field">
-                <span className="settings-label">{t('remote.lan.switch')}</span>
-                <span className="settings-hint">{t('remote.lan.unavailable')}</span>
+                <span className="settings-hint">{t('settings.remote.atStation')}</span>
               </div>
+            ) : (
+              <>
+                <RemoteStation />
+                {/* Remote over this network (the operator, 2026-10-04): this station's own listener, for Nexus on
+                    another computer on the same network with no internet. Windows only, as the stream it
+                    serves is; never on the Remote page, and every press on it is the shack's own. */}
+                {IS_WINDOWS && <LanStation />}
+                {!IS_WINDOWS && (
+                  <div className="settings-field">
+                    <span className="settings-label">{t('remote.lan.switch')}</span>
+                    <span className="settings-hint">{t('remote.lan.unavailable')}</span>
+                  </div>
+                )}
+              </>
             )}
             {/* The other end of the stream (the operator, 2026-10-04, "Stream client window"): this PC
                 opens the Remote page in a Nexus window of its own. Last in the card, after this
@@ -11040,7 +11051,11 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.connections.log.hint')}</span>
               </div>
               {connLog.length === 0 ? (
-                <p className="conn-log-empty">{t('settings.connections.log.empty')}</p>
+                // From a computer driving a station the log is never read (it stays at the station),
+                // so empty there is not "no events yet".
+                <p className="conn-log-empty">
+                  {drivesAnotherStation() ? t('settings.connections.log.atStation') : t('settings.connections.log.empty')}
+                </p>
               ) : (
                 <ul className="conn-log-list">
                   {connLog.slice(0, 40).map((e, i) => (

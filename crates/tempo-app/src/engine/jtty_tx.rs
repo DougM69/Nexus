@@ -735,9 +735,7 @@ impl Engine {
             return Err(super::REMOTE_HOLD_HOLDS_TX.to_string());
         }
         if !self.tx_enabled {
-            return Err(
-                "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
-            );
+            return Err(super::TX_OFF_TURN_IT_ON.to_string());
         }
         if let Some(why) = self.connection_tx_refusal() {
             return Err(why.to_string());

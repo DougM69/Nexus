@@ -222,6 +222,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   waiting. The hold lifts by itself 15 minutes after it signs in, once the station knows you were told
   it was added, or at once when you press **Allow to transmit** or **Approve**. Stop is never held, and
   computers on your own network are unaffected.
+- **Driving the shack from another computer: CW's TX On/Off button beside Tune now works**, as Phone's does, so
+  Enter Sends Message can send once you turn TX on; a refusal is shown, and Enter still never turns TX on.
+- **Driving the shack from another computer: a refused press now says why, and nothing that belongs to the shack
+  pretends otherwise.** CQ, Tune in every screen, the popped-out Operate window's buttons, JS8 typeahead, band picks,
+  tuning, AGC, RF power and CW speed show the reason when they are refused, and a refused power or speed slider goes
+  back to the rig's level. Opening the contest logger window no longer brings up "Nexus could not start". A send
+  refused because TX is off now says "turn TX on first". Repair clock, Clear test contacts, the Field Day club's
+  Give and Remove, the Remote access card and the Connections log say they are at the shack, and the first-run
+  setup wizard no longer opens by itself on that computer.
 - **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
   paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
   opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping

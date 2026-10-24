@@ -6068,6 +6068,8 @@ export const FR: PartialCatalog = {
   "settings.connections.hrdlog.code.saved": "Code HRDLog.net enregistré — l'envoi auto vers HRDLog.net est ACTIF",
   "settings.connections.legend": "Connexions",
   "settings.connections.log.empty": "Aucun événement pour cette session — enregistrez un identifiant ou lancez une synchro et cela s'affichera ici.",
+  "settings.connections.log.atStation": "Ce journal est tenu à la station : lisez-le là-bas, dans les Réglages.",
+  "settings.remote.atStation": "L’accès à distance se configure à la station, sur son propre écran.",
   "settings.connections.log.hint": "chaque enregistrement, synchro, envoi et échec atterrit ici",
   "settings.connections.log.title": "Journal des connexions",
   "settings.connections.lotw.password.clearFailed": "Impossible d'effacer le mot de passe LoTW",

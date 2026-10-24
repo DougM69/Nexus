@@ -2785,6 +2785,8 @@ pub(crate) fn run(station: String, typed: Option<Typed>) {
             }
             // This computer's window layouts, restored and kept here.
             crate::window_state::install(app.handle());
+            // The window is up: a panic from here on is not a launch that failed to show one.
+            crate::startup_reached_window();
             let handle = app.handle().clone();
             driving.before_install(Box::new(move || {
                 crate::capture_all_window_geometry(&handle);

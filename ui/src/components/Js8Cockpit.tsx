@@ -1763,7 +1763,7 @@ export function Js8Cockpit({
           radio={snap.radio}
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}
-          onTune={(on) => { void setTune(on).then((s) => onSnap?.(s)) }}
+          onTune={(on) => { void setTune(on).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error')) }}
           onAtuTune={() =>
             void atuTune()
               .then((s) => onSnap?.(s))

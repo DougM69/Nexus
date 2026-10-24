@@ -1101,6 +1101,8 @@ export const DE: PartialCatalog = {
   "settings.connections.log.title": "Verbindungsprotokoll",
   "settings.connections.log.hint": "jedes Speichern, jeder Abgleich, jede Übertragung und jeder Fehler landet hier",
   "settings.connections.log.empty": "Noch keine Ereignisse in dieser Sitzung — Zugangsdaten speichern oder einen Abgleich starten, dann erscheint es hier.",
+  "settings.connections.log.atStation": "Dieses Protokoll wird an der Station geführt: Lies es dort in den Einstellungen.",
+  "settings.remote.atStation": "Der Fernzugriff wird an der Station eingerichtet, an ihrem eigenen Bildschirm.",
   "settings.b4.legend": "Schon gearbeitet (B4) & Dupes",
   "settings.b4.matchMode.label": "Betriebsart mitprüfen",
   "settings.b4.matchMode.hint": "Aus (Standard, und so auch bei WSJT-X): Wer auf 40m gearbeitet wurde, gilt für 40m in jeder Betriebsart als B4-auf-Band, und das Dupe-Abzeichen im Log-Streifen zählt jede Betriebsart auf dem Band. An: 40m FT8 und 40m Phone sind getrennte QSOs — der gefüllte B4-Chip und das Dupe-Abzeichen verlangen zusätzlich dieselbe Betriebsart. Der hohle B4-Chip (irgendwo gearbeitet) bleibt in beiden Fällen unberührt.",

@@ -413,9 +413,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   }, [isBandMap])
 
   // Drive a command then mirror the returned snapshot immediately (the 300 ms poll would
-  // catch it anyway, but this keeps the cockpit snappy).
+  // catch it anyway, but this keeps the cockpit snappy). A refusal is shown in the words it came
+  // with, as the main window's same buttons show it: a transmit press that did nothing and said
+  // nothing reads as a dead button, and from a computer driving a station that was every refusal.
   const apply = (p: Promise<AppSnapshot>) => {
-    void p.then((s) => s && setSnap(s)).catch(() => {})
+    void p.then((s) => s && setSnap(s)).catch((e) => pushToast(e instanceof Error ? e.message : String(e), 'error'))
   }
 
   // ESC STOPS TRANSMIT IN THE CONTEST'S WINDOWS TOO (operator, Illinois QSO Party 2026-10-18: working
@@ -1136,7 +1138,17 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           onSetTxCycleAuto={(auto: boolean) => apply(setTxCycleAuto(auto))}
           onResend={() => apply(qsoResend())}
           onFreetext={(text: string) => apply(qsoFreetext(text))}
-          onLog={() => apply(logCurrentQso().then((r) => r.snapshot))}
+          onLog={() =>
+            apply(
+              logCurrentQso().then((r) => {
+                // The engine's verdict, as the main window reads it: a false is a refusal to log
+                // (already logged, no active QSO, no report exchanged), never a write.
+                if (r.logged) pushToast(t('shell.toast.logged'), 'success', 2500)
+                else if (!r.pending) pushToast(t('shell.toast.nothingToLog'), 'info', 4000)
+                return r.snapshot
+              }),
+            )
+          }
           onOverrideTx={(call: string, grid: string | null, text: string) =>
             apply(overrideNextTx(call, grid, text))
           }

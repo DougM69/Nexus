@@ -5465,6 +5465,8 @@ export const JA: PartialCatalog = {
   "settings.connections.log.title": "接続ログ",
   "settings.connections.log.hint": "保存・同期・送出・失敗のすべてがここに記録されます",
   "settings.connections.log.empty": "このセッションのイベントはまだありません — 資格情報を保存するか同期を実行するとここに表示されます。",
+  "settings.connections.log.atStation": "このログは局で記録されます。局の設定で確認してください。",
+  "settings.remote.atStation": "リモートアクセスは局の画面で設定します。",
   "settings.b4.legend": "交信済み（B4）と重複",
   "settings.b4.matchMode.label": "モードも一致で判定",
   "settings.b4.matchMode.hint": "オフ（デフォルトで、WSJT-Xも同じ）: 40mで交信した局は、モードを問わず40mでB4（バンド内交信済み）となり、ログストリップのDupeバッジもバンド内の全モードを対象に数えます。オン: 40m FT8と40mフォーンは別々の交信になり、塗りつぶしのB4チップとDupeバッジはモードの一致も必要とします。中抜きのB4チップ（どこかで交信済み）はどちらの設定でも変わりません。",

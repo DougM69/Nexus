@@ -12,6 +12,7 @@ import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
 import { stepFrom } from '../wheelTuningPolicy'
 import { t } from '../i18n'
+import { showWhenDriving } from '../features/drivingRefusal'
 
 /** The rig's own vocabulary on these buttons: the two clarifiers and the two VFOs. Named so
  *  the catalog guard reads them as the deliberate tokens they are. */
@@ -65,7 +66,7 @@ export function TuningStrip({
   const rit = snap.radio.ritHz ?? 0
   const xit = snap.radio.xitHz ?? 0
   const vfo = snap.radio.activeVfo || 'A'
-  const apply = (p: Promise<AppSnapshot>) => void p.then((s) => s && onSnap?.(s)).catch(() => {})
+  const apply = (p: Promise<AppSnapshot>) => void p.then((s) => s && onSnap?.(s)).catch(showWhenDriving)
   const fmtOffset = (hz: number) => (hz > 0 ? `+${hz}` : `${hz}`)
 
   const tuneTo = async (mhz: number) => {
@@ -78,7 +79,10 @@ export function TuningStrip({
     // toast "outside the band plan" and return, which is what made every ◄/► nudge and every
     // typed entry stop dead at a band edge.
     // In-band keeps the current sideband; crossing 10 MHz follows the band convention (#45).
-    const s = await setFrequency(mhz, bandLabelForMhz(mhz), sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband)).catch(() => null)
+    const s = await setFrequency(mhz, bandLabelForMhz(mhz), sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband)).catch((e) => {
+      showWhenDriving(e)
+      return null
+    })
     if (s) onSnap?.(s)
   }
   // #273: `steps` whole steps, the first rounding to the step (18.110.250 → 18.111.000 at 1 kHz),

@@ -42,6 +42,7 @@ import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer, type VoiceKeyerForEnter } from './VoiceKeyer'
 import { drivesAnotherStation } from '../features/durableStore'
+import { showWhenDriving } from '../features/drivingRefusal'
 import { STREAM_PTT_REASSERT_MS } from '../remote-web/stream-protocol'
 import { EsmPlate } from './EsmPlate'
 import { esmLitKeys, useEsmHost, type EsmMessage, type EsmSetting } from '../features/esmHost'
@@ -790,13 +791,13 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => s && onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
   // Native Icom scope reference level, in tenths of a dB (−200..+200 = −20.0..+20.0 dB).
   const [scopeRefTenths, setScopeRefTenths] = useState(0)
   const changeScopeRef = (tenths: number) => {
     setScopeRefTenths(tenths)
-    void setScopeRef(tenths)
+    void setScopeRef(tenths).catch(showWhenDriving)
   }
   const [keyed, setKeyed] = useState(false)
   /** Mirrors `keyed` for the window key handlers, which capture their closure once per
@@ -873,7 +874,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
     setFlexRefDbm(dbm)
     void setFlexPanRef(dbm)
       .then((s) => onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
@@ -1233,9 +1234,15 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
   const pttArmed =
     keyed && snap.radio.txAllowed && snap.radio.txEnabled && (micArmed.current || driving) &&
     !pressEnded && (streamMic === 'armed' || (streamMic === null && !micReported))
+  // A refused level goes back to what the rig reports: the read-back above moves the slider only
+  // when the rig's value changes, and a refusal changes nothing.
   const changePower = (pct: number) => {
     setPower(pct)
-    void setRfPower(pct / 100)
+    void setRfPower(pct / 100).catch((e) => {
+      const rb = snap.radio.rfPower
+      if (rb != null) setPower(Math.round(rb * 100))
+      showWhenDriving(e)
+    })
   }
   // Commit a typed dial from the shared header readout — same CAT path as the
   // TuningStrip nudge/wheel (keeps the current sideband so an in-band entry
@@ -1247,7 +1254,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
     // In-band keeps the current sideband; crossing 10 MHz follows the band convention (#45).
     void setFrequency(mhz, bandLabelForMhz(mhz), sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband))
       .then((s) => s && onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
 
   // QSO recording (audio bridge): a session-level toggle driven by the snapshot (so the REC
@@ -2076,7 +2083,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
                      explanation anywhere. The rig's OWN refusal arrives a tick later in
                      `radio.scopeSpanRefused` (the status lane); this catch is the nearer half,
                      the command itself failing. */
-                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
                 >
                   {sp.label}
                 </button>
@@ -2113,7 +2120,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
                   type="button"
                   className="theme-chip"
                   title={t('phone.flexPan.span.title', { span: sp.label })}
-                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
                 >
                   {sp.label}
                 </button>

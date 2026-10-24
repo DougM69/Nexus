@@ -8580,6 +8580,10 @@ export const EN = {
   'settings.connections.log.hint': 'every save, sync, push, and failure lands here',
   'settings.connections.log.empty':
     'No events yet this session — save a credential or run a sync and it shows here.',
+  // On a computer driving a station: its log is never read from afar (its lines carry the services' own words).
+  'settings.connections.log.atStation': 'This log is kept at the station: read it in Settings there.',
+  // On a computer driving a station: in place of the station's half of the Remote card.
+  'settings.remote.atStation': 'Remote access is set up at the station, on its own screen.',
 
   // ── Settings ▸ Logging & Connectors ▸ Worked-before (B4) & dupes ────────────────────
   // ⚠️ B4 is the hobby's own shorthand for "worked before" and Dupe is what the badge is

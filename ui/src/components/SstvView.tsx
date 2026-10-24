@@ -74,6 +74,7 @@ import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { announce } from '../announce'
 import { pushToast, withErrorToast } from '../toast'
 import { drivesAnotherStation } from '../features/durableStore'
+import { showWhenDriving } from '../features/drivingRefusal'
 import { stationPictureBytes, useStationPicture } from '../features/shackFiles'
 import { ShackFilesSave } from './ShackFilesSave'
 import { pollSingleFlight } from '../singleFlight'
@@ -1678,7 +1679,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               // the rig — Send must not overwrite it with the Settings default.
               powerTouched.current = true
               setTxPower(pct)
-              void setRfPower(pct / 100)
+              void setRfPower(pct / 100).catch(showWhenDriving)
             },
             label: t('sstv.header.power.label'),
             title: t('sstv.header.power.title'),
@@ -1947,7 +1948,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         <CockpitTxStrip
           radio={snap.radio}
           onSetTxEnabled={onSetTxEnabled}
-          onTune={(on) => { void setTune(on).then((st) => onSnap?.(st)) }}
+          onTune={(on) => { void setTune(on).then((st) => onSnap?.(st)).catch((e) => pushToast(String(e), 'error')) }}
           onAtuTune={() =>
             void atuTune()
               .then((st) => onSnap?.(st))

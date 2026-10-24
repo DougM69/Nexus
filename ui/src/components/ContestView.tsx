@@ -18,6 +18,7 @@ import type {
 import { openContestLogger } from '../features/contestLoggerLayout'
 import { contestClear, contestMergeUnmerged, contestRemoveLast, contestRemoved, contestRestore, contestUnmerged, exportLog, fdClubAllowBack, fdClubExport, fdClubGivePosition, fdClubLogNewest, fdClubRemovePosition, fdMergeToGeneral, fdSetUpload, getFdRuleset, getSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type ContestUnmerged, type FdGiveAnswer, type FdRemoveAnswer, type FdRulesetDto, type RemovedContest } from '../api'
 import { isStreamInput } from '../remote-native/stream-input'
+import { drivesAnotherStation } from '../features/durableStore'
 import { patchSettings } from '../settings/patch'
 import { FdAdvisories } from './FdAdvisories'
 import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
@@ -1987,9 +1988,10 @@ export function FdClubSection({
   // The codes are this laptop's screen's and the host's, never the pop-out's or Remote's.
   const showCodes = !detached && !readOnly
   function ask(handle: number, r: { posName: string; call: string; clubCode?: string }) {
-    // Only at the host: a press that comes through a stream gives no position. Read before
-    // anything awaits, while the stream's dispatch is still the one running.
-    if (isStreamInput()) {
+    // Only at the host: a press that comes through a stream gives no position, nor one from a
+    // computer driving the station (the station refuses it there). Read before anything awaits,
+    // while the stream's dispatch is still the one running.
+    if (isStreamInput() || drivesAnotherStation()) {
       setGiveNote({ text: t('fieldDay.club.give.refused.remote'), alert: true })
       return
     }
@@ -1997,7 +1999,7 @@ export function FdClubSection({
     setAsking({ handle, name: r.posName, call: r.call, code: r.clubCode ?? '' })
   }
   function give() {
-    if (isStreamInput()) {
+    if (isStreamInput() || drivesAnotherStation()) {
       setGiveNote({ text: t('fieldDay.club.give.refused.remote'), alert: true })
       return
     }
@@ -2046,7 +2048,7 @@ export function FdClubSection({
   }
   function askRemove(row: FdClubBoardRow) {
     // Only at the host, as Give is: read before anything awaits.
-    if (isStreamInput()) {
+    if (isStreamInput() || drivesAnotherStation()) {
       setRemoveNote(remoteNote)
       return
     }
@@ -2054,7 +2056,7 @@ export function FdClubSection({
     setRemoving({ posid: row.posid, name: boardName(row) })
   }
   function remove() {
-    if (isStreamInput()) {
+    if (isStreamInput() || drivesAnotherStation()) {
       setRemoveNote(remoteNote)
       return
     }
@@ -2072,7 +2074,7 @@ export function FdClubSection({
     )
   }
   function allowBack(row: FdClubBoardRow) {
-    if (isStreamInput()) {
+    if (isStreamInput() || drivesAnotherStation()) {
       setRemoveNote(remoteNote)
       return
     }
@@ -3190,9 +3192,10 @@ export function ContestView({
       setRemovedNote({ text, alert })
       pushToast(text, alert ? 'error' : 'info', CLEAR_TOAST_MS)
     }
-    // Only at the station, as removal is: a press through the Remote stream clears nothing. Read
-    // before anything awaits, inside the stream's dispatch.
-    if (isStreamInput()) {
+    // Only at the station, as removal is: a press through the Remote stream clears nothing, nor one
+    // from a computer driving the station (the station refuses it there). Read before anything
+    // awaits, inside the stream's dispatch.
+    if (isStreamInput() || drivesAnotherStation()) {
       setClearAsk(null)
       say(t('contest.clear.remote'), true)
       return

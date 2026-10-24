@@ -889,6 +889,8 @@ const MAY_REACH: &[&str] = &[
     "crate::capture_all_window_geometry",
     "crate::capture_bandmap_window",
     "crate::show_startup_failure",
+    // The panic hook's flag that the window is up. It sets one flag and starts nothing.
+    "crate::startup_reached_window",
 ];
 
 /// What starts a station, or holds one: none of it may be named in client mode.
@@ -924,6 +926,28 @@ fn client_source() -> String {
         .map(|line| line.split("//").next().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Client mode's window is up once its setup runs, and it says so: the panic hook shows "Nexus could
+/// not start" only while no window has been reached, and only the station's own setup used to say
+/// it, so on a computer driving a station every later panic raised that box over a running app.
+/// CONTROL: the scan finds the setup it reads.
+#[test]
+fn client_mode_marks_its_window_reached() {
+    let source = client_source();
+    let run = &source[source
+        .find("pub(crate) fn run(station: String")
+        .expect("run")..];
+    let setup = &run[run.find(".setup(move |app|").expect("the setup")..];
+    let setup = &setup[..setup.find(".on_window_event(").expect("the setup's end")];
+    assert!(
+        setup.contains("crate::window_state::install"),
+        "the scan reads the setup"
+    );
+    assert!(
+        setup.contains("crate::startup_reached_window()"),
+        "client mode's setup marks the window reached"
+    );
 }
 
 /// ★ No station here, by construction: client mode names nothing that starts or holds a station
