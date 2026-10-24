@@ -53,6 +53,7 @@ import {
 } from '../api'
 import { t } from '../i18n'
 import { lanReachLine } from '../remote-native/lanReach'
+import { heldLine } from '../features/txOnHeld'
 
 /** How often the banner asks after the link while this computer drives a station. */
 export const CLIENT_STATUS_EVERY_MS = 500
@@ -326,7 +327,15 @@ export function ClientBanner() {
       {/* Why a PTT press here would not key the station, from the client status. Beside the over
           line, the banner's own place for what the station says of transmitting; it never covers
           Stop. Absent on an older station build, so nothing shows then. */}
-      {status.pttRefusal && (
+      {/* The station holds this computer from transmit, in any mode: Allow to transmit at the shack,
+          with the minutes left only when the station sent them. It stands in for the PTT's own
+          on-hold line, which says the same without the time. */}
+      {status.txHold && (
+        <span className="client-banner-over" data-tx-hold={status.txHold.leftSecs != null ? 'counting' : 'waiting'}>
+          {heldLine(status.txHold)}
+        </span>
+      )}
+      {status.pttRefusal && !(status.txHold && status.pttRefusal === 'onHold') && (
         <span className="client-banner-over" data-ptt-refusal={status.pttRefusal}>
           {refusalLine(status.pttRefusal)}
         </span>

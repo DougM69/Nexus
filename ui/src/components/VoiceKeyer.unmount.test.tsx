@@ -9,9 +9,17 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import { VoiceKeyer } from './VoiceKeyer'
 
-const { stopVoice, playVoiceMessage } = vi.hoisted(() => ({
+const { stopVoice, playVoiceMessage, pushToast } = vi.hoisted(() => ({
   stopVoice: vi.fn(async (): Promise<unknown> => ({})),
   playVoiceMessage: vi.fn(async (_slot: number): Promise<unknown> => ({})),
+  pushToast: vi.fn(),
+}))
+
+// Only the keyer's own toasts are watched; a refused send still goes through the real
+// withErrorToast, which answers it.
+vi.mock('../toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../toast')>()),
+  pushToast,
 }))
 
 vi.mock('../api', () => ({
@@ -30,10 +38,11 @@ afterEach(() => {
   vi.restoreAllMocks()
   stopVoice.mockClear()
   playVoiceMessage.mockClear()
+  pushToast.mockClear()
 })
 
 async function renderKeyer() {
-  const view = render(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+  const view = render(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
   await act(async () => {})
   return view
 }
@@ -67,8 +76,8 @@ describe('the voice keyer leaving the screen', () => {
     await playF1(container)
     const now = Date.now()
     vi.spyOn(Date, 'now').mockReturnValue(now)
-    rerender(<VoiceKeyer txEnabled keyed transmitting />)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    rerender(<VoiceKeyer txEnabled keyed voicePlaying />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
     vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
     unmount()
     expect(stopVoice).not.toHaveBeenCalled()
@@ -78,13 +87,13 @@ describe('the voice keyer leaving the screen', () => {
   it('stops a message pressed while the last one was still on the air', async () => {
     const { container, rerender, unmount } = await renderKeyer()
     await playF1(container)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying />)
     // Pressed again before the first message ends: the next one waits for it.
     await playF1(container)
     expect(playVoiceMessage).toHaveBeenCalledTimes(2)
     const now = Date.now()
     vi.spyOn(Date, 'now').mockReturnValue(now)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
     // The first one's end, long enough ago to count, and the second has not keyed yet.
     vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
     unmount()
@@ -94,12 +103,12 @@ describe('the voice keyer leaving the screen', () => {
   it('stops a message the rig keyed for again after the last one ended', async () => {
     const { container, rerender, unmount } = await renderKeyer()
     await playF1(container)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying />)
     await playF1(container)
     const now = Date.now()
     vi.spyOn(Date, 'now').mockReturnValue(now)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying />)
     vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
     unmount()
     expect(stopVoice).toHaveBeenCalledTimes(1)
@@ -122,11 +131,11 @@ describe('the voice keyer leaving the screen', () => {
   it('stops a message after a snapshot briefly read the rig unkeyed', async () => {
     const { container, rerender, unmount } = await renderKeyer()
     await playF1(container)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying />)
     const now = Date.now()
     vi.spyOn(Date, 'now').mockReturnValue(now)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying />)
     // Still keyed, long after the brief unkeyed reading.
     vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
     unmount()
@@ -136,10 +145,52 @@ describe('the voice keyer leaving the screen', () => {
   it('stops a message hidden while a snapshot reads the rig unkeyed', async () => {
     const { container, rerender, unmount } = await renderKeyer()
     await playF1(container)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting />)
-    rerender(<VoiceKeyer txEnabled keyed={false} transmitting={false} />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
     unmount()
     expect(stopVoice, 'one unkeyed snapshot counted as the end').toHaveBeenCalledTimes(1)
+  })
+})
+
+// `voicePlaying` is the station's own word that a voice message is queued or on the air (absent
+// when false). A hide while it says so stops the message and says an over was cut; a station that
+// never says it (an older build) shows no rise, so no message reads as ended and the hide stops it.
+describe('the station saying a voice message is playing', () => {
+  const said = () => pushToast.mock.calls.map((c) => String(c[0])).join(' | ')
+
+  it('a hide while it plays stops it and says the over was stopped', async () => {
+    const { container, rerender, unmount } = await renderKeyer()
+    await playF1(container)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying />)
+    unmount()
+    expect(stopVoice).toHaveBeenCalledTimes(1)
+    expect(said(), 'the voice over was cut in silence').toMatch(/F1/)
+  })
+
+  it('says nothing of an over once the message has ended', async () => {
+    const { container, rerender, unmount } = await renderKeyer()
+    await playF1(container)
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying />)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying={false} />)
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
+    unmount()
+    expect(stopVoice).not.toHaveBeenCalled()
+    expect(said()).toBe('')
+  })
+
+  it('a station that never says it gets its message stopped, and no over claimed', async () => {
+    const { container, rerender, unmount } = await renderKeyer()
+    await playF1(container)
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying={undefined} />)
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
+    rerender(<VoiceKeyer txEnabled keyed={false} voicePlaying={undefined} />)
+    unmount()
+    expect(stopVoice, 'a silent station read as the message ending').toHaveBeenCalledTimes(1)
+    expect(said()).toBe('')
   })
 })
 

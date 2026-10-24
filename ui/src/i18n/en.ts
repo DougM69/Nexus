@@ -723,6 +723,7 @@ export const EN = {
   "client.ptt.refusal.otherOwner": "Another device is holding the transmitter.",
   "client.ptt.refusal.clockRepair": "The station is fixing its clock.",
   "client.ptt.refusal.onHold": "Listening and tuning only. Transmit waits for you to press Allow to transmit at the shack.",
+  "client.ptt.refusal.onHoldLeft": "Listening and tuning only. Transmit waits for you to press Allow to transmit at the shack, or about {{minutes}} min.",
   "client.ptt.refusal.noPresence": "The link to the station dropped.",
   "client.ptt.refusal.noFeed": "No microphone is set on this computer.",
   "client.ptt.refusal.noAudio": "No microphone audio is reaching the station.",
@@ -12107,7 +12108,7 @@ export const EN = {
   // station, so nothing starts transmitting. The lane says why the latch stayed dark while it lasts.
   'shell.lane.txOnHeld.message': 'TX HELD — APPROVAL NEEDED',
   'shell.lane.txOnHeld.detail':
-    'A newly signed-in Remote device is waiting for your approval. Approve it under Settings \u25B8 Remote to transmit.',
+    'A newly signed-in Remote device is waiting for your approval. Press Allow to transmit under Settings \u25B8 Remote to let it transmit.',
   'shell.lane.prop.offline.message': 'Prop: no live data',
   'shell.lane.prop.offline.detail':
     'No live propagation data yet — set your callsign in Settings and check your internet connection.',

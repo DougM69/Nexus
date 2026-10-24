@@ -881,6 +881,10 @@ pub(crate) struct Status {
     /// would, or did, key. DISPLAY ONLY — the Phone PTT shows it so a press that did nothing is
     /// explained; nothing here keys, refuses or releases.
     pub(crate) ptt_refusal: Option<String>,
+    /// The station holds this computer from transmit, in any mode, as its snapshot says it
+    /// (`radio.txHold`): with the time left only when the station would lift the hold by itself.
+    /// DISPLAY ONLY — the banner says so; the station's own authority decides every transmission.
+    pub(crate) tx_hold: Option<tempo_app::dto::TxHold>,
     /// The link runs over the internet (through the station's room), not this network.
     pub(crate) internet: bool,
     /// "Still there?": nothing from the operator for a quarter of an hour on the internet.
@@ -1012,6 +1016,7 @@ impl Client {
                 reason: None,
                 over: None,
                 ptt_refusal: None,
+                tx_hold: None,
                 internet: false,
                 still_there: false,
                 udp_blocked: false,
@@ -1154,16 +1159,21 @@ impl Client {
             .and_then(|shack| shack.stop_road())
             .and_then(|road| road.over(std::time::Instant::now()));
         // Why a press would not key, as the station's snapshot says it (`radio.pttRefusal`).
-        let ptt_refusal = self.fed("snapshot/1").ok().and_then(|snap| {
-            snap.get("radio")
-                .and_then(|radio| radio.get("pttRefusal"))
-                .and_then(|refusal| refusal.as_str())
-                .map(str::to_string)
-        });
+        let snap = self.fed("snapshot/1").ok();
+        let radio = snap.as_ref().and_then(|snap| snap.get("radio"));
+        let ptt_refusal = radio
+            .and_then(|radio| radio.get("pttRefusal"))
+            .and_then(|refusal| refusal.as_str())
+            .map(str::to_string);
+        // The hold beside it, the same way (`radio.txHold`); one the banner cannot read is none.
+        let tx_hold = radio
+            .and_then(|radio| radio.get("txHold"))
+            .and_then(|hold| serde_json::from_value(hold.clone()).ok());
         let internet = self.on_internet.load(Ordering::SeqCst);
         Status {
             over,
             ptt_refusal,
+            tx_hold,
             internet,
             still_there: internet && lock(&self.idle).state(Instant::now()) == Idle::Prompt,
             udp_blocked: internet && self.udp_blocked.load(Ordering::SeqCst),

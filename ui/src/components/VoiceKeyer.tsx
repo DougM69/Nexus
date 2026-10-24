@@ -38,12 +38,13 @@ interface Props {
   /** Whether the operator is holding live PTT — playing a canned message then would fight
    * the live over, so we block it and say so. */
   keyed: boolean
-  /** The rig's real keyed state (snapshot). The engine has no "voice message finished"
-   * event — the radio loop simply drops PTT when the samples run out — so the rig UNKEYING
-   * is the only signal that a message this pane started is over. Used to know whether the
-   * unmount teardown actually ENDED an over, so it can say so, and whether a message this pane
-   * sent is known to have ended (`endedOnAir`), so the unmount need not stop it. */
-  transmitting: boolean
+  /** Whether a voice-keyer message is queued or on the air at the station (the snapshot's
+   * `radio.voicePlaying`): its fall is the only signal that a message this pane started is over.
+   * Used to know whether the unmount teardown actually ENDED an over, so it can say so, and
+   * whether a message this pane sent is known to have ended (`endedOnAir`), so the unmount need
+   * not stop it. Absent when false; a station that never sends it shows no rise, so nothing then
+   * ever reads as ended and the unmount stops. */
+  voicePlaying: boolean | undefined
   /** Field Day exchange to read ("3A WI") — when set (FD mode), hint that a slot can be
    * recorded with it for one-key sends. Empty/undefined outside FD. */
   fdExchange?: string | null
@@ -113,7 +114,7 @@ function endedOnAir(p: { fellAt: number | null }): boolean {
  * button (two do), not that its unmount cleanup is itself a stop. The cleanup below is not
  * what buys the entry — it is what the entry's note has to WARN ABOUT.
  */
-export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: Props) {
+export function VoiceKeyer({ txEnabled, keyed, voicePlaying, fdExchange, esm }: Props) {
   const [stored, setMsgs] = useState<VoiceMessage[]>([])
   // A deleted slot inside its Undo window still has its recording in the backend; everything
   // here (the slot, its F-key, Enter Sends Message) treats it as empty until Undo or the clear.
@@ -142,9 +143,9 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: 
   // The message this pane put on the air and has not seen end, or null: its slot, a number of
   // its own (`gen`), and what the rig has done since it was sent. Set when the operator sends
   // one; cleared only by ■ Stop / Esc and by the engine refusing THAT send. It is never cleared
-  // by `transmitting` falling, because that edge need not be this message's: an F-key pressed
+  // by `voicePlaying` falling, because that edge need not be this message's: an F-key pressed
   // while the last message is still on the air sees the last one end before its own keys, and a
-  // stale snapshot can read the rig unkeyed mid-message. Instead the unmount asks whether this
+  // stale snapshot can read it ended mid-message. Instead the unmount asks whether this
   // message is known to have ended (`endedOnAir`), and anything short of that stops it.
   const playingRef = useRef<{ slot: number; gen: number; rose: boolean; fellAt: number | null } | null>(
     null,
@@ -162,16 +163,16 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: 
   const onAirRef = useRef(false)
   useEffect(() => {
     const p = playingRef.current
-    if (p && !onAirRef.current && transmitting) {
-      // A rise AFTER the send: the rig keyed once this message was sent. A rise is the only edge
-      // that can start one, so a message pressed while another over is on the air waits for one.
+    if (p && !onAirRef.current && voicePlaying) {
+      // A rise AFTER the send: the station had a message once this one was sent. A rise is the
+      // only edge that can start one, so a message pressed while another is on the air waits for one.
       p.rose = true
       p.fellAt = null
-    } else if (p?.rose && onAirRef.current && !transmitting) {
+    } else if (p?.rose && onAirRef.current && !voicePlaying) {
       p.fellAt = Date.now()
     }
-    onAirRef.current = transmitting
-  }, [transmitting])
+    onAirRef.current = voicePlaying === true
+  }, [voicePlaying])
 
   useEffect(() => {
     void getVoiceMessages()
@@ -211,11 +212,11 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: 
   useEffect(() => {
     return () => {
       // BOTH conditions, and only these two: this pane started a message it has not seen end,
-      // AND the rig is keyed right now. Either alone would lie — a message the engine dropped
-      // before it played (TX went off first) leaves the first set with nothing ever on the
-      // air, and live mic PTT satisfies the second with no keyer message involved. The cost is
-      // the ~1 poll between pressing an F-key and the snapshot showing TX: a hide inside that
-      // window says nothing. A missed notice beats a false one.
+      // AND the station says a voice message is playing right now. Either alone would lie — a
+      // message the engine dropped before it played (TX went off first) leaves the first set with
+      // nothing ever on the air, and another pane's message satisfies the second with none of
+      // this one's. The cost is the ~1 poll between pressing an F-key and the snapshot showing
+      // it: a hide inside that window says nothing. A missed notice beats a false one.
       const p = playingRef.current
       const playing = p !== null && !endedOnAir(p) ? p.slot : null
       const over = onAirRef.current ? playing : null

@@ -15,6 +15,7 @@ use std::sync::{
     Mutex,
 };
 use std::time::{Duration, Instant};
+use tempo_app::engine::remote_transmit::RemoteTxHold;
 use tempo_app::remote_control::transmit::TransmitAuthority;
 
 mod station;
@@ -540,18 +541,61 @@ impl Authority {
     /// held device keeps its lease and stays held. Returns `None` while a request holds Core (it is
     /// setting the gate itself), so the tick leaves the flag be; it never blocks the radio loop and
     /// cannot deadlock a request, which takes Core then the engine with the same `try` discipline.
-    pub fn current_transmit_hold(&self, now: Instant) -> Option<bool> {
+    ///
+    /// Beside the gate's answer it says, for the remote PC's display only, whether the owner of a
+    /// held device was notified and, when only its window holds it, what is left of that window
+    /// ([`Self::hold_shown`]).
+    pub fn current_transmit_hold(&self, now: Instant) -> Option<RemoteTxHold> {
         let mut c = self.core.try_lock().ok()?;
         // Authority unavailable (Remote off past the counter, or saturated): no device can operate
         // the station, so none is held and the local operator is free.
         if self.reconcile(&mut c, now).is_err() {
-            return Some(false);
+            return Some(RemoteTxHold::default());
         }
-        Some(
-            c.lease
-                .as_ref()
-                .is_some_and(|l| self.tx_held_for(&l.device, &c.tx_grants, now)),
-        )
+        Some(c.lease.as_ref().map_or_else(RemoteTxHold::default, |l| {
+            self.hold_shown(&l.device, &c.tx_grants, now)
+        }))
+    }
+
+    /// [`Self::tx_held_for`] for `device`, and what the remote PC may be told of it: notified only
+    /// when the service confirms a notice for every name it is held under ([`Self::hold_names`]),
+    /// and the time left only then, and only when each of those names is held by its window alone
+    /// (the provenance list loaded and naming it), the longest of them. Anything less says no time.
+    fn hold_shown(
+        &self,
+        device: &str,
+        grants: &BTreeMap<String, TxGrant>,
+        now: Instant,
+    ) -> RemoteTxHold {
+        if !self.tx_held_for(device, grants, now) {
+            return RemoteTxHold::default();
+        }
+        let held: Vec<String> = self
+            .hold_names(device)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|name| self.held_as(name, grants, now))
+            .collect();
+        let owner_notified = !held.is_empty() && held.iter().all(|name| self.is_notified(name));
+        let listed = |name: &String| {
+            self.signin_devices
+                .lock()
+                .is_ok_and(|set| set.as_ref().is_some_and(|set| set.contains(name)))
+        };
+        let left = held
+            .iter()
+            .map(|name| match grants.get(name) {
+                Some(TxGrant::Held { until }) if *until > now && listed(name) => Some(*until - now),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .and_then(|lefts| lefts.into_iter().max())
+            .filter(|_| owner_notified);
+        RemoteTxHold {
+            held: true,
+            owner_notified,
+            left,
+        }
     }
 
     /// Synchronous invalidation does not wait for an in-flight file operation.

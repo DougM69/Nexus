@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *Laptop* to transmit?" with the device's key, and **Allow to transmit** or **Not now**. Not now leaves
   it listening and tuning only, and the button stays in Settings ▸ Remote access. The held computer
   now says the same: listening and tuning only, until Allow to transmit is pressed at the shack.
+- **A held remote computer sees its hold in every mode**, with "or about N min" when the station would lift it by itself; a voice message cut short by leaving Phone is now announced.
 - **Approvals given at the shack now last across a station restart.** A browser added by signing in
   that you let transmit (with **Approve** or **Allow to transmit**) stays allowed after Nexus or the
   station restarts, once the station has heard the device list again, and so do your own computers and
@@ -216,6 +217,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
+- **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone
+  press or a program on TCI could start transmitting over a message still going out. Both are now
+  refused until the message ends, and Stop still ends it at once. A TCI program that sends a
+  transmit-off while a message plays now stops the message, as it already stops FT, CW, RTTY and Tune.
 - **Driving the shack from another computer: the screen now shows the shack's own mode.** It follows
   the shack's Phone, CW or FT section instead of the last one this computer showed, so a Phone band
   change gives USB or LSB, never DATA; picking a mode is sent to the shack, and a refusal is shown

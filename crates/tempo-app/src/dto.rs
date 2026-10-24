@@ -1362,6 +1362,19 @@ pub enum PttRefusal {
     NoAudio,
 }
 
+/// The controlling device's transmit hold, as [`RadioStatus::tx_hold`] shows it. DISPLAY ONLY.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxHold {
+    /// The station holds a confirmed notice to the device's owner.
+    pub owner_notified: bool,
+    /// Seconds, rounded up, until the hold lifts by itself: sent only when the owner was notified
+    /// and the device's window is all that holds it. Without a notice, only Allow to transmit at
+    /// the station lifts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_secs: Option<u64>,
+}
+
 /// Which kind of problem the station's audio-error line reports ([`RadioStatus::audio_error_kind`]).
 /// Named by the line's writer beside its sentence, so the UI never reads the sentence to learn what
 /// it is about. The words, and how loudly each is shown, are the UI's.
@@ -1839,6 +1852,19 @@ pub struct RadioStatus {
     /// show it beside the PTT control so a press that did nothing is explained.
     #[serde(default)]
     pub ptt_refusal: Option<PttRefusal>,
+    /// The device driving the station from afar is held from transmit (the 2026-10-23 sign-in
+    /// decision), in every mode, or `None` when it is not (or nobody drives it). DISPLAY ONLY
+    /// ([`TxHold`]): the remote PC's banner and status lane say so, with the time left only where
+    /// the station would lift the hold by itself. The transmit gate reads the station's own
+    /// authority, never this. Skipped when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_hold: Option<TxHold>,
+    /// A voice-keyer message is queued or on the air at the station. DISPLAY ONLY: the voice
+    /// keyer learns from its fall that its message has ended. Skipped when false, so every other
+    /// snapshot is byte for byte what it was; a station that never says it shows the keyer no
+    /// rise, so its message never reads as ended and a hide stops it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub voice_playing: bool,
     /// Whether the transmit watchdog has tripped (continuous-TX limit reached)
     /// and auto-halted transmit. Cleared by re-enabling TX.
     #[serde(default)]

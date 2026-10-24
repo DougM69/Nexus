@@ -3814,6 +3814,9 @@ pub struct Engine {
     /// Installed once by the Remote service; `None` in a build without it (the hold then stays as
     /// the last request set it). See [`remote_transmit::RemoteTxHoldSource`].
     remote_tx_hold_source: Option<remote_transmit::RemoteTxHoldSource>,
+    /// The controlling device's hold as the last `poll_remote_transmit` tick heard it from that
+    /// source, for the snapshot's `radio.txHold` only. DISPLAY ONLY: no gate reads it.
+    remote_tx_hold_shown: Option<crate::dto::TxHold>,
     /// The streamed operator's microphone over, and what it needs: see `engine/remote_mic.rs`.
     mic: crate::mic::MicLatch,
     mic_feed: Option<crate::mic::MicFeed>,
@@ -4328,6 +4331,12 @@ pub struct Engine {
     /// held), keys PTT, plays it, and drops PTT when it's out — the same path the soundcard CW
     /// keyer uses. Set by `send_voice`.
     voice_tx: Option<Vec<f32>>,
+    /// The radio loop is playing a voice-keyer message it took from `voice_tx`: set as the loop
+    /// takes it ([`Engine::poll_voice`]) and then as the loop reports it each tick
+    /// ([`Engine::set_voice_on_air`]). For the snapshot's `radio.voicePlaying`, and for the
+    /// transmit arbiter ([`Engine::tx_owner`]), which counts the message as the transmitter's
+    /// owner until its over ends.
+    voice_on_air: bool,
     /// When the pending message was queued for Nexus's own Flex client's DAX switch, the radio
     /// having the mic: the radio loop asks the radio for DAX, keys only once it reports it, and
     /// drops the message when that has not happened 2 seconds after the press, or something else
@@ -6522,6 +6531,7 @@ impl Engine {
             afar_started: None,
             remote_ptt_hold: None,
             remote_tx_hold_source: None,
+            remote_tx_hold_shown: None,
             mic: crate::mic::MicLatch::default(),
             mic_feed: None,
             mic_presence: None,
@@ -6646,6 +6656,7 @@ impl Engine {
             broker_ptt: false,
             broker_context_hold: false,
             voice_tx: None,
+            voice_on_air: false,
             voice_dax: None,
             voice_dropped: None,
             voice_abort: false,
@@ -12956,7 +12967,17 @@ impl Engine {
             self.voice_tx = None;
             return None;
         }
+        // On the air from here until the loop says otherwise, so the snapshot never reads the
+        // message as ended between the take and the loop's next report.
+        self.voice_on_air = true;
         self.voice_tx.take()
+    }
+
+    /// The radio loop's word, each tick, on whether a voice-keyer message it took is still on the
+    /// air (its over not yet ended, stopped or refused). Shown as `radio.voicePlaying`, and the
+    /// arbiter refuses every other start while it is up ([`Self::tx_owner`]).
+    pub fn set_voice_on_air(&mut self, on_air: bool) {
+        self.voice_on_air = on_air;
     }
 
     /// When the pending message was queued, if it waits for Nexus's own Flex client to switch the
@@ -22793,23 +22814,28 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// different subset — the SSTV gate's field list was the only complete one,
     /// and this generalises it.
     ///
-    /// Engine-visible only: a one-shot over already PLAYING (APRS/voice audio
-    /// mid-buffer) is fenced by the radio loop's `tx_until_ms` + physical-PTT
-    /// guards, which are the loop's own state, not the engine's. The APRS queue
-    /// is pending work, not ownership — it keys only through `poll_aprs_tx`,
-    /// behind this arbiter.
+    /// Engine-visible only: an APRS frame already PLAYING (audio mid-buffer) is
+    /// fenced by the radio loop's `tx_until_ms` + physical-PTT guards, which are
+    /// the loop's own state, not the engine's. The APRS queue is pending work, not
+    /// ownership — it keys only through `poll_aprs_tx`, behind this arbiter.
+    ///
+    /// ⛔ A voice-keyer message owns the transmitter from its send until its over
+    /// ends: queued (`voice_tx`), and then on the air as the radio loop reports it
+    /// (`voice_on_air`), after the loop has taken it. Counting only the queued
+    /// message let a Remote microphone press or a TCI program key under a message
+    /// still playing, two sources in one output ring.
     pub fn tx_owner(&self) -> Option<TxOwner> {
-        self.tx_owner_with(self.voice_tx.is_some())
+        self.tx_owner_with(self.voice_tx.is_some() || self.voice_on_air)
     }
 
-    /// [`Self::tx_owner`] apart from the voice keyer's own pending message: what ELSE holds the
-    /// transmitter. Asked for a message that waits for Nexus's own Flex client to switch the radio
-    /// to DAX, at its send and while it waits: anything here refuses or drops it.
+    /// [`Self::tx_owner`] apart from the voice keyer's own message, pending or playing: what ELSE
+    /// holds the transmitter. Asked for a message that waits for Nexus's own Flex client to switch
+    /// the radio to DAX, at its send and while it waits: anything here refuses or drops it.
     pub fn tx_owner_beside_voice(&self) -> Option<TxOwner> {
         self.tx_owner_with(false)
     }
 
-    /// The arbiter's one chain, with the voice keyer's pending message as `voice`.
+    /// The arbiter's one chain, with the voice keyer's message, pending or playing, as `voice`.
     fn tx_owner_with(&self, voice: bool) -> Option<TxOwner> {
         if self.app.radio.transmitting {
             Some(TxOwner::Slot)
@@ -26784,6 +26810,13 @@ contact yourself."
         // Why a streamed operator's held PTT would not key right now (display only): the first gate
         // `arm_remote_mic` would hit, for the Phone cockpit and the client banner to word.
         s.radio.ptt_refusal = self.ptt_refusal(std::time::Instant::now());
+        // The controlling device's hold, for the remote PC's banner and lane (display only): shown
+        // only while the gate itself holds, so a lifted hold never lingers here.
+        s.radio.tx_hold = self
+            .remote_tx_hold_shown
+            .filter(|_| self.remote_transmit_held());
+        // A voice-keyer message queued or on the air at the station (display only).
+        s.radio.voice_playing = self.voice_tx.is_some() || self.voice_on_air;
         s.radio.rig_keyed = self.rig_keyed;
         // HRD link: Some(true) delivered, Some(false) HRD unreachable (contacts queued),
         // None nothing sent yet. Only meaningful when HRD forwarding is on.
@@ -31493,20 +31526,20 @@ contact yourself."
     /// transmission.
     ///
     /// ⚠️ ONE GAP, KNOWN AND LEFT (the operator's ruling, 2026-10-06: "Leave it, note it"): a
-    /// voice message or an APRS frame that the radio loop is still playing. (The last word of a
-    /// CW send is no longer in it: the loop reports that word's window, and [`Self::tx_owner`]
-    /// counts it.) The engine has handed it over (`poll_voice` took the message, `poll_aprs_tx`
-    /// popped the frame) and keeps nothing of it, and while the
+    /// beacon or other APRS frame that the radio loop is still playing. (The last word of a CW
+    /// send and a voice message are no longer in it: the loop reports that word's window and the
+    /// message's over, and [`Self::tx_owner`] counts both.) The engine has handed it over
+    /// (`poll_aprs_tx` popped the frame) and keeps nothing of it, and while the
     /// loop holds the key on its own deadline (`tx_until_ms`) it reads no PTT back from the rig
     /// and keeps `rig_keyed` down. So this reads idle and a press goes ahead; the hold refuses
     /// only starts, so the over plays out. (RTTY, PSK and SSTV report their playback to the
-    /// engine, so [`Self::tx_owner`] sees those.) Neither is timed to the clock, so a
+    /// engine, so [`Self::tx_owner`] sees those.) It is not timed to the clock, so a
     /// step under one mistimes nothing; the most a step can do is end the over early. One of
     /// more than 250 ms trips the loop's clock-jump guard, which expires that deadline: what is
     /// left to play is flushed and the key dropped at once. A smaller step moves the deadline by
     /// as much, into the over's 250 ms tail or past it. Nothing keys and nothing is left keyed.
-    /// Seeing these overs would need the loop to report its playback to the engine, plumbing on
-    /// the transmit path that is not added here.
+    /// Seeing these frames would need the loop to report their playback to the engine, as it does
+    /// a voice message's, plumbing on the transmit path that is not added here.
     pub fn on_air(&self) -> bool {
         self.app.transmitting() || self.rig_keyed || self.tuning() || self.tx_owner().is_some()
     }
@@ -34613,6 +34646,32 @@ mod tests {
         assert_eq!(e.rtty_state().seq_state, "idle");
         assert!(e.take_rtty_abort(), "abort unkeys the over in flight");
         assert_eq!(e.poll_rtty_one(), None, "the queue was dropped");
+    }
+
+    /// ★ `radio.voicePlaying` says a voice-keyer message is queued or on the air: from the send,
+    /// through the radio loop's take, for as long as the loop says it is on the air, and no
+    /// longer. A message refused at the take was never on the air.
+    #[test]
+    fn the_snapshot_says_a_voice_message_is_playing_until_the_loop_says_it_ended() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_tx_enabled(true);
+        assert!(!e.snapshot().radio.voice_playing, "nothing sent");
+        e.send_voice(vec![0.1; 16]).unwrap();
+        assert!(e.snapshot().radio.voice_playing, "queued");
+        assert!(e.poll_voice().is_some(), "premise: the loop takes it");
+        assert!(e.snapshot().radio.voice_playing, "taken, not yet reported");
+        e.set_voice_on_air(true);
+        assert!(e.snapshot().radio.voice_playing, "on the air");
+        e.set_voice_on_air(false);
+        assert!(!e.snapshot().radio.voice_playing, "the loop says it ended");
+
+        e.send_voice(vec![0.1; 16]).unwrap();
+        e.set_tx_enabled(false);
+        assert!(e.poll_voice().is_none(), "premise: refused at the take");
+        assert!(
+            !e.snapshot().radio.voice_playing,
+            "a dropped message never played"
+        );
     }
 
     #[test]

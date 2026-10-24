@@ -852,7 +852,9 @@ async fn a_sign_in_computer_on_the_tunnel_is_held_under_its_tunnel_name() {
         "its tunnel name is free past the window"
     );
     assert_eq!(
-        operations.current_transmit_hold(std::time::Instant::now()),
+        operations
+            .current_transmit_hold(std::time::Instant::now())
+            .map(|hold| hold.held),
         Some(true),
         "the radio loop's tick lets it start a transmission"
     );

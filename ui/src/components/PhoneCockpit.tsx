@@ -1940,7 +1940,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
       <VoiceKeyer
         txEnabled={snap.radio.txEnabled}
         keyed={keyed}
-        transmitting={snap.radio.transmitting}
+        voicePlaying={snap.radio.voicePlaying}
         fdExchange={fdExchange}
         esm={{
           lit: esmLitKeys(esm.preview),

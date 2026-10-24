@@ -578,3 +578,51 @@ describe('why a PTT press here did not key the station (the client-status refusa
     expect(container.querySelector('[data-ptt-refusal]')).toBeNull()
   })
 })
+
+describe('the station holding this computer from transmit (the client-status hold)', () => {
+  const holdLine = (container: HTMLElement) =>
+    container.querySelector('.client-banner-over[data-tx-hold]')?.textContent
+
+  it('says Allow to transmit at the shack, in any mode, with no time when the station sent none', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, txHold: { ownerNotified: false } })
+    const container = await shown()
+    expect(holdLine(container)).toBe(EN['client.ptt.refusal.onHold'])
+  })
+
+  it('adds the minutes left, rounded up, only when the station sent them', async () => {
+    mockStatus.mockResolvedValue({
+      station: AT,
+      phase: 'live',
+      reason: null,
+      txHold: { ownerNotified: true, leftSecs: 541 },
+    })
+    const container = await shown()
+    expect(holdLine(container)).toBe(fill(EN['client.ptt.refusal.onHoldLeft'], { minutes: '10' }))
+  })
+
+  it('stands in for the PTT on-hold line rather than saying it twice', async () => {
+    mockStatus.mockResolvedValue({
+      station: AT,
+      phase: 'live',
+      reason: null,
+      pttRefusal: 'onHold',
+      txHold: { ownerNotified: true, leftSecs: 60 },
+    })
+    const container = await shown()
+    expect(container.querySelector('[data-ptt-refusal]')).toBeNull()
+    expect(holdLine(container)).toBe(fill(EN['client.ptt.refusal.onHoldLeft'], { minutes: '1' }))
+  })
+
+  it('shows nothing when not held, or from a station build that does not say', async () => {
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, txHold: null })
+    let container = await shown()
+    expect(container.querySelector('[data-tx-hold]')).toBeNull()
+    cleanup()
+    mockStatus.mockResolvedValue({ station: AT, phase: 'live', reason: null, pttRefusal: 'onHold' })
+    container = await shown()
+    expect(container.querySelector('[data-tx-hold]')).toBeNull()
+    expect(container.querySelector('[data-ptt-refusal="onHold"]')?.textContent).toBe(
+      EN['client.ptt.refusal.onHold'],
+    )
+  })
+})

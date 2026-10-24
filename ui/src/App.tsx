@@ -190,7 +190,7 @@ import { slotOverDroppedLane } from './features/slotOverDropped'
 import { pttRefusedLane } from './features/pttRefused'
 import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
-import { txOnHeldLane } from './features/txOnHeld'
+import { heldLine, txOnHeldLane } from './features/txOnHeld'
 import { drivesAnotherStation } from './features/durableStore'
 import { audioErrorLane } from './features/audioError'
 import { askAgainWhileSaving } from './features/notAnswered'
@@ -815,10 +815,12 @@ function App() {
 
   // A TX On refused because a newly signed-in device that is not yet approved controls the station:
   // the latch stays dark, so the lane says why while the hold stands — where to approve it at the
-  // shack, that this device must be approved on a computer driving the station.
+  // shack, that this device must be approved on a computer driving the station. Rebuilt as the
+  // remote PC's words for the hold change too (the minutes left, the owner told), not every second.
+  const txHoldLine = heldLine(snap?.radio.txHold)
   useEffect(() => {
-    setStatus('txOnHeld', txOnHeldLane(snap?.radio.txOnHeld, drivesAnotherStation()))
-  }, [snap?.radio.txOnHeld])
+    setStatus('txOnHeld', txOnHeldLane(snap?.radio.txOnHeld, drivesAnotherStation(), snap?.radio.txHold))
+  }, [snap?.radio.txOnHeld, txHoldLine])
 
   // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend
   // log funnel; the engine bumps uploadTick per outcome and we toast it here —

@@ -8,15 +8,29 @@
 // written literally.
 
 import type { StatusItem } from '../status'
+import type { TxHold } from '../types'
 import { t } from '../i18n'
 
+/** What a computer driving the station is told of its hold: Allow to transmit at the shack, and
+ *  "or about N min" only when the station sent the time left (`leftSecs`, which it sends only
+ *  when it would lift the hold by itself). The minutes are rounded up, never below 1. */
+export function heldLine(hold: TxHold | null | undefined): string {
+  const left = hold?.leftSecs
+  if (left == null) return t('client.ptt.refusal.onHold')
+  return t('client.ptt.refusal.onHoldLeft', { minutes: String(Math.max(1, Math.ceil(left / 60))) })
+}
+
 /** The status-lane item after a TX On the sign-in hold refused, or null. `client` is whether this
- *  computer drives another station. */
-export function txOnHeldLane(held: boolean | undefined, client: boolean): Omit<StatusItem, 'id'> | null {
+ *  computer drives another station, and `hold` the station's `radio.txHold`. */
+export function txOnHeldLane(
+  held: boolean | undefined,
+  client: boolean,
+  hold?: TxHold | null,
+): Omit<StatusItem, 'id'> | null {
   if (!held) return null
   return {
     tier: 'warning',
     message: t('shell.lane.txOnHeld.message'),
-    detail: client ? t('client.ptt.refusal.onHold') : t('shell.lane.txOnHeld.detail'),
+    detail: client ? heldLine(hold) : t('shell.lane.txOnHeld.detail'),
   }
 }
