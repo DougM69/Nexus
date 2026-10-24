@@ -57,6 +57,8 @@ mod from_afar_aprs_sstv_chat;
 mod internet;
 /// Phone's Lock from afar, from this computer's screen and microphone to the shack's loop.
 mod lock;
+/// A press's cap across renewals, a reconnect, re-assertions and the next press.
+mod press_cap;
 /// Stop's second road through a relay, as the internet stands between the two computers.
 mod relayed;
 /// Stop wins over a start that was in flight.
@@ -95,6 +97,8 @@ fn on_a_runtime(workers: usize, test: impl std::future::Future<Output = ()>) {
 struct Roadside {
     s: Shack,
     ptt: PttHold,
+    /// The microphone feed installed in its engine: its epoch moves at every drop of an over.
+    mic: MicFeed,
     road: Option<Running>,
     /// The audio road beside it, and the receive feed its encoder reads.
     audio: Option<audio_road::Running>,
@@ -188,7 +192,7 @@ fn roadside_limited(app: &App, afterlife: Duration, cap: Duration, hears: Hears)
                 authority.audio_admitted(session, device, lease, now)
             }),
             ptt: ptt.clone(),
-            mic,
+            mic: mic.clone(),
         },
     )
     .unwrap();
@@ -196,6 +200,7 @@ fn roadside_limited(app: &App, afterlife: Duration, cap: Duration, hears: Hears)
     Roadside {
         s,
         ptt,
+        mic,
         road: Some(road),
         audio: Some(audio),
         feed,
