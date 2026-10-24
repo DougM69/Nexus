@@ -1731,6 +1731,10 @@ export interface RadioStatus {
    *  ends, two minutes at most, so the clock cannot move in the middle of an over. The status
    *  lane says so, and Phone's PTT says why it did not key. */
   clockRepairTxHeld?: boolean
+  /** A TX On was refused because a newly signed-in device that is not yet approved controls the
+   *  station, and that hold still stands. Display only: the status lane says why the latch did
+   *  not light. Absent when false, and on an older station build. */
+  txOnHeld?: boolean
   /** Where decodes come from: the native engine or a WSJT-X/JTDX/MSHV companion. */
   source: SourceKind
   /** Human-readable source label, e.g. "Native (FT8)" or "WSJT-X UDP". */

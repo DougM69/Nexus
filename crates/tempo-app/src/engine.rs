@@ -3322,6 +3322,10 @@ pub struct Engine {
     /// one place: entering Phone, CW, RTTY or PSK arms TX only while nothing holds it. It keys,
     /// refuses and stops nothing itself. Runtime only, never persisted.
     tx_stop_hold: bool,
+    /// A TX On the sign-in hold refused ([`Engine::set_tx_enabled`]), so the status lane can say
+    /// why the latch did not light. Cleared when the hold lifts; the snapshot says it only while
+    /// the hold still stands (`radio.tx_on_held`). Display only: it refuses and keys nothing.
+    tx_on_held: bool,
     /// One-shot "cut the shared TX hold NOW" — armed by [`Engine::halt_tx`] (Stop TX /
     /// UDP HaltTx / CAT-failure halts), by every TX-watchdog trip, and by the cockpit
     /// Stop buttons ([`Engine::stop_cw`] / [`Engine::rtty_stop`] / [`Engine::sstv_stop`],
@@ -6383,6 +6387,7 @@ impl Engine {
             tx_enabled: false,
             // …and nothing has stopped it yet, so the first manual-mode entry arms as always.
             tx_stop_hold: false,
+            tx_on_held: false,
             slot_tx_abort: false,
             skip_tx1: false,
             tuning: false,
@@ -19389,6 +19394,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     ),
                 );
             }
+            self.tx_on_held = true;
             return;
         }
         if was != on && !self.quiet_tx_log {
@@ -26963,6 +26969,7 @@ contact yourself."
             s.radio.clock_owner_note = self.station.clock_owner_note().to_string();
             s.radio.clock_repair_available = self.station.clock_repair_available();
             s.radio.clock_repair_tx_held = self.station.clock_repair_holds_tx(now);
+            s.radio.tx_on_held = self.tx_on_held && self.remote_transmit_held();
         }
         s.radio.source = self.source_kind;
         // ⚠️ THE CACHE, NOT THE LOCK. Reading `source_lock(&self.source).label()`
@@ -31440,6 +31447,9 @@ contact yourself."
     /// [`crate::station::Station::remote_transmit_held`].
     pub fn set_remote_transmit_held(&mut self, held: bool) {
         self.station.set_remote_transmit_held(held);
+        if !held {
+            self.tx_on_held = false;
+        }
     }
 
     /// Whether a sign-in transmit hold refuses a transmission start right now

@@ -190,6 +190,8 @@ import { slotOverDroppedLane } from './features/slotOverDropped'
 import { pttRefusedLane } from './features/pttRefused'
 import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
+import { txOnHeldLane } from './features/txOnHeld'
+import { drivesAnotherStation } from './features/durableStore'
 import { audioErrorLane } from './features/audioError'
 import { askAgainWhileSaving } from './features/notAnswered'
 import { useTciSpots } from './features/tciSpots'
@@ -785,6 +787,13 @@ function App() {
   useEffect(() => {
     setStatus('clockRepairHold', clockRepairHoldLane(snap?.radio.clockRepairTxHeld))
   }, [snap?.radio.clockRepairTxHeld])
+
+  // A TX On refused because a newly signed-in device that is not yet approved controls the station:
+  // the latch stays dark, so the lane says why while the hold stands — where to approve it at the
+  // shack, that this device must be approved on a computer driving the station.
+  useEffect(() => {
+    setStatus('txOnHeld', txOnHeldLane(snap?.radio.txOnHeld, drivesAnotherStation()))
+  }, [snap?.radio.txOnHeld])
 
   // Connector auto-upload outcomes (QRZ/ClubLog/eQSL) now happen in the backend
   // log funnel; the engine bumps uploadTick per outcome and we toast it here —

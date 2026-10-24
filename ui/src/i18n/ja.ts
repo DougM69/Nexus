@@ -7675,6 +7675,8 @@ export const JA: PartialCatalog = {
   "shell.lane.voiceDropped.keyed": "{{time}} UTC、Nexus はボイスメッセージを再生しませんでした。ほかのものが送信中だったか、先に無線機をキーイングしたため（マイクや PTT、チューンのキャリア、別のプログラム）、何も送信していません。メッセージは保留せずに破棄しました。",
   "shell.lane.clockRepairHold.message": "時計の修復中 — TX保留",
   "shell.lane.clockRepairHold.detail": "Nexusがこのコンピューターの時計を修復しています。修復が終わるまで（最長2分）送信は始まりません。送信の途中で時計が動かないようにするためです。",
+  "shell.lane.txOnHeld.message": "TX保留 — 承認が必要",
+  "shell.lane.txOnHeld.detail": "新しくサインインしたRemote端末があなたの承認を待っています。送信するには、設定 ▸ リモート で承認してください。",
   "shell.lane.prop.offline.message": "伝搬: ライブデータなし",
   "shell.lane.prop.offline.detail": "ライブ伝搬データがまだありません — 設定でコールサインを設定し、インターネット接続を確認してください。",
   "shell.lane.prop.cached.message": "伝搬: {{minutes}}分前のキャッシュ",

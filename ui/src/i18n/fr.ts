@@ -7744,6 +7744,8 @@ export const FR: PartialCatalog = {
   "shell.lane.voiceDropped.keyed": "Nexus n’a pas joué le message vocal à {{time}} UTC : autre chose émettait déjà ou a passé la radio en émission avant lui (votre micro ou le PTT, une porteuse Tune, un autre programme), donc rien n’a été émis. Le message a été abandonné, pas mis en attente.",
   "shell.lane.clockRepairHold.message": "RÉPARATION DE L'HORLOGE — TX EN ATTENTE",
   "shell.lane.clockRepairHold.detail": "Nexus répare l'horloge de cet ordinateur. Aucune émission ne commence avant la fin de la réparation, deux minutes au plus, pour que l'horloge ne bouge pas au milieu d'une émission.",
+  "shell.lane.txOnHeld.message": "TX EN ATTENTE — APPROBATION REQUISE",
+  "shell.lane.txOnHeld.detail": "Un appareil Remote nouvellement connecté attend votre approbation. Approuvez-le dans Réglages ▸ À distance pour émettre.",
   "shell.lane.txPowerZero.detail": "La radio annonce 0% de puissance alors que l'émission est armée — elle passera en émission sans rien mettre sur l'air. Vérifiez le curseur Pwr, et la puissance propre à CE mode sur la radio : les Yaesu gardent un niveau distinct pour SSB, DATA, CW et AM.",
   "shell.lane.txPowerZero.message": "AUCUNE PUISSANCE HF",
   "shell.loading": "Connexion à Nexus…",

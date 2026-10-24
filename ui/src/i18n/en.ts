@@ -12080,6 +12080,11 @@ export const EN = {
   'shell.lane.clockRepairHold.message': 'CLOCK REPAIR — TX HELD',
   'shell.lane.clockRepairHold.detail':
     'Nexus is repairing this computer\u2019s clock. Nothing starts transmitting until the repair finishes, two minutes at most, so the clock cannot move in the middle of an over.',
+  // A TX On the sign-in hold refused: a newly signed-in device that is not yet approved controls the
+  // station, so nothing starts transmitting. The lane says why the latch stayed dark while it lasts.
+  'shell.lane.txOnHeld.message': 'TX HELD — APPROVAL NEEDED',
+  'shell.lane.txOnHeld.detail':
+    'A newly signed-in Remote device is waiting for your approval. Approve it under Settings \u25B8 Remote to transmit.',
   'shell.lane.prop.offline.message': 'Prop: no live data',
   'shell.lane.prop.offline.detail':
     'No live propagation data yet — set your callsign in Settings and check your internet connection.',
