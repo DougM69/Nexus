@@ -243,16 +243,34 @@ pub struct Authority {
     /// (once its window elapses) only while it is here; a device not confirmed is held even past
     /// its window. Replaced from the durable list on every list, beside `signin_devices`.
     notified_devices: Mutex<BTreeSet<String>>,
-    /// The service's id for each computer (or phone) on the room's tunnel, by the name the tunnel
-    /// takes it as (`lan::tunnel_device_id`): one device under two names. The transmit hold, its
-    /// records and the sign-in provenance all key by the service id, so the hold reads a tunnel name
-    /// as that id ([`Authority::hold_name`]). Replaced beside the tunnel's own list
+    /// What the hold knows of each computer (or phone) on the room's tunnel, by the name the tunnel
+    /// takes it as (`lan::tunnel_device_id`). Replaced beside the tunnel's own list
     /// (`Control::sync_approved`). Its own leaf lock, taken alone or after Core.
-    tunnel_owners: Mutex<BTreeMap<String, String>>,
+    tunnel_owners: Mutex<BTreeMap<String, TunnelName>>,
+    /// Whether the computer holding the LAN key with a pin was paired by code at the shack: in the
+    /// LAN book and not kept there by a sign-in (see `hold_code_paired`). Unset in a build of the
+    /// service without a LAN road.
+    code_paired: std::sync::OnceLock<CodePaired>,
 }
 /// The device ids of the LAN road's paired computers while LAN is on, and none while it is off.
 /// Called under Core: it may take no lock that is ever held while Core is taken.
 pub type LanDevices = Box<dyn Fn() -> Vec<String> + Send + Sync>;
+/// Whether the computer holding the LAN key with this pin was paired by code at the shack. Called
+/// under Core, as [`LanDevices`] is.
+pub type CodePaired = Box<dyn Fn(&[u8; 32]) -> bool + Send + Sync>;
+/// What the transmit hold knows of a name the room's tunnel takes: one device under two names.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TunnelName {
+    /// The service's ids it stands for. The hold, its records and the sign-in provenance all key by
+    /// the service id, so the hold reads the name as those ids ([`Authority::hold_names`]). More
+    /// than one only for listed devices that share a key, and then the name is held while any of
+    /// them is.
+    pub owners: BTreeSet<String>,
+    /// The pins of the LAN keys that the sign-in proofs among them name, as the station checked
+    /// those proofs when it granted on them. The name stands for a computer the shack paired by
+    /// code while one of these is such a computer's ([`Authority::paired_at_shack`]).
+    pub lan: BTreeSet<[u8; 32]>,
+}
 impl Authority {
     /// The authority's lock, held for as long as a test keeps what this returns: every request
     /// that comes meanwhile is answered `remoteBusy`, as it is while another request holds it.
@@ -314,6 +332,28 @@ impl Authority {
             .filter_map(|devices| devices.get())
             .any(|devices| devices().iter().any(|d| d == device))
     }
+    /// The LAN road tells the hold which computers the shack paired by code (the operator's ruling:
+    /// such a computer, signed in to the account as well, is not held on the room's tunnel). Set
+    /// once, by the LAN road at its start; `paired` takes only locks of its own, since it runs under
+    /// Core.
+    pub fn hold_code_paired(&self, paired: CodePaired) {
+        let _ = self.code_paired.set(paired);
+    }
+    /// Whether `device` is a name the room's tunnel takes for a computer the shack paired by code
+    /// on its own network: its key for the tunnel and its LAN key both named by one sign-in's proof,
+    /// checked here, and that LAN key paired by code at the shack, not kept on the LAN by a sign-in.
+    /// RECORDED provenance (the LAN book and the proof), never the road a connection came by. No
+    /// while either is unknown, and while the map's lock is poisoned.
+    fn paired_at_shack(&self, device: &str) -> bool {
+        let Some(paired) = self.code_paired.get() else {
+            return false;
+        };
+        let lan = match self.tunnel_owners.lock() {
+            Ok(owners) => owners.get(device).map(|name| name.lan.clone()),
+            Err(_) => None,
+        };
+        lan.is_some_and(|lan| lan.iter().any(paired))
+    }
     /// Replace the set of device ids the service lists as added by a sign-in (`addedBy ==
     /// "account"`): the provenance a transmit hold keys to (the 2026-10-23 sign-in decision). The
     /// controller calls this from the durable list on every list it hears, so the provenance cannot
@@ -349,26 +389,25 @@ impl Authority {
             *held = devices;
         }
     }
-    /// Replace the service's id for each computer on the room's tunnel, by its tunnel name. See
+    /// Replace what the hold knows of each computer on the room's tunnel, by its tunnel name. See
     /// [`Authority::tunnel_owners`].
-    pub fn set_tunnel_owners(&self, owners: BTreeMap<String, String>) {
+    pub fn set_tunnel_owners(&self, owners: BTreeMap<String, TunnelName>) {
         if let Ok(mut held) = self.tunnel_owners.lock() {
             *held = owners;
         }
     }
-    /// The name the transmit hold keys `device` by: a computer on the room's tunnel by the service's
-    /// id for it, so its tunnel name is held exactly as that id is; any other device by its own.
-    /// FAIL-CLOSED: `None`, which holds, for a name the tunnel takes whose service id is not known,
-    /// and while the map's lock is poisoned.
-    fn hold_name(&self, device: &str) -> Option<String> {
-        if let Some(owner) = self.tunnel_owners.lock().ok()?.get(device) {
-            return Some(owner.clone());
+    /// The names the transmit hold keys `device` by: a computer on the room's tunnel by the service's
+    /// ids for it, so its tunnel name is held exactly as they are; a device the service names by its
+    /// own. FAIL-CLOSED: `None`, which holds, for a name of the shack's own (version 8: a tunnel
+    /// name or a LAN id, `lan::tunnel_device_id`) that the map does not place, so one that has
+    /// just left the tunnel, or whose revoke was lost, is held; and while the map's lock is
+    /// poisoned. A computer in the LAN book never gets here (`tx_held_for`).
+    fn hold_names(&self, device: &str) -> Option<BTreeSet<String>> {
+        if let Some(name) = self.tunnel_owners.lock().ok()?.get(device) {
+            return (!name.owners.is_empty()).then(|| name.owners.clone());
         }
-        let tunnel = self
-            .tunnel_devices
-            .get()
-            .is_some_and(|devices| devices().iter().any(|d| d == device));
-        (!tunnel).then(|| device.to_string())
+        let shacks = identifier(device) && device.as_bytes()[14] == b'8';
+        (!shacks).then(|| BTreeSet::from([device.to_string()]))
     }
     /// Whether the service confirms a durable owner-notice record exists for `device`: the
     /// precondition a held sign-in device's transmit lifts against.
@@ -475,8 +514,9 @@ impl Authority {
     ///   (the 2026-10-23 sign-in decision: an absent/unconfirmed notice holds it even past 15 min);
     ///   in it with NO record → HELD; a poisoned lock → HELD.
     ///
-    /// A computer on the room's tunnel is asked under the service's id for it ([`Self::hold_name`]),
-    /// whatever name holds the lease; one whose service id is not known is HELD.
+    /// A computer on the room's tunnel is asked under the service's ids for it
+    /// ([`Self::hold_names`]), whatever name holds the lease, and held while any of them is; a name
+    /// of the shack's own whose service id is not known is HELD.
     fn tx_held_for(&self, device: &str, grants: &BTreeMap<String, TxGrant>, now: Instant) -> bool {
         // A device paired or enrolled on the station's OWN network (the LAN book) is locally
         // trusted — recorded provenance, not transport — so it is never held, even before the
@@ -484,10 +524,16 @@ impl Authority {
         if self.is_lan_device(device) {
             return false;
         }
-        let Some(device) = self.hold_name(device) else {
-            return true;
-        };
-        let device = device.as_str();
+        // Nor is one on the room's tunnel that the shack paired by code on its own network (the
+        // operator's ruling): the pairing at the shack proved it, as a waiver there would.
+        if self.paired_at_shack(device) {
+            return false;
+        }
+        self.hold_names(device)
+            .is_none_or(|names| names.iter().any(|name| self.held_as(name, grants, now)))
+    }
+    /// [`Self::tx_held_for`] for one name the hold keys by.
+    fn held_as(&self, device: &str, grants: &BTreeMap<String, TxGrant>, now: Instant) -> bool {
         // A local positive waiver (an Approve at the shack) frees at once.
         if matches!(grants.get(device), Some(TxGrant::Waived)) {
             return false;

@@ -195,6 +195,8 @@ struct Shack {
     public_key: String,
     /// The credential store the station's book is kept in.
     store: LanStore,
+    /// The switch attached to it, if one is (`switch_with`).
+    switch: Arc<std::sync::OnceLock<std::sync::Weak<State>>>,
 }
 
 fn shack(network: Network) -> Shack {
@@ -220,6 +222,18 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
     let identity = tls::Identity::new(&station_key, STATION.into()).unwrap();
     let public_key = identity.public_key().to_string();
     let book = book_on(&store);
+    // The book's computers, as the LAN road tells the authority them at its start (`Lan::start`):
+    // the recorded provenance that never holds them from transmit. Its book while a switch attached
+    // later (`switch_with`) is on, as that switch would tell it; with none, this listener's book.
+    let switch = Arc::new(std::sync::OnceLock::<std::sync::Weak<State>>::new());
+    let (listed, switched) = (book.clone(), switch.clone());
+    authority.hold_lan_devices(Box::new(move || match switched.get() {
+        Some(state) => state
+            .upgrade()
+            .filter(|state| state.on.load(Ordering::SeqCst))
+            .map_or_else(Vec::new, |state| state.book.ids()),
+        None => listed.ids(),
+    }));
     let (paired, pairing) = book.verifier();
     let dispatcher =
         crate::command_dispatch::Dispatcher::new(crate::command_dispatch::ShackStores {
@@ -260,6 +274,7 @@ fn shack_with(network: Network, station_key: String, computer: Computer, store: 
         station_key,
         public_key,
         store,
+        switch,
     }
 }
 
@@ -1530,7 +1545,7 @@ fn switch_with(
     advertise: Advertise,
     firewall: FirewallSays,
 ) -> Lan {
-    Lan::start(
+    let lan = Lan::start(
         scratch.path(),
         Deps {
             authority: s.shared.authority.clone(),
@@ -1545,7 +1560,9 @@ fn switch_with(
             commands: s.shared.commands.clone(),
             station_key: s.shared.station_key.clone(),
         },
-    )
+    );
+    let _ = s.switch.set(Arc::downgrade(&lan.state));
+    lan
 }
 
 /// A look at a computer whose one network, if it has one, is `network`.

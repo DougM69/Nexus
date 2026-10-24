@@ -20,8 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it listening and tuning only, and the button stays in Settings ▸ Remote access. The held computer
   now says the same: listening and tuning only, until Allow to transmit is pressed at the shack.
 - **Approvals given at the shack now last across a station restart.** A device added by signing in
+- **Approvals given at the shack now last across a station restart.** A browser added by signing in
   that you let transmit (with **Approve** or **Allow to transmit**) stays allowed after Nexus or the
-  station restarts, once the station has heard the device list again. Revoking its station control,
+  station restarts, once the station has heard the device list again, and so do your own computers and
+  phones. A guest's computer or phone is held again after a restart until you press **Allow to
+  transmit** again. Revoking its station control,
   removing it, the device expiring or no longer being listed, cancelling, or revoking station access
   ends that approval for good, and the device is held again until you allow it. Turning Remote off
   only pauses it, as it pauses the device's other grants. Devices on your own network are unaffected.
@@ -216,9 +219,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the shack's transmit checks, and a refused Tune is shown.
 - **A computer or phone added by signing in is now held from transmitting over the internet too.** The
   hold on a device added by signing in did not apply to a computer or phone driving the station over the
-  internet, so it could transmit at once. It is now held like a browser until you press **Allow to
-  transmit** or **Approve** at the shack, and it shows there as waiting. Stop is never held, and
-  computers paired on your own network are unaffected.
+  internet, so it could transmit at once. It is now held like a browser, and shows at the shack as
+  waiting. The hold lifts by itself 15 minutes after it signs in, once the station knows you were told
+  it was added, or at once when you press **Allow to transmit** or **Approve**. Stop is never held, and
+  computers on your own network are unaffected. A computer you paired with a code at the shack after it
+  last signed in is not held over the internet either.
 - **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
   paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
   opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping

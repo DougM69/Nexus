@@ -172,6 +172,20 @@ impl Enrolment {
         })
     }
 
+    /// Whether the computer holding the key with `pin` is kept on the LAN by a sign-in (the cache
+    /// holds it), as last read: not paired by code at the shack. Yes until the cache has been read,
+    /// and while its lock is poisoned; no in a test with no account, where nothing is enrolled.
+    pub(crate) fn enrolled(&self, pin: &[u8; 32]) -> bool {
+        if self.kept.is_none() {
+            return false;
+        }
+        let pin = tempo_client::hex(pin);
+        self.enrolled.lock().map_or(true, |held| {
+            held.as_ref()
+                .is_none_or(|devices| devices.iter().any(|device| device.pin == pin))
+        })
+    }
+
     /// The pins of the enrolled computers whose proofs are past their age now, as last read.
     pub(super) fn expired(&self) -> Vec<[u8; 32]> {
         let Some(Kept { now_s, .. }) = &self.kept else {

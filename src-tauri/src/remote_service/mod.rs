@@ -763,6 +763,11 @@ struct Control {
     /// The computers (and phones) the service lists as approved and not yet ended, by device id:
     /// what a pin is compared with.
     natives: BTreeMap<String, Native>,
+    /// The pin of the LAN key that the proof of each computer (or phone) granted on its own sign-in
+    /// in this run names, checked here (`account::vouch_listed`), by device id, beside the pin that
+    /// grant made: it counts only while that pin is the one approving it as listed
+    /// ([`Control::sync_approved`]).
+    vouched_lan: BTreeMap<String, (String, [u8; 32])>,
     /// What the room's tunnel serves its computers with: the LAN road's authority, feeds and
     /// command lane. `None` in a build of the service without the LAN road.
     tunnel: Option<lan::TunnelDeps>,
@@ -850,12 +855,27 @@ impl Control {
     /// key pinned for it (`lan::tunnel_device_id`), never by the service's id, so it can stand for
     /// no other device in the authority it shares with the relay's road and the LAN's.
     ///
-    /// The transmit hold is told the service's id for each name first (`set_tunnel_owners`), so a
-    /// name the tunnel takes is never one the hold cannot place.
+    /// The transmit hold is told the service's ids for each name first (`set_tunnel_owners`), so a
+    /// name the tunnel takes is never one the hold cannot place; a name that leaves it is one the
+    /// hold no longer places, and so held, until its revoke lands. Two listed devices that share a
+    /// key share its name, and the hold keeps both ids for it.
+    ///
+    /// A computer whose sign-in's proof, checked here, named a LAN key the shack paired by code is
+    /// not held on the tunnel (the operator's ruling); the hold is told those LAN keys beside the
+    /// ids, and asks the LAN book itself whether each is still so paired.
     fn sync_approved(&self) {
         let (mut keys, mut owners) = (BTreeMap::new(), BTreeMap::new());
         for (id, pin, name, until) in self.on_tunnel() {
-            owners.insert(name.clone(), id.clone());
+            let owner: &mut operations::TunnelName = owners.entry(name.clone()).or_default();
+            owner.owners.insert(id.clone());
+            // The LAN key its sign-in's proof named, under the approval pinned for it then.
+            if let Some((_, lan)) = self
+                .vouched_lan
+                .get(id)
+                .filter(|(at, _)| self.remembered.pins.get(id) == Some(at))
+            {
+                owner.lan.insert(*lan);
+            }
             keys.insert(pin, (name, until));
         }
         self.operations.set_tunnel_owners(owners);
@@ -2488,7 +2508,7 @@ impl Controller {
                 .collect();
             for (device, result) in waiting.into_iter().zip(results) {
                 match result.and_then(|(vouched, lan)| {
-                    let granted = self.grant_vouched(device, &vouched, &approved, at)?;
+                    let granted = self.grant_vouched(device, &vouched, &lan, &approved, at)?;
                     Ok(granted.then_some((vouched, lan)))
                 }) {
                     Ok(Some((vouched, lan))) => {
@@ -2589,6 +2609,7 @@ impl Controller {
         &self,
         device: &Device,
         vouched: &tempo_client::account::Vouched,
+        lan: &str,
         approved: &[String],
         (generation, epoch): (u64, u64),
     ) -> Result<bool, &'static str> {
@@ -2605,6 +2626,22 @@ impl Controller {
         if control.generation != generation || control.operations.epoch() != epoch {
             return Ok(false);
         }
+        // ⛔ A 15-MINUTE TRANSMIT HOLD (the 2026-10-23 sign-in decision): a device whose control came
+        // from a sign-in may hold control and operate the receiver, but no transmit ARM starts for
+        // `account::TX_HOLD` — the engine's gate refuses it while this device controls
+        // (`Authority::apply_tx_hold`). This records a POSITIVE outcome; FAIL-CLOSED, a sign-in
+        // device with no record stays held (`Authority::tx_held_for` keys on the durable service
+        // list, not on this write). Only an Approve at the shack waives it (`grant_approved`); a LAN
+        // enrolment never records one (`lan::enrol`). A second factor at sign-in does NOT waive it:
+        // that exemption is held for later (operator, 2026-10-24), so an MFA sign-in is held like any
+        // other. Stop and disarming are never held. Recorded before anything is granted or pinned,
+        // so a waiver this device had before is gone before the room's tunnel takes it again.
+        control
+            .operations
+            .hold_transmit_until(&device.id, std::time::Instant::now() + account::TX_HOLD);
+        control.remember(Persist::Hold {
+            device_id: device.id.clone(),
+        });
         if control.enabled && browser {
             control.operations.permit_station(&device.id, operate)?;
         }
@@ -2615,25 +2652,16 @@ impl Controller {
                 control: Some(operate),
             });
         }
+        // The LAN key its proof names, for the tunnel, before the tunnel takes it.
+        if let Some(lan) = lan::pairing::hex32(lan).filter(|_| !browser) {
+            control
+                .vouched_lan
+                .insert(device.id.clone(), (pin.clone(), lan));
+        }
         control.remember(Persist::Listed(approved.to_vec()));
         control.remember(Persist::Pin {
             device_id: device.id.clone(),
             key: Some(pin),
-        });
-        // ⛔ A 15-MINUTE TRANSMIT HOLD (the 2026-10-23 sign-in decision): a device whose control came
-        // from a sign-in may hold control and operate the receiver, but no transmit ARM starts for
-        // `account::TX_HOLD` — the engine's gate refuses it while this device controls
-        // (`Authority::apply_tx_hold`). This records a POSITIVE outcome; FAIL-CLOSED, a sign-in
-        // device with no record stays held (`Authority::tx_held_for` keys on the durable service
-        // list, not on this write). Only an Approve at the shack waives it (`grant_approved`); a LAN
-        // enrolment never records one (`lan::enrol`). A second factor at sign-in does NOT waive it:
-        // that exemption is held for later (operator, 2026-10-24), so an MFA sign-in is held like any
-        // other. Stop and disarming are never held.
-        control
-            .operations
-            .hold_transmit_until(&device.id, std::time::Instant::now() + account::TX_HOLD);
-        control.remember(Persist::Hold {
-            device_id: device.id.clone(),
         });
         Ok(true)
     }
@@ -3234,10 +3262,13 @@ impl Controller {
 /// A waivers write that did not land, its fallback removal included, is tried again ahead of every
 /// later batch, and until it lands no state is saved, only removed: a grant of station control kept
 /// beside a waiver the station meant to take back would bring that waiver back at the next launch.
+/// The latest state removed so is kept, and saved in the batch the waivers write lands in, unless a
+/// later state write came first.
 fn write_remembered(vault: Arc<dyn Vault>, mut writes: mpsc::UnboundedReceiver<Write>) {
-    let mut unwritten = None;
+    // The waivers write that did not land, and the latest state removed in its place.
+    let (mut unwritten, mut deferred) = (None, None);
     while let Some(first) = writes.blocking_recv() {
-        let (mut state, mut pins, mut waivers) = (None, None, unwritten.take());
+        let (mut state, mut pins, mut waivers) = (deferred.take(), None, unwritten.take());
         let mut next = Some(first);
         while let Some(write) = next {
             match write {
@@ -3252,7 +3283,10 @@ fn write_remembered(vault: Arc<dyn Vault>, mut writes: mpsc::UnboundedReceiver<W
         for write in [waivers, state, pins].into_iter().flatten() {
             match write {
                 Write::Save(state) => {
-                    if unwritten.is_some() || vault.save_state(&state).is_err() {
+                    if unwritten.is_some() {
+                        let _ = vault.remove_state();
+                        deferred = Some(Write::Save(state));
+                    } else if vault.save_state(&state).is_err() {
                         let _ = vault.remove_state();
                     }
                 }

@@ -1053,8 +1053,9 @@ fn a_lan_book_controller_is_free_even_before_the_list_loads() {
 
 /// ★ A TUNNEL COMPUTER IS ASKED UNDER THE SERVICE'S ID FOR IT: the name the room's tunnel takes it
 /// as is held exactly as that id is, and freed by that id's waiver; one standing for a device the
-/// list names as not signed in is free. FAIL-CLOSED: a name the tunnel takes whose service id is not
-/// known is held, whatever the list says.
+/// list names as not signed in is free. FAIL-CLOSED: a name of the shack's own whose service id is
+/// not known is held, whatever the list says, on the tunnel's list or (just removed, its revoke not
+/// yet queued) off it; a computer in the LAN book is not.
 #[test]
 fn a_tunnel_name_is_held_as_the_service_id_it_stands_for() {
     const TUNNEL: &str = "60000000-0000-8000-8000-000000000001";
@@ -1068,8 +1069,13 @@ fn a_tunnel_name_is_held_as_the_service_id_it_stands_for() {
         "a tunnel name whose service id is not known"
     );
     let stands_for = |id: &str| {
-        f.authority
-            .set_tunnel_owners(BTreeMap::from([(TUNNEL.to_string(), id.to_string())]))
+        f.authority.set_tunnel_owners(BTreeMap::from([(
+            TUNNEL.to_string(),
+            TunnelName {
+                owners: BTreeSet::from([id.to_string()]),
+                ..TunnelName::default()
+            },
+        )]))
     };
     stands_for(OTHER);
     assert!(
@@ -1083,6 +1089,21 @@ fn a_tunnel_name_is_held_as_the_service_id_it_stands_for() {
     );
     f.authority.waive_transmit(DEVICE);
     assert!(!f.authority.tx_held(TUNNEL, now), "its service id's waiver");
+
+    // Removed: off the map, and (as the tunnel's list says next) off the tunnel.
+    const OFF: &str = "60000000-0000-8000-8000-000000000002";
+    const LAN: &str = "70000000-0000-8000-8000-000000000001";
+    f.authority.set_tunnel_owners(BTreeMap::new());
+    f.authority
+        .hold_lan_devices(Box::new(|| vec![LAN.to_string()]));
+    assert!(
+        f.authority.tx_held(OFF, now),
+        "a name of the shack's own no longer on the tunnel and not yet revoked"
+    );
+    assert!(
+        !f.authority.tx_held(LAN, now),
+        "CONTROL: one in the LAN book"
+    );
 }
 
 /// A sign-in-held device in control, with the real radio-loop hold source wired (as `Service::start`

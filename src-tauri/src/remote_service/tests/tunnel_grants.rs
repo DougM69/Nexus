@@ -74,6 +74,100 @@ async fn a_tunnel_computer_holds_station_control_whenever_remote_is_on() {
     );
 }
 
+/// A station's control with the service listing each of `rows` (its id and the fingerprint of its
+/// key) as an approved computer, pinned here at the approval listed.
+fn tunnel_control(rows: &[(&str, &str)]) -> Control {
+    let mut control = Control::default();
+    for (id, key) in rows {
+        let pin = format!("pin-{id}");
+        control.natives.insert(
+            id.to_string(),
+            Native {
+                pin: pin.clone(),
+                key: key.to_string(),
+                until: u64::MAX,
+            },
+        );
+        control.remembered.pins.insert(id.to_string(), pin);
+    }
+    control
+}
+
+/// What the hold says of `name` each time the tunnel's list changes: whether it is on the list, and
+/// whether it is held at that moment.
+fn watch_hold(control: &Control, name: &str) -> Arc<Mutex<Vec<(bool, bool)>>> {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (kept, operations, name) = (seen.clone(), control.operations.clone(), name.to_string());
+    *control.approved.on_set.lock().unwrap() = Some(Box::new(move |names: &[String]| {
+        let held = operations.tx_held(&name, Instant::now());
+        kept.lock().unwrap().push((names.contains(&name), held));
+    }));
+    seen
+}
+
+/// ★ A COMPUTER JOINING OR LEAVING THE TUNNEL IS NEVER ONE THE HOLD CANNOT PLACE: the moment its name
+/// joins the tunnel's list, the hold already reads it as the service's id for it (here a computer
+/// approved at the shack, and so free); the moment it leaves, removed or approved again at the
+/// service, and before its station control is taken back, its name is held.
+#[test]
+fn a_computer_joining_or_leaving_the_tunnel_is_never_one_the_hold_cannot_place() {
+    let key = "ab".repeat(32);
+    let name = lan::tunnel_device_id(&[0xab; 32]);
+    for leaves in ["removed", "approved again"] {
+        let mut control = tunnel_control(&[(COMPUTER, &key)]);
+        control
+            .operations
+            .set_signin_devices(std::collections::BTreeSet::new());
+        let seen = watch_hold(&control, &name);
+        control.sync_approved();
+        match leaves {
+            "removed" => control.natives.clear(),
+            _ => control.natives.get_mut(COMPUTER).unwrap().pin = "pin-again".into(),
+        }
+        control.sync_approved();
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "{leaves}: premise: it joined and left");
+        assert_eq!(
+            seen[0],
+            (true, false),
+            "{leaves}: held the moment it joined: the hold was told its service id after the list"
+        );
+        assert_eq!(
+            seen[1],
+            (false, true),
+            "{leaves}: free the moment it left, before its station control was taken back"
+        );
+    }
+}
+
+/// ★ TWO LISTED COMPUTERS WITH ONE KEY: the tunnel takes both under one name, and the hold reads that
+/// name as held while the one added by its own sign-in is, whichever id sorts first. The one approved
+/// at the shack never frees it; only a waiver for the sign-in one does.
+#[test]
+fn a_tunnel_name_two_listed_computers_share_is_held_while_the_sign_in_one_is() {
+    const FIRST: &str = "10000000-0000-4000-8000-0000000000e1";
+    const LAST: &str = "f0000000-0000-4000-8000-0000000000e2";
+    let key = "ab".repeat(32);
+    let name = lan::tunnel_device_id(&[0xab; 32]);
+    for (signed, shack) in [(FIRST, LAST), (LAST, FIRST)] {
+        let control = tunnel_control(&[(signed, &key), (shack, &key)]);
+        control
+            .operations
+            .set_signin_devices(std::collections::BTreeSet::from([signed.to_string()]));
+        control.sync_approved();
+        let now = Instant::now();
+        assert!(
+            control.operations.tx_held(&name, now),
+            "freed by the row added at the shack (the sign-in one {signed})"
+        );
+        control.operations.waive_transmit(signed);
+        assert!(
+            !control.operations.tx_held(&name, now),
+            "CONTROL: the sign-in one's waiver frees it (the sign-in one {signed})"
+        );
+    }
+}
+
 /// A computer approved here, the service listing it as added at the shack, is never held from
 /// transmit on the room's tunnel: its tunnel name stands for a device the list names as not
 /// signed in, as its service id does.

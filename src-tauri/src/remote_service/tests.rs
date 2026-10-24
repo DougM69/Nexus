@@ -4596,8 +4596,8 @@ fn the_waivers_are_written_before_the_state() {
 /// ★ A WAIVERS WRITE THAT DID NOT LAND IS TRIED AGAIN, AND HOLDS THE STATE BACK: while the store
 /// refuses the waivers entry, a waiver the station took back stays in it, so a state saved beside it
 /// would hand that waiver a grant again at the next launch. The state is removed instead, each time,
-/// and the waivers write is tried again ahead of every later batch; once it lands, the state is
-/// saved again.
+/// and the waivers write is tried again ahead of every later batch; once it lands, the latest state
+/// is saved again, in a batch with no state of its own too.
 #[test]
 fn a_waivers_write_that_did_not_land_is_tried_again_and_holds_the_state_back() {
     let state = waived_browser().state.unwrap();
@@ -4639,9 +4639,8 @@ fn a_waivers_write_that_did_not_land_is_tried_again_and_holds_the_state_back() {
     );
 
     vault.refusing.lock().unwrap().clear();
-    write(super::Write::RemovePins, 5);
+    write(super::Write::RemovePins, 6);
     assert!(!has("waivers"), "the waivers write never landed");
-    write(super::Write::Save(state), 6);
     assert!(
         has("state"),
         "the state is still held back once the waivers landed"

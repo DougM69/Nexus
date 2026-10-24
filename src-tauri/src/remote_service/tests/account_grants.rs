@@ -876,6 +876,140 @@ async fn a_sign_in_computer_on_the_tunnel_is_held_under_its_tunnel_name() {
     );
 }
 
+/// ★ GRANTED AGAIN ON ITS OWN SIGN-IN, A COMPUTER IS HELD BEFORE THE TUNNEL TAKES IT AGAIN: one the
+/// shack allowed to transmit, then approved again at the service, is held at the moment its name
+/// joins the tunnel's list again, so the waiver it had in this run never frees it there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_granted_again_on_its_sign_in_is_held_before_the_tunnel_takes_it() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let row = computer_row(&token("computer"), "operate");
+    let _ = listed(&service, &cloud, vec![row.clone()]).await;
+    service.action(allow(COMPUTER_ID)).await.unwrap();
+    let named = lan::tunnel_device_id(&road_pin());
+    let (operations, approved) = {
+        let control = service.control.lock().unwrap();
+        (control.operations.clone(), control.approved.clone())
+    };
+    assert!(
+        !operations.tx_held(&named, past_the_window()),
+        "premise: allowed to transmit"
+    );
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    {
+        let (seen, named) = (seen.clone(), named.clone());
+        *approved.on_set.lock().unwrap() = Some(Box::new(move |names: &[String]| {
+            if names.contains(&named) {
+                let held = operations.tx_held(&named, std::time::Instant::now());
+                seen.lock().unwrap().push(held);
+            }
+        }));
+    }
+    let mut again = row;
+    again["generation"] = 4.into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [again] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    let seen = seen.lock().unwrap().clone();
+    assert!(!seen.is_empty(), "premise: it joined the tunnel again");
+    assert!(
+        seen.iter().all(|held| *held),
+        "free on the tunnel the moment it joined again"
+    );
+}
+
+/// ★ A COMPUTER PAIRED BY CODE AT THE SHACK AND SIGNED IN IS NOT HELD ON THE TUNNEL: the proof its
+/// sign-in was granted on, checked here, names the LAN key the shack paired by code, so its tunnel
+/// name stands for a computer the shack paired, and is free. One kept on the LAN by its sign-in alone
+/// (the LAN's device cache holds it) is held, and so is one removed at the shack.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_paired_by_code_at_the_shack_and_signed_in_is_not_held_on_the_tunnel() {
+    use crate::remote_service::lan::tests::{LanStore, Scratch};
+    const LAN_STATION: &str = "60000000-0000-4000-8000-0000000000aa";
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let lan_pin = sha256(&key("computerLan"));
+    let pin: [u8; 32] = tempo_stream::protocol::hex_bytes(&lan_pin)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let (_, station) = station_key::Signer::generate().unwrap();
+    let store = LanStore::holding(&station, LAN_STATION, &[(&pin, "DESKTOP-7Q")]);
+    let scratch = Scratch::new();
+    let engine = engine();
+    let service = super::lan_grants::with_lan(
+        launch_granting_on_sign_in(&cloud, &vault),
+        &engine,
+        &store,
+        &scratch,
+    );
+    let mut row = computer_row(&token("computer"), "operate");
+    row["notified"] = 0.into();
+    let status = listed(&service, &cloud, vec![row]).await;
+    assert_eq!(
+        status.pinned_devices,
+        vec![COMPUTER_ID.to_string()],
+        "premise: granted on its sign-in"
+    );
+    let named = lan::tunnel_device_id(&road_pin());
+    let (operations, enrolment, lan) = {
+        let control = service.control.lock().unwrap();
+        (
+            control.operations.clone(),
+            control.enrolment.clone(),
+            control.lan.clone().unwrap(),
+        )
+    };
+    // In the LAN's device cache (kept there by its sign-in), or out of it (paired by code since).
+    let cached = |kept: bool| {
+        let held = DevicesHeld::take(&vault);
+        let mut cache = vault
+            .device_cache()
+            .unwrap()
+            .unwrap_or_else(|| tempo_client::account::DeviceCache::new(STATION));
+        if kept {
+            cache
+                .keep(CachedDevice {
+                    pin: lan_pin.clone(),
+                    role: Role::Operate,
+                    guest: false,
+                    issued_at: cases()["issuedAt"].as_u64().unwrap(),
+                    confirmed_at: 0,
+                })
+                .unwrap();
+        } else {
+            cache.forget(&lan_pin);
+        }
+        vault.save_device_cache(&held, &cache).unwrap();
+        drop(held);
+        enrolment.reread();
+    };
+    let held_now = || operations.tx_held(&named, std::time::Instant::now());
+
+    cached(false);
+    let mut freed = false;
+    for _ in 0..250 {
+        freed = !held_now();
+        if freed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(freed, "paired by code at the shack and signed in: held");
+    assert!(
+        operations.tx_held(COMPUTER_ID, past_the_window()),
+        "premise: its service id is held"
+    );
+
+    cached(true);
+    assert!(held_now(), "kept on the LAN by its sign-in alone: free");
+
+    cached(false);
+    assert!(!held_now(), "CONTROL: paired by code again");
+    lan.revoke(&lan::device_id(&pin)).unwrap();
+    assert!(held_now(), "removed at the shack: free");
+}
+
 /// A station whose owner is not known here (paired by code, or bound as another station) vouches
 /// for nobody: the owner's own browser waits for a press, as it does today.
 #[tokio::test(flavor = "multi_thread")]
