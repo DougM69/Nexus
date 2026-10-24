@@ -612,7 +612,7 @@ export const JA: PartialCatalog = {
   "client.ptt.refusal.tuning": "局が調整中です。",
   "client.ptt.refusal.otherOwner": "別の端末が送信機を使用中です。",
   "client.ptt.refusal.clockRepair": "局が時計を調整中です。",
-  "client.ptt.refusal.onHold": "この端末は送信する前に局で承認される必要があります。",
+  "client.ptt.refusal.onHold": "受信とチューニングのみです。送信は、局で「送信を許可」が押されるまで待機します。",
   "client.ptt.refusal.noPresence": "局との接続が切れました。",
   "client.ptt.refusal.noFeed": "このコンピューターにマイクが設定されていません。",
   "client.ptt.refusal.noAudio": "マイクの音声が局に届いていません。",

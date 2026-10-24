@@ -722,7 +722,7 @@ export const EN = {
   "client.ptt.refusal.tuning": "The station is tuning.",
   "client.ptt.refusal.otherOwner": "Another device is holding the transmitter.",
   "client.ptt.refusal.clockRepair": "The station is fixing its clock.",
-  "client.ptt.refusal.onHold": "This device must be approved at the station before it can transmit.",
+  "client.ptt.refusal.onHold": "Listening and tuning only. Transmit waits for you to press Allow to transmit at the shack.",
   "client.ptt.refusal.noPresence": "The link to the station dropped.",
   "client.ptt.refusal.noFeed": "No microphone is set on this computer.",
   "client.ptt.refusal.noAudio": "No microphone audio is reaching the station.",
