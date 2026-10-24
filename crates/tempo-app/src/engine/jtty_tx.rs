@@ -28,7 +28,9 @@
 //!   or on the air, and a gate going down drops all of it and cuts the audio.
 //! - **Live entry** (the operator, 2026-10-08: "Include live typing now") is a
 //!   [`crate::keyboard::KeyboardLatch`]: continuous PTT, the filler `<<<<< <<<<<` whenever nothing
-//!   typed is waiting, the per-tick gate re-check, the 10-minute ceiling and the watchdog. What is
+//!   typed is waiting, the per-tick gate re-check, the 10-minute ceiling and the watchdog. The
+//!   ceiling bounds the whole over, from the session's start until what it left queued has
+//!   drained: Send or the sign-off ending the session does not lift it. What is
 //!   typed is committed as WSJT-X commits it: in batches once five words are complete beyond the
 //!   three held back (an atom in progress is never split), everything after a pause, and the
 //!   whole of it, with end-of-message, on Send or the sign-off (`autoAdvanceJttyLiveEntry`,
@@ -930,7 +932,8 @@ impl Engine {
     }
 
     /// Commit a rendered plan: the gate again (anything may have changed while it rendered),
-    /// nothing stopped since it was planned, and the queue still fitting the watchdog; then it
+    /// nothing stopped since it was planned, and the queue still fitting the watchdog and what the
+    /// over has left of its ceiling; then it
     /// is queued (and a live session started or ended as the plan says).
     pub fn jtty_commit(&mut self, plan: JttyPlan, rendered: JttyRendered) -> Result<(), String> {
         self.jtty_tx_gate()?;
@@ -947,6 +950,17 @@ impl Engine {
                 total_ms / 1000.0,
                 limit_ms / 60_000.0
             ));
+        }
+        if let Some(left_ms) = self.jtty_over_left_ms(now_unix_millis()) {
+            if total_ms > left_ms as f64 {
+                return Err(format!(
+                    "That would queue {:.0} s of JTTY, more than this over has left ({:.0} s) \
+                     before its {}-minute ceiling. Nothing was added; send less at a time.",
+                    total_ms / 1000.0,
+                    left_ms as f64 / 1000.0,
+                    crate::keyboard::JTTY.max_latch_ms / 60_000
+                ));
+            }
         }
         if plan.start_live {
             let now = now_unix_millis();
@@ -986,6 +1000,17 @@ impl Engine {
         // An explicit operator send restarts the TX-watchdog clock.
         self.reset_tx_watchdog();
         Ok(())
+    }
+
+    /// While a live session's ceiling stands (from its start until the over drains or is
+    /// stopped), the air time the over has left before it (ms; 0 once it is reached).
+    fn jtty_over_left_ms(&self, now_ms: u64) -> Option<u64> {
+        let start = self.jtty_tx.latch_start_ms?;
+        Some(
+            crate::keyboard::JTTY
+                .max_latch_ms
+                .saturating_sub(now_ms.saturating_sub(start)),
+        )
     }
 
     /// The most air time JTTY may have queued: the TX watchdog's limit, and never more than a
@@ -1126,12 +1151,12 @@ impl Engine {
                     .playing
                     .as_ref()
                     .is_none_or(|p| p.at >= p.seg.pcm.len());
-                if spent
-                    && self.jtty_tx.queue.is_empty()
-                    && !self.jtty_tx.latched
-                    && !self.jtty_tx.stopped
-                {
-                    self.jtty_tx.notice = Some(COMPLETE.to_string());
+                if spent && self.jtty_tx.queue.is_empty() && !self.jtty_tx.latched {
+                    // The over has ended: a later send is a new one, not under this ceiling.
+                    self.jtty_tx.latch_start_ms = None;
+                    if !self.jtty_tx.stopped {
+                        self.jtty_tx.notice = Some(COMPLETE.to_string());
+                    }
                 }
             }
             _ => {}
@@ -1254,6 +1279,17 @@ impl Engine {
             // One-shot: the same gates, and the watchdog, on every tick while it drains.
             if let Some(why) = gate_down(&gates) {
                 self.jtty_drop(why);
+                return JttyTick::Idle;
+            }
+            // ⛔ The ceiling bounds the whole over: what a live session left queued when Send or
+            // the sign-off ended it stops at the same ten minutes, from when the session started.
+            if self.jtty_over_left_ms(gates.now_ms) == Some(0) {
+                let why = format!(
+                    "JTTY stopped at its {}-minute ceiling for one over, so what was still queued \
+                     was dropped. Send it again when you are ready.",
+                    crate::keyboard::JTTY.max_latch_ms / 60_000
+                );
+                self.jtty_drop(&why);
                 return JttyTick::Idle;
             }
             if gates.watchdog_limit_secs > 0 {
@@ -2139,6 +2175,109 @@ mod tests {
         assert!(g.take_jtty_abort());
         assert!(!g.jtty_live());
         assert!(g.jtty_tx_state().notice.unwrap().contains("ceiling"));
+    }
+
+    /// ⛔ THE CEILING BOUNDS THE WHOLE OVER, not only the part with live entry up: once Send or
+    /// the sign-off ends a live session, what it left queued is stopped at the same ten minutes,
+    /// counted from when the session started. One second under it, the drain goes on.
+    /// CONTROL: a session still in live entry, past the ceiling, is stopped as it always was.
+    #[test]
+    fn the_ceiling_bounds_what_a_live_session_left_queued() {
+        let long = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ".repeat(4);
+        let max = crate::keyboard::JTTY.max_latch_ms;
+        for ended_by in ["sign-off", "send", "still live"] {
+            for under in [true, false] {
+                let e = jtty_engine();
+                live_start(&e, "", "").unwrap();
+                live_commit(&e, "HELLO THERE ", "", JttyCommit::Flush).unwrap();
+                frames(&e, 1);
+                match ended_by {
+                    "sign-off" => sign_off(&e, &long, "").map(|_| ()).unwrap(),
+                    "send" => send_text(&e, &long, "").map(|_| ()).unwrap(),
+                    _ => {}
+                }
+                let mut g = engine_lock(&e);
+                assert_eq!(g.jtty_live(), ended_by == "still live", "{ended_by}");
+                let elapsed = if under { max - 1_000 } else { max };
+                g.jtty_tx.latch_start_ms = Some(now_unix_millis() - elapsed);
+                let tick = g.poll_jtty(true, 0.0);
+                if under {
+                    assert!(
+                        matches!(tick, JttyTick::Frame(_)),
+                        "{ended_by}, under the ceiling: {tick:?}"
+                    );
+                    assert!(!g.take_jtty_abort(), "{ended_by}, under the ceiling: cut");
+                    continue;
+                }
+                assert_eq!(tick, JttyTick::Idle, "{ended_by}: keyed past the ceiling");
+                assert!(g.take_jtty_abort(), "{ended_by}: cut");
+                assert_eq!(g.tx_owner(), None, "{ended_by}: the transmitter owned");
+                assert_eq!(g.jtty_tx_state().left, 0, "{ended_by}: still queued");
+                assert!(
+                    g.jtty_tx_state()
+                        .notice
+                        .unwrap()
+                        .contains("10-minute ceiling"),
+                    "{ended_by}: the notice"
+                );
+                assert!(
+                    !g.tx_watchdog && g.tx_enabled,
+                    "{ended_by}: not the watchdog"
+                );
+            }
+        }
+    }
+
+    /// A send that would run a live session's over past its ceiling is refused whole before
+    /// anything of it is queued, with the reason; nothing already going is touched.
+    /// CONTROL: the same sign-off with the session just started is queued.
+    #[test]
+    fn a_send_that_would_outrun_the_overs_ceiling_is_refused() {
+        let long = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ".repeat(4);
+        let max = crate::keyboard::JTTY.max_latch_ms;
+        for late in [true, false] {
+            let e = jtty_engine();
+            live_start(&e, "", "").unwrap();
+            if late {
+                engine_lock(&e).jtty_tx.latch_start_ms = Some(now_unix_millis() - max + 5_000);
+            }
+            let sent = sign_off(&e, &long, "");
+            let mut g = engine_lock(&e);
+            if !late {
+                assert!(sent.is_ok(), "CONTROL: {sent:?}");
+                assert!(g.jtty_tx_state().left > 0, "CONTROL: queued");
+                continue;
+            }
+            let why = sent.map(|_| ()).unwrap_err();
+            assert!(why.contains("10-minute ceiling"), "{why}");
+            assert_eq!(g.jtty_tx_state().left, 0, "queued");
+            assert!(g.jtty_live(), "the session is untouched");
+            assert!(!g.take_jtty_abort(), "cut");
+        }
+    }
+
+    /// The over ends when what a live session left queued has drained: a later send is a new
+    /// over, not stopped or refused under the old one's ceiling.
+    #[test]
+    fn a_drained_over_leaves_no_ceiling_behind() {
+        let e = jtty_engine();
+        live_start(&e, "", "").unwrap();
+        sign_off(&e, "HI ", "").unwrap();
+        engine_lock(&e).set_jtty_sending(true);
+        drain(&e);
+        // Half a second of the ceiling left as the drain ends.
+        let max = crate::keyboard::JTTY.max_latch_ms;
+        engine_lock(&e).jtty_tx.latch_start_ms = Some(now_unix_millis() - max + 500);
+        engine_lock(&e).set_jtty_sending(false);
+        assert_eq!(
+            engine_lock(&e).jtty_tx_state().notice.as_deref(),
+            Some(COMPLETE)
+        );
+        send_text(&e, "CQ CQ DE W9XYZ", "").unwrap();
+        assert!(matches!(
+            engine_lock(&e).poll_jtty(true, 0.0),
+            JttyTick::Frame(_)
+        ));
     }
 
     /// MODE-SWITCH TX-OFF: leaving the JTTY screen — for PSK, the same section, or anywhere

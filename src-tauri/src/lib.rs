@@ -54107,7 +54107,9 @@ mod tests {
     /// the shack's own screen meets, and only under the stand-down the command lane read it under.
     /// For each start (a send, an F-key, live entry started, typed into and signed off): named with
     /// a stand-down a halt has moved since, it is refused `STOPPED_SINCE`; with TX off, outside the
-    /// licence or under a sign-in hold, it is refused with the JTTY gate's own reason; each refusal
+    /// licence, under a sign-in hold or a clock repair, with a tune carrier holding the transmitter
+    /// or on a connection that refuses transmitting, it is refused with the JTTY gate's own reason;
+    /// each refusal
     /// leaves JTTY as it was. Named with the stand-down as it stands, it runs (CONTROL: what it
     /// starts is queued or live), and what it started ends when that stand-down is revoked with no
     /// halt. CONTROL: the same start from the shack's own screen runs, and outlives a bare
@@ -54173,7 +54175,14 @@ mod tests {
                 e.halt_tx();
                 e.take_slot_tx_abort();
                 e.take_jtty_abort();
+                e.set_tune(false);
+                e.end_clock_repair_hold();
                 e.set_remote_transmit_held(false);
+                if e.connection_tx_refusal().is_some() {
+                    let mut settings = e.settings().clone();
+                    settings.rig_conn = String::new();
+                    e.apply_settings(settings);
+                }
                 e.set_license_class("open");
                 e.set_operating_mode("jtty", false);
                 e.set_tx_enabled(true);
@@ -54184,7 +54193,7 @@ mod tests {
             }
         };
         type Guard = fn(&mut tempo_app::engine::Engine);
-        let guards: [(&str, Guard, &str); 3] = [
+        let guards: [(&str, Guard, &str); 6] = [
             ("TX off", |e| e.set_tx_enabled(false), "TX is off"),
             (
                 "outside the licence",
@@ -54195,6 +54204,27 @@ mod tests {
                 "the sign-in hold",
                 |e| e.set_remote_transmit_held(true),
                 tempo_app::engine::REMOTE_HOLD_HOLDS_TX,
+            ),
+            (
+                "a clock repair",
+                |e| {
+                    e.hold_tx_for_clock_repair(Instant::now() + std::time::Duration::from_secs(600))
+                },
+                tempo_app::engine::CLOCK_REPAIR_HOLDS_TX,
+            ),
+            (
+                "a tune carrier holding the transmitter",
+                |e| e.set_tune(true),
+                "Tune carrier is up",
+            ),
+            (
+                "a connection that refuses transmitting",
+                |e| {
+                    let mut settings = e.settings().clone();
+                    settings.rig_conn = "icomlan".into();
+                    e.apply_settings(settings);
+                },
+                tempo_app::settings::ICOM_LAN_TX_REFUSED,
             ),
         ];
         let stopped = Err(STOPPED_SINCE.to_string());
