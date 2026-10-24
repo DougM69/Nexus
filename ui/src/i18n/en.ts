@@ -443,7 +443,7 @@ export const EN = {
   "remote.account.aBrowser": "a browser",
   "remote.account.gotIt": "Got it",
   "remote.account.addedByAccount": "Added by signing in.",
-  "remote.account.waitingToTransmit": "Waiting for your approval to transmit.",
+  "remote.account.waitingToTransmit": "Waiting for you to allow it to transmit.",
   "remote.account.allowTransmit": "Allow to transmit",
   "remote.account.allowTransmitGone": "That device is no longer waiting to transmit. It was removed, or it was not added by signing in.",
   "remote.account.unconfirmed": "The Remote service says this device is yours, but Nexus could not confirm it. Approve it only if you added it yourself.",
@@ -470,6 +470,10 @@ export const EN = {
   "remote.approval.computerBody": "Nexus on {{platform}}, signed in to your Remote account, asks to operate this station over the internet as you would here, transmit included. Approve it only if this key matches the one Nexus shows on that computer: {{key}}.",
   "remote.approval.computerBodyAgain": "Nexus on {{platform}} was approved before, but it can’t connect until you approve it again here. Connected, it can operate this station as you would here, transmit included. Approve it only if this key matches the one Nexus shows on that computer: {{key}}.",
   "remote.approval.deny": "Deny",
+  "remote.approval.heldTitle": "Allow {{device}} to transmit?",
+  "remote.approval.heldBody": "A browser signed in to your Remote account. It can listen and tune now, and transmit waits for you. Allow it only if this key matches the one the browser shows: {{key}}.",
+  "remote.approval.heldComputerBody": "Nexus on {{platform}} signed in to your Remote account. It can listen and tune now, and transmit waits for you. Allow it only if this key matches the one Nexus shows on that computer: {{key}}.",
+  "remote.approval.notNow": "Not now",
   // Remote over this network (Settings ▸ Station ▸ Remote access): this station's own listener, for
   // Nexus on another computer on the same network, with no internet. Pairing is one press at the shack
   // (the operator's ruling, 2026-10-04): making the code is the approval, it works once within ten

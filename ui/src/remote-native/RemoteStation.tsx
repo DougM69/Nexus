@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { answerRemoteAutostartOffer, getRemoteStationStatus, getSettings, remoteStationAction, setLaunchAtLogin } from '../api'
 import { t } from '../i18n'
-import { isNative, PLATFORM_NAMES, waitsForApprove, type AccountRole, type RemoteStationAction, type RemoteStationStatus } from './types'
+import { isNative, offersAllowTransmit, PLATFORM_NAMES, waitsForApprove, type AccountRole, type RemoteStationAction, type RemoteStationStatus } from './types'
 import { shortFingerprint } from '../remote-web/stream-protocol'
 import '../remote-web/remote.css'
 
@@ -98,12 +98,9 @@ export function RemoteStation() {
   const computers = status?.devices?.filter(isNative) ?? []
   const account = status?.account
   const roleName = (role: AccountRole) => role === 'listen' ? t('remote.account.role.listen') : t('remote.account.role.operate')
-  // A device added by its own sign-in that the station holds from transmit (`heldDevices`) is allowed here, and
-  // only where its row offers no Approve: never one waiting for Approve or with its key not pinned here (the
-  // Approve waives the hold itself), one on a proof the station could not confirm, or one removed here.
-  const offersAllow = (device: RemoteStationStatus['devices'][number]) => !!status?.heldDevices?.includes(device.id)
-    && device.approved === 1 && !(device.key && !status.pinnedDevices?.includes(device.id))
-    && !account?.unconfirmed?.[device.id] && !account?.removals?.includes(device.id)
+  // A device added by its own sign-in that the station holds from transmit is allowed here, and only where its row
+  // offers no Approve (`offersAllowTransmit`, which the shack's pop-up asks by too).
+  const offersAllow = (device: RemoteStationStatus['devices'][number]) => offersAllowTransmit(status, device)
   // What the station knows of a device beyond its approval: added by its own sign-in, a proof the station
   // could not confirm (never granted), or a removal the service has not heard yet. A device added by its
   // sign-in that waits for Approve here was confirmed, so it says only how it was added.

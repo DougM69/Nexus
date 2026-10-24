@@ -87,6 +87,13 @@ export const isNative = (device: { kind?: DeviceKind }) => device.kind === 'comp
  *  asks as a device added at the station asks; the station never approved it. */
 export const waitsForApprove = (status: RemoteStationStatus | null | undefined, deviceId: string) =>
   status?.account?.unconfirmed?.[deviceId] === 'approveAtStation'
+/** A device added by its own sign-in that the station holds from transmit (`heldDevices`), offered Allow to transmit
+ *  at the shack: only where it is asked nothing else. Never one waiting for Approve or with its key not pinned here (the
+ *  Approve waives the hold itself), one on a proof the station could not confirm, or one removed here. The card's
+ *  button and the shack's pop-up both read it, so they offer the same act for the same devices. */
+export const offersAllowTransmit = (status: RemoteStationStatus | null | undefined, device: RemoteStationStatus['devices'][number]) =>
+  !!status?.heldDevices?.includes(device.id) && device.approved === 1 && !(device.key && !status.pinnedDevices?.includes(device.id))
+    && !status.account?.unconfirmed?.[device.id] && !status.account?.removals?.includes(device.id)
 export type RemoteStationAction =
   | { type: 'begin'; name: string }
   | { type: 'refresh' | 'cancel' | 'enable' | 'disable' | 'forget' }
