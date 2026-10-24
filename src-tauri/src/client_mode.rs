@@ -317,12 +317,19 @@ pub(crate) fn clear_target() {
 }
 
 /// Resolve a kept target to the station a cold launch drives: the station id and the typed address
-/// when `known` says this computer still knows it, else `None`. Split from the store read and the
+/// when `known` says this computer still knows it, else `None` — and always `None` in a radio window
+/// (`profile`), which drives its own radio. Split from the store read and the
 /// knownness query so the by-value tests meet it here.
 fn resolve_target(
+    profile: Option<&str>,
     target: Option<Target>,
     known: impl FnOnce(&str) -> bool,
 ) -> Option<(String, Option<Typed>)> {
+    // A radio window (`--profile`) is the operator choosing one of this computer's own radios from
+    // the picker: it drives that radio, never the station the default window last drove.
+    if profile.is_some() {
+        return None;
+    }
     let target = target?;
     known(&target.station).then(|| {
         let typed = target.at.as_deref().and_then(Typed::read);
@@ -346,9 +353,11 @@ pub(crate) fn auto_requested() -> Option<(String, Option<Typed>)> {
         crate::lan_client::Stations::new(Arc::new(crate::remote_service::vault::SystemVault))
             .typed_in(crate::lan_client::typed_path())
             .signed_in(crate::lan_client::signed_path());
-    resolve_target(read_target_at(&target_path()), |id| {
-        station_known(&stations, id)
-    })
+    resolve_target(
+        crate::active_profile(),
+        read_target_at(&target_path()),
+        |id| station_known(&stations, id),
+    )
 }
 
 // --- Where each command goes -------------------------------------------------------------------

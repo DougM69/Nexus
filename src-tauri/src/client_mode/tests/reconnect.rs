@@ -14,7 +14,7 @@ fn a_cold_start_after_entering_resolves_to_the_station() {
     keep_target_at(&path, STATION, Some(&typed));
     // The cold start reads the kept target; the station is still known here.
     assert_eq!(
-        resolve_target(read_target_at(&path), |id| id == STATION),
+        resolve_target(None, read_target_at(&path), |id| id == STATION),
         Some((STATION.to_string(), Some(typed))),
         "a cold start did not resolve to the station last driven"
     );
@@ -27,7 +27,7 @@ fn a_cold_start_after_leaving_resolves_to_local() {
     keep_target_at(&path, STATION, None);
     clear_target_at(&path);
     assert_eq!(
-        resolve_target(read_target_at(&path), |_| true),
+        resolve_target(None, read_target_at(&path), |_| true),
         None,
         "a cold start after Leave entered client mode"
     );
@@ -41,8 +41,23 @@ fn a_cold_start_for_a_forgotten_station_resolves_to_local() {
     let typed = Typed::read(AT).expect("a typed address");
     keep_target_at(&path, STATION, Some(&typed));
     assert_eq!(
-        resolve_target(read_target_at(&path), |_| false),
+        resolve_target(None, read_target_at(&path), |_| false),
         None,
         "a cold start drove a station this computer no longer knows"
     );
+}
+
+/// (d) A radio window (`--profile`) opened from the picker drives its own radio: even with a kept
+/// target whose station is still known, it never reconnects to that station.
+#[test]
+fn a_radio_profile_window_never_reconnects() {
+    let path = scratch("reconnect-profile").join("client-target.json");
+    keep_target_at(&path, STATION, None);
+    assert_eq!(
+        resolve_target(Some("r2"), read_target_at(&path), |_| true),
+        None,
+        "a radio window was taken over by the station the default window drove"
+    );
+    // Control: the default window, with the same kept target, does reconnect.
+    assert!(resolve_target(None, read_target_at(&path), |_| true).is_some());
 }
