@@ -166,6 +166,8 @@ it('shows a held sign-in device waiting to transmit with Allow to transmit, a br
       ? { ...status, heldDevices: (status.heldDevices ?? []).filter(id => id !== action.deviceId) } : status)
   await screen.findAllByText('Owner phone')
   expect(screen.getAllByText(EN['remote.account.waitingToTransmit'])).toHaveLength(2)
+  // One name for the shack's act, the one its button and the pop-up use: never the pairing's Approve.
+  for (const line of screen.getAllByText(EN['remote.account.waitingToTransmit'])) expect(line.textContent).not.toMatch(/approv/i)
   const allows = screen.getAllByRole('button', { name: EN['remote.account.allowTransmit'] })
   expect(allows).toHaveLength(2)
   fireEvent.click(allows[0])

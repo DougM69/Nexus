@@ -3,7 +3,7 @@ import { getRemoteStationStatus, remoteStationAction } from '../api'
 import { Dialog } from '../components/ui/Dialog'
 import { t } from '../i18n'
 import { shortFingerprint } from '../remote-web/stream-protocol'
-import { isNative, PLATFORM_NAMES, waitsForApprove, type RemoteStationStatus } from './types'
+import { isNative, offersAllowTransmit, PLATFORM_NAMES, waitsForApprove, type RemoteStationStatus } from './types'
 
 /** How often the shack looks for a browser asking to stream, while Remote is on. Each look is the
  *  Refresh the Remote access panel makes (one request to the service); with Remote off, none is made. */
@@ -13,18 +13,24 @@ export const APPROVAL_POLL_MS = 10_000
 export const APPROVAL_ARM_MS = 1_000
 
 type Device = RemoteStationStatus['devices'][number]
+/** A device the shack asks about, and whether the question is Allow to transmit for a held one. */
+type Asked = { device: Device; held: boolean }
 /** The browsers asking to stream: a request waiting here, or a browser approved before its key was
  *  pinned (it is refused a stream until approved again). Only with a key: the key is what the
  *  operator compares, and a browser with none could not stream after approval anyway. A computer
  *  running Nexus (the native client) asks the same way to connect, and its key is what the tunnel
  *  through the room is held to once it is pinned. */
-function asking(status: RemoteStationStatus | null, now: number): Device[] {
+function asking(status: RemoteStationStatus | null, now: number): Asked[] {
   if (!status?.stationId) return []
   const pinned = status.pinnedDevices
-  return status.devices.filter(device => !!device.key && device.expiresAt > now
+  const approve = status.devices.filter(device => !!device.key && device.expiresAt > now
     && (device.approved !== 1 || (!!pinned && !pinned.includes(device.id))))
+  // Then a device added by its own sign-in that the station holds from transmit: exactly where the card offers
+  // Allow to transmit, which is never a device asked about above.
+  const held = status.devices.filter(device => !!device.key && device.expiresAt > now && offersAllowTransmit(status, device))
+  return [...approve.map(device => ({ device, held: false })), ...held.map(device => ({ device, held: true }))]
 }
-const question = (device: Device) => `${device.id}:${device.key}`
+const question = ({ device, held }: Asked) => `${held ? 'held:' : ''}${device.id}:${device.key}`
 
 /** The question Nexus asks at the shack when a browser asks to stream (the operator, 2026-10-02: "Nexus
  *  at the shack pops up "Let Chrome on Windows stream this station? Key XXXX XXXX" with Approve / Deny
@@ -42,7 +48,14 @@ const question = (device: Device) => `${device.id}:${device.key}`
  *  A computer running Nexus is asked about the same way, by its name, its platform and its key in
  *  eight groups, and its Approve is the same press: its key pinned, for the tunnel through the room to
  *  check. Approving it grants nothing on the relay's lanes:
- *  what the computer may do once connected is the station's own rules for a computer driving it. */
+ *  what the computer may do once connected is the station's own rules for a computer driving it.
+ *
+ *  A device added by its own sign-in is held from transmit until the operator allows it here, and the
+ *  shack asks about it the same way: "Allow DESKTOP-7Q to transmit?", with its key. Allow to transmit is
+ *  the card's own button, the same shack-only action (`remote_station_action` is refused from afar), under
+ *  the same name. Not now, Escape or a click outside send nothing, so the device stays held, and the
+ *  card still offers Allow to transmit. The same guards hold: Not now has the keyboard, and Allow takes
+ *  no click for its first second. */
 export function RemoteApprovalPrompt() {
   const [status, setStatus] = useState<RemoteStationStatus | null>(null)
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set())
@@ -69,8 +82,9 @@ export function RemoteApprovalPrompt() {
     const timer = setInterval(() => void look(), APPROVAL_POLL_MS)
     return () => { mounted.current = false; clearInterval(timer) }
   }, [])
-  const device = asking(status, Date.now()).find(candidate => !answered.has(question(candidate))) ?? null
-  const current = device ? question(device) : null
+  const asked = asking(status, Date.now()).find(candidate => !answered.has(question(candidate))) ?? null
+  const device = asked?.device ?? null, held = !!asked?.held
+  const current = asked ? question(asked) : null
   useEffect(() => {
     setArmed(false); setFailed(false)
     if (!current) return
@@ -80,13 +94,15 @@ export function RemoteApprovalPrompt() {
 
   const settle = (key: string) => setAnswered(previous => new Set(previous).add(key))
   async function answer(approve: boolean) {
-    if (!device || busy) return
-    const key = question(device)
+    if (!asked || !device || busy) return
+    const key = question(asked)
+    // Not now leaves a held device held: nothing is sent.
+    if (!approve && held) { settle(key); return }
     // A browser approved before keeps its approval on a Deny; only a waiting request is refused.
     if (!approve && device.approved === 1) { settle(key); return }
     setBusy(true); setFailed(false)
     try {
-      const next = await remoteStationAction(approve
+      const next = await remoteStationAction(held ? { type: 'allowTransmit', deviceId: device.id } : approve
         ? { type: 'device', deviceId: device.id, approve: true, key: device.key ?? undefined, kind: device.kind ?? 'browser' }
         : { type: 'device', deviceId: device.id, approve: false })
       if (!mounted.current) return
@@ -103,9 +119,12 @@ export function RemoteApprovalPrompt() {
     open={!!device}
     // Escape and a click outside: closed, and nothing answered. The request stays in Settings.
     onOpenChange={open => { if (!open && current) settle(current) }}
-    title={!device ? '' : isNative(device) ? t('remote.approval.computerTitle', { computer: device.name })
+    title={!device ? '' : held ? t('remote.approval.heldTitle', { device: device.name }) : isNative(device) ? t('remote.approval.computerTitle', { computer: device.name })
       : t('remote.approval.title', { browser: device.name })}
-    description={!device ? undefined : isNative(device) ? again
+    description={!device ? undefined : held ? isNative(device)
+      ? t('remote.approval.heldComputerBody', { platform, key: fingerprint })
+      : t('remote.approval.heldBody', { key: fingerprint })
+      : isNative(device) ? again
       ? t('remote.approval.computerBodyAgain', { platform, key: fingerprint })
       : t('remote.approval.computerBody', { platform, key: fingerprint })
       : again
@@ -117,12 +136,12 @@ export function RemoteApprovalPrompt() {
     <p className="remote-approval-key"><code>{fingerprint}</code></p>
     {/* A computer compares this station's key too, in the same call: its window shows the key it was
         given for this station, and holds the internet road until the operator says they match. */}
-    {device && isNative(device) && status?.stationKey
+    {device && !held && isNative(device) && status?.stationKey
       && <p>{t('remote.thisStationKey', { key: shortFingerprint(status.stationKey) })}</p>}
     {failed && <p role="alert">{t('remote.requestFailed')}</p>}
     <div className="confirm-actions">
-      <button type="button" className="settings-refresh" autoFocus disabled={busy} onClick={() => void answer(false)}>{t('remote.approval.deny')}</button>
-      <button type="button" className="settings-save" disabled={busy || !armed} onClick={() => void answer(true)}>{t('remote.approve')}</button>
+      <button type="button" className="settings-refresh" autoFocus disabled={busy} onClick={() => void answer(false)}>{held ? t('remote.approval.notNow') : t('remote.approval.deny')}</button>
+      <button type="button" className="settings-save" disabled={busy || !armed} onClick={() => void answer(true)}>{held ? t('remote.account.allowTransmit') : t('remote.approve')}</button>
     </div>
   </Dialog>
 }

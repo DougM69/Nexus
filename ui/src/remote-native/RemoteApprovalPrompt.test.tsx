@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { APPROVAL_ARM_MS, APPROVAL_POLL_MS, RemoteApprovalPrompt } from './RemoteApprovalPrompt'
 import type { RemoteStationAction, RemoteStationStatus } from './types'
+import { EN } from '../i18n/en'
 
 const KEY = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
 // The key as both ends show it: the first 128 bits of the fingerprint, eight groups of four (S3-L1).
@@ -34,6 +35,7 @@ beforeEach(() => {
     const action = (input as { action: RemoteStationAction }).action
     // The poll's own Refresh is how it reads the requests; the answers are what these tests are about.
     if (action.type !== 'refresh') actions.push(action)
+    if (action.type === 'allowTransmit') status = { ...status, heldDevices: (status.heldDevices ?? []).filter(id => id !== action.deviceId) }
     if (action.type === 'device') {
       const id = action.deviceId
       status = { ...status, devices: action.approve ? status.devices.map(d => d.id === id ? { ...d, approved: 1 } : d) : status.devices.filter(d => d.id !== id),
@@ -216,4 +218,78 @@ it('a computer asking: the question shows this station\'s key too, read out in t
   render(<RemoteApprovalPrompt />)
   await flush()
   expect(screen.getByRole('dialog').textContent).not.toContain(shown)
+})
+
+// A device added by signing in has control at once but is held from transmit until it is allowed here. The shack
+// asks about it the way it asks about a new one, and the answer is the card's own Allow to transmit: the same
+// shack-only action, under the same name. Not now leaves it held.
+const held = (extra: Partial<Device> = {}): Device => asking({ name: 'DESKTOP-7Q', kind: 'computer', platform: 'windows', approved: 1,
+  untilRemoved: 1, role: 'operate', addedBy: 'account', ...extra })
+const allow = () => screen.getByRole('button', { name: EN['remote.account.allowTransmit'] }) as HTMLButtonElement
+const notNow = () => screen.getByRole('button', { name: EN['remote.approval.notNow'] }) as HTMLButtonElement
+
+it('a held sign-in device: the shack asks to allow it to transmit, and Allow to transmit is the card\'s own shack-only action', async () => {
+  const device = held()
+  status = station([device], { pinnedDevices: [device.id], heldDevices: [device.id] })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  const box = screen.getByRole('dialog', { name: 'Allow DESKTOP-7Q to transmit?' })
+  expect(document.getElementById(box.getAttribute('aria-describedby')!)?.textContent)
+    .toBe(`Nexus on Windows signed in to your Remote account. It can listen and tune now, and transmit waits for you. Allow it only if this key matches the one Nexus shows on that computer: ${SHORT}.`)
+  expect(box.querySelector('.remote-approval-key')?.textContent).toBe(SHORT)
+  // One name for the act, here and on the card; never the pairing's Approve.
+  expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
+  expect(box.textContent).not.toMatch(/approv/i)
+  // Never by default: Not now holds the keyboard, and Allow takes no click for its first second.
+  expect(document.activeElement).toBe(notNow())
+  expect(allow().disabled).toBe(true)
+  await wait(APPROVAL_ARM_MS)
+  fireEvent.click(allow())
+  await flush()
+  expect(actions).toEqual([{ type: 'allowTransmit', deviceId: device.id }])
+  expect(dialog(), 'answered: it goes').toBeNull()
+})
+
+it('a held browser is asked about in a browser\'s words', async () => {
+  const device = held({ name: 'Owner phone', kind: 'browser', platform: null })
+  status = station([device], { pinnedDevices: [device.id], heldDevices: [device.id] })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  const box = screen.getByRole('dialog', { name: 'Allow Owner phone to transmit?' })
+  expect(document.getElementById(box.getAttribute('aria-describedby')!)?.textContent)
+    .toBe(`A browser signed in to your Remote account. It can listen and tune now, and transmit waits for you. Allow it only if this key matches the one the browser shows: ${SHORT}.`)
+})
+
+it('Not now, Escape or a click outside leave a held device held: nothing is sent, and it is not asked again this session', async () => {
+  const device = held()
+  status = station([device], { pinnedDevices: [device.id], heldDevices: [device.id] })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  fireEvent.click(notNow())
+  await flush()
+  expect(dialog()).toBeNull()
+  expect(actions, 'Not now sends nothing: the device stays held').toEqual([])
+  await wait(APPROVAL_POLL_MS)
+  expect(dialog()).toBeNull()
+  cleanup()
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+  await flush()
+  expect(dialog()).toBeNull()
+  expect(actions).toEqual([])
+})
+
+it('asks to allow only where the card offers Allow to transmit: never a device not held, unconfirmed or removed here', async () => {
+  const free = held({ name: 'Free' }), unconfirmed = held({ name: 'Unconfirmed', key: 'c'.repeat(64) }),
+    removed = held({ name: 'Removed', key: 'd'.repeat(64) })
+  status = station([free, unconfirmed, removed], { pinnedDevices: [free.id, unconfirmed.id, removed.id], heldDevices: [unconfirmed.id, removed.id],
+    account: { signingIn: false, added: [], unconfirmed: { [unconfirmed.id]: 'tokenAudience' }, removals: [removed.id], people: [] } })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  expect(dialog()).toBeNull()
+  // Positive control: the same station holding Free is asked about it.
+  status = { ...status, heldDevices: [free.id, unconfirmed.id, removed.id] }
+  await wait(APPROVAL_POLL_MS)
+  expect(screen.getByRole('dialog', { name: 'Allow Free to transmit?' })).toBeTruthy()
 })
