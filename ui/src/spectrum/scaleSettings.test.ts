@@ -42,7 +42,7 @@ describe('a cockpit’s scale settings', () => {
   it('start from the specification’s defaults, with CW’s averaging off and Phone’s window fast', () => {
     for (const c of COCKPITS) {
       expect(loadScaleSettings(c), c).toEqual({
-        averageMs: c === 'cw' ? 0 : 250,
+        averageMs: c === 'cw' ? 0 : c === 'phone' ? 100 : 250,
         detector: 'peak',
         gain: 0,
         zero: 0,

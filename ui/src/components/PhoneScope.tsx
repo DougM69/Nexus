@@ -154,6 +154,13 @@ type RowCadence = 'smooth' | 'sweep'
 /** Rows of history kept for pause and scrollback: 51 s at 20 rows a second, as before. */
 const HISTORY_ROWS = 1024
 
+/** The phone scope's trace peak-hold time constant (ms). Below the `normal` preset (250 ms, which
+ *  the RF panadapter pane still takes) so the voice trace falls back faster after a signal drops —
+ *  less "sticky" against a live Flex-like passband — while staying above CW's `fast` 120 ms, short
+ *  enough that it would flicker on every syllable (operator ruling 2026-10-23). The window
+ *  and averaging are the onset levers; this is the decay one. */
+const PHONE_TRACE_HOLD_MS = 150
+
 /** A frame drawn on an axis that runs against its row (LSB on the carrier-centred axis): bins
  *  reversed, span negated, so the frame says what it means on the axis it is drawn on. */
 function mirrorFrame(f: SpectrumFrame): SpectrumFrame {
@@ -248,7 +255,8 @@ interface Props {
   /** Trace peak-hold time constant (ms) — how long a column's peak stands after the signal
    * stops. See TRACE_HOLD_MS: the cockpit picks it, because the right answer depends on the
    * SIGNAL, not on the operator. CW passes `fast` (48 ms dits have to be visible as keying);
-   * phone takes the `normal` default (a hold short enough for CW flickers on every syllable). */
+   * when unset, phone defaults to PHONE_TRACE_HOLD_MS (150 ms) and the RF pane to `normal`
+   * (250 ms) — both above `fast`, which flickers on every voice syllable. */
   traceHoldMs?: number
   /** The mouse wheel moves the G and Z sliders, one of their steps a notch (#384), rather than
    *  tuning the rig through them. Phone passes it; CW keeps its scope's wheel as it was. */
@@ -331,7 +339,7 @@ export function PhoneScope({
   pitchHz = 600,
   cwPitchRefDial = true,
   interactive = false,
-  traceHoldMs = TRACE_HOLD_MS.normal,
+  traceHoldMs,
   wheelSliders = false,
   cockpit = 'phone',
   feed = 'scope',
@@ -446,7 +454,9 @@ export function PhoneScope({
   const pitchRef = useRef(pitchHz)
   const cwPitchRefRef = useRef(cwPitchRefDial)
   const interactiveRef = useRef(interactive)
-  const traceHoldRef = useRef(traceHoldMs)
+  // Phone defaults to PHONE_TRACE_HOLD_MS (150 ms); the RF pane keeps `normal` (250 ms); CW passes `fast`.
+  const effTraceHoldMs = traceHoldMs ?? (cockpit === 'phone' ? PHONE_TRACE_HOLD_MS : TRACE_HOLD_MS.normal)
+  const traceHoldRef = useRef(effTraceHoldMs)
   const lastRowRef = useRef<{ row: number[]; rowLo: number; rowHi: number } | null>(null)
   // `mirrored` = the drawn axis runs against the row (LSB on a carrier-centered axis), so
   // every pixel↔Hz conversion here negates: axis Hz is RF offset, row Hz is receiver audio.
@@ -513,7 +523,7 @@ export function PhoneScope({
   pitchRef.current = pitchHz
   cwPitchRefRef.current = cwPitchRefDial
   interactiveRef.current = interactive && (!onBeginClick || scopeAvailable)
-  traceHoldRef.current = traceHoldMs
+  traceHoldRef.current = effTraceHoldMs
 
   // ---- The receiver marker's state, read by the overlay and the gestures alike (refs only) ----
   /** The width the marker shows: an edge being dragged, else a width just commanded (until the

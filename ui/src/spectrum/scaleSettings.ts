@@ -70,8 +70,12 @@ const DETECTORS: readonly Detector[] = ['peak', 'average']
 
 /** The averaging default, deskHPSDR's 250 ms, on every cockpit but Phone and CW. */
 export const AVERAGE_DEFAULT_MS = 250
-/** Phone's averaging default: 250 ms. Set 2026-10-04 ahead of the operator's ruling on it. */
-export const PHONE_AVERAGE_DEFAULT_MS = 250
+/** Phone's averaging default: 100 ms (operator ruling 2026-10-23 — down from the 250 ms
+ *  placeholder set 2026-10-04 ahead of that ruling). The log-recursive average is what flattens
+ *  the noise floor's grain; 100 ms keeps most of that calm while cutting ~150 ms of settling lag
+ *  off the passband trace, so a signal appearing or fading tracks closer to a live Flex. It is a
+ *  display filter on the trace only (not the waterfall) and does not touch the dB axis or levels. */
+export const PHONE_AVERAGE_DEFAULT_MS = 100
 /**
  * CW's averaging default: off. Set 2026-10-04 ahead of the operator's ruling on it. CW's trace
  * already has its own fast hold (TRACE_HOLD_MS.fast, 120 ms), and a 250 ms log-recursive average on
