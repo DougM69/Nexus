@@ -1,24 +1,22 @@
 //! An unkey pressed on a computer driving the station, on the roadside the road tests use: the
 //! shack's real channel, command lane and engine over loopback, and the app's own handlers reached
 //! as the main window reaches them. An unkey is the off half of a transmit switch, the contest
-//! screen's S&P chip, or the voice keyer's stop of its own over. From afar it does at the shack what
-//! the same press does at the shack's own screen, and on the radio loop's next tick nothing more:
-//! what other starts from afar began goes on.
+//! screen's S&P chip among them. From afar it does at the shack what the same press does at the
+//! shack's own screen, and on the radio loop's next tick nothing more: what other starts from afar
+//! began goes on. A Stop, the voice keyer's own included, still ends everything.
 use super::from_afar::the_apps_handlers;
 use super::*;
 use crate::command_classes::Class;
-use crate::command_dispatch::{off_args, Answer, OFF_HALVES, UNKEYS};
+use crate::command_dispatch::{off_args, Answer, OFF_HALVES};
 
-/// Every unkey a computer sends: each switch's off half as the table reads it, the contest
-/// screen's S&P chip, and the voice keyer's stop. The PTT's off half is also what Phone's Lock and
-/// leaving Phone send; Tune's, what the setup wizard's Prove TX sends as it ends; the voice
-/// keyer's stop, what it sends as it leaves the screen.
+/// Every unkey a computer sends: each switch's off half as the table reads it, and the contest
+/// screen's S&P chip. The PTT's off half is also what Phone's Lock and leaving Phone send; Tune's,
+/// what the setup wizard's Prove TX sends as it ends.
 fn unkeys() -> Vec<(&'static str, Value)> {
     OFF_HALVES
         .iter()
         .map(|(cmd, ..)| (*cmd, off_args(cmd).unwrap()))
         .chain([("set_mode", json!({"mode": "fieldday-sp"}))])
-        .chain(UNKEYS.iter().map(|cmd| (*cmd, json!({}))))
         .collect()
 }
 
@@ -64,8 +62,8 @@ fn at_the_shack(r: &Roadside, cmd: &str, args: Value) -> Result<Value, String> {
 /// ⛔ An unkey from afar ends its own over and nothing else. For every unkey: TX On and the tune
 /// carrier pressed on the computer driving the station, then the unkey, then the radio loop's tick,
 /// leave the station as the same three presses at the shack's own screen leave it. CONTROL: no
-/// press from afar was refused; the PTT let go, Tune off and the voice keyer's stop each leave TX
-/// on at the shack's own screen, so this tells a halt from an unkey; and a real Stop from afar after
+/// press from afar was refused; the PTT let go and Tune off each leave TX on at the shack's own
+/// screen, so this tells a halt from an unkey; and a real Stop from afar after
 /// all of that still halts everything.
 #[test]
 fn an_unkey_from_afar_ends_its_own_over_and_nothing_else() {
@@ -88,7 +86,7 @@ fn an_unkey_from_afar_ends_its_own_over_and_nothing_else() {
             }
             let _ = at_the_shack(&own, cmd, args.clone());
             let expected = holds(&mut own.s.shared.engine.lock().unwrap());
-            if matches!(cmd, "set_ptt" | "set_tune" | "stop_voice") {
+            if matches!(cmd, "set_ptt" | "set_tune") {
                 assert!(expected.0, "CONTROL {what}: TX stays on at the shack");
             }
 
@@ -136,8 +134,8 @@ fn an_unkey_from_afar_ends_its_own_over_and_nothing_else() {
 }
 
 /// ⛔ A Stop is not an unkey: on the command link alone it still ends everything a computer started
-/// from afar, on the radio loop's next tick. For every command that stops a transmission and is no
-/// unkey: TX On and the tune carrier pressed from afar, then that Stop by the link alone (the road
+/// from afar, on the radio loop's next tick. For every command that stops a transmission (the
+/// voice keyer's Stop included): TX On and the tune carrier pressed from afar, then that Stop by the link alone (the road
 /// never sent it), then the tick, and nothing is armed or keyed. CONTROL: TX On and the carrier were
 /// up before the Stop; and each of those Stops but `halt_tx` leaves TX on at the shack's own screen,
 /// so it is the Stop from afar, not its handler, that ends everything.
@@ -146,10 +144,10 @@ fn a_stop_on_the_link_alone_ends_everything_started_from_afar() {
     let _alone = alone();
     on_a_runtime(2, async {
         let stops: Vec<&str> = crate::command_classes::classes()
-            .filter(|(cmd, class)| *class == Class::StopsTx && !UNKEYS.contains(cmd))
+            .filter(|(_, class)| *class == Class::StopsTx)
             .map(|(cmd, _)| cmd)
             .collect();
-        assert_eq!(stops.len(), 8, "{stops:?}");
+        assert_eq!(stops.len(), 9, "{stops:?}");
         let mut wrong = Vec::new();
         for stop in stops {
             if stop != "halt_tx" {

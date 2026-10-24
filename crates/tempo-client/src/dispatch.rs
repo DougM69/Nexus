@@ -363,11 +363,15 @@ pub fn is_stop(cmd: &str, args: &Value) -> bool {
 /// Whether a call runs under Stop's rules: its command stops a transmission, or it is the off half
 /// of a transmit switch.
 pub fn runs_as_stop(class: Option<Class>, cmd: &str, args: &Value) -> bool {
-    class == Some(Class::StopsTx) || off_half(cmd, args)
+    class == Some(Class::StopsTx) || is_unkey(cmd, args)
 }
 
-/// Whether a call is the off half of a transmit switch ([`OFF_HALVES`]).
-fn off_half(cmd: &str, args: &Value) -> bool {
+/// ⛔ Whether a call under Stop's rules only unkeys: the off half of a transmit switch
+/// ([`OFF_HALVES`]). An unkey goes by the link alone, ahead of everything, and ends its own over at
+/// once, as at the shack's own screen. It voids every start its computer made before it, as a Stop
+/// does, but halts nothing else: what other starts from afar began goes on. A command that stops a
+/// transmission is a Stop, by both roads, and halts everything at the station.
+pub fn is_unkey(cmd: &str, args: &Value) -> bool {
     OFF_HALVES.iter().any(|(name, arg, off)| {
         *name == cmd
             && match (off, args.get(*arg)) {
@@ -378,19 +382,6 @@ fn off_half(cmd: &str, args: &Value) -> bool {
                 _ => false,
             }
     })
-}
-
-/// The stops that end only their own over, as the shack's own screen's do: from afar each is an
-/// unkey ([`is_unkey`]), never a Stop of everything.
-pub const UNKEYS: &[&str] = &["stop_voice"];
-
-/// ⛔ Whether a call under Stop's rules only unkeys: the off half of a transmit switch, or one of
-/// [`UNKEYS`]. An unkey goes by the link alone, ahead of everything, and ends its own over at once,
-/// as at the shack's own screen. It voids every start its computer made before it, as a Stop does,
-/// but halts nothing else: what other starts from afar began goes on. Anything else under Stop's
-/// rules is a Stop, by both roads, and halts everything at the station.
-pub fn is_unkey(cmd: &str, args: &Value) -> bool {
-    UNKEYS.contains(&cmd) || off_half(cmd, args)
 }
 
 // --- Stores and their revisions ------------------------------------------------------------------
@@ -571,9 +562,6 @@ pub fn contract_text() -> String {
     }
     for (cmd, arg, off) in OFF_HALVES {
         let _ = writeln!(text, "off {cmd} {arg} {off:?}");
-    }
-    for cmd in UNKEYS {
-        let _ = writeln!(text, "unkey {cmd}");
     }
     for (cmd, store, access) in STORES {
         let _ = writeln!(text, "store {cmd} {store:?} {access:?}");

@@ -2669,11 +2669,12 @@ fn an_unseen_id_at_or_below_a_forgotten_one_is_refused_and_above_it_runs() {
 }
 
 /// ⛔ An unkey is told from a Stop the same way at both ends ([`is_unkey`]): the off half of every
-/// transmit switch, and the voice keyer's stop of its own over, are unkeys; every other command
-/// that stops a transmission is a Stop, which halts everything at the shack; and the on half of a
-/// switch is neither. CONTROL: each unkey runs under Stop's rules, so it is never refused.
+/// transmit switch is an unkey; every command that stops a transmission (the voice keyer's own
+/// Stop and `release_stream_mic` included) is a Stop, by both roads, which halts everything at the
+/// shack; and the on half of a switch is neither. CONTROL: each unkey runs under Stop's rules, so
+/// it is never refused.
 #[test]
-fn an_unkey_is_the_off_half_of_a_switch_or_a_stop_of_its_own_over_and_nothing_else() {
+fn an_unkey_is_the_off_half_of_a_switch_and_nothing_else() {
     for (cmd, ..) in OFF_HALVES {
         for off in off_args(cmd) {
             assert!(is_unkey(cmd, &off), "{cmd} {off}");
@@ -2697,26 +2698,11 @@ fn an_unkey_is_the_off_half_of_a_switch_or_a_stop_of_its_own_over_and_nothing_el
         .filter(|(_, class, _)| *class == Class::StopsTx)
         .map(|(cmd, ..)| *cmd)
         .collect();
-    let unkeys: Vec<&str> = stops
-        .iter()
-        .copied()
-        .filter(|cmd| is_unkey(cmd, &json!({})))
-        .collect();
-    assert_eq!(unkeys, ["stop_voice"], "the stops that are unkeys");
-    assert_eq!(UNKEYS, ["stop_voice"]);
-    for cmd in [
-        "halt_tx",
-        "stop_cw",
-        "rtty_stop",
-        "psk_stop",
-        "jtty_stop",
-        "sstv_stop",
-    ] {
-        assert!(
-            stops.contains(&cmd) && !is_unkey(cmd, &json!({})),
-            "{cmd} is a Stop"
-        );
+    assert_eq!(stops.len(), 9, "{stops:?}");
+    for cmd in &stops {
+        assert!(!is_unkey(cmd, &json!({})), "{cmd} is a Stop");
     }
+    assert!(stops.contains(&"stop_voice") && stops.contains(&"release_stream_mic"));
 }
 
 /// ⛔ A start from afar runs only while BOTH generations it was read under stand

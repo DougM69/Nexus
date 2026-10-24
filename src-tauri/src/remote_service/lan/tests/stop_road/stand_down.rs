@@ -186,15 +186,15 @@ async fn a_start_admitted_before_a_lapse_does_not_run_after_its_halt() {
     );
 }
 
-/// ⛔ A start admitted before an unkey (the off half of a switch, or the voice keyer's stop of its
-/// own over) does not run after it either: an unkey halts nothing, so only the link moving the
-/// starts-voided generation as it reads it voids what was waiting. Each case on a link with no Stop
-/// on the road: Enable TX's off half behind a CQ (TX stays off, no CQ armed); and behind the voice
-/// keyer's play (nothing queued to play), its stop, the PTT let go (also what Phone's Lock and
-/// leaving Phone send), Tune off (also the end of the setup wizard's Prove TX) and the contest
-/// screen's S&P chip. The off half goes with an `afar` of its own, which a computer never writes:
-/// it still runs, because nothing it carries can refuse a Stop. CONTROL: each premise is asserted
-/// (the start waited, the unkey ran first).
+/// ⛔ A start admitted before an unkey (the off half of a switch), or a Stop that names one over,
+/// does not run after it either. An unkey halts nothing, so only the link moving the starts-voided
+/// generation as it reads it voids what was waiting; the voice keyer's Stop moves the stand-down as
+/// it is read. Each case on a link with no Stop on the road: Enable TX's off half behind a CQ (TX
+/// stays off, no CQ armed); and behind the voice keyer's play (nothing queued to play), its Stop,
+/// the PTT let go (also what Phone's Lock and leaving Phone send), Tune off (also the end of the
+/// setup wizard's Prove TX) and the contest screen's S&P chip. The off half goes with an `afar` of
+/// its own, which a computer never writes: it still runs, because nothing it carries can refuse a
+/// Stop. CONTROL: each premise is asserted (the start waited, the unkey or the Stop ran first).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_admitted_before_an_off_half_or_the_keyers_stop_does_not_run_after_it() {
     let mut stood = Vec::new();

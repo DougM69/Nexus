@@ -9,9 +9,9 @@
 //!   (`command_dispatch::admit_stop`), and run at once, behind no other call, its answer ahead of
 //!   everything waiting to be written. It needs no lease and takes no slot. It moves the transmit
 //!   stand-down generation there and then, an atomic step, so every start read before it is void
-//!   wherever it waits. An unkey (`command_dispatch::is_unkey`: the off half of a switch, or a stop
-//!   of its own over) moves the starts-voided generation instead, which voids them the same way and
-//!   halts nothing. Each Stop command has one thread at work at most, never one per Stop,
+//!   wherever it waits. An unkey (`command_dispatch::is_unkey`: the off half of a switch) moves
+//!   the starts-voided generation instead, which voids them the same way and halts nothing. Each
+//!   Stop command has one thread at work at most, never one per Stop,
 //!   as the Stop road's stopper has: a Stop runs at once when none of its command is running,
 //!   and Stops of that command that land while one runs are run once more after it, after all of
 //!   them have landed, each answered from that run. A Stop of another command never waits behind it.

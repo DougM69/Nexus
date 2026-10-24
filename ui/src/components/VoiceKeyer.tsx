@@ -154,6 +154,10 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: 
   // The two teardowns are not the same act, and the second one is DESTRUCTIVE:
   //   · stopVoice ends a message that is playing. Cleanup, not safety — the operator could
   //     have stopped it from the dock either way — but it is an over cut short, so it speaks.
+  //     ⛔ Sent only when this pane started a message it has not seen end (playingRef). On a
+  //     computer driving a station, stop_voice is a Stop of EVERYTHING there (both roads), so
+  //     an unconditional one on every unmount turned TX off at the station each time the
+  //     operator left Phone. The ■ Stop button and Esc still always send it.
   //   · cancelVoiceRecording DISCARDS an in-progress capture (lib.rs: take + drop the
   //     buffer). Nothing about hiding a pane implies "throw away the recording I am making",
   //     so it may not happen silently. It still has to happen — leaving the recorder running
@@ -177,8 +181,9 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: 
       // air, and live mic PTT satisfies the second with no keyer message involved. The cost is
       // the ~1 poll between pressing an F-key and the snapshot showing TX: a hide inside that
       // window says nothing. A missed notice beats a false one.
-      const over = onAirRef.current ? playingRef.current : null
-      void stopVoice().catch(() => {})
+      const playing = playingRef.current
+      const over = onAirRef.current ? playing : null
+      if (playing !== null) void stopVoice().catch(() => {})
       if (over !== null) {
         pushToast(t('phone.keyer.hide.stoppedOver', { slot: over }), 'info', 6000)
       }
