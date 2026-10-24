@@ -1122,4 +1122,56 @@ mod tests {
             "a keyed press reported a refusal"
         );
     }
+
+    /// ⛔ C1 holds across presses: one over, its key handed to a new press five times as the answer
+    /// to "Still talking?" hands it, and presence renewed at each, ends at its 10-minute ceiling
+    /// counted from its FIRST key, and no hand-over restarts the watchdog's clock. Aged to 2 s short
+    /// of the ceiling ([`crate::mic::MicLatch::age_for_test`]), it stays keyed through every new
+    /// press; aged 2 s more, the next tick drops it as `Ceiling`. CONTROL: each new press kept the
+    /// over keyed, so the ceiling, not a hand-over, ended it.
+    #[test]
+    fn the_ceiling_holds_across_presses_handed_the_key_and_renewals() {
+        let mut s = scene();
+        s.key();
+        let mut k = 1u64;
+        // The press `id` re-asserted, a frame of its voice, and a tick of the loop at `n` ms.
+        let spoken = |s: &mut Scene, id: &str, n: u64, k: &mut u64| {
+            s.hold.hold(id, s.at(n));
+            s.feed.push(frame(*k, s.at(n))).unwrap();
+            *k += 1;
+            s.tick(n)
+        };
+        for n in [20u64, 40, 60] {
+            spoken(&mut s, PRESS, n, &mut k);
+        }
+        let watchdog = s.e.tx_watchdog_start;
+        assert!(watchdog.is_some(), "premise: the watchdog's clock started");
+        s.e.mic.age_for_test(MIC.max_latch_ms - 2_000);
+        let mut n = 80u64;
+        let mut last = String::new();
+        for p in 0..5u64 {
+            last = format!("10000000-0000-4000-8000-00000000010{p}");
+            let now = s.at(n);
+            assert!(s
+                .e
+                .hold_remote_presence(s.presence.permit(now + PRESENCE).unwrap(), now));
+            for _ in 0..5 {
+                let tick = spoken(&mut s, &last, n, &mut k);
+                assert!(s.e.mic_keyed(), "new press {p} at {n} ms: {tick:?}");
+                n += 20;
+            }
+        }
+        assert!(
+            s.hold.keyed_by(&last),
+            "premise: the last new press holds the key"
+        );
+        assert_eq!(
+            s.e.tx_watchdog_start, watchdog,
+            "a hand-over restarted the watchdog's clock"
+        );
+        s.e.mic.age_for_test(2_000);
+        spoken(&mut s, &last, n, &mut k);
+        assert!(!s.e.mic_armed(), "the ceiling did not end the carried over");
+        assert_eq!(s.e.mic_ended, Some(crate::mic::MicEnded::Ceiling));
+    }
 }
