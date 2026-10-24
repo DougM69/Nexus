@@ -92,6 +92,7 @@ import {
   setNrLevel,
   openPanelWindow,
   setTune,
+  setTxEnabled,
   atuTune,
   setFrequency,
   haltTx,
@@ -117,6 +118,7 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { cwScopeSideSign, cwScopeWindow, isRfScopeSource, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { t } from '../i18n'
 import { showWhenDriving } from '../features/drivingRefusal'
+import { drivesAnotherStation } from '../features/durableStore'
 import { T } from '../i18n/T'
 import type { MessageKey } from '../i18n'
 
@@ -2073,13 +2075,24 @@ export function CwCockpit({
   // stands under it, so nothing placed there can push the call field down. Keyed, so the order is a move.
   const logSlot = <Fragment key="log-form">{logPane}</Fragment>
 
-  // THE TX STRIP — FT's cluster (2026-10-01): the TX-enable latch READ-ONLY (the mode change
-  // arms TX here), Tune, the rig's ATU and Stop TX (→ stopCw + haltTx, the same abort Esc runs),
-  // sticky so they never leave the window. A shell child with no ⊞ id: under the scope, or after
-  // the contact in the hosted Quick presentation (below).
+  // THE TX STRIP — FT's cluster (2026-10-01): the TX-enable latch READ-ONLY at the station (the
+  // mode change arms TX here), Tune, the rig's ATU and Stop TX (→ stopCw + haltTx, the same abort
+  // Esc runs), sticky so they never leave the window. ON A COMPUTER DRIVING A STATION the latch is a
+  // button, as Phone's is: entering CW from afar arms nothing, so it reads TX Off and Enter Sends
+  // Message (which never arms) refuses; one click is one `set_tx_enabled` under every guard the
+  // station applies to a start from afar, and a refusal is shown. A shell child with no ⊞ id: under
+  // the scope, or after the contact in the hosted Quick presentation (below).
   const txStrip = (
     <CockpitTxStrip
       radio={snap.radio}
+      onSetTxEnabled={
+        drivesAnotherStation()
+          ? (on) =>
+              void setTxEnabled(on)
+                .then((s) => onSnap?.(s))
+                .catch((e) => pushToast(String(e), 'error'))
+          : undefined
+      }
       onTune={(on) =>
         void setTune(on)
           .then((s) => onSnap?.(s))

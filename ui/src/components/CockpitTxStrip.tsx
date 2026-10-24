@@ -15,8 +15,9 @@ import { RadioTuneNote } from './RadioTuneNote'
 export interface CockpitTxStripProps {
   radio: RadioStatus
   /** Arm/disarm TX (WSJT-X "Enable Tx"). Omit ⇒ the first slot shows the latch READ-ONLY (Phone
-   *  and CW arm it themselves: the mode change arms it, Phone's PTT offers to). Phone passes it on
-   *  a computer driving a station, where entering the section arms nothing. */
+   *  and CW arm it themselves: the mode change arms it, Phone's PTT offers to). Phone and CW pass it
+   *  on a computer driving a station, where entering the section arms nothing: from afar the button
+   *  arms it. */
   onSetTxEnabled?: (on: boolean) => void
   /** Tune (key a steady carrier). */
   onTune?: (on: boolean) => void
@@ -42,7 +43,7 @@ export interface CockpitTxStripProps {
  * replaces sat under the dock or below the window.
  *
  * THE FIRST SLOT IS THE LATCH, AND KEEPS ONE WIDTH: a button where the screen arms TX here (RTTY,
- * PSK, JS8, SSTV, Tempo, APRS), its read-only twin where the screen arms it itself (Phone, CW), so
+ * PSK, JS8, SSTV, Tempo, APRS), its read-only twin where the screen arms it itself (Phone, CW, at the station), so
  * Tune, ATU and Stop TX sit at the same x on every screen. The button keys on the SLOT flag, as
  * the header's did: in RTTY and SSTV the latch is a STOP (set_tx_enabled(false) arms the mode's
  * abort) and must stay a button through their overs, which `radio.transmitting` never marks.

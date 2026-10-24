@@ -204,6 +204,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change gives USB or LSB, never DATA; picking a mode is sent to the shack, and a refusal is shown
   instead of switching. The TX On/Off button beside Tune in Phone now works from there, through all
   of the shack's transmit checks, and a refused Tune is shown.
+- **Driving the shack from another computer: CW's TX On/Off button beside Tune now works**, as Phone's does, so
+  Enter Sends Message can send once you turn TX on; a refusal is shown, and Enter still never turns TX on.
 - **Driving the shack from another computer: a refused press now says why, and nothing that belongs to the shack
   pretends otherwise.** CQ, Tune in every screen, the popped-out Operate window's buttons, JS8 typeahead, band picks,
   tuning, AGC, RF power and CW speed show the reason when they are refused, and a refused power or speed slider goes
