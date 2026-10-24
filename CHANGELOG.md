@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Spot a station from anywhere — now on the phone cockpit and on every Spots row.** The one-click
+  Spot button, which opens the review popup that posts a DX-cluster spot from your station's login,
+  used to live only on the Operate and DXpedition screens. It now also sits on the phone/SSB
+  cockpit's toolbar (seeded with the call you are logging) and on each row of the Spots board
+  (seeded with that spot's call and frequency). The confirm popup is unchanged — every spot is still
+  reviewed before it goes out.
+- **A "show all spots" step on the Needed board while a contest is running.** The Needed board shows
+  only stations you still need, which during a contest — when you want to work everyone, not just new
+  ones — can leave the phone board looking empty. While a contest is running the board now shows a
+  short bar with one click to the full, un-gated Spots view (filter to Phone there for SSB). Outside
+  a contest nothing changes.
 - **An SDRplay receiver as the scope's source, through SDRconnect (needs a bench check).** Settings ▸ Radio has a
   new **Scope source** section: **The radio** (as before, and as it comes) or **SDRconnect (SDRplay)**. With an
   SDRplay RSP fed from the rig's RX OUT (or a splitter with transmit protection) and SDRplay's own SDRconnect

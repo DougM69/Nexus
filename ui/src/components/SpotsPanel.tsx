@@ -21,6 +21,7 @@ import { spotMarkWords, spotMultTag, useContestSpotMarker } from '../features/co
 import { useWatchMatch } from '../watchlist'
 import { WatchTile } from './WatchTile'
 import { SpotsSpotMe, type SpotMeStation } from './SpotsSpotMe'
+import { SpotDialog } from './SpotDialog'
 import { WorkedWindowSelect, isWorkedWindow, workedWithin, type WorkedWindow } from './WorkedWindowSelect'
 
 type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
@@ -222,6 +223,11 @@ function adoptPopOutFilters(): void {
 
 export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, onPopOut, myGrid = '', needAlerts, pane, fieldDay, spotMe, poppedOut }: SpotsPanelProps) {
   const marker = useContestSpotMarker(fieldDay)
+  // The row-level Spot button (reuses SpotDialog, the same reviewable popup Operate/Phone open):
+  // which row's call+freq is being spotted, or null when the popup is closed. A right-there spot
+  // for a station already on the board is one click, then the confirm (it posts publicly from the
+  // station's own cluster login — the review step is deliberate, never bypassed).
+  const [spotRow, setSpotRow] = useState<{ call: string; freqMhz: number } | null>(null)
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
   const centroids = useEntityCentroids()
   // The operator's watch list, live — the matcher the Call Roster and the Stations list ask, so
@@ -838,11 +844,38 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                   )}
                   {s.comment || (workedAge || watch || mark ? '' : '—')}
                 </span>
+                {/* Spot THIS station in one click — the reviewable cluster-spot popup
+                    (SpotDialog), seeded with its call and frequency. Its OWN trailing cell
+                    (`data-col='spot'`, a 10th grid track; hidden in the narrow Connect box), so the
+                    call and comment cells keep their exact text and the WATCH tile keeps the lead of
+                    its cell. `stopPropagation` so the press spots rather than working the row. The
+                    small-action button style is the Needed board's ↗ (`np-point`). */}
+                <span className="sp-actions" data-col="spot">
+                  <button
+                    type="button"
+                    className="np-point sp-spot-btn"
+                    onClick={(e) => { e.stopPropagation(); setSpotRow({ call: s.call, freqMhz: s.freqMhz }) }}
+                    aria-label={t('spots.row.spot.aria', { call: s.call })}
+                    title={t('operate.header.spot.title')}
+                  >
+                    📢
+                  </button>
+                </span>
               </div>
             )
           })
         )}
       </div>
+      {/* The row Spot popup — one instance for the board, seeded from whichever row's
+          button was pressed (SpotDialog re-seeds each time `open` goes true). Portals out, so it
+          is fine in the view, in a cockpit pane and in a box alike. */}
+      <SpotDialog
+        open={spotRow != null}
+        onClose={() => setSpotRow(null)}
+        initialCall={spotRow?.call ?? ''}
+        freqMhz={spotRow?.freqMhz ?? 0}
+        defaultComment=""
+      />
     </Root>
   )
 }

@@ -2338,6 +2338,10 @@ export const EN = {
   'needed.popOut.title': 'Open this board in its own window (for a second monitor)',
   'needed.autoPop.label': 'open at launch',
   'needed.autoPop.title': 'Open this board in its own window automatically when the app starts',
+  // The contest show-all-SSB bar, shown only while a contest runs.
+  'needed.contest.allSpots.note': 'Contest running — this board shows only stations you still need.',
+  'needed.contest.allSpots.label': 'Show all spots',
+  'needed.contest.allSpots.title': 'Open the Spots view — every spot on the air, not only your needs (filter to Phone for SSB)',
 
   // The rotator strip. `{{deg}}` is a bearing in degrees — a number, never grouped.
   'needed.rotator.title': 'Antenna rotator — live heading + manual point (via rotctld)',
@@ -3449,6 +3453,7 @@ export const EN = {
 
   // Composing a spot for the cluster (opened from a log row or a cockpit).
   'spots.post.aria': 'Spot a callsign',
+  'spots.row.spot.aria': 'Spot {{call}} on the DX cluster',
   'spots.post.title': 'Spot to the DX cluster',
   'spots.post.call.label': 'Callsign',
   'spots.post.freq.label': 'Frequency (MHz)',

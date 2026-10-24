@@ -2789,6 +2789,24 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
           targetCall={workedCall || null}
           onPointAt={rotorPointAt()}
         />
+        {/* The Spot button, as Operate's header has had it (OperateCockpit 📢): one click opens
+            the reviewable cluster-spot popup (SpotDialog), seeded with the call being logged —
+            empty when none is typed, exactly as Operate seeds from its worked/selected call.
+            The popup's Send posts publicly from the station's own cluster login, so the review
+            step stays. Shares Operate's catalog keys: the text is mode-neutral ("Spot a callsign
+            on the DX cluster"). The dialog itself is already mounted at the shell foot. */}
+        <button
+          type="button"
+          className="cockpit-popout icon"
+          onClick={() => {
+            setSpotCall(workedCall)
+            setSpotOpen(true)
+          }}
+          aria-label={t('operate.header.spot.aria')}
+          title={t('operate.header.spot.title')}
+        >
+          📢
+        </button>
         {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
             '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
             the glyph and the tooltip already say. The accessible name is explicit here rather

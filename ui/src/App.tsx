@@ -3089,6 +3089,11 @@ function App() {
           spotsSeen: feedHealth.phoneSpotsSeen,
         }
       : null,
+    // During a contest the needs-gate hides everyone the operator wants to work, so the
+    // board offers one click to the un-gated Spots view. `fieldDay.running` is the one
+    // contest-active signal (the same one the contest spot marks and ESM plate read).
+    contestActive: snap.fieldDay?.running ?? false,
+    onShowAllSpots: () => setView('spots'),
   }
   // WHAT THE BOXES ARE LENT, once: the dashboard rail beside the cockpits, and the boxes inside FT,
   // Phone, CW and JS8 (any pane in any area, 2026-10-07), get this one object, so a box can never be wired
