@@ -214,6 +214,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
+  at the shack; a refused change is shown.
 - **Driving the shack from another computer: the screen now shows the shack's own mode.** It follows
   the shack's Phone, CW or FT section instead of the last one this computer showed, so a Phone band
   change gives USB or LSB, never DATA; picking a mode is sent to the shack, and a refusal is shown

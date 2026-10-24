@@ -22146,13 +22146,13 @@ fn call_station_on(
 }
 
 /// Toggle Skip Tx1 (WSJT-X parity). Session-only — the engine flag resets to off each
-/// launch (not persisted), matching WSJT-X; the UI holds its own session state to match.
+/// launch (not persisted). Returns the snapshot, whose `radio.skipTx1` is what the box draws,
+/// here and on a computer driving this station.
 #[tauri::command(async)]
-fn set_skip_tx1(state: State<'_, SharedEngine>, enabled: bool) -> Result<(), String> {
-    engine_lock_result(&state)
-        .map_err(|e| e.to_string())?
-        .set_skip_tx1(enabled);
-    Ok(())
+fn set_skip_tx1(state: State<'_, SharedEngine>, enabled: bool) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock_result(&state).map_err(|e| e.to_string())?;
+    eng.set_skip_tx1(enabled);
+    Ok(eng.snapshot())
 }
 
 /// Switch the top-level operating area: "dx" (FT8/FT4 structured) or "msg"

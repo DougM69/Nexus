@@ -5970,6 +5970,7 @@ export const DE: PartialCatalog = {
   "operate.strip.period.auto.second": "TX AUTO / 2.",
   "operate.strip.period.first": "TX 1. / gerade",
   "operate.strip.period.second": "TX 2. / ungerade",
+  "operate.strip.skipTx1.failed": "Tx1 überspringen wurde nicht geändert",
   "operate.strip.skipTx1.label": "Ohne Tx1",
   "operate.strip.skipTx1.title": "Tx1 überspringen — bei der Antwort auf ein CQ mit dem Rapport (Tx2) beginnen statt mit dem Locator (Tx1), das spart einen Zyklus. Nur bei Standard-Rufzeichen (ein zusammengesetztes Rufzeichen sendet weiterhin seinen Locator). Wird bei jedem Start zurückgesetzt, wie bei WSJT-X.",
   "operate.strip.nextSlot.label": "in {{secs}}s",

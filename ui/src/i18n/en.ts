@@ -10120,6 +10120,7 @@ export const EN = {
   'operate.strip.period.auto.second': 'TX AUTO / 2nd',
   'operate.strip.period.first': 'TX 1st / even',
   'operate.strip.period.second': 'TX 2nd / odd',
+  'operate.strip.skipTx1.failed': 'Skip Tx1 was not changed',
   'operate.strip.skipTx1.label': 'Skip Tx1',
   'operate.strip.skipTx1.title':
     'Skip Tx1 — when you answer a CQ, open with your signal report (Tx2) instead of your grid (Tx1), saving a cycle. Standard callsigns only (a compound call still sends its grid). Resets each launch, like WSJT-X.',

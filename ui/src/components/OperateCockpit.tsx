@@ -49,7 +49,7 @@ import { pointRotatorAtCall, redecode, startCq, startRunning, startSearchAndPoun
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { qrzLookup, resolveEntity } from '../api'
-import { pushToast } from '../toast'
+import { pushToast, withErrorToast } from '../toast'
 import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
 import { pointedTo } from './rotorPointAt'
@@ -566,13 +566,18 @@ export function OperateCockpit({
       /* ignore */
     }
   }, [tuneStep])
-  // Skip Tx1 remains session-only. The UI retains its existing launch default and pushes each
-  // toggle to the engine.
-  const [skipTx1, setSkipTx1] = useState(false)
-  const handleSkipTx1 = useCallback((v: boolean) => {
-    setSkipTx1(v)
-    setSkipTx1Cmd(v).catch(() => {})
-  }, [])
+  // Skip Tx1 is the station's own session setting: the box draws the snapshot's value, so a
+  // computer driving a station shows the station's, and a click draws the station's answer. A
+  // refusal is said; the box keeps the value the station still has.
+  const skipTx1 = snap.radio.skipTx1 ?? false
+  const handleSkipTx1 = useCallback(
+    (v: boolean) => {
+      void withErrorToast(() => setSkipTx1Cmd(v), t('operate.strip.skipTx1.failed')).then((s) => {
+        if (s) onSnap?.(s)
+      })
+    },
+    [onSnap],
+  )
   const recording = snap.radio.qsoRecording
   const toggleRecord = () => {
     if (recBusy) return

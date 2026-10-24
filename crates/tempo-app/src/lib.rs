@@ -379,6 +379,7 @@ impl AppState {
                 rx_offset_hz: 1500.0,
                 tx_offset_hz: 1500.0,
                 hold_tx_freq: false,
+                skip_tx1: false,
                 clock_offset_ms: None,
                 clock_age_secs: None,
                 clock_servers: None,

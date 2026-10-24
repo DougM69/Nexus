@@ -1698,6 +1698,9 @@ export interface RadioStatus {
   txOffsetHz: number
   /** Keep the TX offset fixed when RX changes ("Hold Tx Freq"). */
   holdTxFreq: boolean
+  /** Skip Tx1: answering a CQ opens with the report. The station's own session flag, so a
+   *  computer driving it shows the station's value. Absent from an older station: off. */
+  skipTx1?: boolean
   /** TX audio drive level (0.0–1.0) — the "Pwr" slider. */
   txLevel: number
   /** Measured PC-clock-vs-UTC offset in ms (positive = fast) that Nexus **is

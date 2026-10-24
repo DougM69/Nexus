@@ -2233,9 +2233,10 @@ export async function sstvDeleteImage(path: string): Promise<void> {
   await invoke('sstv_delete_image', { path })
 }
 
-/** Toggle Skip Tx1 (WSJT-X parity) — a session-only flag, resets each launch. */
-export async function setSkipTx1(enabled: boolean): Promise<void> {
-  await invoke('set_skip_tx1', { enabled })
+/** Toggle Skip Tx1 — the station's session-only flag, resets each launch.
+ *  Returns the snapshot, whose `radio.skipTx1` the box draws. */
+export async function setSkipTx1(enabled: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_skip_tx1', { enabled })
 }
 
 /** Write text to the operator's Downloads folder; returns the full saved path. Reliable in a

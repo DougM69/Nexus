@@ -157,6 +157,7 @@
     "scopeSpanRefused": null,
     "sideband": "USB",
     "sidebandOverride": null,
+    "skipTx1": false,
     "slot": 0,
     "smeterDb": null,
     "source": "native",

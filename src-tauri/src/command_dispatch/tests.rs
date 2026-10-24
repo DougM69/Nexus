@@ -428,6 +428,33 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
     }
 }
 
+/// Skip Tx1 from afar is the station's own setting: the other computer sends the change on to the
+/// shack, and the shack runs it with the value the operator picked, on and off alike, so the box
+/// the client draws from the station's snapshot follows the click. It keys nothing, so it is never a
+/// start. CONTROL: a refusal (no lease) is said by name, not dropped.
+#[test]
+fn skip_tx1_from_afar_reaches_the_stations_setting_with_its_value() {
+    let shack = shack();
+    assert_eq!(class_of("set_skip_tx1"), Some(Class::RunsAtShack));
+    for (id, enabled) in [(1, true), (2, false)] {
+        let args = json!({ "enabled": enabled });
+        assert_eq!(route("set_skip_tx1", &args), Route::Shack, "{enabled}");
+        match shack.admit(&controller(), call(id, "set_skip_tx1", args.clone())) {
+            Admission::Run { args: ran, .. } => assert_eq!(ran, args, "the value is the click's"),
+            other => panic!("{enabled}: {}", kind(&other)),
+        }
+    }
+    let watcher = caller(2, false);
+    assert!(
+        kind(&shack.admit(
+            &watcher,
+            call(3, "set_skip_tx1", json!({ "enabled": true }))
+        ))
+        .starts_with("refused"),
+        "a computer without the lease is refused"
+    );
+}
+
 /// ⛔ From afar `js8_arm` turns on every switch the shack's own screen does: the automatic
 /// replies, the heartbeat, relay, heartbeat acks and heartbeat networking each pass the other
 /// computer's routing and the shack's admission, and run at the shack. Their off halves, every
