@@ -11,14 +11,14 @@ import { EN } from '../i18n/en'
 
 let desktop = true
 const mockStatus = vi.fn<() => Promise<ClientStatus | null>>()
-const mockLeave = vi.fn<() => Promise<void>>()
+const mockLeave = vi.fn<(pairAgain?: boolean) => Promise<void>>()
 const mockSwitch = vi.fn<(to: BenchPosition) => Promise<BenchPosition>>()
 const mockStillHere = vi.fn<() => Promise<void>>()
 const mockTake = vi.fn<() => Promise<void>>()
 vi.mock('../api', () => ({
   isTauri: () => desktop,
   clientStatus: () => mockStatus(),
-  leaveClientMode: () => mockLeave(),
+  leaveClientMode: (pairAgain?: boolean) => mockLeave(pairAgain),
   benchRoadSwitch: (to: BenchPosition) => mockSwitch(to),
   clientStillHere: () => mockStillHere(),
   clientTakeControl: () => mockTake(),
@@ -152,7 +152,33 @@ describe('on a computer driving a station', () => {
     const leave = screen.getByRole('button', { name: EN['client.banner.leave'] })
     fireEvent.click(leave)
     expect(mockLeave).toHaveBeenCalledTimes(1)
+    expect(mockLeave).toHaveBeenCalledWith(undefined)
     expect((leave as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('a station that no longer knows this computer, or answers with another key, offers Pair again: Leave, to pair again', async () => {
+    for (const reason of ['notPaired', 'keyChanged'] as const) {
+      mockLeave.mockClear()
+      mockStatus.mockResolvedValue({ station: AT, phase: 'refused', reason })
+      await shown()
+      const again = screen.getByRole('button', { name: EN['client.banner.pairAgain'] })
+      fireEvent.click(again)
+      expect(mockLeave, reason).toHaveBeenCalledWith(true)
+      expect((again as HTMLButtonElement).disabled).toBe(true)
+      expect((screen.getByRole('button', { name: EN['client.banner.leave'] }) as HTMLButtonElement).disabled).toBe(true)
+      cleanup()
+    }
+    // CONTROL: any other refusal, and a station signed in to from elsewhere, offer only Leave.
+    for (const status of [
+      { station: AT, phase: 'refused', reason: 'updateStation' },
+      { station: AT, phase: 'live', reason: null },
+      { station: AT, phase: 'refused', reason: 'notPaired', away: true },
+    ] as const) {
+      mockStatus.mockResolvedValue(status as ClientStatus)
+      await shown()
+      expect(screen.queryByRole('button', { name: EN['client.banner.pairAgain'] }), JSON.stringify(status)).toBeNull()
+      cleanup()
+    }
   })
 })
 

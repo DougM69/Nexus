@@ -389,15 +389,19 @@ fn reach(app: &tauri::AppHandle) -> Reach {
 }
 
 /// Open the Stations on this network window, or bring it forward when it is already open, with
-/// its page in `locale` (one of [`LOCALES`]; otherwise the page's own choice).
+/// its page in `locale` (one of [`LOCALES`]; otherwise the page's own choice), and offering Pair
+/// again for the station `pair_again` names (a station id; anything else is left out): the one
+/// this computer last drove, which refused it in a way only a new pairing ends
+/// (`client_mode::pair_again`). The page fills in that station's address from its own list.
 ///
-/// Called by Settings ▸ Station ▸ Remote access on this PC's own window; the window's page cannot
-/// call it (or anything else).
+/// Called by Settings ▸ Station ▸ Remote access on this PC's own window, and by the launch after
+/// such a refusal; the window's page cannot call it (or anything else).
 #[tauri::command]
 pub async fn open_lan_stations_window(
     app: tauri::AppHandle,
     origin: tauri::State<'_, LanOrigin>,
     locale: Option<String>,
+    pair_again: Option<String>,
 ) -> Result<(), String> {
     if !cfg!(windows) {
         return Err(UNAVAILABLE.into());
@@ -417,6 +421,9 @@ pub async fn open_lan_stations_window(
     let mut page = Url::parse(&page).map_err(|_| NOT_OPENED)?;
     if let Some(locale) = locale.filter(|l| LOCALES.contains(&l.as_str())) {
         page.query_pairs_mut().append_pair("lang", &locale);
+    }
+    if let Some(station) = pair_again.filter(|id| tempo_stream::protocol::identifier(id)) {
+        page.query_pairs_mut().append_pair("pairAgain", &station);
     }
     let (here, here_too) = (page.clone(), page.clone());
     let (to_browser, new_to_browser) = (app.clone(), app.clone());

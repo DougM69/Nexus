@@ -36,8 +36,8 @@ pub(crate) struct Signed {
 /// [`SIGN_IN_PORT`] first, so a port that is taken is `signInPortBusy` before any browser opens):
 /// the browser sent to the issuer by `open`, and the code it brings back within `wait` exchanged
 /// for tokens over `http`. With a `nonce`, an answer with no ID token is `signInFailed`: whoever
-/// asked for one cannot go on without it. `signInTimedOut` after `wait`, `signInRefused` when the
-/// issuer said no.
+/// asked for one cannot go on without it. `signInTimedOut` after `wait`; when the issuer said no,
+/// `signInRefused` (a cancel), `emailUnverified` or `signInFailed` ([`redirected`]).
 pub(crate) async fn signed_in(
     http: &reqwest::Client,
     sign: &SignIn,
@@ -89,8 +89,9 @@ async fn answer(mut response: reqwest::Response) -> Option<Value> {
 }
 
 /// The browser's redirect to this computer's loopback port: the code it brought for this sign-in's
-/// `state`, or the issuer's refusal. A request for anything else (a favicon, a redirect this
-/// sign-in did not start) is answered and the wait goes on.
+/// `state`, or the issuer's no, told by what it said (`native::callback`) and written to the
+/// diagnostic log as the issuer's error and its description, never a code or a token. A request for
+/// anything else (a favicon, a redirect this sign-in did not start) is answered and the wait goes on.
 pub(crate) async fn redirected(
     listener: &TcpListener,
     state: &str,
@@ -107,10 +108,30 @@ pub(crate) async fn redirected(
             Some(target) => native::callback(target, state),
             None => Err("signInFailed"),
         };
-        let page = match result {
-            Ok(_) => "Nexus is signed in. You can close this tab and go back to Nexus.",
-            Err("signInRefused") => "The sign-in was cancelled. You can close this tab.",
-            Err(_) => "This is not the sign-in Nexus is waiting for.",
+        let said = target
+            .as_deref()
+            .and_then(|target| native::issuer_said(target, state));
+        if let Some((error, description)) = &said {
+            tempo_core::applog::warn(
+                "remote",
+                &format!(
+                    "sign-in: the issuer said {} ({})",
+                    loggable(error),
+                    loggable(description)
+                ),
+            );
+        }
+        let page = match (result.as_ref().err().copied(), &said) {
+            (None, _) => "Nexus is signed in. You can close this tab and go back to Nexus.",
+            (Some("signInRefused"), _) => "The sign-in was cancelled. You can close this tab.",
+            (Some("emailUnverified"), _) => {
+                "Confirm your email address with the link Nexus Remote sent you, then sign in again \
+                 from Nexus. You can close this tab."
+            }
+            (Some(_), Some(_)) => {
+                "The sign-in did not finish. Go back to Nexus and try again. You can close this tab."
+            }
+            (Some(_), None) => "This is not the sign-in Nexus is waiting for.",
         };
         let body =
             format!("<!doctype html><meta charset=\"utf-8\"><title>Nexus</title><p>{page}</p>");
@@ -123,10 +144,15 @@ pub(crate) async fn redirected(
         let _ = stream.shutdown().await;
         match result {
             Ok(code) => return Ok(code),
-            Err("signInRefused") => return Err("signInRefused"),
+            Err(reason) if said.is_some() => return Err(reason),
             Err(_) => continue,
         }
     }
+}
+
+/// What the issuer said, as the diagnostic log takes it: one line, printable, and short.
+fn loggable(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).take(200).collect()
 }
 
 /// A GET's request target from the first line of a request read within a second, or `None`.
@@ -194,5 +220,35 @@ pub(crate) mod tests {
         let refused = tokio::spawn(async move { redirected(&listener, "state-2").await });
         let _ = ask(at, "/callback?error=access_denied&state=state-2").await;
         assert_eq!(refused.await.unwrap(), Err("signInRefused"));
+    }
+
+    /// ★ Every no the issuer says under this sign-in's state ends the wait, told by what it said:
+    /// an address not confirmed yet is never a cancel, and no other error leaves the operator
+    /// waiting out the five minutes. CONTROL: the same no under another state is answered and the
+    /// wait goes on.
+    #[tokio::test]
+    async fn the_issuers_no_ends_the_wait_as_what_it_said() {
+        let unverified = "/callback?error=access_denied&error_description=Please%20verify%20your%20email%20address%2C%20then%20sign%20in%20again.";
+        for (target, page, reason) in [
+            (unverified, "Confirm your email", "emailUnverified"),
+            (
+                "/callback?error=unauthorized_client&error_description=Grant%20type",
+                "did not finish",
+                "signInFailed",
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let at = listener.local_addr().unwrap();
+            let waiting = tokio::spawn(async move { redirected(&listener, "s").await });
+            assert!(ask(at, &format!("{target}&state=other"))
+                .await
+                .contains("not the sign-in"));
+            assert!(ask(at, &format!("{target}&state=s")).await.contains(page));
+            let ended = tokio::time::timeout(Duration::from_secs(5), waiting)
+                .await
+                .expect("the wait ended")
+                .unwrap();
+            assert_eq!(ended, Err(reason));
+        }
     }
 }

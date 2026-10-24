@@ -4832,9 +4832,11 @@ export async function clientTakeControl(): Promise<void> {
   return invoke<void>('client_take_control')
 }
 
-/** Leave: this computer's Nexus starts again as itself, the station handed back first. */
-export async function leaveClientMode(): Promise<void> {
-  return invoke<void>('leave_client_mode')
+/** Leave: this computer's Nexus starts again as itself, the station handed back first. With
+ *  `pairAgain`, while the station refuses this computer in a way only a new pairing ends, the start
+ *  that follows opens Stations on this network offering Pair again for it. */
+export async function leaveClientMode(pairAgain?: boolean): Promise<void> {
+  return invoke<void>('leave_client_mode', pairAgain ? { pairAgain } : undefined)
 }
 
 /** Load the durable UI-state store (`ui-state.json`, beside settings.json). See

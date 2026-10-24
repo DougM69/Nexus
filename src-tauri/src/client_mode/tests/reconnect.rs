@@ -61,3 +61,68 @@ fn a_radio_profile_window_never_reconnects() {
     // Control: the default window, with the same kept target, does reconnect.
     assert!(resolve_target(None, read_target_at(&path), |_| true).is_some());
 }
+
+/// (e) A station that last refused this computer as one it no longer knows, or with another key,
+/// is not driven again by a cold start: that refusal passes only when the operator pairs again. The
+/// next cold start offers to pair again with it instead, once. CONTROL: a station that refused for
+/// another reason, and one that took this computer again since, are driven as before.
+#[test]
+fn a_cold_start_after_the_station_refused_this_computer_offers_to_pair_again() {
+    for reason in ["notPaired", "keyChanged"] {
+        let path = scratch(&format!("reconnect-refused-{reason}")).join("client-target.json");
+        keep_target_at(&path, STATION, None);
+        note_refusal_at(&path, STATION, Some(reason));
+        assert_eq!(
+            resolve_target(None, read_target_at(&path), |_| true),
+            None,
+            "{reason}: a cold start drove a station that refused this computer"
+        );
+        assert_eq!(
+            pair_again_at(&path, None, |_| true),
+            Some(STATION.to_string()),
+            "{reason}: the next start does not offer to pair again"
+        );
+        assert_eq!(
+            pair_again_at(&path, None, |_| true),
+            None,
+            "{reason}: offered on every start, not once"
+        );
+        assert_eq!(
+            resolve_target(None, read_target_at(&path), |_| true),
+            None,
+            "{reason}: offered, then driven anyway"
+        );
+    }
+    // CONTROL: a refusal that is not about the pairing, and one cleared by a link that opened.
+    let path = scratch("reconnect-refused-control").join("client-target.json");
+    keep_target_at(&path, STATION, None);
+    note_refusal_at(&path, STATION, Some("updateStation"));
+    assert!(resolve_target(None, read_target_at(&path), |_| true).is_some());
+    note_refusal_at(&path, STATION, Some("notPaired"));
+    note_refusal_at(&path, STATION, None);
+    assert!(resolve_target(None, read_target_at(&path), |_| true).is_some());
+    assert_eq!(pair_again_at(&path, None, |_| true), None);
+    // A refusal by another station than the one kept says nothing of the one kept.
+    note_refusal_at(
+        &path,
+        "60000000-0000-4000-8000-0000000000ff",
+        Some("notPaired"),
+    );
+    assert!(resolve_target(None, read_target_at(&path), |_| true).is_some());
+}
+
+/// (f) A radio window never offers to pair again, and never takes the offer from the default
+/// window; nor is a station this computer no longer knows offered.
+#[test]
+fn only_the_default_window_offers_to_pair_again_with_a_known_station() {
+    let path = scratch("reconnect-pair-again-scope").join("client-target.json");
+    keep_target_at(&path, STATION, None);
+    note_refusal_at(&path, STATION, Some("notPaired"));
+    assert_eq!(pair_again_at(&path, Some("r2"), |_| true), None);
+    assert_eq!(pair_again_at(&path, None, |_| false), None);
+    assert_eq!(
+        pair_again_at(&path, None, |_| true),
+        Some(STATION.to_string()),
+        "CONTROL: the default window offers it"
+    );
+}

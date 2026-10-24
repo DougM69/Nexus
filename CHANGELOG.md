@@ -199,6 +199,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **Signing in and pairing again from another computer.** A sign-in refused because your email address
+  is not confirmed yet now says to confirm it, not "The sign-in was cancelled"; Stations on this network
+  has one **Sign in…** button, with **Link to your account…** on a station paired with a code; and a
+  station that no longer knows this computer offers **Pair again** with its address filled in, in that
+  window and on the client banner, instead of reconnecting to it on every start.
 - **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
   paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
   opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping

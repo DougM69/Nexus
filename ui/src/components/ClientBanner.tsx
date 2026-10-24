@@ -29,6 +29,10 @@
 // Block the command link, Block the Stop road, one click each, and a mark while a road is blocked.
 // Only a test build's status names the switch, so a shipped build draws none of it.
 //
+// A station that no longer knows this computer, or answers with another key, is not fixed by waiting:
+// it offers Pair again, which leaves and opens Stations on this network with the pairing for that
+// station (`client_mode::pair_again`).
+//
 // While another device holds the station it offers Take control, asked inline (a modal would
 // stand between the operator and Stop TX): confirmed, that device's over ends as its Stop would and
 // this computer starts with TX off. A computer control was taken from says so, and can take it back
@@ -295,10 +299,14 @@ export function ClientBanner() {
   }
   const over = overLine(status.over)
   const idleEnded = status.phase === 'refused' && status.reason === 'idle'
-  const leave = () => {
+  const leave = (pairAgain?: boolean) => {
     setLeaving(true)
-    void leaveClientMode().catch(() => setLeaving(false))
+    void leaveClientMode(pairAgain).catch(() => setLeaving(false))
   }
+  // Refused in a way only a new pairing ends. A station signed in to from elsewhere has no pairing
+  // on this network to make again.
+  const pairAgain = status.phase === 'refused' && !status.away
+    && (status.reason === 'notPaired' || status.reason === 'keyChanged')
   const bench = status.bench
   return (
     <div
@@ -358,10 +366,21 @@ export function ClientBanner() {
           moved={(now) => setStatus((was) => (was ? { ...was, bench: now } : was))}
         />
       )}
+      {pairAgain && (
+        <button
+          type="button"
+          className="client-banner-leave"
+          onClick={() => leave(true)}
+          disabled={leaving}
+          title={t('client.banner.pairAgain.title')}
+        >
+          {t('client.banner.pairAgain')}
+        </button>
+      )}
       <button
         type="button"
         className="client-banner-leave"
-        onClick={leave}
+        onClick={() => leave()}
         disabled={leaving}
         title={t('client.banner.leave.title')}
       >

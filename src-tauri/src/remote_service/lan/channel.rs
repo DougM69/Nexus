@@ -453,7 +453,7 @@ pub(super) async fn connection<S>(
     // 2 and 3. The handshake, inside one deadline, unless enough newer ones arrive meanwhile to cut
     // it: a handshake holds a handshake's place, never a session's.
     let handshake = tokio::select! {
-        done = tokio::time::timeout(shared.handshake, handshake(stream, &shared)) => done.ok(),
+        done = tokio::time::timeout(shared.handshake, handshake(stream, &shared, Some(peer))) => done.ok(),
         // ⛔ Cut to make room: newer arrivals did it, not this address, so it is never counted
         // against it. Counted, a flood could cut a paired computer's handshakes until its own
         // address was ignored.
@@ -503,7 +503,7 @@ pub(super) async fn tunnel<S>(stream: S, shared: Shared, stop: watch::Receiver<b
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let handshake = tokio::time::timeout(shared.handshake, handshake(stream, &shared)).await;
+    let handshake = tokio::time::timeout(shared.handshake, handshake(stream, &shared, None)).await;
     if let Ok(Ok(Opened::Session(socket, pin, device))) = handshake {
         session(socket, pin, device, shared, stop, None).await;
     }
@@ -524,8 +524,9 @@ enum Opened<S> {
 }
 
 /// TLS, the upgrade and the first message: a hello from a paired computer, or a request to pair.
-/// `Err`: a failed handshake.
-async fn handshake<S>(stream: S, shared: &Shared) -> Result<Opened<S>, ()>
+/// `Err`: a failed handshake. A computer refused for its key is written to the diagnostic log with
+/// the address it came from (`peer`, none through the room's pipe) and why, never the key.
+async fn handshake<S>(stream: S, shared: &Shared, peer: Option<SocketAddr>) -> Result<Opened<S>, ()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -538,6 +539,7 @@ where
         Err((error, io)) => {
             // Every other failure closes at once.
             if refused_key(&error) {
+                refused(peer, "its key is not paired here");
                 drain(io).await;
             }
             return Err(());
@@ -572,11 +574,10 @@ where
         }) => {
             // Asked again here, after the verifier: a computer revoked during its own handshake
             // is out, and a key the verifier took only for the pairing window is no paired one.
-            let device = shared
-                .roster
-                .paired(&pin)
-                .filter(|d| identifier(d))
-                .ok_or(())?;
+            let Some(device) = shared.roster.paired(&pin).filter(|d| identifier(d)) else {
+                refused(peer, "its key is not paired here, or no longer");
+                return Err(());
+            };
             match refusal((protocol, stream, operation)) {
                 Some(reason) => told(socket, reason).await,
                 None => Ok(Opened::Session(socket, pin, device)),
@@ -616,6 +617,15 @@ where
         },
         _ => Err(()),
     }
+}
+
+/// Why the station did not take a computer, for the diagnostic log: where it came from and why.
+fn refused(peer: Option<SocketAddr>, why: &str) {
+    let from = peer.map_or_else(|| "through the room".to_string(), |at| format!("at {at}"));
+    tempo_core::applog::warn(
+        "remote",
+        &format!("on this network: refused a computer {from}: {why}"),
+    );
 }
 
 /// Did the handshake fail on the computer's key: one no paired computer holds, outside the pairing
