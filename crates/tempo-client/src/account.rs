@@ -370,6 +370,8 @@ pub struct Vouched {
     /// forged or unsigned MFA claim can never set it. The station waives the new device's transmit
     /// hold on this (the 2026-10-23 sign-in decision): an MFA sign-in is trusted to transmit at once.
     pub mfa: bool,
+    /// A guest's address as [`mailbox`] gives it, the invitation it matched; `None` for the owner.
+    pub mailbox: Option<String>,
 }
 
 /// Whether a device's proof admits it at this station, and as what. The proof must hold
@@ -407,6 +409,7 @@ pub fn vouched(
             guest: false,
             issued_at: claims.issued_at,
             mfa,
+            mailbox: None,
         });
     }
     let invited = claims
@@ -422,6 +425,7 @@ pub fn vouched(
             guest: true,
             issued_at: claims.issued_at,
             mfa,
+            mailbox: Some(invite.mailbox.clone()),
         }),
         None => Err("proofNotYours"),
     }
@@ -833,6 +837,7 @@ mod tests {
                 guest: false,
                 issued_at: case.issued(),
                 mfa: false,
+                mailbox: None,
             })
         );
         // A browser's proof is for the page's application.

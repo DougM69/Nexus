@@ -48,6 +48,20 @@
 //! so [`admit`] records no hold — it never touches `operations::Authority::hold_transmit_until`, and
 //! the engine's arm gate holds a LAN-enrolled computer not at all.
 //!
+//! **What a Remove at the shack leaves behind** (`super::super::vault::Ties`). Each key removed at
+//! the shack, a LAN key or an internet key, is kept with when, for a proof's age: an enrolment on a
+//! proof signed by then is refused ([`admit`]), as is the internet road's grant on one
+//! (`remote_service::Controller::vouch`), and a computer still in the book with a removed key is
+//! admitted nowhere ([`Enrolment::admits`]), so a book the store would not write after a Remove is
+//! no road back after a restart. A fresh sign-in, signed after the removal, enrols as any does; a
+//! pairing by code at the shack takes the removal out. Beside it, the link between a computer's two
+//! roads: the internet key its proof names beside the LAN key, kept when the station first checks
+//! the proof ([`admit`], [`tie_vouched`]), so a Remove ends both roads with no proof read again and
+//! no list heard. A guest's link holds only when the computer proved its LAN key here and the
+//! station checked its listing's proof, both for the same guest: so no guest's claim names another
+//! computer's key into a Remove. Each link names who signed in (a hash of a guest's address), so an
+//! invitation taken back takes that guest's computers off the LAN at once.
+//!
 //! Nothing here writes a log line, and no proof is kept: the cache holds the key's pin, the role
 //! and the proof's signing time.
 use std::sync::{Arc, Mutex};
@@ -57,7 +71,7 @@ use serde_json::json;
 use tempo_client::account::{self, CachedDevice, DeviceCache, Invite, KeySet, Owner, Role, Tenant};
 use tokio::sync::watch;
 
-use super::super::vault::{AccountVault, DevicesHeld};
+use super::super::vault::{AccountVault, DevicesHeld, Removed, Tie, Ties};
 use super::book::{valid_name, Book};
 use super::channel::Socket;
 use super::pairing::{refuse, say, Desk, Outcome};
@@ -65,6 +79,89 @@ use super::tls;
 
 /// The longest proof taken: an ID token is a little over a kilobyte.
 const PROOF_CHARS: usize = 4096;
+
+/// The most links kept: one for each device the LAN's cache keeps. A link left out only leaves a
+/// Remove telling the shack to check the other list.
+const TIES_KEPT: usize = account::CACHED_DEVICES;
+
+/// The most removals kept, the newest: with the links, they fit the smallest credential blob.
+const REMOVED_KEPT: usize = 12;
+
+/// A key or pin as [`Ties`] keeps it: the first sixteen hex digits of its SHA-256.
+pub(crate) fn short(pin: &str) -> String {
+    pin.get(..16).unwrap_or(pin).to_ascii_lowercase()
+}
+
+/// A guest's address as [`account::mailbox`] gives it, as [`Ties`] keeps it: never in clear.
+pub(crate) fn mailbox_tag(mailbox: &str) -> String {
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+    hash.update(b"nexus-lan-mailbox/1");
+    hash.update(mailbox.as_bytes());
+    short(&tempo_client::hex(hash.finish().as_ref()))
+}
+
+/// Whether a proof signed at `issued_at` naming any of `keys` (as [`short`] gives them) was signed
+/// by the time one of them was removed at the shack.
+pub(crate) fn removed_by(removed: &[Removed], keys: &[&str], issued_at: u64) -> bool {
+    removed
+        .iter()
+        .any(|r| keys.contains(&r.key.as_str()) && issued_at <= r.at)
+}
+
+/// Whether `tie` links its two roads (see the header): the owner's, checked on either road; a
+/// guest's, only when it proved its LAN key here and its listing's proof was checked, both its own.
+pub(crate) fn linked(tie: &Tie) -> bool {
+    match tie.mailbox {
+        None => tie.enrolled || tie.vouched,
+        Some(_) => tie.enrolled && tie.vouched,
+    }
+}
+
+/// `ties`, each removal past a proof's age after it dropped, then held to what is kept, and saved.
+fn keep_ties(
+    vault: &dyn AccountVault,
+    held: &DevicesHeld<'_>,
+    ties: &mut Ties,
+    now_s: u64,
+) -> Result<(), &'static str> {
+    let age = account::PROOF_MAX_AGE_S + tempo_client::id_token::LEEWAY_S;
+    ties.removed.retain(|r| now_s < r.at.saturating_add(age));
+    let over = ties.removed.len().saturating_sub(REMOVED_KEPT);
+    ties.removed.drain(..over);
+    let over = ties.ties.len().saturating_sub(TIES_KEPT);
+    ties.ties.drain(..over);
+    vault.save_ties(held, ties)
+}
+
+/// The listing of the computer whose LAN key has `lan` as its pin and internet key `key` as its
+/// fingerprint (lowercase hex each), its proof checked for `mailbox` (a guest's, or the owner's for
+/// `None`): its link kept (see the header). A claim never replaces the link of a computer that
+/// proved its LAN key here for another key or person. Blocks on the credential store.
+pub(crate) fn tie_vouched(
+    vault: &dyn AccountVault,
+    lan: &str,
+    key: &str,
+    mailbox: Option<&str>,
+    now_s: u64,
+) -> Result<(), &'static str> {
+    let held = DevicesHeld::take(vault);
+    let mut ties = vault.ties()?.unwrap_or_default();
+    let (lan, key, mailbox) = (short(lan), short(key), mailbox.map(mailbox_tag));
+    let at = ties.ties.iter().position(|t| t.lan == lan);
+    let tie = match at.map(|at| ties.ties.remove(at)) {
+        Some(t) if t.key == key && t.mailbox == mailbox => Tie { vouched: true, ..t },
+        Some(t) if t.enrolled => t,
+        _ => Tie {
+            lan,
+            key,
+            mailbox,
+            enrolled: false,
+            vouched: true,
+        },
+    };
+    ties.ties.push(tie);
+    keep_ties(vault, &held, &mut ties, now_s)
+}
 
 /// What a station bound to its account checks an enrolment against, as it kept it: no token.
 pub(crate) struct Ready {
@@ -90,6 +187,9 @@ pub(crate) struct Enrolment {
     /// The devices that cache holds, as last read: `None` until it has been read, and then nobody
     /// is admitted, as the book admits nobody until it has read its own.
     enrolled: Mutex<Option<Vec<CachedDevice>>>,
+    /// The links and the removals kept beside it, as last read: `None` until read, and then nobody
+    /// is admitted, since a removal may be among them.
+    ties: Mutex<Option<Ties>>,
 }
 
 /// Where the LAN's device cache is kept, and the clock proofs are read by.
@@ -107,8 +207,9 @@ impl Enrolment {
         }
     }
 
-    /// Reads the device cache, if it has not been read yet: before anything listens.
-    pub(super) fn load(&self) {
+    /// Reads the device cache, if it has not been read yet: before anything listens, and before a
+    /// Remove at the shack or a list follows what it keeps.
+    pub(crate) fn load(&self) {
         if self.enrolled.lock().is_ok_and(|held| held.is_none()) {
             self.reread();
         }
@@ -126,6 +227,10 @@ impl Enrolment {
     /// [`Enrolment::reread`], the cache held: so the copy in memory follows the store in the order
     /// its writers saved it, and never goes back to a read older than a save.
     fn read(&self, vault: &dyn AccountVault, _held: &DevicesHeld<'_>) {
+        // Whatever the cache answers: a removal must not wait on it.
+        if let Ok(ties) = vault.ties() {
+            self.hold_ties(ties.unwrap_or_default());
+        }
         let read = match vault.device_cache() {
             Ok(cache) => cache.map(|cache| cache.devices).unwrap_or_default(),
             Err(_) => {
@@ -153,6 +258,109 @@ impl Enrolment {
         }
     }
 
+    fn hold_ties(&self, ties: Ties) {
+        if let Ok(mut held) = self.ties.lock() {
+            *held = Some(ties);
+        }
+    }
+
+    /// The links kept, as last read (see the header): what a Remove at the shack follows.
+    pub(crate) fn ties(&self) -> Vec<Tie> {
+        self.ties
+            .lock()
+            .ok()
+            .and_then(|ties| ties.as_ref().map(|t| t.ties.clone()))
+            .unwrap_or_default()
+    }
+
+    /// The removals kept, as last read.
+    pub(crate) fn removed(&self) -> Vec<Removed> {
+        self.ties
+            .lock()
+            .ok()
+            .and_then(|ties| ties.as_ref().map(|t| t.removed.clone()))
+            .unwrap_or_default()
+    }
+
+    /// Whether the key with `pin` was removed at the shack, as last read, and has not come back
+    /// since: a computer still in the book with it is a removal the book's store did not keep.
+    pub(crate) fn is_removed(&self, pin: &[u8; 32]) -> bool {
+        let pin = short(&tempo_client::hex(pin));
+        self.removed().iter().any(|r| r.key == pin)
+    }
+
+    /// Keeps each of `keys` (pins or fingerprints, lowercase hex) as removed at the shack now, and
+    /// drops every link that names one: before any road it is removed from ends, so no road comes
+    /// back on a proof signed before (see the header), and a book that is not written after it
+    /// admits it nowhere. Blocks on the credential store.
+    pub(crate) fn remove(&self, keys: &[String]) -> Result<(), &'static str> {
+        let Some(Kept { vault, now_s }) = &self.kept else {
+            return Ok(());
+        };
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let now_s = now_s();
+        let held = DevicesHeld::take(&**vault);
+        let kept = vault.ties().and_then(|ties| {
+            let mut ties = ties.unwrap_or_default();
+            let keys: Vec<String> = keys.iter().map(|key| short(key)).collect();
+            ties.ties
+                .retain(|t| !keys.contains(&t.lan) && !keys.contains(&t.key));
+            ties.removed.retain(|r| !keys.contains(&r.key));
+            ties.removed
+                .extend(keys.into_iter().map(|key| Removed { key, at: now_s }));
+            keep_ties(&**vault, &held, &mut ties, now_s)
+        });
+        self.read(&**vault, &held);
+        kept
+    }
+
+    /// Each of `keys` (as [`Enrolment::remove`] takes them) back from its removal at the shack: the
+    /// operator approved its listing again at the shack, or it came back on a proof signed after
+    /// its removal. Blocks on the credential store.
+    pub(crate) fn unremove(&self, keys: &[String]) -> Result<(), &'static str> {
+        let Some(Kept { vault, now_s }) = &self.kept else {
+            return Ok(());
+        };
+        let keys: Vec<String> = keys.iter().map(|key| short(key)).collect();
+        if !self.removed().iter().any(|r| keys.contains(&r.key)) {
+            return Ok(());
+        }
+        let held = DevicesHeld::take(&**vault);
+        let kept = vault.ties().and_then(|ties| {
+            let mut ties = ties.unwrap_or_default();
+            ties.removed.retain(|r| !keys.contains(&r.key));
+            keep_ties(&**vault, &held, &mut ties, now_s())
+        });
+        self.read(&**vault, &held);
+        kept
+    }
+
+    /// The LAN keys (as [`short`] gives them) of the computers the guest with `mailbox` signed in
+    /// on, as the links name them, and of every guest's computer kept with no link to say whose:
+    /// an invitation taken back takes them all off the LAN (see the header).
+    pub(crate) fn guests(&self, mailbox: &str) -> Vec<String> {
+        let tag = mailbox_tag(mailbox);
+        let ties = self.ties();
+        let unknown: Vec<String> = self
+            .enrolled
+            .lock()
+            .ok()
+            .and_then(|held| held.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|d| d.guest)
+            .map(|d| short(&d.pin))
+            .filter(|pin| !ties.iter().any(|t| t.lan == *pin && t.mailbox.is_some()))
+            .collect();
+        ties.into_iter()
+            .filter(|t| t.mailbox.as_deref() == Some(tag.as_str()))
+            .map(|t| t.lan)
+            .chain(unknown)
+            .collect()
+    }
+
     /// Whether the LAN admits the computer holding the key with `pin` now, as far as its enrolment
     /// goes: one the cache does not hold was paired by code, and the book alone decides; one it holds
     /// is admitted for [`account::PROOF_MAX_AGE_S`] from its proof's signing (see the header).
@@ -163,13 +371,17 @@ impl Enrolment {
         let Ok(held) = self.enrolled.lock() else {
             return false;
         };
-        held.as_ref().is_some_and(|devices| {
+        let enrolled = held.as_ref().is_some_and(|devices| {
             let pin = tempo_client::hex(pin);
             devices
                 .iter()
                 .find(|device| device.pin == pin)
                 .is_none_or(|device| device.admits(now_s(), false))
-        })
+        });
+        drop(held);
+        // Read, and not removed: until read, a removal may be among them.
+        let read = self.ties.lock().is_ok_and(|ties| ties.is_some());
+        enrolled && read && !self.is_removed(pin)
     }
 
     /// The pins of the enrolled computers whose proofs are past their age now, as last read.
@@ -228,8 +440,22 @@ impl Enrolment {
             }
             _ => Ok(()),
         });
+        // Nor any link, nor a removal: the pairing at the shack is the operator's word on it now.
+        let short = short(&pin);
+        let untied = vault.ties().and_then(|ties| match ties {
+            Some(mut ties)
+                if ties.ties.iter().any(|t| t.lan == short)
+                    || ties.removed.iter().any(|r| r.key == short) =>
+            {
+                ties.ties.retain(|t| t.lan != short);
+                ties.removed.retain(|r| r.key != short);
+                let now_s = self.kept.as_ref().map_or(0, |kept| (kept.now_s)());
+                keep_ties(&**vault, &held, &mut ties, now_s)
+            }
+            _ => Ok(()),
+        });
         self.read(&**vault, &held);
-        taken.map_err(|_| "unavailable")
+        taken.and(untied).map_err(|_| "unavailable")
     }
 
     /// `paired` (who the book admits), held to [`Enrolment::admits`]: what the LAN's TLS and its
@@ -256,26 +482,6 @@ impl Enrolment {
     pub(super) fn or_pairing(self: &Arc<Self>, pairing: tls::Pairing) -> tls::Pairing {
         let enrolment = self.clone();
         Arc::new(move || pairing() || enrolment.open())
-    }
-
-    /// Whether `proof` holds for a device of `kind` with exactly `keys` (its internet key, then its
-    /// LAN key), as an enrolment's must, checked against what the station keeps now: the one
-    /// record that says a listed computer and a computer in the book are the same one, so a Remove
-    /// at the shack ends both (`remote_service::Control::roads`). Never while unarmed.
-    pub(crate) fn vouches(&self, proof: &str, kind: &str, keys: &[&[u8]]) -> bool {
-        self.ready().is_some_and(|ready| {
-            account::vouched(
-                proof,
-                kind,
-                keys,
-                &ready.keys,
-                ready.tenant,
-                &ready.owner,
-                &ready.invites,
-                (ready.now_s)(),
-            )
-            .is_ok()
-        })
     }
 
     /// The people it takes, while armed: for a test to read.
@@ -359,10 +565,21 @@ pub(super) fn admit(
         return Err("listenNative");
     }
     let pin = tls::pin(&asked.key);
+    let (lan, key) = (
+        short(&tempo_client::hex(&pin)),
+        short(&tempo_client::hex(
+            ring::digest::digest(&ring::digest::SHA256, &asked.public_key).as_ref(),
+        )),
+    );
     // The cache first: a key the cache does not hold is never taken out of the book by a list. Held
     // until the book keeps the pairing, so no list's sweep lands between the two.
     let station_id = &ready.owner.station_id;
     let held = DevicesHeld::take(&*ready.vault);
+    // Removed at the shack since this proof was signed: it signs in again (see the header).
+    let mut ties = ready.vault.ties()?.unwrap_or_default();
+    if removed_by(&ties.removed, &[&lan, &key], vouched.issued_at) {
+        return Err("tokenRemoved");
+    }
     let mut cache = ready
         .vault
         .device_cache()?
@@ -378,6 +595,23 @@ pub(super) fn admit(
     })?;
     ready.vault.save_device_cache(&held, &cache)?;
     enrolment.hold(cache.devices);
+    // Its link, proven by this very TLS session for the LAN key: whatever was kept for that key
+    // before, the checked listing's side kept only for the same internet key and the same person.
+    let mailbox = vouched.mailbox.as_deref().map(mailbox_tag);
+    let was = ties.ties.iter().position(|t| t.lan == lan);
+    let vouched_side = was
+        .map(|at| ties.ties.remove(at))
+        .is_some_and(|t| t.key == key && t.mailbox == mailbox && t.vouched);
+    ties.removed.retain(|r| r.key != lan);
+    ties.ties.push(Tie {
+        lan,
+        key,
+        mailbox,
+        enrolled: true,
+        vouched: vouched_side,
+    });
+    keep_ties(&*ready.vault, &held, &mut ties, now_s)?;
+    enrolment.hold_ties(ties);
     book.add(pin, &asked.name, under)
 }
 

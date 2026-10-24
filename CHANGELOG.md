@@ -214,7 +214,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
-- **Remove at the shack now removes a computer everywhere.** Removing it from Paired computers also ends its internet access, and removing it from Your computers also takes it off your network, when Nexus can confirm they are the same computer; if it cannot, it says to check the other list. If the computer signs in again, it comes back held until you allow it to transmit.
+- **Remove at the shack now removes a computer everywhere.** Removing it from Paired computers also ends its internet access, and removing it from Your computers also takes it off your network, when Nexus can confirm they are the same computer; if it cannot, it says to check the other list. If the computer signs in again, it comes back held until you allow it to transmit. Taking back an invitation also takes that person's computers off your network at once, even while the internet is down.
 - **Driving the shack from another computer: the screen now shows the shack's own mode.** It follows
   the shack's Phone, CW or FT section instead of the last one this computer showed, so a Phone band
   change gives USB or LSB, never DATA; picking a mode is sent to the shack, and a refusal is shown

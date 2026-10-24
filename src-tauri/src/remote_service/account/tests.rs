@@ -99,6 +99,16 @@ impl AccountVault for Store {
     ) -> Result<(), &'static str> {
         Ok(())
     }
+    fn ties(&self) -> Result<Option<crate::remote_service::vault::Ties>, &'static str> {
+        Ok(None)
+    }
+    fn save_ties(
+        &self,
+        _: &DevicesHeld<'_>,
+        _: &crate::remote_service::vault::Ties,
+    ) -> Result<(), &'static str> {
+        Ok(())
+    }
 }
 
 /// What the stand-in saw.
