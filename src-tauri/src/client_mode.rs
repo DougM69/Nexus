@@ -119,13 +119,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::net::SocketAddrV4;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::ipc::{Invoke, InvokeBody, InvokeError};
 use tauri::{Emitter, Manager, Runtime};
@@ -234,6 +234,130 @@ pub(crate) fn typed_in(mut args: impl Iterator<Item = String>) -> Option<Typed> 
         return typed.and_then(|text| Typed::read(&text));
     }
     None
+}
+
+// --- This computer's last client target ---------------------------------------------------------
+
+/// This computer's last client target: the station it last drove and the address the operator
+/// typed for it, kept so a COLD launch (the icon, with no `--client` argument) connects again to
+/// that station, exactly as the warm `--client` relaunch does. A cold launch would otherwise boot
+/// as this computer's own station, dropping the operator out of the shack they were driving.
+///
+/// It lives in a file of its own beside the DEFAULT profile's settings ([`target_path`]), as the
+/// paired stations do ([`crate::lan_client::typed_path`]): the station it names is this computer's,
+/// not one radio profile's, and it is read before any window or profile is opened. It is NOT a
+/// `ui-state.json` "here" key — those are the rail, scale and window layout the operator sits in
+/// front of (the ruling of 2026-10-07), a different kind of state read later and per profile.
+const TARGET_FILE: &str = "client-target.json";
+
+/// Where [`TARGET_FILE`] lives: beside the default profile's settings, where the paired stations
+/// it names are kept.
+pub(crate) fn target_path() -> PathBuf {
+    crate::config_dir_for(None).join(TARGET_FILE)
+}
+
+/// The last client target as it is kept on disk.
+#[derive(Debug, Serialize, Deserialize)]
+struct Target {
+    /// The station's id (a sound [`tempo_stream::protocol::identifier`], or the target is ignored).
+    station: String,
+    /// The address or host name the operator typed for it (`--client-at`), as [`Typed`] writes it;
+    /// absent when none was typed (the station is found by its record or by name instead).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    at: Option<String>,
+}
+
+/// Read the kept target at `path`: `None` when there is no sound one — no file, one this build
+/// cannot read, or an id no station could have.
+fn read_target_at(path: &Path) -> Option<Target> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let target: Target = serde_json::from_str(&text).ok()?;
+    tempo_stream::protocol::identifier(&target.station).then_some(target)
+}
+
+/// Keep `station` and the address typed for it as this computer's last client target, so a cold
+/// launch connects to it again. Written as this computer ENTERS client mode ([`run`]), so it names
+/// the station actually driven. A write that does not land is logged, not fatal: the only cost is
+/// that a cold launch does not reconnect.
+fn keep_target_at(path: &Path, station: &str, typed: Option<&Typed>) {
+    let target = Target {
+        station: station.to_string(),
+        at: typed.map(Typed::to_string),
+    };
+    match serde_json::to_string_pretty(&target) {
+        Ok(text) if crate::write_json_atomic(path, &text) => {}
+        _ => tempo_core::applog::warn(
+            "client",
+            "could not keep the last client target; a cold launch will not reconnect to it",
+        ),
+    }
+}
+
+/// Forget this computer's last client target, so a cold launch boots as this computer's own
+/// station. Called as Leave hands the station back ([`leave_client_mode`]).
+fn clear_target_at(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tempo_core::applog::warn(
+            "client",
+            &format!("could not clear the last client target: {e}"),
+        ),
+    }
+}
+
+/// [`keep_target_at`] in this computer's own [`target_path`].
+pub(crate) fn keep_target(station: &str, typed: Option<&Typed>) {
+    keep_target_at(&target_path(), station, typed);
+}
+
+/// [`clear_target_at`] in this computer's own [`target_path`].
+pub(crate) fn clear_target() {
+    clear_target_at(&target_path());
+}
+
+/// Resolve a kept target to the station a cold launch drives: the station id and the typed address
+/// when `known` says this computer still knows it, else `None` — and always `None` in a radio window
+/// (`profile`), which drives its own radio. Split from the store read and the
+/// knownness query so the by-value tests meet it here.
+fn resolve_target(
+    profile: Option<&str>,
+    target: Option<Target>,
+    known: impl FnOnce(&str) -> bool,
+) -> Option<(String, Option<Typed>)> {
+    // A radio window (`--profile`) is the operator choosing one of this computer's own radios from
+    // the picker: it drives that radio, never the station the default window last drove.
+    if profile.is_some() {
+        return None;
+    }
+    let target = target?;
+    known(&target.station).then(|| {
+        let typed = target.at.as_deref().and_then(Typed::read);
+        (target.station, typed)
+    })
+}
+
+/// Whether this computer still knows station `id`: a sound LAN record (paired, or paired by code),
+/// or a station kept by its service id (signed in to from elsewhere). These are the stations the
+/// stations window lists, so a target whose station the operator removed resolves to none.
+fn station_known(stations: &crate::lan_client::Stations, id: &str) -> bool {
+    stations.get(id).ok().flatten().is_some() || stations.away(id).ok().flatten().is_some()
+}
+
+/// The station a COLD launch (no `--client`) drives, with the address typed for it: this computer's
+/// last client target, when one is kept and its station is still known here. `None` — boot as this
+/// computer's own station — when there is no kept target, or its station is no longer paired here
+/// (the operator removed it, or Leave cleared the target).
+pub(crate) fn auto_requested() -> Option<(String, Option<Typed>)> {
+    let stations =
+        crate::lan_client::Stations::new(Arc::new(crate::remote_service::vault::SystemVault))
+            .typed_in(crate::lan_client::typed_path())
+            .signed_in(crate::lan_client::signed_path());
+    resolve_target(
+        crate::active_profile(),
+        read_target_at(&target_path()),
+        |id| station_known(&stations, id),
+    )
 }
 
 // --- Where each command goes -------------------------------------------------------------------
@@ -672,6 +796,11 @@ pub(crate) struct Status {
     /// This computer's over, as the station last said it on Stop's road: on the air with its holes,
     /// ended and why, or no word while a press is held.
     pub(crate) over: Option<Over>,
+    /// Why a PTT press would not key the station right now, lifted from the station's snapshot
+    /// (`radio.pttRefusal`, the first gate `Engine::arm_remote_mic` would hit): `None` when a press
+    /// would, or did, key. DISPLAY ONLY — the Phone PTT shows it so a press that did nothing is
+    /// explained; nothing here keys, refuses or releases.
+    pub(crate) ptt_refusal: Option<String>,
     /// The link runs over the internet (through the station's room), not this network.
     pub(crate) internet: bool,
     /// "Still there?": nothing from the operator for a quarter of an hour on the internet.
@@ -799,6 +928,7 @@ impl Client {
                 phase: Phase::Connecting,
                 reason: None,
                 over: None,
+                ptt_refusal: None,
                 internet: false,
                 still_there: false,
                 udp_blocked: false,
@@ -926,9 +1056,17 @@ impl Client {
             .shack()
             .and_then(|shack| shack.stop_road())
             .and_then(|road| road.over(std::time::Instant::now()));
+        // Why a press would not key, as the station's snapshot says it (`radio.pttRefusal`).
+        let ptt_refusal = self.fed("snapshot/1").ok().and_then(|snap| {
+            snap.get("radio")
+                .and_then(|radio| radio.get("pttRefusal"))
+                .and_then(|refusal| refusal.as_str())
+                .map(str::to_string)
+        });
         let internet = self.on_internet.load(Ordering::SeqCst);
         Status {
             over,
+            ptt_refusal,
             internet,
             still_there: internet && lock(&self.idle).state(Instant::now()) == Idle::Prompt,
             udp_blocked: internet && self.udp_blocked.load(Ordering::SeqCst),
@@ -2393,25 +2531,27 @@ pub(crate) fn leave_client_mode(app: tauri::AppHandle) -> Result<(), String> {
     if app.try_state::<Arc<Client>>().is_none() {
         return Err("notClient".to_string());
     }
+    // The operator asked to come back to this computer's own station: forget the last client
+    // target so the next cold launch boots as itself, not back into the station just left.
+    clear_target();
     start_again(&app, Vec::new());
     Ok(())
 }
 
 /// This run in client mode: the app with no station of its own, driving the station `station`.
-/// Client mode's drive of the station, from this computer's store of paired stations and the
-/// launch's arguments `args`: the station's record read from the store each time, and an address
-/// or host name the operator typed (`--client-at`, [`typed_in`]) tried first, then kept with the
-/// station once Operate opens there.
+/// Client mode's drive of the station, from this computer's store of paired stations: the
+/// station's record read from the store each time, and the address or host name the operator typed
+/// for it (`typed`, from `--client-at` on a warm launch or the kept target on a cold one) tried
+/// first, then kept with the station once Operate opens there.
 pub(crate) fn start_driving<R: Runtime>(
     client: Arc<Client>,
     app: tauri::AppHandle<R>,
     stations: Arc<crate::lan_client::Stations>,
     look: Look,
-    args: impl Iterator<Item = String>,
+    typed: Option<Typed>,
 ) -> tauri::async_runtime::JoinHandle<()> {
     client.keep_typed_with(Arc::clone(&stations) as Arc<dyn Keep>);
     let find: Find = Arc::new(move |id: &str| stations.get(id));
-    let typed = typed_in(args);
     tauri::async_runtime::spawn(client.drive(app, find, look, typed))
 }
 
@@ -2467,11 +2607,15 @@ fn sign_in_again<R: Runtime>(
     });
 }
 
-pub(crate) fn run(station: String) {
+pub(crate) fn run(station: String, typed: Option<Typed>) {
     tempo_core::applog::info(
         "startup",
         "client mode: driving a paired station; this computer's own station stays off",
     );
+    // This computer is now driving this station: keep it as the last client target so a later
+    // cold launch connects to it again. Warm or cold, the target reflects the station and the
+    // typed address this launch actually drives.
+    keep_target(&station, typed.as_ref());
     let this = ThisComputer::read(crate::settings_path(), crate::ui_state_path());
     let headset = audio_road::headset(&this.output, &this.input);
     if let Some(headset) = &headset {
@@ -2551,8 +2695,7 @@ pub(crate) fn run(station: String) {
                 ),
             }
             let look: Look = Arc::new(tempo_stream::lan::dnssd::find);
-            let args = std::env::args().skip(1);
-            start_driving(driving, app.handle().clone(), stations, look, args);
+            start_driving(driving, app.handle().clone(), stations, look, typed);
             Ok(())
         })
         .on_window_event(|window, event| {

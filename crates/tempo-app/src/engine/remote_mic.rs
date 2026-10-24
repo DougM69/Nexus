@@ -44,6 +44,7 @@ use super::{now_unix_millis, now_unix_secs};
 /// How much of the operator's voice must have arrived, with the rig reporting no power, before the
 /// no-power warning is believed: two seconds, the same settle as the loop's own zero-power watch.
 const MIC_NO_POWER_AFTER_MS: u64 = 2_000;
+use crate::dto::PttRefusal;
 use crate::mic::{MicDrop, MicEnded, MicFeed, MicGates, MicStatus, MicTick, MIC};
 use crate::settings::OperatingMode;
 use std::time::Instant;
@@ -90,6 +91,50 @@ impl Engine {
         // here, and the over is measured from its key.
         self.reset_tx_watchdog();
         true
+    }
+
+    /// Why a streamed operator's held PTT would not key the station right now, for display
+    /// (`radio.pttRefusal`): the FIRST gate [`Self::arm_remote_mic`] would refuse at, in that exact
+    /// order, or — once a press is armed — the armed-but-no-audio case. `None` when a press would
+    /// key, and once one has keyed.
+    ///
+    /// It reads the live state only: it records nothing, keys nothing and relaxes no guard. The
+    /// arm's own conditions are unchanged; this only names which of them held, so the operator is
+    /// no longer left pressing a dead PTT with no word why.
+    pub fn ptt_refusal(&self, now: Instant) -> Option<PttRefusal> {
+        if self.mic.keyed() {
+            return None; // a press did key
+        }
+        if self.mic.active() {
+            // Armed by a held press; nothing keys until the first frame of audio arrives (M1).
+            return Some(PttRefusal::NoAudio);
+        }
+        // Not armed: the first gate a fresh press would meet, in `arm_remote_mic`'s own order.
+        if self.mic_feed.is_none() {
+            return Some(PttRefusal::NoFeed);
+        }
+        if self.settings.operating_mode != OperatingMode::Phone {
+            return Some(PttRefusal::NotPhone);
+        }
+        if !self.tx_enabled {
+            return Some(PttRefusal::TxDisabled);
+        }
+        if !self.tx_allowed() {
+            return Some(PttRefusal::OutsideLicence);
+        }
+        if self.tuning {
+            return Some(PttRefusal::Tuning);
+        }
+        if self.tx_owner().is_some() {
+            return Some(PttRefusal::OtherOwner);
+        }
+        if self.clock_repair_holds_tx() {
+            return Some(PttRefusal::ClockRepair);
+        }
+        if !self.remote_presence.as_ref().is_some_and(|p| p.valid(now)) {
+            return Some(PttRefusal::NoPresence);
+        }
+        None // a press would key
     }
 
     /// The Phone cockpit let go of a press it armed through the stream's picture: the over ends,
@@ -981,5 +1026,56 @@ mod tests {
         );
         e.set_remote_mic_feed(MicFeed::default());
         assert!(e.arm_remote_mic(t0), "control: with a feed it arms");
+    }
+
+    // ── Why a press would not key (pttRefusal, display only) ──────────────────────────────────
+
+    /// ★ The first gate a press would hit is named for the page, by value and in `arm_remote_mic`'s
+    /// own order — and once armed, the armed-but-no-audio case. Recording the reason changes
+    /// nothing about the arm.
+    #[test]
+    fn ptt_refusal_names_the_first_gate() {
+        // Not Phone (a feed is installed, so the mode is the first gate a press would meet).
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.set_remote_mic_feed(MicFeed::default());
+        e.set_operating_mode("cw", false);
+        assert_eq!(e.ptt_refusal(Instant::now()), Some(PttRefusal::NotPhone));
+
+        // Phone, with transmit not enabled at the station.
+        let mut s = scene();
+        s.e.set_tx_enabled(false);
+        assert_eq!(s.e.ptt_refusal(s.at(0)), Some(PttRefusal::TxDisabled));
+
+        // Armed by a held press, with no audio yet: the over waits to key.
+        let mut s = scene();
+        assert_eq!(s.held_tick(0), MicTick::Armed, "premise: the press arms");
+        assert!(
+            s.e.mic_armed() && !s.e.mic_keyed(),
+            "premise: armed, not keyed"
+        );
+        assert_eq!(s.e.ptt_refusal(s.at(0)), Some(PttRefusal::NoAudio));
+
+        // No microphone feed set up on this computer.
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.set_operating_mode("phone", false);
+        assert_eq!(e.ptt_refusal(Instant::now()), Some(PttRefusal::NoFeed));
+    }
+
+    /// Null when a press would key, and once one has keyed: there is nothing to explain.
+    #[test]
+    fn ptt_refusal_is_none_when_a_press_would_or_did_key() {
+        let mut s = scene();
+        assert_eq!(
+            s.e.ptt_refusal(s.at(0)),
+            None,
+            "a ready press reported a refusal"
+        );
+        s.key();
+        assert!(s.e.mic_keyed(), "premise: the voice keyed it");
+        assert_eq!(
+            s.e.ptt_refusal(s.at(0)),
+            None,
+            "a keyed press reported a refusal"
+        );
     }
 }
