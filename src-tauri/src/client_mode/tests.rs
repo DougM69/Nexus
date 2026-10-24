@@ -279,6 +279,7 @@ fn expected(cmd: &str, args: &Value) -> Way {
                 | Wired::Tune
                 | Wired::Rtty
                 | Wired::Psk
+                | Wired::Jtty
                 | Wired::Aprs
                 | Wired::Sstv
                 | Wired::Chat,

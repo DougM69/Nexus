@@ -18398,7 +18398,9 @@ fn jtty_clear(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyStat
 // (`Engine::jtty_tx_gate`: the JTTY screen, clock repair, TX on, the connection, a callsign, the
 // licence, the transmitter's owner) before anything reaches the radio. A send is planned under
 // the engine lock, rendered with it released (the modem lock, which a decode can hold for
-// seconds) and committed under it again: on the blocking pool, never on a runtime worker. Stop is never refused. ----
+// seconds) and committed under it again: on the blocking pool, never on a runtime worker. From a
+// computer driving the station, each hold first asks whether a Stop has come since it was pressed
+// (`command_dispatch::still_bound`). Stop is never refused. ----
 
 /// What a JTTY send did, for the compose bar: how much of the typed text it took (UTF-16 units)
 /// and what goes in its place, and the state after it.
@@ -18410,18 +18412,26 @@ struct JttySentDto {
     state: tempo_app::dto::JttyState,
 }
 
-/// Run one JTTY send on the blocking pool and answer the state after it.
+/// Run one JTTY send on the blocking pool and answer the state after it. `afar`: as
+/// [`set_tx_enabled`]'s, asked under each hold of the engine lock the send takes, the plan's and the
+/// commit's (`jtty_tx::run_bound`), so a Stop between the two still wins.
 async fn jtty_send_with(
     engine: &SharedEngine,
-    send: impl FnOnce(
-            &std::sync::Mutex<tempo_app::engine::Engine>,
-        ) -> Result<tempo_app::engine::jtty_tx::JttySent, String>
+    afar: Option<command_dispatch::Afar>,
+    plan: impl FnOnce(
+            &mut tempo_app::engine::Engine,
+        ) -> Result<tempo_app::engine::jtty_tx::JttyPlan, String>
         + Send
         + 'static,
 ) -> Result<JttySentDto, String> {
     let engine = Arc::clone(engine);
     tauri::async_runtime::spawn_blocking(move || {
-        let done = send(&engine)?;
+        let done = tempo_app::engine::jtty_tx::run_bound(
+            &engine,
+            plan,
+            |e| command_dispatch::still_bound(e, afar.as_ref()),
+            |e| command_dispatch::started_from_afar(e, afar.as_ref()),
+        )?;
         Ok(JttySentDto {
             consumed: done.consumed,
             sent: done.sent,
@@ -18433,74 +18443,76 @@ async fn jtty_send_with(
 }
 
 /// Send typed text (WSJT-X's Send): all of it, the macros in it expanded, ending the message (and
-/// a live session, if one runs). `his_call` is the log strip's Call (`%H`).
+/// a live session, if one runs). `his_call` is the log strip's Call (`%H`). `afar`: as
+/// [`jtty_send_with`]'s.
 #[tauri::command]
 async fn jtty_send(
     state: State<'_, SharedEngine>,
     text: String,
     his_call: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
-    jtty_send_with(&state, move |e| {
-        tempo_app::engine::jtty_tx::send_text(e, &text, &his_call)
-    })
-    .await
+    jtty_send_with(&state, afar, move |e| e.jtty_plan_send(&text, &his_call)).await
 }
 
-/// F-key `n` (1..8): WSJT-X's Contest template, compiled into JTTY's atoms.
+/// F-key `n` (1..8): WSJT-X's Contest template, compiled into JTTY's atoms. `afar`: as
+/// [`jtty_send_with`]'s.
 #[tauri::command]
 async fn jtty_fkey(
     state: State<'_, SharedEngine>,
     n: u8,
     his_call: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
-    jtty_send_with(&state, move |e| {
-        tempo_app::engine::jtty_tx::send_fkey(e, n, &his_call)
-    })
-    .await
+    jtty_send_with(&state, afar, move |e| e.jtty_plan_fkey(n, &his_call)).await
 }
 
-/// Start live entry with what is typed so far (WSJT-X's Alt+J).
+/// Start live entry with what is typed so far (WSJT-X's Alt+J). `afar`: as [`jtty_send_with`]'s.
 #[tauri::command]
 async fn jtty_live_start(
     state: State<'_, SharedEngine>,
     typed: String,
     his_call: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
-    jtty_send_with(&state, move |e| {
-        tempo_app::engine::jtty_tx::live_start(e, &typed, &his_call)
+    jtty_send_with(&state, afar, move |e| {
+        e.jtty_plan_live_start(&typed, &his_call)
     })
     .await
 }
 
 /// Commit live typing: `flush` after a pause (everything typed), otherwise only once five words
-/// are complete beyond the three held back.
+/// are complete beyond the three held back. `afar`: as [`jtty_send_with`]'s.
 #[tauri::command]
 async fn jtty_live_commit(
     state: State<'_, SharedEngine>,
     typed: String,
     his_call: String,
     flush: bool,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
     let how = if flush {
         tempo_app::engine::jtty_tx::JttyCommit::Flush
     } else {
         tempo_app::engine::jtty_tx::JttyCommit::Advance
     };
-    jtty_send_with(&state, move |e| {
-        tempo_app::engine::jtty_tx::live_commit(e, &typed, &his_call, how)
+    jtty_send_with(&state, afar, move |e| {
+        e.jtty_plan_live(&typed, &his_call, how)
     })
     .await
 }
 
-/// Sign off (WSJT-X's Alt+K): `DE <my call> K` after what is typed, and the session ends.
+/// Sign off (WSJT-X's Alt+K): `DE <my call> K` after what is typed, and the session ends. `afar`:
+/// as [`jtty_send_with`]'s.
 #[tauri::command]
 async fn jtty_sign_off(
     state: State<'_, SharedEngine>,
     typed: String,
     his_call: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
-    jtty_send_with(&state, move |e| {
-        tempo_app::engine::jtty_tx::sign_off(e, &typed, &his_call)
+    jtty_send_with(&state, afar, move |e| {
+        e.jtty_plan_sign_off(&typed, &his_call)
     })
     .await
 }
@@ -53007,7 +53019,7 @@ mod tests {
 
     /// A mock of the shack's app over `engine`, with a main window, holding the app's own handlers
     /// for the Operate strip's Call CQ and contest S&P, the JS8 sends, keyboard CW and its macros,
-    /// the tune carrier and the rig's tuner, the RTTY, PSK, APRS, SSTV and chat starts, Enable TX
+    /// the tune carrier and the rig's tuner, the RTTY, PSK, JTTY, APRS, SSTV and chat starts, Enable TX
     /// and the stops a cockpit sends: what the starts from afar are run through, as the
     /// command lane runs them (`command_dispatch::tauri_runner`). Here because a handler's command
     /// macro is reachable only from the module that defines it.
@@ -53018,7 +53030,8 @@ mod tests {
         };
         use crate::{
             atu_tune, halt_tx, js8_answer_reply, js8_arm, js8_call_cq, js8_cq_repeat,
-            js8_heartbeat_now, js8_send, js8_send_command, js8_typeahead, psk_send,
+            js8_heartbeat_now, js8_send, js8_send_command, js8_typeahead, jtty_fkey,
+            jtty_live_commit, jtty_live_start, jtty_send, jtty_sign_off, jtty_stop, psk_send,
             psk_set_latched, psk_stop, psk_type, rtty_auto_answer, rtty_auto_cq, rtty_send,
             rtty_set_latched, rtty_stop, rtty_type, send_cw, send_cw_armed, set_tune,
             set_tx_enabled, start_running, start_search_and_pounce, stop_cw,
@@ -53048,6 +53061,12 @@ mod tests {
                 js8_send,
                 js8_send_command,
                 js8_typeahead,
+                jtty_fkey,
+                jtty_live_commit,
+                jtty_live_start,
+                jtty_send,
+                jtty_sign_off,
+                jtty_stop,
                 psk_send,
                 psk_set_latched,
                 psk_stop,
@@ -54144,6 +54163,282 @@ mod tests {
             kept_after_a_revocation.is_empty(),
             "kept after its stand-down was revoked: {kept_after_a_revocation:#?}"
         );
+    }
+
+    /// ⛔ A JTTY start from afar runs through the shack's own handler under every transmit guard
+    /// the shack's own screen meets, and only under the stand-down the command lane read it under.
+    /// For each start (a send, an F-key, live entry started, typed into and signed off): named with
+    /// a stand-down a halt has moved since, it is refused `STOPPED_SINCE`; with TX off, outside the
+    /// licence, under a sign-in hold or a clock repair, with a tune carrier holding the transmitter
+    /// or on a connection that refuses transmitting, it is refused with the JTTY gate's own reason;
+    /// each refusal
+    /// leaves JTTY as it was. Named with the stand-down as it stands, it runs (CONTROL: what it
+    /// starts is queued or live), and what it started ends when that stand-down is revoked with no
+    /// halt. CONTROL: the same start from the shack's own screen runs, and outlives a bare
+    /// revocation, as it always has.
+    #[test]
+    fn a_jtty_start_from_afar_runs_only_under_every_transmit_guard() {
+        use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
+        use crate::{jtty_fkey, jtty_live_commit, jtty_live_start, jtty_send, jtty_sign_off};
+        use serde_json::{json, Value};
+        use std::time::Instant;
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let transmit = TransmitAuthority::default();
+        engine_lock(&engine).set_remote_transmit_revocation(transmit.revocation());
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![
+                jtty_fkey,
+                jtty_live_commit,
+                jtty_live_start,
+                jtty_send,
+                jtty_sign_off
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the handler answered")
+        };
+        let with = |mut args: Value, stand_down: u64| {
+            args["afar"] = json!({ "standDown": stand_down });
+            args
+        };
+        let stand_down = || engine_lock(&engine).remote_transmit_stand_down_generation();
+        // What JTTY holds at the station: a live session, the segments still to go and their text,
+        // and the transmitter.
+        let left = || {
+            let e = engine_lock(&engine);
+            let tx = e.jtty_state().tx;
+            (tx.live, tx.left, tx.pending, e.tx_owner().is_some())
+        };
+        // The station as the shack's own screen leaves it for the start: Stopped, on the JTTY
+        // screen, TX on (at the shack, which moves no stand-down), the licence open, no hold, and
+        // a live session running for what types into one.
+        let set_up = |cmd: &str| {
+            {
+                let mut e = engine_lock(&engine);
+                e.halt_tx();
+                e.take_slot_tx_abort();
+                e.take_jtty_abort();
+                e.set_tune(false);
+                e.end_clock_repair_hold();
+                e.set_remote_transmit_held(false);
+                if e.connection_tx_refusal().is_some() {
+                    let mut settings = e.settings().clone();
+                    settings.rig_conn = String::new();
+                    e.apply_settings(settings);
+                }
+                e.set_license_class("open");
+                e.set_operating_mode("jtty", false);
+                e.set_tx_enabled(true);
+            }
+            if matches!(cmd, "jtty_live_commit" | "jtty_sign_off") {
+                tempo_app::engine::jtty_tx::live_start(&engine, "", "")
+                    .expect("premise: a live session");
+            }
+        };
+        type Guard = fn(&mut tempo_app::engine::Engine);
+        let guards: [(&str, Guard, &str); 6] = [
+            ("TX off", |e| e.set_tx_enabled(false), "TX is off"),
+            (
+                "outside the licence",
+                |e| e.set_license_class("technician"),
+                "TX locked",
+            ),
+            (
+                "the sign-in hold",
+                |e| e.set_remote_transmit_held(true),
+                tempo_app::engine::REMOTE_HOLD_HOLDS_TX,
+            ),
+            (
+                "a clock repair",
+                |e| {
+                    e.hold_tx_for_clock_repair(Instant::now() + std::time::Duration::from_secs(600))
+                },
+                tempo_app::engine::CLOCK_REPAIR_HOLDS_TX,
+            ),
+            (
+                "a tune carrier holding the transmitter",
+                |e| e.set_tune(true),
+                "Tune carrier is up",
+            ),
+            (
+                "a connection that refuses transmitting",
+                |e| {
+                    let mut settings = e.settings().clone();
+                    settings.rig_conn = "icomlan".into();
+                    e.apply_settings(settings);
+                },
+                tempo_app::settings::ICOM_LAN_TX_REFUSED,
+            ),
+        ];
+        let stopped = Err(STOPPED_SINCE.to_string());
+        let mut wrong = Vec::new();
+        for (cmd, args) in [
+            (
+                "jtty_send",
+                json!({"text": "CQ CQ DE W9XYZ", "hisCall": ""}),
+            ),
+            ("jtty_fkey", json!({"n": 1, "hisCall": ""})),
+            ("jtty_live_start", json!({"typed": "HELLO ", "hisCall": ""})),
+            (
+                "jtty_live_commit",
+                json!({"typed": "MORE TEXT ", "hisCall": "", "flush": true}),
+            ),
+            ("jtty_sign_off", json!({"typed": "TNX ", "hisCall": ""})),
+        ] {
+            // After a Stop: the stand-down it was read under has moved.
+            set_up(cmd);
+            let stale = stand_down();
+            set_up(cmd);
+            let before = left();
+            let voided = ask(cmd, with(args.clone(), stale));
+            let after = left();
+            if voided != stopped || after != before {
+                wrong.push(format!(
+                    "{cmd} after a Stop: {:?}, (live, left, pending, TX held) {before:?} -> \
+                     {after:?}",
+                    voided.map(|_| "ran")
+                ));
+            }
+            // Each transmit guard down, under the stand-down as it stands.
+            for (guard, down, why) in guards {
+                set_up(cmd);
+                down(&mut engine_lock(&engine));
+                let refusal = engine_lock(&engine).jtty_state().tx.refusal;
+                assert!(
+                    refusal.as_deref().is_some_and(|r| r.contains(why)),
+                    "premise, {cmd} {guard}: {refusal:?}"
+                );
+                let before = left();
+                let refused = ask(cmd, with(args.clone(), stand_down()));
+                let after = left();
+                if refused != Err(refusal.clone().unwrap()) || after != before {
+                    wrong.push(format!(
+                        "{cmd} {guard}: {:?}, (live, left, pending, TX held) {before:?} -> \
+                         {after:?}",
+                        refused.map(|_| "ran")
+                    ));
+                }
+            }
+            // CONTROL: every guard up, it runs, and what it started is there.
+            set_up(cmd);
+            let ran = ask(cmd, with(args.clone(), stand_down()));
+            assert!(ran.is_ok(), "CONTROL {cmd}: it ran from afar: {ran:?}");
+            let (live, segments, ..) = left();
+            if cmd == "jtty_live_start" {
+                assert!(live, "CONTROL {cmd}: the live session runs");
+            } else {
+                assert!(segments > 0, "CONTROL {cmd}: something queued");
+            }
+            // ⛔ Its stand-down revoked with no halt: the radio loop's next tick ends it.
+            transmit.revoke();
+            let halted = engine_lock(&engine).poll_remote_transmit(Instant::now());
+            let after = left();
+            if !halted || after != (false, 0, String::new(), false) {
+                wrong.push(format!(
+                    "{cmd} kept after its stand-down was revoked: halted {halted}, (live, left, \
+                     pending, TX held) {after:?}"
+                ));
+            }
+            // CONTROL: from the shack's own screen it runs, and a bare revocation leaves it.
+            set_up(cmd);
+            let ran = ask(cmd, args);
+            assert!(ran.is_ok(), "CONTROL {cmd}: it ran from the shack: {ran:?}");
+            transmit.revoke();
+            assert!(
+                !engine_lock(&engine).poll_remote_transmit(Instant::now()),
+                "CONTROL {cmd}: the shack's own start outlives a bare revocation"
+            );
+        }
+        engine_lock(&engine).halt_tx();
+        assert!(wrong.is_empty(), "JTTY from afar: {wrong:#?}");
+    }
+
+    /// The keyboard modem picked from afar is the one that sends: the JTTY screen and then the PSK
+    /// screen entered from afar, TX On from afar, and a PSK send from afar runs; and back on the
+    /// JTTY screen, a JTTY send from afar runs. CONTROL: on the JTTY screen a PSK send is refused
+    /// by PSK's own gate, so the modem is what decided it.
+    #[test]
+    fn the_keyboard_modem_picked_from_afar_is_the_one_that_sends() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::{jtty_send, psk_send, set_operating_mode, set_tx_enabled};
+        use serde_json::{json, Value};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![
+                jtty_send,
+                psk_send,
+                set_operating_mode,
+                set_tx_enabled
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        // Each call as the command lane hands it over: with the stand-down as it stands.
+        let ask = |cmd: &str, mut args: Value| -> Result<Value, String> {
+            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
+            args["afar"] = json!({ "standDown": now });
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the handler answered")
+        };
+        let enter = |mode: &str| {
+            let entered = ask(
+                "set_operating_mode",
+                json!({"mode": mode, "followFreq": true}),
+            );
+            assert!(entered.is_ok(), "{mode}: {entered:?}");
+            let on = ask("set_tx_enabled", json!({"enabled": true}));
+            assert!(on.is_ok(), "{mode}: TX On {on:?}");
+        };
+        enter("jtty");
+        let psk_on_jtty = ask("psk_send", json!({"text": "CQ"}));
+        assert!(
+            psk_on_jtty
+                .as_ref()
+                .is_err_and(|e| e.contains("JTTY is the keyboard modem")),
+            "CONTROL: {psk_on_jtty:?}"
+        );
+        enter("keyboard");
+        let psk = ask("psk_send", json!({"text": "CQ"}));
+        assert!(psk.is_ok(), "PSK after JTTY, from afar: {psk:?}");
+        engine_lock(&engine).halt_tx();
+        enter("jtty");
+        let jtty = ask("jtty_send", json!({"text": "CQ", "hisCall": ""}));
+        assert!(jtty.is_ok(), "JTTY after PSK, from afar: {jtty:?}");
+        engine_lock(&engine).halt_tx();
     }
 
     /// ⛔ A voice message started from afar ends when the stand-down it ran under is revoked with

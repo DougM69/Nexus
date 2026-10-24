@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **JTTY sends from a remote computer.** Driving a station from another computer, JTTY's Send,
+  F-keys, live typing and sign-off now transmit, under the same guards and Stop as the other remote
+  modes.
 - **Allow to transmit, at the shack.** A device added by signing in is held from transmitting until
   you let it. Settings ▸ Remote access now shows such a device, browser or computer, once it has
   station control, as "Waiting for you to allow it to transmit" with an **Allow to transmit** button
@@ -231,6 +234,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused because TX is off now says "turn TX on first". Repair clock, Clear test contacts, the Field Day club's
   Give and Remove, the Remote access card and the Connections log say they are at the shack, and the first-run
   setup wizard no longer opens by itself on that computer.
+- **JTTY's 10-minute limit now covers the text still going out after live typing ends.** After Send or the
+  sign-off, the transmission now stops at 10 minutes from the start of the session, at the station and from afar.
 - **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
   paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
   opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping
