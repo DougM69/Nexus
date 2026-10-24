@@ -39,7 +39,7 @@ fn within(what: &str, within: Duration, mut done: impl FnMut() -> bool) {
 fn holding_the_link_stops(r: &mut Roadside, held: Gate) -> Arc<Mutex<Vec<String>>> {
     let ran = Arc::new(Mutex::new(Vec::new()));
     let (engine, record) = (r.s.shared.engine.clone(), ran.clone());
-    r.s.shared.commands = crate::remote_service::lan::commands::Commands::new(Arc::new(
+    let runner: crate::command_dispatch::Runner = Arc::new(
         move |cmd: String, args: Value, answer: crate::command_dispatch::Answer| {
             // Every feed's poll, read from the feeds' own table so a feed added later is left out
             // too: the RTTY scope's was recorded as a press once it came.
@@ -77,7 +77,9 @@ fn holding_the_link_stops(r: &mut Roadside, held: Gate) -> Arc<Mutex<Vec<String>
             };
             answer(done.map(|()| json!({ "ran": cmd })))
         },
-    ));
+    );
+    let voided = r.s.shared.engine.lock().unwrap().remote_starts_voided();
+    r.s.shared.commands = crate::remote_service::lan::commands::Commands::new(runner, voided);
     ran
 }
 

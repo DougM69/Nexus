@@ -236,6 +236,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setup wizard no longer opens by itself on that computer.
 - **JTTY's 10-minute limit now covers the text still going out after live typing ends.** After Send or the
   sign-off, the transmission now stops at 10 minutes from the start of the session, at the station and from afar.
+- **Driving a station from another computer, TX no longer turns itself off after a second, or after every over.**
+  Letting go of the PTT, Tune off, Phone's Lock, leaving Phone or hiding the voice keyer, and the contest S&P chip
+  each stopped everything at the station, the TX On you had just pressed included. Each now ends only its own
+  transmission, as on the station's own screen; Stop TX and the voice keyer's Stop still stop everything.
 - **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
   paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
   opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping

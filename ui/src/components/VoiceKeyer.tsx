@@ -40,8 +40,9 @@ interface Props {
   keyed: boolean
   /** The rig's real keyed state (snapshot). The engine has no "voice message finished"
    * event — the radio loop simply drops PTT when the samples run out — so the rig UNKEYING
-   * is the only signal that a message this pane started is over. Used for one thing: to know
-   * whether the unmount teardown actually ENDED an over, so it can say so. */
+   * is the only signal that a message this pane started is over. Used to know whether the
+   * unmount teardown actually ENDED an over, so it can say so, and whether a message this pane
+   * sent is known to have ended (`endedOnAir`), so the unmount need not stop it. */
   transmitting: boolean
   /** Field Day exchange to read ("3A WI") — when set (FD mode), hint that a slot can be
    * recorded with it for one-key sends. Empty/undefined outside FD. */
@@ -81,6 +82,18 @@ export interface VoiceKeyerForEnter {
 // catalog sentence, `phone.keyer.slot.record.title`: a warning glued to a stem cannot be
 // translated into a language that orders the two the other way round. Both controls name the
 // whole sentence and pass their slot.
+
+/** How long the rig must have read unkeyed, after keying for a message, before that message
+ *  counts as over: one unkeyed snapshot mid-message is not an end. */
+const VOICE_END_HOLD_MS = 2000
+
+/** Whether a message this pane sent is KNOWN to have ended: the rig keyed after it was sent,
+ *  has unkeyed since, and has stayed unkeyed for `VOICE_END_HOLD_MS` (`fellAt` is set only by a
+ *  fall after that rise, and cleared by the next rise). Anything less is doubt, and the unmount
+ *  stops it. */
+function endedOnAir(p: { fellAt: number | null }): boolean {
+  return p.fellAt !== null && Date.now() - p.fellAt >= VOICE_END_HOLD_MS
+}
 
 /**
  * Phone voice keyer (casual) — message slots on F1–F6 and F8 (AGN, the slot Enter Sends Message
@@ -126,16 +139,37 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: 
     recordingRef.current = recording
   }, [recording])
 
-  // The slot whose message this pane put on the air, or null. Set when the operator sends
-  // one, cleared by ■ Stop / Esc and by the rig UNKEYING — the falling edge of `transmitting`
-  // is how a message ending on its own is observed, there being no completion event. A bare
-  // `if (!transmitting) clear` would not do: the snapshot lags the send by a poll, so it
-  // would wipe the slot before the rig ever keyed.
-  const playingRef = useRef<number | null>(null)
+  // The message this pane put on the air and has not seen end, or null: its slot, a number of
+  // its own (`gen`), and what the rig has done since it was sent. Set when the operator sends
+  // one; cleared only by ■ Stop / Esc and by the engine refusing THAT send. It is never cleared
+  // by `transmitting` falling, because that edge need not be this message's: an F-key pressed
+  // while the last message is still on the air sees the last one end before its own keys, and a
+  // stale snapshot can read the rig unkeyed mid-message. Instead the unmount asks whether this
+  // message is known to have ended (`endedOnAir`), and anything short of that stops it.
+  const playingRef = useRef<{ slot: number; gen: number; rose: boolean; fellAt: number | null } | null>(
+    null,
+  )
+  const genRef = useRef(0)
+  const send = (slot: number) => {
+    genRef.current += 1
+    playingRef.current = { slot, gen: genRef.current, rose: false, fellAt: null }
+    return genRef.current
+  }
+  const refused = (gen: number) => {
+    if (playingRef.current?.gen === gen) playingRef.current = null
+  }
   // The same flag the cleanup can read — it captures [] deps and cannot see the prop.
   const onAirRef = useRef(false)
   useEffect(() => {
-    if (onAirRef.current && !transmitting) playingRef.current = null
+    const p = playingRef.current
+    if (p && !onAirRef.current && transmitting) {
+      // A rise AFTER the send: the rig keyed once this message was sent. A rise is the only edge
+      // that can start one, so a message pressed while another over is on the air waits for one.
+      p.rose = true
+      p.fellAt = null
+    } else if (p?.rose && onAirRef.current && !transmitting) {
+      p.fellAt = Date.now()
+    }
     onAirRef.current = transmitting
   }, [transmitting])
 
@@ -154,6 +188,11 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: 
   // The two teardowns are not the same act, and the second one is DESTRUCTIVE:
   //   · stopVoice ends a message that is playing. Cleanup, not safety — the operator could
   //     have stopped it from the dock either way — but it is an over cut short, so it speaks.
+  //     ⛔ Sent unless this pane sent nothing or its last message is known to have ended
+  //     (playingRef, endedOnAir): in doubt, it stops. On a computer driving a station,
+  //     stop_voice is a Stop of EVERYTHING there (both roads), so an unconditional one on every
+  //     unmount turned TX off at the station each time the operator left Phone. The ■ Stop
+  //     button and Esc still always send it.
   //   · cancelVoiceRecording DISCARDS an in-progress capture (lib.rs: take + drop the
   //     buffer). Nothing about hiding a pane implies "throw away the recording I am making",
   //     so it may not happen silently. It still has to happen — leaving the recorder running
@@ -177,8 +216,10 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: 
       // air, and live mic PTT satisfies the second with no keyer message involved. The cost is
       // the ~1 poll between pressing an F-key and the snapshot showing TX: a hide inside that
       // window says nothing. A missed notice beats a false one.
-      const over = onAirRef.current ? playingRef.current : null
-      void stopVoice().catch(() => {})
+      const p = playingRef.current
+      const playing = p !== null && !endedOnAir(p) ? p.slot : null
+      const over = onAirRef.current ? playing : null
+      if (playing !== null) void stopVoice().catch(() => {})
       if (over !== null) {
         pushToast(t('phone.keyer.hide.stoppedOver', { slot: over }), 'info', 6000)
       }
@@ -222,12 +263,12 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: 
       pushToast(why.text, 'info', why.ms)
       return
     }
-    playingRef.current = slot
+    const gen = send(slot)
     // The toast carries the engine's reason: a message refused outside the privileges (or with
     // TX off after all) used to be ignored without a word, and now says why.
     void withErrorToast(() => playVoiceMessage(slot), t('phone.keyer.playFailed', { slot })).then(
       (snap) => {
-        if (snap === null) playingRef.current = null
+        if (snap === null) refused(gen)
       },
     )
   }
@@ -243,12 +284,12 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange, esm }: 
   const playForEnter = async (slot: number): Promise<string | null> => {
     const why = refusal(slot)
     if (why) return why.text
-    playingRef.current = slot
+    const gen = send(slot)
     try {
       await playVoiceMessage(slot)
       return null
     } catch (e) {
-      playingRef.current = null
+      refused(gen)
       return e instanceof Error ? e.message : String(e)
     }
   }

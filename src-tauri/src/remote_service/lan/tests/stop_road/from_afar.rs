@@ -3,7 +3,7 @@
 //! RTTY auto CQ run, pressed on a computer driving the station, on the roadside the road tests use: the shack's real channel, command lane, Stop road
 //! and engine over loopback, and the app's own handlers reached as the main window reaches them
 //! (`command_dispatch::tauri_runner`). The shack runs each with only the arguments the screen sent
-//! and the stand-down the lane wrote, and each is ended by the link's Stop alone, by the road's
+//! and the generations the lane wrote, and each is ended by the link's Stop alone, by the road's
 //! Stop alone, and by presence lapsing with the lease still held.
 use super::*;
 use crate::command_dispatch::{tauri_runner, Runner};
@@ -127,7 +127,7 @@ pub(super) fn the_apps_handlers(r: &mut Roadside) -> (crate::tests::ShackApp, Go
     let runner: Runner = tauri_runner(app.handle().clone());
     let got = Arc::new(Mutex::new(Vec::new()));
     let record = got.clone();
-    r.s.shared.commands = super::super::super::commands::Commands::new(Arc::new(
+    let recording: Runner = Arc::new(
         move |cmd: String, args: Value, answer: crate::command_dispatch::Answer| {
             if cmd == "get_snapshot" {
                 return answer(Ok(json!({})));
@@ -135,7 +135,9 @@ pub(super) fn the_apps_handlers(r: &mut Roadside) -> (crate::tests::ShackApp, Go
             record.lock().unwrap().push((cmd.clone(), args.clone()));
             runner(cmd, args, answer)
         },
-    ));
+    );
+    let voided = r.s.shared.engine.lock().unwrap().remote_starts_voided();
+    r.s.shared.commands = super::super::super::commands::Commands::new(recording, voided);
     ((app, main), got)
 }
 
@@ -293,8 +295,8 @@ fn assert_over(e: &mut tempo_app::engine::Engine, over: &str, end: &str) {
 /// into, and an RTTY auto CQ run: the computer presses it, the shack's own handler runs it
 /// and the station keys it; then the link's Stop alone, the road's Stop alone, or presence lapsing
 /// (the heartbeats stop, the lease still kept) ends it, as the shack's own Stop TX would. The shack
-/// got only what the screen sent, and `afar` with the stand-down alone: no time crossed. CONTROL:
-/// each over is on the air before it ends, and each press was answered with no refusal.
+/// got only what the screen sent, and `afar` with the two generations alone: no time crossed.
+/// CONTROL: each over is on the air before it ends, and each press was answered with no refusal.
 #[test]
 fn an_over_started_from_afar_ends_by_either_road_alone_and_by_presence() {
     let _alone = alone();
@@ -337,7 +339,7 @@ fn an_over_started_from_afar_ends_by_either_road_alone_and_by_presence() {
                     "{what}: premise, on the air"
                 );
                 // No time crossed: each press reached the handler with what the screen sent and
-                // the stand-down the lane wrote, nothing else.
+                // the generations the lane wrote, nothing else.
                 let got = got.lock().unwrap().clone();
                 for (cmd, args) in &presses {
                     let (_, reached) = got
@@ -349,7 +351,7 @@ fn an_over_started_from_afar_ends_by_either_road_alone_and_by_presence() {
                     sent.insert("afar".into(), afar.clone());
                     assert_eq!(reached, &Value::Object(sent), "{what}: {cmd}");
                     let keys: Vec<&String> = afar.as_object().unwrap().keys().collect();
-                    assert_eq!(keys, ["standDown"], "{what}: {cmd} {afar}");
+                    assert_eq!(keys, ["standDown", "startsVoided"], "{what}: {cmd} {afar}");
                 }
                 match end {
                     "link" => {

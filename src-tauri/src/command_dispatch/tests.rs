@@ -643,7 +643,10 @@ fn a_settings_save_from_afar_keeps_the_shacks_transmit_settings() {
     asked.js8_aprs_relay = true;
     asked.beacon_tx_percent = 20;
     asked.cw_wpm = 31;
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut save = asked.clone();
     keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
     assert!(
@@ -797,7 +800,10 @@ fn moved(a: &tempo_app::settings::Settings, b: &tempo_app::settings::Settings) -
 #[test]
 fn a_settings_save_from_afar_keeps_every_transmit_setting_at_the_shacks_value() {
     let shack = tempo_app::settings::Settings::default();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     for (name, change) in TRANSMITS_BY_ITSELF
         .iter()
         .chain(TX_GUARDS)
@@ -828,7 +834,10 @@ fn a_settings_save_from_afar_keeps_every_transmit_setting_at_the_shacks_value() 
 #[test]
 fn a_settings_save_from_afar_takes_what_neither_transmits_nor_guards() {
     let shack = tempo_app::settings::Settings::default();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     for (name, change) in NEITHER {
         let mut asked = shack.clone();
         change(&mut asked);
@@ -873,7 +882,10 @@ fn two_radio_shack() -> tempo_app::settings::Settings {
 #[test]
 fn a_save_from_afar_keeps_the_ptt_of_the_radio_its_form_edited() {
     let shack = two_radio_shack();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut save = shack.clone();
     save.active_radio = 1;
     save.ptt_method = "rts".into();
@@ -901,7 +913,10 @@ fn a_save_from_afar_keeps_the_ptt_of_the_radio_its_form_edited() {
 #[test]
 fn a_radio_edit_from_afar_keeps_that_radios_ptt() {
     let shack = two_radio_shack();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut asked: tempo_app::settings::RadioProfilePatch =
         serde_json::from_value(serde_json::to_value(&shack.radios[1]).unwrap()).unwrap();
     asked.ptt_method = "rts".into();
@@ -934,7 +949,14 @@ fn kept_from_afar<T>(
     let mut asked = shack.clone();
     change(&mut asked);
     let mut from_afar = asked.clone();
-    keep_the_shacks_settings(shack, &mut from_afar, Some(&Afar { stand_down: 3 }));
+    keep_the_shacks_settings(
+        shack,
+        &mut from_afar,
+        Some(&Afar {
+            stand_down: 3,
+            starts_voided: 0,
+        }),
+    );
     let mut at_the_shack = asked;
     keep_the_shacks_settings(shack, &mut at_the_shack, None);
     [read(shack), read(&from_afar), read(&at_the_shack)]
@@ -1106,7 +1128,15 @@ fn a_radio_edit_from_afar_keeps_that_radios_flex_beta() {
     asked.flex_native_unbenched = false;
     asked.tx_level = 0.25;
     let mut patch = asked.clone();
-    keep_the_shacks_radio_ptt(&shack, 1, &mut patch, Some(&Afar { stand_down: 3 }));
+    keep_the_shacks_radio_ptt(
+        &shack,
+        1,
+        &mut patch,
+        Some(&Afar {
+            stand_down: 3,
+            starts_voided: 0,
+        }),
+    );
     assert!(patch.flex_native_unbenched, "from afar, radio 1's Beta");
     assert_eq!(patch.tx_level, 0.25, "CONTROL: the rest of the edit");
     let mut patch = asked.clone();
@@ -1126,7 +1156,10 @@ fn a_radio_edit_from_afar_keeps_that_radios_flex_beta() {
 fn a_save_from_afar_never_lets_programs_on_tci_transmit() {
     let shack = two_radio_shack();
     assert!(!shack.tci_server && !shack.tci_server_tx, "premise: off");
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let on = |s: &tempo_app::settings::Settings| (s.tci_server, s.tci_server_tx);
     let mut asked = shack.clone();
     asked.tci_server = true;
@@ -1217,7 +1250,10 @@ fn key_destinations(s: &tempo_app::settings::Settings) -> (String, String, Strin
 #[test]
 fn a_settings_save_from_afar_keeps_where_the_shack_sends_its_keys() {
     let shack = shack_that_sends_keys();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut save = save_pointing_elsewhere(&shack, 1);
     keep_the_shacks_credential_addresses(&shack, &mut save, Some(&afar));
     assert_eq!(
@@ -1261,7 +1297,10 @@ fn a_settings_save_from_afar_keeps_where_the_shack_sends_its_keys() {
 #[test]
 fn a_settings_save_from_afar_takes_the_addresses_that_carry_no_key() {
     let shack = shack_that_sends_keys();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut asked = shack.clone();
     asked.cloudlog_station_id = "7".into();
     asked.cloudlog_upload = !shack.cloudlog_upload;
@@ -1292,7 +1331,10 @@ fn a_settings_save_from_afar_takes_the_addresses_that_carry_no_key() {
 #[test]
 fn a_radio_edit_from_afar_keeps_that_radios_icom_address() {
     let shack = shack_that_sends_keys();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
     let mut asked: tempo_app::settings::RadioProfilePatch =
         serde_json::from_value(serde_json::to_value(&shack.radios[1]).unwrap()).unwrap();
     asked.icom_lan_host = "203.0.113.7".into();
@@ -2626,6 +2668,107 @@ fn an_unseen_id_at_or_below_a_forgotten_one_is_refused_and_above_it_runs() {
     );
 }
 
+/// ⛔ An unkey is told from a Stop the same way at both ends ([`is_unkey`]): the off half of every
+/// transmit switch is an unkey; every command that stops a transmission (the voice keyer's own
+/// Stop and `release_stream_mic` included) is a Stop, by both roads, which halts everything at the
+/// shack; and the on half of a switch is neither. CONTROL: each unkey runs under Stop's rules, so
+/// it is never refused.
+#[test]
+fn an_unkey_is_the_off_half_of_a_switch_and_nothing_else() {
+    for (cmd, ..) in OFF_HALVES {
+        for off in off_args(cmd) {
+            assert!(is_unkey(cmd, &off), "{cmd} {off}");
+            assert!(
+                is_stop(cmd, &off),
+                "CONTROL: {cmd} {off} runs under Stop's rules"
+            );
+        }
+    }
+    for (cmd, args) in [
+        ("set_ptt", json!({"on": true})),
+        ("set_tune", json!({"on": true})),
+        ("set_tx_enabled", json!({"enabled": true})),
+        ("set_mode", json!({"mode": "fieldday-run"})),
+        ("set_ptt", json!({})),
+    ] {
+        assert!(!is_unkey(cmd, &args), "{cmd} {args}");
+    }
+    let stops: Vec<&str> = CLASSES
+        .iter()
+        .filter(|(_, class, _)| *class == Class::StopsTx)
+        .map(|(cmd, ..)| *cmd)
+        .collect();
+    assert_eq!(stops.len(), 9, "{stops:?}");
+    for cmd in &stops {
+        assert!(!is_unkey(cmd, &json!({})), "{cmd} is a Stop");
+    }
+    assert!(stops.contains(&"stop_voice") && stops.contains(&"release_stream_mic"));
+}
+
+/// ⛔ A start from afar runs only while BOTH generations it was read under stand
+/// ([`still_bound`]): an unkey moves the starts-voided generation and voids it; a Stop or any halt
+/// moves the stand-down and voids it. Only the stand-down is what a start that ran is ended by: an
+/// unkey taken after a start from afar ran leaves what it began on the radio loop's next tick, and
+/// a stand-down revoked with no halt ends it. CONTROL: under the generations as they stand it runs,
+/// and from the shack's own screen (`None`) it always runs.
+#[test]
+fn a_start_from_afar_is_voided_by_an_unkey_or_a_stop_and_ended_only_by_a_stop() {
+    use tempo_app::remote_control::transmit::TransmitAuthority;
+    let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN52", 0);
+    let transmit = TransmitAuthority::default();
+    e.set_remote_transmit_revocation(transmit.revocation());
+    let read = |e: &tempo_app::engine::Engine| Afar {
+        stand_down: e.remote_transmit_stand_down_generation(),
+        starts_voided: e.remote_starts_voided_generation(),
+    };
+    let stopped = Err(STOPPED_SINCE.to_string());
+
+    let before_an_unkey = read(&e);
+    assert_eq!(still_bound(&e, Some(&before_an_unkey)), Ok(()), "CONTROL");
+    e.remote_starts_voided().revoke();
+    assert_eq!(
+        still_bound(&e, Some(&before_an_unkey)),
+        stopped,
+        "after an unkey"
+    );
+    assert_eq!(still_bound(&e, None), Ok(()), "CONTROL: the shack's own");
+
+    let before_a_stop = read(&e);
+    assert_eq!(still_bound(&e, Some(&before_a_stop)), Ok(()), "CONTROL");
+    e.halt_tx();
+    assert_eq!(
+        still_bound(&e, Some(&before_a_stop)),
+        stopped,
+        "after a halt"
+    );
+    let before_a_revocation = read(&e);
+    transmit.revoke();
+    assert_eq!(
+        still_bound(&e, Some(&before_a_revocation)),
+        stopped,
+        "after a Stop"
+    );
+
+    // TX On from afar, then an unkey: TX stays on, tick after tick.
+    let afar = read(&e);
+    still_bound(&e, Some(&afar)).unwrap();
+    e.set_tx_enabled_by_operator(true);
+    started_from_afar(&mut e, Some(&afar));
+    e.remote_starts_voided().revoke();
+    e.set_ptt(false);
+    let now = Instant::now();
+    assert!(!e.poll_remote_transmit(now), "an unkey halted the station");
+    assert!(
+        !e.poll_remote_transmit(now),
+        "an unkey halted the station later"
+    );
+    assert!(e.tx_enabled(), "an unkey from afar turned TX off");
+    // …and a revocation with no halt ends it.
+    transmit.revoke();
+    assert!(e.poll_remote_transmit(now), "a revoked stand-down halts");
+    assert!(!e.tx_enabled(), "a revoked stand-down left TX on");
+}
+
 /// ★ The link's Stop admission: every command that stops a transmission, and the off half of every
 /// transmit switch, is taken as it came, and agrees with [`is_stop`]; anything else, the on half of
 /// the same switches included, is handed back untouched for the dispatcher.
@@ -3051,7 +3194,10 @@ fn a_settings_save_from_afar_keeps_the_program_the_shack_runs() {
     let mut asked = shack.clone();
     asked.tqsl_path = r"C:\Users\Public\evil.exe".to_string();
     asked.lotw_station_location = "Home".to_string();
-    let afar = Afar { stand_down: 3 };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
 
     let mut save = asked.clone();
     keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
@@ -3084,7 +3230,10 @@ fn a_settings_save_from_afar_keeps_the_program_the_shack_runs() {
 /// into the file (at the shack: `a_shack_save_of_a_form_read_without_its_keys_keeps_them`).
 #[test]
 fn a_settings_save_from_afar_cannot_change_blank_or_plant_a_stored_key() {
-    let afar = Afar { stand_down: 2 };
+    let afar = Afar {
+        stand_down: 2,
+        starts_voided: 0,
+    };
     for (name, field) in SECRET_SETTINGS {
         // (what the shack holds, what the save asks for)
         for (held, asked) in [
@@ -3186,7 +3335,10 @@ fn a_shack_read_while_a_stream_watches_blanks_each_stored_key() {
 /// it saved; the shack's own read blanks nothing and says nothing.
 #[test]
 fn a_settings_read_from_afar_blanks_each_stored_key_and_says_whether_it_is_saved() {
-    let afar = Afar { stand_down: 0 };
+    let afar = Afar {
+        stand_down: 0,
+        starts_voided: 0,
+    };
     for (name, field) in SECRET_SETTINGS {
         for held in ["FAKE-SHACK-KEY-0001", "", "   "] {
             let mut shack = tempo_app::settings::Settings::default();
@@ -3304,7 +3456,14 @@ fn a_whole_save_from_afar_goes_through_every_keep() {
         )
     };
     let mut save = asked.clone();
-    keep_the_shacks_settings(&shack, &mut save, Some(&Afar { stand_down: 4 }));
+    keep_the_shacks_settings(
+        &shack,
+        &mut save,
+        Some(&Afar {
+            stand_down: 4,
+            starts_voided: 0,
+        }),
+    );
     assert_eq!(
         shown(&save),
         (
@@ -3745,7 +3904,14 @@ fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<Str
             untried.push(name.clone());
             continue;
         };
-        keep_the_shacks_settings(&shack, &mut save, Some(&Afar { stand_down: 1 }));
+        keep_the_shacks_settings(
+            &shack,
+            &mut save,
+            Some(&Afar {
+                stand_down: 1,
+                starts_voided: 0,
+            }),
+        );
         if serde_json::to_value(&save).unwrap()[name] == *value {
             kept.insert(name.clone());
         }
@@ -3760,12 +3926,14 @@ fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<Str
 #[test]
 fn every_setting_a_save_from_afar_keeps_is_set_at_the_station() {
     let (kept, untried) = what_a_save_from_afar_keeps();
-    let flagged: std::collections::BTreeSet<String> =
-        station_only_settings(Some(&Afar { stand_down: 1 }))
-            .unwrap()
-            .into_iter()
-            .map(String::from)
-            .collect();
+    let flagged: std::collections::BTreeSet<String> = station_only_settings(Some(&Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    }))
+    .unwrap()
+    .into_iter()
+    .map(String::from)
+    .collect();
     assert_eq!(
         kept.difference(&flagged).collect::<Vec<_>>(),
         Vec::<&String>::new(),
@@ -3805,11 +3973,14 @@ fn the_ui_fixture_carries_the_station_only_list() {
         "../../../ui/src/components/__fixtures__/stationOnlySettings.json"
     ))
     .unwrap();
-    let sent: Vec<String> = station_only_settings(Some(&Afar { stand_down: 1 }))
-        .unwrap()
-        .into_iter()
-        .map(String::from)
-        .collect();
+    let sent: Vec<String> = station_only_settings(Some(&Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    }))
+    .unwrap()
+    .into_iter()
+    .map(String::from)
+    .collect();
     assert_eq!(fixture, sent);
 }
 
@@ -3817,7 +3988,13 @@ fn the_ui_fixture_carries_the_station_only_list() {
 /// the file, from afar or at the shack.
 #[test]
 fn a_save_never_writes_the_set_at_the_station_list() {
-    for afar in [Some(Afar { stand_down: 2 }), None] {
+    for afar in [
+        Some(Afar {
+            stand_down: 2,
+            starts_voided: 0,
+        }),
+        None,
+    ] {
         let shack = tempo_app::settings::Settings::default();
         let mut save = shack.clone();
         save.unknown

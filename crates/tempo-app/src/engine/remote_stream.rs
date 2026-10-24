@@ -934,4 +934,52 @@ mod tests {
             );
         }
     }
+
+    /// ⛔ An unkey from afar halts nothing a start from afar began; only the stand-down does. TX On
+    /// and the tune carrier from afar on Phone, then the PTT let go and Tune off from afar, each
+    /// moving the starts-voided generation as the command lane moves it for an unkey: tick after
+    /// tick TX stays on. CONTROL: the stand-down revoked with no halt then stops everything on the
+    /// next tick, and with neither moved the same presses leave TX on, as at the shack.
+    #[test]
+    fn an_unkey_from_afar_leaves_tx_armed_and_only_the_stand_down_halts() {
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        let transmit = TransmitAuthority::default();
+        e.set_remote_transmit_revocation(transmit.revocation());
+        e.set_operating_mode_with_arming("phone", false, false);
+        assert!(
+            !e.tx_enabled(),
+            "premise: a Phone entry from afar arms nothing"
+        );
+        let under = e.remote_transmit_stand_down_generation();
+        e.set_tx_enabled_by_operator(true);
+        e.note_started_from_afar(under);
+        e.set_tune(true);
+        e.note_started_from_afar(under);
+        assert!(
+            e.tx_enabled() && e.tuning(),
+            "premise: TX on, the carrier up"
+        );
+        let now = Instant::now();
+        e.remote_starts_voided().revoke();
+        e.set_ptt(false);
+        assert!(
+            !e.poll_remote_transmit(now),
+            "a PTT let go from afar halted"
+        );
+        assert!(e.tx_enabled(), "a PTT let go from afar turned TX off");
+        assert!(e.tuning(), "a PTT let go from afar dropped the carrier");
+        e.remote_starts_voided().revoke();
+        e.set_tune(false);
+        for tick in 1..=3 {
+            let later = now + Duration::from_millis(50 * tick);
+            assert!(!e.poll_remote_transmit(later), "Tune off from afar halted");
+        }
+        assert!(e.tx_enabled(), "Tune off from afar turned TX off");
+        transmit.revocation().revoke();
+        assert!(
+            e.poll_remote_transmit(now),
+            "a revoked stand-down halted nothing"
+        );
+        assert!(!e.tx_enabled(), "a revoked stand-down left TX on");
+    }
 }

@@ -39443,9 +39443,12 @@ fn remote_service_for(
     // A paired computer's calls (the command lane of Remote over this network) run through this
     // app's own command handler, as its main window's screen runs them; and each event that
     // crosses to that computer is heard here as the screen hears it, and handed on.
-    let commands = remote_service::lan::commands::Commands::new(command_dispatch::tauri_runner(
-        handle.clone(),
-    ));
+    // An unkey from any computer voids every start from afar still in flight, by the Engine's own
+    // counter: one for the whole station.
+    let commands = remote_service::lan::commands::Commands::new(
+        command_dispatch::tauri_runner(handle.clone()),
+        engine_lock(&d.engine).remote_starts_voided(),
+    );
     // …and while a stream watches that window, the window is told, so it hides any stored key it
     // shows (its settings reads carry none then: `get_settings`).
     let watched = handle
@@ -47021,6 +47024,7 @@ mod tests {
         let presence = TransmitAuthority::default();
         let afar = Afar {
             stand_down: station.remote_transmit_stand_down_generation(),
+            starts_voided: station.remote_starts_voided_generation(),
         };
         let flies = |standing: Option<tempo_app::remote_control::Standing>| {
             let eng = sat_station();
@@ -53036,6 +53040,7 @@ mod tests {
             rtty_set_latched, rtty_stop, rtty_type, send_cw, send_cw_armed, set_tune,
             set_tx_enabled, start_running, start_search_and_pounce, stop_cw,
         };
+        use crate::{release_stream_mic, rtty_auto_abort, rtty_set_auto, set_ptt, stop_voice};
         let app = tauri::test::mock_builder()
             .manage(engine)
             .invoke_handler(tauri::generate_handler![
@@ -53071,19 +53076,24 @@ mod tests {
                 psk_set_latched,
                 psk_stop,
                 psk_type,
+                release_stream_mic,
+                rtty_auto_abort,
                 rtty_auto_answer,
                 rtty_auto_cq,
                 rtty_send,
+                rtty_set_auto,
                 rtty_set_latched,
                 rtty_stop,
                 rtty_type,
                 send_cw,
                 send_cw_armed,
+                set_ptt,
                 set_tune,
                 set_tx_enabled,
                 start_running,
                 start_search_and_pounce,
-                stop_cw
+                stop_cw,
+                stop_voice
             ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("a mock app");
@@ -53958,8 +53968,10 @@ mod tests {
     /// revoked with no halt (the computer's permission to transmit withdrawn), as an APRS, SSTV or
     /// chat start does. Called through the shack's own runner, as the command lane calls them, with
     /// the stand-down as it stands: each runs (CONTROL), then the stand-down is revoked and the
-    /// radio loop ticks. The station halts: TX off, no carrier, neither latch up. CONTROL: the same
-    /// start from the shack's own screen (no `afar`) outlives a bare revocation, as it always has.
+    /// radio loop ticks. The station halts: TX off, no carrier, neither latch up. ⛔ An unkey from
+    /// afar before that (its starts-voided generation moved) ends none of it: the tick leaves the
+    /// station as it was. CONTROL: the same start from the shack's own screen (no `afar`) outlives
+    /// a bare revocation, as it always has.
     #[test]
     fn a_start_from_afar_ends_when_its_stand_down_is_revoked_with_no_halt() {
         use crate::command_dispatch::{tauri_runner, Runner};
@@ -54097,6 +54109,7 @@ mod tests {
             )
         };
         let mut kept_after_a_revocation = Vec::new();
+        let mut ended_by_an_unkey = Vec::new();
         for (cmd, args) in [
             ("call_cq", json!({})),
             ("call_station", json!({"call": "K1ABC"})),
@@ -54138,10 +54151,37 @@ mod tests {
         ] {
             let mut afar = args.clone();
             set_up(cmd, &mut afar);
-            let now = engine_lock(&engine).remote_transmit_stand_down_generation();
-            afar["afar"] = json!({ "standDown": now });
+            let (now, starts_voided) = {
+                let e = engine_lock(&engine);
+                (
+                    e.remote_transmit_stand_down_generation(),
+                    e.remote_starts_voided_generation(),
+                )
+            };
+            afar["afar"] = json!({ "standDown": now, "startsVoided": starts_voided });
             let ran = ask(cmd, afar);
             assert!(ran.is_ok(), "CONTROL {cmd}: it ran from afar: {ran:?}");
+            {
+                let mut e = engine_lock(&engine);
+                let held = |e: &tempo_app::engine::Engine| {
+                    (
+                        e.tx_enabled(),
+                        e.tuning(),
+                        e.rtty_latched(),
+                        e.psk_latched(),
+                    )
+                };
+                let before = held(&e);
+                e.remote_starts_voided().revoke();
+                let halted = e.poll_remote_transmit(Instant::now());
+                let after = held(&e);
+                if halted || after != before {
+                    ended_by_an_unkey.push(format!(
+                        "{cmd}: halted {halted}, (TX, tuning, RTTY latched, PSK latched) \
+                         {before:?} -> {after:?}"
+                    ));
+                }
+            }
             let (halted, left) = revoke_and_tick();
             if !halted || left != (false, false, false, false) {
                 kept_after_a_revocation.push(format!(
@@ -54160,22 +54200,26 @@ mod tests {
         }
         engine_lock(&engine).halt_tx();
         assert!(
+            ended_by_an_unkey.is_empty(),
+            "ended by an unkey from afar: {ended_by_an_unkey:#?}"
+        );
+        assert!(
             kept_after_a_revocation.is_empty(),
             "kept after its stand-down was revoked: {kept_after_a_revocation:#?}"
         );
     }
 
     /// ⛔ A JTTY start from afar runs through the shack's own handler under every transmit guard
-    /// the shack's own screen meets, and only under the stand-down the command lane read it under.
+    /// the shack's own screen meets, and only under the generations the command lane read it under.
     /// For each start (a send, an F-key, live entry started, typed into and signed off): named with
-    /// a stand-down a halt has moved since, it is refused `STOPPED_SINCE`; with TX off, outside the
-    /// licence, under a sign-in hold or a clock repair, with a tune carrier holding the transmitter
-    /// or on a connection that refuses transmitting, it is refused with the JTTY gate's own reason;
-    /// each refusal
-    /// leaves JTTY as it was. Named with the stand-down as it stands, it runs (CONTROL: what it
-    /// starts is queued or live), and what it started ends when that stand-down is revoked with no
-    /// halt. CONTROL: the same start from the shack's own screen runs, and outlives a bare
-    /// revocation, as it always has.
+    /// a stand-down a halt has moved since, or a starts-voided generation an unkey has moved since,
+    /// it is refused `STOPPED_SINCE`; an unkey once it has run ends none of it; with TX off, outside
+    /// the licence, under a sign-in hold or a clock repair, with a tune carrier holding the
+    /// transmitter or on a connection that refuses transmitting, it is refused with the JTTY gate's
+    /// own reason; each refusal leaves JTTY as it was. Named with the stand-down as it stands, it
+    /// runs (CONTROL: what it starts is queued or live), and what it started ends when that
+    /// stand-down is revoked with no halt. CONTROL: the same start from the shack's own screen runs,
+    /// and outlives a bare revocation, as it always has.
     #[test]
     fn a_jtty_start_from_afar_runs_only_under_every_transmit_guard() {
         use crate::command_dispatch::{tauri_runner, Runner, STOPPED_SINCE};
@@ -54216,10 +54260,12 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_secs(10))
                 .expect("the handler answered")
         };
-        let with = |mut args: Value, stand_down: u64| {
-            args["afar"] = json!({ "standDown": stand_down });
+        let voided_now = || engine_lock(&engine).remote_starts_voided_generation();
+        let with_voided = |mut args: Value, stand_down: u64, starts_voided: u64| {
+            args["afar"] = json!({ "standDown": stand_down, "startsVoided": starts_voided });
             args
         };
+        let with = |args: Value, stand_down: u64| with_voided(args, stand_down, voided_now());
         let stand_down = || engine_lock(&engine).remote_transmit_stand_down_generation();
         // What JTTY holds at the station: a live session, the segments still to go and their text,
         // and the transmitter.
@@ -54318,6 +54364,20 @@ mod tests {
                     voided.map(|_| "ran")
                 ));
             }
+            // ⛔ After an unkey: the starts-voided generation it was read under has moved.
+            set_up(cmd);
+            let stale = voided_now();
+            engine_lock(&engine).remote_starts_voided().revoke();
+            let before = left();
+            let voided = ask(cmd, with_voided(args.clone(), stand_down(), stale));
+            let after = left();
+            if voided != stopped || after != before {
+                wrong.push(format!(
+                    "{cmd} after an unkey: {:?}, (live, left, pending, TX held) {before:?} -> \
+                     {after:?}",
+                    voided.map(|_| "ran")
+                ));
+            }
             // Each transmit guard down, under the stand-down as it stands.
             for (guard, down, why) in guards {
                 set_up(cmd);
@@ -54347,6 +54407,17 @@ mod tests {
                 assert!(live, "CONTROL {cmd}: the live session runs");
             } else {
                 assert!(segments > 0, "CONTROL {cmd}: something queued");
+            }
+            // ⛔ An unkey from afar after it ran (Tune off, the PTT let go) ends none of it.
+            let running = left();
+            engine_lock(&engine).remote_starts_voided().revoke();
+            let halted = engine_lock(&engine).poll_remote_transmit(Instant::now());
+            if halted || left() != running {
+                wrong.push(format!(
+                    "{cmd} ended by an unkey: halted {halted}, (live, left, pending, TX held) \
+                     {running:?} -> {:?}",
+                    left()
+                ));
             }
             // ⛔ Its stand-down revoked with no halt: the radio loop's next tick ends it.
             transmit.revoke();
@@ -55754,7 +55825,10 @@ mod secrets_toward_remote_tests {
     /// unknown key of that name planted; at the shack it names none.
     #[test]
     fn a_settings_read_from_afar_says_what_is_set_at_the_station() {
-        let afar = command_dispatch::Afar { stand_down: 1 };
+        let afar = command_dispatch::Afar {
+            stand_down: 1,
+            starts_voided: 0,
+        };
         let mut shack = station();
         shack.unknown.insert(
             command_dispatch::SET_AT_THE_STATION.into(),
@@ -55857,7 +55931,10 @@ mod secrets_toward_remote_tests {
     /// still reads its ClubLog key, and never the Cloudlog one.
     #[test]
     fn a_settings_read_from_afar_carries_no_stored_key() {
-        let afar = command_dispatch::Afar { stand_down: 1 };
+        let afar = command_dispatch::Afar {
+            stand_down: 1,
+            starts_voided: 0,
+        };
         let mut shack = station();
         shack.unknown.insert(
             command_dispatch::SAVED_AT_THE_STATION.into(),
