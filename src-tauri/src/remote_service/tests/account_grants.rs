@@ -1919,3 +1919,49 @@ async fn allow_to_transmit_is_refused_for_any_other_device() {
     );
     assert!(held_at(&service, past_the_window()), "removed: still held");
 }
+
+/// ★ A LOCAL DECISION AFTER THE PRESS WINS: Allow to transmit is pressed, and Remote is taken over or
+/// turned off at the shack before the station has run the press (it waits on the service's list).
+/// The press is answered and waives nothing: the device is still held, now and past its window.
+#[tokio::test(flavor = "multi_thread")]
+async fn allow_to_transmit_overtaken_by_a_take_over_or_turn_off_leaves_the_device_held() {
+    for (what, decision) in [
+        ("take over", Action::TakeOverLogging {}),
+        ("Turn off", Action::Disable {}),
+    ] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        let service = launch_granting_on_sign_in(&cloud, &vault);
+        let before = listed(&service, &cloud, vec![notified_row(0)]).await;
+        assert_eq!(
+            before.held_devices,
+            vec![BROWSER.to_string()],
+            "{what}: premise"
+        );
+
+        cloud.holding_lists.store(true, Ordering::SeqCst);
+        let mut press = std::pin::pin!(service.action(allow(BROWSER)));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut press)
+                .await
+                .is_err(),
+            "{what}: premise: the press waits on the service's list"
+        );
+        // Taken at once; a Turn off is in force at once and waits for its reply behind the press.
+        let mut decided = std::pin::pin!(service.action(decision));
+        let at_once = tokio::time::timeout(Duration::from_millis(200), &mut decided).await;
+        cloud.holding_lists.store(false, Ordering::SeqCst);
+        assert_eq!(press.await.err(), None, "{what}: the press is answered");
+        if at_once.is_err() {
+            let _ = decided.await;
+        }
+        assert!(
+            held_at(&service, std::time::Instant::now()),
+            "{what}: still held now"
+        );
+        assert!(
+            held_at(&service, past_the_window()),
+            "{what}: and past its window"
+        );
+    }
+}
