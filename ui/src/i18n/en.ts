@@ -1601,6 +1601,9 @@ export const EN = {
   'qso.detail.ota.mine': 'My reference',
   'qso.detail.ota.theirs': 'Their reference',
   'qso.detail.comment': 'Comment',
+  'qso.detail.section.location': 'Location and zones',
+  'qso.detail.section.uploads': 'Uploads',
+  'qso.detail.section.contest': 'Contest',
   'logbook.row.view.title': 'View everything recorded for {{call}}',
   'logbook.row.notes.title': 'Comment (shared on the QSL)',
   'logbook.row.notes.private': 'Private note',
@@ -1649,11 +1652,8 @@ export const EN = {
   'logbook.column.time': 'Time (UTC)',
   'logbook.column.park': 'Park',
   'logbook.column.actions': 'Edit / delete',
-  // #239 More columns + the edit form's own-side and QSL fields. `(W)` is the unit symbol and
+  // #239's extra columns + the edit form's own-side and QSL fields. `(W)` is the unit symbol and
   // MY_GRIDSQUARE / MY_RIG are ADIF field names — tokens inside the sentence.
-  'logbook.columns.more.label': 'More columns',
-  'logbook.columns.more.title':
-    'Show the contact end time, your grid, rig, name, QTH, state, power and operator in a wider table you can scroll sideways',
   'logbook.column.end': 'End (UTC)',
   'logbook.column.myGrid': 'My grid',
   'logbook.column.myRig': 'Rig',
@@ -1662,6 +1662,49 @@ export const EN = {
   'logbook.column.state': 'State',
   'logbook.column.power': 'Power (W)',
   'logbook.column.operator': 'Operator',
+  // The column chooser and the columns it adds: what the log stores and the table never showed.
+  // IOTA, CQ, ITU, LoTW, eQSL are names and abbreviations; `(km)` is the unit symbol.
+  'logbook.column.qsl': 'QSL',
+  'logbook.column.grid': 'Their grid',
+  'logbook.column.iota': 'IOTA',
+  'logbook.column.county': 'County',
+  'logbook.column.cqz': 'CQ zone',
+  'logbook.column.ituz': 'ITU zone',
+  'logbook.column.cont': 'Continent',
+  'logbook.column.distance': 'Distance (km)',
+  'logbook.column.qslSentDate': 'Card sent',
+  'logbook.column.qslRcvdDate': 'Card received',
+  'logbook.column.lotwRcvdDate': 'LoTW received',
+  'logbook.column.eqslRcvdDate': 'eQSL received',
+  // `{{service}}` is a service's own name: LoTW, eQSL, QRZ, Club Log.
+  'logbook.column.upload': '{{service}} upload',
+  'logbook.column.contest': 'Contest',
+  'logbook.column.exchSent': 'Exchange sent',
+  'logbook.column.exchRcvd': 'Exchange received',
+  'logbook.columns.label': 'Columns',
+  'logbook.columns.title': 'Choose the columns the log shows',
+  'logbook.columns.hint':
+    'Drag the right edge of a column’s header to change its width, or press Alt+← or Alt+→ on the header. Double-click the edge to put it back.',
+  'logbook.columns.group.contact': 'Contact',
+  'logbook.columns.group.location': 'Location',
+  'logbook.columns.group.qsl': 'QSL',
+  'logbook.columns.group.uploads': 'Uploads',
+  'logbook.columns.group.contest': 'Contest',
+  'logbook.columns.group.station': 'My station',
+  'logbook.columns.reset': 'Reset to the default columns',
+  'logbook.columns.saveFailed': 'Couldn’t save the Logbook’s columns',
+  // An upload column's tooltip: the state, and when the service answered (`{{date}}`, UTC).
+  'logbook.upload.done': 'Uploaded',
+  'logbook.upload.waiting': 'Sent, no answer yet',
+  'logbook.upload.failed': 'Refused',
+  'logbook.upload.none': 'Not uploaded',
+  'logbook.upload.title': '{{state}}, {{date}}',
+  'logbook.field.iota.label': 'IOTA',
+  'logbook.field.iota.title':
+    'Their IOTA island reference, such as NA-001. Leave it blank to keep the one stored.',
+  'logbook.form.iotaInvalid':
+    'An IOTA reference is a continent (AF, AN, AS, EU, NA, OC or SA), a hyphen and three digits, such as NA-001.',
+  'logbook.form.alsoStored': 'Also on this contact',
   'logbook.field.myGrid.label': 'My grid',
   'logbook.field.myGrid.title':
     'Your own grid square for this contact (ADIF MY_GRIDSQUARE) — where you were, if not at home',
@@ -9164,6 +9207,10 @@ export const EN = {
   'settings.workspace.logbookGlobe.aria': 'Show the 3-D globe above the Logbook',
   'settings.workspace.logbookGlobe.hint':
     'The 3-D globe above the Logbook table. Turn it off and the table starts at the top.',
+  'settings.workspace.logbookColumns.label': 'Logbook columns',
+  'settings.workspace.logbookColumns.hint':
+    'The columns and widths chosen in the Logbook (its Columns button), kept with your settings. Reset puts back the default table.',
+  'settings.workspace.logbookColumns.reset': 'Reset',
   'settings.workspace.localClock.label': 'Local time beside UTC',
   'settings.workspace.localClock.on': 'On',
   'settings.workspace.localClock.off': 'Off',

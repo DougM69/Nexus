@@ -114,7 +114,15 @@ mod vec_bodies {
                     && rec.ota.their_program.is_none()
                     && rec.ota.their_ref.is_none();
                 if incoming_ota_empty {
+                    // ⚠️ AMENDED, not verbatim (2026-10-24): the edit policy changed on purpose —
+                    // the Logbook form has an IOTA box, so an IOTA reference an edit carries with
+                    // no park beside it is the edit's (`edited`). The oracle follows the policy;
+                    // what this test holds is that both implementations agree on it.
+                    let iota = rec.ota.iota.take();
                     rec.ota = old.ota.clone();
+                    if iota.is_some() {
+                        rec.ota.iota = iota;
+                    }
                 }
                 // Nor the contest block: the edit form carries none of it (the desktop
                 // DTO hard-sets `contest: None`), so without this an ordinary edit drops

@@ -116,6 +116,50 @@ describe('the QSO detail view', () => {
 
 // CLOSED, THE KEYBOARD GOES BACK TO WHERE THE VIEW WAS OPENED FROM (focusReturn.ts) — the Logbook
 // row (Logbook.keyboard.test.tsx). It was left on the page itself.
+describe('the detail view shows the fields the Logbook columns added', () => {
+  const pairs = () =>
+    Object.fromEntries([...document.querySelectorAll('.qso-detail-field')].map((d) => [d.querySelector('dt')?.textContent, d.querySelector('dd')?.textContent]))
+
+  it('IOTA, the zones and county, the QSL dates, each upload and the contest exchange', () => {
+    render(
+      <QsoDetail
+        qso={qso({
+          ota: { iota: 'EU-005' },
+          upload: { lotw: { outcome: 'accepted', whenUnix: 1_782_600_000 }, qrz: { outcome: 'rejected', whenUnix: 1_782_700_000 } },
+          contest: { contestId: 'CQ-WW-CW', stx: 7, srx: 88, sent: [], rcvd: [['CQZ', '14']] },
+          extra: [['CNTY', 'MA,MIDDLESEX'], ['CQZ', '14'], ['ITUZ', '28'], ['CONT', 'EU'], ['LOTW_QSLRDATE', '20260701'], ['SFI', '142']],
+        })}
+        onClose={() => {}}
+      />,
+    )
+    const p = pairs()
+    expect(p).toMatchObject({
+      IOTA: 'EU-005',
+      County: 'MA,MIDDLESEX',
+      'CQ zone': '14',
+      'ITU zone': '28',
+      Continent: 'EU',
+      'LoTW received': '2026-07-01',
+      'LoTW upload': 'Uploaded · 2026-06-27 22:40:00Z',
+      'QRZ upload': 'Refused · 2026-06-29 02:26:40Z',
+      Contest: 'CQ-WW-CW',
+      'Exchange sent': '7',
+      'Exchange received': '14',
+    })
+    // A tag shown under its name is not listed raw again; one with no name still is.
+    expect(p.CNTY).toBeUndefined()
+    expect(p.CQZ).toBeUndefined()
+    expect(p.SFI).toBe('142')
+  })
+
+  it('an ordinary contact shows no upload or contest section', () => {
+    render(<QsoDetail qso={qso()} onClose={() => {}} />)
+    expect(shown()).not.toContain('Uploads')
+    expect(shown()).not.toContain('Contest')
+    expect(shown()).not.toContain('Location and zones')
+  })
+})
+
 describe('the detail view gives the keyboard back when it closes', () => {
   function Rows({ rows }: { rows: string[] }) {
     const [left, setLeft] = useState(rows)

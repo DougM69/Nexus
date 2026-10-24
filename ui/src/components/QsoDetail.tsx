@@ -19,9 +19,15 @@ import type { LoggedQso } from '../types'
 import { Dialog } from './ui/Dialog'
 import { useFocusReturn } from '../focusReturn'
 import { t } from '../i18n'
+import { addedColumnText, columnName, logColumn, uploadMark, uploadOf, uploadWord } from '../features/logColumns'
 
 /** A rendered field: a label and a value that is definitely worth showing. */
 type Field = { label: string; value: string; mono?: boolean }
+
+/** The ADIF tags shown under their own names above, so the raw list below leaves them out. */
+const NAMED_TAGS: ReadonlySet<string> = new Set([
+  'CNTY', 'CQZ', 'ITUZ', 'CONT', 'DISTANCE', 'QSLRDATE', 'LOTW_QSLRDATE', 'EQSL_QSLRDATE',
+])
 
 const has = (v: unknown): boolean =>
   v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0)
@@ -63,6 +69,20 @@ export function QsoDetail({ qso, onClose }: QsoDetailProps) {
     rcvd?.qrz && 'QRZ',
   ].filter(Boolean).join(' · ')
 
+  // An added Logbook column's value, under the column's own name.
+  const col = (id: string, mono = true): Field | null => {
+    const c = logColumn(id)
+    return c ? f(columnName(c), addedColumnText(q, id), mono) : null
+  }
+  // One service's upload stamp: its state, and when the service answered.
+  const upload = (id: string): Field | null => {
+    const c = logColumn(id)
+    const st = uploadOf(q, id)
+    if (!c || !st) return null
+    const word = uploadWord(uploadMark(st))
+    return f(columnName(c), st.whenUnix ? `${word} · ${utc(st.whenUnix)}` : word)
+  }
+
   const sections = [
     // The callsign is the dialog's TITLE; a first field repeating it says the same thing
     // twice in the same box.
@@ -77,6 +97,16 @@ export function QsoDetail({ qso, onClose }: QsoDetailProps) {
       // call resolves to none.
       f(t('logbook.column.country'), q.entity ?? q.country),
       f('DXCC', q.dxcc, true),
+    ]),
+    // Where the station was, as the record holds it: IOTA is a field of its own; the rest are
+    // ADIF tags kept from the log or an import, named here instead of listed raw below.
+    section(t('qso.detail.section.location'), [
+      col('iota'),
+      col('county', false),
+      col('cqz'),
+      col('ituz'),
+      col('cont'),
+      col('distance'),
     ]),
     section(t('qso.detail.section.contact.radio'), [
       f(t('logbook.column.band'), q.band, true),
@@ -108,9 +138,20 @@ export function QsoDetail({ qso, onClose }: QsoDetailProps) {
         : null),
       f(t('qso.detail.qsl.confirmed'), q.confirmed ? t('qso.detail.qsl.yes') : null),
       f(t('qso.detail.qsl.awardConfirmed'), q.awardConfirmed ? t('qso.detail.qsl.yes') : null),
+      col('qslRcvdDate'),
+      col('lotwRcvdDate'),
+      col('eqslRcvdDate'),
       f(t('qso.detail.credit.granted'), q.creditGranted?.join(' · ')),
       f(t('qso.detail.credit.submitted'), q.creditSubmitted?.join(' · ')),
     ]),
+    // The header always claimed this view shows the upload state per connector; now it does.
+    section(t('qso.detail.section.uploads'), [
+      upload('upLotw'),
+      upload('upEqsl'),
+      upload('upQrz'),
+      upload('upClublog'),
+    ]),
+    section(t('qso.detail.section.contest'), [col('contest'), col('exchSent'), col('exchRcvd')]),
     section(t('qso.detail.section.programs'), [
       f(t('qso.detail.ota.mine'), q.ota?.myProgram && q.ota?.myRef
         ? `${q.ota.myProgram} ${q.ota.myRef}` : null, true),
@@ -126,7 +167,7 @@ export function QsoDetail({ qso, onClose }: QsoDetailProps) {
   // ⭐ ADIF FIELDS NEXUS PRESERVED BUT DOES NOT MODEL. An import carries tags this app has no
   // column for; they survive a round trip and were never visible anywhere. Shown raw, last,
   // and only when there are any — this is the operator's own data, not ours to hide.
-  const extra = (q.extra ?? []).filter(([k, v]) => has(k) && has(v))
+  const extra = (q.extra ?? []).filter(([k, v]) => has(k) && has(v) && !NAMED_TAGS.has(k.toUpperCase()))
 
   return (
     <Dialog

@@ -76,11 +76,8 @@ pub struct QsoEdit {
     pub qsl_card: bool,
 }
 
-/// The park/summit half of an edit (ADIF `MY_SIG`/`MY_SIG_INFO`/`SIG`/`SIG_INFO`, `*_SOTA_REF`).
-///
-/// ⚠️ [`super::Ota::iota`] is deliberately absent. The form carries the stored value straight
-/// back out rather than offering a box for it, so it is not something an edit can change, and
-/// a field in the key that no edit can move only widens the refusal surface.
+/// The park/summit half of an edit (ADIF `MY_SIG`/`MY_SIG_INFO`/`SIG`/`SIG_INFO`, `*_SOTA_REF`),
+/// and the worked station's IOTA reference.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OtaEdit {
@@ -88,6 +85,12 @@ pub struct OtaEdit {
     pub my_ref: Option<String>,
     pub their_program: Option<String>,
     pub their_ref: Option<String>,
+    /// The worked station's IOTA reference ("NA-001"), which the form has a box for now. A
+    /// blank one means LEAVE ALONE, as the park refs and the end time do, so the form corrects
+    /// a reference and never clears one. Text that is not a reference is refused
+    /// ([`QsoEdit::iota`]). Missing from an older payload, it reads as blank.
+    #[serde(default)]
+    pub iota: Option<String>,
 }
 
 /// A park box the form reads as empty: no value, or an empty one (the form's own truthiness).
@@ -119,6 +122,7 @@ impl QsoEdit {
                 my_ref: r.ota.my_ref.clone(),
                 their_program: r.ota.their_program.clone(),
                 their_ref: r.ota.their_ref.clone(),
+                iota: r.ota.iota.clone(),
             },
             my_grid: r.my_grid.clone(),
             my_rig: r.my_rig.clone(),
@@ -164,9 +168,11 @@ impl QsoEdit {
     /// would carry the stored `iota` only because the form did, which it does, below.
     ///
     /// The fields the form echoed from the row it opened (`confirmed`, `awardConfirmed`,
-    /// `upload`, the park's `iota`) are echoed here from `stored` — the first three are
-    /// overwritten by `update_record` whatever they hold, and `iota` is the one the form keeps.
+    /// `upload`) are echoed here from `stored`, and `update_record` overwrites them whatever they
+    /// hold. The IOTA reference is the edit's where it carries one, else the stored one.
     pub fn record(&self, stored: &QsoRecord) -> QsoRecord {
+        // A reference the edit refuses is never written; the edit command refuses it first.
+        let iota = self.iota().ok().flatten();
         QsoRecord {
             // Identity is the log's: `update_record` restores the stored id.
             id: None,
@@ -197,18 +203,22 @@ impl QsoEdit {
             credit_granted: Vec::new(),
             credit_submitted: Vec::new(),
             upload: stored.upload.clone(),
-            // The form's own rule: with both park refs blank it sends no `ota` at all, and
-            // `update_record` puts the stored one back whole; otherwise the four fields as the
-            // form fills them, with the stored IOTA it echoes.
+            // The form's own rule: with both park refs blank it sends no park at all, and
+            // `update_record` puts the stored one back whole — keeping an IOTA reference the edit
+            // carries alone; otherwise the four fields as the form fills them, beside the edit's
+            // IOTA or the stored one.
             ota: if blank(&self.ota.my_ref) && blank(&self.ota.their_ref) {
-                super::Ota::default()
+                super::Ota {
+                    iota,
+                    ..super::Ota::default()
+                }
             } else {
                 super::Ota {
                     my_program: self.ota.my_program.clone(),
                     my_ref: self.ota.my_ref.clone(),
                     their_program: self.ota.their_program.clone(),
                     their_ref: self.ota.their_ref.clone(),
-                    iota: stored.ota.iota.clone(),
+                    iota: iota.or_else(|| stored.ota.iota.clone()),
                 }
             },
             dxcc: None,
@@ -244,6 +254,20 @@ impl QsoEdit {
             Some(code) => Err(format!(
                 "Unknown QSL-sent method '{code}' — use B, D, or E."
             )),
+        }
+    }
+
+    /// The IOTA reference this edit writes, in the log's one spelling: `Ok(None)` for a blank box
+    /// (leave the stored one), `Err` for text that is not a reference — refused rather than
+    /// stored as junk that no award counts.
+    pub fn iota(&self) -> Result<Option<String>, String> {
+        match self.ota.iota.as_deref().map(str::trim) {
+            None | Some("") => Ok(None),
+            Some(raw) => super::valid_iota(raw).map(Some).ok_or_else(|| {
+                format!(
+                    "'{raw}' is not an IOTA reference — use a continent, a hyphen and three digits, such as NA-001."
+                )
+            }),
         }
     }
 
@@ -416,6 +440,10 @@ mod tests {
             (
                 "notes",
                 Box::new(|r: &mut QsoRecord| r.notes = Some("vertical".into())),
+            ),
+            (
+                "ota.iota",
+                Box::new(|r: &mut QsoRecord| r.ota.iota = Some("EU-005".into())),
             ),
             (
                 "ota.myProgram",
@@ -724,6 +752,7 @@ mod tests {
                 my_ref: blank.clone(),
                 their_program: None,
                 their_ref: blank.clone(),
+                iota: blank.clone(),
             };
             assert_eq!(
                 e.record(&stored).ota,
@@ -744,6 +773,55 @@ mod tests {
                 iota: Some("NA-001".into()),
             }
         );
+    }
+
+    /// The IOTA box: a reference typed there is written (in the log's one spelling), with or
+    /// without a park beside it; a blank box leaves the stored reference, as the park boxes and
+    /// the end time do; and text that is not a reference is refused rather than stored as junk no
+    /// award counts. Through `update_record`, the one edit policy, as the edit command applies it.
+    #[test]
+    fn an_iota_edit_is_written_and_a_blank_one_keeps_the_stored() {
+        let edited = |stored: QsoRecord, iota: Option<&str>| {
+            let mut lb = crate::logbook::Logbook::new();
+            lb.add(stored);
+            let held = QsoRecord::clone(&lb.records()[0]);
+            let mut e = QsoEdit::project(&held);
+            e.ota.iota = iota.map(str::to_string);
+            assert!(lb.update_record(0, e.record(&held)));
+            QsoRecord::clone(&lb.records()[0]).ota
+        };
+        // A park and an island: the island changes, the park stays.
+        let ota = edited(record(), Some("EU-005"));
+        assert_eq!(ota.iota.as_deref(), Some("EU-005"));
+        assert_eq!(
+            ota.my_ref.as_deref(),
+            Some("K-1234"),
+            "the park went with it"
+        );
+        // No park at all, and no island yet: the island is written, in its one spelling.
+        let mut bare = record();
+        bare.ota = Ota::default();
+        assert_eq!(
+            edited(bare.clone(), Some(" eu-005 ")),
+            Ota {
+                iota: Some("EU-005".into()),
+                ..Ota::default()
+            }
+        );
+        // A blank box keeps what is stored, with a park and without one.
+        assert_eq!(edited(record(), None).iota.as_deref(), Some("NA-001"));
+        assert_eq!(edited(record(), Some("")).iota.as_deref(), Some("NA-001"));
+        let mut island_only = bare;
+        island_only.ota.iota = Some("NA-001".into());
+        assert_eq!(edited(island_only, None).iota.as_deref(), Some("NA-001"));
+
+        let mut e = QsoEdit::project(&record());
+        e.ota.iota = Some("EU5".into());
+        assert!(e.iota().is_err(), "junk is refused, not stored");
+        e.ota.iota = Some("eu-005".into());
+        assert_eq!(e.iota(), Ok(Some("EU-005".into())));
+        e.ota.iota = None;
+        assert_eq!(e.iota(), Ok(None));
     }
 
     /// The form's own vocabulary for the QSL-sent mark, which the projection has to speak

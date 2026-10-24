@@ -21612,6 +21612,25 @@ fn set_watch_list(
     true
 }
 
+/// Save the Logbook's column choice — the ONE write path for `logbookColumns`, called the moment
+/// the operator shows, hides or resizes a column (`null` is the default table, from the chooser's
+/// reset or Settings ▸ Map & globe). Narrow for the same stale-snapshot reason as
+/// `set_beta_updates`, and because the settings form would also advance the transmit gate's
+/// generation for a change that has nothing to do with transmitting. `Engine::apply_settings`
+/// keeps the live value, so a form save cannot put an older choice back.
+#[tauri::command(async)]
+fn set_logbook_columns(
+    state: State<'_, SharedEngine>,
+    columns: Option<tempo_app::settings::LogbookColumns>,
+) -> Result<(), String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.set_logbook_columns(columns);
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: failed to persist the Logbook's columns: {e}")
+    });
+    Ok(())
+}
+
 /// Turn the BETA update channel on or off — the Settings ▸ App updates switch, and the ONE
 /// write path for it. A NARROW write, and here the narrowness is the point rather than the
 /// #54 cost saving: while this rode along in the whole-struct save, any surface holding a
@@ -39031,6 +39050,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_contest_esm,
         set_psk_macros,
         set_beta_updates,
+        set_logbook_columns,
         retire_wanted_calls,
         set_watch_list,
         set_launch_at_login,

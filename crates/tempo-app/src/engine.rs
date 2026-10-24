@@ -7069,6 +7069,9 @@ impl Engine {
         // with what the computer does at the next sign-in.
         let live_launch_at_login = self.settings.launch_at_login;
         let live_remote_autostart_offer_answered = self.settings.remote_autostart_offer_answered;
+        // The Logbook's column choice: ONE WRITER (`set_logbook_columns`), saved the moment it is
+        // made, so a payload read before it would put an older choice back.
+        let live_logbook_columns = self.settings.logbook_columns.take();
         // The RETIRED wanted list (operator 2026-09-24, "One list"): read once by the desktop's
         // fold into the watch list and then emptied by its one writer, `retire_wanted_calls`. A
         // form payload is a snapshot that may predate the fold, and writing its copy back would
@@ -7191,6 +7194,7 @@ impl Engine {
                 self.settings.js8_last_dial_mhz,
             ) = live_js8_wf;
             self.settings.remote_autostart_offer_answered = live_remote_autostart_offer_answered;
+            self.settings.logbook_columns = live_logbook_columns;
             self.settings.macros.rtty_profiles = live_rtty_profiles;
             self.settings.macros.active_rtty_profile = live_active_rtty_profile;
             self.settings.macros.psk_profiles = live_psk_profiles;
@@ -7795,6 +7799,18 @@ impl Engine {
     /// caller to persist.
     pub fn set_simultaneous_radios(&mut self, on: bool) -> &Settings {
         self.settings.simultaneous_radios = on;
+        &self.settings
+    }
+
+    /// **THE ONE WRITER of `logbook_columns`**: the Logbook's column choice, saved the moment the
+    /// operator makes it (`None` = the default table). Never a form save — it would also advance
+    /// the transmit gate's generation for a change that has nothing to do with transmitting. The
+    /// caller persists.
+    pub fn set_logbook_columns(
+        &mut self,
+        columns: Option<crate::settings::LogbookColumns>,
+    ) -> &Settings {
+        self.settings.logbook_columns = columns;
         &self.settings
     }
 
@@ -39942,6 +39958,51 @@ mod tests {
         e.apply_settings(s);
         assert_ne!(e.tx_gate_gen, generation);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// **No settings form moves the Logbook's column choice.** `set_logbook_columns` is its one
+    /// writer: the Logbook saves a choice the moment it is made, and a Settings payload is a
+    /// snapshot from whenever the sending surface last read the settings — saved later, its copy
+    /// would put an older choice back. A restore or a factory reset is the other contract, and
+    /// takes the bundle's.
+    #[test]
+    fn a_form_save_cannot_move_the_logbook_columns() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let chosen = crate::settings::LogbookColumns {
+            shown: vec!["iota".into()],
+            hidden: Vec::new(),
+            widths: [("country".to_string(), 210)].into_iter().collect(),
+        };
+        let stale = e.settings().clone();
+        e.set_logbook_columns(Some(chosen.clone()));
+        assert_eq!(
+            e.settings().logbook_columns.as_ref(),
+            Some(&chosen),
+            "the verb moves it"
+        );
+
+        e.apply_settings(stale);
+        assert_eq!(
+            e.settings().logbook_columns.as_ref(),
+            Some(&chosen),
+            "a stale form payload put the old columns back"
+        );
+        // …nor can a payload's copy set one: the verb is the only way in.
+        let mut other = e.settings().clone();
+        other.logbook_columns = None;
+        e.apply_settings(other);
+        assert_eq!(e.settings().logbook_columns.as_ref(), Some(&chosen));
+
+        // The positive control: the verb clears it, and a reset takes the bundle's.
+        e.set_logbook_columns(None);
+        assert_eq!(e.settings().logbook_columns, None);
+        e.set_logbook_columns(Some(chosen));
+        e.apply_restored_settings(Settings::default());
+        assert_eq!(
+            e.settings().logbook_columns,
+            None,
+            "a reset keeps nothing it promised to clear"
+        );
     }
 
     /// ⛔ **No settings payload moves Start at sign-in, on ANY path.** `set_launch_at_login` is

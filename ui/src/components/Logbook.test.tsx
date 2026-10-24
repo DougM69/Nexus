@@ -240,9 +240,9 @@ describe('POTA park on logbook edit (#60)', () => {
     const edit = editQsoById.mock.calls[0][1]
     // Editing a POTA QSO that also carries an island reference must keep the iota (the guard's
     // blind spot): a park-only ota built from the four editable fields would silently drop it.
-    // The IOTA has no box, so the edit carries none and the ENGINE keeps the stored one
-    // (tempo-core `QsoEdit::record`, pinned by its park test); the park goes with its programme.
-    expect(edit.ota).toEqual({ myProgram: null, myRef: null, theirProgram: 'POTA', theirRef: 'US-1234' })
+    // The IOTA box opens on the stored reference, so the edit carries it back unchanged beside
+    // the park and its programme (tempo-core `QsoEdit::record`, pinned by its IOTA test).
+    expect(edit.ota).toEqual({ myProgram: null, myRef: null, theirProgram: 'POTA', theirRef: 'US-1234', iota: 'NA-001' })
   })
 })
 

@@ -728,6 +728,31 @@ mod tests {
         );
     }
 
+    /// The DTO carries a contest contact's block OUTBOUND now, for the Logbook to show. The journal
+    /// holds the DTO flattened beside its own `gridSource`, and a key both wrote would make the
+    /// whole journal unreadable — every held contact lost with it, not just the new field. A held
+    /// contest contact reads back, as it did before the field existed.
+    #[test]
+    fn a_held_contest_contact_still_reads_back_from_the_journal() {
+        let mut held = tempo_core::logbook::parse_adif(
+            "<CALL:6>DL1ABC<QSO_DATE:8>20250102<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <FREQ:6>14.025<CONTEST_ID:8>CQ-WW-CW<STX:2>12<SRX:3>345<EOR>",
+        )
+        .pop()
+        .expect("one contact");
+        assert!(held.contest.is_some(), "premise: a contest contact");
+        let text = pending_qso_json(&held, GridSource::LookedUp).expect("serializes");
+        assert_eq!(text.matches("\"contest\"").count(), 1, "{text}");
+        let mut restored = Engine::new("K2DEF", "FN31", 0);
+        restored.load_pending_qso_json(&text);
+        let back = restored.pending_log().expect("the journal read back");
+        // The block is a display copy on the DTO and is not read back — as before it existed —
+        // and holding a contact stamps the station's callsign on it.
+        held.contest = None;
+        held.station_callsign = back.station_callsign.clone();
+        assert_eq!(back, &held);
+    }
+
     #[test]
     fn held_record_keeps_split_and_end_time_through_journal_and_confirmation() {
         let mut fixture = Fixture::new(Tier::Ft8, true);

@@ -2854,7 +2854,13 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
         && rec.ota.their_program.is_none()
         && rec.ota.their_ref.is_none();
     if incoming_ota_empty {
+        // …but an IOTA reference the edit does carry is the edit's (the Logbook form has a box
+        // for it, beside the park boxes); an empty one keeps the stored, like the parks.
+        let iota = rec.ota.iota.take();
         rec.ota = old.ota.clone();
+        if iota.is_some() {
+            rec.ota.iota = iota;
+        }
     }
     // Nor the contest block: the edit form carries none of it (the desktop
     // DTO hard-sets `contest: None`), so without this an ordinary edit drops

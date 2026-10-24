@@ -82,6 +82,7 @@ import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProg
 import type { SliceIntent } from './types'
 import type { FieldDayQso } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
+import type { LogColumnsSaved } from './features/logColumns'
 import type { StreetPack } from './features/streetPack'
 import type {
   StreetArea,
@@ -1592,6 +1593,9 @@ export interface OtaEdit {
   myRef: string | null
   theirProgram: string | null
   theirRef: string | null
+  /** The worked station's IOTA reference ("NA-001"). Blank leaves the stored one, as the park
+   *  boxes do. */
+  iota: string | null
 }
 
 /** Exactly what the Logbook's edit form writes to one contact — tempo-core's `QsoEdit`, whose field
@@ -4027,6 +4031,15 @@ export async function setBlockedCalls(calls: string[]): Promise<AppSnapshot> {
  * the live value across every settings save, so this verb is the only thing that moves it. */
 export async function setBetaUpdates(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_beta_updates', { on })
+}
+
+/** Save the Logbook's column choice (features/logColumns.ts) — the ONE write path for
+ * `logbookColumns`, for the same stale-snapshot reason as `setBetaUpdates`: the backend keeps the
+ * live value across every settings save. Narrow, never the settings form, which would also move
+ * the transmit gate's generation for a change that has nothing to do with transmitting. `null`
+ * forgets the choice: the default table. */
+export async function setLogbookColumns(columns: LogColumnsSaved | null): Promise<void> {
+  return invoke<void>('set_logbook_columns', { columns })
 }
 
 /** Start Nexus when the operator signs in to this computer — the ONE write path for Settings ▸

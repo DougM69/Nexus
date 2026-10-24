@@ -17,6 +17,7 @@ import {
   getBandPlan,
   getFdRuleset,
   getSettings,
+  setLogbookColumns,
   logOperators,
   getSnapshot,
   type FdRulesetDto,
@@ -3458,6 +3459,13 @@ function App() {
             focusCall={logFocus}
             onConsumeFocusCall={() => setLogFocus(null)}
             logTick={snap.logTick}
+            // The column choice lives in settings.json, saved through its one writer: a settings
+            // save from an older copy keeps the live one (`set_logbook_columns`).
+            columns={settings?.logbookColumns}
+            onColumnsChange={(logbookColumns) => {
+              setSettings((prev) => (prev ? { ...prev, logbookColumns } : prev))
+              void withErrorToast(() => setLogbookColumns(logbookColumns), t('logbook.columns.saveFailed'))
+            }}
             defaultBand={snap.radio.band}
             defaultFreqMhz={snap.radio.dialMhz}
             // Seed manual entries from the mode the operator was ACTUALLY running —

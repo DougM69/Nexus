@@ -2621,6 +2621,25 @@ export interface LoggedQso {
   /** #239: the radio used for this contact (ADIF MY_RIG). */
   myRig?: string | null
   extra?: [string, string][]
+  /** The contest block of a contact logged in a contest (CONTEST_ID, STX/SRX and the exchange as
+   *  logged); absent on an ordinary contact. Display only: sent back, it is ignored, and an edit
+   *  keeps the stored block. */
+  contest?: LoggedContest | null
+}
+
+/** A contest contact's contest fields, as the Logbook shows them. */
+export interface LoggedContest {
+  /** ADIF `CONTEST_ID` ("ARRL-FIELD-DAY"). */
+  contestId: string
+  /** ADIF `STX` / `SRX`: the serial sent and received. */
+  stx?: number | null
+  srx?: number | null
+  /** ADIF `STX_STRING` / `SRX_STRING`. */
+  stxString?: string | null
+  srxString?: string | null
+  /** The exchange as logged, field by field: `[field, value]`. */
+  sent?: [string, string][]
+  rcvd?: [string, string][]
 }
 
 /** On-the-air (POTA/SOTA) references for a QSO. POTA maps to ADIF SIG/SIG_INFO, SOTA to SOTA_REF. */
@@ -5072,6 +5091,11 @@ export interface Settings {
   /** Remote's one-time offer to turn on `launchAtLogin` has been answered (either way), so it is
    * never shown again. READ-ONLY through this struct: write it with `answerRemoteAutostartOffer`. */
   remoteAutostartOfferAnswered?: boolean
+  /** The Logbook's column choice (features/logColumns.ts): the default columns turned off, the
+   *  others turned on, and dragged widths in px. Absent = the default table. READ-ONLY through
+   *  this struct, like `betaUpdates`: write it with `setLogbookColumns` (api.ts), its one writer,
+   *  so a settings form saved from an older copy cannot put an old choice back. */
+  logbookColumns?: import('./features/logColumns').LogColumnsSaved | null
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string
   n3fjpPort?: number

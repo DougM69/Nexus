@@ -42,10 +42,16 @@ beside the search box filters to contacts without an award-eligible (LoTW/paper)
 confirmation — a QSL you've *requested* but not received still counts as
 unconfirmed and stays in that list.
 
-**More columns**, beside it, widens the table to show your own grid and rig for
-each contact, plus the name, QTH, state, power and operator the compact table
-leaves out. The wider table scrolls sideways. It stays off until you turn it on,
-and Nexus remembers your choice on this computer.
+**Columns**, beside it, chooses what the table shows. Tick a column to add it:
+your own grid and rig, the name, QTH, state, power and operator, and what the
+log stores about the station you worked — their grid, IOTA, county, CQ and ITU
+zones, continent and distance, the dates a card was sent and a QSL received,
+each service's upload state, and a contest contact's exchange. Untick one to
+hide it. Drag the right edge of a column's header to change its width (or press
+Alt+← / Alt+→ on the header); double-click the edge to put it back. A table with
+added columns scrolls sideways. Nexus keeps the choice in your settings, and
+**Reset to the default columns** in the same menu, or Settings ▸ Appearance ▸
+Map & globe, puts the default table back.
 
 **What each contact records.** Besides the call, band, mode and reports, a contact you log
 carries:
