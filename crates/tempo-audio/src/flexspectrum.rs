@@ -40,7 +40,14 @@ use tempo_net::flexvita::{
 
 /// Panadapter span: a 200 kHz window centered on the dial.
 const SPAN_HZ: f64 = 200_000.0;
-const FPS: u32 = 15;
+/// Frame rate we command the Flex pan to stream at. 30 fps (operator ruling 2026-10-23 — up from
+/// 15): the commanded rate is the Flex path's dominant latency term, and 15 fps held the
+/// panadapter well below the radio's own SmartSDR cadence, which was the "less responsive on a
+/// Flex" feel. ⚠️ NEEDS-BENCH: ships only after a bench check on a real Flex (6300/6400M) confirms
+/// the extra UDP/FFT traffic (~2×, roughly 60→120 KB/s at 2048 u16 bins) does not starve a
+/// monitored radio's CAT poll. Pairs with a UI poll at least this fast (the phone scope polls at
+/// 20 Hz today, which under-samples 30 fps).
+const FPS: u32 = 30;
 /// The pan's width in FFT bins; the UI downsamples to its pixel width.
 const X_PIXELS: u32 = 2048;
 /// The pan's height in rows: the scale its FFT bins are counted on, row 0 at the top. Upstream's
@@ -1270,7 +1277,7 @@ mod tests {
                 "display pan set 0x40000000 xpixels=2048 ypixels=700",
                 "display pan set 0x40000000 center=14.100000",
                 "display pan set 0x40000000 bandwidth=0.050000",
-                "display pan set 0x40000000 fps=15",
+                "display pan set 0x40000000 fps=30",
                 "display pan set 0x40000000 max_dbm=-40 min_dbm=-140",
             ]
         );
