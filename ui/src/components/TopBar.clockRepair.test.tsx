@@ -18,6 +18,12 @@ vi.mock('../api', () => ({
   appVersion: vi.fn(() => Promise.resolve('0.0.0')),
   repairClock: vi.fn(),
 }))
+// A computer driving a station (client mode): off unless a case turns it on.
+const driving = vi.hoisted(() => ({ on: false }))
+vi.mock('../features/durableStore', async (actual) => ({
+  ...(await actual<typeof import('../features/durableStore')>()),
+  drivesAnotherStation: () => driving.on,
+}))
 vi.mock('../toast', async (original) => ({
   ...(await original<typeof import('../toast')>()),
   pushToast: vi.fn(),
@@ -139,6 +145,22 @@ describe('a press', () => {
     renderBar()
     await act(async () => fireEvent.click(button()!))
     expect(toast).toHaveBeenCalledWith(EN[key], 'error')
+  })
+})
+
+// On a computer driving a station the repair is the station's: client mode refuses it in words
+// (`client.refused.shackOnly`), and those are what the toast says. It used to say the repair did
+// not take, which read as a declined administrator prompt.
+describe('on a computer driving a station', () => {
+  afterEach(() => {
+    driving.on = false
+  })
+  it('says it is only at the station, in the words the refusal came with', async () => {
+    driving.on = true
+    repair.mockRejectedValue(EN['client.refused.shackOnly'])
+    renderBar()
+    await act(async () => fireEvent.click(button()!))
+    expect(toast).toHaveBeenCalledWith(EN['client.refused.shackOnly'], 'error')
   })
 })
 

@@ -1102,7 +1102,7 @@ export function OperateCockpit({
         return
       }
       setLocalNext(5)
-      startCq(dir).then((s) => onSnap?.(s)).catch(() => {})
+      void startCq(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
       return
     }
     const call = dxCall.trim().toUpperCase()

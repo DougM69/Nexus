@@ -21966,7 +21966,7 @@ async fn open_panel_window(
     // long as it exists: from here, once it is built, to its `Destroyed` event (the app's window
     // handler). Never persisted, so a restart cannot leave it shared.
     if slug == CONTEST_LOGGER_SLUG && matches!(inst, Instance::Main) {
-        engine_lock(&app.state::<SharedEngine>()).contest_entry_share(true);
+        share_the_contest_entry(&app);
     }
     if let Some(side) = docked_side {
         // Re-pin to the edge of the current work area (best-effort; ignore if unmapped) so a
@@ -21977,6 +21977,16 @@ async fn open_panel_window(
         window_state::arm_panel_capture(&win);
     }
     Ok(())
+}
+
+/// The contest logger window opened: the station's Engine shares the contest strip's entry with it.
+/// A computer driving another station has no Engine here (`client_mode` manages none), so there it
+/// shares nothing; `app.state` panicked in this async command, and the panic hook said Nexus could
+/// not start.
+fn share_the_contest_entry<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(engine) = app.try_state::<SharedEngine>() {
+        engine_lock(&engine).contest_entry_share(true);
+    }
 }
 
 /// Snap the calling band-map window to the left/right edge of its monitor as a full-height
@@ -36138,6 +36148,14 @@ fn rebuild_after_setting_webview_data_aside(
 /// for.
 static STARTUP_REACHED_WINDOW: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+/// Client mode's window is up (`client_mode::run`'s setup). Its launch never reaches the station
+/// setup that sets [`STARTUP_REACHED_WINDOW`], so without this every later panic on a computer
+/// driving a station raised the startup-failure box over a running app.
+pub(crate) fn startup_reached_window() {
+    STARTUP_REACHED_WINDOW.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// The dialog is shown at most once per process: a failing startup can panic on several
 /// threads, and a stack of identical message boxes is its own bug report.
 static STARTUP_FAILURE_SHOWN: std::sync::atomic::AtomicBool =
@@ -41279,9 +41297,13 @@ mod tests {
         let open = body("\nasync fn open_panel_window(");
         let built = open.find("builder.build()").expect("the window is built");
         let shared = open
-            .find("contest_entry_share(true)")
+            .find("share_the_contest_entry(&app)")
             .expect("opening the logger window shares the entry");
         assert!(built < shared, "only once the window exists");
+        assert!(
+            body("\nfn share_the_contest_entry<").contains("contest_entry_share(true)"),
+            "the share is the engine's"
+        );
         let build = body("\nfn build_app(");
         let destroyed = build
             .find("WindowEvent::Destroyed")
@@ -41311,6 +41333,29 @@ mod tests {
             crate::panel_min_inner(crate::CONTEST_LOGGER_SLUG),
             crate::panel_min_inner("")
         );
+    }
+
+    /// A computer driving a station has no Engine here (client mode manages none), so opening the
+    /// contest logger window there shares nothing: `app.state` panicked, and the panic hook raised
+    /// "Nexus could not start" over a running app. CONTROL: with the station's Engine the same
+    /// opening shares the entry.
+    #[test]
+    fn opening_the_contest_logger_with_no_engine_here_shares_nothing_and_panics_not() {
+        let mock = || tauri::test::mock_context(tauri::test::noop_assets());
+        let client = tauri::test::mock_builder()
+            .build(mock())
+            .expect("a mock app with no Engine");
+        crate::share_the_contest_entry(client.handle());
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let station = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .build(mock())
+            .expect("a mock station");
+        assert!(engine_lock(&engine).snapshot().contest_entry.is_none());
+        crate::share_the_contest_entry(station.handle());
+        assert!(engine_lock(&engine).snapshot().contest_entry.is_some());
     }
 
     /// The Spots window (the Spots board popped out, `?panel=spots`): its own name in the title bar

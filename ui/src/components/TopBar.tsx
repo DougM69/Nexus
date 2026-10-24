@@ -23,6 +23,7 @@ import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
 import { UtcClock } from './UtcClock'
+import { drivesAnotherStation } from '../features/durableStore'
 
 /** The bar's own plates: the product name, the two directions of the TX/RX indicator, the
  *  operator prefix and the recording badge. Tokens, named so the catalog guard reads them as the
@@ -294,8 +295,11 @@ function ClockChip({ radio }: { radio: RadioStatus }) {
   )
 }
 
-/** What a refused Repair clock press says. The backend's codes, each its own sentence. */
+/** What a refused Repair clock press says. The backend's codes, each its own sentence. On a
+ *  computer driving a station the repair is the station's, and the refusal comes in words
+ *  (`api.ts`): those are said as they came. */
 function clockRepairRefused(code: unknown): string {
+  if (drivesAnotherStation()) return code instanceof Error ? code.message : String(code)
   if (code === 'onAir') return t('topbar.clock.repair.onAir')
   if (code === 'midMessage') return t('topbar.clock.repair.midMessage')
   if (code === 'repairRunning') return t('topbar.clock.repair.running')

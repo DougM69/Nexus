@@ -1838,6 +1838,12 @@ const CW_REFUSED_CW_PRIVILEGES: &str = "CW not sent: where it would key is outsi
 const CW_LEFT_SECTION: &str = "CW stopped: you left the CW screen, so what was still to go was \
      dropped. Send it again when you are ready.";
 
+/// Why a send was refused with the TX latch off, in the keyboard and message cockpits (RTTY, PSK,
+/// JTTY, SSTV, the voice keyer). It says what to do and guesses no cause: the latch is off after a
+/// Stop TX or the watchdog, and also before the first send from a computer driving the station,
+/// whose entry to a section arms nothing.
+const TX_OFF_TURN_IT_ON: &str = "TX is off — turn TX on first";
+
 /// Why [`Engine::send_cw_armed`] took nothing: the contest strip shows it, and logs nothing.
 /// English at the engine, like the refusals above.
 const CW_ARMED_NOT_CW: &str = "Not sent: this is not the CW screen.";
@@ -12840,9 +12846,7 @@ impl Engine {
         }
         if !self.tx_enabled {
             tempo_core::applog::info("tx", "voice-keyer message refused: transmit is off");
-            return Err(
-                "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
-            );
+            return Err(TX_OFF_TURN_IT_ON.to_string());
         }
         if let Some(why) = self.connection_tx_refusal() {
             tempo_core::applog::info("tx", &format!("voice-keyer message refused: {why}"));
@@ -23259,9 +23263,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err(REMOTE_HOLD_HOLDS_TX.to_string());
         }
         if !self.tx_enabled {
-            return Err(
-                "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
-            );
+            return Err(TX_OFF_TURN_IT_ON.to_string());
         }
         if let Some(why) = self.connection_tx_refusal() {
             return Err(why.to_string());
@@ -23591,9 +23593,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err(REMOTE_HOLD_HOLDS_TX.to_string());
         }
         if !self.tx_enabled {
-            return Err(
-                "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
-            );
+            return Err(TX_OFF_TURN_IT_ON.to_string());
         }
         if let Some(why) = self.connection_tx_refusal() {
             return Err(why.to_string());
@@ -24937,9 +24937,7 @@ contact yourself."
             return Err(REMOTE_HOLD_HOLDS_TX.to_string());
         }
         if !self.tx_enabled {
-            return Err(
-                "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
-            );
+            return Err(TX_OFF_TURN_IT_ON.to_string());
         }
         if let Some(why) = self.connection_tx_refusal() {
             return Err(why.to_string());
@@ -35836,6 +35834,38 @@ mod tests {
             .sstv_send(sstv_img_samples(), "PD-120".into())
             .unwrap_err()
             .contains("Already"));
+    }
+
+    /// A send refused because TX is off gives the true reason, the same in every keyboard and
+    /// message cockpit: "turn TX on first". It used to guess why ("Stop TX / the watchdog disarmed
+    /// it"), which was false for the first send after a computer driving the station entered the
+    /// section, since an entry from afar arms nothing. The latch and the refusal are unchanged.
+    #[test]
+    fn a_send_refused_with_tx_off_says_to_turn_tx_on() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.set_frequency(14.080, "20m", "USB");
+        e.set_operating_mode("rtty", false);
+        e.set_tx_enabled(false);
+        let rtty = e.set_rtty_latched(true).unwrap_err();
+        e.set_operating_mode("keyboard", false);
+        e.set_tx_enabled(false);
+        let psk = e.set_psk_latched(true).unwrap_err();
+        e.set_frequency(14.290, "20m", "USB");
+        e.set_operating_mode("phone", false);
+        e.set_tx_enabled(false);
+        let voice = e.send_voice(vec![0.5]).unwrap_err();
+        let sstv = e
+            .sstv_send(sstv_img_samples(), "PD-120".into())
+            .unwrap_err();
+        for (what, err) in [
+            ("RTTY", rtty),
+            ("PSK", psk),
+            ("voice", voice),
+            ("SSTV", sstv),
+        ] {
+            assert_eq!(err, "TX is off — turn TX on first", "{what}");
+        }
     }
 
     #[test]

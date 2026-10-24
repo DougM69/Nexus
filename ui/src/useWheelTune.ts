@@ -4,6 +4,7 @@ import type { AppSnapshot } from './types'
 import { setFrequency } from './api'
 import { bandLabelForMhz } from './band'
 import { clampWheelTarget, stepFrom } from './wheelTuningPolicy'
+import { showWhenDriving } from './features/drivingRefusal'
 
 /** Trailing-flush window: at most one CAT write per this many ms while the wheel spins. */
 const FLUSH_MS = 120
@@ -122,7 +123,7 @@ export function useWheelTune(
     // own knob. What still bounds a burst is `clampToBand`, not this.
     void setFrequency(mhz, bandLabelForMhz(mhz), sideband || 'USB')
       .then((s) => s && onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }, [])
 
   /** Seed the optimistic target for a fresh burst (or one resumed after a pause) from the live

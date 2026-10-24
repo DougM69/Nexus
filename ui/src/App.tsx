@@ -352,9 +352,11 @@ function App() {
   useAchievements(features.isOn('gamification'))
   useJourneyUnlocks(features.isOn('gamification'))
   const reveal = useReveals(features)
-  // First-run setup wizard (goal-driven). Only on a genuinely fresh install.
+  // First-run setup wizard (goal-driven). Only on a genuinely fresh install, and never by itself on a
+  // computer driving another station: it sets up a station, and there every setting it edits is the
+  // station's, while "fresh" is read from this computer's own storage. Settings still offers it.
   const [showWizard, setShowWizard] = useState<boolean>(
-    () => features.firstRun && storageWritable() && !wizardSeen(),
+    () => !drivesAnotherStation() && features.firstRun && storageWritable() && !wizardSeen(),
   )
   // Getting started guide — Help ▸ Getting started, and the wizard's optional
   // walkthrough offer. Pure documentation: it writes nothing and is never

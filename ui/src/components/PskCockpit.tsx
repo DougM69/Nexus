@@ -51,6 +51,7 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { confidenceRuns } from '../transcript'
 import { PSK_MODES, PSK_MODE_BY_SLUG } from '../pskModes'
 import { t } from '../i18n'
+import { showWhenDriving } from '../features/drivingRefusal'
 import { useEscStop } from '../useEscStop'
 import { PskMacroButton, PskMacroEditor, PskMacroSetSwitch, isEmptyPskSlot } from './PskMacroEditor'
 import type { MacroEditorFocus } from './MacroEditor'
@@ -601,7 +602,12 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             unit: '%',
             onChange: (pct: number) => {
               setPower(pct)
-              void setRfPower(pct / 100)
+              // A refused level goes back to what the rig reports (Phone's slider says why).
+              void setRfPower(pct / 100).catch((e) => {
+                const rb = snap.radio.rfPower
+                if (rb != null) setPower(Math.round(rb * 100))
+                showWhenDriving(e)
+              })
             },
             label: t('psk.header.power.label'),
             title: t('psk.header.power.title'),
@@ -762,7 +768,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           radio={snap.radio}
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}
-          onTune={(on) => { void setTune(on).then((s) => onSnap?.(s)) }}
+          onTune={(on) => { void setTune(on).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error')) }}
           onAtuTune={() =>
             void atuTune()
               .then((s) => onSnap?.(s))

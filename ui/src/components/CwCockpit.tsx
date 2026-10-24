@@ -116,6 +116,7 @@ import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { cwScopeSideSign, cwScopeWindow, isRfScopeSource, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { t } from '../i18n'
+import { showWhenDriving } from '../features/drivingRefusal'
 import { T } from '../i18n/T'
 import type { MessageKey } from '../i18n'
 
@@ -592,7 +593,7 @@ export function CwCockpit({
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => s && onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
   // Native scope feed (reported by PhoneScope) → drives the RF-panadapter switch, exactly like
   // Phone. When a Flex/Icom CI-V scope is streaming we show the real RF spectrum (with client
@@ -656,13 +657,13 @@ export function CwCockpit({
     setFlexRefDbm(dbm)
     void setFlexPanRef(dbm)
       .then((s) => onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
   const [rfSpan, setRfSpan] = useState<(typeof RF_SPANS)[number]>(RF_SPANS[0])
   const [scopeRefTenths, setScopeRefTenths] = useState(0)
   const changeScopeRef = (tenths: number) => {
     setScopeRefTenths(tenths)
-    void setScopeRef(tenths)
+    void setScopeRef(tenths).catch(showWhenDriving)
   }
   // Live single-signal CW decode of the receive audio at the marker pitch — poll the
   // engine ~1.4 Hz (the decode reads a multi-second ring, so faster adds no detail).
@@ -1029,10 +1030,16 @@ export function CwCockpit({
   const changeWpm = (w: number, persist = true) => {
     const v = Math.max(WPM_MIN, Math.min(WPM_MAX, Math.round(w)))
     setWpm(v)
-    void setCwWpm(v, false)
+    // A refused speed goes back to what the keyer reports: the read-back moves the slider only
+    // when its value changes, and a refusal changes nothing.
+    void setCwWpm(v, false).catch((e) => {
+      const rb = snap.radio.cwWpm
+      if (rb != null) setWpm(rb)
+      showWhenDriving(e)
+    })
     if (!persist) return
     clearTimeout(wpmCommit.current)
-    wpmCommit.current = setTimeout(() => void setCwWpm(v, true), 600)
+    wpmCommit.current = setTimeout(() => void setCwWpm(v, true).catch(showWhenDriving), 600)
   }
   // The F-key last sent from here, for the turn cue's "send it again".
   const lastKeyRef = useRef<string | null>(null)
@@ -1280,7 +1287,7 @@ export function CwCockpit({
     // In-band keeps the current sideband; crossing 10 MHz follows the band convention (#45).
     void setFrequency(mhz, bandLabelForMhz(mhz), sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband))
       .then((s) => s && onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
   const changeKeyer = (k: 'cat' | 'soundcard' | 'winkeyer' | 'serial') => {
     setKeyer(k)
@@ -1675,7 +1682,7 @@ export function CwCockpit({
                      explanation anywhere. The rig's OWN refusal arrives a tick later in
                      `radio.scopeSpanRefused` (the status lane); this catch is the nearer half,
                      the command itself failing. */
-                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
                 >
                   {sp.label}
                 </button>
@@ -1712,7 +1719,7 @@ export function CwCockpit({
                   type="button"
                   className="theme-chip"
                   title={t('cw.flexPan.span.title', { span: sp.label })}
-                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
                 >
                   {sp.label}
                 </button>
@@ -2073,7 +2080,11 @@ export function CwCockpit({
   const txStrip = (
     <CockpitTxStrip
       radio={snap.radio}
-      onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+      onTune={(on) =>
+        void setTune(on)
+          .then((s) => onSnap?.(s))
+          .catch((e) => pushToast(String(e), 'error'))
+      }
       onAtuTune={() =>
         void atuTune()
           .then((s) => onSnap?.(s))

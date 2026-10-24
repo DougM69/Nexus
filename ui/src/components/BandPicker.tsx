@@ -10,6 +10,7 @@ import { getLicensedBandPlan, pickBand } from '../api'
 import { bandChipInk, bandColor } from '../bandColors'
 import { BandMenu } from './BandMenu'
 import { t } from '../i18n'
+import { showWhenDriving } from '../features/drivingRefusal'
 
 interface Props {
   snap: AppSnapshot
@@ -46,7 +47,7 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
     if (!plan.some((c) => c.band === band)) return
     void pickBand(band, mode)
       .then((s) => onSnap?.(s))
-      .catch(() => {})
+      .catch(showWhenDriving)
   }
 
   // If the operator has manually tuned to a band that's not a licensed jump target (or off

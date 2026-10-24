@@ -204,6 +204,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change gives USB or LSB, never DATA; picking a mode is sent to the shack, and a refusal is shown
   instead of switching. The TX On/Off button beside Tune in Phone now works from there, through all
   of the shack's transmit checks, and a refused Tune is shown.
+- **Driving the shack from another computer: a refused press now says why, and nothing that belongs to the shack
+  pretends otherwise.** CQ, Tune in every screen, the popped-out Operate window's buttons, JS8 typeahead, band picks,
+  tuning, AGC, RF power and CW speed show the reason when they are refused, and a refused power or speed slider goes
+  back to the rig's level. Opening the contest logger window no longer brings up "Nexus could not start". A send
+  refused because TX is off now says "turn TX on first". Repair clock, Clear test contacts, the Field Day club's
+  Give and Remove, the Remote access card and the Connections log say they are at the shack, and the first-run
+  setup wizard no longer opens by itself on that computer.
 - **A computer driving a remote station opens that station again next launch, not its own.** When you Operate a
   paired station from this computer, Nexus drives that station and keeps its own station off. Closing Nexus and
   opening it fresh — from the icon, or after a reboot — used to start this computer's own station instead, dropping

@@ -6056,6 +6056,8 @@ export const ES: PartialCatalog = {
   "settings.connections.hrdlog.code.saved": "Código de HRDLog.net guardado — la subida automática a HRDLog.net está ACTIVADA",
   "settings.connections.legend": "Conexiones",
   "settings.connections.log.empty": "Aún no hay eventos en esta sesión — guarda una credencial o lanza una sincronización y aparecerá aquí.",
+  "settings.connections.log.atStation": "Este registro se guarda en la estación: léelo allí, en Ajustes.",
+  "settings.remote.atStation": "El acceso remoto se configura en la estación, en su propia pantalla.",
   "settings.connections.log.hint": "cada guardado, sincronización, envío y fallo aparece aquí",
   "settings.connections.log.title": "Log de conexiones",
   "settings.connections.lotw.password.clearFailed": "No se pudo borrar la contraseña de LoTW",

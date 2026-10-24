@@ -709,7 +709,9 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}
           onTune={(on) => {
-            void setTune(on).then((s) => onSnap?.(s))
+            void setTune(on)
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
           }}
           onAtuTune={() =>
             void atuTune()
