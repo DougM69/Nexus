@@ -411,8 +411,8 @@ impl Authority {
     /// (the 2026-10-23 sign-in decision). Called at every lease event under the Engine lock, so the
     /// gate always reflects who holds the station now: a held device's hold never leaks onto the
     /// next controller or the local operator, and a sign-in controller without a positive waiver
-    /// cannot arm. With no controller nobody is held. The hold itself stops and disarms nothing —
-    /// the engine side refuses only an ARM.
+    /// cannot start a transmission. With no controller nobody is held. The hold itself stops and
+    /// disarms nothing — the engine side refuses only a START (an arm, a key, a send, an over).
     fn apply_tx_hold(&self, c: &Core, engine: &mut tempo_app::engine::Engine, now: Instant) {
         // EVERY controller goes through `tx_held_for`: the decision is a pure function of RECORDED
         // provenance, never the lease's transport (a tunnelled connection that looks LAN must not

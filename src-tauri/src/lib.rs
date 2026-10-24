@@ -35079,6 +35079,8 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         let tx_enabled = e.tx_enabled();
         let tx_allowed = e.tx_allowed();
         let owner = e.tx_owner();
+        let clock_repair = e.clock_repair_holds_tx();
+        let held = e.remote_transmit_held();
         let granted = e.broker_ptt(on);
         drop(e);
         if !on {
@@ -35101,6 +35103,12 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
                 .to_string()
         } else if let Some(o) = owner {
             o.busy_reason()
+        } else if held {
+            "a newly signed-in Remote device controls the station and is not yet approved — \
+             approve it at the shack"
+                .to_string()
+        } else if clock_repair {
+            "the clock is being repaired; transmit resumes when it is done".to_string()
         } else {
             "the band or radio changed since this client last keyed — re-arm transmit in Nexus"
                 .to_string()

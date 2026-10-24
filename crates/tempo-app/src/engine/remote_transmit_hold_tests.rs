@@ -1,7 +1,7 @@
 //! ⛔ A SIGN-IN AUTO-GRANTED DEVICE HOLDS TRANSMIT (the 2026-10-23 sign-in decision). A device the
 //! owner's account signed in and was auto-granted control to may connect, operate the receiver and
-//! hold station control, but no transmit ARM starts while the service holds it — through every arm
-//! path. The hold itself keys, unkeys and disarms nothing: Stop and the off half of the TX-enable
+//! hold station control, but no transmission STARTS while the service holds it — no arm, key,
+//! send or over, even under a latch that was already on. The hold itself keys, unkeys and disarms nothing: Stop and the off half of the TX-enable
 //! latch are taken at once, held or not. The service decides the hold FAIL-CLOSED (a sign-in
 //! controller is held unless positively waived) and sets it here
 //! ([`Engine::set_remote_transmit_held`]); these drive the engine's own gates against the flag.

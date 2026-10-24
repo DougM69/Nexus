@@ -113,12 +113,18 @@ impl Engine {
             // Armed by a held press; nothing keys until the first frame of audio arrives (M1).
             return Some(PttRefusal::NoAudio);
         }
-        // Not armed: the first gate a fresh press would meet, in `arm_remote_mic`'s own order.
+        // Not armed: the first gate a fresh press would meet, in `arm_remote_mic`'s order — except
+        // that the approval hold is named first (below), since it refuses the switch-on as well.
         if self.mic_feed.is_none() {
             return Some(PttRefusal::NoFeed);
         }
         if self.settings.operating_mode != OperatingMode::Phone {
             return Some(PttRefusal::NotPhone);
+        }
+        // The approval hold is named before the latch: a held device switching TX on would be
+        // refused too, so "approve it at the station" is the reason that tells it what to do.
+        if self.remote_transmit_held() {
+            return Some(PttRefusal::OnHold);
         }
         if !self.tx_enabled {
             return Some(PttRefusal::TxDisabled);
@@ -134,9 +140,6 @@ impl Engine {
         }
         if self.clock_repair_holds_tx() {
             return Some(PttRefusal::ClockRepair);
-        }
-        if self.remote_transmit_held() {
-            return Some(PttRefusal::OnHold);
         }
         if !self.remote_presence.as_ref().is_some_and(|p| p.valid(now)) {
             return Some(PttRefusal::NoPresence);
@@ -1081,6 +1084,11 @@ mod tests {
         let mut s = scene();
         s.e.set_tx_enabled(false);
         assert_eq!(s.e.ptt_refusal(s.at(0)), Some(PttRefusal::TxDisabled));
+        // The same, while the device is on the approval hold: switching TX on would be refused
+        // too, so the hold is the reason named — approval is what lets it transmit.
+        s.e.set_remote_transmit_held(true);
+        assert_eq!(s.e.ptt_refusal(s.at(0)), Some(PttRefusal::OnHold));
+        s.e.set_remote_transmit_held(false);
 
         // Armed by a held press, with no audio yet: the over waits to key.
         let mut s = scene();

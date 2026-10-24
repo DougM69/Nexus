@@ -4750,7 +4750,7 @@ impl StationCore {
         self.remote_transmit_held = held;
     }
 
-    /// Whether a sign-in transmit hold refuses an arm right now.
+    /// Whether a sign-in transmit hold refuses a transmission start right now.
     pub fn remote_transmit_held(&self) -> bool {
         self.remote_transmit_held
     }
