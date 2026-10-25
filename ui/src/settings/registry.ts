@@ -461,7 +461,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'dwell', 'how long', 'seconds', 'miss',
       // The new DXCC / grid alert's own switch, and the three band menus the Needed boards
       // follow. Searched for by what they do: the beep, or what the board lists.
-      'beep', 'needed board'],
+      'beep', 'needed board',
+      // The board's opt-in WPX and WAE chips, by the awards' names and by what they mark.
+      'wpx', 'prefix', 'wae', 'worked all europe'],
   },
 
   // ---- Logbook -----------------------------------------------------------------

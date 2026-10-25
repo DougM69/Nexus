@@ -1794,6 +1794,11 @@ a new one is genuinely an event.
   you close it still does.
 - **My call** — "Beep + flash when someone directs a call at you."
 - **CQ calls** — "Alert on any decoded CQ. Off by default — CQs are constant."
+- **Show WPX prefix needs** — adds a WPX chip to a Needed-board station that would be a new
+  CQ WPX prefix on that band and mode (CW, phone or digital). Off by default: almost every
+  station is a new prefix, so with it on most rows carry the chip. A chip only: no sound, no
+  pop-up, and the row's headline and order stay as they were.
+- **Show WAE country needs** — the same for a new Worked All Europe country. Off by default.
 - **New DXCC and grid alerts** — the sound and the pop-up when you decode a new
   DXCC, a new grid or a rare grid 💎 on a band its menu allows. On by default. Off
   silences those alerts and changes nothing else: the three menus keep their

@@ -190,6 +190,29 @@ const NEED_TYPE_OPTS: NeedTypeFilter[] = [
 /** The programmes' own names — the same four letters in every language. */
 const POTA_PROGRAM = 'POTA'
 const SOTA_PROGRAM = 'SOTA'
+/** The awards' own names, the same three letters in every language. */
+const WPX_AWARD = 'WPX'
+const WAE_AWARD = 'WAE'
+
+/** The opt-in WPX and WAE chips (Settings ▸ Spots & Alerts ▸ Alerts, both off as they ship). The
+ *  station sends `wpxNeed` / `waeNeed` only while its setting is on, so a board with them off renders
+ *  exactly as it did before they existed. */
+function awardChips(a: NeedAlert): { label: string; title: string }[] {
+  const chips: { label: string; title: string }[] = []
+  if (a.wpxNeed) {
+    chips.push({
+      label: WPX_AWARD,
+      title: t('need.chip.wpx.title', { prefix: a.wpxNeed, band: a.band, mode: a.mode }),
+    })
+  }
+  if (a.waeNeed) {
+    chips.push({
+      label: WAE_AWARD,
+      title: t('need.chip.wae.title', { country: a.waeNeed, band: a.band, mode: a.mode }),
+    })
+  }
+  return chips
+}
 
 /** The chip's word. A switch rather than a table so each key is a literal at its use. */
 function needTypeLabel(value: NeedTypeFilter): string {
@@ -768,14 +791,14 @@ export function NeededPanel({
                         deg: az.deg,
                         band: a.band,
                         mode: a.mode,
-                        tags: a.tags.join(' '),
+                        tags: [...a.tags, ...awardChips(a).map((c) => c.label)].join(' '),
                       })
                     : t('needed.row.aria', {
                         call: a.call,
                         entity: a.entity,
                         band: a.band,
                         mode: a.mode,
-                        tags: a.tags.join(' '),
+                        tags: [...a.tags, ...awardChips(a).map((c) => c.label)].join(' '),
                       })
                 }
                 tabIndex={roving.rowProps(i).tabIndex}
@@ -800,6 +823,11 @@ export function NeededPanel({
                       title={tag === 'NewState' ? stateChipTitle(a.stateFrom) : chipFor(tag).title}
                     >
                       {chipFor(tag).label}
+                    </span>
+                  ))}
+                  {awardChips(a).map((c) => (
+                    <span key={c.label} className="need-chip" title={c.title}>
+                      {c.label}
                     </span>
                   ))}
                 </span>

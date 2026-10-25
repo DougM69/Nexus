@@ -15,8 +15,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::awards::BandAward;
+use crate::awards::{BandAward, RecordFields};
 use crate::model::{Band, ModeClass};
+use crate::needalert::NeedAlert;
 
 /// What the award fold credited one contact with — the slots it filled, whether or not they were
 /// confirmed — handed here once the fold has placed it.
@@ -241,6 +242,47 @@ impl Slot {
     }
 }
 
+/// The WPX prefixes and WAE countries the log has worked on each band in each mode class (CW,
+/// Phone, Digital), from the award fold: what the Needed board's opt-in WPX and WAE chips ask of a
+/// station heard ([`mark_award_needs`]).
+#[derive(Debug, Clone, Default)]
+pub struct WpxWaeWorked {
+    wpx: HashSet<(String, Band, ModeClass)>,
+    wae: HashSet<(u16, Band, ModeClass)>,
+}
+
+/// The Needed board's opt-in WPX and WAE chips (operator ruling 2026-10-25: both off by default,
+/// because almost every station heard is an unworked WPX prefix). With `wpx` on, a row whose
+/// station would be a new WPX prefix on the row's band in its mode class names that prefix
+/// ([`NeedAlert::wpx_need`]); with `wae` on, one that would be a new WAE country names the country
+/// ([`NeedAlert::wae_need`]). Nothing else on a row moves — its tags, headline and priority, and
+/// so every alert, stay as they were — and with both off no row is touched at all.
+///
+/// The station heard has no record, so its prefix and country come from its call alone, through
+/// the resolvers the fold credits a logged contact's call with ([`crate::wpx::wpx_prefix`],
+/// [`crate::wae::wae_country`]).
+pub fn mark_award_needs(alerts: &mut [NeedAlert], worked: &WpxWaeWorked, wpx: bool, wae: bool) {
+    if !wpx && !wae {
+        return;
+    }
+    for a in alerts {
+        let Some(band) = Band::from_label(&a.band) else {
+            continue;
+        };
+        let class = ModeClass::from_adif(&a.mode);
+        if wpx {
+            a.wpx_need = crate::wpx::wpx_prefix(&a.call)
+                .filter(|p| !worked.wpx.contains(&(p.clone(), band, class)));
+        }
+        if wae {
+            let resolved = crate::dxcc::resolve(&a.call);
+            a.wae_need = crate::wae::wae_country(resolved.as_ref(), &RecordFields::default())
+                .filter(|i| !worked.wae.contains(&(*i, band, class)))
+                .map(|i| crate::wae::COUNTRIES[i as usize].0.to_string());
+        }
+    }
+}
+
 /// A contact kept as a What-to-QSL candidate, and how many slots still keep it.
 #[derive(Debug, Clone)]
 struct Kept {
@@ -264,6 +306,7 @@ pub(crate) struct MoreAwards {
     wae_confirmed: HashSet<u16>,
     wae_band: HashSet<(u16, Band)>,
     wae_band_confirmed: HashSet<(u16, Band)>,
+    pub(crate) slots_worked: WpxWaeWorked,
     wwff: HashSet<String>,
     wwff_entities: HashSet<&'static str>,
     /// `(entity, band)` → chart cell; `entity` → its any-band cell.
@@ -291,6 +334,7 @@ impl MoreAwards {
         if let Some(prefix) = crate::wpx::wpx_prefix(c.call) {
             self.wpx_worked.insert(prefix.clone());
             if let Some(b) = c.on_band {
+                self.slots_worked.wpx.insert((prefix.clone(), b, c.class));
                 self.wpx_band.insert((prefix.clone(), b));
                 if c.confirmed {
                     self.wpx_band_confirmed.insert((prefix.clone(), b));
@@ -304,6 +348,7 @@ impl MoreAwards {
         if let Some(country) = cr.wae {
             self.wae_worked.insert(country);
             if let Some(b) = c.on_band {
+                self.slots_worked.wae.insert((country, b, c.class));
                 self.wae_band.insert((country, b));
                 if c.confirmed {
                     self.wae_band_confirmed.insert((country, b));
@@ -650,6 +695,188 @@ mod tests {
         assert_eq!(band("20m"), Some((1, 1)));
         assert_eq!(band("40m"), Some((3, 0)));
         assert_eq!(band("15m"), None);
+    }
+
+    /// A Needed-board row for `call` heard on `band` in mode class `mode`, needed as a new band.
+    fn row(call: &str, band: &str, mode: &str) -> NeedAlert {
+        NeedAlert {
+            call: call.into(),
+            entity: "Test".into(),
+            band: band.into(),
+            zone: 5,
+            tags: vec![crate::needalert::NeedTag::NewBand],
+            priority: 50,
+            headline: format!("New band — {call}"),
+            mode: mode.into(),
+            exact_mode: None,
+            freq_mhz: Some(14.025),
+            admitted_at: Some(1),
+            evidence: None,
+            grid_rarity: None,
+            grid: None,
+            park: None,
+            state_from: None,
+            wpx_need: None,
+            wae_need: None,
+        }
+    }
+
+    /// The log both chip tests read: N8 on 20 m CW, PA0 (worked portable) on 20 m CW, and
+    /// Germany on 20 m Phone.
+    fn chip_log() -> WpxWaeWorked {
+        let mut a = Awards::new();
+        log(&mut a, "N8BJQ", "20m", "CW", false, 1);
+        log(&mut a, "PA/N8BJQ", "20m", "CW", false, 2);
+        log(&mut a, "DL1ABC", "20m", "SSB", true, 3);
+        a.wpx_wae_worked()
+    }
+
+    /// A row as the chip tests read it: call, band, mode, its WPX chip and its WAE chip.
+    type Chips<'a> = (&'a str, &'a str, &'a str, Option<&'a str>, Option<&'a str>);
+
+    fn chips(rows: &[NeedAlert]) -> Vec<Chips<'_>> {
+        rows.iter()
+            .map(|r| {
+                (
+                    r.call.as_str(),
+                    r.band.as_str(),
+                    r.mode.as_str(),
+                    r.wpx_need.as_deref(),
+                    r.wae_need.as_deref(),
+                )
+            })
+            .collect()
+    }
+
+    fn chip_rows() -> Vec<NeedAlert> {
+        vec![
+            row("N8XYZ", "20m", "CW"),
+            row("N8XYZ", "20m", "Phone"),
+            row("N8XYZ", "40m", "CW"),
+            row("W8AA", "20m", "CW"),
+            row("DL2XX", "20m", "Phone"),
+            row("DL2XX", "20m", "CW"),
+            row("DL2XX", "20m", "Digital"),
+            row("IT9ABC", "20m", "Phone"),
+            row("W1AW", "20m", "Phone"),
+        ]
+    }
+
+    /// Each chip lights only when its own setting is on, and only on a row whose station would
+    /// be new on that row's band in its mode class: a prefix or country worked on another band
+    /// or in another mode is still new here.
+    #[test]
+    fn each_award_chip_marks_only_new_slots_and_only_when_its_setting_is_on() {
+        let worked = chip_log();
+
+        let mut wpx_only = chip_rows();
+        mark_award_needs(&mut wpx_only, &worked, true, false);
+        assert_eq!(
+            chips(&wpx_only),
+            vec![
+                ("N8XYZ", "20m", "CW", None, None),
+                ("N8XYZ", "20m", "Phone", Some("N8"), None),
+                ("N8XYZ", "40m", "CW", Some("N8"), None),
+                ("W8AA", "20m", "CW", Some("W8"), None),
+                ("DL2XX", "20m", "Phone", Some("DL2"), None),
+                ("DL2XX", "20m", "CW", Some("DL2"), None),
+                ("DL2XX", "20m", "Digital", Some("DL2"), None),
+                ("IT9ABC", "20m", "Phone", Some("IT9"), None),
+                ("W1AW", "20m", "Phone", Some("W1"), None),
+            ]
+        );
+
+        let mut wae_only = chip_rows();
+        mark_award_needs(&mut wae_only, &worked, false, true);
+        assert_eq!(
+            chips(&wae_only),
+            vec![
+                ("N8XYZ", "20m", "CW", None, None),
+                ("N8XYZ", "20m", "Phone", None, None),
+                ("N8XYZ", "40m", "CW", None, None),
+                ("W8AA", "20m", "CW", None, None),
+                ("DL2XX", "20m", "Phone", None, None),
+                ("DL2XX", "20m", "CW", None, Some("DL")),
+                ("DL2XX", "20m", "Digital", None, Some("DL")),
+                // Sicily is its own WAE country, so Germany worked does not cover it.
+                ("IT9ABC", "20m", "Phone", None, Some("IT")),
+                ("W1AW", "20m", "Phone", None, None),
+            ]
+        );
+
+        let mut both = chip_rows();
+        mark_award_needs(&mut both, &worked, true, true);
+        assert_eq!(
+            both[5].wpx_need.as_deref().zip(both[5].wae_need.as_deref()),
+            Some(("DL2", "DL"))
+        );
+    }
+
+    /// With both settings off the board is exactly what it was: every row equal, and its wire
+    /// form byte for byte the same, with no chip key in it. Turning a setting on (the positive
+    /// control) does change the same rows, so the equality is not a no-op's.
+    #[test]
+    fn with_both_award_chips_off_no_row_changes() {
+        let worked = chip_log();
+        let before = chip_rows();
+        let wire = serde_json::to_string(&before).unwrap();
+        assert!(!wire.contains("wpxNeed") && !wire.contains("waeNeed"));
+
+        let mut off = chip_rows();
+        mark_award_needs(&mut off, &worked, false, false);
+        assert_eq!(off, before);
+        assert_eq!(serde_json::to_string(&off).unwrap(), wire);
+
+        let mut on = chip_rows();
+        mark_award_needs(&mut on, &worked, true, true);
+        let on_wire = serde_json::to_string(&on).unwrap();
+        assert_ne!(on_wire, wire, "a setting on changes the board");
+        assert!(on_wire.contains("\"wpxNeed\":\"W8\"") && on_wire.contains("\"waeNeed\":\"DL\""));
+        // The chips add a key and touch nothing else on the row.
+        for (a, b) in on.iter().zip(&before) {
+            let mut stripped = a.clone();
+            stripped.wpx_need = None;
+            stripped.wae_need = None;
+            assert_eq!(&stripped, b);
+        }
+    }
+
+    /// The prefix a chip names is the prefix CQ's rule gives the call ([`crate::wpx::wpx_prefix`]),
+    /// the one the WPX award card counts: a portable designator becomes the prefix, one without
+    /// a digit takes a zero, a bare-digit one replaces the call's numeral, and a mobile or
+    /// license-class suffix is not a prefix. A call the log worked portable as PA0 leaves PA0
+    /// worked, so another PA-portable station is not new.
+    #[test]
+    fn the_chip_prefix_is_the_wpx_rule_prefix() {
+        let worked = chip_log();
+        let calls = [
+            "PA/K1ABC",
+            "N8BJQ/4",
+            "K1ABC/M",
+            "XEFTJW",
+            "LY1000X",
+            "WD8ABC",
+            "K1ABC/KH9",
+        ];
+        let mut rows: Vec<NeedAlert> = calls.iter().map(|c| row(c, "20m", "CW")).collect();
+        mark_award_needs(&mut rows, &worked, true, false);
+        for r in &rows {
+            let rule = crate::wpx::wpx_prefix(&r.call);
+            let expected = rule.filter(|p| p != "PA0" && p != "N8");
+            assert_eq!(r.wpx_need, expected, "{}", r.call);
+        }
+        assert_eq!(
+            chips(&rows).iter().map(|c| (c.0, c.3)).collect::<Vec<_>>(),
+            vec![
+                ("PA/K1ABC", None),
+                ("N8BJQ/4", Some("N4")),
+                ("K1ABC/M", Some("K1")),
+                ("XEFTJW", Some("XE0")),
+                ("LY1000X", Some("LY1000")),
+                ("WD8ABC", Some("WD8")),
+                ("K1ABC/KH9", Some("KH9")),
+            ]
+        );
     }
 
     /// WAE: a WAE-only country counts as itself, a country's band points stop at 5, and a

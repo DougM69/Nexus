@@ -359,6 +359,63 @@ mod whole_log_reader_tests {
         out.join("\n")
     }
 
+    /// The Needed board's WPX and WAE chips: with both settings off (as they ship) the board's
+    /// rows come back exactly as they went in and the award fold is not run for them; with one
+    /// on, only that chip is set, from the same fold the Awards view counts with.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn the_award_need_chips_change_nothing_off_and_mark_only_their_own_need_on() {
+        let engine = engine_with_log();
+        let tallies = LogTallies::default();
+        let row = |call: &str, band: &str, mode: &str| -> propagation::NeedAlert {
+            serde_json::from_value(serde_json::json!({
+                "call": call, "entity": "", "band": band, "zone": 0, "tags": ["NewBand"],
+                "priority": 50, "headline": "New band", "mode": mode,
+            }))
+            .unwrap()
+        };
+        // The log holds DL1AB on 40 m CW and G4ABC on 17 m RTTY.
+        let rows = vec![
+            row("DL2XX", "40m", "CW"),
+            row("G4XYZ", "17m", "Digital"),
+            row("G4XYZ", "20m", "Digital"),
+        ];
+        let wire = serde_json::to_string(&rows).unwrap();
+
+        LOG_TALLIES.with(|c| c.set(0));
+        let off = log_folds::award_need_chips(&engine, &tallies, rows.clone(), false, false);
+        assert_eq!(
+            serde_json::to_string(&off).unwrap(),
+            wire,
+            "off: byte-identical"
+        );
+        assert_eq!(
+            LOG_TALLIES.with(|c| c.get()),
+            0,
+            "off: the award fold is not run"
+        );
+
+        let need = |a: &[propagation::NeedAlert]| -> Vec<(Option<String>, Option<String>)> {
+            a.iter()
+                .map(|r| (r.wpx_need.clone(), r.wae_need.clone()))
+                .collect()
+        };
+        let wpx = log_folds::award_need_chips(&engine, &tallies, rows.clone(), true, false);
+        assert_eq!(
+            need(&wpx),
+            vec![
+                (Some("DL2".into()), None),
+                (None, None),
+                (Some("G4".into()), None)
+            ]
+        );
+        let wae = log_folds::award_need_chips(&engine, &tallies, rows.clone(), false, true);
+        assert_eq!(
+            need(&wae),
+            vec![(None, None), (None, None), (None, Some("G".into()))]
+        );
+    }
+
     /// ★ The needs model is the model the old fold made, whoever asks — the propagation
     /// refetch, the Needed board, a satellite pass — and an unchanged log is folded ONCE for all
     /// of them; a logged contact folds it once more.
@@ -23898,10 +23955,23 @@ async fn get_need_alerts(
     // would flag a DXCC/state/grid as needed that the other one already worked. Read with the
     // Engine lock released; two atomic reads when nothing changed.
     sync_shared_log(&state).await?;
-    with_engine(&state, move |eng| {
+    let (alerts, wpx, wae) = with_engine(&state, move |eng| {
+        // The opt-in WPX and WAE chips (both off as they ship): read with the board's own lock.
+        let (wpx, wae) = (eng.settings().show_wpx_needs, eng.settings().show_wae_needs);
         read_need_alerts(eng, &needs, &live_paths, &region_paths, &spots, &ota_cache)
+            .map(|alerts| (alerts, wpx, wae))
     })
-    .await?
+    .await??;
+    if !wpx && !wae {
+        return Ok(alerts);
+    }
+    let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
+    log_folds::off_the_runtime(move || {
+        Ok(log_folds::award_need_chips(
+            &engine, &tallies, alerts, wpx, wae,
+        ))
+    })
+    .await
 }
 
 /// An activation counts as "current" for about this long after its spot. Both hunter-feed

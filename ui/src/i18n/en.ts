@@ -2813,6 +2813,8 @@ export const EN = {
   'need.chip.newState.title.park': 'New US state on this band — the state the park or summit is in',
   'need.chip.newState.title.license': "New US state on this band — from the station's licence",
   'need.chip.newState.title.grid': "New US state on this band — a best guess from the station's grid square",
+  'need.chip.wpx.title': 'New WPX prefix {{prefix}} on {{band}} {{mode}}',
+  'need.chip.wae.title': 'New WAE country {{country}} on {{band}} {{mode}}',
   'need.chip.newPark.label': 'NEW PARK',
   'need.chip.newPark.short': 'PARK',
   'need.chip.newPark.title':
@@ -4108,6 +4110,10 @@ export const EN = {
   'settings.alerts.confirmTier.label': 'Confirmation opportunities',
   'settings.alerts.confirmTier.hint':
     'Show worked-but-unconfirmed award slots — LoTW confirmation chances — on the Needed board and as chips on decodes. Turn off to chase only new contacts.',
+  'settings.alerts.wpxNeeds.label': 'Show WPX prefix needs',
+  'settings.alerts.wpxNeeds.hint': 'Add a WPX chip to Needed-board stations that would be a new prefix on that band and mode. Off by default, because most stations are. No sound or pop-up.',
+  'settings.alerts.waeNeeds.label': 'Show WAE country needs',
+  'settings.alerts.waeNeeds.hint': 'Add a WAE chip to Needed-board stations that would be a new Worked All Europe country on that band and mode. Off by default. No sound or pop-up.',
   'settings.alerts.cq.label': 'CQ calls',
   'settings.alerts.cq.hint': 'Alert on any decoded CQ. Off by default — CQs are constant.',
   'settings.alerts.potaNewActivation.label': 'New POTA activation',

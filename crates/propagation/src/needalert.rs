@@ -224,6 +224,15 @@ pub struct NeedAlert {
     /// chip's tooltip says which.
     #[serde(default)]
     pub state_from: Option<StateSource>,
+    /// The WPX prefix this station would be new on this band in this mode class, when the
+    /// operator has turned on "Show WPX prefix needs" ([`crate::awards_more::mark_award_needs`]).
+    /// `None` otherwise, and then not sent, so a board with the setting off is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wpx_need: Option<String>,
+    /// The WAE country this station would be new in on this band in this mode class, when the
+    /// operator has turned on "Show WAE country needs"; `None` otherwise, and then not sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wae_need: Option<String>,
 }
 
 /// Build a [`Heard`] from a spot frequency (MHz) — maps the frequency to a band
@@ -558,6 +567,8 @@ pub fn score_slots(
         grid: grid.map(str::to_string),
         park: None, // set by activation_alert; a scored award row names no activation
         state_from: None, // set by rank and activation_alert, which know where the state came from
+        wpx_need: None,
+        wae_need: None,
     })
 }
 
@@ -866,6 +877,8 @@ pub fn activation_alert(
         grid: spot.grid.clone(),
         park: None, // filled in below, on the merged row as well as this one
         state_from: None,
+        wpx_need: None,
+        wae_need: None,
     });
     // The award's row names the scored mode itself where it names FT8, FT4 or RTTY; this row is
     // the class, as it always was.
@@ -982,6 +995,8 @@ pub fn watched_alert(
         grid: grid.map(str::to_string),
         park: None,
         state_from: None,
+        wpx_need: None,
+        wae_need: None,
     });
     mark_watched(&mut alert);
     alert
@@ -3902,6 +3917,8 @@ mod tests {
                 grid: None,
                 park: None,
                 state_from: None,
+                wpx_need: None,
+                wae_need: None,
             }
         }
         let mut alerts = vec![
