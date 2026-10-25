@@ -146,6 +146,7 @@ const MIGRATED = [
   'components/Logbook.tsx',
   // The Logbook's column chooser and the column model whose labels it shows — born migrated.
   'components/LogColumnsMenu.tsx',
+  'components/LogFilterBar.tsx',
   'features/logColumns.ts',
   // The words for a LoTW upload that skipped contacts, which the Logbook and the Awards
   // upload buttons share — born migrated.

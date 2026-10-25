@@ -1825,6 +1825,14 @@ pub struct Settings {
     /// good too.
     #[serde(default = "default_history_snapshot_days")]
     pub history_snapshot_days: u32,
+    /// The Logbook's named filters (`ui/src/features/logFilter.ts`), in the order the operator
+    /// saved them. Empty — the key absent — is none saved, so a file that never saved one writes
+    /// exactly what it did before.
+    ///
+    /// ONE WRITER: `set_logbook_filters`, the moment one is saved, renamed or deleted; kept live
+    /// across a form save for the same stale-snapshot reason as `logbook_columns`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logbook_filters: Vec<SavedLogFilter>,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -5557,6 +5565,20 @@ fn default_js8_api_udp_port() -> u16 {
     crate::engine::js8_api::DEFAULT_UDP_PORT
 }
 
+/// One of the Logbook's named filters.
+///
+/// ⚠️ **The filter is kept as the JSON it arrived as, never parsed here.** The engine reads a
+/// filter strictly (an unknown field refuses the question), and a settings file outlives the build
+/// that wrote it: a filter saved by a newer Nexus, read by an older one, must not make the whole
+/// file unreadable. The window reads it back through `cleanSavedFilters`, which keeps what it
+/// knows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedLogFilter {
+    pub name: String,
+    #[serde(default)]
+    pub filter: serde_json::Value,
+}
+
 /// The Logbook's column choice as `settings.json` keeps it: deltas from the default table, so a
 /// column added to the defaults later still shows for an operator who chose before it existed.
 /// Column ids are the window's (`LOG_COLUMNS`); one it does not know is ignored there.
@@ -5732,7 +5754,8 @@ impl Default for Settings {
             beta_updates: false, // stable channel by default; MUST match the serde default (false)
             launch_at_login: false, // nothing starts itself unasked; MUST match the serde default
             remote_autostart_offer_answered: false,
-            logbook_columns: None, // the default table
+            logbook_columns: None,       // the default table
+            logbook_filters: Vec::new(), // none saved
             history_snapshot_days: default_history_snapshot_days(),
             beacon: false,
             harq_enabled: true,
@@ -13092,6 +13115,58 @@ mod tests {
     /// (`logbookColumns`, with `shown`/`hidden`/`widths` inside), and nothing saved is no key at
     /// all — an upgrade, and every settings file that never chose columns, keep the default table
     /// and write byte for byte what they wrote before.
+    #[test]
+    fn logbook_filters_round_trip_and_nothing_saved_writes_nothing() {
+        let older: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(
+            older.logbook_filters.is_empty(),
+            "an upgrade has saved none"
+        );
+        let none = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            !none.contains("logbookFilters"),
+            "none saved, no key: {none}"
+        );
+
+        let dir = std::env::temp_dir().join(format!("tempo_logfilters_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        // A filter with a field this build has never heard of: kept, not refused.
+        std::fs::write(
+            &path,
+            r#"{"mycall":"KD9TAW","logbookFilters":[{"name":"DX on 20","filter":{"band":"20m","need":"dxcc","qsl":{"lotw":"notSent"}}},{"name":"Later","filter":{"band":"6m","someFutureField":[1,2]}}]}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(
+            loaded.mycall, "KD9TAW",
+            "an unknown filter field cost the whole file"
+        );
+        let names: Vec<&str> = loaded
+            .logbook_filters
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(names, ["DX on 20", "Later"]);
+        assert_eq!(
+            loaded.logbook_filters[0].filter,
+            serde_json::json!({"band":"20m","need":"dxcc","qsl":{"lotw":"notSent"}})
+        );
+        loaded.save(&path).unwrap();
+        let again = Settings::load(&path);
+        assert_eq!(
+            again.logbook_filters, loaded.logbook_filters,
+            "a save dropped them"
+        );
+        assert_eq!(
+            again.logbook_filters[1].filter["someFutureField"],
+            serde_json::json!([1, 2]),
+            "a save dropped what this build does not know"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn logbook_columns_round_trip_and_nothing_saved_writes_nothing() {
         let older: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();

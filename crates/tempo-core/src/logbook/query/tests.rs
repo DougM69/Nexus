@@ -717,6 +717,8 @@ fn the_golden_log_exercises_what_it_claims() {
         asc: false,
         search: search.to_string(),
         needs_confirm_only: false,
+        then: Vec::new(),
+        filter: Default::default(),
     };
     let none = |_: &QsoRecord| None;
     assert_eq!(reference::order(&log, &q("z"), &none).len(), 24);
@@ -733,6 +735,8 @@ fn the_golden_log_exercises_what_it_claims() {
                 asc,
                 search: String::new(),
                 needs_confirm_only: false,
+                then: Vec::new(),
+                filter: Default::default(),
             },
             &none,
         );
@@ -794,6 +798,8 @@ fn the_country_column_sorts_on_the_entity_the_logbook_shows() {
             asc,
             search: String::new(),
             needs_confirm_only: false,
+            then: Vec::new(),
+            filter: Default::default(),
         };
         reference::order(&log, &query, &entity)
             .into_iter()
@@ -838,6 +844,8 @@ fn the_country_column_sorts_each_row_on_its_own_entity() {
         asc: true,
         search: String::new(),
         needs_confirm_only: false,
+        then: Vec::new(),
+        filter: Default::default(),
     };
     let sorted: Vec<(&str, Option<u32>)> = reference::order(&log, &query, &entity)
         .into_iter()
@@ -1134,6 +1142,8 @@ fn a_search_finds_a_contact_by_the_country_the_logbook_shows() {
             asc: true,
             search: search.to_string(),
             needs_confirm_only: false,
+            then: Vec::new(),
+            filter: Default::default(),
         };
         reference::order(&log, &query, &entity)
             .into_iter()
@@ -1175,6 +1185,8 @@ fn a_search_finds_a_contact_by_the_entity_its_record_names() {
         asc: true,
         search: "navassa".to_string(),
         needs_confirm_only: false,
+        then: Vec::new(),
+        filter: Default::default(),
     };
     let found: Vec<Option<u32>> = reference::order(&log, &query, &entity)
         .into_iter()

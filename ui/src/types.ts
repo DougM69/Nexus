@@ -5271,6 +5271,10 @@ export interface Settings {
    *  this struct, like `betaUpdates`: write it with `setLogbookColumns` (api.ts), its one writer,
    *  so a settings form saved from an older copy cannot put an old choice back. */
   logbookColumns?: import('./features/logColumns').LogColumnsSaved | null
+  /** The Logbook's named filters (features/logFilter.ts). READ-ONLY through this struct: write
+   *  them with `setLogbookFilters` (api.ts), their one writer. Read through `cleanSavedFilters`,
+   *  since another version of Nexus may have written them. */
+  logbookFilters?: unknown
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string
   n3fjpPort?: number

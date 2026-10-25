@@ -437,7 +437,11 @@ CREATE TABLE IF NOT EXISTS qso_contest_adif (
 /// through them builds only the rest when it resumes. ⚠️ Do not reformat them. SQLite records
 /// each statement's text from the index name onward in `sqlite_master`, so as written a store
 /// built by this list carries the same schema, byte for byte, as one built before the split.
-const INDEXES: [&str; 9] = [
+///
+/// `qso_extra_cnty` is PARTIAL: only the `CNTY` rows of the passthrough, by value, so the Logbook's
+/// county filter reads those rows and never walks every passthrough row of the log
+/// (`filter_sql`). Without it a county filter would join the passthrough once per contact.
+const INDEXES: [&str; 10] = [
     "CREATE INDEX IF NOT EXISTS qso_worked   ON qso(call_norm, band_norm, mode_norm)",
     "CREATE INDEX IF NOT EXISTS qso_dedup    ON qso(base_call, band_norm, mode_norm, when_unix)",
     "CREATE INDEX IF NOT EXISTS qso_recent   ON qso(when_unix DESC)",
@@ -447,12 +451,16 @@ const INDEXES: [&str; 9] = [
     "CREATE INDEX IF NOT EXISTS qso_dupekey  ON qso(contest_id, dupe_key)",
     "CREATE INDEX IF NOT EXISTS cx_dupe      ON contest_exchange(contest_id, slot, raw)",
     "CREATE INDEX IF NOT EXISTS up_service   ON qso_upload(service, when_unix DESC)",
+    "CREATE INDEX IF NOT EXISTS qso_extra_cnty ON qso_extra(value COLLATE NOCASE) WHERE name = 'CNTY'",
 ];
 
 /// The reads behind the UI's log questions (SPEC-2 v3 C17a): the order vectors, rows by rowid,
 /// the call index.
 mod query_reads;
 pub use query_reads::{ENTITY_COLUMNS, ORDER_COLUMNS};
+
+/// The Logbook's field filters as a `WHERE`, and the read of the rows an order is built from.
+mod filter_sql;
 
 /// A store written before contacts were held in one form, read back through every decoder.
 #[cfg(test)]

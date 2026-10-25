@@ -472,6 +472,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("set_license_class",              RefusedHere, "The shack's licence class decides where it may transmit; set at the shack only."),
     ("set_log_form_grid",              RunsAtShack, "The shack's log form."),
     ("set_logbook_columns",            RunsAtShack, "Saves the Logbook's column choice in the shack's settings; display only."),
+    ("set_logbook_filters",            RunsAtShack, "Saves the Logbook's named filters in the shack's settings; display only."),
     ("set_lotw_password",              RefusedHere, "Credentials are set at the shack only."),
     ("set_mic_gain",                   RunsAtShack, "The shack's rig control."),
     ("set_mode",                       StartsTx,    "A run mode calls CQ and arms transmit."),

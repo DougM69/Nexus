@@ -84,6 +84,7 @@ import type { SliceIntent } from './types'
 import type { FieldDayQso } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { LogColumnsSaved } from './features/logColumns'
+import type { SavedLogFilter } from './features/logFilter'
 import type { StreetPack } from './features/streetPack'
 import type {
   StreetArea,
@@ -4189,6 +4190,13 @@ export async function setBetaUpdates(on: boolean): Promise<AppSnapshot> {
  * forgets the choice: the default table. */
 export async function setLogbookColumns(columns: LogColumnsSaved | null): Promise<void> {
   return invoke<void>('set_logbook_columns', { columns })
+}
+
+/** Save the Logbook's named filters (features/logFilter.ts) — the ONE write path for
+ * `logbookFilters`, narrow for the same stale-snapshot reason as `setLogbookColumns`. The whole list
+ * each time: saving, renaming and deleting a filter are each one write of the list it leaves. */
+export async function setLogbookFilters(filters: SavedLogFilter[]): Promise<void> {
+  return invoke<void>('set_logbook_filters', { filters })
 }
 
 /** Start Nexus when the operator signs in to this computer — the ONE write path for Settings ▸

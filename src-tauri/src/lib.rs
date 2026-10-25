@@ -21638,6 +21638,22 @@ fn set_logbook_columns(
     Ok(())
 }
 
+/// Save the Logbook's named filters — the ONE write path for `logbookFilters`, the whole list each
+/// time one is saved, renamed or deleted. Narrow for `set_logbook_columns`' reasons;
+/// `Engine::apply_settings` keeps the live list, so a form save cannot put an older one back.
+#[tauri::command(async)]
+fn set_logbook_filters(
+    state: State<'_, SharedEngine>,
+    filters: Vec<tempo_app::settings::SavedLogFilter>,
+) -> Result<(), String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.set_logbook_filters(filters);
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: failed to persist the Logbook's filters: {e}")
+    });
+    Ok(())
+}
+
 /// Turn the BETA update channel on or off — the Settings ▸ App updates switch, and the ONE
 /// write path for it. A NARROW write, and here the narrowness is the point rather than the
 /// #54 cost saving: while this rode along in the whole-struct save, any surface holding a
@@ -39448,6 +39464,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_psk_macros,
         set_beta_updates,
         set_logbook_columns,
+        set_logbook_filters,
         retire_wanted_calls,
         set_watch_list,
         set_launch_at_login,
@@ -39665,6 +39682,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
     let remote_publisher = remote_monitor::Publisher::default();
     // The launch's second half gets the whole bundle: the builder chain below moves its fields.
     let launch = d.clone();
+    // The whole-log tallies, shared with the Logbook's answers (its award-need filter).
+    let log_tallies = LogTallies::default();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -39699,13 +39718,14 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedOpeningTracker::default())
         .manage(SharedWxHistory::default())
         .manage(SolarIndicesCache::default())
-        .manage(LogTallies::default())
+        .manage(log_tallies.clone())
         .manage(SharedConfirmationChecks::default())
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .manage(SharedCallbookCache::default())
         .manage(BetaUpdateState::default())
-        .manage(log_queries::LogQueries::default())
+        // The Logbook's award-need filter reads the award fold the Awards view keeps.
+        .manage(log_queries::LogQueries::with_tallies(log_tallies))
         .manage(street_map::StreetMapState::default())
         // Whether a stream watches the main window: settings reads ask it from the first launch
         // on, before the Remote service that opens a stream exists.
