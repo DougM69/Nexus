@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Novice and Advanced licence classes.** Holders of the grandfathered US Novice and Advanced
+  licences can now pick their class in the setup wizard and Settings ▸ Station, and the transmit
+  lockout holds them to their own segments: a Novice to CW on 80, 40 and 15 m, 10 m from 28.0 to
+  28.5 MHz (data below 28.3, single-sideband voice above), 222–225 MHz and 1270–1295 MHz; an
+  Advanced to everything a General has plus 3.700–3.800, 7.125–7.175, 14.175–14.225 and
+  21.225–21.275 MHz phone. Power limits (200 W on HF, 25 W on 222 MHz and 5 W on 23 cm for a
+  Novice) are still yours to keep: the lockout checks frequency and mode, not power. Every other
+  class works exactly as before.
 - **Logbook filters, saved filters and sorting on up to three columns.** The new Filters button beside the search box filters the whole log by call (prefix or `*`/`?` pattern), band, mode, dates, DXCC entity, continent, CQ and ITU zone, grid, state, county, IOTA, park or summit reference, contest, words in the comment, name or QTH, QSL state per service (LoTW, eQSL, card, QRZ: confirmed, sent, not sent; Club Log: sent, not sent) and award need (contacts whose DXCC, WAS, WAZ, VUCC or FFMA band slot is worked but not yet confirmed). Save a filter under a name, recall, rename or delete it. Shift-click a column header to sort by it next; grid, state, IOTA, county and contest now sort too.
 - **Callbook answers are kept on this computer.** A call you looked up is answered from a local cache for 30 days (Settings ▸ Logging & Connectors ▸ Confirmations ▸ Callbook cache, adjustable), and offline at any age; refresh one call or clear the whole cache there. No password or sign-in key is ever kept. US calls that QRZ and HamQTH do not answer are also asked of the free callook.info.
 - **Station card.** Click a call (or press Enter on it) in the Logbook, Spots, the decode list's QRZ

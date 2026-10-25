@@ -944,8 +944,12 @@ impl Settings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LicenseClass {
+    /// Grandfathered: no new Novice licences are issued, but existing ones renew.
+    Novice,
     Technician,
     General,
+    /// Grandfathered, as Novice is.
+    Advanced,
     Extra,
     #[default]
     Open,
@@ -13530,6 +13534,80 @@ mod tests {
         );
         assert_eq!(Settings::load(&path).mycall, "W9XYZ");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The grandfathered Novice and Advanced classes persist under their own tokens and come
+    /// back from disk as themselves — never as `Open`, which would drop the Part 97 lockout.
+    #[test]
+    fn novice_and_advanced_round_trip_through_the_settings_file() {
+        for (class, token) in [
+            (LicenseClass::Novice, "novice"),
+            (LicenseClass::Advanced, "advanced"),
+        ] {
+            let dir = scratch_dir_ready("licence_round_trip");
+            let path = dir.join("settings.json");
+            let s = Settings {
+                mycall: "W9XYZ".into(),
+                license_class: class,
+                ..Settings::default()
+            };
+            s.save(&path).expect("saved");
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                v["licenseClass"],
+                serde_json::json!(token),
+                "the stored token"
+            );
+            let back = Settings::load(&path);
+            assert!(
+                kept_aside_in(&dir).is_empty(),
+                "{token}: the file was set aside"
+            );
+            assert_eq!(back.license_class, class, "{token} came back as itself");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// ⛔ AN EXISTING OPERATOR'S CLASS IS UNCHANGED BY THE NEW CLASSES. A file written before
+    /// Novice and Advanced existed, with each class that shipped (and with none at all), loads as
+    /// the class it holds and saves the same token back; no class is renamed or remapped.
+    #[test]
+    fn a_stored_class_from_before_novice_and_advanced_loads_unchanged() {
+        for (token, class) in [
+            (Some("technician"), LicenseClass::Technician),
+            (Some("general"), LicenseClass::General),
+            (Some("extra"), LicenseClass::Extra),
+            (Some("open"), LicenseClass::Open),
+            (None, LicenseClass::Open),
+        ] {
+            let dir = scratch_dir_ready("licence_migration");
+            let path = dir.join("settings.json");
+            let mut file = serde_json::json!({"mycall": "W9XYZ", "dialMhz": 14.074});
+            if let Some(token) = token {
+                file["licenseClass"] = serde_json::json!(token);
+            }
+            std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+            let back = Settings::load(&path);
+            assert!(
+                kept_aside_in(&dir).is_empty(),
+                "{token:?}: the file was set aside"
+            );
+            assert_eq!(
+                back.license_class, class,
+                "{token:?} loaded as another class"
+            );
+            assert_eq!(back.mycall, "W9XYZ");
+            back.save(&path).expect("saved");
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(
+                v["licenseClass"],
+                serde_json::json!(token.unwrap_or("open")),
+                "{token:?}: the token saved back changed"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     /// A unique scratch directory under the OS temp dir — no external tempfile crate, and

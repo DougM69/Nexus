@@ -10940,8 +10940,10 @@ impl Engine {
     pub fn set_license_class(&mut self, class: &str) {
         use crate::settings::LicenseClass;
         self.settings.license_class = match class.to_ascii_lowercase().as_str() {
+            "novice" => LicenseClass::Novice,
             "technician" => LicenseClass::Technician,
             "general" => LicenseClass::General,
+            "advanced" => LicenseClass::Advanced,
             "extra" => LicenseClass::Extra,
             _ => LicenseClass::Open,
         };
@@ -32657,6 +32659,28 @@ mod tests {
         e.set_rtty_armed(true);
         assert_eq!(e.poll_rtty_one(), None);
         assert!(!e.rtty_state().sending);
+    }
+
+    /// Every class the wizard and Settings offer is parsed as itself. A token this parser did
+    /// not know would fall to `Open`, which lifts the lockout, so the grandfathered classes must
+    /// be named here, and the classes that shipped keep their tokens.
+    #[test]
+    fn set_license_class_parses_every_offered_class() {
+        use crate::settings::LicenseClass;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        for (token, class) in [
+            ("novice", LicenseClass::Novice),
+            ("technician", LicenseClass::Technician),
+            ("general", LicenseClass::General),
+            ("advanced", LicenseClass::Advanced),
+            ("extra", LicenseClass::Extra),
+            ("open", LicenseClass::Open),
+            ("Novice", LicenseClass::Novice),
+            ("ADVANCED", LicenseClass::Advanced),
+        ] {
+            e.set_license_class(token);
+            assert_eq!(e.settings.license_class, class, "{token}");
+        }
     }
 
     /// ⭐ **OUR OWN OVER APPEARS IN THE TRANSCRIPT, AND ONLY WHAT RADIATED.**
