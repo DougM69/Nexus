@@ -378,6 +378,7 @@ export const ES: PartialCatalog = {
   "remote.account.operateIsYours": "Quien es invitado a operar puede hacer todo lo que tú puedes desde otro ordenador: transmitir con tu indicativo, editar, exportar o borrar tu log, subir con tus accesos guardados (LoTW firmado con tu certificado), publicar spots con tu indicativo y leer tu buzón de Winlink. Invita a operar solo a alguien a quien le confiarías la estación.",
   "remote.account.invite": "Invitar",
   "remote.account.uninvite": "Quitar",
+  "remote.account.alsoUninvited": "También se quitaron de esta red, porque Nexus no podía saber de quién eran: {{names}}. Quien los use vuelve a iniciar sesión en ellos para volver.",
   "remote.account.inviteLimit": "Esta estación ha invitado a tantas personas como puede. Quita a alguien primero.",
   "remote.native.advanced": "Avanzado",
   "remote.approve": "Autorizar",

@@ -368,6 +368,7 @@ export const JA: PartialCatalog = {
   "remote.account.operateIsYours": "「操作」で招待した人は、あなたが別のコンピューターからできることをすべて行えます。あなたのコールサインでの送信、ログブックの編集・エクスポート・削除、保存済みのログイン情報でのアップロード（LoTW はあなたの証明書で署名）、あなたのコールサインでのスポット、Winlink メールボックスの閲覧などです。シャックを任せられる人だけを「操作」で招待してください。",
   "remote.account.invite": "招待",
   "remote.account.uninvite": "削除",
+  "remote.account.alsoUninvited": "Nexus が持ち主を確認できなかったため、次のコンピューターもこのネットワークから外しました：{{names}}。使っている人がそのコンピューターで再度サインインすると戻れます。",
   "remote.account.inviteLimit": "この局はこれ以上招待できません。先に誰かを削除してください。",
   "remote.native.advanced": "詳細設定",
   "remote.approve": "承認",

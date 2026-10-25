@@ -291,6 +291,10 @@ export function RemoteStation() {
           </span>
         </li>)}
       </ul>}
+      {/* An invitation taken back takes off the LAN every guest's computer the station cannot tell whose it is:
+          said by name, so their owners know to sign in on them again. */}
+      {(account?.alsoUninvited?.length ?? 0) > 0
+        && <p role="status">{t('remote.account.alsoUninvited', { names: account!.alsoUninvited!.join(', ') })}</p>}
       <label>{t('remote.account.email')}<input type="email" value={inviteEmail} maxLength={254} onChange={event => setInviteEmail(event.target.value)} /></label>
       <label>{t('remote.account.role')}<select value={inviteRole} onChange={event => setInviteRole(event.target.value === 'listen' ? 'listen' : 'operate')}>
         <option value="operate">{t('remote.account.role.operate')}</option>

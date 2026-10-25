@@ -378,6 +378,7 @@ export const FR: PartialCatalog = {
   "remote.account.operateIsYours": "Une personne invitée à opérer peut faire tout ce que vous faites depuis un autre ordinateur : émettre sous votre indicatif, modifier, exporter ou supprimer votre log, envoyer avec vos identifiants enregistrés (LoTW signé avec votre certificat), spotter sous votre indicatif et lire votre boîte Winlink. N’invitez à opérer que quelqu’un à qui vous confieriez la station.",
   "remote.account.invite": "Inviter",
   "remote.account.uninvite": "Retirer",
+  "remote.account.alsoUninvited": "Également retirés de ce réseau, car Nexus ne pouvait pas savoir à qui ils appartiennent : {{names}}. Leurs utilisateurs s’y reconnectent pour revenir.",
   "remote.account.inviteLimit": "Cette station a invité autant de personnes que possible. Retirez d’abord quelqu’un.",
   "remote.native.advanced": "Avancé",
   "remote.approve": "Autoriser",

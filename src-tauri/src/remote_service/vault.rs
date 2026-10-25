@@ -63,7 +63,9 @@
 //! credential blob beside the devices kept for the LAN, and is held with them ([`DevicesHeld`]). It
 //! grants nothing: a link only ever takes access away, and a removal refuses a proof signed before
 //! it. Its own entry, so no older Nexus reads it; one that does not read admits no computer on the
-//! LAN, as the devices kept for it do.
+//! LAN, as the devices kept for it do, until Reset network identity writes it afresh. When more
+//! removals are made than it keeps, the oldest still in force leaves its time behind instead (its
+//! floor): every proof signed by then is refused, whatever key it names.
 //!
 //! The rest belong to the other end of Remote over this network, the computer an operator works
 //! from (`crate::lan_client`). One entry for each station it is paired with: its own key for that
@@ -423,6 +425,14 @@ pub struct Ties {
     pub ties: Vec<Tie>,
     #[serde(default)]
     pub removed: Vec<Removed>,
+    /// Unix seconds: a proof signed by then is refused for any key, since a removal it may name was
+    /// dropped to keep within the blob (`lan::enrol`). 0 for none.
+    #[serde(rename = "f", default, skip_serializing_if = "zero")]
+    pub floor: u64,
+}
+
+fn zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// One computer's LAN key and the internet key a proof named beside it, each as the first sixteen

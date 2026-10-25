@@ -459,6 +459,7 @@ export const EN = {
   "remote.account.operateIsYours": "Someone invited to operate can do all you can from another computer: transmit under your callsign, edit, export or delete your log, upload with your saved logins (LoTW signed with your certificate), spot under your call and read your Winlink mail. Invite to operate only someone you would hand the shack to.",
   "remote.account.invite": "Invite",
   "remote.account.uninvite": "Remove",
+  "remote.account.alsoUninvited": "Also taken off this network, since Nexus could not tell whose they were: {{names}}. Whoever uses them signs in on them again to come back.",
   "remote.account.inviteLimit": "This station has invited as many people as it can. Remove someone first.",
   "remote.native.advanced": "Advanced",
   "remote.approve": "Approve",

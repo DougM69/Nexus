@@ -450,6 +450,13 @@ pub(super) async fn connection<S>(
     let Ok(mut ticket) = shared.gate.admit(peer.ip(), Instant::now()) else {
         return;
     };
+    // A first read of the signed-in computers that did not complete admits nobody: read again
+    // before this one is asked, off the runtime, since the store can block.
+    if let Some(enrolment) = shared.desk.as_ref().map(|desk| desk.enrolment.clone()) {
+        if !enrolment.is_read() {
+            let _ = tokio::task::spawn_blocking(move || enrolment.load()).await;
+        }
+    }
     // 2 and 3. The handshake, inside one deadline, unless enough newer ones arrive meanwhile to cut
     // it: a handshake holds a handshake's place, never a session's.
     let handshake = tokio::select! {

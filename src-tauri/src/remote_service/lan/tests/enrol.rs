@@ -16,15 +16,16 @@ use super::super::enrol as lan_enrol;
 use super::*;
 use crate::remote_service::tests::MemoryVault;
 use crate::remote_service::vault::{
-    AccountKeys, AccountVault, DevicesHeld, Notified, People, Revokes, Ties, Uninvites,
+    AccountKeys, AccountVault, DevicesHeld, Notified, People, Revokes, Tie, Ties, Uninvites,
 };
 use crate::remote_service::{account, Controller};
 use std::sync::atomic::AtomicU64;
 use std::sync::mpsc;
 use tempo_client::account::{
     mailbox, CachedDevice, DeviceCache, Invite, KeySet, Owner, Role, Tenant, Vouched,
-    PROOF_MAX_AGE_S,
+    CACHED_DEVICES, PROOF_MAX_AGE_S,
 };
+use tempo_client::id_token::LEEWAY_S;
 
 const CASES: &str =
     include_str!("../../../../../crates/tempo-client/tests/fixtures/account-proof-cases.json");
@@ -704,12 +705,14 @@ async fn a_computer_paired_again_with_a_code_outlasts_its_proofs_age() {
 }
 
 /// The station's account entries in `inner`, its device cache refused as a credential store that
-/// will not answer refuses it: the read while `reads` is set, the write while `saves` is.
+/// will not answer refuses it: the read while `reads` is set, the write while `saves` is; and what
+/// a Remove leaves behind alone, read, while `ties_reads` is.
 #[derive(Clone, Default)]
 struct Refusing {
     inner: MemoryVault,
     reads: Arc<AtomicBool>,
     saves: Arc<AtomicBool>,
+    ties_reads: Arc<AtomicBool>,
 }
 impl AccountVault for Refusing {
     fn owner(&self) -> Result<Option<Owner>, &'static str> {
@@ -768,7 +771,7 @@ impl AccountVault for Refusing {
         self.inner.save_notified(notified)
     }
     fn ties(&self) -> Result<Option<Ties>, &'static str> {
-        if self.reads.load(Ordering::SeqCst) {
+        if self.reads.load(Ordering::SeqCst) || self.ties_reads.load(Ordering::SeqCst) {
             return Err("credentialStoreUnavailable");
         }
         self.inner.ties()
@@ -1193,8 +1196,15 @@ fn every_writer_of_the_device_cache_waits_for_one_held_between_its_read_and_its_
             "a list keeping a device it vouched for",
             Box::new(move |vault: &Holding, _: &lan_enrol::Enrolment| {
                 let pin = tempo_client::hex(&s);
-                Controller::keep_for_lan(vault, SERVICE_STATION, &vouched, pin, fixture_now())
-                    .unwrap();
+                Controller::keep_for_lan(
+                    vault,
+                    SERVICE_STATION,
+                    &vouched,
+                    pin,
+                    false,
+                    fixture_now(),
+                )
+                .unwrap();
             }),
             vec![&q_hex, &r_hex, &u_hex, &enrolled, &s_hex],
         ),
@@ -1422,7 +1432,8 @@ fn each_writer_holds_the_cache_from_its_read_to_its_save() {
                 mailbox: None,
             };
             let pin = tempo_client::hex(&pin);
-            Controller::keep_for_lan(vault, SERVICE_STATION, &vouched, pin, fixture_now()).unwrap();
+            Controller::keep_for_lan(vault, SERVICE_STATION, &vouched, pin, false, fixture_now())
+                .unwrap();
         })
     };
     let writers: Vec<(&str, Writer, Vec<&String>)> = vec![
@@ -1529,7 +1540,7 @@ fn an_old_proof_enrols_no_computer_removed_at_the_shack() {
         );
         assert_eq!(book.paired(&pin), None, "{removed}");
 
-        // Removed before this proof was signed: it is a sign-in since.
+        // Removed before this proof was signed, past the clocks' leeway: it is a sign-in since.
         let vault = MemoryVault::default();
         let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(
             Arc::new(vault.clone()),
@@ -1537,7 +1548,7 @@ fn an_old_proof_enrols_no_computer_removed_at_the_shack() {
         ));
         enrolment.arm(Some(ready(&vault, Vec::new())));
         enrolment.load();
-        CLOCK.store(issued_at() - 10, Ordering::SeqCst);
+        CLOCK.store(issued_at() - LEEWAY_S - 1, Ordering::SeqCst);
         enrolment.remove(std::slice::from_ref(&removed)).unwrap();
         CLOCK.store(fixture_now(), Ordering::SeqCst);
         lan_enrol::admit(&book, &enrolment, STATION, &asked, fixture_now()).unwrap();
@@ -1656,4 +1667,197 @@ fn the_links_and_removals_kept_fit_the_smallest_credential_blob() {
         tie.enrolled = true;
     }
     assert!(serde_json::to_string(&kept).unwrap().len() <= 1280);
+}
+
+/// ★ A REMOVAL HOLDS THROUGH THE CLOCKS' LEEWAY: the station's clock and the issuer's may differ by
+/// up to a minute, so a proof signed up to a minute after a removal (by the station's clock) is
+/// refused: a station clock running slow refuses more, never less. One signed later enrols.
+#[test]
+fn a_removal_holds_through_the_clocks_leeway() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    let pin = tls::pin(&spki("computerLan"));
+    for (removed_at, refused) in [
+        (issued_at() - 30, true),
+        (issued_at() - LEEWAY_S, true),
+        (issued_at() - LEEWAY_S - 1, false),
+    ] {
+        let vault = MemoryVault::default();
+        let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(
+            Arc::new(vault.clone()),
+            clock,
+        ));
+        enrolment.arm(Some(ready(&vault, Vec::new())));
+        CLOCK.store(removed_at, Ordering::SeqCst);
+        enrolment.load();
+        enrolment.remove(&[hashed("computerLan")]).unwrap();
+        CLOCK.store(fixture_now(), Ordering::SeqCst);
+        let book = empty_book();
+        let asked = computer(&token("computer"), "computerLan");
+        let admitted = lan_enrol::admit(&book, &enrolment, STATION, &asked, fixture_now());
+        match refused {
+            true => assert_eq!(admitted, Err("tokenRemoved"), "removed at {removed_at}"),
+            false => assert!(admitted.is_ok(), "removed at {removed_at}: {admitted:?}"),
+        }
+        assert_eq!(
+            book.paired(&pin).is_none(),
+            refused,
+            "removed at {removed_at}"
+        );
+    }
+}
+
+/// ★ A REMOVAL PUSHED OUT OF WHAT IS KEPT STILL REFUSES AN OLD PROOF: the fixture's computer removed
+/// at the shack, then as many other keys as are kept (one Reset network identity of a few linked
+/// computers does it), so its own removal no longer fits. Its old proof is still refused, by the
+/// floor its removal left. CONTROL: removed before that proof was signed, it enrols; and the floor
+/// goes once no proof signed by it can still be in age.
+#[test]
+fn a_removal_pushed_out_of_what_is_kept_still_refuses_an_old_proof() {
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    let pin = tls::pin(&spki("computerLan"));
+    let others: Vec<String> = (100..112u8).map(|i| tempo_client::hex(&[i; 32])).collect();
+    for (removed_at, refused) in [(fixture_now(), true), (issued_at() - LEEWAY_S - 1, false)] {
+        let vault = MemoryVault::default();
+        let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(
+            Arc::new(vault.clone()),
+            clock,
+        ));
+        enrolment.arm(Some(ready(&vault, Vec::new())));
+        CLOCK.store(removed_at, Ordering::SeqCst);
+        enrolment.load();
+        enrolment.remove(&[hashed("computerLan")]).unwrap();
+        enrolment.remove(&others).unwrap();
+        let kept = vault.ties().unwrap().unwrap();
+        let own = lan_enrol::short(&hashed("computerLan"));
+        assert!(
+            !kept.removed.iter().any(|r| r.key == own),
+            "premise: its removal pushed out"
+        );
+        assert_eq!(kept.floor, removed_at);
+
+        CLOCK.store(fixture_now(), Ordering::SeqCst);
+        let book = empty_book();
+        let asked = computer(&token("computer"), "computerLan");
+        let admitted = lan_enrol::admit(&book, &enrolment, STATION, &asked, fixture_now());
+        match refused {
+            true => assert_eq!(admitted, Err("tokenRemoved")),
+            false => assert!(admitted.is_ok(), "{admitted:?}"),
+        }
+        assert_eq!(
+            book.paired(&pin).is_none(),
+            refused,
+            "removed at {removed_at}"
+        );
+
+        CLOCK.store(removed_at + PROOF_MAX_AGE_S + LEEWAY_S, Ordering::SeqCst);
+        enrolment.remove(&[tempo_client::hex(&[99; 32])]).unwrap();
+        assert_eq!(
+            vault.ties().unwrap().unwrap().floor,
+            0,
+            "past every proof's age"
+        );
+    }
+}
+
+/// ★ NO CLAIM PUSHES OUT A LINK A COMPUTER PROVED HERE: as many links as are kept, each proved at
+/// enrolment, then a guest's listings claiming other LAN keys, more than are kept (each sign-in of
+/// a guest can make one): every proved link stays, and no claim is kept in place of one.
+#[test]
+fn no_claim_pushes_out_a_link_a_computer_proved_here() {
+    let vault = MemoryVault::default();
+    let guest = mailbox("K9.Guest@example.test");
+    let proved: Vec<Tie> = (0..CACHED_DEVICES as u8)
+        .map(|i| Tie {
+            lan: lan_enrol::short(&tempo_client::hex(&[i; 32])),
+            key: lan_enrol::short(&tempo_client::hex(&[i + 50; 32])),
+            mailbox: (i % 2 == 0).then(|| lan_enrol::mailbox_tag(&guest)),
+            enrolled: true,
+            vouched: i % 3 == 0,
+        })
+        .collect();
+    vault
+        .save_ties(
+            &DevicesHeld::take(&vault),
+            &Ties {
+                ties: proved.clone(),
+                ..Ties::default()
+            },
+        )
+        .unwrap();
+    for i in 100..120u8 {
+        let lan = tempo_client::hex(&[i; 32]);
+        lan_enrol::tie_vouched(&vault, &lan, &hashed("road"), Some(&guest), fixture_now()).unwrap();
+    }
+    assert_eq!(vault.ties().unwrap().unwrap().ties, proved);
+}
+
+/// ★ A FIRST READ THAT DID NOT COMPLETE IS READ AGAIN: at launch the signed-in computers read and
+/// what a Remove leaves behind did not, so nobody is admitted, a computer paired by code included.
+/// The next read asked (each new connection asks one first) reads it, and the computer is admitted.
+#[test]
+fn a_first_read_that_did_not_complete_is_read_again() {
+    let by_code = [3; 32];
+    let vault = Refusing {
+        inner: caching(Vec::new()),
+        ..Refusing::default()
+    };
+    vault.ties_reads.store(true, Ordering::SeqCst);
+    let enrolment = lan_enrol::Enrolment::kept_in(Arc::new(vault.clone()), fixture_now);
+    enrolment.load();
+    assert!(!enrolment.admits(&by_code), "premise: not read");
+    vault.ties_reads.store(false, Ordering::SeqCst);
+    enrolment.load();
+    assert!(enrolment.admits(&by_code));
+}
+
+/// ★ OVER THE LAN'S OWN LISTENER, A CONNECTION READS AGAIN WHAT DID NOT READ: the listener started
+/// with what a Remove leaves behind unread, so it admits nobody; once the store answers, the next
+/// connection of a computer paired by code reads it first and is welcomed, with nothing else
+/// reading it meanwhile. Skipped, saying so, on a box with no private address of its own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_reads_again_what_did_not_read() {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return;
+    };
+    let port = std::net::TcpListener::bind((address, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let network = Network::new(address, 32).unwrap();
+    let (station_key, by_code) = (fixture_key(), Computer::new());
+    let store = LanStore::holding(&station_key, STATION, &[(&by_code.pin, "Den PC")]);
+    let s = shack_with(network, station_key, by_code, store);
+    let vault = Refusing {
+        inner: caching(Vec::new()),
+        ..Refusing::default()
+    };
+    vault.ties_reads.store(true, Ordering::SeqCst);
+    let scratch = Scratch::new();
+    let enrolment = Arc::new(lan_enrol::Enrolment::kept_in(
+        Arc::new(vault.clone()),
+        fixture_now,
+    ));
+    let lan = lan_enrolled(&s, &scratch, network, book_on(&s.store), enrolment.clone());
+    lan.turn_on(None, Some(port)).unwrap();
+    let at = SocketAddr::new(address.into(), port);
+    eventually(&lan, "never listened", |st| {
+        st.listening.as_deref() == Some(at.to_string().as_str())
+    })
+    .await;
+    assert!(!enrolment.is_read(), "premise: not read");
+    vault.ties_reads.store(false, Ordering::SeqCst);
+    let stream = tokio::net::TcpStream::connect(at).await.unwrap();
+    let welcome = match open(stream, &s.computer.key, &s.public_key).await {
+        Ok(mut socket) => hello(&mut socket, VERSIONS).await,
+        Err(refused) => json!({ "refused": refused }),
+    };
+    assert_eq!(welcome["type"], "welcome", "{welcome}");
 }

@@ -75,6 +75,9 @@ export type AccountStatus = {
   removals: string[]
   /** The people invited: each address as the service matches it, and a role. */
   people: { mailbox: string; role: AccountRole }[]
+  /** The computers the last invitation taken back took off this network beside that guest's own: guests'
+   *  computers the station could not tell whose they were, by name. */
+  alsoUninvited?: string[]
 }
 export type DeviceKind = 'browser' | 'computer' | 'phone'
 export type DevicePlatform = 'windows' | 'macos' | 'linux' | 'ios' | 'android'

@@ -107,6 +107,10 @@ pub struct AccountStatus {
     /// The people invited to this station, as it keeps them: each address as the service matches
     /// it, and a role.
     people: Vec<tempo_client::account::Invite>,
+    /// The computers the last invitation taken back took off this network beside that guest's own:
+    /// guests' computers the station kept no proof of whose they were, by name, for the shack to
+    /// tell their owners to sign in again ([`Controller::off_lan`]).
+    also_uninvited: Vec<String>,
 }
 /// A device the station granted on its own proof: what the notice says of it.
 #[derive(Clone, Serialize)]
@@ -956,8 +960,11 @@ impl Control {
         let live = |d: &Device| d.approved == 1 && d.expires_at > now;
         // Every listed id known here with its key's fingerprint: the list's, and the computers the
         // station holds as listed.
+        // A browser's never reach the LAN, so none is kept as removed for it: its pin, its listing
+        // and the removals waiting for the service end it.
         let mut keyed: Vec<(String, String)> = listed
             .iter()
+            .filter(|d| d.kind != Kind::Browser)
             .filter_map(|d| Some((d.id.clone(), d.key.clone()?)))
             .collect();
         keyed.extend(
@@ -1553,6 +1560,19 @@ impl Service {
             }
             Action::LanReset {} => {
                 let lan = self.lan()?.ok_or("serviceUnavailable")?;
+                // What a Remove leaves behind, if it does not read at all, written afresh first: it
+                // refuses every proof signed before, and the LAN admits again. The reset goes on
+                // whatever it answers.
+                let enrolment = self
+                    .control
+                    .lock()
+                    .map_err(|_| "serviceUnavailable")?
+                    .enrolment
+                    .clone();
+                let recovered = tokio::task::spawn_blocking(move || enrolment.recover())
+                    .await
+                    .map_err(|_| "serviceUnavailable")
+                    .and_then(|recovered| recovered);
                 // Each paired computer's other roads, read before the book forgets them.
                 let mut roads = Roads::default();
                 for computer in lan.status().devices {
@@ -1566,6 +1586,7 @@ impl Service {
                     .map_err(|_| "serviceUnavailable")
                     .and_then(|reset| reset);
                 reset?;
+                recovered?;
                 ended?;
                 return self.status();
             }
@@ -2180,13 +2201,17 @@ impl Controller {
     /// removal kept for the service ([`Controller::queue_removal`]): a removal the service was never
     /// told of, or pressed before this station had a list to find it in, is not lost. Before the
     /// list is taken in, so nothing is granted on it meanwhile. One listed with a proof and not
-    /// pinned is [`Controller::vouch`]'s: it comes back on a proof signed after its removal.
+    /// pinned is [`Controller::vouch`]'s: it comes back on a proof signed after its removal. With
+    /// the removals not read, none is known to end: each list reads them again first, and
+    /// [`Controller::vouch`] grants nothing meanwhile.
     fn end_removed(&mut self, devices: &[Device]) {
         let Some(enrolment) = self.control.lock().ok().map(|c| c.enrolment.clone()) else {
             return;
         };
         enrolment.load();
-        let removed = enrolment.removed();
+        let Some(removed) = enrolment.kept().map(|kept| kept.removed) else {
+            return;
+        };
         let now = now_ms();
         let gone: Vec<String> = match self.control.lock() {
             Ok(mut control) => {
@@ -2285,34 +2310,43 @@ impl Controller {
     /// Takes the computers of the guest with `mailbox` (as `tempo_client::account::mailbox` gives
     /// it) out of the LAN book, each as a Remove at the shack takes it, its key kept as removed
     /// first (`lan::enrol::Enrolment::guests`, which names too every guest's computer kept with no
-    /// link to say whose). Every one is taken out whatever another answers; the first failure.
-    /// Blocks on the credential store.
-    fn off_lan(&self, mailbox: &str) -> Result<(), &'static str> {
+    /// link to say whose). Every one is taken out whatever another answers; the first failure. And
+    /// the names of those taken with no link to say they were this guest's, for the shack
+    /// (`AccountStatus::also_uninvited`). Blocks on the credential store.
+    fn off_lan(&self, mailbox: &str) -> (Vec<String>, Result<(), &'static str>) {
         let Some((lan, enrolment)) = self
             .control
             .lock()
             .ok()
             .and_then(|c| Some((c.lan.clone()?, c.enrolment.clone())))
         else {
-            return Ok(());
+            return (Vec::new(), Ok(()));
         };
-        let theirs = enrolment.guests(mailbox);
-        let computers: Vec<(String, String)> = lan
+        let (theirs, unknown) = enrolment.guests(mailbox);
+        let computers: Vec<(String, String, String)> = lan
             .status()
             .devices
             .into_iter()
-            .filter(|c| theirs.contains(&lan::enrol::short(&c.key)))
-            .map(|c| (c.id, c.key))
+            .filter(|c| {
+                let pin = lan::enrol::short(&c.key);
+                theirs.contains(&pin) || unknown.contains(&pin)
+            })
+            .map(|c| (c.id, c.key, c.name))
+            .collect();
+        let others = computers
+            .iter()
+            .filter(|(_, key, _)| !theirs.contains(&lan::enrol::short(key)))
+            .map(|(_, _, name)| name.clone())
             .collect();
         if computers.is_empty() {
-            return Ok(());
+            return (others, Ok(()));
         }
-        let keys: Vec<String> = computers.iter().map(|(_, key)| key.clone()).collect();
+        let keys: Vec<String> = computers.iter().map(|(_, key, _)| key.clone()).collect();
         let mut out = enrolment.remove(&keys);
-        for (id, _) in &computers {
+        for (id, _, _) in &computers {
             out = out.and(lan.revoke(id));
         }
-        out
+        (others, out)
     }
     /// Changes the removals waiting, and keeps them in the store. One the store will not keep is
     /// still held here for this run.
@@ -2834,13 +2868,18 @@ impl Controller {
             control.operations.keep_restored(&kept);
             confirmed = Some(notified);
         }
-        // Removed at the shack: as the station keeps them now, all through this list.
+        // Removed at the shack: as the station keeps them now, all through this list. `None` while
+        // they do not read, and then nothing is granted on a proof.
         let enrolment = self.control.lock().ok().map(|c| c.enrolment.clone());
-        let removed = enrolment.as_ref().map_or_else(Vec::new, |enrolment| {
+        let removed = enrolment.as_ref().and_then(|enrolment| {
             enrolment.load();
-            enrolment.removed()
+            enrolment.kept()
         });
-        let removed_key = |d: &Device| removed_key(&removed, d);
+        let removed_key = |d: &Device| {
+            removed
+                .as_ref()
+                .is_some_and(|kept| removed_key(&kept.removed, d))
+        };
         let waiting: Vec<&Device> = {
             let Ok(control) = self.control.lock() else {
                 return;
@@ -2871,7 +2910,7 @@ impl Controller {
                 .map(|b| b.station_id.clone())
                 .unwrap_or_default();
             let results = match &self.accounts.service {
-                _ if self.removals.is_none() => rows
+                _ if self.removals.is_none() || removed.is_none() => rows
                     .iter()
                     .map(|_| Err("credentialStoreUnavailable"))
                     .collect(),
@@ -2895,19 +2934,33 @@ impl Controller {
                 let result = match result {
                     // Removed at the shack since it was signed: never granted on it again.
                     Ok((vouched, lan))
-                        if lan::enrol::removed_by(
-                            &removed,
-                            &[&lan::enrol::short(&key), &lan::enrol::short(&lan)],
-                            vouched.issued_at,
-                        ) =>
+                        if removed.as_ref().is_some_and(|kept| {
+                            lan::enrol::removed_by(
+                                &kept.removed,
+                                &[&lan::enrol::short(&key), &lan::enrol::short(&lan)],
+                                vouched.issued_at,
+                            )
+                        }) =>
                     {
                         let _ = self.queue_removal(device.id.clone());
                         continue;
                     }
+                    // Signed by a removal no longer kept by key (`lan::enrol::floored`): refused,
+                    // and not taken for a removal of this device.
+                    Ok((vouched, _))
+                        if removed
+                            .as_ref()
+                            .is_some_and(|kept| lan::enrol::floored(kept, vouched.issued_at)) =>
+                    {
+                        Err("tokenRemoved")
+                    }
                     Ok((vouched, lan)) => {
-                        let vault = &*self.accounts.vault;
-                        let mailbox = vouched.mailbox.as_deref();
-                        let _ = lan::enrol::tie_vouched(vault, &lan, &key, mailbox, now_s);
+                        // A link for a listing that names a LAN key, the only kind with two roads.
+                        if device.lan_key.is_some() {
+                            let vault = &*self.accounts.vault;
+                            let mailbox = vouched.mailbox.as_deref();
+                            let _ = lan::enrol::tie_vouched(vault, &lan, &key, mailbox, now_s);
+                        }
                         if removed_key(device) {
                             back.push(key);
                         }
@@ -2923,7 +2976,13 @@ impl Controller {
                         // The LAN's entry for it. One the store will not take leaves it out of the
                         // LAN with the internet down, which is where a refusal belongs.
                         let vault = &*self.accounts.vault;
-                        let _ = Self::keep_for_lan(vault, &station_id, &vouched, lan, now_s);
+                        let in_book = self.control.lock().ok().is_some_and(|control| {
+                            control.lan.as_deref().is_some_and(|book| {
+                                book.status().devices.iter().any(|c| c.key == lan)
+                            })
+                        });
+                        let _ =
+                            Self::keep_for_lan(vault, &station_id, &vouched, lan, in_book, now_s);
                         self.added(device, &vouched);
                     }
                     // A local decision since the list was asked for: the next list asks again.
@@ -2937,7 +2996,9 @@ impl Controller {
                 let _ = enrolment.unremove(&back);
             }
         }
-        self.tie_pinned(devices, &removed, now_s).await;
+        if let Some(kept) = &removed {
+            self.tie_pinned(devices, &kept.removed, now_s).await;
+        }
         if let Some(enrolment) = &enrolment {
             enrolment.reread();
         }
@@ -3125,12 +3186,16 @@ impl Controller {
     }
     /// Keeps a device the station vouched for in the LAN's entry in `vault`, by the pin the LAN
     /// admits it by, the entry held from its read to its save (`vault::DevicesHeld`). An entry that
-    /// does not read is never written over.
+    /// does not read is never written over. A computer the LAN book holds (`in_book`) and the entry
+    /// does not was paired by code at the shack, and is held to no sign-in's age (`lan::enrol`): a
+    /// guest's listing naming its LAN key, a claim the service does not check, never makes it that
+    /// guest's (an invitation taken back would take it off the LAN) nor puts it under their age.
     fn keep_for_lan(
         vault: &dyn vault::AccountVault,
         station_id: &str,
         vouched: &tempo_client::account::Vouched,
         pin: String,
+        in_book: bool,
         now_s: u64,
     ) -> Result<(), &'static str> {
         let held = vault::DevicesHeld::take(vault);
@@ -3138,6 +3203,9 @@ impl Controller {
             .device_cache()?
             .filter(|cache| cache.station_id == station_id)
             .unwrap_or_else(|| tempo_client::account::DeviceCache::new(station_id));
+        if vouched.guest && in_book && cache.find(&pin).is_none() {
+            return Ok(());
+        }
         cache.keep(tempo_client::account::CachedDevice {
             pin,
             role: vouched.role,
@@ -3567,7 +3635,10 @@ impl Controller {
                 // Their computers on this network out at once, each as a Remove at the shack takes
                 // it: every one holds station control while the LAN is on, and the service, whose
                 // next list would sweep them, may not be reached for days.
-                let off = self.off_lan(&mailbox);
+                let (others, off) = self.off_lan(&mailbox);
+                if let Ok(mut status) = self.status.lock() {
+                    status.account.also_uninvited = others;
+                }
                 let sent = self
                     .client
                     .post(
