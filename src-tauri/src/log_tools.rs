@@ -248,7 +248,9 @@ pub struct BulkPreviewDto {
     pub change: usize,
     pub unchanged: usize,
     pub missing: usize,
-    /// Of those it changes, the ones uploaded under the station call it changes: sent again.
+    /// Of those it changes, the ones whose station call it replaces with another.
+    pub recall: usize,
+    /// Of those, the ones uploaded under the station call it changes: sent again.
     pub resend: usize,
     /// The LoTW, eQSL and QRZ confirmations the changed station call takes off.
     pub unconfirm: usize,
@@ -272,6 +274,7 @@ pub async fn bulk_edit_preview(
             change: p.change,
             unchanged: p.unchanged,
             missing: p.missing,
+            recall: p.recall,
             resend: p.resend,
             unconfirm: p.unconfirm,
         })

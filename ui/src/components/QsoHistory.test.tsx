@@ -51,7 +51,7 @@ const entry = (over: Partial<QsoHistoryEntry>): QsoHistoryEntry => ({
 })
 
 const done = {
-  changed: 1, run: 'undo-run', kept: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0,
+  changed: 1, run: 'undo-run', kept: [], held: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0,
   unknownKind: 0, changedSinceCalls: [] as string[], duplicateCalls: [] as string[],
 }
 
@@ -104,6 +104,14 @@ describe("a contact's history", () => {
     expect(toasts.some((x) => x.message === 'Nothing put back: a contact with K2ABC on the same band and mode within 5 minutes was logged again after it was deleted.')).toBe(true)
     sayUndone({ ...done, changed: 0, run: null, unknownKind: 1 }, 'Change undone', () => {})
     expect(toasts.some((x) => x.message.startsWith('That change was made by a newer version'))).toBe(true)
+  })
+
+  it('says which field it kept so as not to send a contact under another call', () => {
+    sayUndone({ ...done, changed: 2, held: ['STATION_CALLSIGN'] }, 'Bulk edit undone', () => {})
+    const said = toasts.find((x) => x.message.startsWith('Bulk edit undone'))?.message ?? ''
+    expect(said).toBe('Bulk edit undone; STATION_CALLSIGN kept: put back blank, the contact would be sent under the call in Settings now, not the call it was made under')
+    sayUndone({ ...done, changed: 0, run: null, held: ['STATION_CALLSIGN'] }, 'Change undone', () => {})
+    expect(toasts.some((x) => x.message === 'Nothing undone: STATION_CALLSIGN was kept. Put back blank, the contact would be sent under the call in Settings now, not the call it was made under.')).toBe(true)
   })
 
   it('shows an undone change as undone, with no Undo of its own', async () => {

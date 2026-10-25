@@ -333,7 +333,7 @@ fn an_undo_puts_back_what_the_edit_changed_and_keeps_what_changed_since() {
     c.grid = Some("FN42".into());
     let (_, h) = entries_after(&[(&a, &b), (&b, &c)]);
     match undo(&h[0], Some(&c), None).unwrap() {
-        Undo::Revert { row, kept } => {
+        Undo::Revert { row, kept, .. } => {
             assert_eq!(row.name.as_deref(), Some("Bob"), "the name goes back");
             assert_eq!(row.grid.as_deref(), Some("FN42"), "the later grid stays");
             assert_eq!(kept, vec!["GRIDSQUARE".to_string()]);
@@ -344,7 +344,7 @@ fn an_undo_puts_back_what_the_edit_changed_and_keeps_what_changed_since() {
     }
     // With nothing changed since, the undo is the contact as it was, field for field.
     match undo(&h[1], Some(&c), None).unwrap() {
-        Undo::Revert { row, kept } => {
+        Undo::Revert { row, kept, .. } => {
             assert!(kept.is_empty());
             assert_eq!(row, b, "the contact before the second edit, whole");
         }
@@ -357,6 +357,69 @@ fn an_undo_puts_back_what_the_edit_changed_and_keeps_what_changed_since() {
         undo(&h[1], Some(&d), None).err(),
         Some(CannotUndo::ChangedSince)
     );
+}
+
+/// ⛔ An undo never puts back a blank station call that would put the contact under another call
+/// than the one it names: with the call in Settings another call (or none), the call stays, with
+/// its stamps, and the field is named as held. Every other field it changed still goes back. With
+/// the Settings call the one it names (a portable /P aside), the blank goes back and keeps the
+/// stamps. A named call put back over another is never held.
+#[test]
+fn an_undo_never_blanks_a_station_call_onto_another_call() {
+    let stamp = UploadStatus {
+        outcome: UploadOutcome::Accepted,
+        when_unix: 9,
+        detail: None,
+    };
+    let a = rec("K1ABC", 1);
+    let mut b = a.clone();
+    b.station_callsign = Some("KA1OLD".into());
+    b.name = Some("Robert".into());
+    let mut b_now = b.clone();
+    b_now.upload.lotw = Some(stamp.clone());
+    let (_, h) = entries_after(&[(&a, &b)]);
+
+    for settings in [Some("KD9NEW"), None] {
+        let Undo::Revert { row, kept, held } = undo(&h[0], Some(&b_now), settings).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            row.station_callsign.as_deref(),
+            Some("KA1OLD"),
+            "{settings:?}"
+        );
+        assert_eq!(row.upload, b_now.upload, "{settings:?}: its stamps stay");
+        assert_eq!(row.name.as_deref(), Some("Bob"), "the rest goes back");
+        assert!(kept.is_empty());
+        assert_eq!(held, vec!["STATION_CALLSIGN".to_string()]);
+    }
+    for settings in ["ka1old", "KA1OLD/P"] {
+        let Undo::Revert { row, held, .. } = undo(&h[0], Some(&b_now), Some(settings)).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(row.station_callsign, None, "{settings}");
+        assert_eq!(
+            row.upload, b_now.upload,
+            "{settings}: the same call all along"
+        );
+        assert!(held.is_empty());
+    }
+
+    // A named call put back over another: never held, and owed again under it.
+    let mut c = a.clone();
+    c.station_callsign = Some("KD0AA".into());
+    let mut d = c.clone();
+    d.station_callsign = Some("W6R".into());
+    let mut d_now = d.clone();
+    d_now.upload.lotw = Some(stamp);
+    let (_, h) = entries_after(&[(&c, &d)]);
+    let Undo::Revert { row, held, .. } = undo(&h[0], Some(&d_now), Some("KD9NEW")).unwrap() else {
+        panic!()
+    };
+    assert_eq!(row.station_callsign.as_deref(), Some("KD0AA"));
+    assert_eq!(row.upload, UploadState::default());
+    assert!(held.is_empty());
 }
 
 /// An undo keeps the stamps the contact has — unless it corrects the call, which owes the

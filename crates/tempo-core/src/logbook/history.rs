@@ -52,7 +52,8 @@
 //!   beside it before the delete never blocks it: the log held both;
 //! - an edit: each field it changed goes back, **but only a field still holding what the change
 //!   wrote**. A field changed again since keeps the later value; an undo whose every field was
-//!   changed since is refused rather than made as nothing;
+//!   changed since is refused rather than made as nothing. A blank station call is not put back
+//!   where it would move the contact under another call than the one it names ([`revert`]);
 //! - an entry of a kind this build does not know (a later build wrote it): refused, never taken
 //!   for an edit.
 //!
@@ -785,12 +786,17 @@ pub enum Undo {
     /// Put the contact back, whole: the entry deleted it.
     Restore(QsoRecord),
     /// The contact, with the entry's fields put back where they still hold what it wrote.
-    /// `kept` names the fields changed again since, which keep the later value.
+    /// `kept` names the fields changed again since, which keep the later value; `held` the fields
+    /// left as they are because putting them back would put the contact under another call.
     Revert {
         /// The contact as the undo leaves it.
         row: QsoRecord,
         /// Fields left as they are, because a later change moved them.
         kept: Vec<String>,
+        /// Fields left as they are, because putting them back would move the contact under a
+        /// call it was not made under: a blank STATION_CALLSIGN, while the call in Settings is
+        /// another call than the one it holds.
+        held: Vec<String>,
     },
 }
 
@@ -860,6 +866,16 @@ pub fn undo(
 /// the contact under the restored call, and a service already holding that QSO answers Duplicate.
 /// A blank station call filled with the Settings call, undone, keeps its stamps: the call it is
 /// uploaded under never moved.
+///
+/// **⛔ An undo never puts back a blank station call that would move the contact under another
+/// call.** A contact naming none goes out under the call in Settings NOW, and nothing records the
+/// call a blank contact was uploaded under. Old contacts uploaded under KA1OLD, filled with KA1OLD,
+/// and the fill undone after Settings moved to KD9NEW would be owed to every service under KD9NEW,
+/// and LoTW cannot take back a QSO it accepted. So where the blank would land the contact under
+/// another call than the one its STATION_CALLSIGN names now, that call stays, with its stamps, and
+/// the field is `held`. The Settings call the edit was made under is not what decides: in that
+/// example it was KD9NEW too. Only the call the contact holds now is known to be one it was made
+/// under. Putting back a call that is named is always allowed: it is a call the operator wrote.
 fn revert(
     entry: &Entry,
     current: &QsoRecord,
@@ -898,11 +914,17 @@ fn revert(
         .next()
         .ok_or(CannotUndo::ChangedSince)?;
     row.id = current.id;
+    let station = |r: &QsoRecord| super::cleanup::station_call(r, settings_call);
+    let mut held = Vec::new();
+    let named = |r: &QsoRecord| super::cleanup::station_call(r, None).is_some();
+    if !named(&row) && named(current) && station(&row) != station(current) {
+        row.station_callsign = current.station_callsign.clone();
+        held.push("STATION_CALLSIGN".to_string());
+    }
     // A stamp is never history, so it is never undone: the contact keeps the stamps it has —
     // unless the undo corrects its call, or the station call it is uploaded under, which owes it
     // to every service again, as a corrected call always has (`edited`), with the LoTW mark
     // another logger left in it.
-    let station = |r: &QsoRecord| crate::reconcile::lotw_own_call(r, settings_call);
     if row.call.trim().eq_ignore_ascii_case(current.call.trim())
         && station(&row) == station(current)
     {
@@ -911,7 +933,7 @@ fn revert(
         row.upload = super::UploadState::default();
         row.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
     }
-    Ok(Undo::Revert { row, kept })
+    Ok(Undo::Revert { row, kept, held })
 }
 
 #[cfg(test)]

@@ -327,7 +327,7 @@ fn a_bulk_edit_changes_only_its_fields_and_keeps_every_stamp() {
         },
     ])
     .unwrap();
-    let after = changed(&b, &changes, &no_country, None).expect("a change");
+    let after = changed(&b, &changes, &no_country).expect("a change");
     let mut want = b.clone();
     want.my_grid = Some("em10".into());
     want.operator = None;
@@ -341,12 +341,12 @@ fn a_bulk_edit_changes_only_its_fields_and_keeps_every_stamp() {
 
     b.ota.my_program = None;
     b.ota.my_ref = None;
-    let parked = changed(&b, &changes, &no_country, None).unwrap();
+    let parked = changed(&b, &changes, &no_country).unwrap();
     assert_eq!(parked.ota.my_program.as_deref(), Some("POTA"));
     assert_eq!(parked.ota.my_ref.as_deref(), Some("US-0001"));
 
     assert!(
-        changed(&parked, &changes, &no_country, None).is_none(),
+        changed(&parked, &changes, &no_country).is_none(),
         "already so"
     );
     assert!(checked(&[Change {
@@ -635,7 +635,7 @@ fn a_bulk_station_call_change_clears_the_upload_stamps() {
         }])
         .unwrap()
     };
-    let after = changed(&b, &to(Some("w6r")), &no_country, None).unwrap();
+    let after = changed(&b, &to(Some("w6r")), &no_country).unwrap();
     assert_eq!(after.station_callsign.as_deref(), Some("W6R"));
     assert_eq!(after.upload, crate::logbook::UploadState::default());
     assert_eq!(extra_value(&after, "LOTW_QSL_SENT"), None);
@@ -644,12 +644,14 @@ fn a_bulk_station_call_change_clears_the_upload_stamps() {
         after.credit_submitted, b.credit_submitted,
         "with the card's credit"
     );
-    assert!(resends(&b, &after, None));
+    assert!(resends(&b, &after));
 
-    let cleared = changed(&b, &to(None), &no_country, None).unwrap();
-    assert_eq!(cleared.upload, crate::logbook::UploadState::default());
+    // Cleared: no change of call (the next test), so the stamps stay.
+    let cleared = changed(&b, &to(None), &no_country).unwrap();
+    assert_eq!(cleared.upload, b.upload);
+    assert!(!resends(&b, &cleared));
 
-    assert!(changed(&b, &to(Some("k2def")), &no_country, None).is_none());
+    assert!(changed(&b, &to(Some("k2def")), &no_country).is_none());
     let rig = changed(
         &b,
         &checked(&[Change {
@@ -658,11 +660,10 @@ fn a_bulk_station_call_change_clears_the_upload_stamps() {
         }])
         .unwrap(),
         &no_country,
-        None,
     )
     .unwrap();
     assert_eq!(rig.upload, b.upload);
-    assert!(!resends(&b, &rig, None));
+    assert!(!resends(&b, &rig));
 }
 
 /// ★ A STATION CALL CHANGED IN BULK TAKES OFF WHAT THE SERVICES MATCHED UNDER THE OLD ONE: LoTW's,
@@ -704,7 +705,7 @@ fn a_bulk_station_call_change_clears_the_electronic_confirmations_and_keeps_the_
         .unwrap()
     };
 
-    let after = changed(&r, &to(Some("w6r")), &no_country, None).unwrap();
+    let after = changed(&r, &to(Some("w6r")), &no_country).unwrap();
     let mut want = r.clone();
     want.station_callsign = Some("W6R".into());
     want.qsl_rcvd = QslRcvd {
@@ -736,7 +737,7 @@ fn a_bulk_station_call_change_clears_the_electronic_confirmations_and_keeps_the_
     for k in ["QSL_RCVD_VIA", "QSLRDATE"] {
         set_extra(&mut no_card, k, None);
     }
-    let cleared = changed(&no_card, &to(None), &no_country, None).unwrap();
+    let cleared = changed(&no_card, &to(Some("W6R")), &no_country).unwrap();
     assert_eq!(cleared.qsl_rcvd, QslRcvd::default());
     assert!(!cleared.confirmed && !cleared.award_confirmed);
     assert_eq!(
@@ -758,13 +759,13 @@ fn a_bulk_station_call_change_clears_the_electronic_confirmations_and_keeps_the_
         ..QslRcvd::default()
     };
     eqsl_only.award_confirmed = false;
-    let after = changed(&eqsl_only, &to(Some("W6R")), &no_country, None).unwrap();
+    let after = changed(&eqsl_only, &to(Some("W6R")), &no_country).unwrap();
     assert_eq!(after.credit_granted, eqsl_only.credit_granted);
     assert!(!after.confirmed);
     assert_eq!(confirmations_cleared(&eqsl_only, &after), 1);
 
     // The same call: nothing at all.
-    assert!(changed(&r, &to(Some(" k2def ")), &no_country, None).is_none());
+    assert!(changed(&r, &to(Some(" k2def ")), &no_country).is_none());
     // Another field: every confirmation stays.
     let rig = changed(
         &r,
@@ -774,7 +775,6 @@ fn a_bulk_station_call_change_clears_the_electronic_confirmations_and_keeps_the_
         }])
         .unwrap(),
         &no_country,
-        None,
     )
     .unwrap();
     assert_eq!(
@@ -818,13 +818,13 @@ fn a_copys_revision_moves_with_everything_but_a_stamp() {
     }
 }
 
-/// ★ THE CALL A CONTACT IS UPLOADED UNDER is its STATION_CALLSIGN, else the call in Settings. A
-/// bulk edit filling a blank station call with the Settings call, or clearing the Settings call
-/// from it, leaves the contact under the call it was uploaded and confirmed under: the field
-/// changes and nothing else — every stamp, confirmation, date and credit stays. Filled with
-/// another call, it is a change, and they go. With no call in Settings a fill is a change.
+/// ★ FILLING IN A BLANK STATION CALL, OR CLEARING ONE, IS NO CHANGE OF CALL, whatever the call in
+/// Settings is (operator ruling): a contact naming no station call was uploaded and confirmed
+/// under whatever call was in Settings then, which nothing records, and the fill records it. The
+/// field changes and nothing else — every stamp, confirmation, date and credit stays — filled with
+/// any call, or cleared. Only one call replaced by ANOTHER is a change, and they go.
 #[test]
-fn a_station_call_filled_with_the_settings_call_clears_nothing() {
+fn a_blank_station_call_filled_or_a_call_cleared_clears_nothing() {
     let mut r = contact("W1AW", T0, 1);
     r.qsl_rcvd = QslRcvd {
         lotw: true,
@@ -846,28 +846,81 @@ fn a_station_call_filled_with_the_settings_call_clears_nothing() {
         }])
         .unwrap()
     };
-    let settings = Some(" kd9taw");
 
-    let filled = changed(&r, &to(Some("KD9TAW")), &no_country, settings).unwrap();
-    let mut want = r.clone();
-    want.station_callsign = Some("KD9TAW".into());
-    assert_eq!(filled, want, "the field, and nothing else");
-    assert!(!resends(&r, &filled, settings));
-    assert_eq!(confirmations_cleared(&r, &filled), 0);
+    for call in ["KD9TAW", "KA1OLD"] {
+        let filled = changed(&r, &to(Some(call)), &no_country).unwrap();
+        let mut want = r.clone();
+        want.station_callsign = Some(call.into());
+        assert_eq!(filled, want, "{call}: the field, and nothing else");
+        assert!(!resends(&r, &filled));
+        assert_eq!(confirmations_cleared(&r, &filled), 0);
 
-    let blanked = changed(&filled, &to(None), &no_country, settings).unwrap();
-    assert_eq!(
-        blanked, r,
-        "cleared back to the Settings call: nothing else"
-    );
+        let blanked = changed(&filled, &to(None), &no_country).unwrap();
+        assert_eq!(blanked, r, "{call} cleared: nothing else");
+        assert!(!resends(&filled, &blanked));
+    }
 
-    let other = changed(&r, &to(Some("W6R")), &no_country, settings).unwrap();
-    assert!(resends(&r, &other, settings));
+    // CONTROL: one call replaced by another.
+    let filled = changed(&r, &to(Some("KA1OLD")), &no_country).unwrap();
+    let other = changed(&filled, &to(Some("W6R")), &no_country).unwrap();
+    assert!(resends(&filled, &other));
     assert_eq!(other.upload, crate::logbook::UploadState::default());
-    assert_eq!(confirmations_cleared(&r, &other), 3);
+    assert_eq!(confirmations_cleared(&filled, &other), 3);
+}
 
-    let unknown = changed(&r, &to(Some("KD9TAW")), &no_country, None).unwrap();
-    assert!(resends(&r, &unknown, None), "no Settings call: a change");
+/// ★ A PORTABLE /P IS THE SAME STATION CALL (operator ruling), for a change of station call and
+/// for the duplicate finder: `KD9TAW/P` over `KD9TAW`, or back, changes the field and nothing else,
+/// and copies under the two are one contact. Only /P: `/M`, `/QRP`, `/MM` and a prefix are other
+/// calls, both ways.
+#[test]
+fn a_portable_p_is_the_same_station_call_and_nothing_else_is() {
+    let mut r = contact("W1AW", T0, 1);
+    r.station_callsign = Some("KD9TAW".into());
+    r.qsl_rcvd.lotw = true;
+    r.award_confirmed = true;
+    r.confirmed = true;
+    r.upload.lotw = stamp(100);
+    let to = |v: &str| {
+        checked(&[Change {
+            field: Field::StationCallsign,
+            value: Some(v.to_string()),
+        }])
+        .unwrap()
+    };
+    let portable = changed(&r, &to("kd9taw/p"), &no_country).unwrap();
+    let mut want = r.clone();
+    want.station_callsign = Some("KD9TAW/P".into());
+    assert_eq!(portable, want, "the field, and nothing else");
+    assert!(!resends(&r, &portable) && !resends(&portable, &r));
+
+    let (mut a, mut b) = pair("W1AW", "W1AW");
+    a.station_callsign = Some("KD9TAW".into());
+    b.station_callsign = Some("KD9TAW/P".into());
+    assert_eq!(distinct(&a, &b, None), None);
+    assert_eq!(distinct(&b, &a, Some("W6R")), None);
+    // A blank copy, under the Settings call: /P aside, the same call.
+    b.station_callsign = None;
+    assert_eq!(distinct(&a, &b, Some("KD9TAW/P")), None);
+
+    for other in [
+        "KD9TAW/M",
+        "KD9TAW/QRP",
+        "KD9TAW/MM",
+        "W1/KD9TAW",
+        "KD9TAW/9",
+    ] {
+        let moved = changed(&r, &to(other), &no_country).unwrap();
+        assert!(resends(&r, &moved), "{other}");
+        assert_eq!(
+            moved.upload,
+            crate::logbook::UploadState::default(),
+            "{other}"
+        );
+        let mut b = a.clone();
+        b.station_callsign = Some(other.into());
+        assert_eq!(distinct(&a, &b, None), Some("STATION_CALLSIGN"), "{other}");
+        assert_eq!(distinct(&b, &a, None), Some("STATION_CALLSIGN"), "{other}");
+    }
 }
 
 /// ★ A MERGE NEVER DROPS A REFERENCE. Copies on the same side (both on one summit), one also
@@ -907,14 +960,80 @@ fn a_merge_never_drops_a_parked_reference_and_guards_a_differing_side() {
     let merged = merge(&[a.clone(), b.clone()], 0, &HashMap::new());
     assert_eq!(merged.unchosen(&HashMap::new()), vec!["MY_SIG_INFO"]);
 
-    // A park on one copy, a summit on the other: the worked station's side.
+    // Two programmes neither of which a record can hold beside the other: the worked station's
+    // side is a guarded choice.
     let (mut a, mut b) = pair("W1AW", "W1AW");
     a.ota.their_program = Some("POTA".into());
     a.ota.their_ref = Some("US-1234".into());
-    b.ota.their_program = Some("SOTA".into());
-    b.ota.their_ref = Some("W7A/CN-01".into());
+    b.ota.their_program = Some("WWFF".into());
+    b.ota.their_ref = Some("KFF-1234".into());
     let merged = merge(&[a, b], 0, &HashMap::new());
     assert_eq!(merged.unchosen(&HashMap::new()), vec!["SIG"]);
+}
+
+/// ★ A HUNTER'S TWO-FER IS KEPT WHOLE. A summit on one copy and a park on the other are both
+/// right: whichever copy is kept, and whichever side an older ask chose, the merged contact holds
+/// the summit as its side and the park beside it — as a read of the record it writes holds them —
+/// with nothing to choose. A park the summit's copy already parks beside it, and a different one
+/// on the other copy, are a guarded choice.
+#[test]
+fn a_merge_of_a_hunters_two_fer_keeps_the_summit_and_the_park() {
+    let (mut a, mut b) = pair("W1AW", "W1AW");
+    a.ota.their_program = Some("SOTA".into());
+    a.ota.their_ref = Some("W7A/CN-01".into());
+    b.ota.their_program = Some("POTA".into());
+    b.ota.their_ref = Some("US-1234".into());
+    for keep in [0, 1] {
+        for choices in [HashMap::new(), [("SIG".to_string(), b.id.unwrap())].into()] {
+            let merged = merge(&[a.clone(), b.clone()], keep, &choices);
+            let r = &merged.record;
+            assert_eq!(
+                (r.ota.their_program.as_deref(), r.ota.their_ref.as_deref()),
+                (Some("SOTA"), Some("W7A/CN-01")),
+                "keep {keep}"
+            );
+            assert_eq!(extra_value(r, "SIG"), Some("POTA"));
+            assert_eq!(extra_value(r, "SIG_INFO"), Some("US-1234"));
+            assert_eq!(extra_value(r, "POTA_REF"), Some("US-1234"));
+            assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
+            let reread = parse_adif(&adif_record_own_log(r)).remove(0);
+            assert_eq!(reread.ota, r.ota, "the record reads back as merged");
+            assert_eq!(extra_value(&reread, "SIG_INFO"), Some("US-1234"));
+        }
+    }
+
+    // The summit's copy already parks another park: the two parks are the operator's to choose.
+    a.extra = vec![
+        ("SIG".into(), "POTA".into()),
+        ("SIG_INFO".into(), "US-5678".into()),
+    ];
+    let merged = merge(&[a, b], 0, &HashMap::new());
+    assert_eq!(merged.unchosen(&HashMap::new()), vec!["SIG_INFO"]);
+}
+
+/// Of copies otherwise equally full, the one a service already holds is the one kept by default:
+/// a merge keeps only the kept copy's stamps, so keeping it sends nothing again. A failed upload is
+/// no upload. Fuller still wins.
+#[test]
+fn of_equal_copies_the_one_sent_is_kept() {
+    let (a, mut b) = pair("W1AW", "W1AW");
+    assert_eq!(suggested_keep(&[a.clone(), b.clone()]), 0, "log order");
+    b.upload.qrz = stamp(100);
+    assert_eq!(suggested_keep(&[a.clone(), b.clone()]), 1);
+    let mut failed = a.clone();
+    failed.upload.lotw = Some(UploadStatus {
+        outcome: UploadOutcome::Rejected,
+        when_unix: 1,
+        detail: None,
+    });
+    assert_eq!(suggested_keep(&[failed.clone(), b.clone()]), 1);
+    let mut fuller = a;
+    fuller.name = Some("Hiram".into());
+    assert_eq!(
+        suggested_keep(&[fuller, b]),
+        0,
+        "the fuller copy still wins"
+    );
 }
 
 /// ★ A GRID IS ONE GRID AT ANY PRECISION. One logger writes the 4-character square, another the
@@ -980,11 +1099,11 @@ fn a_station_call_change_takes_off_an_older_records_confirmation() {
         value: Some("W6R".into()),
     }])
     .unwrap();
-    let after = changed(&r, &to_w6r, &no_country, None).unwrap();
+    let after = changed(&r, &to_w6r, &no_country).unwrap();
     assert!(!after.confirmed && !after.award_confirmed);
     assert_eq!(confirmations_cleared(&r, &after), 1);
     r.award_confirmed = false;
-    let after = changed(&r, &to_w6r, &no_country, None).unwrap();
+    let after = changed(&r, &to_w6r, &no_country).unwrap();
     assert!(!after.confirmed);
     assert_eq!(confirmations_cleared(&r, &after), 1);
 }

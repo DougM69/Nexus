@@ -35,11 +35,12 @@
 //!   the kept copy's, unchanged: no correction — and copies under different calls, or different
 //!   station calls, are never merged at all.
 //! - **a bulk edit** never changes the worked call (`cleanup::BULK_FIELDS`). Every stamp and
-//!   confirmation stays, but on a contact whose **STATION_CALLSIGN** it changes: that is the call
-//!   the contact is uploaded under (the call in Settings where it names none, so filling that in
-//!   changes nothing else), so its stamps are cleared as a corrected call's are, and the next
-//!   upload sends it under the new call ([`cleanup::resends`]; the preview counts them,
-//!   [`BulkPreview::resend`]). It is not queued here. The LoTW, eQSL and QRZ confirmations matched
+//!   confirmation stays, but on a contact whose **STATION_CALLSIGN** it replaces with another
+//!   call: that is the call the contact is uploaded under, so its stamps are cleared as a corrected
+//!   call's are, and the next upload sends it under the new call ([`cleanup::resends`]; the
+//!   preview counts them, [`BulkPreview::recall`] and [`BulkPreview::resend`]). Filling in a blank
+//!   station call, clearing one, or adding or taking off a portable `/P` changes the field and
+//!   nothing else, whatever the call in Settings is. It is not queued here. The LoTW, eQSL and QRZ confirmations matched
 //!   under the old call go too; a paper card and the credit codes stay (`cleanup`'s header; the
 //!   preview counts them, [`BulkPreview::unconfirm`]), and the run's undo puts them back. A
 //!   push answered after the change is not stamped on it ([`station::push_target`]).
@@ -49,7 +50,9 @@
 //! An undo of any of them sends nothing either ([`crate::loghistory`]). A stamp is never history:
 //! the undo of a merge leaves the kept contact the stamps it had before the merge, because the
 //! merge gave it none; the undo of a station call change clears the stamps of uploads made under
-//! the call it takes off, so the contact is owed again under the call it gets back.
+//! the call it takes off, so the contact is owed again under the call it gets back; and it never
+//! puts back a blank station call that would move a contact under another call
+//! ([`crate::loghistory::Undone::held`]).
 //!
 //! # What a merge does not touch
 //!
@@ -458,8 +461,11 @@ pub struct BulkPreview {
     pub unchanged: usize,
     /// Those no longer in the log.
     pub missing: usize,
-    /// Of those it changes, the ones uploaded somewhere under the station call it changes: their
-    /// stamps are cleared, and the next upload sends them again under the new call.
+    /// Of those it changes, the ones whose station call it replaces with another
+    /// ([`cleanup::resends`]): owed to every service under the new call.
+    pub recall: usize,
+    /// Of those, the ones uploaded somewhere under the station call it changes: their stamps are
+    /// cleared, and the next upload sends them again under the new call.
     pub resend: usize,
     /// The LoTW, eQSL and QRZ confirmations a changed station call takes off those it changes.
     pub unconfirm: usize,
@@ -488,7 +494,6 @@ pub fn bulk_preview(
 ) -> Result<BulkPreview, String> {
     let changes = bulk_changes(changes)?;
     let country = country_rule(engine);
-    let settings_call = settings_call(engine);
     let mut seen = HashSet::new();
     let ids: Vec<RecordId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
     let mut out = BulkPreview {
@@ -500,13 +505,14 @@ pub fn bulk_preview(
         let rows = plan.rows(part)?;
         out.missing += part.len() - rows.len();
         for row in rows.values() {
-            match cleanup::changed(row, &changes, &country, Some(&settings_call)) {
+            match cleanup::changed(row, &changes, &country) {
                 Some(after) => {
                     out.change += 1;
-                    if cleanup::resends(row, &after, Some(&settings_call))
-                        && row.upload != Default::default()
-                    {
-                        out.resend += 1;
+                    if cleanup::resends(row, &after) {
+                        out.recall += 1;
+                        if row.upload != Default::default() {
+                            out.resend += 1;
+                        }
                     }
                     out.unconfirm += cleanup::confirmations_cleared(row, &after);
                 }
@@ -542,7 +548,6 @@ pub fn bulk_edit(
         return (Err(NOT_AS_PREVIEWED.into()), Durability::default());
     }
     let country = country_rule(engine);
-    let settings_call = settings_call(engine);
     let parts: Vec<Vec<RecordId>> = ids.chunks(CHUNK).map(<[RecordId]>::to_vec).collect();
     run_in_parts(engine, &parts, "bulk_edit", |k, rows| {
         let mut pairs = Vec::new();
@@ -551,9 +556,7 @@ pub fn bulk_edit(
             match rows.get(id) {
                 None => refused.push((*id, "gone")),
                 Some(row) => {
-                    if let Some(after) =
-                        cleanup::changed(row, &changes, &country, Some(&settings_call))
-                    {
+                    if let Some(after) = cleanup::changed(row, &changes, &country) {
                         pairs.push((Arc::clone(row), Some(Arc::new(after))));
                     }
                 }
@@ -816,7 +819,6 @@ pub fn apply_fixes(engine: &Mutex<Engine>, fixes: &[Fix]) -> (Result<ToolRun, St
         held.push((fix, change));
     }
     let country = country_rule(engine);
-    let settings_call = settings_call(engine);
     let parts: Vec<Vec<RecordId>> = ids.chunks(CHUNK).map(<[RecordId]>::to_vec).collect();
     run_in_parts(engine, &parts, "log_fixes", |k, rows| {
         let mut pairs = Vec::new();
@@ -836,7 +838,7 @@ pub fn apply_fixes(engine: &Mutex<Engine>, fixes: &[Fix]) -> (Result<ToolRun, St
                     refused.push((*id, "changed"));
                 }
             }
-            if let Some(after) = cleanup::changed(row, &still, &country, Some(&settings_call)) {
+            if let Some(after) = cleanup::changed(row, &still, &country) {
                 pairs.push((Arc::clone(row), Some(Arc::new(after))));
             }
         }

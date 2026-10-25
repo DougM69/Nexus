@@ -15,8 +15,8 @@
 //! more than its window: a station worked every 45 minutes all afternoon is several groups, never
 //! one that chains for hours.
 //!
-//! **Copies that differ in an identity field are two contacts** ([`distinct`]): the station call,
-//! the operator, either grid, the operator's park or summit, the propagation mode or satellite.
+//! **Copies that differ in an identity field are two contacts** ([`distinct`]): the station call
+//! (a portable `/P` aside: `KD9TAW/P` is `KD9TAW`, operator ruling), the operator, either grid, the operator's park or summit, the propagation mode or satellite.
 //! A club log's two calls, a rover's grid corner and a satellite pass beside a simplex contact
 //! are each owed their own record. A copy holding NONE of a field is no difference — that is the
 //! gap a merge fills — but a copy naming no station call is under the call in Settings, as its
@@ -51,9 +51,11 @@
 //! - a side's passthrough references (the other programme's reference `take_ota_side` parks in
 //!   the passthrough) are never dropped unseen. Where the copies hold the same side (or one holds
 //!   none) they are unioned, and a reference two copies hold differently is guarded. Where the
-//!   sides differ — a park on one, a summit on the other — the side is a guarded conflict, and its
-//!   references come from the copy whose side was chosen, never from another: written after the
-//!   side, the next read would take a left-over one for it.
+//!   sides differ the side is a guarded conflict, and its references come from the copy whose
+//!   side was chosen, never from another: written after the side, the next read would take a
+//!   left-over one for it. **A hunter's two-fer** — a summit on one copy, a park on the other —
+//!   is no choice: both are right, so the merged contact keeps the summit as its side and the park
+//!   parked beside it, as a read of such a record holds them ([`with_twofer_parked`]).
 //!
 //! The copies that are not kept are deleted by the merge, whole, into the history: nothing a
 //! copy held is lost, and the merge is undone as one run.
@@ -84,8 +86,9 @@
 //! no confirmation on the contact, only its stamp. The preview counts what is taken off
 //! ([`confirmations_cleared`]), and the run's undo puts it back.
 //!
-//! Filling a blank station call with the Settings call, or clearing the Settings call from it, is
-//! no change of the call the contact is uploaded under: the field changes and nothing else.
+//! Filling in a blank station call, or clearing one, is no change of call, whatever the call in
+//! Settings is (operator ruling): the field changes and nothing else. Only one call replaced by
+//! another is a change, and a portable `/P` added or taken off is not ([`resends`]).
 //!
 //! The marks that say Nexus or a callbook filled a field come off a field it changes, as an edit
 //! takes them off. A park or summit is set only on a contact whose side holds no reference or one
@@ -228,11 +231,21 @@ pub fn distinct(a: &QsoRecord, b: &QsoRecord, settings_call: Option<&str>) -> Op
     fields.into_iter().find(|(_, d)| *d).map(|(tag, _)| tag)
 }
 
-/// The call `r` is uploaded under: its STATION_CALLSIGN, else `settings_call`, the call in
-/// Settings ([`crate::reconcile::lotw_own_call`]), trimmed, case aside. `None` when neither names
-/// one.
-fn station_call(r: &QsoRecord, settings_call: Option<&str>) -> Option<String> {
-    crate::reconcile::lotw_own_call(r, settings_call)
+/// The call `r` is uploaded under, as the clean-up tools compare it: its STATION_CALLSIGN, else
+/// `settings_call`, the call in Settings ([`crate::reconcile::lotw_own_call`]), trimmed, case
+/// aside, a portable `/P` taken off ([`without_portable_p`]). `None` when neither names one.
+pub(crate) fn station_call(r: &QsoRecord, settings_call: Option<&str>) -> Option<String> {
+    crate::reconcile::lotw_own_call(r, settings_call).map(without_portable_p)
+}
+
+/// `call` without a portable `/P` at its end (operator ruling): `KD9TAW/P` is the same station call
+/// as `KD9TAW` to the duplicate finder and to a change of station call. Only `/P` — `/M`, `/MM`,
+/// `/QRP`, a prefix (`W1/KD9TAW`) or any other suffix is another call.
+fn without_portable_p(call: String) -> String {
+    match call.strip_suffix("/P") {
+        Some(base) if !base.is_empty() => base.to_string(),
+        _ => call,
+    }
 }
 
 /// Whether two locators are one grid: the shorter, case aside, begins the longer and ends on a
@@ -584,12 +597,24 @@ fn fullness(r: &QsoRecord) -> usize {
     held + r.extra.iter().filter(|(k, _)| !is_mark(k)).count() + 2 * confirmed
 }
 
+/// How many services a copy has been sent to ([`super::UploadOutcome::is_sent`]).
+fn sent_to(r: &QsoRecord) -> usize {
+    let u = &r.upload;
+    [&u.lotw, &u.eqsl, &u.qrz, &u.clublog]
+        .into_iter()
+        .filter(|s| s.as_ref().is_some_and(|s| s.outcome.is_sent()))
+        .count()
+}
+
 /// The copy a merge keeps unless the operator picks another: the fullest — the most fields,
-/// confirmations counted twice — and of equally full ones the first in log order.
+/// confirmations counted twice — then, of equally full ones, the one sent to the most services
+/// (a merge keeps only the kept copy's stamps, so keeping the sent one sends nothing again), and
+/// then the first in log order.
 pub fn suggested_keep(copies: &[QsoRecord]) -> usize {
+    let rank = |r: &QsoRecord| (fullness(r), sent_to(r));
     let mut best = 0;
     for (i, r) in copies.iter().enumerate() {
-        if fullness(r) > fullness(&copies[best]) {
+        if rank(r) > rank(&copies[best]) {
             best = i;
         }
     }
@@ -619,10 +644,49 @@ const SIDE_EXTRAS: [(&str, [&str; 4]); 2] = [
 /// The passthrough field an upload stamp is read back from: the kept copy's own, like a stamp.
 const STAMP_EXTRA: &str = "LOTW_QSL_SENT";
 
+/// The copies, a hunter's two-fer's parked as one record holds it: where one copy names a summit
+/// for the worked station and another names a park (or another programme's reference), both are
+/// right, and the record keeps both the way a read of it does — the summit as the side (a summit
+/// always takes the side, `take_ota_side`) and the other reference beside it in the passthrough,
+/// as its own side writes it (`ota_fields`). So the copies not on a summit come in with their side
+/// parked, and the merge unions the parked references as it does any side's: none is dropped, and
+/// two that differ are a guarded choice. Copies naming no summit come in as they are.
+fn with_twofer_parked(copies: &[QsoRecord]) -> Vec<QsoRecord> {
+    let summit = |r: &QsoRecord| {
+        text(&r.ota.their_program).is_some_and(|p| p.eq_ignore_ascii_case("SOTA"))
+            && text(&r.ota.their_ref).is_some()
+    };
+    let twofer = copies.iter().any(summit);
+    copies
+        .iter()
+        .map(|r| {
+            let written = super::ota_fields(
+                "SIG",
+                "SIG_INFO",
+                "SOTA_REF",
+                "POTA_REF",
+                &r.ota.their_program,
+                &r.ota.their_ref,
+            );
+            if !twofer || summit(r) || written.is_empty() {
+                return r.clone();
+            }
+            let mut parked = r.clone();
+            parked.ota.their_program = None;
+            parked.ota.their_ref = None;
+            for (k, v) in super::history::fields(&written) {
+                set_extra(&mut parked, &k, Some(v));
+            }
+            parked
+        })
+        .collect()
+}
+
 /// ★ The copies of one contact merged into the copy `keep` (see the module header). `copies` in
 /// log order; `choices` names, for a conflicting field, the copy whose value the merged contact
 /// takes. The merged contact keeps `copies[keep]`'s id.
 pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, RecordId>) -> Merged {
+    let copies = &with_twofer_parked(copies);
     let kept = &copies[keep];
     // The kept copy first: its value is the default wherever it has one.
     let order: Vec<&QsoRecord> = std::iter::once(kept)
@@ -1087,13 +1151,19 @@ fn set_side(
     }
 }
 
-/// Whether a change from `before` to `after` changes the call the contact is uploaded under
-/// ([`station_call`]: its STATION_CALLSIGN, else `settings_call`, the call in Settings; trimmed,
-/// case aside): its stamps go, and the next upload sends it again under the call it now carries.
-/// A blank station call filled with the Settings call, or the Settings call cleared, is no change:
-/// the contact was uploaded under that call all along.
-pub fn resends(before: &QsoRecord, after: &QsoRecord, settings_call: Option<&str>) -> bool {
-    station_call(before, settings_call) != station_call(after, settings_call)
+/// Whether a change from `before` to `after` changes the call the contact is uploaded under: one
+/// STATION_CALLSIGN replaced by ANOTHER ([`station_call`]: trimmed, case and a portable `/P`
+/// aside). Its stamps go, and the next upload sends it again under the call it now carries.
+///
+/// A blank station call filled in, or a station call cleared, is no change, whatever the call in
+/// Settings is (operator ruling). A contact naming no station call was uploaded under whatever call
+/// was in Settings then, which Nexus does not record: the fill records the call it was made under,
+/// and clearing it never owes it to the services under a call it may never have been made under.
+pub fn resends(before: &QsoRecord, after: &QsoRecord) -> bool {
+    matches!(
+        (station_call(before, None), station_call(after, None)),
+        (Some(x), Some(y)) if x != y
+    )
 }
 
 /// What a service matched under a station call, beside its confirmation flag: LoTW's and eQSL's
@@ -1157,7 +1227,6 @@ pub fn changed(
     row: &QsoRecord,
     changes: &[Change],
     country: &dyn Fn(&str, Option<u32>) -> Option<String>,
-    settings_call: Option<&str>,
 ) -> Option<QsoRecord> {
     let mut rec = row.clone();
     for c in changes {
@@ -1206,7 +1275,7 @@ pub fn changed(
     }
     callbook::unmark_edited(row, &mut rec);
     // A changed station call: the stamps go, as a corrected call's do (the module header).
-    if resends(row, &rec, settings_call) {
+    if resends(row, &rec) {
         rec.upload = UploadState::default();
         rec.extra.retain(|(k, _)| k != STAMP_EXTRA);
         unconfirm_electronic(&mut rec);

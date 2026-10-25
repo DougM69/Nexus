@@ -1673,11 +1673,14 @@ export interface DeletedQso {
 /** What an undo made. `run` is the undo's own run: undoing it is the redo. The counts are the
  *  contacts it could not change, by why: `changedSince` includes a contact an import added that
  *  was edited or confirmed since (it stays), `duplicate` one the log holds already under another
- *  id (it is not put back twice). The calls name those contacts, sorted, each once. */
+ *  id (it is not put back twice). The calls name those contacts, sorted, each once. `kept`: the
+ *  fields a later change moved; `held`: the fields it left because putting them back would send a
+ *  contact under a call it was not made under (a blank station call). */
 export interface UndoAnswer {
   changed: number
   run: string | null
   kept: string[]
+  held: string[]
   gone: number
   alreadyThere: number
   changedSince: number
@@ -1806,14 +1809,16 @@ export interface FieldChange { field: CleanupField; value: string | null }
 export type BulkTarget = { ids: string[] } | { query: LogQuery }
 
 /** What a bulk edit would make of its contacts. `ids`: the contacts previewed, which the apply is
- *  handed back. `resend`: of those it changes, the ones uploaded under the station call it changes.
- *  `unconfirm`: the LoTW, eQSL and QRZ confirmations that change of station call takes off. */
+ *  handed back. `recall`: of those it changes, the ones whose station call it replaces with another.
+ *  `resend`: of those, the ones uploaded under the station call it changes. `unconfirm`: the LoTW,
+ *  eQSL and QRZ confirmations that change of station call takes off. */
 export interface BulkPreview {
   ids: string[]
   selected: number
   change: number
   unchanged: number
   missing: number
+  recall: number
   resend: number
   unconfirm: number
 }

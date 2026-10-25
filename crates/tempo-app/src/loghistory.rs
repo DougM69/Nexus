@@ -41,7 +41,10 @@
 //!   beside it before the delete never blocks it: the log held both, as an import that keeps two
 //!   contacts a second apart holds both. The operator can restore one anyway
 //!   ([`restore_deleted_anyway`]);
-//! - an entry of a kind a later build recorded ([`CannotUndo::UnknownKind`]).
+//! - an entry of a kind a later build recorded ([`CannotUndo::UnknownKind`]);
+//! - a blank station call it would put back where the call in Settings is another call than the
+//!   one the contact names: the contact would be owed to every service under a call it was not
+//!   made under, so the call stays, with its stamps ([`Undone::held`], [`history::undo`]).
 //!
 //! **A whole run's undo of more than [`tempo_core::logbook::writer::CHUNK_ROWS`] contacts waits
 //! while the radio transmits** ([`MUST_WAIT_FOR_TX`]): it is made in one hold of the Engine lock
@@ -231,6 +234,9 @@ pub struct Undone {
     pub run: Option<String>,
     /// Fields left as they are because a later change moved them, by contact.
     pub kept: Vec<(RecordId, String)>,
+    /// Fields left as they are because putting them back would move the contact under a call it
+    /// was not made under (a blank station call, [`history::undo`]), by contact.
+    pub held: Vec<(RecordId, String)>,
     /// Contacts it could not change, and why.
     pub refused: Vec<(RecordId, CannotUndo)>,
     /// The call of each contact it could not change that the log holds or would have held, so
@@ -375,8 +381,9 @@ fn plan_undo(
                     restored_from.get_or_insert(e.seq);
                     now = Some(row);
                 }
-                Ok(Undo::Revert { row, kept }) => {
+                Ok(Undo::Revert { row, kept, held }) => {
                     answer.kept.extend(kept.into_iter().map(|tag| (*id, tag)));
+                    answer.held.extend(held.into_iter().map(|tag| (*id, tag)));
                     now = Some(row);
                 }
                 Err(why) => {
@@ -394,6 +401,8 @@ fn plan_undo(
             continue;
         }
         match (before, now) {
+            // Every field it would put back held: the contact stays as it is.
+            (Some(b), Some(a)) if *b == a => {}
             (Some(b), Some(a)) => changed.push((Some(b), Some(Arc::new(a)))),
             (Some(b), None) => {
                 class = OpClass::Structural;

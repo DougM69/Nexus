@@ -206,6 +206,7 @@ export function LogBulkEdit({
             {asking && (
               <span className="log-tools-confirm">
                 <span>{t('logbook.tools.bulk.ask', { count: preview.change })}</span>
+                {preview.recall > 0 && <span>{t('logbook.tools.bulk.askUndo')}</span>}
                 <button type="button" className="export-btn danger" disabled={busy} onClick={() => void onApply()}>
                   {t('logbook.tools.bulk.confirm', { count: preview.change })}
                 </button>

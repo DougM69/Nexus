@@ -66,13 +66,14 @@ function callList(calls: string[]): string {
 
 /** What an undo made, said in a toast — with Redo where it changed something. A contact it left
  *  as it is because it changed since, and one it did not put back because the log holds it
- *  already, are named. */
+ *  already, are named, and so is a field it held so as not to move a contact under another call. */
 export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => void): void {
   const keptCalls = answer.changedSinceCalls
   const dupCalls = answer.duplicateCalls
   if (answer.changed === 0) {
     pushToast(
-      dupCalls.length > 0 ? t('qso.history.undo.allDuplicates', { count: dupCalls.length, calls: callList(dupCalls) })
+      answer.held.length > 0 ? t('qso.history.undo.heldOnly', { fields: answer.held.join(', ') })
+        : dupCalls.length > 0 ? t('qso.history.undo.allDuplicates', { count: dupCalls.length, calls: callList(dupCalls) })
         : answer.alreadyThere > 0 ? t('qso.history.undo.alreadyThere')
         : keptCalls.length > 0 ? t('qso.history.undo.allKept', { count: keptCalls.length, calls: callList(keptCalls) })
         : answer.unknownKind > 0 ? t('qso.history.undo.unknownKind')
@@ -84,6 +85,7 @@ export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => voi
     return
   }
   const kept = answer.kept.length ? t('qso.history.undo.kept', { fields: answer.kept.join(', ') }) : ''
+  const held = answer.held.length ? t('qso.history.undo.held', { fields: answer.held.join(', ') }) : ''
   const keptContacts = keptCalls.length
     ? t('qso.history.undo.contactsKept', { count: keptCalls.length, calls: callList(keptCalls) })
     : ''
@@ -91,7 +93,7 @@ export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => voi
     ? t('qso.history.undo.duplicates', { count: dupCalls.length, calls: callList(dupCalls) })
     : ''
   const run = answer.run
-  pushToast(`${done}${kept}${keptContacts}${dups}`, 'success', 10_000, run ? {
+  pushToast(`${done}${kept}${held}${keptContacts}${dups}`, 'success', 10_000, run ? {
     actionLabel: t('qso.history.redo'),
     // A refusal rejects with its reason, so the toast stays up saying why and Redo can be
     // pressed again (a redo of a large undo waits while the radio transmits).

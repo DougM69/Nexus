@@ -322,6 +322,7 @@ fn a_bulk_edit_previews_applies_and_undoes_and_keeps_every_stamp() {
             change: 3,
             unchanged: 0,
             missing: 0,
+            recall: 0,
             resend: 0,
             unconfirm: 0,
         }
@@ -1194,5 +1195,266 @@ fn an_upload_answered_after_the_station_call_changed_is_not_stamped() {
     assert!(
         rows(&engine)[1].upload.qrz.is_some(),
         "the same call all along"
+    );
+}
+
+/// One change setting STATION_CALLSIGN to `call`, or clearing it.
+fn station_to(call: Option<&str>) -> [Change; 1] {
+    [Change {
+        field: Field::StationCallsign,
+        value: call.map(str::to_string),
+    }]
+}
+
+/// The contacts the default LoTW batch would send now.
+fn owed_to_lotw(engine: &Mutex<Engine>) -> Vec<RecordId> {
+    let rows = engine_lock(engine).log_rows();
+    station::lotw_unsent_ids(&rows).unwrap()
+}
+
+/// ★ FILLING IN A BLANK STATION CALL IS NEVER A CHANGE OF CALL, whatever the call in Settings is
+/// now. The contact was uploaded and confirmed under whatever call it was; the fill records it.
+/// Old contacts, uploaded under KA1OLD while it was the Settings call, filled with KA1OLD after
+/// Settings moved to KD9NEW: the preview counts nothing to resend or take off, and every stamp and
+/// confirmation stays. Clearing a station call is no change of call either. Replacing one call
+/// with another still is: its stamps and confirmations go.
+#[test]
+fn filling_a_blank_station_call_clears_nothing_whatever_the_settings_call() {
+    let d = Dir::new("tools-bulk-fill-old");
+    let engine = shared(
+        &d,
+        &[
+            adif("W1AW", "120000", "<LOTW_QSL_RCVD:1>Y<EQSL_QSL_RCVD:1>Y"),
+            adif(
+                "K1ABC",
+                "120100",
+                "<STATION_CALLSIGN:5>KD0AA<LOTW_QSL_RCVD:1>Y",
+            ),
+            adif(
+                "N0XYZ",
+                "120200",
+                "<STATION_CALLSIGN:5>KD0AA<LOTW_QSL_RCVD:1>Y",
+            ),
+        ],
+    );
+    settings_call_is(&engine, "KA1OLD");
+    for r in rows(&engine) {
+        stamp(&engine, &r, UploadService::Lotw, 100);
+    }
+    settings_call_is(&engine, "KD9NEW");
+    engine_lock(&engine).take_pending_uploads();
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+
+    let fill = station_to(Some("ka1old"));
+    let preview = bulk_preview(&engine, &ids[..1], &fill).unwrap();
+    assert_eq!(
+        (preview.change, preview.resend, preview.unconfirm),
+        (1, 0, 0)
+    );
+    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &fill);
+    assert_eq!(made.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let mut want = before[0].clone();
+    want.station_callsign = Some("KA1OLD".into());
+    assert_eq!(rows(&engine)[0], want, "the field, and nothing else");
+
+    let clear = station_to(None);
+    let preview = bulk_preview(&engine, &ids[1..2], &clear).unwrap();
+    assert_eq!(
+        (preview.change, preview.resend, preview.unconfirm),
+        (1, 0, 0)
+    );
+    let (made, dur) = bulk_edit(&engine, &ids[1..2], 1, &clear);
+    assert_eq!(made.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let mut want = before[1].clone();
+    want.station_callsign = None;
+    assert_eq!(
+        rows(&engine)[1],
+        want,
+        "cleared: the field, and nothing else"
+    );
+
+    // CONTROL: one call replaced by another is a change.
+    let other = station_to(Some("W6R"));
+    let preview = bulk_preview(&engine, &ids[2..], &other).unwrap();
+    assert_eq!(
+        (
+            preview.change,
+            preview.recall,
+            preview.resend,
+            preview.unconfirm
+        ),
+        (1, 1, 1, 1)
+    );
+    let (made, dur) = bulk_edit(&engine, &ids[2..], 1, &other);
+    assert_eq!(made.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let n0xyz = rows(&engine).remove(2);
+    assert_eq!(n0xyz.upload, Default::default());
+    assert!(!n0xyz.qsl_rcvd.lotw);
+    assert!(engine_lock(&engine).take_pending_uploads().is_empty());
+}
+
+/// ★ AN UNDO NEVER PUTS A CONTACT UNDER A CALL IT WAS NOT MADE UNDER. A contact naming no station
+/// call goes out under the call in Settings NOW. Old contacts uploaded under KA1OLD, filled with
+/// KA1OLD — after Settings moved to KD9NEW, or before it did — and the fill undone: putting the
+/// blank back would owe them to every service under KD9NEW, and the next LoTW batch would sign
+/// them as KD9NEW's. The undo keeps KA1OLD in the field, and its stamps, so nothing is owed. With
+/// the Settings call still the filled one, the blank goes back and moves nothing.
+#[test]
+fn an_undo_never_puts_a_contact_under_a_call_it_was_not_made_under() {
+    let d = Dir::new("tools-bulk-undo-blank");
+    let engine = shared(
+        &d,
+        &[
+            adif("W1AW", "120000", "<LOTW_QSL_RCVD:1>Y"),
+            adif("K1ABC", "120100", "<LOTW_QSL_RCVD:1>Y"),
+        ],
+    );
+    settings_call_is(&engine, "KA1OLD");
+    for r in rows(&engine) {
+        stamp(&engine, &r, UploadService::Lotw, 100);
+        stamp(&engine, &r, UploadService::Qrz, 101);
+    }
+    engine_lock(&engine).take_pending_uploads();
+    let ids: Vec<RecordId> = rows(&engine).iter().map(|r| r.id.unwrap()).collect();
+    let fill = station_to(Some("KA1OLD"));
+
+    // K1ABC filled while KA1OLD is still the Settings call.
+    let (made, dur) = bulk_edit(&engine, &ids[1..], 1, &fill);
+    let early = made.unwrap().run.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    // The new call.
+    settings_call_is(&engine, "KD9NEW");
+    // W1AW filled after it.
+    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &fill);
+    let late = made.unwrap().run.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    let filled = rows(&engine);
+    assert!(filled.iter().all(|r| r.upload.lotw.is_some()));
+
+    for (run, id) in [(&late, ids[0]), (&early, ids[1])] {
+        let (undone, dur) = undo_run(&engine, run);
+        let undone = undone.unwrap();
+        dur.wait(DURABLE_WAIT).unwrap();
+        assert_eq!(undone.held, vec![(id, "STATION_CALLSIGN".to_string())]);
+        assert_eq!(undone.changed, 0, "nothing else to put back");
+    }
+    assert_eq!(rows(&engine), filled, "under KA1OLD, stamps and all");
+    assert!(
+        owed_to_lotw(&engine).is_empty(),
+        "nothing owed under KD9NEW"
+    );
+    settle(&engine);
+    let reread = tempo_core::logbook::parse_adif(&mirror(&d));
+    assert!(reread
+        .iter()
+        .all(|r| r.station_callsign.as_deref() == Some("KA1OLD") && r.upload.lotw.is_some()));
+
+    // CONTROL: the Settings call is the filled one again — the blank goes back, nothing moves.
+    settings_call_is(&engine, "KA1OLD");
+    let (undone, dur) = undo_run(&engine, &early);
+    assert_eq!(undone.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let k1abc = rows(&engine).remove(1);
+    assert_eq!(k1abc.station_callsign, None);
+    assert_eq!(k1abc.upload, filled[1].upload);
+}
+
+/// ★ A PORTABLE /P IS THE SAME STATION CALL for the clean-up tools: KD9TAW/P written over KD9TAW
+/// (or back) changes the field and nothing else. Only /P: KD9TAW/M is another call, and its stamps
+/// and confirmations go.
+#[test]
+fn a_portable_p_is_the_same_station_call() {
+    let d = Dir::new("tools-bulk-portable");
+    let engine = shared(
+        &d,
+        &[
+            adif(
+                "W1AW",
+                "120000",
+                "<STATION_CALLSIGN:6>KD9TAW<LOTW_QSL_RCVD:1>Y",
+            ),
+            adif(
+                "K1ABC",
+                "120100",
+                "<STATION_CALLSIGN:8>KD9TAW/P<LOTW_QSL_RCVD:1>Y",
+            ),
+            adif(
+                "N0XYZ",
+                "120200",
+                "<STATION_CALLSIGN:6>KD9TAW<LOTW_QSL_RCVD:1>Y",
+            ),
+        ],
+    );
+    for r in rows(&engine) {
+        stamp(&engine, &r, UploadService::Lotw, 100);
+    }
+    engine_lock(&engine).take_pending_uploads();
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+
+    for (id, to) in [(ids[0], "kd9taw/p"), (ids[1], "KD9TAW")] {
+        let preview = bulk_preview(&engine, &[id], &station_to(Some(to))).unwrap();
+        assert_eq!(
+            (
+                preview.change,
+                preview.recall,
+                preview.resend,
+                preview.unconfirm
+            ),
+            (1, 0, 0, 0),
+            "{to}"
+        );
+        let (made, dur) = bulk_edit(&engine, &[id], 1, &station_to(Some(to)));
+        assert_eq!(made.unwrap().changed, 1);
+        dur.wait(DURABLE_WAIT).unwrap();
+    }
+    let now = rows(&engine);
+    for (i, call) in [(0, "KD9TAW/P"), (1, "KD9TAW")] {
+        let mut want = before[i].clone();
+        want.station_callsign = Some(call.into());
+        assert_eq!(now[i], want, "{call}: the field, and nothing else");
+    }
+
+    // CONTROL: /M is another call.
+    let preview = bulk_preview(&engine, &ids[2..], &station_to(Some("KD9TAW/M"))).unwrap();
+    assert_eq!(
+        (
+            preview.change,
+            preview.recall,
+            preview.resend,
+            preview.unconfirm
+        ),
+        (1, 1, 1, 1)
+    );
+}
+
+/// A push naming no row, of a contact unchanged since, under a station call other than the
+/// Settings call, is stamped on it: the newest-match fallback reads the station call with the row.
+#[test]
+fn an_unnamed_push_under_another_station_call_is_stamped() {
+    let d = Dir::new("tools-push-unnamed-station");
+    let engine = shared(&d, &[adif("W1AW", "120000", "<STATION_CALLSIGN:3>W6R")]);
+    settings_call_is(&engine, "KD9TAW");
+    let mut unnamed = rows(&engine).remove(0);
+    unnamed.id = None;
+    let (made, dur) = logwrite::stamp_push(
+        &engine,
+        &unnamed,
+        UploadService::Qrz,
+        UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 700,
+            detail: None,
+        },
+    );
+    assert!(made, "the contact pushed, under W6R");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(
+        rows(&engine)[0].upload.qrz.as_ref().map(|s| s.when_unix),
+        Some(700)
     );
 }

@@ -79,7 +79,7 @@ describe('duplicates', () => {
     api.findLogDuplicates.mockResolvedValue({ scanned: 10, groups: [group] })
     api.mergeLogDuplicates.mockResolvedValue(made)
     api.undoHistoryRun.mockResolvedValue({
-      changed: 2, run: 'u', kept: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0,
+      changed: 2, run: 'u', kept: [], held: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0,
       unknownKind: 0, changedSinceCalls: [], duplicateCalls: [],
     })
     const onChanged = open('dupes')
@@ -125,7 +125,7 @@ describe('duplicates', () => {
 
 describe('bulk edit', () => {
   it('previews, names the count, asks once more and sends exactly the fields and contacts', async () => {
-    api.bulkEditPreview.mockResolvedValue({ ids: ['x', 'y'], selected: 2, change: 2, unchanged: 0, missing: 0, resend: 0, unconfirm: 0 })
+    api.bulkEditPreview.mockResolvedValue({ ids: ['x', 'y'], selected: 2, change: 2, unchanged: 0, missing: 0, recall: 0, resend: 0, unconfirm: 0 })
     api.bulkEditApply.mockResolvedValue(made)
     open('bulk', ['x', 'y'])
     fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: ' EM10 ' } })
@@ -137,6 +137,7 @@ describe('bulk edit', () => {
     )
     fireEvent.click(apply)
     expect(api.bulkEditApply).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Undo puts the station call/)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Yes, change 2' }))
     await waitFor(() => expect(api.bulkEditApply).toHaveBeenCalledWith(
       ['x', 'y'],
@@ -147,7 +148,7 @@ describe('bulk edit', () => {
 
   it('applies to the ids the preview answered, with its count, not to the filter as it now stands', async () => {
     const ids = Array.from({ length: 42 }, (_, i) => `q${i}`)
-    api.bulkEditPreview.mockResolvedValue({ ids, selected: 42, change: 40, unchanged: 2, missing: 0, resend: 3, unconfirm: 5 })
+    api.bulkEditPreview.mockResolvedValue({ ids, selected: 42, change: 40, unchanged: 2, missing: 0, recall: 4, resend: 3, unconfirm: 5 })
     api.bulkEditApply.mockResolvedValue(made)
     open('bulk')
     fireEvent.change(screen.getByRole('combobox', { name: 'Field' }), { target: { value: 'STATION_CALLSIGN' } })
@@ -155,6 +156,10 @@ describe('bulk edit', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Change 40 contacts' }))
     expect(screen.getByText(/3 of these were uploaded under another station call/)).toBeTruthy()
+    // What an undo of it cannot take back.
+    expect(screen.getByText(
+      'Undo puts the station call and its confirmations back. Anything uploaded under the new call stays on that service, and these contacts are sent again under the call they get back.',
+    )).toBeTruthy()
     expect(screen.getByText(
       '5 LoTW, eQSL or QRZ confirmations were matched under the old station call and will be cleared. Paper QSL cards stay.',
     )).toBeTruthy()
@@ -167,7 +172,7 @@ describe('bulk edit', () => {
   })
 
   it('a change after the preview takes the apply away until it is previewed again', async () => {
-    api.bulkEditPreview.mockResolvedValue({ ids: [], selected: 42, change: 40, unchanged: 2, missing: 0, resend: 0, unconfirm: 0 })
+    api.bulkEditPreview.mockResolvedValue({ ids: [], selected: 42, change: 40, unchanged: 2, missing: 0, recall: 0, resend: 0, unconfirm: 0 })
     open('bulk')
     fireEvent.change(screen.getByRole('combobox', { name: 'Set or clear' }), { target: { value: 'clear' } })
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
@@ -182,7 +187,7 @@ describe('bulk edit', () => {
   })
 
   it('a change of the contacts chosen or of the filter after the preview takes the apply away', async () => {
-    api.bulkEditPreview.mockResolvedValue({ ids: ['x'], selected: 1, change: 1, unchanged: 0, missing: 0, resend: 0, unconfirm: 0 })
+    api.bulkEditPreview.mockResolvedValue({ ids: ['x'], selected: 1, change: 1, unchanged: 0, missing: 0, recall: 0, resend: 0, unconfirm: 0 })
     const props = { onChanged: () => {}, afar: false, query: DEFAULT_LOG_QUERY, shown: 42 }
     const { rerender } = render(<LogBulkEdit {...props} picked={new Set(['x'])} />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: 'EM10' } })
@@ -200,7 +205,7 @@ describe('bulk edit', () => {
 
   it('driving another station, the change cannot be pressed', async () => {
     setRemoteStation(true)
-    api.bulkEditPreview.mockResolvedValue({ ids: [], selected: 42, change: 40, unchanged: 2, missing: 0, resend: 0, unconfirm: 0 })
+    api.bulkEditPreview.mockResolvedValue({ ids: [], selected: 42, change: 40, unchanged: 2, missing: 0, recall: 0, resend: 0, unconfirm: 0 })
     open('bulk')
     fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: 'EM10' } })
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
