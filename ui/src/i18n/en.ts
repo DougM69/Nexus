@@ -10698,7 +10698,7 @@ export const EN = {
   'operate.strip.roles.aria': 'Sequencer role',
   'operate.strip.callCq.label': 'Call CQ',
   'operate.strip.callCq.title':
-    'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically',
+    'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically. In an FT8 or FT4 contest it stops after each contact: press it again to call CQ',
   'operate.strip.sandp.label': 'S&P',
   'operate.strip.sandp.title': 'Search & pounce — listens; double-click a CQ to call that station',
   'operate.strip.txControls.aria': 'Transmit controls',
@@ -10732,6 +10732,8 @@ export const EN = {
 
   'operate.strip.autoCq.title':
     'Auto CQ is running — calling CQ continuously, working each station that answers, then returning to CQ for the next one. Click S&P to stop.',
+  'operate.strip.autoCq.contestTitle':
+    "The contest's Running is calling CQ — it works the station that answers, then stops after the contact: TX goes off until you call CQ again (TX On, Running, or Call CQ on FT8 and FT4). Click S&P to stop.",
   'operate.strip.report.title': 'Report received about your signal',
 
   // "Now sending". The three non-message states are whole answers; `txNow` itself is the

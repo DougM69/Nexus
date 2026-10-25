@@ -22,6 +22,8 @@ use crate::test_util::StoredLog;
 
 /// A station already in the contest's log, worked again on FT8: logged a dupe, worth nothing.
 mod picked_dupe;
+/// The contest's Running stops after each contact until the operator calls CQ again.
+mod run_stops;
 
 const ME: &str = "K1ABC";
 const MY_GRID: &str = "FN42";
@@ -792,15 +794,12 @@ fn expected(contest: &str, role: Role, tier: &str) -> (Vec<String>, Option<Strin
     };
     let v = |s: &[&str]| s.iter().map(|t| t.to_string()).collect::<Vec<_>>();
     match (contest, role) {
+        // Every Running: one contact, then no CQ until the operator calls one, as WSJT-X's
+        // auto-sequencer stops after a logged contact.
         // Field Day: what it has always sent, and the 73 WSJT-X's runner answers the caller's
         // RR73 with (Tx5).
         ("" | "arrlfd", Role::Running) => (
-            v(&[
-                "CQ FD K1ABC FN42",
-                "W9XYZ K1ABC R 2B EMA",
-                "W9XYZ K1ABC 73",
-                "CQ FD K1ABC FN42",
-            ]),
+            v(&["CQ FD K1ABC FN42", "W9XYZ K1ABC R 2B EMA", "W9XYZ K1ABC 73"]),
             row("CLASS=1D,SECTION=WI", "CLASS=2B,SECTION=EMA"),
         ),
         ("" | "arrlfd", _) => (
@@ -809,11 +808,7 @@ fn expected(contest: &str, role: Role, tier: &str) -> (Vec<String>, Option<Strin
         ),
         // Banned FT8/FT4: nothing new. Winter Field Day runs Field Day's exchange…
         ("wfd", Role::Running) => (
-            v(&[
-                "CQ FD K1ABC FN42",
-                "W9XYZ K1ABC R 1H EMA",
-                "CQ FD K1ABC FN42",
-            ]),
+            v(&["CQ FD K1ABC FN42", "W9XYZ K1ABC R 1H EMA"]),
             row("CLASS=1D,SECTION=WI", "CLASS=1H,SECTION=EMA"),
         ),
         ("wfd", _) => (
@@ -830,12 +825,7 @@ fn expected(contest: &str, role: Role, tier: &str) -> (Vec<String>, Option<Strin
         ),
         // The ARRL VHF contests: WSJT-X's NA VHF Contest messages.
         ("arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep", Role::Running) => (
-            v(&[
-                "CQ TEST K1ABC FN42",
-                "W9XYZ K1ABC R FN42",
-                "W9XYZ K1ABC 73",
-                "CQ TEST K1ABC FN42",
-            ]),
+            v(&["CQ TEST K1ABC FN42", "W9XYZ K1ABC R FN42", "W9XYZ K1ABC 73"]),
             row("GRID=EN37", "GRID=FN42"),
         ),
         ("arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep", _) => (
@@ -844,12 +834,7 @@ fn expected(contest: &str, role: Role, tier: &str) -> (Vec<String>, Option<Strin
         ),
         // Every other contest: WSJT-X has no activity for it, so the standard messages.
         (_, Role::Running) => (
-            v(&[
-                "CQ K1ABC FN42",
-                "W9XYZ K1ABC -12",
-                "W9XYZ K1ABC RR73",
-                "CQ K1ABC FN42",
-            ]),
+            v(&["CQ K1ABC FN42", "W9XYZ K1ABC -12", "W9XYZ K1ABC RR73"]),
             row("", ""),
         ),
         (_, _) => (
@@ -887,9 +872,7 @@ fn every_contest_sends_its_own_messages_on_ft8_and_ft4() {
                     "{what}: sent {:?}",
                     s.sent
                 );
-                if role == Role::DoubleClick {
-                    assert_eq!(s.sent.len(), want.len(), "{what}: S&P sends nothing more");
-                }
+                assert_eq!(s.sent.len(), want.len(), "{what}: nothing more");
                 assert_eq!(s.logged, row.into_iter().collect::<Vec<_>>(), "{what}");
                 // Each over packs as the standard or Field Day message it reads as, and
                 // decodes back to exactly its own text.
@@ -1335,10 +1318,13 @@ fn a_field_day_runner_answers_the_callers_rr73_and_rrr_with_73() {
     };
     for tier in [Tier::Ft8, Tier::Ft4] {
         for closing in ["K1ABC W9XYZ RR73", "K1ABC W9XYZ RRR"] {
-            let (cq, after, next, logged) = run("arrlfd", tier, closing);
+            let (_, after, next, logged) = run("arrlfd", tier, closing);
             let what = format!("{} {closing:?}", tier_name(tier));
             assert_eq!(after.as_deref(), Some("W9XYZ K1ABC 73"), "{what}");
-            assert_eq!(next.as_deref(), Some(cq.as_str()), "{what}: then CQ");
+            assert_eq!(
+                next, None,
+                "{what}: then no CQ until the operator calls one"
+            );
             assert_eq!(logged, 1, "{what}");
         }
     }
@@ -1348,12 +1334,11 @@ fn a_field_day_runner_answers_the_callers_rr73_and_rrr_with_73() {
         ("arrlfd", Tier::TempoFast, "K1ABC W9XYZ RR73"),
         ("wfd", Tier::Ft8, "K1ABC W9XYZ RR73"),
     ] {
-        let (cq, after, _, logged) = run(contest, tier, closing);
+        let (_, after, _, logged) = run(contest, tier, closing);
         let what = format!("{contest:?} {} {closing:?}", tier_name(tier));
         assert_eq!(
-            after.as_deref(),
-            Some(cq.as_str()),
-            "{what}: straight back to CQ"
+            after, None,
+            "{what}: nothing, and no CQ until the operator calls one"
         );
         assert_eq!(logged, 1, "{what}");
     }
@@ -1387,7 +1372,8 @@ fn rows_of(e: &Engine) -> Vec<String> {
 /// exchange in hand and our roger on the air, K2DEF's RR73, RRR or 73 to us logs nothing and
 /// sends K2DEF nothing: the next over is W9XYZ's again. W9XYZ's own RR73 then logs W9XYZ and
 /// closes as before: with 73 in ARRL Field Day on FT8 and FT4, where W9XYZ runs WSJT-X's Field
-/// Day activity, and with nothing on FT1 and in Winter Field Day; then the run calls CQ. Heard in
+/// Day activity, and with nothing on FT1 and in Winter Field Day; then the run waits for the
+/// operator to call CQ again. Heard in
 /// the same period as W9XYZ's, K2DEF's costs W9XYZ nothing. The ARRL VHF contests' runner and
 /// the standard messages' S&P, which took only their partner's already, are the control.
 #[test]
@@ -1443,7 +1429,7 @@ fn only_the_callers_own_confirmation_closes_a_contest_contact() {
             let mut e = engine_for(contest, MY_GRID);
             e.set_tier(tier);
             e.set_mode("fieldday-run").expect("the run starts");
-            let cq = keyed(&mut e, 0).expect("the CQ");
+            keyed(&mut e, 0).expect("the CQ");
             e.ingest_decodes_for_test(&[heard(call)], 2);
             assert_eq!(keyed(&mut e, 2).as_deref(), Some(roger), "{what}");
             e.ingest_decodes_for_test(&[heard(stranger)], 4);
@@ -1457,11 +1443,15 @@ fn only_the_callers_own_confirmation_closes_a_contest_contact() {
             assert_eq!(rows_of(&e), [row], "{what}: W9XYZ's own RR73 logs W9XYZ");
             assert_eq!(
                 keyed(&mut e, 6).as_deref(),
-                Some(answer.unwrap_or(&cq)),
+                answer,
                 "{what}: and closes as before"
             );
             e.ingest_decodes_for_test(&[], 8);
-            assert_eq!(keyed(&mut e, 8), Some(cq), "{what}: then CQ");
+            assert_eq!(
+                keyed(&mut e, 8),
+                None,
+                "{what}: then no CQ until the operator calls one"
+            );
             assert_eq!(rows_of(&e), [row], "{what}: once");
         }
     }
@@ -1658,7 +1648,7 @@ fn the_contest_logs_a_hashed_call_without_its_brackets() {
         let mut e = engine_for(contest, MY_GRID);
         e.set_tier(tier);
         e.set_mode("fieldday-run").expect("the run starts");
-        let cq = keyed(&mut e, 0).expect("the CQ");
+        keyed(&mut e, 0).expect("the CQ");
         e.ingest_decodes_for_test(&[heard(&format!("K1ABC <W9XYZ/M> {theirs} WI"))], 2);
         assert_eq!(
             keyed(&mut e, 2),
@@ -1666,12 +1656,13 @@ fn the_contest_logs_a_hashed_call_without_its_brackets() {
             "{what}: R and ours"
         );
         e.ingest_decodes_for_test(&[heard("K1ABC <W9XYZ/M> RR73")], 4);
-        // ARRL Field Day's runner answers RR73 with 73; Winter Field Day's goes back to CQ.
+        // ARRL Field Day's runner answers RR73 with 73; Winter Field Day's sends nothing, and
+        // neither calls CQ until the operator does.
         let close = match contest {
-            "arrlfd" => "W9XYZ/M <K1ABC> 73".to_string(),
-            _ => cq,
+            "arrlfd" => Some("W9XYZ/M <K1ABC> 73".to_string()),
+            _ => None,
         };
-        assert_eq!(keyed(&mut e, 4), Some(close), "{what}: the close");
+        assert_eq!(keyed(&mut e, 4), close, "{what}: the close");
         assert_eq!(logged(&e), row(), "{what}: logged");
     }
 }
@@ -1796,7 +1787,8 @@ fn rr73_and_73_to_a_nonstandard_call_are_wsjtxs_bit_for_bit_in_every_set() {
 /// (`t0b`, mainwindow.cpp 9597 and 9625-9626) and its RR73 with ours hashed,
 /// `<K1ABC> W9XYZ/M RR73` (9702), each heard here as this station's decoder prints it from the
 /// air. In ARRL Field Day on FT8 and FT4 the run logs W9XYZ/M, bare, answers with WSJT-X's 73,
-/// `W9XYZ/M <K1ABC> 73` (9709), and calls CQ; in Winter Field Day it logs and calls CQ. Before,
+/// `W9XYZ/M <K1ABC> 73` (9709); in Winter Field Day it logs. Either way it then waits for the
+/// operator to call CQ again. Before,
 /// the RR73 was not taken: the caller got the R and exchange again, and nothing was logged.
 #[test]
 fn the_contests_run_closes_with_a_caller_whose_call_is_nonstandard() {
@@ -1810,7 +1802,7 @@ fn the_contests_run_closes_with_a_caller_whose_call_is_nonstandard() {
         let mut e = engine_for(contest, MY_GRID);
         e.set_tier(tier);
         e.set_mode("fieldday-run").expect("the run starts");
-        let cq = keyed(&mut e, 0).expect("the CQ");
+        keyed(&mut e, 0).expect("the CQ");
         let exch = air_form(&format!("K1ABC <W9XYZ/M> {theirs} WI")).1;
         e.ingest_decodes_for_test(&[heard(&exch)], 2);
         assert_eq!(
@@ -1830,14 +1822,14 @@ fn the_contests_run_closes_with_a_caller_whose_call_is_nonstandard() {
             [format!("W9XYZ/M CLASS={theirs},SECTION=WI")],
             "{what}: logged"
         );
-        let close = if answers {
-            "W9XYZ/M <K1ABC> 73".to_string()
-        } else {
-            cq.clone()
-        };
-        assert_eq!(keyed(&mut e, 4), Some(close), "{what}: the close");
+        let close = answers.then(|| "W9XYZ/M <K1ABC> 73".to_string());
+        assert_eq!(keyed(&mut e, 4), close, "{what}: the close");
         e.ingest_decodes_for_test(&[], 6);
-        assert_eq!(keyed(&mut e, 6), Some(cq), "{what}: then CQ");
+        assert_eq!(
+            keyed(&mut e, 6),
+            None,
+            "{what}: then no CQ until the operator calls one"
+        );
         assert_eq!(rows_of(&e).len(), 1, "{what}: once");
     }
 }
@@ -2406,9 +2398,7 @@ fn the_cockpits_gestures_work_the_running_contest() {
                     "{what}: sent {:?}",
                     s.sent
                 );
-                if like == Role::DoubleClick {
-                    assert_eq!(s.sent.len(), want.len(), "{what}: nothing more");
-                }
+                assert_eq!(s.sent.len(), want.len(), "{what}: nothing more");
                 assert_eq!(s.logged, row.into_iter().collect::<Vec<_>>(), "{what}");
                 let running = role == Role::CallCq;
                 assert!(
@@ -2593,7 +2583,7 @@ fn the_tx6_row_shows_the_cq_the_contests_running_sends() {
 /// ⭐ WHERE WSJT-X HAS NO ACTIVITY FOR THE CONTEST, ITS RUNNING CALLS THE CQ TYPED IN TX6, as WSJT-X's
 /// normal mode sends its Tx6 (`on_tx6_editingFinished`, mainwindow.cpp 10075-10086; `genCQMsg`): a
 /// direction of one to four letters or three digits, `CQ QP K1ABC FN42`, on the Running's first CQ
-/// and on every CQ after a contact, the contact in the contest's log. On this computer Tx 6 and Call
+/// and on the CQ the operator calls after a contact, the contact in the contest's log. On this computer Tx 6 and Call
 /// CQ hand the direction to the Running, and the Contest screen's Running keeps it. The contests
 /// WSJT-X has an activity for keep their own CQ; outside a contest Call CQ is the plain run it always
 /// was; a refused start changes nothing; and a nonstandard call's CQ never carries a direction, which
@@ -2639,16 +2629,17 @@ fn where_wsjtx_has_no_activity_the_running_calls_the_cq_typed_in_tx6() {
             match e.start_running_with_cq(Some("QP")) {
                 Ok(()) => {
                     let (cqs, logged) = run(&mut e);
-                    assert_eq!(
-                        cqs.first().map(String::as_str),
-                        Some(typed),
-                        "{what}: the first CQ"
-                    );
-                    assert!(
-                        cqs.len() >= 2 && cqs.iter().all(|c| c == typed),
-                        "{what}: every CQ, after the contact too: {cqs:?}"
-                    );
+                    assert_eq!(cqs, [typed], "{what}: the CQ, and none after the contact");
                     assert_eq!(logged, 1, "{what}: the contact is the contest's");
+                    // The run waits for the operator; Enable TX calls the same CQ again.
+                    assert!(e.take_pending_tx_disable(), "{what}: TX goes off");
+                    e.set_tx_enabled(false);
+                    e.set_tx_enabled(true);
+                    assert_eq!(
+                        keyed(&mut e, SLOTS).as_deref(),
+                        Some(typed),
+                        "{what}: the CQ after the contact"
+                    );
                     ran += 1;
                 }
                 // CQ WW and CQ WPX cannot start without a country file, as the Contest screen's Running.
@@ -2894,8 +2885,6 @@ fn a_nonstandard_call_goes_out_as_wsjtx_writes_it_in_every_contest_over() {
                     cq.clone(),
                     format!("W9XYZ {me} R 2B EMA"),
                     format!("<W9XYZ> {me} 73"),
-                    cq.clone(),
-                    cq.clone(),
                 ],
             ),
             (
@@ -2916,8 +2905,6 @@ fn a_nonstandard_call_goes_out_as_wsjtx_writes_it_in_every_contest_over() {
                     cq.clone(),
                     format!("W9XYZ {h} R FN42"),
                     format!("<W9XYZ> {me} 73"),
-                    cq.clone(),
-                    cq.clone(),
                 ],
             ),
             (
@@ -2946,8 +2933,6 @@ fn a_nonstandard_call_goes_out_as_wsjtx_writes_it_in_every_contest_over() {
                     cq.clone(),
                     format!("W9XYZ {h} {DX_SNR:+03}"),
                     format!("<W9XYZ> {me} RR73"),
-                    cq.clone(),
-                    cq.clone(),
                 ],
             ),
         ];
@@ -3237,7 +3222,7 @@ fn the_runners_73_follows_the_tier_it_is_on() {
         e.set_mode("fieldday-run").expect("the run starts");
         e.set_tier(to);
         e.set_tx_enabled(true); // a mode switch that moves the dial turns TX off, as WSJT-X does
-        let cq = keyed(&mut e, 0).expect("the CQ");
+        keyed(&mut e, 0).expect("the CQ");
         e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ 1D WI")], 2);
         keyed(&mut e, 2).expect("the rogered exchange");
         e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ RR73")], 4);
@@ -3245,7 +3230,10 @@ fn the_runners_73_follows_the_tier_it_is_on() {
         if want_73 {
             assert_eq!(after.as_deref(), Some("W9XYZ K1ABC 73"), "{what}");
         } else {
-            assert_eq!(after, Some(cq), "{what}: straight back to CQ");
+            assert_eq!(
+                after, None,
+                "{what}: nothing, and no CQ until the operator calls one"
+            );
         }
     }
 }

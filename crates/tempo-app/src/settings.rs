@@ -2967,7 +2967,7 @@ pub struct Settings {
     /// WSJT-X Settings ▸ Behavior: "Disable Tx after sending 73" (stock default
     /// ON). After OUR final 73 of an S&P contact goes out, Enable-Tx drops —
     /// the next station is a deliberate arm. A CQ run is unaffected (it returns
-    /// to CQ, stock Run behavior).
+    /// to CQ); a contest's Running turns TX off after each contact whatever this says.
     #[serde(default = "default_on")]
     pub disable_tx_after_73: bool,
     /// Play a short audio cue when the dial crosses your TX privileges — a rising

@@ -72,7 +72,7 @@ The sequencer runs seven states: **Listening → CallingCq → AwaitReport → A
 
 **Sender lock** — once a QSO is in progress, `observe()` advances the sequencer only on messages from the locked DX callsign (base-call comparison, so portable suffixes like `/P` are handled). A report from any other station is ignored.
 
-**Return-to-CQ** — when you called CQ (Running mode), a completed QSO automatically restarts the CQ state machine for the next pileup caller. The directed-CQ token (e.g., `CQ DX`, `CQ POTA`) persists across the entire pileup run; you do not need to re-enter it between contacts. S&P double-clicks do **not** auto-resume.
+**Return-to-CQ** — when you called CQ (Running mode), a completed QSO automatically restarts the CQ state machine for the next pileup caller. The directed-CQ token (e.g., `CQ DX`, `CQ POTA`) persists across the entire pileup run; you do not need to re-enter it between contacts. S&P double-clicks do **not** auto-resume. In an FT8/FT4 contest the contest's Running does **not** auto-resume either: after each contact TX goes off and the run waits, as WSJT-X does with Auto Seq on, until you press Call CQ, the Contest screen's Running or TX On, each of which sends the CQ. While TX is off it takes no caller: a station answering your earlier CQ is not answered or logged.
 
 **Disable TX after 73** — default ON. TX is disarmed after the final 73 is sent in an S&P QSO. The flag is consumed only after the over fully plays out; it is never dropped mid-transmission. In an FT8/FT4 contest every S&P contact starts with a double-click on a CQ, or a reply to one from JTAlert or GridTracker, because the contest's S&P never calls a station by itself: TX goes off after the contact's last over and you stay in the contest's S&P.
 

@@ -28270,13 +28270,23 @@ contact yourself."
                 }
             }
             Mode::FieldDay { station, .. } => {
-                let m = station.outgoing();
+                // ⛔ No CQ while TX is about to go off: a run whose contact just closed has set
+                // its CQ up for the operator's next press (`observe_modes`), and the radio loop
+                // may make this decision before it turns TX off.
+                let m = if self.pending_tx_disable
+                    && station.state == tempo_core::fieldday::FdState::CallingCq
+                {
+                    None
+                } else {
+                    station.outgoing()
+                };
                 if m.is_some() {
                     station.after_tx();
                     // Stock "Disable Tx after sending 73" after a contact the operator picked (a
                     // double-click on its CQ, a logger's Reply to it): the over leaving NOW closes
                     // it, and the radio loop turns TX off once it has played, as WSJT-X does after
-                    // a double-clicked contact's RR73 or 73. The run keeps TX on to call CQ again.
+                    // a double-clicked contact's RR73 or 73. A run turns TX off after its contacts
+                    // too, once the contact is closed (`observe_modes`).
                     if station.done() && station.picked() && self.settings.disable_tx_after_73 {
                         self.pending_tx_disable = true;
                     }
@@ -29963,7 +29973,17 @@ contact yourself."
                 // must reach the journal like any other.
                 let rows_before = station.log.qsos().len();
                 let next_before = station.outgoing();
-                station.observe(decodes, slot);
+                // ⛔ A run calling CQ with TX off, or about to go off after its contact, takes
+                // no caller: no exchange is queued and nothing is logged until the operator calls
+                // CQ again. WSJT-X auto-sequences only with Enable Tx on (`m_auto`,
+                // mainwindow.cpp 7542-7543), and turning it off ends the CQ (3790-3793). A contact
+                // in progress and the contest's S&P are not gated.
+                let stopped = *running
+                    && station.state == tempo_core::fieldday::FdState::CallingCq
+                    && (!self.tx_enabled || self.pending_tx_disable);
+                if !stopped {
+                    station.observe(decodes, slot);
+                }
                 sequence_advanced = station.state != state_before;
                 self.ft_seq_moved = sequence_advanced || station.outgoing() != next_before;
                 // The FD sequencer logged a contact this slot → journal it
@@ -29973,13 +29993,22 @@ contact yourself."
                 // the closing frame has gone out, so `done()` is true), re-arm to
                 // work the NEXT station instead of transmitting nothing forever —
                 // the FD analogue of Mode::Qso's resume_cq. Keeps the in-station
-                // contest log so dupes are still caught. Run re-arms instantly
-                // (the happy path reaches Done with no pending); S&P re-arms on
-                // the slot after its final RR73 is sent, and listens: it calls
-                // nobody until the operator picks the next CQ.
+                // contest log so dupes are still caught. S&P re-arms on the slot
+                // after its final RR73 is sent, and listens: it calls nobody until
+                // the operator picks the next CQ.
+                //
+                // ⭐ Run stops after each contact: its CQ is set up again and TX goes
+                // off, so the next CQ is the operator's (Call CQ, the Contest
+                // screen's Running, or Enable TX), as WSJT-X's auto-sequencer turns
+                // Enable Tx off once a contact is logged (`cease_auto_Tx_after_QSO`,
+                // mainwindow.cpp 10518-10538) and sets up Tx6. Deferred to TX-idle
+                // like "Disable Tx after sending 73"; `plan_tx` keys no CQ meanwhile.
                 if station.done() {
                     station.rearm(*running);
                     sequence_advanced = true;
+                    if *running {
+                        self.pending_tx_disable = true;
+                    }
                 }
             }
         }
