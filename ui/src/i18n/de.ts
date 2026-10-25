@@ -6203,7 +6203,7 @@ export const DE: PartialCatalog = {
   "operate.strip.beacon.why": "Das ist eine Baken-Betriebsart — sie sendet Rufzeichen, Locator und Leistung nach Zeitplan. Es gibt keinen QSO-Ablauf. Sendeanteil in % und Leistung unter Einstellungen ▸ Baken (WSPR & FST4W) einstellen.",
   "operate.strip.roles.aria": "Sequencer-Rolle",
   "operate.strip.callCq.label": "CQ rufen",
-  "operate.strip.callCq.title": "Auto-CQ — ununterbrochen CQ rufen, jede antwortende Station im normalen FT8/FT4-Ablauf arbeiten und dann automatisch zurück zu CQ",
+  "operate.strip.callCq.title": "Auto-CQ — ununterbrochen CQ rufen, jede antwortende Station im normalen FT8/FT4-Ablauf arbeiten und dann automatisch zurück zu CQ. In einem Contest stoppt es nach jeder Verbindung: erneut drücken, um wieder CQ zu rufen",
   "operate.strip.sandp.label": "S&P",
   "operate.strip.sandp.title": "Search & Pounce — hört nur zu; Doppelklick auf ein CQ ruft die Station",
   "operate.strip.txControls.aria": "Sendesteuerung",

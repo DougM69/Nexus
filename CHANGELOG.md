@@ -212,7 +212,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Winter Field Day on FT8, FT4, FT2, FT1 and DX1, a double-click on a CQ while you are in the
   contest's S&P answers it with your class and section and logs it in the contest. On FST4, Q65,
   MSK144 and JT65, and in other contests on FT2, FT1 and DX1, a double-click works the station as a
-  normal QSO, as before. Running is unchanged.
+  normal QSO, as before.
+- **In a contest, FT8 and FT4 Running stops after each contact.** Once a contact is logged and your
+  last over (the 73, or the RR73) has gone out, TX goes off and Nexus stops calling CQ, as WSJT-X does
+  with Auto Seq on. Press **Call CQ**, the Contest screen's **Running** or **TX On** to call CQ
+  again, in the same period as before. A station that answers your CQ while you are calling it is
+  worked as before, and the contact still runs itself to the log. The Contest screen's Running stops
+  the same way on FT2, FT1 and DX1. Outside a contest, Call CQ still goes back to CQ after each
+  contact.
 - **Nexus Remote is free during the beta, with no 14-day limit.** Where the service runs the beta, the Remote
   page says "Free during the beta" instead of counting a trial's days, internet use no longer runs out, and
   attaching a station no longer promises a trial. Everything else about who may use Remote is unchanged.

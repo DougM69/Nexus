@@ -6627,7 +6627,7 @@ export const JA: PartialCatalog = {
   "operate.strip.beacon.why": "ビーコンモードです — 自局のコールサイン・グリッド・出力をスケジュールで送信します。QSO シーケンスはありません。送信率（%）と出力は設定 ▸ ビーコン（WSPR & FST4W）で設定してください。",
   "operate.strip.roles.aria": "シーケンサーの役割",
   "operate.strip.callCq.label": "CQ 呼出し",
-  "operate.strip.callCq.title": "自動 CQ — CQ を出し続け、応答してきた各局と通常の FT8/FT4 シーケンスで交信し、終わると自動的に CQ に戻ります",
+  "operate.strip.callCq.title": "自動 CQ — CQ を出し続け、応答してきた各局と通常の FT8/FT4 シーケンスで交信し、終わると自動的に CQ に戻ります。コンテストでは交信ごとに停止します。もう一度押すと CQ を出します",
   "operate.strip.sandp.label": "S&P",
   "operate.strip.sandp.title": "サーチ＆パウンス — 受信のみ。CQをダブルクリックするとその局を呼び出します",
   "operate.strip.txControls.aria": "送信コントロール",

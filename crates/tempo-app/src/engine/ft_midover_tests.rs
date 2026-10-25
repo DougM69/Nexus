@@ -1137,12 +1137,26 @@ fn a_field_day_run_switches_its_exchange_to_73_when_the_callers_rr73_folds() {
         panic!("premise: the contest");
     };
     assert_eq!(station.log.qsos().len(), 1, "logged");
-    assert!(!e.take_pending_tx_disable(), "a run keeps TX on");
+    assert!(
+        !e.take_pending_tx_disable(),
+        "TX stays on while the 73 plays"
+    );
     hear(&mut e, "CQ K2DEF FN31", -5, 6);
     assert_eq!(
-        key(&mut e, 6).as_deref(),
+        key(&mut e, 6),
+        None,
+        "no CQ: the run waits for the operator"
+    );
+    assert!(
+        e.take_pending_tx_disable(),
+        "TX goes off once the 73 has played"
+    );
+    e.set_tx_enabled(false);
+    e.set_tx_enabled(true);
+    assert_eq!(
+        key(&mut e, 8).as_deref(),
         Some(cq.as_str()),
-        "the run calls CQ"
+        "the operator's Enable TX calls CQ"
     );
 }
 
@@ -1180,7 +1194,8 @@ fn contest_sp_switches_to_rr73_and_never_starts_the_next_contact_mid_over() {
 }
 
 /// ⛔ THE OPERATOR STARTS EVERY CONTEST QSO: a CQ on the air is never switched to an answer, and
-/// a contact the run closes without a 73 (Winter Field Day) never becomes a CQ mid-over.
+/// a contact the run closes without a 73 (Winter Field Day) never becomes a CQ mid-over, nor at
+/// the next over: the run waits for the operator's next CQ.
 #[test]
 fn a_contest_never_switches_a_cq_or_switches_to_one() {
     let mut e = contest("arrlfd");
@@ -1215,7 +1230,7 @@ fn a_contest_never_switches_a_cq_or_switches_to_one() {
         None,
         "{exch} stays"
     );
-    assert_eq!(key(&mut e, 4), Some(cq_wfd), "the CQ at the next over");
+    assert_eq!(key(&mut e, 4), None, "no CQ at the next over");
 }
 
 /// A contest contact the operator picked (a double-click on the CQ) and closed by the switch: the

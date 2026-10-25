@@ -10394,7 +10394,7 @@ export const EN = {
   'operate.strip.roles.aria': 'Sequencer role',
   'operate.strip.callCq.label': 'Call CQ',
   'operate.strip.callCq.title':
-    'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically',
+    'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically. In a contest it stops after each contact: press it again to call CQ',
   'operate.strip.sandp.label': 'S&P',
   'operate.strip.sandp.title': 'Search & pounce — listens; double-click a CQ to call that station',
   'operate.strip.txControls.aria': 'Transmit controls',

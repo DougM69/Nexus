@@ -4251,7 +4251,7 @@ export const ES: PartialCatalog = {
   "operate.strip.autoCq.title": "El CQ automático está en marcha — llamando CQ sin parar, trabajando a cada estación que responde y volviendo a CQ para la siguiente. Pulsa S&P para parar.",
   "operate.strip.beacon.why": "Es un modo baliza — transmite tu indicativo, locator y potencia según un horario. No hay secuencia de QSO. Ajusta el % de transmisión y la potencia en Ajustes ▸ Balizas (WSPR y FST4W).",
   "operate.strip.callCq.label": "Llamar CQ",
-  "operate.strip.callCq.title": "CQ automático — llama CQ sin parar, trabaja con la secuencia normal de FT8/FT4 a cada estación que responde y vuelve a CQ automáticamente",
+  "operate.strip.callCq.title": "CQ automático — llama CQ sin parar, trabaja con la secuencia normal de FT8/FT4 a cada estación que responde y vuelve a CQ automáticamente. En un concurso se detiene tras cada contacto: púlselo de nuevo para llamar CQ",
   "operate.strip.freetext.aria": "Texto libre dentro del QSO",
   "operate.strip.freetext.placeholder": "Texto libre (Tx5)",
   "operate.strip.holdTx.label": "Hold Tx",
