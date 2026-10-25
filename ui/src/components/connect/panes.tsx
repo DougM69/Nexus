@@ -636,7 +636,9 @@ export const PANES: PaneDef[] = [
     expert: (c) => {
       // VHF openings → the cards; otherwise null so PaneFrame falls back to the (identical)
       // Basic season line — no duplicated empty state.
-      const vhf = (c.prop?.openings ?? []).filter((o) => ['6m', '4m', '2m'].includes(o.band))
+      const vhf = (c.prop?.openings ?? []).filter((o) =>
+        ['6m', '4m', '2m', '70cm', '33cm', '23cm'].includes(o.band),
+      )
       return vhf.length ? <OpeningStrip openings={vhf} onBandClick={c.toggleFocusBand} /> : null
     },
   },

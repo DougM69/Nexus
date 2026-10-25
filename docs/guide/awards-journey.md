@@ -34,6 +34,13 @@ required to *see* where you stand:
   plus the LoTW designator, which is what moves this card. The ISS is the one
   exception ([Satellites](satellites.md) explains why), and an imported
   contact moves it only if the file already carried both fields,
+- **FFMA** (the ARRL Fred Fish Memorial Award): the 488 grid squares of the 48
+  contiguous states, confirmed on 6 m. The card counts them, and the chase lists
+  name the squares still needed — worked but not confirmed first, then the ones
+  never worked, folded away. Satellite contacts are left out; contacts through a
+  repeater do not count for the award either, and Nexus cannot tell those apart,
+  so leave them out of an application. A needed 6 m square on the Needed board
+  says FFMA in its row,
 - **IOTA** (Islands On The Air).
 
 Under the cards, DXCC is broken out **by band**, and the chase lists start with
@@ -49,8 +56,8 @@ DXCC credit (60 m and 4 m earn none); WAS the 50 states; WAZ the 40 zones.
 a call in the log entry and the pane shows NEW ONE, NEW BAND and NEW MODE for the band
 you are on and the mode you log, which confirmations you hold through LoTW, a card,
 eQSL and QRZ for its country and for this call, and a grid for its DXCC entity, its
-state (WAS) and its CQ zone (WAZ): CW, phone and digital by 160 m to 2 m, each slot
-not worked, worked or confirmed. It counts exactly what this page counts. It stands
+state (WAS) and its CQ zone (WAZ): CW, phone and digital by 160 m to 23 cm, each slot
+not worked, worked or confirmed (DXCC has no slot on 60 m, 4 m, 70 cm, 33 cm or 23 cm). It counts exactly what this page counts. It stands
 under the log entry and keeps one height whatever it shows, so nothing beside it moves
 as you type, log and clear a call. Phone, CW and JS8 show it by themselves on a window
 with room for it beside the whole log form (a maximized window on a 2560×1440 screen,

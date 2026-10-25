@@ -759,6 +759,9 @@ const BAND_COLOR: Record<string, string> = {
   '6m': '#ff4d6d',
   '4m': '#ff4da6',
   '2m': '#d24dff',
+  '70cm': '#b04dff',
+  '33cm': '#a24dff',
+  '23cm': '#944dff',
 }
 const bandColor = (b: string): string => BAND_COLOR[b] ?? '#8aa0b0'
 const GETTING_OUT = '#3ddc6a' // a station that heard ME

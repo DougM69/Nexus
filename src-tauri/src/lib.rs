@@ -46780,9 +46780,11 @@ mod tests {
             s.vucc.worked, 0,
             "…and the terrestrial tracker did NOT (the old wrong-credit defect)"
         );
-        // `Band::from_label` still has no centimetre variants — that keeps the
-        // centimetre bands out of the DXCC fold, which is a separate ledger.
-        for cm in ["70cm", "33cm", "23cm", "13cm", "9cm", "5cm", "3cm", "1.2cm"] {
+        // 70/33/23 cm are `Band` variants (openings, need alerts) that fill no DXCC band
+        // slot — the DXCC fold was re-audited for them, and `propagation`'s
+        // `a_uhf_contact_counts_the_entity_and_fills_no_dxcc_band_slot` pins it. The
+        // microwave labels still have no variant.
+        for cm in ["13cm", "9cm", "5cm", "3cm", "1.2cm"] {
             assert!(
                 propagation::model::Band::from_label(cm).is_none(),
                 "{cm} gained a DXCC Band variant — re-audit the DXCC fold"
@@ -46861,14 +46863,15 @@ mod tests {
             ("4m", 70.154, true),
             // Every U/V bird's downlink — the ordinary wrong-credit case.
             ("2m", 145.960, true),
-            // ⚠️ THE COUNTEREXAMPLE. A metre label with no `Band` variant, so
-            // the grid falls out exactly as 70 cm does.
+            // ⚠️ THE COUNTEREXAMPLE. A metre label with no `Band` variant.
             ("1.25m", 222.130, false),
-            ("70cm", 436.795, false),
-            ("33cm", 903.100, false),
-            ("23cm", 1296.200, false),
+            // The UHF bands have `Band` variants (openings, need alerts) but fill no
+            // DXCC band slot; their grids are label-keyed like every band's.
+            ("70cm", 436.795, true),
+            ("33cm", 903.100, true),
+            ("23cm", 1296.200, true),
             // Batch 3's microwave bands: no DXCC `Band` variant (the enum tops
-            // out at 2 m by design), so their grids land in the label-keyed
+            // out at 23 cm), so their grids land in the label-keyed
             // tracker exactly as 70 cm does — and each is a REAL ARRL VUCC
             // band (threshold 5 at 2.3 GHz and above; QO-100's legs live on
             // 13 cm / 3 cm).

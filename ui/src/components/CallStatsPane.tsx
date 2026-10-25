@@ -161,12 +161,13 @@ const MODE_ABBR: Record<string, string> = { CW: 'CW', Phone: 'PH', Digital: 'DIG
 /** A grid row's mode class in its short form (the station sends CW / Phone / Digital). */
 const modeLabel = (m: string) => MODE_ABBR[m] ?? m
 
-/** A band's column head: its number, the metres left off (`160m` → `160`). */
-const bandHead = (band: string) => band.replace(/m$/, '')
+/** A band's column head: its number, the metres left off (`160m` → `160`); a centimetre band keeps
+ *  its unit (`70cm`), which a bare number would pass off as metres. */
+const bandHead = (band: string) => (band.endsWith('cm') ? band : band.replace(/m$/, ''))
 
 /** The grids' columns and rows while there is no answer to draw them from: the award model's bands
  *  and mode classes, as every answer carries them (an answer's own win). */
-const BANDS: readonly string[] = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m']
+const BANDS: readonly string[] = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '33cm', '23cm']
 const MODES: readonly string[] = ['CW', 'Phone', 'Digital']
 
 /** What an award's head shows in place of an entity, state or zone the call earns no grid for:

@@ -25,6 +25,7 @@ pub mod dxcc;
 pub mod dxped;
 pub mod engine;
 pub mod fccstate;
+pub mod ffma;
 pub mod geo;
 pub mod gettingout;
 pub mod gridrarity;

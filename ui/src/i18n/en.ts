@@ -2275,6 +2275,9 @@ export const EN = {
     '{{remaining}} grids to go on {{band}} · {{confirmed}} grids confirmed on all bands (tracker)',
   'awards.vucc.note.none':
     'No 6 m-and-up grids yet · {{confirmed}} grids confirmed on all bands (tracker — VUCC itself is 50 MHz and up)',
+  'awards.ffma.note.achieved': 'Fred Fish Memorial Award ✓ · all {{total}} squares confirmed on 6 m',
+  'awards.ffma.note.toGo':
+    '{{remaining}} squares to go · {{worked}} worked on 6 m · the 48 contiguous states, 6 m only',
   'awards.satVucc.note.achieved':
     'Satellite VUCC ✓ · {{worked}} grids worked · Sat DXCC {{satDxcc}} confirmed',
   'awards.satVucc.note.toGo':
@@ -2329,6 +2332,13 @@ export const EN = {
   'awards.chase.bandTargets.empty': 'No almost-complete entities to chase.',
   'awards.chase.was.head': 'WAS — states needed ({{count}})',
   'awards.chase.was.empty': 'All 50 states confirmed. 🎉',
+  // FFMA: grid squares are data, never translated.
+  'awards.chase.ffma.head': 'FFMA — 6 m squares needed ({{count}})',
+  'awards.chase.ffma.empty': 'All {{total}} squares confirmed on 6 m. 🎉',
+  'awards.chase.ffma.note':
+    'The ARRL list for the 48 contiguous states. Confirmed by LoTW or a QSL card; satellite contacts are left out. Contacts through a repeater do not count for the award either.',
+  'awards.chase.ffma.unconfirmed': 'Worked on 6 m, not confirmed ({{count}})',
+  'awards.chase.ffma.unworked': 'Never worked on 6 m ({{count}})',
 
   // The chase list's own filter + sort. `{{query}}` is what the operator typed.
   'awards.needList.filter.placeholder': 'filter entities…',

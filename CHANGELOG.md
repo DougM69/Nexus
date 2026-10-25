@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **LoTW sync keeps the QSL details.** A LoTW confirmation now also fills the station's grid,
   county, IOTA, ITU zone and prefix when the contact had none.
 - **Logbook columns.** A Columns button replaces "More columns": show or hide each column, drag a column's edge to resize it, and the choice is kept in your settings. New columns show what the log already stored: their grid, IOTA, county, CQ and ITU zones, continent, distance, the QSL sent and received dates, each service's upload state and the contest exchange; IOTA can now be edited, and the contact view shows these too.
+- **The Fred Fish Memorial Award (FFMA) on the Awards page.** A new card counts the 488 grid squares of the
+  48 contiguous states worked and confirmed on 6 m, with the squares still needed listed beside the other
+  chases, and a needed 6 m square on the Needed board now says FFMA.
+- **70 cm, 33 cm and 23 cm are full bands for openings, need alerts and awards.** A grid, zone or state
+  worked on one of them no longer shows as new there, tropo openings on them are detected (moonbounce is
+  not), 33 cm gets a weak-signal channel and a CW calling dial, and the 70 cm and 23 cm CW dials move to
+  the ARRL calling frequencies, out of the moonbounce segments.
 - **JTTY sends from a remote computer.** Driving a station from another computer, JTTY's Send,
   F-keys, live typing and sign-off now transmit, under the same guards and Stop as the other remote
   modes.

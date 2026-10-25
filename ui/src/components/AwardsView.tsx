@@ -7,7 +7,7 @@
 
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud, Grid3x3, Satellite } from 'lucide-react'
-import type { AwardBandNeeds, AwardSummary, BandNeed, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, DxccDisagreement, QsoDiagnosis, UploadReport } from '../types'
+import type { AwardBandNeeds, AwardSummary, BandNeed, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, DxccDisagreement, FfmaProgress, QsoDiagnosis, UploadReport } from '../types'
 import {
   getAwards,
   getConfirmationDiagnostics,
@@ -37,6 +37,7 @@ const AWARD_NAMES = {
   waz: 'WAZ',
   was: 'WAS',
   vucc: 'VUCC',
+  ffma: 'FFMA',
   satVucc: 'Sat VUCC',
   iota: 'IOTA',
 }
@@ -153,6 +154,47 @@ function BandNeedsPanel({ needs }: { needs: AwardBandNeeds }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+/** The FFMA chase: the squares worked on 6 m but not confirmed, then the ones never worked there
+ *  (folded away by default — on a new log that is all 488). Grid squares are data. */
+function FfmaNeeded({ ffma }: { ffma: FfmaProgress }) {
+  const chips = (grids: string[]) => (
+    <span className="aw-needbands">
+      {grids.map((g) => (
+        <span className="aw-chip" key={g}>
+          {g}
+        </span>
+      ))}
+    </span>
+  )
+  const needed = ffma.unworked.length + ffma.unconfirmed.length
+  return (
+    <div className="aw-panel aw-ffma">
+      <h3>
+        <Grid3x3 size={14} aria-hidden="true" /> {t('awards.chase.ffma.head', { count: needed })}
+      </h3>
+      {needed === 0 ? (
+        <p className="aw-empty">{t('awards.chase.ffma.empty', { total: ffma.total })}</p>
+      ) : (
+        <>
+          <p className="aw-empty">{t('awards.chase.ffma.note')}</p>
+          {ffma.unconfirmed.length > 0 && (
+            <p className="aw-bn-list" data-kind="unconfirmed">
+              <strong>{t('awards.chase.ffma.unconfirmed', { count: ffma.unconfirmed.length })}</strong>{' '}
+              {chips(ffma.unconfirmed)}
+            </p>
+          )}
+          {ffma.unworked.length > 0 && (
+            <details className="aw-ffma-unworked">
+              <summary>{t('awards.chase.ffma.unworked', { count: ffma.unworked.length })}</summary>
+              {chips(ffma.unworked)}
+            </details>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -859,6 +901,34 @@ export function AwardsView({
           )
         })()}
 
+        {/* The Fred Fish Memorial Award: the ARRL's 488 squares of the 48 contiguous states, on
+            6 m only, confirmed as VUCC counts them. Absent from a station older than FFMA. */}
+        {aw.ffma && (
+          <div className={`aw-card${aw.ffma.confirmed >= aw.ffma.total ? ' aw-card-elite' : ''}`}>
+            <span className="aw-k">
+              <Grid3x3 size={13} aria-hidden="true" /> {AWARD_NAMES.ffma}
+            </span>
+            <span className="aw-v">
+              {aw.ffma.confirmed}
+              <span className="aw-of"> / {aw.ffma.total}</span>
+            </span>
+            <div className="aw-bar">
+              <div
+                className="aw-fill good"
+                style={{ width: `${Math.min(100, (aw.ffma.confirmed / Math.max(1, aw.ffma.total)) * 100)}%` }}
+              />
+            </div>
+            <span className="aw-note">
+              {aw.ffma.confirmed >= aw.ffma.total
+                ? t('awards.ffma.note.achieved', { total: aw.ffma.total })
+                : t('awards.ffma.note.toGo', {
+                    remaining: aw.ffma.total - aw.ffma.confirmed,
+                    worked: aw.ffma.worked,
+                  })}
+            </span>
+          </div>
+        )}
+
         {/* Satellite VUCC — its own ARRL category, and the ONLY place a grid
             worked through a bird is ALLOWED to count. Since 2026-08-10 Nexus
             tags these ITSELF: a contact logged on the held bird's downlink gets
@@ -1083,6 +1153,7 @@ export function AwardsView({
               </span>
             )}
           </div>
+          {aw.ffma && <FfmaNeeded ffma={aw.ffma} />}
           {(aw.dxccDisagreements ?? []).length > 0 && (
             <div className="aw-panel">
               <h3>

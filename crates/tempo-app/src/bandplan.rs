@@ -137,6 +137,9 @@ pub fn band_plan() -> Vec<BandChannel> {
         ch("1.25m", "VHF", 222.1300, "USB", "1.25 m · SSB/weak-signal", "alt: 222.10–222.15 weak-signal segment, above 222.100 call + FT8 222.065"),
         // --- 70 cm ---
         ch("70cm", "UHF", 432.4500, "USB", "70 cm · SSB/weak-signal", "in 432.40–433.00 mixed-mode; far from SSB call 432.100, sat 435–438, beacons 432.3–432.4"),
+        // --- 33 cm --- (ARRL band plan, arrl.org/band-plan: 903.100 is the CW/SSB weak-signal
+        // calling frequency, 903.000–903.100 beacons, 903.100–903.400 CW/SSB weak signal.)
+        ch("33cm", "UHF", 903.2000, "USB", "33 cm · SSB/weak-signal", "in the 903.100–903.400 weak-signal segment; clear of the 903.100 call and the 903.000–903.100 beacons. 902.100 is the other regional calling option — check your area"),
         ch("23cm", "UHF", 1296.2000, "USB", "23 cm · SSB/weak-signal", "in the 1296.2 SSB segment; clear of the 1296.100 call, FT8 1296.174, beacons 1296.300+"),
         ch("70cm-fm", "UHF", 445.9500, "FM", "70 cm · FM simplex (HT)", "local-option only — 70 cm has no national digital segment; below 446.000 call. Check your coordinator"),
     ]
@@ -218,6 +221,8 @@ pub fn ft8_band_plan() -> Vec<BandChannel> {
         ch("4m", "VHF", 70.154, "USB", "4 m · FT8", "standard FT8 calling frequency (WSJT-X default) — IARU Region 1 only, no US allocation; 4 m band edges vary widely by country, confirm yours before transmitting"),
         ch("2m", "VHF", 144.174, "USB", "2 m · FT8", n),
         ch("70cm", "UHF", 432.065, "USB", "70 cm · FT8", n),
+        // No 33 cm row: neither the ARRL band plan nor the FT8 default frequency list names an
+        // FT8 frequency between 902 and 928 MHz, and this table does not invent one.
         ch("23cm", "UHF", 1296.174, "USB", "23 cm · FT8", n),
     ]
 }
@@ -695,8 +700,14 @@ pub fn cw_activity_mhz(band: &str) -> Option<f64> {
         "4m" => 70.200,
         "2m" => 144.050,
         "1.25m" => 222.050,
-        "70cm" => 432.050,
-        "23cm" => 1296.050,
+        // 70 cm, 33 cm and 23 cm: the ARRL band plan's CW/SSB calling frequencies
+        // (arrl.org/band-plan), each clear of the band's EME segment — 432.00–432.07 and
+        // 1295.800–1296.080, where the 432.050 and 1296.050 these replaced sat. On 33 cm the
+        // plan lists 902.100 and 903.100 as regional options; 903.100 is the one the band
+        // picker's listening dial already uses.
+        "70cm" => 432.100,
+        "33cm" => 903.100,
+        "23cm" => 1296.100,
         _ => return None,
     })
 }
@@ -880,11 +891,39 @@ mod tests {
         // IC-9700 support: dial→band, the FT8 channel at the verified 1296.174,
         // and a CW dial — a band missing any of these is invisible to QSY/UI.
         assert_eq!(super::band_for_dial(1296.174), Some("23cm"));
-        assert_eq!(super::cw_activity_mhz("23cm"), Some(1296.05));
+        assert_eq!(super::cw_activity_mhz("23cm"), Some(1296.1));
         let has_ft8_23 = super::ft8_band_plan()
             .iter()
             .any(|c| c.band == "23cm" && (c.dial_mhz - 1296.174).abs() < 1e-6);
         assert!(has_ft8_23, "23cm FT8 channel at 1296.174");
+    }
+
+    /// 33 cm (902–928 MHz) and 23 cm (1240–1300 MHz) both ways: every dial inside the US
+    /// allocation names the band and nothing just outside does, and the dials a band pick
+    /// parks on name the band back. The CW and weak-signal dials are the ARRL band plan's
+    /// (arrl.org/band-plan): the CW/SSB calling frequencies 903.100, 1296.100 and 432.100,
+    /// each clear of its band's EME segment (432.00–432.07, 1295.800–1296.080).
+    #[test]
+    fn the_33cm_and_23cm_bands_map_both_ways() {
+        for (lo, hi, band) in [(902.0, 927.999, "33cm"), (1240.0, 1299.999, "23cm")] {
+            assert_eq!(band_for_dial(lo), Some(band), "{lo} MHz");
+            assert_eq!(band_for_dial(hi), Some(band), "{hi} MHz");
+            assert_eq!(band_for_dial(lo - 0.001), None, "just below {band}");
+            assert_eq!(band_for_dial(hi + 0.001), None, "the top edge of {band}");
+        }
+        for (band, cw) in [("70cm", 432.1), ("33cm", 903.1), ("23cm", 1296.1)] {
+            assert_eq!(cw_activity_mhz(band), Some(cw), "{band} CW calling dial");
+            assert_eq!(band_for_dial(cw), Some(band));
+            let weak = band_plan()
+                .into_iter()
+                .find(|c| canonical_band(&c.band) == band && c.mode == "USB")
+                .unwrap_or_else(|| panic!("{band} has a weak-signal channel"));
+            assert_eq!(band_for_dial(weak.dial_mhz), Some(band), "{}", weak.label);
+            assert!(
+                (weak.dial_mhz - cw).abs() > 0.05,
+                "{band}: the Tempo channel sits clear of the calling frequency"
+            );
+        }
     }
 
     use super::*;

@@ -3403,6 +3403,19 @@ export interface VuccBandStanding {
   achieved: boolean
 }
 
+/** ARRL Fred Fish Memorial Award: the 488 grid squares of the 48 contiguous US states, worked
+ * and confirmed on 6 m (terrestrial; confirmed as VUCC counts it). */
+export interface FfmaProgress {
+  worked: number
+  confirmed: number
+  /** 488. */
+  total: number
+  /** Squares never worked on 6 m, in the ARRL list's order. */
+  unworked: string[]
+  /** Squares worked on 6 m but not confirmed. */
+  unconfirmed: string[]
+}
+
 /** IOTA (Islands On The Air) progress — distinct island groups worked / confirmed
  * (basic IOTA = 100 confirmed). */
 export interface IotaProgress {
@@ -3538,6 +3551,8 @@ export interface AwardSummary {
   was: WasProgress
   /** VUCC — Maidenhead grid squares worked / confirmed, overall and per band. */
   vucc: VuccProgress
+  /** FFMA — the 488 squares of the 48 states on 6 m. Absent from a station older than FFMA. */
+  ffma?: FfmaProgress
   /** IOTA — island groups worked / confirmed. */
   iota: IotaProgress
   /** WORK chase: entities worked on most award bands but missing a few — the
