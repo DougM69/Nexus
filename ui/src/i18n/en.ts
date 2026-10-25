@@ -539,8 +539,6 @@ export const EN = {
   // `Stream` are names on screen; {{address}}, {{key}} and {{example}} are a station's address, its
   // key's fingerprint and an address, {{name}} the name a station advertises (`Nexus` and the start of
   // its key), and {{date}} a day written YYYY-MM-DD, all invariant.
-  "lanWindow.title": "Stations on this network",
-  "lanWindow.intro": "Operate a station from this computer, on the station’s network or over the internet. Sign in once with your Nexus Remote account, and your station is added here.",
   "lanWindow.opening": "Starting…",
   "lanWindow.lost": "This window lost touch with Nexus. Close it, then open it again from Settings.",
   "lanWindow.paired": "Stations on this computer",
@@ -650,6 +648,15 @@ export const EN = {
   "lanWindow.signIn.linking": "That station is on this computer already, paired with a code. Sign in once more to link it to your account.",
   "lanWindow.pairAgain": "Pair again…",
   "lanWindow.pairAgainHint": "The station did not take this computer last time. Pair it again: at the station, press Pair a computer, then type the code it shows here.",
+  "lanWindow.connect.title": "Connect to my station",
+  "lanWindow.connect.intro": "Nexus looks for your station on this network first. If it isn’t here, sign in with your Nexus Remote account to reach it over the internet.",
+  "lanWindow.connect.looking": "Looking for your station on this network…",
+  "lanWindow.connect.foundNew": "Found {{name}} at {{address}}. This computer isn’t paired with it yet: at the station, press Pair a computer, then type the code it shows here.",
+  "lanWindow.connect.choose": "More than one station answered on this network. Which one is yours?",
+  "lanWindow.connect.notFound": "Your station did not answer on this network.",
+  "lanWindow.connect.signIn": "Sign in to reach it over the internet",
+  "lanWindow.connect.start": "Connect to my station",
+  "lanWindow.connect.advanced": "Advanced: the stations on this computer, an address, a code",
   "lanWindow.signInHint": "Sign in with the Nexus Remote account your station is linked to, or one its owner invited to operate it. The station is then on this computer, on its network and over the internet, with no code to type.",
   "lanWindow.pairCodeHint": "For a station whose owner has not signed in to Nexus Remote at the station yet.",
   "lanWindow.signIn.choose": "Your Nexus Remote account has more than one station. Pick the one to add to this computer.",
@@ -7714,6 +7721,10 @@ export const EN = {
   "settings.lanStations.open": "Stations on this network…",
   "settings.lanStations.hint": "Opens a Nexus window for stations you pair with over your own network, with no internet needed. Pair each station once with the code it shows under Remote over this network. F11 switches the window to full screen and back, and Esc over the picture still stops transmitting.",
   "settings.lanStations.failed": "Nexus could not open the Stations on this network window. Try again.",
+  "settings.connectStation.label": "Operate your station from this computer",
+  "settings.connectStation.open": "Connect to my station…",
+  "settings.connectStation.hint": "Finds your station on this network, or reaches it over the internet when you sign in with your Nexus Remote account. F11 switches the window to full screen and back, and Esc over the picture still stops transmitting.",
+  "settings.connectStation.failed": "Nexus could not open the Connect to my station window. Try again.",
 
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
   // `rigctld` is the daemon's own; the call site supplies the emphasis for each.

@@ -79,6 +79,8 @@ const MIGRATED = [
   // The Stations on this network window's page (2026-10-04) — born migrated: its list, its pairing
   // dialog and every reason this computer's Nexus gives, each a sentence.
   'lan/LanApp.tsx',
+  // Settings' one Connect to my station… entry — born migrated: its label, button, hint and failure line.
+  'lan/ConnectEntry.tsx',
   'components/SettingsStation.tsx',
   // Settings ▸ Appearance ▸ Colours (2026-09-26) — born migrated: the section's rows, and the role
   // table whose `labelKey`/`hintKey` entries name every role and preset word.
