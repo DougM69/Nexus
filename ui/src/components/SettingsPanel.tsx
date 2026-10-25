@@ -278,6 +278,7 @@ import { ARRL_SECTIONS_BY_DIVISION, RETIRED_SECTIONS } from '../features/arrlSec
 // the modifier-chord labels needed it too.
 import { IS_MAC, IS_WINDOWS } from '../platform'
 import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from '../settings/ampAddress'
+import { normaliseTyped, upperTyped } from '../typedInput'
 
 interface Props {
   /** The live contest session, for the READ-ONLY role read-out on the Contesting tab.
@@ -9901,7 +9902,7 @@ export function SettingsPanel({
                 <input
                   className="settings-input"
                   value={form.js8Info ?? ''}
-                  onChange={(e) => update('js8Info', e.target.value.toUpperCase())}
+                  onChange={(e) => update('js8Info', upperTyped(e.target))}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -9912,7 +9913,7 @@ export function SettingsPanel({
                 <input
                   className="settings-input"
                   value={form.js8Status ?? ''}
-                  onChange={(e) => update('js8Status', e.target.value.toUpperCase())}
+                  onChange={(e) => update('js8Status', upperTyped(e.target))}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -13526,7 +13527,7 @@ export function SettingsPanel({
                     className="settings-input mono"
                     type="text"
                     value={form.contestQthCounty ?? ''}
-                    onChange={(e) => update('contestQthCounty', e.target.value.toUpperCase())}
+                    onChange={(e) => update('contestQthCounty', upperTyped(e.target))}
                     autoComplete="off"
                     spellCheck={false}
                   />
@@ -13540,7 +13541,7 @@ export function SettingsPanel({
                     className="settings-input mono"
                     type="text"
                     value={form.contestQthState ?? ''}
-                    onChange={(e) => update('contestQthState', e.target.value.toUpperCase())}
+                    onChange={(e) => update('contestQthState', upperTyped(e.target))}
                     autoComplete="off"
                     spellCheck={false}
                   />
@@ -13559,7 +13560,7 @@ export function SettingsPanel({
                     inputMode="numeric"
                     maxLength={2}
                     value={form.contestCheck ?? ''}
-                    onChange={(e) => update('contestCheck', e.target.value.replace(/\D/g, ''))}
+                    onChange={(e) => update('contestCheck', normaliseTyped(e.target, (s) => s.replace(/\D/g, '')))}
                     autoComplete="off"
                     spellCheck={false}
                   />
@@ -13607,7 +13608,7 @@ export function SettingsPanel({
                     className="settings-input mono"
                     type="text"
                     value={form.contestPower ?? ''}
-                    onChange={(e) => update('contestPower', e.target.value.toUpperCase())}
+                    onChange={(e) => update('contestPower', upperTyped(e.target))}
                     autoComplete="off"
                     spellCheck={false}
                   />
@@ -13839,7 +13840,7 @@ export function SettingsPanel({
                   className="settings-input mono"
                   type="text"
                   value={form.contestOperators ?? ''}
-                  onChange={(e) => update('contestOperators', e.target.value.toUpperCase())}
+                  onChange={(e) => update('contestOperators', upperTyped(e.target))}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -14314,7 +14315,7 @@ export function SettingsPanel({
                   className="settings-input mono"
                   type="text"
                   value={form.fdClass}
-                  onChange={(e) => update('fdClass', e.target.value.toUpperCase())}
+                  onChange={(e) => update('fdClass', upperTyped(e.target))}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -14333,7 +14334,7 @@ export function SettingsPanel({
                   value={form.fdSection}
                   list="fd-section-list"
                   aria-invalid={fdSectionInvalid}
-                  onChange={(e) => update('fdSection', e.target.value.toUpperCase())}
+                  onChange={(e) => update('fdSection', upperTyped(e.target))}
                   autoComplete="off"
                   spellCheck={false}
                 />

@@ -180,6 +180,7 @@ const rttyPanelLabels = (): Record<RttyPanelId, string> => ({
  * field hang it fixed) lives with the function. */
 export { confidenceRuns, TRANSCRIPT_MAX_RUNS as RTTY_MAX_RUNS } from '../transcript'
 import { authoredRuns } from '../transcript'
+import { upperTyped } from '../typedInput'
 
 /** The character under a point, as an offset into `box.textContent` — or null when nothing
  *  under it is in `box`. The browser's caret hit-test first (`caretPositionFromPoint`, or the
@@ -1583,7 +1584,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         <input
           className="settings-input rtty-hiscall"
           value={hisCall}
-          onChange={(e) => setHisCall(e.target.value.toUpperCase())}
+          onChange={(e) => setHisCall(upperTyped(e.target))}
           placeholder={t('rtty.hisCall.placeholder')}
           aria-label={t('rtty.hisCall.aria')}
           autoComplete="off"

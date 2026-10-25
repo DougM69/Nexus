@@ -31,6 +31,7 @@ import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { POTA_SPOTS, SOTA_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../features/connectFeeds'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
+import { upperTyped } from '../typedInput'
 
 type Program = 'POTA' | 'SOTA' | 'Both'
 
@@ -672,7 +673,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             <input
               className="settings-input mono pota-act-ref"
               value={actRef}
-              onChange={(e) => setActRef(e.target.value.toUpperCase())}
+              onChange={(e) => setActRef(upperTyped(e.target))}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void handleStartActivation()
               }}

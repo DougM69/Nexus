@@ -131,6 +131,7 @@ import { Js8ComposeActions } from './Js8ComposeActions'
 import { JS8_COMPOSE_DEFAULTS, js8InsertText, js8MacroSelected, type Js8ComposeConfig } from '../js8Compose'
 import { JS8_DEFAULT_SAVED, JS8_DEFAULT_STATUS, js8FormatSnr, js8MacroValues, replaceJs8Macros } from '../js8Macros'
 import { patchSettings } from '../settings/patch'
+import { upperTyped } from '../typedInput'
 
 interface Props {
   /** Open the Logbook filtered to a callsign — handed to the log strip's recall card. */
@@ -1845,7 +1846,7 @@ export function Js8Cockpit({
             className="settings-input rtty-hiscall js8-to"
             list="js8-to-list"
             value={toCall}
-            onChange={(e) => setToCall(e.target.value.toUpperCase())}
+            onChange={(e) => setToCall(upperTyped(e.target))}
             placeholder={t('js8.dock.to.placeholder')}
             aria-label={t('js8.dock.to.aria')}
             autoComplete="off"

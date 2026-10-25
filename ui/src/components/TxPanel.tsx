@@ -6,6 +6,7 @@ import type { Ref } from 'react'
 import { t } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import type { StdMessages } from '../txMessages'
+import { upperTyped } from '../typedInput'
 
 /** WSJT-X's own name for a message slot — `Tx 1`…`Tx 6`, the token the Alt+N hints and the
  *  panel's own accessible name point at. */
@@ -123,7 +124,7 @@ export function TxPanel({
             autoCapitalize="characters"
             placeholder="—"
             aria-label={t('operate.tx.dxCall.aria')}
-            onChange={(e) => onDxCall(e.target.value.toUpperCase())}
+            onChange={(e) => onDxCall(upperTyped(e.target))}
           />
         </label>
         <label className="txp-field">
@@ -136,7 +137,7 @@ export function TxPanel({
             autoCapitalize="characters"
             placeholder="—"
             aria-label={t('operate.tx.dxGrid.aria')}
-            onChange={(e) => onDxGrid(e.target.value.toUpperCase())}
+            onChange={(e) => onDxGrid(upperTyped(e.target))}
           />
         </label>
         {/* THE PANE'S OWN ✕, last on the DX row — `.cockpit-popout` carries
@@ -180,7 +181,7 @@ export function TxPanel({
                     list="txp-tx5-macros"
                     placeholder={t('operate.tx.tx5.placeholder')}
                     aria-label={t('operate.tx.tx5.aria')}
-                    onChange={(e) => onTx5(e.target.value.toUpperCase())}
+                    onChange={(e) => onTx5(upperTyped(e.target))}
                   />
                   <datalist id="txp-tx5-macros">
                     {tx5Options.map((m) => (
@@ -199,7 +200,7 @@ export function TxPanel({
                     spellCheck={false}
                     placeholder={t('operate.tx.tx6.placeholder')}
                     aria-label={tx6Contest != null ? t('operate.tx.tx6.contest.aria') : t('operate.tx.tx6.aria')}
-                    onChange={(e) => onTx6(e.target.value.toUpperCase())}
+                    onChange={(e) => onTx6(upperTyped(e.target))}
                   />
                   <div className="txp-cq-hint">
                     {tx6Contest != null ? t('operate.tx.tx6.contest.hint') : t('operate.tx.tx6.hint')}

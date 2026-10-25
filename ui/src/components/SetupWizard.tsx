@@ -37,6 +37,7 @@ import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { STARTER_PACKS, importPack } from '../features/packs'
 import { memoriesStore } from '../features/memories'
 import { TCI_DEFAULT_HOST, TCI_DEFAULT_PORT, TCI_RIG_MODEL, TCI_RIG_MODEL_NAME, tciProbeMessage, tciServerName } from '../tci'
+import { upperTyped } from '../typedInput'
 
 /** What the wizard collects beyond the goal profiles: station identity + rig.
  * Only the fields the operator actually touched are set — App merges this into
@@ -792,7 +793,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 value={mycall}
                 autoComplete="off"
                 spellCheck={false}
-                onChange={(e) => setMycall(e.target.value.toUpperCase())}
+                onChange={(e) => setMycall(upperTyped(e.target))}
               />
             </label>
             <label className="wizard-field">

@@ -17,6 +17,7 @@ import { isStreamInput } from '../remote-native/stream-input'
 import { bandOptions, editForm, editOf, editText, modeOptions } from '../features/contestEdit'
 import { contactLabel } from '../features/contestRemoval'
 import { receivedCaption } from '../features/contestSlots'
+import { normaliseTyped, upperTyped } from '../typedInput'
 
 /** The line a host shows once an edit is over. */
 export interface EditNote {
@@ -113,7 +114,7 @@ export function ContestContactEdit({
           className="settings-input mono"
           value={form.call}
           onChange={(e) => {
-            const call = e.target.value.replace(/\s+/g, '').toUpperCase()
+            const call = normaliseTyped(e.target, (s) => s.replace(/\s+/g, '').toUpperCase())
             setForm((f) => ({ ...f, call }))
           }}
           onKeyDown={onKey}
@@ -128,7 +129,7 @@ export function ContestContactEdit({
             className="settings-input mono"
             value={form.fields[f.key] ?? ''}
             onChange={(e) => {
-              const value = e.target.value.toUpperCase()
+              const value = upperTyped(e.target)
               setForm((s) => ({ ...s, fields: { ...s.fields, [f.key]: value } }))
             }}
             onKeyDown={onKey}

@@ -288,6 +288,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **Typing in the middle of a call no longer jumps the cursor to the end.** Type the suffix first,
+  go back to the start and type the prefix, and the cursor now stays after each letter you type, as in
+  any text box: "abc", Home, "dl1" gives DL1ABC. This holds in the contest entry (the Contest screen,
+  the cockpit strip and the logger window), the log entry, the contact editor and every other box that
+  capitalises as you type.
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
 - **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone

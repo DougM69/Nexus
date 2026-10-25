@@ -17,6 +17,7 @@ import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { modeMismatch } from './TopBar'
 import { RadioTuneNote } from './RadioTuneNote'
+import { upperTyped } from '../typedInput'
 
 /** `TX` on the now-sending label and `AUTO-CQ` on the run pill are annunciator tokens, not
  *  words — `CQ` is a Q-code, and the word joiners keep the pill from breaking mid-token in a
@@ -395,7 +396,7 @@ export function OperateQsoStrip({
           maxLength={13}
           placeholder={t('operate.strip.freetext.placeholder')}
           aria-label={t('operate.strip.freetext.aria')}
-          onChange={(e) => setFree(e.target.value.toUpperCase())}
+          onChange={(e) => setFree(upperTyped(e.target))}
         />
         <button
           type="submit"

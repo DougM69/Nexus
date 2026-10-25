@@ -6,6 +6,7 @@ import { useState } from 'react'
 import type { LoggedQso } from '../types'
 import { t } from '../i18n'
 import { FtStopControl } from './FtStopControl'
+import { upperTyped } from '../typedInput'
 
 interface Props {
   /** The completed contact awaiting confirm-before-log. */
@@ -88,7 +89,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
               className="mono"
               value={call}
               autoFocus
-              onChange={(e) => setCall(e.target.value.toUpperCase())}
+              onChange={(e) => setCall(upperTyped(e.target))}
             />
           </label>
           <label>
@@ -98,7 +99,7 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
               value={grid}
               maxLength={6}
               placeholder="—"
-              onChange={(e) => setGrid(e.target.value.toUpperCase())}
+              onChange={(e) => setGrid(upperTyped(e.target))}
             />
           </label>
           <label>
