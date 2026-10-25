@@ -1,8 +1,14 @@
 // ⭐ THE EDIT OF A LOGGED CONTEST CONTACT, IN PLACE — the contest screen's Edit (in the row it
 // edits) and the strip's Ctrl+Y (in place of its entry boxes): the call, one box per received
 // slot, the band and the mode, with Save and Cancel. Enter saves; Esc leaves it as it was.
-// What a box may hold is the strip's own rule (`features/contestEdit`), and the engine names the
-// contact by its call and time, so a contact that changed meanwhile is refused, never mis-edited.
+// What a box may hold is the strip's own rule (`features/contestEdit`).
+//
+// ⛔ A FORM FILLED FROM WHAT A CONTACT WAS NEVER SAVES OVER WHAT IT IS NOW. Another window (the
+// logger window, the main window's contest screen) can edit the same contact while this edit is
+// open. When this window's rows of the contact stop reading as they did when the edit opened
+// (`contactText`), the edit closes and says so. A save pressed before this window hears of the
+// change sends the rows the edit opened from, and the engine refuses it as changed when the
+// contact no longer reads as them. A contact removed elsewhere is its host's to close.
 //
 // ⛔ NOTHING HERE TRANSMITS, AND NOTHING HERE STOPS A KEY ON ITS WAY. No handler calls
 // stopPropagation: Esc still reaches the shared capture listener that stops TX, and Space's keyup
@@ -14,7 +20,7 @@ import { contestEdit, resolveEntity } from '../api'
 import type { ContestFieldSpec, FieldDayQso } from '../types'
 import { t } from '../i18n'
 import { isStreamInput } from '../remote-native/stream-input'
-import { bandOptions, editForm, editOf, editText, modeOptions } from '../features/contestEdit'
+import { bandOptions, contactText, editForm, editOf, editText, modeOptions } from '../features/contestEdit'
 import { contactLabel } from '../features/contestRemoval'
 import { receivedCaption } from '../features/contestSlots'
 
@@ -65,6 +71,13 @@ export function ContestContactEdit({
   const [form, setForm] = useState(() => editForm(rows, receives))
   const [why, setWhy] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // The contact as the form was filled from it. Changed since, the edit closes; this edit's own
+  // save, under way, answers for itself.
+  const [opened] = useState(rows)
+  const changed = contactText(rows) !== contactText(opened)
+  useEffect(() => {
+    if (changed && !busy) onDone({ text: t('contest.edit.changed'), alert: true })
+  }, [changed, busy, onDone])
   const callRef = useRef<HTMLInputElement>(null)
   const boxRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -116,7 +129,7 @@ export function ContestContactEdit({
       return
     }
     setBusy(true)
-    contestEdit(first.call, first.whenUnix ?? 0, made.edit).then(
+    contestEdit(first.call, first.whenUnix ?? 0, made.edit, opened).then(
       (answer) => onDone({ text: editText(answer), alert: answer.outcome === 'refused' }),
       () => onDone({ text: t('contest.edit.failed'), alert: true }),
     )

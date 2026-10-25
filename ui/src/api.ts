@@ -915,13 +915,20 @@ export interface ContestContactEdit {
 }
 
 /** ⭐ **Edit a contest contact in place** — when it is still the one named (`call` and
- *  `whenUnix`, as the screen showed it), else `refused: changed`. It keeps its time, serial and
+ *  `whenUnix`, as the screen showed it) and still reads as `opened`, the rows the form was filled
+ *  from, else `refused: changed`. It keeps its time, serial and
  *  number; refused at a club (`club`). Answers once the contest journal holds the edit. Never
  *  keys or stops TX. */
-export async function contestEdit(call: string, whenUnix: number, edit: ContestContactEdit): Promise<ContestEditAnswer> {
+export async function contestEdit(
+  call: string,
+  whenUnix: number,
+  edit: ContestContactEdit,
+  opened: FieldDayQso[],
+): Promise<ContestEditAnswer> {
   return invoke<ContestEditAnswer>('contest_edit', {
     call,
     whenUnix,
+    opened,
     newCall: edit.call,
     rows: edit.rows,
     band: edit.band,

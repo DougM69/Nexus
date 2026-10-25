@@ -1370,6 +1370,21 @@ impl FieldDayLog {
         true
     }
 
+    /// Where the contact [`edit_contact`](Self::edit_contact) names is in the log: the live rows
+    /// with `call` (any case) and `when_unix`, in row order. A time of `0` names nothing.
+    pub fn contact_at(&self, call: &str, when_unix: u64) -> Vec<usize> {
+        self.qsos
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| {
+                when_unix != 0
+                    && q.when_unix == when_unix
+                    && q.call.eq_ignore_ascii_case(call.trim())
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     /// ⭐ **Edit a contact already in the log — its call, what they sent, its band and its
     /// mode — and keep everything that makes it the contact it was**: its time, its seq, the
     /// operator and the exchange it was sent with, the serial included. An edit never spends a
@@ -1398,17 +1413,7 @@ impl FieldDayLog {
         when_unix: u64,
         edit: &ContactEdit,
     ) -> Result<Vec<LoggedQso>, EditRefusal> {
-        let at: Vec<usize> = self
-            .qsos
-            .iter()
-            .enumerate()
-            .filter(|(_, q)| {
-                when_unix != 0
-                    && q.when_unix == when_unix
-                    && q.call.eq_ignore_ascii_case(call.trim())
-            })
-            .map(|(i, _)| i)
-            .collect();
+        let at = self.contact_at(call, when_unix);
         if at.is_empty() {
             return Err(EditRefusal::Changed);
         }

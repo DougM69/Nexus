@@ -132,7 +132,7 @@ describe('a last contact is corrected in place', () => {
       band: '20m',
       // Unchanged, as the contest screen's edit sends it.
       mode: '',
-    })
+    }, [LOG[11]])
     expect(api.contestLogManual).not.toHaveBeenCalled()
     expect(api.logQso).not.toHaveBeenCalled()
     expect(editor()).toBeNull()

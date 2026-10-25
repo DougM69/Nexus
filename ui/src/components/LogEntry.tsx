@@ -123,11 +123,6 @@ function fdRcvd(row: Pick<FieldDayQso, 'class' | 'section'>, key: string): strin
   return ''
 }
 
-/** What a contact's edit can change on its rows, as one string to compare. */
-function contactText(rows: readonly FieldDayQso[]): string {
-  return JSON.stringify(rows.map((q) => [q.call, q.band, q.mode, q.submode, q.class, q.section, q.rcvd]))
-}
-
 /** The boxes the next contact starts with once `row` is in the log: a signal report goes back to
  *  untouched (absent, so it shows the report of the mode the strip logs under), and every other
  *  box takes what a row carries over (`fdRcvd`), empty for the rest. No row (the contact was taken
@@ -858,16 +853,15 @@ export function LogEntry({
   // contact is fixed there today, because club sync cannot carry an edit to the other laptops.
   // Left open in a cockpit that is then hidden (RTTY, PSK, JTTY and JS8 stay mounted), it stays as
   // typed for when the cockpit is back, and holds back no other edit meanwhile (`focusOpenContestEdit`).
-  const [editing, setEditing] = useState<{ call: string; whenUnix: number; was: string } | null>(null)
+  const [editing, setEditing] = useState<{ call: string; whenUnix: number } | null>(null)
   const rowsOf = (call: string, whenUnix: number | undefined) =>
     fieldDay ? fieldDay.log.filter((q) => q.call === call && q.whenUnix === whenUnix) : []
   const editRows = editing ? rowsOf(editing.call, editing.whenUnix) : []
-  // A contact removed or edited elsewhere while its edit was open: the edit closes, so a form
-  // filled from what the contact was can never save over the change.
-  const editNow = contactText(editRows)
+  // A contact removed elsewhere while its edit was open: the edit closes. One edited elsewhere
+  // closes itself and says so (`ContestContactEdit`).
   useEffect(() => {
-    if (editing && (editRows.length === 0 || editNow !== editing.was)) setEditing(null)
-  }, [editing, editRows.length, editNow])
+    if (editing && editRows.length === 0) setEditing(null)
+  }, [editing, editRows.length])
   const pressEdit = () => {
     setRemoveArmed(null)
     if (isStreamInput()) {
@@ -890,7 +884,7 @@ export function LogEntry({
       return
     }
     setRemoveNote(null)
-    setEditing({ call: newest.call, whenUnix: newest.whenUnix, was: contactText(rowsOf(newest.call, newest.whenUnix)) })
+    setEditing({ call: newest.call, whenUnix: newest.whenUnix })
   }
   const pressEditRef = useRef(pressEdit)
   pressEditRef.current = pressEdit

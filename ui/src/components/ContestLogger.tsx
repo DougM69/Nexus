@@ -182,7 +182,8 @@ export function LastContacts({
   const editRows = editing
     ? fieldDay.log.filter((q) => q.call === editing.call && q.whenUnix === editing.whenUnix)
     : []
-  // A contact removed or edited elsewhere while its edit was open: the edit closes.
+  // A contact removed elsewhere while its edit was open: the edit closes. One edited elsewhere
+  // closes itself and says so (`ContestContactEdit`).
   useEffect(() => {
     if (editing && editRows.length === 0) setEditing(null)
   }, [editing, editRows.length])

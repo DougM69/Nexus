@@ -182,7 +182,7 @@ describe('Ctrl+Y opens the newest contact for edit', () => {
       rows: [[['RST', '599'], ['QTH', 'LAKE']]],
       band: '20m',
       mode: '',
-    })
+    }, [LOG[1]])
     expect(editor()).toBeNull()
     expect(callBox().value, 'what was typed in the strip is still there').toBe('N9XYZ')
     expect(line()).toBe('Edited W9BBB: now W9BBC · 20m CW · 17:01 · 599 LAKE.')
@@ -411,5 +411,9 @@ describe('an edit left open in a cockpit that is then hidden', () => {
     view.rerender(<Screens psk log={[LOG[0], row('W9BBB', 'COOK', T0 + 60)]} />)
     expect(pskEdit(), 'its county changed on the screen meanwhile').toBeNull()
     expect(document.querySelector('.psk-host .le-fd-big'), 'the entry boxes are back').not.toBeNull()
+    expect(
+      document.querySelector('.psk-host .le-fd-remove-line')?.textContent,
+      'and the line says why the typing is gone',
+    ).toBe(t('contest.edit.changed'))
   })
 })

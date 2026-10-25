@@ -32889,7 +32889,8 @@ enum ContestEditDto {
 }
 
 /// ⭐ **Edit a contest contact in place** — the contest screen's Edit and the strip's Ctrl+Y — when
-/// it is still the contact named (`call`, `when_unix`): its call, what they sent (one field
+/// it is still the contact named (`call`, `when_unix`) and still reads as the rows the form opened
+/// from (`opened`, as the log table showed them): its call, what they sent (one field
 /// vector per row, as [`contest_log_manual_rows`] takes them), its band and its mode.
 ///
 /// It keeps its time, serial and seq ([`tempo_app::engine::contest_edit`]); refused while club
@@ -32898,11 +32899,13 @@ enum ContestEditDto {
 /// copy is read with the engine lock released, on the blocking pool.
 ///
 /// ⛔ Not one of Remote's operations: an edit is refused from afar, as a removal is.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn contest_edit(
     state: State<'_, SharedEngine>,
     call: String,
     when_unix: u64,
+    opened: Vec<tempo_app::dto::FieldDayQso>,
     new_call: String,
     rows: Vec<Vec<(String, String)>>,
     band: String,
@@ -32916,7 +32919,7 @@ async fn contest_edit(
         mode,
     };
     let answer = tokio::task::spawn_blocking(move || {
-        tempo_app::engine::contest_edit::edit(&engine, &call, when_unix, &edit)
+        tempo_app::engine::contest_edit::edit(&engine, &call, when_unix, &opened, &edit)
     })
     .await
     .map_err(|e| format!("contest log task failed: {e}"))??;

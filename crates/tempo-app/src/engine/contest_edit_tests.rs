@@ -94,6 +94,15 @@ fn shown(e: &Engine) -> (Vec<(String, String, bool)>, usize, Option<u32>) {
     (rows, fd.qso_count, fd.mult_count)
 }
 
+/// The contact `call` at `when` as the screen shows it: the rows an edit opens with.
+fn opened(e: &Engine, call: &str, when: u64) -> Vec<crate::dto::FieldDayQso> {
+    let fd = e.snapshot().field_day.expect("the contest runs");
+    fd.log
+        .into_iter()
+        .filter(|q| q.call == call && q.when_unix == when)
+        .collect()
+}
+
 fn row(call: &str, county: &str, dupe: bool) -> (String, String, bool) {
     (call.into(), county.into(), dupe)
 }
@@ -134,9 +143,14 @@ fn an_edit_moves_the_dupe_marks_the_count_and_the_multipliers() {
     );
     let calm = transmit_state(&e);
 
-    e.contest_edit("K9AAB", t0 + 60, &cw("K9AAA", "COOK"))
-        .unwrap()
-        .expect("edited");
+    e.contest_edit(
+        "K9AAB",
+        t0 + 60,
+        &opened(&e, "K9AAB", t0 + 60),
+        &cw("K9AAA", "COOK"),
+    )
+    .unwrap()
+    .expect("edited");
     assert_eq!(
         shown(&e),
         (
@@ -147,9 +161,14 @@ fn an_edit_moves_the_dupe_marks_the_count_and_the_multipliers() {
         "the busted call is the dupe it was"
     );
 
-    e.contest_edit("K9AAA", t0 + 60, &cw("W9CCC", "LAKE"))
-        .unwrap()
-        .expect("edited");
+    e.contest_edit(
+        "K9AAA",
+        t0 + 60,
+        &opened(&e, "K9AAA", t0 + 60),
+        &cw("W9CCC", "LAKE"),
+    )
+    .unwrap()
+    .expect("edited");
     assert_eq!(
         shown(&e),
         (
@@ -179,7 +198,9 @@ fn an_edit_reaches_the_cabrillo_the_adif_and_a_merge_made_after_it() {
         band: "40m".into(),
         mode: "USB".into(),
     };
-    e.contest_edit("K9AAB", t0, &fix).unwrap().expect("edited");
+    e.contest_edit("K9AAB", t0, &opened(&e, "K9AAB", t0), &fix)
+        .unwrap()
+        .expect("edited");
 
     let cabrillo = e.export_log("cabrillo").expect("a Cabrillo entry");
     let line = cabrillo
@@ -238,7 +259,7 @@ fn an_edit_survives_a_restart_and_spends_no_number() {
     let mut e = party_on(Engine::new("W9XYZ", "EN50", 0), &path, |_| {});
     let high = e.contest_seq_high_water();
     assert_eq!(high, 2, "premise");
-    e.contest_edit("K9AAB", t0, &cw("K9AAA", "DUPG"))
+    e.contest_edit("K9AAB", t0, &opened(&e, "K9AAB", t0), &cw("K9AAA", "DUPG"))
         .unwrap()
         .expect("edited");
     e.journal_mark().wait();
@@ -292,7 +313,8 @@ fn at_a_club_an_edit_is_refused_and_changes_nothing() {
         e.journal_mark().wait();
         let journaled = std::fs::read_to_string(&path).expect("the journal");
         assert_eq!(
-            e.contest_edit("K9AAB", t0, &cw("K9AAA", "COOK")).unwrap(),
+            e.contest_edit("K9AAB", t0, &opened(&e, "K9AAB", t0), &cw("K9AAA", "COOK"))
+                .unwrap(),
             Err(ContestEditRefusal::Club),
             "{role}"
         );
@@ -314,7 +336,7 @@ fn at_a_club_an_edit_is_refused_and_changes_nothing() {
     let mut e = party_on(Engine::new("W9XYZ", "EN50", 0), &path, |_| {});
     assert!(!e.fd_sync_enabled());
     assert!(e
-        .contest_edit("K9AAB", t0, &cw("K9AAA", "COOK"))
+        .contest_edit("K9AAB", t0, &opened(&e, "K9AAB", t0), &cw("K9AAA", "COOK"))
         .unwrap()
         .is_ok());
     assert_eq!(shown(&e).0, [row("K9AAA", "COOK", false)]);
@@ -340,12 +362,14 @@ fn an_edit_names_where_the_contact_had_already_gone() {
         s.n1mm_addr = "192.168.1.255:12060".into();
         s.wsjtx_udp = true;
     });
+    // What the edit opens with, read as the screen read it before the merge below.
+    let was = opened(&e, "K9AAB", t0);
     assert_eq!(e.fd_merge_to_general().expect("merged").added(), 2);
     flush(&e);
     e.note_fd_forwarded(1);
     let shared = std::sync::Mutex::new(e);
 
-    let gone = edit(&shared, "K9AAB", t0, &cw("K9AAA", "COOK"))
+    let gone = edit(&shared, "K9AAB", t0, &was, &cw("K9AAA", "COOK"))
         .unwrap()
         .expect("edited");
     assert_eq!(gone.edit.before[0].call, "K9AAB");
@@ -370,10 +394,12 @@ fn an_edit_names_where_the_contact_had_already_gone() {
     let d = Dir::new("contest-edit-unsent");
     let path = d.0.join("fieldday.adi");
     std::fs::write(&path, journal(&[("K9AAB", "COOK", t0)])).expect("the journal");
-    let shared = std::sync::Mutex::new(party_on(engine_on_store(&d), &path, |s| {
+    let e = party_on(engine_on_store(&d), &path, |s| {
         s.n3fjp_host = "192.168.1.30".into();
-    }));
-    let fresh = edit(&shared, "K9AAB", t0, &cw("K9AAA", "COOK"))
+    });
+    let was = opened(&e, "K9AAB", t0);
+    let shared = std::sync::Mutex::new(e);
+    let fresh = edit(&shared, "K9AAB", t0, &was, &cw("K9AAA", "COOK"))
         .unwrap()
         .expect("edited");
     assert_eq!(
@@ -393,14 +419,73 @@ fn an_edit_of_a_contact_that_is_not_there_is_refused() {
     let mut e = party_on(Engine::new("W9XYZ", "EN50", 0), &path, |_| {});
     let log = shown(&e);
     assert_eq!(
-        e.contest_edit("K9AAB", t0 + 1, &cw("K9AAA", "COOK"))
-            .unwrap(),
+        e.contest_edit(
+            "K9AAB",
+            t0 + 1,
+            &opened(&e, "K9AAB", t0 + 1),
+            &cw("K9AAA", "COOK")
+        )
+        .unwrap(),
         Err(ContestEditRefusal::Changed)
     );
     assert_eq!(shown(&e), log);
     let _ = std::fs::remove_file(&path);
     let mut idle = Engine::new("W9XYZ", "EN50", 0);
     assert!(idle
-        .contest_edit("K9AAB", t0, &cw("K9AAA", "COOK"))
+        .contest_edit("K9AAB", t0, &[], &cw("K9AAA", "COOK"))
         .is_err());
+}
+
+/// ⛔ **An edit opened before the contact changed elsewhere is refused, and changes nothing.**
+/// Two windows can each have an edit of one contact open; the first saves, and the second's form
+/// still holds what the contact was. Its save must not write that back: the log, the journal and
+/// every row stay exactly as the first edit left them. CONTROL: the same edit opened from the
+/// contact as it now is applies.
+#[test]
+fn an_edit_opened_before_the_contact_changed_is_refused() {
+    let path = journal_path("stale");
+    let t0 = now_unix_secs() - 600;
+    std::fs::write(
+        &path,
+        journal(&[("K9AAB", "COOK", t0), ("W9BBB", "LAKE", t0 + 60)]),
+    )
+    .expect("the journal");
+    let mut e = party_on(Engine::new("W9XYZ", "EN50", 0), &path, |_| {});
+    let stale = opened(&e, "K9AAB", t0);
+    // The other window fixes the county; the call stays, so the contact is still named.
+    e.contest_edit("K9AAB", t0, &stale, &cw("K9AAB", "DUPG"))
+        .unwrap()
+        .expect("the first edit");
+    e.journal_mark().wait();
+    let log = e.snapshot().field_day.expect("the contest runs").log;
+    let journaled = std::fs::read_to_string(&path).expect("the journal");
+
+    assert_eq!(
+        e.contest_edit("K9AAB", t0, &stale, &cw("K9AAB", "COOK"))
+            .unwrap(),
+        Err(ContestEditRefusal::Changed),
+        "the second form still holds Cook"
+    );
+    assert_eq!(
+        e.snapshot().field_day.expect("the contest runs").log,
+        log,
+        "every row as the first edit left it"
+    );
+    e.journal_mark().wait();
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("the journal"),
+        journaled,
+        "the journal is as it was"
+    );
+
+    // CONTROL: opened from the contact as it now is, the same edit applies.
+    let now = opened(&e, "K9AAB", t0);
+    e.contest_edit("K9AAB", t0, &now, &cw("K9AAB", "COOK"))
+        .unwrap()
+        .expect("edited");
+    assert_eq!(
+        shown(&e).0,
+        [row("K9AAB", "COOK", false), row("W9BBB", "LAKE", false)]
+    );
+    let _ = std::fs::remove_file(&path);
 }
