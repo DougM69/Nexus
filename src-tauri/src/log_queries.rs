@@ -1199,8 +1199,7 @@ fn needed(
         AwardNeed::Dxcc => !sat && counted.is_some_and(|c| !c.deleted && slot(c.name)),
         AwardNeed::Was => {
             counted.is_some_and(|c| c.is_us_state())
-                && r.state
-                    .as_deref()
+                && tempo_core::logbook::record_field(r, "STATE")
                     .and_then(propagation::awards::valid_state)
                     .is_some_and(slot)
         }

@@ -4420,6 +4420,10 @@ mod logbook_startup_tests {
                 && at(job, ".spawn(move ||") < at(job, "fill_log_store("),
             "and runs on the thread it spawns"
         );
+        assert!(
+            at(job, ".spawn(move ||") < at(job, "copy_contest_columns("),
+            "the contest-column copy runs on it too"
+        );
     }
 
     /// The main window is sent to the root beside the page it waits on — the address Tauri itself
@@ -8701,7 +8705,9 @@ fn fill_version(rules: u32) -> i64 {
 /// loop's — with the resolvers the engine fills every insert with ([`country_of`], the engine's
 /// own DXCC-number names, [`subdivision_hint`]), counting a contact without a state only where one
 /// can apply
-/// ([`subdivision_applies`]). See `tempo_app::logfill` (SPEC-2 v3 D2-A).
+/// ([`subdivision_applies`]). See `tempo_app::logfill` (SPEC-2 v3 D2-A). Then, on the same thread,
+/// the one-time copy of merged contest contacts' received grid, name and QTH into their own
+/// fields (`tempo_app::logfill::copy_contest_columns`).
 fn spawn_log_fill(engine: SharedEngine) {
     let spawned = std::thread::Builder::new()
         .name("nexus-log-fill".into())
@@ -8723,6 +8729,30 @@ fn spawn_log_fill(engine: SharedEngine) {
                     &format!(
                         "the logbook's country and state were not saved this launch, and the \
                          next launch tries again: {e}"
+                    ),
+                ),
+            }
+            // Once per store: a merged contest contact's received grid, name and QTH copied into
+            // its own fields, as one history run (`tempo_app::logfill::copy_contest_columns`).
+            match tempo_app::logfill::copy_contest_columns(&engine) {
+                Ok(done) => {
+                    if let Some(run) = &done.run {
+                        tempo_core::applog::info(
+                            "logbook",
+                            &format!(
+                                "{} merged contest contacts took the grid, name or QTH they \
+                                 received into their own columns (history run {run})",
+                                done.copied
+                            ),
+                        );
+                    }
+                }
+                Err(e) => tempo_core::applog::warn(
+                    "logbook",
+                    &format!(
+                        "merged contest contacts' grids, names and QTHs were not copied into \
+                         their own columns this launch, and the next launch takes it up again: \
+                         {e}"
                     ),
                 ),
             }
@@ -22684,13 +22714,80 @@ async fn edit_qso(
                 &engine,
                 id,
                 &found.edit_key,
-                |_| record.clone(),
+                |stored| edited_whole(&record, stored),
                 |_, (_, after)| after.clone(),
             )
         });
         (changed_row(seen_outcome(made)), durability)
     })
     .await
+}
+
+/// [`edit_qso`]'s contact as it writes it: `record`, the whole contact a client sent back, with its
+/// State taken as the Logbook's edit form takes it ([`tempo_core::logbook::edited_state`]). The
+/// client was shown the state every reader counts (a merged contest exchange's, `LoggedQso`'s), so
+/// a State it sends back unchanged keeps the record's own field as stored, and a changed one
+/// replaces the exchange's too.
+fn edited_whole(
+    record: &tempo_core::logbook::QsoRecord,
+    stored: &tempo_core::logbook::QsoRecord,
+) -> tempo_core::logbook::QsoRecord {
+    let mut r = record.clone();
+    let (state, contest) = tempo_core::logbook::edited_state(&record.state, stored);
+    r.state = state;
+    if contest.is_some() {
+        r.contest = contest;
+    }
+    r
+}
+
+#[cfg(test)]
+mod edit_qso_state_tests {
+    use super::*;
+    use tempo_core::logbook::{record_field, ContestFields, Logbook, QsoRecord};
+
+    /// ★ The whole-contact edit (an older or Remote client's round trip of the row it was shown)
+    /// takes State as the Logbook's edit form does: an edit of another field leaves the record's
+    /// own state as stored and the exchange's as sent; a State edit is the state everywhere.
+    #[test]
+    fn a_whole_contact_edit_keeps_or_replaces_the_state_as_the_form_does() {
+        let mut stored = tempo_core::logbook::parse_adif(
+            "<CALL:5>W2XYZ<QSO_DATE:8>20240101<TIME_ON:4>1200<BAND:3>20m<MODE:2>CW\
+             <STATE:2>NJ<EOR>",
+        )
+        .remove(0);
+        stored.contest = Some(Box::new(ContestFields {
+            session: "naqp".into(),
+            contest_id: "NAQP-CW".into(),
+            adif: vec![("STATE".into(), "NY".into())],
+            ..Default::default()
+        }));
+        let mut lb = Logbook::new();
+        lb.add(stored.clone());
+        let edit = |lb: &mut Logbook, change: &dyn Fn(&mut LoggedQso)| {
+            let now = QsoRecord::clone(&lb.records()[0]);
+            let mut shown = LoggedQso::from(now.clone());
+            change(&mut shown);
+            lb.apply(tempo_core::logbook::LogOp::Edit {
+                id: now.id.expect("the log gives every contact an id"),
+                rec: Box::new(edited_whole(&shown.into(), &now)),
+            });
+            QsoRecord::clone(&lb.records()[0])
+        };
+
+        let named = edit(&mut lb, &|q| q.name = Some("Hiram".into()));
+        assert_eq!(named.name.as_deref(), Some("Hiram"));
+        assert_eq!(named.state.as_deref(), Some("NJ"), "the field as stored");
+        assert_eq!(named.contest, stored.contest, "the exchange as sent");
+
+        let moved = edit(&mut lb, &|q| q.state = Some("PA".into()));
+        assert_eq!(moved.state.as_deref(), Some("PA"));
+        assert_eq!(record_field(&moved, "STATE"), Some("PA"));
+        assert_eq!(
+            moved.contest.as_deref().unwrap().adif,
+            [("STATE".to_string(), "PA".to_string())]
+        );
+    }
 }
 
 /// What a `via` argument MEANS on [`mark_qsl_sent`] — the one decision the command layer owns
@@ -24134,7 +24231,7 @@ fn park_state_review_on(
     };
     let rows = engine_lock(engine).log_rows();
     let mut hunted = Vec::new();
-    rows.each(HUNTED, Scope::All, Order::Log, &mut |r| {
+    rows.each_with(HUNTED, &["STATE"], Scope::All, Order::Log, &mut |r| {
         if r.id.is_some() && r.ota.their_ref.is_some() {
             hunted.push(r.clone());
         }
@@ -24159,7 +24256,8 @@ fn park_state_review_on(
             continue;
         };
         let park_state = tempo_app::engine::place_state(one).to_string();
-        let held = r.state.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        // The state its upload carries: a merged contest contact's exchange (`record_field`).
+        let held = tempo_core::logbook::record_field(&r, "STATE");
         if held.is_some_and(|s| s.eq_ignore_ascii_case(&park_state)) {
             continue;
         }

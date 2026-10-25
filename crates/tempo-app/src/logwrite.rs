@@ -28,6 +28,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use tempo_core::logbook::history::Source;
 use tempo_core::logbook::{
     LogOp, QsoEdit, QsoRecord, RecordId, RowAfter, UploadService, UploadStatus,
 };
@@ -844,15 +845,71 @@ fn fill_in_chunks(
     fill_ver: i64,
     chunk: usize,
 ) -> Result<usize, String> {
-    let chunks: Vec<&[LogFill]> = if fills.is_empty() {
+    let meta = (crate::logfill::FILL_VER, fill_ver);
+    // Every chunk's fills are one run in the history, undone together.
+    let run = crate::loghistory::new_run();
+    let source = (Source::Fill, run.as_str());
+    in_chunks(
+        engine,
+        fills,
+        |f| f.id,
+        station::fill_pairs,
+        meta,
+        source,
+        chunk,
+    )
+}
+
+/// ★ The one-time copy of merged contest contacts' received grid, name and QTH into their own
+/// fields ([`tempo_core::logbook::with_contest_columns_copied`]), for the contacts `ids` — as the
+/// fill job's fills are written ([`fill`]): `chunk` contacts at a time, each row read whole and
+/// copied into only as it now stands (a field the operator filled meanwhile is theirs), all of it
+/// in the history's run `run` ([`Source::ContestColumns`]), undone together, and
+/// [`crate::logfill::CONTEST_COLUMNS_COPIED`] set with the last chunk. No upload stamp moves and
+/// nothing is queued to a service: the contacts' ADIF carries the same tags and values as before.
+/// How many contacts changed.
+///
+/// ⚠️ It reads the store and waits for it: call it on a thread of its own, with no lock held.
+pub fn copy_contest_columns(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    run: &str,
+    chunk: usize,
+) -> Result<usize, String> {
+    let pairs = |rows: &std::collections::HashMap<RecordId, Arc<QsoRecord>>, ids: &[RecordId]| {
+        ids.iter()
+            .filter_map(|id| {
+                let row = rows.get(id)?;
+                let copied = tempo_core::logbook::with_contest_columns_copied(row)?;
+                Some((Arc::clone(row), Some(Arc::new(copied))))
+            })
+            .collect()
+    };
+    let meta = (crate::logfill::CONTEST_COLUMNS_COPIED, 1);
+    let source = (Source::ContestColumns, run);
+    in_chunks(engine, ids, |id| *id, pairs, meta, source, chunk)
+}
+
+/// The writing of [`fill`] and [`copy_contest_columns`]: `items` a `chunk` at a time, each chunk's
+/// rows read whole with the Engine lock released and `pairs` made of them under it, every chunk
+/// in the one history run `source` names, and `meta` set with the last chunk only once every
+/// earlier one is on disk. How many contacts changed.
+fn in_chunks<T>(
+    engine: &Mutex<Engine>,
+    items: &[T],
+    id: impl Fn(&T) -> RecordId,
+    pairs: impl Fn(&std::collections::HashMap<RecordId, Arc<QsoRecord>>, &[T]) -> Vec<MadeRow>,
+    meta: (&'static str, i64),
+    (source, run): (Source, &str),
+    chunk: usize,
+) -> Result<usize, String> {
+    let chunks: Vec<&[T]> = if items.is_empty() {
         vec![&[]]
     } else {
-        fills.chunks(chunk).collect()
+        items.chunks(chunk).collect()
     };
     let last = chunks.len() - 1;
     let mut filled = 0;
-    // Every chunk's fills are one run in the history, undone together.
-    let run = crate::loghistory::new_run();
     // The chunk made before the latest: in the store before the next is planned.
     let mut previous = Durability::default();
     for (k, chunk) in chunks.into_iter().enumerate() {
@@ -860,25 +917,18 @@ fn fill_in_chunks(
             // `fill_ver` only once every earlier fill is on disk.
             previous.wait_stored(crate::logstore::DURABLE_WAIT)?;
         }
-        let meta = if k == last {
-            vec![(crate::logfill::FILL_VER, fill_ver)]
-        } else {
-            Vec::new()
-        };
-        let ids: Vec<RecordId> = chunk.iter().map(|f| f.id).collect();
+        let meta = if k == last { vec![meta] } else { Vec::new() };
+        let ids: Vec<RecordId> = chunk.iter().map(&id).collect();
         let mut made = None;
         for _ in 0..PLANS {
             let plan = crate::engine::log_plan(engine);
             let rows = plan.rows(&ids)?;
             #[cfg(test)]
             tests::race();
-            let pairs = station::fill_pairs(&rows, chunk);
+            let pairs = pairs(&rows, chunk);
             let n = pairs.len();
             let (ok, durability) = engine_lock(engine).with_log_tickets(|e| {
-                e.station_mut().origin = Some(crate::loghistory::Origin::in_run(
-                    tempo_core::logbook::history::Source::Fill,
-                    &run,
-                ));
+                e.station_mut().origin = Some(crate::loghistory::Origin::in_run(source, run));
                 let ok = e
                     .station_mut()
                     .commit_planned(

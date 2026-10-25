@@ -131,7 +131,7 @@ pub(crate) fn source_of(context: &str) -> Source {
 /// What a change of `source` to a contact the log holds is called.
 fn edit_kind(source: Source) -> Kind {
     match source {
-        Source::Fill => Kind::Fill,
+        Source::Fill | Source::ContestColumns => Kind::Fill,
         Source::Import | Source::Lotw | Source::Eqsl | Source::Qrz | Source::Pota => Kind::Merge,
         _ => Kind::Edit,
     }

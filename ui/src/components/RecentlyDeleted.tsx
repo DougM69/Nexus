@@ -137,6 +137,7 @@ export function RecentlyDeleted({
       answer,
       run.kind === 'purge' ? t('logbook.purge.undone')
         : run.kind === 'import' ? t('logbook.import.undone')
+        : run.kind === 'contestColumns' ? t('logbook.contestColumns.undone')
         : t('qso.history.redone'),
       changed,
       run.kind === 'undo',
@@ -173,6 +174,7 @@ export function RecentlyDeleted({
                 >
                   {run.kind === 'purge' ? t('logbook.deleted.undoPurge')
                     : run.kind === 'import' ? t('logbook.deleted.undoImport')
+                    : run.kind === 'contestColumns' ? t('logbook.deleted.undoContestColumns')
                     : t('logbook.deleted.redo')}
                 </button>
                 {afar && <span className="recently-deleted-when">{t('logbook.deleted.atStation')}</span>}
@@ -245,6 +247,7 @@ function runLabel(run: HistoryRun): string {
   switch (run.kind) {
     case 'purge': return t('logbook.deleted.run.purge', { count, when })
     case 'import': return t('logbook.deleted.run.import', { count, when })
+    case 'contestColumns': return t('logbook.deleted.run.contestColumns', { count, when })
     default: return t('logbook.deleted.run.undo', { count, when })
   }
 }
@@ -253,6 +256,8 @@ function runLabel(run: HistoryRun): string {
 function runQuestion(run: HistoryRun): string {
   const count = run.contacts
   const when = utcDate(Math.floor(run.atMs / 1000))
+  // The copy's undo takes nothing out of the log and puts nothing back: its question says what it does.
+  if (run.kind === 'contestColumns') return t('logbook.deleted.confirm.contestColumns', { count, when })
   const asked = run.kind === 'purge' ? t('logbook.deleted.confirm.purge', { count, when })
     : run.kind === 'import' ? t('logbook.deleted.confirm.import', { count, when })
     : t('logbook.deleted.confirm.undoRun', { count, when })

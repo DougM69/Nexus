@@ -2008,6 +2008,7 @@ export const EN = {
   'logbook.undo': 'Undo',
   'logbook.import.undone': 'Import undone',
   'logbook.purge.undone': 'Purge undone',
+  'logbook.contestColumns.undone': 'Copy of contest grid, name and QTH undone',
   // Recently deleted: the contacts taken out of the log and not put back, each with Restore.
   'logbook.deleted.button': 'Recently deleted',
   'logbook.deleted.title': 'Recently deleted',
@@ -2034,6 +2035,13 @@ export const EN = {
   },
   'logbook.deleted.undoPurge': 'Undo this purge',
   'logbook.deleted.undoImport': 'Undo this import',
+  // The one-time copy of a merged contest contact's received grid, name and QTH into its own
+  // fields, listed so it can be undone as one change.
+  'logbook.deleted.run.contestColumns': {
+    one: 'Contest grid, name and QTH copied into {{count}} contact · {{when}}',
+    other: 'Contest grid, name and QTH copied into {{count}} contacts · {{when}}',
+  },
+  'logbook.deleted.undoContestColumns': 'Undo this copy',
   // A whole undo of a purge or an import, listed so it can be redone after its own toast has gone.
   'logbook.deleted.run.undo': {
     one: 'Undo of {{count}} contact · {{when}}',
@@ -2051,6 +2059,10 @@ export const EN = {
   'logbook.deleted.confirm.import': {
     one: 'Undo this import of {{count}} contact from {{when}}?',
     other: 'Undo this import of {{count}} contacts from {{when}}?',
+  },
+  'logbook.deleted.confirm.contestColumns': {
+    one: 'Undo copying the contest grid, name and QTH into {{count}} contact from {{when}}? The copied fields are blank again; the contest exchange keeps the values.',
+    other: 'Undo copying the contest grid, name and QTH into {{count}} contacts from {{when}}? The copied fields are blank again; the contest exchange keeps the values.',
   },
   'logbook.deleted.confirm.undoRun': {
     one: 'Redo the undo of {{count}} contact from {{when}}?',
@@ -2260,6 +2272,7 @@ export const EN = {
   'qso.history.source.import': 'import',
   'qso.history.source.fill': 'automatic fill',
   'qso.history.source.contest': 'contest log',
+  'qso.history.source.contestColumns': 'copy from the contest exchange',
   'qso.history.source.remote': 'Remote',
   'qso.history.source.file': 'another program',
   'qso.history.source.undo': 'undo',
@@ -9476,7 +9489,7 @@ export const EN = {
   'settings.confirmations.lotw.adifLocation.label': 'Sign from ADIF location (travelers)',
   'settings.confirmations.lotw.adifLocation.aria': 'Sign LoTW uploads from the ADIF location',
   'settings.confirmations.lotw.adifLocation.hint':
-    'Turn on if you set TQSL to <em>"use the location in the ADIF file"</em> and don\'t create named Station Locations (handy if you travel). Nexus then stamps your call + grid (STATION_CALLSIGN / MY_GRIDSQUARE) into the upload and omits the <code>-l</code> argument, so TQSL signs from those and the Station Location above isn\'t required. <b>The whole batch is signed from your current grid above</b>, so if you operate from more than one location, upload <em>before</em> you move — otherwise earlier contacts are signed with the new grid.',
+    'Turn on if you set TQSL to <em>"use the location in the ADIF file"</em> and don\'t create named Station Locations (handy if you travel). Nexus then stamps your call + grid (STATION_CALLSIGN / MY_GRIDSQUARE) into the upload and omits the <code>-l</code> argument, so TQSL signs from those and the Station Location above isn\'t required. <b>The whole batch is signed from your current grid above</b>, so if you operate from more than one location, upload <em>before</em> you move — otherwise earlier contacts are signed with the new grid. The exception is a VHF contest contact merged into the Logbook: it is signed with the grid you sent in its exchange (a rover\'s grid at that moment).',
   'settings.confirmations.lotw.tqslPath.label': 'TQSL path (optional)',
   'settings.confirmations.lotw.tqslPath.placeholder': 'auto-detect (leave blank)',
   'settings.confirmations.lotw.tqslPath.hint':

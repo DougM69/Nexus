@@ -548,8 +548,12 @@ fn keep_lotw_detail(rec: &mut QsoRecord, inc: &QsoRecord) {
             .filter(|v| !v.is_empty())
             .map(str::to_string)
     };
+    // What the log holds is read wherever the record keeps it (`record_field`): a merged contest
+    // contact's exchange columns hold what the other station sent, and a value LoTW wrote beside
+    // one of them would be a second, conflicting tag in every upload.
+    let held = crate::logbook::record_field;
     if let Some(grid) = given(&inc.grid) {
-        if take(rec, "GRIDSQUARE", rec.grid.as_deref()) {
+        if take(rec, "GRIDSQUARE", held(rec, "GRIDSQUARE")) {
             rec.grid = Some(grid);
             unmark_callbook_filled(rec, "GRIDSQUARE");
         }
@@ -570,7 +574,7 @@ fn keep_lotw_detail(rec: &mut QsoRecord, inc: &QsoRecord) {
         let Some(value) = crate::logbook::extra_field(inc, tag).filter(|v| !v.is_empty()) else {
             continue;
         };
-        if take(rec, tag, crate::logbook::extra_field(rec, tag)) {
+        if take(rec, tag, held(rec, tag)) {
             let value = value.to_string();
             crate::logbook::set_extra(rec, tag, Some(value));
             unmark_callbook_filled(rec, tag);
@@ -2170,6 +2174,28 @@ mod tests {
         let mut log = vec![under(w1aw_at(d, 12, 0), "K2DEF")];
         reconcile(&mut log, &[detail(w1aw_at(d, 12, 0))]);
         assert_eq!(log[0].grid, None);
+
+        // A merged contest contact holds what the other station SENT in its exchange columns
+        // (a grid, before the merge moved it to the record's own field; a zone and a county):
+        // that is a value the log holds, and LoTW writes no second, conflicting one beside it.
+        let mut merged = under(w1aw_at(d, 12, 0), "K2DEF");
+        merged.contest = Some(Box::new(crate::logbook::ContestFields {
+            adif: vec![
+                ("GRIDSQUARE".into(), "FN42".into()),
+                ("CQZ".into(), "4".into()),
+                ("CNTY".into(), "MA,ESSEX".into()),
+            ],
+            ..Default::default()
+        }));
+        let mut log = vec![merged.clone()];
+        reconcile_lotw(&mut log, &[detail(w1aw_at(d, 12, 0))], Some("K2DEF"));
+        let out = crate::logbook::adif_record(&log[0]);
+        for (tag, want) in [("GRIDSQUARE", "FN42"), ("CQZ", "4"), ("CNTY", "MA,ESSEX")] {
+            assert_eq!(out.matches(&format!("<{tag}:")).count(), 1, "{tag}: {out}");
+            assert_eq!(crate::logbook::record_field(&log[0], tag), Some(want));
+        }
+        // …and fills what the exchange did not carry.
+        assert_eq!(crate::logbook::extra_field(&log[0], "ITUZ"), Some("8"));
     }
 
     /// A contact naming no call of its own is the Settings call's: N2OLD's row in its minute

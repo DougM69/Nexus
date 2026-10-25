@@ -26,7 +26,7 @@
 //! callbook zone, filled first, would block LoTW's authoritative one for good, and WAZ would
 //! count the callbook's.
 
-use super::{extra_value, set_extra, valid_iota, QsoRecord};
+use super::{extra_value, record_field, set_extra, valid_iota, QsoRecord};
 
 /// The fields the callbook filled on this contact, as a comma-separated list of their ADIF names
 /// (see the module header). App-private, never sent.
@@ -157,11 +157,9 @@ fn us_county_entity(country: Option<&str>) -> bool {
 /// when the answer is this station's record and no park places the contact (module header).
 /// Every field written is named in [`CALLBOOK_FILLED_FIELD`].
 pub fn fill_from_callbook(rec: &mut QsoRecord, a: &CallbookAnswer) {
-    let contest: Vec<String> = rec
-        .contest
-        .as_deref()
-        .map(|c| c.adif.iter().map(|(t, _)| t.clone()).collect())
-        .unwrap_or_default();
+    // Whether the record carries the field anywhere: its own column, a contest exchange's (what
+    // the other station sent, which a callbook never overrides), or the passthrough.
+    let carried = |rec: &QsoRecord, tag: &str| record_field(rec, tag).is_some();
     let blank = |v: &Option<String>| v.as_deref().is_none_or(|v| v.trim().is_empty());
     let clean = |v: &Option<String>| {
         v.as_deref()
@@ -176,7 +174,7 @@ pub fn fill_from_callbook(rec: &mut QsoRecord, a: &CallbookAnswer) {
 
     // The modelled columns.
     let mut column = |rec: &mut QsoRecord, tag: &str, value: Option<String>| {
-        if contest.iter().any(|t| t == tag) {
+        if carried(rec, tag) {
             return;
         }
         let Some(v) = value else { return };
@@ -257,8 +255,7 @@ pub fn fill_from_callbook(rec: &mut QsoRecord, a: &CallbookAnswer) {
     }
     for (tag, value) in extra {
         let Some(v) = value else { continue };
-        if contest.iter().any(|t| t == tag) || extra_value(rec, tag).is_some_and(|v| !v.is_empty())
-        {
+        if carried(rec, tag) {
             continue;
         }
         set_extra(rec, tag, Some(v));
@@ -459,6 +456,31 @@ mod tests {
         assert_eq!(extra_value(&r, "CQZ"), None);
         assert_eq!(r.state, None);
         assert_eq!(value_of(&r, "ITUZ"), Some("8"));
+        // The zone they sent is the record's zone, written once.
+        assert_eq!(crate::logbook::record_cq_zone(&r), Some(5));
+        assert_eq!(adif_record(&r).matches("<CQZ:").count(), 1);
+    }
+
+    /// The grid, name and QTH a contest merged before they reached the record's own fields are
+    /// still the exchange's: the callbook writes none of them beside it.
+    #[test]
+    fn an_older_merged_rows_exchange_owns_its_grid_name_and_qth() {
+        let mut r = rec("W1ABC");
+        r.contest = Some(Box::new(crate::logbook::ContestFields {
+            adif: vec![
+                ("GRIDSQUARE".into(), "FN31".into()),
+                ("NAME".into(), "BOB".into()),
+                ("QTH".into(), "BOSTON".into()),
+            ],
+            ..Default::default()
+        }));
+        fill_from_callbook(&mut r, &answer("W1ABC"));
+        assert_eq!((&r.grid, &r.name, &r.qth), (&None, &None, &None));
+        let out = adif_record(&r);
+        for tag in ["GRIDSQUARE", "NAME", "QTH"] {
+            assert_eq!(out.matches(&format!("<{tag}:")).count(), 1, "{out}");
+            assert!(!is_callbook_filled(&r, tag));
+        }
     }
 
     /// A malformed value is absence: a grid that is not a locator, an IOTA that is not a

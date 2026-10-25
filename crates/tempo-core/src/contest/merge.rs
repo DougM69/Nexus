@@ -464,7 +464,7 @@ fn record_for(
     let (rst_sent, rst_rcvd) = (rst_of(&sent, spec), rst_of(&q.rx, spec));
     // The serial it sent, or in a contest that sends none the number the log gave it.
     let (stx, srx) = (serial_of(&sent, spec).or(number), serial_of(&q.rx, spec));
-    let contest = ContestFields {
+    let mut contest = ContestFields {
         session: id.session.clone(),
         // A mode-split contest has a distinct id per mode, and a general-log record
         // is one row, so it resolves against ITS OWN class. `Err` is unreachable for
@@ -500,20 +500,33 @@ fn record_for(
             .collect(),
         qid: id.qid.clone(),
     };
+    // ⭐ THE RECEIVED COLUMNS THE LOGBOOK HOLDS IN A FIELD OF ITS OWN — the grid a VHF contest's
+    // exchange carries, a name and a QTH — moved out of the contest columns into that field, as
+    // the reports and serials above are. Left there, the value reached the file and never the
+    // Logbook's own column: a VHF contest's grids were missing from the Grid column and from
+    // everything that reads it until the row was imported again. Moved rather than copied, so
+    // the file writes each tag once.
+    let mut own = |tag: &str| {
+        let at = contest.adif.iter().position(|(t, _)| t == tag)?;
+        Some(contest.adif.remove(at).1)
+    };
+    let (their_grid, name, qth) = (own("GRIDSQUARE"), own("NAME"), own("QTH"));
     // The grid stamped on the row at log time, unless the exchange itself sent one (a VHF
     // contest's `GRID`, a rover's grid at that moment): that is written as `MY_GRIDSQUARE`
     // from the contest's own columns, and wins.
     let my_grid = Some(q.grid.clone()).filter(|g| {
         !g.trim().is_empty() && !contest.adif.iter().any(|(t, _)| t == "MY_GRIDSQUARE")
     });
-    let station_callsign = [&q.on_air_call, &log.mycall]
+    // The call the contact went out under: a club's rebuild names a GOTA station's own
+    // ([`LoggedQso::station_call`]), else the call on the air when it was logged, else the log's.
+    let station_callsign = [&q.station_call, &q.on_air_call, &log.mycall]
         .into_iter()
         .find(|c| !c.trim().is_empty())
         .cloned();
     let mut rec = QsoRecord {
         id: None,
         call: q.call.clone(),
-        grid: None,
+        grid: their_grid,
         country: q.entity.clone(),
         // ⭐ THE STATE THEY SENT, where the exchange carries one (see `received_state` for
         // what counts). Written before the engine's merge-time fill, which resolves only
@@ -563,8 +576,10 @@ fn record_for(
         mode: q.recorded_mode().to_string(),
         rst_sent,
         rst_rcvd,
-        name: None,
-        qth: None,
+        name,
+        qth,
+        // A contest row holds no comment and no private note: the entry strip takes the call
+        // and the exchange, nothing else ([`LoggedQso`]).
         comment: None,
         notes: None,
         // The power stamped on the row at log time, as the general log writes it; a row from
@@ -589,6 +604,8 @@ fn record_for(
         credit_granted: Vec::new(),
         credit_submitted: Vec::new(),
         upload: UploadState::default(),
+        // Nor a park, summit or island reference, either side's: no exchange carries one and the
+        // row has no field for one, so there is nothing here to carry, not something dropped.
         ota: crate::logbook::Ota::default(),
         dxcc: None,
         // ⭐ **THE BIRD SURVIVES THE MERGE.** These were hardcoded `None`, which was true
@@ -1232,6 +1249,330 @@ mod tests {
         assert_eq!(out.matches("<MY_GRIDSQUARE:").count(), 1, "{out}");
         assert!(out.contains("<MY_GRIDSQUARE:4>EN53"), "{out}");
         assert!(crate::logbook::self_filled(r).is_empty());
+    }
+
+    /// ⭐ **EVERY FIELD A CONTEST ROW HOLDS REACHES THE LOGBOOK, BY VALUE.** The row is
+    /// destructured with no `..`, so a field added to [`LoggedQso`] does not compile here until
+    /// this test says where it lands in the Logbook, or why it has no place there. Every value is
+    /// distinct from every other and from what the log would stamp by itself, so a field read
+    /// from the wrong place fails rather than agreeing by accident.
+    ///
+    /// ARRL January VHF because its exchange RECEIVES a grid: the one shipped exchange column the
+    /// Logbook models in a field of its own, which the merge left in the contest columns only, so
+    /// a VHF contest's grids never reached the Logbook's grid column nor anything that reads it.
+    #[test]
+    fn every_field_a_contest_row_holds_reaches_the_logbook_by_value() {
+        let rs = crate::fd_rules::ruleset_by_id("arrlvhf_jan", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        let data = crate::contest::StationData {
+            mycall: "W9XYZ".into(),
+            mygrid: "EN53".into(),
+            ..Default::default()
+        };
+        let session = ContestSession::for_ruleset(rs, &data).expect("the session builds");
+        let mut log = FieldDayLog::new("W9XYZ", session, "2m");
+        log.operator = "K9OP".into();
+        log.on_air_call = "K9AIR".into();
+        log.rig = "IC-9700".into();
+        log.tx_power = "50".into();
+        log.grid = "EN51".into();
+        let rx = [("GRID".to_string(), "FN31".to_string())];
+        assert!(log.log_fields_at("K1ABC", &rx, "PH", "USB", 7, 1_782_583_500));
+        {
+            // What the log path stamps from the radio, the country file and a club's rebuild.
+            let q = &mut log.qsos_mut()[0];
+            q.entity = Some("United States".into());
+            q.continent = Some("NA".into());
+            q.freq_khz = 144_200;
+            q.on_air_hz = 144_201_500;
+            q.freq_rx_hz = Some(144_210_000);
+            q.sat = Some(crate::fieldday::SatLeg {
+                band: "2m".into(),
+                down_hz: 145_960_000,
+                bird: "IO-117".into(),
+                name: Some("IO-117".into()),
+                ..Default::default()
+            });
+            q.station_call = "K9GOTA".into();
+        }
+        let row = log.qsos()[0].clone();
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 1);
+        let rec = lb.records()[0].clone();
+        let c = rec.contest.as_deref().expect("the contest provenance");
+        let path = scratch_adi();
+        lb.save(&path).expect("write log.adi");
+        let reborn = Logbook::load(&path).records()[0].clone();
+        let _ = std::fs::remove_file(&path);
+        // …and through the logbook database, which (unlike the file) gives the contest columns
+        // back as contest columns: the store a restart reads.
+        let mut db = crate::logbook::sqlite::LogDb::open_in_memory().unwrap();
+        db.insert(&rec, crate::logbook::sqlite::Resolved::default())
+            .unwrap();
+        let stored = db.load_all().unwrap().remove(0);
+        let (out, back, kept) = (
+            crate::logbook::adif_record(&rec),
+            crate::logbook::adif_record(&reborn),
+            crate::logbook::adif_record(&stored),
+        );
+        // Once, with this value, in the file every upload is made from, before and after a restart.
+        let once = |tag: &str, val: &str| {
+            let want = format!("<{tag}:{}>{val}", val.len());
+            [&out, &back, &kept]
+                .iter()
+                .all(|f| f.contains(&want) && f.matches(&format!("<{tag}:")).count() == 1)
+        };
+        let LoggedQso {
+            call,
+            rx,
+            tx,
+            role,
+            entity,
+            continent,
+            prefix,
+            band,
+            freq_khz,
+            on_air_hz,
+            freq_rx_hz,
+            mode,
+            submode,
+            slot,
+            when_unix,
+            seq,
+            dupe,
+            sat,
+            operator,
+            station_call,
+            on_air_call,
+            rig,
+            tx_power,
+            grid,
+        } = row.clone();
+        let checks: Vec<(&str, bool)> = vec![
+            ("call", rec.call == call && reborn.call == call),
+            (
+                "rx",
+                c.rcvd == pairs(&rx)
+                    && rec.grid.as_deref() == Some("FN31")
+                    && reborn.grid.as_deref() == Some("FN31")
+                    && stored.grid.as_deref() == Some("FN31")
+                    && once("GRIDSQUARE", "FN31"),
+            ),
+            (
+                "tx",
+                c.sent == pairs(&tx)
+                    && tx.iter().any(|v| v.raw == "EN53")
+                    && once("MY_GRIDSQUARE", "EN53"),
+            ),
+            // Which slots the row sent and received, and so which columns the two above write.
+            (
+                "role",
+                crate::contest::role_for(&row, log.session.exchange)
+                    .id
+                    .eq(&role)
+                    && c.sent.len()
+                        == crate::contest::role_for(&row, log.session.exchange)
+                            .sends
+                            .len(),
+            ),
+            ("entity", entity.is_some() && rec.country == entity),
+            (
+                "continent",
+                once("CONT", continent.as_deref().unwrap_or("?")),
+            ),
+            // Derived from the call by the sponsor's rule, for scoring; the call is the fact.
+            ("prefix", prefix.is_some()),
+            ("band", rec.band == band && once("BAND", &band)),
+            // The dial, which the on-air frequency below supersedes; a row with none falls back
+            // to it (`a_merged_row_carries_the_frequency_it_was_worked_on`).
+            ("freq_khz", freq_khz == 144_200),
+            ("on_air_hz", rec.freq_mhz == on_air_hz as f64 / 1e6),
+            (
+                "freq_rx_hz",
+                rec.freq_rx_mhz == freq_rx_hz.map(|hz| hz as f64 / 1e6),
+            ),
+            ("mode", mode == "PH" && rec.mode == "SSB"),
+            ("submode", once("SUBMODE", &submode)),
+            // The digital slot the row was decoded in: a property of the decode, not the contact.
+            ("slot", slot == 7),
+            (
+                "when_unix",
+                rec.when_unix == when_unix && reborn.when_unix == when_unix,
+            ),
+            ("seq", c.qid == qid_for(&session_of(&log, &row), "pos", seq)),
+            // A fact about the contest LOG, re-derived from its other rows; the contact is real.
+            ("dupe", !dupe),
+            (
+                "sat",
+                once(
+                    "SAT_NAME",
+                    sat.and_then(|s| s.name).as_deref().unwrap_or("?"),
+                ) && once("PROP_MODE", "SAT"),
+            ),
+            ("operator", once("OPERATOR", &operator)),
+            ("station_call", once("STATION_CALLSIGN", &station_call)),
+            // Shadowed above by the club's call; its own leg is below.
+            ("on_air_call", on_air_call == "K9AIR"),
+            ("rig", once("MY_RIG", &rig)),
+            ("tx_power", rec.tx_power == tx_power.parse().ok()),
+            // The exchange's own sent grid wins over this stamp (`a_vhf_rows_sent_grid_wins…`).
+            ("grid", grid == "EN51" && !out.contains("EN51")),
+        ];
+        let failed: Vec<&str> = checks
+            .iter()
+            .filter(|(_, ok)| !ok)
+            .map(|(f, _)| *f)
+            .collect();
+        assert!(
+            failed.is_empty(),
+            "lost or changed: {failed:?}\n{out}\n{back}"
+        );
+
+        // The call it went out under, for the row a club's rebuild did not re-sign.
+        log.qsos_mut()[0].station_call.clear();
+        let mut own = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut own).added(), 1);
+        assert_eq!(own.records()[0].station_callsign.as_deref(), Some("K9AIR"));
+
+        // A contest row holds no park, summit, comment, note or name of the other operator
+        // outside its exchange: the entry strip takes the call and the exchange, nothing else.
+        // So the Logbook row has none, rather than having had one taken away.
+        assert_eq!(rec.ota, crate::logbook::Ota::default());
+        assert_eq!(
+            (&rec.name, &rec.qth, &rec.comment, &rec.notes),
+            (&None, &None, &None, &None)
+        );
+
+        // Twice is once.
+        let again = merge_into_general(&log, "pos", &mut lb);
+        assert_eq!(
+            (again.added(), again.already, lb.records().len()),
+            (0, 1, 1)
+        );
+    }
+
+    /// A name and a QTH the other station SENT, in an exchange that carries them, are the
+    /// Logbook's own Name and QTH — not a contest column the Name column never shows — and are
+    /// written once.
+    #[test]
+    fn a_name_and_qth_they_sent_are_the_logbooks_name_and_qth() {
+        let mut session = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        session.exchange = crate::contest::exchanges::casual();
+        let mut log = FieldDayLog::new("W9XYZ", session, "20m");
+        let rx = [
+            ("RST".to_string(), "579".to_string()),
+            ("NAME".to_string(), "BOB".to_string()),
+            ("QTH".to_string(), "BOSTON".to_string()),
+        ];
+        assert!(log.log_fields_at("K1ABC", &rx, "CW", "", 0, 1_782_583_500));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 1);
+        let rec = &lb.records()[0];
+        assert_eq!(
+            (rec.name.as_deref(), rec.qth.as_deref()),
+            (Some("BOB"), Some("BOSTON"))
+        );
+        let out = crate::logbook::adif_record(rec);
+        assert_eq!(out.matches("<NAME:").count(), 1, "{out}");
+        assert_eq!(out.matches("<QTH:").count(), 1, "{out}");
+    }
+
+    /// ★ The CQ zone the other station SENT in a CQ WW exchange is the zone the contact carries,
+    /// wherever it is read: on the merged record, back from the logbook database, and from the
+    /// narrow read the award folds make. It stays a contest column (the database keeps those
+    /// apart from the passthrough, `sqlite.rs` says why), so a reader of the passthrough alone
+    /// counted the country file's zone instead: a W1 call in California sending zone 3 was
+    /// credited zone 5.
+    #[test]
+    fn the_cq_zone_they_sent_is_the_zone_the_contact_carries() {
+        use crate::logbook::record_cq_zone;
+        use crate::logbook::sqlite::{LogDb, Narrow, Order, Resolved, Scope};
+        let rs = crate::fd_rules::ruleset_by_id("cqww_cw", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        // CQ WW's exchange on a session this test binary can build: CQ WW itself refuses a build
+        // with no country file to score by, and the merge reads only the exchange.
+        let mut session = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        session.exchange = rs.exchange;
+        let mut log = FieldDayLog::new("W9XYZ", session, "20m");
+        let rx = [
+            ("RST".to_string(), "599".to_string()),
+            ("ZN".to_string(), "3".to_string()),
+        ];
+        assert!(log.log_fields_at("W1AW", &rx, "CW", "", 0, 1_782_583_500));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 1);
+        let rec = lb.records()[0].clone();
+        // The premise: the zone is a contest column and not in the passthrough.
+        assert!(rec
+            .contest
+            .as_deref()
+            .is_some_and(|c| c.adif.contains(&("CQZ".to_string(), "3".to_string()))));
+        assert_eq!(crate::logbook::extra_field(&rec, "CQZ"), None);
+
+        assert_eq!(record_cq_zone(&rec), Some(3), "the merged record");
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert(&rec, Resolved::default()).unwrap();
+        let stored = db.load_all().unwrap().remove(0);
+        assert_eq!(record_cq_zone(&stored), Some(3), "back from the database");
+        let mut narrow = Vec::new();
+        db.each_narrow_with(
+            Narrow {
+                columns: &["call"],
+                uploads: false,
+            },
+            crate::logbook::AWARD_EXTRAS,
+            Scope::All,
+            Order::Log,
+            &mut |r| {
+                narrow.push(record_cq_zone(r));
+                std::ops::ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+        assert_eq!(narrow, [Some(3)], "the award folds' narrow read");
+        let out = crate::logbook::adif_record(&stored);
+        assert_eq!(out.matches("<CQZ:").count(), 1, "{out}");
+        assert!(out.contains("<CQZ:1>3"), "{out}");
+    }
+
+    /// A contact edited in the contest log before the merge reaches the Logbook as edited.
+    #[test]
+    fn a_contact_edited_before_the_merge_merges_as_edited() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        assert!(log.log_mode_at("K1ABD", "2A", "EMA", "CW", 0, 1_782_583_500));
+        let edit = crate::fieldday::ContactEdit {
+            call: "K1ABC".into(),
+            rows: vec![vec![
+                ("CLASS".to_string(), "3F".to_string()),
+                ("SECTION".to_string(), "CT".to_string()),
+            ]],
+            band: "40m".into(),
+            mode: "USB".into(),
+        };
+        log.edit_contact("K1ABD", 1_782_583_500, &edit)
+            .expect("the edit applies");
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 1);
+        let rec = &lb.records()[0];
+        let c = rec.contest.as_deref().expect("contest");
+        assert_eq!(
+            (rec.call.as_str(), rec.band.as_str(), rec.mode.as_str()),
+            ("K1ABC", "40m", "SSB")
+        );
+        assert_eq!(
+            c.rcvd,
+            [
+                ("CLASS".to_string(), "3F".to_string()),
+                ("SECTION".to_string(), "CT".to_string())
+            ]
+        );
+        assert!(c
+            .adif
+            .contains(&("ARRL_SECT".to_string(), "CT".to_string())));
     }
 
     #[test]

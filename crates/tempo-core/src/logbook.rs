@@ -263,7 +263,11 @@ pub const EQSL_AG_FIELD: &str = "APP_EQSL_AG";
 /// The passthrough fields ([`QsoRecord::extra`]) the award folds read beside their columns: the
 /// contact's CQ zone, LoTW's DXCC and eQSL's Authenticity-Guaranteed mark. What a narrow read of
 /// the store asks for them by (`sqlite::LogDb::each_narrow_with`).
-pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD, EQSL_AG_FIELD];
+///
+/// And `STATE`, which no passthrough holds: asked for here, the narrow read brings a merged
+/// contest contact's exchange `STATE` with it, the state its upload carries and WAS counts
+/// ([`record_field`]).
+pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD, EQSL_AG_FIELD, "STATE"];
 
 /// A passthrough field's value, by its (uppercased) ADIF name.
 fn extra_value<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
@@ -273,10 +277,11 @@ fn extra_value<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.trim())
 }
 
-/// ADIF `CQZ` as the record carries it — the contacted station's CQ zone. `None` when it has none
-/// or it is not a number; whether the number is a zone is the awards' rule to apply.
+/// ADIF `CQZ` as the record carries it ([`record_field`]) — the contacted station's CQ zone, the
+/// one a CQ WW exchange sent among them. `None` when it has none or it is not a number; whether
+/// the number is a zone is the awards' rule to apply.
 pub fn record_cq_zone(r: &QsoRecord) -> Option<u8> {
-    extra_value(r, "CQZ")?.parse().ok()
+    record_field(r, "CQZ")?.parse().ok()
 }
 
 /// LoTW's DXCC for the contact, where it differs from the log's own ([`LOTW_DXCC_FIELD`]).
@@ -288,6 +293,86 @@ pub fn record_lotw_dxcc(r: &QsoRecord) -> Option<u32> {
 /// qualifies the record's eQSL confirmation and means nothing without one.
 pub fn record_eqsl_ag(r: &QsoRecord) -> bool {
     extra_value(r, EQSL_AG_FIELD).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
+}
+
+/// ⭐ **A field's value by its (uppercased) ADIF name, wherever the record keeps it** — the value
+/// the record's own ADIF writes first for that tag. Blank is none.
+///
+/// The order is the writer's: a field the log models in a column of its own (the grid, name and
+/// QTH), else a contest exchange's directed column ([`ContestFields::adif`]), else the passthrough
+/// ([`QsoRecord::extra`]). STATE is the one exception, and it is the writer's too: the state the
+/// other station SENT in the exchange is written in place of the column's.
+///
+/// One reading for every reader that asks for a tag a contest exchange can carry. A merged contest
+/// contact holds what the other station sent — a CQ WW zone, a county, a section, a class — in its
+/// contest columns and not in the passthrough (`sqlite.rs` says why they stay there), so a reader
+/// of the passthrough alone counted that contact as if it carried none: WAZ credited the country
+/// file's zone instead of the one the station sent. Contacts merged before the merge moved the
+/// received grid, name and QTH into their own columns still hold those here as well.
+pub fn record_field<'a>(r: &'a QsoRecord, tag: &str) -> Option<&'a str> {
+    let given = |v: Option<&'a str>| v.map(str::trim).filter(|v| !v.is_empty());
+    let own = given(match tag {
+        "GRIDSQUARE" => r.grid.as_deref(),
+        "NAME" => r.name.as_deref(),
+        "QTH" => r.qth.as_deref(),
+        "STATE" => r.state.as_deref(),
+        _ => None,
+    });
+    let contest = || {
+        given(r.contest.as_deref().and_then(|c| {
+            c.adif
+                .iter()
+                .find(|(t, _)| t == tag)
+                .map(|(_, v)| v.as_str())
+        }))
+    };
+    let own_first = if tag == "STATE" {
+        contest().or(own)
+    } else {
+        own.or_else(contest)
+    };
+    own_first.or_else(|| given(extra_value(r, tag)))
+}
+
+/// The received fields a contest merge once left only in the contest's columns, which it now
+/// writes into the record's own: [`with_contest_columns_copied`]'s.
+pub const CONTEST_COPIED_TAGS: [&str; 3] = ["GRIDSQUARE", "NAME", "QTH"];
+
+/// ⭐ **A contact merged before the merge wrote a received grid, name and QTH into the record's
+/// own fields, with them copied there** — or `None` when it has none to copy. Each of
+/// [`CONTEST_COPIED_TAGS`] whose own field is blank and whose contest column holds a value (the
+/// first, as [`record_field`] reads it) takes that value, exactly; a field that holds anything is
+/// never touched. The contest columns are left exactly as they were: the ADIF writer and
+/// [`record_field`] already take the own field first, so the column is never written twice, and
+/// an undo of the copy only blanks the field again — the value is never in neither place.
+///
+/// Every reader then finds the value where the log's own columns are read — the Grid column, its
+/// sort and search, VUCC and the needs, the edit form — and the ADIF the contact writes holds the
+/// same one tag with the same value, from the field. Nothing else about the record moves: its
+/// stamps, its passthrough and its contest block are as they were.
+pub fn with_contest_columns_copied(r: &QsoRecord) -> Option<QsoRecord> {
+    let columns = &r.contest.as_deref()?.adif;
+    let mut out = r.clone();
+    let mut copied = false;
+    for tag in CONTEST_COPIED_TAGS {
+        let Some((_, value)) = columns.iter().find(|(t, _)| t == tag) else {
+            continue;
+        };
+        if value.trim().is_empty() {
+            continue;
+        }
+        let own = match tag {
+            "GRIDSQUARE" => &mut out.grid,
+            "NAME" => &mut out.name,
+            _ => &mut out.qth,
+        };
+        if own.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+            continue;
+        }
+        *own = Some(value.clone());
+        copied = true;
+    }
+    copied.then_some(out)
 }
 
 /// A passthrough field's value, by its (uppercased) ADIF name — [`QsoRecord::extra`] read the way
@@ -1046,7 +1131,7 @@ pub mod reader;
 mod records;
 pub mod sqlite;
 pub mod writer;
-pub use edit::{OtaEdit, QsoEdit};
+pub use edit::{edited_state, OtaEdit, QsoEdit};
 pub use id::{Minter, RecordId};
 pub use op::{Effects, LogOp, RowAfter, UploadService};
 use records::Records;
@@ -3490,7 +3575,7 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     // ordinary ADIF they are — `STATE` into `state`, `MY_ARRL_SECT` and friends into
     // `extra`, re-emitted from there exactly once. That is the honest shape, not a
     // gap: see the field's own doc comment, which is where this is explained.
-    out.push_str(&contest_fields(r.contest.as_deref()));
+    out.push_str(&contest_fields(r));
     // The record's identity (APP_-namespaced; other loggers ignore it, and one that drops it
     // hands back a row the next load gives a provisional id).
     if let Some(id) = &r.id {
@@ -3512,6 +3597,19 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         {
             continue;
         }
+        // Nor ever a history-only tag ([`history::HISTORY_ONLY_PREFIX`]), for any audience: only a
+        // build from before it could have left one in the passthrough, and a read heals it
+        // ([`history::heal_history_only`]); this keeps it out of every file and upload anyway.
+        if k.starts_with(history::HISTORY_ONLY_PREFIX) {
+            continue;
+        }
+        // Nor a tag the contest exchange already wrote (`contest_fields` writes every non-empty
+        // one): a confirmation download used to fill a CQ zone or county here beside the one
+        // the station sent, and the file then carried two, which can disagree. The exchange's
+        // is the one [`record_field`] reads; the other stays in the store.
+        if contest_adif.iter().any(|(t, cv)| t == k && !cv.is_empty()) {
+            continue;
+        }
         out.push_str(&field(k, v));
     }
     out.push_str("<EOR>\n");
@@ -3521,8 +3619,8 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
 /// The contest half of [`adif_record`] — every tag omitted when it has nothing to say,
 /// so a record with `contest: None` (and one whose contest block is empty) writes
 /// exactly the bytes it wrote before this existed.
-fn contest_fields(c: Option<&ContestFields>) -> String {
-    let Some(c) = c else {
+fn contest_fields(r: &QsoRecord) -> String {
+    let Some(c) = r.contest.as_deref() else {
         return String::new();
     };
     let mut out = String::new();
@@ -3547,8 +3645,26 @@ fn contest_fields(c: Option<&ContestFields>) -> String {
     // The exchange's own standard columns, already directed (§2.1.1). Written before
     // the `APP_NEXUS_*` carrier so a reader that stops at the modelled fields still
     // gets the section, the county and the state under the tags every logger knows.
+    //
+    // ⭐ Minus a received grid, name or QTH the record already wrote from its own field: the
+    // duplicate-`STATE` guard's other half, the other way round. A contact merged before the
+    // merge moved those into the record's own fields still holds them here, and once the
+    // operator gives it a grid of their own in the Logbook (an edit keeps the stored contest
+    // block) the upload would carry two conflicting `GRIDSQUARE` tags. The field is the one the
+    // operator can edit, so it wins; [`record_field`] reads them in the same order.
+    let wrote_own = |tag: &str| {
+        let own = match tag {
+            "GRIDSQUARE" => &r.grid,
+            "NAME" => &r.name,
+            "QTH" => &r.qth,
+            _ => return false,
+        };
+        own.as_deref().is_some_and(|v| !v.trim().is_empty())
+    };
     for (tag, val) in &c.adif {
-        text(tag, val);
+        if !wrote_own(tag) {
+            text(tag, val);
+        }
     }
     text("APP_NEXUS_SESSION", &c.session);
     text("APP_NEXUS_QID", &c.qid);
@@ -3651,8 +3767,13 @@ pub fn adif_record_with_station(r: &QsoRecord, station_call: &str, my_grid: &str
     // Same duplicate-field guard for MY_GRIDSQUARE: a record carrying its own (#239 modelled
     // it; an import used to park it in `extra`) has it emitted by adif_record already —
     // appending a second, conflicting one hands TQSL undefined territory on the
-    // award-signing path. The `extra` check stays for a record built before the field existed.
-    if !grid.is_empty() && r.my_grid.is_none() && !r.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE")
+    // award-signing path. The `extra` check stays for a record built before the field existed;
+    // a merged VHF contest contact carries the grid it SENT (a rover's, at that moment) in its
+    // contest columns ([`record_field`]), and that one is the contact's too.
+    if !grid.is_empty()
+        && r.my_grid.is_none()
+        && !r.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE")
+        && record_field(r, "MY_GRIDSQUARE").is_none()
     {
         extra.push_str(&field("MY_GRIDSQUARE", grid));
     }
@@ -4935,6 +5056,8 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             extra
         },
     };
+    // A history-only tag an older build left in the passthrough goes back where it belongs.
+    history::heal_history_only(&mut rec);
     // Every ADIF read hands back a contact in the log's one form: another logger's `20M` and a
     // sideband in MODE included ([`canonical`]).
     canonical::contact(&mut rec);
@@ -5573,6 +5696,184 @@ mod tests {
             extra: Vec::new(),
             contest: None,
         }
+    }
+
+    /// ★ A contact merged from a contest before the merge put the received grid, name and QTH in
+    /// the record's own fields holds them only in its contest columns. Its file writes each of
+    /// them ONCE, and every reader of the field sees it; and once the operator gives it one of
+    /// their own (a Logbook edit keeps the stored contest block), the file writes the operator's
+    /// and not the old exchange column beside it: two conflicting `GRIDSQUARE` tags in an
+    /// upload are undefined territory to every service that reads them.
+    #[test]
+    fn an_older_merged_rows_grid_name_and_qth_are_written_once() {
+        let mut old = rec("K1ABC", "2m", 1_782_583_500);
+        (old.grid, old.name, old.qth) = (None, None, None);
+        old.contest = Some(Box::new(ContestFields {
+            contest_id: "ARRL-VHF-JAN".into(),
+            adif: vec![
+                ("MY_GRIDSQUARE".into(), "EN53".into()),
+                ("GRIDSQUARE".into(), "FN31".into()),
+                ("NAME".into(), "BOB".into()),
+                ("QTH".into(), "BOSTON".into()),
+            ],
+            ..Default::default()
+        }));
+        let out = adif_record(&old);
+        for (tag, want) in [("GRIDSQUARE", "FN31"), ("NAME", "BOB"), ("QTH", "BOSTON")] {
+            assert_eq!(out.matches(&format!("<{tag}:")).count(), 1, "{tag}: {out}");
+            assert!(
+                out.contains(&format!("<{tag}:{}>{want}", want.len())),
+                "{out}"
+            );
+            assert_eq!(record_field(&old, tag), Some(want), "{tag}");
+        }
+
+        // The operator's own grid and name, given later: the file and every reader agree on them.
+        let mut edited = old.clone();
+        (edited.grid, edited.name) = (Some("FN32".into()), Some("ROBERT".into()));
+        let out = adif_record(&edited);
+        for (tag, want) in [
+            ("GRIDSQUARE", "FN32"),
+            ("NAME", "ROBERT"),
+            ("QTH", "BOSTON"),
+        ] {
+            assert_eq!(out.matches(&format!("<{tag}:")).count(), 1, "{tag}: {out}");
+            assert!(
+                out.contains(&format!("<{tag}:{}>{want}", want.len())),
+                "{out}"
+            );
+            assert_eq!(record_field(&edited, tag), Some(want), "{tag}");
+        }
+        // The sent grid is another tag, and stays.
+        assert_eq!(out.matches("<MY_GRIDSQUARE:4>EN53").count(), 1, "{out}");
+    }
+
+    /// ★ The one-time copy of a merged contact's received grid, name and QTH: each into its own
+    /// field ONLY where that field is blank, its contest column left as it was; a field holding
+    /// anything is never touched; a contact with nothing to copy is not changed at all. The
+    /// upload carries the same one GRIDSQUARE, NAME and QTH before and after.
+    #[test]
+    fn the_contest_column_copy_fills_only_blank_fields() {
+        let merged = |grid: Option<&str>, adif: &[(&str, &str)]| {
+            let mut r = rec("K1ABC", "2m", 1_782_583_500);
+            (r.grid, r.name, r.qth) = (grid.map(str::to_string), None, None);
+            r.contest = Some(Box::new(ContestFields {
+                contest_id: "ARRL-VHF-JAN".into(),
+                session: "s".into(),
+                adif: adif
+                    .iter()
+                    .map(|(t, v)| (t.to_string(), v.to_string()))
+                    .collect(),
+                ..Default::default()
+            }));
+            r
+        };
+        let all = [
+            ("MY_GRIDSQUARE", "EN53"),
+            ("GRIDSQUARE", "FN31"),
+            ("NAME", "BOB"),
+            ("QTH", "BOSTON"),
+        ];
+        let upload = |r: &QsoRecord| {
+            let out = adif_record(r);
+            ["GRIDSQUARE", "NAME", "QTH"].map(|tag| {
+                assert!(out.matches(&format!("<{tag}:")).count() <= 1, "{out}");
+                record_field(r, tag).map(str::to_string)
+            })
+        };
+
+        // Blank fields: all three are copied, and every column stays.
+        let blank = merged(None, &all);
+        let copied = with_contest_columns_copied(&blank).expect("copies");
+        assert_eq!(
+            (
+                copied.grid.as_deref(),
+                copied.name.as_deref(),
+                copied.qth.as_deref()
+            ),
+            (Some("FN31"), Some("BOB"), Some("BOSTON"))
+        );
+        assert_eq!(copied.contest, blank.contest, "the columns are untouched");
+        assert_eq!(upload(&copied), upload(&blank));
+        let mut rest = copied.clone();
+        (rest.grid, rest.name, rest.qth) = (None, None, None);
+        assert_eq!(rest, blank, "nothing else changed");
+
+        // A grid of the operator's own: never touched; the blank name and QTH are still copied.
+        let own = merged(Some("FN42"), &all);
+        let copied = with_contest_columns_copied(&own).expect("the name and QTH are copied");
+        assert_eq!(copied.grid.as_deref(), Some("FN42"));
+        assert_eq!(
+            (copied.name.as_deref(), copied.qth.as_deref()),
+            (Some("BOB"), Some("BOSTON"))
+        );
+        assert_eq!(copied.contest, own.contest);
+        assert_eq!(upload(&copied), upload(&own));
+
+        // Nothing to copy: no contest block, no such column, or a blank one.
+        let mut plain = rec("K1ABC", "2m", 1_782_583_500);
+        plain.grid = None;
+        assert_eq!(with_contest_columns_copied(&plain), None);
+        assert_eq!(with_contest_columns_copied(&merged(None, &all[..1])), None);
+        assert_eq!(
+            with_contest_columns_copied(&merged(None, &[("GRIDSQUARE", " ")])),
+            None
+        );
+        // And a second run over a copied contact copies nothing.
+        assert_eq!(
+            with_contest_columns_copied(&with_contest_columns_copied(&blank).unwrap()),
+            None
+        );
+    }
+
+    /// ★ The one reading of a field by its ADIF name answers what the record's own upload file
+    /// says for that tag: the modelled field, else a contest exchange's column, else the
+    /// passthrough — except STATE, where the exchange's column is what the file writes. Every
+    /// value disagrees with every other, so a reader taking the wrong one fails.
+    #[test]
+    fn record_field_reads_what_the_file_writes() {
+        let mut r = rec("W1AW", "20m", 1_782_583_500);
+        r.state = Some("NY".into());
+        r.extra = vec![
+            ("CNTY".into(), "MA,ESSEX".into()),
+            ("CQZ".into(), "5".into()),
+            ("ITUZ".into(), "8".into()),
+        ];
+        r.contest = Some(Box::new(ContestFields {
+            adif: vec![
+                ("CQZ".into(), "3".into()),
+                ("STATE".into(), "CA".into()),
+                ("ARRL_SECT".into(), "SV".into()),
+                ("GRIDSQUARE".into(), "CM87".into()),
+            ],
+            ..Default::default()
+        }));
+        let out = adif_record(&r);
+        for (tag, want) in [
+            ("CQZ", Some("3")),
+            ("STATE", Some("CA")),
+            ("ARRL_SECT", Some("SV")),
+            ("GRIDSQUARE", Some("EN37")),
+            ("CNTY", Some("MA,ESSEX")),
+            ("ITUZ", Some("8")),
+            ("CLASS", None),
+        ] {
+            assert_eq!(record_field(&r, tag), want, "{tag}");
+            let first = out
+                .split(&format!("<{tag}:"))
+                .nth(1)
+                .map(|rest| &rest[rest.find('>').unwrap() + 1..])
+                .map(|v| &v[..v.find('<').unwrap_or(v.len())]);
+            assert_eq!(first, want, "the first {tag} the file writes: {out}");
+            // And the only one: a zone a service filled beside the one the station sent is
+            // never uploaded beside it.
+            let count = out.matches(&format!("<{tag}:")).count();
+            assert_eq!(count, usize::from(want.is_some()), "{tag}: {out}");
+        }
+        assert_eq!(record_cq_zone(&r), Some(3));
+        // A blank value is none, wherever it is.
+        r.contest.as_mut().unwrap().adif[0].1 = " ".into();
+        assert_eq!(record_field(&r, "CQZ"), Some("5"));
     }
 
     /// A hunter contact's state rides with its park through the ADIF this log writes and reads
@@ -7943,6 +8244,15 @@ mod tests {
         let out = adif_record_with_station(r, "KD9TAW", "EN52XX");
         assert_eq!(out.matches("MY_GRIDSQUARE").count(), 1);
         assert!(out.contains("EN52XX"));
+        // A merged VHF contest contact sent its grid in the exchange: that one is signed.
+        let mut rover = r.clone();
+        rover.contest = Some(Box::new(ContestFields {
+            adif: vec![("MY_GRIDSQUARE".into(), "EN53".into())],
+            ..Default::default()
+        }));
+        let out = adif_record_with_station(&rover, "KD9TAW", "EN52XX");
+        assert_eq!(out.matches("MY_GRIDSQUARE").count(), 1, "{out}");
+        assert!(out.contains("<MY_GRIDSQUARE:4>EN53"), "{out}");
     }
 
     #[test]

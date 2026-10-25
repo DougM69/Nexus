@@ -27,6 +27,7 @@ export function sourceWord(source: string): string {
     case 'import': return t('qso.history.source.import')
     case 'fill': return t('qso.history.source.fill')
     case 'contest': return t('qso.history.source.contest')
+    case 'contest-columns': return t('qso.history.source.contestColumns')
     case 'remote': return t('qso.history.source.remote')
     case 'file': return t('qso.history.source.file')
     case 'undo': return t('qso.history.source.undo')
