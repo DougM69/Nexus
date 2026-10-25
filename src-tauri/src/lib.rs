@@ -42934,15 +42934,15 @@ mod tests {
         }
     }
 
-    /// ⛔ A CAT broker client's key from 28.3 to 28.5 MHz for a Technician, with the radio in a DATA
-    /// submode: refused, and the connection log says why in the rule's own words. CONTROL: in
-    /// plain USB the same key is granted.
+    /// ⛔ A CAT broker client's key from 28.3 to 28.5 MHz for a Technician: refused whatever the
+    /// radio reads back, plain USB too, and the connection log says why in the rule's own words.
+    /// CONTROL: a General's key there in PKTUSB is granted.
     #[cfg(feature = "radio")]
     #[test]
-    fn the_broker_refuses_a_ten_meter_data_key_and_says_why() {
+    fn the_broker_refuses_every_ten_meter_key_for_a_technician_and_says_why() {
         use tempo_app::settings::{OperatingMode, Settings};
         use tempo_audio::rigctld_server::RigBackend;
-        let rig_in = |read_back: &str| {
+        let rig_in = |class: &str, read_back: &str| {
             let mut e = tempo_app::engine::Engine::with_settings(Settings {
                 operating_mode: OperatingMode::Phone,
                 band: "10m".into(),
@@ -42951,7 +42951,7 @@ mod tests {
                 cat_broker_ptt: true,
                 ..Settings::default()
             });
-            assert!(e.set_license_class("technician"));
+            assert!(e.set_license_class(class));
             e.set_tx_enabled(true);
             e.observe_rig_mode(read_back.into());
             assert!(e.tx_allowed(), "precondition: USB voice keys at 28.400");
@@ -42961,17 +42961,22 @@ mod tests {
             "refused PTT from a client: {}",
             tempo_app::engine::OUTSIDE_KEY_VOICE_ONLY
         );
-        assert!(
-            !rig_in("PKTUSB").set_ptt(true),
-            "a key in PKTUSB is refused"
-        );
+        for read_back in ["PKTUSB", "USB"] {
+            assert!(
+                !rig_in("technician", read_back).set_ptt(true),
+                "a key in {read_back} is refused"
+            );
+        }
         assert!(
             super::get_connection_log()
                 .iter()
                 .any(|e| e.connector == "CAT broker" && e.message == line),
             "the log names the rule: {line}"
         );
-        assert!(rig_in("USB").set_ptt(true), "control: plain USB keys");
+        assert!(
+            rig_in("general", "PKTUSB").set_ptt(true),
+            "control: a General keys"
+        );
     }
 
     /// #140, the reported half: the CAT broker answered `RPRT 0` to EVERY mode word. It

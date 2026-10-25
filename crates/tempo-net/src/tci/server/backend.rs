@@ -111,9 +111,8 @@ pub enum Refusal {
     /// Outside the licence: for an audio over, the whole transmit passband (item 5).
     Licence,
     /// A key where the licence allows only CW and single-sideband voice (a Novice or a
-    /// Technician from 28.3 to 28.5 MHz) while the radio is not known to be in plain USB or LSB
-    /// (item 5): in a DATA mode a program's audio may be a picture or data, which Nexus cannot
-    /// tell from voice.
+    /// Technician from 28.3 to 28.5 MHz), whatever the radio's mode (item 5): a program's audio
+    /// may be a picture or data, which Nexus cannot tell from voice.
     VoiceOnly,
     /// Something else owns the transmitter (item 6).
     Owner,
@@ -172,8 +171,7 @@ impl Refusal {
             Refusal::Licence => "outside the licence",
             Refusal::VoiceOnly => {
                 "on 28.3–28.5 MHz a Novice or Technician license allows only CW and \
-                 single-sideband voice, so a program may key there only while the radio is in \
-                 plain USB or LSB, not a DATA mode (or its mode is not known yet)"
+                 single-sideband voice, so Nexus does not let other programs key the radio there"
             }
             Refusal::Owner => "something else is transmitting",
             Refusal::ClockRepair => "the clock is being repaired",

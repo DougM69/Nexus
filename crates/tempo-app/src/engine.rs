@@ -1907,10 +1907,10 @@ const PHONE_USB_ONLY: &str = "TX locked — 60 m allows only USB phone. Pick USB
 const PHONE_TEN_METER_SSB_ONLY: &str = "TX locked — on 28.3–28.5 MHz a Novice or Technician \
      license allows only CW and single-sideband voice. Pick USB, LSB or AUTO.";
 /// Why the CAT broker refused a program's key from 28.3 to 28.5 MHz for a Novice or a Technician
-/// ([`Engine::outside_key_allowed`]), in the broker's connection-log line.
+/// ([`Engine::outside_key_allowed`]), in the broker's connection-log line. The TCI server's
+/// `Refusal::VoiceOnly` says the same words.
 pub const OUTSIDE_KEY_VOICE_ONLY: &str = "on 28.3–28.5 MHz a Novice or Technician license allows \
-     only CW and single-sideband voice, so another program may key there only while the radio is \
-     in plain USB or LSB, not a DATA mode (or its mode is not known yet)";
+     only CW and single-sideband voice, so Nexus does not let other programs key the radio there";
 /// What [`Engine::sstv_tx_gate`] answers for a Novice's or a Technician's picture from 28.3 to
 /// 28.5 MHz, where the frequency is fine for voice ([`Engine::sstv_picture_allowed`])…
 const SSTV_REFUSED_TEN_METER: &str = "SSTV not sent: on 28.3–28.5 MHz a Novice or Technician \
@@ -25746,25 +25746,18 @@ contact yourself."
     /// the TCI server keying the radio's microphone or an over of its own audio? Not where the
     /// class is held to CW and single-sideband voice ([`crate::privileges::cw_and_ssb_voice_only`]:
     /// a Novice or a Technician from 28.3 to 28.5 MHz, judged at every frequency the next over is
-    /// emitted on, as [`Self::sstv_picture_allowed`] judges a picture), unless the radio is in
-    /// plain USB or LSB ([`Self::radio_in_plain_sideband`]). Nexus cannot hear what such a program
-    /// sends, and in a DATA submode it is soundcard audio, a picture or data as easily as voice.
-    /// Every other class and frequency is unchanged. ANDed after [`Self::tx_allowed`] on every
-    /// outside key and re-read while one is held, so it can only ever refuse more; an un-key is
-    /// never judged.
+    /// emitted on, as [`Self::sstv_picture_allowed`] judges a picture), whatever mode the radio is
+    /// in. Nexus cannot hear what such a program sends, and neither the radio's mode nor its
+    /// read-back proves it is voice: plain USB can carry a soundcard picture or data as easily.
+    /// A broker client's key in the CW section is refused there too, though CW is allowed: a PTT
+    /// key carries whatever the program sends, so the rule refuses every outside key on that
+    /// segment. A TCI program's CW text is not such a key: Nexus's own keyer sends it, judged as
+    /// Nexus's own CW, as its PTT, voice keyer and SSTV paths are judged on their own. Every other
+    /// class and frequency is unchanged. ANDed after [`Self::tx_allowed`] on every outside key and
+    /// re-read while one is held, so it can only ever refuse more, and a held key drops when it
+    /// turns false (a retune into the segment, a class change); an un-key is never judged.
     pub fn outside_key_allowed(&self) -> bool {
-        self.sstv_picture_allowed() || self.radio_in_plain_sideband()
-    }
-
-    /// Is the radio known to be in plain USB or LSB: the mode it last read back, the word Nexus
-    /// commands the transmitting VFO, and a satellite uplink's own word while one is in force? Any
-    /// other word fails it (`PKTUSB`, `PKTLSB`, `DATA-U`, `USB-D`, AM, FM, a spelling this does not
-    /// know), and so does a radio that has read back no mode: unknown is refused.
-    fn radio_in_plain_sideband(&self) -> bool {
-        let plain = |word: &str| matches!(word.trim().to_ascii_uppercase().as_str(), "USB" | "LSB");
-        self.rig_mode.as_deref().is_some_and(plain)
-            && plain(&self.tx_mode_effective())
-            && self.sat_uplink_word().is_none_or(|word| plain(&word))
+        self.sstv_picture_allowed()
     }
 
     /// The words for a licence refusal: [`PHONE_USB_ONLY`] when the phone mode is the whole reason

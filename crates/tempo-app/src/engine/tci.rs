@@ -21,7 +21,7 @@
 //! | 2 | "Programs on TCI may transmit" is on; for CW, the CW tier as well | `Switch`, `Tier` |
 //! | 3 | no Stop held, no watchdog trip, TX armed, no context hold | `StopHold`, `WatchdogTrip`, `Disarmed`, `ContextHold` |
 //! | 4 | the radio's connection can transmit; for a `tci` over, a radio that takes the audio Nexus plays, not its own microphone | `Connection`, `RadioMic` |
-//! | 5 | the licence: a `tci` over across its whole passband, a microphone key as Nexus's own, Tune at its carrier, CW as Nexus's own CW; a `tci` over or a microphone key where the class may send only CW and single-sideband voice, only while the radio is in plain USB or LSB | `Licence`, `VoiceOnly` |
+//! | 5 | the licence: a `tci` over across its whole passband, a microphone key as Nexus's own, Tune at its carrier, CW as Nexus's own CW; no `tci` over or microphone key where the class may send only CW and single-sideband voice, whatever the radio's mode | `Licence`, `VoiceOnly` |
 //! | 6 | nothing else owns the transmitter (a program re-asserting its own key passes, and its CW queues behind its own) | `Owner` |
 //! | 7 | no clock repair and no sign-in transmit hold (neither drops a key already held; CW is never admitted under either) | `ClockRepair`, `OnHold` |
 //! | 8 | the section: a `tci` over or a microphone key in Phone, CW in CW, Tune in any; a `tci` over in Digital not yet, nor in any section from a program whose last `modulation:` asked a data mode; and a `tci` over only from a program whose last `modulation:` asked a voice mode | `Section`, `SlotTimed`, `VoiceMode` |
@@ -256,7 +256,7 @@ impl Engine {
             return Err(Refusal::Licence);
         }
         // A program's audio or microphone from 28.3 to 28.5 MHz for a Novice or a Technician:
-        // only in plain USB or LSB (`Engine::outside_key_allowed`).
+        // never, whatever the radio's mode (`Engine::outside_key_allowed`).
         if matches!(ask, Ask::Over | Ask::Mic) && !self.outside_key_allowed() {
             return Err(Refusal::VoiceOnly);
         }
@@ -590,7 +590,7 @@ impl Engine {
         } else if !self.tx_allowed() {
             Some("outside the licence")
         } else if !self.outside_key_allowed() {
-            Some("the radio left plain USB or LSB where only CW and voice are allowed")
+            Some(Refusal::VoiceOnly.text())
         } else if self.tuning || self.manual_ptt {
             Some("Nexus keyed its own transmission")
         } else if now_ms.saturating_sub(k.since_ms) >= TCI_OVER.max_latch_ms {
@@ -675,8 +675,8 @@ impl Engine {
         let key = self.tci.key;
         let gates = MicGates {
             tx_enabled: self.tci_may_transmit(),
-            // G2: the passband in the licence, plain USB or LSB where only CW and voice are
-            // allowed, and a radio that takes the audio Nexus plays.
+            // G2: the passband in the licence, not where only CW and voice are allowed, and a
+            // radio that takes the audio Nexus plays.
             tx_allowed: self.tci_over_licensed()
                 && self.outside_key_allowed()
                 && self.tci_over_routed(),
