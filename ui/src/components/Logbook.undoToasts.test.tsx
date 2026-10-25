@@ -32,7 +32,17 @@ vi.mock('../api', () => {
   const undone = { changed: 3, run: 'undo-run', kept: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [] }
   return {
     askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
-    importAdif: vi.fn(async () => ({ added: 3, skipped: 0, updated: 0, total: 6, run: 'import-run' })),
+    previewImport: vi.fn(async () => ({
+      format: 'adif', template: null, records: 3, contacts: 3, firstUnix: null, lastUnix: null,
+      new: 3, duplicates: 0, updates: 0, notes: [], coverage: [], unmapped: [],
+    })),
+    importLog: vi.fn(async () => ({
+      stats: { added: 3, skipped: 0, updated: 0, total: 6, run: 'import-run' },
+      report: {
+        format: 'adif', template: null, records: 3, contacts: 3, added: 3, duplicates: 0, updated: 0,
+        newOnly: false, fields: [], unmapped: [], notes: [], accounted: true,
+      },
+    })),
     purgeLog: vi.fn(async () => ({ removed: 3, run: 'purge-run' })),
     undoHistoryRun: vi.fn(async () => undone),
     exportGeneralLog: noop(), saveTextToDownloads: noop(), deleteQsoById: noop(),
@@ -82,6 +92,8 @@ describe('the Undo on the import and purge toasts', () => {
     fireEvent.change(document.querySelector('.log-actions input[type="file"]') as HTMLInputElement, {
       target: { files: [new File(['<CALL:5>N4GHI<EOR>'], 'log.adi')] },
     })
+    // The preview first; the import is the operator's pick.
+    fireEvent.click(await screen.findByRole('button', { name: t('logbook.import.preview.import') }))
     await waitFor(() => expect(toastSaying(t('logbook.import.imported', { count: 3 }))).toBeTruthy())
     const toast = toastSaying(t('logbook.import.imported', { count: 3 }))!
     expect(toast.actionLabel).toBe(t('logbook.undo'))

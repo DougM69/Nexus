@@ -25435,6 +25435,76 @@ async fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<Imp
     .await
 }
 
+/// The Logbook's Import, looked at before anything is written: the file read in its own format
+/// (ADIF, ADX or Cabrillo — `tempo_core::logbook::import`), its records, dates, fields and
+/// problems, and the log's own duplicate rule's counts from the plan the import would make, let
+/// go ([`tempo_app::logwrite::preview_import`]). Read with the Engine lock released.
+#[tauri::command]
+async fn preview_import(
+    state: State<'_, SharedEngine>,
+    text: String,
+) -> Result<tempo_core::logbook::import::Preview, String> {
+    use tempo_core::logbook::import;
+    let engine = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = import::read(&text, import::detect(&text));
+        let mut preview = import::preview(&source);
+        let (new, duplicates, updates) =
+            tempo_app::logwrite::preview_import(&engine, source.adif(&text))?;
+        preview.new = new;
+        preview.duplicates = duplicates;
+        preview.updates = updates;
+        Ok(preview)
+    })
+    .await
+    .map_err(|e| format!("import preview task failed: {e}"))?
+}
+
+/// What the Logbook's Import answers: the counts and the run its Undo undoes, and the no-loss
+/// report — every field of the file and what became of it.
+#[derive(serde::Serialize)]
+struct ImportDone {
+    stats: ImportStats,
+    report: tempo_core::logbook::import::Report,
+}
+
+/// The Logbook's Import, after its preview: the file in any of the three formats, imported as one
+/// run ([`import_adif`]'s), with "Import new only" leaving every contact the log already holds as
+/// it is. Answers with the no-loss report.
+#[tauri::command]
+async fn import_log(
+    state: State<'_, SharedEngine>,
+    text: String,
+    new_only: bool,
+) -> Result<ImportDone, String> {
+    use tempo_core::logbook::import;
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let source = import::read(&text, import::detect(&text));
+        let adif = source.adif(&text);
+        let run = tempo_app::loghistory::new_run();
+        let (made, durability) = tempo_app::logwrite::until_written(|| {
+            if new_only {
+                tempo_app::logwrite::import_adif_new_only_in_run(&engine, adif, &run)
+            } else {
+                tempo_app::logwrite::import_adif_in_run(&engine, adif, &run)
+            }
+        });
+        let made = made.map(|(added, skipped, updated, total)| ImportDone {
+            stats: ImportStats {
+                added,
+                skipped,
+                updated,
+                total,
+                run: Some(run.clone()),
+            },
+            report: import::report(&source, (added, skipped, updated), new_only),
+        });
+        (made, durability)
+    })
+    .await
+}
+
 /// Reconcile a confirmation/credit report (LoTW ADIF export) INTO the existing
 /// log — upgrades confirmation + credit on already-logged QSOs (which a plain
 /// import would skip), rewrites the log file, and returns the diff + any
@@ -39536,6 +39606,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_log_timeline,
         get_confirmation_diagnostics,
         import_adif,
+        preview_import,
+        import_log,
         sync_lotw_report,
         set_lotw_password,
         clear_lotw_password,

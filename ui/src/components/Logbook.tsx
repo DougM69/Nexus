@@ -9,7 +9,7 @@ import { confirmDialog } from '../confirm'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { LogExport, LoggedActivation, LoggedQso } from '../types'
+import type { ImportStats, LogExport, LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
 import { RecentlyDeleted } from './RecentlyDeleted'
 import { sayUndone } from './QsoHistory'
@@ -25,6 +25,7 @@ import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
+import { ImportPreview } from './ImportPreview'
 import { ParkStateReview } from './ParkStateReview'
 import { ConfirmationReview } from './ConfirmationReview'
 import { LogCountryPicker } from './LogCountryPicker'
@@ -68,7 +69,6 @@ import {
   exportLogForActivation,
   logOperators,
   logActivations,
-  importAdif,
   restoreDeletedQso,
   undoHistoryRun,
   logQso,
@@ -523,6 +523,8 @@ export function Logbook({
   const [exportFrom, setExportFrom] = useState('')
   const [exportTo, setExportTo] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  // The file the import preview is open on.
+  const [importFile, setImportFile] = useState<{ text: string; name: string } | null>(null)
   const syncRef = useRef<HTMLInputElement>(null)
   const potaRef = useRef<HTMLInputElement>(null)
 
@@ -553,31 +555,32 @@ export function Logbook({
 
   // Import an external ADIF logbook → real "needs" + B4. Read the file in the
   // browser/WebView (no fs plugin), hand the text to the engine.
+  // The file opens the import preview (ImportPreview): nothing is written until the operator picks
+  // Import or Import new only there, and the import it makes answers here, with its Undo.
   const onImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     e.target.value = '' // let the same file be re-selected later
     if (!f) return
-    const text = await f.text()
-    const stats = await withErrorToast(() => importAdif(text), t('logbook.import.failed'))
-    if (stats) {
-      // An import of a LoTW/eQSL download adds nothing and updates everything —
-      // say so, or the one toast that means "your awards were just repaired"
-      // reads as "nothing happened, all dupes".
-      // Three statements, each with its OWN count: one message cannot select a plural form
-      // for two counts at once, so each carries its own (see the catalog's note).
-      const dupes = stats.skipped ? t('logbook.import.dupes', { count: stats.skipped }) : ''
-      const upgraded = stats.updated ? t('logbook.import.updated', { count: stats.updated }) : ''
-      const run = stats.run
-      pushToast(
-        `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}`,
-        'success',
-        10_000,
-        stats.added + stats.updated > 0 && run
-          ? { actionLabel: t('logbook.undo'), action: () => undoRun(run, t('logbook.import.undone')) }
-          : {},
-      )
-      load()
-    }
+    setImportFile({ text: await f.text(), name: f.name })
+  }
+  const onImported = (stats: ImportStats) => {
+    // An import of a LoTW/eQSL download adds nothing and updates everything —
+    // say so, or the one toast that means "your awards were just repaired"
+    // reads as "nothing happened, all dupes".
+    // Three statements, each with its OWN count: one message cannot select a plural form
+    // for two counts at once, so each carries its own (see the catalog's note).
+    const dupes = stats.skipped ? t('logbook.import.dupes', { count: stats.skipped }) : ''
+    const upgraded = stats.updated ? t('logbook.import.updated', { count: stats.updated }) : ''
+    const run = stats.run
+    pushToast(
+      `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}`,
+      'success',
+      10_000,
+      stats.added + stats.updated > 0 && run
+        ? { actionLabel: t('logbook.undo'), action: () => undoRun(run, t('logbook.import.undone')) }
+        : {},
+    )
+    load()
   }
 
   // Undo the run an import or a purge handed back — exactly that change, never "the latest of its
@@ -1949,11 +1952,16 @@ export function Logbook({
           <input
             ref={fileRef}
             type="file"
-            accept=".adi,.adif,.txt"
+            accept=".adi,.adif,.adx,.cbr,.log,.txt"
             style={{ display: 'none' }}
             onChange={onImportFile}
           />
-          <button type="button" className="export-btn" onClick={() => fileRef.current?.click()}>
+          <button
+            type="button"
+            className="export-btn"
+            onClick={() => fileRef.current?.click()}
+            title={t('logbook.import.title')}
+          >
             {t('logbook.import.adif.label')}
           </button>
           <input
@@ -3284,6 +3292,15 @@ export function Logbook({
           )}
         </div>
       </div>
+
+      {importFile && (
+        <ImportPreview
+          text={importFile.text}
+          fileName={importFile.name}
+          onClose={() => setImportFile(null)}
+          onImported={onImported}
+        />
+      )}
 
       {showPurge && (
         <div

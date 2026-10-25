@@ -1032,6 +1032,7 @@ mod edit;
 pub mod history;
 pub mod hot;
 mod id;
+pub mod import;
 pub mod io_fence;
 pub mod logfile;
 pub mod migrate;
@@ -1260,7 +1261,23 @@ impl Logbook {
     pub fn import_adif_with(
         &mut self,
         text: &str,
+        prepare: impl FnMut(&mut QsoRecord),
+    ) -> (Vec<QsoRecord>, usize, usize) {
+        self.import_adif_as(text, prepare, true)
+    }
+
+    /// [`Self::import_adif`] with "Import new only": a contact the log already holds is counted
+    /// as a duplicate and left exactly as it is — nothing it restates is merged in.
+    pub fn import_adif_new_only(&mut self, text: &str) -> (Vec<QsoRecord>, usize, usize) {
+        self.import_adif_as(text, |_| {}, false)
+    }
+
+    /// The import, upgrading a held contact from the row restating it only when `upgrade`.
+    fn import_adif_as(
+        &mut self,
+        text: &str,
         mut prepare: impl FnMut(&mut QsoRecord),
+        upgrade: bool,
     ) -> (Vec<QsoRecord>, usize, usize) {
         // Held records by dedup identity → index, so a dupe can be upgraded in
         // place and not merely counted. First index wins (log order), matching
@@ -1300,6 +1317,7 @@ impl Logbook {
                 .and_then(|t| held.get(&t).copied())
                 .or_else(|| held.get(&key).copied());
             match hit {
+                Some(_) if !upgrade => skipped += 1,
                 Some(i) => {
                     skipped += 1;
                     // Compare the whole record, not the summary counters: the
@@ -4211,52 +4229,14 @@ pub fn file_calls_and_ids(text: &str) -> (Vec<String>, Vec<RecordId>) {
 /// [`parse_adif`], with each record's own text beside it: after the previous `<EOR>` (or the
 /// header) through this record's `<EOR>`. A provisional id hashes that span (see `id`).
 fn parse_adif_spans(text: &str) -> Vec<(QsoRecord, &str)> {
-    let body = match text.to_ascii_uppercase().find("<EOH>") {
-        Some(i) => &text[i + 5..],
-        None => text,
-    };
-    let mut records = Vec::new();
-    let mut cur: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let bytes = body.as_bytes();
-    let mut i = 0;
-    // Where the current record's text begins: always just after an ASCII `>`, so a char
-    // boundary.
-    let mut start = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'<' {
-            i += 1;
-            continue;
-        }
-        let end = match body[i..].find('>') {
-            Some(e) => i + e,
-            None => break,
-        };
-        let tag = &body[i + 1..end];
-        i = end + 1;
-        let upper = tag.to_ascii_uppercase();
-        if upper == "EOR" {
-            if let Some(rec) = record_from(std::mem::take(&mut cur)) {
-                records.push((rec, &body[start..i]));
-            }
-            start = i;
-            continue;
-        }
-        // NAME:len or NAME:len:type
-        let mut parts = tag.splitn(3, ':');
-        let name = parts.next().unwrap_or("").to_ascii_uppercase();
-        let len: usize = parts
-            .next()
-            .and_then(|l| l.trim().parse().ok())
-            .unwrap_or(0);
-        // `len` is attacker-controllable (from a crafted `<NAME:len>`); use saturating
-        // arithmetic so a huge value can't overflow `i + len` (release: wrap → i jumps
-        // backwards → infinite loop) — it just clamps past the end and stops the scan.
-        let end = i.saturating_add(len);
-        let val = body.get(i..end).unwrap_or("").to_string();
-        i = end;
-        cur.insert(name, val);
-    }
-    records
+    // One tokenizer for the import and for its preview and report (`import::adif_records`), so
+    // what the preview counts is what the import reads. A tag repeated in one record: the last
+    // one wins, as it always has (`collect` into the map inserts in order).
+    import::adif_records(text)
+        .records
+        .into_iter()
+        .filter_map(|raw| record_from(raw.fields.into_iter().collect()).map(|rec| (rec, raw.span)))
+        .collect()
 }
 
 /// ADIF Time: 6 digits HHMMSS **or 4 digits HHMM** — both legal per the spec.

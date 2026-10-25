@@ -583,13 +583,29 @@ fn import(
     text: &str,
     run: Option<&str>,
 ) -> (Result<(usize, usize, usize), String>, Durability) {
+    import_as(engine, text, run, false)
+}
+
+/// [`import`], with "Import new only" when `new_only` ([`station::plan_import_new_only`]).
+fn import_as(
+    engine: &Mutex<Engine>,
+    text: &str,
+    run: Option<&str>,
+    new_only: bool,
+) -> (Result<(usize, usize, usize), String>, Durability) {
     bulk_as(
         engine,
         "import_adif",
         run.map(|run| {
             crate::loghistory::Origin::in_run(tempo_core::logbook::history::Source::Import, run)
         }),
-        |plan| station::plan_import(plan, text),
+        |plan| {
+            if new_only {
+                station::plan_import_new_only(plan, text)
+            } else {
+                station::plan_import(plan, text)
+            }
+        },
         |_, counts| counts,
     )
 }
@@ -617,6 +633,30 @@ pub fn import_adif_in_run(
     run: &str,
 ) -> (Result<ImportCounts, String>, Durability) {
     import_adif_in(engine, text, Some(run))
+}
+
+/// [`import_adif_in_run`] with "Import new only": a contact the log already holds is left exactly
+/// as it is, nothing the file restates about it merged in. Its own run, undone as one.
+pub fn import_adif_new_only_in_run(
+    engine: &Mutex<Engine>,
+    text: &str,
+    run: &str,
+) -> (Result<ImportCounts, String>, Durability) {
+    let (made, durability) = import_as(engine, text, Some(run), true);
+    let made =
+        made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?)));
+    (made, durability)
+}
+
+/// What an import of `text` would do, planned on the log as it stands and then let go: nothing
+/// is written. `(added, skipped, merged)` — the contacts the log lacks, the ones it holds by its
+/// own duplicate rule, and how many of those the import would upgrade — the very plan
+/// [`import_adif_in_run`] makes, so the preview's counts are the import's.
+///
+/// ⚠️ It reads the store: never call it under the Engine lock.
+pub fn preview_import(engine: &Mutex<Engine>, text: &str) -> Result<(usize, usize, usize), String> {
+    let plan = crate::engine::log_plan(engine);
+    station::plan_import(&plan, text).map(|(counts, _)| counts)
 }
 
 fn import_adif_in(
@@ -1217,3 +1257,6 @@ fn write_before_file(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod import_tests;

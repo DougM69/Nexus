@@ -10,6 +10,7 @@ import { t } from './i18n'
 import { isStreamInput } from './remote-native/stream-input'
 import { clientWords } from './features/clientWords'
 import type { SelfSpotReport } from './selfSpot'
+import type { ImportDone, ImportPreview } from './features/logImport'
 import type {
   AppSnapshot,
   AudioDevices,
@@ -1852,6 +1853,17 @@ export async function getConfirmationDiagnostics(): Promise<DiagnosticsReport> {
 /** Import an external ADIF logbook (deduped merge → real "needs" + B4). */
 export async function importAdif(text: string): Promise<ImportStats> {
   return invoke<ImportStats>('import_adif', { text })
+}
+
+/** What importing a log file (ADIF, ADX or Cabrillo) would do, before anything is written. */
+export async function previewImport(text: string): Promise<ImportPreview> {
+  return invoke<ImportPreview>('preview_import', { text })
+}
+
+/** Import a log file (ADIF, ADX or Cabrillo) as one undoable run; `newOnly` leaves every contact the
+ *  log already holds as it is. Answers with the no-loss report. */
+export async function importLog(text: string, newOnly: boolean): Promise<ImportDone> {
+  return invoke<ImportDone>('import_log', { text, newOnly })
 }
 
 /** Reconcile a LoTW (or any ADIF) confirmation report INTO the log: upgrade

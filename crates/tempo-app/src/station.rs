@@ -1943,6 +1943,21 @@ pub(crate) fn plan_import(
     })
 }
 
+/// [`plan_import`] with "Import new only" (`Logbook::import_adif_new_only`): the contacts the log
+/// lacks appended, and the ones it holds left exactly as they are.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_import_new_only(
+    plan: &LogPlan,
+    text: &str,
+) -> Result<((usize, usize, usize), Planned), String> {
+    let (calls, ids) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &ids, OpClass::Upgrade, |log| {
+        let (added, skipped, merged) = log.import_adif_new_only(text);
+        (added.len(), skipped, merged)
+    })
+}
+
 /// A confirmation report planned (eQSL's): the logged contacts it matches upgraded —
 /// `Logbook::merge_report`, on the rows of the report's calls. Its summary, and the plan.
 ///
