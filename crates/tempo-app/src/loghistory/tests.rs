@@ -684,12 +684,133 @@ fn a_refused_purge_undo_stays_reachable_after_the_toast() {
 
     engine_lock(&engine).set_tx_enabled(false);
     let (undone, dur) = undo_run(&engine, &listed[0].run);
-    assert_eq!(undone.expect("made").changed, n - 1);
+    let undone = undone.expect("made");
+    assert_eq!(undone.changed, n - 1);
     dur.wait(DURABLE_WAIT).unwrap();
-    assert!(
-        undoable_runs(&engine, 20).unwrap().is_empty(),
-        "undone: off the list"
+
+    // Undone, the purge is off the list and its undo is on it: the lasting Redo once the undo's
+    // own toast has gone, through the same run undo and the same wait. Redone, the purge is back.
+    let redo = undone.run.expect("the undo's own run");
+    let listed = undoable_runs(&engine, 20).unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|r| (r.run.as_str(), r.source.as_str(), r.contacts, r.removes))
+            .collect::<Vec<_>>(),
+        vec![(redo.as_str(), "undo", (n - 1) as u64, true)],
+        "the undo, whose redo takes the contacts out again"
     );
+    engine_lock(&engine).set_tx_enabled(true);
+    let (refused, _) = undo_run(&engine, &redo);
+    assert_eq!(
+        refused,
+        Err(MUST_WAIT_FOR_TX.to_string()),
+        "the redo waits too"
+    );
+    assert_eq!(engine.stored_log().len(), n - 1, "nothing was made");
+    engine_lock(&engine).set_tx_enabled(false);
+    let (redone, dur) = undo_run(&engine, &redo);
+    assert_eq!(redone.expect("redone").changed, n - 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert!(engine.stored_log().is_empty());
+    assert_eq!(
+        undoable_runs(&engine, 20)
+            .unwrap()
+            .iter()
+            .map(|r| r.source.as_str())
+            .collect::<Vec<_>>(),
+        vec!["undo", "operator"],
+        "the redo (to undo again) and the purge"
+    );
+}
+
+/// ★ The runs listed to undo whole are held to the days Settings keeps deleted contacts: an import
+/// made a year ago is listed when the history is kept for good (0) and not at 30 days, beside one
+/// made a week ago, which is listed at both.
+#[test]
+fn the_runs_listed_to_undo_are_held_to_the_days_settings_keeps() {
+    use tempo_core::logbook::history::{Kind, Note};
+    use tempo_core::logbook::sqlite::{Batch, LogDb, RowWrite};
+    const DAY: i64 = 86_400_000;
+    let d = Dir::new("history-runs-retention");
+    let rows: Vec<Arc<QsoRecord>> = {
+        let engine = shared(&d, 4);
+        let rows = engine.stored_log();
+        drop(engine);
+        rows
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    {
+        // Each pair taken out with no history, then added back as an import made `ago` days back.
+        let mut db = LogDb::open(&d.db()).unwrap();
+        for (pair, run, ago) in [
+            (&rows[..2], "old import", 365),
+            (&rows[2..], "recent import", 7),
+        ] {
+            let ids: Vec<RecordId> = pair.iter().filter_map(|r| r.id).collect();
+            db.apply(Batch {
+                remove: &ids,
+                ..Default::default()
+            })
+            .unwrap();
+            let upsert: Vec<RowWrite> = pair.iter().map(|r| RowWrite::new(Arc::clone(r))).collect();
+            let note = Note {
+                run: run.into(),
+                at_ms: now - ago * DAY,
+                source: Source::Import,
+                edit: Kind::Merge,
+                undoes: HashMap::new(),
+            };
+            db.apply(Batch {
+                upsert: &upsert,
+                history: Some(&note),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+    }
+    let listed = |days: u32| -> Vec<String> {
+        let mut s = Engine::new("K2DEF", "FN31", 0).settings().clone();
+        s.history_snapshot_days = days;
+        let mut e = Engine::with_settings(s);
+        e.attach_log_store(open_fast(&d));
+        let engine = Arc::new(Mutex::new(e));
+        settle(&engine);
+        undoable_runs(&engine, 20)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.run)
+            .collect()
+    };
+    assert_eq!(
+        listed(0),
+        vec!["recent import", "old import"],
+        "the control: kept for good"
+    );
+    assert_eq!(
+        listed(30),
+        vec!["recent import"],
+        "a year is older than 30 days"
+    );
+}
+
+/// ⛔ The engine's copy of the loop's hold ends by itself, a margin after the deadline it was told
+/// of, whether or not the loop's end arrives: a loop that stops telling never leaves a large undo
+/// refused for good.
+#[test]
+fn the_loops_hold_ends_by_itself_when_its_end_is_never_told() {
+    let engine = Engine::new("K2DEF", "FN31", 0);
+    let engine = Mutex::new(engine);
+    engine_lock(&engine).observe_loop_tx_hold(Some(1.0));
+    assert!(
+        engine_lock(&engine).transmit_needs_the_lock(),
+        "the control: held"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    assert!(!engine_lock(&engine).transmit_needs_the_lock());
 }
 
 /// ★ A run's undo asks each contact it puts back about the contacts logged after ITS OWN delete.

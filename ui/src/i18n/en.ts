@@ -1886,7 +1886,7 @@ export const EN = {
     'The same station, band and mode within 5 minutes was logged again after this contact was deleted. Restore anyway keeps both.',
   // A whole purge or import, undone from Recently deleted after its toast has gone. `{{when}}` is
   // a UTC time (a token).
-  'logbook.deleted.runsIntro': 'A whole purge or import can be undone here, as one change.',
+  'logbook.deleted.runsIntro': 'A whole purge, import or undo can be undone here, as one change.',
   'logbook.deleted.run.purge': {
     one: 'Purge of {{count}} contact · {{when}}',
     other: 'Purge of {{count}} contacts · {{when}}',
@@ -1897,6 +1897,39 @@ export const EN = {
   },
   'logbook.deleted.undoPurge': 'Undo this purge',
   'logbook.deleted.undoImport': 'Undo this import',
+  // A whole undo of a purge or an import, listed so it can be redone after its own toast has gone.
+  'logbook.deleted.run.undo': {
+    one: 'Undo of {{count}} contact · {{when}}',
+    other: 'Undo of {{count}} contacts · {{when}}',
+  },
+  'logbook.deleted.redo': 'Redo',
+  // Beside a whole run's button on a computer driving the station: undone only at the station.
+  'logbook.deleted.atStation': 'Only at the station',
+  'logbook.deleted.run.remote': 'Only at the station: a press through Remote undoes no purge, import or undo.',
+  // Asked in the dialog before a whole run is undone. `{{when}}` is a UTC date (a token).
+  'logbook.deleted.confirm.purge': {
+    one: 'Undo this purge of {{count}} contact from {{when}}?',
+    other: 'Undo this purge of {{count}} contacts from {{when}}?',
+  },
+  'logbook.deleted.confirm.import': {
+    one: 'Undo this import of {{count}} contact from {{when}}?',
+    other: 'Undo this import of {{count}} contacts from {{when}}?',
+  },
+  'logbook.deleted.confirm.undoRun': {
+    one: 'Redo the undo of {{count}} contact from {{when}}?',
+    other: 'Redo the undo of {{count}} contacts from {{when}}?',
+  },
+  'logbook.deleted.confirm.removes': {
+    one: 'It will be removed from the log.',
+    other: 'They will be removed from the log.',
+  },
+  'logbook.deleted.confirm.putsBack': {
+    one: 'It will be put back in the log.',
+    other: 'They will be put back in the log.',
+  },
+  'logbook.deleted.confirm.undo': 'Undo it',
+  'logbook.deleted.confirm.redo': 'Redo it',
+  'logbook.deleted.confirm.cancel': 'Cancel',
   'logbook.deleted.restored': 'Restored {{call}}',
   'logbook.deleted.failed': 'The contact could not be restored.',
   // A contact's history, in the QSO detail view: each change, who made it, and its undo.

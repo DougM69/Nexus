@@ -1040,12 +1040,84 @@ fn the_runs_still_to_undo_are_the_purges_and_imports_not_yet_undone() {
         Some(&note("undo-d", Source::Undo, Kind::Edit)),
     )
     .unwrap();
-    // The import undone: every contact it added is out of the log again.
+    // The import undone: every contact it added is out of the log again. The import leaves the
+    // list; its undo, a whole run of two, takes its place, to be redone.
     remove(
         &mut db,
         &[id(2), id(5)],
         Some(&note("undo-import", Source::Undo, Kind::Edit)),
     )
     .unwrap();
-    assert!(runs(&db, 0).is_empty(), "{:?}", runs(&db, 0));
+    assert_eq!(
+        runs(&db, 0),
+        vec![("undo-import".to_string(), "undo".to_string(), 2)],
+        "the import is off the list, the one-contact restores never on it"
+    );
+}
+
+/// ★ A whole run's undo is listed while it can still be redone: the lasting Redo once its toast has
+/// gone. An undo that took contacts out, while one is still out (its redo puts them back), and one
+/// that put contacts back, while one is still in (its redo takes them out: `removes`). An undo of
+/// one contact is not listed; nor is an undo whose contacts are all where its redo would put them.
+#[test]
+fn a_whole_runs_undo_is_listed_to_redo_while_it_can_be() {
+    let mut db = LogDb::open_in_memory().unwrap();
+    let (a, b, c) = (rec("K1ABC", 1), rec("K2XYZ", 2), rec("K3QQQ", 3));
+    write(
+        &mut db,
+        &[a.clone(), b.clone()],
+        Some(&note("import", Source::Import, Kind::Merge)),
+    )
+    .unwrap();
+    write(
+        &mut db,
+        std::slice::from_ref(&c),
+        Some(&note("logged", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    let runs = |db: &LogDb| -> Vec<(String, String, u64, bool)> {
+        db.history_undoable_runs(0, 10)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.run, r.source, r.contacts, r.removes))
+            .collect()
+    };
+    let row =
+        |run: &str, source: &str, removes: bool| (run.to_string(), source.to_string(), 2, removes);
+    assert_eq!(
+        runs(&db),
+        vec![row("import", "import", true)],
+        "the control"
+    );
+
+    remove(
+        &mut db,
+        &[id(1), id(2)],
+        Some(&note("undo-import", Source::Undo, Kind::Edit)),
+    )
+    .unwrap();
+    remove(
+        &mut db,
+        &[id(3)],
+        Some(&note("undo-one", Source::Undo, Kind::Edit)),
+    )
+    .unwrap();
+    assert_eq!(
+        runs(&db),
+        vec![row("undo-import", "undo", false)],
+        "its redo puts the two back; the one-contact undo is not listed"
+    );
+
+    // Redone: the two are back. The redo is listed, and undoing it takes them out again.
+    write(
+        &mut db,
+        &[a, b],
+        Some(&note("redo", Source::Undo, Kind::Edit)),
+    )
+    .unwrap();
+    assert_eq!(
+        runs(&db),
+        vec![row("redo", "undo", true), row("import", "import", true)],
+        "the undo is done with: both its contacts are back"
+    );
 }

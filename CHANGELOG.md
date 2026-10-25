@@ -25,7 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   APRS frame finishes, because it holds up the radio while it is made; the message then stays up and
   says so, and its Undo works once you stop. Recently deleted also lists each recent purge and import
   with **Undo this purge** or **Undo this import**, so a whole one can still be undone after its
-  message has gone. The history is kept in the logbook
+  message has gone, and each recent whole undo with **Redo**. Each asks first, naming how many
+  contacts, from when, and whether they leave the log or come back to it. Undoing a whole purge,
+  import or undo is done only at the station: a computer driving it through Remote sees the list
+  but cannot press it. The history is kept in the logbook
   database, so it survives a restart. Every edit is kept for good; a deleted or purged contact's full
   copy is kept for 90 days, which **Keep deleted contacts for (days)** under Settings › Config ›
   Data & log folder changes. An undo never sends anything to QRZ, Club Log, eQSL or LoTW; an undo that

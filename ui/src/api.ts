@@ -1694,23 +1694,27 @@ export async function undoQsoChange(seq: number): Promise<UndoAnswer> {
   return invoke<UndoAnswer>('undo_qso_change', { seq })
 }
 
-/** Undo every change of one run, as one transaction. Sends nothing to any service. */
+/** Undo every change of one run, as one transaction. Sends nothing to any service. Only at the
+ *  station: a computer driving it is refused, as a purge is. */
 export async function undoHistoryRun(run: string): Promise<UndoAnswer> {
   return invoke<UndoAnswer>('undo_history_run', { run })
 }
 
-/** A purge or an import whose whole-run undo can still be asked for. */
+/** A purge, an import or a whole run's undo whose whole-run undo can still be asked for. */
 export interface HistoryRun {
   /** What `undoHistoryRun` takes. */
   run: string
-  kind: 'purge' | 'import'
+  /** `undo`: a whole run's undo, which undone is the redo. */
+  kind: 'purge' | 'import' | 'undo'
   atMs: number
   /** How many contacts it changed. */
   contacts: number
+  /** Whether undoing it takes contacts out of the log (else it puts them back). */
+  removes: boolean
 }
 
-/** The purges and imports that can still be undone whole, newest first: the lasting way to undo
- *  one after its toast has gone, through `undoHistoryRun`. */
+/** The purges, imports and whole undos that can still be undone whole, newest first: the lasting
+ *  way to undo one after its toast has gone, through `undoHistoryRun`. */
 export async function undoableHistoryRuns(): Promise<HistoryRun[]> {
   return invoke<HistoryRun[]>('undoable_history_runs')
 }

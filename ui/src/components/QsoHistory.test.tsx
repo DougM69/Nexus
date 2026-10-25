@@ -3,9 +3,10 @@
 // A CONTACT'S HISTORY and RECENTLY DELETED — what the operator sees of the log's change history,
 // and that each Undo, Redo and Restore asks the backend for exactly that one thing.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
-import { render, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
+import { render, cleanup, fireEvent, screen, waitFor, act } from '@testing-library/react'
 import type { QsoHistoryEntry } from '../api'
 import { subscribeToasts, type Toast } from '../toast'
+import { setRemoteStation } from '../features/durableStore'
 
 const api = vi.hoisted(() => ({
   qsoHistory: vi.fn(),
@@ -16,6 +17,9 @@ const api = vi.hoisted(() => ({
   undoableHistoryRuns: vi.fn(),
 }))
 vi.mock('../api', () => api)
+/** Whether the event being handled came through the Remote stream, as `isStreamInput` answers it. */
+const stream = vi.hoisted(() => ({ on: false }))
+vi.mock('../remote-native/stream-input', () => ({ isStreamInput: () => stream.on }))
 
 import { QsoHistory, sayUndone } from './QsoHistory'
 import { GUARD_MS, RecentlyDeleted } from './RecentlyDeleted'
@@ -30,6 +34,8 @@ beforeEach(() => {
 afterEach(() => {
   unsubscribe()
   cleanup()
+  stream.on = false
+  setRemoteStation(false)
 })
 
 const entry = (over: Partial<QsoHistoryEntry>): QsoHistoryEntry => ({
@@ -174,29 +180,135 @@ describe('recently deleted', () => {
     expect(api.restoreDeletedQso.mock.calls).toEqual([['a', false]])
   })
 
-  it('undoes a whole purge after its toast has gone, and keeps it listed when the undo is refused', async () => {
+  it('never sends two restores for two clicks before the first answers', async () => {
+    api.recentlyDeletedQsos.mockResolvedValue([
+      { id: 'a', call: 'K1ABC', band: '20m', mode: 'FT8', whenUnix: 1_782_583_500, deletedAtMs: 0, source: 'operator' },
+      { id: 'b', call: 'K2XYZ', band: '40m', mode: 'CW', whenUnix: 1_782_583_600, deletedAtMs: 0, source: 'operator' },
+    ])
+    api.restoreDeletedQso.mockReturnValue(new Promise(() => {}))
+    render(<RecentlyDeleted open onClose={() => {}} onRestored={() => {}} />)
+    await screen.findByText('K2XYZ')
+    const [a, b] = screen.getAllByRole('button', { name: 'Restore' })
+    // Both before the screen redraws them disabled.
+    act(() => {
+      a.click()
+      b.click()
+    })
+    expect(api.restoreDeletedQso.mock.calls).toEqual([['a', false]])
+  })
+
+  const at = Date.UTC(2026, 9, 12, 12, 0, 0)
+  const purge = { run: 'purge-run', kind: 'purge', atMs: at, contacts: 500, removes: false }
+  const imported = { run: 'import-run', kind: 'import', atMs: at, contacts: 41, removes: true }
+  const undone = { run: 'undo-run', kind: 'undo', atMs: at, contacts: 41, removes: true }
+
+  it('undoes a whole purge after its toast has gone, once asked, and keeps it listed when the undo is refused', async () => {
     api.recentlyDeletedQsos.mockResolvedValue([])
-    const purge = { run: 'purge-run', kind: 'purge', atMs: Date.UTC(2026, 9, 24, 12, 0, 0), contacts: 500 }
     api.undoableHistoryRuns.mockResolvedValue([purge])
     api.undoHistoryRun.mockRejectedValueOnce(
       'Stop transmitting first: undoing this many contacts holds up the radio while it is made.',
     )
     const onRestored = vi.fn()
     render(<RecentlyDeleted open onClose={() => {}} onRestored={onRestored} />)
-    expect(await screen.findByText('Purge of 500 contacts · 2026-10-24 12:00:00Z')).toBeTruthy()
+    expect(await screen.findByText('Purge of 500 contacts · 2026-10-12 12:00:00Z')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Undo this purge' }))
+    expect(screen.getByText('Undo this purge of 500 contacts from 2026-10-12? They will be put back in the log.')).toBeTruthy()
+    expect(api.undoHistoryRun).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo it' }))
     await waitFor(() => expect(toasts.some((t) => t.message.includes('Stop transmitting first'))).toBe(true))
     expect(api.undoHistoryRun).toHaveBeenCalledWith('purge-run')
     expect(onRestored).not.toHaveBeenCalled()
 
-    // Transmit off: pressed again, it is made.
+    // Transmit off: pressed again, and asked again, it is made.
     api.undoHistoryRun.mockResolvedValueOnce({ ...done, changed: 500 })
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + GUARD_MS + 1)
     fireEvent.click(screen.getByRole('button', { name: 'Undo this purge' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo it' }))
     await waitFor(() => expect(onRestored).toHaveBeenCalled())
     expect(api.undoHistoryRun.mock.calls).toEqual([['purge-run'], ['purge-run']])
     expect(toasts.some((t) => t.message.startsWith('Purge undone'))).toBe(true)
     vi.restoreAllMocks()
+  })
+
+  it('asks before undoing a whole import, naming how many and when, and Cancel deletes nothing', async () => {
+    api.recentlyDeletedQsos.mockResolvedValue([])
+    api.undoableHistoryRuns.mockResolvedValue([imported])
+    api.undoHistoryRun.mockResolvedValue({ ...done, changed: 41 })
+    render(<RecentlyDeleted open onClose={() => {}} onRestored={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo this import' }))
+    expect(screen.getByText('Undo this import of 41 contacts from 2026-10-12? They will be removed from the log.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('button', { name: 'Undo it' })).toBeNull()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.undoHistoryRun).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo this import' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Undo it' }))
+    await waitFor(() => expect(api.undoHistoryRun.mock.calls).toEqual([['import-run']]))
+    await waitFor(() => expect(toasts.some((t) => t.message.startsWith('Import undone'))).toBe(true))
+  })
+
+  it('lists a whole undo with Redo, through the same question and the same undo', async () => {
+    api.recentlyDeletedQsos.mockResolvedValue([])
+    api.undoableHistoryRuns.mockResolvedValue([undone])
+    api.undoHistoryRun.mockResolvedValue({ ...done, changed: 41 })
+    render(<RecentlyDeleted open onClose={() => {}} onRestored={() => {}} />)
+    expect(await screen.findByText('Undo of 41 contacts · 2026-10-12 12:00:00Z')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Redo' }))
+    expect(screen.getByText('Redo the undo of 41 contacts from 2026-10-12? They will be removed from the log.')).toBeTruthy()
+    expect(api.undoHistoryRun).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Redo it' }))
+    await waitFor(() => expect(api.undoHistoryRun.mock.calls).toEqual([['undo-run']]))
+    await waitFor(() => expect(toasts.some((t) => t.message.startsWith('Change made again'))).toBe(true))
+  })
+
+  it('never sends two whole undos for two clicks before the first answers', async () => {
+    api.recentlyDeletedQsos.mockResolvedValue([])
+    api.undoableHistoryRuns.mockResolvedValue([imported])
+    api.undoHistoryRun.mockReturnValue(new Promise(() => {}))
+    render(<RecentlyDeleted open onClose={() => {}} onRestored={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo this import' }))
+    const go = screen.getByRole('button', { name: 'Undo it' })
+    act(() => {
+      go.click()
+      go.click()
+    })
+    expect(api.undoHistoryRun.mock.calls).toEqual([['import-run']])
+  })
+
+  it('driving the station from another computer, lists the runs but undoes none: only at the station', async () => {
+    setRemoteStation(true)
+    api.recentlyDeletedQsos.mockResolvedValue([])
+    api.undoableHistoryRuns.mockResolvedValue([imported, undone])
+    render(<RecentlyDeleted open onClose={() => {}} onRestored={() => {}} />)
+    const undo = await screen.findByRole('button', { name: 'Undo this import' })
+    expect(undo).toHaveProperty('disabled', true)
+    expect(screen.getByRole('button', { name: 'Redo' })).toHaveProperty('disabled', true)
+    expect(screen.getAllByText('Only at the station')).toHaveLength(2)
+    fireEvent.click(undo)
+    expect(screen.queryByRole('button', { name: 'Undo it' })).toBeNull()
+    expect(api.undoHistoryRun).not.toHaveBeenCalled()
+  })
+
+  it('a press through the Remote stream undoes no run, and says so', async () => {
+    api.recentlyDeletedQsos.mockResolvedValue([])
+    api.undoableHistoryRuns.mockResolvedValue([imported])
+    api.undoHistoryRun.mockResolvedValue({ ...done, changed: 41 })
+    render(<RecentlyDeleted open onClose={() => {}} onRestored={() => {}} />)
+    const undo = await screen.findByRole('button', { name: 'Undo this import' })
+    stream.on = true
+    fireEvent.click(undo)
+    expect(screen.queryByRole('button', { name: 'Undo it' })).toBeNull()
+    expect(screen.getByText('Only at the station: a press through Remote undoes no purge, import or undo.')).toBeTruthy()
+
+    // Asked at the station, then the confirm pressed through the stream: still nothing.
+    stream.on = false
+    fireEvent.click(undo)
+    const go = screen.getByRole('button', { name: 'Undo it' })
+    stream.on = true
+    fireEvent.click(go)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.undoHistoryRun).not.toHaveBeenCalled()
   })
 
   it('says when nothing has been deleted', async () => {

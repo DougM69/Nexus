@@ -11,7 +11,12 @@
 // within GUARD_MS of its answer is ignored for the same reason.
 //
 // Above the contacts, the purges and imports that can still be undone whole: the lasting way to undo
-// one once its toast has gone. The same undo as the toast's, with its wait while transmitting.
+// one once its toast has gone. The same undo as the toast's, with its wait while transmitting. A
+// whole undo is listed too, with Redo: the lasting way back from one once its own toast has gone.
+// Each is asked first, in the dialog, naming how many contacts, from when, and whether they leave
+// the log or come back to it: one press can take out a whole import. Only at the station, as a
+// purge is: driving the station from another computer the list is read but its buttons are off,
+// and a press through the Remote stream undoes nothing.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Calls, bands and modes
 // are invariant tokens, shown as they are.
@@ -27,6 +32,8 @@ import {
 import { t } from '../i18n'
 import { withErrorToast } from '../toast'
 import { utcDate } from '../features/utcLog'
+import { drivesAnotherStation } from '../features/durableStore'
+import { isStreamInput } from '../remote-native/stream-input'
 import { Dialog } from './ui/Dialog'
 import { sayUndone, sourceWord, utcMs } from './QsoHistory'
 
@@ -52,6 +59,12 @@ export function RecentlyDeleted({
   const answeredAt = useRef(new Map<string, number>())
   // One restore or undo at a time, held before React re-renders the buttons disabled.
   const inFlight = useRef(false)
+  // The whole run asked about, waiting for the operator's answer.
+  const [asking, setAsking] = useState<HistoryRun | null>(null)
+  // Why a press did nothing (one through the Remote stream).
+  const [note, setNote] = useState<string | null>(null)
+  // Driving the station from another computer: the whole runs are the station's own to undo.
+  const afar = drivesAnotherStation()
 
   const load = useCallback(async () => {
     try {
@@ -66,7 +79,10 @@ export function RecentlyDeleted({
 
   useEffect(() => {
     if (open) void load()
-    else { setRows(null); setRuns([]); setBlocked(new Set()); answeredAt.current.clear() }
+    else {
+      setRows(null); setRuns([]); setBlocked(new Set()); setAsking(null); setNote(null)
+      answeredAt.current.clear()
+    }
   }, [open, load])
 
   const settling = (key: string) => Date.now() - (answeredAt.current.get(key) ?? -Infinity) < GUARD_MS
@@ -90,18 +106,40 @@ export function RecentlyDeleted({
     changed()
   }
 
-  // A whole purge or import, through the toast's own undo. Refused while transmitting, it says why
-  // and stays listed, to be pressed again.
+  // Only at the station: a press through the Remote stream undoes no run. Read before anything
+  // awaits, inside the stream's dispatch.
+  const fromAfar = () => {
+    if (!isStreamInput()) return false
+    setAsking(null)
+    setNote(t('logbook.deleted.run.remote'))
+    return true
+  }
+
+  const ask = (run: HistoryRun) => {
+    if (fromAfar()) return
+    setNote(null)
+    setAsking(run)
+  }
+
+  // A whole purge, import or undo, through the toast's own undo, once the operator said yes.
+  // Refused while transmitting, it says why and stays listed, to be pressed again.
   const undoRun = async (run: HistoryRun) => {
-    if (inFlight.current || settling(run.run)) return
+    if (fromAfar() || inFlight.current || settling(run.run)) return
     inFlight.current = true
+    setAsking(null)
     setBusy(run.run)
     const answer = await withErrorToast(() => undoHistoryRun(run.run), t('qso.history.undo.failed'))
     answeredAt.current.set(run.run, Date.now())
     inFlight.current = false
     setBusy(null)
     if (!answer) return
-    sayUndone(answer, run.kind === 'purge' ? t('logbook.purge.undone') : t('logbook.import.undone'), changed)
+    sayUndone(
+      answer,
+      run.kind === 'purge' ? t('logbook.purge.undone')
+        : run.kind === 'import' ? t('logbook.import.undone')
+        : t('qso.history.redone'),
+      changed,
+    )
     changed()
   }
 
@@ -121,22 +159,40 @@ export function RecentlyDeleted({
       {runs.length > 0 && (
         <>
           <p className="qso-detail-bare">{t('logbook.deleted.runsIntro')}</p>
+          {note && <p role="alert" className="qso-detail-bare">{note}</p>}
           <ul className="recently-deleted-list">
             {runs.map((run) => (
               <li key={run.run} className="recently-deleted-row">
-                <span className="recently-deleted-when">
-                  {run.kind === 'purge'
-                    ? t('logbook.deleted.run.purge', { count: run.contacts, when: utcMs(run.atMs) })
-                    : t('logbook.deleted.run.import', { count: run.contacts, when: utcMs(run.atMs) })}
-                </span>
+                <span className="recently-deleted-when">{runLabel(run)}</span>
                 <button
                   type="button"
                   className="export-btn"
-                  disabled={busy !== null}
-                  onClick={() => void undoRun(run)}
+                  disabled={busy !== null || afar}
+                  onClick={() => ask(run)}
                 >
-                  {run.kind === 'purge' ? t('logbook.deleted.undoPurge') : t('logbook.deleted.undoImport')}
+                  {run.kind === 'purge' ? t('logbook.deleted.undoPurge')
+                    : run.kind === 'import' ? t('logbook.deleted.undoImport')
+                    : t('logbook.deleted.redo')}
                 </button>
+                {afar && <span className="recently-deleted-when">{t('logbook.deleted.atStation')}</span>}
+                {asking?.run === run.run && (
+                  // On a line of its own under the row, never where the pointer already is: a
+                  // double-click on the row's button cannot answer the question.
+                  <span className="recently-deleted-anyway">
+                    <span>{runQuestion(run)}</span>
+                    <button
+                      type="button"
+                      className="export-btn danger"
+                      disabled={busy !== null}
+                      onClick={() => void undoRun(run)}
+                    >
+                      {run.kind === 'undo' ? t('logbook.deleted.confirm.redo') : t('logbook.deleted.confirm.undo')}
+                    </button>
+                    <button type="button" className="export-btn" onClick={() => setAsking(null)}>
+                      {t('logbook.deleted.confirm.cancel')}
+                    </button>
+                  </span>
+                )}
               </li>
             ))}
           </ul>
@@ -179,4 +235,28 @@ export function RecentlyDeleted({
       )}
     </Dialog>
   )
+}
+
+/** A whole run as the list names it. */
+function runLabel(run: HistoryRun): string {
+  const count = run.contacts
+  const when = utcMs(run.atMs)
+  switch (run.kind) {
+    case 'purge': return t('logbook.deleted.run.purge', { count, when })
+    case 'import': return t('logbook.deleted.run.import', { count, when })
+    default: return t('logbook.deleted.run.undo', { count, when })
+  }
+}
+
+/** What the operator is asked before a whole run is undone: how many, from when, and where they go. */
+function runQuestion(run: HistoryRun): string {
+  const count = run.contacts
+  const when = utcDate(Math.floor(run.atMs / 1000))
+  const asked = run.kind === 'purge' ? t('logbook.deleted.confirm.purge', { count, when })
+    : run.kind === 'import' ? t('logbook.deleted.confirm.import', { count, when })
+    : t('logbook.deleted.confirm.undoRun', { count, when })
+  const where = run.removes
+    ? t('logbook.deleted.confirm.removes', { count })
+    : t('logbook.deleted.confirm.putsBack', { count })
+  return `${asked} ${where}`
 }

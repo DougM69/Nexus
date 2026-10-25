@@ -144,22 +144,39 @@ pub async fn recently_deleted_qsos(
         .collect())
 }
 
-/// A purge or an import whose whole-run undo can still be asked for.
+/// A purge, an import or a whole run's undo whose whole-run undo can still be asked for.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRunDto {
     /// What `undo_history_run` takes.
     pub run: String,
-    /// `purge` or `import`.
+    /// `purge`, `import` or `undo` (a whole run's undo: undone, it is the redo).
     pub kind: &'static str,
     pub at_ms: i64,
     /// How many contacts it changed.
     pub contacts: u64,
+    /// Whether undoing it takes contacts out of the log; else it puts them back.
+    pub removes: bool,
 }
 
-/// The purges and imports whose whole-run undo can still be asked for, newest first: the lasting
-/// way to undo one after its toast has gone. Each is undone by `undo_history_run`, with its wait
-/// while the radio transmits.
+fn run_dto(r: tempo_core::logbook::history::RunSummary) -> HistoryRunDto {
+    HistoryRunDto {
+        kind: match r.source.as_str() {
+            "import" => "import",
+            "undo" => "undo",
+            _ => "purge",
+        },
+        run: r.run,
+        at_ms: r.at_ms,
+        contacts: r.contacts,
+        removes: r.removes,
+    }
+}
+
+/// The purges, imports and whole-run undos whose whole-run undo can still be asked for, newest
+/// first: the lasting way to undo one after its toast has gone, and to redo an undo after its own.
+/// Each is undone by `undo_history_run`, with its wait while the radio transmits. Readable from a
+/// computer driving the station; the undo itself is the station's only.
 #[tauri::command]
 pub async fn undoable_history_runs(
     state: State<'_, SharedEngine>,
@@ -169,19 +186,7 @@ pub async fn undoable_history_runs(
         tokio::task::spawn_blocking(move || tempo_app::loghistory::undoable_runs(&engine, 20))
             .await
             .map_err(|e| format!("logbook task failed: {e}"))??;
-    Ok(runs
-        .into_iter()
-        .map(|r| HistoryRunDto {
-            kind: if r.source == "import" {
-                "import"
-            } else {
-                "purge"
-            },
-            run: r.run,
-            at_ms: r.at_ms,
-            contacts: r.contacts,
-        })
-        .collect())
+    Ok(runs.into_iter().map(run_dto).collect())
 }
 
 /// What an undo made.
@@ -255,7 +260,8 @@ pub async fn undo_qso_change(
     .await
 }
 
-/// Undo every change one run made, as one transaction.
+/// Undo every change one run made, as one transaction. Only at the station: a whole run's undo can
+/// delete as much of the log as a purge (`command_classes`).
 #[tauri::command]
 pub async fn undo_history_run(
     state: State<'_, SharedEngine>,
@@ -292,4 +298,29 @@ pub async fn restore_deleted_qso(
         (made.map(answer), durability)
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempo_core::logbook::history::RunSummary;
+
+    /// Each listed run reaches the page as what it is, and which way its undo moves contacts.
+    #[test]
+    fn a_listed_run_says_what_it_is_and_which_way_its_undo_goes() {
+        let run = |source: &str, removes: bool| {
+            let dto = run_dto(RunSummary {
+                run: "r".into(),
+                source: source.into(),
+                at_ms: 5,
+                contacts: 41,
+                removes,
+            });
+            (dto.kind, dto.removes, dto.contacts, dto.at_ms)
+        };
+        assert_eq!(run("operator", false), ("purge", false, 41, 5));
+        assert_eq!(run("import", true), ("import", true, 41, 5));
+        assert_eq!(run("undo", true), ("undo", true, 41, 5));
+        assert_eq!(run("undo", false), ("undo", false, 41, 5));
+    }
 }

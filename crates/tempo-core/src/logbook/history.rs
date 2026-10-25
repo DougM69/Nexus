@@ -671,18 +671,33 @@ pub struct RunSummary {
     pub at_ms: i64,
     /// How many contacts it changed.
     pub contacts: u64,
+    /// Whether undoing it now takes a contact out of the log: a contact it added is still there.
+    pub removes: bool,
+}
+
+/// SQL: whether the run `r.id` added a contact the log still holds, which its undo would take out
+/// ([`RunSummary::removes`]).
+fn added_still_in() -> String {
+    format!(
+        "EXISTS (SELECT 1 FROM qso_history a WHERE a.run_id = r.id AND a.kind = {create} \
+         AND EXISTS (SELECT 1 FROM qso q WHERE q.id = a.qso_id))",
+        create = Kind::Create.code()
+    )
 }
 
 /// The latest run made by `source` (any source when `None`) that changed a contact.
 pub(crate) fn latest_run(conn: &Connection, source: Option<&str>) -> Result<Option<RunSummary>> {
     let found = conn
         .query_row(
-            "SELECT r.run, r.source, r.at_ms, \
-                    (SELECT COUNT(*) FROM qso_history h WHERE h.run_id = r.id) \
-             FROM history_run r \
-             WHERE (?1 IS NULL OR r.source = ?1) \
-               AND EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id) \
-             ORDER BY r.id DESC LIMIT 1",
+            &format!(
+                "SELECT r.run, r.source, r.at_ms, \
+                        (SELECT COUNT(*) FROM qso_history h WHERE h.run_id = r.id), {removes} \
+                 FROM history_run r \
+                 WHERE (?1 IS NULL OR r.source = ?1) \
+                   AND EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id) \
+                 ORDER BY r.id DESC LIMIT 1",
+                removes = added_still_in()
+            ),
             [source],
             |r| {
                 Ok(RunSummary {
@@ -690,6 +705,7 @@ pub(crate) fn latest_run(conn: &Connection, source: Option<&str>) -> Result<Opti
                     source: r.get(1)?,
                     at_ms: r.get(2)?,
                     contacts: r.get::<_, i64>(3)?.max(0) as u64,
+                    removes: r.get(4)?,
                 })
             },
         )
@@ -699,35 +715,38 @@ pub(crate) fn latest_run(conn: &Connection, source: Option<&str>) -> Result<Opti
 
 /// The runs a whole-run undo can still be asked for after its toast has gone, newest first, at
 /// most `limit`, made at `since_ms` or later: a purge (the operator's run of two or more deletes
-/// and nothing else) with a contact it took out still out of the log, and an import of two or more
-/// contacts with a contact it added still in it. Read off the log as it stands, so a run already
-/// undone, or put back a contact at a time, is not among them; a purge whose deleted contacts the
-/// history no longer keeps ([`trim`]) is gone with them. A companion program's one logged contact
-/// is an import of one, and is not listed.
+/// and nothing else) with a contact it took out still out of the log, an import of two or more
+/// contacts with a contact it added still in it, and a whole run's undo of two or more contacts
+/// that took one out still out or put one back still in (undoing it is the redo). Read off the log
+/// as it stands, so a run already undone, or put back a contact at a time, is not among them; a
+/// purge whose deleted contacts the history no longer keeps ([`trim`]) is gone with them. A
+/// companion program's one logged contact is an import of one, and an undo of one contact is one
+/// too: neither is listed.
 pub(crate) fn undoable_runs(
     conn: &Connection,
     since_ms: i64,
     limit: usize,
 ) -> Result<Vec<RunSummary>> {
     let sql = format!(
-        "SELECT run, source, at_ms, n FROM ( \
+        "SELECT run, source, at_ms, n, removes FROM ( \
            SELECT r.id, r.run, r.source, r.at_ms, \
-                  (SELECT COUNT(*) FROM qso_history c WHERE c.run_id = r.id) AS n \
+                  (SELECT COUNT(*) FROM qso_history c WHERE c.run_id = r.id) AS n, \
+                  {removes} AS removes, \
+                  EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id AND h.kind = {delete} \
+                          AND NOT EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id)) AS puts_back \
            FROM history_run r \
-           WHERE r.at_ms >= ?1 AND r.source IN ('{operator}', '{import}')) r \
+           WHERE r.at_ms >= ?1 AND r.source IN ('{operator}', '{import}', '{undo}')) r \
          WHERE n >= 2 AND ( \
-           (r.source = '{operator}' \
-            AND NOT EXISTS (SELECT 1 FROM qso_history o WHERE o.run_id = r.id AND o.kind <> {delete}) \
-            AND EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id \
-                        AND NOT EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id))) \
-           OR (r.source = '{import}' \
-            AND EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id AND h.kind = {create} \
-                        AND EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id)))) \
+           (r.source = '{operator}' AND puts_back \
+            AND NOT EXISTS (SELECT 1 FROM qso_history o WHERE o.run_id = r.id AND o.kind <> {delete})) \
+           OR (r.source = '{import}' AND removes) \
+           OR (r.source = '{undo}' AND (removes OR puts_back))) \
          ORDER BY r.id DESC LIMIT ?2",
+        removes = added_still_in(),
         operator = Source::Operator.code(),
         import = Source::Import.code(),
+        undo = Source::Undo.code(),
         delete = Kind::Delete.code(),
-        create = Kind::Create.code(),
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
@@ -738,6 +757,7 @@ pub(crate) fn undoable_runs(
                 source: r.get(1)?,
                 at_ms: r.get(2)?,
                 contacts: r.get::<_, i64>(3)?.max(0) as u64,
+                removes: r.get(4)?,
             })
         },
     )?;
