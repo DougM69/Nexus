@@ -17,7 +17,7 @@ import {
   type LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { clearHuntTarget, contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestLoggedQth, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
+import { clearHuntTarget, contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestLoggedQth, contestPlace, contestWorking, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
@@ -47,8 +47,8 @@ import { contestDupe, contestDupeRow, contestWorkedRows, workedValues, type Cont
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { askForOperatorBox, isOperatorBoxKey, isWipeKey } from '../features/contestKeys'
 import { isMarkKey, markHere, publishEntryCall } from '../features/freqMarkers'
-import { isEditKey } from '../features/contestEdit'
-import { ContestContactEdit, type EditNote } from './ContestContactEdit'
+import { closedText, isEditKey } from '../features/contestEdit'
+import { ContestContactEdit, focusOpenContestEdit, type EditNote } from './ContestContactEdit'
 import { esmPress, type EsmCaret, type EsmRole, type EsmStrip } from '../features/esm'
 import { ENTRY_CHANGED, ENTRY_LOGGED, useSharedEntry, type StripContent } from '../features/contestEntryShare'
 import type { EsmHost } from '../features/esmHost'
@@ -851,15 +851,22 @@ export function LogEntry({
   // was, and the entry boxes come back as they were, with the caret in Call. The contact keeps its
   // time, serial and number. Never through the Remote stream; and at a club the line says how a
   // contact is fixed there today, because club sync cannot carry an edit to the other laptops.
+  // Left open in a cockpit that is then hidden (RTTY, PSK, JTTY and JS8 stay mounted), it stays as
+  // typed for when the cockpit is back, and holds back no other edit meanwhile (`focusOpenContestEdit`).
   const [editing, setEditing] = useState<{ call: string; whenUnix: number } | null>(null)
-  const editRows =
-    editing && fieldDay
-      ? fieldDay.log.filter((q) => q.call === editing.call && q.whenUnix === editing.whenUnix)
-      : []
-  // A contact removed or edited elsewhere while its edit was open: the edit closes.
+  const rowsOf = (call: string, whenUnix: number | undefined) =>
+    fieldDay ? fieldDay.log.filter((q) => q.call === call && q.whenUnix === whenUnix) : []
+  const editRows = editing ? rowsOf(editing.call, editing.whenUnix) : []
+  // A contact this window no longer finds while its edit is open — its call changed elsewhere, the
+  // commonest edit, or it was removed: the edit closes and says which (`closedText`). This edit's
+  // own save changing the call answers for itself. One edited elsewhere with its call kept closes
+  // itself and says so (`ContestContactEdit`).
+  const saving = useRef(false)
   useEffect(() => {
-    if (editing && editRows.length === 0) setEditing(null)
-  }, [editing, editRows.length])
+    if (!editing || editRows.length > 0) return
+    setEditing(null)
+    if (!saving.current) setRemoveNote({ text: closedText(fieldDay?.log ?? [], editing.whenUnix), alert: true })
+  }, [editing, editRows.length, fieldDay?.log])
   const pressEdit = () => {
     setRemoveArmed(null)
     if (isStreamInput()) {
@@ -874,12 +881,21 @@ export function LogEntry({
       setRemoveNote({ text: t('contest.edit.club'), alert: true })
       return
     }
+    // Another edit open in this window (a last contact's, the contest screen's): it keeps the
+    // keyboard and its typing, and no second one opens. With this strip's own open, Ctrl+Y opens
+    // the newest afresh, as it always has.
+    if (editRows.length === 0 && focusOpenContestEdit()) {
+      setRemoveNote({ text: t('contest.edit.open'), alert: false })
+      return
+    }
     setRemoveNote(null)
+    saving.current = false
     setEditing({ call: newest.call, whenUnix: newest.whenUnix })
   }
   const pressEditRef = useRef(pressEdit)
   pressEditRef.current = pressEdit
   const editDone = (note: EditNote | null) => {
+    saving.current = false
     setEditing(null)
     if (note) setRemoveNote(note)
     requestAnimationFrame(() => callInputRef.current?.focus({ preventScroll: true }))
@@ -942,6 +958,8 @@ export function LogEntry({
       // one press.
       if (isWipeKey(e)) {
         e.preventDefault()
+        // Pressed in a contact's edit, it is that edit's moment, not the entry line's.
+        if (e.target instanceof Element && e.target.closest('.contest-edit')) return
         if (!e.repeat) pressWipeRef.current()
       } else if (isOperatorBoxKey(e)) {
         e.preventDefault()
@@ -1581,29 +1599,43 @@ export function LogEntry({
   const entityAnswer = entityAnswered ?? emptyAnswer(entityQuestion)
   const newEntity = entityAnswered !== undefined && entityAnswer.newEntity
 
-  // THE COUNTRY FILE'S ZONE, as a HINT in a contest that receives a CQ zone — the slot the
-  // DTO tags with ADIF's `CQZ`. It is the placeholder of that box and never its value: a
+  // WHERE THE CONTEST PLACES THE CALL (`contestPlace`): the entity its scorer counts the call
+  // under, for the country line, and the country file's zone, as a HINT in a contest that
+  // receives a CQ zone — the slot the DTO tags with ADIF's `CQZ`. Both from ONE answer about
+  // the call in the box, so the line never names a country the scorer does not count (IT9 is
+  // Sicily here, where the badges' `logEntity` says Italy) and never pairs one call's country
+  // with another's zone. The zone is the placeholder of that box and never its value: a
   // prefix's zone is the likely one, and a station in a zone other than its prefix's
   // (a portable, a W6 in zone 4) is exactly what the operator must still copy.
   const zoneSlot = fdActive ? fdReceives.find((f) => f.adif === 'CQZ') : undefined
-  const [zoneHint, setZoneHint] = useState<string | null>(null)
+  const [place, setPlace] = useState<{ call: string; entity: string; cqZone: number | null } | null>(null)
+  // Not asked in the Field Day events, which show no country and receive no zone.
+  const placeAsked = fdActive && !isFieldDay(fieldDay?.event)
   useEffect(() => {
     const call = logCall.trim()
-    if (remoteMode || !zoneSlot || call.length < 3) {
-      setZoneHint(null)
+    if (remoteMode || !placeAsked || !call) {
+      setPlace(null)
       return
     }
     let stale = false
-    void contestZoneHint(call)
-      .then((z) => {
-        if (!stale) setZoneHint(z != null ? String(z) : null)
+    void contestPlace(call)
+      .then((p) => {
+        if (!stale) setPlace(p ? { call, ...p } : null)
       })
       .catch(() => {})
     return () => {
       stale = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logCall, remoteMode, zoneSlot?.key])
+  }, [logCall, remoteMode, placeAsked])
+  const placed = place != null && place.call === logCall.trim() ? place : null
+  const zoneHint = zoneSlot && logCall.trim().length >= 3 && placed?.cqZone != null ? String(placed.cqZone) : null
+  // The contest strip's country line: the country, and its CQ zone in a contest that receives one.
+  const fdCountryZone = placed != null && zoneHint != null
+  const fdCountry = placed
+    ? fdCountryZone
+      ? t('logEntry.contest.country.zone', { country: placed.entity, zone: zoneHint })
+      : placed.entity
+    : ''
 
   // DXCC-Challenge axis: the entity is already worked, but is THIS band (or mode) a new
   // slot for it? Only meaningful once the entity is in the log (an ATNO is owned by
@@ -1694,7 +1726,7 @@ export function LogEntry({
     // box, Tab, or a click away — so the number the strip shows and the keyer sends is bound
     // to THIS station before the exchange goes out. On COMMIT and never per keystroke: bound
     // to onChange it would mint a binding for every prefix of the call and strand all but the
-    // last. (`contestZoneHint` above is the per-keystroke endpoint; this is deliberately not.)
+    // last. (`contestPlace` above is the per-keystroke endpoint; this is deliberately not.)
     if (fdActive && !remoteMode) void contestWorking(logCall.trim()).catch(() => {})
   }
 
@@ -2764,6 +2796,9 @@ export function LogEntry({
             receives={fdReceives}
             role={fieldDay?.role}
             bands={fieldDay?.bands}
+            onSaving={() => {
+              saving.current = true
+            }}
             onDone={editDone}
           />
         ) : (
@@ -2787,6 +2822,21 @@ export function LogEntry({
                 )}
                 {fdWorkedLine}
               </span>
+              {/* ⭐ THE COUNTRY of the call being typed, as the contest places it (`contestPlace`), with
+                  the CQ zone its prefix usually has where the contest receives one (`zoneHint`, the
+                  zone box's placeholder). Read-only: nothing here goes into the exchange, and the zone a
+                  station sends is still copied. On this same caption line, after the dupe badge,
+                  which it gives way to first, so it adds no height and no width in any host. Outside
+                  the live region, so a screen reader is not read a country per keystroke. Not in the
+                  Field Day events, where every station is W/VE. */}
+              {!fdEventIsFieldDay && fdCountry && (
+                <span
+                  className="le-fd-country"
+                  title={fdCountryZone ? t('logEntry.contest.country.zoneTitle') : t('logEntry.contest.country.title')}
+                >
+                  {fdCountry}
+                </span>
+              )}
             </span>
             <input
               ref={callInputRef}

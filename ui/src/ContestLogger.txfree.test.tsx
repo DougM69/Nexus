@@ -75,7 +75,7 @@ const ALLOWED = new Set([
   // the window's own pin (Keep in front): this window's stacking and its record, nothing at the radio
   'get_window_on_top', 'set_window_on_top',
   // the log line: the contact, its serial binding, its hints, its sent exchange, its log
-  'contest_entry_put', 'contest_entry_reset', 'contest_working', 'contest_zone_hint', 'contest_i_moved',
+  'contest_entry_put', 'contest_entry_reset', 'contest_working', 'contest_place', 'contest_i_moved',
   'contest_log_manual', 'contest_log_manual_rows', 'resolve_entity', 'set_cw_peer_info', 'set_log_form_grid',
   'scp_ensure', 'get_scp_calls', 'get_call_history',
   // the county/state box's pre-fill from the whole log: a read of the logbook's rows for one call,
@@ -159,7 +159,7 @@ function respond(cmd: string): unknown {
   }
   if (cmd === 'fd_merge_to_general') return [{ added: 0, already: 1, refused: 0, queued: false }, snapshot]
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_place|get_call_history)$/.test(cmd)) return null
   return {}
 }
 

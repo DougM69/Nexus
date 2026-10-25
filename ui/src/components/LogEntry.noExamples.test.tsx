@@ -23,7 +23,7 @@ vi.mock('../api', () => {
   const noop = () => vi.fn(() => Promise.resolve(null))
   return {
     fdLogManual: noop(), contestLogManual: noop(), contestWorking: noop(), contestEntryReset: noop(),
-    contestZoneHint: noop(), logQso: noop(), lookupPark: noop(), lookupParkLive: noop(), qrzLookup: noop(),
+    contestPlace: noop(), logQso: noop(), lookupPark: noop(), lookupParkLive: noop(), qrzLookup: noop(),
     resolveEntity: noop(), searchParks: vi.fn(() => Promise.resolve([])), setCwPeerInfo: noop(),
     setLogFormGrid: noop(),
     askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, [])),

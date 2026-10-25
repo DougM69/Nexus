@@ -13854,6 +13854,20 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .le-fd-dupe.le-fd-dupe-maybe {
   color: var(--state-warn);
 }
+/* THE COUNTRY ON THE CALL CAPTION'S LINE (LogEntry): the call's country, and its CQ zone where the
+   contest receives one, after the DUPE badge in `.le-fd-cap-marked`'s zero-width row, so it never
+   widens the field or adds height. It shrinks first (a shrink factor far above the badge's 1), so
+   the badge always has the line before it does; what does not fit is clipped with an ellipsis.
+   Tokens only, both themes. */
+.le-fd-country {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-dim);
+}
 .settings-input.le-fd-input-maybe,
 .settings-input.le-fd-input-maybe:focus {
   border-color: var(--state-warn);
@@ -20691,6 +20705,20 @@ button.cq-skiptx1.on {
 }
 .contest-logger-recent .fd-mode-chip {
   font-size: calc(14px * var(--text-scale));
+}
+/* The line a last contact's edit leaves (ContestLogger `LastContacts`): the last thing in the list's
+   scroller, held to its bottom edge, so it is on screen however far the list is scrolled (in the flow
+   alone, after ten rows, it was below the list's edge at 1024×768), and its room comes out of the
+   list's: under it, at 640×480 and the 420×320 floor, it was past the bottom of the window. Its text
+   on the list's 1600 px measure and inset, on an opaque surface the rows scroll under. */
+.contest-logger-recent-note {
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  max-width: none;
+  padding: var(--space-1) max(var(--space-4), calc(50% - 800px + var(--space-4)));
+  font-size: var(--fs-body);
+  background: var(--bg-elev);
 }
 /* THE CONTEST SCREEN'S ENTRY, in the main window (App.tsx): the same large log line at the top of
    the screen while a contest runs, the last contacts under it, and the screen below, scrolling in

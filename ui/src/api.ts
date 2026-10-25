@@ -896,10 +896,11 @@ export async function contestRemoved(): Promise<RemovedContest[]> {
   return invoke<RemovedContest[]>('contest_removed')
 }
 
-/** Why an edit changed nothing: the contact is no longer as it was shown; no call or no band;
+/** Why an edit changed nothing: the contact is no longer as it was shown; it is no longer in the
+ *  log at all; no call or no band;
  *  another number of counties than a county line has; a satellite contact's band; club sync,
  *  which cannot carry an edit to the club. */
-export type ContestEditRefusal = 'changed' | 'incomplete' | 'rows' | 'satellite' | 'club'
+export type ContestEditRefusal = 'changed' | 'gone' | 'incomplete' | 'rows' | 'satellite' | 'club'
 
 /** What an edit came to: the contact as it was and as it is now (one row, or one per county),
  *  and where it had already gone, which keeps what it said — or why nothing changed. */
@@ -917,13 +918,20 @@ export interface ContestContactEdit {
 }
 
 /** ⭐ **Edit a contest contact in place** — when it is still the one named (`call` and
- *  `whenUnix`, as the screen showed it), else `refused: changed`. It keeps its time, serial and
+ *  `whenUnix`, as the screen showed it) and still reads as `opened`, the rows the form was filled
+ *  from, else `refused: changed`. It keeps its time, serial and
  *  number; refused at a club (`club`). Answers once the contest journal holds the edit. Never
  *  keys or stops TX. */
-export async function contestEdit(call: string, whenUnix: number, edit: ContestContactEdit): Promise<ContestEditAnswer> {
+export async function contestEdit(
+  call: string,
+  whenUnix: number,
+  edit: ContestContactEdit,
+  opened: FieldDayQso[],
+): Promise<ContestEditAnswer> {
   return invoke<ContestEditAnswer>('contest_edit', {
     call,
     whenUnix,
+    opened,
     newCall: edit.call,
     rows: edit.rows,
     band: edit.band,
@@ -1012,7 +1020,7 @@ export async function contestLogSatellite(
  *  the gesture is a correction and a move-on in the same keystrokes.
  *
  *  ⚠️ COMMIT ONLY — Enter, blur, a spot click. Never on every keystroke: bound to each edit it
- *  mints a binding per prefix of the call and strands all but the last. `contestZoneHint` is the
+ *  mints a binding per prefix of the call and strands all but the last. `contestPlace` is the
  *  per-keystroke endpoint; this is deliberately not. */
 export async function contestWorking(call: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_working', { call })
@@ -1529,11 +1537,12 @@ export async function resolveEntity(call: string): Promise<string | null> {
   return invoke<string | null>('resolve_entity', { call })
 }
 
-/** The CQ zone the country file gives a callsign, or null — through the same adapter the
- *  contest scorer places a call with. A HINT for the contest strip's zone box (its
- *  placeholder), never a logged value: a station outside its prefix's zone sends its own. */
-export async function contestZoneHint(call: string): Promise<number | null> {
-  return invoke<number | null>('contest_zone_hint', { call })
+/** Where the contest places a callsign, or null: the entity its scorer counts the call under
+ *  (a WAE area is its own, IT9 is Sicily) and the CQ zone the country file gives it, out of ONE
+ *  resolve, the scorer's. The zone is a HINT for the contest strip's zone box (its placeholder),
+ *  never a logged value: a station outside its prefix's zone sends its own. */
+export async function contestPlace(call: string): Promise<{ entity: string; cqZone: number | null } | null> {
+  return invoke<{ entity: string; cqZone: number | null } | null>('contest_place', { call })
 }
 
 /** What the log last said of `call`'s county or state, for the contest entry's box receiving
