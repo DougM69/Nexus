@@ -98,6 +98,40 @@ fn blank(r: &Option<String>) -> bool {
     r.as_deref().is_none_or(str::is_empty)
 }
 
+/// ⭐ **What an edit's State does to `stored`**, as the record's own state and, where it changed
+/// the state of a merged contest exchange, the contest block to write in place of the stored one
+/// (`None`: the stored block stays, as an edit always keeps it). Every path that writes an edited
+/// State comes here ([`QsoEdit::record`], an edit of a whole contact, the park-state check).
+///
+/// The state an edit is compared with is the one every reader takes ([`super::record_field`]):
+/// on a merged contest contact, the state the exchange carried, which is what the form showed.
+/// Left as it was shown, the record's own state stays as stored and the exchange is untouched;
+/// changed, the record's own state is the edit's and the exchange's `STATE` becomes it too, in
+/// its place, so the upload, WAS and the custom awards all count the one state.
+pub fn edited_state(
+    state: &Option<String>,
+    stored: &QsoRecord,
+) -> (Option<String>, Option<Box<super::ContestFields>>) {
+    let typed = state.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let exchange = stored
+        .contest
+        .as_deref()
+        .filter(|c| c.adif.iter().any(|(t, _)| t == "STATE"));
+    if exchange.is_some() && typed == super::record_field(stored, "STATE") {
+        return (stored.state.clone(), None);
+    }
+    let contest = exchange.zip(typed).map(|(c, state)| {
+        let mut c = c.clone();
+        for (t, v) in &mut c.adif {
+            if t == "STATE" {
+                *v = state.to_string();
+            }
+        }
+        Box::new(c)
+    });
+    (state.clone(), contest)
+}
+
 impl QsoEdit {
     /// The editable projection of a stored record — the other half of the key's definition.
     ///
@@ -187,38 +221,14 @@ impl QsoEdit {
     pub fn record(&self, stored: &QsoRecord) -> QsoRecord {
         // A reference the edit refuses is never written; the edit command refuses it first.
         let iota = self.iota().ok().flatten();
-        fn typed(v: &Option<String>) -> Option<&str> {
-            v.as_deref().map(str::trim).filter(|v| !v.is_empty())
-        }
-        let exchange = stored
-            .contest
-            .as_deref()
-            .filter(|c| c.adif.iter().any(|(t, _)| t == "STATE"));
-        let shown = super::record_field(stored, "STATE");
-        let unchanged = exchange.is_some() && typed(&self.state) == shown;
-        let contest = exchange
-            .zip(typed(&self.state))
-            .filter(|_| !unchanged)
-            .map(|(c, state)| {
-                let mut c = c.clone();
-                for (t, v) in &mut c.adif {
-                    if t == "STATE" {
-                        *v = state.to_string();
-                    }
-                }
-                Box::new(c)
-            });
+        let (state, contest) = edited_state(&self.state, stored);
         QsoRecord {
             // Identity is the log's: `update_record` restores the stored id.
             id: None,
             call: self.call.clone(),
             grid: self.grid.clone(),
             country: None,
-            state: if unchanged {
-                stored.state.clone()
-            } else {
-                self.state.clone()
-            },
+            state,
             band: self.band.clone(),
             freq_mhz: self.freq_mhz,
             freq_rx_mhz: None,

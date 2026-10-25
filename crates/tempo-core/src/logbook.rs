@@ -335,48 +335,44 @@ pub fn record_field<'a>(r: &'a QsoRecord, tag: &str) -> Option<&'a str> {
 }
 
 /// The received fields a contest merge once left only in the contest's columns, which it now
-/// writes into the record's own: [`with_contest_columns_moved`]'s.
-pub const CONTEST_MOVED_TAGS: [&str; 3] = ["GRIDSQUARE", "NAME", "QTH"];
+/// writes into the record's own: [`with_contest_columns_copied`]'s.
+pub const CONTEST_COPIED_TAGS: [&str; 3] = ["GRIDSQUARE", "NAME", "QTH"];
 
 /// ⭐ **A contact merged before the merge wrote a received grid, name and QTH into the record's
-/// own fields, with them moved there** — or `None` when it has none to move. Each of
-/// [`CONTEST_MOVED_TAGS`] whose own field is blank and whose contest column holds a value (the
-/// first, as [`record_field`] reads it) takes that value, exactly, and the column goes; a field
-/// that holds anything is never touched, and its column stays (the ADIF writer already skips it).
+/// own fields, with them copied there** — or `None` when it has none to copy. Each of
+/// [`CONTEST_COPIED_TAGS`] whose own field is blank and whose contest column holds a value (the
+/// first, as [`record_field`] reads it) takes that value, exactly; a field that holds anything is
+/// never touched. The contest columns are left exactly as they were: the ADIF writer and
+/// [`record_field`] already take the own field first, so the column is never written twice, and
+/// an undo of the copy only blanks the field again — the value is never in neither place.
 ///
 /// Every reader then finds the value where the log's own columns are read — the Grid column, its
 /// sort and search, VUCC and the needs, the edit form — and the ADIF the contact writes holds the
 /// same one tag with the same value, from the field. Nothing else about the record moves: its
-/// stamps, its passthrough and the rest of its contest block are as they were.
-pub fn with_contest_columns_moved(r: &QsoRecord) -> Option<QsoRecord> {
-    r.contest.as_deref()?;
+/// stamps, its passthrough and its contest block are as they were.
+pub fn with_contest_columns_copied(r: &QsoRecord) -> Option<QsoRecord> {
+    let columns = &r.contest.as_deref()?.adif;
     let mut out = r.clone();
-    let mut moved = false;
-    for tag in CONTEST_MOVED_TAGS {
-        let columns = &mut out.contest.as_deref_mut()?.adif;
-        let Some(at) = columns.iter().position(|(t, _)| t == tag) else {
+    let mut copied = false;
+    for tag in CONTEST_COPIED_TAGS {
+        let Some((_, value)) = columns.iter().find(|(t, _)| t == tag) else {
             continue;
         };
-        if columns[at].1.trim().is_empty() {
+        if value.trim().is_empty() {
             continue;
         }
         let own = match tag {
-            "GRIDSQUARE" => &out.grid,
-            "NAME" => &out.name,
-            _ => &out.qth,
+            "GRIDSQUARE" => &mut out.grid,
+            "NAME" => &mut out.name,
+            _ => &mut out.qth,
         };
         if own.as_deref().is_some_and(|v| !v.trim().is_empty()) {
             continue;
         }
-        let (_, value) = columns.remove(at);
-        *match tag {
-            "GRIDSQUARE" => &mut out.grid,
-            "NAME" => &mut out.name,
-            _ => &mut out.qth,
-        } = Some(value);
-        moved = true;
+        *own = Some(value.clone());
+        copied = true;
     }
-    moved.then_some(out)
+    copied.then_some(out)
 }
 
 /// A passthrough field's value, by its (uppercased) ADIF name — [`QsoRecord::extra`] read the way
@@ -1133,7 +1129,7 @@ pub mod reader;
 mod records;
 pub mod sqlite;
 pub mod writer;
-pub use edit::{OtaEdit, QsoEdit};
+pub use edit::{edited_state, OtaEdit, QsoEdit};
 pub use id::{Minter, RecordId};
 pub use op::{Effects, LogOp, RowAfter, UploadService};
 use records::Records;
@@ -3582,6 +3578,12 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         {
             continue;
         }
+        // Nor ever a history-only tag ([`history::HISTORY_ONLY_PREFIX`]), for any audience: only a
+        // build from before it could have left one in the passthrough, and a read heals it
+        // ([`history::heal_history_only`]); this keeps it out of every file and upload anyway.
+        if k.starts_with(history::HISTORY_ONLY_PREFIX) {
+            continue;
+        }
         // Nor a tag the contest exchange already wrote (`contest_fields` writes every non-empty
         // one): a confirmation download used to fill a CQ zone or county here beside the one
         // the station sent, and the file then carried two, which can disagree. The exchange's
@@ -5073,6 +5075,8 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             extra
         },
     };
+    // A history-only tag an older build left in the passthrough goes back where it belongs.
+    history::heal_history_only(&mut rec);
     // Every ADIF read hands back a contact in the log's one form: another logger's `20M` and a
     // sideband in MODE included ([`canonical`]).
     canonical::contact(&mut rec);
@@ -5763,12 +5767,12 @@ mod tests {
         assert_eq!(out.matches("<MY_GRIDSQUARE:4>EN53").count(), 1, "{out}");
     }
 
-    /// ★ The one-time move of a merged contact's received grid, name and QTH: each into its own
-    /// field ONLY where that field is blank, its contest column gone with it; a field holding
-    /// anything is never touched; a contact with nothing to move is not changed at all. The
+    /// ★ The one-time copy of a merged contact's received grid, name and QTH: each into its own
+    /// field ONLY where that field is blank, its contest column left as it was; a field holding
+    /// anything is never touched; a contact with nothing to copy is not changed at all. The
     /// upload carries the same one GRIDSQUARE, NAME and QTH before and after.
     #[test]
-    fn the_contest_column_move_fills_only_blank_fields() {
+    fn the_contest_column_copy_fills_only_blank_fields() {
         let merged = |grid: Option<&str>, adif: &[(&str, &str)]| {
             let mut r = rec("K1ABC", "2m", 1_782_583_500);
             (r.grid, r.name, r.qth) = (grid.map(str::to_string), None, None);
@@ -5797,50 +5801,46 @@ mod tests {
             })
         };
 
-        // Blank fields: all three move, and only the moved columns go.
+        // Blank fields: all three are copied, and every column stays.
         let blank = merged(None, &all);
-        let moved = with_contest_columns_moved(&blank).expect("moves");
+        let copied = with_contest_columns_copied(&blank).expect("copies");
         assert_eq!(
             (
-                moved.grid.as_deref(),
-                moved.name.as_deref(),
-                moved.qth.as_deref()
+                copied.grid.as_deref(),
+                copied.name.as_deref(),
+                copied.qth.as_deref()
             ),
             (Some("FN31"), Some("BOB"), Some("BOSTON"))
         );
-        let left = &moved.contest.as_deref().unwrap().adif;
-        assert_eq!(left, &[("MY_GRIDSQUARE".to_string(), "EN53".to_string())]);
-        assert_eq!(upload(&moved), upload(&blank));
-        let mut rest = moved.clone();
+        assert_eq!(copied.contest, blank.contest, "the columns are untouched");
+        assert_eq!(upload(&copied), upload(&blank));
+        let mut rest = copied.clone();
         (rest.grid, rest.name, rest.qth) = (None, None, None);
-        rest.contest = blank.contest.clone();
-        assert_eq!(rest, blank, "nothing else moved");
+        assert_eq!(rest, blank, "nothing else changed");
 
-        // A grid of the operator's own: never touched, and its column stays; the blank name and
-        // QTH still move.
+        // A grid of the operator's own: never touched; the blank name and QTH are still copied.
         let own = merged(Some("FN42"), &all);
-        let moved = with_contest_columns_moved(&own).expect("the name and QTH move");
-        assert_eq!(moved.grid.as_deref(), Some("FN42"));
-        assert!(moved
-            .contest
-            .as_deref()
-            .unwrap()
-            .adif
-            .contains(&("GRIDSQUARE".to_string(), "FN31".to_string())));
-        assert_eq!(upload(&moved), upload(&own));
+        let copied = with_contest_columns_copied(&own).expect("the name and QTH are copied");
+        assert_eq!(copied.grid.as_deref(), Some("FN42"));
+        assert_eq!(
+            (copied.name.as_deref(), copied.qth.as_deref()),
+            (Some("BOB"), Some("BOSTON"))
+        );
+        assert_eq!(copied.contest, own.contest);
+        assert_eq!(upload(&copied), upload(&own));
 
-        // Nothing to move: no contest block, no such column, or a blank one.
+        // Nothing to copy: no contest block, no such column, or a blank one.
         let mut plain = rec("K1ABC", "2m", 1_782_583_500);
         plain.grid = None;
-        assert_eq!(with_contest_columns_moved(&plain), None);
-        assert_eq!(with_contest_columns_moved(&merged(None, &all[..1])), None);
+        assert_eq!(with_contest_columns_copied(&plain), None);
+        assert_eq!(with_contest_columns_copied(&merged(None, &all[..1])), None);
         assert_eq!(
-            with_contest_columns_moved(&merged(None, &[("GRIDSQUARE", " ")])),
+            with_contest_columns_copied(&merged(None, &[("GRIDSQUARE", " ")])),
             None
         );
-        // And a second run over a moved contact moves nothing.
+        // And a second run over a copied contact copies nothing.
         assert_eq!(
-            with_contest_columns_moved(&with_contest_columns_moved(&blank).unwrap()),
+            with_contest_columns_copied(&with_contest_columns_copied(&blank).unwrap()),
             None
         );
     }

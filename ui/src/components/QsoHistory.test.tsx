@@ -262,6 +262,23 @@ describe('recently deleted', () => {
     await waitFor(() => expect(toasts.some((t) => t.message.startsWith('Import undone'))).toBe(true))
   })
 
+  it('lists the one-time contest-column copy for one undo of the whole of it, saying what it does', async () => {
+    const copy = { run: 'copy-run', kind: 'contestColumns', atMs: at, contacts: 312, removes: false }
+    api.recentlyDeletedQsos.mockResolvedValue([])
+    api.undoableHistoryRuns.mockResolvedValue([copy])
+    api.undoHistoryRun.mockResolvedValue({ ...done, changed: 312 })
+    render(<RecentlyDeleted open onClose={() => {}} onRestored={() => {}} />)
+    expect(await screen.findByText('Contest grid, name and QTH copied into 312 contacts · 2026-10-12 12:00:00Z')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo this copy' }))
+    expect(screen.getByText(
+      'Undo copying the contest grid, name and QTH into 312 contacts from 2026-10-12? The copied fields are blank again; the contest exchange keeps the values.',
+    )).toBeTruthy()
+    expect(api.undoHistoryRun).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo it' }))
+    await waitFor(() => expect(api.undoHistoryRun.mock.calls).toEqual([['copy-run']]))
+    await waitFor(() => expect(toasts.some((t) => t.message.startsWith('Copy of contest grid, name and QTH undone'))).toBe(true))
+  })
+
   it('lists a whole undo with Redo, through the same question and the same undo', async () => {
     api.recentlyDeletedQsos.mockResolvedValue([])
     api.undoableHistoryRuns.mockResolvedValue([undone])

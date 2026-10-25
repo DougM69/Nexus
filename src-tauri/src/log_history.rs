@@ -105,7 +105,7 @@ fn shown(c: tempo_core::logbook::history::FieldChange) -> Vec<FieldChangeDto> {
         .filter_map(|tag| {
             let (was, now) = (values(&old, tag), values(&new, tag));
             (was != now).then(|| FieldChangeDto {
-                tag: format!("{tag} (contest)"),
+                tag: tempo_core::logbook::history::contest_column_label(tag),
                 old: was,
                 new: now,
             })
@@ -176,13 +176,16 @@ pub async fn recently_deleted_qsos(
         .collect())
 }
 
-/// A purge, an import or a whole run's undo whose whole-run undo can still be asked for.
+/// A purge, an import, the one-time contest-column copy or a whole run's undo whose whole-run undo
+/// can still be asked for.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRunDto {
     /// What `undo_history_run` takes.
     pub run: String,
-    /// `purge`, `import` or `undo` (a whole run's undo: undone, it is the redo).
+    /// `purge`, `import`, `contestColumns` (the received grid, name and QTH of merged contest
+    /// contacts copied into their own fields) or `undo` (a whole run's undo: undone, it is the
+    /// redo).
     pub kind: &'static str,
     pub at_ms: i64,
     /// How many contacts it changed.
@@ -196,6 +199,7 @@ fn run_dto(r: tempo_core::logbook::history::RunSummary) -> HistoryRunDto {
         kind: match r.source.as_str() {
             "import" => "import",
             "undo" => "undo",
+            "contest-columns" => "contestColumns",
             _ => "purge",
         },
         run: r.run,
@@ -417,5 +421,9 @@ mod tests {
         assert_eq!(run("import", true), ("import", true, 41, 5));
         assert_eq!(run("undo", true), ("undo", true, 41, 5));
         assert_eq!(run("undo", false), ("undo", false, 41, 5));
+        assert_eq!(
+            run("contest-columns", false),
+            ("contestColumns", false, 41, 5)
+        );
     }
 }

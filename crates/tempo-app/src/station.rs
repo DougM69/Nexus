@@ -818,7 +818,8 @@ pub(crate) fn park_state_pairs(
         .filter_map(|c| {
             let row = rows.get(&c.id)?;
             let reference = row.ota.their_ref.as_deref()?;
-            if norm(row.state.as_deref()) != norm(c.from.as_deref()) {
+            // The state the check listed: the one every reader counts (`record_field`).
+            if norm(tempo_core::logbook::record_field(row, "STATE")) != norm(c.from.as_deref()) {
                 return None;
             }
             let program = row.ota.their_program.as_deref().unwrap_or("POTA");
@@ -828,8 +829,13 @@ pub(crate) fn park_state_pairs(
                 }
                 _ => return None,
             };
+            // Written as a State edit is: a merged contest exchange's STATE becomes it too.
             let mut now = QsoRecord::clone(row);
-            now.state = Some(to);
+            let (state, contest) = tempo_core::logbook::edited_state(&Some(to), row);
+            now.state = state;
+            if contest.is_some() {
+                now.contest = contest;
+            }
             Some((Arc::clone(row), Some(Arc::new(now))))
         })
         .collect()
@@ -6009,3 +6015,50 @@ mod hot_parity_tests {
 
 #[cfg(test)]
 mod bulk_tests;
+
+#[cfg(test)]
+mod park_state_tests {
+    use super::*;
+    use tempo_core::logbook::{record_field, ContestFields, RecordId};
+
+    /// ★ The park-state check on a merged contest contact compares and writes the state every
+    /// reader counts: it applies only while the exchange's state is the one it listed, and the
+    /// state it writes is the exchange's as well as the record's own.
+    #[test]
+    fn a_park_state_change_on_a_merged_contact_reaches_its_exchange() {
+        let mut r = tempo_core::logbook::parse_adif(
+            "<CALL:5>K2ABC<QSO_DATE:8>20240101<TIME_ON:4>1200<BAND:3>20m<MODE:2>CW\
+             <STATE:2>NJ<POTA_REF:7>US-1234<EOR>",
+        )
+        .remove(0);
+        r.id = Some(RecordId::Provisional {
+            hash: 5,
+            ordinal: 0,
+        });
+        r.contest = Some(Box::new(ContestFields {
+            contest_id: "NAQP-CW".into(),
+            adif: vec![("STATE".into(), "NY".into())],
+            ..Default::default()
+        }));
+        let id = r.id.unwrap();
+        let rows = HashMap::from([(id, Arc::new(r))]);
+        let places = |_: &str, _: &str| vec!["US-PA".to_string()];
+        let change = |from: &str| ParkStateChange {
+            id,
+            from: Some(from.into()),
+            to: "PA".into(),
+        };
+        assert!(
+            park_state_pairs(&rows, &[change("NJ")], &places).is_empty(),
+            "listed by the looked-up state, which no reader counts: not the contact's"
+        );
+        let made = park_state_pairs(&rows, &[change("NY")], &places);
+        let now = made[0].1.as_deref().expect("changed");
+        assert_eq!(now.state.as_deref(), Some("PA"));
+        assert_eq!(record_field(now, "STATE"), Some("PA"));
+        assert_eq!(
+            now.contest.as_deref().unwrap().adif,
+            [("STATE".to_string(), "PA".to_string())]
+        );
+    }
+}

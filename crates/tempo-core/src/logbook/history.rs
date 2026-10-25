@@ -155,6 +155,9 @@ pub enum Source {
     File,
     /// An undo (or a redo) made from the history.
     Undo,
+    /// The one-time copy of merged contest contacts' received grid, name and QTH into their own
+    /// fields ([`super::with_contest_columns_copied`]): one run, listed for a whole-run undo.
+    ContestColumns,
 }
 
 impl Source {
@@ -172,6 +175,7 @@ impl Source {
             Source::Remote => "remote",
             Source::File => "file",
             Source::Undo => "undo",
+            Source::ContestColumns => "contest-columns",
         }
     }
 }
@@ -373,6 +377,34 @@ pub const CONTEST_COLUMNS_TAG: &str = "APP_NEXUS_C_ADIF";
 
 /// The prefix of every history-only tag: what no ADIF the log writes may ever carry.
 pub const HISTORY_ONLY_PREFIX: &str = "APP_NEXUS_C_";
+
+/// ⚠️ **A history-only tag found in a record's passthrough is taken out of it** — every tag of
+/// [`HISTORY_ONLY_PREFIX`] — and the contest columns [`CONTEST_COLUMNS_TAG`] holds are put back
+/// where a record keeps them, where it holds none of its own. Only a build from before this tag
+/// leaves it there: one that puts back a contact this build deleted, or undoes an entry that took
+/// a contact's last contest column out, keeps the tag it does not know as a field it does not
+/// model. Read back here, the contact is healed — its columns where they belong, and the tag
+/// never handed to a writer (which skips it as well).
+pub(crate) fn heal_history_only(r: &mut QsoRecord) {
+    if !r
+        .extra
+        .iter()
+        .any(|(k, _)| k.starts_with(HISTORY_ONLY_PREFIX))
+    {
+        return;
+    }
+    let stray = r
+        .extra
+        .iter()
+        .find(|(k, _)| k == CONTEST_COLUMNS_TAG)
+        .map(|(_, v)| crate::contest::carrier::decode_pairs(v));
+    r.extra.retain(|(k, _)| !k.starts_with(HISTORY_ONLY_PREFIX));
+    if let Some(columns) = stray.filter(|c| !c.is_empty()) {
+        if r.contest.as_deref().is_none_or(|c| c.adif.is_empty()) {
+            r.contest.get_or_insert_with(Default::default).adif = columns;
+        }
+    }
+}
 
 /// A contact's ADIF as the history sees it: the operator's own log's, with a contest exchange's
 /// directed columns under [`CONTEST_COLUMNS_TAG`] instead of their plain tags — so the plain tags
@@ -653,7 +685,8 @@ pub(crate) fn deleted(conn: &Connection, limit: usize) -> Result<Vec<Entry>> {
 /// export), or a change of a kind a later build wrote: anything but a delete — each with the latest
 /// such change's place in the order. What an undo of the run must not take out without a word
 /// ([`CannotUndo::ChangedSince`]). Not counted: an undo (a redo of the operator's own), and the
-/// fill job's country and state, which the log derives from the contact itself. An upload since is
+/// fill job's country and state and the copy of a contest column into its field
+/// ([`Source::ContestColumns`]), which the log derives from the contact itself. An upload since is
 /// not history: [`Entry::uploaded_since`] answers that.
 pub(crate) fn changed_after(conn: &Connection, run: &str) -> Result<HashMap<RecordId, i64>> {
     let sql = format!(
@@ -662,12 +695,13 @@ pub(crate) fn changed_after(conn: &Connection, run: &str) -> Result<HashMap<Reco
          JOIN qso_history h ON h.qso_id = c.qso_id AND h.seq > c.seq \
          JOIN history_run r ON r.id = h.run_id \
          WHERE cr.run = ?1 AND c.kind = {create} AND h.kind <> {delete} AND r.run <> ?1 \
-           AND r.source NOT IN ('{undo}', '{fill}') \
+           AND r.source NOT IN ('{undo}', '{fill}', '{copy}') \
          GROUP BY h.qso_id",
         create = Kind::Create.code(),
         delete = Kind::Delete.code(),
         undo = Source::Undo.code(),
         fill = Source::Fill.code(),
+        copy = Source::ContestColumns.code(),
     );
     ids_with_seq(conn, &sql, [run])
 }
@@ -804,7 +838,10 @@ pub(crate) fn latest_run(conn: &Connection, source: Option<&str>) -> Result<Opti
 /// as it stands, so a run already undone, or put back a contact at a time, is not among them; a
 /// purge whose deleted contacts the history no longer keeps ([`trim`]) is gone with them. A
 /// companion program's one logged contact is an import of one, and an undo of one contact is one
-/// too: neither is listed.
+/// too: neither is listed. The one-time copy of contest columns into their fields
+/// ([`Source::ContestColumns`]) is listed, however few contacts it changed, while a contact it
+/// changed is in the log and that change not undone: it is one change the operator never asked
+/// for, and one Undo of it is the way back. No other fill is ever listed.
 pub(crate) fn undoable_runs(
     conn: &Connection,
     since_ms: i64,
@@ -816,19 +853,27 @@ pub(crate) fn undoable_runs(
                   (SELECT COUNT(*) FROM qso_history c WHERE c.run_id = r.id) AS n, \
                   {removes} AS removes, \
                   EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id AND h.kind = {delete} \
-                          AND NOT EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id)) AS puts_back \
+                          AND NOT EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id)) AS puts_back, \
+                  CASE WHEN r.source = '{copy}' THEN \
+                    EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id \
+                            AND EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id) \
+                            AND NOT EXISTS (SELECT 1 FROM qso_history u \
+                                            WHERE u.qso_id = h.qso_id AND u.undoes = h.seq)) \
+                  ELSE 0 END AS standing \
            FROM history_run r \
-           WHERE r.at_ms >= ?1 AND r.source IN ('{operator}', '{import}', '{undo}')) r \
-         WHERE n >= 2 AND ( \
+           WHERE r.at_ms >= ?1 \
+             AND r.source IN ('{operator}', '{import}', '{undo}', '{copy}')) r \
+         WHERE (r.source = '{copy}' AND standing) OR (n >= 2 AND ( \
            (r.source = '{operator}' AND puts_back \
             AND NOT EXISTS (SELECT 1 FROM qso_history o WHERE o.run_id = r.id AND o.kind <> {delete})) \
            OR (r.source = '{import}' AND removes) \
-           OR (r.source = '{undo}' AND (removes OR puts_back))) \
+           OR (r.source = '{undo}' AND (removes OR puts_back)))) \
          ORDER BY r.id DESC LIMIT ?2",
         removes = added_still_in(),
         operator = Source::Operator.code(),
         import = Source::Import.code(),
         undo = Source::Undo.code(),
+        copy = Source::ContestColumns.code(),
         delete = Kind::Delete.code(),
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -918,6 +963,89 @@ fn old_format_kept(tag: &str, current: &QsoRecord) -> bool {
         .is_some_and(|c| c.adif.iter().any(|(t, v)| t == tag && !v.trim().is_empty()))
 }
 
+/// How the History names a contest column ([`CONTEST_COLUMNS_TAG`] holds them all): `TAG
+/// (contest)`, beside the record's own field of that tag.
+pub fn contest_column_label(tag: &str) -> String {
+    format!("{tag} (contest)")
+}
+
+/// [`revert`] of the contest columns ([`CONTEST_COLUMNS_TAG`]), a column at a time: each tag the
+/// entry changed goes back where its values are still what the entry wrote, and is kept, named
+/// ([`contest_column_label`]), where a later change moved it; a tag the entry did not change is
+/// left as it is now. So a later change of one column (a State edit's STATE, say) never makes the
+/// undo of another column's change drop it. Whether any column went back.
+fn revert_columns(
+    change: &FieldChange,
+    now: &mut Vec<(String, String)>,
+    kept: &mut Vec<String>,
+) -> bool {
+    use crate::contest::carrier::{decode_pairs, encode_pairs};
+    let pairs = |v: Option<&str>| decode_pairs(v.unwrap_or(""));
+    let at = now.iter().position(|(tag, _)| tag == CONTEST_COLUMNS_TAG);
+    let (old, new) = (pairs(change.old.as_deref()), pairs(change.new.as_deref()));
+    let mut columns = pairs(at.map(|i| now[i].1.as_str()));
+    let values = |pairs: &[(String, String)], tag: &str| -> Vec<String> {
+        pairs
+            .iter()
+            .filter(|(t, _)| t == tag)
+            .map(|(_, v)| v.clone())
+            .collect()
+    };
+    let mut tags: Vec<&str> = Vec::new();
+    for (t, _) in old.iter().chain(&new) {
+        if !tags.contains(&t.as_str()) {
+            tags.push(t);
+        }
+    }
+    let mut back = Vec::new();
+    for tag in tags {
+        let wrote = values(&new, tag);
+        if values(&old, tag) == wrote {
+            continue;
+        }
+        if values(&columns, tag) == wrote {
+            back.push(tag);
+        } else {
+            kept.push(contest_column_label(tag));
+        }
+    }
+    if back.is_empty() {
+        return false;
+    }
+    if columns == new {
+        // Nothing changed since: the columns as they were, in their order.
+        columns = old;
+    } else {
+        for tag in back {
+            let first = columns.iter().position(|(t, _)| t == tag);
+            columns.retain(|(t, _)| t != tag);
+            let was: Vec<(String, String)> =
+                old.iter().filter(|(t, _)| t == tag).cloned().collect();
+            // In its place: where it is now, else after the column it followed in the entry's
+            // `old`, else first.
+            let place = first.unwrap_or_else(|| {
+                let before = old.iter().position(|(t, _)| t == tag).unwrap_or(0);
+                old[..before]
+                    .iter()
+                    .rev()
+                    .find_map(|(p, _)| columns.iter().rposition(|(t, _)| t == p))
+                    .map_or(0, |i| i + 1)
+            });
+            let place = place.min(columns.len());
+            columns.splice(place..place, was);
+        }
+    }
+    match (at, columns.is_empty()) {
+        (Some(i), true) => {
+            now.remove(i);
+        }
+        (Some(i), false) => now[i].1 = encode_pairs(&columns),
+        (None, true) => {}
+        (None, false) => now.push((CONTEST_COLUMNS_TAG.to_string(), encode_pairs(&columns))),
+    }
+    true
+}
+
 /// [`undo`] of an edit: each changed field back where it still holds what the edit wrote.
 ///
 /// **An edit of the callsign, undone.** A corrected call ([`super::edited`]) clears the
@@ -938,6 +1066,10 @@ fn revert(entry: &Entry, current: &QsoRecord) -> std::result::Result<Undo, Canno
     for change in changes {
         // The contest columns as they were and stayed: the entry's mark, not a change.
         if change.old == change.new {
+            continue;
+        }
+        if change.tag == CONTEST_COLUMNS_TAG {
+            moved |= revert_columns(&change, &mut now, &mut kept);
             continue;
         }
         if !marked && old_format_kept(&change.tag, current) {

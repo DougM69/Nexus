@@ -1598,6 +1598,8 @@ impl LogDb {
             if let (Some(c), Some(adif)) = (rec.contest.as_deref_mut(), directed.remove(&id)) {
                 c.adif = adif;
             }
+            // A history-only tag an older build left in the passthrough goes back where it belongs.
+            super::history::heal_history_only(&mut rec);
             // The same emptiness test `parse_contest` applies, for the same reason: a `Some`
             // here is a claim that this contact belonged to a contest, and an all-empty block
             // would make that claim of every ordinary QSO.

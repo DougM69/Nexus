@@ -1306,3 +1306,284 @@ fn no_writer_ever_writes_the_history_only_tag() {
         }
     }
 }
+
+/// An NAQP contact as the contest merge wrote it before the merge filled the record's own name:
+/// the name the station sent only in the exchange, the state it sent beside the one looked up from
+/// its call.
+fn naqp(n: u64) -> QsoRecord {
+    let mut r = rec("W1AW", n);
+    r.name = None;
+    r.state = Some("NJ".into());
+    r.contest = Some(Box::new(crate::logbook::ContestFields {
+        session: "naqp".into(),
+        contest_id: "NAQP-CW".into(),
+        adif: vec![("NAME".into(), "BOB".into()), ("STATE".into(), "NY".into())],
+        ..Default::default()
+    }));
+    r
+}
+
+/// The operator's State edit as the Logbook makes it on a merged contact: the field and the
+/// exchange's STATE alike.
+fn state_edited(r: &QsoRecord, state: &str) -> QsoRecord {
+    let mut s = r.clone();
+    s.state = Some(state.into());
+    for (t, v) in &mut s.contest.as_deref_mut().unwrap().adif {
+        if t == "STATE" {
+            *v = state.into();
+        }
+    }
+    s
+}
+
+/// What a contact's record answers for its name and state, and its contest columns.
+fn read_back(r: &QsoRecord) -> (Option<String>, Option<String>, Vec<(String, String)>) {
+    (
+        crate::logbook::record_field(r, "NAME").map(str::to_string),
+        crate::logbook::record_field(r, "STATE").map(str::to_string),
+        r.contest
+            .as_deref()
+            .map(|c| c.adif.clone())
+            .unwrap_or_default(),
+    )
+}
+
+/// ★ The one-time copy of a merged contact's received name, then a State edit, then an Undo of
+/// the copy: the name is still the contact's (in its own field or its contest column, never in
+/// neither), the State edit stays, and nothing is reported kept that the undo did not keep.
+#[test]
+fn undoing_the_contest_column_copy_after_a_state_edit_keeps_the_name() {
+    let a = naqp(1);
+    let copied = crate::logbook::with_contest_columns_copied(&a).expect("copies");
+    let edited = state_edited(&copied, "PA");
+    let (_, h) = entries_after(&[(&a, &copied), (&copied, &edited)]);
+    match undo(&h[0], Some(&edited)).unwrap() {
+        Undo::Revert { row, kept } => {
+            assert!(kept.is_empty(), "{kept:?}");
+            assert_eq!(
+                read_back(&row),
+                (
+                    Some("BOB".into()),
+                    Some("PA".into()),
+                    vec![
+                        ("NAME".to_string(), "BOB".to_string()),
+                        ("STATE".to_string(), "PA".to_string())
+                    ]
+                )
+            );
+            assert_eq!(row.name, None, "the copy is undone");
+            assert_eq!(row.state.as_deref(), Some("PA"), "the State edit stays");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// ★ An entry that took a column out (as an earlier build's move did), then a change of another
+/// column, then its Undo: the column it took comes back, the later change stays — each column on
+/// its own, never the contest columns as one.
+#[test]
+fn an_undo_reverts_the_contest_columns_one_tag_at_a_time() {
+    let a = naqp(1);
+    let mut moved = a.clone();
+    moved.name = Some("BOB".into());
+    moved
+        .contest
+        .as_deref_mut()
+        .unwrap()
+        .adif
+        .retain(|(t, _)| t != "NAME");
+    let edited = state_edited(&moved, "PA");
+    let (_, h) = entries_after(&[(&a, &moved), (&moved, &edited)]);
+    match undo(&h[0], Some(&edited)).unwrap() {
+        Undo::Revert { row, kept } => {
+            assert!(kept.is_empty(), "{kept:?}");
+            assert_eq!(row.name, None);
+            assert_eq!(
+                read_back(&row),
+                (
+                    Some("BOB".into()),
+                    Some("PA".into()),
+                    vec![
+                        ("NAME".to_string(), "BOB".to_string()),
+                        ("STATE".to_string(), "PA".to_string())
+                    ]
+                ),
+                "the name back in its column, in its place; the later State edit kept"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// ★ A State edit, then a change of another contest column, then an Undo of the State edit:
+/// both the record's own state and the exchange's go back, and the later column stays.
+#[test]
+fn undoing_a_state_edit_after_another_column_changed_reverts_both_states() {
+    let a = naqp(1);
+    let edited = state_edited(&a, "PA");
+    let mut later = edited.clone();
+    later
+        .contest
+        .as_deref_mut()
+        .unwrap()
+        .adif
+        .push(("CQZ".into(), "5".into()));
+    let (_, h) = entries_after(&[(&a, &edited), (&edited, &later)]);
+    match undo(&h[0], Some(&later)).unwrap() {
+        Undo::Revert { row, kept } => {
+            assert!(kept.is_empty(), "{kept:?}");
+            assert_eq!(row.state.as_deref(), Some("NJ"), "the field");
+            assert_eq!(
+                row.contest.as_deref().unwrap().adif,
+                [
+                    ("NAME".to_string(), "BOB".to_string()),
+                    ("STATE".to_string(), "NY".to_string()),
+                    ("CQZ".to_string(), "5".to_string()),
+                ],
+                "the exchange's state, and the later column"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// ★ A contest column the entry changed and a later change moved again keeps the later value,
+/// named as the History shows it, not by the history's own tag.
+#[test]
+fn a_contest_column_changed_since_is_kept_and_named() {
+    let a = naqp(1);
+    let edited = state_edited(&a, "PA");
+    let mut later = edited.clone();
+    later.contest.as_deref_mut().unwrap().adif[1].1 = "OH".into();
+    let (_, h) = entries_after(&[(&a, &edited), (&edited, &later)]);
+    match undo(&h[0], Some(&later)).unwrap() {
+        Undo::Revert { row, kept } => {
+            assert_eq!(kept, ["STATE (contest)".to_string()]);
+            assert_eq!(row.state.as_deref(), Some("NJ"));
+            assert_eq!(read_back(&row).1.as_deref(), Some("OH"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// ★ The operator's own edit of a field a contest column also holds — a grid typed on a contact
+/// that keeps the grid its exchange carried — undoes: this build's entry carries the unchanged
+/// contest columns as its mark, so it is never taken for an older build's.
+#[test]
+fn undoing_the_operators_grid_edit_beside_a_contest_grid() {
+    let a = merged(1);
+    let mut b = a.clone();
+    b.grid = Some("FN20".into());
+    let (_, h) = entries_after(&[(&a, &b)]);
+    match undo(&h[0], Some(&b)).unwrap() {
+        Undo::Revert { row, kept } => {
+            assert!(kept.is_empty(), "{kept:?}");
+            assert_eq!(row, a, "the grid edit undone, the columns as they were");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// ★ A record an older build handed back with the history-only tag in its passthrough — a VHF
+/// contact whose only contest column was its grid, put back or undone by a build that does not
+/// know the tag: no writer ever writes the tag, and a read of the record (from ADIF, and from the
+/// store) puts its columns back where they belong and drops the tag.
+#[test]
+fn a_stray_history_only_tag_is_never_written_and_heals_on_read() {
+    let mut stray = rec("W1AW", 1);
+    stray.grid = None;
+    stray.contest = Some(Box::new(crate::logbook::ContestFields {
+        session: "vhf".into(),
+        contest_id: "ARRL-VHF-JAN".into(),
+        ..Default::default()
+    }));
+    stray
+        .extra
+        .push((CONTEST_COLUMNS_TAG.into(), "GRIDSQUARE::FN31".into()));
+    stray.extra.sort();
+    for out in [
+        crate::logbook::adif_record(&stray),
+        adif_record_own_log(&stray),
+        crate::logbook::adif_record_with_station(&stray, "KD9TAW", "EN52"),
+    ] {
+        assert!(!out.contains(HISTORY_ONLY_PREFIX), "{out}");
+        assert!(
+            out.contains("<APP_OTHERLOG_X:5>kept!"),
+            "control: the passthrough is written: {out}"
+        );
+    }
+    let healed = |r: &QsoRecord| {
+        assert!(
+            !r.extra
+                .iter()
+                .any(|(k, _)| k.starts_with(HISTORY_ONLY_PREFIX)),
+            "{:?}",
+            r.extra
+        );
+        assert!(r.extra.iter().any(|(k, _)| k == "APP_OTHERLOG_X"));
+        assert_eq!(
+            r.contest.as_deref().map(|c| c.adif.clone()),
+            Some(vec![("GRIDSQUARE".to_string(), "FN31".to_string())])
+        );
+        assert_eq!(crate::logbook::record_field(r, "GRIDSQUARE"), Some("FN31"));
+    };
+    // As an older build's own log file holds it.
+    let mut text = adif_record_own_log(&stray);
+    let at = text.rfind("<EOR>").unwrap();
+    text.insert_str(
+        at,
+        &crate::logbook::field(CONTEST_COLUMNS_TAG, "GRIDSQUARE::FN31"),
+    );
+    healed(&parse_adif(&text).remove(0));
+    // As an older build stored it.
+    let mut db = LogDb::open_in_memory().unwrap();
+    write(&mut db, std::slice::from_ref(&stray), None).unwrap();
+    let back = db.rows_by_ids(&[id(1)]).unwrap();
+    healed(&back[0]);
+}
+
+/// ★ The one-time copy of contest columns into their fields is listed for a whole-run undo — even
+/// over one contact — while a contact it changed is in the log and that change is not undone; an
+/// ordinary fill run, of any size, never is.
+#[test]
+fn the_contest_column_copy_is_listed_until_it_is_undone_and_a_fill_never() {
+    let mut db = LogDb::open_in_memory().unwrap();
+    let (a, b, c) = (naqp(1), rec("K2XYZ", 2), rec("K3QQQ", 3));
+    write(&mut db, &[a.clone(), b.clone(), c.clone()], None).unwrap();
+    let copied = crate::logbook::with_contest_columns_copied(&a).unwrap();
+    write(
+        &mut db,
+        std::slice::from_ref(&copied),
+        Some(&note("copy", Source::ContestColumns, Kind::Fill)),
+    )
+    .unwrap();
+    let (mut b2, mut c2) = (b.clone(), c.clone());
+    b2.state = Some("NY".into());
+    c2.state = Some("OH".into());
+    write(
+        &mut db,
+        &[b2, c2],
+        Some(&note("fill", Source::Fill, Kind::Fill)),
+    )
+    .unwrap();
+    let runs = |db: &LogDb| -> Vec<(String, String, u64)> {
+        db.history_undoable_runs(0, 10)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.run, r.source, r.contacts))
+            .collect()
+    };
+    assert_eq!(
+        runs(&db),
+        [("copy".to_string(), "contest-columns".to_string(), 1)]
+    );
+    // Undone: off the list.
+    let entry = db.history_run("copy").unwrap().remove(0);
+    let Ok(Undo::Revert { row, .. }) = undo(&entry, Some(&copied)) else {
+        panic!("undoes")
+    };
+    let mut undo_note = note("undo-copy", Source::Undo, Kind::Edit);
+    undo_note.undoes.insert(id(1), entry.seq);
+    write(&mut db, &[row], Some(&undo_note)).unwrap();
+    assert!(runs(&db).is_empty(), "{:?}", runs(&db));
+}

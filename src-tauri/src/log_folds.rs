@@ -620,7 +620,7 @@ pub(crate) fn journey_kept(
     tempo_core::logbook::io_fence::whole_log_off_engine_lock("the Journey fold");
     let mut qsos: Vec<propagation::JourneyQso> = Vec::new();
     let fresh = rows
-        .each(JOURNEY, Scope::All, Order::Log, &mut |r| {
+        .each_with(JOURNEY, &["STATE"], Scope::All, Order::Log, &mut |r| {
             qsos.push(journey_qso(r));
             ControlFlow::Continue(())
         })
@@ -642,7 +642,8 @@ pub(crate) fn journey_qso(r: &QsoRecord) -> propagation::JourneyQso {
     propagation::JourneyQso {
         call: r.call.clone(),
         grid: r.grid.clone(),
-        state: r.state.clone(),
+        // The state its upload carries: a merged contest contact's exchange (`record_field`).
+        state: tempo_core::logbook::record_field(r, "STATE").map(str::to_string),
         band: Band::from_label(&r.band),
         mode: ModeClass::from_adif(&r.mode),
         when_unix: r.when_unix as i64,
@@ -812,8 +813,9 @@ pub(crate) fn newest_logged_qth(
 ) -> Result<Option<(String, u64)>, String> {
     // Newest first: (when, Ok(state)) for an ordinary row, (when, Err(id)) for this contest's.
     let mut found: Vec<(u64, Result<String, tempo_core::logbook::RecordId>)> = Vec::new();
-    rows.each(
+    rows.each_with(
         QTHS,
+        &["STATE"],
         Scope::CallNorm(&call_norm_of(peer)),
         Order::Log,
         &mut |q| {
@@ -822,7 +824,9 @@ pub(crate) fn newest_logged_qth(
                     .contest
                     .as_deref()
                     .is_some_and(|c| contest_ids.contains(&c.contest_id));
-                match (ours, q.id, q.state.as_deref().map(str::trim)) {
+                // Another row's state as its upload carries it (`record_field`): a merged
+                // contest contact's exchange STATE.
+                match (ours, q.id, tempo_core::logbook::record_field(q, "STATE")) {
                     (true, Some(id), _) => found.push((q.when_unix, Err(id))),
                     (false, _, Some(st)) if !st.is_empty() => {
                         found.push((q.when_unix, Ok(st.to_string())))
@@ -1900,6 +1904,45 @@ mod tests {
         let other = ["CA-QSO-PARTY".to_string()];
         let in_ca = answered(&mut || newest_logged_qth(&rows, "K9AAA", &other, "QTH"));
         assert_eq!(in_ca.map(|(v, _)| v).as_deref(), Some("IL"));
+    }
+
+    /// ★ The Journey and the contest entry's last-state lookup take a merged contest contact's
+    /// state as its upload carries it — the state its exchange sent, read from the store beside
+    /// the columns they read — never the one looked up from its call.
+    #[test]
+    fn the_journey_and_the_last_state_lookup_read_the_exchanges_state() {
+        let d = Dir::new("merged-state");
+        std::fs::write(d.log(), tempo_core::logbook::adif_header()).unwrap();
+        let e = launch(&d);
+        let mut r = merged_contest_contact();
+        r.call = "K9NQP".into();
+        r.state = Some("NJ".into());
+        let c = r.contest.as_deref_mut().unwrap();
+        c.contest_id = "NAQP-CW".into();
+        c.adif = vec![("STATE".into(), "NY".into())];
+        r.id = Some(tempo_core::logbook::RecordId::Provisional {
+            hash: 77,
+            ordinal: 0,
+        });
+        tempo_core::logbook::sqlite::LogDb::open(&d.db())
+            .unwrap()
+            .insert(&r, Resolved::default())
+            .unwrap();
+        let rows = e.lock().unwrap().log_rows();
+        let ids = ["IL-QSO-PARTY".to_string()];
+        let said = answered(&mut || newest_logged_qth(&rows, "K9NQP", &ids, "QTH"));
+        assert_eq!(said.map(|(v, _)| v).as_deref(), Some("NY"));
+        let mut journey = Vec::new();
+        answered(&mut || {
+            journey.clear();
+            rows.each_with(JOURNEY, &["STATE"], Scope::All, Order::Log, &mut |q| {
+                journey.push(journey_qso(q).state);
+                ControlFlow::Continue(())
+            })
+            .map_err(unreadable)?
+            .or_refuse()
+        });
+        assert_eq!(journey, [Some("NY".to_string())]);
     }
 
     /// ★ The award fold reads what each record carries beyond its call — its DXCC number, CQ zone

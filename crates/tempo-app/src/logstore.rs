@@ -2812,13 +2812,14 @@ pub(crate) mod tests {
         );
     }
 
-    /// ★ THE ONE-TIME CONTEST-COLUMN MOVE: a contact merged before the merge wrote a received
-    /// grid, name and QTH into its own fields gets them there — only where its field is blank —
-    /// as ONE history run that one Undo takes back to the byte; once per store; no upload stamp
+    /// ★ THE ONE-TIME CONTEST-COLUMN COPY: a contact merged before the merge wrote a received
+    /// grid, name and QTH into its own fields gets them there — only where its field is blank,
+    /// the contest columns left as they were — as ONE history run, listed in the Logbook for a
+    /// whole-run undo, that one Undo takes back to the byte; once per store; no upload stamp
     /// moves; and no file the log writes (its mirror, a backup copy, an export, an upload) ever
     /// changes its tags or carries the history's own.
     #[test]
-    fn the_contest_column_move_runs_once_as_one_undoable_run() {
+    fn the_contest_column_copy_runs_once_as_one_undoable_run() {
         use tempo_core::logbook::{adif_record, ContestFields, RecordId, UploadStatus};
         let d = Dir::new("contest-move");
         std::fs::write(d.log(), legacy_log(1)).unwrap();
@@ -2875,25 +2876,22 @@ pub(crate) mod tests {
         };
         let e = Mutex::new(engine_on_store(&d));
 
-        let done = crate::logfill::move_contest_columns(&e).expect("the move runs");
+        let done = crate::logfill::copy_contest_columns(&e).expect("the copy runs");
         flush(&e.lock().unwrap());
-        assert_eq!(done.moved, 1, "{done:?}");
+        assert_eq!(done.copied, 1, "{done:?}");
         let run = done.run.clone().expect("one run");
         let after = stored(&d);
-        let moved = after.iter().find(|r| r.id == blank.id).unwrap();
+        let copied = after.iter().find(|r| r.id == blank.id).unwrap();
         assert_eq!(
             (
-                moved.grid.as_deref(),
-                moved.name.as_deref(),
-                moved.qth.as_deref()
+                copied.grid.as_deref(),
+                copied.name.as_deref(),
+                copied.qth.as_deref()
             ),
             (Some("FN31"), Some("BOB"), Some("BOSTON"))
         );
-        assert_eq!(
-            moved.contest.as_deref().unwrap().adif,
-            [("MY_GRIDSQUARE".to_string(), "EN53".to_string())]
-        );
-        assert_eq!(moved.upload, blank.upload, "no stamp moves");
+        assert_eq!(copied.contest, blank.contest, "the columns stay");
+        assert_eq!(copied.upload, blank.upload, "no stamp moves");
         for r in [&own, &none] {
             let now = after.iter().find(|a| a.id == r.id).unwrap();
             assert_eq!(now, r, "untouched");
@@ -2909,9 +2907,19 @@ pub(crate) mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].qso_id, blank.id.unwrap());
 
+        // Listed for one Undo of the whole of it, under its own source.
+        let listed = crate::loghistory::undoable_runs(&e, 20).unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|r| (r.run.as_str(), r.source.as_str(), r.contacts))
+                .collect::<Vec<_>>(),
+            [(run.as_str(), "contest-columns", 1)]
+        );
+
         // Once: the next launch reads nothing and writes nothing.
-        let again = crate::logfill::move_contest_columns(&e).expect("runs");
-        assert!(again.current && again.moved == 0, "{again:?}");
+        let again = crate::logfill::copy_contest_columns(&e).expect("runs");
+        assert!(again.current && again.copied == 0, "{again:?}");
 
         // No file the log writes holds the history's own tag; the mirror holds one grid each.
         let export = crate::logexport::export_logbook(
@@ -2943,11 +2951,94 @@ pub(crate) mod tests {
             assert!(!text.contains("APP_NEXUS_C_"), "{text}");
         }
 
-        // One Undo of the run: every contact back to the byte.
+        // One Undo of the run: every contact back to the byte, and the run off the list.
         let (undone, _) = crate::loghistory::undo_run(&e, &run);
         assert_eq!(undone.expect("undone").changed, 1);
         flush(&e.lock().unwrap());
         assert_eq!(stored(&d), before, "the log as it was, whole");
+        assert!(crate::loghistory::undoable_runs(&e, 20).unwrap().is_empty());
+    }
+
+    /// ★ The contest-column copy over several chunks is still one run; and a copy cut short
+    /// before its last chunk (a crash, a busy log) is taken up at the next launch in the SAME run,
+    /// so one Undo of it still puts every contact back.
+    #[test]
+    fn the_contest_column_copy_over_chunks_and_a_resumed_launch_is_one_run() {
+        use tempo_core::logbook::{ContestFields, RecordId};
+        let d = Dir::new("contest-copy-chunks");
+        std::fs::write(d.log(), legacy_log(1)).unwrap();
+        flush(&engine_on_store(&d));
+        let merged = |n: u64| {
+            let mut r = qso(&format!("K{n}NQP"), 1_790_000_000 + n);
+            r.id = Some(RecordId::Provisional {
+                hash: 8_000 + n,
+                ordinal: 0,
+            });
+            r.name = None;
+            r.contest = Some(Box::new(ContestFields {
+                session: "naqp".into(),
+                contest_id: "NAQP-CW".into(),
+                adif: vec![
+                    ("NAME".into(), format!("OP{n}")),
+                    ("STATE".into(), "NY".into()),
+                ],
+                ..Default::default()
+            }));
+            r
+        };
+        let insert = |ns: std::ops::Range<u64>| {
+            let mut db = LogDb::open(&d.db()).unwrap();
+            for n in ns {
+                db.insert(&merged(n), Resolved::default()).unwrap();
+            }
+        };
+        insert(1..6);
+        let before = stored(&d);
+
+        // Five contacts, two to a change: three chunks, one run.
+        let e = Mutex::new(engine_on_store(&d));
+        let done = crate::logfill::copy_contest_columns_in_chunks(&e, 2).expect("copies");
+        flush(&e.lock().unwrap());
+        assert_eq!(done.copied, 5, "{done:?}");
+        let run = done.run.clone().expect("one run");
+        let reads = e.lock().unwrap().log_store_reads();
+        let entries = |run: &str| reads.read(READ_WAIT, |db| db.history_run(run)).unwrap().0;
+        assert_eq!(entries(&run).len(), 5);
+        assert!(stored(&d)
+            .iter()
+            .filter(|r| r.contest.is_some())
+            .all(|r| r.name.is_some()));
+        drop(e);
+
+        // A launch cut short: the copy's marker not yet in the store, and contacts still to copy.
+        {
+            let db = LogDb::open(&d.db()).unwrap();
+            db.set_meta(crate::logfill::CONTEST_COLUMNS_COPIED, 0)
+                .unwrap();
+        }
+        insert(6..8);
+        let e = Mutex::new(engine_on_store(&d));
+        let resumed = crate::logfill::copy_contest_columns_in_chunks(&e, 1).expect("copies");
+        flush(&e.lock().unwrap());
+        assert_eq!(resumed.copied, 2, "only the two left: {resumed:?}");
+        assert_eq!(resumed.run.as_deref(), Some(run.as_str()), "the same run");
+        let reads = e.lock().unwrap().log_store_reads();
+        let all = reads.read(READ_WAIT, |db| db.history_run(&run)).unwrap().0;
+        assert_eq!(all.len(), 7);
+        assert!(crate::logfill::copy_contest_columns(&e).unwrap().current);
+
+        // One Undo of it: all seven back as they were (the five as before the first launch).
+        let (undone, _) = crate::loghistory::undo_run(&e, &run);
+        assert_eq!(undone.expect("undone").changed, 7);
+        flush(&e.lock().unwrap());
+        let now = stored(&d);
+        for r in &before {
+            assert_eq!(now.iter().find(|n| n.id == r.id), Some(r), "{}", r.call);
+        }
+        assert!(now
+            .iter()
+            .filter(|r| r.contest.is_some())
+            .all(|r| r.name.is_none()));
     }
 
     /// ★ D2-A: an imported US contact carries its state from the moment it is imported — in the

@@ -1713,12 +1713,14 @@ export async function redoQsoChange(run: string): Promise<UndoAnswer> {
   return invoke<UndoAnswer>('redo_qso_change', { run })
 }
 
-/** A purge, an import or a whole run's undo whose whole-run undo can still be asked for. */
+/** A purge, an import, the one-time contest-column copy or a whole run's undo whose whole-run undo
+ *  can still be asked for. */
 export interface HistoryRun {
   /** What `undoHistoryRun` takes. */
   run: string
-  /** `undo`: a whole run's undo, which undone is the redo. */
-  kind: 'purge' | 'import' | 'undo'
+  /** `contestColumns`: merged contest contacts' received grid, name and QTH copied into their own
+   *  fields, once. `undo`: a whole run's undo, which undone is the redo. */
+  kind: 'purge' | 'import' | 'contestColumns' | 'undo'
   atMs: number
   /** How many contacts it changed. */
   contacts: number

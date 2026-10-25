@@ -1913,6 +1913,7 @@ export const EN = {
   'logbook.undo': 'Undo',
   'logbook.import.undone': 'Import undone',
   'logbook.purge.undone': 'Purge undone',
+  'logbook.contestColumns.undone': 'Copy of contest grid, name and QTH undone',
   // Recently deleted: the contacts taken out of the log and not put back, each with Restore.
   'logbook.deleted.button': 'Recently deleted',
   'logbook.deleted.title': 'Recently deleted',
@@ -1939,6 +1940,13 @@ export const EN = {
   },
   'logbook.deleted.undoPurge': 'Undo this purge',
   'logbook.deleted.undoImport': 'Undo this import',
+  // The one-time copy of a merged contest contact's received grid, name and QTH into its own
+  // fields, listed so it can be undone as one change.
+  'logbook.deleted.run.contestColumns': {
+    one: 'Contest grid, name and QTH copied into {{count}} contact · {{when}}',
+    other: 'Contest grid, name and QTH copied into {{count}} contacts · {{when}}',
+  },
+  'logbook.deleted.undoContestColumns': 'Undo this copy',
   // A whole undo of a purge or an import, listed so it can be redone after its own toast has gone.
   'logbook.deleted.run.undo': {
     one: 'Undo of {{count}} contact · {{when}}',
@@ -1956,6 +1964,10 @@ export const EN = {
   'logbook.deleted.confirm.import': {
     one: 'Undo this import of {{count}} contact from {{when}}?',
     other: 'Undo this import of {{count}} contacts from {{when}}?',
+  },
+  'logbook.deleted.confirm.contestColumns': {
+    one: 'Undo copying the contest grid, name and QTH into {{count}} contact from {{when}}? The copied fields are blank again; the contest exchange keeps the values.',
+    other: 'Undo copying the contest grid, name and QTH into {{count}} contacts from {{when}}? The copied fields are blank again; the contest exchange keeps the values.',
   },
   'logbook.deleted.confirm.undoRun': {
     one: 'Redo the undo of {{count}} contact from {{when}}?',
@@ -1990,6 +2002,7 @@ export const EN = {
   'qso.history.source.import': 'import',
   'qso.history.source.fill': 'automatic fill',
   'qso.history.source.contest': 'contest log',
+  'qso.history.source.contestColumns': 'copy from the contest exchange',
   'qso.history.source.remote': 'Remote',
   'qso.history.source.file': 'another program',
   'qso.history.source.undo': 'undo',
