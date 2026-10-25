@@ -140,7 +140,13 @@ pub fn band_plan() -> Vec<BandChannel> {
         // --- 33 cm --- (ARRL band plan, arrl.org/band-plan: 903.100 is the CW/SSB weak-signal
         // calling frequency, 903.000–903.100 beacons, 903.100–903.400 CW/SSB weak signal.)
         ch("33cm", "UHF", 903.2000, "USB", "33 cm · SSB/weak-signal", "in the 903.100–903.400 weak-signal segment; clear of the 903.100 call and the 903.000–903.100 beacons. 902.100 is the other regional calling option — check your area"),
-        ch("23cm", "UHF", 1296.2000, "USB", "23 cm · SSB/weak-signal", "in the 1296.2 SSB segment; clear of the 1296.100 call, FT8 1296.174, beacons 1296.300+"),
+        // --- 23 cm --- (ARRL band plan, arrl.org/band-plan: 1295.800–1296.080 EME,
+        // 1296.080–1296.200 CW/SSB weak signal with the 1296.100 calling frequency,
+        // 1296.200–1296.400 beacons.) Moved off 1296.200, the beacon segment's bottom edge.
+        // 1296.185 keeps a 3 kHz USB passband ~5 kHz above FT2's (1296.177) and ~12 kHz below
+        // the beacons. The channel is this fixed table, not negotiated on the air, so a build
+        // from before the move still calls on 1296.200 and the two do not hear each other.
+        ch("23cm", "UHF", 1296.1850, "USB", "23 cm · SSB/weak-signal", "in the 1296.080–1296.200 weak-signal segment, below the 1296.200–1296.400 beacons; clear of the 1296.100 call, FT8 1296.174 and FT2 1296.177. Older Nexus builds called on 1296.200"),
         ch("70cm-fm", "UHF", 445.9500, "FM", "70 cm · FM simplex (HT)", "local-option only — 70 cm has no national digital segment; below 446.000 call. Check your coordinator"),
     ]
 }
@@ -924,6 +930,74 @@ mod tests {
                 "{band}: the Tempo channel sits clear of the calling frequency"
             );
         }
+    }
+
+    /// The 23 cm Tempo channel is in the ARRL plan's CW/SSB weak-signal segment,
+    /// 1296.080–1296.200 (arrl.org/band-plan), judged on a whole 3 kHz USB passband: not
+    /// in the 1296.200–1296.400 beacon segment above it, not in the 1295.800–1296.080 EME
+    /// segment below it, and not on the FT2 passband just under it.
+    #[test]
+    fn the_23cm_tempo_channel_sits_below_the_beacons_and_above_eme() {
+        let c = band_plan()
+            .into_iter()
+            .find(|c| c.band == "23cm")
+            .expect("a 23 cm Tempo channel");
+        let (lo, hi) = (c.dial_mhz, c.dial_mhz + 0.003);
+        assert!(hi < 1296.200, "{lo} MHz reaches the beacon segment");
+        assert!(lo > 1296.080, "{lo} MHz is in the EME segment");
+        assert!(
+            (lo - 1296.100).abs() > 0.05,
+            "{lo} MHz is on the calling frequency"
+        );
+        let ft2 = ft2_band_plan()
+            .into_iter()
+            .find(|c| c.band == "23cm")
+            .unwrap()
+            .dial_mhz;
+        assert!(
+            lo > ft2 + 0.003,
+            "{lo} MHz overlaps the FT2 passband at {ft2}"
+        );
+        // Both ways: the dial names the band and the channel, and the old dial no longer
+        // names a Tempo channel.
+        assert_eq!(band_for_dial(c.dial_mhz), Some("23cm"));
+        assert_eq!(channel_for_dial(c.dial_mhz).unwrap().band, "23cm");
+        assert!(channel_for_dial(1296.200).is_none());
+    }
+
+    /// Every Tempo channel's dial and mode, pinned. Only 23 cm moved (1296.200 → 1296.185);
+    /// a change to any other row is a Tempo protocol change and has to be made here on purpose.
+    #[test]
+    fn the_tempo_plan_is_the_golden_table() {
+        let golden: &[(&str, f64, &str)] = &[
+            ("160m", 1.8460, "USB"),
+            ("80m", 3.5935, "USB"),
+            ("40m", 7.0430, "USB"),
+            ("30m", 10.1425, "USB"),
+            ("20m", 14.0905, "USB"),
+            ("17m", 18.0955, "USB"),
+            ("15m", 21.0905, "USB"),
+            ("12m", 24.9115, "USB"),
+            ("10m", 28.1000, "USB"),
+            ("6m", 50.3450, "USB"),
+            ("2m", 144.2350, "USB"),
+            ("2m-fm", 145.5600, "FM"),
+            ("1.25m-fm", 223.5600, "FM"),
+            ("1.25m", 222.1300, "USB"),
+            ("70cm", 432.4500, "USB"),
+            ("33cm", 903.2000, "USB"),
+            ("23cm", 1296.1850, "USB"),
+            ("70cm-fm", 445.9500, "FM"),
+        ];
+        let plan: Vec<(String, f64, String)> = band_plan()
+            .into_iter()
+            .map(|c| (c.band, c.dial_mhz, c.mode))
+            .collect();
+        let want: Vec<(String, f64, String)> = golden
+            .iter()
+            .map(|(b, f, m)| (b.to_string(), *f, m.to_string()))
+            .collect();
+        assert_eq!(plan, want);
     }
 
     use super::*;
