@@ -35,6 +35,7 @@ export type SettingsTabId =
   | 'cw'
   | 'digital'
   | 'spots'
+  | 'logbook'
   | 'logging'
   | 'contesting'
   | 'appearance'
@@ -64,6 +65,11 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
   { id: 'cw', label: 'CW' },
   { id: 'digital', label: 'Digital' },
   { id: 'spots', label: 'Spots & Alerts' },
+  // The logbook's own settings — its display, how long it keeps a deleted contact, the callbook
+  // lookups and the reference data a contact is checked against — on one tab (operator,
+  // 2026-10-25). Logging & Connectors keeps the service sign-ins, the uploads and the programs
+  // that log through Nexus.
+  { id: 'logbook', label: 'Logbook' },
   { id: 'logging', label: 'Logging & Connectors' },
   { id: 'contesting', label: 'Contesting' },
   { id: 'appearance', label: 'Appearance' },
@@ -458,6 +464,64 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'beep', 'needed board'],
   },
 
+  // ---- Logbook -----------------------------------------------------------------
+  // The logbook's own settings (operator, 2026-10-25). The callbook lookups, worked-before and the
+  // three reference lists came from Logging & Connectors; the columns and the station card from
+  // Appearance; the deleted-contact retention from Config's Data & log folder. Every control kept
+  // its setting, so a stored choice is untouched; the moved sections kept their ids.
+  {
+    id: 'logbook-display',
+    label: 'Logbook display',
+    tab: 'logbook',
+    keywords: ['logbook columns', 'columns', 'column width', 'more columns', 'reset columns',
+      'table', 'station card', 'callsign card', 'call card', 'hover', 'pointer'],
+  },
+  {
+    // How long the log's history keeps a deleted contact for Recently deleted and Undo.
+    id: 'logbook-history',
+    label: 'Deleted contacts',
+    tab: 'logbook',
+    keywords: ['recently deleted', 'undo', 'history', 'keep deleted', 'retention', 'purge',
+      'restore a contact'],
+  },
+  {
+    // QRZ's callbook sign-in (the XML lookup, not the Logbook API key, which uploads and stays with
+    // the uploads), HamQTH, callook.info and the answers kept on this computer.
+    id: 'callbook',
+    label: 'Callbook lookups',
+    tab: 'logbook',
+    neededInHourOne: true,
+    keywords: ['qrz', 'qrz lookup', 'qrz xml', 'qrz password', 'qrz username', 'hamqth', 'callook',
+      'callook.info', 'name lookup', 'autofill', 'name and grid', 'callbook cache', 'lookup cache',
+      'offline lookup', 'clear cache', 'refresh', 'refresh a call'],
+  },
+  {
+    id: 'connections-b4',
+    label: 'Worked-before (B4) & dupes',
+    tab: 'logbook',
+    keywords: ['b4', 'worked before', 'dupe', 'duplicate', 'match mode', 'band', 'highlight',
+      'wsjt-x', 'already worked'],
+  },
+  {
+    id: 'lotw-users',
+    label: 'LoTW users list',
+    tab: 'logbook',
+    keywords: ['lotw', 'logbook of the world', 'users', 'marks', 'known users'],
+  },
+  {
+    id: 'callsign-state',
+    label: 'Callsign → state database',
+    tab: 'logbook',
+    keywords: ['fcc', 'state', 'was', 'callsign database', 'us states'],
+  },
+  {
+    id: 'country-file',
+    label: 'Country file (DXCC)',
+    tab: 'logbook',
+    keywords: ['cty', 'cty.dat', 'dxcc', 'country file', 'entities', 'ad1c', 'prefix',
+      'country'],
+  },
+
   // ---- Logging & Connectors ----------------------------------------------------
   {
     id: 'connections',
@@ -465,13 +529,6 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'logging',
     keywords: ['status', 'connector', 'health', 'log', 'connection log', 'test', 'upload',
       'not uploading', 'last upload', 'failing', 'revoked', 'wrong password', 'green'],
-  },
-  {
-    id: 'connections-b4',
-    label: 'Worked-before (B4) & dupes',
-    tab: 'logging',
-    keywords: ['b4', 'worked before', 'dupe', 'duplicate', 'match mode', 'band', 'highlight',
-      'wsjt-x', 'already worked'],
   },
   {
     id: 'integrations-feeds',
@@ -512,35 +569,16 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['n1mm', 'contest logger', 'broadcast', 'contactinfo'],
   },
   {
-    id: 'lotw-users',
-    label: 'LoTW users list',
-    tab: 'logging',
-    keywords: ['lotw', 'logbook of the world', 'users', 'marks', 'known users'],
-  },
-  {
-    id: 'callsign-state',
-    label: 'Callsign → state database',
-    tab: 'logging',
-    keywords: ['fcc', 'state', 'was', 'callsign database', 'us states'],
-  },
-  {
-    id: 'country-file',
-    label: 'Country file (DXCC)',
-    tab: 'logging',
-    keywords: ['cty', 'cty.dat', 'dxcc', 'country file', 'entities', 'ad1c', 'prefix',
-      'country'],
-  },
-  {
     id: 'confirmations',
     label: 'Confirmations',
     tab: 'logging',
     neededInHourOne: true,
     keywords: ['lotw', 'eqsl', 'qrz', 'clublog', 'club log', 'hrdlog', 'cloudlog', 'wavelog',
       'hamqth', 'qsl', 'upload', 'auto-upload', 'password', 'api key', 'credential', 'login',
-      'callbook', 'repeaterbook', 'tqsl', 'station location',
+      'repeaterbook', 'tqsl', 'station location',
       'wrl', 'world radio league', 'qth nickname', 'nickname',
       'download everything again', 're-download', 'whole history', 'missing confirmations',
-      'callbook cache', 'lookup cache', 'callook', 'offline lookup', 'clear cache', 'refresh'],
+      'qrz logbook', 'logbook api key'],
   },
 
   // ---- Contesting --------------------------------------------------------------
@@ -670,8 +708,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'ui scale', 'text size', 'font size', 'zoom', 'accessibility', 'large text', 'readable',
       'larger text', 'bigger text',
       'density', 'compact', 'comfortable', 'touch', 'touchscreen',
-      'pane', 'layout', 'clock', 'local time', 'time zone', 'utc',
-      'station card', 'callsign card', 'call card', 'hover'],
+      'pane', 'layout', 'clock', 'local time', 'time zone', 'utc'],
   },
   {
     // The theme cards and the rows that change how the theme paints: High contrast, Night and
@@ -711,12 +748,13 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'spectrum', 'panadapter', 'wide graph', 'scope colours', 'scope colors'],
   },
   {
-    // The Logbook's globe and its saved columns, and where the Connect map's own choices live.
+    // The Logbook's globe, and where the Connect map's own choices live. The Logbook's columns
+    // moved to Settings ▸ Logbook with their Reset.
     id: 'map-globe',
     label: 'Map & globe',
     tab: 'appearance',
     keywords: ['globe', 'logbook globe', '3d globe', 'map', 'world map', 'projection', 'layers',
-      'greyline', 'grayline', 'logbook columns', 'columns', 'column width', 'more columns'],
+      'greyline', 'grayline'],
   },
   {
     // Motion: animations and fades, and the switch for a slow computer.
@@ -791,9 +829,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'configurations',
     keywords: ['data folder', 'log folder', 'logbook location', 'log.adi', 'where is my log',
       'move my log', 'nas', 'network drive', 'dropbox', 'onedrive', 'google drive', 'synced folder',
-      'shared log', 'two computers', 'storage', 'path', 'folder',
-      // How long the log's history keeps a deleted contact for Recently deleted and Undo.
-      'recently deleted', 'deleted contacts', 'undo', 'history', 'keep deleted', 'retention'],
+      'shared log', 'two computers', 'storage', 'path', 'folder'],
   },
   {
     id: 'configurations',
@@ -822,7 +858,10 @@ export const TAB_ALIASES: Record<string, SettingsTabId> = {
   // FT8/FT4 rows (`FREQ_MODES`), while its top-level name promised park, net and repeater
   // frequencies it does not have.
   frequencies: 'digital',
-  // 0.17 consolidation (fourteen → eight)
+  // 0.17 consolidation (fourteen → eight). "Logbook & QSL" stays on Logging & Connectors even
+  // though a Logbook tab exists again (2026-10-25): what that old tab held was the service
+  // accounts and uploads, which stayed there. A pointer that names a moved section ("Logbook &
+  // QSL ▸ HamQTH") lands on it by the section, never by this line.
   'logbook & qsl': 'logging',
   'logbook and qsl': 'logging',
   integrations: 'logging',
@@ -852,6 +891,13 @@ export const SECTION_ALIASES: Record<string, string> = {
   'sound-card': 'audio',
   'logbook-qsl': 'confirmations',
   'qsl-services': 'confirmations',
+  // Settings ▸ Logbook (2026-10-25). These were headings and rows inside other sections, never
+  // sections of their own: the callbook cache and the HamQTH sign-in sat in Confirmations, the
+  // Logbook columns in Appearance ▸ Map & globe. A pointer that names one lands on the section
+  // that holds it now.
+  'callbook-cache': 'callbook',
+  hamqth: 'callbook',
+  'logbook-columns': 'logbook-display',
   'setup-health': 'radios',
   // Field Day's section by its old LABELS (its id never changed). "Field Day Setup" was the
   // whole section, whose class and section are still there; "Contest mode" was the name it had
@@ -889,7 +935,8 @@ export function sectionById(id: string): SettingsSectionDef | undefined {
   // own spelling — prose says "Settings ▸ Q65", "MSK144", "JT65", never "q65". Comparing a raw
   // caller string against a lowercase id silently returned undefined for every mode written the
   // way a ham writes it, which is precisely the dead end this module exists to prevent.
-  const resolved = norm(SECTION_ALIASES[norm(id)] ?? id)
+  // An alias is keyed by its slug, and prose writes the name ("Callbook cache"), so try both.
+  const resolved = norm(SECTION_ALIASES[norm(id)] ?? SECTION_ALIASES[sectionSlug(id)] ?? id)
   return SETTINGS_SECTIONS.find((s) => s.id === resolved)
 }
 

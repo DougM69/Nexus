@@ -4,8 +4,9 @@
 //
 // APP-GLOBAL, bare localStorage, the same classification as the Logbook globe
 // (features/logbookGlobe.ts): a standing statement about how this operator wants the app to behave,
-// not a property of one window. The switch lives in Settings ▸ Appearance ▸ Workspace; the card's
-// triggers read it at the moment the pointer arrives, so there is nothing to subscribe to there.
+// not a property of one window. The switch lives in Settings ▸ Logbook ▸ Logbook display; the
+// card's triggers read it at the moment the pointer arrives, so there is nothing to subscribe to
+// there.
 
 import { useEffect, useState } from 'react'
 
