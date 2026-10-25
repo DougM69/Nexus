@@ -1032,6 +1032,7 @@ mod edit;
 pub mod history;
 pub mod hot;
 mod id;
+pub mod import;
 pub mod io_fence;
 pub mod logfile;
 pub mod migrate;
@@ -1260,7 +1261,23 @@ impl Logbook {
     pub fn import_adif_with(
         &mut self,
         text: &str,
+        prepare: impl FnMut(&mut QsoRecord),
+    ) -> (Vec<QsoRecord>, usize, usize) {
+        self.import_adif_as(text, prepare, true)
+    }
+
+    /// [`Self::import_adif`] with "Import new only": a contact the log already holds is counted
+    /// as a duplicate and left exactly as it is — nothing it restates is merged in.
+    pub fn import_adif_new_only(&mut self, text: &str) -> (Vec<QsoRecord>, usize, usize) {
+        self.import_adif_as(text, |_| {}, false)
+    }
+
+    /// The import, upgrading a held contact from the row restating it only when `upgrade`.
+    fn import_adif_as(
+        &mut self,
+        text: &str,
         mut prepare: impl FnMut(&mut QsoRecord),
+        upgrade: bool,
     ) -> (Vec<QsoRecord>, usize, usize) {
         // Held records by dedup identity → index, so a dupe can be upgraded in
         // place and not merely counted. First index wins (log order), matching
@@ -1300,6 +1317,7 @@ impl Logbook {
                 .and_then(|t| held.get(&t).copied())
                 .or_else(|| held.get(&key).copied());
             match hit {
+                Some(_) if !upgrade => skipped += 1,
                 Some(i) => {
                     skipped += 1;
                     // Compare the whole record, not the summary counters: the
@@ -4211,52 +4229,14 @@ pub fn file_calls_and_ids(text: &str) -> (Vec<String>, Vec<RecordId>) {
 /// [`parse_adif`], with each record's own text beside it: after the previous `<EOR>` (or the
 /// header) through this record's `<EOR>`. A provisional id hashes that span (see `id`).
 fn parse_adif_spans(text: &str) -> Vec<(QsoRecord, &str)> {
-    let body = match text.to_ascii_uppercase().find("<EOH>") {
-        Some(i) => &text[i + 5..],
-        None => text,
-    };
-    let mut records = Vec::new();
-    let mut cur: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let bytes = body.as_bytes();
-    let mut i = 0;
-    // Where the current record's text begins: always just after an ASCII `>`, so a char
-    // boundary.
-    let mut start = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'<' {
-            i += 1;
-            continue;
-        }
-        let end = match body[i..].find('>') {
-            Some(e) => i + e,
-            None => break,
-        };
-        let tag = &body[i + 1..end];
-        i = end + 1;
-        let upper = tag.to_ascii_uppercase();
-        if upper == "EOR" {
-            if let Some(rec) = record_from(std::mem::take(&mut cur)) {
-                records.push((rec, &body[start..i]));
-            }
-            start = i;
-            continue;
-        }
-        // NAME:len or NAME:len:type
-        let mut parts = tag.splitn(3, ':');
-        let name = parts.next().unwrap_or("").to_ascii_uppercase();
-        let len: usize = parts
-            .next()
-            .and_then(|l| l.trim().parse().ok())
-            .unwrap_or(0);
-        // `len` is attacker-controllable (from a crafted `<NAME:len>`); use saturating
-        // arithmetic so a huge value can't overflow `i + len` (release: wrap → i jumps
-        // backwards → infinite loop) — it just clamps past the end and stops the scan.
-        let end = i.saturating_add(len);
-        let val = body.get(i..end).unwrap_or("").to_string();
-        i = end;
-        cur.insert(name, val);
-    }
-    records
+    // One tokenizer for the import and for its preview and report (`import::adif_records`), so
+    // what the preview counts is what the import reads. A tag repeated in one record: the last
+    // one wins, as it always has (`collect` into the map inserts in order).
+    import::adif_records(text)
+        .records
+        .into_iter()
+        .filter_map(|raw| record_from(raw.fields.into_iter().collect()).map(|rec| (rec, raw.span)))
+        .collect()
 }
 
 /// ADIF Time: 6 digits HHMMSS **or 4 digits HHMM** — both legal per the spec.
@@ -8385,6 +8365,48 @@ mod tests {
         static N: AtomicU32 = AtomicU32::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!("tempo_logtest_{}_{n}.adi", std::process::id()))
+    }
+
+    /// The import refuses a record of more than `import::MAX_FIELDS` fields, but the log's own
+    /// reads never do: a record of `log.adi` past that many is still the operator's contact, read
+    /// whole, its last `CALL` and `BAND` (fields 2,000 and 2,001) the ones the file means. Capped,
+    /// it would vanish from the log on the next load.
+    #[test]
+    fn the_logs_own_reads_keep_a_record_of_any_number_of_fields() {
+        let mut fields = String::from(
+            "<CALL:5>K1AAA<BAND:3>15m<QSO_DATE:8>20240101<TIME_ON:6>120000<MODE:3>FT8",
+        );
+        for i in 5..import::MAX_FIELDS - 1 {
+            fields.push_str(&format!("<APP_X_F:{}>{i}", i.to_string().len()));
+        }
+        fields.push_str("<CALL:5>W9BBB<BAND:3>40m<EOR>\n");
+        let text = format!("{}{fields}", adif_header());
+        let row = |r: &QsoRecord| (r.call.clone(), r.band.clone());
+        let want = vec![("W9BBB".to_string(), "40m".to_string())];
+        assert_eq!(parse_adif(&text).iter().map(row).collect::<Vec<_>>(), want);
+        assert_eq!(file_calls_and_ids(&text).0, ["W9BBB"]);
+        let mut lb = Logbook::default();
+        lb.reconcile_disk(&text);
+        assert_eq!(
+            lb.records().iter().map(|r| row(r)).collect::<Vec<_>>(),
+            want
+        );
+        let mut lb = Logbook::default();
+        lb.import_adif(&text);
+        assert_eq!(
+            lb.records().iter().map(|r| row(r)).collect::<Vec<_>>(),
+            want
+        );
+
+        let path = scratch_adi();
+        std::fs::write(&path, &text).unwrap();
+        let lb = Logbook::load(&path);
+        let loaded: Vec<_> = lb.records().iter().map(|r| row(r)).collect();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("adi.bak"));
+        assert_eq!(loaded, want);
+        let read = import::adif_records(&text);
+        assert_eq!(read.records[0].fields.len(), import::MAX_FIELDS + 1);
     }
 
     /// THE DATA-LOSS REGRESSION. A file with a record `parse_adif` cannot assemble (no `CALL`)
