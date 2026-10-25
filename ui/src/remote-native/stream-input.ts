@@ -216,8 +216,13 @@ export class StreamInputDispatcher {
   }
 
   /** The browser's defaults for a primary press: focus moves to what was pressed (or away, if it
-   *  cannot take focus); a list opens for a `<select>`; a range slider jumps to the press. */
+   *  cannot take focus); a list opens for a `<select>`; a range slider jumps to the press. The
+   *  focus and blur events it causes are the stream's, so they run inside the mark as well. */
   private pressDefault(target: Element, clientX: number): void {
+    dispatching++
+    try { this.pressDefaultMarked(target, clientX) } finally { dispatching-- }
+  }
+  private pressDefaultMarked(target: Element, clientX: number): void {
     const focusable = target.closest(FOCUSABLE) as HTMLElement | null
     if (focusable && !(focusable as HTMLInputElement).disabled) focusable.focus({ preventScroll: true })
     else if (this.doc.activeElement instanceof this.win.HTMLElement && this.doc.activeElement !== this.doc.body) this.doc.activeElement.blur()

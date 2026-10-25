@@ -104,6 +104,28 @@ it('moves focus to what was pressed, and away from a field when the press lands 
   expect(document.activeElement).toBe(document.body)
 })
 
+it('the focus and blur a streamed press causes are the stream’s, so a save-on-blur handler sees it as one', () => {
+  const blurred = vi.fn(), focused = vi.fn()
+  render(<><input aria-label="Call" onFocus={() => focused(isStreamInput())} onBlur={() => blurred(isStreamInput())} /><input aria-label="Name" /><p>Band activity</p></>)
+  const d = bridge()
+  under = screen.getByLabelText('Call')
+  click(d)
+  expect(focused).toHaveBeenCalledWith(true)
+  // Focus moves to another field, and then away to nothing focusable: each blur is the stream's.
+  under = screen.getByLabelText('Name')
+  click(d)
+  expect(blurred).toHaveBeenLastCalledWith(true)
+  screen.getByLabelText('Call').focus()
+  under = screen.getByText('Band activity')
+  click(d)
+  expect(blurred).toHaveBeenCalledTimes(2)
+  expect(blurred).toHaveBeenLastCalledWith(true)
+  // Control: the shack's own focus change is not the stream's.
+  screen.getByLabelText('Call').focus()
+  screen.getByLabelText('Name').focus()
+  expect(blurred).toHaveBeenLastCalledWith(false)
+})
+
 function Callsign({ onSubmit }: { onSubmit: (streamed: boolean) => void }) {
   const [call, setCall] = useState('')
   return <form onSubmit={event => { event.preventDefault(); onSubmit(isStreamInput()) }}>

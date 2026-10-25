@@ -1665,7 +1665,8 @@ impl Service {
         }
         self.action(action).await
     }
-    pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
+    /// ⛔ Private: [`Service::press`] is the only way in, so nothing can skip its origin check.
+    async fn action(&self, action: Action) -> Result<Status, &'static str> {
         match &action {
             Action::StationPermission { device_id, allow } => {
                 // Keep admission and grant under the same local control lock

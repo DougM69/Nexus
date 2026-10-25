@@ -2180,6 +2180,53 @@ fn a_presss_origin_is_the_shack_or_a_stream_and_nothing_else() {
     }
 }
 
+/// ★ THE COMMAND TAKES NO PRESS WITHOUT ITS ORIGIN: `remote_station_action` called through Tauri's
+/// own dispatch with no `origin`, or one the page never stamps, is refused before the station sees
+/// it. CONTROL: the same call with `origin` set is answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_command_refuses_a_press_with_no_origin() {
+    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::Manager;
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let app = tauri::test::mock_builder()
+        .invoke_handler(tauri::generate_handler![remote_station_action])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("a mock app");
+    app.manage(launch_granting_on_sign_in(&cloud, &vault));
+    let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .expect("a main window");
+    let call = |body: serde_json::Value| {
+        let request = tauri::webview::InvokeRequest {
+            cmd: "remote_station_action".into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: InvokeBody::Json(body),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.to_string(),
+        };
+        tokio::task::block_in_place(|| tauri::test::get_ipc_response(&window, request)).is_ok()
+    };
+    let refresh = json!({"type":"refresh"});
+    assert!(!call(json!({ "action": refresh })), "no origin");
+    for other in [json!("Shack"), json!(""), json!(null)] {
+        assert!(
+            !call(json!({ "action": refresh, "origin": other })),
+            "{other}"
+        );
+    }
+    assert!(
+        call(json!({ "action": refresh, "origin": "shack" })),
+        "the shack's"
+    );
+    assert!(
+        call(json!({ "action": refresh, "origin": "stream" })),
+        "a stream's read"
+    );
+}
+
 /// ★ KEPT LIKE AN APPROVE: for a device whose notice the service confirmed, what the station keeps
 /// for a restart is its window ended (0) once it is allowed, as an Approve at the shack keeps it.
 #[tokio::test(flavor = "multi_thread")]

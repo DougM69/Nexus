@@ -251,6 +251,37 @@ it('ONLY THE SHACK DECIDES: every Devices button pressed through a stream, by a 
   expect(origins).toEqual(Array(7).fill('shack'))
 })
 
+// The card's other buttons take the same road: refused through a stream and said in the card's alert.
+const cardPresses: [string, () => RemoteStationStatus, () => HTMLElement, RemoteStationAction][] = [
+  ['Turn off Remote', station, () => screen.getByRole('button', { name: EN['remote.disable'] }), { type: 'disable' }],
+  ['Turn on Remote', () => ({ ...station(), phase: 'disabled' }), () => screen.getByRole('button', { name: EN['remote.enable'] }), { type: 'enable' }],
+  ['Revoke station access', station, () => screen.getByRole('button', { name: EN['remote.revokeStation'] }), { type: 'forget' }],
+  ['Invite', station, () => {
+    fireEvent.change(screen.getByLabelText(EN['remote.account.email']), { target: { value: 'n0call@example.test' } })
+    return screen.getByRole('button', { name: EN['remote.account.invite'] })
+  }, { type: 'invite', email: 'n0call@example.test', role: 'operate' }],
+  ['Sign in', () => ({ ...station(), phase: 'unpaired' }), () => {
+    fireEvent.change(screen.getByLabelText(EN['remote.stationName']), { target: { value: 'Shack' } })
+    return screen.getByRole('button', { name: EN['remote.account.signIn'] })
+  }, { type: 'signIn', name: 'Shack' }],
+]
+for (const [name, status, control, sent] of cardPresses) {
+  it(`ONLY THE SHACK DECIDES: ${name} pressed through a stream sends nothing and says why; at the shack it goes`, async () => {
+    const actions = mount(status())
+    await list()
+    const button = control()
+    await streamedClick(button)
+    await streamedEnter(button)
+    await act(async () => { await Promise.resolve() })
+    expect(actions).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe(EN['remote.lan.atShackOnly'])
+    // CONTROL: the same press at the shack, with the stream still connected, goes, stamped as the shack's.
+    fireEvent.click(button)
+    await waitFor(() => expect(actions).toEqual([sent]))
+    expect(origins).toEqual(['shack'])
+  })
+}
+
 it('the station’s own refusal of a streamed press is said in the same words', async () => {
   mount(station(), action => action.type === 'stationPermission' ? 'atShackOnly' : null)
   await list()
