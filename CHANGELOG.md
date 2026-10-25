@@ -308,7 +308,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   program at its usual 1500 Hz sent at 14.1505 MHz, past a General's 14.150 MHz data limit. A key already held drops
   if you retune that close to an edge, and the connection log says how far the program's audio
   could reach. In Phone and CW the check is the one Nexus applies to its own voice and CW, and
-  Nexus's own transmissions are judged as before.
+  Nexus's own transmissions are judged as before. On the 60 m channels, which are narrower than
+  3 kHz, other programs' keys are judged at the channel as before; the 60 m segment is checked
+  across the passband.
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
 - **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone

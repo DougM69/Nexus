@@ -25784,10 +25784,15 @@ contact yourself."
     /// passband too, in that section's privileges. ANDed after [`Self::tx_allowed`] on every
     /// outside key and re-read while one is held, so it can only ever refuse more, and a held key
     /// drops when a retune carries the passband across an edge; an un-key is never judged.
-    /// Nexus's own transmissions keep their own judgement.
+    /// Nexus's own transmissions keep their own judgement. On a 60 m channel the key is judged at
+    /// the channel, as [`Self::tx_allowed`] judges it: a channel is 2.8 kHz wide, so no 3 kHz
+    /// passband fits one (operator ruling, 2026-10-25). The 60 m segment keeps the passband.
     pub fn outside_key_passband_allowed(&self) -> bool {
         use crate::settings::OperatingMode;
         let om = self.settings.operating_mode;
+        if self.every_tx_frequency(om, crate::privileges::on_sixty_meter_channel) {
+            return self.tx_allowed();
+        }
         self.tx_allowed_for(tci::PASSBAND)
             && (om == OperatingMode::Phone
                 || self.every_tx_frequency(om, |mhz| {

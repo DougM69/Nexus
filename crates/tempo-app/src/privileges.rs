@@ -105,7 +105,7 @@ const REGION1: &[Seg] = &[
 // never AM or FM ([`wide_phone_allowed`]).
 // 60 m is channelized — excluded from the band dropdown but enforced by the lockout.
 const SIXTY: &[Seg] = &[
-    s(5.3515, 5.3665, true, true, true),
+    SIXTY_SEGMENT,
     s(5.3306, 5.3334, false, true, false), // ch 5.3320 data
     s(5.3305, 5.3334, false, false, true), // ch 5.3320 phone, carrier 5.3305
     sixty_cw(5.3320),                      // ch 5.3320 CW, at the centre
@@ -119,6 +119,18 @@ const SIXTY: &[Seg] = &[
     s(5.4035, 5.4064, false, false, true), // ch 5.4050 phone, carrier 5.4035
     sixty_cw(5.4050),                      // ch 5.4050 CW, at the centre
 ];
+
+/// 60 m's 5.3515–5.3665 MHz segment, all-mode. Every other [`SIXTY`] row is a channel's.
+const SIXTY_SEGMENT: Seg = s(5.3515, 5.3665, true, true, true);
+
+/// Is `mhz` on one of 60 m's four channels: in a [`SIXTY`] row other than the segment's, from a
+/// channel's phone carrier to its top? The segment is not a channel.
+pub fn on_sixty_meter_channel(mhz: f64) -> bool {
+    SIXTY
+        .iter()
+        .filter(|seg| seg.hi <= SIXTY_SEGMENT.lo || seg.lo >= SIXTY_SEGMENT.hi)
+        .any(|seg| mhz >= seg.lo && mhz < seg.hi)
+}
 
 /// How far a CW carrier may sit from a 60 m channel's centre and still key: 5 Hz either side
 /// for a whole-hertz frequency. A dial that moves in 10 Hz steps always has a step within 5 Hz

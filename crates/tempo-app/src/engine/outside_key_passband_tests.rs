@@ -288,3 +288,49 @@ fn the_passband_refusal_says_where_the_programs_audio_could_reach() {
     let e = armed("general", "digital", "20m", "USB", 14.140);
     assert_eq!(e.outside_key_passband_refusal(), None, "control: inside");
 }
+
+/// The four 60 m channels' dials, each a channel's carrier, 1.5 kHz under its centre.
+const SIXTY_CHANNEL_DIALS: [f64; 4] = [5.3305, 5.3465, 5.3715, 5.4035];
+
+/// ⛔ ON A 60 M CHANNEL AN OUTSIDE KEY IS JUDGED AT THE CHANNEL, as before the passband rule
+/// (operator ruling, 2026-10-25): a channel is 2.8 kHz wide, so a 3 kHz passband never fits one
+/// and the rule would refuse every outside data key there. A General's or an Extra's broker key
+/// in Digital at each channel's dial keys as Nexus's own does; between channels it is still
+/// refused. The 5.3515–5.3665 segment keeps the passband rule: 3 kHz under its top refused where
+/// Nexus's own frame keys, 4 kHz under it granted.
+#[test]
+fn on_a_60m_channel_an_outside_key_is_judged_at_the_channel() {
+    let mut wrong = Vec::new();
+    for class in ["general", "extra"] {
+        for dial in SIXTY_CHANNEL_DIALS {
+            let mut e = armed(class, "digital", "60m", "USB", dial);
+            if !(e.tx_allowed() && e.outside_key_passband_allowed() && broker_keys(&mut e)) {
+                wrong.push(format!("{class} at the channel dial {dial}: refused"));
+            }
+        }
+        // Off every channel: between the 5.3320 and 5.3480 channels, and a hair under a carrier.
+        for dial in [5.3400, 5.3300] {
+            let mut e = armed(class, "digital", "60m", "USB", dial);
+            if e.outside_key_passband_allowed() || broker_keys(&mut e) {
+                wrong.push(format!("{class} off-channel at {dial}: granted"));
+            }
+        }
+        // The segment's top, by the passband: 5.3635 reaches 5.3665, the segment's top.
+        let mut e = armed(class, "digital", "60m", "USB", 5.3635);
+        if !e.tx_allowed() || e.outside_key_passband_allowed() || broker_keys(&mut e) {
+            wrong.push(format!(
+                "{class} at 5.3635 under the segment's top: not the passband"
+            ));
+        }
+        let mut e = armed(class, "digital", "60m", "USB", 5.3625);
+        if !(e.outside_key_passband_allowed() && broker_keys(&mut e)) {
+            wrong.push(format!("{class} at 5.3625 inside the segment: refused"));
+        }
+    }
+    // CONTROL: a 20 m edge point keeps the passband rule.
+    let mut e = armed("general", "digital", "20m", "USB", 14.148);
+    if !e.tx_allowed() || e.outside_key_passband_allowed() || broker_keys(&mut e) {
+        wrong.push("general at 14.148: not the passband".into());
+    }
+    assert!(wrong.is_empty(), "60 m outside keys: {wrong:#?}");
+}
