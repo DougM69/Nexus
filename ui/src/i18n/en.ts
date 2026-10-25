@@ -436,6 +436,7 @@ export const EN = {
   "remote.account.signInPortBusy": "Another sign-in is already open on this computer. Finish or close it, then try again.",
   "remote.account.stationLimit": "Your account already has two stations. Remove one on the Remote page first.",
   "remote.account.reproof": "Sign in again to keep adding devices: the key your station's sign-in was checked with has been retired.",
+  "remote.account.removalsUnreadable": "Nexus could not read its list of computers removed here, so it adds no device by its sign-in and takes no computer on this network. Press Reset network identity under Network identity below. A reset removes every paired computer, so each one has to be paired again.",
   "remote.account.signInAgain": "Sign in again",
   "remote.account.notOwner": "Sign in with the account this station belongs to.",
   "remote.account.added": "Added by signing in as you: {{name}} ({{what}}), key {{key}}.",

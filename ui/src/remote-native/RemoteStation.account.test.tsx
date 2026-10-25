@@ -145,6 +145,16 @@ it('names the other computers an invitation taken back took off this network, an
   expect(screen.queryByText(/Also taken off this network/), 'CONTROL: none taken').toBeNull()
 })
 
+it('points to Reset network identity while the list of computers removed here does not read, and says nothing once it does', async () => {
+  shack(bound({ removalsUnreadable: true }))
+  const told = await screen.findByText(EN['remote.account.removalsUnreadable'])
+  expect(told.getAttribute('role')).toBe('alert')
+  cleanup()
+  shack(bound({ removalsUnreadable: false }))
+  await screen.findByRole('heading', { name: EN['remote.account.people'] })
+  expect(screen.queryByText(EN['remote.account.removalsUnreadable']), 'CONTROL: it reads').toBeNull()
+})
+
 it('asks a bound station to sign in again once its proof key is retired, and waits for the browser', async () => {
   const actions = shack(bound({ reproof: true }), (action, status) => action.type === 'signInAgain'
     ? { ...status, account: { ...status.account!, signingIn: true } }

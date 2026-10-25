@@ -78,6 +78,9 @@ export type AccountStatus = {
   /** The computers the last invitation taken back took off this network beside that guest's own: guests'
    *  computers the station could not tell whose they were, by name. */
   alsoUninvited?: string[]
+  /** What a Remove leaves behind does not read: nothing is granted on a sign-in, and the LAN takes no computer, until
+   *  Reset network identity. */
+  removalsUnreadable?: boolean
 }
 export type DeviceKind = 'browser' | 'computer' | 'phone'
 export type DevicePlatform = 'windows' | 'macos' | 'linux' | 'ios' | 'android'

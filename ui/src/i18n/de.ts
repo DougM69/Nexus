@@ -340,6 +340,7 @@ export const DE: PartialCatalog = {
   "remote.account.signInPortBusy": "Auf diesem Computer ist bereits eine andere Anmeldung offen. Schließe sie ab oder beende sie und versuche es dann erneut.",
   "remote.account.stationLimit": "Dein Konto hat bereits zwei Stationen. Entferne zuerst eine auf der Remote-Seite.",
   "remote.account.reproof": "Melde dich erneut an, um weiter Geräte hinzuzufügen: Der Schlüssel, mit dem die Anmeldung deiner Station geprüft wurde, wurde zurückgezogen.",
+  "remote.account.removalsUnreadable": "Nexus konnte die Liste der hier entfernten Computer nicht lesen, daher fügt es kein Gerät über seine Anmeldung hinzu und nimmt keinen Computer in diesem Netzwerk an. Drücke unten unter „Netzwerkidentität“ auf „Netzwerkidentität zurücksetzen“. Zurücksetzen entfernt alle gekoppelten Computer, daher muss jeder neu gekoppelt werden.",
   "remote.account.signInAgain": "Erneut anmelden",
   "remote.account.notOwner": "Melde dich mit dem Konto an, zu dem diese Station gehört.",
   "remote.account.added": "Durch deine Anmeldung hinzugefügt: {{name}} ({{what}}), Schlüssel {{key}}.",

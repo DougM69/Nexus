@@ -177,6 +177,7 @@ export function RemoteStation() {
       </span>
     </div> })}
     {account?.reproof && <p role="alert">{t('remote.account.reproof')}</p>}
+    {account?.removalsUnreadable && <p role="alert">{t('remote.account.removalsUnreadable')}</p>}
     {/* Signing in again, for a station bound already: the same sign-in, the station otherwise as it was. */}
     {phase !== 'unpaired' && (account?.signingIn ? <>
       <p role="status">{t('remote.account.signingIn')}</p>

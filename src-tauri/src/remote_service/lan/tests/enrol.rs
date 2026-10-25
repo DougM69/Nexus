@@ -1200,6 +1200,7 @@ fn every_writer_of_the_device_cache_waits_for_one_held_between_its_read_and_its_
                     vault,
                     SERVICE_STATION,
                     &vouched,
+                    "",
                     pin,
                     false,
                     fixture_now(),
@@ -1432,8 +1433,16 @@ fn each_writer_holds_the_cache_from_its_read_to_its_save() {
                 mailbox: None,
             };
             let pin = tempo_client::hex(&pin);
-            Controller::keep_for_lan(vault, SERVICE_STATION, &vouched, pin, false, fixture_now())
-                .unwrap();
+            Controller::keep_for_lan(
+                vault,
+                SERVICE_STATION,
+                &vouched,
+                "",
+                pin,
+                false,
+                fixture_now(),
+            )
+            .unwrap();
         })
     };
     let writers: Vec<(&str, Writer, Vec<&String>)> = vec![
@@ -1874,6 +1883,28 @@ fn a_first_read_that_did_not_complete_is_read_again() {
     assert!(!enrolment.admits(&by_code), "premise: not read");
     vault.ties_reads.store(false, Ordering::SeqCst);
     enrolment.load();
+    assert!(enrolment.admits(&by_code));
+}
+
+/// ★ A CONNECTION READS AGAIN AT MOST ONCE A WHILE: what a Remove leaves behind did not read, so
+/// each connection asks a read first; a flood of them reads the store once per interval, never once
+/// each, and the next after it reads it again.
+#[test]
+fn a_connection_reads_again_at_most_once_a_while() {
+    let by_code = [3; 32];
+    let vault = Refusing {
+        inner: caching(Vec::new()),
+        ..Refusing::default()
+    };
+    vault.ties_reads.store(true, Ordering::SeqCst);
+    let enrolment = lan_enrol::Enrolment::kept_in(Arc::new(vault.clone()), fixture_now);
+    let start = std::time::Instant::now();
+    enrolment.retry(start);
+    assert!(!enrolment.admits(&by_code), "premise: not read");
+    vault.ties_reads.store(false, Ordering::SeqCst);
+    enrolment.retry(start + Duration::from_secs(1));
+    assert!(!enrolment.admits(&by_code), "read again at once");
+    enrolment.retry(start + lan_enrol::RETRY_EVERY);
     assert!(enrolment.admits(&by_code));
 }
 

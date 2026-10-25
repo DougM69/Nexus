@@ -69,12 +69,15 @@
 //! age. A link the bound pushes out is a claim first, and a link a computer proved here last. Each
 //! removal time is read with the issuer's clock leeway, on the side that refuses. Until all of it
 //! has been read, nobody is admitted and no proof is granted; an entry that does not read at all
-//! stays so until Reset network identity writes it afresh ([`Enrolment::recover`]).
+//! stays so, and the shack says so, until Reset network identity writes it afresh. The reset sets
+//! the floor to now whatever was kept, so a floor kept while the station's clock ran ahead comes
+//! back ([`Enrolment::recover`]).
 //!
 //! Nothing here writes a log line, and no proof is kept: the cache holds the key's pin, the role
 //! and the proof's signing time.
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tempo_client::account::{self, CachedDevice, DeviceCache, Invite, KeySet, Owner, Role, Tenant};
@@ -95,6 +98,9 @@ const TIES_KEPT: usize = account::CACHED_DEVICES;
 
 /// The most removals kept, the newest: with the links, they fit the smallest credential blob.
 const REMOVED_KEPT: usize = 12;
+
+/// How often a connection may read again what did not read ([`Enrolment::retry`]).
+pub(crate) const RETRY_EVERY: Duration = Duration::from_secs(5);
 
 /// A key or pin as [`Ties`] keeps it: the first sixteen hex digits of its SHA-256.
 pub(crate) fn short(pin: &str) -> String {
@@ -228,6 +234,10 @@ pub(crate) struct Enrolment {
     /// The links and the removals kept beside it, as last read: `None` until read, and then nobody
     /// is admitted, since a removal may be among them.
     ties: Mutex<Option<Ties>>,
+    /// Whether that did not read at all when last read.
+    unreadable: AtomicBool,
+    /// When a connection last read them again ([`Enrolment::retry`]).
+    retried: Mutex<Option<Instant>>,
 }
 
 /// Where the LAN's device cache is kept, and the clock proofs are read by.
@@ -254,6 +264,29 @@ impl Enrolment {
         }
     }
 
+    /// [`Enrolment::load`], for a connection the LAN took at `now`: at most once each
+    /// [`RETRY_EVERY`], so no stream of connections keeps the credential store, or the log, busy.
+    pub(crate) fn retry(&self, now: Instant) {
+        if self.is_read() {
+            return;
+        }
+        let Ok(mut last) = self.retried.lock() else {
+            return;
+        };
+        if last.is_some_and(|at| now.saturating_duration_since(at) < RETRY_EVERY) {
+            return;
+        }
+        *last = Some(now);
+        drop(last);
+        self.load();
+    }
+
+    /// Whether what a Remove leaves behind did not read at all when last read: the shack says so,
+    /// with its way out, Reset network identity ([`Enrolment::recover`]).
+    pub(crate) fn unreadable(&self) -> bool {
+        self.unreadable.load(Ordering::SeqCst)
+    }
+
     /// Whether both have been read: until then nobody is admitted.
     pub(crate) fn is_read(&self) -> bool {
         self.enrolled.lock().is_ok_and(|held| held.is_some())
@@ -275,12 +308,18 @@ impl Enrolment {
         // Whatever the cache answers: a removal must not wait on it. A missing entry is none kept
         // (a station from before links were kept); one that does not read is never taken for it.
         match vault.ties() {
-            Ok(ties) => self.hold_ties(ties.unwrap_or_default()),
-            Err("unreadable") => tempo_core::applog::warn(
-                "remote",
-                "on this network: the removed computers' list does not read; until it does, no \
-                 paired computer is taken. Reset network identity writes it afresh",
-            ),
+            Ok(ties) => {
+                self.unreadable.store(false, Ordering::SeqCst);
+                self.hold_ties(ties.unwrap_or_default());
+            }
+            // Said once, when it starts.
+            Err("unreadable") if !self.unreadable.swap(true, Ordering::SeqCst) => {
+                tempo_core::applog::warn(
+                    "remote",
+                    "on this network: the removed computers' list does not read; until it does, \
+                     no paired computer is taken. Reset network identity writes it afresh",
+                );
+            }
             Err(_) => {}
         }
         let read = match vault.device_cache() {
@@ -337,24 +376,34 @@ impl Enrolment {
             .is_some_and(|kept| kept.removed.iter().any(|r| r.key == pin))
     }
 
-    /// An entry of what a Remove leaves behind that does not read at all, written afresh with its
-    /// floor now: every proof signed before is refused (see the header), so nothing comes back on
-    /// what it held. Reset network identity's, which takes every computer out of the book too. One
-    /// that reads, or a store that will not answer, is left. Blocks on the credential store.
+    /// What a Remove leaves behind, its floor set to now: every proof signed before is refused (see
+    /// the header), so nothing comes back on what it held. Reset network identity's, which takes
+    /// every computer out of the book too. A floor, or a removal, kept while the station's clock ran
+    /// ahead comes back to now, so it refuses nothing signed after the reset. An entry that does not
+    /// read at all is written afresh; one the store will not answer for is left, and said. Blocks on
+    /// the credential store.
     pub(crate) fn recover(&self) -> Result<(), &'static str> {
         let Some(Kept { vault, now_s }) = &self.kept else {
             return Ok(());
         };
+        let now_s = now_s();
         let held = DevicesHeld::take(&**vault);
         let written = match vault.ties() {
+            Ok(ties) => {
+                let mut ties = ties.unwrap_or_default();
+                ties.floor = now_s;
+                let ahead = now_s.saturating_add(tempo_client::id_token::LEEWAY_S);
+                ties.removed.retain(|r| r.at <= ahead);
+                keep_ties(&**vault, &held, &mut ties, now_s)
+            }
             Err("unreadable") => vault.save_ties(
                 &held,
                 &Ties {
-                    floor: now_s(),
+                    floor: now_s,
                     ..Ties::default()
                 },
             ),
-            _ => Ok(()),
+            Err(reason) => Err(reason),
         };
         self.read(&**vault, &held);
         written

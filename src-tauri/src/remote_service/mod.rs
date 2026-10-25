@@ -111,6 +111,9 @@ pub struct AccountStatus {
     /// guests' computers the station kept no proof of whose they were, by name, for the shack to
     /// tell their owners to sign in again ([`Controller::off_lan`]).
     also_uninvited: Vec<String>,
+    /// What a Remove leaves behind does not read at all, so the station grants nothing on a proof
+    /// and the LAN takes no paired computer, until Reset network identity writes it afresh.
+    removals_unreadable: bool,
 }
 /// A device the station granted on its own proof: what the notice says of it.
 #[derive(Clone, Serialize)]
@@ -1450,6 +1453,7 @@ impl Service {
             .and_then(|key| fingerprint(key.public_key()));
         status.observation_generation = enabled.then(|| control.generation.to_string());
         status.key_refused = control.key_refused;
+        status.account.removals_unreadable = control.enrolment.unreadable();
         status.lan = control.lan.as_deref().map(lan::Lan::status);
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
@@ -1560,9 +1564,9 @@ impl Service {
             }
             Action::LanReset {} => {
                 let lan = self.lan()?.ok_or("serviceUnavailable")?;
-                // What a Remove leaves behind, if it does not read at all, written afresh first: it
-                // refuses every proof signed before, and the LAN admits again. The reset goes on
-                // whatever it answers.
+                // What a Remove leaves behind, its floor set to now first (written afresh if it does
+                // not read at all): it refuses every proof signed before, and the LAN admits again.
+                // The reset goes on whatever it answers.
                 let enrolment = self
                     .control
                     .lock()
@@ -2968,7 +2972,7 @@ impl Controller {
                         };
                         tied.map(|()| {
                             if removed_key(device) {
-                                back.push(key);
+                                back.push(key.clone());
                             }
                             (vouched, lan)
                         })
@@ -2988,8 +2992,15 @@ impl Controller {
                                 book.status().devices.iter().any(|c| c.key == lan)
                             })
                         });
-                        let _ =
-                            Self::keep_for_lan(vault, &station_id, &vouched, lan, in_book, now_s);
+                        let _ = Self::keep_for_lan(
+                            vault,
+                            &station_id,
+                            &vouched,
+                            &key,
+                            lan,
+                            in_book,
+                            now_s,
+                        );
                         self.added(device, &vouched);
                     }
                     // A local decision since the list was asked for: the next list asks again.
@@ -3197,10 +3208,14 @@ impl Controller {
     /// does not was paired by code at the shack, and is held to no sign-in's age (`lan::enrol`): a
     /// guest's listing naming its LAN key, a claim the service does not check, never makes it that
     /// guest's (an invitation taken back would take it off the LAN) nor puts it under their age.
+    /// Nor does it touch a computer the entry holds already, unless the links kept show that same
+    /// guest enrolled it here for the internet key `key`: so it never makes the owner's computer a
+    /// guest's, nor holds another guest's computer to its own sign-in's age.
     fn keep_for_lan(
         vault: &dyn vault::AccountVault,
         station_id: &str,
         vouched: &tempo_client::account::Vouched,
+        key: &str,
         pin: String,
         in_book: bool,
         now_s: u64,
@@ -3210,8 +3225,21 @@ impl Controller {
             .device_cache()?
             .filter(|cache| cache.station_id == station_id)
             .unwrap_or_else(|| tempo_client::account::DeviceCache::new(station_id));
-        if vouched.guest && in_book && cache.find(&pin).is_none() {
-            return Ok(());
+        if vouched.guest {
+            match cache.find(&pin) {
+                None if in_book => return Ok(()),
+                None => {}
+                Some(_) => {
+                    let (lan, key) = (lan::enrol::short(&pin), lan::enrol::short(key));
+                    let mailbox = vouched.mailbox.as_deref().map(lan::enrol::mailbox_tag);
+                    let theirs = vault.ties()?.unwrap_or_default().ties.iter().any(|t| {
+                        t.enrolled && t.lan == lan && t.key == key && t.mailbox == mailbox
+                    });
+                    if !theirs {
+                        return Ok(());
+                    }
+                }
+            }
         }
         cache.keep(tempo_client::account::CachedDevice {
             pin,
