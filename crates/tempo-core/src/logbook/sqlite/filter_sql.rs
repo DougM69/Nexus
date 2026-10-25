@@ -16,8 +16,8 @@
 //! The plan test below holds it to that.
 
 use super::{
-    contest_is_empty, extra_columns, record_from_row, with_submode, Error, LogDb, Result,
-    QSO_COLUMNS, SUBMODE_JOIN, SUBMODE_VALUE,
+    contest_is_empty, extra_columns, extras_width, record_from_row, with_extras, with_submode,
+    Error, LogDb, Result, QSO_COLUMNS, SUBMODE_JOIN, SUBMODE_VALUE,
 };
 use crate::logbook::query::filter::{field, LogFilter, QslState, SentState};
 use crate::logbook::query::{ui_band_edges, UI_BAND_LABELS};
@@ -271,7 +271,7 @@ impl LogDb {
         let mut rows = stmt.query(params_from_iter(w.params.iter()))?;
         let submode_at = QSO_COLUMNS.len();
         let extras_at = submode_at + usize::from(submode);
-        let rowid_at = extras_at + extras.len();
+        let rowid_at = extras_at + extras_width(extras);
         while let Some(row) = rows.next()? {
             let rowid = u32::try_from(row.get::<_, i64>(rowid_at)?)
                 .map_err(|_| Error::Sql(rusqlite::Error::IntegralValueOutOfRange(rowid_at, 0)))?;
@@ -282,11 +282,7 @@ impl LogDb {
             if submode {
                 with_submode(&mut rec, row.get(submode_at)?);
             }
-            for (i, name) in extras.iter().enumerate() {
-                if let Some(value) = row.get::<_, Option<String>>(extras_at + i)? {
-                    crate::logbook::set_extra(&mut rec, name, Some(value));
-                }
-            }
+            with_extras(&mut rec, row, extras_at, extras)?;
             crate::logbook::canonical::contact(&mut rec);
             each(rowid, &rec);
         }

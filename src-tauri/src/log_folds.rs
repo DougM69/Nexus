@@ -493,13 +493,6 @@ pub(crate) fn custom_awards_kept(
 
 /// One whole record into the custom awards' fold.
 pub(crate) fn custom_add(fold: &mut propagation::custom::CustomAwards, q: &QsoRecord) {
-    let extra = |name: &str| {
-        q.extra
-            .iter()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-    };
     // The references a contact carries: its park or summit, its island group, and the WWFF,
     // POTA and SOTA fields the log keeps beside a modelled one.
     let mut refs: Vec<&str> = Vec::new();
@@ -513,20 +506,17 @@ pub(crate) fn custom_add(fold: &mut propagation::custom::CustomAwards, q: &QsoRe
             refs.push(v);
         }
     }
-    // A field by its ADIF name: the modelled ones the log keeps as fields, else what it keeps
-    // verbatim beside them.
+    // A field by its ADIF name: the modelled ones the log keeps as fields, else wherever the
+    // record keeps it (`record_field`) — a merged contest contact's county, section or class is
+    // in its contest columns, not beside the fields.
     let field = |name: &str| -> Option<String> {
         let some = |v: Option<&str>| v.map(str::to_string);
         match name {
             "CALL" => Some(q.call.clone()),
             "BAND" => Some(q.band.clone()),
             "MODE" => Some(q.mode.clone()),
-            "STATE" => some(q.state.as_deref()),
             "COUNTRY" => some(q.country.as_deref()),
-            "GRIDSQUARE" => some(q.grid.as_deref()),
             "DXCC" => q.dxcc.map(|d| d.to_string()),
-            "NAME" => some(q.name.as_deref()),
-            "QTH" => some(q.qth.as_deref()),
             "IOTA" => some(q.ota.iota.as_deref()),
             "SIG" => some(q.ota.their_program.as_deref()),
             "SIG_INFO" => some(q.ota.their_ref.as_deref()),
@@ -534,15 +524,21 @@ pub(crate) fn custom_add(fold: &mut propagation::custom::CustomAwards, q: &QsoRe
             "SAT_NAME" => some(q.sat_name.as_deref()),
             "OPERATOR" => some(q.operator.as_deref()),
             "STATION_CALLSIGN" => some(q.station_callsign.as_deref()),
-            "MY_GRIDSQUARE" => some(q.my_grid.as_deref()),
-            other => extra(other),
+            // A VHF contest's sent grid is its exchange's `MY_GRIDSQUARE`, which no stamp
+            // shadows (the merge stamps none beside it).
+            "MY_GRIDSQUARE" => some(
+                q.my_grid
+                    .as_deref()
+                    .or_else(|| tempo_core::logbook::record_field(q, name)),
+            ),
+            other => some(tempo_core::logbook::record_field(q, other)),
         }
     };
     fold.add(&propagation::custom::CustomContact {
         call: &q.call,
         band: &q.band,
         mode: &q.mode,
-        grid: q.grid.as_deref(),
+        grid: tempo_core::logbook::record_field(q, "GRIDSQUARE"),
         refs: &refs,
         field: &field,
         lotw_card: q.award_confirmed,
@@ -2303,6 +2299,93 @@ mod tests {
         assert!(custom_awards_kept(&e, &tallies, Vec::new())
             .unwrap()
             .is_empty());
+    }
+
+    /// A contest contact as the merge puts it in the Logbook: what the other station sent stays
+    /// in the contest's own columns — the zone in CQ WW, the county, section and class elsewhere.
+    fn merged_contest_contact() -> QsoRecord {
+        let mut log = tempo_core::logbook::Logbook::new();
+        log.import_adif(
+            "<CALL:4>W1AW<QSO_DATE:8>20261024<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <LOTW_QSL_RCVD:1>Y<EOR>\n",
+        );
+        let mut r = QsoRecord::clone(&log.records()[0]);
+        r.contest = Some(Box::new(tempo_core::logbook::ContestFields {
+            contest_id: "CQ-WW-CW".into(),
+            adif: vec![
+                ("MY_CQ_ZONE".into(), "4".into()),
+                ("CQZ".into(), "3".into()),
+                ("CNTY".into(), "CA,SANTA CLARA".into()),
+                ("ARRL_SECT".into(), "SCV".into()),
+                ("CLASS".into(), "2A".into()),
+            ],
+            ..Default::default()
+        }));
+        r
+    }
+
+    /// ★ WAZ counts the zone the other station SENT in a merged CQ WW contact, read the way the
+    /// award folds read the log — the store's narrow read — and the way a whole record is read.
+    /// A W1 call operating from California sends zone 3; the country file's zone for W1 is 5,
+    /// which is what the contact used to be credited with.
+    #[test]
+    fn waz_counts_the_zone_a_merged_contest_contact_was_sent() {
+        let rec = merged_contest_contact();
+        let mut db = tempo_core::logbook::sqlite::LogDb::open_in_memory().unwrap();
+        db.insert(&rec, tempo_core::logbook::sqlite::Resolved::default())
+            .unwrap();
+        let zone = |q: &QsoRecord| {
+            propagation::awards::counted_zone(
+                propagation::dxcc::resolve(&q.call).as_ref(),
+                &award_fields(q),
+            )
+        };
+        let mut read = Vec::new();
+        for (narrow, extras) in [(NEEDS, AWARD_EXTRAS), (AWARDS, AWARDS_EXTRAS)] {
+            db.each_narrow_with(narrow, extras, Scope::All, Order::Log, &mut |q| {
+                read.push(zone(q));
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+        }
+        read.push(zone(&db.load_all().unwrap()[0]));
+        assert_eq!(read, [Some(3); 3]);
+    }
+
+    /// ★ A custom award on a field a contest exchange carries — the county, section or class —
+    /// counts the merged contest contacts that carry it.
+    #[test]
+    fn a_custom_award_counts_a_merged_contest_contacts_exchange() {
+        use propagation::custom::{CustomAward, CustomAwards, CustomKind};
+        let on = |field: &str, target: &str| CustomAward {
+            name: field.into(),
+            kind: CustomKind::Field,
+            field: field.into(),
+            targets: vec![target.into()],
+            ..CustomAward::default()
+        };
+        let defs = [
+            on("CNTY", "CA,Santa Clara"),
+            on("ARRL_SECT", "SCV"),
+            on("CLASS", "2A"),
+            on("CQZ", "3"),
+        ];
+        let mut fold = CustomAwards::new(&defs);
+        custom_add(&mut fold, &merged_contest_contact());
+        let worked: Vec<(String, usize)> = fold
+            .progress()
+            .into_iter()
+            .map(|p| (p.name, p.worked))
+            .collect();
+        assert_eq!(
+            worked,
+            [
+                ("CNTY".to_string(), 1),
+                ("ARRL_SECT".to_string(), 1),
+                ("CLASS".to_string(), 1),
+                ("CQZ".to_string(), 1)
+            ]
+        );
     }
 
     /// One ADIF record, parsed as the log parses it, with no id.

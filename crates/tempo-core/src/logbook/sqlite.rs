@@ -185,6 +185,13 @@ fn with_submode(rec: &mut QsoRecord, submode: Option<String>) {
 /// ([`LogDb::each_narrow_with`]): one join on `qso_extra`'s own key per field, as the SUBMODE's
 /// is. A name is an ADIF field name — upper-case letters, digits and `_` — or the read is refused,
 /// since it is written into the statement.
+///
+/// ⭐ And beside each, the same tag among the row's contest columns (`qso_contest_adif`, the
+/// first by `ord`, on that table's own key): a merged contest contact keeps what the other
+/// station sent there, the CQ zone of a CQ WW exchange among it, and a whole row holds it in
+/// [`ContestFields::adif`]. Read here too, a narrow row answers `logbook::record_field` as the
+/// whole row does; without it the award folds counted the country file's zone for a contact whose
+/// station had sent its own.
 fn extra_columns(extras: &[&str]) -> Result<(String, String)> {
     let (mut values, mut joins) = (String::new(), String::new());
     for (i, name) in extras.iter().enumerate() {
@@ -197,12 +204,43 @@ fn extra_columns(extras: &[&str]) -> Result<(String, String)> {
                 (*name).to_string(),
             )));
         }
-        values.push_str(&format!(", x{i}.value"));
+        values.push_str(&format!(
+            ", x{i}.value, (SELECT c.value FROM qso_contest_adif c \
+             WHERE c.qso_id = q.id AND c.tag = '{name}' ORDER BY c.ord LIMIT 1)"
+        ));
         joins.push_str(&format!(
             " LEFT JOIN qso_extra x{i} ON x{i}.qso_id = q.id AND x{i}.name = '{name}'"
         ));
     }
     Ok((values, joins))
+}
+
+/// How many values [`extra_columns`] selects for `extras`: each field's passthrough value and its
+/// contest column's.
+fn extras_width(extras: &[&str]) -> usize {
+    2 * extras.len()
+}
+
+/// Put what [`extra_columns`] read for `extras`, from `at` on, where a whole row holds it: the
+/// passthrough value in `extra`, the contest column's in the contest block.
+fn with_extras(
+    rec: &mut QsoRecord,
+    row: &rusqlite::Row<'_>,
+    at: usize,
+    extras: &[&str],
+) -> Result<()> {
+    for (i, name) in extras.iter().enumerate() {
+        if let Some(value) = row.get::<_, Option<String>>(at + 2 * i)? {
+            super::set_extra(rec, name, Some(value));
+        }
+        if let Some(value) = row.get::<_, Option<String>>(at + 2 * i + 1)? {
+            rec.contest
+                .get_or_insert_with(Default::default)
+                .adif
+                .push((name.to_string(), value));
+        }
+    }
+    Ok(())
 }
 
 /// Which rows a narrow read visits.
@@ -409,6 +447,11 @@ CREATE TABLE IF NOT EXISTS contest_exchange (
 -- contest block in the role order `directed_columns` chose; and (3) blind the ADIF writer's
 -- duplicate-`STATE` guard, which reads `contest.adif` and would then write the tag twice —
 -- the "undefined territory" LoTW/TQSL reject.
+--
+-- The merge itself no longer stores the modelled ones here: it moves the reports, serials and
+-- the received grid, name and QTH into the record's own fields. Rows merged before it moved the
+-- grid, name and QTH still hold those here, which is why `logbook::record_field` reads this
+-- block after the field and the ADIF writer skips one the field has already written.
 --
 -- Keyed on `ord`, never on `tag`: `ord` is unique by construction, so a ruleset that declared
 -- one tag twice cannot violate the key, and no colliding row can destroy a QSO.
@@ -1799,7 +1842,7 @@ impl LogDb {
         let stamp_at = QSO_COLUMNS.len();
         let submode_at = stamp_at + if narrow.uploads { 4 } else { 0 };
         let extras_at = submode_at + usize::from(submode);
-        let rowid_at = extras_at + extras.len();
+        let rowid_at = extras_at + extras_width(extras);
         // The record being assembled: a row with several stamps arrives as several joined rows,
         // one after another, all with its rowid.
         let mut current: Option<(i64, QsoRecord)> = None;
@@ -1819,11 +1862,7 @@ impl LogDb {
                 if submode {
                     with_submode(&mut rec, row.get(submode_at)?);
                 }
-                for (i, name) in extras.iter().enumerate() {
-                    if let Some(value) = row.get::<_, Option<String>>(extras_at + i)? {
-                        super::set_extra(&mut rec, name, Some(value));
-                    }
-                }
+                with_extras(&mut rec, row, extras_at, extras)?;
                 // And the same form: the hot index holds narrow rows and compares them with the
                 // whole ones `decode` hands a plan.
                 super::canonical::contact(&mut rec);

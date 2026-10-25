@@ -1304,14 +1304,21 @@ mod tests {
         lb.save(&path).expect("write log.adi");
         let reborn = Logbook::load(&path).records()[0].clone();
         let _ = std::fs::remove_file(&path);
-        let (out, back) = (
+        // …and through the logbook database, which (unlike the file) gives the contest columns
+        // back as contest columns: the store a restart reads.
+        let mut db = crate::logbook::sqlite::LogDb::open_in_memory().unwrap();
+        db.insert(&rec, crate::logbook::sqlite::Resolved::default())
+            .unwrap();
+        let stored = db.load_all().unwrap().remove(0);
+        let (out, back, kept) = (
             crate::logbook::adif_record(&rec),
             crate::logbook::adif_record(&reborn),
+            crate::logbook::adif_record(&stored),
         );
         // Once, with this value, in the file every upload is made from, before and after a restart.
         let once = |tag: &str, val: &str| {
             let want = format!("<{tag}:{}>{val}", val.len());
-            [&out, &back]
+            [&out, &back, &kept]
                 .iter()
                 .all(|f| f.contains(&want) && f.matches(&format!("<{tag}:")).count() == 1)
         };
@@ -1348,6 +1355,7 @@ mod tests {
                 c.rcvd == pairs(&rx)
                     && rec.grid.as_deref() == Some("FN31")
                     && reborn.grid.as_deref() == Some("FN31")
+                    && stored.grid.as_deref() == Some("FN31")
                     && once("GRIDSQUARE", "FN31"),
             ),
             (
@@ -1467,6 +1475,64 @@ mod tests {
         let out = crate::logbook::adif_record(rec);
         assert_eq!(out.matches("<NAME:").count(), 1, "{out}");
         assert_eq!(out.matches("<QTH:").count(), 1, "{out}");
+    }
+
+    /// ★ The CQ zone the other station SENT in a CQ WW exchange is the zone the contact carries,
+    /// wherever it is read: on the merged record, back from the logbook database, and from the
+    /// narrow read the award folds make. It stays a contest column (the database keeps those
+    /// apart from the passthrough, `sqlite.rs` says why), so a reader of the passthrough alone
+    /// counted the country file's zone instead: a W1 call in California sending zone 3 was
+    /// credited zone 5.
+    #[test]
+    fn the_cq_zone_they_sent_is_the_zone_the_contact_carries() {
+        use crate::logbook::record_cq_zone;
+        use crate::logbook::sqlite::{LogDb, Narrow, Order, Resolved, Scope};
+        let rs = crate::fd_rules::ruleset_by_id("cqww_cw", crate::fd_rules::CURRENT_RULES_YEAR)
+            .expect("a shipped ruleset");
+        // CQ WW's exchange on a session this test binary can build: CQ WW itself refuses a build
+        // with no country file to score by, and the merge reads only the exchange.
+        let mut session = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        session.exchange = rs.exchange;
+        let mut log = FieldDayLog::new("W9XYZ", session, "20m");
+        let rx = [
+            ("RST".to_string(), "599".to_string()),
+            ("ZN".to_string(), "3".to_string()),
+        ];
+        assert!(log.log_fields_at("W1AW", &rx, "CW", "", 0, 1_782_583_500));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 1);
+        let rec = lb.records()[0].clone();
+        // The premise: the zone is a contest column and not in the passthrough.
+        assert!(rec
+            .contest
+            .as_deref()
+            .is_some_and(|c| c.adif.contains(&("CQZ".to_string(), "3".to_string()))));
+        assert_eq!(crate::logbook::extra_field(&rec, "CQZ"), None);
+
+        assert_eq!(record_cq_zone(&rec), Some(3), "the merged record");
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert(&rec, Resolved::default()).unwrap();
+        let stored = db.load_all().unwrap().remove(0);
+        assert_eq!(record_cq_zone(&stored), Some(3), "back from the database");
+        let mut narrow = Vec::new();
+        db.each_narrow_with(
+            Narrow {
+                columns: &["call"],
+                uploads: false,
+            },
+            crate::logbook::AWARD_EXTRAS,
+            Scope::All,
+            Order::Log,
+            &mut |r| {
+                narrow.push(record_cq_zone(r));
+                std::ops::ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+        assert_eq!(narrow, [Some(3)], "the award folds' narrow read");
+        let out = crate::logbook::adif_record(&stored);
+        assert_eq!(out.matches("<CQZ:").count(), 1, "{out}");
+        assert!(out.contains("<CQZ:1>3"), "{out}");
     }
 
     /// A contact edited in the contest log before the merge reaches the Logbook as edited.
