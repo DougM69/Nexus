@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that can reach the station once, under you or the person you invited, with how it connects, where it
   stands, and Approve, Allow to transmit and Remove on the row. It replaces the separate lists of
   browsers, computers, paired computers and people.
+- **One Connect to my station… entry on the computer you operate from.** It replaces Remote stations… and Stations on this network… in Settings ▸ Remote access: Nexus looks for your station on this network first and connects, opens the code pairing if this computer is not paired yet, or offers to sign in and reach it over the internet; the station list, a typed address and the code stay under Advanced.
 - **JTTY sends from a remote computer.** Driving a station from another computer, JTTY's Send,
   F-keys, live typing and sign-off now transmit, under the same guards and Stop as the other remote
   modes.

@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 //
-// The Remote stations window's entry in Settings ▸ Station ▸ Remote access (the operator,
-// 2026-10-04, "Stream client window"): the PC an operator works FROM opens the Remote page in a
-// Nexus window of its own. Pinned here: it is offered on Windows only, at the END of the card (the
-// beta line and the streaming switch stay first, as ordered on 2026-10-02), one click asks Rust to
-// open the window once, and a failure says so in words.
+// The one Connect to my station… entry in Settings ▸ Remote access, on the PC an operator works FROM:
+// it opens the window that finds the station on this network first and otherwise signs in to reach it
+// over the internet. It replaced the two entries that were here (Remote stations… and Stations on
+// this network…). Pinned here: it is offered on Windows only, at the END of the card (the beta line
+// and the streaming switch stay first, as ordered on 2026-10-02), one click asks Rust to open the
+// window once, in the app's language, and a failure says so in words.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
@@ -77,8 +78,8 @@ async function openRemoteTab() {
 }
 
 const card = () => document.getElementById('settings-remote-access')!
-const theButton = () => screen.queryByRole('button', { name: EN['settings.remoteStations.open'] })
-const opens = () => api.get('openRemoteStationsWindow')
+const theButton = () => screen.queryByRole('button', { name: EN['settings.connectStation.open'] })
+const opens = () => api.get('openLanStationsWindow')
 
 beforeEach(() => {
   platform.windows = true
@@ -108,7 +109,7 @@ describe('on Windows', () => {
     expect(card().contains(button)).toBe(true)
     const streaming = screen.getByRole('switch', { name: EN['settings.remoteStream.label'] })
     expect(streaming.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING, 'after the switch').toBeTruthy()
-    const hint = screen.getByText(EN['settings.remoteStations.hint'])
+    const hint = screen.getByText(EN['settings.connectStation.hint'])
     expect(hint.closest('.settings-field')?.contains(button)).toBe(true)
     expect(hint.textContent).toMatch(/F11 switches the window to full screen and back, and Esc over the picture still stops transmitting/)
   })
@@ -121,11 +122,20 @@ describe('on Windows', () => {
     const button = await waitFor(() => theButton()!)
     fireEvent.click(button)
     expect(opens()).toHaveBeenCalledTimes(1)
-    expect(opens().mock.calls[0]).toEqual([])
+    expect(opens().mock.calls[0]).toEqual(['en'])
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true))
     finish()
     await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false))
-    expect(screen.queryByText(EN['settings.remoteStations.failed'])).toBeNull()
+    expect(screen.queryByText(EN['settings.connectStation.failed'])).toBeNull()
+  })
+
+  it('is the only way in: the two entries it replaced are gone', async () => {
+    renderPanel()
+    await openRemoteTab()
+    await waitFor(() => theButton()!)
+    expect(screen.queryByRole('button', { name: EN['settings.remoteStations.open'] })).toBeNull()
+    expect(screen.queryByRole('button', { name: EN['settings.lanStations.open'] })).toBeNull()
+    expect(api.get('openRemoteStationsWindow')).not.toHaveBeenCalled()
   })
 
   it('says so in words when the window could not be opened, and lets the operator try again', async () => {
@@ -135,11 +145,11 @@ describe('on Windows', () => {
     const button = await waitFor(() => theButton()!)
     fireEvent.click(button)
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toBe(EN['settings.remoteStations.failed'])
+    expect(alert.textContent).toBe(EN['settings.connectStation.failed'])
     expect((button as HTMLButtonElement).disabled).toBe(false)
     opens().mockImplementation(() => Promise.resolve(null))
     fireEvent.click(button)
-    await waitFor(() => expect(screen.queryByText(EN['settings.remoteStations.failed'])).toBeNull())
+    await waitFor(() => expect(screen.queryByText(EN['settings.connectStation.failed'])).toBeNull())
     expect(opens()).toHaveBeenCalledTimes(2)
   })
 })

@@ -1,5 +1,10 @@
-// The Stations on this network window's page (src-tauri/src/remote_window.rs, `open_lan_stations_window`):
-// the stations on this computer, adding one by signing in with its Nexus Remote account (or, for a
+// The Stations on this network window's page (src-tauri/src/remote_window.rs, `open_lan_stations_window`),
+// Settings' one Connect to my station… entry. It decides by itself, network first: it looks by name,
+// and a station found that is paired here is operated (asked first), one found that is not opens the
+// code pairing with its address filled in, several ask which, and none offers signing in to reach it
+// over the internet. A name found is only a hint for which station and where: the road still proves
+// the key pinned at pairing, so the road the window picks never decides trust; the station does.
+// Under Advanced, collapsed: the stations on this computer, adding one by signing in with its Nexus Remote account (or, for a
 // station whose owner has not signed in there, pairing with its code), and the stream of the one the
 // operator opens (the operator's ruling of 2026-10-04, "Window only in v1"). A station signed in to
 // from elsewhere (a laptop away from home, a guest who lives elsewhere) is listed apart,
@@ -160,6 +165,29 @@ type Road = { connection: LanConnection; station: LanStation }
 /** The refusals only a new pairing ends: the row offers Pair again. */
 const PAIR_AGAIN: readonly ConnectReason[] = ['notPaired', 'keyChanged']
 
+/** Where Connect to my station stands: looking on this network; a station to operate (asked first),
+ *  with the name and address it was found at, if it was; one found that is not paired here, for the
+ *  code pairing; several found, for the operator to pick; or none found, for signing in. */
+type Step = { kind: 'looking' } | { kind: 'operate'; id: string; shack?: LanFound } | { kind: 'pair'; shack: LanFound }
+  | { kind: 'choose'; shacks: LanFound[] } | { kind: 'notFound'; available: boolean }
+
+/** The station paired here that a station found by name is, by its key tag (the first 64 bits of the
+ *  key's fingerprint). Only which row to reach: the road proves the whole key. */
+function pairedAs(shack: LanFound, stations: LanStation[]): LanStation | undefined {
+  return stations.find(station => station.key.startsWith(shack.key))
+}
+
+/** Network first: one found station paired here is the one to operate; else one found is paired with
+ *  its code, several are picked from, and none means it is not on this network. */
+function decide(shacks: LanFound[], stations: LanStation[], available: boolean): Step {
+  const seen = shacks.filter((shack, at) => shacks.findIndex(other => other.key === shack.key) === at)
+  const mine = seen.filter(shack => pairedAs(shack, stations))
+  if (mine.length === 1) return { kind: 'operate', id: pairedAs(mine[0], stations)!.id, shack: mine[0] }
+  if (seen.length === 1) return { kind: 'pair', shack: seen[0] }
+  if (seen.length > 1) return { kind: 'choose', shacks: seen }
+  return { kind: 'notFound', available }
+}
+
 /** The station the window was opened to pair again with (`?pairAgain=<id>`), or none. */
 function pairAgainIn(page: string): string | null {
   try { return new URL(page).searchParams.get('pairAgain') } catch { return null }
@@ -229,6 +257,18 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   const pairAgainAsked = useRef(pairAgainIn(page))
   // The stations as last told, for a sign-in's answer to read.
   const listed = useRef<{ stations: LanStation[]; away: LanAway[]; account: LanSigned[] }>({ stations: [], away: [], account: [] })
+  // Connect to my station: where it stands, and whether the look it asked for is still to be decided
+  // ('ask' until the stations are first told). Not when opened to pair again; and anything the
+  // operator starts under Advanced before the look answers ends it, so nothing moves under them.
+  const [step, setStep] = useState<Step | null>(pairAgainAsked.current === null ? { kind: 'looking' } : null)
+  const stepNow = useRef(step)
+  stepNow.current = step
+  const seeking = useRef<'ask' | 'asked' | null>(pairAgainAsked.current === null ? 'ask' : null)
+  // Connect to my station's next step: a station found but not paired here opens the code pairing.
+  const take = useCallback((next: Step) => {
+    setStep(next)
+    if (next.kind === 'pair') { setPairing(true); setAddress(next.shack.address); setCode('') }
+  }, [])
 
   const say = useCallback((value: Record<string, unknown>) => {
     try { socket.current?.send(JSON.stringify(value)) } catch { setPhase('lost') }
@@ -266,6 +306,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           setComputer(told.computer)
           setStoreFailed(told.error !== null)
           listed.current = { stations: told.stations, away: told.away, account: told.account }
+          if (seeking.current === 'ask') { seeking.current = 'asked'; ws.send(JSON.stringify({ type: 'find' })) }
           if (told.forgetUnreached !== null) setSaid({ text: t('lanWindow.internet.forgetUnreached'), alert: true })
           if (told.dropUnreached !== undefined) setSaid({ text: t('lanWindow.internet.dropRoadUnreached'), alert: true })
           if (pairAgainAsked.current !== null) {
@@ -276,10 +317,14 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           return
         case 'found':
           setFound({ shacks: told.shacks, available: told.available })
+          if (seeking.current === 'asked') { seeking.current = null; take(decide(told.shacks, listed.current.stations, told.available)) }
+          else if (stepNow.current?.kind === 'looking') setStep(null)
           return
         case 'paired':
           setBusy(null); setPairing(false); setCode('')
           setSaid({ text: t('lanWindow.pairedNow'), alert: false })
+          // Paired on the way to connecting: the station just paired is the one to operate.
+          if (stepNow.current && stepNow.current.kind !== 'looking') setStep({ kind: 'operate', id: told.station.id })
           say({ type: 'stations' })
           return
         case 'pairRefused':
@@ -328,9 +373,12 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           // Signed in again for a station added with the account; or added (on this network, or
           // over the internet when found nowhere here), or linked.
           const again = signingFor.current !== null && renewing.current.has(signingFor.current)
+          // Signed in on the way to connecting: the station added is the one to operate, through the account.
+          const connecting = stepNow.current?.kind === 'notFound' && signingFor.current === null
+          if (connecting) setStep({ kind: 'operate', id: told.stationId })
           setBusy(null); setChoosing(null); setWhere(null)
           setSaid({ text: told.waiting ? t('lanWindow.internet.waiting', { key: shortFingerprint(told.key) }) : told.away ? t('lanWindow.away.added')
-            : again ? t('lanWindow.signIn.renewed') : t('lanWindow.signIn.done'), alert: false, at: signedAt() })
+            : again ? t('lanWindow.signIn.renewed') : t('lanWindow.signIn.done'), alert: false, at: connecting ? told.stationId : signedAt() })
           say({ type: 'stations' })
           return
         }
@@ -358,7 +406,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
       }
     }
     return () => { leave(); ws.onopen = ws.onclose = ws.onmessage = null; ws.close() }
-  }, [open, page, say, environment])
+  }, [open, page, say, environment, take])
 
   // Control taken back by the station as a side effect of a decision about the hosted road (Turn
   // Remote on or off there, revoking a browser), which gives this computer its grant back at once.
@@ -393,6 +441,13 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
     return () => { offLink(); offOps() }
   }, [road])
 
+  // Connect to my station, again: a fresh look on this network.
+  const lookAgain = () => {
+    seeking.current = 'asked'
+    setStep({ kind: 'looking' }); setSaid(null); setPairAgain(null)
+    look()
+  }
+
   // The pairing dialog's address field offers the stations a look by name finds (the operator's
   // ruling of 2026-10-04, "By name, or typed"); typing an address always works, found or not.
   const look = () => {
@@ -424,6 +479,11 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
   // The last action's line, under the action that made it.
   const saidLine = said && <p className={said.alert ? 'rm-warning' : 'remote-site-status'} role={said.alert ? 'alert' : 'status'}>{said.text}</p>
   const saidAt = (at: string) => said?.at === at && saidLine
+  // A line Connect to my station's card holds is said there, and not again on the row under Advanced.
+  const cardAt = step?.kind === 'operate' ? step.id : step?.kind === 'notFound' ? 'add' : null
+  const rowSaid = (at: string) => at !== cardAt && saidAt(at)
+  // The code pairing for a station paired here, with its address: Pair again.
+  const pairStation = (station: LanStation) => { setSaid(null); setPairAgain(null); setPairing(true); setAddress(station.addresses[0]); look() }
   const shownName = name ?? computer
   const pairReady = !busy && phase === 'open' && address.trim() !== '' && codeShaped(code) && shownName.trim() !== ''
   // A station's internet road, by the station's key it is pinned to, in the eight groups the station
@@ -461,9 +521,9 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
       <img className="remote-site-mark" src={nexusMark} alt="" width={28} height={28} />
       <strong>{BRAND}</strong>
     </span></header>
-    <main className="rm-scroll" aria-label={t('lanWindow.title')}><div className="rm-content remote-account">
-      <h1>{t('lanWindow.title')}</h1>
-      <p className="remote-site-lead">{t('lanWindow.intro')}</p>
+    <main className="rm-scroll" aria-label={t('lanWindow.connect.title')}><div className="rm-content remote-account">
+      <h1>{t('lanWindow.connect.title')}</h1>
+      <p className="remote-site-lead">{t('lanWindow.connect.intro')}</p>
       {phase === 'opening' && <p className="remote-site-status" role="status">{t('lanWindow.opening')}</p>}
       {phase === 'lost' && <p className="rm-warning" role="alert">{t('lanWindow.lost')}</p>}
       {storeFailed && <p className="rm-warning" role="alert">{t('lanWindow.reason.storeUnavailable')}</p>}
@@ -502,6 +562,57 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           </div>
         </form>
       </section>}
+      {/* Connect to my station: the one action, decided by the window, network first. */}
+      <section className="rm-card remote-section remote-site-card--action" aria-label={t('lanWindow.connect.title')}>
+        {step?.kind === 'looking' && <p className="remote-site-status">{t('lanWindow.connect.looking')}</p>}
+        {step?.kind === 'operate' && (() => {
+          const at = step.id
+          const known = stations.find(station => station.id === at)
+          return <>
+            {step.shack && <p><strong>{t('lanWindow.foundAt', { name: step.shack.name, address: step.shack.address })}</strong></p>}
+            {roadKey(at)}
+            <p className="remote-warning">{awayIds.current.has(at) ? t('lanWindow.away.operateConfirm') : t('lanWindow.operateConfirm')}</p>
+            <div className="remote-actions">
+              <button type="button" className="remote-button remote-button--primary" disabled={!!busy || phase !== 'open'} onClick={() => {
+                setBusy(`operate:${at}`); setSaid(null); setPairAgain(null)
+                reaching.current = at
+                say({ type: 'operate', stationId: at })
+              }}>{t('lanWindow.operateYes')}</button>
+              <button type="button" className="remote-button remote-button--quiet" onClick={() => setStep(null)}>{t('lanWindow.operateNo')}</button>
+            </div>
+            {saidAt(at)}
+            {pairAgain === at && known && <div className="remote-actions">
+              <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'} onClick={() => pairStation(known)}>{t('lanWindow.pairAgain')}</button>
+            </div>}
+          </>
+        })()}
+        {step?.kind === 'pair' && <p>{t('lanWindow.connect.foundNew', { name: step.shack.name, address: step.shack.address })}</p>}
+        {step?.kind === 'choose' && <div role="group" aria-labelledby="lan-connect-choose">
+          <p id="lan-connect-choose">{t('lanWindow.connect.choose')}</p>
+          <div className="remote-actions">{step.shacks.map(shack =>
+            <button type="button" key={shack.key} className="remote-button" onClick={() => {
+              const station = pairedAs(shack, stations)
+              take(station ? { kind: 'operate', id: station.id, shack } : { kind: 'pair', shack })
+            }}>{t('lanWindow.foundAt', { name: shack.name, address: shack.address })}</button>)}</div>
+        </div>}
+        {step?.kind === 'notFound' && <>
+          <p>{t('lanWindow.connect.notFound')}</p>
+          <p className="settings-hint">{lanFindLine(step.available)}</p>
+          <div className="remote-actions">
+            <button type="button" className="remote-button remote-button--primary" disabled={!!busy || phase !== 'open'} onClick={() => signIn(null)}>
+              {busy === 'signIn' && signingFor.current === null ? t('lanWindow.internet.adding') : t('lanWindow.connect.signIn')}</button>
+          </div>
+          {saidAt('add')}
+        </>}
+        {step === null && <div className="remote-actions">
+          <button type="button" className="remote-button remote-button--primary" disabled={!!busy || phase !== 'open'} onClick={lookAgain}>{t('lanWindow.connect.start')}</button>
+        </div>}
+      </section>
+      {/* Advanced, collapsed: the stations on this computer, each with its own actions, a typed address,
+          signing in and the code. Anything started here ends the window's own look, so nothing moves
+          under the operator. */}
+      <details className="lan-advanced" onClickCapture={event => { if (!(event.target as Element).closest('summary')) seeking.current = null }}>
+        <summary>{t('lanWindow.connect.advanced')}</summary>
       <section className="rm-card remote-section">
         <h2>{t('lanWindow.paired')}</h2>
         {stations.length === 0 && away.length === 0 && <p>{t('lanWindow.none')}</p>}
@@ -570,11 +681,11 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
               </div>}
             </>
           })()}
-          {saidAt(station.id)}
+          {rowSaid(station.id)}
           {/* Refused in a way only a new pairing ends: the code pairing, with this station's address. */}
-          {pairAgain === station.id && forgetting !== station.id && operating !== station.id && <div className="remote-actions">
+          {pairAgain === station.id && cardAt !== station.id && forgetting !== station.id && operating !== station.id && <div className="remote-actions">
             <button type="button" className="remote-button" disabled={!!busy || phase !== 'open'}
-              onClick={() => { setSaid(null); setPairAgain(null); setPairing(true); setAddress(station.addresses[0]); look() }}>{t('lanWindow.pairAgain')}</button>
+              onClick={() => pairStation(station)}>{t('lanWindow.pairAgain')}</button>
           </div>}
           {/* Kept once Operate opened there, and tried first by Operate from then on: changed or cleared here. */}
           {station.typedAddress !== undefined && forgetting !== station.id && operating !== station.id && (changing?.id === station.id
@@ -645,7 +756,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
               <button type="button" className="remote-button remote-button--quiet" disabled={!!busy} onClick={() => setForgetting(station.id)}>{t('lanWindow.forget')}</button>
             </div>
           </>}
-          {saidAt(station.id)}
+          {rowSaid(station.id)}
         </div>)}
         {/* Signing in is how a station is added. A code stays for a station whose owner has not signed
             in to Nexus Remote at the station, until every station has. */}
@@ -653,7 +764,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           <button type="button" className="remote-button remote-button--primary" disabled={!!busy || phase !== 'open'} onClick={() => signIn(null)}>
             {busy === 'signIn' && signingFor.current === null ? t('lanWindow.internet.adding') : t('lanWindow.signIn')}</button>
         </div>
-        {saidAt('add')}
+        {rowSaid('add')}
         <p className="settings-hint">{t('lanWindow.signInHint')}</p>
         {!pairing && <>
           <div className="remote-actions">
@@ -662,6 +773,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           <p className="settings-hint">{t('lanWindow.pairCodeHint')}</p>
         </>}
       </section>
+      </details>
       {pairing && <section className="rm-card remote-section remote-site-card--action" aria-label={t('lanWindow.pairTitle')}>
         <h2>{t('lanWindow.pairTitle')}</h2>
         <p>{t('lanWindow.pairHint')}</p>
@@ -697,7 +809,8 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
           <span className="settings-hint">{t('lanWindow.nameHint')}</span>
           <div className="remote-actions">
             <button className="remote-button remote-button--primary" disabled={!pairReady}>{busy === 'pair' ? t('lanWindow.pairing') : t('lanWindow.pairSubmit')}</button>
-            <button type="button" className="remote-button remote-button--quiet" disabled={busy === 'pair'} onClick={() => setPairing(false)}>{t('lanWindow.cancel')}</button>
+            <button type="button" className="remote-button remote-button--quiet" disabled={busy === 'pair'}
+              onClick={() => { setPairing(false); if (step?.kind === 'pair') setStep(null) }}>{t('lanWindow.cancel')}</button>
           </div>
         </form>
       </section>}

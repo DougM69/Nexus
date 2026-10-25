@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
-import { RemoteStationsWindow } from '../remote-native/RemoteStationsWindow'
+import { ConnectEntry } from '../lan/ConnectEntry'
 import { LanStation } from '../remote-native/LanStation'
 import { isStreamInput } from '../remote-native/stream-input'
 import { useStreamWatched } from '../remote-native/stream-watched'
@@ -5071,15 +5071,15 @@ export function SettingsPanel({
                 )}
               </>
             )}
-            {/* The other end of the stream (the operator, 2026-10-04, "Stream client window"): this PC
-                opens the Remote page in a Nexus window of its own. Last in the card, after this
-                station's own Remote, which the operator ordered first. Windows only, where the
-                webview is the Chromium the page is tested on; elsewhere the note says to use a
-                browser. Never on the Remote page. */}
-            {IS_WINDOWS && <RemoteStationsWindow />}
+            {/* The other end: this PC operating a station, through the one Connect to my station…
+                entry, which finds it on this network first and otherwise reaches it over the
+                internet. Last in the card, after this station's own Remote, which the operator
+                ordered first. Windows only, where the webview is the Chromium the page is tested
+                on; elsewhere the note says to use a browser. Never on the Remote page. */}
+            {IS_WINDOWS && <ConnectEntry />}
             {!IS_WINDOWS && (
               <div className="settings-field">
-                <span className="settings-label">{t('settings.remoteStations.label')}</span>
+                <span className="settings-label">{t('settings.connectStation.label')}</span>
                 <span className="settings-hint">{t('settings.remoteStations.unavailable')}</span>
               </div>
             )}

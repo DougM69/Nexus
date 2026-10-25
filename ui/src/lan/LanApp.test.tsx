@@ -188,8 +188,10 @@ describe('the pairing dialog', () => {
     fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.pair'] }))
     socket.tell({ type: 'found', available: true, shacks: [] })
     expect(screen.getByText(EN['remote.lan.find.none'])).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.findAgain'] }))
+    // The window's own look on opening, and the pairing card's.
     expect(socket.sent.filter(m => m.type === 'find')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.findAgain'] }))
+    expect(socket.sent.filter(m => m.type === 'find')).toHaveLength(3)
     expect(screen.getByText(EN['lanWindow.finding'])).toBeTruthy()
     socket.tell({ type: 'found', available: false, shacks: [] })
     expect(screen.getByText(EN['remote.lan.find.unavailable'])).toBeTruthy()
@@ -243,7 +245,7 @@ describe('the stream', () => {
     fireEvent.click(screen.getByRole('button', { name: EN['remote.disconnect'] }))
     expect(last(socket.sent)).toEqual({ type: 'disconnect' })
     socket.tell({ type: 'closed', reason: 'disconnected' })
-    expect(screen.getByRole('heading', { name: EN['lanWindow.title'] })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: EN['lanWindow.connect.title'] })).toBeTruthy()
   })
 
   /** Connected, in control and offering: the view started by itself (the Stream press), took the
@@ -417,7 +419,7 @@ describe('Operate from this computer', () => {
     expect(buttons.filter(b => b.classList.contains('remote-button--primary')).map(b => b.textContent)).toEqual([EN['lanWindow.operate']])
     expect(buttons[1].classList.contains('remote-button--quiet')).toBe(true)
     expect(within(card).getByText(EN['lanWindow.choiceHint'])).toBeTruthy()
-    expect(screen.queryByText(EN['lanWindow.intro'])?.textContent).not.toMatch(/stream/i)
+    expect(screen.getByText(EN['lanWindow.connect.intro']).textContent).not.toMatch(/stream/i)
     fireEvent.click(buttons[1])
     expect(last(socket.sent)).toEqual({ type: 'connect', stationId: STATION })
   })
@@ -877,5 +879,124 @@ describe('the station’s key for each internet road', () => {
     page()
     socket.tell({ type: 'signInRefused', reason: 'stationKeyDisagrees' })
     expect(screen.getByRole('alert').textContent).toBe(EN['lanWindow.internet.reason.stationKeyDisagrees'])
+  })
+})
+
+// Connect to my station: the window decides by itself, network first. A station found by name is a
+// hint for which station to reach and at what address, never an identity: the road still proves the
+// key pinned at pairing, and a code pairing still proves the station's.
+describe('Connect to my station', () => {
+  const KEY = '5966'.repeat(16)
+  const mine = { id: STATION, addresses: ['192.168.1.20:42075'], key: KEY }
+  const shack = (name: string, address: string, key: string) => ({ name, address, protocol: 1, key })
+  const told = (stations: unknown[] = [], away: unknown[] = []) =>
+    socket.tell({ type: 'stations', computer: 'DEN-PC', internet: [], account: [], stations, away })
+  const connectCard = () => screen.getByRole('region', { name: EN['lanWindow.connect.title'] })
+
+  it('looks on this network first, once the stations here are known', () => {
+    page()
+    expect(socket.sent).toEqual([{ type: 'stations' }])
+    told([mine])
+    expect(last(socket.sent)).toEqual({ type: 'find' })
+    expect(within(connectCard()).getByText(EN['lanWindow.connect.looking'])).toBeTruthy()
+  })
+
+  it('found, and paired with this computer: asks once, then operates it', () => {
+    page()
+    told([mine])
+    socket.tell({ type: 'found', available: true, shacks: [shack('SHACK', '192.168.1.20:42075', KEY.slice(0, 16))] })
+    const card = connectCard()
+    expect(within(card).getByText(EN['lanWindow.operateConfirm'])).toBeTruthy()
+    expect(socket.sent.some(m => m.type === 'operate'), 'asked first').toBe(false)
+    fireEvent.click(within(card).getByRole('button', { name: EN['lanWindow.operateYes'] }))
+    expect(last(socket.sent)).toEqual({ type: 'operate', stationId: STATION })
+  })
+
+  it('found, and not paired with this computer: the code pairing, with its address filled in; paired, it operates it', () => {
+    page()
+    told([])
+    socket.tell({ type: 'found', available: true, shacks: [shack('SHACK', '192.168.1.30:42075', 'abcdabcdabcdabcd')] })
+    const pairing = screen.getByRole('region', { name: EN['lanWindow.pairTitle'] })
+    expect((within(pairing).getByLabelText(EN['lanWindow.address']) as HTMLInputElement).value).toBe('192.168.1.30:42075')
+    expect(socket.sent.some(m => m.type === 'signIn' || m.type === 'pair'), 'nothing sent before the code').toBe(false)
+    fireEvent.change(within(pairing).getByLabelText(EN['lanWindow.code']), { target: { value: '0123 4567 89ab cdef' } })
+    fireEvent.click(within(pairing).getByRole('button', { name: EN['lanWindow.pairSubmit'] }))
+    expect(last(socket.sent)).toEqual({ type: 'pair', address: '192.168.1.30:42075', code: '0123 4567 89ab cdef', name: 'DEN-PC' })
+    const station = { id: STATION, addresses: ['192.168.1.30:42075'], key: 'abcd'.repeat(16) }
+    socket.tell({ type: 'paired', station })
+    told([station])
+    fireEvent.click(within(connectCard()).getByRole('button', { name: EN['lanWindow.operateYes'] }))
+    expect(last(socket.sent)).toEqual({ type: 'operate', stationId: STATION })
+  })
+
+  it('not found on this network: offers sign-in for the internet, and connects through the account', () => {
+    page()
+    told([])
+    socket.tell({ type: 'found', available: true, shacks: [] })
+    const card = connectCard()
+    expect(within(card).getByText(EN['lanWindow.connect.notFound'])).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: EN['lanWindow.connect.signIn'] }))
+    expect(last(socket.sent)).toEqual({ type: 'signIn', stationId: null })
+    socket.tell({ type: 'signedIn', stationId: AWAY, waiting: true, away: true, key: ROAD_KEY })
+    told([], [{ id: AWAY, name: 'Shack', key: KEY }])
+    expect(within(connectCard()).getByText(EN['lanWindow.internet.waiting'].replace('{{key}}', shortFingerprint(ROAD_KEY)))).toBeTruthy()
+    expect(within(connectCard()).getByText(EN['lanWindow.away.operateConfirm'])).toBeTruthy()
+    fireEvent.click(within(connectCard()).getByRole('button', { name: EN['lanWindow.operateYes'] }))
+    expect(last(socket.sent)).toEqual({ type: 'operate', stationId: AWAY })
+  })
+
+  it('several stations found: asks which, then decides for the one picked', () => {
+    page()
+    told([mine])
+    socket.tell({ type: 'found', available: true, shacks: [
+      shack('CLUB', '192.168.1.40:42075', 'abcdabcdabcdabcd'), shack('FIELD', '192.168.1.41:42075', '0123012301230123')] })
+    const card = connectCard()
+    expect(within(card).getByText(EN['lanWindow.connect.choose'])).toBeTruthy()
+    expect(screen.queryByRole('region', { name: EN['lanWindow.pairTitle'] }), 'nothing chosen for the operator').toBeNull()
+    fireEvent.click(within(card).getByRole('button', { name: 'FIELD at 192.168.1.41:42075' }))
+    const pairing = screen.getByRole('region', { name: EN['lanWindow.pairTitle'] })
+    expect((within(pairing).getByLabelText(EN['lanWindow.address']) as HTMLInputElement).value).toBe('192.168.1.41:42075')
+  })
+
+  it('a refusal is said in the card, with Pair again for a station that no longer knows this computer', () => {
+    page()
+    told([mine])
+    socket.tell({ type: 'found', available: true, shacks: [shack('SHACK', '192.168.1.20:42075', KEY.slice(0, 16))] })
+    fireEvent.click(within(connectCard()).getByRole('button', { name: EN['lanWindow.operateYes'] }))
+    socket.tell({ type: 'connectRefused', reason: 'notPaired' })
+    const card = connectCard()
+    expect(within(card).getByRole('alert').textContent).toBe(EN['lanWindow.reason.notPaired'])
+    expect(screen.getAllByRole('alert'), 'said once').toHaveLength(1)
+    fireEvent.click(within(card).getByRole('button', { name: EN['lanWindow.pairAgain'] }))
+    const pairing = screen.getByRole('region', { name: EN['lanWindow.pairTitle'] })
+    expect((within(pairing).getByLabelText(EN['lanWindow.address']) as HTMLInputElement).value).toBe('192.168.1.20:42075')
+  })
+
+  it('keeps the stations, a typed address and the code under Advanced, collapsed', () => {
+    page()
+    told([mine])
+    const advanced = screen.getByText(EN['lanWindow.connect.advanced']).closest('details') as HTMLDetailsElement
+    expect(advanced.open).toBe(false)
+    expect(advanced.contains(screen.getByRole('button', { name: EN['lanWindow.operate'] }))).toBe(true)
+    expect(advanced.contains(screen.getByRole('button', { name: EN['lanWindow.pair'] }))).toBe(true)
+    expect(advanced.contains(screen.getByRole('button', { name: EN['lanWindow.signIn'] }))).toBe(true)
+  })
+
+  it('CONTROL: an operator who started something under Advanced before the look answered is not moved', () => {
+    page()
+    told([mine])
+    fireEvent.click(screen.getByRole('button', { name: EN['lanWindow.pair'] }))
+    socket.tell({ type: 'found', available: true, shacks: [shack('SHACK', '192.168.1.20:42075', KEY.slice(0, 16))] })
+    expect(screen.queryByText(EN['lanWindow.operateConfirm'])).toBeNull()
+    expect(screen.getByRole('region', { name: EN['lanWindow.pairTitle'] })).toBeTruthy()
+  })
+
+  it('CONTROL: opened to pair again, it does not look for a station to connect to', () => {
+    socket = new FakeSocket()
+    render(<LanApp page={`${PAGE}&pairAgain=${STATION}`} open={() => socket} />)
+    act(() => { socket.onopen?.() })
+    told([mine])
+    socket.tell({ type: 'found', available: true, shacks: [shack('SHACK', '192.168.1.20:42075', KEY.slice(0, 16))] })
+    expect(screen.queryByText(EN['lanWindow.operateConfirm'])).toBeNull()
   })
 })
