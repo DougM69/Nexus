@@ -205,6 +205,31 @@ fn a_command_that_runs_here_runs_here_and_never_at_the_shack() {
     }
 }
 
+/// The Redo of one change's undo is no riskier than the undo a computer driving the station may
+/// already ask for, so it runs at the shack from afar, as there; it refuses a run over more than
+/// one contact itself (`undo_contact_run`), which stays `undo_history_run`'s, at the shack.
+#[test]
+fn one_contacts_redo_runs_from_afar_and_a_whole_runs_undo_does_not() {
+    let shack = shack();
+    for (id, name) in ["undo_qso_change", "redo_qso_change"]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(class_of(name), Some(Class::RunsAtShack), "{name}");
+        let args = json!({ "run": "r" });
+        assert_eq!(route(name, &args), Route::Shack, "{name} here");
+        let admission = shack.admit(&controller(), call(id as u64 + 1, name, args));
+        assert_eq!(kind(&admission), "run", "{name} at the shack");
+    }
+    let args = json!({ "run": "r" });
+    assert_eq!(
+        route("undo_history_run", &args),
+        Route::Refused(Refusal::ShackOnly)
+    );
+    let admission = shack.admit(&controller(), call(9, "undo_history_run", args));
+    assert_eq!(kind(&admission), refused(Refusal::ShackOnly));
+}
+
 #[test]
 fn a_shack_only_command_is_refused_at_both_ends() {
     // The operator's rulings of 2026-10-07 by name: a settings restore and a factory reset, a

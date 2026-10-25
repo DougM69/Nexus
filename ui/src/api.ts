@@ -1707,6 +1707,12 @@ export async function undoHistoryRun(run: string): Promise<UndoAnswer> {
   return invoke<UndoAnswer>('undo_history_run', { run })
 }
 
+/** Undo a run that changed one contact: the Redo of one change's undo or of one restore. Asked
+ *  from afar as the undo is; a run over more contacts is refused (`undoHistoryRun`'s). */
+export async function redoQsoChange(run: string): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('redo_qso_change', { run })
+}
+
 /** A purge, an import or a whole run's undo whose whole-run undo can still be asked for. */
 export interface HistoryRun {
   /** What `undoHistoryRun` takes. */

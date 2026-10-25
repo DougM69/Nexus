@@ -12,7 +12,7 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). ADIF tags, field values
 // and service names are invariant tokens, shown as they are.
 import { useCallback, useEffect, useState } from 'react'
-import { qsoHistory, undoHistoryRun, undoQsoChange, type QsoHistoryEntry, type UndoAnswer } from '../api'
+import { qsoHistory, redoQsoChange, undoHistoryRun, undoQsoChange, type QsoHistoryEntry, type UndoAnswer } from '../api'
 import { t } from '../i18n'
 import { failureText, pushToast, withErrorToast } from '../toast'
 
@@ -94,9 +94,12 @@ export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => voi
   pushToast(`${done}${kept}${keptContacts}${dups}`, 'success', 10_000, run ? {
     actionLabel: t('qso.history.redo'),
     // A refusal rejects with its reason, so the toast stays up saying why and Redo can be
-    // pressed again (a redo of a large undo waits while the radio transmits).
+    // pressed again (a redo of a large undo waits while the radio transmits). An undo of one
+    // contact is redone as one, which a computer driving the station may ask for as it may the
+    // undo; a whole run's is the station's.
     action: async () => {
-      const a = await undoHistoryRun(run).catch((err: unknown) => {
+      const redo = answer.changed === 1 ? redoQsoChange : undoHistoryRun
+      const a = await redo(run).catch((err: unknown) => {
         throw new Error(failureText(t('qso.history.undo.failed'), err))
       })
       sayUndone(a, t('qso.history.redone'), onChanged)

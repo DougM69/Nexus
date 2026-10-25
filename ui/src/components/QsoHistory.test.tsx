@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   qsoHistory: vi.fn(),
   undoQsoChange: vi.fn(),
   undoHistoryRun: vi.fn(),
+  redoQsoChange: vi.fn(),
   recentlyDeletedQsos: vi.fn(),
   restoreDeletedQso: vi.fn(),
   undoableHistoryRuns: vi.fn(),
@@ -79,7 +80,7 @@ describe("a contact's history", () => {
   it('undoes one change, says so with a Redo, and the Redo undoes the undo', async () => {
     api.qsoHistory.mockResolvedValue([entry({ seq: 7, kind: 'edit', changes: [{ tag: 'COMMENT', old: null, new: 'x' }] })])
     api.undoQsoChange.mockResolvedValue(done)
-    api.undoHistoryRun.mockResolvedValue({ ...done, run: 'redo-run' })
+    api.redoQsoChange.mockResolvedValue({ ...done, run: 'redo-run' })
     const onChanged = vi.fn()
     render(<QsoHistory id="1:2:3" onChanged={onChanged} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
@@ -88,7 +89,20 @@ describe("a contact's history", () => {
     const toast = toasts.find((t) => t.message.startsWith('Change undone'))
     expect(toast?.actionLabel).toBe('Redo')
     toast?.action?.()
+    // One contact's redo, which a computer driving the station may ask for as it may the undo;
+    // never the whole-run undo, which is the station's alone.
+    await waitFor(() => expect(api.redoQsoChange).toHaveBeenCalledWith('undo-run'))
+    expect(api.undoHistoryRun).not.toHaveBeenCalled()
+  })
+
+  it("redoes a whole run's undo of several contacts as the whole run, at the station", async () => {
+    api.undoHistoryRun.mockResolvedValue({ ...done, changed: 41, run: 'redo-run' })
+    sayUndone({ ...done, changed: 41 }, 'Whole run undone', () => {})
+    const toast = toasts.find((t) => t.message.startsWith('Whole run undone'))
+    expect(toast?.actionLabel).toBe('Redo')
+    toast?.action?.()
     await waitFor(() => expect(api.undoHistoryRun).toHaveBeenCalledWith('undo-run'))
+    expect(api.redoQsoChange).not.toHaveBeenCalled()
   })
 
   it('names the contacts an undo left because they changed since, and those the log holds already', () => {
