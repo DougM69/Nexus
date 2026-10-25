@@ -9022,13 +9022,27 @@ fn contest_place_call(call: &str) -> Option<tempo_core::contest::CallLocation> {
     })
 }
 
-/// The CQ zone the country file gives a callsign — the contest strip's zone HINT (the
-/// box's placeholder, never its value). Read through [`contest_place_call`], the adapter
-/// the scorer places a call with, so the hint and the scorer cannot disagree about where a
-/// station is.
+/// Where the contest places a callsign, for the entry strip: the entity its scorer counts
+/// the call under and the CQ zone the country file gives it.
+#[derive(Debug, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct ContestPlace {
+    /// As the scorer counts it: a WAE area is its own (IT9 is Sicily), where the callsign
+    /// card's [`resolve_entity`] folds it into its DXCC entity (Italy).
+    entity: &'static str,
+    /// The zone HINT (the zone box's placeholder, never its value).
+    cq_zone: Option<u8>,
+}
+
+/// The contest strip's country line and zone hint, out of ONE resolve: read through
+/// [`contest_place_call`], the adapter the scorer places a call with, so the strip cannot
+/// name a country or a zone the scorer does not count. Read-only, and per keystroke.
 #[tauri::command]
-fn contest_zone_hint(call: String) -> Option<u8> {
-    contest_place_call(&call).and_then(|l| l.cq_zone)
+fn contest_place(call: String) -> Option<ContestPlace> {
+    contest_place_call(&call).map(|l| ContestPlace {
+        entity: l.entity,
+        cq_zone: l.cq_zone,
+    })
 }
 
 /// Install [`contest_place_call`] once, at startup. Logged either way; a second install is
@@ -32546,7 +32560,7 @@ async fn contest_log_satellite(
 ///
 /// ⚠️ **COMMIT ONLY — Enter, blur, a spot click. Never on every keystroke.** Bound to
 /// each edit it would mint a binding per prefix of the call and strand all but the
-/// last. [`contest_zone_hint`] is the per-keystroke endpoint; this is deliberately not.
+/// last. [`contest_place`] is the per-keystroke endpoint; this is deliberately not.
 ///
 /// A blank call is the reset — the operator cleared the box.
 #[tauri::command(async)]
@@ -39505,7 +39519,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         discard_pending_log,
         log_qso,
         resolve_entity,
-        contest_zone_hint,
+        contest_place,
         contest_logged_qth,
         edit_qso,
         mark_qsl_sent,
@@ -41126,11 +41140,47 @@ mod tests {
                 Some(zone),
                 "{call} places in zone {zone}"
             );
-            assert_eq!(super::contest_zone_hint(call.into()), Some(zone), "{call}");
+            assert_eq!(
+                super::contest_place(call.into()).and_then(|p| p.cq_zone),
+                Some(zone),
+                "{call}"
+            );
         }
         // NEGATIVE CONTROL: nothing to place, nothing to hint — never a made-up zone.
-        assert_eq!(super::contest_zone_hint(String::new()), None);
-        assert_eq!(super::contest_zone_hint("...".into()), None);
+        assert_eq!(super::contest_place(String::new()), None);
+        assert_eq!(super::contest_place("...".into()), None);
+    }
+
+    /// ⭐ **The strip names the entity the contest counts.** CQ WW counts a WAE area as a
+    /// country of its own, so IT9XYZ is Sicily on the strip, as the scorer counts it, while
+    /// the callsign card's entity folds it into Italy. A call outside the WAE areas is the
+    /// same entity both ways.
+    #[test]
+    fn the_contest_place_is_the_scorers_entity_and_zone_from_one_resolve() {
+        let sicily = super::contest_place("IT9XYZ".into()).expect("IT9XYZ places");
+        assert_eq!(sicily.entity, "Sicily");
+        assert_eq!(
+            Some(sicily.entity),
+            super::contest_place_call("IT9XYZ").map(|l| l.entity)
+        );
+        assert_eq!(sicily.cq_zone, Some(15));
+        // The card's entity, which the strip used to show, is the DXCC entity.
+        assert_eq!(
+            super::resolve_entity("IT9XYZ".into()).as_deref(),
+            Some("Italy")
+        );
+        // CONTROL: a plain DXCC call is the same entity both ways.
+        let dl = super::contest_place("DL1ABC".into()).expect("DL1ABC places");
+        assert_eq!(dl.entity, "Fed. Rep. of Germany");
+        assert_eq!(
+            super::resolve_entity("DL1ABC".into()).as_deref(),
+            Some(dl.entity)
+        );
+        // And it reaches the page in the strip's spelling.
+        assert_eq!(
+            serde_json::to_value(&dl).unwrap(),
+            serde_json::json!({ "entity": "Fed. Rep. of Germany", "cqZone": 14 })
+        );
     }
 
     /// ⭐ **The entity spellings the W/VE warning keys on are this country file's own.**

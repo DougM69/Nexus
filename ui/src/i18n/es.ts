@@ -8694,6 +8694,7 @@ export const ES: PartialCatalog = {
   "contest.edit.failed": "Nexus could not edit the contact, so nothing was changed.",
   "contest.edit.remote": "Only at the station: a press through Remote edits no contact.",
   "contest.edit.empty": "There is no contest contact to edit.",
+  "contest.edit.open": "Another edit of a contact is open: finish it first. Enter saves it, Esc leaves it as it was.",
   // APRS-IS up for JS8 while the APRS screen's feed is off: MACHINE TRANSLATION, for a native speaker to check.
   "aprs.inet.js8.label": "Internet para JS8",
   "aprs.inet.js8.detail": "El feed de esta pantalla está apagado. APRS-IS está conectado para JS8: su pasarela @APRSIS envía con tu indicativo lo que las estaciones JS8 dirigen a @APRSIS. Nada de ello se muestra aquí.{{relay}}",

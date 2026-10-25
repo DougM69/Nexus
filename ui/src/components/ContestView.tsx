@@ -41,7 +41,7 @@ import { formatOpTime, OFF_TIME_MIN_SEC, operatingTime } from '../features/conte
 import { OperatorStatsBoard } from './ContestOperators'
 import { stationMode, usePskName } from '../features/contestMode'
 import { CLEAR_TOAST_MS, REMOVE_CONFIRM_MS, SERVICE_NAMES, clearText, contactCount, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
-import { ContestContactEdit, type EditNote } from './ContestContactEdit'
+import { ContestContactEdit, focusOpenContestEdit, type EditNote } from './ContestContactEdit'
 import { ContestSpotMe } from './ContestSpotMe'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
@@ -3263,6 +3263,12 @@ export function ContestView({
     setRemoveAsk(null)
     if (fieldDay?.club) {
       setRemovedNote({ text: t('contest.edit.club'), alert: true })
+      return
+    }
+    // Another edit open in this window (the strip's Ctrl+Y, a last contact's): it keeps the
+    // keyboard and its typing, and no second one opens.
+    if (!editing && focusOpenContestEdit()) {
+      setRemovedNote({ text: t('contest.edit.open'), alert: false })
       return
     }
     setRemovedNote(null)

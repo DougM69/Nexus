@@ -13999,7 +13999,7 @@ impl Engine {
     ///
     /// ⚠️ **COMMIT semantics — Enter, blur, a spot click. Never per keystroke.** Bound
     /// to every edit this mints a binding for each prefix of the call and strands all
-    /// but the last. `contest_zone_hint` is the per-keystroke endpoint and is
+    /// but the last. `contest_place` is the per-keystroke endpoint and is
     /// deliberately not this one.
     ///
     /// A blank call is [`Self::contest_entry_reset`] — the operator cleared the box.

@@ -2284,6 +2284,7 @@ export const EN = {
   'contest.edit.failed': 'Nexus could not edit the contact, so nothing was changed.',
   'contest.edit.remote': 'Only at the station: a press through Remote edits no contact.',
   'contest.edit.empty': 'There is no contest contact to edit.',
+  'contest.edit.open': 'Another edit of a contact is open: finish it first. Enter saves it, Esc leaves it as it was.',
   'logEntry.shared.logged': '{{call}} is already in the log: Enter was pressed in the other window first.',
   'logEntry.shared.changed': 'The contact changed in the other window before it was logged. Check it and log it again.',
   'logEntry.countyLine.repeated': '{{value}} is in this county line twice.',

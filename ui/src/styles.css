@@ -20706,11 +20706,17 @@ button.cq-skiptx1.on {
 .contest-logger-recent .fd-mode-chip {
   font-size: calc(14px * var(--text-scale));
 }
-/* The line a last contact's edit leaves (ContestLogger `LastContacts`), on the list's inset. */
+/* The line a last contact's edit leaves (ContestLogger `LastContacts`): under the list and OUTSIDE its
+   scroller, so it is on screen however far the list is scrolled (inside, after ten rows, it was below
+   the list's edge at 1024×768). A line of content height that never shrinks, on the list's surface,
+   its text on the list's 1600 px measure and inset. */
 .contest-logger-recent-note {
-  margin: var(--space-1) 0;
-  padding: 0 var(--space-4);
+  flex: 0 0 auto;
+  margin: 0;
+  max-width: none;
+  padding: var(--space-1) max(var(--space-4), calc(50% - 800px + var(--space-4)));
   font-size: var(--fs-body);
+  background: var(--bg-elev);
 }
 /* THE CONTEST SCREEN'S ENTRY, in the main window (App.tsx): the same large log line at the top of
    the screen while a contest runs, the last contacts under it, and the screen below, scrolling in

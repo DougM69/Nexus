@@ -18,6 +18,22 @@ import { bandOptions, editForm, editOf, editText, modeOptions } from '../feature
 import { contactLabel } from '../features/contestRemoval'
 import { receivedCaption } from '../features/contestSlots'
 
+// ONE EDIT OF A CONTACT AT A TIME IN A WINDOW. The last contacts' Edit, the contest screen's and the
+// strip's Ctrl+Y can each open one, and two open at once would race: the engine refuses the second
+// save as changed, and the losing edit's typing is gone. So a host that has none open asks here
+// first, and while one is open it opens nothing and the keyboard goes back to the open one as typed.
+let openEdit: HTMLElement | null = null
+
+/** Is another contact's edit open in this window? If so it gets the keyboard back, and the caller
+ *  opens nothing. A host asks only while it has no edit of its own open. */
+export function focusOpenContestEdit(): boolean {
+  const el = openEdit
+  if (!el?.isConnected) return false
+  el.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true })
+  el.scrollIntoView?.({ block: 'nearest' })
+  return true
+}
+
 /** The line a host shows once an edit is over. */
 export interface EditNote {
   text: string
@@ -46,6 +62,14 @@ export function ContestContactEdit({
   const [why, setWhy] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const callRef = useRef<HTMLInputElement>(null)
+  const boxRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = boxRef.current
+    openEdit = el
+    return () => {
+      if (openEdit === el) openEdit = null
+    }
+  }, [])
   // The country of the call in the form, as the strip resolves its own: from a station in the USA
   // or Canada a QSO party's QTH box takes only what is on the contest's lists (`editOf`).
   const [entity, setEntity] = useState<string | null>(null)
@@ -102,6 +126,7 @@ export function ContestContactEdit({
   }
   return (
     <div
+      ref={boxRef}
       className="contest-edit"
       role="group"
       aria-label={t('contest.edit.aria', { contact: contactLabel(rows) })}

@@ -55,7 +55,7 @@ const api = vi.hoisted(() => ({
   contestLogSatellite: vi.fn(async () => ({})),
   contestWorking: vi.fn(async () => ({})),
   contestEntryReset: vi.fn(async () => ({})),
-  contestZoneHint: vi.fn(async () => ({})),
+  contestPlace: vi.fn(async () => ({})),
   contestIMoved: vi.fn(async () => ({})),
   logQso: vi.fn(async () => ({})),
   lookupPark: vi.fn(async () => null),

@@ -1010,7 +1010,7 @@ export async function contestLogSatellite(
  *  the gesture is a correction and a move-on in the same keystrokes.
  *
  *  ⚠️ COMMIT ONLY — Enter, blur, a spot click. Never on every keystroke: bound to each edit it
- *  mints a binding per prefix of the call and strands all but the last. `contestZoneHint` is the
+ *  mints a binding per prefix of the call and strands all but the last. `contestPlace` is the
  *  per-keystroke endpoint; this is deliberately not. */
 export async function contestWorking(call: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('contest_working', { call })
@@ -1527,11 +1527,12 @@ export async function resolveEntity(call: string): Promise<string | null> {
   return invoke<string | null>('resolve_entity', { call })
 }
 
-/** The CQ zone the country file gives a callsign, or null — through the same adapter the
- *  contest scorer places a call with. A HINT for the contest strip's zone box (its
- *  placeholder), never a logged value: a station outside its prefix's zone sends its own. */
-export async function contestZoneHint(call: string): Promise<number | null> {
-  return invoke<number | null>('contest_zone_hint', { call })
+/** Where the contest places a callsign, or null: the entity its scorer counts the call under
+ *  (a WAE area is its own, IT9 is Sicily) and the CQ zone the country file gives it, out of ONE
+ *  resolve, the scorer's. The zone is a HINT for the contest strip's zone box (its placeholder),
+ *  never a logged value: a station outside its prefix's zone sends its own. */
+export async function contestPlace(call: string): Promise<{ entity: string; cqZone: number | null } | null> {
+  return invoke<{ entity: string; cqZone: number | null } | null>('contest_place', { call })
 }
 
 /** What the log last said of `call`'s county or state, for the contest entry's box receiving

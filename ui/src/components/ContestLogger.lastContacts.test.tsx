@@ -3,7 +3,9 @@
 // THE LAST CONTACTS UNDER THE CONTEST ENTRY — the newest ten, newest first, and each one correctable
 // where it stands: its Edit opens the contest screen's own edit (`ContestContactEdit`, the engine's
 // `contest_edit`) in the row's place, with the same refusals (a club, a press through Remote) and the
-// same line once it is over, the "edit it in the logbook too" warning included.
+// same line once it is over, the "edit it in the logbook too" warning included. That line stands
+// outside the list's scroller, so it is on screen however far the list is scrolled, and goes at the
+// next edit or contact logged. Save or Esc gives the keyboard back to the entry (`onEditDone`).
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, fireEvent, cleanup, act, screen } from '@testing-library/react'
 import { createRef } from 'react'
@@ -12,6 +14,7 @@ import type { FdClubStatus, FieldDayQso, FieldDayStatus } from '../types'
 import { StreamInputDispatcher } from '../remote-native/stream-input'
 import { t } from '../i18n'
 import { contactLabel } from '../features/contestRemoval'
+import { ContestContactEdit } from './ContestContactEdit'
 
 vi.mock('../api', () => ({
   contestEdit: vi.fn(),
@@ -61,19 +64,27 @@ const settle = async () => {
   })
 }
 
+const onEditDone = vi.fn()
+const list = (fieldDay: FieldDayStatus) => (
+  <LastContacts fieldDay={fieldDay} style={{}} boxRef={createRef<HTMLElement>()} onEditDone={onEditDone} />
+)
 function show(fieldDay: FieldDayStatus) {
-  return render(<LastContacts fieldDay={fieldDay} style={{}} boxRef={createRef<HTMLElement>()} />)
+  return render(list(fieldDay))
 }
+/** `n` more contacts after LOG's twelve, a minute apart: N00NN … */
+const more = (n: number) => Array.from({ length: n }, (_, i) => row(`N${String(i).padStart(2, '0')}NN`, '5', T0 + (12 + i) * 60))
 
 const calls = () => [...document.querySelectorAll('.contest-logger-recent .fd-log-row .fd-col.call')].map((c) => c.textContent)
 const editButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.contest-logger-recent .fd-edit')]
 const editor = () => document.querySelector<HTMLElement>('.contest-logger-recent .contest-edit')
 const boxes = () => [...(editor()?.querySelectorAll<HTMLInputElement>('input') ?? [])]
-const note = () => document.querySelector('.contest-logger-recent-note')?.textContent ?? null
+const noteEl = () => document.querySelector<HTMLElement>('.contest-logger-recent-note')
+const note = () => noteEl()?.textContent ?? null
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 
 afterEach(() => {
   cleanup()
+  onEditDone.mockClear()
   for (const f of Object.values(api)) f.mockClear()
 })
 
@@ -159,9 +170,122 @@ describe('a last contact is corrected in place', () => {
     const view = show(cqww(LOG))
     fireEvent.click(editButtons()[0])
     expect(editor()).not.toBeNull()
-    view.rerender(<LastContacts fieldDay={cqww(LOG.slice(0, 11))} style={{}} boxRef={createRef<HTMLElement>()} />)
+    view.rerender(list(cqww(LOG.slice(0, 11))))
     await settle()
     expect(editor()).toBeNull()
+  })
+
+  it('keeps the contact it opened while new contacts push its row down, and out of the ten', async () => {
+    api.contestEdit.mockResolvedValue({ outcome: 'refused', refusal: 'changed' })
+    const view = show(cqww(LOG))
+    // K09AA, third from the top.
+    fireEvent.click(editButtons()[2])
+    type(boxes()[0], 'K09AB')
+    // Three logged meanwhile: its row is now sixth.
+    view.rerender(list(cqww([...LOG, ...more(3)])))
+    expect(boxes()[0].value, 'what was typed is still there').toBe('K09AB')
+    expect(document.activeElement).toBe(boxes()[0])
+    // Ten more: it is past the ten shown, and the edit is still open, after them.
+    view.rerender(list(cqww([...LOG, ...more(10)])))
+    expect(editor()).not.toBeNull()
+    expect(boxes()[0].value).toBe('K09AB')
+    expect(document.activeElement).toBe(boxes()[0])
+    expect(calls()).toEqual(more(10).reverse().map((q) => q.call))
+    expect(editor()!.compareDocumentPosition(document.querySelectorAll('.contest-logger-recent .fd-log-row')[9]) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+    await act(async () => {
+      fireEvent.keyDown(boxes()[0], { key: 'Enter' })
+    })
+    await settle()
+    // The contact it opened, by its call and time — never the one now in its old place.
+    expect(api.contestEdit).toHaveBeenCalledTimes(1)
+    expect(api.contestEdit.mock.calls[0].slice(0, 2)).toEqual(['K09AA', LOG[9].whenUnix])
+    expect(api.contestEdit.mock.calls[0][2].call).toBe('K09AB')
+  })
+
+  it('gives the keyboard back to the entry once it is over, by Save and by Esc', async () => {
+    api.contestEdit.mockResolvedValueOnce({
+      outcome: 'edited',
+      before: [LOG[11]],
+      after: [row('K11AB', '5', LOG[11].whenUnix!)],
+      sentTo: { wsjtx: false, logbook: false, uploaded: [] },
+    })
+    show(cqww(LOG))
+    fireEvent.click(editButtons()[0])
+    expect(onEditDone).not.toHaveBeenCalled()
+    await act(async () => {
+      fireEvent.keyDown(boxes()[0], { key: 'Enter' })
+    })
+    await settle()
+    expect(onEditDone).toHaveBeenCalledTimes(1)
+    fireEvent.click(editButtons()[0])
+    fireEvent.keyDown(boxes()[0], { key: 'Escape' })
+    expect(onEditDone).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the line an edit leaves', () => {
+  const edited = () =>
+    api.contestEdit.mockResolvedValueOnce({
+      outcome: 'edited',
+      before: [LOG[11]],
+      after: [row('K11AB', '5', LOG[11].whenUnix!)],
+      sentTo: { wsjtx: false, logbook: true, uploaded: [] },
+    })
+  const saveNewest = async () => {
+    fireEvent.click(editButtons()[0])
+    type(boxes()[0], 'K11AB')
+    await act(async () => {
+      fireEvent.keyDown(boxes()[0], { key: 'Enter' })
+    })
+    await settle()
+  }
+
+  it('stands outside the scrolling list, so no scroll position hides it', async () => {
+    edited()
+    show(cqww(LOG))
+    await saveNewest()
+    expect(note()).toContain(t('contest.edit.logbook', { call: 'K11AA' }))
+    expect(noteEl()!.closest('.contest-logger-recent'), 'not inside the scroller').toBeNull()
+  })
+
+  it('goes when a contact is logged, and stays while the log only changes otherwise', async () => {
+    edited()
+    const view = show(cqww(LOG))
+    await saveNewest()
+    const after = [...LOG.slice(0, 11), row('K11AB', '5', LOG[11].whenUnix!)]
+    view.rerender(list(cqww(after)))
+    expect(note(), 'the edit itself is not a new contact').not.toBeNull()
+    view.rerender(list(cqww([...after, ...more(1)])))
+    expect(note()).toBeNull()
+  })
+
+  it('goes at the next edit', () => {
+    show(cqww(LOG, CLUB))
+    fireEvent.click(editButtons()[0])
+    expect(note()).toBe(t('contest.edit.club'))
+    cleanup()
+    show(cqww(LOG))
+    fireEvent.click(editButtons()[0])
+    expect(note()).toBeNull()
+  })
+})
+
+describe('one edit of a contact at a time', () => {
+  it('another edit open in the window: Edit opens nothing, says so, and gives the keyboard back to it as typed', () => {
+    render(
+      <>
+        <ContestContactEdit rows={[LOG[11]]} receives={cqww(LOG).receives ?? []} onDone={() => {}} />
+        {list(cqww(LOG))}
+      </>,
+    )
+    const other = document.querySelector<HTMLInputElement>('.contest-edit input')!
+    type(other, 'K11AB')
+    editButtons()[0].focus()
+    fireEvent.click(editButtons()[0])
+    expect(editor(), 'no second edit').toBeNull()
+    expect(note()).toBe(t('contest.edit.open'))
+    expect(document.activeElement).toBe(other)
+    expect(other.value).toBe('K11AB')
   })
 })
 

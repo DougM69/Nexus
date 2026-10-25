@@ -14,11 +14,13 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { LogEntry } from './LogEntry'
+import { ContestContactEdit } from './ContestContactEdit'
 import type { AppSnapshot, FieldDayQso, FieldDayStatus } from '../types'
 import { useEsmHost, type EsmMessage } from '../features/esmHost'
 import { CONTEST_LAYOUT_ROLES, CW_CONTEST_LAYOUT } from '../features/esmRoles'
 import { StreamInputDispatcher } from '../remote-native/stream-input'
 import { MOD_CTRL } from '../remote-web/stream-protocol'
+import { t } from '../i18n'
 
 vi.mock('../api', () => ({
   contestLogManual: vi.fn(() => Promise.resolve({})),
@@ -29,7 +31,7 @@ vi.mock('../api', () => ({
   contestIMoved: vi.fn(() => Promise.resolve({})),
   contestRemoveLast: vi.fn(),
   contestEdit: vi.fn(),
-  contestZoneHint: vi.fn(() => Promise.resolve(null)),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
   logQso: vi.fn(() => Promise.resolve({})),
   lookupPark: vi.fn(() => Promise.resolve(null)),
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
@@ -319,5 +321,44 @@ describe('at a club, and from afar', () => {
       ctrlY()
       expect(editor()).not.toBeNull()
     })
+  })
+})
+
+describe('one edit of a contact at a time', () => {
+  /** The strip, and another edit of a contact open in the same window (the last contacts' row edit). */
+  const withOther = () =>
+    render(
+      <>
+        <Strip fieldDay={party(LOG)} />
+        <div className="other">
+          <ContestContactEdit rows={[LOG[0]]} receives={party(LOG).receives ?? []} onDone={() => {}} />
+        </div>
+      </>,
+    )
+  const other = () => document.querySelector<HTMLInputElement>('.other .contest-edit input')!
+
+  it('Ctrl+Y opens no second edit while another is open, says so, and gives the keyboard back to it as typed', () => {
+    withOther()
+    type(other(), 'K9AAB')
+    callBox().focus()
+    expect(ctrlY()).toBe(true)
+    expect(document.querySelectorAll('.contest-edit')).toHaveLength(1)
+    expect(document.querySelector('.le-fd-big'), 'the entry boxes stay').not.toBeNull()
+    expect(line()).toBe(t('contest.edit.open'))
+    expect(document.activeElement).toBe(other())
+    expect(other().value).toBe('K9AAB')
+    // …and pressed in that edit, the same.
+    fireEvent.keyDown(other(), { key: 'y', code: 'KeyY', ctrlKey: true })
+    expect(document.querySelectorAll('.contest-edit')).toHaveLength(1)
+    expect(other().value).toBe('K9AAB')
+  })
+
+  it('Alt+W pressed in another edit wipes nothing in the entry; CONTROL: in the entry it wipes', () => {
+    withOther()
+    type(callBox(), 'N9XYZ')
+    expect(!fireEvent.keyDown(other(), { key: 'w', code: 'KeyW', altKey: true }), 'held from the webview').toBe(true)
+    expect(callBox().value).toBe('N9XYZ')
+    fireEvent.keyDown(callBox(), { key: 'w', code: 'KeyW', altKey: true })
+    expect(callBox().value).toBe('')
   })
 })

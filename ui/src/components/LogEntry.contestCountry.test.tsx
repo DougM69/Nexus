@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 //
-// THE COUNTRY ON THE CONTEST ENTRY — the call's country from the country file, as the strip already
-// resolves it on every keystroke, read-only on the Call caption's line: "Fed. Rep. of Germany · CQ 14"
-// in a contest that receives a CQ zone, the country alone in one that does not. The zone stays the
-// zone box's placeholder and never becomes its value.
+// THE COUNTRY ON THE CONTEST ENTRY — the call's country as the contest places it (`contestPlace`, the
+// scorer's own resolve), read-only on the Call caption's line: "Fed. Rep. of Germany · CQ 14" in a
+// contest that receives a CQ zone, the country alone in one that does not. The country and the zone come
+// from that one answer, so a WAE area the scorer counts on its own (IT9 is Sicily) is named as it counts.
+// The zone stays the zone box's placeholder and never becomes its value.
 //
 // ⚠️ jsdom lays out nothing; that the label moves no box is the browser measurement's to say.
 import { describe, it, expect, vi, afterEach } from 'vitest'
@@ -18,7 +19,7 @@ vi.mock('../api', () => ({
   contestWorking: vi.fn(() => Promise.resolve(true)),
   contestEntryReset: vi.fn(() => Promise.resolve(true)),
   contestIMoved: vi.fn(() => Promise.resolve({})),
-  contestZoneHint: vi.fn(() => Promise.resolve(null)),
+  contestPlace: vi.fn(() => Promise.resolve(null)),
   logQso: vi.fn(() => Promise.resolve({})),
   lookupPark: vi.fn(() => Promise.resolve(null)),
   lookupParkLive: vi.fn(() => Promise.resolve(null)),
@@ -32,8 +33,18 @@ const api = (await import('../api')) as unknown as Record<string, ReturnType<typ
 
 const snap = { radio: { band: '20m', dialMhz: 14.25 }, hunt: null } as unknown as AppSnapshot
 
-const COUNTRY: Record<string, string> = { DL1ABC: 'Fed. Rep. of Germany', W6XYZ: 'United States' }
-const ZONE: Record<string, number> = { DL1ABC: 14, W6XYZ: 3 }
+/** The contest's own placing of a call: the entity its scorer counts, and the prefix's CQ zone. */
+const PLACE: Record<string, { entity: string; cqZone: number | null }> = {
+  DL1ABC: { entity: 'Fed. Rep. of Germany', cqZone: 14 },
+  W6XYZ: { entity: 'United States', cqZone: 3 },
+  IT9XYZ: { entity: 'Sicily', cqZone: 15 },
+}
+/** The callsign card's entity, which folds a WAE area into its DXCC entity (IT9 is Italy there). */
+const CARD: Record<string, string> = { DL1ABC: 'Fed. Rep. of Germany', W6XYZ: 'United States', IT9XYZ: 'Italy' }
+const placeAll = () => {
+  api.resolveEntity.mockImplementation((c: string) => Promise.resolve(CARD[c] ?? null))
+  api.contestPlace.mockImplementation((c: string) => Promise.resolve(PLACE[c] ?? null))
+}
 
 /** CQ WW SSB as the engine serialises it: RST and a CQ zone. */
 const cqww = {
@@ -88,13 +99,12 @@ afterEach(() => {
   cleanup()
   for (const f of Object.values(api)) f.mockClear()
   api.resolveEntity.mockImplementation(() => Promise.resolve(null))
-  api.contestZoneHint.mockImplementation(() => Promise.resolve(null))
+  api.contestPlace.mockImplementation(() => Promise.resolve(null))
 })
 
 describe('the country on the contest entry', () => {
   it('shows the country and its CQ zone on the Call caption line in a CQ-zone contest, and fills nothing', async () => {
-    api.resolveEntity.mockImplementation((c: string) => Promise.resolve(COUNTRY[c] ?? null))
-    api.contestZoneHint.mockImplementation((c: string) => Promise.resolve(ZONE[c] ?? null))
+    placeAll()
     render(strip(cqww))
     expect(country()?.textContent ?? '').toBe('')
     await typeCall('DL1ABC')
@@ -116,12 +126,55 @@ describe('the country on the contest entry', () => {
   })
 
   it('shows the country alone in a contest with no zone in its exchange', async () => {
-    api.resolveEntity.mockImplementation((c: string) => Promise.resolve(COUNTRY[c] ?? null))
-    api.contestZoneHint.mockImplementation((c: string) => Promise.resolve(ZONE[c] ?? null))
+    placeAll()
     render(strip(serial))
     await typeCall('DL1ABC')
     expect(country()!.textContent).toBe('Fed. Rep. of Germany')
-    expect(api.contestZoneHint).not.toHaveBeenCalled()
+  })
+
+  it('names a WAE area as the contest counts it, Sicily for IT9, not the DXCC entity; CONTROL: a plain call as before', async () => {
+    placeAll()
+    render(strip(cqww))
+    await typeCall('IT9XYZ')
+    expect(country()!.textContent).toBe('Sicily · CQ 15')
+    expect(zoneBox().placeholder).toBe('15')
+    await typeCall('DL1ABC')
+    expect(country()!.textContent).toBe('Fed. Rep. of Germany · CQ 14')
+  })
+
+  it("never pairs one call's country with another's zone while the new call's answer is on its way", async () => {
+    placeAll()
+    render(strip(cqww))
+    await typeCall('DL1ABC')
+    expect(country()!.textContent).toBe('Fed. Rep. of Germany · CQ 14')
+    let answer: (v: unknown) => void = () => {}
+    api.contestPlace.mockImplementationOnce(() => new Promise((r) => (answer = r)))
+    await typeCall('W6XYZ')
+    expect(country()?.textContent ?? '', 'nothing of DL1ABC is left on W6XYZ').toBe('')
+    expect(zoneBox().placeholder).toBe('')
+    await act(async () => answer(PLACE.W6XYZ))
+    expect(country()!.textContent).toBe('United States · CQ 3')
+    expect(zoneBox().placeholder).toBe('3')
+  })
+
+  it('is not shown in Field Day, where every station is W/VE; CONTROL: the same call in CQ WW is', async () => {
+    placeAll()
+    const fd = {
+      ...cqww,
+      event: 'arrlfd',
+      receives: [
+        { key: 'CLASS', kind: 'fdClass', required: true },
+        { key: 'SECTION', kind: 'oneOf', required: true, domains: ['fd_sections'] },
+      ],
+      composing: [],
+    } as unknown as FieldDayStatus
+    render(strip(fd))
+    await typeCall('W6XYZ')
+    expect(country()).toBeNull()
+    cleanup()
+    render(strip(cqww))
+    await typeCall('W6XYZ')
+    expect(country()!.textContent).toBe('United States · CQ 3')
   })
 
   it('shows nothing for a call the country file cannot place', async () => {

@@ -93,7 +93,7 @@ function respond(cmd: string): unknown {
   if (cmd === 'contest_entry_put') return ++rev
   if (cmd === 'contest_removed' || cmd === 'contest_unmerged') return []
   if (/^(get_band_plan|get_need_alerts|get_scp_calls)$/.test(cmd)) return []
-  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_zone_hint|get_call_history)$/.test(cmd)) return null
+  if (/^(get_propagation|get_fd_ruleset|resolve_entity|contest_place|get_call_history)$/.test(cmd)) return null
   return {}
 }
 
@@ -428,5 +428,29 @@ describe('Ctrl+O in the logger window', () => {
     })
     expect(document.activeElement).toBe(operator)
     expect(callBox().value, 'the contact in progress is untouched').toBe('K9ABC')
+  })
+})
+
+describe('a last contact’s edit in the logger window', () => {
+  it('gives the caret back to Call once it is over, as the strip’s own Ctrl+Y edit does', async () => {
+    const asked: string[] = []
+    window.__TAURI_INTERNALS__ = {
+      invoke: async <T,>(cmd: string): Promise<T> => {
+        asked.push(cmd)
+        // Esc is also this window's halt, which answers with the station's snapshot.
+        return (cmd === 'halt_tx' ? snapshot : respond(cmd)) as T
+      },
+    }
+    await mountLogger()
+    const recent = document.querySelector<HTMLElement>('.contest-logger-recent')!
+    fireEvent.click(within(recent).getAllByRole('button', { name: /^Edit / })[0])
+    const edit = recent.querySelector<HTMLInputElement>('.contest-edit input')!
+    expect(document.activeElement).toBe(edit)
+    fireEvent.keyDown(edit, { key: 'Escape', code: 'Escape' })
+    await act(async () => new Promise((r) => setTimeout(r, 50)))
+    expect(recent.querySelector('.contest-edit')).toBeNull()
+    expect(document.activeElement).toBe(callBox())
+    expect(callBox().value, 'the contact in progress is untouched').toBe('K9ABC')
+    expect(asked, 'Esc edits nothing').not.toContain('contest_edit')
   })
 })
