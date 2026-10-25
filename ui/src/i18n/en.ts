@@ -1535,14 +1535,14 @@ export const EN = {
   // The purge gate. `{{word}}` is the typed confirmation token (`DELETE`) — it is matched
   // against what the operator types, so it is a token, not prose, and it stays in the code.
   'logbook.purge.label': 'Purge log',
-  'logbook.purge.title': 'Delete every contact in the local logbook (irreversible)',
+  'logbook.purge.title': 'Delete every contact in the local logbook',
   'logbook.purge.aria': 'Purge logbook',
   'logbook.purge.heading': 'Purge the entire logbook?',
-  'logbook.purge.irreversible': 'Irreversible',
+  'logbook.purge.irreversible': 'Deletes everything',
   'logbook.purge.warn': {
-    one: "This permanently deletes <b>all {{count}} contact</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. There is no undo — export an ADIF backup first if you might want it.",
+    one: "This deletes <b>all {{count}} contact</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. You can undo the whole purge from the message that follows, or later with <b>Undo this purge</b> in Recently deleted, for as long as Settings keeps deleted contacts (90 days unless you changed it); contacts can also be restored there one at a time. While the radio is transmitting, a large purge is undone only once you stop. Export an ADIF backup first if you might want it later.",
     other:
-      "This permanently deletes <b>all {{count}} contacts</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. There is no undo — export an ADIF backup first if you might want it.",
+      "This deletes <b>all {{count}} contacts</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. You can undo the whole purge from the message that follows, or later with <b>Undo this purge</b> in Recently deleted, for as long as Settings keeps deleted contacts (90 days unless you changed it); contacts can also be restored there one at a time. While the radio is transmitting, a large purge is undone only once you stop. Export an ADIF backup first if you might want it later.",
   },
   'logbook.purge.syncWarn':
     'It also resets your <b>LoTW and eQSL sync position</b>, so the next sync re-downloads your whole confirmation history instead of only recent matches. That is what brings your confirmations back after a purge — but it takes considerably longer than a routine sync, so give it time to finish.',
@@ -1879,10 +1879,123 @@ export const EN = {
 
   // Deleting one contact. `{{band}}` is a band name — never translated.
   'logbook.delete.heading': 'Delete the QSO with {{call}} on {{band}}?',
-  'logbook.delete.body': "This removes it from your log. This can't be undone.",
+  'logbook.delete.body': 'This removes it from your log. You can put it back from Recently deleted.',
   'logbook.delete.confirm': 'Delete QSO',
   'logbook.delete.failed': 'Could not delete the QSO',
   'logbook.delete.done': 'Deleted {{call}}',
+  // Undo, from a toast: after a delete, an import, a purge. It sends nothing to any service.
+  'logbook.undo': 'Undo',
+  'logbook.import.undone': 'Import undone',
+  'logbook.purge.undone': 'Purge undone',
+  // Recently deleted: the contacts taken out of the log and not put back, each with Restore.
+  'logbook.deleted.button': 'Recently deleted',
+  'logbook.deleted.title': 'Recently deleted',
+  'logbook.deleted.intro':
+    'Contacts deleted from the log. Restore puts one back exactly as it was, upload marks included, so nothing is sent again.',
+  'logbook.deleted.reading': 'Reading…',
+  'logbook.deleted.readFailed': 'The deleted contacts could not be read.',
+  'logbook.deleted.empty': 'No deleted contacts.',
+  'logbook.deleted.when': 'deleted {{when}} · {{source}}',
+  'logbook.deleted.restore': 'Restore',
+  'logbook.deleted.restoreAnyway': 'Restore anyway',
+  'logbook.deleted.restoreAnywayHint':
+    'The same station, band and mode within 5 minutes was logged again after this contact was deleted. Restore anyway keeps both.',
+  // A whole purge or import, undone from Recently deleted after its toast has gone. `{{when}}` is
+  // a UTC time (a token).
+  'logbook.deleted.runsIntro': 'A whole purge, import or undo can be undone here, as one change.',
+  'logbook.deleted.run.purge': {
+    one: 'Purge of {{count}} contact · {{when}}',
+    other: 'Purge of {{count}} contacts · {{when}}',
+  },
+  'logbook.deleted.run.import': {
+    one: 'Import of {{count}} contact · {{when}}',
+    other: 'Import of {{count}} contacts · {{when}}',
+  },
+  'logbook.deleted.undoPurge': 'Undo this purge',
+  'logbook.deleted.undoImport': 'Undo this import',
+  // A whole undo of a purge or an import, listed so it can be redone after its own toast has gone.
+  'logbook.deleted.run.undo': {
+    one: 'Undo of {{count}} contact · {{when}}',
+    other: 'Undo of {{count}} contacts · {{when}}',
+  },
+  'logbook.deleted.redo': 'Redo',
+  // Beside a whole run's button on a computer driving the station: undone only at the station.
+  'logbook.deleted.atStation': 'Only at the station',
+  'logbook.deleted.run.remote': 'Only at the station: a press through Remote undoes no purge, import or undo.',
+  // Asked in the dialog before a whole run is undone. `{{when}}` is a UTC date (a token).
+  'logbook.deleted.confirm.purge': {
+    one: 'Undo this purge of {{count}} contact from {{when}}?',
+    other: 'Undo this purge of {{count}} contacts from {{when}}?',
+  },
+  'logbook.deleted.confirm.import': {
+    one: 'Undo this import of {{count}} contact from {{when}}?',
+    other: 'Undo this import of {{count}} contacts from {{when}}?',
+  },
+  'logbook.deleted.confirm.undoRun': {
+    one: 'Redo the undo of {{count}} contact from {{when}}?',
+    other: 'Redo the undo of {{count}} contacts from {{when}}?',
+  },
+  'logbook.deleted.confirm.removes': {
+    one: 'It will be removed from the log.',
+    other: 'They will be removed from the log.',
+  },
+  'logbook.deleted.confirm.putsBack': {
+    one: 'It will be put back in the log.',
+    other: 'They will be put back in the log.',
+  },
+  'logbook.deleted.confirm.undo': 'Undo it',
+  'logbook.deleted.confirm.redo': 'Redo it',
+  'logbook.deleted.confirm.cancel': 'Cancel',
+  'logbook.deleted.restored': 'Restored {{call}}',
+  'logbook.deleted.failed': 'The contact could not be restored.',
+  // A contact's history, in the QSO detail view: each change, who made it, and its undo.
+  'qso.history.title': 'History',
+  'qso.history.empty': 'No changes recorded.',
+  'qso.history.noValue': '(none)',
+  'qso.history.failed': 'The history could not be read.',
+  'qso.history.what': '{{kind}} · {{source}}',
+  'qso.history.kind.create': 'Logged',
+  'qso.history.kind.edit': 'Edited',
+  'qso.history.kind.delete': 'Deleted',
+  'qso.history.kind.merge': 'Merged',
+  'qso.history.kind.fill': 'Filled',
+  'qso.history.kind.unknown': 'Changed by a newer Nexus',
+  'qso.history.source.operator': 'you',
+  'qso.history.source.import': 'import',
+  'qso.history.source.fill': 'automatic fill',
+  'qso.history.source.contest': 'contest log',
+  'qso.history.source.remote': 'Remote',
+  'qso.history.source.file': 'another program',
+  'qso.history.source.undo': 'undo',
+  'qso.history.undo': 'Undo',
+  'qso.history.redo': 'Redo',
+  'qso.history.wasUndone': 'Undone',
+  'qso.history.undone': 'Change undone',
+  'qso.history.redone': 'Change made again',
+  'qso.history.undo.kept': '; {{fields}} changed since and kept',
+  'qso.history.undo.nothing': 'Nothing to undo: every field it changed has changed since.',
+  'qso.history.undo.gone': 'Nothing to undo: that contact is no longer in the log.',
+  'qso.history.undo.alreadyThere': 'Nothing to restore: that contact is already in the log.',
+  'qso.history.undo.failed': 'The change could not be undone.',
+  // `{{calls}}` is a list of callsigns (tokens), cut short with `qso.history.undo.andMore`.
+  'qso.history.undo.contactsKept': {
+    one: '; {{calls}} was changed since, and kept',
+    other: '; {{count}} contacts changed since were kept: {{calls}}',
+  },
+  'qso.history.undo.duplicates': {
+    one: '; {{calls}} was not put back: the same station, band and mode within 5 minutes was logged again after it was deleted',
+    other: '; {{count}} contacts were not put back: the same station, band and mode within 5 minutes was logged again after each was deleted: {{calls}}',
+  },
+  'qso.history.undo.allKept': {
+    one: 'Nothing undone: {{calls}} was changed since, and kept.',
+    other: 'Nothing undone: {{count}} contacts were changed since, and kept: {{calls}}.',
+  },
+  'qso.history.undo.allDuplicates': {
+    one: 'Nothing put back: a contact with {{calls}} on the same band and mode within 5 minutes was logged again after it was deleted.',
+    other: 'Nothing put back: {{count}} contacts were logged again after they were deleted (the same station, band and mode within 5 minutes): {{calls}}.',
+  },
+  'qso.history.undo.unknownKind': 'That change was made by a newer version of Nexus, so this one cannot undo it.',
+  'qso.history.undo.andMore': '{{list}} and {{count}} more',
   // A change to one contact that was NOT made: after this window read the contact it was changed
   // — in another window (a Remote browser), or by a sync filling in a blank field — or deleted.
   // Nothing was written, and the list (or the edit form) now shows the contact as it is.
@@ -9397,6 +9510,9 @@ export const EN = {
   'settings.dataFolder.reset': 'Use the default folder',
   'settings.dataFolder.reset.title': 'Forget the chosen folder and go back to the default one at the next start. Nothing is deleted.',
   'settings.dataFolder.restart': 'A new folder is used the next time Nexus starts. Nothing is ever moved or deleted — your old folder stays as it is.',
+  'settings.dataFolder.snapshots.label': 'Keep deleted contacts for (days)',
+  'settings.dataFolder.snapshots.hint':
+    "How long Recently deleted and Undo can put back a deleted or purged contact. After that, the logbook's copy of it is removed when Nexus starts. Every edit's old and new values are kept for good. 0 keeps deleted contacts for good too.",
   'settings.dataFolder.copied': 'Copied {{files}} files ({{bytes}} bytes) and checked every one against the original. Nexus uses the new folder the next time it starts.',
   'settings.dataFolder.chosen': 'Saved. Nexus uses the new folder the next time it starts.',
   'settings.dataFolder.failed': 'Could not change the data folder',

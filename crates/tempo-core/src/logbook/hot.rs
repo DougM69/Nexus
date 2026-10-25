@@ -800,6 +800,25 @@ impl HotIndex {
         })
     }
 
+    /// [`Self::is_duplicate`], asked of only the rows `counts` names by id (a row with no id is
+    /// never counted): whether putting `rec` back into the log would duplicate one of them — an
+    /// undo's restore, asked of the contacts logged since the delete and not taken out by the same
+    /// undo. The same predicate, asked of the same station lists; only `log_qso`'s guard is
+    /// [`Self::is_duplicate`].
+    pub fn is_duplicate_among(&self, rec: &QsoRecord, counts: impl Fn(RecordId) -> bool) -> bool {
+        self.by_base.get(&base_call(&rec.call)).is_some_and(|rows| {
+            rows.iter().any(|r| {
+                r.id.is_some_and(&counts)
+                    && super::dedup::is_recent_duplicate_in_slot(
+                        self.bands.name(r.band),
+                        self.modes.name(r.mode),
+                        r.when,
+                        rec,
+                    )
+            })
+        })
+    }
+
     /// The grid logged on the NEWEST row, in log order, whose call is `call`'s station
     /// (`same_call`) — if that row's grid is not blank. An older row's grid is never reached
     /// for: a rover's most recent square is the answer, or there is none.

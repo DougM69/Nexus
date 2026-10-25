@@ -1640,6 +1640,97 @@ export async function editQsoById(target: RowRef, edit: QsoEdit): Promise<RowAns
   return invoke<RowAnswer>('edit_qso_by_id', { target, edit })
 }
 
+/** One field a change to a contact changed (ADIF tag; `null` where the contact did not carry it). */
+export interface QsoFieldChange { tag: string; old: string | null; new: string | null }
+
+/** One entry of a contact's change history. `source` is a token (`operator`, `import`, `fill`,
+ *  `lotw`, `eqsl`, `qrz`, `pota`, `contest`, `remote`, `file`, `undo`), never prose. */
+export interface QsoHistoryEntry {
+  seq: number
+  /** `unknown`: a kind a later build recorded — shown, never undone. */
+  kind: 'create' | 'edit' | 'delete' | 'merge' | 'fill' | 'unknown'
+  source: string
+  run: string
+  atMs: number
+  undoes: number | null
+  undoneBy: number | null
+  changes: QsoFieldChange[]
+}
+
+/** A contact deleted from the log and not put back. */
+export interface DeletedQso {
+  id: string
+  call: string
+  band: string
+  mode: string
+  whenUnix: number
+  deletedAtMs: number
+  source: string
+}
+
+/** What an undo made. `run` is the undo's own run: undoing it is the redo. The counts are the
+ *  contacts it could not change, by why: `changedSince` includes a contact an import added that
+ *  was edited or confirmed since (it stays), `duplicate` one the log holds already under another
+ *  id (it is not put back twice). The calls name those contacts, sorted, each once. */
+export interface UndoAnswer {
+  changed: number
+  run: string | null
+  kept: string[]
+  gone: number
+  alreadyThere: number
+  changedSince: number
+  duplicate: number
+  unknownKind: number
+  changedSinceCalls: string[]
+  duplicateCalls: string[]
+}
+
+/** One contact's change history, oldest first. */
+export async function qsoHistory(id: string): Promise<QsoHistoryEntry[]> {
+  return invoke<QsoHistoryEntry[]>('qso_history', { id })
+}
+
+/** The contacts deleted and not put back, newest first. */
+export async function recentlyDeletedQsos(limit?: number): Promise<DeletedQso[]> {
+  return invoke<DeletedQso[]>('recently_deleted_qsos', { limit: limit ?? null })
+}
+
+/** Undo one change to a contact. Sends nothing to any service. Returns once it is on disk. */
+export async function undoQsoChange(seq: number): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('undo_qso_change', { seq })
+}
+
+/** Undo every change of one run, as one transaction. Sends nothing to any service. Only at the
+ *  station: a computer driving it is refused, as a purge is. */
+export async function undoHistoryRun(run: string): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('undo_history_run', { run })
+}
+
+/** A purge, an import or a whole run's undo whose whole-run undo can still be asked for. */
+export interface HistoryRun {
+  /** What `undoHistoryRun` takes. */
+  run: string
+  /** `undo`: a whole run's undo, which undone is the redo. */
+  kind: 'purge' | 'import' | 'undo'
+  atMs: number
+  /** How many contacts it changed. */
+  contacts: number
+  /** Whether undoing it takes contacts out of the log (else it puts them back). */
+  removes: boolean
+}
+
+/** The purges, imports and whole undos that can still be undone whole, newest first: the lasting
+ *  way to undo one after its toast has gone, through `undoHistoryRun`. */
+export async function undoableHistoryRuns(): Promise<HistoryRun[]> {
+  return invoke<HistoryRun[]>('undoable_history_runs')
+}
+
+/** Put a deleted contact back, as its latest delete took it out — unless it was logged again since
+ *  (`duplicate`). `anyway`: put it back all the same, beside the one logged since. */
+export async function restoreDeletedQso(id: string, anyway = false): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('restore_deleted_qso', { id, anyway })
+}
+
 /** Mark the contact `target` QSL-sent (operator-declared): a card or request went out `via`
  *  "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT a confirmation — this never
  *  moves `confirmed`/`awardConfirmed`. `via: null` WITHDRAWS the mark (#180): sending is once-only,
@@ -1683,11 +1774,14 @@ export async function deleteQsoById(target: RowRef): Promise<RowAnswer> {
   return invoke<RowAnswer>('delete_qso_by_id', { target })
 }
 
-/** Purge the ENTIRE logbook — delete every contact and truncate the ADIF file.
- * Irreversible; the UI gates this behind a typed confirmation. Returns the number
- * of contacts removed. */
-export async function purgeLog(): Promise<number> {
-  return invoke<number>('purge_log')
+/** What a purge answers: how many contacts it removed, and its run in the log's history — what
+ *  its Undo undoes, and nothing else. */
+export interface PurgeAnswer { removed: number; run: string }
+
+/** Purge the ENTIRE logbook — delete every contact and truncate the ADIF file. The UI gates this
+ * behind a typed confirmation; every contact is kept in the history for the toast's Undo. */
+export async function purgeLog(): Promise<PurgeAnswer> {
+  return invoke<PurgeAnswer>('purge_log')
 }
 
 /** DXCC-first award progress computed from the logbook (cty.dat-resolved). */

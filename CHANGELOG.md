@@ -51,6 +51,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stands, and Approve, Allow to transmit and Remove on the row. It replaces the separate lists of
   browsers, computers, paired computers and people.
 - **One Connect to my station… entry on the computer you operate from.** It replaces Remote stations… and Stations on this network… in Settings ▸ Remote access: Nexus looks for your station on this network first and connects, opens the code pairing if this computer is not paired yet, or offers to sign in and reach it over the internet; the station list, a typed address and the code stay under Advanced.
+- **Every contact keeps its history, and every change can be undone.** The contact view now ends
+  with a History section: each change to the contact, when it was made, what it changed (old → new)
+  and who made it — you, an import, a LoTW, eQSL or QRZ download, the automatic fill, the contest
+  log, a Remote computer. Each change has **Undo**, which puts back the fields it changed that have
+  not changed since; an undo is itself a change, so it can be redone. **Recently deleted** in the
+  Logbook lists deleted contacts with **Restore**, which brings one back exactly as it was. After a
+  delete, an import or a purge, the message offers **Undo**, and a whole import or purge is undone in
+  one step — that import or purge, and never a contact logged after it. An undo never puts a contact
+  back beside the same contact logged again after it was deleted (the same station, band and mode
+  within 5 minutes), and **Restore anyway** puts it back when they are two different contacts; a
+  contact the log held beside it before the delete, such as a rover worked from two grids minutes
+  apart, never stops it coming back. An import's undo keeps any contact you have edited, that has
+  been confirmed or uploaded, or that you imported again, since; the message names them. Undoing
+  more than a few hundred contacts at once waits until you stop transmitting, or a voice message or
+  APRS frame finishes, because it holds up the radio while it is made; the message then stays up and
+  says so, and its Undo works once you stop. Recently deleted also lists each recent purge and import
+  with **Undo this purge** or **Undo this import**, so a whole one can still be undone after its
+  message has gone, and each recent whole undo with **Redo**. Each asks first, naming how many
+  contacts, from when, and whether they leave the log or come back to it. Undoing a whole purge,
+  import or undo is done only at the station: a computer driving it through Remote sees the list
+  but cannot press it. The history is kept in the logbook
+  database, so it survives a restart. Every edit is kept for good; a deleted or purged contact's full
+  copy is kept for 90 days, which **Keep deleted contacts for (days)** under Settings › Config ›
+  Data & log folder changes. An undo never sends anything to QRZ, Club Log, eQSL or LoTW; an undo that
+  changes a callsign marks the contact to be sent again with your next upload, as correcting a
+  callsign does.
 - **JTTY sends from a remote computer.** Driving a station from another computer, JTTY's Send,
   F-keys, live typing and sign-off now transmit, under the same guards and Stop as the other remote
   modes.

@@ -2955,6 +2955,13 @@ same logbook produce a *conflicted copy*, not a merged log. Nexus warns when the
 folder looks synced — it is a guess from the folder's name, so it can miss a
 renamed one. Run one, or keep one machine's Nexus closed.
 
+**Keep deleted contacts for (days)** — the logbook keeps a full copy of every
+contact you delete or purge, so **Recently deleted** and the **Undo** on the
+delete, import and purge messages can put it back exactly as it was. This sets
+how long, 90 days by default. After that the copy is removed, a little at a time
+in the background, when Nexus starts. The old and new values of every edit are
+kept for good whatever this says; `0` keeps deleted contacts for good too.
+
 ### Backup & reset
 
 ![The Backup & reset group: an explanation, "Back up" and "Restore…" links, a note that the file holds no passwords or API keys, and a red "Reset all settings…" link under a Start over heading.](../img/manual/settings-backup-reset.webp)

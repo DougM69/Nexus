@@ -209,11 +209,13 @@ fn a_command_that_runs_here_runs_here_and_never_at_the_shack() {
 fn a_shack_only_command_is_refused_at_both_ends() {
     // The operator's rulings of 2026-10-07 by name: a settings restore and a factory reset, a
     // whole-log purge and the Connections log stay at the shack. The clock's repair waits on an
-    // administrator prompt on the shack's own screen.
+    // administrator prompt on the shack's own screen. A whole run's undo can delete as much of the
+    // log as a purge (an import's undo), so it stays at the shack with it.
     for name in [
         "import_settings_bundle",
         "reset_settings",
         "purge_log",
+        "undo_history_run",
         "get_connection_log",
         "repair_clock",
     ] {

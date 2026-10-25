@@ -4236,6 +4236,9 @@ pub struct Engine {
     /// Until when the rig is sending the CW word the radio loop last handed to a keyer, on any
     /// keyer backend — see [`Self::observe_cw_keying`]. `None` = no word on the air.
     cw_keying_until: Option<Instant>,
+    /// Until when the radio loop holds the key on a deadline of its own — a voice-keyer message
+    /// or an APRS frame it is still playing — see [`Self::observe_loop_tx_hold`]. `None` = none.
+    loop_tx_hold_until: Option<Instant>,
     rig_tx_swr: Option<f32>,
     /// Consecutive keyed SWR readings above [`Settings::swr_stop_ratio`]. The cutoff fires at
     /// TWO, never one — see [`Self::observe_rig_tx_meters`]. Zeroed by a reading at or below
@@ -6639,6 +6642,7 @@ impl Engine {
             rig_smeter_db: None,
             rig_keyed: false,
             cw_keying_until: None,
+            loop_tx_hold_until: None,
             rig_tx_swr: None,
             swr_over_count: 0,
             rig_tx_alc: None,
@@ -12416,6 +12420,20 @@ impl Engine {
         });
     }
 
+    /// The radio loop's word that it holds the key on a deadline of its own (`tx_until_ms`) for
+    /// `left_ms` more, or (`None`) that it holds none: a voice-keyer message or an APRS frame it is
+    /// still playing, which the engine handed over and keeps nothing of — the gap in
+    /// [`Self::on_air`]. Read by [`Self::transmit_needs_the_lock`] only: no gate refuses a key on
+    /// it, and the clock-repair interlock is unchanged.
+    ///
+    /// It ends by itself [`CW_KEYING_MARGIN_MS`] after the deadline it was told of, whether or not
+    /// the loop's end arrives.
+    pub fn observe_loop_tx_hold(&mut self, left_ms: Option<f64>) {
+        self.loop_tx_hold_until = left_ms.filter(|ms| ms.is_finite() && *ms > 0.0).map(|ms| {
+            Instant::now() + Duration::from_millis(ms.ceil() as u64 + CW_KEYING_MARGIN_MS)
+        });
+    }
+
     /// Whether the rig is still sending the CW word the radio loop handed it
     /// ([`Self::observe_cw_keying`]): never past that word's hard end.
     fn cw_keying(&self) -> bool {
@@ -14143,7 +14161,11 @@ impl Engine {
                 crate::station::fill_with(rec, country, number, state);
             }
             // The merge's append — the station's, as every contact's (SPEC-2 v3 C19): ids
-            // minted, the hot index told, the writer handed the rows. No SQL.
+            // minted, the hot index told, the writer handed the rows. No SQL. Its history names
+            // the contest.
+            self.station.origin = Some(crate::loghistory::Origin::from(
+                tempo_core::logbook::history::Source::Contest,
+            ));
             let (written, _) = self
                 .station
                 .append(std::mem::take(&mut report.written), false);
@@ -30682,7 +30704,26 @@ contact yourself."
         let rows = self.station.attach_store(opened);
         // A fresh log, whose ids start without the position id — as after `set_log_path`.
         self.sync_log_posid();
+        self.trim_log_history();
         rows
+    }
+
+    /// Have the store's writer take out of the history the whole contacts deletes kept longer
+    /// ago than Settings keeps them ([`crate::settings::Settings::history_snapshot_days`]; 0 keeps
+    /// them for good) — in the background, a bounded step at a time between the log's changes
+    /// ([`tempo_core::logbook::writer::LogWriter::trim_history`]). An edit's fields are never
+    /// taken out. Made at each launch, once the log is attached. Never waits.
+    pub fn trim_log_history(&self) {
+        let days = self.settings.history_snapshot_days;
+        if days == 0 {
+            return;
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        let before_ms = now_ms.saturating_sub(i64::from(days) * 86_400_000);
+        // The answer is not waited for: the next launch finishes what this one could not.
+        drop(self.station.store.writer().trim_history(before_ms));
     }
 
     /// Whether switching to `spec` opens a contest session: a Field Day mode entered from any
@@ -31273,6 +31314,20 @@ contact yourself."
         removed
     }
 
+    /// [`Self::clear_logbook`], recorded in the history under `run`
+    /// ([`crate::loghistory::new_run`]) — the run the purge's Undo undoes, and only that: a
+    /// contact logged a moment later is a change of its own, never mistaken for the purge.
+    pub fn clear_logbook_in_run(&mut self, run: &str) -> usize {
+        self.station.origin = Some(crate::loghistory::Origin::in_run(
+            tempo_core::logbook::history::Source::Operator,
+            run,
+        ));
+        let removed = self.clear_logbook();
+        // Taken by the purge's change; cleared all the same, so it can never ride another.
+        self.station.origin = None;
+        removed
+    }
+
     /// See [`StationCore::import_adif`].
     pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize, usize) {
         self.station.import_adif(text)
@@ -31611,6 +31666,19 @@ contact yourself."
     /// a voice message's, plumbing on the transmit path that is not added here.
     pub fn on_air(&self) -> bool {
         self.app.transmitting() || self.rig_keyed || self.tuning() || self.tx_owner().is_some()
+    }
+
+    /// Whether a log change that holds the Engine lock for a long time must wait: the radio is
+    /// on the air ([`Self::on_air`]), the radio loop is still playing a voice-keyer message or an
+    /// APRS frame on its own deadline ([`Self::observe_loop_tx_hold`], which `on_air` does not
+    /// see), or the FT sequencer is armed to key at the next slot — the radio loop needs the lock
+    /// at every slot boundary to key, and at the end of every over to unkey. Asked by a whole
+    /// run's undo too large to make in a moment ([`crate::loghistory::undo_run`]).
+    pub fn transmit_needs_the_lock(&self) -> bool {
+        self.on_air()
+            || self.loop_tx_hold_until.is_some_and(|t| Instant::now() < t)
+            || (self.tx_enabled
+                && self.settings.operating_mode == crate::settings::OperatingMode::Digital)
     }
 
     /// Is a message that takes several overs part-way through: its first over gone, the rest

@@ -1817,6 +1817,14 @@ pub struct Settings {
     /// here bounds a width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logbook_columns: Option<LogbookColumns>,
+    /// How many days the Logbook's history keeps a deleted contact whole, so Recently deleted and
+    /// an undo can put it back ([`tempo_core::logbook::history::SNAPSHOT_DAYS`], 90, by default).
+    /// After that the contact's copy is taken out of the history, a step at a time in the
+    /// background at each launch ([`crate::engine::Engine::trim_log_history`]). Every edit's
+    /// fields, old and new, are kept for good whatever this says. 0 keeps deleted contacts for
+    /// good too.
+    #[serde(default = "default_history_snapshot_days")]
+    pub history_snapshot_days: u32,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -3714,6 +3722,10 @@ fn default_swr_stop_threshold() -> f32 {
 
 fn default_tune_timeout() -> u32 {
     12
+}
+
+fn default_history_snapshot_days() -> u32 {
+    tempo_core::logbook::history::SNAPSHOT_DAYS
 }
 
 /// The shared default for the two #145 CAT declarations: "work it out as before".
@@ -5721,6 +5733,7 @@ impl Default for Settings {
             launch_at_login: false, // nothing starts itself unasked; MUST match the serde default
             remote_autostart_offer_answered: false,
             logbook_columns: None, // the default table
+            history_snapshot_days: default_history_snapshot_days(),
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),

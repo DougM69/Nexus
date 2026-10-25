@@ -28,6 +28,7 @@ pub mod fdevent;
 pub mod keyboard;
 pub mod logexport;
 pub mod logfill;
+pub mod loghistory;
 pub mod logstore;
 pub mod logwrite;
 pub mod mic;

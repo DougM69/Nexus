@@ -321,6 +321,12 @@ html {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* Why the toast's action did not happen (Toasts.tsx): its own line under the message. */
+.ui-toast-note {
+  display: block;
+  margin-top: var(--space-1);
+  font-weight: 700;
+}
 .ui-toast-close {
   /* The body is click-through (see .ui-toast); its controls are not. */
   pointer-events: auto;
@@ -32177,6 +32183,76 @@ tr.sel .aprs-sym {
 .qso-detail-bare {
   color: var(--text-dim);
   margin: 0;
+}
+
+/* A contact's history (QsoHistory.tsx), the detail view's last section: newest change first, each
+   a head line (when · what · who, and its Undo) over the fields it changed, old → new, in the
+   detail view's own two-column list. The dialog scrolls, so the list needs no height of its own. */
+.qso-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.qso-history-entry + .qso-history-entry {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+.qso-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+.qso-history-when {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+.qso-history-what {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.qso-history-undone {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+.qso-history-changes {
+  margin-top: 2px;
+}
+
+/* Recently deleted (RecentlyDeleted.tsx): a `ui/Dialog`, which scrolls its own content past its
+   capped height. One line per contact, wrapping on a narrow window rather than running wide. */
+.recently-deleted-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.recently-deleted-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+.recently-deleted-call {
+  font-weight: 700;
+}
+.recently-deleted-when {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+/* A restore refused as a duplicate: why, in words, and Restore anyway — a line of its own under the
+   row, never Restore relabelled where the pointer already is. */
+.recently-deleted-anyway {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  font-size: 0.85em;
 }
 
 /* ===========================================================================

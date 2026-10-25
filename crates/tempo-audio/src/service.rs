@@ -980,6 +980,9 @@ const MAX_TUNE_MS: f64 = 60_000.0;
 /// Safety auto-stop for a forgotten QSO recording: cap a single recording at 2 hours so a
 /// recording the operator forgot to stop can't fill the disk unbounded (~86 MB/hour).
 const MAX_QSO_REC_MS: f64 = 2.0 * 60.0 * 60.0 * 1000.0;
+/// How far the wall clock may step under the engine's copy of the loop's own transmit deadline
+/// before the loop tells it again ([`RadioLoop::tell_tx_hold`]): under the engine's 250 ms margin.
+const TX_HOLD_RETELL_MS: f64 = 100.0;
 /// How often to run the FULL rig read-back over CAT — RF power, S-meter, mode mirror, DSP funcs.
 /// Each is a blocking TCP round-trip, so the heavy set is throttled well below the loop rate.
 const RIG_POLL_MS: f64 = 750.0;
@@ -3783,6 +3786,12 @@ struct RadioLoop {
     /// What the engine was last told of [`Self::cw_keying_until`] (0.0 = no word), so it hears
     /// each word's window once, and its end.
     cw_keying_told: f64,
+    /// What the engine was last told of [`Self::tx_until_ms`] (0.0 = none), so it hears each
+    /// over's deadline once, and its end ([`Self::tell_tx_hold`]).
+    tx_hold_told: f64,
+    /// When it was last told a deadline: the wall clock's `now` and the monotonic clock's, to see
+    /// the wall clock step under the engine's copy ([`Self::tell_tx_hold`]).
+    tx_hold_told_at: Option<(f64, Instant)>,
     /// Last FM repeater config (shift, offset Hz, CTCSS Hz) the RIG ACCEPTED — so the
     /// shift/offset/CTCSS commands only fire on change, not every loop. `None` when not
     /// in FM. ⚠️ It is set from the rig's answer, never from the fact that the commands
@@ -4555,6 +4564,8 @@ impl RadioLoop {
             cw_busy_until: 0.0,
             cw_keying_until: 0.0,
             cw_keying_told: 0.0,
+            tx_hold_told: 0.0,
+            tx_hold_told_at: None,
             last_fm: None,
             fm_push_misses: 0,
             remote_retune_uncertain: false,
@@ -6021,6 +6032,28 @@ impl RadioLoop {
     /// the same question ([`crate::slot::key_slot_transmitter`]).
     fn holds_tx(&self) -> bool {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
+    }
+
+    /// Tell the engine the deadline this loop holds the key to (`tx_until_ms`), on a change: a
+    /// voice-keyer message or an APRS frame it plays is handed over whole and the engine keeps
+    /// nothing of it, so without this a log change that holds the Engine lock for a long time
+    /// would go ahead under one and hold up its unkey ([`Engine::observe_loop_tx_hold`]). Reads
+    /// the deadline, and changes nothing about the over.
+    ///
+    /// Told again when the wall clock has stepped [`TX_HOLD_RETELL_MS`] since: the engine keeps the
+    /// time left on its monotonic clock, while this loop's unkey is on the wall clock, so steps
+    /// too small for the clock-jump interlock could add up past the engine's margin over a long
+    /// message and end its copy before the unkey.
+    fn tell_tx_hold(&mut self, engine: &Mutex<Engine>, now: f64) {
+        let hold = self.tx_until_ms.filter(|&t| now < t).unwrap_or(0.0);
+        let stepped = self.tx_hold_told_at.is_some_and(|(wall, mono)| {
+            ((now - wall) - mono.elapsed().as_secs_f64() * 1000.0).abs() > TX_HOLD_RETELL_MS
+        });
+        if hold != self.tx_hold_told || (hold > 0.0 && stepped) {
+            self.tx_hold_told = hold;
+            self.tx_hold_told_at = (hold > 0.0).then(|| (now, Instant::now()));
+            engine_lock(engine).observe_loop_tx_hold((hold > 0.0).then_some(hold - now));
+        }
     }
 
     /// The voice keyer's message for this tick, if one may go out, and whether it rides Nexus's
@@ -12820,6 +12853,7 @@ impl RadioLoop {
                 self.cw_keying_told = window;
                 engine_lock(engine).observe_cw_keying(cw_keying.then_some(window - now));
             }
+            self.tell_tx_hold(engine, now);
             let keyed_now = self.tx_until_ms.is_some()
                 || self.tuning_keyed
                 || self.manual_ptt_applied
@@ -22529,6 +22563,76 @@ mod tests {
         assert!(!base.audio_differs(&Transport::from_settings(&s)));
     }
 
+    /// A voice-keyer message or an APRS frame the loop is still playing, on its own deadline,
+    /// reaches the engine: a log change that holds the Engine lock for a long time waits for it,
+    /// and stops waiting when the over ends. The loop tells each deadline once.
+    #[test]
+    fn the_loops_own_over_is_told_to_the_engine_and_its_end_too() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut s = loop_state();
+        let now = now_unix_ms();
+        s.tell_tx_hold(&engine, now);
+        assert!(
+            !engine_lock(&engine).transmit_needs_the_lock(),
+            "the control: idle"
+        );
+
+        s.tx_until_ms = Some(now + 5_000.0); // a voice message's deadline
+        s.tell_tx_hold(&engine, now);
+        assert!(engine_lock(&engine).transmit_needs_the_lock());
+        assert!(
+            !engine_lock(&engine).on_air(),
+            "the clock-repair interlock is not changed by it"
+        );
+
+        s.tx_until_ms = None; // played out, unkeyed
+        s.tell_tx_hold(&engine, now + 5_000.0);
+        assert!(!engine_lock(&engine).transmit_needs_the_lock());
+    }
+
+    /// The loop takes the Engine lock to tell a deadline once, not on every tick: a second tick
+    /// on the same deadline tells nothing (the engine's copy, cleared behind the loop's back,
+    /// stays cleared).
+    #[test]
+    fn the_loop_tells_each_deadline_once() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut s = loop_state();
+        let now = now_unix_ms();
+        s.tx_until_ms = Some(now + 5_000.0);
+        s.tell_tx_hold(&engine, now);
+        assert!(
+            engine_lock(&engine).transmit_needs_the_lock(),
+            "the control"
+        );
+        engine_lock(&engine).observe_loop_tx_hold(None);
+        s.tell_tx_hold(&engine, now);
+        assert!(
+            !engine_lock(&engine).transmit_needs_the_lock(),
+            "the same deadline was told again"
+        );
+    }
+
+    /// The engine keeps the loop's deadline on its own monotonic clock; the loop's unkey is on the
+    /// wall clock. A wall clock stepped back while a long message plays moves the loop's end later
+    /// and not the engine's copy, so the loop tells it again: steps too small for the clock-jump
+    /// interlock that add up past the margin never end the engine's hold before the loop unkeys.
+    #[test]
+    fn a_wall_clock_stepped_back_mid_message_is_told_again() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut s = loop_state();
+        let now = now_unix_ms();
+        s.tx_until_ms = Some(now + 100.0);
+        s.tell_tx_hold(&engine, now);
+        // Two backward steps of 200 ms: the loop now has 500 ms to go, the engine's copy 100.
+        s.tell_tx_hold(&engine, now - 200.0);
+        s.tell_tx_hold(&engine, now - 400.0);
+        std::thread::sleep(std::time::Duration::from_millis(450));
+        assert!(
+            engine_lock(&engine).transmit_needs_the_lock(),
+            "the loop still holds the key for 50 ms and its margin"
+        );
+    }
+
     // ---- the full loop core (RadioLoop::step), driven hardware-free ----
 
     fn loop_state() -> RadioLoop {
@@ -28342,6 +28446,63 @@ mod tests {
             live_mode.lock().unwrap().as_str(),
             "CW",
             "…and the radio must END in CW"
+        );
+    }
+
+    /// ⛔ A voice-keyer message the loop is playing reaches the engine's transmit check through
+    /// the loop's own tick, from the tick that keys it to the tick after it ends. The engine
+    /// handed the message over whole and keeps nothing of it, so without the loop's word a long
+    /// log change would take the Engine lock mid-message and hold up its unkey.
+    #[test]
+    fn a_voice_message_the_loop_plays_holds_the_engines_transmit_check() {
+        let (addr, _seen, _live_mode) = band_stacking_rigctld_stub(14_250_000, &[]);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+            e.set_tx_enabled(true);
+        }
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+            state
+                .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                .unwrap();
+        };
+        let t0 = now_unix_ms();
+        run(&mut state, &mut rig, &mut backend, t0);
+        assert!(
+            !engine.lock().unwrap().transmit_needs_the_lock(),
+            "the control: Phone, nothing playing"
+        );
+        // Two seconds of message.
+        engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.0; 24_000])
+            .expect("the voice keyer takes it");
+        run(&mut state, &mut rig, &mut backend, t0 + 100.0);
+        assert!(
+            state.tx_until_ms.is_some(),
+            "scene guard: the loop keyed it"
+        );
+        {
+            let e = engine.lock().unwrap();
+            assert!(
+                !e.on_air(),
+                "scene guard: the engine itself no longer sees it"
+            );
+            assert!(e.transmit_needs_the_lock(), "…but the loop's word does");
+        }
+        run(&mut state, &mut rig, &mut backend, t0 + 5_000.0);
+        assert!(
+            !engine.lock().unwrap().transmit_needs_the_lock(),
+            "played out: the check lets a long change go ahead again"
         );
     }
 

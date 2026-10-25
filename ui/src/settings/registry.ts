@@ -791,7 +791,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'configurations',
     keywords: ['data folder', 'log folder', 'logbook location', 'log.adi', 'where is my log',
       'move my log', 'nas', 'network drive', 'dropbox', 'onedrive', 'google drive', 'synced folder',
-      'shared log', 'two computers', 'storage', 'path', 'folder'],
+      'shared log', 'two computers', 'storage', 'path', 'folder',
+      // How long the log's history keeps a deleted contact for Recently deleted and Undo.
+      'recently deleted', 'deleted contacts', 'undo', 'history', 'keep deleted', 'retention'],
   },
   {
     id: 'configurations',

@@ -11,6 +11,8 @@ import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LogExport, LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
+import { RecentlyDeleted } from './RecentlyDeleted'
+import { sayUndone } from './QsoHistory'
 import { gpuCapableForGlobe } from '../gpu'
 import { GlobeGuard } from './GlobeGuard'
 import { useLogbookGlobe } from '../features/logbookGlobe'
@@ -65,6 +67,8 @@ import {
   logOperators,
   logActivations,
   importAdif,
+  restoreDeletedQso,
+  undoHistoryRun,
   logQso,
   markLotwUploaded,
   markQslSentById,
@@ -78,7 +82,7 @@ import {
   syncLotwReport,
   uploadLotwReport,
 } from '../api'
-import { pushToast, withErrorToast } from '../toast'
+import { failureText, pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
 import { callCardTrigger, qrzPageOf } from './CallCard'
@@ -159,7 +163,7 @@ interface DraftQso {
   qslCard: string
 }
 
-/** The word the operator must type to arm the full-log purge (irreversible). It is COMPARED
+/** The word the operator must type to arm the full-log purge. It is COMPARED
  * against what they type, so it is a token and not prose — translating it would move the gate. */
 const PURGE_WORD = 'DELETE'
 
@@ -474,8 +478,9 @@ export function Logbook({
   // nothing until Check, and changes nothing until Apply.
   const [showConfirmations, setShowConfirmations] = useState(false)
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
-  // arm the danger button — a deliberate, typed gate for an irreversible wipe.
+  // arm the danger button — a deliberate, typed gate for a wipe of the whole log.
   const [showPurge, setShowPurge] = useState(false)
+  const [showDeleted, setShowDeleted] = useState(false)
   const [purgeText, setPurgeText] = useState('')
   const [purging, setPurging] = useState(false)
   // "Mark all as already on LoTW" confirmation — for an imported legacy log that was
@@ -557,12 +562,29 @@ export function Logbook({
       // for two counts at once, so each carries its own (see the catalog's note).
       const dupes = stats.skipped ? t('logbook.import.dupes', { count: stats.skipped }) : ''
       const upgraded = stats.updated ? t('logbook.import.updated', { count: stats.updated }) : ''
+      const run = stats.run
       pushToast(
         `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}`,
         'success',
+        10_000,
+        stats.added + stats.updated > 0 && run
+          ? { actionLabel: t('logbook.undo'), action: () => undoRun(run, t('logbook.import.undone')) }
+          : {},
       )
       load()
     }
+  }
+
+  // Undo the run an import or a purge handed back — exactly that change, never "the latest of its
+  // kind", which a contact logged a moment later would be — in one transaction. The toast's
+  // action: a refusal (a large undo while transmitting) rejects with its reason, so the toast stays
+  // up saying why and its Undo can be pressed again. Recently deleted offers the same undo after.
+  const undoRun = async (run: string, done: string) => {
+    const answer = await undoHistoryRun(run).catch((err: unknown) => {
+      throw new Error(failureText(t('qso.history.undo.failed'), err))
+    })
+    sayUndone(answer, done, load)
+    load()
   }
 
   // Sync a LoTW (or any ADIF) confirmation report INTO the log: upgrades
@@ -1008,9 +1030,19 @@ export function Logbook({
       load()
       return false
     }
+    const id = q.id
     pushToast(
       answer.kind === 'gone' ? t('logbook.delete.gone', { call: q.call }) : t('logbook.delete.done', { call: q.call }),
       answer.kind === 'gone' ? 'info' : 'success',
+      10_000,
+      answer.kind === 'deleted' && id ? {
+        actionLabel: t('logbook.undo'),
+        action: () => {
+          void withErrorToast(() => restoreDeletedQso(id), t('logbook.deleted.failed')).then((a) => {
+            if (a) { sayUndone(a, t('logbook.deleted.restored', { call: q.call }), load); load() }
+          })
+        },
+      } : {},
     )
     if (editingKey === key) cancelForm()
     load()
@@ -1023,14 +1055,18 @@ export function Logbook({
   }
 
   // Wipe the ENTIRE logbook (truncates the ADIF file). Armed only once the operator
-  // types the confirmation word — an irreversible action gets a deliberate gate.
+  // types the confirmation word — a wipe of the whole log gets a deliberate gate.
   const onPurge = async () => {
     if (purgeText.trim().toUpperCase() !== PURGE_WORD) return
     setPurging(true)
-    const removed = await withErrorToast(() => purgeLog(), t('logbook.purge.failed'))
+    const purged = await withErrorToast(() => purgeLog(), t('logbook.purge.failed'))
     setPurging(false)
-    if (removed !== null && removed !== undefined) {
-      pushToast(t('logbook.purge.done', { count: removed }), 'success')
+    if (purged) {
+      const { removed, run } = purged
+      pushToast(t('logbook.purge.done', { count: removed }), 'success', 15_000, removed > 0 ? {
+        actionLabel: t('logbook.undo'),
+        action: () => undoRun(run, t('logbook.purge.undone')),
+      } : {})
       closePurge()
       cancelForm()
       load()
@@ -2260,6 +2296,9 @@ export function Logbook({
           >
             {showForm ? t('logbook.form.close') : t('logbook.form.open')}
           </button>
+          <button type="button" className="export-btn" onClick={() => setShowDeleted(true)}>
+            {t('logbook.deleted.button')}
+          </button>
           <button
             type="button"
             className="export-btn danger"
@@ -3409,7 +3448,8 @@ export function Logbook({
       />
       {/* Mounted beside SpotDialog at the section root, not inside the virtualised rows:
           the row that opened it can be recycled out from under the view while it is open. */}
-      <QsoDetail qso={viewing} onClose={() => setViewing(null)} />
+      <QsoDetail qso={viewing} onClose={() => setViewing(null)} onChanged={load} />
+      <RecentlyDeleted open={showDeleted} onClose={() => setShowDeleted(false)} onRestored={load} />
       <ParkStateReview open={showParkStates} onClose={() => setShowParkStates(false)} onApplied={load} />
       <ConfirmationReview open={showConfirmations} onClose={() => setShowConfirmations(false)} onApplied={load} />
     </section>

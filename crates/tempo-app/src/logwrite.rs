@@ -524,6 +524,18 @@ fn stopped(stamped: usize, total: usize, why: Option<String>) -> String {
 fn bulk<R, T>(
     engine: &Mutex<Engine>,
     context: &str,
+    plan_it: impl FnMut(&station::LogPlan) -> Result<(R, station::Planned), String>,
+    then: impl FnOnce(&mut Engine, R) -> T,
+) -> (Result<T, String>, Durability) {
+    bulk_as(engine, context, None, plan_it, then)
+}
+
+/// [`bulk`], recorded in the history as `origin` says when it says ([`crate::loghistory::Origin`]):
+/// a change whose run its maker names before it is made, so the maker can hand that run back.
+fn bulk_as<R, T>(
+    engine: &Mutex<Engine>,
+    context: &str,
+    origin: Option<crate::loghistory::Origin>,
     mut plan_it: impl FnMut(&station::LogPlan) -> Result<(R, station::Planned), String>,
     then: impl FnOnce(&mut Engine, R) -> T,
 ) -> (Result<T, String>, Durability) {
@@ -539,7 +551,11 @@ fn bulk<R, T>(
         let mut out = Some(out);
         let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
             if !planned.is_empty() {
-                e.station_mut().commit_bulk(&plan, planned, context).ok()?;
+                e.station_mut().origin = origin.clone();
+                let made = e.station_mut().commit_bulk(&plan, planned, context);
+                // Taken by the change it was set for — or by none, when the plan went stale.
+                e.station_mut().origin = None;
+                made.ok()?;
             }
             let then = then.take()?;
             Some(then(e, out.take()?))
@@ -561,14 +577,18 @@ fn log_len(engine: &Mutex<Engine>) -> Result<usize, String> {
 }
 
 /// An ADIF import ([`StationCore::import_adif`]), planned with the Engine lock released:
-/// `(added, skipped, merged)`.
+/// `(added, skipped, merged)`. Recorded under `run` when one is named, else a run of its own.
 fn import(
     engine: &Mutex<Engine>,
     text: &str,
+    run: Option<&str>,
 ) -> (Result<(usize, usize, usize), String>, Durability) {
-    bulk(
+    bulk_as(
         engine,
         "import_adif",
+        run.map(|run| {
+            crate::loghistory::Origin::in_run(tempo_core::logbook::history::Source::Import, run)
+        }),
         |plan| station::plan_import(plan, text),
         |_, counts| counts,
     )
@@ -584,7 +604,27 @@ pub fn import_adif(
     engine: &Mutex<Engine>,
     text: &str,
 ) -> (Result<ImportCounts, String>, Durability) {
-    let (made, durability) = import(engine, text);
+    import_adif_in(engine, text, None)
+}
+
+/// [`import_adif`], recorded in the history under `run` ([`crate::loghistory::new_run`]) — the
+/// run the import's Undo undoes, and only that: a contact another program logs meanwhile is in a
+/// run of its own. The caller names the run before the import, so an import made again after the
+/// store turned it back ([`until_written`]) is still that one run.
+pub fn import_adif_in_run(
+    engine: &Mutex<Engine>,
+    text: &str,
+    run: &str,
+) -> (Result<ImportCounts, String>, Durability) {
+    import_adif_in(engine, text, Some(run))
+}
+
+fn import_adif_in(
+    engine: &Mutex<Engine>,
+    text: &str,
+    run: Option<&str>,
+) -> (Result<ImportCounts, String>, Durability) {
+    let (made, durability) = import(engine, text, run);
     let made =
         made.and_then(|(added, skipped, merged)| Ok((added, skipped, merged, log_len(engine)?)));
     (made, durability)
@@ -597,7 +637,7 @@ pub fn import_logged_contact(
     engine: &Mutex<Engine>,
     adif: &str,
 ) -> (Result<usize, String>, Durability) {
-    let (made, durability) = import(engine, adif);
+    let (made, durability) = import(engine, adif, None);
     (made.map(|(added, _, _)| added), durability)
 }
 
@@ -770,6 +810,8 @@ fn fill_in_chunks(
     };
     let last = chunks.len() - 1;
     let mut filled = 0;
+    // Every chunk's fills are one run in the history, undone together.
+    let run = crate::loghistory::new_run();
     // The chunk made before the latest: in the store before the next is planned.
     let mut previous = Durability::default();
     for (k, chunk) in chunks.into_iter().enumerate() {
@@ -792,7 +834,12 @@ fn fill_in_chunks(
             let pairs = station::fill_pairs(&rows, chunk);
             let n = pairs.len();
             let (ok, durability) = engine_lock(engine).with_log_tickets(|e| {
-                e.station_mut()
+                e.station_mut().origin = Some(crate::loghistory::Origin::in_run(
+                    tempo_core::logbook::history::Source::Fill,
+                    &run,
+                ));
+                let ok = e
+                    .station_mut()
                     .commit_planned(
                         &plan,
                         station::fill_class(n),
@@ -801,7 +848,9 @@ fn fill_in_chunks(
                         meta.clone(),
                         "fill",
                     )
-                    .is_ok()
+                    .is_ok();
+                e.station_mut().origin = None;
+                ok
             });
             if ok {
                 made = Some((n, durability));

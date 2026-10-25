@@ -155,6 +155,8 @@ const MIGRATED = [
   'features/exportLacks.ts',
   // The QSO detail view (#313) — born migrated: every string in it is a catalog key.
   'components/QsoDetail.tsx',
+  'components/QsoHistory.tsx',
+  'components/RecentlyDeleted.tsx',
   // The Logbook's country picker — born migrated: the entity names and numbers it lists are data.
   'components/LogCountryPicker.tsx',
   'components/LogEntry.tsx',

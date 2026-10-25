@@ -1029,6 +1029,7 @@ pub mod callbook;
 pub mod canonical;
 pub mod dedup;
 mod edit;
+pub mod history;
 pub mod hot;
 mod id;
 pub mod io_fence;

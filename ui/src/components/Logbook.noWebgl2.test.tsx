@@ -145,7 +145,7 @@ describe('the Logbook on a computer with WebGL 1 and no WebGL 2', () => {
     const editQsoById = vi.mocked(api.editQsoById)
     editQsoById.mockResolvedValue({ kind: 'applied' } as never)
     const importAdif = vi.mocked(api.importAdif)
-    importAdif.mockResolvedValue({ added: 1, skipped: 0, updated: 0 } as never)
+    importAdif.mockResolvedValue({ added: 1, skipped: 0, updated: 0, run: 'import-run' } as never)
     const c = await open()
     expect(crash(c), 'the Logbook is the error page').toBeNull()
 
@@ -168,7 +168,12 @@ describe('the Logbook on a computer with WebGL 1 and no WebGL 2', () => {
       target: { files: [new File([adif], 'log.adi')] },
     })
     await waitFor(() => expect(importAdif).toHaveBeenCalledWith(adif))
-    await waitFor(() => expect(vi.mocked(toast.pushToast)).toHaveBeenCalledWith(t('logbook.import.imported', { count: 1 }), 'success'))
+    await waitFor(() => expect(vi.mocked(toast.pushToast)).toHaveBeenCalledWith(
+      t('logbook.import.imported', { count: 1 }),
+      'success',
+      10_000,
+      expect.objectContaining({ actionLabel: t('logbook.undo') }),
+    ))
     expect(crash(c), 'the Logbook is the error page').toBeNull()
   }, 30_000)
 
