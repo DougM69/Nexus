@@ -63,7 +63,10 @@ const party = (log: FieldDayQso[]): FieldDayStatus =>
 const LOG = [row('K9AAA', 'COOK', T0), row('W9BBB', 'LAKE', T0 + 60)]
 /** The log once the logger window's edit of K9AAA (Cook → DuPage) is in. */
 const EDITED = [row('K9AAA', 'DUPG', T0), LOG[1]]
+/** …and once a call fix of K9AAA (to K9AAC) is in, the commonest contest edit. */
+const CALLED = [row('K9AAC', 'COOK', T0), LOG[1]]
 const CHANGED = 'That contact changed in the contest log since its edit opened, so nothing was edited. To edit it as it is now, open it again.'
+const GONE = 'That contact is no longer in the contest log, so nothing was edited.'
 
 const settle = async () => {
   await act(async () => {
@@ -90,6 +93,8 @@ const editor = (id: 'logger' | 'main') =>
   document.querySelector<HTMLElement>(`[data-testid="${id}"] .contest-edit`)
 const boxes = (id: 'logger' | 'main') => [...(editor(id)?.querySelectorAll<HTMLInputElement>('input') ?? [])]
 const mainNote = () => document.querySelector('[data-testid="main"] .fd-removed-note')?.textContent ?? null
+const loggerNote = () => document.querySelector('[data-testid="logger"] .contest-logger-recent-note')?.textContent ?? null
+const note = (id: 'logger' | 'main') => (id === 'main' ? mainNote() : loggerNote())
 const type = (el: HTMLInputElement, value: string) => fireEvent.change(el, { target: { value } })
 const enter = async (el: HTMLInputElement) => {
   await act(async () => {
@@ -167,5 +172,67 @@ describe('an edit of a contact changed in another window', () => {
     await settle()
     expect(editor('main')).toBeNull()
     expect(mainNote()).toMatch(/^Edited K9AAA: now K9AAA /)
+  })
+
+  // The host finds the edit's contact by the call and time it opened with, so a call fix leaves it
+  // nothing to show: it closes the edit, and must say why.
+  it.each([
+    ['main', 'logger'],
+    ['logger', 'main'],
+  ] as const)('a call fix in the %s window closes the %s window’s edit and says the contact changed', async (fixer, other) => {
+    api.contestEdit.mockResolvedValueOnce({
+      outcome: 'edited',
+      before: [LOG[0]],
+      after: [CALLED[0]],
+      sentTo: { wsjtx: false, logbook: false, uploaded: [] },
+    })
+    const view = await bothOpen()
+    type(boxes(fixer)[0], 'K9AAC')
+    await enter(boxes(fixer)[0])
+    expect(api.contestEdit).toHaveBeenCalledTimes(1)
+    expect(note(fixer), 'premise: the fixing window says what it did').toMatch(/^Edited K9AAA: now K9AAC /)
+    view.rerender(both(CALLED))
+    await settle()
+    expect(editor(other), 'the old form is gone').toBeNull()
+    expect(note(other)).toBe(CHANGED)
+    expect(note(fixer), 'the fixing window keeps its own line').toMatch(/^Edited K9AAA: now K9AAC /)
+    expect(api.contestEdit, 'the other window sent nothing').toHaveBeenCalledTimes(1)
+  })
+
+  // CONTROL: this edit's own call fix, its answer still on the way when the change arrives, is not
+  // "changed elsewhere": the answer says what it did.
+  it.each(['main', 'logger'] as const)('the %s window’s own call fix answers for itself', async (id) => {
+    let answer: (a: unknown) => void = () => {}
+    api.contestEdit.mockReturnValueOnce(new Promise((r) => (answer = r)))
+    const view = render(both(LOG))
+    await settle()
+    fireEvent.click(editOf(id, 'K9AAA'))
+    type(boxes(id)[0], 'K9AAC')
+    await enter(boxes(id)[0])
+    view.rerender(both(CALLED))
+    await settle()
+    expect(editor(id), 'the host has nothing to show it on').toBeNull()
+    expect(note(id), 'no "changed" while its own answer is on the way').toBeNull()
+    await act(async () => {
+      answer({ outcome: 'edited', before: [LOG[0]], after: [CALLED[0]], sentTo: { wsjtx: false, logbook: false, uploaded: [] } })
+    })
+    await settle()
+    expect(note(id)).toMatch(/^Edited K9AAA: now K9AAC /)
+  })
+
+  it('removed elsewhere, the edit closes and says the contact is no longer in the log', async () => {
+    const view = await bothOpen()
+    view.rerender(both([LOG[1]]))
+    await settle()
+    expect([editor('main'), editor('logger')]).toEqual([null, null])
+    expect([mainNote(), loggerNote()]).toEqual([GONE, GONE])
+  })
+
+  it('a save the engine refuses as gone says the contact is no longer in the log', async () => {
+    api.contestEdit.mockResolvedValueOnce({ outcome: 'refused', refusal: 'gone' })
+    await bothOpen()
+    type(boxes('main')[2], 'DUPG')
+    await enter(boxes('main')[2])
+    expect(mainNote()).toBe(GONE)
   })
 })

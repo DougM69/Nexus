@@ -894,10 +894,11 @@ export async function contestRemoved(): Promise<RemovedContest[]> {
   return invoke<RemovedContest[]>('contest_removed')
 }
 
-/** Why an edit changed nothing: the contact is no longer as it was shown; no call or no band;
+/** Why an edit changed nothing: the contact is no longer as it was shown; it is no longer in the
+ *  log at all; no call or no band;
  *  another number of counties than a county line has; a satellite contact's band; club sync,
  *  which cannot carry an edit to the club. */
-export type ContestEditRefusal = 'changed' | 'incomplete' | 'rows' | 'satellite' | 'club'
+export type ContestEditRefusal = 'changed' | 'gone' | 'incomplete' | 'rows' | 'satellite' | 'club'
 
 /** What an edit came to: the contact as it was and as it is now (one row, or one per county),
  *  and where it had already gone, which keeps what it said — or why nothing changed. */

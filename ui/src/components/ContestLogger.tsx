@@ -83,6 +83,7 @@ import { isStreamInput } from '../remote-native/stream-input'
 import { useOperatorBoxAsk } from '../features/contestKeys'
 import { useLoggerLayout } from '../features/contestLoggerLayout'
 import { contestLogMode, stationMode, usePskName } from '../features/contestMode'
+import { closedText } from '../features/contestEdit'
 import { ContestContactEdit, focusOpenContestEdit, type EditNote } from './ContestContactEdit'
 import { annotate, ContestLogHead, ContestLogRow, ContestView, logIsNumbered, OperatorBox } from './ContestView'
 import { NoCreditChip } from './FdAdvisories'
@@ -182,11 +183,16 @@ export function LastContacts({
   const editRows = editing
     ? fieldDay.log.filter((q) => q.call === editing.call && q.whenUnix === editing.whenUnix)
     : []
-  // A contact removed elsewhere while its edit was open: the edit closes. One edited elsewhere
-  // closes itself and says so (`ContestContactEdit`).
+  // A contact this window no longer finds while its edit is open — its call changed elsewhere, the
+  // commonest edit, or it was removed: the edit closes and says which (`closedText`). This edit's
+  // own save changing the call answers for itself. One edited elsewhere with its call kept closes
+  // itself and says so (`ContestContactEdit`).
+  const saving = useRef(false)
   useEffect(() => {
-    if (editing && editRows.length === 0) setEditing(null)
-  }, [editing, editRows.length])
+    if (!editing || editRows.length > 0) return
+    setEditing(null)
+    if (!saving.current) setNote({ text: closedText(fieldDay.log, editing.whenUnix), alert: true })
+  }, [editing, editRows.length, fieldDay.log])
   // A contact logged retires the line; an edit, which leaves the count as it was, does not.
   const logLen = fieldDay.log.length
   const seenLen = useRef(logLen)
@@ -210,9 +216,11 @@ export function LastContacts({
       return
     }
     setNote(null)
+    saving.current = false
     setEditing({ call: q.call, whenUnix: q.whenUnix ?? 0 })
   }
   const editDone = (done: EditNote | null) => {
+    saving.current = false
     setEditing(null)
     setNote(done)
     onEditDone()
@@ -228,6 +236,9 @@ export function LastContacts({
         receives={fieldDay.receives ?? []}
         role={fieldDay.role}
         bands={fieldDay.bands}
+        onSaving={() => {
+          saving.current = true
+        }}
         onDone={editDone}
       />
     ) : null

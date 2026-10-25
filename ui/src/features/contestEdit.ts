@@ -28,6 +28,13 @@ export function contactText(rows: readonly FieldDayQso[]): string {
   return JSON.stringify(rows.map((q) => [q.call, q.band, q.mode, q.submode, q.class, q.section, q.rcvd]))
 }
 
+/** What a host says when the edit's contact is no longer in its window by the call and time
+ *  it opened with: every edit keeps a contact's time, so one still at that time had its call
+ *  changed elsewhere, and with none at it the contact was removed. */
+export function closedText(log: readonly FieldDayQso[], whenUnix: number): string {
+  return log.some((q) => q.whenUnix === whenUnix) ? t('contest.edit.changed') : t('contest.edit.gone')
+}
+
 /** The modes on the air the form offers besides the contact's own — ADIF mode names, tokens. */
 export const EDIT_MODES = ['CW', 'USB', 'LSB', 'FM', 'AM', 'RTTY', 'FT8', 'FT4'] as const
 
@@ -126,6 +133,8 @@ export function editText(answer: ContestEditAnswer): string {
         return t('contest.edit.satellite')
       case 'club':
         return t('contest.edit.club')
+      case 'gone':
+        return t('contest.edit.gone')
       default:
         return t('contest.edit.changed')
     }

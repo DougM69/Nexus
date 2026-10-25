@@ -2277,6 +2277,7 @@ export const EN = {
     other: 'This contact is a county line of {{count}} counties, and an edit keeps {{count}}: give them joined by /.',
   },
   'contest.edit.changed': 'That contact changed in the contest log since its edit opened, so nothing was edited. To edit it as it is now, open it again.',
+  'contest.edit.gone': 'That contact is no longer in the contest log, so nothing was edited.',
   'contest.edit.incomplete': 'A contact needs a call and a band, so nothing was edited.',
   'contest.edit.rows': 'A county line keeps its number of counties, so nothing was edited.',
   'contest.edit.satellite': 'A contact made through a satellite keeps the band of its pass, so nothing was edited.',

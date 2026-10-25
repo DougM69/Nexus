@@ -255,8 +255,39 @@ describe('Ctrl+Y opens the newest contact for edit', () => {
     rerender(<Strip fieldDay={party([LOG[0]])} />)
     expect(editor()).toBeNull()
     expect(document.querySelector('.le-fd-big')).not.toBeNull()
+    expect(line(), 'and the line says why').toBe(t('contest.edit.gone'))
     rerender(<Strip fieldDay={party(LOG)} />)
     expect(editor(), 'restored meanwhile, it does not open again by itself').toBeNull()
+  })
+
+  it('closes when its call is fixed elsewhere meanwhile, and the line says the contact changed', () => {
+    const { rerender } = render(<Strip fieldDay={party(LOG)} />)
+    ctrlY()
+    type(editBoxes()[2], 'COOK')
+    rerender(<Strip fieldDay={party([LOG[0], row('W9BBC', 'LAKE', T0 + 60)])} />)
+    expect(editor()).toBeNull()
+    expect(line()).toBe(t('contest.edit.changed'))
+    expect(api.contestEdit).not.toHaveBeenCalled()
+  })
+
+  it('its own call fix answers for itself: the change arriving before the answer is not "changed"', async () => {
+    let answer: (a: unknown) => void = () => {}
+    api.contestEdit.mockReturnValueOnce(new Promise((r) => (answer = r)))
+    const { rerender } = render(<Strip fieldDay={party(LOG)} />)
+    ctrlY()
+    type(editBoxes()[0], 'W9BBC')
+    await act(async () => {
+      fireEvent.keyDown(editBoxes()[0], { key: 'Enter' })
+    })
+    rerender(<Strip fieldDay={party([LOG[0], row('W9BBC', 'LAKE', T0 + 60)])} />)
+    await settle()
+    expect(editor()).toBeNull()
+    expect(line()).not.toBe(t('contest.edit.changed'))
+    await act(async () => {
+      answer({ outcome: 'edited', before: [LOG[1]], after: [row('W9BBC', 'LAKE', T0 + 60)], sentTo: { wsjtx: false, logbook: false, uploaded: [] } })
+    })
+    await settle()
+    expect(line()).toBe('Edited W9BBB: now W9BBC · 20m CW · 17:01 · 599 LAKE.')
   })
 
   it('Ctrl+Y again, after a newer contact is logged, opens that one afresh', () => {

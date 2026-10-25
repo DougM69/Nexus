@@ -35,6 +35,7 @@ import { contestDomain, multCode, multTotal, type DomainGroup } from '../feature
 import { composingSlot } from '../features/contestExchange'
 import { receivedCaption } from '../features/contestSlots'
 import { contestUnsavedText } from '../features/contestUnsaved'
+import { closedText } from '../features/contestEdit'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { bandRank, operatorSummaryLines } from '../features/contestOperators'
 import { formatOpTime, OFF_TIME_MIN_SEC, operatingTime } from '../features/contestOpTime'
@@ -3251,11 +3252,16 @@ export function ContestView({
   const editRows = editing
     ? log.filter((q) => q.call === editing.call && q.whenUnix === editing.whenUnix)
     : []
-  // A contact removed elsewhere while its edit was open: the edit closes. One edited elsewhere
-  // closes itself and says so (`ContestContactEdit`).
+  // A contact this window no longer finds while its edit is open — its call changed elsewhere, the
+  // commonest edit, or it was removed: the edit closes and says which (`closedText`). This edit's
+  // own save changing the call answers for itself. One edited elsewhere with its call kept closes
+  // itself and says so (`ContestContactEdit`).
+  const saving = useRef(false)
   useEffect(() => {
-    if (editing && editRows.length === 0) setEditing(null)
-  }, [editing, editRows.length])
+    if (!editing || editRows.length > 0) return
+    setEditing(null)
+    if (!saving.current) setRemovedNote({ text: closedText(log, editing.whenUnix), alert: true })
+  }, [editing, editRows.length, log])
   const editRow = (q: FieldDayQso) => {
     if (isStreamInput()) {
       setRemovedNote({ text: t('contest.edit.remote'), alert: true })
@@ -3273,9 +3279,11 @@ export function ContestView({
       return
     }
     setRemovedNote(null)
+    saving.current = false
     setEditing({ call: q.call, whenUnix: q.whenUnix ?? 0 })
   }
   const editDone = (note: EditNote | null) => {
+    saving.current = false
     setEditing(null)
     if (note) setRemovedNote(note)
   }
@@ -4325,6 +4333,9 @@ export function ContestView({
                   receives={fieldDay?.receives ?? []}
                   role={fieldDay?.role}
                   bands={fieldDay?.bands}
+                  onSaving={() => {
+                    saving.current = true
+                  }}
                   onDone={editDone}
                 />
               ) : null

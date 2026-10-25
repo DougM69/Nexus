@@ -8,7 +8,10 @@
 // open. When this window's rows of the contact stop reading as they did when the edit opened
 // (`contactText`), the edit closes and says so. A save pressed before this window hears of the
 // change sends the rows the edit opened from, and the engine refuses it as changed when the
-// contact no longer reads as them. A contact removed elsewhere is its host's to close.
+// contact no longer reads as them. A contact this window no longer finds by the call and time the
+// edit opened with (its call changed elsewhere, or it was removed) is its host's to close, and the
+// host says which (`closedText`) — unless this edit's own save is under way (`onSaving`), whose
+// answer says what it did.
 //
 // ⛔ NOTHING HERE TRANSMITS, AND NOTHING HERE STOPS A KEY ON ITS WAY. No handler calls
 // stopPropagation: Esc still reaches the shared capture listener that stops TX, and Space's keyup
@@ -55,6 +58,7 @@ export function ContestContactEdit({
   receives,
   role,
   bands,
+  onSaving,
   onDone,
 }: {
   /** The contact: one row, or one per county for a county line. */
@@ -65,6 +69,8 @@ export function ContestContactEdit({
   role?: string
   /** The contest's bands. */
   bands?: readonly string[]
+  /** This edit's save is under way: its answer, through `onDone`, says what it did. */
+  onSaving?: () => void
   /** The edit is over: what to say, or `null` when it was left as it was. */
   onDone: (note: EditNote | null) => void
 }) {
@@ -129,6 +135,7 @@ export function ContestContactEdit({
       return
     }
     setBusy(true)
+    onSaving?.()
     contestEdit(first.call, first.whenUnix ?? 0, made.edit, opened).then(
       (answer) => onDone({ text: editText(answer), alert: answer.outcome === 'refused' }),
       () => onDone({ text: t('contest.edit.failed'), alert: true }),

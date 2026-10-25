@@ -30,9 +30,12 @@ use tempo_core::fieldday::{ContactEdit, EditRefusal, FieldDayLog, LoggedQso};
 /// Why an edit changed nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContestEditRefusal {
-    /// No contact in the log has that call and time, or it no longer reads as the edit opened
-    /// it: it was removed or edited since it was shown.
+    /// The contact no longer reads as the edit opened it: it was edited since it was shown (its
+    /// call too, so no contact has that call and time now).
     Changed,
+    /// No contact in the log has that time any more: it was removed since it was shown. Every
+    /// edit keeps a contact's time, so one whose call was changed still has it and is `Changed`.
+    Gone,
     /// The edit names no call, or a band no contest file can carry.
     Incomplete,
     /// The edit gives another number of rows than the contact has (a county line's counties).
@@ -48,6 +51,7 @@ impl ContestEditRefusal {
     pub fn code(self) -> &'static str {
         match self {
             ContestEditRefusal::Changed => "changed",
+            ContestEditRefusal::Gone => "gone",
             ContestEditRefusal::Incomplete => "incomplete",
             ContestEditRefusal::Rows => "rows",
             ContestEditRefusal::Satellite => "satellite",
@@ -100,7 +104,7 @@ impl Engine {
     /// form was filled from them. Another window can edit the same contact meanwhile, and a form
     /// filled before that would write its old values back over the change, so a contact whose
     /// call, band, mode or received exchange no longer reads as `opened` is refused as `Changed`,
-    /// and nothing changes.
+    /// and nothing changes — or as `Gone` when no contact has its time any more.
     pub fn contest_edit(
         &mut self,
         call: &str,
@@ -114,6 +118,9 @@ impl Engine {
         };
         if club {
             return Ok(Err(ContestEditRefusal::Club));
+        }
+        if when_unix != 0 && !station.log.qsos().iter().any(|q| q.when_unix == when_unix) {
+            return Ok(Err(ContestEditRefusal::Gone));
         }
         if !reads_as(&station.log, call, when_unix, opened) {
             return Ok(Err(ContestEditRefusal::Changed));

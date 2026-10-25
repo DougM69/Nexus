@@ -47,7 +47,7 @@ import { contestDupe, contestDupeRow, contestWorkedRows, workedValues, type Cont
 import { REMOVE_CONFIRM_MS, contactLabel, isModifierKey, isRemoveKey, newestContact, removalText } from '../features/contestRemoval'
 import { askForOperatorBox, isOperatorBoxKey, isWipeKey } from '../features/contestKeys'
 import { isMarkKey, markHere, publishEntryCall } from '../features/freqMarkers'
-import { isEditKey } from '../features/contestEdit'
+import { closedText, isEditKey } from '../features/contestEdit'
 import { ContestContactEdit, focusOpenContestEdit, type EditNote } from './ContestContactEdit'
 import { esmPress, type EsmCaret, type EsmRole, type EsmStrip } from '../features/esm'
 import { ENTRY_CHANGED, ENTRY_LOGGED, useSharedEntry, type StripContent } from '../features/contestEntryShare'
@@ -857,11 +857,16 @@ export function LogEntry({
   const rowsOf = (call: string, whenUnix: number | undefined) =>
     fieldDay ? fieldDay.log.filter((q) => q.call === call && q.whenUnix === whenUnix) : []
   const editRows = editing ? rowsOf(editing.call, editing.whenUnix) : []
-  // A contact removed elsewhere while its edit was open: the edit closes. One edited elsewhere
-  // closes itself and says so (`ContestContactEdit`).
+  // A contact this window no longer finds while its edit is open — its call changed elsewhere, the
+  // commonest edit, or it was removed: the edit closes and says which (`closedText`). This edit's
+  // own save changing the call answers for itself. One edited elsewhere with its call kept closes
+  // itself and says so (`ContestContactEdit`).
+  const saving = useRef(false)
   useEffect(() => {
-    if (editing && editRows.length === 0) setEditing(null)
-  }, [editing, editRows.length])
+    if (!editing || editRows.length > 0) return
+    setEditing(null)
+    if (!saving.current) setRemoveNote({ text: closedText(fieldDay?.log ?? [], editing.whenUnix), alert: true })
+  }, [editing, editRows.length, fieldDay?.log])
   const pressEdit = () => {
     setRemoveArmed(null)
     if (isStreamInput()) {
@@ -884,11 +889,13 @@ export function LogEntry({
       return
     }
     setRemoveNote(null)
+    saving.current = false
     setEditing({ call: newest.call, whenUnix: newest.whenUnix })
   }
   const pressEditRef = useRef(pressEdit)
   pressEditRef.current = pressEdit
   const editDone = (note: EditNote | null) => {
+    saving.current = false
     setEditing(null)
     if (note) setRemoveNote(note)
     requestAnimationFrame(() => callInputRef.current?.focus({ preventScroll: true }))
@@ -2789,6 +2796,9 @@ export function LogEntry({
             receives={fdReceives}
             role={fieldDay?.role}
             bands={fieldDay?.bands}
+            onSaving={() => {
+              saving.current = true
+            }}
             onDone={editDone}
           />
         ) : (
