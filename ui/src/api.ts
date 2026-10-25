@@ -1641,7 +1641,8 @@ export interface QsoFieldChange { tag: string; old: string | null; new: string |
  *  `lotw`, `eqsl`, `qrz`, `pota`, `contest`, `remote`, `file`, `undo`), never prose. */
 export interface QsoHistoryEntry {
   seq: number
-  kind: 'create' | 'edit' | 'delete' | 'merge' | 'fill'
+  /** `unknown`: a kind a later build recorded — shown, never undone. */
+  kind: 'create' | 'edit' | 'delete' | 'merge' | 'fill' | 'unknown'
   source: string
   run: string
   atMs: number
@@ -1661,11 +1662,10 @@ export interface DeletedQso {
   source: string
 }
 
-/** The latest run of changes of one kind. */
-export interface HistoryRun { run: string; source: string; atMs: number; contacts: number }
-
 /** What an undo made. `run` is the undo's own run: undoing it is the redo. The counts are the
- *  contacts it could not change, by why. */
+ *  contacts it could not change, by why: `changedSince` includes a contact an import added that
+ *  was edited or confirmed since (it stays), `duplicate` one the log holds already under another
+ *  id (it is not put back twice). The calls name those contacts, sorted, each once. */
 export interface UndoAnswer {
   changed: number
   run: string | null
@@ -1673,6 +1673,10 @@ export interface UndoAnswer {
   gone: number
   alreadyThere: number
   changedSince: number
+  duplicate: number
+  unknownKind: number
+  changedSinceCalls: string[]
+  duplicateCalls: string[]
 }
 
 /** One contact's change history, oldest first. */
@@ -1683,11 +1687,6 @@ export async function qsoHistory(id: string): Promise<QsoHistoryEntry[]> {
 /** The contacts deleted and not put back, newest first. */
 export async function recentlyDeletedQsos(limit?: number): Promise<DeletedQso[]> {
   return invoke<DeletedQso[]>('recently_deleted_qsos', { limit: limit ?? null })
-}
-
-/** The latest run made by `source` that changed a contact. */
-export async function latestHistoryRun(source: string | null): Promise<HistoryRun | null> {
-  return invoke<HistoryRun | null>('latest_history_run', { source })
 }
 
 /** Undo one change to a contact. Sends nothing to any service. Returns once it is on disk. */
@@ -1748,11 +1747,14 @@ export async function deleteQsoById(target: RowRef): Promise<RowAnswer> {
   return invoke<RowAnswer>('delete_qso_by_id', { target })
 }
 
-/** Purge the ENTIRE logbook — delete every contact and truncate the ADIF file.
- * Irreversible; the UI gates this behind a typed confirmation. Returns the number
- * of contacts removed. */
-export async function purgeLog(): Promise<number> {
-  return invoke<number>('purge_log')
+/** What a purge answers: how many contacts it removed, and its run in the log's history — what
+ *  its Undo undoes, and nothing else. */
+export interface PurgeAnswer { removed: number; run: string }
+
+/** Purge the ENTIRE logbook — delete every contact and truncate the ADIF file. The UI gates this
+ * behind a typed confirmation; every contact is kept in the history for the toast's Undo. */
+export async function purgeLog(): Promise<PurgeAnswer> {
+  return invoke<PurgeAnswer>('purge_log')
 }
 
 /** DXCC-first award progress computed from the logbook (cty.dat-resolved). */

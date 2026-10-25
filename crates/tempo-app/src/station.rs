@@ -1168,6 +1168,9 @@ impl Recent {
 
     /// Whether no change since `revision` touched any of `ids`.
     fn untouched_since(&self, revision: u64, ids: &[RecordId]) -> bool {
+        // A set, so a run's undo of every contact of a big log asks each change since in constant
+        // time per row, not a scan of the run.
+        let ids: HashSet<RecordId> = ids.iter().copied().collect();
         self.untouched_since_by(revision, |(id, _)| id.is_some_and(|id| ids.contains(&id)))
     }
 
@@ -2804,13 +2807,18 @@ impl StationCore {
     /// undo leaves it. [`Stale`], changing nothing, when a row it read has changed since, or a
     /// contact it puts back has been changed here since the plan (another window's is the store's
     /// to refuse: every pair is checked as it is written).
+    ///
+    /// **A contact it would put back that the log already holds under another id is left out**,
+    /// by the log's own duplicate rule asked of the hot index here, under the lock, where every
+    /// contact this window and the windows it has taken in hold is counted — the rows the undo
+    /// itself takes out not among them. Their ids come back beside the ticket; the rest is made.
     pub(crate) fn commit_undo(
         &mut self,
         plan: &LogPlan,
         class: OpClass,
-        pairs: Vec<RowPair>,
+        mut pairs: Vec<RowPair>,
         origin: crate::loghistory::Origin,
-    ) -> Result<Option<tempo_core::logbook::writer::Ticket>, Stale> {
+    ) -> Result<(Option<tempo_core::logbook::writer::Ticket>, Vec<RecordId>), Stale> {
         let read: Vec<Arc<QsoRecord>> = pairs.iter().filter_map(|(b, _)| b.clone()).collect();
         let put_back: Vec<RecordId> = pairs
             .iter()
@@ -2819,6 +2827,25 @@ impl StationCore {
             .collect();
         if !self.unchanged_since(plan, &read) || !self.recent.untouched_since(plan.rev, &put_back) {
             return Err(Stale);
+        }
+        let taken_out: HashSet<RecordId> = pairs
+            .iter()
+            .filter(|(_, a)| a.is_none())
+            .filter_map(|(b, _)| b.as_ref().and_then(|b| b.id))
+            .collect();
+        let mut duplicates = Vec::new();
+        {
+            let hot = self.hot();
+            pairs.retain(|(before, after)| match (before, after) {
+                (None, Some(a)) if hot.is_duplicate_except(a, &taken_out) => {
+                    duplicates.extend(a.id);
+                    false
+                }
+                _ => true,
+            });
+        }
+        if pairs.is_empty() {
+            return Ok((None, duplicates));
         }
         let bulk = pairs.len() > tempo_core::logbook::writer::CHUNK_ROWS;
         self.origin = Some(origin);
@@ -2833,7 +2860,7 @@ impl StationCore {
             },
             "undo",
         );
-        Ok(ticket)
+        Ok((ticket, duplicates))
     }
 
     /// ★ Make a bulk change planned off the Engine lock on the candidate sub-log

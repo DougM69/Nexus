@@ -305,7 +305,6 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("jtty_set_tx",                    RunsAtShack, "The shack's JTTY Tx offset; keys nothing."),
     ("jtty_sign_off",                  StartsTx,    "Sends the JTTY sign-off."),
     ("jtty_stop",                      StopsTx,     "Stops JTTY transmit now."),
-    ("latest_history_run",             RunsAtShack, "The latest change of a kind to the shack's logbook, for its undo."),
     ("leave_client_mode",              RunsHere,    "Starts this computer's Nexus again as itself."),
     ("log_activations",                RunsAtShack, "From the shack's logbook."),
     ("log_current_qso",                RunsAtShack, "Logs the current contact at the shack."),

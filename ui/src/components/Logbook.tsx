@@ -67,7 +67,6 @@ import {
   logOperators,
   logActivations,
   importAdif,
-  latestHistoryRun,
   restoreDeletedQso,
   undoHistoryRun,
   logQso,
@@ -562,21 +561,23 @@ export function Logbook({
       // for two counts at once, so each carries its own (see the catalog's note).
       const dupes = stats.skipped ? t('logbook.import.dupes', { count: stats.skipped }) : ''
       const upgraded = stats.updated ? t('logbook.import.updated', { count: stats.updated }) : ''
+      const run = stats.run
       pushToast(
         `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}`,
         'success',
         10_000,
-        stats.added + stats.updated > 0 ? { actionLabel: t('logbook.undo'), action: () => void undoLatest('import', t('logbook.import.undone')) } : {},
+        stats.added + stats.updated > 0 && run
+          ? { actionLabel: t('logbook.undo'), action: () => void undoRun(run, t('logbook.import.undone')) }
+          : {},
       )
       load()
     }
   }
 
-  // Undo the latest run of `source` — what an import or a clear just made — in one transaction.
-  const undoLatest = async (source: string, done: string) => {
-    const run = await withErrorToast(() => latestHistoryRun(source), t('qso.history.undo.failed'))
-    if (!run) return
-    const answer = await withErrorToast(() => undoHistoryRun(run.run), t('qso.history.undo.failed'))
+  // Undo the run an import or a purge handed back — exactly that change, never "the latest of its
+  // kind", which a contact logged a moment later would be — in one transaction.
+  const undoRun = async (run: string, done: string) => {
+    const answer = await withErrorToast(() => undoHistoryRun(run), t('qso.history.undo.failed'))
     if (!answer) return
     sayUndone(answer, done, load)
     load()
@@ -1054,12 +1055,13 @@ export function Logbook({
   const onPurge = async () => {
     if (purgeText.trim().toUpperCase() !== PURGE_WORD) return
     setPurging(true)
-    const removed = await withErrorToast(() => purgeLog(), t('logbook.purge.failed'))
+    const purged = await withErrorToast(() => purgeLog(), t('logbook.purge.failed'))
     setPurging(false)
-    if (removed !== null && removed !== undefined) {
+    if (purged) {
+      const { removed, run } = purged
       pushToast(t('logbook.purge.done', { count: removed }), 'success', 15_000, removed > 0 ? {
         actionLabel: t('logbook.undo'),
-        action: () => void undoLatest('operator', t('logbook.purge.undone')),
+        action: () => void undoRun(run, t('logbook.purge.undone')),
       } : {})
       closePurge()
       cancelForm()

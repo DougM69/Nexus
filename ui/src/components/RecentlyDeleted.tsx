@@ -1,7 +1,9 @@
 // RECENTLY DELETED — the contacts taken out of the log and not put back, newest first, each with
 // Restore. A restore puts the contact back whole, under its own id, with every field and upload
 // mark it had, so nothing goes to a service again. The list is the log's own history, so it
-// survives a restart.
+// survives a restart — on the logbook database. On the fallback path (the log kept in log.adi
+// when its database could not be opened) the history lives in memory and starts empty each launch.
+// A deleted contact's copy is kept for the days Settings names (90 by default), then removed.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Calls, bands and modes
 // are invariant tokens, shown as they are.

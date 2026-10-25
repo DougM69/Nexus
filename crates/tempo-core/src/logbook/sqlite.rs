@@ -63,7 +63,7 @@ use super::{
     UploadOutcome, UploadState, UploadStatus, Watermarks,
 };
 use rusqlite::{params, params_from_iter, Connection};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::sync::Arc;
@@ -1117,44 +1117,87 @@ impl LogDb {
     ///
     /// **A batch with a [`Batch::history`] note writes each contact's history in the same
     /// transaction**, from the rows as this transaction read them before it wrote: a crash keeps
-    /// both or neither.
+    /// both or neither. The rows it takes out are read, checked and recorded
+    /// [`ROWS_PER_STATEMENT`] at a time, so a purge of the whole log in one transaction holds one
+    /// chunk of it in memory, never the log.
     pub fn apply(&mut self, b: Batch<'_>) -> Result<()> {
         let tx = rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         )?;
-        // The rows as the store holds them before the batch: what the check compares and what the
-        // history records the change against. Read once, inside the write lock.
-        let stored: HashMap<RecordId, QsoRecord> = if b.expect.is_some() || b.history.is_some() {
-            let ids: Vec<RecordId> = b
-                .remove
+        // What the batch writes, by id: a row it also takes out is an edit, not a delete.
+        let written: HashSet<RecordId> = b.upsert.iter().filter_map(|w| w.rec.id).collect();
+        let read =
+            |id: &RecordId| b.history.is_some() || b.expect.is_some_and(|e| e.contains_key(id));
+        let mut recorder = b
+            .history
+            .map(|note| super::history::Recorder::new(&tx, note, &written));
+        let mut conflicts: Vec<RecordId> = Vec::new();
+        // A purge that names no row takes out every row the store holds: each one's history, a
+        // chunk of the log at a time, never the log at once.
+        if let (true, Some(rec)) = (b.clear, recorder.as_mut()) {
+            let mut failed = None;
+            self.each_record(ROWS_PER_STATEMENT, &mut |old| match rec.deleted(&old) {
+                Ok(()) => ControlFlow::Continue(()),
+                Err(e) => {
+                    failed = Some(e);
+                    ControlFlow::Break(())
+                }
+            })?;
+            if let Some(e) = failed {
+                return Err(e);
+            }
+        }
+        // The rows it only takes out, as the store holds them before the batch — what the check
+        // compares and what the history keeps — read inside the write lock a bounded chunk at a
+        // time, so a purge of the whole log never holds the whole log.
+        for chunk in b.remove.chunks(ROWS_PER_STATEMENT) {
+            let ids: Vec<RecordId> = chunk
                 .iter()
                 .copied()
-                .chain(b.upsert.iter().filter_map(|w| w.rec.id))
-                .filter(|id| b.history.is_some() || b.expect.is_some_and(|e| e.contains_key(id)))
+                .filter(|id| !written.contains(id) && read(id))
                 .collect();
             if ids.is_empty() {
-                HashMap::new()
-            } else {
-                self.rows_by_ids(&ids)?
-                    .into_iter()
-                    .filter_map(|r| r.id.map(|id| (id, r)))
-                    .collect()
+                continue;
             }
-        } else {
+            let stored = self.stored(&ids)?;
+            if let Some(expect) = b.expect {
+                // Taken out, so one already gone is as expected.
+                conflicts.extend(Self::conflicts(&ids, expect, &stored, |_| true));
+            }
+            if let Some(rec) = recorder.as_mut() {
+                for id in chunk {
+                    if let Some(old) = stored.get(id) {
+                        rec.deleted(old)?;
+                    }
+                }
+            }
+        }
+        // The rows it writes, as the store holds them before the batch: bounded by the batch's own
+        // rows, which it holds already.
+        let ids: Vec<RecordId> = b
+            .upsert
+            .iter()
+            .filter_map(|w| w.rec.id)
+            .filter(|id| read(id))
+            .collect();
+        let stored = if ids.is_empty() {
             HashMap::new()
+        } else {
+            self.stored(&ids)?
         };
         if let Some(expect) = b.expect {
-            Self::check_expected(&b, expect, &stored)?;
+            let taken_out: HashSet<&RecordId> =
+                b.remove.iter().filter(|id| written.contains(id)).collect();
+            conflicts.extend(Self::conflicts(&ids, expect, &stored, |id| {
+                taken_out.contains(id)
+            }));
         }
-        if let Some(note) = b.history {
-            // A purge that names no row takes out every row the store holds.
-            let cleared = if b.clear {
-                self.read_all(&mut || {})?
-            } else {
-                Vec::new()
-            };
-            super::history::record(&tx, note, &stored, &cleared, b.remove, b.upsert)?;
+        if !conflicts.is_empty() {
+            return Err(Error::Conflict { rows: conflicts });
+        }
+        if let Some(rec) = recorder.as_mut() {
+            rec.written(&stored, b.upsert)?;
         }
         {
             if b.clear {
@@ -1233,42 +1276,35 @@ impl LogDb {
         Ok(())
     }
 
-    /// [`Self::apply`]'s check, inside its transaction: every row the batch writes or takes out
-    /// that the change expects something of is still as the change's plan read it — none there
-    /// for a row put in, the same row for one changed, the same row or already gone for one
-    /// taken out.
-    /// `stored` holds the rows the store held before the batch, by id — at least every one the
-    /// change expects something of.
-    fn check_expected(
-        b: &Batch<'_>,
+    /// [`Self::apply`]'s check, inside its transaction: of `ids`, the rows the change expects
+    /// something of that are not as its plan read them — none there for a row put in, the same
+    /// row for one changed, the same row or already gone for one taken out (`taken_out`).
+    /// `stored` holds the rows the store held before the batch, by id — at least every one of
+    /// `ids` the change expects something of.
+    fn conflicts(
+        ids: &[RecordId],
         expect: &HashMap<RecordId, Expect>,
         stored: &HashMap<RecordId, QsoRecord>,
-    ) -> Result<()> {
-        let ids: Vec<RecordId> = b
-            .remove
-            .iter()
+        taken_out: impl Fn(&RecordId) -> bool,
+    ) -> Vec<RecordId> {
+        ids.iter()
             .copied()
-            .chain(b.upsert.iter().filter_map(|w| w.rec.id))
-            .filter(|id| expect.contains_key(id))
-            .collect();
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let taken_out: std::collections::HashSet<&RecordId> = b.remove.iter().collect();
-        let rows: Vec<RecordId> = ids
-            .into_iter()
-            .filter(|id| match (&expect[id], stored.get(id)) {
-                (Expect::Absent, None) => false,
-                (Expect::Absent, Some(_)) => true,
-                (Expect::Row(_), None) => !taken_out.contains(id),
-                (Expect::Row(was), Some(now)) => !same_row(was, now),
+            .filter(|id| match (expect.get(id), stored.get(id)) {
+                (None, _) | (Some(Expect::Absent), None) => false,
+                (Some(Expect::Absent), Some(_)) => true,
+                (Some(Expect::Row(_)), None) => !taken_out(id),
+                (Some(Expect::Row(was)), Some(now)) => !same_row(was, now),
             })
-            .collect();
-        if rows.is_empty() {
-            Ok(())
-        } else {
-            Err(Error::Conflict { rows })
-        }
+            .collect()
+    }
+
+    /// The rows `ids` name, as the store holds them, by id.
+    fn stored(&self, ids: &[RecordId]) -> Result<HashMap<RecordId, QsoRecord>> {
+        Ok(self
+            .rows_by_ids(ids)?
+            .into_iter()
+            .filter_map(|r| r.id.map(|id| (id, r)))
+            .collect())
     }
 
     /// Move the shared [`INDEX_SEQ`] on by one, in a transaction of its own: for a change the
@@ -1307,6 +1343,25 @@ impl LogDb {
     /// The contacts deleted and not put back, newest first, at most `limit`.
     pub fn history_deleted(&self, limit: usize) -> Result<Vec<super::history::Entry>> {
         super::history::deleted(&self.conn, limit)
+    }
+
+    /// The contacts `run` added that another run has edited or merged into since, each with the
+    /// latest such change ([`super::history::changed_after`]).
+    pub fn history_changed_after(&self, run: &str) -> Result<HashMap<RecordId, i64>> {
+        super::history::changed_after(&self.conn, run)
+    }
+
+    /// Take out of the history, in one transaction, up to `limit` of the whole contacts deletes
+    /// kept that were made before `before_ms` ([`super::history::trim`]). How many it took out:
+    /// fewer than `limit` means none is left.
+    pub fn trim_history(&mut self, before_ms: i64, limit: usize) -> Result<usize> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let taken = super::history::trim(&tx, before_ms, limit)?;
+        tx.commit()?;
+        Ok(taken)
     }
 
     /// The latest run `source` made (any source's when `None`) that changed a contact.

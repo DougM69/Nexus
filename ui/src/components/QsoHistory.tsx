@@ -40,6 +40,7 @@ function kindWord(kind: QsoHistoryEntry['kind']): string {
     case 'delete': return t('qso.history.kind.delete')
     case 'merge': return t('qso.history.kind.merge')
     case 'fill': return t('qso.history.kind.fill')
+    case 'unknown': return t('qso.history.kind.unknown')
     default: return t('qso.history.kind.edit')
   }
 }
@@ -52,11 +53,29 @@ export function utcMs(ms: number): string {
     `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}Z`
 }
 
-/** What an undo made, said in a toast — with Redo where it changed something. */
+/** How many calls a toast names before it says how many more. */
+const CALLS_SHOWN = 5
+
+/** Callsigns, as a toast lists them: the first few, then how many more. */
+function callList(calls: string[]): string {
+  const list = calls.slice(0, CALLS_SHOWN).join(', ')
+  return calls.length > CALLS_SHOWN
+    ? t('qso.history.undo.andMore', { list, count: calls.length - CALLS_SHOWN })
+    : list
+}
+
+/** What an undo made, said in a toast — with Redo where it changed something. A contact it left
+ *  as it is because it changed since, and one it did not put back because the log holds it
+ *  already, are named. */
 export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => void): void {
+  const keptCalls = answer.changedSinceCalls
+  const dupCalls = answer.duplicateCalls
   if (answer.changed === 0) {
     pushToast(
-      answer.alreadyThere > 0 ? t('qso.history.undo.alreadyThere')
+      dupCalls.length > 0 ? t('qso.history.undo.allDuplicates', { count: dupCalls.length, calls: callList(dupCalls) })
+        : answer.alreadyThere > 0 ? t('qso.history.undo.alreadyThere')
+        : keptCalls.length > 0 ? t('qso.history.undo.allKept', { count: keptCalls.length, calls: callList(keptCalls) })
+        : answer.unknownKind > 0 ? t('qso.history.undo.unknownKind')
         : answer.gone > 0 ? t('qso.history.undo.gone')
         : t('qso.history.undo.nothing'),
       'info',
@@ -65,8 +84,14 @@ export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => voi
     return
   }
   const kept = answer.kept.length ? t('qso.history.undo.kept', { fields: answer.kept.join(', ') }) : ''
+  const keptContacts = keptCalls.length
+    ? t('qso.history.undo.contactsKept', { count: keptCalls.length, calls: callList(keptCalls) })
+    : ''
+  const dups = dupCalls.length
+    ? t('qso.history.undo.duplicates', { count: dupCalls.length, calls: callList(dupCalls) })
+    : ''
   const run = answer.run
-  pushToast(`${done}${kept}`, 'success', 10_000, run ? {
+  pushToast(`${done}${kept}${keptContacts}${dups}`, 'success', 10_000, run ? {
     actionLabel: t('qso.history.redo'),
     action: () => {
       void withErrorToast(() => undoHistoryRun(run), t('qso.history.undo.failed')).then((a) => {

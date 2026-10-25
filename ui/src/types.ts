@@ -3628,6 +3628,8 @@ export interface ImportStats {
    *  STATE/COUNTRY) — invisible in the QSO count, but it is what fixes the awards. */
   updated: number
   total: number
+  /** The import's run in the log's history: what its Undo undoes, and nothing else. */
+  run?: string | null
 }
 
 /** Sequencer status for a 1:1 QSO. */
@@ -4960,6 +4962,9 @@ export interface Settings {
   doubleClickSetsTx?: boolean
   /** Tune carrier auto-release (seconds). */
   tuneTimeoutSecs?: number
+  /** Days the Logbook's history keeps a deleted contact whole for Recently deleted and Undo
+   *  (90 by default; 0 keeps them for good). Edits are kept for good regardless. */
+  historySnapshotDays?: number
   /** Field Day event: 'arrlfd' (default when empty) | 'wfd'. */
   fdEvent?: string
   /** ⭐ The entry declaration Cabrillo's `CATEGORY-OPERATOR` header states:

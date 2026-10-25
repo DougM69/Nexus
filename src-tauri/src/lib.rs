@@ -22803,16 +22803,27 @@ async fn delete_qso(
     .await
 }
 
+/// What a purge answers: how many contacts it took out, and its run in the Logbook's history —
+/// what its Undo undoes, and nothing else.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PurgeAnswer {
+    removed: usize,
+    run: String,
+}
+
 /// Purge the ENTIRE logbook — delete every contact and truncate the ADIF file to
-/// an empty log. Destructive and irreversible; the UI gates this behind an explicit
-/// confirmation dialog. Returns the number of contacts removed (for the toast).
+/// an empty log. Destructive; the UI gates this behind an explicit confirmation dialog, and
+/// every contact is kept in the history for its Undo. Returns the number of contacts removed
+/// (for the toast) and the purge's run.
 #[tauri::command]
-async fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
+async fn purge_log(state: State<'_, SharedEngine>) -> Result<PurgeAnswer, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
+        let run = tempo_app::loghistory::new_run();
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            let removed = eng.clear_logbook();
+            let removed = eng.clear_logbook_in_run(&run);
             // `clear_logbook` also resets the LoTW/eQSL sync cursors (see its doc comment:
             // an incremental cursor is a lie about an empty log). Persist that here — the
             // engine holds settings, the command layer owns the file.
@@ -22823,7 +22834,7 @@ async fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
                     format!("failed to reset the sync cursor after a purge: {e}"),
                 )
             });
-            Ok(removed)
+            Ok(PurgeAnswer { removed, run })
         })
     })
     .await
@@ -25233,13 +25244,17 @@ async fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<Imp
     // Planned with the Engine lock released and made under it (SPEC-2 v3 C19): the rows of the
     // file's calls are read off the store, never under the lock.
     durable_command(move || {
-        let (made, durability) =
-            tempo_app::logwrite::until_written(|| tempo_app::logwrite::import_adif(&engine, &text));
+        // Its run, named before it is made: the run its Undo undoes, whatever is logged meanwhile.
+        let run = tempo_app::loghistory::new_run();
+        let (made, durability) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::import_adif_in_run(&engine, &text, &run)
+        });
         let made = made.map(|(added, skipped, updated, total)| ImportStats {
             added,
             skipped,
             updated,
             total,
+            run: Some(run.clone()),
         });
         (made, durability)
     })
@@ -39106,7 +39121,6 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_by_id::delete_qso_by_id,
         log_history::qso_history,
         log_history::recently_deleted_qsos,
-        log_history::latest_history_run,
         log_history::undo_qso_change,
         log_history::undo_history_run,
         log_history::restore_deleted_qso,

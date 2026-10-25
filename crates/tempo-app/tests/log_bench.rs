@@ -264,6 +264,28 @@ fn restating(rows: &[QsoRecord], extra: &str) -> String {
     s
 }
 
+/// The process's resident memory now, in bytes, with its peak set back to it (Linux; 0 where
+/// `/proc` has no answer). [`peak_above`] then reads how far the peak rose past it.
+fn resident() -> u64 {
+    let _ = std::fs::write("/proc/self/clear_refs", "5");
+    proc_status("VmRSS:")
+}
+
+/// How far the process's peak resident memory has risen above `rss` ([`resident`]).
+fn peak_above(rss: u64) -> u64 {
+    proc_status("VmHWM:").saturating_sub(rss)
+}
+
+fn proc_status(key: &str) -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            let line = s.lines().find(|l| l.starts_with(key))?.to_string();
+            line.split_whitespace().nth(1)?.parse::<u64>().ok()
+        })
+        .map_or(0, |kib| kib * 1024)
+}
+
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1e3
 }
@@ -634,19 +656,44 @@ fn bench(n: usize) -> Vec<String> {
     // Last, since it ends the log: the purge, through the command's own entry point — made
     // under the lock with its changes' tickets collected, and waited for with the lock released —
     // and what the engine's log holds once it is done.
+    let rss = resident();
     let started = Instant::now();
     let (removed, d) = engine_lock(&shared).with_log_tickets(|e| e.clear_logbook());
     wait(d);
     settle(&shared);
     let purged = started.elapsed();
+    let purge_peak = peak_above(rss);
     hold("the purge", &watcher);
-    drop(watcher);
     println!(
         "  purged {removed} contacts in {:.1} s, until on disk; the engine's log then holds {:.1} \
-         MiB of Rust heap",
+         MiB of Rust heap; the process's peak resident memory rose {:.0} MB",
         purged.as_secs_f64(),
-        mib(LIVE.load(Ordering::SeqCst) - base)
+        mib(LIVE.load(Ordering::SeqCst) - base),
+        purge_peak as f64 / 1e6
     );
+
+    // And the purge undone: every contact put back from its history, in one transaction.
+    let run = tempo_app::loghistory::latest_run(
+        &shared,
+        Some(tempo_core::logbook::history::Source::Operator),
+    )
+    .expect("reads")
+    .expect("the purge's run");
+    let rss = resident();
+    let started = Instant::now();
+    let (undone, d) = tempo_app::loghistory::undo_run(&shared, &run.run);
+    let undone = undone.expect("undone");
+    wait(d);
+    settle(&shared);
+    println!(
+        "  the purge undone: {} contacts back in {:.1} s, until on disk; the process's peak \
+         resident memory rose {:.0} MB",
+        undone.changed,
+        started.elapsed().as_secs_f64(),
+        peak_above(rss) as f64 / 1e6
+    );
+    hold("the purge undone (one transaction)", &watcher);
+    drop(watcher);
 
     println!(
         "  longest Engine-lock hold, by path (the bound is {:.0} ms), with how many holds the \

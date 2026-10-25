@@ -28,10 +28,33 @@
 //! call made by an edit is queued to the connectors at once (`requeue_if_corrected`); an undo's is
 //! not.
 //!
+//! **What the undo of a run leaves alone**, and names in the answer ([`Undone`]):
+//!
+//! - a contact the run added that has been edited or confirmed since, by any other run (the
+//!   operator, a download, a later import — not the fill job, nor an undo): it stays
+//!   ([`CannotUndo::ChangedSince`]);
+//! - a contact it would put back that the log holds already under another id — the same station,
+//!   band and mode within the log's duplicate window, as `log_qso`'s guard asks — re-imported or
+//!   downloaded since: it is not put back twice ([`CannotUndo::Duplicate`], asked of the hot index
+//!   under the lock, [`crate::station::StationCore::commit_undo`]);
+//! - an entry of a kind a later build recorded ([`CannotUndo::UnknownKind`]).
+//!
+//! **A run is undone by its id**, which the change that made it hands back — an import's
+//! ([`crate::logwrite::import_adif_in_run`]), a purge's
+//! ([`crate::engine::Engine::clear_logbook_in_run`]), an undo's own for its redo — never by "the
+//! latest run of a kind" ([`latest_run`], kept for display): a contact a companion program or the
+//! FT sequencer logs a moment later is the latest import, or the latest of the operator's.
+//!
+//! **The history lives in the store.** On the fallback path (1.13's: the log kept in `log.adi`,
+//! its rows in a store in memory, `crate::logstore`) the history is in that memory store too, and
+//! it ends with the session: Recently deleted is empty after a restart and nothing from an earlier
+//! session can be undone. No contact is lost by it — `log.adi` holds the log — only the means to
+//! undo what was done before the restart.
+//!
 //! Not undone here: the contest log's own row (Field Day's journal) — an undo changes the general
 //! log only.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -183,6 +206,9 @@ pub struct Undone {
     pub kept: Vec<(RecordId, String)>,
     /// Contacts it could not change, and why.
     pub refused: Vec<(RecordId, CannotUndo)>,
+    /// The call of each contact it could not change that the log holds or would have held, so
+    /// the answer can name it.
+    pub calls: HashMap<RecordId, String>,
 }
 
 /// Undo the entry `seq`.
@@ -227,12 +253,21 @@ pub fn undo_run(engine: &Mutex<Engine>, run: &str) -> (Result<Undone, String>, D
 }
 
 /// What undoing `entries` makes of the contacts they name, as `rows` holds them: a pair per
-/// contact that changes, the widest class among them, and the answer.
+/// contact that changes, the widest class among them, and the answer. `later` holds, for each
+/// contact an entry added, the latest edit or merge another run made to it since
+/// ([`tempo_core::logbook::history::changed_after`]): such a contact is kept, not taken out.
+///
+/// Linear in the entries: each contact's are found through one index of them, built once.
 fn plan_undo(
     entries: &[Entry],
     ids: &[RecordId],
     rows: &HashMap<RecordId, Arc<QsoRecord>>,
+    later: &HashMap<RecordId, i64>,
 ) -> (Vec<RowPair>, OpClass, HashMap<RecordId, i64>, Undone) {
+    let mut by_id: HashMap<RecordId, Vec<&Entry>> = HashMap::with_capacity(ids.len());
+    for e in entries {
+        by_id.entry(e.qso_id).or_default().push(e);
+    }
     let mut changed: Vec<RowPair> = Vec::new();
     let mut put_back: Vec<RowPair> = Vec::new();
     let mut undoes = HashMap::new();
@@ -243,8 +278,15 @@ fn plan_undo(
         let mut now: Option<QsoRecord> = before.as_deref().cloned();
         let mut moved = false;
         // Latest first: the run's changes to one contact come off in the order they went on.
-        for e in entries.iter().rev().filter(|e| e.qso_id == *id) {
-            match history::undo(e, now.as_ref()) {
+        for e in by_id.get(id).into_iter().flatten().rev() {
+            let undo = match (e.kind, now.as_ref()) {
+                // Added by the entry and edited or confirmed since: it stays.
+                (Kind::Create, Some(_)) if later.get(id).is_some_and(|&seq| seq > e.seq) => {
+                    Err(CannotUndo::ChangedSince)
+                }
+                _ => history::undo(e, now.as_ref()),
+            };
+            match undo {
                 Ok(Undo::Remove(_)) => now = None,
                 Ok(Undo::Restore(row)) => now = Some(row),
                 Ok(Undo::Revert { row, kept }) => {
@@ -253,6 +295,9 @@ fn plan_undo(
                 }
                 Err(why) => {
                     answer.refused.push((*id, why));
+                    if let Some(row) = now.as_ref() {
+                        answer.calls.insert(*id, row.call.clone());
+                    }
                     continue;
                 }
             }
@@ -285,10 +330,24 @@ fn undo_entries(
     entries: &[Entry],
     whole: bool,
 ) -> (Result<Undone, String>, Durability) {
-    let mut ids: Vec<RecordId> = Vec::new();
-    for e in entries {
-        if !ids.contains(&e.qso_id) {
-            ids.push(e.qso_id);
+    let mut seen = HashSet::with_capacity(entries.len());
+    let ids: Vec<RecordId> = entries
+        .iter()
+        .map(|e| e.qso_id)
+        .filter(|id| seen.insert(*id))
+        .collect();
+    // The contacts an entry added that another run changed since, read once: the history only
+    // grows, and a change made between this read and the undo is the plan's to catch.
+    let runs: BTreeSet<&str> = entries
+        .iter()
+        .filter(|e| e.kind == Kind::Create)
+        .map(|e| e.run.as_str())
+        .collect();
+    let mut later = HashMap::new();
+    for run in runs {
+        match read(engine, |db| db.history_changed_after(run)) {
+            Ok(found) => later.extend(found),
+            Err(e) => return (Err(e), Durability::default()),
         }
     }
     let run = new_run();
@@ -298,7 +357,7 @@ fn undo_entries(
             Ok(rows) => rows,
             Err(e) => return (Err(e), Durability::default()),
         };
-        let (pairs, class, undoes, mut answer) = plan_undo(entries, &ids, &rows);
+        let (pairs, class, undoes, mut answer) = plan_undo(entries, &ids, &rows, &later);
         if pairs.is_empty() {
             return (Ok(answer), Durability::default());
         }
@@ -316,10 +375,24 @@ fn undo_entries(
                 .commit_undo(&plan, class, pairs.clone(), origin.clone());
             // Taken by the change it was set for — or by none, when the plan went stale.
             e.station_mut().origin = None;
-            made.is_ok()
+            made.ok()
+                .map(|(ticket, duplicates)| (ticket.is_some(), duplicates))
         });
-        if made {
-            answer.run = Some(run);
+        if let Some((committed, duplicates)) = made {
+            // The contacts the log already held under another id were left out of it.
+            let left_out: HashSet<RecordId> = duplicates.iter().copied().collect();
+            let names: HashMap<RecordId, String> = pairs
+                .iter()
+                .filter_map(|(_, a)| a.as_ref())
+                .filter_map(|a| Some((a.id?, a.call.clone())))
+                .filter(|(id, _)| left_out.contains(id))
+                .collect();
+            answer.changed -= duplicates.len();
+            answer
+                .refused
+                .extend(duplicates.iter().map(|id| (*id, CannotUndo::Duplicate)));
+            answer.calls.extend(names);
+            answer.run = committed.then_some(run);
             return (Ok(answer), durability);
         }
     }

@@ -710,6 +710,19 @@ type CopyRequest = (
     std::sync::mpsc::SyncSender<std::result::Result<u64, String>>,
 );
 
+/// A trim of the history (see [`LogWriter::trim_history`]): the time before which a delete's
+/// whole contact goes, how many it has taken out so far, and who hears how many once it is done.
+type TrimRequest = (
+    i64,
+    usize,
+    std::sync::mpsc::SyncSender<std::result::Result<usize, String>>,
+);
+
+/// How many of the history's whole contacts one step of a trim takes out, in one transaction of
+/// its own ([`LogWriter::trim_history`]): a few milliseconds of the store's lock, between the
+/// changes the writer is handed.
+const TRIM_ROWS: usize = 2_000;
+
 /// Rows a change takes out that its sender does not list: named by a function the writer calls on
 /// its own thread when the change arrives, so the list is made in the order the change was sent,
 /// and never under the lock the sender sends from (SPEC-2 v3 §4.11). The operator's Clear is sent
@@ -758,6 +771,8 @@ enum Msg {
     /// A change and the rows it takes out besides its own `remove` ([`RemoveLater`]).
     WriteRemovingLater(Box<Change>, Arc<Slot>, RemoveLater),
     Copy(CopyRequest),
+    /// Take the history's old whole contacts out ([`LogWriter::trim_history`]).
+    Trim(TrimRequest),
     /// Look for another process's commits now, and answer with the count
     /// ([`LogWriter::foreign_commits_now`]).
     Foreign(std::sync::mpsc::SyncSender<u64>),
@@ -1088,6 +1103,23 @@ impl LogWriter {
         HeldLooks(&self.shared.looks)
     }
 
+    /// Take out of the history every whole contact a delete kept before `before_ms`
+    /// ([`LogDb::trim_history`]) FROM THE WRITER THREAD, [`TRIM_ROWS`] at a time in a transaction
+    /// each, while it has no change to write: a change handed over meanwhile waits for one step
+    /// at most. Never waits; the answer — how many it took out — comes on the channel handed back,
+    /// which a caller may drop. A writer stopping drops what it has not done, and the next trim
+    /// finishes it.
+    pub fn trim_history(
+        &self,
+        before_ms: i64,
+    ) -> std::sync::mpsc::Receiver<std::result::Result<usize, String>> {
+        let (reply, answer) = std::sync::mpsc::sync_channel(1);
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(Msg::Trim((before_ms, 0, reply)));
+        }
+        answer
+    }
+
     /// Copy the database to `dst` ([`sqlite::copy_database`]) FROM THE WRITER THREAD, after
     /// every change submitted before this call is written, and with none written while it
     /// runs. The data-folder move uses this while the store is open: a copy taken beside a
@@ -1409,6 +1441,8 @@ fn pump(
     // Copies wait for the queue ahead of them to empty: a copy must hold every change
     // submitted before it was asked for.
     let mut copies: VecDeque<CopyRequest> = VecDeque::new();
+    // Trims of the history, a step at a time while there is nothing else to write.
+    let mut trims: VecDeque<TrimRequest> = VecDeque::new();
     // Callers waiting for a look at other processes' commits ([`LogWriter::foreign_commits_now`]).
     let mut looks: Vec<std::sync::mpsc::SyncSender<u64>> = Vec::new();
     // Where counting other processes' commits starts: the baseline read before this thread ran
@@ -1447,6 +1481,7 @@ fn pump(
                     queue.push_back(Job::removing_later(*c, slot, later));
                 }
                 Ok(Msg::Copy(request)) => copies.push_back(request),
+                Ok(Msg::Trim(request)) => trims.push_back(request),
                 Ok(Msg::Foreign(reply)) => looks.push(reply),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -1474,6 +1509,27 @@ fn pump(
             if closed {
                 return;
             }
+            // One step of a trim, then back to the top: a change handed over meanwhile is written
+            // before the next step.
+            if let Some((before_ms, taken, _)) = trims.front_mut() {
+                io_fence::on_log_lane("a trim of the logbook's history");
+                let step = db.trim_history(*before_ms, TRIM_ROWS);
+                if let Ok(n) = step {
+                    *taken += n;
+                }
+                if !matches!(step, Ok(n) if n == TRIM_ROWS) {
+                    let (_, taken, reply) = trims.pop_front().expect("the trim just stepped");
+                    let outcome = step.map(|_| taken).map_err(|e| e.to_string());
+                    if let Err(why) = &outcome {
+                        applog::info(
+                            "logdb",
+                            &format!("the logbook's history was not trimmed this time: {why}"),
+                        );
+                    }
+                    let _ = reply.send(outcome);
+                }
+                continue;
+            }
             match rx.recv_timeout(FOREIGN_POLL) {
                 Ok(Msg::Write(c, slot)) => {
                     unresolved.insert(c.rev);
@@ -1484,6 +1540,7 @@ fn pump(
                     queue.push_back(Job::removing_later(*c, slot, later));
                 }
                 Ok(Msg::Copy(request)) => copies.push_back(request),
+                Ok(Msg::Trim(request)) => trims.push_back(request),
                 Ok(Msg::Foreign(reply)) => looks.push(reply),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,

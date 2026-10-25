@@ -15,9 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not changed since; an undo is itself a change, so it can be redone. **Recently deleted** in the
   Logbook lists deleted contacts with **Restore**, which brings one back exactly as it was. After a
   delete, an import or a purge, the message offers **Undo**, and a whole import or purge is undone in
-  one step. The history is kept in the logbook database, so it survives a restart. An undo never
-  sends anything to QRZ, Club Log, eQSL or LoTW; an undo that changes a callsign marks the contact to
-  be sent again with your next upload, as correcting a callsign does.
+  one step — that import or purge, and never a contact logged after it. An undo never puts a contact
+  back that the log already holds again, and an import's undo keeps any contact you have edited, or
+  that has been confirmed, since; the message names both. The history is kept in the logbook
+  database, so it survives a restart. Every edit is kept for good; a deleted or purged contact's full
+  copy is kept for 90 days, which **Keep deleted contacts for (days)** under Settings › Config ›
+  Data & log folder changes. An undo never sends anything to QRZ, Club Log, eQSL or LoTW; an undo that
+  changes a callsign marks the contact to be sent again with your next upload, as correcting a
+  callsign does.
 - **Logbook columns.** A Columns button replaces "More columns": show or hide each column, drag a column's edge to resize it, and the choice is kept in your settings. New columns show what the log already stored: their grid, IOTA, county, CQ and ITU zones, continent, distance, the QSL sent and received dates, each service's upload state and the contest exchange; IOTA can now be edited, and the contact view shows these too.
 - **JTTY sends from a remote computer.** Driving a station from another computer, JTTY's Send,
   F-keys, live typing and sign-off now transmit, under the same guards and Stop as the other remote

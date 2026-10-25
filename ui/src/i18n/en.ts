@@ -1894,6 +1894,7 @@ export const EN = {
   'qso.history.kind.delete': 'Deleted',
   'qso.history.kind.merge': 'Merged',
   'qso.history.kind.fill': 'Filled',
+  'qso.history.kind.unknown': 'Changed by a newer Nexus',
   'qso.history.source.operator': 'you',
   'qso.history.source.import': 'import',
   'qso.history.source.fill': 'automatic fill',
@@ -1911,6 +1912,25 @@ export const EN = {
   'qso.history.undo.gone': 'Nothing to undo: that contact is no longer in the log.',
   'qso.history.undo.alreadyThere': 'Nothing to restore: that contact is already in the log.',
   'qso.history.undo.failed': 'The change could not be undone.',
+  // `{{calls}}` is a list of callsigns (tokens), cut short with `qso.history.undo.andMore`.
+  'qso.history.undo.contactsKept': {
+    one: '; {{calls}} was changed since, and kept',
+    other: '; {{count}} contacts changed since were kept: {{calls}}',
+  },
+  'qso.history.undo.duplicates': {
+    one: '; {{calls}} is in the log already, and was not put back twice',
+    other: '; {{count}} contacts in the log already were not put back twice: {{calls}}',
+  },
+  'qso.history.undo.allKept': {
+    one: 'Nothing undone: {{calls}} was changed since, and kept.',
+    other: 'Nothing undone: {{count}} contacts were changed since, and kept: {{calls}}.',
+  },
+  'qso.history.undo.allDuplicates': {
+    one: 'Nothing put back: {{calls}} is in the log already.',
+    other: 'Nothing put back: {{count}} contacts are in the log already: {{calls}}.',
+  },
+  'qso.history.undo.unknownKind': 'That change was made by a newer version of Nexus, so this one cannot undo it.',
+  'qso.history.undo.andMore': '{{list}} and {{count}} more',
   // A change to one contact that was NOT made: after this window read the contact it was changed
   // — in another window (a Remote browser), or by a sync filling in a blank field — or deleted.
   // Nothing was written, and the list (or the edit form) now shows the contact as it is.
@@ -9299,6 +9319,9 @@ export const EN = {
   'settings.dataFolder.reset': 'Use the default folder',
   'settings.dataFolder.reset.title': 'Forget the chosen folder and go back to the default one at the next start. Nothing is deleted.',
   'settings.dataFolder.restart': 'A new folder is used the next time Nexus starts. Nothing is ever moved or deleted — your old folder stays as it is.',
+  'settings.dataFolder.snapshots.label': 'Keep deleted contacts for (days)',
+  'settings.dataFolder.snapshots.hint':
+    "How long Recently deleted and Undo can put back a deleted or purged contact. After that, the logbook's copy of it is removed when Nexus starts. Every edit's old and new values are kept for good. 0 keeps deleted contacts for good too.",
   'settings.dataFolder.copied': 'Copied {{files}} files ({{bytes}} bytes) and checked every one against the original. Nexus uses the new folder the next time it starts.',
   'settings.dataFolder.chosen': 'Saved. Nexus uses the new folder the next time it starts.',
   'settings.dataFolder.failed': 'Could not change the data folder',

@@ -16,7 +16,7 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('../api', () => api)
 
-import { QsoHistory } from './QsoHistory'
+import { QsoHistory, sayUndone } from './QsoHistory'
 import { RecentlyDeleted } from './RecentlyDeleted'
 
 let toasts: Toast[] = []
@@ -42,7 +42,10 @@ const entry = (over: Partial<QsoHistoryEntry>): QsoHistoryEntry => ({
   ...over,
 })
 
-const done = { changed: 1, run: 'undo-run', kept: [], gone: 0, alreadyThere: 0, changedSince: 0 }
+const done = {
+  changed: 1, run: 'undo-run', kept: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0,
+  unknownKind: 0, changedSinceCalls: [] as string[], duplicateCalls: [] as string[],
+}
 
 describe("a contact's history", () => {
   it('lists each change newest first, who made it and the fields it changed, old → new', async () => {
@@ -78,6 +81,21 @@ describe("a contact's history", () => {
     expect(toast?.actionLabel).toBe('Redo')
     toast?.action?.()
     await waitFor(() => expect(api.undoHistoryRun).toHaveBeenCalledWith('undo-run'))
+  })
+
+  it('names the contacts an undo left because they changed since, and those the log holds already', () => {
+    sayUndone({
+      ...done, changed: 2, changedSince: 1, duplicate: 7,
+      changedSinceCalls: ['N0IMP'],
+      duplicateCalls: ['K0AA', 'K1AA', 'K2AA', 'K3AA', 'K4AA', 'K5AA', 'K6AA'],
+    }, 'Import undone', () => {})
+    const said = toasts.find((x) => x.message.startsWith('Import undone'))?.message ?? ''
+    expect(said).toContain('N0IMP was changed since, and kept')
+    expect(said).toContain('7 contacts in the log already were not put back twice: K0AA, K1AA, K2AA, K3AA, K4AA and 2 more')
+    sayUndone({ ...done, changed: 0, run: null, duplicate: 1, duplicateCalls: ['K2ABC'] }, 'Restored K2ABC', () => {})
+    expect(toasts.some((x) => x.message === 'Nothing put back: K2ABC is in the log already.')).toBe(true)
+    sayUndone({ ...done, changed: 0, run: null, unknownKind: 1 }, 'Change undone', () => {})
+    expect(toasts.some((x) => x.message.startsWith('That change was made by a newer version'))).toBe(true)
   })
 
   it('shows an undone change as undone, with no Undo of its own', async () => {

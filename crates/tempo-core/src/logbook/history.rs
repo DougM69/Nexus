@@ -40,16 +40,28 @@
 //! [`Source::Undo`] and a link to the entry it undoes, so it can itself be undone (a redo).
 //! What it does to the contact, as it stands now ([`undo`]):
 //!
-//! - a new contact: removed;
-//! - a deleted one: put back, whole, under its own id;
+//! - a new contact: removed — **unless it has been edited or confirmed since** (a later edit or
+//!   merge by any other run, [`changed_after`]), which keeps it, named in the answer;
+//! - a deleted one: put back, whole, under its own id — **unless the log holds it already** under
+//!   another id (the log's own duplicate rule), which the app checks against its index when it
+//!   makes the undo, and refuses as [`CannotUndo::Duplicate`];
 //! - an edit: each field it changed goes back, **but only a field still holding what the change
 //!   wrote**. A field changed again since keeps the later value; an undo whose every field was
-//!   changed since is refused rather than made as nothing.
+//!   changed since is refused rather than made as nothing;
+//! - an entry of a kind this build does not know (a later build wrote it): refused, never taken
+//!   for an edit.
 //!
 //! An undo never touches an upload stamp, with the one exception the edit rule already makes: an
 //! undo that changes the callsign clears the stamps, as a corrected call does
 //! ([`super::edited`]), so the contact is owed to the services under the call it now carries.
 //! Nothing here sends anything anywhere.
+//!
+//! # How long it is kept
+//!
+//! An edit's fields, a new contact, a merge and a fill are kept for as long as the log is. A
+//! delete's whole contact is the bulk of the history (about 1 KB a contact, against tens of bytes
+//! for an edit), so it is kept for a number of days the operator sets ([`SNAPSHOT_DAYS`] by
+//! default) and then taken out in bounded chunks by the writer, between changes ([`trim`]).
 //!
 //! # Older builds
 //!
@@ -58,7 +70,7 @@
 //! recorded, and an undo made afterwards meets the contact as that build left it — which the
 //! field-by-field rule above already answers.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -165,6 +177,9 @@ pub enum Kind {
     Merge,
     /// An empty field of it was filled.
     Fill,
+    /// A kind this build does not know: written by a later one. Shown, never undone — what it
+    /// did to the contact is that build's to say.
+    Unknown(i64),
 }
 
 impl Kind {
@@ -175,16 +190,18 @@ impl Kind {
             Kind::Delete => 2,
             Kind::Merge => 3,
             Kind::Fill => 4,
+            Kind::Unknown(code) => code,
         }
     }
 
     fn of_code(code: i64) -> Kind {
         match code {
             0 => Kind::Create,
+            1 => Kind::Edit,
             2 => Kind::Delete,
             3 => Kind::Merge,
             4 => Kind::Fill,
-            _ => Kind::Edit,
+            _ => Kind::Unknown(code),
         }
     }
 
@@ -196,6 +213,7 @@ impl Kind {
             Kind::Delete => "delete",
             Kind::Merge => "merge",
             Kind::Fill => "fill",
+            Kind::Unknown(_) => "unknown",
         }
     }
 }
@@ -349,83 +367,105 @@ pub fn diff(old: &QsoRecord, new: &QsoRecord) -> Option<(String, String)> {
     (!before.is_empty() || !after.is_empty()).then_some((before, after))
 }
 
-/// Write the history of one chunk of a change, inside the chunk's transaction.
-///
-/// `stored` holds the rows as the store held them before the chunk, by id — every row the chunk
-/// takes out or writes that the store held. `cleared` is every row a purge that named none took
-/// out. A row both taken out and written is an edit.
-pub(crate) fn record(
-    conn: &Connection,
-    note: &Note,
-    stored: &HashMap<RecordId, QsoRecord>,
-    cleared: &[QsoRecord],
-    remove: &[RecordId],
-    upsert: &[RowWrite],
-) -> Result<()> {
-    let written: HashMap<RecordId, &QsoRecord> = upsert
-        .iter()
-        .filter_map(|w| Some((w.rec.id?, &*w.rec)))
-        .collect();
-    let mut rows: Vec<(RecordId, Kind, Option<String>, Option<String>)> = Vec::new();
-    let mut gone = |id: RecordId, old: &QsoRecord| {
-        if !written.contains_key(&id) {
-            rows.push((
+/// Writes the history of one chunk of a change, inside the chunk's transaction, a contact at a
+/// time: nothing is held beyond the contact being written, so a purge of the whole log costs the
+/// memory of one of its rows, not of the log ([`super::sqlite::LogDb::apply`] reads the rows it
+/// takes out a bounded chunk at a time). Its run's row is written with its first entry, so a
+/// change that recorded nothing leaves no run either.
+pub(crate) struct Recorder<'a> {
+    conn: &'a Connection,
+    note: &'a Note,
+    /// The ids the chunk writes: a row taken out and written again is an edit, not a delete.
+    written: &'a HashSet<RecordId>,
+    run_id: Option<i64>,
+}
+
+impl<'a> Recorder<'a> {
+    pub(crate) fn new(
+        conn: &'a Connection,
+        note: &'a Note,
+        written: &'a HashSet<RecordId>,
+    ) -> Recorder<'a> {
+        Recorder {
+            conn,
+            note,
+            written,
+            run_id: None,
+        }
+    }
+
+    /// `old`, as the store held it, taken out by the chunk.
+    pub(crate) fn deleted(&mut self, old: &QsoRecord) -> Result<()> {
+        match old.id {
+            Some(id) if !self.written.contains(&id) => self.entry(
                 id,
                 Kind::Delete,
-                Some(super::adif_record_own_log(old)),
+                Some(&super::adif_record_own_log(old)),
                 None,
-            ));
-        }
-    };
-    for old in cleared {
-        if let Some(id) = old.id {
-            gone(id, old);
+            ),
+            _ => Ok(()),
         }
     }
-    for id in remove {
-        if let Some(old) = stored.get(id) {
-            gone(*id, old);
-        }
-    }
-    for w in upsert {
-        let Some(id) = w.rec.id else { continue };
-        match stored.get(&id) {
-            None => rows.push((id, Kind::Create, None, None)),
-            Some(old) => {
-                if let Some((before, after)) = diff(old, &w.rec) {
-                    rows.push((id, note.edit, Some(before), Some(after)));
+
+    /// The rows the chunk writes, against `stored`, the rows the store held before it by id: a
+    /// row it did not hold is new, one it did is an edit of the fields that changed.
+    pub(crate) fn written(
+        &mut self,
+        stored: &HashMap<RecordId, QsoRecord>,
+        upsert: &[RowWrite],
+    ) -> Result<()> {
+        for w in upsert {
+            let Some(id) = w.rec.id else { continue };
+            match stored.get(&id) {
+                None => self.entry(id, Kind::Create, None, None)?,
+                Some(old) => {
+                    if let Some((before, after)) = diff(old, &w.rec) {
+                        self.entry(id, self.note.edit, Some(&before), Some(&after))?;
+                    }
                 }
             }
         }
+        Ok(())
     }
-    if rows.is_empty() {
-        return Ok(());
+
+    fn entry(
+        &mut self,
+        id: RecordId,
+        kind: Kind,
+        before: Option<&str>,
+        after: Option<&str>,
+    ) -> Result<()> {
+        let run_id = match self.run_id {
+            Some(run_id) => run_id,
+            None => {
+                self.conn.execute(
+                    "INSERT INTO history_run (run, at_ms, source) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(run) DO NOTHING",
+                    params![self.note.run, self.note.at_ms, self.note.source.code()],
+                )?;
+                let run_id: i64 = self.conn.query_row(
+                    "SELECT id FROM history_run WHERE run = ?1",
+                    [&self.note.run],
+                    |r| r.get(0),
+                )?;
+                *self.run_id.insert(run_id)
+            }
+        };
+        self.conn
+            .prepare_cached(
+                "INSERT INTO qso_history (run_id, qso_id, kind, undoes, before, after)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?
+            .execute(params![
+                run_id,
+                id.to_string(),
+                kind.code(),
+                self.note.undoes.get(&id),
+                before,
+                after
+            ])?;
+        Ok(())
     }
-    conn.execute(
-        "INSERT INTO history_run (run, at_ms, source) VALUES (?1, ?2, ?3)
-         ON CONFLICT(run) DO NOTHING",
-        params![note.run, note.at_ms, note.source.code()],
-    )?;
-    let run_id: i64 = conn.query_row(
-        "SELECT id FROM history_run WHERE run = ?1",
-        [&note.run],
-        |r| r.get(0),
-    )?;
-    let mut ins = conn.prepare_cached(
-        "INSERT INTO qso_history (run_id, qso_id, kind, undoes, before, after)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-    )?;
-    for (id, kind, before, after) in rows {
-        ins.execute(params![
-            run_id,
-            id.to_string(),
-            kind.code(),
-            note.undoes.get(&id),
-            before,
-            after
-        ])?;
-    }
-    Ok(())
 }
 
 const SELECT: &str = "SELECT h.seq, h.qso_id, h.kind, r.run, r.at_ms, r.source, h.undoes, \
@@ -499,6 +539,78 @@ pub(crate) fn deleted(conn: &Connection, limit: usize) -> Result<Vec<Entry>> {
     )
 }
 
+/// The contacts `run` added that a later change edited or merged into since — the operator's, a
+/// download's, an import's, from any other run — each with the latest such change's place in the
+/// order. What an undo of the run must not take out without a word ([`CannotUndo::ChangedSince`]).
+/// Not counted: an undo (a redo of the operator's own), and the fill job's country and state,
+/// which the log derives from the contact itself.
+pub(crate) fn changed_after(conn: &Connection, run: &str) -> Result<HashMap<RecordId, i64>> {
+    let sql = format!(
+        "SELECT h.qso_id, MAX(h.seq) FROM qso_history h JOIN history_run r ON r.id = h.run_id \
+         WHERE h.kind IN ({edit}, {merge}) AND r.run <> ?1 \
+           AND r.source NOT IN ('{undo}', '{fill}') \
+           AND h.qso_id IN (SELECT x.qso_id FROM qso_history x \
+                            JOIN history_run y ON y.id = x.run_id \
+                            WHERE y.run = ?1 AND x.kind = {create}) \
+         GROUP BY h.qso_id",
+        edit = Kind::Edit.code(),
+        merge = Kind::Merge.code(),
+        create = Kind::Create.code(),
+        undo = Source::Undo.code(),
+        fill = Source::Fill.code(),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([run], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (id, seq) = row?;
+        if let Ok(id) = id.parse::<RecordId>() {
+            out.insert(id, seq);
+        }
+    }
+    Ok(out)
+}
+
+/// How long a whole contact a delete kept stays in the history, by default: 90 days. An edit's
+/// fields are kept for as long as the log is.
+pub const SNAPSHOT_DAYS: u32 = 90;
+
+/// Take out of the history, in one transaction of the caller's, up to `limit` of the whole
+/// contacts deletes kept ([`Kind::Delete`]) that were made before `before_ms`, and the runs left
+/// with no entry. How many it took out: fewer than `limit` means none is left to take.
+///
+/// Only a delete's entry holds a whole contact; every other kind — an edit's fields, a new
+/// contact, a merge, a fill — is never touched, however old. A contact deleted that long ago is
+/// then gone from Recently deleted, and an undo of the run that deleted it finds nothing to put
+/// back.
+pub(crate) fn trim(conn: &Connection, before_ms: i64, limit: usize) -> Result<usize> {
+    let picked: Vec<(i64, i64)> = {
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT h.seq, h.run_id FROM qso_history h JOIN history_run r ON r.id = h.run_id \
+             WHERE h.kind = {delete} AND r.at_ms < ?1 ORDER BY h.seq LIMIT ?2",
+            delete = Kind::Delete.code()
+        ))?;
+        let rows = stmt.query_map(
+            params![before_ms, i64::try_from(limit).unwrap_or(i64::MAX)],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let mut drop_entry = conn.prepare_cached("DELETE FROM qso_history WHERE seq = ?1")?;
+    for (seq, _) in &picked {
+        drop_entry.execute([seq])?;
+    }
+    let runs: BTreeSet<i64> = picked.iter().map(|(_, run)| *run).collect();
+    let mut drop_run = conn.prepare_cached(
+        "DELETE FROM history_run WHERE id = ?1 \
+         AND NOT EXISTS (SELECT 1 FROM qso_history WHERE run_id = ?1)",
+    )?;
+    for run in runs {
+        drop_run.execute([run])?;
+    }
+    Ok(picked.len())
+}
+
 /// A run, as a toast or a menu names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSummary {
@@ -560,8 +672,15 @@ pub enum CannotUndo {
     Gone,
     /// The contact is in the log already: there is nothing to put back.
     AlreadyThere,
-    /// Every field the entry changed has been changed again since.
+    /// Every field the entry changed has been changed again since — or, for a contact the entry
+    /// added, the contact has been edited or confirmed since, and stays.
     ChangedSince,
+    /// The contact it would put back is in the log already under another id: the same station,
+    /// band and mode within the log's duplicate window ([`super::dedup::is_recent_duplicate`]).
+    /// Put back, it would be a duplicate.
+    Duplicate,
+    /// The entry is of a kind this build does not know ([`Kind::Unknown`]).
+    UnknownKind,
 }
 
 /// What undoing `entry` does to its contact, `current` — the contact as the log now holds it, or
@@ -583,10 +702,21 @@ pub fn undo(entry: &Entry, current: Option<&QsoRecord>) -> std::result::Result<U
             let current = current.ok_or(CannotUndo::Gone)?;
             revert(entry, current)
         }
+        Kind::Unknown(_) => Err(CannotUndo::UnknownKind),
     }
 }
 
 /// [`undo`] of an edit: each changed field back where it still holds what the edit wrote.
+///
+/// **An edit of the callsign, undone.** A corrected call ([`super::edited`]) clears the
+/// contact's confirmations, credits, entity and state, its upload stamps and its
+/// `LOTW_QSL_SENT`, and the edit records each of those fields but the stamps, which are never
+/// history. Its undo therefore puts the call back with the confirmations and credits the old call
+/// held, and leaves the stamps cleared and `LOTW_QSL_SENT` off: the contact is owed again to every
+/// service under the call it now carries, and goes with the next upload. A service that already
+/// holds it under that call answers that upload as a duplicate; nothing is claimed sent that was
+/// not. Deliberate: the stamps belonged to the contact as it stood before
+/// the undo, and a stamp is only ever written by a service's answer.
 fn revert(entry: &Entry, current: &QsoRecord) -> std::result::Result<Undo, CannotUndo> {
     let mut now = fields(&super::adif_record_own_log(current));
     let mut kept = Vec::new();

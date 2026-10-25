@@ -30596,7 +30596,26 @@ contact yourself."
         let rows = self.station.attach_store(opened);
         // A fresh log, whose ids start without the position id — as after `set_log_path`.
         self.sync_log_posid();
+        self.trim_log_history();
         rows
+    }
+
+    /// Have the store's writer take out of the history the whole contacts deletes kept longer
+    /// ago than Settings keeps them ([`crate::settings::Settings::history_snapshot_days`]; 0 keeps
+    /// them for good) — in the background, a bounded step at a time between the log's changes
+    /// ([`tempo_core::logbook::writer::LogWriter::trim_history`]). An edit's fields are never
+    /// taken out. Made at each launch, once the log is attached. Never waits.
+    pub fn trim_log_history(&self) {
+        let days = self.settings.history_snapshot_days;
+        if days == 0 {
+            return;
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        let before_ms = now_ms.saturating_sub(i64::from(days) * 86_400_000);
+        // The answer is not waited for: the next launch finishes what this one could not.
+        drop(self.station.store.writer().trim_history(before_ms));
     }
 
     /// Whether switching to `spec` opens a contest session: a Field Day mode entered from any
@@ -31184,6 +31203,20 @@ contact yourself."
         self.settings.lotw_sweep_year = 0;
         self.settings.lotw_sweep_since.clear();
         self.settings.eqsl_last_sync.clear();
+        removed
+    }
+
+    /// [`Self::clear_logbook`], recorded in the history under `run`
+    /// ([`crate::loghistory::new_run`]) — the run the purge's Undo undoes, and only that: a
+    /// contact logged a moment later is a change of its own, never mistaken for the purge.
+    pub fn clear_logbook_in_run(&mut self, run: &str) -> usize {
+        self.station.origin = Some(crate::loghistory::Origin::in_run(
+            tempo_core::logbook::history::Source::Operator,
+            run,
+        ));
+        let removed = self.clear_logbook();
+        // Taken by the purge's change; cleared all the same, so it can never ride another.
+        self.station.origin = None;
         removed
     }
 

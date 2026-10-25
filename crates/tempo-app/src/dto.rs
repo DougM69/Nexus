@@ -4178,7 +4178,7 @@ pub struct UploadReportDto {
 }
 
 /// Result of importing an external ADIF logbook (deduped merge).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportStats {
     pub added: usize,
@@ -4190,6 +4190,10 @@ pub struct ImportStats {
     /// that fixes every award.
     pub updated: usize,
     pub total: usize,
+    /// The import's run in the Logbook's history: what its Undo undoes, and nothing else
+    /// (`tempo_app::loghistory::undo_run`). `None` from a build that named none.
+    #[serde(default)]
+    pub run: Option<String>,
 }
 
 /// A confirmation in a synced report with no matching logged QSO (diagnostic).

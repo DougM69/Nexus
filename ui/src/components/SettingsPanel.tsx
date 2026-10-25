@@ -4078,6 +4078,27 @@ export function SettingsPanel({
                   <span className="settings-hint" role="status">{dataFolderNote}</span>
                 )}
               </div>
+              {/* How long the Logbook's history keeps a deleted contact whole (Recently deleted, the
+                  Undo of a delete, an import or a purge). Here because it is the log's storage: the
+                  copies are most of what the history costs on disk. Edits are kept for good. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.dataFolder.snapshots.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  value={form.historySnapshotDays ?? 90}
+                  onChange={(e) => {
+                    // '' is back to the 90-day default; a typed value is whole days, never negative.
+                    markDirty()
+                    const n = e.target.value === '' ? 90 : Math.max(0, Math.trunc(Number(e.target.value)) || 0)
+                    setForm((prev) => (prev ? { ...prev, historySnapshotDays: n } : prev))
+                  }}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.dataFolder.snapshots.hint')}</span>
+              </label>
             </fieldset>
           )}
 

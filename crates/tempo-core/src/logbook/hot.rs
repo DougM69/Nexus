@@ -800,6 +800,28 @@ impl HotIndex {
         })
     }
 
+    /// [`Self::is_duplicate`], with the rows `except` names not counted: whether putting `rec`
+    /// back into the log would duplicate a contact a change leaves in it, when that same change
+    /// takes `except` out (an undo that puts one contact back and takes another out). The same
+    /// predicate, asked of the same rows; only `log_qso`'s guard is [`Self::is_duplicate`].
+    pub fn is_duplicate_except(
+        &self,
+        rec: &QsoRecord,
+        except: &std::collections::HashSet<RecordId>,
+    ) -> bool {
+        self.by_base.get(&base_call(&rec.call)).is_some_and(|rows| {
+            rows.iter().any(|r| {
+                !r.id.is_some_and(|id| except.contains(&id))
+                    && super::dedup::is_recent_duplicate_in_slot(
+                        self.bands.name(r.band),
+                        self.modes.name(r.mode),
+                        r.when,
+                        rec,
+                    )
+            })
+        })
+    }
+
     /// The grid logged on the NEWEST row, in log order, whose call is `call`'s station
     /// (`same_call`) — if that row's grid is not blank. An older row's grid is never reached
     /// for: a rover's most recent square is the answer, or there is none.

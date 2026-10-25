@@ -106,6 +106,7 @@ fn each_kind_of_change_is_recorded_with_its_source() {
         Some(&note("r4", Source::Fill, Kind::Fill)),
     )
     .unwrap();
+    let held = db.load_all().unwrap().remove(0);
 
     remove(
         &mut db,
@@ -156,9 +157,13 @@ fn each_kind_of_change_is_recorded_with_its_source() {
     );
     let gone = h[4].deleted_contact().expect("a delete keeps the contact");
     assert_eq!(
+        gone, held,
+        "the contact as the store held it, every field — a foreign APP_ tag included"
+    );
+    assert_eq!(
         adif_record_own_log(&gone),
         adif_record_own_log(&filled),
-        "the contact as it was, every field — a foreign APP_ tag included"
+        "and as the log writes it"
     );
     assert_eq!(h[0].at_ms, 1_700_000_000_000);
 }
@@ -337,6 +342,14 @@ fn an_undo_puts_back_what_the_edit_changed_and_keeps_what_changed_since() {
         }
         other => panic!("{other:?}"),
     }
+    // With nothing changed since, the undo is the contact as it was, field for field.
+    match undo(&h[1], Some(&c)).unwrap() {
+        Undo::Revert { row, kept } => {
+            assert!(kept.is_empty());
+            assert_eq!(row, b, "the contact before the second edit, whole");
+        }
+        other => panic!("{other:?}"),
+    }
     // Every field it changed has moved since: nothing to undo.
     let mut d = c.clone();
     d.grid = Some("FN53".into());
@@ -405,7 +418,10 @@ fn a_create_undoes_to_a_removal_and_a_delete_to_a_restore() {
     assert_eq!(undo(&h[0], Some(&a)), Ok(Undo::Remove(id(1))));
     assert_eq!(undo(&h[0], None), Err(CannotUndo::Gone));
     match undo(&h[1], None).unwrap() {
-        Undo::Restore(back) => assert_eq!(adif_record_own_log(&back), adif_record_own_log(&a)),
+        Undo::Restore(back) => {
+            assert_eq!(back, a, "the contact as it was, field for field");
+            assert_eq!(adif_record_own_log(&back), adif_record_own_log(&a));
+        }
         other => panic!("{other:?}"),
     }
     assert_eq!(undo(&h[1], Some(&a)), Err(CannotUndo::AlreadyThere));
@@ -613,4 +629,198 @@ fn the_history_at_scale() {
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+// ── what an undo must not take for something it is not ──────────────────────────────────────
+
+/// An entry of a kind a later build wrote is shown, and never undone — not taken for an edit.
+#[test]
+fn an_entry_of_an_unknown_kind_is_never_undone() {
+    let mut db = LogDb::open_in_memory().unwrap();
+    let a = rec("K1ABC", 1);
+    write(
+        &mut db,
+        std::slice::from_ref(&a),
+        Some(&note("c", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    db.conn_for_tests()
+        .execute(
+            "INSERT INTO qso_history (run_id, qso_id, kind, before, after) \
+             SELECT run_id, qso_id, 9, '<NAME:3>Bob', '<NAME:3>Ann' FROM qso_history",
+            [],
+        )
+        .unwrap();
+    let h = db.history_of(id(1)).unwrap();
+    assert_eq!(h[1].kind, Kind::Unknown(9));
+    assert_eq!(h[1].kind.word(), "unknown");
+    let mut now = a.clone();
+    now.name = Some("Ann".into());
+    assert_eq!(
+        undo(&h[1], Some(&now)),
+        Err(CannotUndo::UnknownKind),
+        "an edit would have put Bob back"
+    );
+}
+
+/// The contacts a run added that another run has edited or merged into since are named, with the
+/// latest such change; the fill job's country and an undo are not changes of the operator's.
+#[test]
+fn the_contacts_a_run_added_and_another_changed_since_are_named() {
+    let mut db = LogDb::open_in_memory().unwrap();
+    let (a, b, c) = (rec("K1ABC", 1), rec("K2XYZ", 2), rec("K3QQQ", 3));
+    write(
+        &mut db,
+        &[a.clone(), b.clone(), c.clone()],
+        Some(&note("import", Source::Import, Kind::Merge)),
+    )
+    .unwrap();
+    let mut a2 = a.clone();
+    a2.comment = Some("by hand".into());
+    write(
+        &mut db,
+        &[a2],
+        Some(&note("edit", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    let mut b2 = b.clone();
+    b2.confirmed = true;
+    write(
+        &mut db,
+        &[b2],
+        Some(&note("lotw", Source::Lotw, Kind::Merge)),
+    )
+    .unwrap();
+    let mut c2 = c.clone();
+    c2.country = Some("Filled".into());
+    write(
+        &mut db,
+        &[c2],
+        Some(&note("fill", Source::Fill, Kind::Fill)),
+    )
+    .unwrap();
+    let mut c3 = c.clone();
+    c3.country = None;
+    write(
+        &mut db,
+        &[c3],
+        Some(&note("undo", Source::Undo, Kind::Edit)),
+    )
+    .unwrap();
+    let later = db.history_changed_after("import").unwrap();
+    let seq_of = |id: RecordId| db.history_of(id).unwrap().last().unwrap().seq;
+    assert_eq!(
+        later,
+        HashMap::from([(id(1), seq_of(id(1))), (id(2), seq_of(id(2)))])
+    );
+}
+
+// ── how long it is kept ──────────────────────────────────────────────────────────────────────
+
+/// ★ The trim takes out a delete's whole contact once it is older than the cut-off, a step of at
+/// most `limit` at a time, and the runs it leaves with nothing; an edit, a new contact and a
+/// recent delete are never touched, however old.
+#[test]
+fn the_trim_takes_old_whole_contacts_out_and_never_an_edit() {
+    let mut db = LogDb::open_in_memory().unwrap();
+    let at = |run: &str, source: Source, at_ms: i64| Note {
+        at_ms,
+        ..note(run, source, Kind::Edit)
+    };
+    const DAY: i64 = 86_400_000;
+    let old = 1_000 * DAY;
+    let rows: Vec<QsoRecord> = (1..=5).map(|n| rec(&format!("K{n}AA"), n)).collect();
+    write(&mut db, &rows, Some(&at("added", Source::Import, old))).unwrap();
+    let mut edited = rows[0].clone();
+    edited.name = Some("Robert".into());
+    write(&mut db, &[edited], Some(&at("edit", Source::Operator, old))).unwrap();
+    remove(
+        &mut db,
+        &[id(1), id(2), id(3)],
+        Some(&at("purge", Source::Operator, old + DAY)),
+    )
+    .unwrap();
+    remove(
+        &mut db,
+        &[id(4)],
+        Some(&at("recent", Source::Operator, old + 200 * DAY)),
+    )
+    .unwrap();
+    let before = old + 90 * DAY;
+
+    assert_eq!(db.trim_history(before, 2).unwrap(), 2, "a step of two");
+    assert_eq!(db.history_run("purge").unwrap().len(), 1, "one still to go");
+    assert_eq!(db.trim_history(before, 2).unwrap(), 1, "the last, and done");
+    assert_eq!(db.trim_history(before, 2).unwrap(), 0);
+    assert!(db.history_run("purge").unwrap().is_empty());
+    let runs: Vec<String> = {
+        let mut stmt = db
+            .conn_for_tests()
+            .prepare("SELECT run FROM history_run ORDER BY id")
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+        rows.collect::<rusqlite::Result<_>>().unwrap()
+    };
+    assert_eq!(
+        runs,
+        vec!["added", "edit", "recent"],
+        "a run left with nothing goes with it"
+    );
+    assert_eq!(
+        db.history_run("added").unwrap().len(),
+        5,
+        "new contacts kept"
+    );
+    let h = db.history_of(id(1)).unwrap();
+    assert_eq!(
+        h.iter().map(|e| e.kind).collect::<Vec<_>>(),
+        vec![Kind::Create, Kind::Edit],
+        "the edit's fields kept, the old delete gone"
+    );
+    assert_eq!(h[1].changes().len(), 1);
+    let gone: Vec<RecordId> = db
+        .history_deleted(10)
+        .unwrap()
+        .iter()
+        .map(|e| e.qso_id)
+        .collect();
+    assert_eq!(gone, vec![id(4)], "the recent delete stays restorable");
+}
+
+/// The writer trims in steps of its own, between the changes it is handed, and answers how many
+/// whole contacts it took out once none is left.
+#[test]
+fn the_writer_trims_in_steps_and_answers_how_many() {
+    use crate::logbook::writer::LogWriter;
+    let dir = std::env::temp_dir().join(format!("nexus-history-trim-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("log.sqlite3");
+    let n = 2_500u64;
+    {
+        let mut db = LogDb::open(&path).unwrap();
+        let rows: Vec<QsoRecord> = (1..=n).map(|i| rec(&format!("K{i}AA"), i)).collect();
+        write(&mut db, &rows, None).unwrap();
+        let ids: Vec<RecordId> = (1..=n).map(id).collect();
+        let purge = Note {
+            at_ms: 1_000,
+            ..note("purge", Source::Operator, Kind::Edit)
+        };
+        remove(&mut db, &ids, Some(&purge)).unwrap();
+    }
+    let writer = LogWriter::start(LogDb::open(&path).unwrap());
+    let answer = writer.trim_history(2_000);
+    assert_eq!(
+        answer
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .unwrap(),
+        Ok(n as usize),
+        "more than one step's worth, all of it"
+    );
+    drop(writer);
+    let db = LogDb::open(&path).unwrap();
+    assert!(db.history_run("purge").unwrap().is_empty());
+    assert!(db.history_deleted(10).unwrap().is_empty());
+    drop(db);
+    let _ = std::fs::remove_dir_all(&dir);
 }

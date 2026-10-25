@@ -1,6 +1,8 @@
 //! The Logbook's change history and its undo, as the UI asks for them: a contact's history, the
-//! contacts deleted and not put back, the latest run of a kind, and the undo of one change, of a
-//! run, or of a delete ([`tempo_app::loghistory`]).
+//! contacts deleted and not put back, and the undo of one change, of a run, or of a delete
+//! ([`tempo_app::loghistory`]). A run is undone by the id the change that made it handed back
+//! (an import's, a purge's, an undo's own for its redo) — never by "the latest of a kind", which
+//! a contact logged a moment later would be.
 //!
 //! Every read runs with the Engine lock released. Every undo is planned with the lock released and
 //! made under it, made again when the store turns it back ([`tempo_app::logwrite::until_written`]),
@@ -9,7 +11,7 @@
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
-use tempo_core::logbook::history::{CannotUndo, Entry, Kind, Source};
+use tempo_core::logbook::history::{CannotUndo, Entry, Kind};
 use tempo_core::logbook::RecordId;
 
 use crate::{durable_command, SharedEngine};
@@ -28,7 +30,8 @@ pub struct FieldChangeDto {
 #[serde(rename_all = "camelCase")]
 pub struct HistoryEntryDto {
     pub seq: i64,
-    /// `create`, `edit`, `delete`, `merge` or `fill`.
+    /// `create`, `edit`, `delete`, `merge` or `fill` — or `unknown`, a kind a later build
+    /// recorded, which is never undone.
     pub kind: &'static str,
     /// Who made it: `operator`, `import`, `fill`, `lotw`, `eqsl`, `qrz`, `pota`, `contest`,
     /// `remote`, `file` or `undo` (or a word a later build wrote).
@@ -141,56 +144,6 @@ pub async fn recently_deleted_qsos(
         .collect())
 }
 
-/// A run, as a toast names it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryRunDto {
-    pub run: String,
-    pub source: String,
-    pub at_ms: i64,
-    pub contacts: u64,
-}
-
-/// The source a word names, for [`latest_history_run`].
-fn source_arg(word: &str) -> Result<Source, String> {
-    [
-        Source::Operator,
-        Source::Import,
-        Source::Fill,
-        Source::Lotw,
-        Source::Eqsl,
-        Source::Qrz,
-        Source::Pota,
-        Source::Contest,
-        Source::Remote,
-        Source::File,
-        Source::Undo,
-    ]
-    .into_iter()
-    .find(|s| s.code() == word)
-    .ok_or_else(|| format!("'{word}' is not a source of changes."))
-}
-
-/// The latest run `source` made that changed a contact (any source's when `None`).
-#[tauri::command]
-pub async fn latest_history_run(
-    state: State<'_, SharedEngine>,
-    source: Option<String>,
-) -> Result<Option<HistoryRunDto>, String> {
-    let engine = Arc::clone(&state);
-    let source = source.as_deref().map(source_arg).transpose()?;
-    let run =
-        tokio::task::spawn_blocking(move || tempo_app::loghistory::latest_run(&engine, source))
-            .await
-            .map_err(|e| format!("logbook task failed: {e}"))??;
-    Ok(run.map(|r| HistoryRunDto {
-        run: r.run,
-        source: r.source,
-        at_ms: r.at_ms,
-        contacts: r.contacts,
-    }))
-}
-
 /// What an undo made.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,10 +155,18 @@ pub struct UndoAnswer {
     /// The fields a later change moved, which the undo left as they are.
     pub kept: Vec<String>,
     /// How many contacts it could not change, by why: `gone` (no longer in the log),
-    /// `alreadyThere` (nothing to put back), `changedSince` (every field changed again since).
+    /// `alreadyThere` (nothing to put back), `changedSince` (every field changed again since, or
+    /// a contact it would take out edited or confirmed since, which stays), `duplicate` (the log
+    /// holds it already under another id), `unknownKind` (a change a later build recorded).
     pub gone: usize,
     pub already_there: usize,
     pub changed_since: usize,
+    pub duplicate: usize,
+    pub unknown_kind: usize,
+    /// The calls of the contacts left as they are because they changed since, and of those not
+    /// put back because the log holds them already: sorted, each once.
+    pub changed_since_calls: Vec<String>,
+    pub duplicate_calls: Vec<String>,
 }
 
 fn answer(undone: tempo_app::loghistory::Undone) -> UndoAnswer {
@@ -213,6 +174,17 @@ fn answer(undone: tempo_app::loghistory::Undone) -> UndoAnswer {
     let mut kept: Vec<String> = undone.kept.iter().map(|(_, tag)| tag.clone()).collect();
     kept.sort();
     kept.dedup();
+    let calls = |why: CannotUndo| {
+        let mut calls: Vec<String> = undone
+            .refused
+            .iter()
+            .filter(|(_, w)| *w == why)
+            .filter_map(|(id, _)| undone.calls.get(id).cloned())
+            .collect();
+        calls.sort();
+        calls.dedup();
+        calls
+    };
     UndoAnswer {
         changed: undone.changed,
         run: undone.run.clone(),
@@ -220,6 +192,10 @@ fn answer(undone: tempo_app::loghistory::Undone) -> UndoAnswer {
         gone: count(CannotUndo::Gone),
         already_there: count(CannotUndo::AlreadyThere),
         changed_since: count(CannotUndo::ChangedSince),
+        duplicate: count(CannotUndo::Duplicate),
+        unknown_kind: count(CannotUndo::UnknownKind),
+        changed_since_calls: calls(CannotUndo::ChangedSince),
+        duplicate_calls: calls(CannotUndo::Duplicate),
     }
 }
 
