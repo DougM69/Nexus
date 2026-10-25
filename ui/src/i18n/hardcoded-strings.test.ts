@@ -67,9 +67,6 @@ const MIGRATED = [
   'remote-native/RemoteApprovalPrompt.tsx',
   // The Remote site's first visit and its empty state — born migrated.
   'remote-web/RemoteLanding.tsx',
-  // The Remote stations window's entry in Settings (2026-10-04) — born migrated: its label, button,
-  // hint and failure line.
-  'remote-native/RemoteStationsWindow.tsx',
   // Remote over this network's card (2026-10-04) — born migrated: the switch, the status line, the
   // pairing window, the paired computers and the reset.
   'remote-native/LanStation.tsx',

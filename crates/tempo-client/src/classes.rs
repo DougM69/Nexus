@@ -335,7 +335,6 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("open_lan_stations_window",       RunsHere,    "This computer's window onto stations on its network."),
     ("open_panel_window",              RunsHere,    "A window on this computer."),
     ("open_qrz_page",                  RunsHere,    "Opens a web page in this computer's browser."),
-    ("open_remote_stations_window",    RunsHere,    "This computer's window onto hosted Remote."),
     ("os_notify",                      RunsHere,    "A notification on this computer."),
     ("override_next_tx",               StartsTx,    "Chooses the next FT transmission and arms it."),
     ("park_state_review",              RunsAtShack, "Reads the shack's logbook for contacts whose park names another state."),

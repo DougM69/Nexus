@@ -133,9 +133,9 @@ describe('on Windows', () => {
     renderPanel()
     await openRemoteTab()
     await waitFor(() => theButton()!)
-    expect(screen.queryByRole('button', { name: EN['settings.remoteStations.open'] })).toBeNull()
-    expect(screen.queryByRole('button', { name: EN['settings.lanStations.open'] })).toBeNull()
-    expect(api.get('openRemoteStationsWindow')).not.toHaveBeenCalled()
+    // Their old labels, written out: the strings themselves left the catalogs with the entries.
+    expect(screen.queryByRole('button', { name: 'Remote stations…' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Stations on this network…' })).toBeNull()
   })
 
   it('says so in words when the window could not be opened, and lets the operator try again', async () => {

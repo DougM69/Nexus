@@ -103,8 +103,8 @@ mod profile_sync;
 mod quit;
 mod remote_monitor;
 mod remote_service;
-/// The Remote stations window: the hosted Remote page in a Nexus window of its own, on the PC an
-/// operator works from (Windows only). The page in it reaches no command — see the module header.
+/// The Stations on this network window: the Connect to my station… window, on the PC an operator
+/// works from (Windows only). The page in it reaches no command — see the module header.
 mod remote_window;
 /// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
 /// the Remote page alike.
@@ -36512,7 +36512,6 @@ fn capture_all_window_geometry(app_handle: &tauri::AppHandle) {
             // itself — safe to sweep the whole map.
             capture_bandmap_window(&w);
             window_state::capture_panel(&w);
-            window_state::capture_remote(&w);
         }
     }
 }
@@ -39629,7 +39628,6 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         window_state::set_window_on_top,
         window_state::focus_window,
         window_state::request_window_attention,
-        remote_window::open_remote_stations_window,
         remote_window::open_lan_stations_window,
         street_map::street_map_packs,
         street_map::street_map_read,

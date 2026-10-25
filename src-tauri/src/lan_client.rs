@@ -88,8 +88,8 @@
 //! ## The loopback origin ([`origin`])
 //!
 //! The window's page is served from `http://127.0.0.1:<port>`, which Tauri treats as a remote
-//! origin: the page reaches NO Nexus command, as the hosted page in the Remote stations window
-//! reaches none (`remote_window`'s tests hold both). It talks to this module over one WebSocket on
+//! origin: the page reaches NO Nexus command, as no hosted page does (`remote_window`'s tests hold
+//! both). It talks to this module over one WebSocket on
 //! the same origin. The listener binds the loopback address only, lives while the window does,
 //! and answers a request only through all three of its gates ([`origin::Gates`]), each of which
 //! refuses on its own:
