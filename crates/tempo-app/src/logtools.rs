@@ -33,12 +33,13 @@
 //!   not reach, and a service only a deleted copy reached answers its upload as a duplicate. Its
 //!   call is the kept copy's, unchanged: no correction — and copies under different calls are
 //!   never merged at all.
-//! - **a bulk edit** never changes the worked call (`cleanup::BULK_FIELDS`), so by the edit rule
-//!   every confirmation stays. Every stamp stays too, but on a contact whose **STATION_CALLSIGN** it
-//!   changes: that is the call the contact is uploaded under, so its stamps are cleared as a
-//!   corrected call's are, and the next upload sends it under the new call
-//!   ([`cleanup::resends`]; the preview counts them, [`BulkPreview::resend`]). It is not queued
-//!   here.
+//! - **a bulk edit** never changes the worked call (`cleanup::BULK_FIELDS`). Every stamp and
+//!   confirmation stays, but on a contact whose **STATION_CALLSIGN** it changes: that is the call
+//!   the contact is uploaded under, so its stamps are cleared as a corrected call's are, and the
+//!   next upload sends it under the new call ([`cleanup::resends`]; the preview counts them,
+//!   [`BulkPreview::resend`]). It is not queued here. The LoTW, eQSL and QRZ confirmations matched
+//!   under the old call go too, a paper card stays (`cleanup`'s header; the preview counts them,
+//!   [`BulkPreview::unconfirm`]), and the run's undo puts them back.
 //! - **a fix** changes a grid, a band, a DXCC number, a reference or an end time, never a call:
 //!   every stamp stays.
 //!
@@ -451,6 +452,8 @@ pub struct BulkPreview {
     /// Of those it changes, the ones uploaded somewhere under the station call it changes: their
     /// stamps are cleared, and the next upload sends them again under the new call.
     pub resend: usize,
+    /// The LoTW, eQSL and QRZ confirmations a changed station call takes off those it changes.
+    pub unconfirm: usize,
 }
 
 /// Only fields a bulk edit offers, each value of its field's form.
@@ -493,6 +496,7 @@ pub fn bulk_preview(
                     if cleanup::resends(row, &after) && row.upload != Default::default() {
                         out.resend += 1;
                     }
+                    out.unconfirm += cleanup::confirmations_cleared(row, &after);
                 }
                 None => out.unchanged += 1,
             }
@@ -507,8 +511,8 @@ pub const NOT_AS_PREVIEWED: &str =
 
 /// ★ Set or clear `changes` on every contact `ids` names — the ids the preview was made of — as
 /// ONE run of the history. Refused, changing nothing, unless they are `expect` contacts: the count
-/// the operator confirmed. Never the worked call: every confirmation stays, every upload stamp
-/// stays but a changed station call's, and nothing is sent (see the module header). A contact no
+/// the operator confirmed. Never the worked call: every confirmation and upload stamp stays but a
+/// changed station call's (a paper card stays even then), and nothing is sent (see the module header). A contact no
 /// longer in the log is named `gone`.
 pub fn bulk_edit(
     engine: &Mutex<Engine>,

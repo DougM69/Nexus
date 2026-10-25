@@ -57,15 +57,23 @@
 //!
 //! Sets or clears the fields in [`BULK_FIELDS`] — the operator's own station details, the
 //! propagation mode, and the operator's park or summit. **Never the worked call**: by the edit
-//! rule ([`super::edited`]) it keeps every confirmation, and queues nothing to any service.
+//! rule ([`super::edited`]) it keeps every confirmation but a changed station call's (below), and
+//! queues nothing to any service.
 //!
 //! **One exception for the stamps: a changed STATION_CALLSIGN.** It is the call both upload paths
 //! sign and book the contact under, so a contact uploaded under the old one is not on any service
 //! under the new one. Its upload stamps, and the `LOTW_QSL_SENT` mark a stamp is read back from,
 //! are cleared exactly as a corrected call's are ([`super::edited`]), so the next upload sends it
 //! under the call it now carries ([`resends`]). Unlike a corrected call it is not queued here —
-//! no clean-up tool sends anything — and its confirmations stay: what becomes of a confirmation
-//! matched under the old station call is the operator's ruling, not this tool's. The marks that
+//! no clean-up tool sends anything. **And the services' confirmations go with the stamps**
+//! (operator ruling): LoTW, eQSL and QRZ each matched the contact under the old station call, so
+//! their confirmations, LoTW's and eQSL's received dates, eQSL's Authenticity-Guaranteed mark and
+//! LoTW's DXCC are taken off, and `confirmed`/`award_confirmed` are read again from what is left
+//! ([`unconfirm_electronic`]). A paper card is the operator's own record and stays, with its date
+//! and route; so do the credit codes while a card can stand behind them, and with no card they go
+//! with LoTW's confirmation, the only other one that gives credit. Club Log keeps no confirmation
+//! on the contact, only its stamp. The preview counts what is taken off
+//! ([`confirmations_cleared`]), and the run's undo puts it back. The marks that
 //! say Nexus or a callbook filled a field
 //! come off a field it changes, as an edit takes them off. A park or summit is set only on a
 //! contact whose side holds no reference or one of the same programme: another programme's
@@ -77,7 +85,7 @@ use serde::{Deserialize, Serialize};
 
 use super::callbook::{self, CALLBOOK_FILLED_FIELD};
 use super::{
-    canonical, extra_value, self_filled, set_extra, set_self_filled, QsoRecord, RecordId,
+    canonical, extra_value, self_filled, set_extra, set_self_filled, QslRcvd, QsoRecord, RecordId,
     UploadState, SELF_FILLED_FIELD,
 };
 
@@ -1029,6 +1037,49 @@ pub fn resends(before: &QsoRecord, after: &QsoRecord) -> bool {
     call(before) != call(after)
 }
 
+/// What a service matched under a station call, beside its confirmation flag: LoTW's and eQSL's
+/// received dates, eQSL's Authenticity-Guaranteed mark and LoTW's DXCC. A paper card's date and
+/// route (`QSLRDATE`, `QSL_RCVD_VIA`) are not among them.
+const ELECTRONIC_EXTRAS: [&str; 4] = [
+    "LOTW_QSLRDATE",
+    "EQSL_QSLRDATE",
+    super::EQSL_AG_FIELD,
+    super::LOTW_DXCC_FIELD,
+];
+
+/// Take off `rec` the confirmations the services matched under its old station call (the module
+/// header): LoTW's, eQSL's and QRZ's, with [`ELECTRONIC_EXTRAS`]. A paper card stays. The credit
+/// codes go with LoTW's confirmation when no card can stand behind them; an eQSL or QRZ
+/// confirmation never gave credit, so it takes none off.
+fn unconfirm_electronic(rec: &mut QsoRecord) {
+    let q = rec.qsl_rcvd;
+    if !(q.lotw || q.eqsl || q.qrz) {
+        return;
+    }
+    if q.lotw && !q.card {
+        rec.credit_granted.clear();
+        rec.credit_submitted.clear();
+    }
+    rec.qsl_rcvd = QslRcvd {
+        card: q.card,
+        ..QslRcvd::default()
+    };
+    rec.confirmed = rec.qsl_rcvd.any();
+    rec.award_confirmed = rec.qsl_rcvd.award();
+    rec.extra
+        .retain(|(k, _)| !ELECTRONIC_EXTRAS.contains(&k.as_str()));
+}
+
+/// How many of `before`'s LoTW, eQSL and QRZ confirmations `after` no longer holds: what a changed
+/// station call took off, as the preview counts it.
+pub fn confirmations_cleared(before: &QsoRecord, after: &QsoRecord) -> usize {
+    let (b, a) = (before.qsl_rcvd, after.qsl_rcvd);
+    [(b.lotw, a.lotw), (b.eqsl, a.eqsl), (b.qrz, a.qrz)]
+        .into_iter()
+        .filter(|&(was, now)| was && !now)
+        .count()
+}
+
 /// ★ The contact `row` with `changes` made (each already [`checked`]), as an edit makes them: the
 /// fill marks off a field changed, a side's left-over references gone with the side, the band in
 /// the log's one form. `country` names the `COUNTRY` a DXCC number gives the contact, as every
@@ -1088,6 +1139,7 @@ pub fn changed(
     if resends(row, &rec) {
         rec.upload = UploadState::default();
         rec.extra.retain(|(k, _)| k != STAMP_EXTRA);
+        unconfirm_electronic(&mut rec);
     }
     if (&rec.ota.my_program, &rec.ota.my_ref) != (&row.ota.my_program, &row.ota.my_ref) {
         rec.extra.retain(|(k, _)| {

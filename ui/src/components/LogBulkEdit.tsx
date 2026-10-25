@@ -1,9 +1,10 @@
 // BULK EDIT — set or clear one or more fields on many contacts at once: the ones ticked in the
 // list, or every one the list's search and filters show. The operator's own station details
 // (MY_GRIDSQUARE, MY_RIG, OPERATOR, STATION_CALLSIGN, TX_PWR), the propagation mode and satellite,
-// and their own park or summit. Never the worked call: every confirmation stays, and nothing is
-// sent from here. A changed STATION_CALLSIGN is the call a contact is uploaded under, so its upload
-// marks are cleared and the next upload sends it under the new call; the preview counts those.
+// and their own park or summit. Never the worked call, and nothing is sent from here. A changed
+// STATION_CALLSIGN is the call a contact is uploaded under, so its upload marks are cleared and the
+// next upload sends it under the new call, and the LoTW, eQSL and QRZ confirmations matched under
+// the old call are cleared (a paper card stays); the preview counts both, before the confirm.
 //
 // Preview first: how many contacts it would change and how many are already so. The button then
 // names that count, and asks once more, in the dialog, before it changes anything. The change is
@@ -189,6 +190,9 @@ export function LogBulkEdit({
           </p>
           {preview.resend > 0 && (
             <p className="qso-detail-bare">{t('logbook.tools.bulk.resend', { count: preview.resend })}</p>
+          )}
+          {preview.unconfirm > 0 && (
+            <p className="qso-detail-bare">{t('logbook.tools.bulk.unconfirm', { count: preview.unconfirm })}</p>
           )}
           <div className="log-tools-row">
             <button

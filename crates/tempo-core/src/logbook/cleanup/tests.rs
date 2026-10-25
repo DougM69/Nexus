@@ -617,8 +617,8 @@ fn a_sides_left_over_references_follow_the_side_taken() {
 
 /// ★ A STATION CALL CHANGED IN BULK IS THE CALL THE UPLOAD IS SIGNED UNDER: the contact's upload
 /// stamps (and the `LOTW_QSL_SENT` mark a stamp is read back from) are cleared, as a corrected
-/// call's are, so the next upload sends it under the new call. Its confirmations stay. The same
-/// call in another case is no change, and every other bulk field keeps every stamp.
+/// call's are, so the next upload sends it under the new call. The same call in another case is no
+/// change, and every other bulk field keeps every stamp.
 #[test]
 fn a_bulk_station_call_change_clears_the_upload_stamps() {
     let (_, mut b) = two_copies();
@@ -636,8 +636,11 @@ fn a_bulk_station_call_change_clears_the_upload_stamps() {
     assert_eq!(after.station_callsign.as_deref(), Some("W6R"));
     assert_eq!(after.upload, crate::logbook::UploadState::default());
     assert_eq!(extra_value(&after, "LOTW_QSL_SENT"), None);
-    assert_eq!(after.qsl_rcvd, b.qsl_rcvd, "confirmations stay");
-    assert_eq!(after.credit_submitted, b.credit_submitted);
+    assert_eq!(after.qsl_rcvd.card, b.qsl_rcvd.card, "the paper card stays");
+    assert_eq!(
+        after.credit_submitted, b.credit_submitted,
+        "with the card's credit"
+    );
     assert!(resends(&b, &after));
 
     let cleared = changed(&b, &to(None), &no_country).unwrap();
@@ -656,6 +659,119 @@ fn a_bulk_station_call_change_clears_the_upload_stamps() {
     .unwrap();
     assert_eq!(rig.upload, b.upload);
     assert!(!resends(&b, &rig));
+}
+
+/// ★ A STATION CALL CHANGED IN BULK TAKES OFF WHAT THE SERVICES MATCHED UNDER THE OLD ONE: LoTW's,
+/// eQSL's and QRZ's confirmations, their received dates, eQSL's Authenticity-Guaranteed mark and
+/// LoTW's DXCC. A paper card stays, with its date and route, and so does the credit while a card
+/// can stand behind it; with no card, LoTW's credit goes with LoTW's confirmation. The count is
+/// of the confirmations taken off. The same call, case and padding aside, takes off nothing, and
+/// neither does any other field.
+#[test]
+fn a_bulk_station_call_change_clears_the_electronic_confirmations_and_keeps_the_card() {
+    let mut r = contact("W1AW", T0, 1);
+    r.station_callsign = Some("K2DEF".into());
+    r.qsl_rcvd = QslRcvd {
+        card: true,
+        lotw: true,
+        eqsl: true,
+        qrz: true,
+    };
+    r.confirmed = true;
+    r.award_confirmed = true;
+    r.credit_granted = vec!["DXCC".into()];
+    r.credit_submitted = vec!["WAS".into()];
+    for (k, v) in [
+        ("QSL_RCVD_VIA", "B"),
+        ("QSLRDATE", "20260110"),
+        ("LOTW_QSLRDATE", "20260105"),
+        ("EQSL_QSLRDATE", "20260106"),
+        (crate::logbook::EQSL_AG_FIELD, "Y"),
+        (crate::logbook::LOTW_DXCC_FIELD, "1"),
+        ("CQZ", "5"),
+    ] {
+        set_extra(&mut r, k, Some(v.into()));
+    }
+    let to = |v: Option<&str>| {
+        checked(&[Change {
+            field: Field::StationCallsign,
+            value: v.map(str::to_string),
+        }])
+        .unwrap()
+    };
+
+    let after = changed(&r, &to(Some("w6r")), &no_country).unwrap();
+    let mut want = r.clone();
+    want.station_callsign = Some("W6R".into());
+    want.qsl_rcvd = QslRcvd {
+        card: true,
+        ..QslRcvd::default()
+    };
+    for k in [
+        "LOTW_QSLRDATE",
+        "EQSL_QSLRDATE",
+        crate::logbook::EQSL_AG_FIELD,
+        crate::logbook::LOTW_DXCC_FIELD,
+    ] {
+        set_extra(&mut want, k, None);
+    }
+    assert_eq!(
+        after, want,
+        "the card, its date and route, and its credit stay"
+    );
+    assert!(
+        after.confirmed && after.award_confirmed,
+        "the card confirms it"
+    );
+    assert_eq!(confirmations_cleared(&r, &after), 3);
+
+    // No card: nothing confirms it any more, and LoTW's credit goes with LoTW's confirmation.
+    let mut no_card = r.clone();
+    no_card.qsl_rcvd.card = false;
+    for k in ["QSL_RCVD_VIA", "QSLRDATE"] {
+        set_extra(&mut no_card, k, None);
+    }
+    let cleared = changed(&no_card, &to(None), &no_country).unwrap();
+    assert_eq!(cleared.qsl_rcvd, QslRcvd::default());
+    assert!(!cleared.confirmed && !cleared.award_confirmed);
+    assert!(cleared.credit_granted.is_empty() && cleared.credit_submitted.is_empty());
+    assert_eq!(
+        extra_value(&cleared, "CQZ"),
+        Some("5"),
+        "the zone is the log's own"
+    );
+    assert_eq!(confirmations_cleared(&no_card, &cleared), 3);
+
+    // An eQSL alone never gave credit: a code it holds came from elsewhere, and stays.
+    let mut eqsl_only = no_card.clone();
+    eqsl_only.qsl_rcvd = QslRcvd {
+        eqsl: true,
+        ..QslRcvd::default()
+    };
+    eqsl_only.award_confirmed = false;
+    let after = changed(&eqsl_only, &to(Some("W6R")), &no_country).unwrap();
+    assert_eq!(after.credit_granted, eqsl_only.credit_granted);
+    assert!(!after.confirmed);
+    assert_eq!(confirmations_cleared(&eqsl_only, &after), 1);
+
+    // The same call: nothing at all.
+    assert!(changed(&r, &to(Some(" k2def ")), &no_country).is_none());
+    // Another field: every confirmation stays.
+    let rig = changed(
+        &r,
+        &checked(&[Change {
+            field: Field::MyRig,
+            value: Some("FT-991A".into()),
+        }])
+        .unwrap(),
+        &no_country,
+    )
+    .unwrap();
+    assert_eq!(
+        (&rig.qsl_rcvd, &rig.extra, &rig.credit_granted),
+        (&r.qsl_rcvd, &r.extra, &r.credit_granted)
+    );
+    assert_eq!(confirmations_cleared(&r, &rig), 0);
 }
 
 /// The revision a merge compares copies by covers what the edit key leaves out — the contest

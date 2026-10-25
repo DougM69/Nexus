@@ -1978,7 +1978,7 @@ export const EN = {
   // calls, grids and references are tokens. Nothing they change is sent to any service.
   'logbook.tools.button': 'Clean up',
   'logbook.tools.title': 'Clean up the log',
-  'logbook.tools.intro': 'Each change here is one change in the history, undone whole by its Undo. Nothing is sent to any service, and no tool changes the worked call, so confirmations stay as they are.',
+  'logbook.tools.intro': 'Each change here is one change in the history, undone whole by its Undo. Nothing is sent to any service, and no tool changes the worked call. Confirmations stay, except those a changed station call clears in a bulk edit.',
   'logbook.tools.tab.dupes': 'Duplicates',
   'logbook.tools.tab.bulk': 'Bulk edit',
   'logbook.tools.tab.check': 'Check',
@@ -2042,10 +2042,14 @@ export const EN = {
   'logbook.tools.bulk.add': 'Add a field',
   'logbook.tools.bulk.preview': 'Preview',
   'logbook.tools.bulk.previewFailed': 'The preview could not be made',
-  'logbook.tools.bulk.uploads': 'A bulk edit never changes the worked call, and confirmations stay as they are. Nothing is sent from here. A changed STATION_CALLSIGN is the call a contact is uploaded under, so its upload marks are cleared and the next upload sends it again under the new call; every other field keeps its upload marks.',
+  'logbook.tools.bulk.uploads': 'A bulk edit never changes the worked call. Nothing is sent from here. A changed STATION_CALLSIGN is the call a contact is uploaded under, so its upload marks are cleared and the next upload sends it again under the new call, and its LoTW, eQSL and QRZ confirmations, matched under the old call, are cleared; paper QSL cards stay. Every other field keeps its upload marks and confirmations.',
   'logbook.tools.bulk.resend': {
     one: '{{count}} of these was uploaded under another station call: it will be sent again under the new one.',
     other: '{{count}} of these were uploaded under another station call: they will be sent again under the new one.',
+  },
+  'logbook.tools.bulk.unconfirm': {
+    one: '{{count}} LoTW, eQSL or QRZ confirmation was matched under the old station call and will be cleared. Paper QSL cards stay.',
+    other: '{{count}} LoTW, eQSL or QRZ confirmations were matched under the old station call and will be cleared. Paper QSL cards stay.',
   },
   'logbook.tools.bulk.previewed': '{{selected}} contacts: {{change}} will change, {{unchanged}} are already so or hold another programme’s reference, {{missing}} are no longer in the log.',
   'logbook.tools.bulk.apply': {

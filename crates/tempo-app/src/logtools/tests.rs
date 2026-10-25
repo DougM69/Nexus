@@ -323,6 +323,7 @@ fn a_bulk_edit_previews_applies_and_undoes_and_keeps_every_stamp() {
             unchanged: 0,
             missing: 0,
             resend: 0,
+            unconfirm: 0,
         }
     );
     let only_grid = &changes[..1];
@@ -606,9 +607,8 @@ fn a_bulk_edit_acts_only_on_the_count_confirmed() {
 }
 
 /// ★ A STATION CALL CHANGED IN BULK. The preview counts the contacts uploaded under another call;
-/// the edit clears their upload stamps — the next upload sends them under the new call — keeps
-/// every confirmation, and queues nothing itself. A contact already under the new call is left
-/// as it is, stamps and all.
+/// the edit clears their upload stamps — the next upload sends them under the new call — and
+/// queues nothing itself. A contact already under the new call is left as it is, stamps and all.
 #[test]
 fn a_bulk_station_call_change_owes_the_contact_to_every_service_again() {
     let d = Dir::new("tools-bulk-station");
@@ -642,11 +642,6 @@ fn a_bulk_station_call_change_owes_the_contact_to_every_service_again() {
     dur.wait(DURABLE_WAIT).unwrap();
     for (was, now) in before.iter().zip(rows(&engine)) {
         assert_eq!(now.station_callsign.as_deref(), Some("W6R"));
-        assert_eq!(
-            now.qsl_rcvd, was.qsl_rcvd,
-            "{}: confirmations stay",
-            was.call
-        );
         if was.call == "K1ABC" {
             assert_eq!(now, *was, "already W6R: untouched, stamp and all");
         } else {
@@ -657,6 +652,112 @@ fn a_bulk_station_call_change_owes_the_contact_to_every_service_again() {
         engine_lock(&engine).take_pending_uploads().is_empty(),
         "nothing queued by the tool"
     );
+}
+
+/// ★ A STATION CALL CHANGED IN BULK TAKES OFF THE SERVICES' CONFIRMATIONS, THROUGH THE REAL STORE.
+/// The preview counts the LoTW, eQSL and QRZ confirmations it would take off; the edit takes them
+/// off with their dates, eQSL's AG mark and LoTW's DXCC, keeps the paper card with its date, route
+/// and credit, takes LoTW's credit off the contact no card stands behind, and queues nothing. The
+/// mirror follows. The run's undo puts every contact back exactly, confirmations and all. An
+/// unchanged call (case aside) takes nothing off.
+#[test]
+fn a_bulk_station_call_change_clears_the_services_confirmations_and_undo_restores_them() {
+    let d = Dir::new("tools-bulk-unconfirm");
+    let engine = shared(
+        &d,
+        &[
+            adif(
+                "W1AW",
+                "120000",
+                "<STATION_CALLSIGN:5>KD0AA<QSL_RCVD:1>Y<QSL_RCVD_VIA:1>B<QSLRDATE:8>20260110\
+                 <LOTW_QSL_RCVD:1>Y<LOTW_QSLRDATE:8>20260105<EQSL_QSL_RCVD:1>Y\
+                 <EQSL_QSLRDATE:8>20260106<APP_EQSL_AG:1>Y<APP_QRZLOG_STATUS:1>C\
+                 <CREDIT_GRANTED:4>DXCC",
+            ),
+            adif(
+                "K1ABC",
+                "120100",
+                "<STATION_CALLSIGN:5>KD0AA<DXCC:3>291<LOTW_QSL_RCVD:1>Y\
+                 <LOTW_QSLRDATE:8>20260105<APP_NEXUS_LOTW_DXCC:1>1<CREDIT_GRANTED:4>DXCC",
+            ),
+            adif(
+                "N0XYZ",
+                "120200",
+                "<STATION_CALLSIGN:5>kd0aa<LOTW_QSL_RCVD:1>Y<EQSL_QSL_RCVD:1>Y",
+            ),
+        ],
+    );
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let to = |call: &str| {
+        [Change {
+            field: Field::StationCallsign,
+            value: Some(call.into()),
+        }]
+    };
+
+    let same = bulk_preview(&engine, &ids, &to("KD0AA")).unwrap();
+    assert_eq!(
+        (same.change, same.unconfirm),
+        (0, 0),
+        "the same call: nothing"
+    );
+    let (made, _) = bulk_edit(&engine, &ids, 3, &to("KD0AA"));
+    assert_eq!(made.unwrap().changed, 0);
+    assert_eq!(rows(&engine), before, "an unchanged call clears nothing");
+
+    let preview = bulk_preview(&engine, &ids, &to("W6R")).unwrap();
+    assert_eq!((preview.change, preview.unconfirm), (3, 6));
+
+    let (made, dur) = bulk_edit(&engine, &ids, 3, &to("W6R"));
+    let made = made.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(made.changed, 3);
+    let after = rows(&engine);
+    let extra =
+        |r: &QsoRecord, k: &str| r.extra.iter().find(|(t, _)| t == k).map(|(_, v)| v.clone());
+    for r in &after {
+        assert_eq!(r.station_callsign.as_deref(), Some("W6R"));
+        assert!(
+            !r.qsl_rcvd.lotw && !r.qsl_rcvd.eqsl && !r.qsl_rcvd.qrz,
+            "{}",
+            r.call
+        );
+        for k in [
+            "LOTW_QSLRDATE",
+            "EQSL_QSLRDATE",
+            "APP_EQSL_AG",
+            "APP_NEXUS_LOTW_DXCC",
+        ] {
+            assert_eq!(extra(r, k), None, "{}: {k}", r.call);
+        }
+    }
+    let (card, lotw, plain) = (&after[0], &after[1], &after[2]);
+    assert!(card.qsl_rcvd.card && card.confirmed && card.award_confirmed);
+    assert_eq!(extra(card, "QSLRDATE").as_deref(), Some("20260110"));
+    assert_eq!(extra(card, "QSL_RCVD_VIA").as_deref(), Some("B"));
+    assert_eq!(card.credit_granted, ["DXCC"], "the card stands behind it");
+    assert!(!lotw.confirmed && !lotw.award_confirmed);
+    assert!(
+        lotw.credit_granted.is_empty(),
+        "LoTW's credit goes with LoTW's QSL"
+    );
+    assert_eq!(lotw.dxcc, Some(291), "the log's own DXCC stays");
+    assert!(!plain.confirmed);
+    assert!(
+        engine_lock(&engine).take_pending_uploads().is_empty(),
+        "nothing queued by the tool"
+    );
+    settle(&engine);
+    let text = mirror(&d);
+    assert!(!text.contains("LOTW_QSL_RCVD") && !text.contains("EQSL_QSL_RCVD"));
+    assert!(!text.contains("APP_QRZLOG_STATUS"));
+    assert_eq!(text.matches("<QSL_RCVD:1>Y").count(), 1);
+
+    let (undone, dur) = undo_run(&engine, &made.run.unwrap());
+    assert_eq!(undone.unwrap().changed, 3);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(rows(&engine), before, "every confirmation back, exactly");
 }
 
 /// The check proposes no fix it cannot stand behind: a confirmed contact's DXCC and band are

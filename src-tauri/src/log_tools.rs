@@ -5,9 +5,10 @@
 //! with the lock released and made under it, a chunk at a time, as ONE run of the log's history —
 //! its `run` is what `undo_history_run` takes — and answers only once it is on disk
 //! ([`crate::durable_command`]). None sends anything anywhere: no tool changes the worked call, so
-//! every confirmation stays and nothing is queued to a service. The one stamp a tool clears is a
+//! nothing is queued to a service. The one change of stamps and confirmations a tool makes is a
 //! bulk STATION_CALLSIGN change's — the call the contact is uploaded under — so the next upload
-//! sends it under the new call (`tempo_app::logtools`' header).
+//! sends it under the new call, and the LoTW, eQSL and QRZ confirmations matched under the old
+//! one are taken off, a paper card kept (`tempo_app::logtools`' header).
 //!
 //! A bulk edit is made on exactly the contacts its preview counted: the preview answers their ids,
 //! and the edit takes those ids and the count the operator confirmed, and refuses a mismatch.
@@ -249,6 +250,8 @@ pub struct BulkPreviewDto {
     pub missing: usize,
     /// Of those it changes, the ones uploaded under the station call it changes: sent again.
     pub resend: usize,
+    /// The LoTW, eQSL and QRZ confirmations the changed station call takes off.
+    pub unconfirm: usize,
 }
 
 /// What a bulk edit would make of its contacts. Changes nothing.
@@ -270,6 +273,7 @@ pub async fn bulk_edit_preview(
             unchanged: p.unchanged,
             missing: p.missing,
             resend: p.resend,
+            unconfirm: p.unconfirm,
         })
     })
     .await

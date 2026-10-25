@@ -1806,7 +1806,8 @@ export interface FieldChange { field: CleanupField; value: string | null }
 export type BulkTarget = { ids: string[] } | { query: LogQuery }
 
 /** What a bulk edit would make of its contacts. `ids`: the contacts previewed, which the apply is
- *  handed back. `resend`: of those it changes, the ones uploaded under the station call it changes. */
+ *  handed back. `resend`: of those it changes, the ones uploaded under the station call it changes.
+ *  `unconfirm`: the LoTW, eQSL and QRZ confirmations that change of station call takes off. */
 export interface BulkPreview {
   ids: string[]
   selected: number
@@ -1814,6 +1815,7 @@ export interface BulkPreview {
   unchanged: number
   missing: number
   resend: number
+  unconfirm: number
 }
 
 export async function bulkEditPreview(target: BulkTarget, changes: FieldChange[]): Promise<BulkPreview> {
