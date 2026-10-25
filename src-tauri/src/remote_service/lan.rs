@@ -626,11 +626,19 @@ fn release(authority: &Authority, devices: &[String]) {
 
 /// [`Lan::expire`]. A computer the book does not hold now (not read yet, or never in it) stays in the
 /// cache, as does every one when the store will not keep the book: the LAN still refuses each at
-/// every admission.
+/// every admission. A computer removed at the shack whose removal the book's store did not keep
+/// (`enrol::Enrolment::is_removed`) is taken out with them.
 fn expire(book: &Book, authority: &Authority, enrolment: &enrol::Enrolment) {
+    let removed = book
+        .view(Instant::now())
+        .devices
+        .into_iter()
+        .filter_map(|computer| pairing::hex32(&computer.key))
+        .filter(|pin| enrolment.is_removed(pin));
     let gone: Vec<[u8; 32]> = enrolment
         .expired()
         .into_iter()
+        .chain(removed)
         .filter(|pin| book.forget(&device_id(pin)))
         .collect();
     if gone.is_empty() {

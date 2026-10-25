@@ -148,6 +148,10 @@ describe('what the card says', () => {
     remoteStationAction.mockRejectedValueOnce('credentialStoreUnavailable')
     await pressedAtShack(screen.getByRole('button', { name: 'Pair a computer' }))
     expect(screen.getByRole('alert').textContent).toBe('Nexus could not read or keep this station’s network key and paired computers in your operating system’s credential store. Press Reset network identity under Network identity below. A reset removes every paired computer, so each one has to be paired again.')
+     // Removed, and the station could not link it to the other list by anything it holds.
+    remoteStationAction.mockRejectedValueOnce('removeElsewhere')
+    await pressedAtShack(screen.getByRole('button', { name: 'Remove' }))
+    expect(screen.getByRole('alert').textContent).toBe('Removed. Nexus could not confirm whether this computer is also under “Your computers” or “Paired computers”. Check both lists, and remove it there too if it is.')
   })
 
   it('sends a key or a paired list it cannot read to Reset network identity only, named as the card names it', async () => {

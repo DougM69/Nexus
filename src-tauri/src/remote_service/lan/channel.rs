@@ -450,10 +450,21 @@ pub(super) async fn connection<S>(
     let Ok(mut ticket) = shared.gate.admit(peer.ip(), Instant::now()) else {
         return;
     };
+    // A first read of the signed-in computers that did not complete admits nobody: read again
+    // before this one is asked (at most once a while), off the runtime, since the store can block,
+    // and inside the handshake's deadline.
+    let enrolment = shared.desk.as_ref().map(|desk| desk.enrolment.clone());
+    let opening = async {
+        if let Some(enrolment) = enrolment.filter(|enrolment| !enrolment.is_read()) {
+            let now = Instant::now();
+            let _ = tokio::task::spawn_blocking(move || enrolment.retry(now)).await;
+        }
+        handshake(stream, &shared, Some(peer)).await
+    };
     // 2 and 3. The handshake, inside one deadline, unless enough newer ones arrive meanwhile to cut
     // it: a handshake holds a handshake's place, never a session's.
     let handshake = tokio::select! {
-        done = tokio::time::timeout(shared.handshake, handshake(stream, &shared, Some(peer))) => done.ok(),
+        done = tokio::time::timeout(shared.handshake, opening) => done.ok(),
         // ⛔ Cut to make room: newer arrivals did it, not this address, so it is never counted
         // against it. Counted, a flood could cut a paired computer's handshakes until its own
         // address was ignored.

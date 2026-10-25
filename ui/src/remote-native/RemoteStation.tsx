@@ -155,6 +155,8 @@ export function RemoteStation() {
       : issue === 'inviteLimit' ? t('remote.account.inviteLimit')
       : issue === 'noKey' ? t('remote.vaultFailed')
       : issue === 'notSignInDevice' ? t('remote.account.allowTransmitGone')
+      // Removed on every road the station could link it to; the other list may still hold it.
+      : issue === 'removeElsewhere' ? t('remote.removeElsewhere')
       : t('remote.requestFailed')}</p>}
     {/* S3-M1: browsers check this station's stream against the key the service recorded for it at
         pairing. Another one there is not fixed by waiting, so it gets its own line until it is. */}
@@ -175,6 +177,7 @@ export function RemoteStation() {
       </span>
     </div> })}
     {account?.reproof && <p role="alert">{t('remote.account.reproof')}</p>}
+    {account?.removalsUnreadable && <p role="alert">{t('remote.account.removalsUnreadable')}</p>}
     {/* Signing in again, for a station bound already: the same sign-in, the station otherwise as it was. */}
     {phase !== 'unpaired' && (account?.signingIn ? <>
       <p role="status">{t('remote.account.signingIn')}</p>
@@ -289,6 +292,10 @@ export function RemoteStation() {
           </span>
         </li>)}
       </ul>}
+      {/* An invitation taken back takes off the LAN every guest's computer the station cannot tell whose it is:
+          said by name, so their owners know to sign in on them again. */}
+      {(account?.alsoUninvited?.length ?? 0) > 0
+        && <p role="status">{t('remote.account.alsoUninvited', { names: account!.alsoUninvited!.join(', ') })}</p>}
       <label>{t('remote.account.email')}<input type="email" value={inviteEmail} maxLength={254} onChange={event => setInviteEmail(event.target.value)} /></label>
       <label>{t('remote.account.role')}<select value={inviteRole} onChange={event => setInviteRole(event.target.value === 'listen' ? 'listen' : 'operate')}>
         <option value="operate">{t('remote.account.role.operate')}</option>

@@ -135,6 +135,26 @@ it('invites someone with a role, lists the people invited, and takes an invitati
   await waitFor(() => expect(actions[actions.length - 1]).toEqual({ type: 'uninvite', email: 'k9.guest@example.test' }))
 })
 
+it('names the other computers an invitation taken back took off this network, and nothing when there were none', async () => {
+  shack(bound({ people: [], alsoUninvited: ['Old guest PC', 'Shed laptop'] }))
+  const told = await screen.findByText(EN['remote.account.alsoUninvited'].replace('{{names}}', 'Old guest PC, Shed laptop'))
+  expect(told.getAttribute('role')).toBe('status')
+  cleanup()
+  shack(bound({ people: [], alsoUninvited: [] }))
+  await screen.findByRole('heading', { name: EN['remote.account.people'] })
+  expect(screen.queryByText(/Also taken off this network/), 'CONTROL: none taken').toBeNull()
+})
+
+it('points to Reset network identity while the list of computers removed here does not read, and says nothing once it does', async () => {
+  shack(bound({ removalsUnreadable: true }))
+  const told = await screen.findByText(EN['remote.account.removalsUnreadable'])
+  expect(told.getAttribute('role')).toBe('alert')
+  cleanup()
+  shack(bound({ removalsUnreadable: false }))
+  await screen.findByRole('heading', { name: EN['remote.account.people'] })
+  expect(screen.queryByText(EN['remote.account.removalsUnreadable']), 'CONTROL: it reads').toBeNull()
+})
+
 it('asks a bound station to sign in again once its proof key is retired, and waits for the browser', async () => {
   const actions = shack(bound({ reproof: true }), (action, status) => action.type === 'signInAgain'
     ? { ...status, account: { ...status.account!, signingIn: true } }

@@ -117,6 +117,22 @@ impl vault::AccountVault for MemoryVault {
     fn save_notified(&self, notified: &vault::Notified) -> Result<(), &'static str> {
         self.save_account_entry("account-notified", notified)
     }
+    fn ties(&self) -> Result<Option<vault::Ties>, &'static str> {
+        if self.refuses("account-ties") {
+            return Err("credentialStoreUnavailable");
+        }
+        self.account_entry("account-ties")
+    }
+    fn save_ties(
+        &self,
+        _held: &vault::DevicesHeld<'_>,
+        ties: &vault::Ties,
+    ) -> Result<(), &'static str> {
+        if self.refuses("account-ties") {
+            return Err("credentialStoreUnavailable");
+        }
+        self.save_account_entry("account-ties", ties)
+    }
 }
 impl Vault for MemoryVault {
     fn binding(&self) -> Result<Option<Binding>, &'static str> {

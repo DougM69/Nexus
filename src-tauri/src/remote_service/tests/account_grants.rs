@@ -10,7 +10,8 @@
 //! loopback; the issuer is never asked, because the station already holds its keys, fetched at
 //! that same time.
 use super::*;
-use crate::remote_service::vault::{AccountKeys, AccountVault, DevicesHeld, People};
+use crate::remote_service::lan::enrol::{mailbox_tag, short};
+use crate::remote_service::vault::{AccountKeys, AccountVault, DevicesHeld, People, Tie, Ties};
 use tempo_client::account::{mailbox, CachedDevice, Invite, KeySet, Owner, Role, Tenant};
 
 const CASES: &str =
@@ -2775,4 +2776,1324 @@ async fn a_state_that_will_not_read_removes_the_kept_waivers() {
     let service = launch_granting_on_sign_in(&cloud, &vault);
     assert!(waivers_entry_removed(&vault).await, "entry removed");
     assert!(!recorded(&service), "nothing restored");
+}
+
+// ---- Remove at the shack ends every road -------------------------------------------------------
+
+/// The fixture's computer in the LAN book as well (`DESKTOP-7Q`, by the LAN key its proof names),
+/// with `others` paired beside it, and the service granting it on its own sign-in and listing
+/// `rows`: the station, its LAN store, and the computer's LAN id.
+async fn on_both_roads(
+    cloud: &FakeCloud,
+    vault: &MemoryVault,
+    others: &[(&[u8; 32], &str)],
+    rows: Vec<serde_json::Value>,
+) -> (
+    Service,
+    crate::remote_service::lan::tests::LanStore,
+    crate::remote_service::lan::tests::Scratch,
+    String,
+) {
+    on_both_roads_at(cloud, vault, others, rows, fixture_now).await
+}
+/// [`on_both_roads`], the station's clock `now_s`.
+async fn on_both_roads_at(
+    cloud: &FakeCloud,
+    vault: &MemoryVault,
+    others: &[(&[u8; 32], &str)],
+    rows: Vec<serde_json::Value>,
+    now_s: fn() -> u64,
+) -> (
+    Service,
+    crate::remote_service::lan::tests::LanStore,
+    crate::remote_service::lan::tests::Scratch,
+    String,
+) {
+    use crate::remote_service::lan::tests::{LanStore, Scratch};
+    let pin = computer_lan_pin();
+    let (_, station) = station_key::Signer::generate().unwrap();
+    let mut paired = vec![(&pin, "DESKTOP-7Q")];
+    paired.extend_from_slice(others);
+    let store = LanStore::holding(&station, "60000000-0000-4000-8000-0000000000aa", &paired);
+    let scratch = Scratch::new();
+    let service = relaunched(cloud, vault, &store, &scratch, now_s);
+    eventually(&service, "the book read", |s| {
+        s.lan
+            .as_ref()
+            .is_some_and(|lan| lan.devices.len() == paired.len())
+    })
+    .await;
+    let _ = listed(&service, cloud, rows).await;
+    (service, store, scratch, lan::device_id(&pin))
+}
+/// The station granting on a sign-in, on `vault` and the LAN `store`, its clock `now_s`: launched,
+/// or launched again as after a restart.
+fn relaunched(
+    cloud: &FakeCloud,
+    vault: &MemoryVault,
+    store: &crate::remote_service::lan::tests::LanStore,
+    scratch: &crate::remote_service::lan::tests::Scratch,
+    now_s: fn() -> u64,
+) -> Service {
+    let (bind, _) = binder(Vec::new());
+    let accounts = Accounts {
+        grants_on_sign_in: true,
+        now_s,
+        ..accounts(vault, bind)
+    };
+    super::lan_grants::with_lan(
+        launch_with(cloud, vault, accounts),
+        &engine(),
+        store,
+        scratch,
+    )
+}
+/// The fixture's computer's LAN key's pin.
+fn computer_lan_pin() -> [u8; 32] {
+    tempo_stream::protocol::hex_bytes(&sha256(&key("computerLan")))
+        .unwrap()
+        .try_into()
+        .unwrap()
+}
+/// What the station keeps of the roads' links and of each removal (`lan::enrol`).
+fn ties_kept(vault: &MemoryVault) -> Ties {
+    vault.ties().unwrap().unwrap_or_default()
+}
+/// Keeps `ties` as the station's links, and its copy in memory follows.
+fn keep_ties(service: &Service, vault: &MemoryVault, ties: Vec<Tie>) {
+    let mut kept = ties_kept(vault);
+    kept.ties.extend(ties);
+    vault.save_account_entry("account-ties", &kept).unwrap();
+    service.control.lock().unwrap().enrolment.reread();
+}
+/// The LAN ids the book holds now.
+fn in_book(status: &Status) -> Vec<String> {
+    status
+        .lan
+        .as_ref()
+        .map(|lan| lan.devices.iter().map(|d| d.id.clone()).collect())
+        .unwrap_or_default()
+}
+/// The service ids the fake service lists now.
+fn listed_ids(cloud: &FakeCloud) -> Vec<String> {
+    let listed: serde_json::Value = serde_json::from_str(&cloud.devices.lock().unwrap()).unwrap();
+    listed["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["id"].as_str().unwrap().to_string())
+        .collect()
+}
+/// The devices the station keeps a pin for now: what a list read after a removal cannot show.
+fn pinned(service: &Service) -> Vec<String> {
+    let control = service.control.lock().unwrap();
+    control.remembered.pins.keys().cloned().collect()
+}
+/// The names the room's tunnel takes now.
+fn on_tunnel(service: &Service) -> Vec<String> {
+    service.control.lock().unwrap().approved.names()
+}
+
+/// ★ REMOVE IN PAIRED COMPUTERS ENDS ITS INTERNET ROAD TOO: a computer on the LAN and, by its own
+/// sign-in, on the internet (its proof names both keys), allowed to transmit at the shack. Remove
+/// at the shack takes it out of the LAN book, out of the room's tunnel, its pin and its waiver, and
+/// tells the service, which no longer lists it.
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_a_paired_computer_ends_its_internet_road_too() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (service, _store, _scratch, lan_id) = on_both_roads(
+        &cloud,
+        &vault,
+        &[],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    service.action(allow(COMPUTER_ID)).await.unwrap();
+    let named = lan::tunnel_device_id(&road_pin());
+    let status = service.status().unwrap();
+    assert_eq!(
+        status.pinned_devices,
+        vec![COMPUTER_ID.to_string()],
+        "premise"
+    );
+    assert_eq!(on_tunnel(&service), vec![named.clone()], "premise");
+    let operations = service.control.lock().unwrap().operations.clone();
+    assert!(
+        !operations.tx_held(COMPUTER_ID, past_the_window()),
+        "premise: its waiver"
+    );
+
+    let status = service
+        .action(Action::LanRevoke { device_id: lan_id })
+        .await
+        .unwrap();
+    assert!(in_book(&status).is_empty(), "still on the LAN");
+    assert!(pinned(&service).is_empty(), "still pinned");
+    assert!(on_tunnel(&service).is_empty(), "still on the tunnel");
+    // Read before any list could grant it again: its waiver ended with the Remove.
+    assert!(
+        operations.tx_held(COMPUTER_ID, past_the_window()),
+        "its waiver kept"
+    );
+    assert!(listed_ids(&cloud).is_empty(), "the service was not told");
+}
+
+/// ★ REMOVE IN YOUR COMPUTERS ENDS ITS ROAD ON THIS NETWORK TOO: the same computer, removed from the
+/// account's list at the shack, leaves the LAN book at once, in memory and in the store. CONTROL:
+/// another computer paired by code stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_a_listed_computer_ends_its_road_on_this_network_too() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let other: [u8; 32] = [7; 32];
+    let (service, store, _scratch, lan_id) = on_both_roads(
+        &cloud,
+        &vault,
+        &[(&other, "Den PC")],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    let removed = service
+        .action(Action::Device {
+            device_id: COMPUTER_ID.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await;
+    let status = service.status().unwrap();
+    assert_eq!(
+        in_book(&status),
+        vec![lan::device_id(&other)],
+        "still on the LAN, or the other one gone"
+    );
+    let kept = store.devices.lock().unwrap().clone().unwrap();
+    assert!(!kept.contains(&sha256(&key("computerLan"))), "still kept");
+    assert!(!in_book(&status).contains(&lan_id));
+    assert!(listed_ids(&cloud).is_empty());
+    assert_eq!(removed.err(), None);
+}
+
+/// ★ A COMPUTER REMOVED AT THE SHACK COMES BACK HELD: allowed to transmit, then removed in Paired
+/// computers, it signs in again and the service lists it again. It is granted again on that
+/// sign-in and held from transmit, under its service id and its tunnel name, and it is not back in
+/// the LAN book: nothing the shack waived before follows it back. The station's clock reads the
+/// removal as made before the fixture's proof was signed, past the clocks' leeway (a removal reads
+/// it on the side that refuses), so the proof is the new sign-in's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_removed_at_the_shack_comes_back_held_when_it_signs_in_again() {
+    static CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    fn clock() -> u64 {
+        CLOCK.load(Ordering::SeqCst)
+    }
+    let before_signing =
+        cases()["issuedAt"].as_u64().unwrap() - tempo_client::id_token::LEEWAY_S - 1;
+    // Listed again under the approval it had, or under a new one.
+    for generation in [3, 4] {
+        CLOCK.store(fixture_now(), Ordering::SeqCst);
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        let row = computer_row(&token("computer"), "operate");
+        let (service, _store, _scratch, lan_id) =
+            on_both_roads_at(&cloud, &vault, &[], vec![row.clone()], clock).await;
+        service.action(allow(COMPUTER_ID)).await.unwrap();
+        let operations = service.control.lock().unwrap().operations.clone();
+        let named = lan::tunnel_device_id(&road_pin());
+        assert!(!operations.tx_held(&named, past_the_window()), "premise");
+        CLOCK.store(before_signing, Ordering::SeqCst);
+        service
+            .action(Action::LanRevoke { device_id: lan_id })
+            .await
+            .unwrap();
+        CLOCK.store(fixture_now(), Ordering::SeqCst);
+
+        // Signed in again: approved on its proof.
+        let mut again = row;
+        again["generation"] = generation.into();
+        *cloud.devices.lock().unwrap() = json!({ "devices": [again] }).to_string();
+        let status = service.action(Action::Refresh {}).await.unwrap();
+        assert_eq!(
+            status.pinned_devices,
+            vec![COMPUTER_ID.to_string()],
+            "generation {generation}: granted again on its sign-in"
+        );
+        assert!(
+            in_book(&status).is_empty(),
+            "generation {generation}: back on the LAN"
+        );
+        let now = std::time::Instant::now();
+        assert!(
+            operations.tx_held(COMPUTER_ID, now),
+            "generation {generation}: free under its id"
+        );
+        assert!(
+            operations.tx_held(&named, now),
+            "generation {generation}: free on the tunnel"
+        );
+    }
+}
+
+/// ★ A ROAD THAT CANNOT BE ENDED NOW LEAVES LESS ACCESS, NEVER MORE: with the service down for
+/// removals, Remove in Paired computers still takes the computer off the LAN and off the tunnel at
+/// once and keeps its removal waiting, so the next list grants nothing on its proof. With the LAN's
+/// store locked, Remove in Your computers still takes it out of the LAN in memory and tells the
+/// service, and the shack is shown the store's failure.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_that_cannot_end_every_road_now_leaves_less_access() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let row = computer_row(&token("computer"), "operate");
+    let (service, _store, _scratch, lan_id) =
+        on_both_roads(&cloud, &vault, &[], vec![row.clone()]).await;
+    cloud.refusing_removals.store(true, Ordering::SeqCst);
+    let status = service
+        .action(Action::LanRevoke { device_id: lan_id })
+        .await
+        .unwrap();
+    assert!(in_book(&status).is_empty());
+    assert_eq!(status.account.removals, vec![COMPUTER_ID.to_string()]);
+    assert!(pinned(&service).is_empty());
+    assert!(on_tunnel(&service).is_empty());
+    service.action(Action::Refresh {}).await.unwrap();
+    assert!(pinned(&service).is_empty(), "granted again meanwhile");
+    assert!(on_tunnel(&service).is_empty());
+
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (service, store, _scratch, lan_id) = on_both_roads(&cloud, &vault, &[], vec![row]).await;
+    store.locked.store(true, Ordering::SeqCst);
+    let removed = service
+        .action(Action::Device {
+            device_id: COMPUTER_ID.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await;
+    assert_eq!(removed.err(), Some("credentialStoreUnavailable"));
+    let status = service.status().unwrap();
+    assert!(!in_book(&status).contains(&lan_id), "still on the LAN");
+    assert!(pinned(&service).is_empty());
+    assert!(listed_ids(&cloud).is_empty(), "the service was not told");
+}
+
+/// ★ ONLY A LINK THE STATION KEPT LINKS THE ROADS: a computer the service lists with the LAN key of
+/// one in the book, but no proof that names both, is not taken to be that computer. Remove in Paired
+/// computers takes the LAN computer out and leaves the listed one as it is, and the shack is told to
+/// look there too: by its key alone, since the two are named otherwise.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_listing_no_proof_links_is_left_and_the_shack_told() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    // Named otherwise than in the book: only the key it is listed with says it may be the same.
+    let mut row = computer_row(&token("browser"), "operate");
+    row["name"] = "LAPTOP-3".into();
+    let (service, _store, _scratch, lan_id) = on_both_roads(&cloud, &vault, &[], vec![row]).await;
+    let removed = service
+        .action(Action::LanRevoke { device_id: lan_id })
+        .await;
+    assert_eq!(listed_ids(&cloud), vec![COMPUTER_ID.to_string()], "guessed");
+    assert!(in_book(&service.status().unwrap()).is_empty());
+    assert_eq!(removed.err(), Some("removeElsewhere"));
+}
+
+/// ★ ONE COMPUTER LISTED TWICE GOES AT ONCE: two listings the room's tunnel takes by one key (one
+/// name) are one computer's, and Remove of either ends both.
+#[tokio::test(flavor = "multi_thread")]
+async fn one_computer_listed_twice_is_removed_from_both_listings() {
+    const TWICE: &str = "10000000-0000-4000-8000-00000000000f";
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let mut second = computer_row(&token("computer"), "operate");
+    second["id"] = TWICE.into();
+    let status = listed(
+        &service,
+        &cloud,
+        vec![computer_row(&token("computer"), "operate"), second],
+    )
+    .await;
+    assert_eq!(status.pinned_devices.len(), 2, "premise");
+    service
+        .action(Action::Device {
+            device_id: COMPUTER_ID.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    assert!(pinned(&service).is_empty(), "{:?}", pinned(&service));
+    assert!(on_tunnel(&service).is_empty());
+    assert!(listed_ids(&cloud).is_empty(), "{:?}", listed_ids(&cloud));
+}
+
+/// Reset network identity removes every paired computer, and with each its internet road.
+#[tokio::test(flavor = "multi_thread")]
+async fn resetting_the_network_identity_ends_each_computers_internet_road() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (service, _store, _scratch, _) = on_both_roads(
+        &cloud,
+        &vault,
+        &[],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    let status = service.action(Action::LanReset {}).await.unwrap();
+    assert!(in_book(&status).is_empty());
+    assert!(pinned(&service).is_empty());
+    assert!(on_tunnel(&service).is_empty());
+    assert!(listed_ids(&cloud).is_empty());
+}
+
+/// ★ AN OLD PROOF BRINGS A REMOVED COMPUTER BACK ON NO ROAD: removed in Paired computers, the
+/// computer's listing comes back with the proof it had, signed before the removal. Nothing is
+/// granted on it, and its removal is kept for the service, which no longer lists it after the next
+/// list. Only a sign-in after the removal brings it back
+/// (`a_computer_removed_at_the_shack_comes_back_held_when_it_signs_in_again`).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_old_proof_brings_a_removed_computer_back_on_no_road() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let row = computer_row(&token("computer"), "operate");
+    let (service, _store, _scratch, lan_id) =
+        on_both_roads(&cloud, &vault, &[], vec![row.clone()]).await;
+    service
+        .action(Action::LanRevoke { device_id: lan_id })
+        .await
+        .unwrap();
+    let mut again = row;
+    again["generation"] = 4.into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [again] }).to_string();
+    let status = service.action(Action::Refresh {}).await.unwrap();
+    assert!(
+        pinned(&service).is_empty(),
+        "granted again on its old proof"
+    );
+    assert!(on_tunnel(&service).is_empty());
+    assert_eq!(status.account.removals, vec![COMPUTER_ID.to_string()]);
+    service.action(Action::Refresh {}).await.unwrap();
+    assert!(listed_ids(&cloud).is_empty(), "the service was not told");
+}
+
+/// ★ WITH NO LIST HEARD, REMOVE STILL ENDS BOTH ROADS AND SAYS SO: after a restart with the service
+/// unreachable, the station has no list. Remove in Paired computers takes the computer off the LAN
+/// and tells the shack to check the other list. Its internet road, still pinned from before the
+/// restart, ends at the first list the station hears, before the tunnel takes it, and the service
+/// is told at the next.
+#[tokio::test(flavor = "multi_thread")]
+async fn with_no_list_heard_a_paired_computer_is_removed_on_both_roads_and_the_shack_told() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (service, store, scratch, lan_id) = on_both_roads(
+        &cloud,
+        &vault,
+        &[],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    assert_eq!(pinned(&service), vec![COMPUTER_ID.to_string()], "premise");
+    drop(service);
+    cloud.refusing.store(true, Ordering::SeqCst);
+    let service = relaunched(&cloud, &vault, &store, &scratch, fixture_now);
+    eventually(&service, "the book read", |s| {
+        s.lan.as_ref().is_some_and(|lan| lan.devices.len() == 1)
+    })
+    .await;
+    assert_eq!(pinned(&service), vec![COMPUTER_ID.to_string()], "premise");
+
+    let removed = service
+        .action(Action::LanRevoke { device_id: lan_id })
+        .await;
+    assert_eq!(removed.err(), Some("removeElsewhere"), "no list, and Ok");
+    assert!(in_book(&service.status().unwrap()).is_empty());
+
+    cloud.refusing.store(false, Ordering::SeqCst);
+    service.action(Action::Refresh {}).await.unwrap();
+    assert!(pinned(&service).is_empty(), "still pinned");
+    assert!(on_tunnel(&service).is_empty(), "on the tunnel");
+    service.action(Action::Refresh {}).await.unwrap();
+    assert!(listed_ids(&cloud).is_empty(), "the service was not told");
+}
+
+/// ★ A REMOVAL THE CONTROLLER COULD NOT TAKE IS NOT LOST: with the controller busy on a list and
+/// another command waiting, Remove in Paired computers is answered `remoteBusy`, but the computer is
+/// off the LAN and unpinned at once, and the list that was under way grants nothing on its proof:
+/// its removal reaches the service at the next list.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_the_controller_could_not_take_is_not_lost() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (service, _store, _scratch, lan_id) = on_both_roads(
+        &cloud,
+        &vault,
+        &[],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    cloud.holding_lists.store(true, Ordering::SeqCst);
+    let mut busy = std::pin::pin!(service.action(Action::Refresh {}));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut busy)
+            .await
+            .is_err(),
+        "premise: the controller waits on the service's list"
+    );
+    let mut waiting = std::pin::pin!(service.action(Action::Refresh {}));
+    let _ = tokio::time::timeout(Duration::from_millis(100), &mut waiting).await;
+    let removed = service
+        .action(Action::LanRevoke { device_id: lan_id })
+        .await;
+    assert_eq!(removed.err(), Some("remoteBusy"), "premise");
+    assert!(in_book(&service.status().unwrap()).is_empty());
+    assert!(pinned(&service).is_empty());
+    cloud.holding_lists.store(false, Ordering::SeqCst);
+    let _ = busy.await;
+    let _ = waiting.await;
+    assert!(pinned(&service).is_empty(), "granted again on its proof");
+    assert!(on_tunnel(&service).is_empty());
+    service.action(Action::Refresh {}).await.unwrap();
+    assert!(pinned(&service).is_empty());
+    assert!(listed_ids(&cloud).is_empty(), "the service was never told");
+}
+
+/// ★ BOTH LISTINGS OF ONE COMPUTER END AT ONCE: two listings the room's tunnel takes by one key.
+/// While the service is still being told of the first, the second is already unpinned and off the
+/// tunnel: no road waits on the service.
+#[tokio::test(flavor = "multi_thread")]
+async fn both_listings_of_one_computer_end_before_the_service_is_told() {
+    const TWICE: &str = "10000000-0000-4000-8000-00000000000f";
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let mut second = computer_row(&token("computer"), "operate");
+    second["id"] = TWICE.into();
+    let status = listed(
+        &service,
+        &cloud,
+        vec![computer_row(&token("computer"), "operate"), second],
+    )
+    .await;
+    assert_eq!(status.pinned_devices.len(), 2, "premise");
+    cloud.holding_lists.store(true, Ordering::SeqCst);
+    let mut busy = std::pin::pin!(service.action(Action::Refresh {}));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut busy)
+            .await
+            .is_err(),
+        "premise: the controller waits on the service's list"
+    );
+    let mut press = std::pin::pin!(service.action(Action::Device {
+        device_id: COMPUTER_ID.into(),
+        approve: false,
+        key: None,
+        kind: None,
+    }));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut press)
+            .await
+            .is_err(),
+        "premise: the press waits on the service"
+    );
+    let (pins, tunnel) = (pinned(&service), on_tunnel(&service));
+    cloud.holding_lists.store(false, Ordering::SeqCst);
+    let _ = busy.await;
+    let _ = press.await;
+    assert!(pins.is_empty(), "{pins:?}");
+    assert!(tunnel.is_empty(), "{tunnel:?}");
+}
+
+/// ★ A LINK OF A LINK IS FOLLOWED: two computers in the LAN book whose proofs named one internet
+/// key, and that key's listing. Remove of the second in Paired computers ends the listing, and
+/// through it the first.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_remove_follows_a_link_of_a_link() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let other: [u8; 32] = [7; 32];
+    let (service, _store, _scratch, first) = on_both_roads(
+        &cloud,
+        &vault,
+        &[(&other, "Den PC")],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    keep_ties(
+        &service,
+        &vault,
+        vec![Tie {
+            lan: short(&tempo_client::hex(&other)),
+            key: short(&sha256(&key("road"))),
+            mailbox: None,
+            enrolled: true,
+            vouched: false,
+        }],
+    );
+    let status = service
+        .action(Action::LanRevoke {
+            device_id: lan::device_id(&other),
+        })
+        .await
+        .unwrap();
+    assert!(
+        !in_book(&status).contains(&first),
+        "the first, linked through it, stays"
+    );
+    assert!(in_book(&status).is_empty());
+    assert!(pinned(&service).is_empty());
+    assert!(listed_ids(&cloud).is_empty());
+}
+
+/// ★ A LISTING WHOSE LAN KEY THE BOOK DOES NOT HOLD IS NOTHING TO CHECK: removed in Your
+/// computers, a computer listed with a LAN key no computer in the book holds (and named otherwise)
+/// is simply removed: the shack is not sent to look in the other list.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_listing_whose_lan_key_the_book_does_not_hold_is_simply_removed() {
+    use crate::remote_service::lan::tests::{LanStore, Scratch};
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let other: [u8; 32] = [7; 32];
+    let (_, station) = station_key::Signer::generate().unwrap();
+    let store = LanStore::holding(
+        &station,
+        "60000000-0000-4000-8000-0000000000aa",
+        &[(&other, "Den PC")],
+    );
+    let scratch = Scratch::new();
+    let service = relaunched(&cloud, &vault, &store, &scratch, fixture_now);
+    eventually(&service, "the book read", |s| {
+        s.lan.as_ref().is_some_and(|lan| lan.devices.len() == 1)
+    })
+    .await;
+    // Its proof names a LAN key; none it names is in the book.
+    let _ = listed(
+        &service,
+        &cloud,
+        vec![computer_row(&token("browser"), "operate")],
+    )
+    .await;
+    let removed = service
+        .action(Action::Device {
+            device_id: COMPUTER_ID.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await;
+    assert_eq!(removed.err(), None);
+    assert_eq!(in_book(&service.status().unwrap()).len(), 1);
+}
+
+/// ★ A GUEST'S LISTING THAT NAMES A COMPUTER'S LAN KEY IS NOT TAKEN FOR IT: a guest signs in
+/// naming the LAN key of a computer paired at the shack. Remove of the guest's listing leaves that
+/// computer in the book, and the shack is told to check the other list.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guests_listing_naming_a_paired_computers_key_does_not_remove_it() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(
+        &cloud.origin,
+        vec![Invite {
+            mailbox: mailbox("K9.Guest@example.test"),
+            role: Role::Operate,
+        }],
+    );
+    let mut row = computer_row(&token("guest"), "operate");
+    row["name"] = "GUEST-PC".into();
+    let (service, _store, _scratch, lan_id) = on_both_roads(&cloud, &vault, &[], vec![row]).await;
+    assert_eq!(pinned(&service), vec![COMPUTER_ID.to_string()], "premise");
+    assert!(
+        ties_kept(&vault).ties.iter().any(|t| t.mailbox.is_some()),
+        "premise: its claim kept"
+    );
+    let removed = service
+        .action(Action::Device {
+            device_id: COMPUTER_ID.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await;
+    assert_eq!(in_book(&service.status().unwrap()), vec![lan_id], "taken");
+    assert_eq!(removed.err(), Some("removeElsewhere"));
+}
+
+/// ★ AN INVITATION TAKEN BACK TAKES THAT GUEST'S COMPUTERS OFF THE LAN AT ONCE, the service
+/// unreachable: the one its link names as theirs, and a guest's computer kept with no link to say
+/// whose. CONTROL: the owner's computer and one paired by code stay.
+#[tokio::test(flavor = "multi_thread")]
+async fn uninviting_a_guest_takes_their_computers_off_the_lan_at_once() {
+    let cloud = fake_cloud().await;
+    let guest = mailbox("K9.Guest@example.test");
+    let vault = owned_vault(
+        &cloud.origin,
+        vec![Invite {
+            mailbox: guest.clone(),
+            role: Role::Operate,
+        }],
+    );
+    let (theirs, unknown, by_code) = ([4u8; 32], [5u8; 32], [6u8; 32]);
+    let (service, store, _scratch, owners) = on_both_roads(
+        &cloud,
+        &vault,
+        &[
+            (&theirs, "Guest PC"),
+            (&unknown, "Old guest PC"),
+            (&by_code, "Den PC"),
+        ],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    let mut cache = vault.device_cache().unwrap().unwrap();
+    for pin in [theirs, unknown] {
+        cache
+            .keep(CachedDevice {
+                pin: tempo_client::hex(&pin),
+                role: Role::Operate,
+                guest: true,
+                issued_at: fixture_now() - 100,
+                confirmed_at: 0,
+            })
+            .unwrap();
+    }
+    vault.save_account_entry("account-devices", &cache).unwrap();
+    keep_ties(
+        &service,
+        &vault,
+        vec![Tie {
+            lan: short(&tempo_client::hex(&theirs)),
+            key: "0123456789abcdef".into(),
+            mailbox: Some(mailbox_tag(&guest)),
+            enrolled: true,
+            vouched: true,
+        }],
+    );
+    cloud.refusing.store(true, Ordering::SeqCst);
+    service
+        .action(Action::Uninvite {
+            email: "K9.Guest@example.test".into(),
+        })
+        .await
+        .unwrap();
+    let status = service.status().unwrap();
+    let book = in_book(&status);
+    assert_eq!(book, vec![owners, lan::device_id(&by_code)], "{book:?}");
+    let kept = store.devices.lock().unwrap().clone().unwrap();
+    assert!(!kept.contains(&tempo_client::hex(&theirs)), "still kept");
+    // The shack is told of the one taken with no link to say it was theirs.
+    assert_eq!(
+        status.account.also_uninvited,
+        vec!["Old guest PC".to_string()]
+    );
+}
+
+/// ★ A REMOVAL THE LAN'S STORE DID NOT KEEP IS STILL A REMOVAL AFTER A RESTART: with the LAN's
+/// store locked, Remove in Paired computers takes the computer out in memory and shows the store's
+/// failure; the store still lists it. Launched again with the store unlocked, the computer is taken
+/// out of the book at once, and the store no longer lists it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_the_lan_store_did_not_keep_holds_after_a_restart() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (service, store, scratch, lan_id) = on_both_roads(
+        &cloud,
+        &vault,
+        &[],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    store.locked.store(true, Ordering::SeqCst);
+    let removed = service
+        .action(Action::LanRevoke { device_id: lan_id })
+        .await;
+    assert_eq!(removed.err(), Some("credentialStoreUnavailable"), "premise");
+    let lan_pin = sha256(&key("computerLan"));
+    let kept = || store.devices.lock().unwrap().clone().unwrap_or_default();
+    assert!(
+        kept().contains(&lan_pin),
+        "premise: the store still lists it"
+    );
+    drop(service);
+    store.locked.store(false, Ordering::SeqCst);
+    let service = relaunched(&cloud, &vault, &store, &scratch, fixture_now);
+    eventually(&service, "the book read, and it taken out", |s| {
+        s.lan
+            .as_ref()
+            .is_some_and(|lan| lan.key.is_some() && lan.devices.is_empty())
+    })
+    .await;
+    assert!(!kept().contains(&lan_pin), "still in the store");
+}
+
+/// ★ APPROVED AGAIN AT THE SHACK, A REMOVED COMPUTER STAYS: removed, it asks again and the
+/// operator approves it at the shack. Its key is the operator's again: the next list leaves it
+/// pinned, and keeps no removal for it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removed_computer_approved_again_at_the_shack_stays() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let row = computer_row(&token("computer"), "operate");
+    let (service, _store, _scratch, _) =
+        on_both_roads(&cloud, &vault, &[], vec![row.clone()]).await;
+    service
+        .action(Action::Device {
+            device_id: COMPUTER_ID.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    let mut asking = row;
+    asking["approved"] = 0.into();
+    asking["addedBy"] = "shack".into();
+    asking["proof"] = serde_json::Value::Null;
+    *cloud.devices.lock().unwrap() = json!({ "devices": [asking] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    service
+        .action(Action::Device {
+            device_id: COMPUTER_ID.into(),
+            approve: true,
+            key: Some(sha256(&key("road"))),
+            kind: Some(Kind::Computer),
+        })
+        .await
+        .unwrap();
+    assert_eq!(pinned(&service), vec![COMPUTER_ID.to_string()], "premise");
+    let status = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(
+        pinned(&service),
+        vec![COMPUTER_ID.to_string()],
+        "removed again"
+    );
+    assert!(status.account.removals.is_empty());
+    assert_eq!(listed_ids(&cloud), vec![COMPUTER_ID.to_string()]);
+}
+
+/// ★ AN INVITATION TAKEN BACK GOES ONLY BY WHAT A COMPUTER PROVED: a guest signs in naming the LAN
+/// key of the owner's computer paired by code (a claim the service does not check). Taking that
+/// guest's invitation back leaves the computer in the book, with no removal kept for it, and tells
+/// the shack of no other computer.
+#[tokio::test(flavor = "multi_thread")]
+async fn uninviting_a_guest_leaves_a_computer_their_listing_only_claims() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(
+        &cloud.origin,
+        vec![Invite {
+            mailbox: mailbox("K9.Guest@example.test"),
+            role: Role::Operate,
+        }],
+    );
+    let mut row = computer_row(&token("guest"), "operate");
+    row["name"] = "GUEST-PC".into();
+    let (service, _store, _scratch, lan_id) = on_both_roads(&cloud, &vault, &[], vec![row]).await;
+    let lan = short(&sha256(&key("computerLan")));
+    assert!(
+        ties_kept(&vault)
+            .ties
+            .iter()
+            .any(|t| t.lan == lan && t.mailbox.is_some() && !t.enrolled),
+        "premise: its claim kept"
+    );
+    cloud.refusing.store(true, Ordering::SeqCst);
+    service
+        .action(Action::Uninvite {
+            email: "K9.Guest@example.test".into(),
+        })
+        .await
+        .unwrap();
+    let status = service.status().unwrap();
+    assert_eq!(in_book(&status), vec![lan_id]);
+    assert!(
+        !ties_kept(&vault).removed.iter().any(|r| r.key == lan),
+        "kept as removed"
+    );
+    assert!(status.account.also_uninvited.is_empty());
+}
+
+/// ★ NO GUEST'S CLAIM KEEPS ANOTHER GUEST'S COMPUTER ON THE LAN: a guest's computer kept with no
+/// link to say whose, and a second guest's listing claiming its LAN key. Taking the first guest's
+/// invitation back still takes it off the LAN, and the shack is told of it by name.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_guests_claim_keeps_no_computer_on_the_lan_past_an_uninvite() {
+    let cloud = fake_cloud().await;
+    let (first, second) = (
+        mailbox("K9.Guest@example.test"),
+        mailbox("N0.Other@example.test"),
+    );
+    let vault = owned_vault(
+        &cloud.origin,
+        vec![
+            Invite {
+                mailbox: first.clone(),
+                role: Role::Operate,
+            },
+            Invite {
+                mailbox: second.clone(),
+                role: Role::Operate,
+            },
+        ],
+    );
+    let theirs = [5u8; 32];
+    let (service, _store, _scratch, owners) = on_both_roads(
+        &cloud,
+        &vault,
+        &[(&theirs, "Old guest PC")],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    let mut cache = vault.device_cache().unwrap().unwrap();
+    cache
+        .keep(CachedDevice {
+            pin: tempo_client::hex(&theirs),
+            role: Role::Operate,
+            guest: true,
+            issued_at: fixture_now() - 100,
+            confirmed_at: 0,
+        })
+        .unwrap();
+    vault.save_account_entry("account-devices", &cache).unwrap();
+    keep_ties(
+        &service,
+        &vault,
+        vec![Tie {
+            lan: short(&tempo_client::hex(&theirs)),
+            key: "0123456789abcdef".into(),
+            mailbox: Some(mailbox_tag(&second)),
+            enrolled: false,
+            vouched: true,
+        }],
+    );
+    cloud.refusing.store(true, Ordering::SeqCst);
+    service
+        .action(Action::Uninvite {
+            email: "K9.Guest@example.test".into(),
+        })
+        .await
+        .unwrap();
+    let status = service.status().unwrap();
+    assert_eq!(in_book(&status), vec![owners]);
+    assert_eq!(
+        status.account.also_uninvited,
+        vec!["Old guest PC".to_string()]
+    );
+}
+
+/// ★ A REMOVAL PUSHED OUT OF WHAT IS KEPT STILL REFUSES AN OLD PROOF ON THE INTERNET ROAD: the
+/// computer removed in Paired computers, then as many other keys as are kept, so neither of its
+/// removals fits. Its listing comes back with the proof it had: granted nothing, by the floor its
+/// removals left, and shown with why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_pushed_out_of_what_is_kept_still_refuses_an_old_proof_on_the_internet_road() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let row = computer_row(&token("computer"), "operate");
+    let (service, _store, _scratch, lan_id) =
+        on_both_roads(&cloud, &vault, &[], vec![row.clone()]).await;
+    service
+        .action(Action::LanRevoke { device_id: lan_id })
+        .await
+        .unwrap();
+    let others: Vec<String> = (100..112u8).map(|i| tempo_client::hex(&[i; 32])).collect();
+    let enrolment = service.control.lock().unwrap().enrolment.clone();
+    enrolment.remove(&others).unwrap();
+    let kept = ties_kept(&vault);
+    let road = short(&sha256(&key("road")));
+    assert!(
+        kept.floor > 0 && !kept.removed.iter().any(|r| r.key == road),
+        "premise: its removals pushed out"
+    );
+    let mut again = row;
+    again["generation"] = 4.into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [again] }).to_string();
+    let status = service.action(Action::Refresh {}).await.unwrap();
+    assert!(
+        pinned(&service).is_empty(),
+        "granted again on its old proof"
+    );
+    assert!(on_tunnel(&service).is_empty());
+    assert_eq!(
+        status.account.unconfirmed.get(COMPUTER_ID).copied(),
+        Some("tokenRemoved")
+    );
+}
+
+/// ★ WHILE THE REMOVALS DO NOT READ, NO PROOF IS GRANTED: the station cannot tell whether a
+/// listing's keys were removed at the shack, so it grants nothing on a proof and shows why.
+/// CONTROL: once they read, the same listing is granted.
+#[tokio::test(flavor = "multi_thread")]
+async fn while_the_removals_do_not_read_no_proof_is_granted() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    vault.refusing.lock().unwrap().insert("account-ties");
+    let (service, _store, _scratch, _) = on_both_roads(
+        &cloud,
+        &vault,
+        &[],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    let status = service.status().unwrap();
+    assert!(pinned(&service).is_empty(), "granted, the removals unread");
+    assert_eq!(
+        status.account.unconfirmed.get(COMPUTER_ID).copied(),
+        Some("credentialStoreUnavailable")
+    );
+    vault.refusing.lock().unwrap().clear();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(pinned(&service), vec![COMPUTER_ID.to_string()]);
+}
+
+/// ★ A RECORD OF REMOVALS THAT DOES NOT READ AT ALL IS CLEARED BY RESET NETWORK IDENTITY: while it
+/// does not read, the LAN admits nobody, a computer paired by code included, and nothing writes
+/// over it. Reset network identity writes it afresh with its floor now, so every proof signed
+/// before is refused, and the LAN admits again: a computer paired by code after it. (A missing one reads as none:
+/// `the_links_and_removals_kept_fit_the_smallest_credential_blob` and every test here start so.)
+#[tokio::test(flavor = "multi_thread")]
+async fn reset_network_identity_clears_a_record_of_removals_that_does_not_read() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    vault
+        .values
+        .lock()
+        .unwrap()
+        .insert("account-ties".into(), "{not a record".into());
+    let by_code = [6u8; 32];
+    let (service, _store, _scratch, _) =
+        on_both_roads(&cloud, &vault, &[(&by_code, "Den PC")], Vec::new()).await;
+    let enrolment = service.control.lock().unwrap().enrolment.clone();
+    assert!(!enrolment.admits(&by_code), "premise: admitted, unread");
+    service.action(Action::LanReset {}).await.unwrap();
+    assert_eq!(ties_kept(&vault).floor, fixture_now());
+    // The reset took the one paired out; one paired by code after it is admitted.
+    assert!(enrolment.admits(&[7; 32]), "the LAN still admits nobody");
+}
+
+/// ★ A BROWSER KEEPS NO LINK AND NO REMOVAL FOR THIS NETWORK: it has no road here, so its sign-in
+/// takes no place a computer's link needs, and Remove keeps nothing of it for the LAN (its pin, its
+/// listing and the removals waiting for the service end it). CONTROL: the computer listed beside
+/// it keeps its link.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_browser_keeps_no_link_and_no_removal_for_this_network() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (service, _store, _scratch, _) = on_both_roads(
+        &cloud,
+        &vault,
+        &[],
+        vec![
+            browser_row(&token("browser")),
+            computer_row(&token("computer"), "operate"),
+        ],
+    )
+    .await;
+    let keys: Vec<String> = ties_kept(&vault).ties.into_iter().map(|t| t.key).collect();
+    assert_eq!(keys, vec![short(&sha256(&key("road")))]);
+    assert!(pinned(&service).contains(&BROWSER.to_string()), "premise");
+    service
+        .action(Action::Device {
+            device_id: BROWSER.into(),
+            approve: false,
+            key: None,
+            kind: None,
+        })
+        .await
+        .unwrap();
+    assert!(!pinned(&service).contains(&BROWSER.to_string()));
+    assert!(ties_kept(&vault).removed.is_empty());
+}
+
+/// ★ A LINK THE STORE WILL NOT KEEP GRANTS NOTHING: the removals read, and the store then refusing
+/// what links a computer's two roads, a computer's listing is granted nothing (a Remove would end
+/// only one road) and shown with why. CONTROL: once the store keeps it, the same listing is granted,
+/// with its link.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_the_store_will_not_keep_grants_nothing() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (service, _store, _scratch, _) = on_both_roads(&cloud, &vault, &[], Vec::new()).await;
+    let enrolment = service.control.lock().unwrap().enrolment.clone();
+    assert!(enrolment.kept().is_some(), "premise: the removals read");
+    vault.refusing.lock().unwrap().insert("account-ties");
+    *cloud.devices.lock().unwrap() =
+        json!({ "devices": [computer_row(&token("computer"), "operate")] }).to_string();
+    let status = service.action(Action::Refresh {}).await.unwrap();
+    assert!(pinned(&service).is_empty(), "granted with no link kept");
+    assert_eq!(
+        status.account.unconfirmed.get(COMPUTER_ID).copied(),
+        Some("credentialStoreUnavailable")
+    );
+    vault.refusing.lock().unwrap().clear();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(pinned(&service), vec![COMPUTER_ID.to_string()]);
+    let road = short(&sha256(&key("road")));
+    assert!(ties_kept(&vault).ties.iter().any(|t| t.key == road));
+}
+
+/// ★ WHILE THE REMOVALS DO NOT READ, NO BROWSER OR PHONE IS GRANTED ON ITS PROOF: a listing that
+/// names no LAN key keeps no link, so nothing but the unread removals stands in its way, and its
+/// proof is not even checked. CONTROL: once they read, the browser is granted, and the phone's
+/// proof is checked (the fixture signed none for a phone, so it is refused for that).
+#[tokio::test(flavor = "multi_thread")]
+async fn while_the_removals_do_not_read_no_browser_or_phone_is_granted() {
+    const PHONE: &str = "10000000-0000-4000-8000-0000000000e1";
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    vault.refusing.lock().unwrap().insert("account-ties");
+    let mut phone = computer_row(&token("browserNativeAud"), "operate");
+    phone["id"] = PHONE.into();
+    phone["publicKey"] = key("browser").into();
+    phone["kind"] = "phone".into();
+    phone["platform"] = "android".into();
+    phone["lanKey"] = serde_json::Value::Null;
+    let (service, _store, _scratch, _) = on_both_roads(
+        &cloud,
+        &vault,
+        &[],
+        vec![browser_row(&token("browser")), phone],
+    )
+    .await;
+    let status = service.status().unwrap();
+    assert!(pinned(&service).is_empty(), "granted, the removals unread");
+    for id in [BROWSER, PHONE] {
+        assert_eq!(
+            status.account.unconfirmed.get(id).copied(),
+            Some("credentialStoreUnavailable"),
+            "{id}"
+        );
+    }
+    vault.refusing.lock().unwrap().clear();
+    let status = service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(pinned(&service), vec![BROWSER.to_string()]);
+    assert_eq!(
+        status.account.unconfirmed.get(PHONE).copied(),
+        Some("tokenNonce")
+    );
+}
+
+/// The fixture's guest, and a second person, both invited to operate.
+fn two_guests_vault(origin: &str) -> MemoryVault {
+    owned_vault(
+        origin,
+        ["K9.Guest@example.test", "N0.Other@example.test"]
+            .into_iter()
+            .map(|address| Invite {
+                mailbox: mailbox(address),
+                role: Role::Operate,
+            })
+            .collect(),
+    )
+}
+/// Keeps `device` as the LAN's entry for its pin, and the copy in memory follows.
+fn keep_cached(service: &Service, vault: &MemoryVault, device: CachedDevice) {
+    let mut cache = vault
+        .device_cache()
+        .unwrap()
+        .unwrap_or_else(|| tempo_client::account::DeviceCache::new(STATION));
+    cache.keep(device).unwrap();
+    vault.save_account_entry("account-devices", &cache).unwrap();
+    service.control.lock().unwrap().enrolment.reread();
+}
+/// The LAN's entry for the fixture's computer.
+fn computer_cached(vault: &MemoryVault) -> Option<CachedDevice> {
+    let pin = sha256(&key("computerLan"));
+    vault
+        .device_cache()
+        .unwrap()
+        .and_then(|cache| cache.devices.into_iter().find(|d| d.pin == pin))
+}
+
+/// ★ A GUEST'S LISTING NEVER MAKES THE OWNER'S ENROLLED COMPUTER A GUEST'S: the owner's computer
+/// enrolled on its own sign-in, and a guest's listing claiming its LAN key. Its entry for the LAN
+/// stays the owner's, and taking that guest's invitation back leaves it in the book.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guests_listing_never_makes_the_owners_enrolled_computer_a_guests() {
+    let cloud = fake_cloud().await;
+    let vault = two_guests_vault(&cloud.origin);
+    let (service, _store, _scratch, lan_id) = on_both_roads(&cloud, &vault, &[], Vec::new()).await;
+    let owners = CachedDevice {
+        pin: sha256(&key("computerLan")),
+        role: Role::Operate,
+        guest: false,
+        issued_at: fixture_now() - 500,
+        confirmed_at: 0,
+    };
+    keep_cached(&service, &vault, owners.clone());
+    keep_ties(
+        &service,
+        &vault,
+        vec![Tie {
+            lan: short(&sha256(&key("computerLan"))),
+            key: short(&sha256(&key("road"))),
+            mailbox: None,
+            enrolled: true,
+            vouched: false,
+        }],
+    );
+    let mut row = computer_row(&token("guest"), "operate");
+    row["name"] = "GUEST-PC".into();
+    *cloud.devices.lock().unwrap() = json!({ "devices": [row] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(pinned(&service), vec![COMPUTER_ID.to_string()], "premise");
+    let cached = computer_cached(&vault).unwrap();
+    assert_eq!(
+        (cached.guest, cached.issued_at),
+        (owners.guest, owners.issued_at),
+        "made the guest's"
+    );
+    cloud.refusing.store(true, Ordering::SeqCst);
+    service
+        .action(Action::Uninvite {
+            email: "K9.Guest@example.test".into(),
+        })
+        .await
+        .unwrap();
+    let status = service.status().unwrap();
+    assert_eq!(in_book(&status), vec![lan_id]);
+    assert!(status.account.also_uninvited.is_empty());
+}
+
+/// ★ A GUEST'S LISTING NEVER EXTENDS ANOTHER GUEST'S COMPUTER: a second guest's computer enrolled
+/// on their own sign-in, and the fixture's guest's listing, signed later, claiming its LAN key. Its
+/// entry for the LAN keeps the proof its own guest signed, so it is held to that proof's age.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guests_listing_never_extends_another_guests_computer() {
+    let cloud = fake_cloud().await;
+    let vault = two_guests_vault(&cloud.origin);
+    let (service, _store, _scratch, _) = on_both_roads(&cloud, &vault, &[], Vec::new()).await;
+    let theirs = CachedDevice {
+        pin: sha256(&key("computerLan")),
+        role: Role::Operate,
+        guest: true,
+        issued_at: fixture_now() - 5_000,
+        confirmed_at: 0,
+    };
+    keep_cached(&service, &vault, theirs.clone());
+    keep_ties(
+        &service,
+        &vault,
+        vec![Tie {
+            lan: short(&sha256(&key("computerLan"))),
+            key: "0123456789abcdef".into(),
+            mailbox: Some(mailbox_tag(&mailbox("N0.Other@example.test"))),
+            enrolled: true,
+            vouched: false,
+        }],
+    );
+    *cloud.devices.lock().unwrap() =
+        json!({ "devices": [computer_row(&token("guest"), "operate")] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(pinned(&service), vec![COMPUTER_ID.to_string()], "premise");
+    let cached = computer_cached(&vault).unwrap();
+    assert_eq!(
+        (cached.guest, cached.issued_at),
+        (theirs.guest, theirs.issued_at),
+        "extended"
+    );
+}
+
+/// ★ A GUEST'S LISTING KEEPS THEIR OWN ENROLLED COMPUTER'S ENTRY UP TO DATE: the computer that
+/// guest enrolled here, and their listing naming it with a newer proof. CONTROL for the two above.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guests_listing_refreshes_their_own_enrolled_computer() {
+    let cloud = fake_cloud().await;
+    let vault = two_guests_vault(&cloud.origin);
+    let (service, _store, _scratch, _) = on_both_roads(&cloud, &vault, &[], Vec::new()).await;
+    keep_cached(
+        &service,
+        &vault,
+        CachedDevice {
+            pin: sha256(&key("computerLan")),
+            role: Role::Operate,
+            guest: true,
+            issued_at: fixture_now() - 5_000,
+            confirmed_at: 0,
+        },
+    );
+    keep_ties(
+        &service,
+        &vault,
+        vec![Tie {
+            lan: short(&sha256(&key("computerLan"))),
+            key: short(&sha256(&key("road"))),
+            mailbox: Some(mailbox_tag(&mailbox("K9.Guest@example.test"))),
+            enrolled: true,
+            vouched: false,
+        }],
+    );
+    *cloud.devices.lock().unwrap() =
+        json!({ "devices": [computer_row(&token("guest"), "operate")] }).to_string();
+    service.action(Action::Refresh {}).await.unwrap();
+    let cached = computer_cached(&vault).unwrap();
+    assert!(cached.guest);
+    assert_eq!(cached.issued_at, fixture_now() - 100, "not refreshed");
+}
+
+/// The station's clock for [`reset_network_identity_brings_a_floor_set_ahead_back_to_now`]: its own,
+/// so no other test's clock moves with it.
+static RESET_CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1_800_000_000);
+fn reset_clock() -> u64 {
+    RESET_CLOCK.load(Ordering::SeqCst)
+}
+
+/// ★ RESET NETWORK IDENTITY BRINGS A FLOOR SET AHEAD BACK TO NOW: the floor, and a removal, kept
+/// while the station's clock ran years ahead, refuse every sign-in. Reset network identity sets the
+/// floor to its own now and drops the removal kept in the future, so a proof signed after it is
+/// granted again.
+#[tokio::test(flavor = "multi_thread")]
+async fn reset_network_identity_brings_a_floor_set_ahead_back_to_now() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let ahead = fixture_now() + 5 * 365 * 86_400;
+    vault
+        .save_account_entry(
+            "account-ties",
+            &Ties {
+                removed: vec![crate::remote_service::vault::Removed {
+                    key: "0123456789abcdef".into(),
+                    at: ahead,
+                }],
+                floor: ahead,
+                ..Ties::default()
+            },
+        )
+        .unwrap();
+    let row = computer_row(&token("computer"), "operate");
+    let (service, _store, _scratch, _) =
+        on_both_roads_at(&cloud, &vault, &[], vec![row], reset_clock).await;
+    let status = service.status().unwrap();
+    assert_eq!(
+        status.account.unconfirmed.get(COMPUTER_ID).copied(),
+        Some("tokenRemoved"),
+        "premise"
+    );
+    RESET_CLOCK.store(fixture_now() - 1_000, Ordering::SeqCst);
+    // Its listing's other road is not known to the station: the shack is told to check that list.
+    let _ = service.action(Action::LanReset {}).await;
+    RESET_CLOCK.store(fixture_now(), Ordering::SeqCst);
+    let kept = ties_kept(&vault);
+    assert_eq!(kept.floor, fixture_now() - 1_000);
+    assert!(kept.removed.iter().all(|r| r.at < ahead), "kept ahead");
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(pinned(&service), vec![COMPUTER_ID.to_string()]);
+}
+
+/// ★ A RECORD OF REMOVALS THAT DOES NOT READ AT ALL IS SHOWN WITH ITS WAY OUT: the shack says so,
+/// so the operator finds Reset network identity; once reset, it says nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_record_of_removals_that_does_not_read_is_shown() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    vault
+        .values
+        .lock()
+        .unwrap()
+        .insert("account-ties".into(), "{not a record".into());
+    let (service, _store, _scratch, _) = on_both_roads(&cloud, &vault, &[], Vec::new()).await;
+    assert!(service.status().unwrap().account.removals_unreadable);
+    let shown = serde_json::to_value(service.status().unwrap()).unwrap();
+    assert_eq!(shown["account"]["removalsUnreadable"], true);
+    service.action(Action::LanReset {}).await.unwrap();
+    assert!(!service.status().unwrap().account.removals_unreadable);
 }

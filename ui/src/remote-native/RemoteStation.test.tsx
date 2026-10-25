@@ -203,6 +203,26 @@ it('shows an approval that lasts until removed as such, with no date and no warn
   expect(document.body.textContent?.match(/Approved until you remove it\./g)?.length).toBeGreaterThanOrEqual(3)
 })
 
+// Remove at the shack ends every road the station can link the device to. When the other list may
+// still hold it under a link the station could not prove, the card says to look there too.
+it('says to check the other list when a removal could not be linked to it', async () => {
+  const computer = crypto.randomUUID()
+  const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, error: null,
+    devices: [{ id: computer, name: 'Den PC', approved: 1, expiresAt: Date.UTC(9999, 11, 31), generation: 2, untilRemoved: 1, kind: 'computer', platform: 'windows' }] }
+  const invoke = async (command: string) => {
+    if (command === 'get_remote_station_status') return status
+    if (command === 'remote_station_action') throw 'removeElsewhere'
+    throw new Error('unexpectedCommand')
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<RemoteStation />)
+  const heading = await screen.findByRole('heading', { name: 'Your computers' })
+  const row = within(heading.nextElementSibling as HTMLElement).getByText('Den PC').closest('li')!
+  fireEvent.click(within(row).getByRole('button', { name: 'Remove' }))
+  expect((await screen.findByRole('alert')).textContent).toBe('Removed. Nexus could not confirm whether this computer is also under “Your computers” or “Paired computers”. Check both lists, and remove it there too if it is.')
+})
+
 // Browser approval lifetime (operator decision 2026-09-14): each approved browser shows when its
 // approval ends. In the last seven days before the end that use cannot move, the shack warns and
 // offers to approve it again.

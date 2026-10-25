@@ -56,6 +56,17 @@
 //! then admits no device on a proof until it signs in again. The devices kept for the LAN have
 //! several writers, and each holds that entry from its read to its save ([`DevicesHeld`]).
 //!
+//! One more ([`Ties`]) holds what links a computer's two roads and what a Remove at the shack
+//! leaves behind: for each computer kept for the LAN, the LAN key and the internet key one proof
+//! named together, and who signed in for it (a hash of a guest's address, never the address); and
+//! each key removed at the shack, with when. Short hashes and no service id, so it fits the smallest
+//! credential blob beside the devices kept for the LAN, and is held with them ([`DevicesHeld`]). It
+//! grants nothing: a link only ever takes access away, and a removal refuses a proof signed before
+//! it. Its own entry, so no older Nexus reads it; one that does not read admits no computer on the
+//! LAN, as the devices kept for it do, until Reset network identity writes it afresh. When more
+//! removals are made than it keeps, the oldest still in force leaves its time behind instead (its
+//! floor): every proof signed by then is refused, whatever key it names.
+//!
 //! The rest belong to the other end of Remote over this network, the computer an operator works
 //! from (`crate::lan_client`). One entry for each station it is paired with: its own key for that
 //! station (the design's second key, approved on 2026-10-04 and handled as the station key is:
@@ -125,6 +136,7 @@ const ACCOUNT_PEOPLE: &str = "account-people";
 const ACCOUNT_REVOKES: &str = "account-revokes";
 const ACCOUNT_UNINVITES: &str = "account-uninvites";
 const ACCOUNT_NOTIFIED: &str = "account-notified";
+const ACCOUNT_TIES: &str = "account-ties";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -405,6 +417,54 @@ pub struct Revokes {
     pub devices: Vec<String>,
 }
 
+/// What links a computer's roads to this station, and the keys removed here (see the header): both
+/// read past a field they do not know.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Ties {
+    #[serde(default)]
+    pub ties: Vec<Tie>,
+    #[serde(default)]
+    pub removed: Vec<Removed>,
+    /// Unix seconds: a proof signed by then is refused for any key, since a removal it may name was
+    /// dropped to keep within the blob (`lan::enrol`). 0 for none.
+    #[serde(rename = "f", default, skip_serializing_if = "zero")]
+    pub floor: u64,
+}
+
+fn zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// One computer's LAN key and the internet key a proof named beside it, each as the first sixteen
+/// hex digits of its SHA-256 (`lan::enrol::short`), and the guest whose proof it was. `enrolled`:
+/// the computer proved the LAN key itself, enrolling on this network; `vouched`: the station
+/// checked the proof its listing carries. One-letter names, as for the devices kept for the LAN.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Tie {
+    #[serde(rename = "p")]
+    pub lan: String,
+    #[serde(rename = "k")]
+    pub key: String,
+    /// A guest's address as `tempo_client::account::mailbox` gives it, hashed
+    /// (`lan::enrol::mailbox_tag`); `None` for the owner.
+    #[serde(rename = "m", default, skip_serializing_if = "Option::is_none")]
+    pub mailbox: Option<String>,
+    #[serde(rename = "e", default, skip_serializing_if = "not")]
+    pub enrolled: bool,
+    #[serde(rename = "v", default, skip_serializing_if = "not")]
+    pub vouched: bool,
+}
+
+/// A key removed at the shack (a LAN key or an internet key, as [`Tie`] shortens it) and when, in
+/// unix seconds: a proof signed by then no longer admits it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Removed {
+    #[serde(rename = "k")]
+    pub key: String,
+    #[serde(rename = "x")]
+    pub at: u64,
+}
+
 /// The invitations taken back at the station that the service known as `station_id` has not heard
 /// yet: each address as it was typed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -450,6 +510,9 @@ pub trait AccountVault: Send + Sync {
     fn save_uninvites(&self, uninvites: &Uninvites) -> Result<(), &'static str>;
     fn notified(&self) -> Result<Option<Notified>, &'static str>;
     fn save_notified(&self, notified: &Notified) -> Result<(), &'static str>;
+    fn ties(&self) -> Result<Option<Ties>, &'static str>;
+    /// Only while the devices kept for the LAN are held ([`DevicesHeld`]).
+    fn save_ties(&self, held: &DevicesHeld<'_>, ties: &Ties) -> Result<(), &'static str>;
 }
 
 /// The LAN's device cache (`account-devices`) held by one writer from its read to its save. It has
@@ -895,6 +958,12 @@ impl AccountVault for SystemVault {
     }
     fn save_notified(&self, notified: &Notified) -> Result<(), &'static str> {
         save_account_entry(ACCOUNT_NOTIFIED, notified)
+    }
+    fn ties(&self) -> Result<Option<Ties>, &'static str> {
+        account_entry(ACCOUNT_TIES)
+    }
+    fn save_ties(&self, _held: &DevicesHeld<'_>, ties: &Ties) -> Result<(), &'static str> {
+        save_account_entry(ACCOUNT_TIES, ties)
     }
 }
 
