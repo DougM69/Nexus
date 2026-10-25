@@ -5851,7 +5851,7 @@ export const JA: PartialCatalog = {
   "settings.confirmations.lotw.stationLocation.hint": "LoTWへの<b>アップロード</b>用です（ログブックの「LoTWへアップロード」ボタン）。署名はインストール済みの<b>TQSL</b>が、ここで指定した名前のステーションロケーションに対して行います — まずTQSL側で作成し、名前を正確に一致させてください。Nexusは証明書もパスワードも保存しません。",
   "settings.confirmations.lotw.adifLocation.label": "ADIFの位置情報で署名（移動運用向け）",
   "settings.confirmations.lotw.adifLocation.aria": "ADIFの位置情報でLoTWアップロードに署名",
-  "settings.confirmations.lotw.adifLocation.hint": "TQSLを<em>「ADIFファイル内の位置情報を使う」</em>に設定していて、名前付きステーションロケーションを作らない場合にオンにします（移動運用に便利です）。Nexusはコールサインとグリッド（STATION_CALLSIGN / MY_GRIDSQUARE）をアップロードに書き込み、<code>-l</code>引数を省略するため、TQSLはそれらを使って署名し、上のステーションロケーションは不要になります。<b>バッチ全体が上の現在のグリッドで署名される</b>ため、複数の場所から運用する場合は移動する<em>前</em>にアップロードしてください — さもないと以前の交信まで新しいグリッドで署名されます。",
+  "settings.confirmations.lotw.adifLocation.hint": "TQSLを<em>「ADIFファイル内の位置情報を使う」</em>に設定していて、名前付きステーションロケーションを作らない場合にオンにします（移動運用に便利です）。Nexusはコールサインとグリッド（STATION_CALLSIGN / MY_GRIDSQUARE）をアップロードに書き込み、<code>-l</code>引数を省略するため、TQSLはそれらを使って署名し、上のステーションロケーションは不要になります。<b>バッチ全体が上の現在のグリッドで署名される</b>ため、複数の場所から運用する場合は移動する<em>前</em>にアップロードしてください — さもないと以前の交信まで新しいグリッドで署名されます。ただし、VHFコンテストからログブックに取り込んだ交信は、そのエクスチェンジで送ったグリッド（ローバーならその時点のグリッド）で署名されます。",
   "settings.confirmations.lotw.tqslPath.label": "TQSLのパス（任意）",
   "settings.confirmations.lotw.tqslPath.placeholder": "自動検出（空欄のまま）",
   "settings.confirmations.lotw.tqslPath.hint": "TQSLを標準以外の場所にインストールしている場合のみ入力します。通常は空欄のままで自動検出されます。",

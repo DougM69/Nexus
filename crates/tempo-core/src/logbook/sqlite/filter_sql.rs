@@ -168,7 +168,14 @@ pub(crate) fn where_of(f: &LogFilter) -> Where {
     }
     let state = field(&f.state).to_ascii_uppercase();
     if !state.is_empty() {
-        w.push("upper(trim(q.state)) = ?", [text(state)]);
+        // The state every reader counts (`logbook::record_field`): a merged contest contact's
+        // exchange STATE — the first by `ord`, unless blank — else the column.
+        w.push(
+            "upper(trim(coalesce(nullif(trim((SELECT c.value FROM qso_contest_adif c \
+             WHERE c.qso_id = q.id AND c.tag = 'STATE' ORDER BY c.ord LIMIT 1)), ''), \
+             q.state))) = ?",
+            [text(state)],
+        );
     }
     let county = field(&f.county);
     if !county.is_empty() {
@@ -667,6 +674,72 @@ mod tests {
         })
         .unwrap();
         assert_eq!(calls.named(&b.finish()), ["DL1XYZ"]);
+    }
+
+    /// ★ The State filter and the State sort take a merged contest contact's state as every
+    /// reader does (`logbook::record_field`): the state its exchange carried, which its upload
+    /// carries and WAS counts — not the one looked up from its call beside it; a blank exchange
+    /// state is none, and the column answers.
+    #[test]
+    fn the_state_filter_and_sort_read_the_exchanges_state() {
+        let with = |call: &str, when: u64, own: &str, sent: Option<&str>| {
+            let mut r = qso(call, "20m", "CW", when);
+            r.state = Some(own.into());
+            r.contest = sent.map(|s| {
+                Box::new(ContestFields {
+                    contest_id: "NAQP-CW".into(),
+                    adif: vec![("STATE".into(), s.into())],
+                    ..Default::default()
+                })
+            });
+            r
+        };
+        let mut rows = [
+            with("K1SENT", 0, "TX", Some("NY")),
+            with("K2BLANK", 60, "NY", Some(" ")),
+            with("K3PLAIN", 120, "NY", None),
+            with("K4AZ", 180, "AZ", None),
+        ];
+        for (i, r) in rows.iter_mut().enumerate() {
+            r.id = Some(RecordId::Provisional {
+                hash: 900 + i as u64,
+                ordinal: 0,
+            });
+        }
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert_all(rows.iter().map(|r| (r, Resolved::default())))
+            .unwrap();
+        let state = |s: &str| LogFilter {
+            state: s.into(),
+            ..Default::default()
+        };
+        assert_eq!(through(&db, &state("ny")), ["K1SENT", "K2BLANK", "K3PLAIN"]);
+        assert!(
+            through(&db, &state("TX")).is_empty(),
+            "the looked-up state is shadowed"
+        );
+        let q = LogQuery {
+            sort: SortKey::State,
+            asc: false,
+            search: String::new(),
+            needs_confirm_only: false,
+            then: Vec::new(),
+            filter: LogFilter::default(),
+        };
+        let mut b = OrderBuilder::new(&q, &|_| None);
+        let (columns, extras) = b.reads(ORDER_COLUMNS);
+        let mut calls = HashMapCalls::default();
+        db.each_filtered(&columns, &extras, false, &q.filter, &mut |rowid, r| {
+            calls.0.push((rowid, r.call.clone()));
+            b.push(rowid, r)
+        })
+        .unwrap();
+        // Descending: the three NY (newest first, the time breaking the tie), then AZ. K1SENT
+        // sorted by its looked-up TX would come first.
+        assert_eq!(
+            calls.named(&b.finish()),
+            ["K3PLAIN", "K2BLANK", "K1SENT", "K4AZ"]
+        );
     }
 
     #[derive(Default)]

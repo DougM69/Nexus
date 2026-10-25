@@ -4014,6 +4014,12 @@ impl From<crate::logexport::Exported> for LogExportDto {
 
 impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
     fn from(r: tempo_core::logbook::QsoRecord) -> Self {
+        // The state every reader counts: a merged contest contact's exchange STATE, which its
+        // uploads carry and WAS counts, else the record's own (`record_field`). The Logbook's
+        // State column and edit form show this one.
+        let state = tempo_core::logbook::record_field(&r, "STATE")
+            .map(str::to_string)
+            .or_else(|| r.state.clone());
         LoggedQso {
             id: r.id.map(|id| id.to_string()),
             call: r.call,
@@ -4021,7 +4027,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             country: r.country,
             // Filled by the command layer (get_log) — tempo-app has no cty.dat.
             entity: None,
-            state: r.state,
+            state,
             band: r.band,
             freq_mhz: r.freq_mhz,
             freq_rx_mhz: r.freq_rx_mhz,
@@ -5669,6 +5675,32 @@ mod tests {
             serde_json::to_value(&d).unwrap(),
             serde_json::json!({ "text": "<EOR>", "saving": 2, "held": 1 })
         );
+    }
+}
+
+#[cfg(test)]
+mod logged_state_tests {
+    use super::*;
+
+    /// ★ The Logbook's State column and edit form show the state every reader counts: a merged
+    /// contest contact's exchange STATE, which its upload carries and WAS counts — not the state
+    /// looked up from its call beside it. A blank exchange state is none, and the field answers.
+    #[test]
+    fn the_logbook_shows_the_state_its_exchange_carried() {
+        let mut r = tempo_core::logbook::parse_adif(
+            "<CALL:5>K2ABC<QSO_DATE:8>20240101<TIME_ON:4>1200<BAND:3>20m<MODE:2>CW\
+             <STATE:2>NJ<EOR>",
+        )
+        .remove(0);
+        assert_eq!(LoggedQso::from(r.clone()).state.as_deref(), Some("NJ"));
+        r.contest = Some(Box::new(tempo_core::logbook::ContestFields {
+            contest_id: "NAQP-CW".into(),
+            adif: vec![("STATE".into(), "NY".into())],
+            ..Default::default()
+        }));
+        assert_eq!(LoggedQso::from(r.clone()).state.as_deref(), Some("NY"));
+        r.contest.as_mut().unwrap().adif[0].1 = " ".into();
+        assert_eq!(LoggedQso::from(r).state.as_deref(), Some("NJ"));
     }
 }
 

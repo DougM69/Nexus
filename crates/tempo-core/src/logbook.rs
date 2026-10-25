@@ -334,6 +334,51 @@ pub fn record_field<'a>(r: &'a QsoRecord, tag: &str) -> Option<&'a str> {
     own_first.or_else(|| given(extra_value(r, tag)))
 }
 
+/// The received fields a contest merge once left only in the contest's columns, which it now
+/// writes into the record's own: [`with_contest_columns_moved`]'s.
+pub const CONTEST_MOVED_TAGS: [&str; 3] = ["GRIDSQUARE", "NAME", "QTH"];
+
+/// ⭐ **A contact merged before the merge wrote a received grid, name and QTH into the record's
+/// own fields, with them moved there** — or `None` when it has none to move. Each of
+/// [`CONTEST_MOVED_TAGS`] whose own field is blank and whose contest column holds a value (the
+/// first, as [`record_field`] reads it) takes that value, exactly, and the column goes; a field
+/// that holds anything is never touched, and its column stays (the ADIF writer already skips it).
+///
+/// Every reader then finds the value where the log's own columns are read — the Grid column, its
+/// sort and search, VUCC and the needs, the edit form — and the ADIF the contact writes holds the
+/// same one tag with the same value, from the field. Nothing else about the record moves: its
+/// stamps, its passthrough and the rest of its contest block are as they were.
+pub fn with_contest_columns_moved(r: &QsoRecord) -> Option<QsoRecord> {
+    r.contest.as_deref()?;
+    let mut out = r.clone();
+    let mut moved = false;
+    for tag in CONTEST_MOVED_TAGS {
+        let columns = &mut out.contest.as_deref_mut()?.adif;
+        let Some(at) = columns.iter().position(|(t, _)| t == tag) else {
+            continue;
+        };
+        if columns[at].1.trim().is_empty() {
+            continue;
+        }
+        let own = match tag {
+            "GRIDSQUARE" => &out.grid,
+            "NAME" => &out.name,
+            _ => &out.qth,
+        };
+        if own.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+            continue;
+        }
+        let (_, value) = columns.remove(at);
+        *match tag {
+            "GRIDSQUARE" => &mut out.grid,
+            "NAME" => &mut out.name,
+            _ => &mut out.qth,
+        } = Some(value);
+        moved = true;
+    }
+    moved.then_some(out)
+}
+
 /// A passthrough field's value, by its (uppercased) ADIF name — [`QsoRecord::extra`] read the way
 /// the award folds read it, for the log funnel's fills.
 pub fn extra_field<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
@@ -5716,6 +5761,88 @@ mod tests {
         }
         // The sent grid is another tag, and stays.
         assert_eq!(out.matches("<MY_GRIDSQUARE:4>EN53").count(), 1, "{out}");
+    }
+
+    /// ★ The one-time move of a merged contact's received grid, name and QTH: each into its own
+    /// field ONLY where that field is blank, its contest column gone with it; a field holding
+    /// anything is never touched; a contact with nothing to move is not changed at all. The
+    /// upload carries the same one GRIDSQUARE, NAME and QTH before and after.
+    #[test]
+    fn the_contest_column_move_fills_only_blank_fields() {
+        let merged = |grid: Option<&str>, adif: &[(&str, &str)]| {
+            let mut r = rec("K1ABC", "2m", 1_782_583_500);
+            (r.grid, r.name, r.qth) = (grid.map(str::to_string), None, None);
+            r.contest = Some(Box::new(ContestFields {
+                contest_id: "ARRL-VHF-JAN".into(),
+                session: "s".into(),
+                adif: adif
+                    .iter()
+                    .map(|(t, v)| (t.to_string(), v.to_string()))
+                    .collect(),
+                ..Default::default()
+            }));
+            r
+        };
+        let all = [
+            ("MY_GRIDSQUARE", "EN53"),
+            ("GRIDSQUARE", "FN31"),
+            ("NAME", "BOB"),
+            ("QTH", "BOSTON"),
+        ];
+        let upload = |r: &QsoRecord| {
+            let out = adif_record(r);
+            ["GRIDSQUARE", "NAME", "QTH"].map(|tag| {
+                assert!(out.matches(&format!("<{tag}:")).count() <= 1, "{out}");
+                record_field(r, tag).map(str::to_string)
+            })
+        };
+
+        // Blank fields: all three move, and only the moved columns go.
+        let blank = merged(None, &all);
+        let moved = with_contest_columns_moved(&blank).expect("moves");
+        assert_eq!(
+            (
+                moved.grid.as_deref(),
+                moved.name.as_deref(),
+                moved.qth.as_deref()
+            ),
+            (Some("FN31"), Some("BOB"), Some("BOSTON"))
+        );
+        let left = &moved.contest.as_deref().unwrap().adif;
+        assert_eq!(left, &[("MY_GRIDSQUARE".to_string(), "EN53".to_string())]);
+        assert_eq!(upload(&moved), upload(&blank));
+        let mut rest = moved.clone();
+        (rest.grid, rest.name, rest.qth) = (None, None, None);
+        rest.contest = blank.contest.clone();
+        assert_eq!(rest, blank, "nothing else moved");
+
+        // A grid of the operator's own: never touched, and its column stays; the blank name and
+        // QTH still move.
+        let own = merged(Some("FN42"), &all);
+        let moved = with_contest_columns_moved(&own).expect("the name and QTH move");
+        assert_eq!(moved.grid.as_deref(), Some("FN42"));
+        assert!(moved
+            .contest
+            .as_deref()
+            .unwrap()
+            .adif
+            .contains(&("GRIDSQUARE".to_string(), "FN31".to_string())));
+        assert_eq!(upload(&moved), upload(&own));
+
+        // Nothing to move: no contest block, no such column, or a blank one.
+        let mut plain = rec("K1ABC", "2m", 1_782_583_500);
+        plain.grid = None;
+        assert_eq!(with_contest_columns_moved(&plain), None);
+        assert_eq!(with_contest_columns_moved(&merged(None, &all[..1])), None);
+        assert_eq!(
+            with_contest_columns_moved(&merged(None, &[("GRIDSQUARE", " ")])),
+            None
+        );
+        // And a second run over a moved contact moves nothing.
+        assert_eq!(
+            with_contest_columns_moved(&with_contest_columns_moved(&blank).unwrap()),
+            None
+        );
     }
 
     /// ★ The one reading of a field by its ADIF name answers what the record's own upload file

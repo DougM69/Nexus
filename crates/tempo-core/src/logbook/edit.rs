@@ -100,11 +100,16 @@ fn blank(r: &Option<String>) -> bool {
 
 impl QsoEdit {
     /// The editable projection of a stored record — the other half of the key's definition.
+    ///
+    /// Its State is the contact's state as every reader takes it ([`super::record_field`]): on a
+    /// merged contest contact, the state the exchange carried, which its uploads and WAS count.
     pub fn project(r: &QsoRecord) -> QsoEdit {
         QsoEdit {
             call: r.call.clone(),
             grid: r.grid.clone(),
-            state: r.state.clone(),
+            state: super::record_field(r, "STATE")
+                .map(str::to_string)
+                .or_else(|| r.state.clone()),
             band: r.band.clone(),
             freq_mhz: r.freq_mhz,
             mode: r.mode.clone(),
@@ -174,22 +179,26 @@ impl QsoEdit {
     /// ⭐ **A State edit replaces the state a merged contest exchange carries.** The exchange's
     /// `STATE` is what the record's ADIF writes in place of the field (the duplicate-`STATE`
     /// guard), and what WAS and the custom awards read ([`super::record_field`]), so an edit of the
-    /// field alone would reach none of them. Where the operator changed State, the stored contest
-    /// block comes back with its `STATE` set to theirs, in its place; everything else in it is
-    /// the stored block's, which `update_record` would have restored. An edit that leaves State as
-    /// it was leaves the exchange's alone.
+    /// field alone would reach none of them. Where the operator changed State from the one the
+    /// form showed ([`Self::project`]: the exchange's), the stored contest block comes back with
+    /// its `STATE` set to theirs, in its place; everything else in it is the stored block's, which
+    /// `update_record` would have restored. An edit that leaves State as the form showed it leaves
+    /// the exchange's alone, and the record's own field as it was.
     pub fn record(&self, stored: &QsoRecord) -> QsoRecord {
         // A reference the edit refuses is never written; the edit command refuses it first.
         let iota = self.iota().ok().flatten();
         fn typed(v: &Option<String>) -> Option<&str> {
             v.as_deref().map(str::trim).filter(|v| !v.is_empty())
         }
-        let contest = stored
+        let exchange = stored
             .contest
             .as_deref()
-            .filter(|c| c.adif.iter().any(|(t, _)| t == "STATE"))
+            .filter(|c| c.adif.iter().any(|(t, _)| t == "STATE"));
+        let shown = super::record_field(stored, "STATE");
+        let unchanged = exchange.is_some() && typed(&self.state) == shown;
+        let contest = exchange
             .zip(typed(&self.state))
-            .filter(|(_, state)| typed(&stored.state) != Some(*state))
+            .filter(|_| !unchanged)
             .map(|(c, state)| {
                 let mut c = c.clone();
                 for (t, v) in &mut c.adif {
@@ -205,7 +214,11 @@ impl QsoEdit {
             call: self.call.clone(),
             grid: self.grid.clone(),
             country: None,
-            state: self.state.clone(),
+            state: if unchanged {
+                stored.state.clone()
+            } else {
+                self.state.clone()
+            },
             band: self.band.clone(),
             freq_mhz: self.freq_mhz,
             freq_rx_mhz: None,
@@ -897,7 +910,10 @@ mod tests {
         let mut lb = Logbook::new();
         lb.add(stored.clone());
 
-        // An edit of the name only: the exchange's state stays the state.
+        // The form shows the state every reader counts.
+        assert_eq!(QsoEdit::project(&stored).state.as_deref(), Some("NY"));
+        // An edit of the name only: the exchange's state stays the state, and the record's own
+        // field what it was.
         let mut e = QsoEdit::project(&stored);
         e.name = Some("Hiram".into());
         assert!(lb.update_record(0, e.record(&stored)));
@@ -906,6 +922,11 @@ mod tests {
         assert_eq!((state.as_deref(), tags), (Some("NY"), 1), "{out}");
         assert!(out.contains("<STATE:2>NY"), "{out}");
         assert_eq!(unedited.contest, stored.contest, "the block is untouched");
+        assert_eq!(
+            unedited.state.as_deref(),
+            Some("NJ"),
+            "the field is untouched"
+        );
 
         // The operator's State edit: one value, in the field and the exchange alike.
         let mut e = QsoEdit::project(&unedited);
@@ -957,5 +978,9 @@ mod tests {
         };
         let (state, tags, out) = read(&undone);
         assert_eq!((state.as_deref(), tags), (Some("NY"), 1), "{out}");
+        assert_eq!(
+            undone, row,
+            "the contact before the edit, whole: NJ in the field, NY sent"
+        );
     }
 }

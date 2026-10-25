@@ -24,9 +24,16 @@
 //! - **An edit** (and a merge, a fill): only the fields that changed, as two ADIF fragments —
 //!   the values before and after, each `<TAG:n>value` in the log's own spelling. A field absent
 //!   from one side was absent from the contact on that side.
+//!   A merged contest contact's directed columns are one field of their own here
+//!   ([`CONTEST_COLUMNS_TAG`], history only), never their plain tags, so a value moved between a
+//!   column and the record's own field is a change, and its undo puts each back where it was.
 //! - **A delete**: the contact whole, as the operator's own log writes it
 //!   ([`super::adif_record_own_log`]), so it can be put back exactly — its id, its stamps and
 //!   every field another logger left in it.
+//!   As the history sees it ([`history_adif`]): a merged contest contact's columns under
+//!   [`CONTEST_COLUMNS_TAG`], so it is put back with them where they were. ⚠️ An OLDER build
+//!   that puts back a contact this build deleted does not know the tag and keeps it in the
+//!   contact's passthrough, from where its writers send it on.
 //! - **A new contact**: the event, and the upload stamps it arrived with (the `after` fragment;
 //!   none when it carried none) — its content is the contact itself. The stamps are a reference
 //!   point only: an undo of the change that added it can tell a contact uploaded since.
@@ -309,7 +316,7 @@ impl Entry {
             return None;
         }
         let text = self.before.as_deref()?;
-        let mut rec = super::parse_adif(text).into_iter().next()?;
+        let mut rec = rebuilt(text)?;
         rec.id = Some(self.qso_id);
         Some(rec)
     }
@@ -347,9 +354,76 @@ pub fn fields(text: &str) -> Vec<(String, String)> {
     out
 }
 
-/// A contact's fields as the operator's own log writes it, upload stamps left out.
+/// ⭐ **The history's own tag for a contest exchange's directed columns**
+/// ([`super::ContestFields::adif`]): every one of them, in their order, as one value
+/// ([`crate::contest::carrier::encode_pairs`]). History only — it is never written to the log's
+/// file, an export or an upload, and never left in a record ([`rebuilt`] takes it back out).
+///
+/// Why it exists: the operator's own ADIF writes those columns under their plain tags, the same
+/// tags the record's own fields write (`GRIDSQUARE`, `NAME`, `QTH`, `STATE`) and its passthrough
+/// writes (`CQZ`), and reads them back into the fields. So a change that moved a value from a
+/// contest column into a field — or replaced a contest `STATE` beside the field's own — wrote the
+/// same tags before and after and recorded nothing, and an undo rebuilt from those tags put every
+/// contest column into a field. Here the columns are a field of their own, so both are exact.
+///
+/// It is in an edit's fragments whenever the contact had contest columns on either side — with
+/// the same value on both when they did not change — which is how [`revert`] tells an entry this
+/// build recorded from one an older build did ([`old_format_kept`]).
+pub const CONTEST_COLUMNS_TAG: &str = "APP_NEXUS_C_ADIF";
+
+/// The prefix of every history-only tag: what no ADIF the log writes may ever carry.
+pub const HISTORY_ONLY_PREFIX: &str = "APP_NEXUS_C_";
+
+/// A contact's ADIF as the history sees it: the operator's own log's, with a contest exchange's
+/// directed columns under [`CONTEST_COLUMNS_TAG`] instead of their plain tags — so the plain tags
+/// are exactly the record's own fields and its passthrough.
+pub(crate) fn history_adif(r: &QsoRecord) -> String {
+    let Some(c) = r.contest.as_deref().filter(|c| !c.adif.is_empty()) else {
+        return super::adif_record_own_log(r);
+    };
+    let mut plain = r.clone();
+    if let Some(block) = plain.contest.as_deref_mut() {
+        block.adif.clear();
+    }
+    let mut out = super::adif_record_own_log(&plain);
+    let at = out.rfind("<EOR>").unwrap_or(out.len());
+    out.insert_str(
+        at,
+        &super::field(
+            CONTEST_COLUMNS_TAG,
+            &crate::contest::carrier::encode_pairs(&c.adif),
+        ),
+    );
+    out
+}
+
+/// The record a history ADIF text describes ([`history_adif`]): the text read as the log reads
+/// ADIF, with the contest columns [`CONTEST_COLUMNS_TAG`] holds put back where a record keeps
+/// them, in their order, and the tag itself kept out of the record.
+fn rebuilt(text: &str) -> Option<QsoRecord> {
+    let mut f = fields(text);
+    let columns = f
+        .iter()
+        .position(|(tag, _)| tag == CONTEST_COLUMNS_TAG)
+        .map(|i| f.remove(i).1);
+    let mut plain = String::new();
+    for (tag, value) in &f {
+        plain.push_str(&super::field(tag, value));
+    }
+    plain.push_str("<EOR>\n");
+    let mut row = super::parse_adif(&plain).into_iter().next()?;
+    if let Some(columns) = columns {
+        let adif = crate::contest::carrier::decode_pairs(&columns);
+        if !adif.is_empty() {
+            row.contest.get_or_insert_with(Default::default).adif = adif;
+        }
+    }
+    Some(row)
+}
+
+/// A contact's fields as the history sees them ([`history_adif`]), upload stamps left out.
 fn content_fields(r: &QsoRecord) -> Vec<(String, String)> {
-    let mut f = fields(&super::adif_record_own_log(r));
+    let mut f = fields(&history_adif(r));
     f.retain(|(tag, _)| !UPLOAD_TAGS.contains(&tag.as_str()));
     f
 }
@@ -386,7 +460,19 @@ pub fn diff(old: &QsoRecord, new: &QsoRecord) -> Option<(String, String)> {
             after.push_str(&super::field(tag, v));
         }
     }
-    (!before.is_empty() || !after.is_empty()).then_some((before, after))
+    if before.is_empty() && after.is_empty() {
+        return None;
+    }
+    // The contest columns ride every entry of a contact that has them, changed or not: the mark
+    // of an entry this build recorded ([`old_format_kept`]).
+    let columns = CONTEST_COLUMNS_TAG;
+    if am.get(columns) == bm.get(columns) {
+        if let Some(v) = am.get(columns) {
+            before.push_str(&super::field(columns, v));
+            after.push_str(&super::field(columns, v));
+        }
+    }
+    Some((before, after))
 }
 
 /// Writes the history of one chunk of a change, inside the chunk's transaction, a contact at a
@@ -419,12 +505,9 @@ impl<'a> Recorder<'a> {
     /// `old`, as the store held it, taken out by the chunk.
     pub(crate) fn deleted(&mut self, old: &QsoRecord) -> Result<()> {
         match old.id {
-            Some(id) if !self.written.contains(&id) => self.entry(
-                id,
-                Kind::Delete,
-                Some(&super::adif_record_own_log(old)),
-                None,
-            ),
+            Some(id) if !self.written.contains(&id) => {
+                self.entry(id, Kind::Delete, Some(&history_adif(old)), None)
+            }
             _ => Ok(()),
         }
     }
@@ -823,6 +906,18 @@ pub fn undo(entry: &Entry, current: Option<&QsoRecord>) -> std::result::Result<U
     }
 }
 
+/// Whether an entry an older build recorded ([`CONTEST_COLUMNS_TAG`] absent from it) changed
+/// `tag` where the contact now holds a contest column of that name. Such a build wrote the column
+/// under the plain tag, in place of the field, so its entry for the tag may describe either: the
+/// field is left as it is, as a field changed since, rather than given a value that was perhaps
+/// the column's.
+fn old_format_kept(tag: &str, current: &QsoRecord) -> bool {
+    current
+        .contest
+        .as_deref()
+        .is_some_and(|c| c.adif.iter().any(|(t, v)| t == tag && !v.trim().is_empty()))
+}
+
 /// [`undo`] of an edit: each changed field back where it still holds what the edit wrote.
 ///
 /// **An edit of the callsign, undone.** A corrected call ([`super::edited`]) clears the
@@ -835,10 +930,20 @@ pub fn undo(entry: &Entry, current: Option<&QsoRecord>) -> std::result::Result<U
 /// not. Deliberate: the stamps belonged to the contact as it stood before
 /// the undo, and a stamp is only ever written by a service's answer.
 fn revert(entry: &Entry, current: &QsoRecord) -> std::result::Result<Undo, CannotUndo> {
-    let mut now = fields(&super::adif_record_own_log(current));
+    let mut now = fields(&history_adif(current));
     let mut kept = Vec::new();
     let mut moved = false;
-    for change in entry.changes() {
+    let changes = entry.changes();
+    let marked = changes.iter().any(|c| c.tag == CONTEST_COLUMNS_TAG);
+    for change in changes {
+        // The contest columns as they were and stayed: the entry's mark, not a change.
+        if change.old == change.new {
+            continue;
+        }
+        if !marked && old_format_kept(&change.tag, current) {
+            kept.push(change.tag);
+            continue;
+        }
         let at = now.iter().position(|(tag, _)| *tag == change.tag);
         let holds = at.map(|i| now[i].1.clone());
         if holds != change.new {
@@ -863,10 +968,7 @@ fn revert(entry: &Entry, current: &QsoRecord) -> std::result::Result<Undo, Canno
         text.push_str(&super::field(tag, value));
     }
     text.push_str("<EOR>\n");
-    let mut row = super::parse_adif(&text)
-        .into_iter()
-        .next()
-        .ok_or(CannotUndo::ChangedSince)?;
+    let mut row = rebuilt(&text).ok_or(CannotUndo::ChangedSince)?;
     row.id = current.id;
     // A stamp is never history, so it is never undone: the contact keeps the stamps it has —
     // unless the undo corrects its call, which owes it to every service again, as a corrected

@@ -1121,3 +1121,188 @@ fn a_whole_runs_undo_is_listed_to_redo_while_it_can_be() {
         "the undo is done with: both its contacts are back"
     );
 }
+
+// ── a merged contest contact: its exchange's directed columns ─────────────────────────────────
+
+/// A contact as the contest merge writes it into the general log: what the other station sent
+/// in the contest's directed columns — a CQ zone a service also filled beside it, the state it
+/// sent beside the one looked up from the call, and the grid of a contact merged before the
+/// merge moved the grid into the record's own field.
+fn merged(n: u64) -> QsoRecord {
+    let mut r = rec("W1AW", n);
+    r.grid = None;
+    r.state = Some("NJ".into());
+    r.extra.push(("CQZ".into(), "5".into()));
+    r.extra.sort();
+    r.contest = Some(Box::new(crate::logbook::ContestFields {
+        session: "s1".into(),
+        contest_id: "ARRL-VHF-JAN".into(),
+        srx: Some(12),
+        rcvd: vec![("GRID".into(), "FN31".into())],
+        adif: vec![
+            ("CQZ".into(), "3".into()),
+            ("GRIDSQUARE".into(), "FN31".into()),
+            ("STATE".into(), "NY".into()),
+            ("CNTY".into(), "NY,ALBANY".into()),
+        ],
+        ..Default::default()
+    }));
+    r
+}
+
+/// ★ An undo of an edit of a merged contest contact puts it back WHOLE: its contest columns in
+/// their order, its own fields and its passthrough each as they were — not the columns read back
+/// into the fields, as the log's own file would give them.
+#[test]
+fn an_undo_of_a_merged_contest_contacts_edit_puts_it_back_whole() {
+    let a = merged(1);
+    let mut b = a.clone();
+    b.name = Some("Hiram".into());
+    let (_, h) = entries_after(&[(&a, &b)]);
+    assert_eq!(h.len(), 1);
+    match undo(&h[0], Some(&b)).unwrap() {
+        Undo::Revert { row, kept } => {
+            assert!(kept.is_empty(), "{kept:?}");
+            assert_eq!(row, a, "the contact before the edit, whole");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// ★ A value moved from a contest column into the record's own field — and a contest STATE
+/// replaced beside the field's own — is a change the history records, and its undo puts every
+/// part back where it was.
+#[test]
+fn a_value_moved_out_of_a_contest_column_is_recorded_and_undone_exactly() {
+    let a = merged(1);
+    let mut moved = a.clone();
+    moved.grid = Some("FN31".into());
+    let c = moved.contest.as_deref_mut().unwrap();
+    c.adif.retain(|(t, _)| t != "GRIDSQUARE");
+    for r in [&a, &moved] {
+        let out = adif_record_own_log(r);
+        assert_eq!(
+            out.matches("<GRIDSQUARE:").count(),
+            1,
+            "premise: one grid: {out}"
+        );
+        assert!(
+            out.contains("<GRIDSQUARE:4>FN31"),
+            "premise: the same grid: {out}"
+        );
+    }
+    let mut state = a.clone();
+    state.state = Some("PA".into());
+    let c = state.contest.as_deref_mut().unwrap();
+    c.adif[2].1 = "PA".into();
+    for after in [&moved, &state] {
+        let (_, h) = entries_after(&[(&a, after)]);
+        assert_eq!(h.len(), 1, "recorded");
+        match undo(&h[0], Some(after)).unwrap() {
+            Undo::Revert { row, kept } => {
+                assert!(kept.is_empty(), "{kept:?}");
+                assert_eq!(&row, &a, "put back whole");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+/// ★ An entry an older build recorded — its contest columns written under their plain tags — is
+/// never undone into a field the contact now holds a contest column for: that field is kept, as
+/// one changed since. Where the contact holds no such column, the entry undoes as it always did.
+#[test]
+fn an_older_builds_entry_on_a_contest_held_tag_is_kept_not_reverted() {
+    let older = Entry {
+        seq: 1,
+        qso_id: id(1),
+        kind: Kind::Edit,
+        run: "old".into(),
+        at_ms: 1,
+        source: "operator".into(),
+        undoes: None,
+        before: Some("<STATE:2>NJ".into()),
+        after: Some("<STATE:2>NY".into()),
+    };
+    // The contact's own state happens to hold the entry's value: the old build's NY was the
+    // exchange's, so a revert would put a value in the field that was perhaps never the field's.
+    let mut now = merged(1);
+    now.state = Some("NY".into());
+    assert_eq!(undo(&older, Some(&now)), Err(CannotUndo::ChangedSince));
+    // Control: the same entry, on a contact with no contest STATE, undoes.
+    let mut plain = rec("W1AW", 1);
+    plain.state = Some("NY".into());
+    match undo(&older, Some(&plain)).unwrap() {
+        Undo::Revert { row, kept } => {
+            assert!(kept.is_empty());
+            assert_eq!(row.state.as_deref(), Some("NJ"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// ★ A merged contest contact deleted and put back is the contact as it was, contest columns and
+/// all.
+#[test]
+fn a_deleted_merged_contest_contact_is_put_back_whole() {
+    let mut db = LogDb::open_in_memory().unwrap();
+    let a = merged(1);
+    write(&mut db, std::slice::from_ref(&a), None).unwrap();
+    remove(
+        &mut db,
+        &[id(1)],
+        Some(&note("d", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    let h = db.history_of(id(1)).unwrap();
+    match undo(&h[0], None).unwrap() {
+        Undo::Restore(back) => assert_eq!(back, a, "whole"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// ★ The history-only tag is the history's alone: no record an undo or a restore hands back
+/// carries it, so none of the log's writers — the upload, the operator's own file (the log's
+/// mirror, its exports and backups are that text), the LoTW batch — ever writes it. The history's
+/// own view carries it: the control that the check can see it.
+#[test]
+fn no_writer_ever_writes_the_history_only_tag() {
+    let a = merged(1);
+    let mut b = a.clone();
+    b.name = Some("Hiram".into());
+    b.grid = Some("FN31".into());
+    let (mut db, h) = entries_after(&[(&a, &b)]);
+    let Ok(Undo::Revert { row: undone, .. }) = undo(&h[0], Some(&b)) else {
+        panic!("undoes")
+    };
+    remove(
+        &mut db,
+        &[id(1)],
+        Some(&note("d", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    let h = db.history_of(id(1)).unwrap();
+    let Ok(Undo::Restore(restored)) = undo(h.last().unwrap(), None) else {
+        panic!("restores")
+    };
+    assert!(
+        h.iter().any(|e| [&e.before, &e.after].iter().any(|f| f
+            .as_deref()
+            .is_some_and(|f| f.contains(HISTORY_ONLY_PREFIX)))),
+        "control: the history holds the tag"
+    );
+    assert!(history_adif(&a).contains(HISTORY_ONLY_PREFIX), "control");
+    for r in [&a, &b, &undone, &restored] {
+        assert!(!r
+            .extra
+            .iter()
+            .any(|(k, _)| k.starts_with(HISTORY_ONLY_PREFIX)));
+        for out in [
+            crate::logbook::adif_record(r),
+            adif_record_own_log(r),
+            crate::logbook::adif_record_with_station(r, "KD9TAW", "EN52"),
+        ] {
+            assert!(!out.contains(HISTORY_ONLY_PREFIX), "{out}");
+        }
+    }
+}

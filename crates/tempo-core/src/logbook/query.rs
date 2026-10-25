@@ -301,7 +301,8 @@ impl SortKey {
     /// and the passthrough field it reads, if any.
     pub fn reads(self) -> (&'static [&'static str], Option<&'static str>) {
         match self {
-            SortKey::State => (&["state"], None),
+            // A merged contest contact's exchange STATE beside the column ([`super::record_field`]).
+            SortKey::State => (&["state"], Some("STATE")),
             SortKey::Iota => (&["ota_iota"], None),
             SortKey::Contest => (&["contest_id"], None),
             SortKey::County => (&[], Some("CNTY")),
@@ -394,7 +395,7 @@ fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
             0.0
         }),
         SortKey::Grid => text(r.grid.as_deref().unwrap_or("")),
-        SortKey::State => text(r.state.as_deref().unwrap_or("")),
+        SortKey::State => text(super::record_field(r, "STATE").unwrap_or("")),
         SortKey::Iota => text(r.ota.iota.as_deref().unwrap_or("")),
         SortKey::Contest => text(r.contest.as_deref().map_or("", |c| c.contest_id.as_str())),
         SortKey::County => text(
@@ -1123,7 +1124,8 @@ fn was_state(named: &str, r: &QsoRecord) -> Option<String> {
     if !US_ENTITIES.contains(&js_upper(named).as_str()) {
         return None;
     }
-    let code = js_upper(js_trim(r.state.as_deref()?));
+    // The state its upload carries: a merged contest contact's exchange's (`record_field`).
+    let code = js_upper(js_trim(super::record_field(r, "STATE")?));
     WAS_STATES.contains(&code.as_str()).then_some(code)
 }
 

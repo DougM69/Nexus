@@ -4361,6 +4361,10 @@ mod logbook_startup_tests {
                 && at(job, ".spawn(move ||") < at(job, "fill_log_store("),
             "and runs on the thread it spawns"
         );
+        assert!(
+            at(job, ".spawn(move ||") < at(job, "move_contest_columns("),
+            "the contest-column move runs on it too"
+        );
     }
 
     /// The main window is sent to the root beside the page it waits on — the address Tauri itself
@@ -8642,7 +8646,9 @@ fn fill_version(rules: u32) -> i64 {
 /// loop's — with the resolvers the engine fills every insert with ([`country_of`], the engine's
 /// own DXCC-number names, [`subdivision_hint`]), counting a contact without a state only where one
 /// can apply
-/// ([`subdivision_applies`]). See `tempo_app::logfill` (SPEC-2 v3 D2-A).
+/// ([`subdivision_applies`]). See `tempo_app::logfill` (SPEC-2 v3 D2-A). Then, on the same thread,
+/// the one-time move of merged contest contacts' received grid, name and QTH into their own
+/// fields (`tempo_app::logfill::move_contest_columns`).
 fn spawn_log_fill(engine: SharedEngine) {
     let spawned = std::thread::Builder::new()
         .name("nexus-log-fill".into())
@@ -8664,6 +8670,29 @@ fn spawn_log_fill(engine: SharedEngine) {
                     &format!(
                         "the logbook's country and state were not saved this launch, and the \
                          next launch tries again: {e}"
+                    ),
+                ),
+            }
+            // Once per store: a merged contest contact's received grid, name and QTH into its
+            // own fields, as one history run (`tempo_app::logfill::move_contest_columns`).
+            match tempo_app::logfill::move_contest_columns(&engine) {
+                Ok(done) => {
+                    if let Some(run) = &done.run {
+                        tempo_core::applog::info(
+                            "logbook",
+                            &format!(
+                                "{} merged contest contacts took the grid, name or QTH they \
+                                 received into their own columns (history run {run})",
+                                done.moved
+                            ),
+                        );
+                    }
+                }
+                Err(e) => tempo_core::applog::warn(
+                    "logbook",
+                    &format!(
+                        "merged contest contacts' grids, names and QTHs were not moved into \
+                         their own columns this launch, and the next launch tries again: {e}"
                     ),
                 ),
             }

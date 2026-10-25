@@ -9185,7 +9185,7 @@ export const EN = {
   'settings.confirmations.lotw.adifLocation.label': 'Sign from ADIF location (travelers)',
   'settings.confirmations.lotw.adifLocation.aria': 'Sign LoTW uploads from the ADIF location',
   'settings.confirmations.lotw.adifLocation.hint':
-    'Turn on if you set TQSL to <em>"use the location in the ADIF file"</em> and don\'t create named Station Locations (handy if you travel). Nexus then stamps your call + grid (STATION_CALLSIGN / MY_GRIDSQUARE) into the upload and omits the <code>-l</code> argument, so TQSL signs from those and the Station Location above isn\'t required. <b>The whole batch is signed from your current grid above</b>, so if you operate from more than one location, upload <em>before</em> you move — otherwise earlier contacts are signed with the new grid.',
+    'Turn on if you set TQSL to <em>"use the location in the ADIF file"</em> and don\'t create named Station Locations (handy if you travel). Nexus then stamps your call + grid (STATION_CALLSIGN / MY_GRIDSQUARE) into the upload and omits the <code>-l</code> argument, so TQSL signs from those and the Station Location above isn\'t required. <b>The whole batch is signed from your current grid above</b>, so if you operate from more than one location, upload <em>before</em> you move — otherwise earlier contacts are signed with the new grid. The exception is a VHF contest contact merged into the Logbook: it is signed with the grid you sent in its exchange (a rover\'s grid at that moment).',
   'settings.confirmations.lotw.tqslPath.label': 'TQSL path (optional)',
   'settings.confirmations.lotw.tqslPath.placeholder': 'auto-detect (leave blank)',
   'settings.confirmations.lotw.tqslPath.hint':

@@ -11,7 +11,7 @@
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
-use tempo_core::logbook::history::{CannotUndo, Entry, Kind};
+use tempo_core::logbook::history::{CannotUndo, Entry, Kind, CONTEST_COLUMNS_TAG};
 use tempo_core::logbook::RecordId;
 
 use crate::{durable_command, SharedEngine};
@@ -67,16 +67,48 @@ fn entries_dto(entries: Vec<Entry>) -> Vec<HistoryEntryDto> {
             undone_by: undone_by(e.seq),
             changes: match e.kind {
                 Kind::Delete | Kind::Create => Vec::new(),
-                _ => e
-                    .changes()
-                    .into_iter()
-                    .map(|c| FieldChangeDto {
-                        tag: c.tag,
-                        old: c.old,
-                        new: c.new,
-                    })
-                    .collect(),
+                _ => e.changes().into_iter().flat_map(shown).collect(),
             },
+        })
+        .collect()
+}
+
+/// One field change as the history shows it. A merged contest contact's directed columns are one
+/// history-only field ([`CONTEST_COLUMNS_TAG`]); shown, they are each column that changed, as
+/// `TAG (contest)`, and none where they did not (an entry carries them unchanged as its mark).
+fn shown(c: tempo_core::logbook::history::FieldChange) -> Vec<FieldChangeDto> {
+    if c.tag != CONTEST_COLUMNS_TAG {
+        return vec![FieldChangeDto {
+            tag: c.tag,
+            old: c.old,
+            new: c.new,
+        }];
+    }
+    let columns =
+        |v: &Option<String>| tempo_core::contest::carrier::decode_pairs(v.as_deref().unwrap_or(""));
+    let (old, new) = (columns(&c.old), columns(&c.new));
+    let values = |pairs: &[(String, String)], tag: &str| {
+        let v: Vec<&str> = pairs
+            .iter()
+            .filter(|(t, _)| t == tag)
+            .map(|(_, v)| v.as_str())
+            .collect();
+        (!v.is_empty()).then(|| v.join(", "))
+    };
+    let mut tags: Vec<&str> = Vec::new();
+    for (t, _) in old.iter().chain(&new) {
+        if !tags.contains(&t.as_str()) {
+            tags.push(t);
+        }
+    }
+    tags.into_iter()
+        .filter_map(|tag| {
+            let (was, now) = (values(&old, tag), values(&new, tag));
+            (was != now).then(|| FieldChangeDto {
+                tag: format!("{tag} (contest)"),
+                old: was,
+                new: now,
+            })
         })
         .collect()
 }
@@ -322,6 +354,51 @@ pub async fn restore_deleted_qso(
 mod tests {
     use super::*;
     use tempo_core::logbook::history::RunSummary;
+
+    /// A merged contest contact's columns show as each column that changed, never as the
+    /// history's own tag, and not at all where an entry carries them unchanged.
+    #[test]
+    fn a_contest_columns_change_shows_each_column_that_changed() {
+        let entry = |before: &str, after: &str| Entry {
+            seq: 1,
+            qso_id: "~0000000000000001".parse().unwrap(),
+            kind: Kind::Fill,
+            run: "r".into(),
+            at_ms: 1,
+            source: "fill".into(),
+            undoes: None,
+            before: Some(before.into()),
+            after: Some(after.into()),
+        };
+        let cols = |v: &str| format!("<{CONTEST_COLUMNS_TAG}:{}>{v}", v.len());
+        let moved = entry(
+            &cols("MY_GRIDSQUARE::EN53;GRIDSQUARE::FN31"),
+            &format!("<GRIDSQUARE:4>FN31{}", cols("MY_GRIDSQUARE::EN53")),
+        );
+        let shown: Vec<(String, Option<String>, Option<String>)> = entries_dto(vec![moved])[0]
+            .changes
+            .iter()
+            .map(|c| (c.tag.clone(), c.old.clone(), c.new.clone()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (
+                    "GRIDSQUARE (contest)".to_string(),
+                    Some("FN31".to_string()),
+                    None
+                ),
+                ("GRIDSQUARE".to_string(), None, Some("FN31".to_string())),
+            ]
+        );
+        let unchanged = entry(
+            &format!("<NAME:3>BOB{}", cols("CQZ::3")),
+            &format!("<NAME:5>HIRAM{}", cols("CQZ::3")),
+        );
+        let dto = entries_dto(vec![unchanged]);
+        assert_eq!(dto[0].changes.len(), 1);
+        assert_eq!(dto[0].changes[0].tag, "NAME");
+    }
 
     /// Each listed run reaches the page as what it is, and which way its undo moves contacts.
     #[test]

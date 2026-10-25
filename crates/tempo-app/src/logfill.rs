@@ -157,3 +157,88 @@ pub fn fill_log_store(
         filled,
     })
 }
+
+/// The `log_meta` key that marks the one-time move of merged contest contacts' received grid,
+/// name and QTH into their own fields ([`move_contest_columns`]) done: `1`.
+pub const CONTEST_COLUMNS_MOVED: &str = "contest_columns_moved";
+
+/// What the move reads of each contact: its own grid, name and QTH, and beside them the contest
+/// columns of the same names ([`CONTEST_MOVED_TAGS`](tempo_core::logbook::CONTEST_MOVED_TAGS)).
+const MOVES: Narrow = Narrow {
+    columns: &["call", "grid", "name", "qth"],
+    uploads: false,
+};
+
+/// What one run of the move did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MoveOutcome {
+    /// The store was marked moved already: nothing read, nothing written.
+    pub current: bool,
+    /// Contacts that took a value into a field of their own.
+    pub moved: usize,
+    /// The history run that holds every change it made — one Undo of it puts each contact back
+    /// as it was. `None` when it changed nothing.
+    pub run: Option<String>,
+}
+
+/// ★ **Once per store: a contact merged from a contest before the merge wrote a received grid,
+/// name and QTH into the record's own fields gets them there** — each only where its own field is
+/// blank, the contest column it came from taken out
+/// ([`tempo_core::logbook::with_contest_columns_moved`]). Until then such a contact showed no
+/// grid in the Grid column and counted for no VUCC square, though its upload carried the grid.
+///
+/// Written as the fill job's fills are ([`crate::logwrite::move_contest_columns`]): ONE run in
+/// the history, which one Undo takes back whole; no upload stamp moves and nothing is queued to
+/// a service, because every contact's ADIF carries the same tags and values as before. Done
+/// once: [`CONTEST_COLUMNS_MOVED`] goes into the store with the last change, and a store marked
+/// so is not read again. On the 1.13 path it does nothing: that path reads its contacts from
+/// `log.adi`, which gives a contest column back in the record's own field already.
+///
+/// ⚠️ It reads the store and takes the Engine lock: call it on a thread of its own, with no lock
+/// held — never from the radio loop.
+pub fn move_contest_columns(engine: &Mutex<Engine>) -> Result<MoveOutcome, String> {
+    let rows = {
+        let eng = engine_lock(engine);
+        if eng.log_on_file() {
+            return Ok(MoveOutcome::default());
+        }
+        eng.log_rows()
+    };
+    let LogRows::Store(reads) = rows;
+    let ((current, ids), _) = reads
+        .read(READ_WAIT, |db| {
+            if db.meta(CONTEST_COLUMNS_MOVED)? == Some(1) {
+                return Ok((true, Vec::new()));
+            }
+            let mut ids = Vec::new();
+            db.each_narrow_with(
+                MOVES,
+                &tempo_core::logbook::CONTEST_MOVED_TAGS,
+                Scope::All,
+                Order::Log,
+                &mut |r| {
+                    if let Some(id) = r
+                        .id
+                        .filter(|_| tempo_core::logbook::with_contest_columns_moved(r).is_some())
+                    {
+                        ids.push(id);
+                    }
+                    ControlFlow::Continue(())
+                },
+            )?;
+            Ok((false, ids))
+        })
+        .map_err(|e| e.to_string())?;
+    if current {
+        return Ok(MoveOutcome {
+            current: true,
+            ..MoveOutcome::default()
+        });
+    }
+    let (moved, run) = crate::logwrite::move_contest_columns(engine, &ids)?;
+    Ok(MoveOutcome {
+        current: false,
+        moved,
+        run: (moved > 0).then_some(run),
+    })
+}

@@ -2812,6 +2812,144 @@ pub(crate) mod tests {
         );
     }
 
+    /// ★ THE ONE-TIME CONTEST-COLUMN MOVE: a contact merged before the merge wrote a received
+    /// grid, name and QTH into its own fields gets them there — only where its field is blank —
+    /// as ONE history run that one Undo takes back to the byte; once per store; no upload stamp
+    /// moves; and no file the log writes (its mirror, a backup copy, an export, an upload) ever
+    /// changes its tags or carries the history's own.
+    #[test]
+    fn the_contest_column_move_runs_once_as_one_undoable_run() {
+        use tempo_core::logbook::{adif_record, ContestFields, RecordId, UploadStatus};
+        let d = Dir::new("contest-move");
+        std::fs::write(d.log(), legacy_log(1)).unwrap();
+        flush(&engine_on_store(&d));
+        let merged = |n: u64, grid: Option<&str>, adif: &[(&str, &str)]| {
+            let mut r = qso(&format!("K{n}VHF"), 1_790_000_000 + n);
+            r.id = Some(RecordId::Provisional {
+                hash: 7_000 + n,
+                ordinal: 0,
+            });
+            r.grid = grid.map(str::to_string);
+            r.contest = Some(Box::new(ContestFields {
+                session: "vhf".into(),
+                contest_id: "ARRL-VHF-JAN".into(),
+                adif: adif
+                    .iter()
+                    .map(|(t, v)| (t.to_string(), v.to_string()))
+                    .collect(),
+                ..Default::default()
+            }));
+            r
+        };
+        let columns = [
+            ("MY_GRIDSQUARE", "EN53"),
+            ("GRIDSQUARE", "FN31"),
+            ("NAME", "BOB"),
+            ("QTH", "BOSTON"),
+        ];
+        // Blank fields and an upload stamp; a grid of the operator's own; no column to move.
+        let mut blank = merged(1, None, &columns);
+        blank.upload.lotw = Some(UploadStatus {
+            outcome: tempo_core::logbook::UploadOutcome::Accepted,
+            when_unix: 1_790_000_100,
+            detail: None,
+        });
+        let own = merged(2, Some("FN42"), &columns[..2]);
+        let none = merged(3, None, &[("CQZ", "5")]);
+        {
+            let mut db = LogDb::open(&d.db()).unwrap();
+            for r in [&blank, &own, &none] {
+                db.insert(r, Resolved::default()).unwrap();
+            }
+        }
+        let before = stored(&d);
+        // Each upload's tags and values: the same, whatever place the grid is written in.
+        let upload = |rows: &[QsoRecord]| {
+            rows.iter()
+                .map(|r| {
+                    let mut f = tempo_core::logbook::history::fields(&adif_record(r));
+                    f.sort();
+                    f
+                })
+                .collect::<Vec<_>>()
+        };
+        let e = Mutex::new(engine_on_store(&d));
+
+        let done = crate::logfill::move_contest_columns(&e).expect("the move runs");
+        flush(&e.lock().unwrap());
+        assert_eq!(done.moved, 1, "{done:?}");
+        let run = done.run.clone().expect("one run");
+        let after = stored(&d);
+        let moved = after.iter().find(|r| r.id == blank.id).unwrap();
+        assert_eq!(
+            (
+                moved.grid.as_deref(),
+                moved.name.as_deref(),
+                moved.qth.as_deref()
+            ),
+            (Some("FN31"), Some("BOB"), Some("BOSTON"))
+        );
+        assert_eq!(
+            moved.contest.as_deref().unwrap().adif,
+            [("MY_GRIDSQUARE".to_string(), "EN53".to_string())]
+        );
+        assert_eq!(moved.upload, blank.upload, "no stamp moves");
+        for r in [&own, &none] {
+            let now = after.iter().find(|a| a.id == r.id).unwrap();
+            assert_eq!(now, r, "untouched");
+        }
+        assert_eq!(
+            upload(&after),
+            upload(&before),
+            "every upload the same tags and values"
+        );
+        // One run, every change in it.
+        let reads = e.lock().unwrap().log_store_reads();
+        let entries = reads.read(READ_WAIT, |db| db.history_run(&run)).unwrap().0;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].qso_id, blank.id.unwrap());
+
+        // Once: the next launch reads nothing and writes nothing.
+        let again = crate::logfill::move_contest_columns(&e).expect("runs");
+        assert!(again.current && again.moved == 0, "{again:?}");
+
+        // No file the log writes holds the history's own tag; the mirror holds one grid each.
+        let export = crate::logexport::export_logbook(
+            &crate::logexport::Source::of(&e.lock().unwrap()),
+            "adif",
+            None,
+            None,
+        )
+        .unwrap()
+        .text;
+        let mut files = vec![export];
+        let mut walk = vec![d.0.clone()];
+        while let Some(dir) = walk.pop() {
+            for f in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = f.path();
+                if p.is_dir() {
+                    walk.push(p);
+                } else if p.to_string_lossy().contains(".adi") {
+                    files.push(String::from_utf8_lossy(&std::fs::read(&p).unwrap()).into());
+                }
+            }
+        }
+        assert!(files.len() >= 2, "the export and the mirror at least");
+        assert!(
+            files[1..].iter().any(|f| f.contains("K1VHF")),
+            "the mirror holds the contact"
+        );
+        for text in &files {
+            assert!(!text.contains("APP_NEXUS_C_"), "{text}");
+        }
+
+        // One Undo of the run: every contact back to the byte.
+        let (undone, _) = crate::loghistory::undo_run(&e, &run);
+        assert_eq!(undone.expect("undone").changed, 1);
+        flush(&e.lock().unwrap());
+        assert_eq!(stored(&d), before, "the log as it was, whole");
+    }
+
     /// ★ D2-A: an imported US contact carries its state from the moment it is imported — in the
     /// store as in memory — where it used to gain it in memory only, at the next launch.
     #[test]
