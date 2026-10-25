@@ -643,7 +643,8 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 tags={{ b: <strong />, note: <span className="pota-act-sub" /> }}
                 vals={{
                   program: act?.program ?? '',
-                  reference: act?.reference ?? '',
+                  // A two-fer's parks, as an operator writes them: "US-1234, US-5678".
+                  reference: activationParks(act).join(', '),
                 }}
               />
             </span>

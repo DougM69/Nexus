@@ -23077,7 +23077,9 @@ button.cq-skiptx1.on {
   max-width: 160px;
 }
 .pota-act-text {
-  flex: 1;
+  /* A basis, so the sentence keeps a readable width and the counts and the grid wrap onto the
+     next line beside it rather than crush it to a word a line. */
+  flex: 1 1 20em;
 }
 /* Today's count of an activation, one per park ("US-1234 7 of 10 · 3 to go"), and its P2P
    count: the ink of the strip on a hairline, lit in the good colour once a park is valid. */
@@ -23089,7 +23091,7 @@ button.cq-skiptx1.on {
   font-weight: 700;
   white-space: nowrap;
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--text) 35%, transparent);
 }
 .pota-act-progress.valid {
   border-color: var(--state-good);
@@ -23102,8 +23104,9 @@ button.cq-skiptx1.on {
   gap: var(--space-1);
   color: var(--text-dim);
 }
-.pota-act-grid-input {
-  width: 8ch;
+.pota-act-grid .pota-act-grid-input {
+  width: 9ch;
+  padding: 1px 6px;
   flex: 0 0 auto;
 }
 /* The state an activation's contacts carry as MY_STATE, or, on a state line, the ask for it. */
