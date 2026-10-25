@@ -286,6 +286,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **Merging a contest into the logbook keeps the grid the other station sent.** In the ARRL VHF contests the grid in the exchange went into the exported file but not the logbook's own Grid column, so those contacts were missing from the Grid column, grid searches and anything that counts grids until the log was imported again. A name and a QTH sent in an exchange now land in the Name and QTH columns the same way, and a GOTA station's contacts keep the GOTA call as their station call.
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
 - **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone
