@@ -17553,7 +17553,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// ([`Self::answer_cq_in_contest`]): the contest's messages, the contest log. WSJT-X answers
     /// a double-clicked CQ with its contest activity's messages (`processMessage`); this left the
     /// contest for FT8 QSO mode and the standard messages, which a WSJT-X station in its Field Day
-    /// or NA VHF activity never answers.
+    /// or NA VHF activity never answers. **Already in the contest's S&P, a double-click on a CQ
+    /// stays in the contest on every tier** ([`Self::contest_cq`]): the contest's S&P answers no
+    /// CQ by itself, so this is how each of its contacts starts.
     ///
     /// The Remote page calls `call_station_ctx` directly, unchanged.
     pub fn work_station(
@@ -17597,13 +17599,24 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// The CQ a click hands to the running contest's S&P ([`Self::work_station`]): the click's
     /// message is a CQ from the clicked station, not from you, while the contest's own FT8/FT4
-    /// messages apply. Those messages, and the CQ's sender and grid.
+    /// messages apply or the station is already in the contest's S&P. Those messages, and the
+    /// CQ's sender and grid.
     fn contest_cq(
         &self,
         dxcall: &str,
         reply_msg: Option<&str>,
     ) -> Option<(FtMessages, String, String)> {
-        let messages = self.contest_ft_messages()?;
+        // ⭐ Already in the contest's S&P, a CQ double-clicked is answered in the station's own
+        // messages on every tier and in every contest, those WSJT-X has no contest messages for
+        // included (FT1, DX1 and FT2; Winter Field Day and the parties that ban FT8 and FT4):
+        // S&P answers no CQ by itself, so this is how each of its contacts starts there.
+        let messages = self.contest_ft_messages().or(match &self.mode {
+            Mode::FieldDay {
+                station,
+                running: false,
+            } => Some(station.messages()),
+            _ => None,
+        })?;
         let Msg::Cq { de, grid, .. } = Msg::parse(reply_msg?) else {
             return None;
         };
@@ -26371,8 +26384,9 @@ contact yourself."
     /// ⭐ **While a contest runs whose own FT8/FT4 messages apply
     /// ([`Self::contest_ft_messages`]), S&P is the contest's S&P**, its messages and its log, as
     /// the strip's Call CQ is its Running ([`Self::start_running`]) and as the Contest screen's
-    /// S&P is: with TX on it answers the next CQ it hears. A contest that cannot start (its
-    /// exchange not filled in) refuses it, as the Contest screen's S&P does, and nothing changes.
+    /// S&P is: it listens, and only a double-click on a CQ (or a logger's Reply to one) calls
+    /// that station. A contest that cannot start (its exchange not filled in) refuses it, as the
+    /// Contest screen's S&P does, and nothing changes.
     /// The Remote page's S&P keeps its own path.
     pub fn start_search_and_pounce(&mut self) -> Result<(), String> {
         if self.contest_ft_messages().is_some() {
@@ -28129,7 +28143,7 @@ contact yourself."
                     // Stock "Disable Tx after sending 73" after a contact the operator picked (a
                     // double-click on its CQ, a logger's Reply to it): the over leaving NOW closes
                     // it, and the radio loop turns TX off once it has played, as WSJT-X does after
-                    // a double-clicked contact's RR73 or 73. S&P's own pounces keep TX on.
+                    // a double-clicked contact's RR73 or 73. The run keeps TX on to call CQ again.
                     if station.done() && station.picked() && self.settings.disable_tx_after_73 {
                         self.pending_tx_disable = true;
                     }
@@ -29660,8 +29674,6 @@ contact yourself."
         let mut sequence_advanced = false;
         // Did the Field Day sequencer log a contact this slot (→ journal it)?
         let mut fd_logged = false;
-        // Did the contest's S&P pick a CQ out of this slot's decodes to answer?
-        let mut fd_answered_cq = false;
         // Hound: TX frequency to adopt for the R+report (the Fox's freq).
         let mut hound_move_tx: Option<f32> = None;
         match &mut self.mode {
@@ -29821,10 +29833,6 @@ contact yourself."
                 station.observe(decodes, slot);
                 sequence_advanced = station.state != state_before;
                 self.ft_seq_moved = sequence_advanced || station.outgoing() != next_before;
-                // S&P (the role that listens) going from listening to awaiting the runner's
-                // exchange has just answered a CQ in these decodes.
-                fd_answered_cq = state_before == tempo_core::fieldday::FdState::Listening
-                    && station.state == tempo_core::fieldday::FdState::AwaitExchange;
                 // The FD sequencer logged a contact this slot → journal it
                 // (after the match — persist_fd_log needs `self` unborrowed).
                 fd_logged = station.log.qsos().len() > rows_before;
@@ -29834,19 +29842,13 @@ contact yourself."
                 // the FD analogue of Mode::Qso's resume_cq. Keeps the in-station
                 // contest log so dupes are still caught. Run re-arms instantly
                 // (the happy path reaches Done with no pending); S&P re-arms on
-                // the slot after its final RR73 is sent.
+                // the slot after its final RR73 is sent, and listens: it calls
+                // nobody until the operator picks the next CQ.
                 if station.done() {
                     station.rearm(*running);
                     sequence_advanced = true;
                 }
             }
-        }
-        // ⭐ The contest's S&P answers the CQ it picked on the period opposite the CQ's, as WSJT-X
-        // takes Tx 1st from the CQ it answers (`processMessage`) and as a double-click on one
-        // here does: the CQ's audio is from the period before `slot`, so the opposite of its
-        // period is `slot`'s.
-        if fd_answered_cq {
-            self.apply_cycle_parity(slot.is_multiple_of(2));
         }
         // The one over still owed to a partner the run has already left (#170, #153). Runs
         // AFTER the sequencer has had this slot's decodes, so it can never take a message the

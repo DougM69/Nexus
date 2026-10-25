@@ -204,6 +204,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its 15 minutes, once your account's device list confirms it again.
 
 ### Changed
+- **In a contest, FT8 and FT4 Search & Pounce no longer calls stations by itself.** S&P now only
+  listens, as in WSJT-X: you start each contact with a double-click on a CQ, or a reply to one from
+  a logging program. That contact still runs itself to RR73 and the log, and S&P then waits for
+  your next pick. Leaving TX on never calls anyone, and nothing is queued while TX is off. With
+  **Disable TX after sending 73** on, TX now goes off after every S&P contact. On FT1, DX1 and FT2,
+  and in Winter Field Day and the Illinois and New York QSO parties, a double-click on a CQ while you
+  are in the contest's S&P now answers it in the contest's own messages instead of leaving the contest.
+  Running is unchanged.
 - **Nexus Remote is free during the beta, with no 14-day limit.** Where the service runs the beta, the Remote
   page says "Free during the beta" instead of counting a trial's days, internet use no longer runs out, and
   attaching a station no longer promises a trial. Everything else about who may use Remote is unchanged.
