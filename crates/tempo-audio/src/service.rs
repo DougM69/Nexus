@@ -28493,11 +28493,13 @@ mod tests {
         );
         {
             let e = engine.lock().unwrap();
+            // The engine sees the playing message too since the transmit arbiter counts the one
+            // the loop reports on the air (`tx_owner`), so `on_air` holds the check as well.
             assert!(
-                !e.on_air(),
-                "scene guard: the engine itself no longer sees it"
+                e.on_air(),
+                "scene guard: the arbiter sees the playing message"
             );
-            assert!(e.transmit_needs_the_lock(), "…but the loop's word does");
+            assert!(e.transmit_needs_the_lock(), "…and the check holds");
         }
         run(&mut state, &mut rig, &mut backend, t0 + 5_000.0);
         assert!(
