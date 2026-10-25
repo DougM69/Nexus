@@ -4097,3 +4097,147 @@ async fn a_record_of_removals_that_does_not_read_is_shown() {
     service.action(Action::LanReset {}).await.unwrap();
     assert!(!service.status().unwrap().account.removals_unreadable);
 }
+
+// ---- The shack's one Devices list (display only) ------------------------------------------------
+
+/// A row of the shack's Devices list: its listed ids, its LAN ids, the guest's address, not known whose.
+type Shown = (Vec<String>, Vec<String>, Option<String>, bool);
+/// The rows the shack's Devices list is given.
+fn device_rows(status: &Status) -> Vec<Shown> {
+    status
+        .device_rows
+        .iter()
+        .map(|r| (r.listed.clone(), r.lan.clone(), r.guest.clone(), r.unknown))
+        .collect()
+}
+
+/// ★ ONE ROW PER COMPUTER: a computer on the LAN and, by its own sign-in, on the internet is one row
+/// with both its ids, exactly what a Remove on either takes; the owner's. CONTROL: another computer
+/// paired by code is its own row, and the shack sees the rows under `deviceRows`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_devices_list_shows_a_computer_on_both_roads_once() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let other: [u8; 32] = [7; 32];
+    let (service, _store, _scratch, lan_id) = on_both_roads(
+        &cloud,
+        &vault,
+        &[(&other, "Den PC")],
+        vec![computer_row(&token("computer"), "operate")],
+    )
+    .await;
+    let status = service.status().unwrap();
+    assert_eq!(
+        device_rows(&status),
+        vec![
+            (vec![COMPUTER_ID.to_string()], vec![lan_id], None, false),
+            (Vec::new(), vec![lan::device_id(&other)], None, false),
+        ]
+    );
+    let shown = serde_json::to_value(&status).unwrap();
+    assert_eq!(shown["deviceRows"][0]["listed"][0], COMPUTER_ID);
+    assert_eq!(shown["deviceRows"][0]["guest"], serde_json::Value::Null);
+    assert!(shown.get("whose").is_none(), "never sent");
+}
+
+/// ★ A GUEST'S DEVICE IS SHOWN UNDER THE GUEST, after a restart too, when its proof is no longer
+/// waiting for anything: whose it is comes from its proof as checked here, never the service's say.
+/// CONTROL: the owner's own computer is the owner's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guests_device_is_shown_under_the_guest_after_a_restart_too() {
+    let guest = mailbox("K9.Guest@example.test");
+    for (proof, whose) in [("guest", Some(guest.clone())), ("computer", None)] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(
+            &cloud.origin,
+            vec![Invite {
+                mailbox: guest.clone(),
+                role: Role::Operate,
+            }],
+        );
+        let rows = vec![computer_row(&token(proof), "operate")];
+        let first = launch_granting_on_sign_in(&cloud, &vault);
+        let status = listed(&first, &cloud, rows.clone()).await;
+        assert_eq!(
+            status.pinned_devices,
+            vec![COMPUTER_ID.to_string()],
+            "{proof}: premise"
+        );
+        assert_eq!(
+            device_rows(&status),
+            vec![(
+                vec![COMPUTER_ID.to_string()],
+                Vec::new(),
+                whose.clone(),
+                false
+            )],
+            "{proof}"
+        );
+        drop(first);
+        let again = restarted(&cloud, &vault).await;
+        let status = listed(&again, &cloud, rows).await;
+        assert_eq!(
+            device_rows(&status),
+            vec![(vec![COMPUTER_ID.to_string()], Vec::new(), whose, false)],
+            "{proof}: after a restart"
+        );
+    }
+}
+
+/// ★ A DEVICE ADDED BY A SIGN-IN WHOSE PROOF NO LONGER HOLDS HERE IS SHOWN AS NOT KNOWN, never as the
+/// owner's: the issuer's keys gone, nothing can be checked. CONTROL: a device added at the shack is
+/// the owner's whatever is kept.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_device_whose_proof_cannot_be_checked_is_not_known() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let first = launch_granting_on_sign_in(&cloud, &vault);
+    let mut shack = browser_row(&token("browser"));
+    shack["id"] = "10000000-0000-4000-8000-0000000000ee".into();
+    shack["addedBy"] = "shack".into();
+    shack["proof"] = serde_json::Value::Null;
+    let rows = vec![computer_row(&token("computer"), "operate"), shack];
+    let _ = listed(&first, &cloud, rows.clone()).await;
+    drop(first);
+    vault.values.lock().unwrap().remove("account-keys");
+    let again = restarted(&cloud, &vault).await;
+    let status = listed(&again, &cloud, rows).await;
+    assert_eq!(
+        device_rows(&status),
+        vec![
+            (vec![COMPUTER_ID.to_string()], Vec::new(), None, true),
+            (
+                vec!["10000000-0000-4000-8000-0000000000ee".to_string()],
+                Vec::new(),
+                None,
+                false
+            ),
+        ]
+    );
+}
+
+/// ★ THE TIME LEFT OF A HOLD IS SHOWN ONLY WHERE THE REMOTE PC IS SHOWN IT: a held sign-in device
+/// whose owner the service confirms it notified shows its window; one with no confirmed notice
+/// shows no time, so a missing email never looks like a coming unlock.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_devices_list_shows_a_holds_time_only_with_a_confirmed_notice() {
+    for notified in [1, 0] {
+        let cloud = fake_cloud().await;
+        let vault = owned_vault(&cloud.origin, Vec::new());
+        let service = launch_granting_on_sign_in(&cloud, &vault);
+        let status = listed(&service, &cloud, vec![notified_row(notified)]).await;
+        assert_eq!(
+            status.held_devices,
+            vec![BROWSER.to_string()],
+            "{notified}: premise"
+        );
+        let left = status.device_rows[0].hold_left;
+        match notified {
+            1 => assert!(
+                left.is_some_and(|s| s > 0 && s <= account::TX_HOLD.as_secs()),
+                "{left:?}"
+            ),
+            _ => assert_eq!(left, None),
+        }
+    }
+}

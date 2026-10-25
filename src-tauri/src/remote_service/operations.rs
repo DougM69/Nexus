@@ -569,6 +569,19 @@ impl Authority {
         Some(self.hold_shown(&device, &grants, now))
     }
 
+    /// [`Self::hold_shown`] for `device` at `now`, as the remote PC holding the lease under it would
+    /// be told, for the shack's Devices list: DISPLAY ONLY, never read to decide anything. Not held,
+    /// or a poisoned lock, says nothing.
+    pub(crate) fn hold_display(&self, device: &str, now: Instant) -> RemoteTxHold {
+        let Ok(grants) = self.core.lock().map(|c| c.tx_grants.clone()) else {
+            return RemoteTxHold::default();
+        };
+        if !self.tx_held_for(device, &grants, now) {
+            return RemoteTxHold::default();
+        }
+        self.hold_shown(device, &grants, now)
+    }
+
     /// What the remote PC may be told of `device`, which the gate holds: notified only when the
     /// service confirms a notice for every name it is held under ([`Self::hold_names`]), and the
     /// time left only then, and only when each of those names is held by its window alone (the

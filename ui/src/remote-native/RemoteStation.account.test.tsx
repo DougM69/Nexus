@@ -3,7 +3,7 @@
 // the station granted on its own proof, what the card says of a proof it could not confirm or a removal the
 // service has not heard yet, and People.
 import { afterEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RemoteStation } from './RemoteStation'
 import type { AccountStatus, RemoteStationAction, RemoteStationStatus } from './types'
 import { EN } from '../i18n/en'
@@ -106,7 +106,7 @@ it('shows a device added by signing in as asking, with Approve, until it is appr
   expect(screen.queryByText(EN['remote.account.unconfirmed']), 'it was confirmed').toBeNull()
   expect(screen.queryByText(EN['remote.native.computerKeyNotPinned']), 'never approved here').toBeNull()
   expect(screen.getAllByText(EN['remote.account.addedByAccount']).length).toBe(2)
-  fireEvent.click(screen.getAllByRole('button', { name: EN['remote.approve'] })[1])
+  fireEvent.click(within(screen.getByText('DESKTOP-7Q').closest('li')!).getByRole('button', { name: EN['remote.approve'] }))
   await waitFor(() => expect(actions).toEqual([{ type: 'device', deviceId: computer, approve: true, key, kind: 'computer' }]))
 })
 

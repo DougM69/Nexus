@@ -37,7 +37,7 @@ it('renders local pairing and device approval through only the isolated Remote c
   await screen.findByText(accountId)
   fireEvent.click(screen.getByRole('button', { name: 'Approve this account pairing' }))
   await screen.findByText(deviceId.slice(-6))
-  fireEvent.click(screen.getByRole('button', { name: 'Approve browser' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
   await waitFor(() => expect((screen.getByRole('button', { name: 'Turn on Remote' }) as HTMLButtonElement).disabled).toBe(false))
   fireEvent.click(screen.getByRole('button', { name: 'Turn on Remote' }))
   await screen.findByRole('button', { name: 'Turn off Remote' })
@@ -97,15 +97,15 @@ it('approves the pairing and each browser in one step, with no transmit tick', a
   await screen.findByRole('button', { name: 'Start Nexus when I sign in' })
   // One Approve per browser, and no transmit tick beside any of them.
   expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
-  fireEvent.click(screen.getAllByRole('button', { name: 'Approve browser' })[1])
-  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Approve browser' })).toHaveLength(1))
-  fireEvent.click(screen.getByRole('button', { name: 'Approve browser' }))
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve browser' })).toBeNull())
+  fireEvent.click(screen.getAllByRole('button', { name: 'Approve' })[1])
+  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Approve' })).toHaveLength(1))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull())
   expect(actions.slice(1)).toEqual([
     { type: 'device', deviceId: second, approve: true, kind: 'browser' },
     { type: 'device', deviceId: first, approve: true, kind: 'browser' },
   ])
-  expect(screen.getAllByRole('button', { name: 'Revoke browser approval' })).toHaveLength(2)
+  expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(2)
 })
 
 // Remote remembers being on, and approved browsers keep what the operator allowed. The hint no longer
@@ -193,14 +193,14 @@ it('shows an approval that lasts until removed as such, with no date and no warn
   }
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
-  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('div')!
+  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('li.remote-device') as HTMLElement
   expect((await card(kept)).textContent).toContain('Approved until you remove it.')
   expect((await card(kept)).textContent).not.toContain('9999')
   expect((await card(kept)).textContent).not.toContain('approval ends')
   expect(within(await card(kept)).queryByRole('button', { name: 'Approve again' })).toBeNull()
   expect((await card(dated)).textContent, 'control').toContain('This approval ends')
   expect(document.body.textContent).not.toContain('9999')
-  expect(document.body.textContent?.match(/Approved until you remove it\./g)?.length).toBeGreaterThanOrEqual(3)
+  expect(document.body.textContent?.match(/Approved until you remove it\./g)?.length).toBe(2)
 })
 
 // Remove at the shack ends every road the station can link the device to. When the other list may
@@ -217,10 +217,9 @@ it('says to check the other list when a removal could not be linked to it', asyn
   }
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
-  const heading = await screen.findByRole('heading', { name: 'Your computers' })
-  const row = within(heading.nextElementSibling as HTMLElement).getByText('Den PC').closest('li')!
+  const row = (await screen.findByText('Den PC')).closest('li')!
   fireEvent.click(within(row).getByRole('button', { name: 'Remove' }))
-  expect((await screen.findByRole('alert')).textContent).toBe('Removed. Nexus could not confirm whether this computer is also under “Your computers” or “Paired computers”. Check both lists, and remove it there too if it is.')
+  expect((await screen.findByRole('alert')).textContent).toBe('Removed. Nexus could not confirm whether this computer also shows as another row under Devices. Check the list, and remove it there too if it does.')
 })
 
 // Browser approval lifetime (operator decision 2026-09-14): each approved browser shows when its
@@ -248,7 +247,7 @@ it('shows each browser approval expiry, and warns and offers approval again in i
   }
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
-  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('div')!
+  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('li.remote-device') as HTMLElement
   expect((await card(renewing)).textContent).toContain(`Approved until ${date(now + 30 * day)} UTC`)
   expect((await card(renewing)).textContent).toContain(`up to ${date(now + 60 * day)} UTC`)
   expect((await card(older)).textContent).toContain(`Approved until ${date(now + 6 * day)} UTC.`)
@@ -264,7 +263,7 @@ it('shows each browser approval expiry, and warns and offers approval again in i
   fireEvent.click(within(phone).getByRole('button', { name: 'Approve again' }))
   await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: capped, approve: true, kind: 'browser' }))
   // Ending it is still one click away, beside the warning.
-  expect(within(phone).getByRole('button', { name: 'Revoke browser approval' })).toBeTruthy()
+  expect(within(phone).getByRole('button', { name: 'Remove' })).toBeTruthy()
 })
 
 // A5: the operator compares the browser's key with the one the browser shows, and approving pins the
@@ -295,7 +294,7 @@ it('shows each browser key beside its name, approves with the key shown, and ask
   }
   window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<RemoteStation />)
-  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('div')!
+  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('li.remote-device') as HTMLElement
   for (const id of [waiting, unpinned, pinned]) expect((await card(id)).textContent).toContain(`Key ${short(keys[id])}`)
   expect((await card(keyless)).textContent).not.toContain('Key ')
   const notice = 'can’t stream until you approve it again here'
@@ -304,9 +303,10 @@ it('shows each browser key beside its name, approves with the key shown, and ask
     expect((await card(id)).textContent).not.toContain(notice)
     expect(within(await card(id)).queryByRole('button', { name: 'Approve again' })).toBeNull()
   }
-  fireEvent.click(within(await card(waiting)).getByRole('button', { name: 'Approve browser' }))
+  fireEvent.click(within(await card(waiting)).getByRole('button', { name: 'Approve' }))
   await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: waiting, approve: true, key: keys[waiting], kind: 'browser' }))
-  fireEvent.click(within(await card(unpinned)).getByRole('button', { name: 'Approve again' }))
+  // A key not pinned here is asked as a new device is: Approve, on its row, beside the key it pins.
+  fireEvent.click(within(await card(unpinned)).getByRole('button', { name: 'Approve' }))
   await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: unpinned, approve: true, key: keys[unpinned], kind: 'browser' }))
 })
 
@@ -444,19 +444,18 @@ it('a computer running Nexus is listed apart from the browsers, by its name, its
     return status
   }) as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
   render(<form><RemoteStation /></form>)
-  const heading = await screen.findByRole('heading', { name: 'Your computers' })
-  const list = heading.nextElementSibling as HTMLElement
-  const row = within(list).getByText('Shack laptop').closest('li')!
+  const row = (await screen.findByText('Shack laptop')).closest('li')!
   within(row).getByText('Nexus on Windows')
-  within(row).getByText('Key A1B2 C3D4 E5F6 0718 293A 4B5C 6D7E 8F90')
+  // On the row while Approve would pin it, and in its details.
+  expect(within(row).getAllByText('Key A1B2 C3D4 E5F6 0718 293A 4B5C 6D7E 8F90').length).toBe(2)
   within(row).getByText('Asks to operate this station over the internet.')
   expect(within(row).queryByRole('checkbox'), 'no tick').toBeNull()
-  // Not among the browsers, and nowhere under Advanced, where the switches are.
-  const browsers = screen.getByRole('heading', { name: 'Your browsers' }).nextElementSibling as HTMLElement
-  expect(within(browsers).queryByText('Shack laptop')).toBeNull()
-  within(browsers).getByText('Chrome on Windows')
-  expect(screen.queryByText(computerId.slice(-6)), 'not under Advanced').toBeNull()
-  screen.getByText(browserId.slice(-6))
+  // Told apart from the browser by how it connects; no station controls switch for it, as there was none under Advanced.
+  expect([...row.querySelectorAll('.remote-device-road')].map(b => b.textContent)).toEqual(['Internet'])
+  const browser = screen.getByText('Chrome on Windows').closest('li')!
+  expect([...browser.querySelectorAll('.remote-device-road')].map(b => b.textContent)).toEqual(['Browser'])
+  expect(within(row).queryByRole('button', { name: /station controls/ })).toBeNull()
+  within(browser).getByRole('button', { name: 'Revoke station controls' })
   fireEvent.click(within(row).getByRole('button', { name: 'Approve' }))
   await within(row).findByText('Approved until 2026-11-09 UTC.')
   expect(actions.filter(a => a.type === 'device')).toEqual([{ type: 'device', deviceId: computerId, approve: true, key, kind: 'computer' }])
