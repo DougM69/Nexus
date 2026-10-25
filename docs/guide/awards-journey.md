@@ -41,7 +41,63 @@ required to *see* where you stand:
   repeater do not count for the award either, and Nexus cannot tell those apart,
   so leave them out of an application. A needed 6 m square on the Needed board
   says FFMA in its row,
-- **IOTA** (Islands On The Air).
+- **IOTA** (Islands On The Air),
+- **WAP** (Worked All Provinces): the 13 Canadian provinces and territories, from
+  the province logged on a Canadian contact, with the ones still to confirm listed,
+- **WPX** (CQ): distinct prefixes worked and confirmed, by the prefix rule CQ
+  publishes for its WPX programme (<https://www.cqwpx.com/rules/>): a portable
+  designator becomes the prefix (PA/N8BJQ counts PA0), a call with no numeral
+  takes a zero after its first two letters, and /P, /M, /MM and the licence-class
+  suffixes do not count. CQ's award page could not be read when this was built,
+  so the card shows no award level, and an Authenticity-Guaranteed eQSL is not
+  counted for WPX until that is checked. A designator that is a bare digit
+  (N8BJQ/4) counts as N4, which the rules page does not show an example of,
+- **WAE** (DARC's Worked All Europe): the 73 countries of DARC's list
+  (<https://www.darc.de/der-club/referate/dx/diplome/wae-diplom/wae-laenderliste/>),
+  Sicily, Shetland, Bear Island and the other WAE-only areas included, and the
+  award's band points — one per confirmed country per band, at most five bands a
+  country (<https://www.darc.de/der-club/referate/dx/diplome/wae-diplom/>). The
+  card names the highest class reached (WAE III 40 countries and 100 points, II
+  50 and 150, I 60 and 200, TOP 70 and 300). Confirmed here means LoTW or a card;
+  DARC's own page says nothing about LoTW, so check before applying with a
+  LoTW-only country,
+- **WWFF** (World Wide Flora & Fauna): the references you have worked, read from
+  the WWFF reference logged on each contact (`WWFF_REF`, or `SIG` WWFF). WWFF
+  credits only its own log search, never a QSL, so the card counts references
+  worked and the WWFF-H levels
+  (<https://wwff.co/awards/global-awards/>): 10, then steps of 44 to 444, of 100
+  to 4,444, of 200 to 8,444, and of 400 above. No reference directory ships with
+  Nexus, so a reference is counted as you logged it.
+
+A WPX prefix or a WAE country never worked does not raise a row on the Needed
+board on its own; the Needed board stays DXCC, zone, grid, state and park.
+
+### Custom awards
+
+**Custom awards** lets you define your own: a name, and a list of calls,
+prefixes, grid squares, references (park, summit, island or WWFF), or values of
+any ADIF field (`CNTY`, say), with bands and modes to limit it to. Each item is
+one slot, counted worked and confirmed from the log like the awards above;
+confirmed means LoTW or a card unless you pick any channel. **Export** saves the
+definitions to a file, and **Import** adds a file's awards to your own.
+
+### The DXCC chart
+
+**DXCC chart** shows every current DXCC entity against every band that earns
+DXCC band credit, each cell shaded confirmed, worked or needed. Pick a mode (CW,
+Phone, Digital or all), filter the entities by name, or show only the entities
+with a band still to confirm. The row name is shaded by the entity's own
+standing, which also counts the bands with no DXCC band slot (70 cm and up).
+
+### What to QSL
+
+**What to QSL** lists the contacts you have not got confirmed whose
+confirmation would fill a slot an award still needs: a new DXCC entity first,
+then a DXCC Challenge band, a WAZ zone, a WAS state, a WAP province, a WAE
+country, a VUCC grid and a WPX prefix. A contact that fills more slots comes
+before one that fills fewer, and each slot names its three newest contacts.
+The route logged on the contact (`QSL_VIA`) is shown where there is one. The list
+only reads the log; it changes nothing.
 
 Under the cards, DXCC is broken out **by band**, and the chase lists start with
 **Confirm for a new one** — entities you have worked but not confirmed, chipped

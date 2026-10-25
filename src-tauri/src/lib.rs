@@ -244,6 +244,10 @@ struct LogTallies {
     stats: Arc<Tally<String, propagation::LogStats>>,
     /// The upload health the Settings panel polls.
     upload_health: Arc<Tally<(), tempo_core::logbook::UploadHealth>>,
+    /// The custom awards' standing, per their definitions.
+    custom: Arc<
+        Tally<Vec<propagation::custom::CustomAward>, Vec<propagation::custom::CustomAwardProgress>>,
+    >,
 }
 
 // Whole-log fold counter, DEBUG BUILDS ONLY: the command layer's twin of
@@ -22887,6 +22891,160 @@ async fn get_call_stats(
     .await
 }
 
+/// The whole-log DXCC chart: every current entity × every DXCC band, by mode class, from the
+/// award fold ([`log_folds::dxcc_chart_kept`]).
+#[tauri::command]
+async fn get_dxcc_chart(
+    state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
+) -> Result<propagation::DxccChart, String> {
+    let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
+    log_folds::off_the_runtime(move || {
+        log_folds::dxcc_chart_kept(&engine, &tallies).map(|c| c.as_ref().clone())
+    })
+    .await
+}
+
+/// What to QSL: the unconfirmed contacts whose confirmation would fill a slot an award still
+/// needs, most valuable first ([`log_folds::what_to_qsl_kept`]). Read-only.
+#[tauri::command]
+async fn get_what_to_qsl(
+    state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
+) -> Result<Vec<propagation::QslWant>, String> {
+    let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
+    log_folds::off_the_runtime(move || {
+        log_folds::what_to_qsl_kept(&engine, &tallies).map(|w| w.as_ref().clone())
+    })
+    .await
+}
+
+/// Where the operator's custom award definitions are kept: beside settings.json, in the custom
+/// awards file format ([`propagation::custom::export_definitions`]), so the stored file is also
+/// one another station can import.
+fn custom_awards_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("custom_awards.json")
+}
+
+/// The stored definitions: none when the file is absent; refused, by reason, when it is not one.
+fn read_custom_awards(path: &Path) -> Result<Vec<propagation::custom::CustomAward>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => propagation::custom::import_definitions(&text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("the custom awards could not be read: {e}")),
+    }
+}
+
+/// Keep `defs`, normalised, written whole beside the old file and moved over it, so a crash
+/// leaves the old definitions or the new ones, never half of either.
+fn write_custom_awards(
+    path: &Path,
+    defs: &[propagation::custom::CustomAward],
+) -> Result<Vec<propagation::custom::CustomAward>, String> {
+    let defs = propagation::custom::normalize_all(defs)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, propagation::custom::export_definitions(&defs))
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|e| format!("the custom awards could not be saved: {e}"))?;
+    Ok(defs)
+}
+
+/// The custom awards: their definitions and each one's standing in the log.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomAwardsView {
+    awards: Vec<propagation::custom::CustomAward>,
+    progress: Vec<propagation::custom::CustomAwardProgress>,
+}
+
+/// The custom awards and their standing ([`log_folds::custom_awards_kept`]).
+#[tauri::command]
+async fn get_custom_awards(
+    state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
+) -> Result<CustomAwardsView, String> {
+    let (engine, tallies) = (state.inner().clone(), tallies.inner().clone());
+    log_folds::off_the_runtime(move || {
+        let awards = read_custom_awards(&custom_awards_path())?;
+        let progress = log_folds::custom_awards_kept(&engine, &tallies, awards.clone())?;
+        Ok(CustomAwardsView {
+            awards,
+            progress: progress.as_ref().clone(),
+        })
+    })
+    .await
+}
+
+/// Replace the custom award definitions; answers them as kept (normalised, each with an id).
+/// Refused whole, by reason, when one is not a definition.
+#[tauri::command(async)]
+fn set_custom_awards(
+    awards: Vec<propagation::custom::CustomAward>,
+) -> Result<Vec<propagation::custom::CustomAward>, String> {
+    write_custom_awards(&custom_awards_path(), &awards)
+}
+
+/// The definitions a custom awards file holds, checked and normalised — not yet kept: the view
+/// adds them to the station's own and keeps the result with [`set_custom_awards`].
+#[tauri::command(async)]
+fn read_custom_awards_file(text: String) -> Result<Vec<propagation::custom::CustomAward>, String> {
+    propagation::custom::import_definitions(&text)
+}
+
+/// The station's custom award definitions as a file another station imports.
+#[tauri::command(async)]
+fn export_custom_awards() -> Result<String, String> {
+    Ok(propagation::custom::export_definitions(
+        &read_custom_awards(&custom_awards_path())?,
+    ))
+}
+
+#[cfg(test)]
+mod custom_awards_store_tests {
+    use super::{read_custom_awards, write_custom_awards};
+    use propagation::custom::{CustomAward, CustomKind};
+
+    /// The definitions kept are the definitions read back — normalised, each with an id — a
+    /// station with no file has none, and a file that is not one is refused, never read as none.
+    #[test]
+    fn custom_awards_round_trip_through_the_store() {
+        let dir = std::env::temp_dir().join(format!("nexus-custom-awards-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("custom_awards.json");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            read_custom_awards(&path).unwrap(),
+            Vec::<CustomAward>::new()
+        );
+        let kept = write_custom_awards(
+            &path,
+            &[CustomAward {
+                name: "Club".into(),
+                kind: CustomKind::Call,
+                targets: vec!["w1aw".into()],
+                ..CustomAward::default()
+            }],
+        )
+        .unwrap();
+        assert_eq!(kept[0].targets, ["W1AW"]);
+        assert_eq!(kept[0].id, "custom-1");
+        assert_eq!(read_custom_awards(&path).unwrap(), kept);
+        assert!(write_custom_awards(&path, &[CustomAward::default()]).is_err());
+        assert_eq!(
+            read_custom_awards(&path).unwrap(),
+            kept,
+            "a refused save keeps the old file"
+        );
+        std::fs::write(&path, "not a file of definitions").unwrap();
+        assert!(read_custom_awards(&path).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// What the log last said of a station's county or state ([`log_folds::newest_logged_qth`]).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39326,6 +39484,12 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         purge_log,
         get_awards,
         get_call_stats,
+        get_dxcc_chart,
+        get_what_to_qsl,
+        get_custom_awards,
+        set_custom_awards,
+        read_custom_awards_file,
+        export_custom_awards,
         get_journey,
         get_log_stats,
         get_log_timeline,

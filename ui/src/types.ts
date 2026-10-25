@@ -3416,6 +3416,124 @@ export interface FfmaProgress {
   unconfirmed: string[]
 }
 
+/** Worked All Provinces: the 13 Canadian provinces and territories (ADIF codes). */
+export interface WapProgress {
+  worked: number
+  confirmed: number
+  /** The provinces still to confirm, sorted. */
+  needed: string[]
+}
+
+/** CQ WPX: distinct prefixes worked / confirmed (LoTW or a card), overall and per band. */
+export interface WpxProgress {
+  worked: number
+  confirmed: number
+  bands: BandAward[]
+  /** Prefixes worked but not confirmed, sorted. */
+  unconfirmed: string[]
+}
+
+/** One country on DARC's WAE list. Prefix and name are data. */
+export interface WaeCountry {
+  prefix: string
+  name: string
+}
+
+/** DARC's Worked All Europe: countries, and band points (one per confirmed country per band, at
+ *  most five bands a country). */
+export interface WaeProgress {
+  worked: number
+  confirmed: number
+  /** 73. */
+  total: number
+  points: number
+  pointsWorked: number
+  /** The highest class reached ("TOP", "I", "II", "III"), or null. */
+  class: string | null
+  trophy: boolean
+  unworked: WaeCountry[]
+  unconfirmed: WaeCountry[]
+}
+
+/** WWFF references worked. WWFF credits only its own log search, so nothing here is confirmed. */
+export interface WwffProgress {
+  worked: number
+  /** DX entities among them (DXFF-H). */
+  entities: number
+  programmes: number
+  /** The highest WWFF-H level reached, or null. */
+  level: number | null
+  nextLevel: number
+}
+
+/** The whole-log DXCC chart: every current entity × every DXCC band. A cell is six bits —
+ *  worked/confirmed for CW (1, 2), Phone (4, 8) and Digital (16, 32). */
+export interface DxccChart {
+  bands: string[]
+  rows: DxccChartRow[]
+}
+
+export interface DxccChartRow {
+  entity: string
+  /** The entity on any band, a band with no DXCC slot (70 cm) included. */
+  any: number
+  cells: number[]
+}
+
+/** The awards a QSL can be wanted for, most valuable first. */
+export type QslFor = 'dxccEntity' | 'dxccBand' | 'waz' | 'was' | 'wap' | 'wae' | 'vucc' | 'wpx'
+
+export interface QslSlot {
+  award: QslFor
+  /** The entity, zone, state, province, country, grid or prefix, with the band where per band. */
+  item: string
+}
+
+/** An unconfirmed contact whose confirmation fills a slot an award still needs. */
+export interface QslWant {
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+  qslVia: string | null
+  slots: QslSlot[]
+}
+
+export type CustomKind = 'call' | 'prefix' | 'grid' | 'reference' | 'field'
+export type CustomConfirm = 'lotwCard' | 'any'
+
+/** An award the operator defines: what to work, one slot per item, with band and mode filters. */
+export interface CustomAward {
+  id: string
+  name: string
+  kind: CustomKind
+  /** The ADIF field a `field` award reads. */
+  field: string
+  targets: string[]
+  /** Band labels; empty = every band. */
+  bands: string[]
+  /** ADIF modes or a class (CW, PHONE, DIGITAL); empty = every mode. */
+  modes: string[]
+  confirmation: CustomConfirm
+}
+
+export interface CustomAwardProgress {
+  id: string
+  name: string
+  kind: CustomKind
+  total: number
+  worked: number
+  confirmed: number
+  unworked: string[]
+  unconfirmed: string[]
+}
+
+/** The custom awards and their standing in the log. */
+export interface CustomAwardsView {
+  awards: CustomAward[]
+  progress: CustomAwardProgress[]
+}
+
 /** IOTA (Islands On The Air) progress — distinct island groups worked / confirmed
  * (basic IOTA = 100 confirmed). */
 export interface IotaProgress {
@@ -3555,6 +3673,12 @@ export interface AwardSummary {
   ffma?: FfmaProgress
   /** IOTA — island groups worked / confirmed. */
   iota: IotaProgress
+  /** Worked All Provinces (Canada). Absent from an older station. */
+  wap?: WapProgress
+  /** CQ WPX, DARC WAE and WWFF. Absent from a station older than them. */
+  wpx?: WpxProgress
+  wae?: WaeProgress
+  wwff?: WwffProgress
   /** WORK chase: entities worked on most award bands but missing a few — the
    * listed bands are ones to WORK (a new contact). Closest-to-complete first. */
   bandTargets: EntityNeed[]

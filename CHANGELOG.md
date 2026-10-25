@@ -30,6 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **LoTW sync keeps the QSL details.** A LoTW confirmation now also fills the station's grid,
   county, IOTA, ITU zone and prefix when the contact had none.
 - **Logbook columns.** A Columns button replaces "More columns": show or hide each column, drag a column's edge to resize it, and the choice is kept in your settings. New columns show what the log already stored: their grid, IOTA, county, CQ and ITU zones, continent, distance, the QSL sent and received dates, each service's upload state and the contest exchange; IOTA can now be edited, and the contact view shows these too.
+- **More awards: WPX, WAE, WWFF and Worked All Provinces.** The Awards page now counts CQ WPX prefixes,
+  DARC's Worked All Europe countries with their band points and class, WWFF references worked with the
+  hunter levels, and the Canadian provinces it already counted but never showed.
+- **Custom awards.** Define your own award from a list of calls, prefixes, grids, references or ADIF
+  field values, with band and mode filters, and export or import the definitions as a file.
+- **A whole-log DXCC chart.** Every DXCC entity against every band, shaded confirmed, worked or needed,
+  with a mode filter.
+- **What to QSL.** A list of the unconfirmed contacts whose confirmation would fill a slot an award still
+  needs, most valuable first, with the QSL route where the log holds one.
 - **The Fred Fish Memorial Award (FFMA) on the Awards page.** A new card counts the 488 grid squares of the
   48 contiguous states worked and confirmed on 6 m, with the squares still needed listed beside the other
   chases, and a needed 6 m square on the Needed board now says FFMA.

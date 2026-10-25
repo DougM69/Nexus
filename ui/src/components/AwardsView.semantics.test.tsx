@@ -64,6 +64,10 @@ const N9UM: Partial<AwardSummary> = {
 }
 
 vi.mock('../api', () => ({
+  // The Awards view's own panels (AwardsMore) read these; left reading, they change nothing here.
+  getDxccChart: vi.fn(() => new Promise(() => {})),
+  getWhatToQsl: vi.fn(() => new Promise(() => {})),
+  getCustomAwards: vi.fn(() => new Promise(() => {})),
   getAwards: vi.fn(() => Promise.resolve(N9UM)),
   getConfirmationDiagnostics: vi.fn(() => Promise.resolve(null)),
   uploadLotw: vi.fn(),

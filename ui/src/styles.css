@@ -32560,3 +32560,81 @@ tr.sel .aprs-sym {
   color: var(--text-dim);
   overflow-wrap: anywhere;
 }
+/* The whole-log DXCC chart: entities × bands, a cell shaded by its standing under the mode
+   filter. Its own scroller, so ~340 rows never stretch the Awards column; the header row and the
+   entity column stay in view while it scrolls. */
+.aw-chart-scroll {
+  max-height: calc(0.6 * var(--vh-eff, 100vh));
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.aw-chart {
+  border-collapse: collapse;
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+}
+.aw-chart thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel, var(--bg));
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 2px 4px;
+}
+.aw-chart tbody th {
+  position: sticky;
+  left: 0;
+  background: var(--panel, var(--bg));
+  text-align: left;
+  font-weight: 600;
+  padding: 1px var(--space-2) 1px 2px;
+  white-space: nowrap;
+}
+.aw-chart tbody th[data-s='needed'] {
+  color: var(--text-faint);
+}
+.aw-cc {
+  display: inline-block;
+  min-width: 14px;
+  height: 12px;
+  border: 1px solid var(--border);
+  vertical-align: middle;
+}
+td.aw-cc {
+  display: table-cell;
+  min-width: 26px;
+}
+.aw-cc[data-s='confirmed'] {
+  background: var(--state-good);
+}
+.aw-cc[data-s='worked'] {
+  background: color-mix(in srgb, var(--state-ok) 55%, transparent);
+}
+.aw-cc[data-s='needed'] {
+  background: transparent;
+}
+.aw-chart-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.aw-qsl-via {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.aw-custom-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+}
+.aw-custom-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-dim);
+}

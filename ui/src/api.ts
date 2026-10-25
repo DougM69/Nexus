@@ -1695,6 +1695,39 @@ export async function getAwards(): Promise<AwardSummary> {
   return invoke<AwardSummary>('get_awards')
 }
 
+/** The whole-log DXCC chart: every current entity × every DXCC band, by mode class. */
+export async function getDxccChart(): Promise<import('./types').DxccChart> {
+  return invoke('get_dxcc_chart')
+}
+
+/** What to QSL: unconfirmed contacts whose confirmation fills a slot an award still needs,
+ *  most valuable first. Read-only. */
+export async function getWhatToQsl(): Promise<import('./types').QslWant[]> {
+  return invoke('get_what_to_qsl')
+}
+
+/** The operator's custom awards and their standing in the log. */
+export async function getCustomAwards(): Promise<import('./types').CustomAwardsView> {
+  return invoke('get_custom_awards')
+}
+
+/** Replace the custom award definitions; answers them as kept (normalised, each with an id). */
+export async function setCustomAwards(
+  awards: import('./types').CustomAward[],
+): Promise<import('./types').CustomAward[]> {
+  return invoke('set_custom_awards', { awards })
+}
+
+/** The definitions a custom awards file holds, checked — not yet kept. */
+export async function readCustomAwardsFile(text: string): Promise<import('./types').CustomAward[]> {
+  return invoke('read_custom_awards_file', { text })
+}
+
+/** The station's custom award definitions as a file another station imports. */
+export async function exportCustomAwards(): Promise<string> {
+  return invoke('export_custom_awards')
+}
+
 /** The Stats pane: what the log holds for `call`, typed in a log entry on `band` in `mode` —
  *  counted by the award fold itself, in the station. */
 export async function getCallStats(call: string, band: string, mode: string): Promise<import('./types').CallStats> {

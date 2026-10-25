@@ -7,7 +7,7 @@
 
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud, Grid3x3, Satellite } from 'lucide-react'
-import type { AwardBandNeeds, AwardSummary, BandNeed, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, DxccDisagreement, FfmaProgress, QsoDiagnosis, UploadReport } from '../types'
+import type { AwardBandNeeds, AwardSummary, BandNeed, EntityNeed, DiagnosticsReport, DiagAction, DiagActionBucket, DxccDisagreement, FfmaProgress, QsoDiagnosis, UploadReport, WaeProgress } from '../types'
 import {
   getAwards,
   getConfirmationDiagnostics,
@@ -26,6 +26,7 @@ import { VIEW_COLUMN_FLOOR, columnShareStyle, parseColumnShare } from '../featur
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { pushToast } from '../toast'
 import { StateBlock } from './StateBlock'
+import { CustomAwardsPanel, DxccChartPanel, WhatToQslPanel } from './AwardsMore'
 
 /** The programmes' own names. Award names are invariant tokens — DXCC is DXCC in every
  * language, and a translated one names no award anybody can apply for. */
@@ -40,6 +41,10 @@ const AWARD_NAMES = {
   ffma: 'FFMA',
   satVucc: 'Sat VUCC',
   iota: 'IOTA',
+  wap: 'WAP',
+  wpx: 'WPX',
+  wae: 'WAE',
+  wwff: 'WWFF',
 }
 
 /** Confirmed entities for the basic DXCC award. */
@@ -56,6 +61,8 @@ const WAS_STATES = 50
 const VUCC_GRIDS = 100
 /** Island groups for basic IOTA (Islands On The Air). */
 const IOTA_ISLANDS = 100
+/** Canadian provinces and territories for WAP. */
+const WAP_PROVINCES = 13
 
 type NeedSort = 'entity' | 'bands'
 
@@ -191,6 +198,47 @@ function FfmaNeeded({ ffma }: { ffma: FfmaProgress }) {
             <details className="aw-ffma-unworked">
               <summary>{t('awards.chase.ffma.unworked', { count: ffma.unworked.length })}</summary>
               {chips(ffma.unworked)}
+            </details>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+/** The WAE chase: countries worked but not confirmed, then the ones never worked (folded away).
+ *  DARC's prefixes and the country names are data. */
+function WaeNeeded({ wae }: { wae: WaeProgress }) {
+  const chips = (cs: WaeProgress['unworked']) => (
+    <span className="aw-needbands">
+      {cs.map((c) => (
+        <span className="aw-chip" key={c.prefix} title={c.name}>
+          {c.prefix}
+        </span>
+      ))}
+    </span>
+  )
+  const needed = wae.unworked.length + wae.unconfirmed.length
+  return (
+    <div className="aw-panel aw-wae">
+      <h3>
+        <Globe2 size={14} aria-hidden="true" /> {t('awards.chase.wae.head', { count: needed })}
+      </h3>
+      {needed === 0 ? (
+        <p className="aw-empty">{t('awards.chase.wae.empty', { total: wae.total })}</p>
+      ) : (
+        <>
+          <p className="aw-empty">{t('awards.chase.wae.note')}</p>
+          {wae.unconfirmed.length > 0 && (
+            <p className="aw-bn-list" data-kind="unconfirmed">
+              <strong>{t('awards.chase.wae.unconfirmed', { count: wae.unconfirmed.length })}</strong>{' '}
+              {chips(wae.unconfirmed)}
+            </p>
+          )}
+          {wae.unworked.length > 0 && (
+            <details className="aw-wae-unworked">
+              <summary>{t('awards.chase.wae.unworked', { count: wae.unworked.length })}</summary>
+              {chips(wae.unworked)}
             </details>
           )}
         </>
@@ -993,6 +1041,90 @@ export function AwardsView({
                 })}
           </span>
         </div>
+
+        {/* Worked All Provinces: the 13 Canadian provinces and territories, by the logged ADIF
+            STATE on a Canadian contact. Absent from an older station. */}
+        {aw.wap && (
+          <div className={`aw-card${aw.wap.confirmed >= WAP_PROVINCES ? ' aw-card-elite' : ''}`}>
+            <span className="aw-k">
+              <Flag size={13} aria-hidden="true" /> {AWARD_NAMES.wap}
+            </span>
+            <span className="aw-v">
+              {aw.wap.confirmed}
+              <span className="aw-of"> / {WAP_PROVINCES}</span>
+            </span>
+            <div className="aw-bar">
+              <div
+                className="aw-fill good"
+                style={{ width: `${Math.min(100, (aw.wap.confirmed / WAP_PROVINCES) * 100)}%` }}
+              />
+            </div>
+            <span className="aw-note">
+              {aw.wap.confirmed >= WAP_PROVINCES
+                ? t('awards.wap.note.achieved', { worked: aw.wap.worked })
+                : t('awards.wap.note.toGo', {
+                    remaining: WAP_PROVINCES - aw.wap.confirmed,
+                    worked: aw.wap.worked,
+                  })}
+            </span>
+          </div>
+        )}
+
+        {/* CQ WPX: prefixes by CQ's rule. The award's own levels could not be read from CQ, so
+            the card counts and claims no level (crates/propagation/src/wpx.rs). */}
+        {aw.wpx && (
+          <div className="aw-card">
+            <span className="aw-k">
+              <Award size={13} aria-hidden="true" /> {AWARD_NAMES.wpx}
+            </span>
+            <span className="aw-v">{aw.wpx.confirmed}</span>
+            <span className="aw-note">{t('awards.wpx.note', { worked: aw.wpx.worked })}</span>
+          </div>
+        )}
+
+        {/* DARC's WAE: 73 countries, and band points (at most five bands a country). */}
+        {aw.wae && (
+          <div className={`aw-card${aw.wae.class ? ' aw-card-elite' : ''}`}>
+            <span className="aw-k">
+              <Globe2 size={13} aria-hidden="true" /> {AWARD_NAMES.wae}
+            </span>
+            <span className="aw-v">
+              {aw.wae.confirmed}
+              <span className="aw-of"> / {aw.wae.total}</span>
+            </span>
+            <div className="aw-bar">
+              <div
+                className="aw-fill good"
+                style={{ width: `${Math.min(100, (aw.wae.confirmed / Math.max(1, aw.wae.total)) * 100)}%` }}
+              />
+            </div>
+            <span className="aw-note">
+              {aw.wae.class
+                ? t('awards.wae.note.class', { level: aw.wae.class, points: aw.wae.points })
+                : t('awards.wae.note.toGo', { points: aw.wae.points, worked: aw.wae.worked })}
+            </span>
+          </div>
+        )}
+
+        {/* WWFF: references worked. WWFF credits only its own log search, so nothing here is
+            "confirmed"; the levels are WWFF-H's. */}
+        {aw.wwff && (
+          <div className="aw-card">
+            <span className="aw-k">
+              <Globe2 size={13} aria-hidden="true" /> {AWARD_NAMES.wwff}
+            </span>
+            <span className="aw-v">{aw.wwff.worked}</span>
+            <span className="aw-note">
+              {aw.wwff.level != null
+                ? t('awards.wwff.note.level', {
+                    level: aw.wwff.level,
+                    next: aw.wwff.nextLevel,
+                    entities: aw.wwff.entities,
+                  })
+                : t('awards.wwff.note.toGo', { next: aw.wwff.nextLevel, entities: aw.wwff.entities })}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="awards-body" ref={bodyRef} style={columnShareStyle(colShare, AWARDS_COLUMN_VARS)}>
@@ -1112,6 +1244,8 @@ export function AwardsView({
               ))}
             </div>
           </div>
+          {/* The whole-log DXCC chart, the station's own read. */}
+          {!observation && <DxccChartPanel />}
         </div>
 
         <div className="aw-chases" ref={chasesRef}>
@@ -1154,6 +1288,29 @@ export function AwardsView({
             )}
           </div>
           {aw.ffma && <FfmaNeeded ffma={aw.ffma} />}
+          {aw.wap && (
+            <div className="aw-panel aw-wap">
+              <h3>
+                <Flag size={14} aria-hidden="true" />{' '}
+                {t('awards.chase.wap.head', { count: aw.wap.needed.length })}
+              </h3>
+              {aw.wap.needed.length === 0 ? (
+                <p className="aw-empty">{t('awards.chase.wap.empty')}</p>
+              ) : (
+                <span className="aw-needbands">
+                  {aw.wap.needed.map((p) => (
+                    <span className="aw-chip" key={p}>
+                      {p}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </div>
+          )}
+          {aw.wae && <WaeNeeded wae={aw.wae} />}
+          {/* The station's own reads: an observed summary carries none of them. */}
+          {!observation && <WhatToQslPanel />}
+          {!observation && <CustomAwardsPanel />}
           {(aw.dxccDisagreements ?? []).length > 0 && (
             <div className="aw-panel">
               <h3>

@@ -10,12 +10,19 @@
 //! Online LoTW/eQSL/QRZ/ClubLog sync (which would flip a QSO's `confirmed`) is a
 //! separate, later increment; this computes everything from what's already in the
 //! log, so it is fully testable with no network.
+//!
+//! CQ WPX, DARC's WAE, WWFF, the whole-log DXCC chart and What-to-QSL ride the same fold
+//! ([`crate::awards_more`]): each is fed exactly the slots this fold credits a contact with.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::achievements::{self, Achievement, AchievementStats};
+use crate::awards_more::{
+    Contact, Credited, DxccChart, MoreAwards, QslWant, SlotView, WaeProgress, WpxProgress,
+    WwffProgress,
+};
 use crate::callstats::CallStatsIndex;
 use crate::dxcc;
 use crate::model::{Band, ModeClass};
@@ -77,6 +84,16 @@ pub(crate) fn earns_dxcc_credit(b: Band) -> bool {
 /// bands had a [`Band`] variant, when their label did not parse.
 pub(crate) fn fills_dxcc_band_slot(b: Band) -> bool {
     earns_dxcc_credit(b) && !b.is_uhf()
+}
+
+/// Whether `b` is one of the DXCC Challenge bands.
+pub(crate) fn is_challenge_band(b: Band) -> bool {
+    CHALLENGE_BANDS.contains(&b)
+}
+
+/// Whether a normalised band label is a VUCC award band (50 MHz and up).
+pub(crate) fn is_vucc_band(label: &str) -> bool {
+    VUCC_THRESHOLDS.iter().any(|(b, _)| *b == label)
 }
 
 /// DXCC mode classes, in display order (separate CW/Phone/Digital DXCC awards).
@@ -530,6 +547,15 @@ pub struct AwardSummary {
     pub ffma: FfmaProgress,
     /// IOTA — island-group references worked / confirmed.
     pub iota: IotaProgress,
+    /// CQ WPX — prefixes worked / confirmed ([`crate::wpx`]).
+    #[serde(default)]
+    pub wpx: WpxProgress,
+    /// DARC's WAE — countries and band points ([`crate::wae`]).
+    #[serde(default)]
+    pub wae: WaeProgress,
+    /// WWFF — references worked ([`crate::wwff`]).
+    #[serde(default)]
+    pub wwff: WwffProgress,
     /// The WORK chase (elite "every-band" tracker): entities already worked on
     /// most award bands but NOT yet on a few — the bands listed are ones to WORK
     /// (a new contact, not just a confirmation). Closest-to-complete first.
@@ -597,6 +623,18 @@ pub struct Awards {
     /// ([`with_call_stats`](Self::with_call_stats)): each slot filled exactly where the fold
     /// below credits one, so the pane's grids are the awards' own counts.
     call_stats: Option<CallStatsIndex>,
+    /// WPX, WAE, WWFF, the DXCC chart and What-to-QSL, fed what this fold credits each contact.
+    more: MoreAwards,
+}
+
+/// What a contact's record carries for the awards counted beside DXCC ([`Awards::add_contact`]):
+/// its WWFF reference and its QSL route. `Default` carries neither.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ContactExtras<'a> {
+    /// The WWFF reference worked (ADIF `WWFF_REF`, or `SIG_INFO` beside `SIG`=WWFF).
+    pub wwff: Option<&'a str>,
+    /// ADIF `QSL_VIA`.
+    pub qsl_via: Option<&'a str>,
 }
 
 /// The DXCC entity a contact counts toward ([`counted_entity`]).
@@ -768,6 +806,89 @@ impl Awards {
         sat: bool,
         rec: RecordFields,
     ) {
+        self.add_contact(
+            call,
+            band,
+            mode,
+            confirmed,
+            credited,
+            card_confirmed,
+            state,
+            grid,
+            iota,
+            sat,
+            rec,
+            ContactExtras::default(),
+        )
+    }
+
+    /// [`add_qso`](Self::add_qso), plus what the record carries for the awards counted beside
+    /// DXCC ([`ContactExtras`]): WPX, WAE, WWFF, the DXCC chart and What-to-QSL are fed exactly
+    /// the slots the fold below credits.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_contact(
+        &mut self,
+        call: &str,
+        band: &str,
+        mode: &str,
+        confirmed: bool,
+        credited: bool,
+        card_confirmed: bool,
+        state: Option<&str>,
+        grid: Option<&str>,
+        iota: Option<&str>,
+        sat: bool,
+        rec: RecordFields,
+        extras: ContactExtras<'_>,
+    ) {
+        let mut cr = Credited::default();
+        self.fold(
+            call,
+            band,
+            mode,
+            confirmed,
+            credited,
+            card_confirmed,
+            state,
+            grid,
+            iota,
+            sat,
+            rec,
+            &mut cr,
+        );
+        self.more.add(
+            &Contact {
+                call,
+                band,
+                on_band: Band::from_label(band),
+                mode,
+                class: ModeClass::from_adif(mode),
+                confirmed,
+                when_unix: rec.when_unix,
+                wwff: extras.wwff,
+                qsl_via: extras.qsl_via,
+            },
+            &cr,
+        );
+    }
+
+    /// The fold itself; `cr` collects each slot it credits, confirmed or not.
+    #[allow(clippy::too_many_arguments)]
+    fn fold(
+        &mut self,
+        call: &str,
+        band: &str,
+        mode: &str,
+        confirmed: bool,
+        credited: bool,
+        card_confirmed: bool,
+        state: Option<&str>,
+        grid: Option<&str>,
+        iota: Option<&str>,
+        sat: bool,
+        rec: RecordFields,
+        cr: &mut Credited,
+    ) {
         self.qsos += 1;
         if confirmed {
             self.confirmed_qsos += 1;
@@ -785,6 +906,7 @@ impl Awards {
                     self.confirmed_grid_sat.insert(g);
                 }
             } else if let Some(b) = grid_band(band) {
+                cr.grid = Some((g.clone(), b.clone()));
                 self.worked_grid_band.insert((g.clone(), b.clone()));
                 if confirmed {
                     self.confirmed_grid_band.insert((g, b));
@@ -813,6 +935,8 @@ impl Awards {
         if let Some(stats) = &mut self.call_stats {
             stats.note_qsl(call, counted.map(|c| c.name), rec.qsl);
         }
+        cr.any_entity = counted.filter(|c| !c.deleted).map(|c| c.name);
+        cr.wae = crate::wae::wae_country(resolved.as_ref(), &rec);
         if let (Some(lotw_dxcc), Some(logged_dxcc)) = (rec.lotw_dxcc, rec.dxcc) {
             if lotw_dxcc != logged_dxcc {
                 let name = |code| dxcc::entity_by_dxcc(code).map(|e| e.name.to_string());
@@ -837,6 +961,7 @@ impl Awards {
         let is_us_state = counted.is_some_and(|c| c.is_us_state());
         if is_us_state {
             if let Some(code) = state.and_then(valid_state) {
+                cr.state = Some(code);
                 self.worked_states.insert(code);
                 if confirmed {
                     self.confirmed_states.insert(code);
@@ -865,6 +990,7 @@ impl Awards {
         let is_canada = counted.is_some_and(|c| c.name == "Canada");
         if is_canada {
             if let Some(code) = state.and_then(valid_province) {
+                cr.province = Some(code);
                 self.worked_provinces.insert(code);
                 if confirmed {
                     self.confirmed_provinces.insert(code);
@@ -878,6 +1004,7 @@ impl Awards {
         // eQSL from an Authenticity-Guaranteed member as well.
         if let Some(zone) = counted_zone(resolved.as_ref(), &rec) {
             let zone_confirmed = confirmed || rec.qsl.eqsl_ag_confirmed();
+            cr.zone = Some((zone, zone_confirmed));
             self.worked_zones.insert(zone);
             if zone_confirmed {
                 self.confirmed_zones.insert(zone);
@@ -934,6 +1061,7 @@ impl Awards {
             return;
         }
         let entity = counted.name; // &'static str (cty.dat is leaked once)
+        cr.entity = Some(entity);
         self.worked_entity.insert(entity);
         if confirmed {
             self.confirmed_entity.insert(entity);
@@ -956,6 +1084,7 @@ impl Awards {
         if let Some(stats) = &mut self.call_stats {
             stats.note_dxcc(entity, on_band, mode, confirmed);
         }
+        cr.dxcc_band = on_band;
         if let Some(b) = on_band {
             self.worked_slot.insert((entity, b));
             let pb = self.per_band.entry(b).or_default();
@@ -1320,9 +1449,34 @@ impl Awards {
             vucc,
             ffma,
             iota,
+            wpx: self.more.wpx(),
+            wae: self.more.wae(),
+            wwff: self.more.wwff(),
             band_targets,
             band_needs,
         }
+    }
+
+    /// The whole-log DXCC chart: every current entity × every DXCC band, by mode class
+    /// ([`DxccChart`]), from the same slots the DXCC counts above are made of.
+    pub fn dxcc_chart(&self) -> DxccChart {
+        self.more.chart()
+    }
+
+    /// What to QSL ([`QslWant`]): the unconfirmed contacts whose confirmation would fill a slot
+    /// an award still needs, most valuable first. Each slot keeps its newest
+    /// [`WANTS_PER_SLOT`](crate::awards_more::WANTS_PER_SLOT) contacts.
+    pub fn what_to_qsl(&self) -> Vec<QslWant> {
+        self.more.wants(|slot| match slot {
+            SlotView::Entity(e) => self.confirmed_entity.contains(e),
+            SlotView::EntityBand(e, b) => self.confirmed_slot.contains(&(*e, *b)),
+            SlotView::Zone(z) => self.confirmed_zones.contains(z),
+            SlotView::State(s) => self.confirmed_states.contains(s),
+            SlotView::Province(p) => self.confirmed_provinces.contains(p),
+            SlotView::Grid(g, b) => self
+                .confirmed_grid_band
+                .contains(&((*g).to_string(), (*b).to_string())),
+        })
     }
 
     /// DXCC, WAS and WAZ band by band ([`AwardBandNeeds`]): each band's never-worked and

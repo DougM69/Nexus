@@ -98,12 +98,24 @@ const AWARDS: Narrow = Narrow {
         "state",
         "grid",
         "ota_iota",
+        "ota_their_program",
+        "ota_their_ref",
         "prop_mode",
         "dxcc",
         "when_unix",
     ],
     uploads: false,
 };
+
+/// The passthrough fields the award fold reads: [`AWARD_EXTRAS`], and the WWFF reference and QSL
+/// route its WWFF count and What-to-QSL list read ([`award_extras`]).
+const AWARDS_EXTRAS: &[&str] = &[
+    "CQZ",
+    tempo_core::logbook::LOTW_DXCC_FIELD,
+    tempo_core::logbook::EQSL_AG_FIELD,
+    "WWFF_REF",
+    "QSL_VIA",
+];
 
 /// [`journey_qso`]'s inputs.
 const JOURNEY: Narrow = Narrow {
@@ -280,6 +292,9 @@ pub(crate) fn needs_kept(
 pub(crate) struct AwardsKept {
     pub(crate) summary: Arc<propagation::AwardSummary>,
     pub(crate) call_stats: Arc<propagation::CallStatsIndex>,
+    /// The whole-log DXCC chart and the What-to-QSL list, from the same fold.
+    pub(crate) chart: Arc<propagation::DxccChart>,
+    pub(crate) qsl_wants: Arc<Vec<propagation::QslWant>>,
 }
 
 /// `get_awards`'s summary, folded again only when the log's content or the operator's call (the
@@ -298,6 +313,22 @@ pub(crate) fn call_stats_kept(
     tallies: &LogTallies,
 ) -> Result<Arc<propagation::CallStatsIndex>, String> {
     Ok(awards_fold_kept(engine, tallies)?.call_stats.clone())
+}
+
+/// `get_dxcc_chart`'s chart, kept with the summary it is folded beside.
+pub(crate) fn dxcc_chart_kept(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+) -> Result<Arc<propagation::DxccChart>, String> {
+    Ok(awards_fold_kept(engine, tallies)?.chart.clone())
+}
+
+/// `get_what_to_qsl`'s list, kept with the summary it is folded beside.
+pub(crate) fn what_to_qsl_kept(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+) -> Result<Arc<Vec<propagation::QslWant>>, String> {
+    Ok(awards_fold_kept(engine, tallies)?.qsl_wants.clone())
 }
 
 /// The Stats pane's answer for `call` typed on `band` in `mode`, from the kept index
@@ -333,7 +364,7 @@ fn awards_fold_kept(
     // Tell the accumulator our own entity so "First DX" counts only foreign ones.
     awards.set_home_call(&my_call);
     let fresh = rows
-        .each_with(AWARDS, AWARD_EXTRAS, Scope::All, Order::Log, &mut |q| {
+        .each_with(AWARDS, AWARDS_EXTRAS, Scope::All, Order::Log, &mut |q| {
             award_add(&mut awards, q);
             ControlFlow::Continue(())
         })
@@ -341,6 +372,8 @@ fn awards_fold_kept(
     let kept = AwardsKept {
         call_stats: Arc::new(awards.take_call_stats().unwrap_or_default()),
         summary: Arc::new(awards.summary()),
+        chart: Arc::new(awards.dxcc_chart()),
+        qsl_wants: Arc::new(awards.what_to_qsl()),
     };
     keep(&tallies.awards, mark, my_call, kept, fresh)
 }
@@ -381,6 +414,27 @@ pub(crate) fn award_fields(q: &QsoRecord) -> propagation::RecordFields {
     }
 }
 
+/// What a contact's record carries for the awards counted beside DXCC: its WWFF reference (ADIF
+/// `WWFF_REF`, else `SIG_INFO` beside `SIG`=WWFF) and its QSL route (`QSL_VIA`).
+pub(crate) fn award_extras(q: &QsoRecord) -> propagation::ContactExtras<'_> {
+    let extra = |name: &str| {
+        q.extra
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.trim())
+            .filter(|v| !v.is_empty())
+    };
+    let sig_wwff = q
+        .ota
+        .their_program
+        .as_deref()
+        .is_some_and(|p| p.trim().eq_ignore_ascii_case("WWFF"));
+    propagation::ContactExtras {
+        wwff: extra("WWFF_REF").or_else(|| q.ota.their_ref.as_deref().filter(|_| sig_wwff)),
+        qsl_via: extra("QSL_VIA"),
+    }
+}
+
 /// One contact into the award fold — the one step [`awards_kept`] and [`awards_for_records`]
 /// both take.
 fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
@@ -388,7 +442,7 @@ fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
     // granted DXCC-family credit (DXCC / DXCC_BAND / DXCC_MODE / … — real LoTW exports use the
     // granular codes).
     let credited = q.credit_granted.iter().any(|c| c.starts_with("DXCC"));
-    awards.add_qso(
+    awards.add_contact(
         &q.call,
         &q.band,
         &q.mode,
@@ -402,7 +456,98 @@ fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
         q.ota.iota.as_deref(),
         qso_is_sat(q.prop_mode.as_deref()),
         award_fields(q),
+        award_extras(q),
     );
+}
+
+// ── the custom awards ───────────────────────────────────────────────────────
+
+/// The operator's custom awards' standing ([`propagation::custom`]), folded again only when the
+/// log's content or the definitions move. A pass over WHOLE records: a field award may name any
+/// ADIF field the log holds. No definitions, no pass.
+pub(crate) fn custom_awards_kept(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+    defs: Vec<propagation::custom::CustomAward>,
+) -> Result<Arc<Vec<propagation::custom::CustomAwardProgress>>, String> {
+    let eng = engine_lock(engine);
+    let mark = eng.log_index_rev();
+    if let Some(kept) = tallies.custom.get(mark, &defs) {
+        return Ok(kept);
+    }
+    let rows = eng.log_rows();
+    drop(eng);
+    let mut fold = propagation::custom::CustomAwards::new(&defs);
+    let mut fresh = Freshness::Current;
+    if !fold.is_empty() {
+        tempo_core::logbook::io_fence::whole_log_off_engine_lock("the custom awards fold");
+        fresh = rows
+            .each_record(tempo_app::logstore::READ_WAIT, &mut |q| {
+                custom_add(&mut fold, q);
+                ControlFlow::Continue(())
+            })
+            .map_err(unreadable)?;
+    }
+    keep(&tallies.custom, mark, defs, fold.progress(), fresh)
+}
+
+/// One whole record into the custom awards' fold.
+pub(crate) fn custom_add(fold: &mut propagation::custom::CustomAwards, q: &QsoRecord) {
+    let extra = |name: &str| {
+        q.extra
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    // The references a contact carries: its park or summit, its island group, and the WWFF,
+    // POTA and SOTA fields the log keeps beside a modelled one.
+    let mut refs: Vec<&str> = Vec::new();
+    refs.extend(q.ota.their_ref.as_deref());
+    refs.extend(q.ota.iota.as_deref());
+    for (k, v) in &q.extra {
+        if matches!(
+            k.as_str(),
+            "WWFF_REF" | "POTA_REF" | "SOTA_REF" | "SIG_INFO"
+        ) {
+            refs.push(v);
+        }
+    }
+    // A field by its ADIF name: the modelled ones the log keeps as fields, else what it keeps
+    // verbatim beside them.
+    let field = |name: &str| -> Option<String> {
+        let some = |v: Option<&str>| v.map(str::to_string);
+        match name {
+            "CALL" => Some(q.call.clone()),
+            "BAND" => Some(q.band.clone()),
+            "MODE" => Some(q.mode.clone()),
+            "STATE" => some(q.state.as_deref()),
+            "COUNTRY" => some(q.country.as_deref()),
+            "GRIDSQUARE" => some(q.grid.as_deref()),
+            "DXCC" => q.dxcc.map(|d| d.to_string()),
+            "NAME" => some(q.name.as_deref()),
+            "QTH" => some(q.qth.as_deref()),
+            "IOTA" => some(q.ota.iota.as_deref()),
+            "SIG" => some(q.ota.their_program.as_deref()),
+            "SIG_INFO" => some(q.ota.their_ref.as_deref()),
+            "PROP_MODE" => some(q.prop_mode.as_deref()),
+            "SAT_NAME" => some(q.sat_name.as_deref()),
+            "OPERATOR" => some(q.operator.as_deref()),
+            "STATION_CALLSIGN" => some(q.station_callsign.as_deref()),
+            "MY_GRIDSQUARE" => some(q.my_grid.as_deref()),
+            other => extra(other),
+        }
+    };
+    fold.add(&propagation::custom::CustomContact {
+        call: &q.call,
+        band: &q.band,
+        mode: &q.mode,
+        grid: q.grid.as_deref(),
+        refs: &refs,
+        field: &field,
+        lotw_card: q.award_confirmed,
+        any: q.confirmed,
+    });
 }
 
 // ── the log statistics ──────────────────────────────────────────────────────
@@ -1097,7 +1242,7 @@ mod tests {
             // whether ARRL has granted DXCC-family credit (DXCC / DXCC_BAND /
             // DXCC_MODE / … — real LoTW exports use the granular codes).
             let credited = q.credit_granted.iter().any(|c| c.starts_with("DXCC"));
-            awards.add_qso(
+            awards.add_contact(
                 &q.call,
                 &q.band,
                 &q.mode,
@@ -1113,6 +1258,8 @@ mod tests {
                 // Since the awards count by the record's own numbers, the oracle reads them off
                 // the whole record — the store's narrow read must carry them to match it.
                 award_fields(q),
+                // …and the WWFF reference and QSL route likewise.
+                award_extras(q),
             );
         }
         awards.summary()
@@ -2065,6 +2212,97 @@ mod tests {
         let zones: Vec<(u8, usize)> = stats.by_zone.iter().map(|z| (z.zone, z.qsos)).collect();
         // K1N's record says 8 and K1ABC's 3; the rest are their calls' zones.
         assert_eq!(zones, [(3, 1), (5, 3), (8, 2), (14, 1), (15, 1)]);
+    }
+
+    /// ★ WWFF and What-to-QSL read what the store holds: a WWFF reference by `WWFF_REF` or by
+    /// `SIG`=WWFF, and the QSL route — the store's narrow read answers as the whole records do.
+    #[test]
+    fn the_store_reads_what_wwff_and_what_to_qsl_count() {
+        let d = Dir::new("awards-more");
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}{}{}",
+                tempo_core::logbook::adif_header(),
+                "<CALL:6>DL1ABC<QSO_DATE:8>20260101<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+                 <WWFF_REF:9>DLFF-0001<QSL_VIA:6>DL1QSL<EOR>\n",
+                "<CALL:4>W1AW<QSO_DATE:8>20260102<TIME_ON:6>120000<BAND:3>40m<MODE:3>SSB\
+                 <SIG:4>WWFF<SIG_INFO:8>KFF-0001<LOTW_QSL_RCVD:1>Y<EOR>\n",
+                "<CALL:6>JA1ABC<QSO_DATE:8>20260103<TIME_ON:6>120000<BAND:3>15m<MODE:3>FT8\
+                 <QSL_VIA:6>JA1QSL<EOR>\n",
+            ),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let summary = awards_kept(&e, &tallies).unwrap();
+        assert_eq!((summary.wwff.worked, summary.wwff.entities), (2, 2));
+        let wants = what_to_qsl_kept(&e, &tallies).unwrap();
+        let routes: Vec<(&str, Option<&str>)> = wants
+            .iter()
+            .map(|w| (w.call.as_str(), w.qsl_via.as_deref()))
+            .collect();
+        // Both are new ones; Germany's contact fills one more slot (its WAE country).
+        assert_eq!(
+            routes,
+            [("DL1ABC", Some("DL1QSL")), ("JA1ABC", Some("JA1QSL"))]
+        );
+        let mut whole = propagation::Awards::new();
+        whole.set_home_call(MY_CALL);
+        for q in records(&e) {
+            award_add(&mut whole, &q);
+        }
+        assert_eq!(
+            *wants,
+            whole.what_to_qsl(),
+            "the store and the whole records agree"
+        );
+        assert_eq!(*dxcc_chart_kept(&e, &tallies).unwrap(), whole.dxcc_chart());
+        assert_eq!(*summary, whole.summary());
+    }
+
+    /// ★ A custom award counts from the whole records: a field award reads a field the log
+    /// keeps verbatim (`CNTY`), a reference award a park, and the standing is folded again when
+    /// the definitions change.
+    #[test]
+    fn custom_awards_count_from_the_whole_records() {
+        use propagation::custom::{CustomAward, CustomKind};
+        let d = Dir::new("custom-awards");
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}{}",
+                tempo_core::logbook::adif_header(),
+                "<CALL:4>W1AW<QSO_DATE:8>20260101<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+                 <CNTY:11>CT,HARTFORD<LOTW_QSL_RCVD:1>Y<EOR>\n",
+                "<CALL:5>K1ABC<QSO_DATE:8>20260102<TIME_ON:6>120000<BAND:3>40m<MODE:3>SSB\
+                 <SIG:4>POTA<SIG_INFO:7>US-1234<EOR>\n",
+            ),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let counties = CustomAward {
+            name: "Counties".into(),
+            kind: CustomKind::Field,
+            field: "CNTY".into(),
+            targets: vec!["CT,Hartford".into(), "MA,Essex".into()],
+            ..CustomAward::default()
+        };
+        let parks = CustomAward {
+            name: "Parks".into(),
+            kind: CustomKind::Reference,
+            targets: vec!["US-1234".into()],
+            ..CustomAward::default()
+        };
+        let p = custom_awards_kept(&e, &tallies, vec![counties.clone()]).unwrap();
+        assert_eq!((p[0].worked, p[0].confirmed, p[0].total), (1, 1, 2));
+        let p = custom_awards_kept(&e, &tallies, vec![counties, parks]).unwrap();
+        assert_eq!(p.len(), 2, "new definitions fold again");
+        assert_eq!((p[1].worked, p[1].confirmed), (1, 0));
+        assert!(custom_awards_kept(&e, &tallies, Vec::new())
+            .unwrap()
+            .is_empty());
     }
 
     /// One ADIF record, parsed as the log parses it, with no id.
