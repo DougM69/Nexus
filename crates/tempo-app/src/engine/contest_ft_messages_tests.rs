@@ -1121,8 +1121,8 @@ fn a_double_click_in_field_days_sp_answers_in_its_messages_on_every_ft_tier() {
 
 /// ⛔ Where Field Day's messages cannot carry the contest's exchange, a double-click on a CQ from
 /// the contest's S&P works the station outside the contest, as it always has: the ARRL VHF
-/// contests on FT2, MSK144 and Q65, a state QSO party on FT1, and the Illinois and New York
-/// parties, which ban FT8 and FT4. The contact runs to its 73 in QSO mode, by value, and is in
+/// contests on FT2, MSK144 and Q65, a state QSO party on FT1, the Illinois and New York
+/// parties, which ban FT8 and FT4, and both Field Days on Q65 and MSK144. The contact runs to its 73 in QSO mode, by value, and is in
 /// the station's own log; nothing goes out as Field Day's `W9XYZ K1ABC` with no exchange.
 #[test]
 fn a_double_click_from_sp_where_field_days_messages_do_not_fit_works_the_station_as_before() {
@@ -1133,6 +1133,10 @@ fn a_double_click_from_sp_where_field_days_messages_do_not_fit_works_the_station
         ("txqp", Tier::TempoFast, "CQ W9XYZ EN37"),
         ("ilqp", Tier::Ft8, "CQ W9XYZ EN37"),
         ("nyqp", Tier::Ft4, "CQ W9XYZ EN37"),
+        ("arrlfd", Tier::Q65, "CQ FD W9XYZ EN37"),
+        ("arrlfd", Tier::Msk144, "CQ FD W9XYZ EN37"),
+        ("wfd", Tier::Q65, "CQ FD W9XYZ EN37"),
+        ("wfd", Tier::Msk144, "CQ FD W9XYZ EN37"),
     ] {
         let what = format!("{contest:?} {}", tier_name(tier));
         let mut e = engine_for(contest, MY_GRID);
