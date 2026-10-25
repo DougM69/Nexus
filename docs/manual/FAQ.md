@@ -121,7 +121,7 @@ The desktop shell is packaged for **Windows, macOS (Apple Silicon), Linux and Ra
 
 ### Where is my log file?
 
-Nexus stores the logbook as an **ADIF v3.1.4** file in the app data directory (on Windows: `%APPDATA%\tempo\log.adi`). The file is plain-text ADIF and can be imported into any standard logger. Import deduplicates on call + band + mode + UTC day, so re-importing your own log is safe.
+Nexus stores the logbook as an **ADIF v3.1.8** file in the app data directory (on Windows: `%APPDATA%\tempo\log.adi`). The file is plain-text ADIF and can be imported into any standard logger. Import deduplicates on call + band + mode + UTC day, so re-importing your own log is safe.
 
 QSO recordings (if started in the Phone cockpit) are written to timestamped WAV files in a `recordings/` subdirectory alongside the settings file. The WAV header is checkpointed approximately every second so an abnormal exit leaves a readable file; recording auto-stops after 2 hours to prevent unbounded disk fill.
 

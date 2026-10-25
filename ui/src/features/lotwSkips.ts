@@ -6,7 +6,7 @@
 // upload buttons alike.
 //
 // …and the contacts the upload HELD BACK because TQSL does not know their mode yet (a JTTY
-// contact, written bare as WSJT-X writes it): sent, TQSL would drop it and the whole batch would
+// contact, written `MODE=MFSK SUBMODE=JTTY`): sent, TQSL would drop it and the whole batch would
 // read as rejected, so the station keeps it unsent and says so (`heldMode`, the connection log's
 // sentence). Without this the screen showed an upload that left a contact behind for no reason.
 

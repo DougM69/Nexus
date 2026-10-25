@@ -3619,6 +3619,100 @@ fn a_lotw_upload_marks_only_the_contact_made_under_its_own_call() {
     );
 }
 
+/// ★ LoTW's sync keeps the QSL detail it downloads — the partner's grid, county, IOTA, ITU zone
+/// and prefix — through the canonical store, so the ADIF mirror carries it, and a value a
+/// callbook lookup filled at log time gives way to LoTW's (CQZ too) while one the operator gave
+/// stays. Filling them queues no upload.
+#[test]
+fn a_lotw_sync_keeps_the_qsl_detail_and_queues_no_upload() {
+    use tempo_core::logbook::callbook::{callbook_filled, CallbookAnswer};
+    let d = Dir::new("lotw-detail");
+    let engine = holding(&d, &[]);
+    {
+        let mut e = engine.lock().unwrap();
+        e.note_callbook_answer(
+            "W1AW",
+            CallbookAnswer {
+                call: "W1AW".into(),
+                grid: Some("FN42".into()),
+                cq_zone: Some(4),
+                itu_zone: Some(7),
+                ..Default::default()
+            },
+        );
+        let mut rec = contacts(&[w1aw_under("K2DEF", "120000", "")]).remove(0);
+        rec.qth = Some("Newington".into()); // the operator's own
+        e.log_qso(rec);
+        assert_eq!(
+            e.take_pending_uploads().len(),
+            1,
+            "premise: the contact's own upload"
+        );
+    }
+    flush(&engine.lock().unwrap());
+    let logged = made_under(&engine, Some("K2DEF"));
+    assert_eq!(
+        callbook_filled(&logged),
+        ["CQZ", "GRIDSQUARE", "ITUZ"],
+        "premise: the callbook filled them"
+    );
+
+    lotw_synced(
+        &engine,
+        &lotw_answer(&[w1aw_under(
+            "K2DEF",
+            "120000",
+            "<QSL_RCVD:1>Y<GRIDSQUARE:6>FN31PR<CNTY:11>CT,HARTFORD<CQZ:1>5<ITUZ:1>8<PFX:2>W1\
+             <IOTA:6>NA-001<QTH:9>Hartford.",
+        )]),
+    );
+    let got = made_under(&engine, Some("K2DEF"));
+    assert!(
+        got.award_confirmed,
+        "premise: the row confirmed the contact"
+    );
+    let x = |k: &str| tempo_core::logbook::extra_field(&got, k).map(str::to_string);
+    assert_eq!(
+        (
+            got.grid.as_deref(),
+            got.ota.iota.as_deref(),
+            got.qth.as_deref()
+        ),
+        (Some("FN31PR"), Some("NA-001"), Some("Newington"))
+    );
+    assert_eq!(
+        (x("CNTY"), x("CQZ"), x("ITUZ"), x("PFX")),
+        (
+            Some("CT,HARTFORD".into()),
+            Some("5".into()),
+            Some("8".into()),
+            Some("W1".into())
+        )
+    );
+    assert!(
+        callbook_filled(&got).is_empty(),
+        "LoTW's values carry no mark"
+    );
+    assert!(
+        engine.lock().unwrap().take_pending_uploads().is_empty(),
+        "the sync's fill queues no upload"
+    );
+    // The store holds it, and the ADIF mirror follows it.
+    flush(&engine.lock().unwrap());
+    assert_eq!(
+        stored(&d)
+            .iter()
+            .filter(|r| r.grid.as_deref() == Some("FN31PR"))
+            .count(),
+        1
+    );
+    let mirror = std::fs::read_to_string(d.log()).unwrap();
+    assert!(
+        mirror.contains("<PFX:2>W1") && mirror.contains("<CNTY:11>CT,HARTFORD"),
+        "{mirror}"
+    );
+}
+
 /// Check confirmations pairs as the sync merges: N2OLD's confirmation is a gain for N2OLD's
 /// contact, the one Apply's merge gives it to, and not for K2DEF's in the same second.
 #[test]

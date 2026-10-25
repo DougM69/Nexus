@@ -1,6 +1,6 @@
 # Logbook & QSL
 
-The logbook is Nexus's system of record: a persistent ADIF 3.1.4 store with full
+The logbook is Nexus's system of record: a persistent ADIF 3.1.8 store with full
 round-trip fidelity. It holds callsign, grid, entity, state, band, frequency,
 mode, the string RSTs each mode actually uses (FT8's "−12" and CW's "599" are
 both first-class), name/QTH, notes, POTA/SOTA references, and a per-QSO upload
@@ -69,6 +69,13 @@ carries:
   signing from your Station Location.
 - **The worked station's continent** (CONT) and **the distance to it** in km (DISTANCE) when
   both grids are known.
+- **What your callbook lookup said**, when you looked the station up before logging (the
+  callsign card or the log strip): name, QTH, grid, state, county (CNTY), IOTA, CQ and ITU
+  zones, position (LAT/LON), e-mail, web page and QSL manager (QSL_VIA), plus whether they use
+  LoTW, eQSL or paper cards and their UTC offset. Every way of logging takes it, the FT
+  auto-log too; nothing waits for a lookup. Where the station is comes only from its own
+  callbook entry, never a home call's entry for a /P or a station at a park, and a LoTW
+  confirmation's grid, county, zones or IOTA replaces a callbook one.
 - **Space weather**, if you turn on **Log space weather on each contact** in
   [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
   ▸ Propagation: the K index,

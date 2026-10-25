@@ -2739,8 +2739,8 @@ export interface UploadReport {
   /** Contacts of the batch DELETED from the log while TQSL was signing it. Absent from an
    *  older station. */
   skippedDeleted?: number
-  /** Contacts held back because TQSL does not know their mode yet (a JTTY contact, written bare
-   *  as WSJT-X writes it): not sent, still marked not uploaded. Absent from an older station. */
+  /** Contacts held back because TQSL does not know their mode yet (a JTTY contact, written
+   *  `MODE=MFSK SUBMODE=JTTY`): not sent, still marked not uploaded. Absent from an older station. */
   heldMode?: number
 }
 
@@ -3139,6 +3139,18 @@ export interface QrzLookup {
    *  normal case) means "fall back to the locator", never "0, 0". */
   lat?: number | null
   lon?: number | null
+  /** The rest of what a contact can hold, each routinely null: county, IOTA, e-mail, web page,
+   *  QSL route, whether the station confirms by LoTW / eQSL / paper card, and its UTC offset in
+   *  hours. The log copies them into a contact itself; nothing here has to. */
+  county?: string | null
+  iota?: string | null
+  email?: string | null
+  web?: string | null
+  qslVia?: string | null
+  lotw?: boolean | null
+  eqsl?: boolean | null
+  paperQsl?: boolean | null
+  utcOffset?: number | null
 }
 
 /** The Rotor pane's poll (`read_rotator_state`): the azimuth the rotator reports, and what the

@@ -1,5 +1,5 @@
 // The LoTW upload toast for contacts the station HELD BACK because TQSL does not know their mode
-// yet (a JTTY contact, written bare as WSJT-X writes it): the station counts them (`heldMode`) and
+// yet (a JTTY contact, written `MODE=MFSK SUBMODE=JTTY`): the station counts them (`heldMode`) and
 // its connection log says why; this is the same sentence on the screen, in every catalog.
 import { describe, it, expect, afterEach } from 'vitest'
 import { EN, installCatalog, setLocale } from '../i18n'

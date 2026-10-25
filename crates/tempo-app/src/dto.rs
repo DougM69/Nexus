@@ -4202,7 +4202,7 @@ pub struct UploadReportDto {
     #[serde(default)]
     pub skipped_deleted: usize,
     /// Contacts held back from the batch because TQSL does not know their mode yet (a JTTY
-    /// contact, written bare as WSJT-X writes it): left unsent and unstamped, and named in the
+    /// contact, written `MODE=MFSK SUBMODE=JTTY`): left unsent and unstamped, and named in the
     /// connection log, rather than dropped inside TQSL. LoTW only; 0 elsewhere.
     #[serde(default)]
     pub held_mode: usize,
@@ -4566,7 +4566,7 @@ impl DiagnosticsReportDto {
 /// A QRZ.com callsign-lookup result (the serde DTO over the pure
 /// [`tempo_core::qrz::QrzLookup`]). `grid`/`state` are subscriber-only and are
 /// routinely `None` for free QRZ accounts.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QrzLookupDto {
     pub call: String,
@@ -4592,6 +4592,27 @@ pub struct QrzLookupDto {
     pub lat: Option<f64>,
     #[serde(default)]
     pub lon: Option<f64>,
+    /// The rest of what a contact can hold ([`tempo_core::qrz::QrzLookup`] names each): county,
+    /// IOTA, e-mail, web page, QSL route, the LoTW/eQSL/paper-card flags and the UTC offset in
+    /// hours. Each is routinely `None`, and absent from an older answer.
+    #[serde(default)]
+    pub county: Option<String>,
+    #[serde(default)]
+    pub iota: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub web: Option<String>,
+    #[serde(default)]
+    pub qsl_via: Option<String>,
+    #[serde(default)]
+    pub lotw: Option<bool>,
+    #[serde(default)]
+    pub eqsl: Option<bool>,
+    #[serde(default)]
+    pub paper_qsl: Option<bool>,
+    #[serde(default)]
+    pub utc_offset: Option<f32>,
 }
 
 impl From<tempo_core::qrz::QrzLookup> for QrzLookupDto {
@@ -4610,6 +4631,15 @@ impl From<tempo_core::qrz::QrzLookup> for QrzLookupDto {
             image: r.image,
             lat: r.lat,
             lon: r.lon,
+            county: r.county,
+            iota: r.iota,
+            email: r.email,
+            web: r.web,
+            qsl_via: r.qsl_via,
+            lotw: r.lotw,
+            eqsl: r.eqsl,
+            paper_qsl: r.paper_qsl,
+            utc_offset: r.utc_offset,
         }
     }
 }
@@ -4634,6 +4664,15 @@ impl From<tempo_core::hamqth::HamQthLookup> for QrzLookupDto {
             image: r.image,
             lat: r.lat,
             lon: r.lon,
+            county: r.county,
+            iota: r.iota,
+            email: r.email,
+            web: r.web,
+            qsl_via: r.qsl_via,
+            lotw: r.lotw,
+            eqsl: r.eqsl,
+            paper_qsl: r.paper_qsl,
+            utc_offset: r.utc_offset,
         }
     }
 }

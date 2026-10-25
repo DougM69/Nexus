@@ -1896,6 +1896,47 @@ mod tests {
         )
     }
 
+    /// A JTTY contact counts as JTTY on the Needed board under either spelling a log may hold it
+    /// in: an older log's bare `MODE=JTTY`, and ADIF 3.1.8's `MODE=MFSK SUBMODE=JTTY`, which is
+    /// how Nexus writes one. A station heard in JTTY on a band and entity each log has worked in
+    /// JTTY is no new mode; heard in JS8, which neither log holds, it is.
+    #[test]
+    fn a_jtty_contact_counts_as_jtty_under_either_spelling() {
+        for spelling in ["<MODE:4>JTTY", "<MODE:4>MFSK<SUBMODE:4>JTTY"] {
+            let d = Dir::new("needs-jtty");
+            std::fs::write(
+                d.log(),
+                format!(
+                    "{}<CALL:5>K1ABC<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m{spelling}\
+                     <LOTW_QSL_RCVD:1>Y<EOR>\n",
+                    tempo_core::logbook::adif_header(),
+                ),
+            )
+            .unwrap();
+            let e = launch(&d);
+            assert_eq!(
+                records(&e)[0].mode,
+                "JTTY",
+                "premise: {spelling} is stored as JTTY"
+            );
+            let needs = needs_kept(&e, &LogTallies::default()).unwrap();
+            let new_mode = |mode: &str| {
+                propagation::needalert::score_slots(
+                    "K1XYZ",
+                    "20m",
+                    mode,
+                    None,
+                    None,
+                    &*needs,
+                    &needs.slots(),
+                )
+                .is_some_and(|a| a.tags.contains(&propagation::NeedTag::NewMode))
+            };
+            assert!(!new_mode("JTTY"), "{spelling}: JTTY is worked");
+            assert!(new_mode("JS8"), "{spelling}: JS8 is not");
+        }
+    }
+
     /// ★ The Needed board judges what the log holds by the entity, zone and state the awards
     /// count each contact toward — its record's DXCC number (LoTW's first) and CQ zone, else its
     /// call — read from the store as the whole record holds them. Each station below is heard on

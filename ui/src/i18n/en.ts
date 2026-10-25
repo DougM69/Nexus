@@ -1486,7 +1486,7 @@ export const EN = {
     other: ' {{count}} were deleted from the log.',
   },
   // Contacts held back from a LoTW upload because TQSL does not know their mode yet (a JTTY
-  // contact, written bare as WSJT-X writes it): the station's own sentence, for the screen. JTTY,
+  // contact, written `MODE=MFSK SUBMODE=JTTY`): the station's own sentence, for the screen. JTTY,
   // TQSL and LoTW are names.
   'logbook.lotw.held': {
     one: '{{count}} JTTY contact was not sent: TQSL does not know the JTTY mode yet and would drop it, so it was held back. It stays marked as not uploaded to LoTW.',

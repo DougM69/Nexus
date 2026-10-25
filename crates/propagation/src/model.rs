@@ -217,8 +217,8 @@ pub fn mode_key(mode: &str) -> String {
 /// beacon nobody works (`WSPR`, `FST4W`), and another program's own name for something no contact
 /// here is logged as — PSK Reporter passes on whatever the reporting program calls its mode
 /// (`VARAC`, `FREEDV`, `SAFECOM`). A mode the log can hold that is not named here (the rarer PSK
-/// submodes) is judged by its class as well. `JTTY` is a mode of its own: WSJT-X logs it as a bare
-/// `MODE=JTTY`, and so does a JTTY contact logged here.
+/// submodes) is judged by its class as well. `JTTY` is a mode of its own: a JTTY contact is stored
+/// as JTTY, whether its log spelled it as a bare `MODE=JTTY` or `MODE=MFSK SUBMODE=JTTY`.
 fn names_a_contact_mode(name: &str) -> bool {
     matches!(
         name,

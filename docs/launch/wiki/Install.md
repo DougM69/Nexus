@@ -232,7 +232,7 @@ platforms. `~/.config` is hidden in Finder: press **⌘⇧.** in an Open dialog,
 |---|---|---|---|
 | Settings | `%APPDATA%\tempo\settings.json` | `~/.config/tempo/settings.json` | JSON, camelCase keys; partial files merge with defaults, so it's safe to hand-edit |
 | **Logbook** | `%APPDATA%\tempo\log.sqlite3` | `~/.config/tempo/log.sqlite3` | The logbook itself, a database. Never copy it while Nexus is running |
-| **Logbook, as ADIF** | `%APPDATA%\tempo\log.adi` | `~/.config/tempo/log.adi` | ADIF 3.1.4 — every contact, kept up to date a moment after each change. **This is the file to back up** |
+| **Logbook, as ADIF** | `%APPDATA%\tempo\log.adi` | `~/.config/tempo/log.adi` | ADIF 3.1.8 — every contact, kept up to date a moment after each change. **This is the file to back up** |
 | Logbook backups | `%APPDATA%\tempo\backups\` | `~/.config/tempo/backups/` | Dated copies of `log.adi` Nexus takes by itself — see [Restoring the logbook](#restoring-the-logbook-from-a-backup-copy) |
 | Received-audio recordings | `%APPDATA%\tempo\recordings\` | `~/.config/tempo/recordings/` | Only if you enable audio saving; can get large |
 | UI state | `%LOCALAPPDATA%\com.kd9taw.tempo\` | the webview's own store for `com.kd9taw.tempo` | Theme, UI scale, panel layout, wizard-seen flag, board filters |

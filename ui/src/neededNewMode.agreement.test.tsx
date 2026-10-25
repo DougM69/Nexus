@@ -11,7 +11,7 @@
 // mode one capture named; crates/propagation/tests/needs_each_mode.rs holds the file to that board. The
 // engine judged every name PSK Reporter passes on as a mode of its own, so each WSPR beacon, VarAC
 // and FreeDV station of the two countries was a "new mode" no contact could clear, and the radio's own
-// WSPR decodes were too. JTTY is a mode contacts are logged in (WSJT-X's bare MODE=JTTY), so a station
+// WSPR decodes were too. JTTY is a mode contacts are logged in (MODE=MFSK SUBMODE=JTTY), so a station
 // heard in it is a real new mode until one is worked, as a JS8 station is.
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'

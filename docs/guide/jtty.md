@@ -116,10 +116,11 @@ twice.
 
 ## Logging and LoTW
 
-The log strip logs a JTTY contact as **JTTY**, the way WSJT-X writes it. TQSL does not know
-the JTTY mode yet and would drop such a contact from an upload, so a LoTW upload holds JTTY
-contacts back, leaves them marked as not uploaded, and says so on screen and in the
-connection log.
+The log strip logs a JTTY contact as **JTTY**, and an ADIF export writes it as
+`MODE=MFSK SUBMODE=JTTY`, as ADIF 3.1.8 registers it. A log that holds a bare `MODE=JTTY`
+still reads as JTTY. LoTW does not list the JTTY mode yet and TQSL would drop such a contact
+from an upload, so a LoTW upload holds JTTY contacts back, leaves them marked as not
+uploaded, and says so on screen and in the connection log.
 
 ## WSJT-X UDP
 

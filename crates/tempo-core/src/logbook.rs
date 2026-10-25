@@ -1025,6 +1025,7 @@ pub struct Logbook {
     minter: Minter,
 }
 
+pub mod callbook;
 pub mod canonical;
 pub mod dedup;
 mod edit;
@@ -2916,6 +2917,8 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
     if state_of(&rec) != state_of(old) {
         unmark_self_filled(&mut rec, "MY_STATE");
     }
+    // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]).
+    callbook::unmark_edited(old, &mut rec);
     // The same resurrection, for a park. A side's OTHER programme's reference rides
     // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
     // `take_ota_side`), and it described the reference the side HAD. An edit that
@@ -3137,7 +3140,7 @@ pub fn same_push_key(r: &QsoRecord, pushed: &QsoRecord) -> bool {
 /// as `adif_header()` + N×`adif_record()` (TQSL needs a full ADIF file, not bare
 /// records).
 pub fn adif_header() -> String {
-    "Nexus logbook\n<ADIF_VER:5>3.1.4\n<PROGRAMID:5>Nexus\n<EOH>\n".to_string()
+    "Nexus logbook\n<ADIF_VER:5>3.1.8\n<PROGRAMID:5>Nexus\n<EOH>\n".to_string()
 }
 
 /// One `<FIELD:len>value` tag.
@@ -3482,8 +3485,11 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
             continue;
         }
         // Which own-station fields Nexus filled itself is for its own LoTW upload, never a
-        // service's business ([`SELF_FILLED_FIELD`]).
-        if audience == Audience::Outbound && k == SELF_FILLED_FIELD {
+        // service's business ([`SELF_FILLED_FIELD`]); nor is which fields a callbook filled
+        // ([`callbook::CALLBOOK_FILLED_FIELD`]).
+        if audience == Audience::Outbound
+            && (k == SELF_FILLED_FIELD || k == callbook::CALLBOOK_FILLED_FIELD)
+        {
             continue;
         }
         out.push_str(&field(k, v));
@@ -3698,6 +3704,9 @@ pub(crate) fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
         "Q65" => Some(("MFSK", "Q65")),
         "FST4" => Some(("MFSK", "FST4")),
         "FST4W" => Some(("MFSK", "FST4W")),
+        // JTTY, WSJT-X's keyboard mode: a submode of MFSK since ADIF 3.1.8. An older log's bare
+        // `MODE=JTTY` (WSJT-X's own spelling) is still read as JTTY, as any bare MODE is.
+        "JTTY" => Some(("MFSK", "JTTY")),
         // -- The phone SIDEBAND (operator report, 2026-09-15) ------------------------
         // The sideband a phone contact was worked on is what HRD and the other loggers
         // track, and until now nothing here recorded it: a phone QSO was stored and
@@ -3788,6 +3797,7 @@ pub(crate) fn promoted_submode(sub: &str) -> Option<&'static str> {
         "Q65" => Some("Q65"),
         "FST4" => Some("FST4"),
         "FST4W" => Some("FST4W"),
+        "JTTY" => Some("JTTY"),
         _ => None,
     }
 }
@@ -3879,25 +3889,14 @@ fn psk_parent(r: &QsoRecord) -> Option<&'static str> {
         .then_some("PSK")
 }
 
-/// `MFSK` for a row stored as JTTY whose own SUBMODE says JTTY: one read as `MODE=MFSK
-/// SUBMODE=JTTY`, written back under its parent as it came ([`psk_parent`]'s shape). A JTTY row
-/// with no SUBMODE, as Nexus logs one, keeps WSJT-X's bare `MODE=JTTY` (operator ruling,
-/// 2026-10-08).
-fn jtty_parent(r: &QsoRecord) -> Option<&'static str> {
-    let (_, sub) = r.extra.iter().find(|(k, _)| k == "SUBMODE")?;
-    (r.mode.trim().eq_ignore_ascii_case("JTTY") && sub.trim().eq_ignore_ascii_case("JTTY"))
-        .then_some("MFSK")
-}
-
 /// The MODE [`adif_record`] writes for `r` — the parent of a registered pair, the parent a
 /// passthrough SUBMODE asks for, or the stored mode itself — or `None` when the row has no mode
-/// (an empty MODE is omitted, never written as `<MODE:0>`). One answer for the writer and for
-/// anything that must know what a service will receive (`lotw_upload::tqsl_drops`).
+/// (an empty MODE is omitted, never written as `<MODE:0>`).
 pub(crate) fn adif_mode(r: &QsoRecord) -> Option<&str> {
     match adif_submode(&r.mode) {
         Some((parent, _)) => Some(parent),
         None if r.mode.trim().is_empty() => None,
-        None => Some(psk_parent(r).or_else(|| jtty_parent(r)).unwrap_or(&r.mode)),
+        None => Some(psk_parent(r).unwrap_or(&r.mode)),
     }
 }
 
@@ -4822,18 +4821,6 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
                 .and(submode.as_deref())
                 .and_then(psk_submode)
                 .map(str::to_string)
-        })
-        // JTTY under MFSK (`MODE=MFSK SUBMODE=JTTY`), as a logger that files WSJT-X's modes
-        // under their family may write it; WSJT-X's own bare `MODE=JTTY` is the MODE below. The
-        // SUBMODE is kept, as fldigi's is, which writes the row back under MFSK
-        // ([`jtty_parent`]).
-        .or_else(|| {
-            mode_field
-                .as_deref()
-                .filter(|m| m.trim().eq_ignore_ascii_case("MFSK"))
-                .and(submode.as_deref())
-                .filter(|s| s.trim().eq_ignore_ascii_case("JTTY"))
-                .map(|_| "JTTY".to_string())
         })
         .or_else(|| mode_field.clone())
         .unwrap_or_default();
@@ -6165,29 +6152,24 @@ mod tests {
         }
     }
 
-    /// ⭐ JTTY GOES OUT AS WSJT-X WRITES IT, AND COMES IN UNDER EITHER SPELLING (operator ruling,
-    /// 2026-10-08). WSJT-X logs a JTTY contact as a bare `<mode:4>JTTY` (its ADIF writer puts
-    /// only FT4, FST4 and Q65 under MFSK), and a contact logged here goes out the same way, to
-    /// the file and to every upload. A log that files it as `MODE=MFSK SUBMODE=JTTY` is read as
-    /// JTTY too, and written back the way it came, as fldigi's PSK rows are: MFSK is the
-    /// spelling TQSL can place today, and turning someone's MFSK row into a bare JTTY would
-    /// hand TQSL a mode it drops. Both spellings round-trip to the same bytes.
+    /// ⭐ JTTY GOES OUT AS ADIF 3.1.8 SPELLS IT, AND COMES IN UNDER EITHER SPELLING. ADIF 3.1.8
+    /// adds JTTY as a submode of MFSK, so a JTTY contact goes out as `MODE=MFSK SUBMODE=JTTY`, to
+    /// the file and to every upload, as FT4 does. An older log's bare `MODE=JTTY` (WSJT-X's own
+    /// spelling) is still read as JTTY, and both spellings go back out the same way.
     #[test]
-    fn jtty_goes_out_bare_and_comes_in_under_either_spelling() {
+    fn jtty_goes_out_under_mfsk_and_comes_in_under_either_spelling() {
         let mut own = rec("K1ABC", "20m", 1_782_583_500);
         own.mode = "JTTY".into();
         for out in [adif_record(&own), adif_record_own_log(&own)] {
-            assert!(out.contains("<MODE:4>JTTY<"), "WSJT-X's bare JTTY: {out}");
+            assert!(out.contains("<MODE:4>MFSK<"), "MODE is MFSK: {out}");
+            assert!(out.contains("<SUBMODE:4>JTTY<"), "SUBMODE is JTTY: {out}");
             assert_eq!(out.matches("<MODE:").count(), 1, "{out}");
-            assert!(
-                !out.contains("<SUBMODE:") && !out.contains("APP_TEMPO_MODE"),
-                "{out}"
-            );
+            assert_eq!(out.matches("<SUBMODE:").count(), 1, "{out}");
         }
-        for (spelling, parent, submode) in [
-            ("<MODE:4>JTTY", "<MODE:4>JTTY<", 0),
-            ("<MODE:4>MFSK<SUBMODE:4>JTTY", "<MODE:4>MFSK<", 1),
-            ("<MODE:4>mfsk<SUBMODE:4>jtty", "<MODE:4>MFSK<", 1),
+        for spelling in [
+            "<MODE:4>JTTY",
+            "<MODE:4>MFSK<SUBMODE:4>JTTY",
+            "<MODE:4>mfsk<SUBMODE:4>jtty",
         ] {
             let src = format!(
                 "<CALL:5>C56YK<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m{spelling}<EOR>"
@@ -6196,16 +6178,10 @@ mod tests {
             assert_eq!(got.len(), 1, "{src}");
             assert_eq!(got[0].mode, "JTTY", "{spelling} is stored as JTTY");
             for out in [adif_record(&got[0]), adif_record_own_log(&got[0])] {
-                assert!(
-                    out.to_ascii_uppercase().contains(parent),
-                    "{spelling} goes back out under {parent}: {out}"
-                );
+                assert!(out.contains("<MODE:4>MFSK<"), "{spelling}: {out}");
+                assert!(out.contains("<SUBMODE:4>JTTY<"), "{spelling}: {out}");
                 assert_eq!(out.matches("<MODE:").count(), 1, "{out}");
-                assert_eq!(
-                    out.to_ascii_uppercase().matches("<SUBMODE:4>JTTY<").count(),
-                    submode,
-                    "{out}"
-                );
+                assert_eq!(out.matches("<SUBMODE:").count(), 1, "{out}");
                 let back = parse_adif(&(adif_header() + &out));
                 assert_eq!(back[0].mode, "JTTY", "{out}");
                 assert_eq!(adif_record_own_log(&back[0]), adif_record_own_log(&got[0]));

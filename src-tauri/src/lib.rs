@@ -3485,9 +3485,9 @@ mod lotw_batch_tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// TQSL drops a contact whose mode it does not know yet — a JTTY contact, written bare as
-    /// WSJT-X writes it — and the batch then exits 9 and is read as rejected for every contact in
-    /// it. So the JTTY contact never reaches TQSL: the others are signed and stamped, it stays
+    /// TQSL drops a contact whose mode it does not know yet — a JTTY contact, written as ADIF 3.1.8
+    /// spells it, `MODE=MFSK SUBMODE=JTTY` — and the batch then exits 9 and is read as rejected for
+    /// every contact in it. So the JTTY contact never reaches TQSL: the others are signed and stamped, it stays
     /// unstamped (still owed to LoTW), the report counts it and the connection log says why. A
     /// batch of nothing else runs no TQSL at all.
     #[test]
@@ -3507,7 +3507,7 @@ mod lotw_batch_tests {
             let batch = std::fs::read_to_string(args.last().expect("the batch file"))
                 .expect("TQSL can read it");
             assert!(
-                !batch.to_ascii_uppercase().contains("<MODE:4>JTTY"),
+                !batch.to_ascii_uppercase().contains("JTTY"),
                 "TQSL is never handed the JTTY contact: {batch}"
             );
             Ok((0, String::new()))
@@ -27998,7 +27998,7 @@ fn lotw_upload_batch_with(
     .filter(|r| r.time_known)
     .collect();
     // A contact TQSL would drop (its mode is one TQSL does not know yet: a JTTY contact, written
-    // bare as WSJT-X writes it) is held back here, at the same choke point: sent, it would vanish
+    // `MODE=MFSK SUBMODE=JTTY`) is held back here, at the same choke point: sent, it would vanish
     // inside TQSL and make the whole batch read as rejected. Held, it stays unsent and unstamped,
     // and the connection log says why.
     let (held, batch): (Vec<_>, Vec<_>) = batch
@@ -28956,6 +28956,41 @@ fn note_lookup_fix(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::QrzL
     engine_lock(engine).note_callbook_fix(call, fix);
 }
 
+/// Everything the same lookup said that a contact can hold, as the log takes it: the name by the
+/// log strip's rule ([`callbook_log_name`]), the position only when the callbook vouched for one,
+/// and `call` the record the callbook answered with (the base call's, for a stroked call it fell
+/// back from). Never the DXCC number: the country file owns it.
+fn callbook_answer(
+    dto: &tempo_app::dto::QrzLookupDto,
+) -> tempo_core::logbook::callbook::CallbookAnswer {
+    tempo_core::logbook::callbook::CallbookAnswer {
+        call: dto.call.clone(),
+        name: callbook_log_name(dto).map(str::to_string),
+        qth: dto.qth.clone(),
+        grid: dto.grid.clone(),
+        state: dto.state.clone(),
+        county: dto.county.clone(),
+        iota: dto.iota.clone(),
+        cq_zone: dto.cq_zone,
+        itu_zone: dto.itu_zone,
+        position: dto.lat.zip(dto.lon),
+        email: dto.email.clone(),
+        web: dto.web.clone(),
+        qsl_via: dto.qsl_via.clone(),
+        lotw: dto.lotw,
+        eqsl: dto.eqsl,
+        paper_qsl: dto.paper_qsl,
+        utc_offset: dto.utc_offset,
+    }
+}
+
+/// Hand the whole answer to the engine (`Engine::note_callbook_answer`), so a contact logged with
+/// this call on any path, the FT auto-log included, takes it into its empty fields. As for the
+/// name, the lookup already happened; the logging path never makes one.
+fn note_lookup_answer(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::QrzLookupDto) {
+    engine_lock(engine).note_callbook_answer(call, callbook_answer(dto));
+}
+
 /// Look up a callsign, enriching with name / grid / QTH / state. QRZ is tried first
 /// (its paid tier carries grid/state); when QRZ is **unconfigured** (no username or
 /// no stored password) or has **no match**, the lookup falls through to the FREE
@@ -29039,6 +29074,7 @@ async fn qrz_lookup(
                 if let QrzOutcome::Found(dto, _) = attempt.map_err(|f| f.message.into_string())? {
                     note_lookup_name(&state, &call, &dto);
                     note_lookup_fix(&state, &call, &dto);
+                    note_lookup_answer(&state, &call, &dto);
                     return Ok(*dto);
                 }
             }
@@ -29065,6 +29101,7 @@ async fn qrz_lookup(
                 if let Some(dto) = attempt? {
                     note_lookup_name(&state, &call, &dto);
                     note_lookup_fix(&state, &call, &dto);
+                    note_lookup_answer(&state, &call, &dto);
                     return Ok(dto);
                 }
                 // HamQTH was queried and answered — a genuine miss for THIS candidate. Only the
@@ -44060,6 +44097,7 @@ mod tests {
             image: None,
             lat: None,
             lon: None,
+            ..Default::default()
         };
         let d = dto(Some("David Smith"), Some("Dave"));
         assert_eq!(super::callbook_log_name(&d), Some("Dave"));
@@ -44073,6 +44111,60 @@ mod tests {
         );
         let d = dto(Some(" "), None);
         assert_eq!(super::callbook_log_name(&d), None);
+    }
+
+    /// A lookup's whole answer reaches the engine as the log takes it: every field a contact can
+    /// hold, read from QRZ's XML and from HamQTH's into the one DTO, the name by the log strip's
+    /// rule, and the position as a pair. The DXCC number is not in it at all.
+    #[test]
+    fn the_whole_lookup_answer_is_what_the_log_takes() {
+        let qrz = tempo_core::qrz::parse_callsign(
+            "<Callsign><call>W1ABC</call><fname>David</fname><name>Smith</name>\
+<nickname>Dave</nickname><addr2>Newington</addr2><state>CT</state><county>Hartford</county>\
+<grid>FN31pr</grid><dxcc>291</dxcc><cqzone>5</cqzone><ituzone>8</ituzone>\
+<lat>41.7147</lat><lon>-72.7272</lon><geoloc>user</geoloc><iota>NA-001</iota>\
+<email>dave@example.org</email><url>https://example.org</url><qslmgr>W1MGR</qslmgr>\
+<lotw>1</lotw><eqsl>0</eqsl><mqsl>1</mqsl><GMTOffset>-5</GMTOffset></Callsign>",
+        )
+        .unwrap();
+        let a = super::callbook_answer(&qrz.into());
+        assert_eq!(
+            a,
+            tempo_core::logbook::callbook::CallbookAnswer {
+                call: "W1ABC".into(),
+                name: Some("Dave".into()),
+                qth: Some("Newington".into()),
+                grid: Some("FN31pr".into()),
+                state: Some("CT".into()),
+                county: Some("Hartford".into()),
+                iota: Some("NA-001".into()),
+                cq_zone: Some(5),
+                itu_zone: Some(8),
+                position: Some((41.7147, -72.7272)),
+                email: Some("dave@example.org".into()),
+                web: Some("https://example.org".into()),
+                qsl_via: Some("W1MGR".into()),
+                lotw: Some(true),
+                eqsl: Some(false),
+                paper_qsl: Some(true),
+                utc_offset: Some(-5.0),
+            }
+        );
+        let hamqth = tempo_core::hamqth::parse_callsign(
+            "<HamQTH><search><callsign>W1ABC</callsign><adr_name>David Smith</adr_name>\
+<us_state>CT</us_state><us_county>Hartford</us_county><qsl_via>W1MGR</qsl_via>\
+<lotw>Y</lotw><utc_offset>-5</utc_offset></search></HamQTH>",
+        )
+        .unwrap();
+        let a = super::callbook_answer(&hamqth.into());
+        assert_eq!(
+            (a.name.as_deref(), a.county.as_deref(), a.qsl_via.as_deref()),
+            (Some("David Smith"), Some("Hartford"), Some("W1MGR"))
+        );
+        assert_eq!(
+            (a.lotw, a.utc_offset, a.position),
+            (Some(true), Some(-5.0), None)
+        );
     }
 
     #[test]

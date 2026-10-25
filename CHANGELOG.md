@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **More from the callbook on every contact.** When you have looked a station up (the callsign card
+  or the log strip), the contact you log with that call keeps what the lookup said: county, IOTA,
+  CQ and ITU zones, position, e-mail, web page, QSL manager, whether they use LoTW, eQSL or paper
+  cards, and their UTC offset, plus name, QTH, grid and state when you left them empty. This works
+  for every way a contact is logged, the FT auto-log too, which uses the answer already on screen
+  and never waits for a lookup. Nothing you typed is replaced. Where the station is (grid, county,
+  zones and so on) is taken only from their own callbook entry, not a home call's entry for a
+  /P or a station at a park. A zone or location from the callbook gives way to LoTW's when LoTW
+  confirms the contact.
+- **LoTW sync keeps the QSL details.** A LoTW confirmation now also fills the station's grid,
+  county, IOTA, ITU zone and prefix when the contact had none.
 - **Logbook columns.** A Columns button replaces "More columns": show or hide each column, drag a column's edge to resize it, and the choice is kept in your settings. New columns show what the log already stored: their grid, IOTA, county, CQ and ITU zones, continent, distance, the QSL sent and received dates, each service's upload state and the contest exchange; IOTA can now be edited, and the contact view shows these too.
 - **JTTY sends from a remote computer.** Driving a station from another computer, JTTY's Send,
   F-keys, live typing and sign-off now transmit, under the same guards and Stop as the other remote
@@ -68,8 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comes from the WSJT-X 3.3.0-beta4 test release and no WSJT-X general release has it yet, so the other station
   needs a WSJT-X 3.2 or 3.3 test release. Not yet tried on the air: a bench check should confirm keying, power and
   ALC at your data power, and that a WSJT-X station copies what Nexus sends.
-- **JTTY contacts log as JTTY, the way WSJT-X logs them.** TQSL does not know the JTTY mode yet and would drop
-  such a contact, so a LoTW upload holds JTTY contacts back, leaves them marked not uploaded, and says so. The
+- **JTTY contacts log as JTTY, and export as `MODE=MFSK SUBMODE=JTTY`, as ADIF 3.1.8 registers it.** A log
+  with a bare `MODE=JTTY` still reads as JTTY. LoTW does not list the JTTY mode yet and TQSL would drop such a
+  contact, so a LoTW upload holds JTTY contacts back, leaves them marked not uploaded, and says so. The
   WSJT-X UDP Status names the mode JTTY, and no Decode messages go out for it, as from WSJT-X.
 - **JTTY in contests.** In ARRL Field Day, F2, F6 and F8 send your class and section in JTTY's compact exchange
   form, and %E in typed text is your class and section, as in WSJT-X. Winter Field Day allows JTTY for 2027; its

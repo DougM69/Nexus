@@ -192,7 +192,7 @@ fn a_station_heard_only_by_class_is_judged_by_class() {
 /// builds listed every WSPR beacon in the United States and Canada as one, against a log holding
 /// hundreds of FT8 contacts with both. The radio's own WSPR and FST4W decodes did the same. Each
 /// mode a contact IS logged in stays a mode of its own — JTTY among them since JTTY contacts are
-/// logged (as WSJT-X logs them, a bare `MODE=JTTY`).
+/// logged (as `MODE=MFSK SUBMODE=JTTY`, and read from an older log's bare `MODE=JTTY`).
 #[test]
 fn a_station_heard_in_a_mode_no_contact_is_logged_in_is_judged_by_its_class() {
     let mut n = LogNeeds::new();

@@ -20,6 +20,9 @@ mod broker_key_slot_tests;
 /// SPEC-2's C16: changes to one contact by its id.
 #[cfg(test)]
 mod by_id_tests;
+/// A callbook lookup's answer reaches the contact on every log path, never by a lookup of its own.
+#[cfg(test)]
+mod callbook_fill_tests;
 /// A clock repair holds transmit: every way to start one refused, nothing keyed or unkeyed.
 #[cfg(test)]
 mod clock_repair_hold_tests;
@@ -4115,6 +4118,11 @@ pub struct Engine {
     /// [`CALLBOOK_NAMES_CAP`]: the rotator's point-at-call aims at it instead of the country
     /// centre, and never makes a lookup of its own. See [`CallbookFix`].
     callbook_fixes: VecDeque<(String, CallbookFix)>,
+    /// The whole answer those same lookups gave, `(CALL, answer)`, newest last, bounded by
+    /// [`CALLBOOK_NAMES_CAP`]: what [`Self::log_qso_inner`] copies into the empty fields of a
+    /// contact logged with that call, on every log path. Read, never fetched — the FT auto-log
+    /// takes it or nothing. See `tempo_core::logbook::callbook`.
+    callbook_answers: VecDeque<(String, tempo_core::logbook::callbook::CallbookAnswer)>,
     /// The grid the log form holds for the call it is logging, `(CALL, grid)`: typed by the
     /// operator, or filled in from the callbook. Pushed by the frontend and keyed to the call,
     /// like `cw_peer_call`, so a form left on another station never aims the beam.
@@ -6591,6 +6599,7 @@ impl Engine {
             cw_peer_name: String::new(),
             cw_peer_state: String::new(),
             callbook_names: VecDeque::new(),
+            callbook_answers: VecDeque::new(),
             callbook_fixes: VecDeque::new(),
             log_form_grid: None,
             cw_abort: false,
@@ -11158,6 +11167,39 @@ impl Engine {
             position: fix.position,
         };
         self.callbook_fixes.push_back((call, fix));
+    }
+
+    /// Remember everything a callbook lookup answered for `call`, replacing an earlier answer for
+    /// the same call; bounded like [`Self::note_callbook_name`]. A contact logged with this call
+    /// afterwards takes it into its empty fields ([`Self::log_qso_inner`]).
+    pub fn note_callbook_answer(
+        &mut self,
+        call: &str,
+        answer: tempo_core::logbook::callbook::CallbookAnswer,
+    ) {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        if call.is_empty() {
+            return;
+        }
+        self.callbook_answers.retain(|(c, _)| *c != call);
+        if self.callbook_answers.len() >= CALLBOOK_NAMES_CAP {
+            self.callbook_answers.pop_front();
+        }
+        self.callbook_answers.push_back((call, answer));
+    }
+
+    /// The answer a lookup gave this session for exactly this call, if one did. Exact call, as
+    /// for the name: a lookup of `W1AW/P` is not one of `W1AW`.
+    fn callbook_answer(
+        &self,
+        call: &str,
+    ) -> Option<&tempo_core::logbook::callbook::CallbookAnswer> {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        self.callbook_answers
+            .iter()
+            .rev()
+            .find(|(c, _)| *c == call)
+            .map(|(_, a)| a)
     }
 
     /// Where a lookup answered this session placed exactly this call, if one did. Exact call,
@@ -16346,6 +16388,17 @@ impl Engine {
                 }
                 None => {}
             }
+        }
+        // WHAT A CALLBOOK LOOKUP ALREADY SAID of this station — county, IOTA, zones, position,
+        // e-mail, QSL route, and the name, QTH, grid and state where the record has none — on
+        // every path, the FT auto-log included. Only an answer a lookup already returned this
+        // session for exactly this call (the callsign card's, the log strip's): never a lookup
+        // from here, so the FT path takes it or nothing and waits for nothing. Empty fields only,
+        // after the park and the state above have had their say, and before DISTANCE below, which
+        // reads the grid. The rules, and the mark that lets a LoTW value replace a callbook one,
+        // are `tempo_core::logbook::callbook`'s.
+        if let Some(answer) = self.callbook_answer(&rec.call) {
+            tempo_core::logbook::callbook::fill_from_callbook(&mut rec, answer);
         }
         // WHERE THEY ARE: the worked station's continent (ADIF `CONT`), from the country
         // file's answer for the call — the same reading a contest row records — and the distance

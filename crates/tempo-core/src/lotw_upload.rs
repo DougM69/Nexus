@@ -65,25 +65,24 @@ pub fn classify_tqsl_exit(code: i32, stderr: &str) -> Option<UploadOutcome> {
     }
 }
 
-/// Modes no TQSL configuration knows yet, as the MODE a contact goes out under. TQSL run with
+/// Modes no TQSL configuration knows yet, as the SUBMODE a contact goes out under. TQSL run with
 /// `-a compliant` skips such a record silently and exits 9, which [`classify_tqsl_exit`] must
 /// read as Rejected for the WHOLE batch (it cannot tell which record went); so a contact under
 /// one of these is held back from the batch instead, left unsent, and the upload says so.
 ///
-/// JTTY: WSJT-X's keyboard mode, written bare as WSJT-X writes it (operator ruling,
-/// 2026-10-08). It is in neither the ADIF 3.1.7 mode enumeration nor TQSL's configuration (the
-/// 11.8 configuration was checked). Take it out of this list when TQSL's configuration carries
-/// the mode; until then a JTTY contact reaches LoTW only from a log that files it under MFSK.
-const TQSL_UNKNOWN_MODES: [&str; 1] = ["JTTY"];
+/// JTTY: WSJT-X's keyboard mode, written `MODE=MFSK SUBMODE=JTTY` as ADIF 3.1.8 registers it.
+/// LoTW does not list the mode yet (TQSL's 11.8 configuration was checked). Take it out of this
+/// list when LoTW lists JTTY; until then every JTTY contact, under either spelling it was read
+/// in, is held back.
+const TQSL_UNKNOWN_SUBMODES: [&str; 1] = ["JTTY"];
 
-/// Whether TQSL would drop `r`: it goes out under a bare MODE TQSL does not know
-/// ([`TQSL_UNKNOWN_MODES`]). A JTTY contact read as `MODE=MFSK SUBMODE=JTTY` goes back out under
-/// MFSK, which TQSL places, so it is not one.
+/// Whether TQSL would drop `r`: it goes out under a SUBMODE LoTW does not list
+/// ([`TQSL_UNKNOWN_SUBMODES`]).
 pub fn tqsl_drops(r: &crate::logbook::QsoRecord) -> bool {
-    crate::logbook::adif_mode(r).is_some_and(|m| {
-        TQSL_UNKNOWN_MODES
+    crate::logbook::adif_submode(&r.mode).is_some_and(|(_, sub)| {
+        TQSL_UNKNOWN_SUBMODES
             .iter()
-            .any(|u| m.trim().eq_ignore_ascii_case(u))
+            .any(|u| sub.eq_ignore_ascii_case(u))
     })
 }
 
@@ -397,23 +396,32 @@ mod tests {
         assert!(sanitize_detail(&long).unwrap().chars().count() <= 200);
     }
 
-    /// TQSL drops a bare JTTY (no configuration it ships knows the mode yet), so the upload
-    /// holds such a contact back rather than let TQSL lose it. Filed under MFSK, as another
-    /// logger may file it, it goes; and so does every mode TQSL knows.
+    /// TQSL does not know JTTY yet, so the upload holds every JTTY contact back rather than let
+    /// TQSL lose it: one logged here, and one read under either spelling, all of which go out as
+    /// `MODE=MFSK SUBMODE=JTTY`. Every mode TQSL knows goes, MFSK's other submodes among them.
     #[test]
-    fn tqsl_drops_a_bare_jtty_and_nothing_else() {
+    fn tqsl_drops_every_jtty_contact_and_nothing_else() {
         let row = |mode: &str| {
             crate::logbook::parse_adif(&format!(
                 "<EOH><CALL:5>C56YK<QSO_DATE:8>20260701<TIME_ON:6>012345<BAND:3>20m{mode}<EOR>"
             ))
             .remove(0)
         };
-        assert!(tqsl_drops(&row("<MODE:4>JTTY")));
-        assert!(tqsl_drops(&row("<MODE:4>jtty")));
-        for kept in [
+        let mut own = row("<MODE:3>FT8");
+        own.mode = "JTTY".into();
+        assert!(tqsl_drops(&own), "a JTTY contact logged here");
+        for held in [
+            "<MODE:4>JTTY",
+            "<MODE:4>jtty",
             "<MODE:4>MFSK<SUBMODE:4>JTTY",
+            "<MODE:4>mfsk<SUBMODE:4>jtty",
+        ] {
+            assert!(tqsl_drops(&row(held)), "{held}");
+        }
+        for kept in [
             "<MODE:3>FT8",
             "<MODE:4>MFSK<SUBMODE:3>FT4",
+            "<MODE:4>MFSK",
             "<MODE:4>RTTY",
             "<MODE:3>PSK<SUBMODE:5>PSK31",
             "<MODE:4>MFSK<SUBMODE:9>TEMPOFAST",
