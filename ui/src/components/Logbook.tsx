@@ -27,6 +27,8 @@ import { ParkStateReview } from './ParkStateReview'
 import { ConfirmationReview } from './ConfirmationReview'
 import { LogCountryPicker } from './LogCountryPicker'
 import { LogColumnsMenu } from './LogColumnsMenu'
+import { LogFilterBar } from './LogFilterBar'
+import { clickSort, sortPlace, type LogFilter, type LogSort } from '../features/logFilter'
 import { useViewportClass, useViewportSize } from '../useViewport'
 import {
   addedColumnText,
@@ -432,6 +434,9 @@ export function Logbook({
   // Filter to contacts still lacking an award-eligible confirmation (the DX
   // chaser's "who do I still need a card/LoTW from" view).
   const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
+  // The field filters (features/logFilter), answered by the engine; deferred as the search is.
+  const [filter, setFilter] = useState<LogFilter>({})
+  const deferredFilter = useDeferredValue(filter)
   // The rows picked for "Export selected", by contact id, and the row a Shift-click's run starts
   // from. A new search or filter clears them: a picked row the list no longer shows would be
   // exported unseen.
@@ -440,7 +445,7 @@ export function Logbook({
   useEffect(() => {
     pickAnchor.current = null
     setPicked((was) => (was.size ? new Set() : was))
-  }, [deferredSearch, needsConfirmOnly])
+  }, [deferredSearch, needsConfirmOnly, deferredFilter])
   // THE COLUMNS (features/logColumns.ts). The choice is the one this view just made, else the saved
   // one, else — nothing saved yet — the table this browser had ("More columns", #239). Clamped on
   // every read against the window it is shown on, never only when it was dragged.
@@ -507,8 +512,8 @@ export function Logbook({
   // Re-spot a logged contact to the cluster (row 📢): seeded with the row's call,
   // frequency and mode (operator ask 2026-07-21).
   const [spotSeed, setSpotSeed] = useState<{ call: string; freq: number; mode: string } | null>(null)
-  const [sortKey, setSortKey] = useState<SortKey>('time')
-  const [sortAsc, setSortAsc] = useState(false)
+  // Up to three keys: a header click orders by its column, a Shift-click adds it (features/logFilter).
+  const [sort, setSort] = useState<LogSort>({ sort: 'time', asc: false, then: [] })
   // Export date range (#98) — "YYYY-MM-DD" UTC or '' = unbounded. Both empty = whole log.
   const [exportFrom, setExportFrom] = useState('')
   const [exportTo, setExportTo] = useState('')
@@ -1042,8 +1047,15 @@ export function Logbook({
   // order — the first here, for the count; the rest below, for the rows on screen — and holds only
   // those. A page is cut by `features/logQuery`, the filter and sort this view used to run itself.
   const query = useMemo<LogQuery>(
-    () => ({ sort: sortKey, asc: sortAsc, search: deferredSearch, needsConfirmOnly }),
-    [sortKey, sortAsc, deferredSearch, needsConfirmOnly],
+    () => ({
+      sort: sort.sort,
+      asc: sort.asc,
+      search: deferredSearch,
+      needsConfirmOnly,
+      ...(sort.then.length ? { then: sort.then } : {}),
+      ...(Object.keys(deferredFilter).length ? { filter: deferredFilter } : {}),
+    }),
+    [sort, deferredSearch, needsConfirmOnly, deferredFilter],
   )
   const queryKey = logQueryKey(query)
   const firstPage = { kind: 'page', query, offset: 0, limit: LOG_PAGE } as const
@@ -1863,28 +1875,27 @@ export function Logbook({
   }
 
   // A clickable, sort-toggling column header. Clicking the active column flips direction;
-  // clicking a new column jumps to its sensible default direction.
-  const th = (c: LogColumn, k: SortKey) => (
-    <button
-      key={c.id}
-      type="button"
-      className={`log-cell log-th${sortKey === k ? ' sorted' : ''}`}
-      role="columnheader"
-      aria-sort={sortKey === k ? (sortAsc ? 'ascending' : 'descending') : 'none'}
-      onClick={() => {
-        if (sortKey === k) setSortAsc((v) => !v)
-        else {
-          setSortKey(k)
-          setSortAsc(defaultAsc(k))
-        }
-      }}
-      onKeyDown={(e) => resizeByKey(e, c)}
-    >
-      {columnLabel(c)}
-      {sortKey === k ? (sortAsc ? ' ▲' : ' ▼') : ''}
-      {resizeHandle(c)}
-    </button>
-  )
+  // clicking a new column jumps to its sensible default direction; Shift adds it as the next key.
+  const th = (c: LogColumn, k: SortKey) => {
+    const at = sortPlace(sort, k)
+    return (
+      <button
+        key={c.id}
+        type="button"
+        className={`log-cell log-th${at ? ' sorted' : ''}`}
+        role="columnheader"
+        aria-sort={at?.place === 1 ? (at.asc ? 'ascending' : 'descending') : 'none'}
+        title={t('logbook.sort.shiftHint')}
+        onClick={(e) => setSort((cur) => clickSort(cur, k, e.shiftKey, defaultAsc))}
+        onKeyDown={(e) => resizeByKey(e, c)}
+      >
+        {columnLabel(c)}
+        {at ? (at.asc ? ' ▲' : ' ▼') : ''}
+        {at && (sort.then.length > 0) && <span className="log-th-place">{at.place}</span>}
+        {resizeHandle(c)}
+      </button>
+    )
+  }
 
   return (
     <section className="panel log-view logbook">
@@ -2602,6 +2613,7 @@ export function Logbook({
         >
           {t('logbook.filter.needsConfirmation.label')}
         </button>
+        <LogFilterBar filter={filter} onChange={setFilter} />
         {/* The column chooser (features/logColumns.ts). It took the place of "More columns" (#239),
             which showed eight extra columns or none. */}
         <LogColumnsMenu choice={colChoice} onChange={changeColumns} onReset={resetColumns} />
@@ -2616,8 +2628,8 @@ export function Logbook({
               Time header sort on the SAME key, because a record carries ONE instant: there is no
               ordering by time of day that ignores the date, and a header that looks like its
               neighbours while doing nothing is worse than two that say they order the same thing.
-              Free-text and added columns do not sort: sorting a log by remark answers no question
-              an operator asks, and a tag the log keeps only as passthrough has no index to sort by. */}
+              Free-text columns do not sort: sorting a log by remark answers no question an
+              operator asks. Of the passthrough tags only the county sorts, which has an index. */}
           {cols.map((c) =>
             c.sort ? (
               th(c, c.sort)

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Logbook filters, saved filters and sorting on up to three columns.** The new Filters button beside the search box filters the whole log by call (prefix or `*`/`?` pattern), band, mode, dates, DXCC entity, continent, CQ and ITU zone, grid, state, county, IOTA, park or summit reference, contest, words in the comment, name or QTH, QSL state per service (LoTW, eQSL, card, QRZ: confirmed, sent, not sent; Club Log: sent, not sent) and award need (contacts whose DXCC, WAS, WAZ, VUCC or FFMA band slot is worked but not yet confirmed). Save a filter under a name, recall, rename or delete it. Shift-click a column header to sort by it next; grid, state, IOTA, county and contest now sort too.
 - **Callbook answers are kept on this computer.** A call you looked up is answered from a local cache for 30 days (Settings ▸ Logging & Connectors ▸ Confirmations ▸ Callbook cache, adjustable), and offline at any age; refresh one call or clear the whole cache there. No password or sign-in key is ever kept. US calls that QRZ and HamQTH do not answer are also asked of the free callook.info.
 - **Station card.** Click a call (or press Enter on it) in the Logbook, Spots, the decode list's QRZ
   link, the roster's ↗ and the station cards' QRZ, the map's path line or the log strip's new Card button, and one card shows what

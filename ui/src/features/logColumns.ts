@@ -47,8 +47,10 @@ export interface LogColumn {
   narrow?: boolean
   /** Cannot be hidden: the callsign names the row, the actions are its controls. */
   fixed?: boolean
-  /** The engine's sort for it. Only modelled fields sort: an `extra`-only tag would scan every
-   *  passthrough row of the log to order it. */
+  /** The engine's sort for it. Modelled fields sort, and of the `extra`-only tags the county:
+   *  the store indexes it (`qso_extra_cnty`, which its filter reads) and the order reads it by the
+   *  passthrough's own key, one lookup per contact, as the search reads the SUBMODE. Any other
+   *  passthrough tag stays unsorted until it has an index of its own. */
   sort?: LogSortKey
   /** The catalog parameter the label takes, if any (the upload columns name their service). */
   labelVars?: Record<string, string>
@@ -78,13 +80,13 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { id: 'myRig', labelKey: 'logbook.column.myRig', track: '1.1fr', minPx: 40, group: 'station', more: true },
   { id: 'name', labelKey: 'logbook.column.name', track: '1fr', minPx: 40, group: 'contact', more: true },
   { id: 'qth', labelKey: 'logbook.column.qth', track: '1fr', minPx: 40, group: 'location', more: true },
-  { id: 'state', labelKey: 'logbook.column.state', track: '0.5fr', minPx: 32, group: 'location', more: true },
+  { id: 'state', labelKey: 'logbook.column.state', track: '0.5fr', minPx: 32, group: 'location', more: true, sort: 'state' },
   { id: 'power', labelKey: 'logbook.column.power', track: '0.6fr', minPx: 32, group: 'station', more: true },
   { id: 'operator', labelKey: 'logbook.column.operator', track: '0.8fr', minPx: 40, group: 'station', more: true },
   // What the log stores and the table never showed. Off until the operator turns one on.
-  { id: 'grid', labelKey: 'logbook.column.grid', track: '0.7fr', minPx: 40, group: 'location' },
-  { id: 'iota', labelKey: 'logbook.column.iota', track: '0.7fr', minPx: 40, group: 'location' },
-  { id: 'county', labelKey: 'logbook.column.county', track: '1fr', minPx: 40, group: 'location' },
+  { id: 'grid', labelKey: 'logbook.column.grid', track: '0.7fr', minPx: 40, group: 'location', sort: 'grid' },
+  { id: 'iota', labelKey: 'logbook.column.iota', track: '0.7fr', minPx: 40, group: 'location', sort: 'iota' },
+  { id: 'county', labelKey: 'logbook.column.county', track: '1fr', minPx: 40, group: 'location', sort: 'county' },
   { id: 'cqz', labelKey: 'logbook.column.cqz', track: '0.5fr', minPx: 28, group: 'location' },
   { id: 'ituz', labelKey: 'logbook.column.ituz', track: '0.5fr', minPx: 28, group: 'location' },
   { id: 'cont', labelKey: 'logbook.column.cont', track: '0.5fr', minPx: 28, group: 'location' },
@@ -97,7 +99,7 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { id: 'upEqsl', labelKey: 'logbook.column.upload', labelVars: { service: 'eQSL' }, track: '0.6fr', minPx: 28, group: 'uploads' },
   { id: 'upQrz', labelKey: 'logbook.column.upload', labelVars: { service: 'QRZ' }, track: '0.6fr', minPx: 28, group: 'uploads' },
   { id: 'upClublog', labelKey: 'logbook.column.upload', labelVars: { service: 'Club Log' }, track: '0.6fr', minPx: 28, group: 'uploads' },
-  { id: 'contest', labelKey: 'logbook.column.contest', track: '1fr', minPx: 48, group: 'contest' },
+  { id: 'contest', labelKey: 'logbook.column.contest', track: '1fr', minPx: 48, group: 'contest', sort: 'contest' },
   { id: 'exchSent', labelKey: 'logbook.column.exchSent', track: '1fr', minPx: 40, group: 'contest' },
   { id: 'exchRcvd', labelKey: 'logbook.column.exchRcvd', track: '1fr', minPx: 40, group: 'contest' },
   // The tail: the notes, then the controls.

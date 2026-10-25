@@ -17756,9 +17756,49 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .log-searchbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: var(--space-2) var(--space-3);
+}
+/* The Logbook's field filters: a panel on its own line under the search box. It sits in the pinned
+   block above the rows, so it is bounded and scrolls inside itself rather than pushing the rows
+   off a short window. */
+.log-filter-panel {
+  flex: 1 0 100%;
+  max-height: calc(0.4 * var(--vh-eff, 100vh));
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  background: var(--bg);
+}
+.log-filter-saved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px;
+  margin-bottom: var(--space-2);
+}
+.log-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(9.5rem, 100%), 1fr));
+  gap: var(--space-1) var(--space-2);
+}
+.log-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.log-filter-field .settings-input {
+  min-width: 0;
+}
+.log-th-place {
+  font-size: var(--fs-micro);
+  vertical-align: super;
 }
 .log-search {
   flex: 1 1 auto;

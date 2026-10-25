@@ -7095,6 +7095,8 @@ impl Engine {
         // The Logbook's column choice: ONE WRITER (`set_logbook_columns`), saved the moment it is
         // made, so a payload read before it would put an older choice back.
         let live_logbook_columns = self.settings.logbook_columns.take();
+        // The Logbook's named filters: ONE WRITER (`set_logbook_filters`), for the same reason.
+        let live_logbook_filters = std::mem::take(&mut self.settings.logbook_filters);
         // The RETIRED wanted list (operator 2026-09-24, "One list"): read once by the desktop's
         // fold into the watch list and then emptied by its one writer, `retire_wanted_calls`. A
         // form payload is a snapshot that may predate the fold, and writing its copy back would
@@ -7218,6 +7220,7 @@ impl Engine {
             ) = live_js8_wf;
             self.settings.remote_autostart_offer_answered = live_remote_autostart_offer_answered;
             self.settings.logbook_columns = live_logbook_columns;
+            self.settings.logbook_filters = live_logbook_filters;
             self.settings.macros.rtty_profiles = live_rtty_profiles;
             self.settings.macros.active_rtty_profile = live_active_rtty_profile;
             self.settings.macros.psk_profiles = live_psk_profiles;
@@ -7834,6 +7837,17 @@ impl Engine {
         columns: Option<crate::settings::LogbookColumns>,
     ) -> &Settings {
         self.settings.logbook_columns = columns;
+        &self.settings
+    }
+
+    /// **THE ONE WRITER of `logbook_filters`**: the Logbook's named filters, the whole list each
+    /// time one is saved, renamed or deleted. Never a form save, for `set_logbook_columns`'
+    /// reasons. The caller persists.
+    pub fn set_logbook_filters(
+        &mut self,
+        filters: Vec<crate::settings::SavedLogFilter>,
+    ) -> &Settings {
+        self.settings.logbook_filters = filters;
         &self.settings
     }
 
@@ -40081,6 +40095,33 @@ mod tests {
     /// snapshot from whenever the sending surface last read the settings — saved later, its copy
     /// would put an older choice back. A restore or a factory reset is the other contract, and
     /// takes the bundle's.
+    #[test]
+    fn a_form_save_cannot_move_the_logbook_filters() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let saved = vec![crate::settings::SavedLogFilter {
+            name: "DX on 20".into(),
+            filter: serde_json::json!({"band": "20m", "need": "dxcc"}),
+        }];
+        let stale = e.settings().clone();
+        e.set_logbook_filters(saved.clone());
+        assert_eq!(e.settings().logbook_filters, saved, "the verb moves them");
+        e.apply_settings(stale);
+        assert_eq!(
+            e.settings().logbook_filters,
+            saved,
+            "a stale form payload put the old list back"
+        );
+        // The positive control: the verb empties it, and a reset takes the bundle's.
+        e.set_logbook_filters(Vec::new());
+        assert!(e.settings().logbook_filters.is_empty());
+        e.set_logbook_filters(saved);
+        e.apply_restored_settings(Settings::default());
+        assert!(
+            e.settings().logbook_filters.is_empty(),
+            "a reset keeps nothing it promised to clear"
+        );
+    }
+
     #[test]
     fn a_form_save_cannot_move_the_logbook_columns() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);

@@ -146,10 +146,12 @@ describe('the added columns show what the store holds', () => {
     expect(table(container).style.getPropertyValue('--log-min-w')).toMatch(/rem$/)
   })
 
-  it('an added column is not sortable: its header is not a button', async () => {
+  it('an added column sorts only where the engine can order it: its header is a button or not', async () => {
     await renderLog({ columns: ALL_ADDED })
-    const county = screen.getAllByRole('columnheader').find((x) => x.textContent?.startsWith('County'))
-    expect(county?.tagName).toBe('SPAN')
+    const header = (name: string) => screen.getAllByRole('columnheader').find((x) => x.textContent?.startsWith(name))
+    // A passthrough tag with no index does not sort; the county, which the store indexes, does.
+    expect(header('CQ zone')?.tagName).toBe('SPAN')
+    expect(header('County')?.tagName).toBe('BUTTON')
     expect(screen.getByRole('columnheader', { name: 'Call' }).tagName).toBe('BUTTON')
   })
 })
