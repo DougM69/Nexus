@@ -12,7 +12,7 @@
 // Preview first: how many contacts it would change and how many are already so. The button then
 // names that count, and asks once more, in the dialog, before it changes anything. The change is
 // made on exactly the contacts the preview counted (their ids, handed back with the count
-// confirmed, which the station checks), and a change of the contacts chosen, the filter or a field
+// confirmed and the moves ticked for, which the station checks), and a change of the contacts chosen, the filter or a field
 // makes the preview stale. The change is one change the toast's Undo takes back.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Field names are ADIF
@@ -99,7 +99,8 @@ export function LogBulkEdit({
     setBusy(true)
     setAsking(false)
     const made = await withErrorToast(
-      () => bulkEditApply(preview.ids, preview.selected, changes()),
+      // The moves the operator ticked: the station refuses the change if it now finds others.
+      () => bulkEditApply(preview.ids, preview.selected, moves, moves > 0 ? preview.moveTo : null, changes()),
       t('logbook.tools.bulk.failed'),
     )
     inFlight.current = false

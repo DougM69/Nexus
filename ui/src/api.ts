@@ -1681,7 +1681,8 @@ export interface UndoAnswer {
   run: string | null
   kept: string[]
   held: string[]
-  /** The call in Settings a held blank station call would have sent the contacts under. */
+  /** The call in Settings a held blank station call would have sent the contacts under; `null`
+   *  when Settings names none. */
   heldUnder: string | null
   gone: number
   alreadyThere: number
@@ -1835,9 +1836,16 @@ export async function bulkEditPreview(target: BulkTarget, changes: FieldChange[]
 }
 
 /** The change, on exactly the contacts a preview counted (`preview.ids`): refused, changing nothing,
- *  unless they are the `expectCount` the operator confirmed. */
-export async function bulkEditApply(ids: string[], expectCount: number, changes: FieldChange[]): Promise<ToolRun> {
-  return invoke<ToolRun>('bulk_edit_apply', { ids, expectCount, changes })
+ *  unless they are the `expectCount` the operator confirmed and the contacts it sends under another
+ *  call are still the `expectMoves` under `expectMoveTo` the operator acknowledged. */
+export async function bulkEditApply(
+  ids: string[],
+  expectCount: number,
+  expectMoves: number,
+  expectMoveTo: string | null,
+  changes: FieldChange[],
+): Promise<ToolRun> {
+  return invoke<ToolRun>('bulk_edit_apply', { ids, expectCount, expectMoves, expectMoveTo, changes })
 }
 
 /** One problem the check found. `fix`: the proposed change (`value: null` clears the field), or

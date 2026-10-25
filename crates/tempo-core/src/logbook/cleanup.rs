@@ -39,12 +39,14 @@
 //!   the next upload sends it. Where the kept copy's time is the uploaded copy's (one contact
 //!   imported twice) the service already holds that QSO and answers Duplicate; where the copies
 //!   were logged minutes apart, a service that matches on the time may keep both, and nothing here
-//!   can take one back. **One exception:** a copy whose station call is the kept copy's but for a
-//!   portable `/P` (`KD9TAW/P` beside `KD9TAW`) is the same QSO to these tools but another record
-//!   to LoTW, which can delete neither. A service only it was sent to keeps its stamp on the merged
-//!   contact, whichever spelling the merge keeps, so the next upload never signs the QSO a second
-//!   time under the other one. An undo of the merge leaves that stamp, as a `/P` edit leaves its
-//!   stamps: the same station call, and the restored copy carries its own;
+//!   can take one back. **One exception:** a copy whose station call is the merged contact's, or
+//!   the kept copy's, but for a portable `/P` (`KD9TAW/P` beside `KD9TAW`) is the same QSO to these
+//!   tools but another record to LoTW, which can delete neither. A service only it was sent to
+//!   keeps its stamp on the merged contact, whichever spelling the merge puts on it and whichever
+//!   copy is kept (a kept copy naming no station call too), so the next upload never signs the QSO
+//!   a second time under the other one. A copy spelled as both the merged contact and the kept
+//!   copy are takes the rule above. An undo of the merge leaves a carried stamp, as a `/P` edit
+//!   leaves its stamps: the same station call, and the restored copy carries its own;
 //! - a field two copies hold DIFFERENT values for is a [`Conflict`]: the merged contact takes the
 //!   value the caller chose, else the kept copy's (else the first copy's that has one). A conflict
 //!   is **guarded** — it must be chosen, never defaulted — when it is the contest exchange, the
@@ -900,17 +902,19 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
         list.sort();
         list.dedup();
     }
-    // A copy whose station call is the kept copy's but for a portable `/P` is the same QSO here
-    // and another record on LoTW: its upload's stamp comes to the merged contact, so the next
-    // upload does not sign it again under the other spelling.
+    // A copy whose station call is the merged contact's, or the kept copy's, but for a portable
+    // `/P` is the same QSO here and another record on LoTW: its upload's stamp comes to the merged
+    // contact, so the next upload does not sign it again under the spelling the merge put on it.
     let spelled = |r: &QsoRecord| text(&r.station_callsign).map(|c| c.to_ascii_uppercase());
-    let under = station_call(kept, None);
-    for r in order[1..].iter().filter(|r| {
-        call_key(&r.call) == call
-            && under.is_some()
-            && station_call(r, None) == under
-            && spelled(r) != spelled(kept)
-    }) {
+    let apart = |x: &(Option<String>, Option<String>), r: &QsoRecord| {
+        x.0.is_some() && station_call(r, None) == x.0 && spelled(r) != x.1
+    };
+    let merged = (station_call(&out, None), spelled(&out));
+    let kept = (station_call(kept, None), spelled(kept));
+    for r in order[1..]
+        .iter()
+        .filter(|r| call_key(&r.call) == call && (apart(&merged, r) || apart(&kept, r)))
+    {
         let (o, u) = (&mut out.upload, &r.upload);
         for (mine, theirs) in [
             (&mut o.lotw, &u.lotw),

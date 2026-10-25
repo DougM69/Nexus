@@ -1191,3 +1191,72 @@ fn a_merge_of_copies_a_portable_p_apart_keeps_the_sent_copys_stamps() {
     let merged = merge(&[a.clone(), b], 0, &HashMap::new()).record;
     assert_eq!(merged.upload, a.upload);
 }
+
+/// ★ THE CARRY FOLLOWS THE MERGED CONTACT'S SPELLING. Three copies: the kept one KD9TAW and unsent,
+/// one KD9TAW/P and unsent, one KD9TAW and sent to LoTW. The operator picks the /P spelling: the
+/// merged KD9TAW/P would sign a second LoTW QSO, so the plain copy's stamp comes with it. And a
+/// kept copy naming no station call: the merged contact takes the /P spelling, the plain copy was
+/// sent, and its stamp comes too.
+#[test]
+fn a_merge_carries_a_stamp_sent_under_another_spelling_than_the_merged_contacts() {
+    let kept = {
+        let mut r = contact("W1AW", T0, 1);
+        r.station_callsign = Some("KD9TAW".into());
+        r
+    };
+    let mut portable = contact("W1AW", T0 + 60, 2);
+    portable.station_callsign = Some("KD9TAW/P".into());
+    let mut sent = contact("W1AW", T0 + 120, 3);
+    sent.station_callsign = Some("KD9TAW".into());
+    sent.upload.lotw = stamp(100);
+    let choices = HashMap::from([("STATION_CALLSIGN".to_string(), portable.id.unwrap())]);
+    let merged = merge(&[kept, portable.clone(), sent.clone()], 0, &choices).record;
+    assert_eq!(merged.station_callsign.as_deref(), Some("KD9TAW/P"));
+    assert_eq!(
+        merged.upload.lotw, sent.upload.lotw,
+        "not owed to LoTW under /P"
+    );
+    assert_eq!(merged.upload.eqsl, None);
+
+    // The kept copy names no station call (Settings KD9TAW): the /P spelling chosen.
+    let blank = contact("W1AW", T0, 1);
+    let choices = HashMap::from([("STATION_CALLSIGN".to_string(), portable.id.unwrap())]);
+    let merged = merge(&[blank, sent.clone(), portable], 0, &choices).record;
+    assert_eq!(merged.station_callsign.as_deref(), Some("KD9TAW/P"));
+    assert_eq!(
+        merged.upload.lotw, sent.upload.lotw,
+        "not owed to LoTW under /P"
+    );
+}
+
+/// ★ A STAMP UNDER THE SAME SPELLING, ANOTHER CALL OR ANOTHER WORKED STATION STAYS ITS OWN. Copies
+/// all spelled KD9TAW keep the rule every merge has: the kept copy's stamps are its own, even
+/// where another copy was sent. A copy under KD9TAW/M, another call, carries nothing, nor does a
+/// /P copy of another worked call.
+#[test]
+fn a_merge_carries_no_stamp_of_the_same_spelling_another_call_or_another_worked_station() {
+    let mut kept = contact("W1AW", T0, 1);
+    kept.station_callsign = Some("KD9TAW".into());
+    let mut same = contact("W1AW", T0 + 60, 2);
+    same.station_callsign = Some("kd9taw".into());
+    same.upload.lotw = stamp(100);
+    let merged = merge(&[kept.clone(), same], 0, &HashMap::new()).record;
+    assert_eq!(
+        merged.upload.lotw, None,
+        "the same spelling: the kept copy's own"
+    );
+
+    let mut mobile = contact("W1AW", T0 + 60, 2);
+    mobile.station_callsign = Some("KD9TAW/M".into());
+    mobile.upload.lotw = stamp(100);
+    let choices = HashMap::from([("STATION_CALLSIGN".to_string(), mobile.id.unwrap())]);
+    let merged = merge(&[kept.clone(), mobile], 0, &choices).record;
+    assert_eq!(merged.station_callsign.as_deref(), Some("KD9TAW/M"));
+    assert_eq!(merged.upload.lotw, None, "/M is another call");
+
+    let mut other = contact("W1AW/4", T0 + 60, 2);
+    other.station_callsign = Some("KD9TAW/P".into());
+    other.upload.lotw = stamp(100);
+    let merged = merge(&[kept, other], 0, &HashMap::new()).record;
+    assert_eq!(merged.upload.lotw, None, "another worked call");
+}

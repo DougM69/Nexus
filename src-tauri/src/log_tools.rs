@@ -256,7 +256,7 @@ pub struct BulkPreviewDto {
     pub unconfirm: usize,
     /// Of those it changes, the ones a filled or cleared station call sends to a service not yet
     /// sent them under another call than before; `move_to` that call, `move_from` the calls they
-    /// went under.
+    /// went under, each as sent (a portable `/P` kept).
     pub moves: usize,
     pub move_to: Option<String>,
     pub move_from: Vec<String>,
@@ -292,19 +292,27 @@ pub async fn bulk_edit_preview(
 }
 
 /// Set or clear fields on the contacts the preview counted — `ids`, as the preview answered them —
-/// as ONE run, only while they are the `expect_count` the operator confirmed. Never the worked
-/// call; sends nothing.
+/// as ONE run, only while they are the `expect_count` the operator confirmed, and the contacts it
+/// sends under another call are still the `expect_moves` under `expect_move_to` the operator
+/// acknowledged (none, unless the confirm's tick was given). Never the worked call; sends nothing.
 #[tauri::command]
 pub async fn bulk_edit_apply(
     state: State<'_, SharedEngine>,
     ids: Vec<String>,
     expect_count: usize,
+    expect_moves: usize,
+    expect_move_to: Option<String>,
     changes: Vec<Change>,
 ) -> Result<ToolRunDto, String> {
     let ids: Vec<RecordId> = ids.iter().map(|id| id_of(id)).collect::<Result<_, _>>()?;
     let engine = Arc::clone(&state);
+    let acknowledged = logtools::MovesAck {
+        moves: expect_moves,
+        move_to: expect_move_to,
+    };
     durable_command(move || {
-        let (made, durability) = logtools::bulk_edit(&engine, &ids, expect_count, &changes);
+        let (made, durability) =
+            logtools::bulk_edit(&engine, &ids, expect_count, &acknowledged, &changes);
         (made.map(run_dto), durability)
     })
     .await

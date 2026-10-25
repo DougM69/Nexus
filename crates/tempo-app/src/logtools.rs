@@ -42,7 +42,8 @@
 //!   station call, clearing one, or adding or taking off a portable `/P` changes the field and
 //!   nothing else, whatever the call in Settings is; but a contact naming none is uploaded under
 //!   the Settings call, so the preview counts those a fill or a clear sends under another call to
-//!   a service not yet sent them ([`BulkPreview::moves`]). It is not queued here. The LoTW, eQSL and QRZ confirmations matched
+//!   a service not yet sent them ([`BulkPreview::moves`]), and the edit is refused, changing
+//!   nothing, unless they are still the ones the operator acknowledged ([`MovesAck`]). It is not queued here. The LoTW, eQSL and QRZ confirmations matched
 //!   under the old call go too; a paper card and the credit codes stay (`cleanup`'s header; the
 //!   preview counts them, [`BulkPreview::unconfirm`]), and the run's undo puts them back. A
 //!   push answered after the change is not stamped on it, unless only a `/P` changed
@@ -72,6 +73,7 @@ use tempo_core::logbook::cleanup::{self, Change, Conflict, DupeKey, Field};
 use tempo_core::logbook::history::{content_key, Source};
 use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
 use tempo_core::logbook::{OpClass, QsoRecord, RecordId};
+use tempo_core::reconcile::lotw_own_call;
 
 use crate::engine::{engine_lock, Engine};
 use crate::loghistory::{new_run, Origin};
@@ -476,10 +478,20 @@ pub struct BulkPreview {
     /// sent them under another call than before ([`cleanup::moves`]): a contact naming none goes
     /// under the call in Settings. Their stamps stay.
     pub moves: usize,
-    /// The call those go under now ([`cleanup::station_call`]). `None` when none moves.
+    /// The call those go under now, as the upload sends it, a portable `/P` kept
+    /// ([`tempo_core::reconcile::lotw_own_call`]). `None` when none moves.
     pub move_to: Option<String>,
-    /// The calls they went under before, sorted, each once.
+    /// The calls they went under before, as sent, sorted, each once.
     pub move_from: Vec<String>,
+}
+
+/// The contacts a preview said a fill or clear sends under another call ([`BulkPreview::moves`],
+/// [`BulkPreview::move_to`]), as the operator acknowledged them: [`bulk_edit`] changes nothing
+/// unless they are still what it finds. `Default` acknowledges none.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MovesAck {
+    pub moves: usize,
+    pub move_to: Option<String>,
 }
 
 /// Only fields a bulk edit offers, each value of its field's form.
@@ -529,10 +541,11 @@ pub fn bulk_preview(
                         }
                     }
                     out.unconfirm += cleanup::confirmations_cleared(row, &after);
+                    // Decided /P aside, named as sent: LoTW holds KD9TAW/P and KD9TAW apart.
                     if cleanup::moves(row, &after, settings_call) {
                         out.moves += 1;
-                        out.move_to = cleanup::station_call(&after, settings_call);
-                        from.extend(cleanup::station_call(row, settings_call));
+                        out.move_to = lotw_own_call(&after, settings_call);
+                        from.extend(lotw_own_call(row, settings_call));
                     }
                 }
                 None => out.unchanged += 1,
@@ -547,17 +560,26 @@ pub fn bulk_preview(
 pub const NOT_AS_PREVIEWED: &str =
     "The contacts to change are not the ones previewed: preview again. Nothing was changed.";
 
+/// What a bulk edit answers when the contacts it would send under another call are not the ones
+/// the operator acknowledged — the call in Settings changed since the preview, say.
+pub const MOVES_NOT_AS_ACKNOWLEDGED: &str =
+    "The contacts this change would send under another call are not the ones you \
+     acknowledged (has the call in Settings changed?): preview again. Nothing was changed.";
+
 /// ★ Set or clear `changes` on every contact `ids` names — the ids the preview was made of — as
 /// ONE run of the history. Refused, changing nothing, unless they are `expect` contacts: the count
-/// the operator confirmed. Never the worked call: every confirmation and upload stamp stays but a
+/// the operator confirmed, and unless the contacts a fill or clear sends under another call are
+/// still the ones `acknowledged` names ([`MovesAck`]). Never the worked call: every confirmation and upload stamp stays but a
 /// changed station call's (a paper card stays even then), and nothing is sent (see the module header). A contact no
 /// longer in the log is named `gone`.
 pub fn bulk_edit(
     engine: &Mutex<Engine>,
     ids: &[RecordId],
     expect: usize,
+    acknowledged: &MovesAck,
     changes: &[Change],
 ) -> (Result<ToolRun, String>, Durability) {
+    let raw = changes;
     let changes = match bulk_changes(changes) {
         Ok(c) => c,
         Err(e) => return (Err(e), Durability::default()),
@@ -566,6 +588,13 @@ pub fn bulk_edit(
     let ids: Vec<RecordId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
     if ids.len() != expect {
         return (Err(NOT_AS_PREVIEWED.into()), Durability::default());
+    }
+    // The contacts it sends under another call, read again now: never ones the operator did not
+    // acknowledge.
+    match bulk_preview(engine, &ids, raw) {
+        Ok(p) if p.moves == acknowledged.moves && p.move_to == acknowledged.move_to => {}
+        Ok(_) => return (Err(MOVES_NOT_AS_ACKNOWLEDGED.into()), Durability::default()),
+        Err(e) => return (Err(e), Durability::default()),
     }
     let country = country_rule(engine);
     let parts: Vec<Vec<RecordId>> = ids.chunks(CHUNK).map(<[RecordId]>::to_vec).collect();

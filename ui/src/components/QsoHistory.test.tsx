@@ -118,6 +118,18 @@ describe("a contact's history", () => {
     expect(toasts.some((x) => x.message === 'Nothing redone: STATION_CALLSIGN was kept. Put back blank, these contacts would be sent under KD9NEW, the call in Settings now.')).toBe(true)
   })
 
+  it('says Settings has no call when it names none, never an empty call', () => {
+    const held = { held: ['STATION_CALLSIGN'], heldUnder: null }
+    sayUndone({ ...done, changed: 2, ...held }, 'Fill undone', () => {})
+    const said = toasts.find((x) => x.message.startsWith('Fill undone'))?.message ?? ''
+    expect(said).toBe('Fill undone; STATION_CALLSIGN kept: put back blank, these contacts would name no station call, and Settings has no call either')
+    sayUndone({ ...done, changed: 0, run: null, ...held }, 'Change undone', () => {})
+    expect(toasts.some((x) => x.message === 'Nothing undone: STATION_CALLSIGN was kept. Put back blank, these contacts would name no station call, and Settings has no call either.')).toBe(true)
+    sayUndone({ ...done, changed: 0, run: null, ...held }, 'Change made again', () => {}, true)
+    expect(toasts.some((x) => x.message === 'Nothing redone: STATION_CALLSIGN was kept. Put back blank, these contacts would name no station call, and Settings has no call either.')).toBe(true)
+    expect(toasts.some((x) => x.message.includes('under ,'))).toBe(false)
+  })
+
   it("a Redo that held everything says nothing was redone", async () => {
     for (const x of [...toasts]) dismissToast(x.id)
     expect(toasts).toEqual([])

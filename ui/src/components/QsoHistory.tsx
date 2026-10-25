@@ -67,16 +67,20 @@ function callList(calls: string[]): string {
 /** What an undo made, said in a toast — with Redo where it changed something. A contact it left
  *  as it is because it changed since, and one it did not put back because the log holds it
  *  already, are named, and so is a field it held so as not to move a contact under another call,
- *  with the Settings call it would have gone under. `redo`: the undo was of an undo. */
+ *  with the Settings call it would have gone under, or that Settings names none. `redo`: the undo was of an undo. */
 export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => void, redo = false): void {
   const fields = answer.held.join(', ')
-  const settings = answer.heldUnder ?? ''
+  const settings = answer.heldUnder
+  // Settings names no call: a blank put back would name none either.
+  const noCall = settings === null
   const keptCalls = answer.changedSinceCalls
   const dupCalls = answer.duplicateCalls
   if (answer.changed === 0) {
     pushToast(
       answer.held.length > 0
-        ? (redo ? t('qso.history.undo.heldOnlyRedo', { fields, settings }) : t('qso.history.undo.heldOnly', { fields, settings }))
+        ? (redo
+            ? (noCall ? t('qso.history.undo.heldOnlyRedoNoCall', { fields }) : t('qso.history.undo.heldOnlyRedo', { fields, settings }))
+            : (noCall ? t('qso.history.undo.heldOnlyNoCall', { fields }) : t('qso.history.undo.heldOnly', { fields, settings })))
         : dupCalls.length > 0 ? t('qso.history.undo.allDuplicates', { count: dupCalls.length, calls: callList(dupCalls) })
         : answer.alreadyThere > 0 ? t('qso.history.undo.alreadyThere')
         : keptCalls.length > 0 ? t('qso.history.undo.allKept', { count: keptCalls.length, calls: callList(keptCalls) })
@@ -89,7 +93,8 @@ export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => voi
     return
   }
   const kept = answer.kept.length ? t('qso.history.undo.kept', { fields: answer.kept.join(', ') }) : ''
-  const held = answer.held.length ? t('qso.history.undo.held', { fields, settings }) : ''
+  const held = !answer.held.length ? ''
+    : noCall ? t('qso.history.undo.heldNoCall', { fields }) : t('qso.history.undo.held', { fields, settings })
   const keptContacts = keptCalls.length
     ? t('qso.history.undo.contactsKept', { count: keptCalls.length, calls: callList(keptCalls) })
     : ''

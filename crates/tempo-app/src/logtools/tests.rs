@@ -338,7 +338,7 @@ fn a_bulk_edit_previews_applies_and_undoes_and_keeps_every_stamp() {
         "K1ABC is already EM10"
     );
 
-    let (made, dur) = bulk_edit(&engine, &ids, ids.len(), &changes);
+    let (made, dur) = bulk_edit(&engine, &ids, ids.len(), &MovesAck::default(), &changes);
     let made = made.unwrap();
     dur.wait(DURABLE_WAIT).unwrap();
     assert_eq!(made.changed, 3);
@@ -364,7 +364,9 @@ fn a_bulk_edit_previews_applies_and_undoes_and_keeps_every_stamp() {
         value: Some("FN31".into()),
     }];
     assert!(
-        bulk_edit(&engine, &ids, ids.len(), &call).0.is_err(),
+        bulk_edit(&engine, &ids, ids.len(), &MovesAck::default(), &call)
+            .0
+            .is_err(),
         "not a bulk field"
     );
 
@@ -575,6 +577,7 @@ fn a_copy_changed_outside_the_edit_form_is_not_merged_over() {
         &engine,
         &[other],
         1,
+        &MovesAck::default(),
         &[Change {
             field: Field::Operator,
             value: Some("N2XYZ".into()),
@@ -604,7 +607,7 @@ fn a_bulk_edit_acts_only_on_the_count_confirmed() {
         value: Some("IC-7300".into()),
     }];
     for expect in [1, 3] {
-        let (made, _) = bulk_edit(&engine, &ids, expect, &rig);
+        let (made, _) = bulk_edit(&engine, &ids, expect, &MovesAck::default(), &rig);
         assert_eq!(made, Err(NOT_AS_PREVIEWED.to_string()));
     }
     assert_eq!(rows(&engine), before);
@@ -641,7 +644,7 @@ fn a_bulk_station_call_change_owes_the_contact_to_every_service_again() {
     let preview = bulk_preview(&engine, &ids, &w6r).unwrap();
     assert_eq!((preview.change, preview.resend), (2, 2));
 
-    let (made, dur) = bulk_edit(&engine, &ids, 3, &w6r);
+    let (made, dur) = bulk_edit(&engine, &ids, 3, &MovesAck::default(), &w6r);
     assert_eq!(made.unwrap().changed, 2);
     dur.wait(DURABLE_WAIT).unwrap();
     for (was, now) in before.iter().zip(rows(&engine)) {
@@ -706,14 +709,14 @@ fn a_bulk_station_call_change_clears_the_services_confirmations_and_undo_restore
         (0, 0),
         "the same call: nothing"
     );
-    let (made, _) = bulk_edit(&engine, &ids, 3, &to("KD0AA"));
+    let (made, _) = bulk_edit(&engine, &ids, 3, &MovesAck::default(), &to("KD0AA"));
     assert_eq!(made.unwrap().changed, 0);
     assert_eq!(rows(&engine), before, "an unchanged call clears nothing");
 
     let preview = bulk_preview(&engine, &ids, &to("W6R")).unwrap();
     assert_eq!((preview.change, preview.unconfirm), (3, 6));
 
-    let (made, dur) = bulk_edit(&engine, &ids, 3, &to("W6R"));
+    let (made, dur) = bulk_edit(&engine, &ids, 3, &MovesAck::default(), &to("W6R"));
     let made = made.unwrap();
     dur.wait(DURABLE_WAIT).unwrap();
     assert_eq!(made.changed, 3);
@@ -860,18 +863,18 @@ fn a_large_run_waits_until_transmit_is_off() {
         "premise: armed for FT"
     );
 
-    let (refused, _) = bulk_edit(&engine, &ids, ids.len(), &changes);
+    let (refused, _) = bulk_edit(&engine, &ids, ids.len(), &MovesAck::default(), &changes);
     assert_eq!(refused, Err(MUST_WAIT_FOR_TX.to_string()));
     assert!(
         rows(&engine).iter().all(|r| r.my_rig.is_none()),
         "nothing was made"
     );
-    let (small, d1) = bulk_edit(&engine, &ids[..3], 3, &changes);
+    let (small, d1) = bulk_edit(&engine, &ids[..3], 3, &MovesAck::default(), &changes);
     assert_eq!(small.unwrap().changed, 3, "a small run is made");
     d1.wait(DURABLE_WAIT).unwrap();
 
     engine_lock(&engine).set_tx_enabled(false);
-    let (made, dur) = bulk_edit(&engine, &ids, ids.len(), &changes);
+    let (made, dur) = bulk_edit(&engine, &ids, ids.len(), &MovesAck::default(), &changes);
     assert_eq!(made.unwrap().changed, n - 3);
     dur.wait(DURABLE_WAIT).unwrap();
     assert!(rows(&engine)
@@ -902,6 +905,7 @@ fn a_run_made_in_several_changes_is_undone_whole() {
         &engine,
         &ids,
         ids.len(),
+        &MovesAck::default(),
         &[Change {
             field: Field::StationCallsign,
             value: Some("K2DEF".into()),
@@ -972,6 +976,7 @@ fn bench_150k() {
         &engine,
         &ids,
         ids.len(),
+        &MovesAck::default(),
         &[Change {
             field: Field::MyRig,
             value: Some("IC-7300".into()),
@@ -1019,6 +1024,14 @@ fn bench_150k() {
 }
 
 /// The call in Settings set to `call`, as the operator sets it.
+/// The operator's tick on a preview's `moves` contacts sent under `to`.
+fn ack(moves: usize, to: &str) -> MovesAck {
+    MovesAck {
+        moves,
+        move_to: Some(to.into()),
+    }
+}
+
 fn settings_call_is(engine: &Mutex<Engine>, call: &str) {
     let mut e = engine_lock(engine);
     let mut s = e.settings().clone();
@@ -1057,7 +1070,7 @@ fn filling_in_the_settings_call_keeps_every_stamp_and_confirmation() {
         (preview.change, preview.resend, preview.unconfirm),
         (1, 0, 0)
     );
-    let (made, dur) = bulk_edit(&engine, &ids, 1, &fill);
+    let (made, dur) = bulk_edit(&engine, &ids, 1, &MovesAck::default(), &fill);
     assert_eq!(made.unwrap().changed, 1);
     dur.wait(DURABLE_WAIT).unwrap();
     let mut want = before[0].clone();
@@ -1101,7 +1114,7 @@ fn undoing_a_station_call_change_never_keeps_the_new_calls_stamps() {
         }]
     };
 
-    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &to("W6R"));
+    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &MovesAck::default(), &to("W6R"));
     let run = made.unwrap().run.unwrap();
     dur.wait(DURABLE_WAIT).unwrap();
     let moved = rows(&engine);
@@ -1125,7 +1138,7 @@ fn undoing_a_station_call_change_never_keeps_the_new_calls_stamps() {
     assert_eq!(w1aw.upload, Default::default(), "the mirror agrees");
 
     // A blank call filled with the Settings call, uploaded, then undone: the same call all along.
-    let (made, dur) = bulk_edit(&engine, &ids[1..], 1, &to("KD9TAW"));
+    let (made, dur) = bulk_edit(&engine, &ids[1..], 1, &MovesAck::default(), &to("KD9TAW"));
     let run = made.unwrap().run.unwrap();
     dur.wait(DURABLE_WAIT).unwrap();
     stamp(&engine, &rows(&engine)[1], UploadService::Qrz, 400);
@@ -1164,6 +1177,7 @@ fn an_upload_answered_after_the_station_call_changed_is_not_stamped() {
             &engine,
             &[id],
             1,
+            &MovesAck::default(),
             &[Change {
                 field: Field::StationCallsign,
                 value: Some(call.into()),
@@ -1255,7 +1269,7 @@ fn filling_a_blank_station_call_clears_nothing_whatever_the_settings_call() {
         (preview.change, preview.resend, preview.unconfirm),
         (1, 0, 0)
     );
-    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &fill);
+    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &ack(1, "KA1OLD"), &fill);
     assert_eq!(made.unwrap().changed, 1);
     dur.wait(DURABLE_WAIT).unwrap();
     let mut want = before[0].clone();
@@ -1268,7 +1282,7 @@ fn filling_a_blank_station_call_clears_nothing_whatever_the_settings_call() {
         (preview.change, preview.resend, preview.unconfirm),
         (1, 0, 0)
     );
-    let (made, dur) = bulk_edit(&engine, &ids[1..2], 1, &clear);
+    let (made, dur) = bulk_edit(&engine, &ids[1..2], 1, &ack(1, "KD9NEW"), &clear);
     assert_eq!(made.unwrap().changed, 1);
     dur.wait(DURABLE_WAIT).unwrap();
     let mut want = before[1].clone();
@@ -1291,7 +1305,7 @@ fn filling_a_blank_station_call_clears_nothing_whatever_the_settings_call() {
         ),
         (1, 1, 1, 1)
     );
-    let (made, dur) = bulk_edit(&engine, &ids[2..], 1, &other);
+    let (made, dur) = bulk_edit(&engine, &ids[2..], 1, &MovesAck::default(), &other);
     assert_eq!(made.unwrap().changed, 1);
     dur.wait(DURABLE_WAIT).unwrap();
     let n0xyz = rows(&engine).remove(2);
@@ -1326,13 +1340,13 @@ fn an_undo_never_puts_a_contact_under_a_call_it_was_not_made_under() {
     let fill = station_to(Some("KA1OLD"));
 
     // K1ABC filled while KA1OLD is still the Settings call.
-    let (made, dur) = bulk_edit(&engine, &ids[1..], 1, &fill);
+    let (made, dur) = bulk_edit(&engine, &ids[1..], 1, &MovesAck::default(), &fill);
     let early = made.unwrap().run.unwrap();
     dur.wait(DURABLE_WAIT).unwrap();
     // The new call.
     settings_call_is(&engine, "KD9NEW");
     // W1AW filled after it.
-    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &fill);
+    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &ack(1, "KA1OLD"), &fill);
     let late = made.unwrap().run.unwrap();
     dur.wait(DURABLE_WAIT).unwrap();
     let filled = rows(&engine);
@@ -1360,6 +1374,14 @@ fn an_undo_never_puts_a_contact_under_a_call_it_was_not_made_under() {
     assert!(reread
         .iter()
         .all(|r| r.station_callsign.as_deref() == Some("KA1OLD") && r.upload.lotw.is_some()));
+
+    // No call in Settings: still held, and no call named for it.
+    settings_call_is(&engine, " ");
+    let (undone, dur) = undo_run(&engine, &late);
+    let undone = undone.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(undone.held, vec![(ids[0], "STATION_CALLSIGN".to_string())]);
+    assert_eq!(undone.held_under, None, "no call in Settings");
 
     // CONTROL: the Settings call is the filled one again — the blank goes back, nothing moves.
     settings_call_is(&engine, "KA1OLD");
@@ -1416,7 +1438,13 @@ fn a_portable_p_is_the_same_station_call() {
             (1, 0, 0, 0),
             "{to}"
         );
-        let (made, dur) = bulk_edit(&engine, &[id], 1, &station_to(Some(to)));
+        let (made, dur) = bulk_edit(
+            &engine,
+            &[id],
+            1,
+            &MovesAck::default(),
+            &station_to(Some(to)),
+        );
         assert_eq!(made.unwrap().changed, 1);
         dur.wait(DURABLE_WAIT).unwrap();
     }
@@ -1508,7 +1536,7 @@ fn a_fill_or_a_clear_that_moves_the_upload_call_is_counted() {
     assert_eq!(counted(&preview), (1, 0, 0, 0, 1));
     assert_eq!(preview.move_to.as_deref(), Some("KD9NEW"));
     assert_eq!(preview.move_from, vec!["KA1OLD".to_string()]);
-    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &clear);
+    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &ack(1, "KD9NEW"), &clear);
     assert_eq!(made.unwrap().changed, 1);
     dur.wait(DURABLE_WAIT).unwrap();
     let mut want = before[0].clone();
@@ -1526,6 +1554,54 @@ fn a_fill_or_a_clear_that_moves_the_upload_call_is_counted() {
 
     let preview = bulk_preview(&engine, &ids[2..], &clear).unwrap();
     assert_eq!(counted(&preview), (1, 0, 0, 0, 0), "sent everywhere");
+
+    // Named as the upload sends it: KD9TAW/P, which LoTW holds apart from KD9TAW.
+    let preview = bulk_preview(&engine, &ids[1..2], &station_to(Some("kd9taw/p"))).unwrap();
+    assert_eq!(counted(&preview), (1, 0, 0, 0, 1));
+    assert_eq!(preview.move_to.as_deref(), Some("KD9TAW/P"));
+    assert_eq!(preview.move_from, vec!["KD9NEW".to_string()]);
+    settings_call_is(&engine, "KD9NEW/P");
+    let preview = bulk_preview(&engine, &ids[1..2], &station_to(Some("KA1OLD"))).unwrap();
+    assert_eq!(preview.move_from, vec!["KD9NEW/P".to_string()]);
+}
+
+/// ★ A BULK EDIT NEVER SENDS CONTACTS UNDER ANOTHER CALL THE OPERATOR DID NOT TICK FOR. The station
+/// reads the moves again at the apply: with none acknowledged, with another count, or with another
+/// call — the call in Settings changed between the preview and the confirm — it refuses and
+/// changes nothing. As acknowledged, it is made.
+#[test]
+fn a_bulk_edit_refuses_moves_the_operator_did_not_acknowledge() {
+    let d = Dir::new("tools-bulk-moves-ack");
+    let engine = shared(
+        &d,
+        &[adif(
+            "W1AW",
+            "120000",
+            "<STATION_CALLSIGN:6>KA1OLD<LOTW_QSL_RCVD:1>Y",
+        )],
+    );
+    settings_call_is(&engine, "KA1OLD");
+    let before = rows(&engine);
+    let ids = [before[0].id.unwrap()];
+    let clear = station_to(None);
+    // The preview: KA1OLD is the Settings call, nothing moves.
+    let preview = bulk_preview(&engine, &ids, &clear).unwrap();
+    assert_eq!((preview.moves, preview.move_to.as_deref()), (0, None));
+    // Settings changes before the confirm: the clear would now send it under KD9NEW.
+    settings_call_is(&engine, "KD9NEW");
+    for (acknowledged, what) in [
+        (MovesAck::default(), "none acknowledged"),
+        (ack(2, "KD9NEW"), "another count"),
+        (ack(1, "KA1OLD"), "another call"),
+    ] {
+        let (made, _) = bulk_edit(&engine, &ids, 1, &acknowledged, &clear);
+        assert_eq!(made.unwrap_err(), MOVES_NOT_AS_ACKNOWLEDGED, "{what}");
+        assert_eq!(rows(&engine), before, "{what}: nothing changed");
+    }
+    let (made, dur) = bulk_edit(&engine, &ids, 1, &ack(1, "KD9NEW"), &clear);
+    assert_eq!(made.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(rows(&engine)[0].station_callsign, None);
 }
 
 /// An upload answered after a bulk edit added /P to the station call it was sent under is stamped:
@@ -1542,7 +1618,13 @@ fn an_answer_after_a_portable_p_edit_is_stamped() {
     );
     let pushed = rows(&engine);
     for (r, to) in [(&pushed[0], "KD9TAW/P"), (&pushed[1], "KD9TAW/M")] {
-        let (made, dur) = bulk_edit(&engine, &[r.id.unwrap()], 1, &station_to(Some(to)));
+        let (made, dur) = bulk_edit(
+            &engine,
+            &[r.id.unwrap()],
+            1,
+            &MovesAck::default(),
+            &station_to(Some(to)),
+        );
         made.unwrap();
         dur.wait(DURABLE_WAIT).unwrap();
     }

@@ -238,7 +238,7 @@ pub struct Undone {
     /// was not made under (a blank station call, [`history::undo`]), by contact.
     pub held: Vec<(RecordId, String)>,
     /// The call in Settings the undo read, when it held a field: the call a blank station call put
-    /// back would have sent those contacts under.
+    /// back would have sent those contacts under. `None` when Settings names no call.
     pub held_under: Option<String>,
     /// Contacts it could not change, and why.
     pub refused: Vec<(RecordId, CannotUndo)>,
@@ -421,7 +421,8 @@ fn plan_undo(
         }
     }
     if !answer.held.is_empty() {
-        answer.held_under = Some(settings_call.trim().to_ascii_uppercase());
+        answer.held_under =
+            Some(settings_call.trim().to_ascii_uppercase()).filter(|c| !c.is_empty());
     }
     // The contacts put back go in after the ones changed, as an append's rows go in last.
     changed.extend(put_back);

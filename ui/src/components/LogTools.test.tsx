@@ -142,6 +142,8 @@ describe('bulk edit', () => {
     await waitFor(() => expect(api.bulkEditApply).toHaveBeenCalledWith(
       ['x', 'y'],
       2,
+      0,
+      null,
       [{ field: 'MY_GRIDSQUARE', value: 'EM10' }],
     ))
   })
@@ -167,6 +169,8 @@ describe('bulk edit', () => {
     await waitFor(() => expect(api.bulkEditApply).toHaveBeenCalledWith(
       ids,
       42,
+      0,
+      null,
       [{ field: 'STATION_CALLSIGN', value: 'W6R' }],
     ))
   })
@@ -195,8 +199,54 @@ describe('bulk edit', () => {
     await waitFor(() => expect(api.bulkEditApply).toHaveBeenCalledWith(
       ['x', 'y', 'z'],
       3,
+      2,
+      'KD9NEW',
       [{ field: 'STATION_CALLSIGN', value: null }],
     ))
+  })
+
+  it('takes the tick back on a new preview, an edit of the value and a reopened confirm', async () => {
+    const preview = {
+      ids: ['x', 'y'], selected: 2, change: 2, unchanged: 0, missing: 0, recall: 0, resend: 0, unconfirm: 0,
+      moves: 2, moveTo: 'KD9NEW', moveFrom: ['KA1OLD'],
+    }
+    api.bulkEditPreview.mockResolvedValue(preview)
+    open('bulk')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Field' }), { target: { value: 'STATION_CALLSIGN' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: 'KA1OLD' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    const tick = (to: string) => screen.getByRole('checkbox', { name: `I understand: these contacts will be sent under ${to}` }) as HTMLInputElement
+    const yes = () => screen.getByRole('button', { name: 'Yes, change 2' }) as HTMLButtonElement
+    const ticked = (to: string) => {
+      fireEvent.click(tick(to))
+      expect(tick(to).checked).toBe(true)
+      expect(yes().disabled).toBe(false)
+    }
+
+    // The confirm reopened.
+    fireEvent.click(await screen.findByRole('button', { name: 'Change 2 contacts' }))
+    ticked('KD9NEW')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change 2 contacts' }))
+    expect(tick('KD9NEW').checked).toBe(false)
+    expect(yes().disabled).toBe(true)
+
+    // A new preview, with the confirm still open, naming another call.
+    ticked('KD9NEW')
+    api.bulkEditPreview.mockResolvedValue({ ...preview, moveTo: 'KD9NEW/P' })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    await waitFor(() => expect(tick('KD9NEW/P').checked).toBe(false))
+    expect(yes().disabled).toBe(true)
+
+    // An edit of the value.
+    ticked('KD9NEW/P')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: 'KA1OL' } })
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change 2 contacts' }))
+    expect(tick('KD9NEW/P').checked).toBe(false)
+    expect(yes().disabled).toBe(true)
+    expect(api.bulkEditApply).not.toHaveBeenCalled()
   })
 
   it('a change after the preview takes the apply away until it is previewed again', async () => {
