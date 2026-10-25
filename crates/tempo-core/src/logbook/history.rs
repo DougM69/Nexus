@@ -57,8 +57,9 @@
 //!   for an edit.
 //!
 //! An undo never touches an upload stamp, with the one exception the edit rule already makes: an
-//! undo that changes the callsign clears the stamps, as a corrected call does
-//! ([`super::edited`]), so the contact is owed to the services under the call it now carries.
+//! undo that changes the callsign, or the station call the contact is uploaded under, clears the
+//! stamps, as a corrected call does ([`super::edited`]), so the contact is owed to the services
+//! under the call it now carries.
 //! Nothing here sends anything anywhere.
 //!
 //! # How long it is kept
@@ -813,8 +814,13 @@ pub enum CannotUndo {
 }
 
 /// What undoing `entry` does to its contact, `current` — the contact as the log now holds it, or
-/// `None` where it holds none.
-pub fn undo(entry: &Entry, current: Option<&QsoRecord>) -> std::result::Result<Undo, CannotUndo> {
+/// `None` where it holds none. `settings_call`: the call in Settings, the one a contact naming no
+/// station call is uploaded under.
+pub fn undo(
+    entry: &Entry,
+    current: Option<&QsoRecord>,
+    settings_call: Option<&str>,
+) -> std::result::Result<Undo, CannotUndo> {
     match entry.kind {
         Kind::Create => match current {
             Some(_) => Ok(Undo::Remove(entry.qso_id)),
@@ -829,7 +835,7 @@ pub fn undo(entry: &Entry, current: Option<&QsoRecord>) -> std::result::Result<U
         },
         Kind::Edit | Kind::Merge | Kind::Fill => {
             let current = current.ok_or(CannotUndo::Gone)?;
-            revert(entry, current)
+            revert(entry, current, settings_call)
         }
         Kind::Unknown(_) => Err(CannotUndo::UnknownKind),
     }
@@ -846,7 +852,19 @@ pub fn undo(entry: &Entry, current: Option<&QsoRecord>) -> std::result::Result<U
 /// holds it under that call answers that upload as a duplicate; nothing is claimed sent that was
 /// not. Deliberate: the stamps belonged to the contact as it stood before
 /// the undo, and a stamp is only ever written by a service's answer.
-fn revert(entry: &Entry, current: &QsoRecord) -> std::result::Result<Undo, CannotUndo> {
+///
+/// **A change of the station call, undone,** is the same: the call the contact is uploaded under
+/// (its STATION_CALLSIGN, else `settings_call`, the call in Settings) moves back, so the stamps of
+/// uploads made under the call it no longer carries are cleared with `LOTW_QSL_SENT`. The stamps
+/// the change itself cleared are not put back — they were never history — so the next upload sends
+/// the contact under the restored call, and a service already holding that QSO answers Duplicate.
+/// A blank station call filled with the Settings call, undone, keeps its stamps: the call it is
+/// uploaded under never moved.
+fn revert(
+    entry: &Entry,
+    current: &QsoRecord,
+    settings_call: Option<&str>,
+) -> std::result::Result<Undo, CannotUndo> {
     let mut now = fields(&super::adif_record_own_log(current));
     let mut kept = Vec::new();
     let mut moved = false;
@@ -881,9 +899,13 @@ fn revert(entry: &Entry, current: &QsoRecord) -> std::result::Result<Undo, Canno
         .ok_or(CannotUndo::ChangedSince)?;
     row.id = current.id;
     // A stamp is never history, so it is never undone: the contact keeps the stamps it has —
-    // unless the undo corrects its call, which owes it to every service again, as a corrected
-    // call always has (`edited`), with the LoTW mark another logger left in it.
-    if row.call.trim().eq_ignore_ascii_case(current.call.trim()) {
+    // unless the undo corrects its call, or the station call it is uploaded under, which owes it
+    // to every service again, as a corrected call always has (`edited`), with the LoTW mark
+    // another logger left in it.
+    let station = |r: &QsoRecord| crate::reconcile::lotw_own_call(r, settings_call);
+    if row.call.trim().eq_ignore_ascii_case(current.call.trim())
+        && station(&row) == station(current)
+    {
         row.upload = current.upload.clone();
     } else {
         row.upload = super::UploadState::default();

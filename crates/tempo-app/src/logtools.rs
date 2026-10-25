@@ -30,22 +30,26 @@
 //!
 //! - **a merge** gives the kept contact no stamp of another copy's (`cleanup`'s header): the kept
 //!   copy's stamps are its own, so the merged contact is owed to every service the kept copy did
-//!   not reach, and a service only a deleted copy reached answers its upload as a duplicate. Its
-//!   call is the kept copy's, unchanged: no correction — and copies under different calls are
-//!   never merged at all.
+//!   not reach, and the next upload sends it there. A service holding a deleted copy at the same
+//!   time answers it Duplicate; one holding a copy logged minutes apart may keep both. Its call is
+//!   the kept copy's, unchanged: no correction — and copies under different calls, or different
+//!   station calls, are never merged at all.
 //! - **a bulk edit** never changes the worked call (`cleanup::BULK_FIELDS`). Every stamp and
 //!   confirmation stays, but on a contact whose **STATION_CALLSIGN** it changes: that is the call
-//!   the contact is uploaded under, so its stamps are cleared as a corrected call's are, and the
-//!   next upload sends it under the new call ([`cleanup::resends`]; the preview counts them,
+//!   the contact is uploaded under (the call in Settings where it names none, so filling that in
+//!   changes nothing else), so its stamps are cleared as a corrected call's are, and the next
+//!   upload sends it under the new call ([`cleanup::resends`]; the preview counts them,
 //!   [`BulkPreview::resend`]). It is not queued here. The LoTW, eQSL and QRZ confirmations matched
-//!   under the old call go too, a paper card stays (`cleanup`'s header; the preview counts them,
-//!   [`BulkPreview::unconfirm`]), and the run's undo puts them back.
+//!   under the old call go too; a paper card and the credit codes stay (`cleanup`'s header; the
+//!   preview counts them, [`BulkPreview::unconfirm`]), and the run's undo puts them back. A
+//!   push answered after the change is not stamped on it ([`station::push_target`]).
 //! - **a fix** changes a grid, a band, a DXCC number, a reference or an end time, never a call:
 //!   every stamp stays.
 //!
 //! An undo of any of them sends nothing either ([`crate::loghistory`]). A stamp is never history:
 //! the undo of a merge leaves the kept contact the stamps it had before the merge, because the
-//! merge gave it none.
+//! merge gave it none; the undo of a station call change clears the stamps of uploads made under
+//! the call it takes off, so the contact is owed again under the call it gets back.
 //!
 //! # What a merge does not touch
 //!
@@ -66,6 +70,7 @@ use tempo_core::logbook::{OpClass, QsoRecord, RecordId};
 use crate::engine::{engine_lock, Engine};
 use crate::loghistory::{new_run, Origin};
 use crate::logstore::{Durability, DURABLE_WAIT};
+use crate::logwrite::settings_call;
 use crate::station::{self, MadeRow, PLANS};
 
 /// How many contacts one change of a tool carries: the fill job's bound, for its reason
@@ -282,6 +287,7 @@ pub fn find_duplicates(engine: &Mutex<Engine>, tier: DupeTier) -> Result<DupeSca
         }
     })?;
     let scanned = keys.len();
+    let settings_call = settings_call(engine);
     let grouped = cleanup::dupe_groups(keys, tier.window_secs());
     let ids: Vec<RecordId> = grouped.iter().flatten().copied().collect();
     let rows = engine_lock(engine).log_rows();
@@ -298,7 +304,7 @@ pub fn find_duplicates(engine: &Mutex<Engine>, tier: DupeTier) -> Result<DupeSca
         places.sort_unstable();
         let copies: Vec<QsoRecord> = places.iter().map(|&i| found[i].clone()).collect();
         // Copies that differ in an identity field are two contacts, not one.
-        for copies in cleanup::split_distinct(copies) {
+        for copies in cleanup::split_distinct(copies, Some(&settings_call)) {
             let keep = cleanup::suggested_keep(&copies);
             let conflicts = cleanup::merge(&copies, keep, &HashMap::new()).conflicts;
             groups.push(DupeGroup {
@@ -359,11 +365,12 @@ pub fn merge_duplicates(
             .extend(ask.copies.iter().map(|(id, _)| *id));
         part_asks.last_mut().expect("a part").push(ask);
     }
+    let settings_call = settings_call(engine);
     run_in_parts(engine, &parts, "merge_duplicates", |k, rows| {
         let mut pairs = Vec::new();
         let mut refused = Vec::new();
         for ask in &part_asks[k] {
-            match merged_pairs(ask, rows) {
+            match merged_pairs(ask, rows, &settings_call) {
                 Ok(made) => pairs.extend(made),
                 Err(why) => refused.push((ask.keep, why)),
             }
@@ -373,9 +380,11 @@ pub fn merge_duplicates(
 }
 
 /// The rows one merge makes on `rows` as the plan read them, or why it is not made.
+/// `settings_call`: the call in Settings, the one a contact naming no station call is under.
 fn merged_pairs(
     ask: &MergeAsk,
     rows: &HashMap<RecordId, Arc<QsoRecord>>,
+    settings_call: &str,
 ) -> Result<Vec<MadeRow>, &'static str> {
     let mut copies: Vec<&Arc<QsoRecord>> = Vec::with_capacity(ask.copies.len());
     for (id, revision) in &ask.copies {
@@ -398,7 +407,7 @@ fn merged_pairs(
     for (i, a) in copies.iter().enumerate() {
         if copies[i + 1..]
             .iter()
-            .any(|b| cleanup::distinct(a, b).is_some())
+            .any(|b| cleanup::distinct(a, b, Some(settings_call)).is_some())
         {
             return Err("distinct");
         }
@@ -479,6 +488,7 @@ pub fn bulk_preview(
 ) -> Result<BulkPreview, String> {
     let changes = bulk_changes(changes)?;
     let country = country_rule(engine);
+    let settings_call = settings_call(engine);
     let mut seen = HashSet::new();
     let ids: Vec<RecordId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
     let mut out = BulkPreview {
@@ -490,10 +500,12 @@ pub fn bulk_preview(
         let rows = plan.rows(part)?;
         out.missing += part.len() - rows.len();
         for row in rows.values() {
-            match cleanup::changed(row, &changes, &country) {
+            match cleanup::changed(row, &changes, &country, Some(&settings_call)) {
                 Some(after) => {
                     out.change += 1;
-                    if cleanup::resends(row, &after) && row.upload != Default::default() {
+                    if cleanup::resends(row, &after, Some(&settings_call))
+                        && row.upload != Default::default()
+                    {
                         out.resend += 1;
                     }
                     out.unconfirm += cleanup::confirmations_cleared(row, &after);
@@ -530,6 +542,7 @@ pub fn bulk_edit(
         return (Err(NOT_AS_PREVIEWED.into()), Durability::default());
     }
     let country = country_rule(engine);
+    let settings_call = settings_call(engine);
     let parts: Vec<Vec<RecordId>> = ids.chunks(CHUNK).map(<[RecordId]>::to_vec).collect();
     run_in_parts(engine, &parts, "bulk_edit", |k, rows| {
         let mut pairs = Vec::new();
@@ -538,7 +551,9 @@ pub fn bulk_edit(
             match rows.get(id) {
                 None => refused.push((*id, "gone")),
                 Some(row) => {
-                    if let Some(after) = cleanup::changed(row, &changes, &country) {
+                    if let Some(after) =
+                        cleanup::changed(row, &changes, &country, Some(&settings_call))
+                    {
                         pairs.push((Arc::clone(row), Some(Arc::new(after))));
                     }
                 }
@@ -605,6 +620,7 @@ const CHECKED: Narrow = Narrow {
         "ota_their_program",
         "ota_their_ref",
         "ota_iota",
+        "qsl_card_rcvd_raw",
         "lotw_rcvd_raw",
         "credit_granted",
     ],
@@ -629,18 +645,19 @@ fn grid_fix(g: &str) -> Option<Option<String>> {
 }
 
 /// ★ The problems of one contact. `dxcc_mismatch` answers, for a call and the DXCC number the
-/// contact carries, the number the call's prefix places it in when that is a different entity
-/// (the country file's assignment; `None` when they agree, either is unknown, or the file cannot
-/// judge the call — a DXpedition's). `now_unix`: a contact more than a day after it is in the
-/// future.
+/// contact carries, whether the country file places the call in a different entity (`None` when
+/// they agree or either is unknown) and, when it does, the number to propose — `None` inside where
+/// the call's prefix cannot decide it (a mainland call logged as one of its own block's islands,
+/// a DXpedition's call, an exact-call exception): listed for the operator, never fixed.
+/// `now_unix`: a contact more than a day after it is in the future.
 ///
-/// **A confirmed contact's DXCC and band are listed, never fixed**: a LoTW confirmation or granted
-/// credit carries the entity and band the other station's record matched, which outrank the call's
-/// prefix and the logged frequency. Nor is an end time ever cleared: an end before the start that
-/// is no midnight wrap is listed for the operator.
+/// **A confirmed contact's DXCC and band are listed, never fixed**: a paper card, a LoTW
+/// confirmation or granted credit carries the entity and band the other station's record matched,
+/// which outrank the call's prefix and the logged frequency. Nor is an end time ever cleared: an
+/// end before the start that is no midnight wrap is listed for the operator.
 pub fn problems_of(
     r: &QsoRecord,
-    dxcc_mismatch: &dyn Fn(&str, u32) -> Option<u32>,
+    dxcc_mismatch: &dyn Fn(&str, u32) -> Option<Option<u32>>,
     now_unix: u64,
 ) -> Vec<Problem> {
     let Some(id) = r.id else {
@@ -668,12 +685,12 @@ pub fn problems_of(
             }
         }
     }
-    let confirmed = r.qsl_rcvd.lotw || !r.credit_granted.is_empty();
+    let confirmed = r.qsl_rcvd.card || r.qsl_rcvd.lotw || !r.credit_granted.is_empty();
     if let Some(want) = r.dxcc.and_then(|n| dxcc_mismatch(&r.call, n)) {
         add(
             ProblemKind::Dxcc,
             Some(Field::Dxcc),
-            (!confirmed).then(|| Some(want.to_string())),
+            want.filter(|_| !confirmed).map(|n| Some(n.to_string())),
         );
     }
     if r.freq_mhz.is_finite() && r.freq_mhz > 0.0 {
@@ -752,7 +769,7 @@ pub fn problems_of(
 /// released, changing nothing. How many contacts it checked, and what it found.
 pub fn check(
     engine: &Mutex<Engine>,
-    dxcc_mismatch: &dyn Fn(&str, u32) -> Option<u32>,
+    dxcc_mismatch: &dyn Fn(&str, u32) -> Option<Option<u32>>,
     now_unix: u64,
 ) -> Result<(usize, Vec<Problem>), String> {
     let (mut checked, mut problems) = (0, Vec::new());
@@ -799,6 +816,7 @@ pub fn apply_fixes(engine: &Mutex<Engine>, fixes: &[Fix]) -> (Result<ToolRun, St
         held.push((fix, change));
     }
     let country = country_rule(engine);
+    let settings_call = settings_call(engine);
     let parts: Vec<Vec<RecordId>> = ids.chunks(CHUNK).map(<[RecordId]>::to_vec).collect();
     run_in_parts(engine, &parts, "log_fixes", |k, rows| {
         let mut pairs = Vec::new();
@@ -818,7 +836,7 @@ pub fn apply_fixes(engine: &Mutex<Engine>, fixes: &[Fix]) -> (Result<ToolRun, St
                     refused.push((*id, "changed"));
                 }
             }
-            if let Some(after) = cleanup::changed(row, &still, &country) {
+            if let Some(after) = cleanup::changed(row, &still, &country, Some(&settings_call)) {
                 pairs.push((Arc::clone(row), Some(Arc::new(after))));
             }
         }

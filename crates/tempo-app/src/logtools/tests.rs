@@ -395,7 +395,7 @@ fn the_check_finds_each_problem_and_makes_only_the_ticked_fixes() {
         ],
     );
     // The country file's answer, as the command layer gives it: W1AW is 291, never 1.
-    let mismatch = |call: &str, n: u32| (call == "W1AW" && n != 1).then_some(1);
+    let mismatch = |call: &str, n: u32| (call == "W1AW" && n != 1).then_some(Some(1));
     let now = 1_790_000_000;
     let (checked, problems) = check(&engine, &mismatch, now).unwrap();
     assert_eq!(checked, 8);
@@ -656,8 +656,8 @@ fn a_bulk_station_call_change_owes_the_contact_to_every_service_again() {
 
 /// ★ A STATION CALL CHANGED IN BULK TAKES OFF THE SERVICES' CONFIRMATIONS, THROUGH THE REAL STORE.
 /// The preview counts the LoTW, eQSL and QRZ confirmations it would take off; the edit takes them
-/// off with their dates, eQSL's AG mark and LoTW's DXCC, keeps the paper card with its date, route
-/// and credit, takes LoTW's credit off the contact no card stands behind, and queues nothing. The
+/// off with their dates, eQSL's AG mark and LoTW's DXCC, keeps the paper card with its date and
+/// route, keeps every credit code, card or none, and queues nothing. The
 /// mirror follows. The run's undo puts every contact back exactly, confirmations and all. An
 /// unchanged call (case aside) takes nothing off.
 #[test]
@@ -738,9 +738,10 @@ fn a_bulk_station_call_change_clears_the_services_confirmations_and_undo_restore
     assert_eq!(extra(card, "QSL_RCVD_VIA").as_deref(), Some("B"));
     assert_eq!(card.credit_granted, ["DXCC"], "the card stands behind it");
     assert!(!lotw.confirmed && !lotw.award_confirmed);
-    assert!(
-        lotw.credit_granted.is_empty(),
-        "LoTW's credit goes with LoTW's QSL"
+    assert_eq!(
+        lotw.credit_granted,
+        ["DXCC"],
+        "the award desk's record stays"
     );
     assert_eq!(lotw.dxcc, Some(291), "the log's own DXCC stays");
     assert!(!plain.confirmed);
@@ -760,8 +761,9 @@ fn a_bulk_station_call_change_clears_the_services_confirmations_and_undo_restore
     assert_eq!(rows(&engine), before, "every confirmation back, exactly");
 }
 
-/// The check proposes no fix it cannot stand behind: a confirmed contact's DXCC and band are
-/// listed with none, a grid holding two locators or a 10-character one is not cut, and an end
+/// The check proposes no fix it cannot stand behind: a confirmed contact's DXCC and band — by a
+/// card, LoTW or granted credit — are listed with none, and so is a DXCC the call's prefix cannot
+/// decide, a grid holding two locators or a 10-character one is not cut, and an end
 /// before the start that is no midnight wrap is not cleared.
 #[test]
 fn the_check_lists_what_only_the_operator_can_settle() {
@@ -774,7 +776,12 @@ fn the_check_lists_what_only_the_operator_can_settle() {
     r.id = Some("~0000000000000001".parse().unwrap());
     r.band = "40m".into();
     r.freq_mhz = 14.074;
-    let mismatch = |_: &str, n: u32| (n == 1).then_some(291);
+    // Number 1 is fixed to 291; number 110 is a mismatch the prefix cannot decide.
+    let mismatch = |_: &str, n: u32| match n {
+        1 => Some(Some(291)),
+        110 => Some(None),
+        _ => None,
+    };
     let fixes = |r: &QsoRecord| -> Vec<(ProblemKind, Option<Option<String>>)> {
         problems_of(r, &mismatch, 1_790_000_000)
             .into_iter()
@@ -806,6 +813,20 @@ fn the_check_lists_what_only_the_operator_can_settle() {
     r.qsl_rcvd.lotw = false;
     r.credit_granted = vec!["DXCC".into()];
     assert_eq!(fixes(&r)[1], (ProblemKind::Dxcc, None), "credit granted");
+    r.credit_granted.clear();
+    r.qsl_rcvd.card = true;
+    assert_eq!(
+        fixes(&r)[1..3],
+        [(ProblemKind::Dxcc, None), (ProblemKind::BandFreq, None)],
+        "a paper card confirms the entity and band"
+    );
+    r.qsl_rcvd.card = false;
+    r.dxcc = Some(110);
+    assert_eq!(
+        fixes(&r)[1],
+        (ProblemKind::Dxcc, None),
+        "undecided by the prefix: listed, never fixed"
+    );
 }
 
 /// ⛔ A run of more than the writer's chunk is refused while the FT sequencer is armed and changes
@@ -990,5 +1011,188 @@ fn bench_150k() {
         made.longest_hold < Duration::from_millis(50),
         "{:?}",
         made.longest_hold
+    );
+}
+
+/// The call in Settings set to `call`, as the operator sets it.
+fn settings_call_is(engine: &Mutex<Engine>, call: &str) {
+    let mut e = engine_lock(engine);
+    let mut s = e.settings().clone();
+    s.mycall = call.into();
+    e.apply_settings(s);
+}
+
+/// ★ FILLING IN THE STATION CALL A CONTACT WAS ALREADY UPLOADED UNDER. A contact naming no station
+/// call is uploaded and confirmed under the call in Settings; a bulk edit writing that call into
+/// it changes the field and nothing else: the preview counts nothing to resend and nothing to
+/// take off, and every stamp and confirmation stays, through the real store.
+#[test]
+fn filling_in_the_settings_call_keeps_every_stamp_and_confirmation() {
+    let d = Dir::new("tools-bulk-fill-own");
+    let engine = shared(
+        &d,
+        &[adif(
+            "W1AW",
+            "120000",
+            "<LOTW_QSL_RCVD:1>Y<LOTW_QSLRDATE:8>20260105<EQSL_QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+        )],
+    );
+    settings_call_is(&engine, "KD9TAW");
+    let w = rows(&engine);
+    stamp(&engine, &w[0], UploadService::Lotw, 100);
+    stamp(&engine, &w[0], UploadService::Qrz, 200);
+    engine_lock(&engine).take_pending_uploads();
+    let before = rows(&engine);
+    let ids = [before[0].id.unwrap()];
+    let fill = [Change {
+        field: Field::StationCallsign,
+        value: Some("kd9taw".into()),
+    }];
+    let preview = bulk_preview(&engine, &ids, &fill).unwrap();
+    assert_eq!(
+        (preview.change, preview.resend, preview.unconfirm),
+        (1, 0, 0)
+    );
+    let (made, dur) = bulk_edit(&engine, &ids, 1, &fill);
+    assert_eq!(made.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let mut want = before[0].clone();
+    want.station_callsign = Some("KD9TAW".into());
+    assert_eq!(rows(&engine), vec![want], "the field, and nothing else");
+}
+
+/// ★ UNDOING A STATION CALL CHANGE AFTER AN UPLOAD UNDER THE NEW CALL. The change clears the
+/// stamps; an upload under the new call stamps the contact again; the undo puts the old call back.
+/// Those stamps are of an upload under the call the contact no longer carries, so the undo clears
+/// them (and `LOTW_QSL_SENT`), and the next upload sends it under the old call again: the service
+/// already holding that QSO answers it as a duplicate. The stamps the change cleared are not put
+/// back — a stamp is never history — so nothing is claimed sent that the log cannot show. Every
+/// other field, confirmations included, is back exactly. An undo that leaves the contact under the
+/// call it was uploaded under (a blank call filled with the Settings call) keeps its stamps.
+#[test]
+fn undoing_a_station_call_change_never_keeps_the_new_calls_stamps() {
+    let d = Dir::new("tools-bulk-undo-stamps");
+    let engine = shared(
+        &d,
+        &[
+            adif(
+                "W1AW",
+                "120000",
+                "<STATION_CALLSIGN:5>KD0AA<LOTW_QSL_RCVD:1>Y<LOTW_QSL_SENT:1>Y",
+            ),
+            adif("K1ABC", "120100", ""),
+        ],
+    );
+    settings_call_is(&engine, "KD9TAW");
+    for r in rows(&engine) {
+        stamp(&engine, &r, UploadService::Lotw, 100);
+    }
+    engine_lock(&engine).take_pending_uploads();
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let to = |call: &str| {
+        [Change {
+            field: Field::StationCallsign,
+            value: Some(call.into()),
+        }]
+    };
+
+    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &to("W6R"));
+    let run = made.unwrap().run.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    let moved = rows(&engine);
+    assert_eq!(moved[0].upload, Default::default());
+    // Uploaded under W6R.
+    stamp(&engine, &moved[0], UploadService::Lotw, 300);
+    stamp(&engine, &moved[0], UploadService::Qrz, 301);
+    assert!(rows(&engine)[0].upload.lotw.is_some());
+
+    let (undone, dur) = undo_run(&engine, &run);
+    assert_eq!(undone.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let now = rows(&engine);
+    let mut want = before[0].clone();
+    want.upload = Default::default();
+    want.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
+    assert_eq!(now[0], want, "back under KD0AA, owed to every service");
+    settle(&engine);
+    let reread = tempo_core::logbook::parse_adif(&mirror(&d));
+    let w1aw = reread.iter().find(|r| r.call == "W1AW").unwrap();
+    assert_eq!(w1aw.upload, Default::default(), "the mirror agrees");
+
+    // A blank call filled with the Settings call, uploaded, then undone: the same call all along.
+    let (made, dur) = bulk_edit(&engine, &ids[1..], 1, &to("KD9TAW"));
+    let run = made.unwrap().run.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    stamp(&engine, &rows(&engine)[1], UploadService::Qrz, 400);
+    let stamped = rows(&engine)[1].upload.clone();
+    let (undone, dur) = undo_run(&engine, &run);
+    assert_eq!(undone.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let k1abc = rows(&engine).remove(1);
+    assert_eq!(k1abc.station_callsign, None);
+    assert_eq!(
+        k1abc.upload, stamped,
+        "uploaded under the call it is still under"
+    );
+}
+
+/// ★ AN UPLOAD IN FLIGHT WHILE THE STATION CALL CHANGES. A QRZ, eQSL or Club Log push sent under
+/// the old call answers after a bulk edit gave the contact another: its stamp is not made, so the
+/// contact stays owed under the call it now carries — by id or by the newest-match fallback. A
+/// push of a contact naming no call, answered after the Settings call was filled in, was sent
+/// under that call and is stamped.
+#[test]
+fn an_upload_answered_after_the_station_call_changed_is_not_stamped() {
+    let d = Dir::new("tools-bulk-inflight");
+    let engine = shared(
+        &d,
+        &[
+            adif("W1AW", "120000", "<STATION_CALLSIGN:5>KD0AA"),
+            adif("K1ABC", "120100", ""),
+        ],
+    );
+    settings_call_is(&engine, "KD9TAW");
+    let pushed = rows(&engine);
+    let ids: Vec<RecordId> = pushed.iter().map(|r| r.id.unwrap()).collect();
+    for (id, call) in [(ids[0], "W6R"), (ids[1], "KD9TAW")] {
+        let (made, dur) = bulk_edit(
+            &engine,
+            &[id],
+            1,
+            &[Change {
+                field: Field::StationCallsign,
+                value: Some(call.into()),
+            }],
+        );
+        made.unwrap();
+        dur.wait(DURABLE_WAIT).unwrap();
+    }
+    for service in [
+        UploadService::Qrz,
+        UploadService::Eqsl,
+        UploadService::Clublog,
+    ] {
+        let mut unnamed = pushed[0].clone();
+        unnamed.id = None;
+        for p in [&pushed[0], &unnamed] {
+            let (made, _) = logwrite::stamp_push(
+                &engine,
+                p,
+                service,
+                UploadStatus {
+                    outcome: UploadOutcome::Accepted,
+                    when_unix: 500,
+                    detail: None,
+                },
+            );
+            assert!(!made, "{service:?}: sent under KD0AA, now W6R");
+        }
+    }
+    assert_eq!(rows(&engine)[0].upload, Default::default());
+    stamp(&engine, &pushed[1], UploadService::Qrz, 600);
+    assert!(
+        rows(&engine)[1].upload.qrz.is_some(),
+        "the same call all along"
     );
 }

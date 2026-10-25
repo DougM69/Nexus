@@ -652,9 +652,9 @@ fn hot_session_key(
 }
 
 /// What a connector's push must read of a row to tell whether it is the contact pushed
-/// ([`tempo_core::logbook::same_push_key`]).
+/// ([`tempo_core::logbook::same_push_key`], and the station call it is uploaded under).
 const PUSH_KEY: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
-    columns: &["call", "band", "mode", "when_unix"],
+    columns: &["call", "band", "mode", "when_unix", "station_callsign"],
     uploads: false,
 };
 
@@ -662,18 +662,28 @@ const PUSH_KEY: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlit
 /// the store — C19):
 ///
 /// ⛔ **A push of a row the log holds NAMES that row, by its id, and the stamp lands there** —
-/// only while it is still the contact that was pushed (the same push key): one corrected since
-/// holds a contact the service never received, and one deleted since holds nothing. A push that
+/// only while it is still the contact that was pushed (the same push key, under the same station
+/// call — its STATION_CALLSIGN, else `settings_call`, the call in Settings): one corrected since,
+/// or given another station call since, holds a contact the service never received, and one
+/// deleted since holds nothing. A push that
 /// names no row (from a page older than the ids) keeps the rule every push had, F9's fallback:
 /// the NEWEST contact with its push key — the store's candidates for its call, then the Rust
 /// match ([`LogPlan::newest`]).
 ///
 /// ⚠️ It reads the store: never under the Engine lock.
-pub fn push_target(plan: &LogPlan, pushed: &QsoRecord) -> Result<Option<Arc<QsoRecord>>, String> {
+pub fn push_target(
+    plan: &LogPlan,
+    pushed: &QsoRecord,
+    settings_call: Option<&str>,
+) -> Result<Option<Arc<QsoRecord>>, String> {
     use tempo_core::logbook::same_push_key;
+    use tempo_core::reconcile::lotw_own_call;
+    let sent_under = lotw_own_call(pushed, settings_call);
+    let same =
+        |r: &QsoRecord| same_push_key(r, pushed) && lotw_own_call(r, settings_call) == sent_under;
     match pushed.id {
-        Some(id) => Ok(plan.row(id)?.filter(|r| same_push_key(r, pushed))),
-        None => plan.newest(&pushed.call, PUSH_KEY, |r| same_push_key(r, pushed)),
+        Some(id) => Ok(plan.row(id)?.filter(|r| same(r))),
+        None => plan.newest(&pushed.call, PUSH_KEY, same),
     }
 }
 
@@ -4446,6 +4456,7 @@ impl StationCore {
     pub fn stamp_qrz_upload(
         &mut self,
         pushed: &QsoRecord,
+        settings_call: Option<&str>,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
@@ -4455,7 +4466,7 @@ impl StationCore {
             when_unix,
             detail,
         };
-        self.stamp_push(pushed, UploadService::Qrz, status)
+        self.stamp_push(pushed, settings_call, UploadService::Qrz, status)
     }
 
     /// Record a ClubLog realtime push outcome on the just-pushed QSO
@@ -4463,6 +4474,7 @@ impl StationCore {
     pub fn stamp_clublog_upload(
         &mut self,
         pushed: &QsoRecord,
+        settings_call: Option<&str>,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
@@ -4472,7 +4484,7 @@ impl StationCore {
             when_unix,
             detail,
         };
-        self.stamp_push(pushed, UploadService::Clublog, status)
+        self.stamp_push(pushed, settings_call, UploadService::Clublog, status)
     }
 
     /// Record an eQSL ADIF-upload outcome on the just-pushed QSO (`upload.eqsl`).
@@ -4480,6 +4492,7 @@ impl StationCore {
     pub fn stamp_eqsl_upload(
         &mut self,
         pushed: &QsoRecord,
+        settings_call: Option<&str>,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
@@ -4489,7 +4502,7 @@ impl StationCore {
             when_unix,
             detail,
         };
-        self.stamp_push(pushed, UploadService::Eqsl, status)
+        self.stamp_push(pushed, settings_call, UploadService::Eqsl, status)
     }
 
     /// Stamp a connector's answer for the QSO it was pushed (`pushed`) on the row that push
@@ -4500,12 +4513,13 @@ impl StationCore {
     pub(crate) fn stamp_push(
         &mut self,
         pushed: &QsoRecord,
+        settings_call: Option<&str>,
         service: UploadService,
         status: tempo_core::logbook::UploadStatus,
     ) -> bool {
         for _ in 0..PLANS {
             let plan = self.plan_in_breath();
-            let target = match push_target(&plan, pushed) {
+            let target = match push_target(&plan, pushed, settings_call) {
                 Ok(Some(row)) => row,
                 Ok(None) => return false,
                 Err(e) => {
@@ -5691,9 +5705,9 @@ mod hot_parity_tests {
             13 if n > 0 => {
                 let pushed = QsoRecord::clone(&sc.stored_log()[rng.below(n)]);
                 match rng.below(3) {
-                    0 => sc.stamp_qrz_upload(&pushed, UploadOutcome::Accepted, 1, None),
-                    1 => sc.stamp_clublog_upload(&pushed, UploadOutcome::Accepted, 1, None),
-                    _ => sc.stamp_eqsl_upload(&pushed, UploadOutcome::Accepted, 1, None),
+                    0 => sc.stamp_qrz_upload(&pushed, None, UploadOutcome::Accepted, 1, None),
+                    1 => sc.stamp_clublog_upload(&pushed, None, UploadOutcome::Accepted, 1, None),
+                    _ => sc.stamp_eqsl_upload(&pushed, None, UploadOutcome::Accepted, 1, None),
                 };
                 "connector stamp"
             }

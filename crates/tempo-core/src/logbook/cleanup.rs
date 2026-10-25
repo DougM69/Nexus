@@ -19,8 +19,10 @@
 //! the operator, either grid, the operator's park or summit, the propagation mode or satellite.
 //! A club log's two calls, a rover's grid corner and a satellite pass beside a simplex contact
 //! are each owed their own record. A copy holding NONE of a field is no difference — that is the
-//! gap a merge fills. [`split_distinct`] splits a window's group on them, and the app refuses a
-//! merge of copies that differ in one, whatever the operator chose.
+//! gap a merge fills — but a copy naming no station call is under the call in Settings, as its
+//! upload was; and a grid is one grid at any precision (`FN31` and `FN31PR`). [`split_distinct`]
+//! splits a window's group on them, leaving out a copy that could belong to either of two, and the
+//! app refuses a merge of copies that differ in one, whatever the operator chose.
 //!
 //! # A merge keeps everything it can ([`merge`])
 //!
@@ -33,18 +35,25 @@
 //! - **upload stamps are the kept copy's own**, never another copy's: neither a stamp nor the
 //!   `LOTW_QSL_SENT` mark a stamp is read back from. A stamp is not history, so a stamp the merge
 //!   gave the kept contact would outlive an undo of the merge and claim an upload that contact
-//!   never had. The price is honest: a service only a deleted copy reached is owed the merged
-//!   contact, and answers its upload as the duplicate it is;
+//!   never had. The price: a service only a deleted copy reached is owed the merged contact, and
+//!   the next upload sends it. Where the kept copy's time is the uploaded copy's (one contact
+//!   imported twice) the service already holds that QSO and answers Duplicate; where the copies
+//!   were logged minutes apart, a service that matches on the time may keep both, and nothing here
+//!   can take one back;
 //! - a field two copies hold DIFFERENT values for is a [`Conflict`]: the merged contact takes the
 //!   value the caller chose, else the kept copy's (else the first copy's that has one). A conflict
 //!   is **guarded** — it must be chosen, never defaulted — when it is the contest exchange, the
 //!   QSL-sent mark (a mark the operator CLEARED is a value too, so a copy marked sent never brings
-//!   it back), operator-written text (COMMENT, NOTES), an identity field ([`IDENTITY`]), or a
-//!   value a confirmed copy carries: a confirmation's own detail (a grid, a state, a zone LoTW
-//!   sent) is never overwritten without the operator's say;
+//!   it back), operator-written text (COMMENT, NOTES), the worked station's park or summit
+//!   (`SIG`), an identity field ([`IDENTITY`]), or a value a confirmed copy carries: a
+//!   confirmation's own detail (a grid, a state, a zone LoTW sent) is never overwritten without
+//!   the operator's say;
 //! - a side's passthrough references (the other programme's reference `take_ota_side` parks in
-//!   the passthrough) come from the copy whose side was taken, never from another: written after
-//!   the side, the next read would take a left-over one for it.
+//!   the passthrough) are never dropped unseen. Where the copies hold the same side (or one holds
+//!   none) they are unioned, and a reference two copies hold differently is guarded. Where the
+//!   sides differ — a park on one, a summit on the other — the side is a guarded conflict, and its
+//!   references come from the copy whose side was chosen, never from another: written after the
+//!   side, the next read would take a left-over one for it.
 //!
 //! The copies that are not kept are deleted by the merge, whole, into the history: nothing a
 //! copy held is lost, and the merge is undone as one run.
@@ -61,23 +70,27 @@
 //! queues nothing to any service.
 //!
 //! **One exception for the stamps: a changed STATION_CALLSIGN.** It is the call both upload paths
-//! sign and book the contact under, so a contact uploaded under the old one is not on any service
-//! under the new one. Its upload stamps, and the `LOTW_QSL_SENT` mark a stamp is read back from,
-//! are cleared exactly as a corrected call's are ([`super::edited`]), so the next upload sends it
-//! under the call it now carries ([`resends`]). Unlike a corrected call it is not queued here —
-//! no clean-up tool sends anything. **And the services' confirmations go with the stamps**
-//! (operator ruling): LoTW, eQSL and QRZ each matched the contact under the old station call, so
-//! their confirmations, LoTW's and eQSL's received dates, eQSL's Authenticity-Guaranteed mark and
-//! LoTW's DXCC are taken off, and `confirmed`/`award_confirmed` are read again from what is left
-//! ([`unconfirm_electronic`]). A paper card is the operator's own record and stays, with its date
-//! and route; so do the credit codes while a card can stand behind them, and with no card they go
-//! with LoTW's confirmation, the only other one that gives credit. Club Log keeps no confirmation
-//! on the contact, only its stamp. The preview counts what is taken off
-//! ([`confirmations_cleared`]), and the run's undo puts it back. The marks that
-//! say Nexus or a callbook filled a field
-//! come off a field it changes, as an edit takes them off. A park or summit is set only on a
-//! contact whose side holds no reference or one of the same programme: another programme's
-//! reference is never replaced by it, and such a contact is left as it is.
+//! sign and book the contact under — the call in Settings where it names none — so a contact
+//! uploaded under the old one is not on any service under the new one. Its upload stamps, and the
+//! `LOTW_QSL_SENT` mark a stamp is read back from, are cleared exactly as a corrected call's are
+//! ([`super::edited`]), so the next upload sends it under the call it now carries ([`resends`]).
+//! Unlike a corrected call it is not queued here — no clean-up tool sends anything. **And the
+//! services' confirmations go with the stamps** (operator ruling): LoTW, eQSL and QRZ each matched
+//! the contact under the old station call, so their confirmations, LoTW's and eQSL's received
+//! dates, eQSL's Authenticity-Guaranteed mark and LoTW's DXCC are taken off, and
+//! `confirmed`/`award_confirmed` are read again from what is left ([`unconfirm_electronic`]). A
+//! paper card is the operator's own record and stays, with its date and route; so do the credit
+//! codes, which record what an award desk granted and what the operator submitted. Club Log keeps
+//! no confirmation on the contact, only its stamp. The preview counts what is taken off
+//! ([`confirmations_cleared`]), and the run's undo puts it back.
+//!
+//! Filling a blank station call with the Settings call, or clearing the Settings call from it, is
+//! no change of the call the contact is uploaded under: the field changes and nothing else.
+//!
+//! The marks that say Nexus or a callbook filled a field come off a field it changes, as an edit
+//! takes them off. A park or summit is set only on a contact whose side holds no reference or one
+//! of the same programme: another programme's reference is never replaced by it, and such a
+//! contact is left as it is.
 
 use std::collections::HashMap;
 
@@ -165,8 +178,11 @@ pub const IDENTITY: [&str; 6] = [
 
 /// The first field in which `a` and `b` are two contacts, not one: the call ([`call_key`]), the
 /// band or mode (case aside), or an identity field ([`IDENTITY`]) both hold and hold differently,
-/// case aside. A field one of them leaves empty is no difference. `None`: they may be one contact.
-pub fn distinct(a: &QsoRecord, b: &QsoRecord) -> Option<&'static str> {
+/// case aside. A field one of them leaves empty is no difference. The station call is the one each
+/// is uploaded under ([`station_call`]), so a copy naming none is under `settings_call`, the call
+/// in Settings. A grid is one grid at any precision ([`same_locator`]). `None`: they may be one
+/// contact.
+pub fn distinct(a: &QsoRecord, b: &QsoRecord, settings_call: Option<&str>) -> Option<&'static str> {
     if call_key(&a.call) != call_key(&b.call) {
         return Some("CALL");
     }
@@ -180,14 +196,21 @@ pub fn distinct(a: &QsoRecord, b: &QsoRecord) -> Option<&'static str> {
         (Some(x), Some(y)) => !x.eq_ignore_ascii_case(&y),
         _ => false,
     };
+    let grids_differ = |x: &Option<String>, y: &Option<String>| match (text(x), text(y)) {
+        (Some(x), Some(y)) => !same_locator(&x, &y),
+        _ => false,
+    };
     let fields: [(&'static str, bool); 7] = [
         (
             "STATION_CALLSIGN",
-            differ(&a.station_callsign, &b.station_callsign),
+            matches!(
+                (station_call(a, settings_call), station_call(b, settings_call)),
+                (Some(x), Some(y)) if x != y
+            ),
         ),
         ("OPERATOR", differ(&a.operator, &b.operator)),
-        ("MY_GRIDSQUARE", differ(&a.my_grid, &b.my_grid)),
-        ("GRIDSQUARE", differ(&a.grid, &b.grid)),
+        ("MY_GRIDSQUARE", grids_differ(&a.my_grid, &b.my_grid)),
+        ("GRIDSQUARE", grids_differ(&a.grid, &b.grid)),
         // The operator's side: its programme and its reference (MY_SIG and MY_SIG_INFO).
         (
             "MY_SIG",
@@ -205,15 +228,48 @@ pub fn distinct(a: &QsoRecord, b: &QsoRecord) -> Option<&'static str> {
     fields.into_iter().find(|(_, d)| *d).map(|(tag, _)| tag)
 }
 
+/// The call `r` is uploaded under: its STATION_CALLSIGN, else `settings_call`, the call in
+/// Settings ([`crate::reconcile::lotw_own_call`]), trimmed, case aside. `None` when neither names
+/// one.
+fn station_call(r: &QsoRecord, settings_call: Option<&str>) -> Option<String> {
+    crate::reconcile::lotw_own_call(r, settings_call)
+}
+
+/// Whether two locators are one grid: the shorter, case aside, begins the longer and ends on a
+/// pair (`FN31` and `FN31PR`; one logger writes the square, another the subsquare). `FN31PR` and
+/// `FN31PS`, or `FN31` and `FN32`, are two.
+fn same_locator(x: &str, y: &str) -> bool {
+    let (x, y) = (x.to_ascii_uppercase(), y.to_ascii_uppercase());
+    let (short, long) = if x.len() <= y.len() { (x, y) } else { (y, x) };
+    short.len() % 2 == 0 && long.starts_with(&short)
+}
+
 /// One window's group split into the groups that may be one contact each: every copy joins the
 /// first group it is [`distinct`] from no member of, in order. Only the groups of two or more.
-pub fn split_distinct(copies: Vec<QsoRecord>) -> Vec<Vec<QsoRecord>> {
+///
+/// A copy that could be a copy of either of two copies that are two contacts (one leaving blank
+/// the grid in which the other two differ) is in no group: which one it was logged for is the
+/// operator's to say, and a merge into the wrong one would hand it the other's confirmation.
+pub fn split_distinct(copies: Vec<QsoRecord>, settings_call: Option<&str>) -> Vec<Vec<QsoRecord>> {
+    let one = |a: &QsoRecord, b: &QsoRecord| distinct(a, b, settings_call).is_none();
+    let ambiguous: Vec<bool> = copies
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let fits: Vec<&QsoRecord> = copies
+                .iter()
+                .enumerate()
+                .filter(|&(j, m)| j != i && one(m, r))
+                .map(|(_, m)| m)
+                .collect();
+            fits.iter()
+                .enumerate()
+                .any(|(k, x)| fits[k + 1..].iter().any(|y| !one(x, y)))
+        })
+        .collect();
     let mut groups: Vec<Vec<QsoRecord>> = Vec::new();
-    for r in copies {
-        match groups
-            .iter_mut()
-            .find(|g| g.iter().all(|m| distinct(m, &r).is_none()))
-        {
+    for (r, _) in copies.into_iter().zip(ambiguous).filter(|(_, a)| !a) {
+        match groups.iter_mut().find(|g| g.iter().all(|m| one(m, &r))) {
             Some(g) => g.push(r),
             None => groups.push(vec![r]),
         }
@@ -547,11 +603,11 @@ fn confirmed(r: &QsoRecord) -> bool {
 
 /// Whether a conflict on `tag` must be chosen whoever holds it (see the module header).
 fn always_guarded(tag: &str) -> bool {
-    matches!(tag, "CONTEST" | "QSL_SENT" | "COMMENT" | "NOTES") || IDENTITY.contains(&tag)
+    matches!(tag, "CONTEST" | "QSL_SENT" | "COMMENT" | "NOTES" | "SIG") || IDENTITY.contains(&tag)
 }
 
-/// Each side's passthrough references, by the part that holds the side: they follow the copy
-/// whose side the merge took.
+/// Each side's passthrough references, by the part that holds the side: where the copies' sides
+/// differ they follow the copy whose side the merge took; where they agree they are unioned.
 const SIDE_EXTRAS: [(&str, [&str; 4]); 2] = [
     (
         "MY_SIG",
@@ -598,7 +654,7 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
             chosen: id_of(kept),
         });
     }
-    // The copy each side was taken from, by its part's tag.
+    // The copy each side was taken from, by its part's tag, where the copies' sides differed.
     let mut side_from: HashMap<&str, RecordId> = HashMap::new();
 
     for part in parts() {
@@ -613,8 +669,8 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
         let records: Vec<&QsoRecord> = holding.iter().map(|(r, _)| *r).collect();
         let from = if differ { pick(part.tag, &records) } else { 0 };
         (part.put)(&mut out, records[from]);
-        side_from.insert(part.tag, id_of(records[from]));
         if differ {
+            side_from.insert(part.tag, id_of(records[from]));
             let guarded = always_guarded(part.tag) || records.iter().any(|r| confirmed(r));
             conflicts.push(Conflict {
                 tag: part.tag.to_string(),
@@ -639,14 +695,15 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
     let mut extra: Vec<(String, String)> = Vec::new();
     for name in names {
         // The copies this field may come from: the kept one alone for the stamp's mark, the one
-        // whose side was taken for a side's reference, else every copy.
+        // whose side was taken for a side's reference where the sides differed, else every copy.
+        let side = SIDE_EXTRAS
+            .iter()
+            .find(|(_, names)| names.contains(&name))
+            .map(|(tag, _)| *tag);
         let source = if name == STAMP_EXTRA {
             Some(id_of(kept))
         } else {
-            SIDE_EXTRAS
-                .iter()
-                .find(|(_, names)| names.contains(&name))
-                .and_then(|(tag, _)| side_from.get(tag).copied())
+            side.and_then(|tag| side_from.get(tag).copied())
         };
         let from_copies: Vec<&QsoRecord> = order
             .iter()
@@ -681,7 +738,8 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
                     .iter()
                     .map(|(r, v)| (id_of(r), v.to_string()))
                     .collect(),
-                guarded: records.iter().any(|r| confirmed(r)),
+                // A reference is never dropped unseen.
+                guarded: side.is_some() || records.iter().any(|r| confirmed(r)),
                 chosen: id_of(records[from]),
             });
         }
@@ -1029,12 +1087,13 @@ fn set_side(
     }
 }
 
-/// Whether a change from `before` to `after` changes the station call the contact is uploaded
-/// under (trimmed, case aside; cleared counts): its stamps go, and the next upload sends it again
-/// under the call it now carries.
-pub fn resends(before: &QsoRecord, after: &QsoRecord) -> bool {
-    let call = |r: &QsoRecord| text(&r.station_callsign).map(|c| c.to_ascii_uppercase());
-    call(before) != call(after)
+/// Whether a change from `before` to `after` changes the call the contact is uploaded under
+/// ([`station_call`]: its STATION_CALLSIGN, else `settings_call`, the call in Settings; trimmed,
+/// case aside): its stamps go, and the next upload sends it again under the call it now carries.
+/// A blank station call filled with the Settings call, or the Settings call cleared, is no change:
+/// the contact was uploaded under that call all along.
+pub fn resends(before: &QsoRecord, after: &QsoRecord, settings_call: Option<&str>) -> bool {
+    station_call(before, settings_call) != station_call(after, settings_call)
 }
 
 /// What a service matched under a station call, beside its confirmation flag: LoTW's and eQSL's
@@ -1047,18 +1106,28 @@ const ELECTRONIC_EXTRAS: [&str; 4] = [
     super::LOTW_DXCC_FIELD,
 ];
 
+/// A contact's confirmations by service. An older record holding one only in
+/// `award_confirmed`/`confirmed`, with no per-service flag, is read as the log writes it: an award
+/// confirmation as LoTW's, any other as eQSL's.
+fn by_service(r: &QsoRecord) -> QslRcvd {
+    let q = r.qsl_rcvd;
+    if q.any() {
+        return q;
+    }
+    QslRcvd {
+        lotw: r.award_confirmed,
+        eqsl: r.confirmed && !r.award_confirmed,
+        ..QslRcvd::default()
+    }
+}
+
 /// Take off `rec` the confirmations the services matched under its old station call (the module
-/// header): LoTW's, eQSL's and QRZ's, with [`ELECTRONIC_EXTRAS`]. A paper card stays. The credit
-/// codes go with LoTW's confirmation when no card can stand behind them; an eQSL or QRZ
-/// confirmation never gave credit, so it takes none off.
+/// header): LoTW's, eQSL's and QRZ's ([`by_service`]), with [`ELECTRONIC_EXTRAS`]. A paper card
+/// stays, and so do the credit codes: what an award desk granted and the operator submitted.
 fn unconfirm_electronic(rec: &mut QsoRecord) {
-    let q = rec.qsl_rcvd;
+    let q = by_service(rec);
     if !(q.lotw || q.eqsl || q.qrz) {
         return;
-    }
-    if q.lotw && !q.card {
-        rec.credit_granted.clear();
-        rec.credit_submitted.clear();
     }
     rec.qsl_rcvd = QslRcvd {
         card: q.card,
@@ -1073,7 +1142,7 @@ fn unconfirm_electronic(rec: &mut QsoRecord) {
 /// How many of `before`'s LoTW, eQSL and QRZ confirmations `after` no longer holds: what a changed
 /// station call took off, as the preview counts it.
 pub fn confirmations_cleared(before: &QsoRecord, after: &QsoRecord) -> usize {
-    let (b, a) = (before.qsl_rcvd, after.qsl_rcvd);
+    let (b, a) = (by_service(before), by_service(after));
     [(b.lotw, a.lotw), (b.eqsl, a.eqsl), (b.qrz, a.qrz)]
         .into_iter()
         .filter(|&(was, now)| was && !now)
@@ -1088,6 +1157,7 @@ pub fn changed(
     row: &QsoRecord,
     changes: &[Change],
     country: &dyn Fn(&str, Option<u32>) -> Option<String>,
+    settings_call: Option<&str>,
 ) -> Option<QsoRecord> {
     let mut rec = row.clone();
     for c in changes {
@@ -1136,7 +1206,7 @@ pub fn changed(
     }
     callbook::unmark_edited(row, &mut rec);
     // A changed station call: the stamps go, as a corrected call's do (the module header).
-    if resends(row, &rec) {
+    if resends(row, &rec, settings_call) {
         rec.upload = UploadState::default();
         rec.extra.retain(|(k, _)| k != STAMP_EXTRA);
         unconfirm_electronic(&mut rec);

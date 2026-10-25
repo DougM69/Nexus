@@ -300,18 +300,19 @@ pub async fn bulk_edit_apply(
 
 // ── the check ──────────────────────────────────────────────────────────────────────────────────
 
-/// The DXCC number the country file places `call` in, when the contact's own `logged` number is a
-/// current entity and the call's is another. A deleted entity's number is never judged: the
-/// prefix it was logged under may name another entity today. Nor is a call the file cannot judge
-/// ([`propagation::dxcc::prefix_decides`]): an exact-call exception, or a DXpedition's call whose
-/// prefix the logged entity's own calls share.
-fn dxcc_mismatch(call: &str, logged: u32) -> Option<u32> {
+/// Whether the country file places `call` in another entity than the contact's own `logged`
+/// number, a current entity's, and the number it would propose: `Some(None)` where the call's
+/// prefix cannot decide it ([`propagation::dxcc::prefix_decides`]) — a mainland call logged as an
+/// island of its own block (K1ABC as Hawaii, G4ABC as Scotland), a DXpedition's call, an exact-call
+/// exception — which is listed for the operator and never fixed. A deleted entity's number is
+/// never judged: the prefix it was logged under may name another entity today.
+fn dxcc_mismatch(call: &str, logged: u32) -> Option<Option<u32>> {
     let entity = propagation::dxcc::entity_by_dxcc(logged)?;
-    if entity.deleted || !propagation::dxcc::prefix_decides(call, logged) {
+    if entity.deleted {
         return None;
     }
     let by_call = propagation::dxcc::resolve(call)?.dxcc?;
-    (by_call != logged).then_some(by_call)
+    (by_call != logged).then(|| propagation::dxcc::prefix_decides(call, logged).then_some(by_call))
 }
 
 fn kind_word(k: ProblemKind) -> &'static str {
@@ -428,7 +429,7 @@ mod tests {
         assert_eq!(dxcc_mismatch("W1AW", 291), None, "agrees");
         assert_eq!(
             dxcc_mismatch("W1AW", 1),
-            Some(291),
+            Some(Some(291)),
             "Canada's number on a US call"
         );
         let deleted = propagation::dxcc::entities()
@@ -440,21 +441,48 @@ mod tests {
 
     /// ★ A DXpedition is never "fixed". `3Y0PI` (Peter I, 1994) and `3Y5X` (Bouvet, 1989) have no
     /// exact entry in the country file and fall to Antarctica's bare `3Y`; logged as Peter I (199)
-    /// or Bouvet (24) — which they were — they are no mismatch. Logged as an entity with no `3Y`
-    /// call at all, they still are. An exact-call exception is never judged against the number.
+    /// or Bouvet (24) — which they were — they are listed for the operator with no number
+    /// proposed. Logged as an entity with no `3Y` call at all, the file's number is proposed. An
+    /// exact-call exception logged as another entity is listed, never fixed.
     #[test]
-    fn a_dxpedition_call_is_never_called_a_mismatch() {
+    fn a_dxpedition_call_is_never_fixed() {
         let antarctica = propagation::dxcc::resolve("3Y0PI").and_then(|i| i.dxcc);
         assert_eq!(antarctica, Some(13), "premise: the bare prefix places it");
-        assert_eq!(dxcc_mismatch("3Y0PI", 199), None);
-        assert_eq!(dxcc_mismatch("3Y5X", 24), None);
+        assert_eq!(dxcc_mismatch("3Y0PI", 199), Some(None));
+        assert_eq!(dxcc_mismatch("3Y5X", 24), Some(None));
         assert_eq!(
             dxcc_mismatch("3Y0PI", 291),
-            Some(13),
+            Some(Some(13)),
             "a US number is still wrong"
         );
-        // =3Y0J is Bouvet's exact entry: whatever number it carries, the file does not judge it.
-        assert_eq!(dxcc_mismatch("3Y0J", 199), None);
+        // =3Y0J is Bouvet's exact entry.
+        assert_eq!(dxcc_mismatch("3Y0J", 199), Some(None));
+        assert_eq!(dxcc_mismatch("3Y0J", 24), None);
+    }
+
+    /// ★ The classic DXCC slips are listed: a mainland call logged as an island or district of its
+    /// own block, and the reverse. The prefix cannot say which the operator meant, so none is
+    /// fixed; but none is hidden.
+    #[test]
+    fn a_mainland_call_logged_as_its_blocks_island_is_listed_unfixed() {
+        const USA: u32 = 291;
+        const HAWAII: u32 = 110;
+        const ALASKA: u32 = 6;
+        const SCOTLAND: u32 = 279;
+        for (call, logged) in [
+            ("K1ABC", HAWAII),
+            ("W1AW", HAWAII),
+            ("K1ABC", ALASKA),
+            ("KH6ABC", USA),
+            ("G4ABC", SCOTLAND),
+        ] {
+            assert_eq!(
+                dxcc_mismatch(call, logged),
+                Some(None),
+                "{call} as {logged}"
+            );
+        }
+        assert_eq!(dxcc_mismatch("KH6ABC", HAWAII), None, "agrees");
     }
 
     /// A merge's ids that are not ids are refused before anything is read.

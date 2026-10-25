@@ -327,7 +327,7 @@ fn a_bulk_edit_changes_only_its_fields_and_keeps_every_stamp() {
         },
     ])
     .unwrap();
-    let after = changed(&b, &changes, &no_country).expect("a change");
+    let after = changed(&b, &changes, &no_country, None).expect("a change");
     let mut want = b.clone();
     want.my_grid = Some("em10".into());
     want.operator = None;
@@ -341,12 +341,12 @@ fn a_bulk_edit_changes_only_its_fields_and_keeps_every_stamp() {
 
     b.ota.my_program = None;
     b.ota.my_ref = None;
-    let parked = changed(&b, &changes, &no_country).unwrap();
+    let parked = changed(&b, &changes, &no_country, None).unwrap();
     assert_eq!(parked.ota.my_program.as_deref(), Some("POTA"));
     assert_eq!(parked.ota.my_ref.as_deref(), Some("US-0001"));
 
     assert!(
-        changed(&parked, &changes, &no_country).is_none(),
+        changed(&parked, &changes, &no_country, None).is_none(),
         "already so"
     );
     assert!(checked(&[Change {
@@ -486,9 +486,9 @@ fn copies_differing_in_an_identity_field_are_two_contacts() {
         let (mut a, mut b) = pair("W1AW", "W1AW");
         set(&mut a, x);
         set(&mut b, y);
-        assert_eq!(distinct(&a, &b), Some(tag), "{tag}: {x} / {y}");
+        assert_eq!(distinct(&a, &b, None), Some(tag), "{tag}: {x} / {y}");
         assert_eq!(
-            split_distinct(vec![a.clone(), b.clone()]),
+            split_distinct(vec![a.clone(), b.clone()], None),
             Vec::<Vec<QsoRecord>>::new(),
             "{tag}: no group"
         );
@@ -499,9 +499,12 @@ fn copies_differing_in_an_identity_field_are_two_contacts() {
         );
         // Held by one copy only: no difference, and it fills the kept one.
         let (bare, _) = pair("W1AW", "W1AW");
-        assert_eq!(distinct(&bare, &b), None, "{tag}");
-        let groups = split_distinct(vec![bare.clone(), b.clone(), a.clone()]);
+        assert_eq!(distinct(&bare, &b, None), None, "{tag}");
+        let groups = split_distinct(vec![bare.clone(), b.clone()], None);
         assert_eq!(groups, vec![vec![bare.clone(), b.clone()]], "{tag}");
+        // Beside two copies that are two contacts, it could be a copy of either: it joins neither.
+        let groups = split_distinct(vec![bare.clone(), b.clone(), a.clone()], None);
+        assert_eq!(groups, Vec::<Vec<QsoRecord>>::new(), "{tag}: ambiguous");
     }
 }
 
@@ -632,7 +635,7 @@ fn a_bulk_station_call_change_clears_the_upload_stamps() {
         }])
         .unwrap()
     };
-    let after = changed(&b, &to(Some("w6r")), &no_country).unwrap();
+    let after = changed(&b, &to(Some("w6r")), &no_country, None).unwrap();
     assert_eq!(after.station_callsign.as_deref(), Some("W6R"));
     assert_eq!(after.upload, crate::logbook::UploadState::default());
     assert_eq!(extra_value(&after, "LOTW_QSL_SENT"), None);
@@ -641,12 +644,12 @@ fn a_bulk_station_call_change_clears_the_upload_stamps() {
         after.credit_submitted, b.credit_submitted,
         "with the card's credit"
     );
-    assert!(resends(&b, &after));
+    assert!(resends(&b, &after, None));
 
-    let cleared = changed(&b, &to(None), &no_country).unwrap();
+    let cleared = changed(&b, &to(None), &no_country, None).unwrap();
     assert_eq!(cleared.upload, crate::logbook::UploadState::default());
 
-    assert!(changed(&b, &to(Some("k2def")), &no_country).is_none());
+    assert!(changed(&b, &to(Some("k2def")), &no_country, None).is_none());
     let rig = changed(
         &b,
         &checked(&[Change {
@@ -655,17 +658,18 @@ fn a_bulk_station_call_change_clears_the_upload_stamps() {
         }])
         .unwrap(),
         &no_country,
+        None,
     )
     .unwrap();
     assert_eq!(rig.upload, b.upload);
-    assert!(!resends(&b, &rig));
+    assert!(!resends(&b, &rig, None));
 }
 
 /// ★ A STATION CALL CHANGED IN BULK TAKES OFF WHAT THE SERVICES MATCHED UNDER THE OLD ONE: LoTW's,
 /// eQSL's and QRZ's confirmations, their received dates, eQSL's Authenticity-Guaranteed mark and
-/// LoTW's DXCC. A paper card stays, with its date and route, and so does the credit while a card
-/// can stand behind it; with no card, LoTW's credit goes with LoTW's confirmation. The count is
-/// of the confirmations taken off. The same call, case and padding aside, takes off nothing, and
+/// LoTW's DXCC. A paper card stays, with its date and route, and so do the credit codes, card or
+/// none: they are an award desk's record and the operator's own. The count is of the
+/// confirmations taken off. The same call, case and padding aside, takes off nothing, and
 /// neither does any other field.
 #[test]
 fn a_bulk_station_call_change_clears_the_electronic_confirmations_and_keeps_the_card() {
@@ -700,7 +704,7 @@ fn a_bulk_station_call_change_clears_the_electronic_confirmations_and_keeps_the_
         .unwrap()
     };
 
-    let after = changed(&r, &to(Some("w6r")), &no_country).unwrap();
+    let after = changed(&r, &to(Some("w6r")), &no_country, None).unwrap();
     let mut want = r.clone();
     want.station_callsign = Some("W6R".into());
     want.qsl_rcvd = QslRcvd {
@@ -725,16 +729,21 @@ fn a_bulk_station_call_change_clears_the_electronic_confirmations_and_keeps_the_
     );
     assert_eq!(confirmations_cleared(&r, &after), 3);
 
-    // No card: nothing confirms it any more, and LoTW's credit goes with LoTW's confirmation.
+    // No card: nothing confirms it any more. The credit codes stay: they record what an award
+    // desk did and what the operator submitted, not a service's match.
     let mut no_card = r.clone();
     no_card.qsl_rcvd.card = false;
     for k in ["QSL_RCVD_VIA", "QSLRDATE"] {
         set_extra(&mut no_card, k, None);
     }
-    let cleared = changed(&no_card, &to(None), &no_country).unwrap();
+    let cleared = changed(&no_card, &to(None), &no_country, None).unwrap();
     assert_eq!(cleared.qsl_rcvd, QslRcvd::default());
     assert!(!cleared.confirmed && !cleared.award_confirmed);
-    assert!(cleared.credit_granted.is_empty() && cleared.credit_submitted.is_empty());
+    assert_eq!(
+        (&cleared.credit_granted, &cleared.credit_submitted),
+        (&no_card.credit_granted, &no_card.credit_submitted),
+        "the award desk's record stays"
+    );
     assert_eq!(
         extra_value(&cleared, "CQZ"),
         Some("5"),
@@ -749,13 +758,13 @@ fn a_bulk_station_call_change_clears_the_electronic_confirmations_and_keeps_the_
         ..QslRcvd::default()
     };
     eqsl_only.award_confirmed = false;
-    let after = changed(&eqsl_only, &to(Some("W6R")), &no_country).unwrap();
+    let after = changed(&eqsl_only, &to(Some("W6R")), &no_country, None).unwrap();
     assert_eq!(after.credit_granted, eqsl_only.credit_granted);
     assert!(!after.confirmed);
     assert_eq!(confirmations_cleared(&eqsl_only, &after), 1);
 
     // The same call: nothing at all.
-    assert!(changed(&r, &to(Some(" k2def ")), &no_country).is_none());
+    assert!(changed(&r, &to(Some(" k2def ")), &no_country, None).is_none());
     // Another field: every confirmation stays.
     let rig = changed(
         &r,
@@ -765,6 +774,7 @@ fn a_bulk_station_call_change_clears_the_electronic_confirmations_and_keeps_the_
         }])
         .unwrap(),
         &no_country,
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -806,4 +816,175 @@ fn a_copys_revision_moves_with_everything_but_a_stamp() {
             "the edit key is blind to change {i}"
         );
     }
+}
+
+/// ★ THE CALL A CONTACT IS UPLOADED UNDER is its STATION_CALLSIGN, else the call in Settings. A
+/// bulk edit filling a blank station call with the Settings call, or clearing the Settings call
+/// from it, leaves the contact under the call it was uploaded and confirmed under: the field
+/// changes and nothing else — every stamp, confirmation, date and credit stays. Filled with
+/// another call, it is a change, and they go. With no call in Settings a fill is a change.
+#[test]
+fn a_station_call_filled_with_the_settings_call_clears_nothing() {
+    let mut r = contact("W1AW", T0, 1);
+    r.qsl_rcvd = QslRcvd {
+        lotw: true,
+        eqsl: true,
+        qrz: true,
+        ..QslRcvd::default()
+    };
+    r.confirmed = true;
+    r.award_confirmed = true;
+    r.credit_granted = vec!["DXCC".into()];
+    r.upload.lotw = stamp(100);
+    r.upload.qrz = stamp(200);
+    set_extra(&mut r, "LOTW_QSL_SENT", Some("Y".into()));
+    set_extra(&mut r, "LOTW_QSLRDATE", Some("20260105".into()));
+    let to = |v: Option<&str>| {
+        checked(&[Change {
+            field: Field::StationCallsign,
+            value: v.map(str::to_string),
+        }])
+        .unwrap()
+    };
+    let settings = Some(" kd9taw");
+
+    let filled = changed(&r, &to(Some("KD9TAW")), &no_country, settings).unwrap();
+    let mut want = r.clone();
+    want.station_callsign = Some("KD9TAW".into());
+    assert_eq!(filled, want, "the field, and nothing else");
+    assert!(!resends(&r, &filled, settings));
+    assert_eq!(confirmations_cleared(&r, &filled), 0);
+
+    let blanked = changed(&filled, &to(None), &no_country, settings).unwrap();
+    assert_eq!(
+        blanked, r,
+        "cleared back to the Settings call: nothing else"
+    );
+
+    let other = changed(&r, &to(Some("W6R")), &no_country, settings).unwrap();
+    assert!(resends(&r, &other, settings));
+    assert_eq!(other.upload, crate::logbook::UploadState::default());
+    assert_eq!(confirmations_cleared(&r, &other), 3);
+
+    let unknown = changed(&r, &to(Some("KD9TAW")), &no_country, None).unwrap();
+    assert!(resends(&r, &unknown, None), "no Settings call: a change");
+}
+
+/// ★ A MERGE NEVER DROPS A REFERENCE. Copies on the same side (both on one summit), one also
+/// holding the park it parked beside it: whichever is kept, the merged contact holds the park.
+/// Copies whose side differs (a park beside a summit) are a guarded conflict, so "Merge all"
+/// cannot pick one silently; and a parked reference two copies hold differently is guarded too.
+#[test]
+fn a_merge_never_drops_a_parked_reference_and_guards_a_differing_side() {
+    let summit = |r: &mut QsoRecord| {
+        r.ota.my_program = Some("SOTA".into());
+        r.ota.my_ref = Some("W7A/CN-01".into());
+    };
+    let (mut a, mut b) = pair("W1AW", "W1AW");
+    summit(&mut a);
+    summit(&mut b);
+    a.extra = vec![
+        ("MY_SIG".into(), "POTA".into()),
+        ("MY_SIG_INFO".into(), "US-1234".into()),
+    ];
+    for keep in [0, 1] {
+        let merged = merge(&[a.clone(), b.clone()], keep, &HashMap::new());
+        assert_eq!(
+            extra_value(&merged.record, "MY_SIG_INFO"),
+            Some("US-1234"),
+            "keep {keep}"
+        );
+        assert_eq!(extra_value(&merged.record, "MY_SIG"), Some("POTA"));
+        assert_eq!(merged.record.ota.my_ref.as_deref(), Some("W7A/CN-01"));
+        assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
+    }
+
+    // The same summit, two different parks beside it.
+    b.extra = vec![
+        ("MY_SIG".into(), "POTA".into()),
+        ("MY_SIG_INFO".into(), "US-5678".into()),
+    ];
+    let merged = merge(&[a.clone(), b.clone()], 0, &HashMap::new());
+    assert_eq!(merged.unchosen(&HashMap::new()), vec!["MY_SIG_INFO"]);
+
+    // A park on one copy, a summit on the other: the worked station's side.
+    let (mut a, mut b) = pair("W1AW", "W1AW");
+    a.ota.their_program = Some("POTA".into());
+    a.ota.their_ref = Some("US-1234".into());
+    b.ota.their_program = Some("SOTA".into());
+    b.ota.their_ref = Some("W7A/CN-01".into());
+    let merged = merge(&[a, b], 0, &HashMap::new());
+    assert_eq!(merged.unchosen(&HashMap::new()), vec!["SIG"]);
+}
+
+/// ★ A GRID IS ONE GRID AT ANY PRECISION. One logger writes the 4-character square, another the
+/// 6-character subsquare: `FN31` and `FN31PR` (case aside) are one contact, either grid. Squares
+/// that truly differ are still two. The merge still names the grid for the operator to choose.
+#[test]
+fn grids_differing_only_in_precision_are_one_contact() {
+    for (tag, set) in [
+        (
+            "GRIDSQUARE",
+            (|r: &mut QsoRecord, v: &str| r.grid = Some(v.into())) as fn(&mut QsoRecord, &str),
+        ),
+        ("MY_GRIDSQUARE", |r, v| r.my_grid = Some(v.into())),
+    ] {
+        for (x, y, two) in [
+            ("FN31", "FN31PR", false),
+            ("fn31pr", "FN31", false),
+            ("EN52", "EN52WB12", false),
+            ("FN31PR", "FN31PS", true),
+            ("FN31", "FN32", true),
+            ("FN3", "FN31", true),
+        ] {
+            let (mut a, mut b) = pair("W1AW", "W1AW");
+            set(&mut a, x);
+            set(&mut b, y);
+            assert_eq!(
+                distinct(&a, &b, None),
+                two.then_some(tag),
+                "{tag}: {x} / {y}"
+            );
+        }
+        let (mut a, mut b) = pair("W1AW", "W1AW");
+        set(&mut a, "FN31");
+        set(&mut b, "FN31PR");
+        let merged = merge(&[a, b], 0, &HashMap::new());
+        assert_eq!(merged.unchosen(&HashMap::new()), vec![tag]);
+    }
+}
+
+/// A copy naming no station call is under the call in Settings: beside a copy under another
+/// call it is another contact, and beside one under the Settings call it is the same one.
+#[test]
+fn a_blank_station_call_is_the_settings_call() {
+    let (a, mut b) = pair("W1AW", "W1AW");
+    b.station_callsign = Some("W6R".into());
+    assert_eq!(distinct(&a, &b, Some("KD9TAW")), Some("STATION_CALLSIGN"));
+    assert_eq!(distinct(&a, &b, None), None, "no Settings call: a gap");
+    b.station_callsign = Some("kd9taw".into());
+    assert_eq!(distinct(&a, &b, Some("KD9TAW")), None);
+}
+
+/// An older record holding its confirmation only in `confirmed`/`award_confirmed`, with no
+/// per-service flag, is written as a LoTW (award) or eQSL confirmation: a changed station call
+/// takes that off too, and counts it.
+#[test]
+fn a_station_call_change_takes_off_an_older_records_confirmation() {
+    let mut r = contact("W1AW", T0, 1);
+    r.station_callsign = Some("K2DEF".into());
+    r.confirmed = true;
+    r.award_confirmed = true;
+    let to_w6r = checked(&[Change {
+        field: Field::StationCallsign,
+        value: Some("W6R".into()),
+    }])
+    .unwrap();
+    let after = changed(&r, &to_w6r, &no_country, None).unwrap();
+    assert!(!after.confirmed && !after.award_confirmed);
+    assert_eq!(confirmations_cleared(&r, &after), 1);
+    r.award_confirmed = false;
+    let after = changed(&r, &to_w6r, &no_country, None).unwrap();
+    assert!(!after.confirmed);
+    assert_eq!(confirmations_cleared(&r, &after), 1);
 }
