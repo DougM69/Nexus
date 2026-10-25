@@ -162,7 +162,7 @@ interface DraftQso {
   qslCard: string
 }
 
-/** The word the operator must type to arm the full-log purge (irreversible). It is COMPARED
+/** The word the operator must type to arm the full-log purge. It is COMPARED
  * against what they type, so it is a token and not prose — translating it would move the gate. */
 const PURGE_WORD = 'DELETE'
 
@@ -477,7 +477,7 @@ export function Logbook({
   // nothing until Check, and changes nothing until Apply.
   const [showConfirmations, setShowConfirmations] = useState(false)
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
-  // arm the danger button — a deliberate, typed gate for an irreversible wipe.
+  // arm the danger button — a deliberate, typed gate for a wipe of the whole log.
   const [showPurge, setShowPurge] = useState(false)
   const [showDeleted, setShowDeleted] = useState(false)
   const [purgeText, setPurgeText] = useState('')
@@ -1051,7 +1051,7 @@ export function Logbook({
   }
 
   // Wipe the ENTIRE logbook (truncates the ADIF file). Armed only once the operator
-  // types the confirmation word — an irreversible action gets a deliberate gate.
+  // types the confirmation word — a wipe of the whole log gets a deliberate gate.
   const onPurge = async () => {
     if (purgeText.trim().toUpperCase() !== PURGE_WORD) return
     setPurging(true)

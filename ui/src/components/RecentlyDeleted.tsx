@@ -4,6 +4,8 @@
 // survives a restart — on the logbook database. On the fallback path (the log kept in log.adi
 // when its database could not be opened) the history lives in memory and starts empty each launch.
 // A deleted contact's copy is kept for the days Settings names (90 by default), then removed.
+// A restore is refused when the contact was logged again after it was deleted (the same station,
+// band and mode within 5 minutes); the row then offers Restore anyway, for two different contacts.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Calls, bands and modes
 // are invariant tokens, shown as they are.
@@ -27,6 +29,8 @@ export function RecentlyDeleted({
   const [rows, setRows] = useState<DeletedQso[] | null>(null)
   const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  // The rows whose restore was refused because the contact was logged again since.
+  const [blocked, setBlocked] = useState<ReadonlySet<string>>(new Set())
 
   const load = useCallback(async () => {
     try {
@@ -39,7 +43,7 @@ export function RecentlyDeleted({
 
   useEffect(() => {
     if (open) void load()
-    else setRows(null)
+    else { setRows(null); setBlocked(new Set()) }
   }, [open, load])
 
   const changed = () => {
@@ -47,11 +51,12 @@ export function RecentlyDeleted({
     onRestored()
   }
 
-  const restore = async (r: DeletedQso) => {
+  const restore = async (r: DeletedQso, anyway: boolean) => {
     setBusy(r.id)
-    const answer = await withErrorToast(() => restoreDeletedQso(r.id), t('logbook.deleted.failed'))
+    const answer = await withErrorToast(() => restoreDeletedQso(r.id, anyway), t('logbook.deleted.failed'))
     setBusy(null)
     if (!answer) return
+    if (answer.changed === 0 && answer.duplicate > 0) setBlocked((b) => new Set(b).add(r.id))
     sayUndone(answer, t('logbook.deleted.restored', { call: r.call }), changed)
     changed()
   }
@@ -83,9 +88,10 @@ export function RecentlyDeleted({
                 type="button"
                 className="export-btn"
                 disabled={busy !== null}
-                onClick={() => void restore(r)}
+                title={blocked.has(r.id) ? t('logbook.deleted.restoreAnywayHint') : undefined}
+                onClick={() => void restore(r, blocked.has(r.id))}
               >
-                {t('logbook.deleted.restore')}
+                {blocked.has(r.id) ? t('logbook.deleted.restoreAnyway') : t('logbook.deleted.restore')}
               </button>
             </li>
           ))}

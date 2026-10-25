@@ -1189,6 +1189,19 @@ impl Recent {
         })
     }
 
+    /// The ids of every row a change since `revision` touched — `None` when one of them touched
+    /// rows nobody listed, or `revision` is older than the oldest change kept.
+    fn ids_since(&self, revision: u64) -> Option<HashSet<RecordId>> {
+        if revision < self.floor {
+            return None;
+        }
+        let mut ids = HashSet::new();
+        for (_, rows) in self.changes.iter().filter(|(at, _)| *at > revision) {
+            ids.extend(rows.as_ref()?.iter().filter_map(|(id, _)| *id));
+        }
+        Some(ids)
+    }
+
     /// Whether no change since `revision` touched a row `hits` names.
     fn untouched_since_by(&self, revision: u64, hits: impl Fn(&Touched) -> bool) -> bool {
         revision >= self.floor
@@ -2808,16 +2821,24 @@ impl StationCore {
     /// contact it puts back has been changed here since the plan (another window's is the store's
     /// to refuse: every pair is checked as it is written).
     ///
-    /// **A contact it would put back that the log already holds under another id is left out**,
-    /// by the log's own duplicate rule asked of the hot index here, under the lock, where every
-    /// contact this window and the windows it has taken in hold is counted — the rows the undo
-    /// itself takes out not among them. Their ids come back beside the ticket; the rest is made.
+    /// **A contact it would put back that was logged again after it was deleted is left out**
+    /// (`restores`, read off the lock from the history): one of the contacts added since its
+    /// delete, not by an undo, that the log's duplicate rule calls the same contact, asked of the
+    /// hot index here, under the lock — the rows the undo itself takes out not among them. A
+    /// contact the log held beside it before the delete never blocks it: the log held both. A
+    /// change made here since the plan, which the history read may not have seen, that touched
+    /// such a contact makes it [`Stale`], to be planned again. `restores.anyway` puts every one
+    /// back. The ids left out come back beside the ticket; the rest is made.
+    ///
+    /// `pairs` and `origin` are taken only when the change is made: on [`Stale`] they are left
+    /// with the caller, to be dropped once the lock is released — a run's are the whole run.
     pub(crate) fn commit_undo(
         &mut self,
         plan: &LogPlan,
         class: OpClass,
-        mut pairs: Vec<RowPair>,
-        origin: crate::loghistory::Origin,
+        pairs: &mut Vec<RowPair>,
+        origin: &mut Option<crate::loghistory::Origin>,
+        restores: &crate::loghistory::Restores,
     ) -> Result<(Option<tempo_core::logbook::writer::Ticket>, Vec<RecordId>), Stale> {
         let read: Vec<Arc<QsoRecord>> = pairs.iter().filter_map(|(b, _)| b.clone()).collect();
         let put_back: Vec<RecordId> = pairs
@@ -2828,27 +2849,68 @@ impl StationCore {
         if !self.unchanged_since(plan, &read) || !self.recent.untouched_since(plan.rev, &put_back) {
             return Err(Stale);
         }
-        let taken_out: HashSet<RecordId> = pairs
-            .iter()
-            .filter(|(_, a)| a.is_none())
-            .filter_map(|(b, _)| b.as_ref().and_then(|b| b.id))
-            .collect();
         let mut duplicates = Vec::new();
-        {
+        if !put_back.is_empty() && !restores.anyway {
+            let Some(since_plan) = self.recent.ids_since(plan.rev) else {
+                return Err(Stale);
+            };
+            // Nothing added since the deletes, and nothing changed here since the plan: no
+            // contact can block one, and a whole run's put-backs are not each asked.
+            if restores.logged_since.is_empty() && since_plan.is_empty() {
+                return self.commit_undo_made(class, pairs, origin, duplicates);
+            }
+            let taken_out: HashSet<RecordId> = pairs
+                .iter()
+                .filter(|(_, a)| a.is_none())
+                .filter_map(|(b, _)| b.as_ref().and_then(|b| b.id))
+                .collect();
             let hot = self.hot();
+            let mut stale = false;
             pairs.retain(|(before, after)| match (before, after) {
-                (None, Some(a)) if hot.is_duplicate_except(a, &taken_out) => {
-                    duplicates.extend(a.id);
-                    false
+                (None, Some(a)) => {
+                    let deleted_at =
+                        a.id.and_then(|id| restores.deleted_at.get(&id).copied())
+                            .unwrap_or(i64::MIN);
+                    let logged_again = hot.is_duplicate_among(a, |id| {
+                        !taken_out.contains(&id)
+                            && restores
+                                .logged_since
+                                .get(&id)
+                                .is_some_and(|&seq| seq > deleted_at)
+                    });
+                    if logged_again {
+                        duplicates.extend(a.id);
+                        return false;
+                    }
+                    stale |= !since_plan.is_empty()
+                        && hot.is_duplicate_among(a, |id| {
+                            !taken_out.contains(&id) && since_plan.contains(&id)
+                        });
+                    true
                 }
                 _ => true,
             });
+            if stale {
+                return Err(Stale);
+            }
         }
+        self.commit_undo_made(class, pairs, origin, duplicates)
+    }
+
+    /// [`Self::commit_undo`]'s change, made: what is left of `pairs`, from `origin`.
+    fn commit_undo_made(
+        &mut self,
+        class: OpClass,
+        pairs: &mut Vec<RowPair>,
+        origin: &mut Option<crate::loghistory::Origin>,
+        duplicates: Vec<RecordId>,
+    ) -> Result<(Option<tempo_core::logbook::writer::Ticket>, Vec<RecordId>), Stale> {
         if pairs.is_empty() {
             return Ok((None, duplicates));
         }
+        let pairs = std::mem::take(pairs);
         let bulk = pairs.len() > tempo_core::logbook::writer::CHUNK_ROWS;
-        self.origin = Some(origin);
+        self.origin = origin.take();
         let ticket = self.commit(
             RowChange {
                 class,

@@ -91,9 +91,9 @@ describe("a contact's history", () => {
     }, 'Import undone', () => {})
     const said = toasts.find((x) => x.message.startsWith('Import undone'))?.message ?? ''
     expect(said).toContain('N0IMP was changed since, and kept')
-    expect(said).toContain('7 contacts in the log already were not put back twice: K0AA, K1AA, K2AA, K3AA, K4AA and 2 more')
+    expect(said).toContain('7 contacts were not put back: the same station, band and mode within 5 minutes was logged again after each was deleted: K0AA, K1AA, K2AA, K3AA, K4AA and 2 more')
     sayUndone({ ...done, changed: 0, run: null, duplicate: 1, duplicateCalls: ['K2ABC'] }, 'Restored K2ABC', () => {})
-    expect(toasts.some((x) => x.message === 'Nothing put back: K2ABC is in the log already.')).toBe(true)
+    expect(toasts.some((x) => x.message === 'Nothing put back: a contact with K2ABC on the same band and mode within 5 minutes was logged again after it was deleted.')).toBe(true)
     sayUndone({ ...done, changed: 0, run: null, unknownKind: 1 }, 'Change undone', () => {})
     expect(toasts.some((x) => x.message.startsWith('That change was made by a newer version'))).toBe(true)
   })
@@ -126,9 +126,25 @@ describe('recently deleted', () => {
     render(<RecentlyDeleted open onClose={() => {}} onRestored={onRestored} />)
     expect(await screen.findByText('K1ABC')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }))
-    await waitFor(() => expect(api.restoreDeletedQso).toHaveBeenCalledWith('a'))
+    await waitFor(() => expect(api.restoreDeletedQso).toHaveBeenCalledWith('a', false))
     await waitFor(() => expect(onRestored).toHaveBeenCalled())
     expect(toasts.some((t) => t.message.startsWith('Restored K1ABC'))).toBe(true)
+  })
+
+  it('offers Restore anyway once a restore is refused because the contact was logged again', async () => {
+    api.recentlyDeletedQsos.mockResolvedValue([
+      { id: 'a', call: 'K1ABC', band: '20m', mode: 'FT8', whenUnix: 1_782_583_500, deletedAtMs: 0, source: 'operator' },
+    ])
+    api.restoreDeletedQso.mockResolvedValueOnce({
+      ...done, changed: 0, run: null, duplicate: 1, duplicateCalls: ['K1ABC'],
+    })
+    render(<RecentlyDeleted open onClose={() => {}} onRestored={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
+    await waitFor(() => expect(api.restoreDeletedQso).toHaveBeenCalledWith('a', false))
+    await waitFor(() => expect(toasts.some((t) => t.message.includes('logged again after it was deleted'))).toBe(true))
+    api.restoreDeletedQso.mockResolvedValueOnce(done)
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore anyway' }))
+    await waitFor(() => expect(api.restoreDeletedQso).toHaveBeenLastCalledWith('a', true))
   })
 
   it('says when nothing has been deleted', async () => {

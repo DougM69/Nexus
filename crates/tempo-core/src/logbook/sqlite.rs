@@ -1345,10 +1345,16 @@ impl LogDb {
         super::history::deleted(&self.conn, limit)
     }
 
-    /// The contacts `run` added that another run has edited or merged into since, each with the
-    /// latest such change ([`super::history::changed_after`]).
+    /// The contacts `run` added that another run has changed since, each with the latest such
+    /// change ([`super::history::changed_after`]).
     pub fn history_changed_after(&self, run: &str) -> Result<HashMap<RecordId, i64>> {
         super::history::changed_after(&self.conn, run)
+    }
+
+    /// The contacts added after the change `after_seq`, not by an undo, each with the latest such
+    /// entry ([`super::history::created_after`]).
+    pub fn history_created_after(&self, after_seq: i64) -> Result<HashMap<RecordId, i64>> {
+        super::history::created_after(&self.conn, after_seq)
     }
 
     /// Take out of the history, in one transaction, up to `limit` of the whole contacts deletes

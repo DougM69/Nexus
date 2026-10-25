@@ -16,8 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Logbook lists deleted contacts with **Restore**, which brings one back exactly as it was. After a
   delete, an import or a purge, the message offers **Undo**, and a whole import or purge is undone in
   one step — that import or purge, and never a contact logged after it. An undo never puts a contact
-  back that the log already holds again, and an import's undo keeps any contact you have edited, or
-  that has been confirmed, since; the message names both. The history is kept in the logbook
+  back beside the same contact logged again after it was deleted (the same station, band and mode
+  within 5 minutes), and **Restore anyway** puts it back when they are two different contacts; a
+  contact the log held beside it before the delete, such as a rover worked from two grids minutes
+  apart, never stops it coming back. An import's undo keeps any contact you have edited, that has
+  been confirmed or uploaded, or that you imported again, since; the message names them. Undoing
+  more than a few hundred contacts at once waits until you stop transmitting, because it holds up
+  the radio while it is made. The history is kept in the logbook
   database, so it survives a restart. Every edit is kept for good; a deleted or purged contact's full
   copy is kept for 90 days, which **Keep deleted contacts for (days)** under Settings › Config ›
   Data & log folder changes. An undo never sends anything to QRZ, Club Log, eQSL or LoTW; an undo that

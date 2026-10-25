@@ -30,14 +30,23 @@
 //!
 //! **What the undo of a run leaves alone**, and names in the answer ([`Undone`]):
 //!
-//! - a contact the run added that has been edited or confirmed since, by any other run (the
-//!   operator, a download, a later import — not the fill job, nor an undo): it stays
-//!   ([`CannotUndo::ChangedSince`]);
-//! - a contact it would put back that the log holds already under another id — the same station,
-//!   band and mode within the log's duplicate window, as `log_qso`'s guard asks — re-imported or
-//!   downloaded since: it is not put back twice ([`CannotUndo::Duplicate`], asked of the hot index
-//!   under the lock, [`crate::station::StationCore::commit_undo`]);
+//! - a contact the run added that has been changed since by any other run (the operator, a
+//!   download, a later import, a later build — not the fill job, nor an undo), or uploaded since:
+//!   it stays ([`CannotUndo::ChangedSince`]);
+//! - a contact it would put back that was logged again after it was deleted — a contact added
+//!   since, not by an undo, with the same station, band and mode within the log's duplicate
+//!   window, as `log_qso`'s guard asks — re-imported, downloaded or logged by hand: it is not put
+//!   back twice ([`CannotUndo::Duplicate`], read off the lock from the history and asked of the
+//!   hot index under it, [`crate::station::StationCore::commit_undo`]). A contact the log held
+//!   beside it before the delete never blocks it: the log held both, as an import that keeps two
+//!   contacts a second apart holds both. The operator can restore one anyway
+//!   ([`restore_deleted_anyway`]);
 //! - an entry of a kind a later build recorded ([`CannotUndo::UnknownKind`]).
+//!
+//! **A whole run's undo of more than [`tempo_core::logbook::writer::CHUNK_ROWS`] contacts waits
+//! while the radio transmits** ([`MUST_WAIT_FOR_TX`]): it is made in one hold of the Engine lock
+//! (one transaction, never chunked), and the radio loop needs that lock at every slot boundary to
+//! key and to unkey.
 //!
 //! **A run is undone by its id**, which the change that made it hands back — an import's
 //! ([`crate::logwrite::import_adif_in_run`]), a purge's
@@ -214,7 +223,7 @@ pub struct Undone {
 /// Undo the entry `seq`.
 pub fn undo_entry(engine: &Mutex<Engine>, seq: i64) -> (Result<Undone, String>, Durability) {
     match read(engine, |db| db.history_entry(seq)) {
-        Ok(Some(entry)) => undo_entries(engine, &[entry], false),
+        Ok(Some(entry)) => undo_entries(engine, &[entry], false, false),
         Ok(None) => (
             Err("That change is not in the logbook's history.".into()),
             Durability::default(),
@@ -223,14 +232,32 @@ pub fn undo_entry(engine: &Mutex<Engine>, seq: i64) -> (Result<Undone, String>, 
     }
 }
 
-/// Put back the contact `id` as its latest delete took it out.
+/// Put back the contact `id` as its latest delete took it out — unless it was logged again since
+/// ([`CannotUndo::Duplicate`]).
 pub fn restore_deleted(
     engine: &Mutex<Engine>,
     id: RecordId,
 ) -> (Result<Undone, String>, Durability) {
+    restore(engine, id, false)
+}
+
+/// [`restore_deleted`], put back even beside a contact logged again since: the operator's
+/// "Restore anyway", when they know the two are different contacts.
+pub fn restore_deleted_anyway(
+    engine: &Mutex<Engine>,
+    id: RecordId,
+) -> (Result<Undone, String>, Durability) {
+    restore(engine, id, true)
+}
+
+fn restore(
+    engine: &Mutex<Engine>,
+    id: RecordId,
+    anyway: bool,
+) -> (Result<Undone, String>, Durability) {
     match history_of(engine, id) {
         Ok(entries) => match entries.into_iter().rev().find(|e| e.kind == Kind::Delete) {
-            Some(entry) => undo_entries(engine, &[entry], false),
+            Some(entry) => undo_entries(engine, &[entry], false, anyway),
             None => (
                 Err("That contact was never deleted from this logbook.".into()),
                 Durability::default(),
@@ -240,22 +267,54 @@ pub fn restore_deleted(
     }
 }
 
-/// Undo every change of the run `run`, in one transaction.
+/// Undo every change of the run `run`, in one transaction. One of more than
+/// [`tempo_core::logbook::writer::CHUNK_ROWS`] contacts is refused while the radio transmits
+/// ([`MUST_WAIT_FOR_TX`]).
 pub fn undo_run(engine: &Mutex<Engine>, run: &str) -> (Result<Undone, String>, Durability) {
     match read(engine, |db| db.history_run(run)) {
         Ok(entries) if entries.is_empty() => (
             Err("That change is not in the logbook's history.".into()),
             Durability::default(),
         ),
-        Ok(entries) => undo_entries(engine, &entries, true),
+        Ok(entries) => undo_entries(engine, &entries, true, false),
         Err(e) => (Err(e), Durability::default()),
     }
 }
 
+/// What a whole run's undo too large to make in a moment answers while the radio transmits or
+/// the FT sequencer is armed ([`crate::engine::Engine::transmit_needs_the_lock`]).
+pub const MUST_WAIT_FOR_TX: &str =
+    "Stop transmitting first: undoing this many contacts holds up the radio while it is made.";
+
+/// What a restore asks of the history, off the lock, for the station to check under it
+/// ([`crate::station::StationCore::commit_undo`]).
+#[derive(Debug, Default)]
+pub(crate) struct Restores {
+    /// For each contact the undo puts back, the delete it undoes.
+    pub(crate) deleted_at: HashMap<RecordId, i64>,
+    /// The contacts added since the earliest of those deletes, not by an undo, each with its
+    /// latest such entry ([`tempo_core::logbook::sqlite::LogDb::history_created_after`]).
+    pub(crate) logged_since: HashMap<RecordId, i64>,
+    /// Put every one back, whatever the log holds: the operator's "Restore anyway".
+    pub(crate) anyway: bool,
+}
+
+/// What [`plan_undo`] decided.
+struct Planned {
+    pairs: Vec<RowPair>,
+    class: OpClass,
+    /// The entry undone, by contact.
+    undoes: HashMap<RecordId, i64>,
+    /// For each contact put back, the delete it undoes.
+    deleted_at: HashMap<RecordId, i64>,
+    answer: Undone,
+}
+
 /// What undoing `entries` makes of the contacts they name, as `rows` holds them: a pair per
 /// contact that changes, the widest class among them, and the answer. `later` holds, for each
-/// contact an entry added, the latest edit or merge another run made to it since
-/// ([`tempo_core::logbook::history::changed_after`]): such a contact is kept, not taken out.
+/// contact an entry added, the latest change another run made to it since
+/// ([`tempo_core::logbook::sqlite::LogDb::history_changed_after`]): such a contact is kept, not
+/// taken out, as is one uploaded since ([`Entry::uploaded_since`]).
 ///
 /// Linear in the entries: each contact's are found through one index of them, built once.
 fn plan_undo(
@@ -263,7 +322,7 @@ fn plan_undo(
     ids: &[RecordId],
     rows: &HashMap<RecordId, Arc<QsoRecord>>,
     later: &HashMap<RecordId, i64>,
-) -> (Vec<RowPair>, OpClass, HashMap<RecordId, i64>, Undone) {
+) -> Planned {
     let mut by_id: HashMap<RecordId, Vec<&Entry>> = HashMap::with_capacity(ids.len());
     for e in entries {
         by_id.entry(e.qso_id).or_default().push(e);
@@ -271,24 +330,31 @@ fn plan_undo(
     let mut changed: Vec<RowPair> = Vec::new();
     let mut put_back: Vec<RowPair> = Vec::new();
     let mut undoes = HashMap::new();
+    let mut deleted_at = HashMap::new();
     let mut answer = Undone::default();
     let mut class = OpClass::Key;
     for id in ids {
         let before = rows.get(id).cloned();
         let mut now: Option<QsoRecord> = before.as_deref().cloned();
         let mut moved = false;
+        let mut restored_from = None;
         // Latest first: the run's changes to one contact come off in the order they went on.
         for e in by_id.get(id).into_iter().flatten().rev() {
             let undo = match (e.kind, now.as_ref()) {
-                // Added by the entry and edited or confirmed since: it stays.
-                (Kind::Create, Some(_)) if later.get(id).is_some_and(|&seq| seq > e.seq) => {
+                // Added by the entry and changed or uploaded since: it stays.
+                (Kind::Create, Some(cur))
+                    if later.get(id).is_some_and(|&seq| seq > e.seq) || e.uploaded_since(cur) =>
+                {
                     Err(CannotUndo::ChangedSince)
                 }
                 _ => history::undo(e, now.as_ref()),
             };
             match undo {
                 Ok(Undo::Remove(_)) => now = None,
-                Ok(Undo::Restore(row)) => now = Some(row),
+                Ok(Undo::Restore(row)) => {
+                    restored_from.get_or_insert(e.seq);
+                    now = Some(row);
+                }
                 Ok(Undo::Revert { row, kept }) => {
                     answer.kept.extend(kept.into_iter().map(|tag| (*id, tag)));
                     now = Some(row);
@@ -313,22 +379,50 @@ fn plan_undo(
                 class = OpClass::Structural;
                 changed.push((Some(b), None));
             }
-            (None, Some(a)) => put_back.push((None, Some(Arc::new(a)))),
+            (None, Some(a)) => {
+                if let Some(seq) = restored_from {
+                    deleted_at.insert(*id, seq);
+                }
+                put_back.push((None, Some(Arc::new(a))));
+            }
             (None, None) => {}
         }
     }
     // The contacts put back go in after the ones changed, as an append's rows go in last.
     changed.extend(put_back);
     answer.changed = changed.len();
-    (changed, class, undoes, answer)
+    Planned {
+        pairs: changed,
+        class,
+        undoes,
+        deleted_at,
+        answer,
+    }
+}
+
+/// `f` against the store once it holds every change this process made before it was asked —
+/// `None` when it still does not after [`READ_WAIT`]: what a plan must not decide on, since the
+/// change it has not taken may be the one that matters. ⚠️ Never under the Engine lock.
+fn read_current<T>(
+    engine: &Mutex<Engine>,
+    f: impl FnOnce(&tempo_core::logbook::sqlite::LogDb) -> tempo_core::logbook::sqlite::Result<T>,
+) -> Result<Option<T>, String> {
+    let reads = engine_lock(engine).log_store_reads();
+    match reads.read(READ_WAIT, f) {
+        Ok((t, crate::logstore::Freshness::Current)) => Ok(Some(t)),
+        Ok(_) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Undo `entries` — one change's, or a run's, `whole` — planned with the Engine lock released and
 /// made under it, planned again while a contact it read keeps changing ([`PLANS`] plans).
+/// `anyway`: put back every contact it would put back, whatever the log holds.
 fn undo_entries(
     engine: &Mutex<Engine>,
     entries: &[Entry],
     whole: bool,
+    anyway: bool,
 ) -> (Result<Undone, String>, Durability) {
     let mut seen = HashSet::with_capacity(entries.len());
     let ids: Vec<RecordId> = entries
@@ -336,20 +430,11 @@ fn undo_entries(
         .map(|e| e.qso_id)
         .filter(|id| seen.insert(*id))
         .collect();
-    // The contacts an entry added that another run changed since, read once: the history only
-    // grows, and a change made between this read and the undo is the plan's to catch.
     let runs: BTreeSet<&str> = entries
         .iter()
         .filter(|e| e.kind == Kind::Create)
         .map(|e| e.run.as_str())
         .collect();
-    let mut later = HashMap::new();
-    for run in runs {
-        match read(engine, |db| db.history_changed_after(run)) {
-            Ok(found) => later.extend(found),
-            Err(e) => return (Err(e), Durability::default()),
-        }
-    }
     let run = new_run();
     for _ in 0..PLANS {
         let plan = crate::engine::log_plan(engine);
@@ -357,43 +442,96 @@ fn undo_entries(
             Ok(rows) => rows,
             Err(e) => return (Err(e), Durability::default()),
         };
-        let (pairs, class, undoes, mut answer) = plan_undo(entries, &ids, &rows, &later);
+        // The history is read after the plan, each time it is taken: a change made before the
+        // plan is in what is read, and one made after it is the commit's precondition's to catch.
+        // First, the contacts an entry added that another run changed since. A store still behind
+        // this process's changes is not decided on: the plan is taken again.
+        let mut later = HashMap::new();
+        let mut behind = false;
+        for run in &runs {
+            match read_current(engine, |db| db.history_changed_after(run)) {
+                Ok(Some(found)) => later.extend(found),
+                Ok(None) => behind = true,
+                Err(e) => return (Err(e), Durability::default()),
+            }
+        }
+        if behind {
+            continue;
+        }
+        let Planned {
+            pairs,
+            class,
+            undoes,
+            deleted_at,
+            mut answer,
+        } = plan_undo(entries, &ids, &rows, &later);
         if pairs.is_empty() {
             return (Ok(answer), Durability::default());
         }
+        // Then the contacts logged since the first delete it undoes: what may block a restore.
+        let logged_since = match deleted_at.values().min() {
+            Some(&first) if !anyway => {
+                match read_current(engine, |db| db.history_created_after(first)) {
+                    Ok(Some(found)) => found,
+                    Ok(None) => continue,
+                    Err(e) => return (Err(e), Durability::default()),
+                }
+            }
+            _ => HashMap::new(),
+        };
+        let restores = Restores {
+            deleted_at,
+            logged_since,
+            anyway,
+        };
+        // The call of each contact it would put back, to name one it leaves out.
+        let names: HashMap<RecordId, String> = pairs
+            .iter()
+            .filter(|(b, _)| b.is_none())
+            .filter_map(|(_, a)| a.as_ref())
+            .filter_map(|a| Some((a.id?, a.call.clone())))
+            .collect();
+        let large = whole && pairs.len() > tempo_core::logbook::writer::CHUNK_ROWS;
         #[cfg(test)]
         tests::race();
-        let origin = Origin {
+        let mut origin = Some(Origin {
             source: Source::Undo,
             run: Some(run.clone()),
             undoes,
             whole,
-        };
+        });
+        let mut pairs = pairs;
+        // `pairs` and `origin` stay out here unless the change takes them, and are dropped with
+        // the lock released: a whole run's are as big as the run.
         let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
-            let made = e
-                .station_mut()
-                .commit_undo(&plan, class, pairs.clone(), origin.clone());
+            // Before any of the work, in the same hold: the radio loop must not wait it out.
+            if large && e.transmit_needs_the_lock() {
+                return Err(MUST_WAIT_FOR_TX);
+            }
+            let made =
+                e.station_mut()
+                    .commit_undo(&plan, class, &mut pairs, &mut origin, &restores);
             // Taken by the change it was set for — or by none, when the plan went stale.
             e.station_mut().origin = None;
-            made.ok()
-                .map(|(ticket, duplicates)| (ticket.is_some(), duplicates))
+            Ok(made
+                .ok()
+                .map(|(ticket, duplicates)| (ticket.is_some(), duplicates)))
         });
-        if let Some((committed, duplicates)) = made {
-            // The contacts the log already held under another id were left out of it.
-            let left_out: HashSet<RecordId> = duplicates.iter().copied().collect();
-            let names: HashMap<RecordId, String> = pairs
-                .iter()
-                .filter_map(|(_, a)| a.as_ref())
-                .filter_map(|a| Some((a.id?, a.call.clone())))
-                .filter(|(id, _)| left_out.contains(id))
-                .collect();
-            answer.changed -= duplicates.len();
-            answer
-                .refused
-                .extend(duplicates.iter().map(|id| (*id, CannotUndo::Duplicate)));
-            answer.calls.extend(names);
-            answer.run = committed.then_some(run);
-            return (Ok(answer), durability);
+        match made {
+            Err(why) => return (Err(why.into()), Durability::default()),
+            Ok(None) => {}
+            Ok(Some((committed, duplicates))) => {
+                // The contacts logged again since they were deleted were left out of it.
+                answer.changed -= duplicates.len();
+                for id in &duplicates {
+                    answer.refused.push((*id, CannotUndo::Duplicate));
+                    if let Some(call) = names.get(id) {
+                        answer.calls.insert(*id, call.clone());
+                    }
+                }
+                answer.run = committed.then_some(run);
+                return (Ok(answer), durability);
+            }
         }
     }
     (Err(crate::station::LOG_BUSY.into()), Durability::default())

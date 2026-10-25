@@ -800,18 +800,15 @@ impl HotIndex {
         })
     }
 
-    /// [`Self::is_duplicate`], with the rows `except` names not counted: whether putting `rec`
-    /// back into the log would duplicate a contact a change leaves in it, when that same change
-    /// takes `except` out (an undo that puts one contact back and takes another out). The same
-    /// predicate, asked of the same rows; only `log_qso`'s guard is [`Self::is_duplicate`].
-    pub fn is_duplicate_except(
-        &self,
-        rec: &QsoRecord,
-        except: &std::collections::HashSet<RecordId>,
-    ) -> bool {
+    /// [`Self::is_duplicate`], asked of only the rows `counts` names by id (a row with no id is
+    /// never counted): whether putting `rec` back into the log would duplicate one of them — an
+    /// undo's restore, asked of the contacts logged since the delete and not taken out by the same
+    /// undo. The same predicate, asked of the same station lists; only `log_qso`'s guard is
+    /// [`Self::is_duplicate`].
+    pub fn is_duplicate_among(&self, rec: &QsoRecord, counts: impl Fn(RecordId) -> bool) -> bool {
         self.by_base.get(&base_call(&rec.call)).is_some_and(|rows| {
             rows.iter().any(|r| {
-                !r.id.is_some_and(|id| except.contains(&id))
+                r.id.is_some_and(&counts)
                     && super::dedup::is_recent_duplicate_in_slot(
                         self.bands.name(r.band),
                         self.modes.name(r.mode),

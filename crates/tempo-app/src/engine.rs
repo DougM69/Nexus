@@ -31560,6 +31560,16 @@ contact yourself."
         self.app.transmitting() || self.rig_keyed || self.tuning() || self.tx_owner().is_some()
     }
 
+    /// Whether a log change that holds the Engine lock for a long time must wait: the radio is
+    /// on the air ([`Self::on_air`]) or the FT sequencer is armed to key at the next slot — the
+    /// radio loop needs the lock at every slot boundary to key and to unkey. Asked by a whole
+    /// run's undo too large to make in a moment ([`crate::loghistory::undo_run`]).
+    pub(crate) fn transmit_needs_the_lock(&self) -> bool {
+        self.on_air()
+            || (self.tx_enabled
+                && self.settings.operating_mode == crate::settings::OperatingMode::Digital)
+    }
+
     /// Is a message that takes several overs part-way through: its first over gone, the rest
     /// still to go?
     ///

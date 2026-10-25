@@ -1519,14 +1519,14 @@ export const EN = {
   // The purge gate. `{{word}}` is the typed confirmation token (`DELETE`) — it is matched
   // against what the operator types, so it is a token, not prose, and it stays in the code.
   'logbook.purge.label': 'Purge log',
-  'logbook.purge.title': 'Delete every contact in the local logbook (irreversible)',
+  'logbook.purge.title': 'Delete every contact in the local logbook',
   'logbook.purge.aria': 'Purge logbook',
   'logbook.purge.heading': 'Purge the entire logbook?',
-  'logbook.purge.irreversible': 'Irreversible',
+  'logbook.purge.irreversible': 'Deletes everything',
   'logbook.purge.warn': {
-    one: "This permanently deletes <b>all {{count}} contact</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. There is no undo — export an ADIF backup first if you might want it.",
+    one: "This deletes <b>all {{count}} contact</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. You can undo it from the message that follows for 15 seconds; after that, contacts can be restored one at a time from Recently deleted for as long as Settings keeps deleted contacts (90 days unless you changed it). Export an ADIF backup first if you might want it later.",
     other:
-      "This permanently deletes <b>all {{count}} contacts</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. There is no undo — export an ADIF backup first if you might want it.",
+      "This deletes <b>all {{count}} contacts</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. You can undo it from the message that follows for 15 seconds; after that, contacts can be restored one at a time from Recently deleted for as long as Settings keeps deleted contacts (90 days unless you changed it). Export an ADIF backup first if you might want it later.",
   },
   'logbook.purge.syncWarn':
     'It also resets your <b>LoTW and eQSL sync position</b>, so the next sync re-downloads your whole confirmation history instead of only recent matches. That is what brings your confirmations back after a purge — but it takes considerably longer than a routine sync, so give it time to finish.',
@@ -1881,6 +1881,9 @@ export const EN = {
   'logbook.deleted.empty': 'No deleted contacts.',
   'logbook.deleted.when': 'deleted {{when}} · {{source}}',
   'logbook.deleted.restore': 'Restore',
+  'logbook.deleted.restoreAnyway': 'Restore anyway',
+  'logbook.deleted.restoreAnywayHint':
+    'The same station, band and mode within 5 minutes was logged again after this contact was deleted. Restore anyway keeps both.',
   'logbook.deleted.restored': 'Restored {{call}}',
   'logbook.deleted.failed': 'The contact could not be restored.',
   // A contact's history, in the QSO detail view: each change, who made it, and its undo.
@@ -1918,16 +1921,16 @@ export const EN = {
     other: '; {{count}} contacts changed since were kept: {{calls}}',
   },
   'qso.history.undo.duplicates': {
-    one: '; {{calls}} is in the log already, and was not put back twice',
-    other: '; {{count}} contacts in the log already were not put back twice: {{calls}}',
+    one: '; {{calls}} was not put back: the same station, band and mode within 5 minutes was logged again after it was deleted',
+    other: '; {{count}} contacts were not put back: the same station, band and mode within 5 minutes was logged again after each was deleted: {{calls}}',
   },
   'qso.history.undo.allKept': {
     one: 'Nothing undone: {{calls}} was changed since, and kept.',
     other: 'Nothing undone: {{count}} contacts were changed since, and kept: {{calls}}.',
   },
   'qso.history.undo.allDuplicates': {
-    one: 'Nothing put back: {{calls}} is in the log already.',
-    other: 'Nothing put back: {{count}} contacts are in the log already: {{calls}}.',
+    one: 'Nothing put back: a contact with {{calls}} on the same band and mode within 5 minutes was logged again after it was deleted.',
+    other: 'Nothing put back: {{count}} contacts were logged again after they were deleted (the same station, band and mode within 5 minutes): {{calls}}.',
   },
   'qso.history.undo.unknownKind': 'That change was made by a newer version of Nexus, so this one cannot undo it.',
   'qso.history.undo.andMore': '{{list}} and {{count}} more',

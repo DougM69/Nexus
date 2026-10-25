@@ -715,6 +715,146 @@ fn the_contacts_a_run_added_and_another_changed_since_are_named() {
     );
 }
 
+/// A change another run made since counts whatever its kind — a contact added again under the
+/// same id, a kind a later build wrote — but a delete does not (the contact is gone, and an undo
+/// finds nothing to take out), nor does a change made BEFORE the run added the contact.
+#[test]
+fn a_contact_added_again_or_changed_by_a_later_build_since_counts_and_a_delete_does_not() {
+    let mut db = LogDb::open_in_memory().unwrap();
+    let (a, b, c) = (rec("K1ABC", 1), rec("K2XYZ", 2), rec("K3QQQ", 3));
+    // Before the import: C edited by the operator.
+    write(
+        &mut db,
+        std::slice::from_ref(&c),
+        Some(&note("before", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    remove(
+        &mut db,
+        &[id(3)],
+        Some(&note("gone", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    write(
+        &mut db,
+        &[a.clone(), b.clone(), c.clone()],
+        Some(&note("import", Source::Import, Kind::Merge)),
+    )
+    .unwrap();
+    // A deleted, then added again by another import.
+    remove(
+        &mut db,
+        &[id(1)],
+        Some(&note("del", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    write(
+        &mut db,
+        std::slice::from_ref(&a),
+        Some(&note("again", Source::Import, Kind::Merge)),
+    )
+    .unwrap();
+    // B changed by a later build, in a kind this one does not know.
+    db.conn_for_tests()
+        .execute(
+            "INSERT INTO qso_history (run_id, qso_id, kind) \
+             SELECT (SELECT id FROM history_run WHERE run = 'del'), ?1, 9",
+            [id(2).to_string()],
+        )
+        .unwrap();
+    // C deleted since: not a change that keeps it.
+    remove(
+        &mut db,
+        &[id(3)],
+        Some(&note("del2", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    let later = db.history_changed_after("import").unwrap();
+    let seq_of = |id: RecordId| db.history_of(id).unwrap().last().unwrap().seq;
+    assert_eq!(
+        later,
+        HashMap::from([(id(1), seq_of(id(1))), (id(2), seq_of(id(2)))])
+    );
+}
+
+/// The contacts added after a change, each with its latest add: a contact an undo put back is
+/// not one of them, nor is one added before.
+#[test]
+fn the_contacts_added_after_a_change_leave_out_the_ones_put_back() {
+    let mut db = LogDb::open_in_memory().unwrap();
+    let (a, b, c) = (rec("K1ABC", 1), rec("K2XYZ", 2), rec("K3QQQ", 3));
+    write(
+        &mut db,
+        &[a.clone(), b.clone()],
+        Some(&note("first", Source::Import, Kind::Merge)),
+    )
+    .unwrap();
+    remove(
+        &mut db,
+        &[id(1), id(2)],
+        Some(&note("purge", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    let purge = db.history_run("purge").unwrap();
+    let first_delete = purge.iter().map(|e| e.seq).min().unwrap();
+    // A put back by an undo of its delete; C logged new.
+    let mut undo = note("undo", Source::Undo, Kind::Edit);
+    undo.undoes.insert(id(1), first_delete);
+    write(&mut db, std::slice::from_ref(&a), Some(&undo)).unwrap();
+    write(
+        &mut db,
+        std::slice::from_ref(&c),
+        Some(&note("logged", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    let seq_of = |id: RecordId| db.history_of(id).unwrap().last().unwrap().seq;
+    assert_eq!(
+        db.history_created_after(first_delete).unwrap(),
+        HashMap::from([(id(3), seq_of(id(3)))])
+    );
+    assert_eq!(
+        db.history_created_after(0).unwrap().len(),
+        3,
+        "the control: from the start, the first import's two and C"
+    );
+}
+
+/// A new contact's entry keeps the upload stamps it arrived with, so an undo can tell one
+/// uploaded since; a contact that arrived with none keeps nothing.
+#[test]
+fn a_new_contact_keeps_the_stamps_it_arrived_with() {
+    let mut db = LogDb::open_in_memory().unwrap();
+    let a = rec("K1ABC", 1);
+    let mut b = rec("K2XYZ", 2);
+    b.upload.qrz = Some(UploadStatus {
+        outcome: UploadOutcome::Accepted,
+        when_unix: 1_900_000_000,
+        detail: None,
+    });
+    write(
+        &mut db,
+        &[a.clone(), b.clone()],
+        Some(&note("import", Source::Import, Kind::Merge)),
+    )
+    .unwrap();
+    let (ea, eb) = (
+        db.history_of(id(1)).unwrap().remove(0),
+        db.history_of(id(2)).unwrap().remove(0),
+    );
+    assert_eq!(ea.after, None);
+    assert!(eb
+        .after
+        .as_deref()
+        .is_some_and(|f| f.contains("APP_TEMPO_UL_QRZ")));
+    assert!(!ea.uploaded_since(&a) && !eb.uploaded_since(&b));
+    let mut a2 = a.clone();
+    a2.upload.lotw = b.upload.qrz.clone();
+    assert!(ea.uploaded_since(&a2), "uploaded since");
+    let mut b2 = b.clone();
+    b2.upload.qrz = None;
+    assert!(eb.uploaded_since(&b2), "its stamp cleared since");
+}
+
 // ── how long it is kept ──────────────────────────────────────────────────────────────────────
 
 /// ★ The trim takes out a delete's whole contact once it is older than the cut-off, a step of at

@@ -27,7 +27,9 @@
 //! - **A delete**: the contact whole, as the operator's own log writes it
 //!   ([`super::adif_record_own_log`]), so it can be put back exactly — its id, its stamps and
 //!   every field another logger left in it.
-//! - **A new contact**: the event alone. Its content is the contact itself.
+//! - **A new contact**: the event, and the upload stamps it arrived with (the `after` fragment;
+//!   none when it carried none) — its content is the contact itself. The stamps are a reference
+//!   point only: an undo of the change that added it can tell a contact uploaded since.
 //!
 //! **Upload stamps are not history** ([`UPLOAD_TAGS`]). A stamp is the app's own bookkeeping of
 //! what a service holds, not something the operator wrote; recording one would make "mark all
@@ -40,11 +42,14 @@
 //! [`Source::Undo`] and a link to the entry it undoes, so it can itself be undone (a redo).
 //! What it does to the contact, as it stands now ([`undo`]):
 //!
-//! - a new contact: removed — **unless it has been edited or confirmed since** (a later edit or
-//!   merge by any other run, [`changed_after`]), which keeps it, named in the answer;
-//! - a deleted one: put back, whole, under its own id — **unless the log holds it already** under
-//!   another id (the log's own duplicate rule), which the app checks against its index when it
-//!   makes the undo, and refuses as [`CannotUndo::Duplicate`];
+//! - a new contact: removed — **unless it has been changed since** (a later change of any kind
+//!   but a delete by any other run, [`changed_after`]; or an upload since,
+//!   [`Entry::uploaded_since`]), which keeps it, named in the answer;
+//! - a deleted one: put back, whole, under its own id — **unless it was logged again after the
+//!   delete**: a contact added since ([`created_after`], not itself put back by an undo) that the
+//!   log's own duplicate rule calls the same one, which the app checks against its index when it
+//!   makes the undo, and refuses as [`CannotUndo::Duplicate`]. A contact that was in the log
+//!   beside it before the delete never blocks it: the log held both;
 //! - an edit: each field it changed goes back, **but only a field still holding what the change
 //!   wrote**. A field changed again since keeps the later value; an undo whose every field was
 //!   changed since is refused rather than made as nothing;
@@ -291,6 +296,13 @@ impl Entry {
             .collect()
     }
 
+    /// Whether the contact a new-contact entry added carries other upload stamps now than it
+    /// arrived with: uploaded (or marked uploaded) since. `false` for any other entry.
+    pub fn uploaded_since(&self, current: &QsoRecord) -> bool {
+        self.kind == Kind::Create
+            && fields(self.after.as_deref().unwrap_or("")) != fields(&uploads_of(current))
+    }
+
     /// The contact a delete took out, as it was. `None` for any other entry.
     pub fn deleted_contact(&self) -> Option<QsoRecord> {
         if self.kind != Kind::Delete {
@@ -340,6 +352,16 @@ fn content_fields(r: &QsoRecord) -> Vec<(String, String)> {
     let mut f = fields(&super::adif_record_own_log(r));
     f.retain(|(tag, _)| !UPLOAD_TAGS.contains(&tag.as_str()));
     f
+}
+
+/// A contact's upload stamps, as the fragment a new contact's entry keeps them in: empty when it
+/// carries none.
+fn uploads_of(r: &QsoRecord) -> String {
+    fields(&super::adif_record_own_log(r))
+        .into_iter()
+        .filter(|(tag, _)| UPLOAD_TAGS.contains(&tag.as_str()))
+        .map(|(tag, value)| super::field(&tag, &value))
+        .collect()
 }
 
 /// What changed between two versions of a contact, as the two fragments an edit stores — or
@@ -417,7 +439,11 @@ impl<'a> Recorder<'a> {
         for w in upsert {
             let Some(id) = w.rec.id else { continue };
             match stored.get(&id) {
-                None => self.entry(id, Kind::Create, None, None)?,
+                None => {
+                    let uploads = uploads_of(&w.rec);
+                    let uploads = (!uploads.is_empty()).then_some(uploads.as_str());
+                    self.entry(id, Kind::Create, None, uploads)?
+                }
                 Some(old) => {
                     if let Some((before, after)) = diff(old, &w.rec) {
                         self.entry(id, self.note.edit, Some(&before), Some(&after))?;
@@ -539,28 +565,51 @@ pub(crate) fn deleted(conn: &Connection, limit: usize) -> Result<Vec<Entry>> {
     )
 }
 
-/// The contacts `run` added that a later change edited or merged into since — the operator's, a
-/// download's, an import's, from any other run — each with the latest such change's place in the
-/// order. What an undo of the run must not take out without a word ([`CannotUndo::ChangedSince`]).
-/// Not counted: an undo (a redo of the operator's own), and the fill job's country and state,
-/// which the log derives from the contact itself.
+/// The contacts `run` added that a later change by another run touched since — an edit, a
+/// merge, a contact added again under the same id (deleted, then imported again from a Nexus
+/// export), or a change of a kind a later build wrote: anything but a delete — each with the latest
+/// such change's place in the order. What an undo of the run must not take out without a word
+/// ([`CannotUndo::ChangedSince`]). Not counted: an undo (a redo of the operator's own), and the
+/// fill job's country and state, which the log derives from the contact itself. An upload since is
+/// not history: [`Entry::uploaded_since`] answers that.
 pub(crate) fn changed_after(conn: &Connection, run: &str) -> Result<HashMap<RecordId, i64>> {
     let sql = format!(
-        "SELECT h.qso_id, MAX(h.seq) FROM qso_history h JOIN history_run r ON r.id = h.run_id \
-         WHERE h.kind IN ({edit}, {merge}) AND r.run <> ?1 \
+        "SELECT h.qso_id, MAX(h.seq) FROM qso_history c \
+         JOIN history_run cr ON cr.id = c.run_id \
+         JOIN qso_history h ON h.qso_id = c.qso_id AND h.seq > c.seq \
+         JOIN history_run r ON r.id = h.run_id \
+         WHERE cr.run = ?1 AND c.kind = {create} AND h.kind <> {delete} AND r.run <> ?1 \
            AND r.source NOT IN ('{undo}', '{fill}') \
-           AND h.qso_id IN (SELECT x.qso_id FROM qso_history x \
-                            JOIN history_run y ON y.id = x.run_id \
-                            WHERE y.run = ?1 AND x.kind = {create}) \
          GROUP BY h.qso_id",
-        edit = Kind::Edit.code(),
-        merge = Kind::Merge.code(),
         create = Kind::Create.code(),
+        delete = Kind::Delete.code(),
         undo = Source::Undo.code(),
         fill = Source::Fill.code(),
     );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([run], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    ids_with_seq(conn, &sql, [run])
+}
+
+/// The contacts added to the log after the change `after_seq` — logged, imported, downloaded or
+/// taken in — each with the latest such entry's place in the order. A contact an undo put back is
+/// not one of them (its entry undoes another): it was in the log before. What a restore of a
+/// contact deleted at `after_seq` or later may be blocked by: the same contact, logged again since
+/// ([`CannotUndo::Duplicate`]). A contact the log held beside it before the delete is never here.
+pub(crate) fn created_after(conn: &Connection, after_seq: i64) -> Result<HashMap<RecordId, i64>> {
+    let sql = format!(
+        "SELECT qso_id, MAX(seq) FROM qso_history \
+         WHERE seq > ?1 AND kind = {create} AND undoes IS NULL GROUP BY qso_id",
+        create = Kind::Create.code(),
+    );
+    ids_with_seq(conn, &sql, [after_seq])
+}
+
+fn ids_with_seq(
+    conn: &Connection,
+    sql: &str,
+    p: impl rusqlite::Params,
+) -> Result<HashMap<RecordId, i64>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(p, |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
     let mut out = HashMap::new();
     for row in rows {
         let (id, seq) = row?;
@@ -675,9 +724,10 @@ pub enum CannotUndo {
     /// Every field the entry changed has been changed again since — or, for a contact the entry
     /// added, the contact has been edited or confirmed since, and stays.
     ChangedSince,
-    /// The contact it would put back is in the log already under another id: the same station,
-    /// band and mode within the log's duplicate window ([`super::dedup::is_recent_duplicate`]).
-    /// Put back, it would be a duplicate.
+    /// The contact it would put back was logged again after it was deleted, under another id: a
+    /// contact added since ([`created_after`]) with the same station, band and mode within the
+    /// log's duplicate window ([`super::dedup::is_recent_duplicate`]). Put back, it would be a
+    /// duplicate. The operator can still put it back anyway.
     Duplicate,
     /// The entry is of a kind this build does not know ([`Kind::Unknown`]).
     UnknownKind,

@@ -130,9 +130,11 @@ describe('purge confirmation dialog', () => {
     })
     const text = dialog.textContent ?? ''
 
-    // The irreversibility warning that was always there — a regression here matters as much.
-    expect(text).toMatch(/permanently deletes/i)
-    expect(text).toMatch(/no undo/i)
+    // What the purge deletes, and how it is undone: the message's Undo, then Recently deleted.
+    expect(text).toMatch(/deletes all/i)
+    expect(text).toMatch(/undo it from the message that follows for 15 seconds/i)
+    expect(text).toMatch(/Recently deleted/)
+    expect(text).not.toMatch(/no undo|permanently/i)
 
     // The new coupling warning: it must name BOTH services and say a full re-download follows.
     // Asserting the meaning, not one phrasing, so a reword does not red the suite falsely.

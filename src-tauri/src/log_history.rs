@@ -156,8 +156,9 @@ pub struct UndoAnswer {
     pub kept: Vec<String>,
     /// How many contacts it could not change, by why: `gone` (no longer in the log),
     /// `alreadyThere` (nothing to put back), `changedSince` (every field changed again since, or
-    /// a contact it would take out edited or confirmed since, which stays), `duplicate` (the log
-    /// holds it already under another id), `unknownKind` (a change a later build recorded).
+    /// a contact it would take out changed or uploaded since, which stays), `duplicate` (logged
+    /// again since it was deleted: the same station, band and mode within 5 minutes),
+    /// `unknownKind` (a change a later build recorded).
     pub gone: usize,
     pub already_there: usize,
     pub changed_since: usize,
@@ -229,17 +230,24 @@ pub async fn undo_history_run(
     .await
 }
 
-/// Put a deleted contact back, as its latest delete took it out.
+/// Put a deleted contact back, as its latest delete took it out — unless it was logged again
+/// since (`duplicate`). `anyway`: put it back all the same, the operator's "Restore anyway".
 #[tauri::command]
 pub async fn restore_deleted_qso(
     state: State<'_, SharedEngine>,
     id: String,
+    anyway: Option<bool>,
 ) -> Result<UndoAnswer, String> {
     let engine = Arc::clone(&state);
     let id = id_of(&id)?;
+    let anyway = anyway.unwrap_or(false);
     durable_command(move || {
         let (made, durability) = tempo_app::logwrite::until_written(|| {
-            tempo_app::loghistory::restore_deleted(&engine, id)
+            if anyway {
+                tempo_app::loghistory::restore_deleted_anyway(&engine, id)
+            } else {
+                tempo_app::loghistory::restore_deleted(&engine, id)
+            }
         });
         (made.map(answer), durability)
     })

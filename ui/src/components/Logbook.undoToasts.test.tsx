@@ -26,9 +26,6 @@ beforeAll(() => {
 })
 
 const engineLog = vi.hoisted(() => vi.fn())
-// What "the latest import" names once a companion program has logged a contact since: never what
-// Undo undoes.
-const latest = vi.hoisted(() => vi.fn(async () => ({ run: 'companion-run', source: 'import', atMs: 0, contacts: 1 })))
 vi.mock('../api', () => {
   const noop = () => vi.fn()
   const undone = { changed: 3, run: 'undo-run', kept: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [] }
@@ -37,7 +34,6 @@ vi.mock('../api', () => {
     importAdif: vi.fn(async () => ({ added: 3, skipped: 0, updated: 0, total: 6, run: 'import-run' })),
     purgeLog: vi.fn(async () => ({ removed: 3, run: 'purge-run' })),
     undoHistoryRun: vi.fn(async () => undone),
-    latestHistoryRun: latest,
     exportGeneralLog: noop(), saveTextToDownloads: noop(), deleteQsoById: noop(),
     editQsoById: vi.fn(async () => ({})), logOperators: vi.fn(async () => [] as string[]),
     exportLogForOperator: noop(), logActivations: vi.fn(async () => []), exportLogForActivation: noop(),
@@ -89,7 +85,6 @@ describe('the Undo on the import and purge toasts', () => {
     toast.action?.()
     await waitFor(() => expect(api.undoHistoryRun).toHaveBeenCalled())
     expect(vi.mocked(api.undoHistoryRun).mock.calls).toEqual([['import-run']])
-    expect(latest).not.toHaveBeenCalled()
     await waitFor(() => expect(toastSaying(t('logbook.import.undone'))).toBeTruthy())
   })
 
@@ -106,6 +101,5 @@ describe('the Undo on the import and purge toasts', () => {
     toast.action?.()
     await waitFor(() => expect(api.undoHistoryRun).toHaveBeenCalled())
     expect(vi.mocked(api.undoHistoryRun).mock.calls).toEqual([['purge-run']])
-    expect(latest).not.toHaveBeenCalled()
   })
 })

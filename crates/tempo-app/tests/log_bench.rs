@@ -55,6 +55,14 @@ const AFTER_THE_CUT: bool = true;
 /// §4.11's bound on an Engine-lock hold in any log path.
 const HOLD_BOUND: Duration = Duration::from_millis(5);
 
+/// The one path held to no hold bound, reported only: a whole run's undo of more than
+/// `CHUNK_ROWS` contacts is one transaction, and its hot index follows every contact it puts back
+/// under the lock — O(run), 0.3 s at 150,000. It is refused, before any of that work, while the
+/// radio transmits or the FT sequencer is armed (`loghistory::MUST_WAIT_FOR_TX`, asserted above
+/// as the refused line, which IS held to the bound), so the radio loop never waits it out to key
+/// or to unkey. The commit is not split across holds: that would undo the run in pieces.
+const WAITS_FOR_TX: &str = "the purge undone (one transaction)";
+
 /// C13's bound on the snapshot the radio loop takes after a contact is logged: the median of 41,
 /// as C13's bench took it.
 const SNAPSHOT_BOUND: Duration = Duration::from_millis(1);
@@ -679,6 +687,19 @@ fn bench(n: usize) -> Vec<String> {
     )
     .expect("reads")
     .expect("the purge's run");
+    // The QSO started above armed transmit: an undo this large waits until it is off, and is
+    // refused, changing nothing, while it is on — the radio loop needs the lock to key and unkey.
+    let (refused, _) = tempo_app::loghistory::undo_run(&shared, &run.run);
+    assert_eq!(
+        refused,
+        Err(tempo_app::loghistory::MUST_WAIT_FOR_TX.to_string()),
+        "refused while transmit is armed"
+    );
+    hold(
+        "the purge's undo, refused while transmit is armed",
+        &watcher,
+    );
+    engine_lock(&shared).set_tx_enabled(false);
     let rss = resident();
     let started = Instant::now();
     let (undone, d) = tempo_app::loghistory::undo_run(&shared, &run.run);
@@ -692,7 +713,7 @@ fn bench(n: usize) -> Vec<String> {
         started.elapsed().as_secs_f64(),
         peak_above(rss) as f64 / 1e6
     );
-    hold("the purge undone (one transaction)", &watcher);
+    hold(WAITS_FOR_TX, &watcher);
     drop(watcher);
 
     println!(
@@ -702,11 +723,17 @@ fn bench(n: usize) -> Vec<String> {
         ms(HOLD_BOUND)
     );
     for (path, h) in &holds {
-        let over = h.longest > HOLD_BOUND;
+        let over = h.longest > HOLD_BOUND && *path != WAITS_FOR_TX;
         println!(
             "    {:>9.3} ms  {path}{}  [{} holds, a look every {:.0} ns, blind at most {:.3} ms]",
             ms(h.longest),
-            if over { "  ← over" } else { "" },
+            if over {
+                "  ← over"
+            } else if *path == WAITS_FOR_TX {
+                "  (waits for transmit off: not bounded)"
+            } else {
+                ""
+            },
             h.holds,
             h.period.as_nanos(),
             ms(h.blind)

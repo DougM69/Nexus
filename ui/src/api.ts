@@ -1699,9 +1699,10 @@ export async function undoHistoryRun(run: string): Promise<UndoAnswer> {
   return invoke<UndoAnswer>('undo_history_run', { run })
 }
 
-/** Put a deleted contact back, as its latest delete took it out. */
-export async function restoreDeletedQso(id: string): Promise<UndoAnswer> {
-  return invoke<UndoAnswer>('restore_deleted_qso', { id })
+/** Put a deleted contact back, as its latest delete took it out — unless it was logged again since
+ *  (`duplicate`). `anyway`: put it back all the same, beside the one logged since. */
+export async function restoreDeletedQso(id: string, anyway = false): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('restore_deleted_qso', { id, anyway })
 }
 
 /** Mark the contact `target` QSL-sent (operator-declared): a card or request went out `via`
