@@ -301,6 +301,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot hear what another program sends, so there it no longer lets other programs key the radio
   through the CAT broker or TCI, whatever the radio's mode; the connection log says why. Nexus's own
   PTT, voice keyer and CW still key there. General, Advanced and Extra are unchanged.
+- **Other programs can no longer transmit past a band or segment edge from a dial just inside it.**
+  Nexus cannot tell where in the sideband another program puts its audio, so a key from the CAT
+  broker or TCI is now allowed only when everything from the dial to 3 kHz above it (below it on
+  LSB) is inside your license privileges for the mode. With the dial at 14.149 MHz, a data
+  program at its usual 1500 Hz sent at 14.1505 MHz, past a General's 14.150 MHz data limit. A key already held drops
+  if you retune that close to an edge, and the connection log says how far the program's audio
+  could reach. In Phone and CW the check is the one Nexus applies to its own voice and CW, and
+  Nexus's own transmissions are judged as before.
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
 - **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone

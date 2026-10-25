@@ -103,9 +103,10 @@ use tempo_net::tci::wire::Word;
 
 mod cw;
 
-/// What a program's audio over is judged as: the whole transmit passband, 0 to 3 kHz of
-/// audio on the sideband's side of the carrier. In Phone the gate judges its own phone passband.
-const PASSBAND: DataFrame = DataFrame {
+/// What a program's audio over, and every other key from a program outside Nexus, is judged as:
+/// the whole transmit passband, 0 to 3 kHz of audio on the sideband's side of the carrier
+/// ([`Engine::outside_key_passband_allowed`]). In Phone the gate judges its own phone passband.
+pub(super) const PASSBAND: DataFrame = DataFrame {
     f0_hz: 0.0,
     bw_hz: 3_000.0,
 };
@@ -246,7 +247,8 @@ impl Engine {
         }
         let licensed = match ask {
             Ask::Over => self.tci_over_licensed(),
-            Ask::Mic => self.tx_allowed(),
+            // As Nexus's own PTT, and across the program's whole passband.
+            Ask::Mic => self.tx_allowed() && self.outside_key_passband_allowed(),
             Ask::Tune => self.tune_allowed(),
             // As Nexus's own CW asks before it queues (`send_cw_armed`): at the dial, and as CW
             // where the keyer puts it, which in the CW section are the one judgement.
@@ -315,9 +317,9 @@ impl Engine {
     }
 
     /// The licence for a program's audio over: its whole passband ([`PASSBAND`]), every other term
-    /// of the gate as for Nexus's own overs.
+    /// of the gate as for Nexus's own overs ([`Engine::outside_key_passband_allowed`]).
     pub(super) fn tci_over_licensed(&self) -> bool {
-        self.tx_allowed_for(PASSBAND)
+        self.outside_key_passband_allowed()
     }
 
     /// ⛔ A program's audio over never goes out on the radio's own microphone: the radio must take
@@ -587,7 +589,7 @@ impl Engine {
             Some("a transmit gate went down")
         } else if self.settings.operating_mode != k.section {
             Some("the section changed")
-        } else if !self.tx_allowed() {
+        } else if !self.tx_allowed() || !self.outside_key_passband_allowed() {
             Some("outside the licence")
         } else if !self.outside_key_allowed() {
             Some(Refusal::VoiceOnly.text())

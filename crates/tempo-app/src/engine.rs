@@ -126,6 +126,9 @@ mod kept_files_tests;
 #[cfg(test)]
 mod live_level_tests;
 mod mode_entry;
+/// A program outside Nexus judged across the whole audio passband it could send.
+#[cfg(test)]
+mod outside_key_passband_tests;
 pub mod parsec_presence;
 /// 60 m allows only USB phone: the picks the cockpit greys, and the lock naming the rule.
 #[cfg(test)]
@@ -11873,9 +11876,15 @@ impl Engine {
     /// masks on read, so a key that became out-of-privilege (knob turned to a locked
     /// segment while holding PTT) drops the next loop pass. A program's microphone key on the TCI
     /// server is held here as a CAT-broker client's is, masked by its own gates as well
-    /// (`engine/tci.rs`).
+    /// (`engine/tci.rs`). A broker client's key is masked by the outside-key rules too: its whole
+    /// passband in the licence ([`Self::outside_key_passband_allowed`]) and none from 28.3 to
+    /// 28.5 MHz for a Novice or a Technician ([`Self::outside_key_allowed`]).
     pub fn manual_ptt(&self) -> bool {
-        (self.manual_ptt || (self.broker_ptt && self.outside_key_allowed()) || self.tci_mic_keyed())
+        (self.manual_ptt
+            || (self.broker_ptt
+                && self.outside_key_passband_allowed()
+                && self.outside_key_allowed())
+            || self.tci_mic_keyed())
             && self.tx_enabled
             && self.tx_allowed()
     }
@@ -11910,6 +11919,9 @@ impl Engine {
             || !self.tx_enabled
             || self.broker_context_hold
             || !self.tx_allowed()
+            // …nor where the program's whole passband is not in the licence: Nexus does not
+            // know where in it the program puts its audio.
+            || !self.outside_key_passband_allowed()
             || !self.outside_key_allowed()
             || (!re_assert && self.tx_owner().is_some())
             || (!re_assert && self.clock_repair_holds_tx())
@@ -25758,6 +25770,72 @@ contact yourself."
     /// turns false (a retune into the segment, a class change); an un-key is never judged.
     pub fn outside_key_allowed(&self) -> bool {
         self.sstv_picture_allowed()
+    }
+
+    /// May a program outside Nexus key the transmitter as the radio stands, judged across the
+    /// WHOLE audio passband it could send ([`tci::PASSBAND`]: 0 to 3 kHz from the carrier, above
+    /// it on an upper sideband, below it on a lower one)? Nexus does not know where in that
+    /// passband the program puts its audio, so its own TX offset proves nothing about the
+    /// program's: a data program at +1500 Hz from a dial a hair under an edge transmits past it.
+    /// Every term of [`Self::tx_allowed`] applies, with that passband as the data frame
+    /// ([`Self::tx_allowed_for`]); the Phone section judges its own phone passband, AM's both
+    /// sides and FM's carrier as for Nexus's own voice, and CW the carrier as for Nexus's own CW.
+    /// Any other section whose transmitting VFO is commanded a sideband is judged across that
+    /// passband too, in that section's privileges. ANDed after [`Self::tx_allowed`] on every
+    /// outside key and re-read while one is held, so it can only ever refuse more, and a held key
+    /// drops when a retune carries the passband across an edge; an un-key is never judged.
+    /// Nexus's own transmissions keep their own judgement.
+    pub fn outside_key_passband_allowed(&self) -> bool {
+        use crate::settings::OperatingMode;
+        let om = self.settings.operating_mode;
+        self.tx_allowed_for(tci::PASSBAND)
+            && (om == OperatingMode::Phone
+                || self.every_tx_frequency(om, |mhz| {
+                    let class = self.settings.license_class;
+                    let (near, far) = (
+                        tci::PASSBAND.f0_hz / 1_000_000.0,
+                        (tci::PASSBAND.f0_hz + tci::PASSBAND.bw_hz) / 1_000_000.0,
+                    );
+                    std::iter::once(self.tx_mode_effective())
+                        .chain(self.sat_uplink_word())
+                        .all(|word| match Self::side_is_lsb(&word) {
+                            Some(true) => {
+                                crate::privileges::tx_span_allowed(class, mhz - far, mhz - near, om)
+                            }
+                            Some(false) => {
+                                crate::privileges::tx_span_allowed(class, mhz + near, mhz + far, om)
+                            }
+                            // CW, AM, FM: the gate's own judgement of that emission.
+                            None => true,
+                        })
+                }))
+    }
+
+    /// Why [`Self::outside_key_passband_allowed`] refuses where [`Self::tx_allowed`] does not, in
+    /// the broker's connection-log line: the frequency the program's audio could reach, the far
+    /// edge of its passband on the side the transmitting VFO is commanded (the stored sideband
+    /// when the word names none). `None` while it allows.
+    pub fn outside_key_passband_refusal(&self) -> Option<String> {
+        if self.outside_key_passband_allowed() {
+            return None;
+        }
+        let width = if self.settings.operating_mode == crate::settings::OperatingMode::Phone {
+            crate::privileges::SSB_BW_MHZ
+        } else {
+            (tci::PASSBAND.f0_hz + tci::PASSBAND.bw_hz) / 1_000_000.0
+        };
+        let lsb = Self::side_is_lsb(&self.tx_mode_effective())
+            .unwrap_or_else(|| self.settings.sideband.eq_ignore_ascii_case("LSB"));
+        let carrier = self.tx_emission_mhz();
+        let reach = if lsb {
+            carrier - width
+        } else {
+            carrier + width
+        };
+        Some(format!(
+            "outside your license privileges at the band edge: the program's audio could reach \
+             {reach:.4} MHz"
+        ))
     }
 
     /// The words for a licence refusal: [`PHONE_USB_ONLY`] when the phone mode is the whole reason
