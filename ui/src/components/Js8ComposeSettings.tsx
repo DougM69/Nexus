@@ -14,6 +14,7 @@ import { t } from '../i18n'
 import type { Settings } from '../types'
 import { JS8_CQS } from '../js8Vocab'
 import { JS8_DEFAULT_CQ, JS8_DEFAULT_REPLY, JS8_DEFAULT_SAVED, JS8_MACRO_TOKENS, JS8_MYGRID4 } from '../js8Macros'
+import { upperTyped } from '../typedInput'
 
 type Key = 'js8CqText' | 'js8ReplyText' | 'js8SavedMessages' | 'js8SendAtOnce' | 'js8Pills' | 'js8WordSuggestions'
 export type Js8ComposePatch = Partial<Pick<Settings, Key>>
@@ -57,7 +58,7 @@ export function Js8ComposeSettings({
           className="settings-input"
           list="js8-cq-forms"
           value={form.js8CqText ?? JS8_DEFAULT_CQ}
-          onChange={(e) => onChange({ js8CqText: e.target.value.toUpperCase() })}
+          onChange={(e) => onChange({ js8CqText: upperTyped(e.target) })}
           autoComplete="off"
           spellCheck={false}
         />
@@ -74,7 +75,7 @@ export function Js8ComposeSettings({
         <input
           className="settings-input"
           value={form.js8ReplyText ?? JS8_DEFAULT_REPLY}
-          onChange={(e) => onChange({ js8ReplyText: e.target.value.toUpperCase() })}
+          onChange={(e) => onChange({ js8ReplyText: upperTyped(e.target) })}
           autoComplete="off"
           spellCheck={false}
         />
@@ -91,7 +92,7 @@ export function Js8ComposeSettings({
                 <input
                   className="settings-input"
                   value={m}
-                  onChange={(e) => setSaved(saved.map((x, k) => (k === i ? e.target.value.toUpperCase() : x)))}
+                  onChange={(e) => setSaved(saved.map((x, k) => (k === i ? upperTyped(e.target) : x)))}
                   aria-label={t('settings.js8.saved.row.aria', { n: i + 1 })}
                   autoComplete="off"
                   spellCheck={false}
@@ -133,7 +134,7 @@ export function Js8ComposeSettings({
           <input
             className="settings-input"
             value={adding}
-            onChange={(e) => setAdding(e.target.value.toUpperCase())}
+            onChange={(e) => setAdding(upperTyped(e.target))}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return
               e.preventDefault()

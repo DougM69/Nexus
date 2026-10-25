@@ -68,6 +68,7 @@ import { PaneSeam } from './PaneSeam'
 import { UtcClock } from './UtcClock'
 import { askMainToWorkIn, dismissWorkInHint, workInHintSeen, type WorkInView } from '../features/contestWorkIn'
 import { useFeatures } from '../useFeatures'
+import { upperTyped } from '../typedInput'
 
 /**
  * ⚠️ INVARIANT — the FD mode codes an entry is scored by, printed as they are logged and
@@ -2834,7 +2835,7 @@ export function OperatorBox({
         value={draft}
         disabled={value === null}
         readOnly={readOnly}
-        onChange={(e) => { if (!readOnly) setDraft(e.target.value.toUpperCase()) }}
+        onChange={(e) => { if (!readOnly) setDraft(upperTyped(e.target)) }}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') e.currentTarget.blur()

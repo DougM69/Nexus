@@ -61,6 +61,7 @@ import { RecallPanel } from './RecallPanel'
 import { ContestScoreChip } from './ContestScoreChip'
 import { pushToast, withErrorToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
+import { normaliseTyped, upperTyped } from '../typedInput'
 
 // ---------------------------------------------------------------------------
 // THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
@@ -2745,7 +2746,7 @@ export function LogEntry({
                       className="settings-input mono le-fd-moved-input"
                       value={movingTo[v.key] ?? ''}
                       onChange={(e) =>
-                        setMovingTo((prev) => ({ ...prev, [v.key]: e.target.value.toUpperCase() }))
+                        setMovingTo((prev) => ({ ...prev, [v.key]: upperTyped(e.target) }))
                       }
                       // Enter commits and Escape backs out, because a contest
                       // operator's hands are on the keyboard and a two-box edit that
@@ -2847,7 +2848,7 @@ export function LogEntry({
               // while the caret is in this field would otherwise log "K1 ABC" verbatim —
               // `logIt` only trims the ends. Costs nothing on any other path (a pasted call
               // with a stray space comes out clean).
-              onChange={(e) => setLogCall(e.target.value.replace(/\s+/g, '').toUpperCase())}
+              onChange={(e) => setLogCall(normaliseTyped(e.target, (s) => s.replace(/\s+/g, '').toUpperCase()))}
               onBlur={onCallBlur}
               onKeyDown={(e) => {
                 // SPACE walks Call → field₁, whatever field₁ is; Shift+Space back to the last.
@@ -2894,7 +2895,7 @@ export function LogEntry({
                   aria-invalid={!sentRstGood}
                   onChange={(e) => {
                     noteTyped(SENT_RST_KEY)
-                    setFdField(SENT_RST_KEY, e.target.value.replace(/\s+/g, ''))
+                    setFdField(SENT_RST_KEY, normaliseTyped(e.target, (s) => s.replace(/\s+/g, '')))
                   }}
                   onKeyDown={(e) => {
                     onExchangeSpace(e, fdBoxRefs.current[f.key] ?? null, prevBox())
@@ -2926,7 +2927,7 @@ export function LogEntry({
                 value={fdValue(f)}
                 onChange={(e) => {
                   noteTyped(f.key)
-                  setFdField(f.key, e.target.value)
+                  setFdField(f.key, upperTyped(e.target))
                   // The list is offered from every universe this slot draws on, which for
                   // a QSO party's one QTH box is counties AND states — and, inside a county
                   // line, for the part being typed and from the county list alone.
@@ -3230,7 +3231,7 @@ export function LogEntry({
           value={logCall}
           onChange={(e) => {
             humanCallEditRef.current = true
-            const next = e.target.value.toUpperCase()
+            const next = upperTyped(e.target)
             // #383: a park the operator typed follows the call as they type it. Typed before any
             // call, it belongs to the first call typed after it; typed mid-call, to the call being
             // finished. Only a keystroke here moves it, so a clicked spot is a new station.
@@ -3317,7 +3318,7 @@ export function LogEntry({
           <input
             className={`settings-input mono le-grid${gridBlocked ? ' invalid' : ''}`}
             value={logGrid}
-            onChange={(e) => setLogGrid(e.target.value.toUpperCase())}
+            onChange={(e) => setLogGrid(upperTyped(e.target))}
             onKeyDown={onEnter}
             placeholder={t('logEntry.grid.placeholder')}
             autoComplete="off"
@@ -3410,7 +3411,7 @@ export function LogEntry({
             className="settings-input mono le-park-ref"
             value={logParkRef}
             onChange={(e) => {
-              setPark(e.target.value.toUpperCase())
+              setPark(upperTyped(e.target))
               parkForRef.current = { call: baseCall(logCall), hunt: false }
             }}
             onKeyDown={onEnter}

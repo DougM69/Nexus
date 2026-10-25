@@ -46,6 +46,7 @@ import { t } from '../i18n'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { jttyAllPane, jttyPaneText, jttyRxPane, jttySegments, type JttyLineOptions } from '../features/jttyLines'
 import { useRegionCols, type RegionCols } from '../useRegionCols'
+import { upperTyped } from '../typedInput'
 
 interface Props {
   /** Open the Logbook filtered to a callsign — handed to the log strip's recall card. */
@@ -762,7 +763,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             <input
               className="settings-input rtty-hiscall"
               value={hisCall}
-              onChange={(e) => setHisCall(e.target.value.toUpperCase())}
+              onChange={(e) => setHisCall(upperTyped(e.target))}
               placeholder={t('jtty.hisCall.placeholder')}
               aria-label={t('jtty.hisCall.aria')}
               autoComplete="off"

@@ -26,6 +26,7 @@ import { isStreamInput } from '../remote-native/stream-input'
 import { bandOptions, contactText, editForm, editOf, editText, modeOptions } from '../features/contestEdit'
 import { contactLabel } from '../features/contestRemoval'
 import { receivedCaption } from '../features/contestSlots'
+import { normaliseTyped, upperTyped } from '../typedInput'
 
 // ONE EDIT OF A CONTACT AT A TIME IN A WINDOW. The last contacts' Edit, the contest screen's and the
 // strip's Ctrl+Y can each open one, and two open at once would race: the engine refuses the second
@@ -163,7 +164,7 @@ export function ContestContactEdit({
           className="settings-input mono"
           value={form.call}
           onChange={(e) => {
-            const call = e.target.value.replace(/\s+/g, '').toUpperCase()
+            const call = normaliseTyped(e.target, (s) => s.replace(/\s+/g, '').toUpperCase())
             setForm((f) => ({ ...f, call }))
           }}
           onKeyDown={onKey}
@@ -178,7 +179,7 @@ export function ContestContactEdit({
             className="settings-input mono"
             value={form.fields[f.key] ?? ''}
             onChange={(e) => {
-              const value = e.target.value.toUpperCase()
+              const value = upperTyped(e.target)
               setForm((s) => ({ ...s, fields: { ...s.fields, [f.key]: value } }))
             }}
             onKeyDown={onKey}

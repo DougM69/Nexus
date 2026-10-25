@@ -66,6 +66,7 @@ import {
   type PskMacroSlot,
   type PskSetId,
 } from '../features/pskMacros'
+import { upperTyped } from '../typedInput'
 
 interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
@@ -1042,7 +1043,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         <input
           className="settings-input rtty-hiscall"
           value={hisCall}
-          onChange={(e) => setHisCall(e.target.value.toUpperCase())}
+          onChange={(e) => setHisCall(upperTyped(e.target))}
           placeholder={t('psk.hisCall.placeholder')}
           aria-label={t('psk.hisCall.aria')}
           autoComplete="off"

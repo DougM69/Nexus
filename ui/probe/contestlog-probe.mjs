@@ -20,6 +20,11 @@
 // falls past the bottom of the window. It must come back NOT on screen; if it does not, the check cannot
 // fail and the probe says so instead of passing.
 //
+// THE CARET (CQ WW SSB, 2026-10): real keystrokes into the logger's Call box — "abc", Home, "dl1" — must
+// leave "DL1ABC" with the caret after the 1, as in any text box. The box upper-cases as it goes, and a
+// value written back changed puts the caret at the end, which is the jump an operator typing the suffix
+// first hit after the first letter of the prefix.
+//
 // exit: 0 every size held · 1 a red, or a control that could not fail · 2 the page never drew the entry
 import { createServer } from 'vite'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -148,6 +153,34 @@ async function measureEdit(w, h) {
   return { clicked, moved: JSON.stringify(before) !== JSON.stringify(after), before, after, ...seen }
 }
 
+/** Types into the Call box as a keyboard does — Chrome's own key events, the caret where the keys put it:
+ *  the box emptied, "abc", Home, "dl1". The value and caret it ends with. */
+async function caret(w, h) {
+  const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
+  const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
+  const call = (method, params) => browser.call(method, params, sessionId)
+  await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+  await call('Page.navigate', { url: `${origin}/probe/contestlog.html?panel=contestlog&layout=full` })
+  const read = async (expression) => (await call('Runtime.evaluate', { expression, returnByValue: true })).result?.value
+  const BOX = `document.querySelector('.contest-logger-scaled input.le-fd-input-call')`
+  for (let i = 0; i < 100 && !(await read(`!!${BOX}`)); i++) await sleep(150)
+  await read(`(() => { const el = ${BOX}; el.focus(); el.select(); return true })()`)
+  const key = async (k) => {
+    if (k === 'Home') {
+      await call('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 })
+      await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 })
+    } else {
+      await call('Input.dispatchKeyEvent', { type: 'keyDown', key: k, text: k, unmodifiedText: k })
+      await call('Input.dispatchKeyEvent', { type: 'keyUp', key: k })
+    }
+    await sleep(30)
+  }
+  for (const k of ['a', 'b', 'c', 'Home', 'd', 'l', '1']) await key(k)
+  const got = await read(`(() => { const el = ${BOX}; return { value: el.value, start: el.selectionStart, end: el.selectionEnd } })()`)
+  await browser.call('Target.closeTarget', { targetId })
+  return got
+}
+
 let code = 0
 try {
   for (const { w, h } of [FLOOR, SIZES[1], { w: 1024, h: 768 }, { w: 1920, h: 1080 }]) {
@@ -210,13 +243,19 @@ try {
       }
     }
   }
+  const k = await caret(640, 480)
+  console.log(`contestlog-probe: caret, "abc" Home "dl1" in the Call box: ${JSON.stringify(k)}`)
+  if (!k || k.value !== 'DL1ABC' || k.start !== 3 || k.end !== 3) {
+    console.error('contestlog-probe: RED caret — the Call box should read DL1ABC with the caret after the 1')
+    code = code || 1
+  }
   const c = await measure(FLOOR.w, FLOOR.h - 100)
   console.log(`contestlog-probe: CONTROL window ${FLOOR.w}×${FLOOR.h - 100}: ${JSON.stringify(c)}`)
   if (!c || c.seen.newest) {
     console.error('contestlog-probe: CONTROL FAILED — the newest contact under the floor came back on screen; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`contestlog-probe: PASS — a last contact's edit line on screen, the entry unmoved, at ${FLOOR.w}×${FLOOR.h}, ${SIZES[1].w}×${SIZES[1].h}, 1024×768 and 1920×1080 (the tenth row clipped at 1024×768); the entry, the dupe warning, the newest contact and Keep in front on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the entry alone at ${FLOOR.w}×${FLOOR.h} and ${SIZES[2].w}×${SIZES[2].h}; both again with the RST sent box on; and the control below the floor clipped`)
+  if (code === 0) console.log(`contestlog-probe: PASS — a last contact's edit line on screen, the entry unmoved, at ${FLOOR.w}×${FLOOR.h}, ${SIZES[1].w}×${SIZES[1].h}, 1024×768 and 1920×1080 (the tenth row clipped at 1024×768); the entry, the dupe warning, the newest contact and Keep in front on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the entry alone at ${FLOOR.w}×${FLOOR.h} and ${SIZES[2].w}×${SIZES[2].h}; both again with the RST sent box on; the caret kept in the Call box; and the control below the floor clipped`)
   process.exitCode = code
 } finally {
   await browser.stop()
