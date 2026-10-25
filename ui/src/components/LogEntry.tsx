@@ -38,6 +38,7 @@ import { composingSlot } from '../features/contestExchange'
 import { readLogDraft, writeLogDraft } from '../features/logDraft'
 import { CALL_HISTORY_SOURCE, SCP_SOURCE, useCallHistory, useScpList } from '../features/contestLists'
 import { scpLine } from '../features/scp'
+import { callCardTrigger } from './CallCard'
 import { applyFill, contestLogFill, EMPTY_FILL, historyFill, loggedQthFill, offerFill, typedIn, type FillSource, type FillState } from '../features/callHistoryFill'
 import { fdFieldOk, fdSlotValue, fdVerdict, receivedCaption, slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
@@ -3206,6 +3207,19 @@ export function LogEntry({
           title={t('logEntry.lookup.title')}
         >
           {qrzBusy ? '…' : t('logEntry.lookup.label')}
+        </button>
+        {/* The call's station card (CallCard.tsx). Never in the tab order and never takes focus on a
+            press, so typing in the call field is never interrupted; this strip has no ESM, and the
+            contest strip has no such button. Never an F-key: F1–F12 are the transmit macros. */}
+        <button
+          type="button"
+          className="le-qrz le-lookup le-card"
+          tabIndex={-1}
+          onMouseDown={(e) => e.preventDefault()}
+          disabled={!logCall.trim()}
+          {...callCardTrigger(logCall)}
+        >
+          {t('logEntry.card.label')}
         </button>
         <label className="le-rst-field" title={t('logEntry.rstSent.title')}>
           <span className="le-rst-cap">{t('logEntry.rstSent.label')}</span>

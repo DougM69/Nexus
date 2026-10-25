@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Callbook answers are kept on this computer.** A call you looked up is answered from a local cache for 30 days (Settings ▸ Logging & Connectors ▸ Confirmations ▸ Callbook cache, adjustable), and offline at any age; refresh one call or clear the whole cache there. No password or sign-in key is ever kept. US calls that QRZ and HamQTH do not answer are also asked of the free callook.info.
+- **Station card.** Click a call (or press Enter on it) in the Logbook, Spots, the decode list's QRZ
+  link, the roster's ↗ and the station cards' QRZ, the map's path line or the log strip's new Card button, and one card shows what
+  Nexus knows about it: distance and bearing, the contacts you have made as a band × mode grid of
+  worked and confirmed, the last one, what it would be new for on the band and mode you are on, its
+  latest spot, and what your log recorded about it, with Lookup for the callbook (name, QTH, county,
+  IOTA, zones, e-mail, web, QSL route, LoTW/eQSL/card, their local time and photo) and a QRZ button for
+  the page. Opening it asks nothing over the internet. Esc or a click elsewhere closes it, and it never
+  covers the TX strip, Stop TX or the TX dock. Settings ▸ Appearance can also open it when the pointer
+  rests on a call (off by default).
 - **More from the callbook on every contact.** When you have looked a station up (the callsign card
   or the log strip), the contact you log with that call keeps what the lookup said: county, IOTA,
   CQ and ITU zones, position, e-mail, web page, QSL manager, whether they use LoTW, eQSL or paper

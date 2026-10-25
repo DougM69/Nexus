@@ -79,8 +79,9 @@ import {
   uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, openQrzPage, syncQrz, downloadLotwReport, importPotaLog } from '../api'
+import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
+import { callCardTrigger, qrzPageOf } from './CallCard'
 import type { QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
 
 interface Props {
@@ -2705,16 +2706,11 @@ export function Logbook({
                       return (
                         <>
                           <span className="log-cell mono">
+                            {/* The station card (its QRZ button opens the page this button used to). */}
                             <button
                               type="button"
                               className="qrz-link-call"
-                              onClick={() =>
-                                void withErrorToast(
-                                  () => openQrzPage(q.call),
-                                  t('callbook.qrzPage.failed', { call: q.call }),
-                                )
-                              }
-                              title={t('callbook.qrzPage.title', { call: q.call })}
+                              {...callCardTrigger(q.call, qrzPageOf(q.call))}
                             >
                               {q.call}
                             </button>

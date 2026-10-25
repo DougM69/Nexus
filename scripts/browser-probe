@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -78,6 +78,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         first rows are on screen and the last row is reached by scrolling,
                         with a control below the smallest that must come back clipped
                         (ui/probe/spots-probe.mjs; it builds nothing)
+  --desktop callcard    the station card beside the transmit controls: a call just above
+                        the TX strip and dock, and one above FT's QSO strip, clicked at
+                        1366×768 and 1024×768, asserting the card is drawn and covers no
+                        point of the strip, Stop TX, the dock or the QSO strip, with a
+                        control (the transmit classes removed) where it must cover one
+                        (ui/probe/callcard-probe.mjs; it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -94,7 +100,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots) ;; *) echo "browser-probe: --desktop takes rotor, contestlog or spots" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots or callcard" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -113,6 +119,7 @@ command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/de
 if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = contestlog ] && exec node "$ROOT/ui/probe/contestlog-probe.mjs"
   [ "$DESKTOP" = spots ] && exec node "$ROOT/ui/probe/spots-probe.mjs"
+  [ "$DESKTOP" = callcard ] && exec node "$ROOT/ui/probe/callcard-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

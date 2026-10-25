@@ -35,8 +35,7 @@ import { StateBlock } from './StateBlock'
 import { RarityChip } from './RarityChip'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
-import { openQrzPage } from '../api'
-import { withErrorToast } from '../toast'
+import { callCardTrigger, qrzPageOf } from './CallCard'
 
 /**
  * The pane's invariant vocabulary — never translated, never locale-formatted.
@@ -987,11 +986,12 @@ export function OperateDecodes({
                   // WSJT-X style: DOUBLE-CLICK the row to work the station (see onDoubleClick) — no
                   // per-row Work button, so each decode stays a single tight line. QRZ opens the
                   // callsign's page.
+                  // The station's card, where its QRZ button opens the page this one used to.
                   <button
                     type="button"
                     className="qrz-link-call decode-qrz"
-                    onClick={(e) => { e.stopPropagation(); const c = d.from as string; void withErrorToast(() => openQrzPage(c), t('callbook.qrzPage.failed', { call: c })) }}
-                    title={t('callbook.qrzPage.title', { call: d.from })}
+                    {...callCardTrigger(d.from, qrzPageOf(d.from), true)}
+                    onDoubleClick={(e) => e.stopPropagation()}
                   >
                     {DECODE_TOKENS.qrz}
                   </button>

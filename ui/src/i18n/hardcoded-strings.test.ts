@@ -166,6 +166,7 @@ const MIGRATED = [
   'features/clubFirewall.ts',
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',
+  'components/CallCard.tsx',
   'components/StationList.tsx',
   // The WATCH tile (2026-09-23) — born migrated: its word and tooltip are catalog keys, shared
   // by the Stations list above, the Call Roster and Spots.

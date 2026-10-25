@@ -4220,6 +4220,13 @@ body.resizing-row {
 .map-path-call {
   font-weight: 600;
   color: var(--accent);
+  /* A button (it opens the station card) that still reads as the call in the readout. */
+  font-family: inherit;
+  font-size: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 .map-path-fig {
   font-family: var(--font-mono);

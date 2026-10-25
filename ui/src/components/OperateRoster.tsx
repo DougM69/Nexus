@@ -11,8 +11,7 @@
 // them — the column headings, the filters, and everything a row says out loud.
 import { useEffect, useMemo, useState } from 'react'
 import { t } from '../i18n'
-import { openQrzPage } from '../api'
-import { withErrorToast } from '../toast'
+import { callCardTrigger, qrzPageOf } from './CallCard'
 import { useRovingList } from '../useRovingList'
 import type { NeedAlert, NeedTag, Station } from '../types'
 import {
@@ -647,18 +646,12 @@ export function OperateRoster({
                       L
                     </span>
                   )}
+                  {/* The station's card, where its QRZ button opens the page this one used to. */}
                   <button
                     type="button"
                     className="qrz-link"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void withErrorToast(
-                        () => openQrzPage(s.call),
-                        t('callbook.qrzPage.failed', { call: s.call }),
-                      )
-                    }}
+                    {...callCardTrigger(s.call, qrzPageOf(s.call), true)}
                     onDoubleClick={(e) => e.stopPropagation()}
-                    title={t('callbook.qrzPage.title', { call: s.call })}
                   >
                     ↗
                   </button>

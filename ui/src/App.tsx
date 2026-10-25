@@ -230,6 +230,7 @@ import { SetupWizard, type WizardDraft } from './components/SetupWizard'
 import { GettingStartedGuide } from './components/GettingStartedGuide'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
+import { CallCardHost } from './components/CallCard'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is the shell: it
 // renders no cockpit control of its own, so what moved is its OWN prose — the loading line,
@@ -3847,6 +3848,8 @@ function App() {
   return (
     <div className="app">
       <ClientBanner />
+      {/* The window's one station card: a call clicked anywhere on screen opens it (CallCard.tsx). */}
+      <CallCardHost snap={snap} spots={allSpots} needAlertsByCall={needAlertsByCall} />
       {/* ⚠️ NOT ON CONNECT, by the operator's ruling (2026-10-01): "at very top, its the frequency, the
           band dropdown, tx off, tune, stop tx.  That bar doenst need to live in connect/conditions",
           then "remove all radio control from connect, reclaim that space". So the whole bar goes on

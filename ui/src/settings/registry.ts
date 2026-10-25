@@ -670,7 +670,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'ui scale', 'text size', 'font size', 'zoom', 'accessibility', 'large text', 'readable',
       'larger text', 'bigger text',
       'density', 'compact', 'comfortable', 'touch', 'touchscreen',
-      'pane', 'layout', 'clock', 'local time', 'time zone', 'utc'],
+      'pane', 'layout', 'clock', 'local time', 'time zone', 'utc',
+      'station card', 'callsign card', 'call card', 'hover'],
   },
   {
     // The theme cards and the rows that change how the theme paints: High contrast, Night and

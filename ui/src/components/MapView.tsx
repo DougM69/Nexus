@@ -10,6 +10,7 @@
 // projection ids, and the SP/LP path abbreviations below. The prose is in the catalog
 // under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { callCardTrigger } from './CallCard'
 import { flushSync } from 'react-dom'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
@@ -3661,7 +3662,10 @@ export function MapView({
           )}
           {selStation && pathInfo && (
             <div className="map-path">
-              <span className="map-path-call">{selStation.call}</span>
+              {/* The selected station's card, from the call in this readout. */}
+              <button type="button" className="map-path-call" {...callCardTrigger(selStation.call)}>
+                {selStation.call}
+              </button>
               <span className="map-path-fig">
                 {t('map.path.figure', {
                   brg: (pathMode === 'sp' ? pathInfo.sp : pathInfo.lp).brg,

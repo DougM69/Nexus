@@ -176,6 +176,8 @@ const SHARED = [
   // Logbook globe on/off (D#278): how this operator wants the Logbook to look, not a window
   // property — the same classification as units (features/logbookGlobe).
   'nexus.logbook.globe',
+  // Station card on hover (features/callCardHover): the same kind of standing preference as the globe.
+  'nexus.callCard.hover',
   // Prose language: the same preference in every window, for the same reason units are. A
   // pop-out band map reading a different language than the window that spawned it would be
   // the shape of bug this list exists to prevent.

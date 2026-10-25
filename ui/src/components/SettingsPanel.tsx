@@ -265,6 +265,7 @@ import type { Motion } from '../useMotion'
 import { FT_PALETTE_SCOPE, getWaterfallPalette, setWaterfallPalette } from '../waterfallPalette'
 import { appearanceIn, withAppearance, type Appearance } from '../features/appearanceBackup'
 import { useLogbookGlobe } from '../features/logbookGlobe'
+import { useCallCardHover } from '../features/callCardHover'
 import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, featureCategoryLabel, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
 import { PROFILE_LIST } from '../features/profiles'
@@ -1179,6 +1180,8 @@ export function SettingsPanel({
   }
   // D#278: browser-local display preference, not a Settings field — no save round-trip.
   const [logbookGlobe, setLogbookGlobe] = useLogbookGlobe()
+  // Browser-local like the globe: whether resting the pointer on a call opens its station card.
+  const [callCardHover, setCallCardHover] = useCallCardHover()
   // APPEARANCE IN THE BACKUP (features/appearanceBackup.ts). The look on screen, as the backup
   // carries it: what this host wires, both waterfall palettes and the Logbook globe — and, by
   // design, not Field mode or UI scale. A restore puts it back through the very setters the rows
@@ -4430,6 +4433,20 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.workspace.density.hint')}</span>
               </div>
+              {/* The station card on hover (features/callCardHover): off by default, per operator,
+                  in every window. A click or Enter on a call opens the card either way. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.workspace.callCardHover.label')}</span>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    checked={callCardHover}
+                    onChange={(e) => setCallCardHover(e.target.checked)}
+                    aria-label={t('settings.workspace.callCardHover.aria')}
+                  />
+                  <span className="settings-hint">{t('settings.workspace.callCardHover.hint')}</span>
+                </span>
+              </label>
               {/* #253: an optional second clock in the top bar showing this computer's local
                   time. Per machine and off by default; UTC stays the station clock. */}
               {onLocalClockChange && (

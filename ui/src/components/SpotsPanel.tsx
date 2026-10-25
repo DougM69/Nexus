@@ -9,8 +9,7 @@
 // comment) and the age column below — all data and measurement, invariant in every locale.
 import { useEffect, useMemo, useState } from 'react'
 import type { BandChannel, FieldDayStatus, NeedAlert, SpotRow } from '../types'
-import { openQrzPage } from '../api'
-import { withErrorToast } from '../toast'
+import { callCardTrigger, qrzPageOf } from './CallCard'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { alertsByCall, alertsForSurface, isActivityTag } from '../features/needs'
@@ -774,11 +773,11 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
               >
                 <span className="np-age">{ageLabel(s.ageSecs)}</span>
                 <span className="np-call">
+                  {/* The station card; stopping the click keeps the row's tune from firing. */}
                   <button
                     type="button"
                     className="qrz-link-call"
-                    onClick={(e) => { e.stopPropagation(); void withErrorToast(() => openQrzPage(s.call), t('callbook.qrzPage.failed', { call: s.call })) }}
-                    title={t('callbook.qrzPage.title', { call: s.call })}
+                    {...callCardTrigger(s.call, qrzPageOf(s.call), true)}
                   >
                     {s.call}
                   </button>

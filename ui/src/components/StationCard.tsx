@@ -6,9 +6,8 @@
 // migrated with that registry, not here.
 
 import type { NeedTag, Station, Tier } from '../types'
-import { openQrzPage } from '../api'
+import { callCardTrigger, qrzPageOf } from './CallCard'
 import { t } from '../i18n'
-import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { useUnits } from '../units'
@@ -181,14 +180,9 @@ export function StationCard({
       <button
         type="button"
         className="station-qrz"
-        onClick={(e) => {
-          e.stopPropagation()
-          void withErrorToast(
-            () => openQrzPage(station.call),
-            t('callbook.qrzPage.failed', { call: station.call }),
-          )
-        }}
-        title={t('callbook.qrzPage.title', { call: station.call })}
+        // The station's card, where its QRZ button opens the page this one used to.
+        {...callCardTrigger(station.call, qrzPageOf(station.call), true)}
+        onDoubleClick={(e) => e.stopPropagation()}
       >
         {QRZ_LABEL}
       </button>
