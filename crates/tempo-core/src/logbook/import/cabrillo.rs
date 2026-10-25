@@ -54,7 +54,7 @@
 //! log's own (the line's sending call, or the `CALLSIGN:` header's): a report, a serial or the
 //! entrant's own call repeated in its exchange is never taken for the station worked.
 
-use super::{Listed, Note, NoteKind, SourceRecord, Unmapped, UnmappedReason};
+use super::{Listed, Note, NoteKind, Notes, SourceRecord, Unmapped, UnmappedReason};
 use crate::contest::spec::ExchangeSpec;
 use crate::contest::{cabrillo_contest_token, is_call_slot};
 use crate::fd_rules::{ruleset_by_contest_id, FdRuleset};
@@ -62,7 +62,7 @@ use crate::fd_rules::{ruleset_by_contest_id, FdRuleset};
 /// A Cabrillo log, read.
 pub(crate) struct Read {
     pub(crate) records: Vec<SourceRecord>,
-    pub(crate) notes: Vec<Note>,
+    pub(crate) notes: Notes,
     pub(crate) unmapped: Vec<Unmapped>,
     pub(crate) template: Option<String>,
 }
@@ -218,7 +218,7 @@ fn readings(spec: &ExchangeSpec, rs: &FdRuleset, n: usize) -> Vec<Reading> {
 
 /// Read a Cabrillo log.
 pub(crate) fn read(text: &str) -> Read {
-    let mut notes = Vec::new();
+    let mut notes = Notes::default();
     let mut unmapped = Listed::default();
     let mut list = |what: &str, side: Option<&'static str>, reason: UnmappedReason| {
         unmapped.add(what, side, reason)

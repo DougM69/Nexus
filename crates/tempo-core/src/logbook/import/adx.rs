@@ -17,7 +17,10 @@
 //! are read as `\n`, as an XML processor reads them. Anything else in a record — an element
 //! inside a field, a field left open — is noted ([`NoteKind::BadXml`]), never guessed at.
 
-use super::{header_unmapped, Listed, Note, NoteKind, SourceRecord, Unmapped, UnmappedReason};
+use super::{
+    header_unmapped, Fields, Listed, Note, NoteKind, Notes, Records, Unmapped, UnmappedReason,
+    MAX_FIELDS,
+};
 
 /// The elements that are the file's structure, never a field's name.
 const STRUCTURE: &[&str] = &["ADX", "HEADER", "RECORDS", "RECORD"];
@@ -30,17 +33,18 @@ struct Tag {
     empty: bool,
 }
 
-/// The records an ADX text holds, what was noticed, and what it holds that is not a contact's
-/// field (the header's fields, a field name ADIF cannot carry).
-pub(crate) fn read(text: &str) -> (Vec<SourceRecord>, Vec<Note>, Vec<Unmapped>) {
-    let mut records = Vec::new();
-    let mut notes = Vec::new();
-    let mut header = Vec::new();
+/// The records an ADX text holds (each read with at most [`MAX_FIELDS`] fields, as an ADIF
+/// file's), what was noticed, and what it holds that is not a contact's field (the header's
+/// fields, a field name ADIF cannot carry).
+pub(crate) fn read(text: &str) -> (Records, Notes, Vec<Unmapped>) {
+    let mut records = Records::default();
+    let mut notes = Notes::default();
+    let mut header = Fields::new(MAX_FIELDS);
     let mut bad_names = Listed::default();
     // Where we are: inside HEADER, inside a RECORD (its fields so far), inside a field (its name
     // and text so far).
     let mut in_header = false;
-    let mut record: Option<Vec<(String, String)>> = None;
+    let mut record: Option<Fields> = None;
     let mut field: Option<(String, String, String)> = None; // (element, ADIF name, text)
     let mut pos = 0;
     while pos < text.len() {
@@ -75,13 +79,13 @@ pub(crate) fn read(text: &str) -> (Vec<SourceRecord>, Vec<Note>, Vec<Unmapped>) 
         let Some((tag, len)) = parse_tag(rest) else {
             notes.push(Note {
                 kind: NoteKind::BadXml,
-                at: records.len() + 1,
+                at: records.next_at(),
                 text: super::clip(rest),
             });
             break;
         };
         pos = lt + len;
-        let at = records.len() + 1;
+        let at = records.next_at();
         if let Some((element, name, value)) = field.take() {
             if tag.closing && tag.name == element {
                 push(record.as_mut().unwrap_or(&mut header), name, value);
@@ -115,21 +119,18 @@ pub(crate) fn read(text: &str) -> (Vec<SourceRecord>, Vec<Note>, Vec<Unmapped>) 
                         at,
                         text: "<RECORD> not closed".to_string(),
                     });
-                    records.push(SourceRecord { at, fields });
+                    records.add(at, fields.list, fields.over, &mut notes);
                 }
-                let at = records.len() + 1;
+                let at = records.next_at();
                 if tag.empty {
-                    records.push(SourceRecord {
-                        at,
-                        fields: Vec::new(),
-                    });
+                    records.add(at, Vec::new(), None, &mut notes);
                 } else {
-                    record = Some(Vec::new());
+                    record = Some(Fields::new(MAX_FIELDS));
                 }
             }
             ("RECORD", true) => {
                 if let Some(fields) = record.take() {
-                    records.push(SourceRecord { at, fields });
+                    records.add(at, fields.list, fields.over, &mut notes);
                 }
             }
             (n, false) if (record.is_some() || in_header) && !STRUCTURE.contains(&n) => {
@@ -156,28 +157,26 @@ pub(crate) fn read(text: &str) -> (Vec<SourceRecord>, Vec<Note>, Vec<Unmapped>) 
         }
     }
     if let Some(fields) = record {
+        let at = records.next_at();
         notes.push(Note {
             kind: NoteKind::BadXml,
-            at: records.len() + 1,
+            at,
             text: "<RECORD> not closed".to_string(),
         });
-        records.push(SourceRecord {
-            at: records.len() + 1,
-            fields,
-        });
+        records.add(at, fields.list, fields.over, &mut notes);
     }
-    // A field whose name was refused is read and discarded: `push` drops an empty name.
-    records
-        .iter_mut()
-        .for_each(|r| r.fields.retain(|(k, _)| !k.is_empty()));
-    header.retain(|(k, _)| !k.is_empty());
     let mut unmapped = header_unmapped(&header);
     unmapped.extend(bad_names.list);
     (records, notes, unmapped)
 }
 
-fn push(fields: &mut Vec<(String, String)>, name: String, value: String) {
-    fields.push((name, value));
+/// A field read, into its record or the header. A field whose name was refused is read and
+/// discarded: its name is empty, and it is not one of the record's fields (nor counted toward
+/// the limit).
+fn push(fields: &mut Fields, name: String, value: String) {
+    if !name.is_empty() {
+        fields.push(name, value);
+    }
 }
 
 /// The ADIF tag an element is the field of.

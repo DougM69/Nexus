@@ -76,7 +76,10 @@ pub fn detect(text: &str) -> Format {
 /// One ADIF record as the tokenizer read it: its fields in file order, a repeated tag included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawRecord<'a> {
+    /// Empty when the record is `over` the limit it was read with.
     pub(crate) fields: Vec<(String, String)>,
+    /// A record past the limit it was read with ([`Fields`]): its fields, counted by name.
+    pub(crate) over: Option<Over>,
     /// The record's own text: after the previous `<EOR>` (or the header) through its `<EOR>`.
     pub(crate) span: &'a str,
     /// The fields whose stated length ended inside a character or past the end of the text,
@@ -90,9 +93,9 @@ pub(crate) struct AdifRecords<'a> {
     pub(crate) records: Vec<RawRecord<'a>>,
     /// Fields after the last `<EOR>`: a record the file never ended. The import has never read
     /// one; the preview says so.
-    pub(crate) tail: Vec<(String, String)>,
+    pub(crate) tail: Fields,
     /// The header's own fields (`ADIF_VER`, `PROGRAMID`…): about the file, not a contact.
-    pub(crate) header: Vec<(String, String)>,
+    pub(crate) header: Fields,
 }
 
 /// The records an ADIF text holds, as the import reads them: the body after `<EOH>` (the whole
@@ -100,41 +103,119 @@ pub(crate) struct AdifRecords<'a> {
 /// upper-cased, and a record ended by `<EOR>`. A length that does not parse is `0`; a length past
 /// the end clamps (it comes from the file, and must never wrap the scan backwards).
 pub(crate) fn adif_records(text: &str) -> AdifRecords<'_> {
+    let mut records = Vec::new();
+    let (tail, header) = adif_each(text, usize::MAX, |r| records.push(r));
+    AdifRecords {
+        records,
+        tail,
+        header,
+    }
+}
+
+/// [`adif_records`], handed over one record at a time, and each record (the header and the tail
+/// too) read with at most `limit` fields ([`Fields`]). Answers the tail and the header.
+pub(crate) fn adif_each<'a>(
+    text: &'a str,
+    limit: usize,
+    mut each: impl FnMut(RawRecord<'a>),
+) -> (Fields, Fields) {
     let (header, body) = match text.to_ascii_uppercase().find("<EOH>") {
         Some(i) => (&text[..i], &text[i + 5..]),
         None => ("", text),
     };
-    let mut records = Vec::new();
-    let mut cur: Vec<(String, String)> = Vec::new();
+    let mut cur = Fields::new(limit);
     let mut cut: Vec<String> = Vec::new();
     // Where the current record's text begins: always just after an ASCII `>`, so a char boundary.
     let mut start = 0;
     scan(body, |name, val, at| match name {
         None => {
-            records.push(RawRecord {
-                fields: std::mem::take(&mut cur),
+            let fields = std::mem::replace(&mut cur, Fields::new(limit));
+            each(RawRecord {
+                fields: fields.list,
+                over: fields.over,
                 span: &body[start..at],
                 cut: std::mem::take(&mut cut),
             });
             start = at;
         }
         Some(name) => {
-            if val.is_none() {
-                cut.push(name.clone());
+            let cut_name = val.is_none().then(|| name.clone());
+            cur.push(name, val.unwrap_or_default());
+            // A record over the limit is not imported, so a value cut in it is not noted.
+            if cur.over.is_some() {
+                cut.clear();
+            } else if let Some(name) = cut_name {
+                cut.push(name);
             }
-            cur.push((name, val.unwrap_or_default()));
         }
     });
-    let mut head = Vec::new();
+    let mut head = Fields::new(limit);
     scan(header, |name, val, _| {
         if let Some(name) = name {
-            head.push((name, val.unwrap_or_default()));
+            head.push(name, val.unwrap_or_default());
         }
     });
-    AdifRecords {
-        records,
-        tail: cur,
-        header: head,
+    (cur, head)
+}
+
+/// A record's fields as a reader reads them, held to a limit. Once a record passes it, its fields
+/// are no longer kept but counted, by name (`over`): such a record is not imported
+/// ([`MAX_FIELDS`]), and a record built to be huge then costs its distinct names, not its fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Fields {
+    limit: usize,
+    /// The fields in file order; empty once the record is `over`.
+    pub(crate) list: Vec<(String, String)>,
+    pub(crate) over: Option<Over>,
+}
+
+/// A record past its reader's limit: every field it had, counted by name, and its first few as
+/// `NAME=value` text, to show which record it was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Over {
+    pub(crate) names: BTreeMap<String, usize>,
+    pub(crate) head: String,
+}
+
+impl Fields {
+    pub(crate) fn new(limit: usize) -> Self {
+        Fields {
+            limit,
+            list: Vec::new(),
+            over: None,
+        }
+    }
+
+    pub(crate) fn push(&mut self, name: String, value: String) {
+        if let Some(over) = &mut self.over {
+            *over.names.entry(name).or_default() += 1;
+        } else if self.list.len() < self.limit {
+            self.list.push((name, value));
+        } else {
+            let head = field_list(&self.list);
+            let mut names = BTreeMap::new();
+            for (k, _) in std::mem::take(&mut self.list) {
+                *names.entry(k).or_default() += 1;
+            }
+            *names.entry(name).or_default() += 1;
+            self.over = Some(Over { names, head });
+        }
+    }
+
+    /// How many fields were read, counted ones too.
+    pub(crate) fn len(&self) -> usize {
+        self.list.len() + self.over.as_ref().map_or(0, |o| o.names.values().sum())
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.list.is_empty() && self.over.is_none()
+    }
+
+    /// The fields as a note's text.
+    fn text(&self) -> String {
+        self.over
+            .as_ref()
+            .map_or_else(|| field_list(&self.list), |o| o.head.clone())
     }
 }
 
@@ -232,7 +313,7 @@ pub enum NoteKind {
     ExcludedQso,
     /// ADX markup that is not a field (a field inside a field, an unclosed element).
     BadXml,
-    /// A record with more than [`MAX_FIELDS`] fields: the fields past the limit are not imported.
+    /// A record with more than [`MAX_FIELDS`] fields: not imported, none of its fields.
     TooManyFields,
 }
 
@@ -278,16 +359,19 @@ pub struct Unmapped {
 #[derive(Debug, Clone)]
 pub struct Source {
     pub format: Format,
+    /// The records the import reads: not the ones over [`MAX_FIELDS`].
     pub records: Vec<SourceRecord>,
-    pub notes: Vec<Note>,
+    /// Grouped as they are read, so a file of a million problems holds a few of each.
+    pub notes: Vec<NoteGroup>,
     pub unmapped: Vec<Unmapped>,
     /// Cabrillo: the contest whose template read the lines (its ADIF `CONTEST_ID`).
     pub template: Option<String>,
     /// The fields after the last `<EOR>` of an ADIF file.
-    tail: Vec<(String, String)>,
-    /// The fields past [`MAX_FIELDS`] of the records that had more.
-    over: Vec<(String, String)>,
-    /// The ADIF the import reads, for a format that is not ADIF already.
+    tail: Fields,
+    /// The records over [`MAX_FIELDS`]: how many, and all their fields, counted by name.
+    over: Records,
+    /// The ADIF the import reads, when it is not the file itself: what a format that is not ADIF
+    /// makes, or an ADIF file without its records over the limit.
     adif: Option<String>,
 }
 
@@ -306,58 +390,48 @@ impl Source {
 
 /// Read `text` as `format`.
 pub fn read(text: &str, format: Format) -> Source {
-    let mut source = match format {
+    match format {
         Format::Adif => read_adif(text),
         Format::Adx => {
-            let (records, notes, unmapped) = adx::read(text);
+            let (mut records, notes, unmapped) = adx::read(text);
+            let list = std::mem::take(&mut records.list);
             Source {
                 format,
-                records,
-                notes,
+                adif: Some(adif_text(&list)),
+                records: list,
+                notes: notes.0,
                 unmapped,
                 template: None,
-                tail: Vec::new(),
-                over: Vec::new(),
-                adif: None,
+                tail: Fields::new(MAX_FIELDS),
+                over: records,
             }
         }
         Format::Cabrillo => {
+            // A line's fields are the template's columns, a bounded set: never near the limit.
             let c = cabrillo::read(text);
             Source {
                 format,
+                adif: Some(adif_text(&c.records)),
                 records: c.records,
-                notes: c.notes,
+                notes: c.notes.0,
                 unmapped: c.unmapped,
                 template: c.template,
-                tail: Vec::new(),
-                over: Vec::new(),
-                adif: None,
+                tail: Fields::new(MAX_FIELDS),
+                over: Records::default(),
             }
         }
-    };
-    // A record's fields past the limit are let go here, so the preview, the report and the import
-    // (which then reads the ADIF the kept fields make) all read the same record.
-    for r in &mut source.records {
-        if r.fields.len() > MAX_FIELDS {
-            source.notes.push(Note {
-                kind: NoteKind::TooManyFields,
-                at: r.at,
-                text: field_list(&r.fields[MAX_FIELDS..]),
-            });
-            source.over.extend(r.fields.drain(MAX_FIELDS..));
-        }
     }
-    if format != Format::Adif || !source.over.is_empty() {
-        source.adif = Some(adif_text(&source.records));
-    }
-    source
 }
 
 /// The most fields one record is read with: 2,000. ADIF defines a few hundred fields, and a
 /// logger's own (`APP_…`) and user-defined ones add tens, so a real contact carries far fewer; a
-/// record with more is damaged or built to be slow. The fields past the limit are not imported,
-/// and the preview and the report say so ([`NoteKind::TooManyFields`],
-/// [`DropReason::TooManyFields`]).
+/// record with more is damaged or built to be slow, and is not imported at all. Keeping its
+/// first fields would store a contact the file itself overrides: a tag repeated later in the
+/// record is the value the file means (the last one wins), and a `CALL` past the limit would
+/// leave the record with another station's, or with none. The preview and the report say so
+/// ([`NoteKind::TooManyFields`], [`DropReason::TooManyFields`]), and the report accounts for
+/// every one of its fields. Past the limit a reader keeps only a count of each name
+/// ([`Fields`]), so such a record does not cost memory by its size.
 pub const MAX_FIELDS: usize = 2_000;
 
 /// The largest file an import reads: 200 MB.
@@ -383,50 +457,117 @@ pub fn read_file(text: &str) -> Result<Source, String> {
 }
 
 fn read_adif(text: &str) -> Source {
-    let raw = adif_records(text);
-    let mut notes = Vec::new();
-    let records = raw
-        .records
-        .into_iter()
-        .enumerate()
-        .map(|(i, r)| {
-            for name in r.cut {
-                notes.push(Note {
-                    kind: NoteKind::CutValue,
-                    at: i + 1,
-                    text: name,
-                });
-            }
-            SourceRecord {
-                at: i + 1,
-                fields: r.fields,
-            }
-        })
-        .collect::<Vec<_>>();
-    if !raw.tail.is_empty() {
+    let mut notes = Notes::default();
+    let mut records = Records::default();
+    // The text of each record over the limit, for the import to read the file without it.
+    let mut left_out: Vec<&str> = Vec::new();
+    let (tail, header) = adif_each(text, MAX_FIELDS, |r| {
+        let at = records.next_at();
+        for name in r.cut {
+            notes.push(Note {
+                kind: NoteKind::CutValue,
+                at,
+                text: name,
+            });
+        }
+        if !records.add(at, r.fields, r.over, &mut notes) {
+            left_out.push(r.span);
+        }
+    });
+    if !tail.is_empty() {
         notes.push(Note {
             kind: NoteKind::Unterminated,
-            at: records.len() + 1,
-            text: field_list(&raw.tail),
+            at: records.next_at(),
+            text: tail.text(),
         });
     }
     Source {
         format: Format::Adif,
-        records,
-        notes,
-        unmapped: header_unmapped(&raw.header),
+        adif: (!left_out.is_empty()).then(|| without(text, &left_out)),
+        records: std::mem::take(&mut records.list),
+        notes: notes.0,
+        unmapped: header_unmapped(&header),
         template: None,
-        tail: raw.tail,
-        over: Vec::new(),
-        adif: None,
+        tail,
+        over: records,
     }
 }
 
-/// A header's fields, each listed once as about the file.
-pub(crate) fn header_unmapped(header: &[(String, String)]) -> Vec<Unmapped> {
+/// `text` without the `spans` (slices of it, in order): the file the import reads when records
+/// are left out of it. Every other byte stays, so each record left in is read as before: a
+/// record's span runs from just after the `<EOR>` before it through its own, and the tokenizer
+/// carries nothing across an `<EOR>`.
+fn without(text: &str, spans: &[&str]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    for span in spans {
+        // A span is a slice of `text`, so its place in it is the distance between their starts.
+        let at = span.as_ptr() as usize - text.as_ptr() as usize;
+        out.push_str(&text[from..at]);
+        from = at + span.len();
+    }
+    out.push_str(&text[from..]);
+    out
+}
+
+/// The records a reader keeps, and those over [`MAX_FIELDS`], which it does not: only counted,
+/// with all their fields counted by name.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Records {
+    pub(crate) list: Vec<SourceRecord>,
+    over_records: usize,
+    names: BTreeMap<String, usize>,
+}
+
+impl Records {
+    /// The number the next record read has.
+    pub(crate) fn next_at(&self) -> usize {
+        self.list.len() + self.over_records + 1
+    }
+
+    /// A record read: kept, or — over the limit — counted and noted. Whether it was kept.
+    pub(crate) fn add(
+        &mut self,
+        at: usize,
+        fields: Vec<(String, String)>,
+        over: Option<Over>,
+        notes: &mut Notes,
+    ) -> bool {
+        let Some(over) = over else {
+            self.list.push(SourceRecord { at, fields });
+            return true;
+        };
+        notes.push(Note {
+            kind: NoteKind::TooManyFields,
+            at,
+            text: over.head,
+        });
+        for (name, n) in over.names {
+            *self.names.entry(name).or_default() += n;
+        }
+        self.over_records += 1;
+        false
+    }
+}
+
+/// What a reader noticed, grouped as it is noticed ([`group`]).
+#[derive(Debug, Default)]
+pub(crate) struct Notes(pub(crate) Vec<NoteGroup>);
+
+impl Notes {
+    pub(crate) fn push(&mut self, n: Note) {
+        group(&mut self.0, n);
+    }
+}
+
+/// A header's fields, each listed once as about the file (past the limit, by name).
+pub(crate) fn header_unmapped(header: &Fields) -> Vec<Unmapped> {
     let mut out = Listed::default();
-    for (name, _) in header {
+    for (name, _) in &header.list {
         out.add(name, None, UnmappedReason::Header);
+    }
+    for (name, n) in header.over.iter().flat_map(|o| &o.names) {
+        out.add_n(name, None, UnmappedReason::Header, *n);
     }
     out.list
 }
@@ -441,6 +582,10 @@ pub(crate) struct Listed {
 
 impl Listed {
     pub(crate) fn add(&mut self, what: &str, side: Option<&'static str>, reason: UnmappedReason) {
+        self.add_n(what, side, reason, 1);
+    }
+
+    fn add_n(&mut self, what: &str, side: Option<&'static str>, reason: UnmappedReason, n: usize) {
         let next = self.list.len();
         let i = *self
             .index
@@ -454,7 +599,7 @@ impl Listed {
                 reason,
             });
         }
-        self.list[i].count += 1;
+        self.list[i].count += n;
     }
 }
 
@@ -515,7 +660,7 @@ pub enum DropReason {
     Rederived,
     /// Read by the import but not written back by this version's ADIF export.
     NotWritten,
-    /// Past the [`MAX_FIELDS`] a record is read with: not imported.
+    /// In a record of more than [`MAX_FIELDS`] fields, which is not imported.
     TooManyFields,
 }
 
@@ -697,10 +842,7 @@ fn each_stored(
     source: &Source,
     mut each: impl FnMut(&SourceRecord, Option<&Stored>),
 ) -> Vec<NoteGroup> {
-    let mut groups = Vec::new();
-    for n in &source.notes {
-        group(&mut groups, n);
-    }
+    let mut groups = source.notes.clone();
     let mut notes = Vec::new();
     for r in &source.records {
         let s = stored_and_written(&r.fields);
@@ -709,7 +851,7 @@ fn each_stored(
             s.as_ref().map(|(rec, w)| (rec, w.as_slice())),
             &mut notes,
         );
-        notes.drain(..).for_each(|n| group(&mut groups, &n));
+        notes.drain(..).for_each(|n| group(&mut groups, n));
         each(r, s.as_ref());
     }
     groups.sort_by_key(|g| g.kind);
@@ -898,21 +1040,22 @@ fn mode_known(mode: &str) -> bool {
 }
 
 /// A note counted in its kind's group, which keeps the first [`EXAMPLES`] by place in the file
-/// (on a tie, the one noticed first).
-fn group(groups: &mut Vec<NoteGroup>, n: &Note) {
+/// (on a tie, the one noticed first). So the examples of notes grouped in turn are those of all of
+/// them grouped at once.
+fn group(groups: &mut Vec<NoteGroup>, n: Note) {
     match groups.iter_mut().find(|g| g.kind == n.kind) {
         Some(g) => {
             g.count += 1;
             let i = g.examples.partition_point(|e| e.at <= n.at);
             if i < EXAMPLES {
-                g.examples.insert(i, n.clone());
+                g.examples.insert(i, n);
                 g.examples.truncate(EXAMPLES);
             }
         }
         None => groups.push(NoteGroup {
             kind: n.kind,
             count: 1,
-            examples: vec![n.clone()],
+            examples: vec![n],
         }),
     }
 }
@@ -956,7 +1099,7 @@ pub fn preview(source: &Source) -> Preview {
     Preview {
         format: source.format,
         template: source.template.clone(),
-        records: source.records.len(),
+        records: source.records.len() + source.over.over_records,
         contacts,
         first_unix,
         last_unix,
@@ -1023,8 +1166,10 @@ pub fn report(source: &Source, counts: Counts, new_only: bool) -> Report {
     let mut fields: Vec<FieldAccount> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut total = 0usize;
-    let mut account = |name: &str, value: &str, fate: Fate| {
-        total += 1;
+    // `n` fields of one name and fate; `value` is theirs when they are one field read with its
+    // value (a field over the limit is only counted).
+    let mut account = |name: &str, value: Option<&str>, fate: Fate, n: usize| {
+        total += n;
         let i = *index.entry(name.to_string()).or_insert_with(|| {
             fields.push(FieldAccount {
                 field: name.to_string(),
@@ -1039,27 +1184,27 @@ pub fn report(source: &Source, counts: Counts, new_only: bool) -> Report {
             fields.len() - 1
         });
         let f = &mut fields[i];
-        f.occurrences += 1;
+        f.occurrences += n;
         let example = match fate {
             Fate::Stored => {
-                f.stored += 1;
+                f.stored += n;
                 None
             }
             Fate::Passthrough => {
-                f.passthrough += 1;
+                f.passthrough += n;
                 None
             }
             Fate::Normalized(to) => {
-                f.normalized += 1;
-                Some(format!("{} → {}", clip(value), clip(&to)))
+                f.normalized += n;
+                value.map(|v| format!("{} → {}", clip(v), clip(&to)))
             }
             Fate::Dropped(reason) => {
-                f.dropped += 1;
+                f.dropped += n;
                 match f.reasons.iter_mut().find(|r| r.reason == reason) {
-                    Some(r) => r.count += 1,
-                    None => f.reasons.push(ReasonCount { reason, count: 1 }),
+                    Some(r) => r.count += n,
+                    None => f.reasons.push(ReasonCount { reason, count: n }),
                 }
-                Some(clip(value))
+                value.map(clip)
             }
         };
         if let Some(e) = example {
@@ -1075,18 +1220,22 @@ pub fn report(source: &Source, counts: Counts, new_only: bool) -> Report {
         };
         contacts += usize::from(rec.is_some());
         for ((k, v), fate) in r.fields.iter().zip(fates(&r.fields, rec, written)) {
-            account(k, v, fate);
+            account(k, Some(v), fate, 1);
         }
     });
-    for (k, v) in &source.tail {
-        account(k, v, Fate::Dropped(DropReason::Unterminated));
+    let unterminated = Fate::Dropped(DropReason::Unterminated);
+    for (k, v) in &source.tail.list {
+        account(k, Some(v), unterminated.clone(), 1);
     }
-    for (k, v) in &source.over {
-        account(k, v, Fate::Dropped(DropReason::TooManyFields));
+    for (k, n) in source.tail.over.iter().flat_map(|o| &o.names) {
+        account(k, None, unterminated.clone(), *n);
+    }
+    for (k, n) in &source.over.names {
+        account(k, None, Fate::Dropped(DropReason::TooManyFields), *n);
     }
     let occurrences: usize = source.records.iter().map(|r| r.fields.len()).sum::<usize>()
         + source.tail.len()
-        + source.over.len();
+        + source.over.names.values().sum::<usize>();
     for f in &mut fields {
         f.reasons.sort_by_key(|r| r.reason);
     }
@@ -1098,7 +1247,7 @@ pub fn report(source: &Source, counts: Counts, new_only: bool) -> Report {
     Report {
         format: source.format,
         template: source.template.clone(),
-        records: source.records.len(),
+        records: source.records.len() + source.over.over_records,
         contacts,
         added: counts.0,
         duplicates: counts.1,

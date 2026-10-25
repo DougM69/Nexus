@@ -5,6 +5,12 @@ fn tag(name: &str, value: &str) -> String {
     format!("<{name}:{}>{value}", value.len())
 }
 
+/// The notes a source keeps as examples: every note, while there are no more than
+/// [`EXAMPLES`] of a kind.
+fn noted(s: &Source) -> impl Iterator<Item = &Note> {
+    s.notes.iter().flat_map(|g| &g.examples)
+}
+
 /// A record from `(name, value)` pairs.
 fn rec(fields: &[(&str, &str)]) -> String {
     let mut s: String = fields.iter().map(|(k, v)| tag(k, v)).collect();
@@ -81,10 +87,13 @@ fn the_tokenizer_reads_what_the_import_reads() {
     let raw = adif_records(&text);
     assert_eq!(raw.records.len(), 3);
     assert_eq!(
-        raw.header,
+        raw.header.list,
         vec![("ADIF_VER".to_string(), "3.1.7".to_string())]
     );
-    assert_eq!(raw.tail, vec![("CALL".to_string(), "W2XX".to_string())]);
+    assert_eq!(
+        raw.tail.list,
+        vec![("CALL".to_string(), "W2XX".to_string())]
+    );
     // A repeated tag: the import reads the last.
     let calls: Vec<String> = parse_adif(&text).into_iter().map(|r| r.call).collect();
     assert_eq!(calls, ["W1AW", "N0Y"]);
@@ -95,10 +104,7 @@ fn a_cut_value_is_noted_not_lost_silently() {
     // A length counted in characters over a two-byte character: the byte scan ends inside it.
     let text = "<EOH><CALL:4>W1AW<NAME:2>Jü<EOR>";
     let s = read(text, Format::Adif);
-    assert!(s
-        .notes
-        .iter()
-        .any(|n| n.kind == NoteKind::CutValue && n.text == "NAME"));
+    assert!(noted(&s).any(|n| n.kind == NoteKind::CutValue && n.text == "NAME"));
     // Positive control: a byte-counted value is not cut.
     let ok = read("<EOH><CALL:4>W1AW<NAME:3>Jü<EOR>", Format::Adif);
     assert!(ok.notes.is_empty(), "{:?}", ok.notes);
@@ -389,7 +395,7 @@ fn adx_entities_and_markup_problems() {
         s.records[0].fields[1],
         ("NAME".to_string(), "A & B éA".to_string())
     );
-    assert!(s.notes.iter().any(|n| n.kind == NoteKind::BadXml));
+    assert!(noted(&s).any(|n| n.kind == NoteKind::BadXml));
 }
 
 // ── Cabrillo ────────────────────────────────────────────────────────────────────────────────────
@@ -507,10 +513,7 @@ fn field_day_lines_read_class_and_section() {
     assert_eq!(field(r, "MY_ARRL_SECT"), Some("WI"));
     // DG names no mode, and Field Day is not a one-mode contest: left blank, and said.
     assert_eq!(field(r, "MODE"), None);
-    assert!(s
-        .notes
-        .iter()
-        .any(|n| n.kind == NoteKind::ModeUnresolved && n.at == 3));
+    assert!(noted(&s).any(|n| n.kind == NoteKind::ModeUnresolved && n.at == 3));
     // The sent class has no ADIF field.
     assert!(s
         .unmapped
@@ -542,14 +545,11 @@ fn an_unknown_contest_keeps_call_band_mode_time_rst_and_the_exchange_text() {
         assert_eq!(field(r, k), Some(v), "{k}");
     }
     assert_eq!(field(&s.records[1], "CALL"), Some("N3ABC"));
-    let kinds: Vec<NoteKind> = s.notes.iter().map(|n| n.kind).collect();
+    let kinds: Vec<NoteKind> = noted(&s).map(|n| n.kind).collect();
     assert!(kinds.contains(&NoteKind::UnknownContest));
     assert!(kinds.contains(&NoteKind::ExcludedQso));
     // The line with no other call is not imported, and is listed.
-    assert!(s
-        .notes
-        .iter()
-        .any(|n| n.kind == NoteKind::UnreadableLine && n.at == 6));
+    assert!(noted(&s).any(|n| n.kind == NoteKind::UnreadableLine && n.at == 6));
     assert!(s
         .unmapped
         .iter()
@@ -714,10 +714,7 @@ fn a_dx_multi_transmitter_rtty_line_reads_the_other_call_not_its_rst() {
         Format::Cabrillo,
     );
     assert!(s.records.is_empty(), "{:?}", s.records);
-    assert!(s
-        .notes
-        .iter()
-        .any(|n| n.kind == NoteKind::UnreadableLine && n.at == 3));
+    assert!(noted(&s).any(|n| n.kind == NoteKind::UnreadableLine && n.at == 3));
 }
 
 /// Every contest the rules table holds, and one it does not: lines of every width with the other
@@ -776,9 +773,7 @@ fn the_logs_own_call_is_never_stored_as_the_other_station() {
         Format::Cabrillo,
     );
     assert!(s.records.is_empty(), "{:?}", s.records);
-    let unreadable: Vec<usize> = s
-        .notes
-        .iter()
+    let unreadable: Vec<usize> = noted(&s)
         .filter(|n| n.kind == NoteKind::UnreadableLine)
         .map(|n| n.at)
         .collect();
@@ -790,10 +785,7 @@ fn the_logs_own_call_is_never_stored_as_the_other_station() {
         Format::Cabrillo,
     );
     assert!(s.records.is_empty(), "{:?}", s.records);
-    assert!(s
-        .notes
-        .iter()
-        .any(|n| n.kind == NoteKind::UnreadableLine && n.at == 3));
+    assert!(noted(&s).any(|n| n.kind == NoteKind::UnreadableLine && n.at == 3));
 }
 
 #[test]
@@ -839,25 +831,54 @@ fn an_adx_field_left_open_ends_at_its_record() {
         s.records
     );
     assert_eq!(field(&s.records[1], "BAND"), Some("20m"));
-    let bad = s
-        .notes
-        .iter()
-        .filter(|n| n.kind == NoteKind::BadXml)
-        .count();
+    let bad = noted(&s).filter(|n| n.kind == NoteKind::BadXml).count();
     assert_eq!(bad, 2, "{:?}", s.notes);
 }
 
+/// How the time `run` takes grows from size `n` to `8 * n`. The small size is run eight times in a
+/// row, so that both sides are the same work when it is linear and take as long: a test thread
+/// sharing a core with others is then slowed alike on both sides, where a short run would often
+/// fit between two of theirs and a long one never does. Each side is timed three times, in turn,
+/// and the fastest kept. Linear work grows about 8 times (less, with a fixed cost) and quadratic
+/// work 64 times, so a growth under [`LINEAR`] is linear on any machine, however fast or loaded.
+fn growth<T>(n: usize, make: impl Fn(usize) -> T, run: impl Fn(&T)) -> f64 {
+    let (small, large) = (make(n), make(8 * n));
+    let time = |input: &T, times: usize| {
+        let t = std::time::Instant::now();
+        for _ in 0..times {
+            run(input);
+        }
+        t.elapsed()
+    };
+    let (mut fast_small, mut fast_large) = (std::time::Duration::MAX, std::time::Duration::MAX);
+    for _ in 0..3 {
+        fast_small = fast_small.min(time(&small, 8));
+        fast_large = fast_large.min(time(&large, 1));
+    }
+    8.0 * fast_large.as_secs_f64() / fast_small.as_secs_f64()
+}
+
+/// The most a size eight times larger may take, as a multiple: three times linear, and a third of
+/// quadratic.
+const LINEAR: f64 = 24.0;
+
 #[test]
 fn adx_ampersands_read_in_linear_time() {
-    let amps = "&".repeat(1_000_000);
-    let adx = format!(
-        "<ADX><RECORDS><RECORD><CALL>W1AW</CALL><COMMENT>{amps}</COMMENT></RECORD></RECORDS></ADX>"
+    let adx = |n: usize| {
+        format!(
+            "<ADX><RECORDS><RECORD><CALL>W1AW</CALL><COMMENT>{}</COMMENT></RECORD></RECORDS></ADX>",
+            "&".repeat(n)
+        )
+    };
+    let s = read(&adx(1_000), Format::Adx);
+    assert_eq!(
+        field(&s.records[0], "COMMENT"),
+        Some("&".repeat(1_000).as_str())
     );
-    let t = std::time::Instant::now();
-    let s = read(&adx, Format::Adx);
-    let took = t.elapsed();
-    assert_eq!(field(&s.records[0], "COMMENT"), Some(amps.as_str()));
-    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+    let g = growth(20_000, adx, |text| {
+        read(text, Format::Adx);
+    });
+    assert!(g < LINEAR, "{g:.1}x");
 }
 
 #[test]
@@ -886,118 +907,263 @@ fn a_preview_shows_the_first_examples_by_place_in_the_file() {
     assert_eq!(at, [2, 3, 6]);
 }
 
-/// A file with a record, a header or a Cabrillo log of 50,000 fields: each read, previewed and
-/// reported in well under a second, so no step looks a field up by scanning the others.
+/// A file with a record, a header or a Cabrillo log of many fields, many field names or many
+/// records: each read, previewed and reported in time linear in its size, so no step looks a field
+/// up by scanning the others.
 #[test]
-fn fifty_thousand_fields_read_in_linear_time() {
-    let many = |prefix: &str| -> String {
-        (0..50_000)
-            .map(|i| tag(&format!("{prefix}{i}"), "v"))
-            .collect()
+fn many_fields_read_in_linear_time() {
+    let many = |prefix: &str, n: usize| -> String {
+        (0..n).map(|i| tag(&format!("{prefix}{i}"), "v")).collect()
     };
-    let adif_record = format!("<EOH>{}{}<EOR>", tag("CALL", "W1AW"), many("APP_X_F"));
-    let adif_header = format!("{}<EOH>{}<EOR>", many("H"), tag("CALL", "W1AW"));
     let adx = |header: String, fields: String| {
-        format!("<ADX><HEADER>{header}</HEADER><RECORDS><RECORD><CALL>W1AW</CALL>{fields}</RECORD></RECORDS></ADX>")
+        format!(
+            "<ADX><HEADER>{header}</HEADER><RECORDS><RECORD><CALL>W1AW</CALL>{fields}</RECORD>\
+             <RECORD><CALL>K1ABC</CALL></RECORD></RECORDS></ADX>"
+        )
     };
-    let adx_header = adx(
-        (0..50_000).map(|i| format!("<H{i}>v</H{i}>")).collect(),
-        String::new(),
-    );
-    let adx_record = adx(
-        String::new(),
-        (0..50_000).map(|i| format!("<F{i}>v</F{i}>")).collect(),
-    );
-    let adx_names = adx(
-        String::new(),
-        (0..50_000)
-            .map(|i| format!("<USERDEF FIELDNAME=\"A B{i}\">v</USERDEF>"))
-            .collect(),
-    );
-    let cabrillo = format!(
-        "START-OF-LOG: 3.0\nCONTEST: CQ-WW-CW\n{}QSO: 14025 CW 2024-11-23 1200 W1AW 599 05 K8MM 599 04\n",
-        (0..50_000).map(|i| format!("X-H{i}: v\n")).collect::<String>()
-    );
-    // Records at the field limit, many of them: a per-record search is quadratic in the limit.
-    let full: String = (0..MAX_FIELDS - 1)
-        .map(|i| tag(&format!("APP_X_F{i}"), "v"))
-        .collect();
-    let full_records = format!(
-        "<EOH>{}{}<EOR>{}",
-        tag("CALL", "W1AW"),
-        full,
-        (0..9)
-            .map(|_| format!("{}{full}<EOR>", tag("CALL", "K1ABC")))
-            .collect::<String>()
-    );
-    for (what, text) in [
-        ("an ADIF record", adif_record),
-        ("10 records at the limit", full_records),
-        ("an ADIF header", adif_header),
-        ("an ADX header", adx_header),
-        ("an ADX record", adx_record),
-        ("ADX field names ADIF cannot carry", adx_names),
-        ("Cabrillo headers", cabrillo),
-    ] {
-        let t = std::time::Instant::now();
-        let source = read(&text, detect(&text));
-        let p = preview(&source);
-        let r = report(&source, (1, 0, 0), false);
-        let took = t.elapsed();
-        assert!(p.contacts >= 1, "{what}");
-        assert!(r.accounted, "{what}");
-        assert!(took < std::time::Duration::from_secs(1), "{what}: {took:?}");
+    type Make = Box<dyn Fn(usize) -> String>;
+    let cases: Vec<(&str, Make)> = vec![
+        (
+            "an ADIF record over the limit",
+            Box::new(move |n| {
+                format!(
+                    "<EOH>{}{}<EOR>{}",
+                    tag("CALL", "W1AW"),
+                    many("APP_X_F", n),
+                    rec(&[("CALL", "K1ABC")])
+                )
+            }),
+        ),
+        (
+            "ADIF records",
+            Box::new(|n| {
+                let mut text = String::from("<EOH>");
+                for i in 0..n / 4 {
+                    text.push_str(&rec(&[
+                        ("CALL", &format!("K{}AB", i % 10)),
+                        ("APP_X_A", "v"),
+                        ("APP_X_B", "v"),
+                    ]));
+                }
+                text
+            }),
+        ),
+        (
+            "an ADIF header",
+            Box::new(move |n| format!("{}<EOH>{}<EOR>", many("H", n), tag("CALL", "W1AW"))),
+        ),
+        (
+            "an ADX header",
+            Box::new(move |n| {
+                adx(
+                    (0..n).map(|i| format!("<H{i}>v</H{i}>")).collect(),
+                    String::new(),
+                )
+            }),
+        ),
+        (
+            "an ADX record over the limit",
+            Box::new(move |n| {
+                adx(
+                    String::new(),
+                    (0..n).map(|i| format!("<F{i}>v</F{i}>")).collect(),
+                )
+            }),
+        ),
+        (
+            "ADX field names ADIF cannot carry",
+            Box::new(move |n| {
+                adx(
+                    String::new(),
+                    (0..n)
+                        .map(|i| format!("<USERDEF FIELDNAME=\"A B{i}\">v</USERDEF>"))
+                        .collect(),
+                )
+            }),
+        ),
+        (
+            "Cabrillo headers",
+            Box::new(|n| {
+                format!(
+                    "START-OF-LOG: 3.0\nCONTEST: CQ-WW-CW\n{}QSO: 14025 CW 2024-11-23 1200 W1AW 599 05 K8MM 599 04\n",
+                    (0..n).map(|i| format!("X-H{i}: v\n")).collect::<String>()
+                )
+            }),
+        ),
+    ];
+    for (what, make) in cases {
+        let g = growth(5_000, make, |text| {
+            let source = read(text, detect(text));
+            let p = preview(&source);
+            let r = report(&source, (1, 0, 0), false);
+            assert!(p.contacts >= 1, "{what}");
+            assert!(r.accounted, "{what}");
+        });
+        assert!(g < LINEAR, "{what}: {g:.1}x");
     }
 }
 
-/// The limit bounds a record, but no step leans on it: a record of 20,000 fields that skipped it
-/// is still previewed and reported in linear time.
+/// The limit bounds a record, but no step leans on it: a record of 40,000 fields that skipped it
+/// is still previewed and reported in time linear in its fields.
 #[test]
 fn a_record_past_the_limit_is_still_handled_in_linear_time() {
-    let mut fields = vec![("CALL".to_string(), "W1AW".to_string())];
-    fields.extend((0..20_000).map(|i| (format!("APP_X_F{i}"), "v".to_string())));
-    let mut source = read("", Format::Adif);
-    source.records.push(SourceRecord { at: 1, fields });
-    let t = std::time::Instant::now();
-    let p = preview(&source);
-    let r = report(&source, (1, 0, 0), false);
-    let took = t.elapsed();
+    let source = |n: usize| {
+        let mut fields = vec![("CALL".to_string(), "W1AW".to_string())];
+        fields.extend((0..n).map(|i| (format!("APP_X_F{i}"), "v".to_string())));
+        let mut source = read("", Format::Adif);
+        source.records.push(SourceRecord { at: 1, fields });
+        source
+    };
+    let p = preview(&source(20_000));
     assert_eq!((p.contacts, p.coverage.len()), (1, 20_001));
-    assert!(r.accounted);
-    assert!(took < std::time::Duration::from_secs(1), "{took:?}");
+    let g = growth(5_000, source, |source| {
+        let p = preview(source);
+        let r = report(source, (1, 0, 0), false);
+        assert_eq!(p.contacts, 1);
+        assert!(r.accounted);
+    });
+    assert!(g < LINEAR, "{g:.1}x");
 }
 
+/// A record over the limit is not imported at all: keeping its first fields would store a contact
+/// the file overrides later in the record. Checked by value, with a repeated CALL and BAND whose
+/// last copies (the ones the file means) sit past the limit.
 #[test]
-fn a_record_over_the_field_limit_keeps_the_first_and_reports_the_rest() {
-    let extra: String = (0..MAX_FIELDS + 500)
-        .map(|i| tag(&format!("APP_X_F{i}"), "v"))
-        .collect();
-    let text = format!(
-        "<EOH>{}{extra}<EOR>{}",
-        tag("CALL", "W1AW"),
-        rec(&[("CALL", "K1ABC")])
-    );
+fn a_record_over_the_field_limit_is_not_imported_at_all() {
+    // CALL and BAND are fields 1 and 2, and again 2,000 and 2,001.
+    let over = |filler: usize| {
+        let mut fields = vec![("CALL", "K1AAA".to_string()), ("BAND", "20M".to_string())];
+        fields.extend((0..filler).map(|i| ("APP_X_F", i.to_string())));
+        fields.push(("CALL", "W9BBB".to_string()));
+        fields.push(("BAND", "40M".to_string()));
+        let mut s: String = fields.iter().map(|(k, v)| tag(k, v)).collect();
+        s.push_str("<EOR>\n");
+        s
+    };
+    let before = rec(&[("CALL", "N0BEF"), ("BAND", "15M"), ("QSO_DATE", "20240101")]);
+    let after = rec(&[("CALL", "N0AFT"), ("BAND", "10M"), ("QSO_DATE", "20240102")]);
+    let text = format!("<EOH>\n{before}{}{after}", over(MAX_FIELDS - 3));
     let source = read(&text, Format::Adif);
-    assert_eq!(source.records[0].fields.len(), MAX_FIELDS);
-    // The import reads what the preview reads: the first fields, not the rest.
-    let stored = parse_adif(source.adif(&text));
-    assert_eq!(stored.len(), 2);
-    assert_eq!(stored[0].extra.len(), MAX_FIELDS - 1);
+
+    // The import reads neither of the record's calls, and its neighbours as a file without it.
+    let row = |r: &QsoRecord| (r.call.clone(), r.band.clone(), r.when_unix);
+    let stored: Vec<_> = parse_adif(source.adif(&text)).iter().map(row).collect();
+    let alone: Vec<_> = parse_adif(&format!("<EOH>\n{before}{after}"))
+        .iter()
+        .map(row)
+        .collect();
+    assert_eq!(stored, alone);
+    let calls: Vec<&str> = stored.iter().map(|(c, _, _)| c.as_str()).collect();
+    assert_eq!(calls, ["N0BEF", "N0AFT"]);
+    let at: Vec<usize> = source.records.iter().map(|r| r.at).collect();
+    assert_eq!(at, [1, 3]);
+
+    // The preview says so, and counts none of its fields.
     let p = preview(&source);
+    assert_eq!((p.records, p.contacts), (3, 2));
     let g = p
         .notes
         .iter()
         .find(|g| g.kind == NoteKind::TooManyFields)
         .expect("noted");
-    assert_eq!((g.count, g.examples[0].at), (1, 1));
+    assert_eq!((g.count, g.examples[0].at), (1, 2));
+    assert!(
+        g.examples[0].text.starts_with("CALL=K1AAA BAND=20M"),
+        "{:?}",
+        g.examples
+    );
+    assert!(
+        p.coverage.iter().all(|c| c.field != "APP_X_F"),
+        "{:?}",
+        p.coverage
+    );
+    assert_eq!(
+        p.coverage
+            .iter()
+            .find(|c| c.field == "CALL")
+            .map(|c| c.count),
+        Some(2)
+    );
+
+    // The report accounts for every one of its fields, as not imported.
     let r = report(&source, (2, 0, 0), false);
     assert!(r.accounted);
-    let over: usize = r
-        .fields
+    let account = |name: &str| r.fields.iter().find(|f| f.field == name).unwrap();
+    let over_count = |name: &str| {
+        account(name)
+            .reasons
+            .iter()
+            .find(|c| c.reason == DropReason::TooManyFields)
+            .map_or(0, |c| c.count)
+    };
+    assert_eq!(
+        (account("CALL").occurrences, account("CALL").stored),
+        (4, 2)
+    );
+    assert_eq!((over_count("CALL"), over_count("BAND")), (2, 2));
+    assert_eq!(account("APP_X_F").occurrences, MAX_FIELDS - 3);
+    assert_eq!(over_count("APP_X_F"), MAX_FIELDS - 3);
+
+    // Positive control: the same record one field shorter is at the limit, and is imported with
+    // the values the file means, the last of each.
+    let text = format!("<EOH>\n{before}{}{after}", over(MAX_FIELDS - 4));
+    let source = read(&text, Format::Adif);
+    assert_eq!(source.adif(&text), text);
+    let stored: Vec<_> = parse_adif(source.adif(&text)).iter().map(row).collect();
+    assert_eq!(stored.len(), 3);
+    assert_eq!(
+        (stored[1].0.as_str(), stored[1].1.as_str()),
+        ("W9BBB", "40m")
+    );
+    assert!(preview(&source)
+        .notes
         .iter()
-        .flat_map(|f| &f.reasons)
-        .filter(|c| c.reason == DropReason::TooManyFields)
-        .map(|c| c.count)
-        .sum();
-    assert_eq!(over, 501);
+        .all(|g| g.kind != NoteKind::TooManyFields));
+
+    // An ADX record over the limit is left out the same way.
+    let fields: String = (0..MAX_FIELDS).map(|i| format!("<F{i}>v</F{i}>")).collect();
+    let adx = format!(
+        "<ADX><RECORDS><RECORD><CALL>K1AAA</CALL>{fields}</RECORD>\
+         <RECORD><CALL>N0AFT</CALL></RECORD></RECORDS></ADX>"
+    );
+    let source = read(&adx, Format::Adx);
+    let calls: Vec<String> = parse_adif(source.adif(&adx))
+        .into_iter()
+        .map(|r| r.call)
+        .collect();
+    assert_eq!(calls, ["N0AFT"]);
+    assert_eq!(source.records[0].at, 2);
+    let r = report(&source, (1, 0, 0), false);
+    assert!(r.accounted);
+    assert_eq!(r.records, 2);
+}
+
+/// A record, a header or a tail built to be huge is held as a count of each name, not as its
+/// fields: what bounds the memory a hostile file within the size limit can take.
+#[test]
+fn a_huge_record_is_counted_not_held() {
+    let n = 100_000;
+    let fields = "<A:0>".repeat(n);
+    let text = format!(
+        "{fields}<EOH><CALL:4>W1AW{fields}<EOR>{}<CALL:4>W2XX{fields}",
+        rec(&[("CALL", "K1ABC")])
+    );
+    let source = read(&text, Format::Adif);
+    let held =
+        source.records.iter().map(|r| r.fields.len()).sum::<usize>() + source.tail.list.len();
+    assert_eq!(held, 1);
+    assert_eq!(source.over.names.get("A"), Some(&n));
+    assert_eq!(source.tail.len(), n + 1);
+    assert_eq!(
+        source
+            .unmapped
+            .iter()
+            .map(|u| (u.what.as_str(), u.count))
+            .collect::<Vec<_>>(),
+        [("A", n)]
+    );
+    let r = report(&source, (1, 0, 0), false);
+    assert!(r.accounted);
+    let a = r.fields.iter().find(|f| f.field == "A").unwrap();
+    assert_eq!((a.occurrences, a.dropped), (2 * n, 2 * n));
 }

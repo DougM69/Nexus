@@ -3,7 +3,28 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { t } from '../i18n'
-import { IMPORT_MAX_BYTES, droppedCount, importTooLarge, reportText, type ImportReport } from './logImport'
+import { EN } from '../i18n/en'
+import { DE } from '../i18n/de'
+import { ES } from '../i18n/es'
+import { FR } from '../i18n/fr'
+import { JA } from '../i18n/ja'
+import {
+  IMPORT_MAX_BYTES,
+  droppedCount,
+  importTooLarge,
+  noteLabel,
+  reasonLabel,
+  reportText,
+  unmappedLabel,
+  type DropReason,
+  type ImportNoteKind,
+  type ImportReport,
+  type UnmappedReason,
+} from './logImport'
+
+const here = dirname(fileURLToPath(import.meta.url))
+/** The engine's import module, whose constants and enums the UI states and names. */
+const ENGINE = readFileSync(resolve(here, '../../../crates/tempo-core/src/logbook/import.rs'), 'utf8')
 
 const REPORT: ImportReport = {
   format: 'cabrillo',
@@ -70,11 +91,55 @@ describe('a file too large to import', () => {
   })
 
   it('is the engine’s own limit', () => {
-    const rust = readFileSync(
-      resolve(dirname(fileURLToPath(import.meta.url)), '../../../crates/tempo-core/src/logbook/import.rs'),
-      'utf8',
-    )
-    const engine = rust.match(/pub const MAX_BYTES: usize = ([0-9_]+);/)
+    const engine = ENGINE.match(/pub const MAX_BYTES: usize = ([0-9_]+);/)
     expect(engine?.[1].replace(/_/g, '')).toBe(String(IMPORT_MAX_BYTES))
+  })
+})
+
+describe('the field limit a record is read with', () => {
+  it('is stated in every language as the engine’s own', () => {
+    const max = ENGINE.match(/pub const MAX_FIELDS: usize = ([0-9_]+);/)?.[1].replace(/_/g, '')
+    expect(max).toMatch(/^[0-9]+$/)
+    const catalogs: Record<string, Record<string, unknown>> = { EN, DE, ES, FR, JA }
+    for (const [lang, catalog] of Object.entries(catalogs)) {
+      for (const key of ['logbook.import.note.tooManyFields', 'logbook.import.reason.tooManyFields']) {
+        const text = String(catalog[key] ?? '')
+        // Every number in the sentence, its digit grouping (2,000 · 2.000 · 2 000) taken out.
+        const numbers = (text.match(/\d(?:[\d.,\u00a0\u202f ]*\d)?/g) ?? []).map((n) => n.replace(/\D/g, ''))
+        expect(numbers.length, `${lang} ${key}`).toBeGreaterThan(0)
+        for (const n of numbers) expect(n, `${lang} ${key}: ${text}`).toBe(max)
+      }
+    }
+  })
+})
+
+/** A Rust enum's variants as serde names them on the wire (`rename_all = "camelCase"`). */
+function serdeNames(name: string): string[] {
+  const body = ENGINE.match(new RegExp(`#\\[serde\\(rename_all = "camelCase"\\)\\]\\npub enum ${name} \\{\\n([\\s\\S]*?)\\n\\}`))?.[1]
+  const variants = [...(body ?? '').matchAll(/^ {4}([A-Z]\w*),$/gm)].map((m) => m[1])
+  return variants.map((v) => v[0].toLowerCase() + v.slice(1))
+}
+
+/** The members of a TS string-literal union, as the module declares it. */
+function unionMembers(name: string): string[] {
+  const source = readFileSync(resolve(here, 'logImport.ts'), 'utf8')
+  const body = source.match(new RegExp(`export type ${name} =([^]*?)\\n\\n`))?.[1] ?? ''
+  return [...body.matchAll(/'(\w+)'/g)].map((m) => m[1])
+}
+
+describe('the engine’s note kinds and reasons', () => {
+  it.each([
+    ['NoteKind', 'ImportNoteKind', (k: string) => noteLabel(k as ImportNoteKind)],
+    ['DropReason', 'DropReason', (k: string) => reasonLabel(k as DropReason)],
+    ['UnmappedReason', 'UnmappedReason', (k: string) => unmappedLabel(k as UnmappedReason)],
+  ])('are the UI’s %s, every one with a label', (rust, ts, label) => {
+    const names = serdeNames(rust)
+    expect(names.length, rust).toBeGreaterThan(3)
+    expect([...unionMembers(ts)].sort()).toEqual([...names].sort())
+    for (const k of names) {
+      const text = label(k)
+      expect(text, k).toBeTruthy()
+      expect(text, k).not.toMatch(/^logbook\./)
+    }
   })
 })
