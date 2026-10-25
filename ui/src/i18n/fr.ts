@@ -3097,7 +3097,7 @@ export const FR: PartialCatalog = {
   "logbook.deleted.confirm.putsBack": { "one": "Il reviendra dans le journal.", "other": "Ils reviendront dans le journal." },
   "logbook.deleted.confirm.undo": "Annuler",
   "logbook.deleted.confirm.redo": "Rétablir",
-  "logbook.deleted.confirm.cancel": "Ne rien faire",
+  "logbook.deleted.confirm.cancel": "Annuler",
   "logbook.deleted.restoreAnyway": "Rétablir quand même",
   "logbook.deleted.restoreAnywayHint": "La même station, sur la même bande et le même mode à moins de 5 minutes, a été enregistrée de nouveau après la suppression de ce contact. Rétablir quand même garde les deux.",
   "logbook.deleted.restored": "{{call}} rétabli",
