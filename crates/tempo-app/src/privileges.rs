@@ -379,15 +379,27 @@ pub fn lsb_phone_allowed(class: LicenseClass, carrier_mhz: f64) -> bool {
 /// know is never trusted to fit. Every other band keeps them, and `Open` is trusted, as
 /// [`tx_allowed`] trusts it.
 ///
-/// A Novice is refused them on 10 m too: "A station having a control operator holding a Novice
-/// Class operator license ... may only transmit a CW emission using the international Morse code
-/// or phone emissions J3E and R3E" (47 CFR 97.307(f)(10), the 28.3–28.5 MHz phone segment),
-/// single sideband. The same sentence binds a Technician, whose rows predate this model and are
-/// unchanged here.
+/// A Novice and a Technician are refused them from 28.3 to 28.5 MHz too
+/// ([`cw_and_ssb_voice_only`]).
 pub fn wide_phone_allowed(class: LicenseClass, carrier_mhz: f64) -> bool {
-    let band = crate::bandplan::band_for_dial(carrier_mhz);
     matches!(class, LicenseClass::Open)
-        || (band != Some("60m") && !(class == LicenseClass::Novice && band == Some("10m")))
+        || (crate::bandplan::band_for_dial(carrier_mhz) != Some("60m")
+            && !cw_and_ssb_voice_only(class, carrier_mhz))
+}
+
+/// Is `class` held to CW and single-sideband voice with its carrier at `carrier_mhz`? From 28.3 to
+/// 28.5 MHz, for a Novice and a Technician: "A station having a control operator holding a Novice
+/// Class operator license, a Technician Class operator license, or a Technician Plus Class
+/// operator license may only transmit a CW emission using the international Morse code or phone
+/// emissions J3E and R3E" (47 CFR 97.307(f)(10)). So AM and FM are refused there
+/// ([`wide_phone_allowed`]), and so is a picture: SSTV is an image (J3F), not voice, though it
+/// rides the same USB passband (`Engine::sstv_tx_gate`). Half-open like every segment, and it
+/// judges only the emission: whether the frequency is the class's is [`tx_allowed`]'s question,
+/// and from 28.3 to 28.5 MHz it is these two classes' whole 10 m phone segment. Every other class,
+/// `Open` included, is never held to it.
+pub fn cw_and_ssb_voice_only(class: LicenseClass, carrier_mhz: f64) -> bool {
+    matches!(class, LicenseClass::Novice | LicenseClass::Technician)
+        && (28.300..28.500).contains(&carrier_mhz)
 }
 
 /// Is upper sideband the only phone `class` may transmit with its carrier at `carrier_mhz`: LSB
@@ -1250,6 +1262,33 @@ mod tests {
         }
     }
 
+    /// 47 CFR 97.307(f)(10) binds a Novice and a Technician alike from 28.3 to 28.5 MHz, edge by
+    /// edge (half-open, as every segment is), and no other class: AM and FM are refused there, a
+    /// single sideband either way is not, and General, Advanced, Extra and `Open` keep them.
+    #[test]
+    fn ten_meter_cw_and_ssb_voice_only_binds_novice_and_technician_alone() {
+        for (f, held) in [
+            (28.299_999, false),
+            (28.300, true),
+            (28.400, true),
+            (28.499_999, true),
+            (28.500, false),
+            (28.500_001, false),
+        ] {
+            for class in [Novice, Technician] {
+                assert_eq!(cw_and_ssb_voice_only(class, f), held, "{class:?} at {f}");
+                if held {
+                    assert!(!wide_phone_allowed(class, f), "{class:?} AM/FM at {f}");
+                    assert!(lsb_phone_allowed(class, f), "{class:?} LSB at {f}");
+                }
+            }
+            for class in [General, Advanced, Extra, Open] {
+                assert!(!cw_and_ssb_voice_only(class, f), "{class:?} at {f}");
+                assert!(wide_phone_allowed(class, f), "{class:?} AM/FM at {f}");
+            }
+        }
+    }
+
     /// Every band a US class may be judged on, the band dropdown's and the gate's.
     const GOLDEN_BANDS: &[&str] = &[
         "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m",
@@ -1303,7 +1342,8 @@ mod tests {
     /// existed, with `NEXUS_WRITE_PRIVILEGE_GOLDENS=1`; the default mode compares today's gate
     /// with it. Regenerating it against today's gate would make this test prove nothing: a
     /// deliberate change to a shipped class is a new golden AND a sentence in its commit saying
-    /// why.
+    /// why. One row has moved so: `Technician 28.4 … wide false`, AM and FM refused to a
+    /// Technician from 28.3 to 28.5 MHz by 47 CFR 97.307(f)(10) ([`cw_and_ssb_voice_only`]).
     #[test]
     fn the_shipped_classes_answer_byte_for_byte_as_before() {
         let path = concat!(

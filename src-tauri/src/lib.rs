@@ -14791,7 +14791,9 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
     let (settings, unknown) = {
         let eng = engine_lock(&state);
         (
-            serde_json::to_value(eng.settings()).map_err(|e| e.to_string())?,
+            // As the settings file stores it, so an older build restores Novice and Advanced as
+            // a class it knows rather than refusing the backup (`LicenseClass`).
+            serde_json::to_value(eng.settings().for_storage()).map_err(|e| e.to_string())?,
             eng.settings().unknown.clone(),
         )
     };
@@ -14816,7 +14818,8 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
 /// settings file does. A restore runs none of `Settings::load`'s migrations, and the field's
 /// default would otherwise switch a restored list of the operator's own to automatic. A backup
 /// from before JS8 heartbeat networking chooses it as an upgraded file does too, or a restored
-/// heartbeat user would lose the HB button.
+/// heartbeat user would lose the HB button. The exact licence class is read back as the settings
+/// file reads it (`Settings::take_exact_license_class`).
 fn settings_from_bundle(
     settings_json: serde_json::Value,
 ) -> Result<tempo_app::settings::Settings, String> {
@@ -14824,6 +14827,7 @@ fn settings_from_bundle(
     let predates_hb_networking = settings_json.get("js8HbNetworking").is_none();
     let mut settings: tempo_app::settings::Settings = serde_json::from_value(settings_json)
         .map_err(|e| format!("The settings in that backup could not be read: {e}"))?;
+    settings.take_exact_license_class();
     if predates_node_choice {
         settings.choose_cluster_nodes_for_old_settings();
     }
@@ -49868,6 +49872,40 @@ mod tests {
         });
         assert_eq!(v["kind"], "nexus-settings-backup");
         assert_eq!(v["schema"], 1);
+    }
+
+    /// A backup carries the licence class as the settings file does: an older build restores a
+    /// Novice or an Advanced as a class it knows (Technician, General) instead of refusing the whole
+    /// backup over a token it cannot read, and this build restores the exact class.
+    #[test]
+    fn a_backup_restores_the_exact_licence_class_and_an_older_build_reads_it() {
+        use tempo_app::settings::{LicenseClass, Settings};
+        for (class, older) in [
+            (LicenseClass::Novice, "technician"),
+            (LicenseClass::Advanced, "general"),
+            (LicenseClass::Technician, "technician"),
+            (LicenseClass::General, "general"),
+            (LicenseClass::Extra, "extra"),
+            (LicenseClass::Open, "open"),
+        ] {
+            let s = Settings {
+                mycall: "W9XYZ".into(),
+                license_class: class,
+                ..Default::default()
+            };
+            // What `export_settings_bundle` puts under "settings".
+            let v = serde_json::to_value(s.for_storage()).unwrap();
+            assert_eq!(
+                v["licenseClass"],
+                serde_json::json!(older),
+                "{class:?} in the backup"
+            );
+            assert_eq!(
+                super::settings_from_bundle(v).unwrap().license_class,
+                class,
+                "{class:?} restored"
+            );
+        }
     }
 
     /// A backup from before the cluster node choice restores the way an upgraded settings file

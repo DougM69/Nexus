@@ -31,7 +31,7 @@ Technician 5.3305 lsb false wide false usb_only true
 Technician 5.36 lsb false wide false usb_only true
 Technician 7.2 lsb true wide true usb_only false
 Technician 14.3 lsb true wide true usb_only false
-Technician 28.4 lsb true wide true usb_only false
+Technician 28.4 lsb true wide false usb_only false
 Technician 29.6 lsb true wide true usb_only false
 Technician 146.52 lsb true wide true usb_only false
 General Digital spans Some([(1.8, 2.0), (3.525, 3.6), (5.3306, 5.3334), (5.3466, 5.3494), (5.3515, 5.3665), (5.3716, 5.3744), (5.4036, 5.4064), (7.025, 7.125), (10.1, 10.15), (14.025, 14.15), (18.068, 18.11), (21.025, 21.2), (24.89, 24.93), (28.0, 28.3), (50.1, 54.0), (144.1, 148.0), (222.0, 225.0), (420.0, 450.0), (902.0, 928.0), (1240.0, 1300.0), (2300.0, 2310.0), (2390.0, 2450.0), (5650.0, 5925.0), (10000.0, 10500.0), (24000.0, 24250.0)])
