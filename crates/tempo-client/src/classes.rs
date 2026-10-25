@@ -567,6 +567,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("ui_state_save",                  RunsAtShack, "Operator data kept at the shack."),
     ("undo_history_run",               RunsAtShack, "Undoes one run of changes to the shack's logbook; sends nothing."),
     ("undo_qso_change",                RunsAtShack, "Undoes one change to a contact in the shack's logbook; sends nothing."),
+    ("undoable_history_runs",          RunsAtShack, "The purges and imports of the shack's logbook that can still be undone whole."),
     ("update_install_block",           RunsAtShack, "Whether the shack's radio is busy, which an update here waits on."),
     ("update_radio_profile",           RunsAtShack, "One radio's setup at the shack, saved whole."),
     ("update_route",                   RunsHere,    "How this computer's Nexus takes an update."),

@@ -1524,9 +1524,9 @@ export const EN = {
   'logbook.purge.heading': 'Purge the entire logbook?',
   'logbook.purge.irreversible': 'Deletes everything',
   'logbook.purge.warn': {
-    one: "This deletes <b>all {{count}} contact</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. You can undo it from the message that follows for 15 seconds; after that, contacts can be restored one at a time from Recently deleted for as long as Settings keeps deleted contacts (90 days unless you changed it). Export an ADIF backup first if you might want it later.",
+    one: "This deletes <b>all {{count}} contact</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. You can undo the whole purge from the message that follows, or later with <b>Undo this purge</b> in Recently deleted, for as long as Settings keeps deleted contacts (90 days unless you changed it); contacts can also be restored there one at a time. While the radio is transmitting, a large purge is undone only once you stop. Export an ADIF backup first if you might want it later.",
     other:
-      "This deletes <b>all {{count}} contacts</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. You can undo it from the message that follows for 15 seconds; after that, contacts can be restored one at a time from Recently deleted for as long as Settings keeps deleted contacts (90 days unless you changed it). Export an ADIF backup first if you might want it later.",
+      "This deletes <b>all {{count}} contacts</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. You can undo the whole purge from the message that follows, or later with <b>Undo this purge</b> in Recently deleted, for as long as Settings keeps deleted contacts (90 days unless you changed it); contacts can also be restored there one at a time. While the radio is transmitting, a large purge is undone only once you stop. Export an ADIF backup first if you might want it later.",
   },
   'logbook.purge.syncWarn':
     'It also resets your <b>LoTW and eQSL sync position</b>, so the next sync re-downloads your whole confirmation history instead of only recent matches. That is what brings your confirmations back after a purge — but it takes considerably longer than a routine sync, so give it time to finish.',
@@ -1884,6 +1884,19 @@ export const EN = {
   'logbook.deleted.restoreAnyway': 'Restore anyway',
   'logbook.deleted.restoreAnywayHint':
     'The same station, band and mode within 5 minutes was logged again after this contact was deleted. Restore anyway keeps both.',
+  // A whole purge or import, undone from Recently deleted after its toast has gone. `{{when}}` is
+  // a UTC time (a token).
+  'logbook.deleted.runsIntro': 'A whole purge or import can be undone here, as one change.',
+  'logbook.deleted.run.purge': {
+    one: 'Purge of {{count}} contact · {{when}}',
+    other: 'Purge of {{count}} contacts · {{when}}',
+  },
+  'logbook.deleted.run.import': {
+    one: 'Import of {{count}} contact · {{when}}',
+    other: 'Import of {{count}} contacts · {{when}}',
+  },
+  'logbook.deleted.undoPurge': 'Undo this purge',
+  'logbook.deleted.undoImport': 'Undo this import',
   'logbook.deleted.restored': 'Restored {{call}}',
   'logbook.deleted.failed': 'The contact could not be restored.',
   // A contact's history, in the QSO detail view: each change, who made it, and its undo.

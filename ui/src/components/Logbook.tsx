@@ -82,7 +82,7 @@ import {
   syncLotwReport,
   uploadLotwReport,
 } from '../api'
-import { pushToast, withErrorToast } from '../toast'
+import { failureText, pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, openQrzPage, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
 import type { QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
@@ -567,7 +567,7 @@ export function Logbook({
         'success',
         10_000,
         stats.added + stats.updated > 0 && run
-          ? { actionLabel: t('logbook.undo'), action: () => void undoRun(run, t('logbook.import.undone')) }
+          ? { actionLabel: t('logbook.undo'), action: () => undoRun(run, t('logbook.import.undone')) }
           : {},
       )
       load()
@@ -575,10 +575,13 @@ export function Logbook({
   }
 
   // Undo the run an import or a purge handed back — exactly that change, never "the latest of its
-  // kind", which a contact logged a moment later would be — in one transaction.
+  // kind", which a contact logged a moment later would be — in one transaction. The toast's
+  // action: a refusal (a large undo while transmitting) rejects with its reason, so the toast stays
+  // up saying why and its Undo can be pressed again. Recently deleted offers the same undo after.
   const undoRun = async (run: string, done: string) => {
-    const answer = await withErrorToast(() => undoHistoryRun(run), t('qso.history.undo.failed'))
-    if (!answer) return
+    const answer = await undoHistoryRun(run).catch((err: unknown) => {
+      throw new Error(failureText(t('qso.history.undo.failed'), err))
+    })
     sayUndone(answer, done, load)
     load()
   }
@@ -1061,7 +1064,7 @@ export function Logbook({
       const { removed, run } = purged
       pushToast(t('logbook.purge.done', { count: removed }), 'success', 15_000, removed > 0 ? {
         actionLabel: t('logbook.undo'),
-        action: () => void undoRun(run, t('logbook.purge.undone')),
+        action: () => undoRun(run, t('logbook.purge.undone')),
       } : {})
       closePurge()
       cancelForm()

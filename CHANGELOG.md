@@ -21,8 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contact the log held beside it before the delete, such as a rover worked from two grids minutes
   apart, never stops it coming back. An import's undo keeps any contact you have edited, that has
   been confirmed or uploaded, or that you imported again, since; the message names them. Undoing
-  more than a few hundred contacts at once waits until you stop transmitting, because it holds up
-  the radio while it is made. The history is kept in the logbook
+  more than a few hundred contacts at once waits until you stop transmitting, or a voice message or
+  APRS frame finishes, because it holds up the radio while it is made; the message then stays up and
+  says so, and its Undo works once you stop. Recently deleted also lists each recent purge and import
+  with **Undo this purge** or **Undo this import**, so a whole one can still be undone after its
+  message has gone. The history is kept in the logbook
   database, so it survives a restart. Every edit is kept for good; a deleted or purged contact's full
   copy is kept for 90 days, which **Keep deleted contacts for (days)** under Settings › Config ›
   Data & log folder changes. An undo never sends anything to QRZ, Club Log, eQSL or LoTW; an undo that

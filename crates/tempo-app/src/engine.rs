@@ -4222,6 +4222,9 @@ pub struct Engine {
     /// Until when the rig is sending the CW word the radio loop last handed to a keyer, on any
     /// keyer backend — see [`Self::observe_cw_keying`]. `None` = no word on the air.
     cw_keying_until: Option<Instant>,
+    /// Until when the radio loop holds the key on a deadline of its own — a voice-keyer message
+    /// or an APRS frame it is still playing — see [`Self::observe_loop_tx_hold`]. `None` = none.
+    loop_tx_hold_until: Option<Instant>,
     rig_tx_swr: Option<f32>,
     /// Consecutive keyed SWR readings above [`Settings::swr_stop_ratio`]. The cutoff fires at
     /// TWO, never one — see [`Self::observe_rig_tx_meters`]. Zeroed by a reading at or below
@@ -6617,6 +6620,7 @@ impl Engine {
             rig_smeter_db: None,
             rig_keyed: false,
             cw_keying_until: None,
+            loop_tx_hold_until: None,
             rig_tx_swr: None,
             swr_over_count: 0,
             rig_tx_alc: None,
@@ -12356,6 +12360,20 @@ impl Engine {
     /// arrives. Stop TX and TX off end it at once ([`Self::halt_tx`], [`Self::stop_cw`]).
     pub fn observe_cw_keying(&mut self, left_ms: Option<f64>) {
         self.cw_keying_until = left_ms.filter(|ms| ms.is_finite() && *ms > 0.0).map(|ms| {
+            Instant::now() + Duration::from_millis(ms.ceil() as u64 + CW_KEYING_MARGIN_MS)
+        });
+    }
+
+    /// The radio loop's word that it holds the key on a deadline of its own (`tx_until_ms`) for
+    /// `left_ms` more, or (`None`) that it holds none: a voice-keyer message or an APRS frame it is
+    /// still playing, which the engine handed over and keeps nothing of — the gap in
+    /// [`Self::on_air`]. Read by [`Self::transmit_needs_the_lock`] only: no gate refuses a key on
+    /// it, and the clock-repair interlock is unchanged.
+    ///
+    /// It ends by itself [`CW_KEYING_MARGIN_MS`] after the deadline it was told of, whether or not
+    /// the loop's end arrives.
+    pub fn observe_loop_tx_hold(&mut self, left_ms: Option<f64>) {
+        self.loop_tx_hold_until = left_ms.filter(|ms| ms.is_finite() && *ms > 0.0).map(|ms| {
             Instant::now() + Duration::from_millis(ms.ceil() as u64 + CW_KEYING_MARGIN_MS)
         });
     }
@@ -31561,11 +31579,14 @@ contact yourself."
     }
 
     /// Whether a log change that holds the Engine lock for a long time must wait: the radio is
-    /// on the air ([`Self::on_air`]) or the FT sequencer is armed to key at the next slot — the
-    /// radio loop needs the lock at every slot boundary to key and to unkey. Asked by a whole
+    /// on the air ([`Self::on_air`]), the radio loop is still playing a voice-keyer message or an
+    /// APRS frame on its own deadline ([`Self::observe_loop_tx_hold`], which `on_air` does not
+    /// see), or the FT sequencer is armed to key at the next slot — the radio loop needs the lock
+    /// at every slot boundary to key, and at the end of every over to unkey. Asked by a whole
     /// run's undo too large to make in a moment ([`crate::loghistory::undo_run`]).
-    pub(crate) fn transmit_needs_the_lock(&self) -> bool {
+    pub fn transmit_needs_the_lock(&self) -> bool {
         self.on_air()
+            || self.loop_tx_hold_until.is_some_and(|t| Instant::now() < t)
             || (self.tx_enabled
                 && self.settings.operating_mode == crate::settings::OperatingMode::Digital)
     }

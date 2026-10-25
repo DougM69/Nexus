@@ -9,9 +9,10 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, cleanup, screen } from '@testing-library/react'
 import { Logbook } from './Logbook'
+import { Toasts } from './Toasts'
 import { t } from '../i18n'
 import * as api from '../api'
-import { subscribeToasts, type Toast } from '../toast'
+import { dismissToast, subscribeToasts, type Toast } from '../toast'
 import type { LogQuestion } from '../features/logAnswers'
 import type { LoggedQso } from '../types'
 
@@ -59,6 +60,8 @@ beforeEach(() => {
   unsubscribe = subscribeToasts((all) => { toasts = all })
 })
 afterEach(() => {
+  // The bus is app-wide: a toast one case raised must not be the one the next case presses.
+  for (const x of toasts) dismissToast(x.id)
   unsubscribe()
   cleanup()
   vi.clearAllMocks()
@@ -101,5 +104,39 @@ describe('the Undo on the import and purge toasts', () => {
     toast.action?.()
     await waitFor(() => expect(api.undoHistoryRun).toHaveBeenCalled())
     expect(vi.mocked(api.undoHistoryRun).mock.calls).toEqual([['purge-run']])
+  })
+
+  it('keeps the purge toast and its Undo when the undo is refused while transmitting', async () => {
+    const refusal = 'Stop transmitting first: undoing this many contacts holds up the radio while it is made.'
+    vi.mocked(api.undoHistoryRun).mockRejectedValueOnce(refusal)
+    engineLog.mockResolvedValue(LOG)
+    render(
+      <>
+        <Logbook defaultBand="40m" defaultFreqMhz={7.074} defaultMode="FT8" />
+        <Toasts />
+      </>,
+    )
+    await waitFor(() => expect(document.querySelectorAll('.logbook-row:not(.head)').length).toBe(3))
+    fireEvent.click(screen.getByRole('button', { name: t('logbook.purge.label') }))
+    fireEvent.change(document.querySelector('.purge-field input') as HTMLInputElement, {
+      target: { value: 'DELETE' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: t('logbook.purge.confirm', { count: 3 }) }))
+    const purged = t('logbook.purge.done', { count: 3 })
+    await waitFor(() => expect(document.querySelector('.ui-toast-action')).not.toBeNull())
+    const undo = () => document.querySelector('.ui-toast-action') as HTMLButtonElement
+
+    fireEvent.click(undo())
+    // Refused: the toast stays, saying why, with its Undo.
+    const why = await screen.findByRole('alert')
+    expect(why.textContent).toContain(refusal)
+    expect(toastSaying(purged)?.note).toContain(refusal)
+    expect(undo()).not.toBeNull()
+
+    // Transmit off: the same Undo, pressed again, undoes that purge.
+    fireEvent.click(undo())
+    await waitFor(() => expect(toastSaying(t('logbook.purge.undone'))).toBeTruthy())
+    expect(vi.mocked(api.undoHistoryRun).mock.calls).toEqual([['purge-run'], ['purge-run']])
+    await waitFor(() => expect(toastSaying(purged)).toBeUndefined())
   })
 })

@@ -144,6 +144,46 @@ pub async fn recently_deleted_qsos(
         .collect())
 }
 
+/// A purge or an import whose whole-run undo can still be asked for.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryRunDto {
+    /// What `undo_history_run` takes.
+    pub run: String,
+    /// `purge` or `import`.
+    pub kind: &'static str,
+    pub at_ms: i64,
+    /// How many contacts it changed.
+    pub contacts: u64,
+}
+
+/// The purges and imports whose whole-run undo can still be asked for, newest first: the lasting
+/// way to undo one after its toast has gone. Each is undone by `undo_history_run`, with its wait
+/// while the radio transmits.
+#[tauri::command]
+pub async fn undoable_history_runs(
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<HistoryRunDto>, String> {
+    let engine = Arc::clone(&state);
+    let runs =
+        tokio::task::spawn_blocking(move || tempo_app::loghistory::undoable_runs(&engine, 20))
+            .await
+            .map_err(|e| format!("logbook task failed: {e}"))??;
+    Ok(runs
+        .into_iter()
+        .map(|r| HistoryRunDto {
+            kind: if r.source == "import" {
+                "import"
+            } else {
+                "purge"
+            },
+            run: r.run,
+            at_ms: r.at_ms,
+            contacts: r.contacts,
+        })
+        .collect())
+}
+
 /// What an undo made.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

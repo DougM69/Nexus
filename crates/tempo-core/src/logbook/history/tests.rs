@@ -964,3 +964,88 @@ fn the_writer_trims_in_steps_and_answers_how_many() {
     drop(db);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// ★ The purges and imports a whole-run undo can still be asked for once the toast has gone: a
+/// purge while a contact it took out is still out, an import while a contact it added is still
+/// in. A single delete, a companion program's one logged contact, an edit, a run older than asked
+/// and a run already undone are not among them.
+#[test]
+fn the_runs_still_to_undo_are_the_purges_and_imports_not_yet_undone() {
+    let mut db = LogDb::open_in_memory().unwrap();
+    let (a, b, c, d, e) = (
+        rec("K1ABC", 1),
+        rec("K2XYZ", 2),
+        rec("K3QQQ", 3),
+        rec("K4ONE", 4),
+        rec("K5IMP", 5),
+    );
+    write(
+        &mut db,
+        &[b.clone(), e.clone()],
+        Some(&note("import", Source::Import, Kind::Merge)),
+    )
+    .unwrap();
+    write(
+        &mut db,
+        std::slice::from_ref(&d),
+        Some(&note("companion", Source::Import, Kind::Merge)),
+    )
+    .unwrap();
+    write(
+        &mut db,
+        &[a.clone(), c.clone()],
+        Some(&note("logged", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    remove(
+        &mut db,
+        &[id(3)],
+        Some(&note("one-delete", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    remove(
+        &mut db,
+        &[id(1), id(4)],
+        Some(&note("purge", Source::Operator, Kind::Edit)),
+    )
+    .unwrap();
+    let runs = |db: &LogDb, since: i64| -> Vec<(String, String, u64)> {
+        db.history_undoable_runs(since, 10)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.run, r.source, r.contacts))
+            .collect()
+    };
+    assert_eq!(
+        runs(&db, 0),
+        vec![
+            ("purge".to_string(), "operator".to_string(), 2),
+            ("import".to_string(), "import".to_string(), 2),
+        ],
+        "newest first; B and E are still in the log, A and D are still out"
+    );
+    assert!(runs(&db, 1_700_000_000_001).is_empty(), "older than asked");
+
+    // The purge put back a contact at a time: once both are back it is done.
+    write(
+        &mut db,
+        std::slice::from_ref(&a),
+        Some(&note("undo-a", Source::Undo, Kind::Edit)),
+    )
+    .unwrap();
+    assert_eq!(runs(&db, 0).len(), 2, "D is still out");
+    write(
+        &mut db,
+        std::slice::from_ref(&d),
+        Some(&note("undo-d", Source::Undo, Kind::Edit)),
+    )
+    .unwrap();
+    // The import undone: every contact it added is out of the log again.
+    remove(
+        &mut db,
+        &[id(2), id(5)],
+        Some(&note("undo-import", Source::Undo, Kind::Edit)),
+    )
+    .unwrap();
+    assert!(runs(&db, 0).is_empty(), "{:?}", runs(&db, 0));
+}

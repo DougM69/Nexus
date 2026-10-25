@@ -321,6 +321,12 @@ html {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* Why the toast's action did not happen (Toasts.tsx): its own line under the message. */
+.ui-toast-note {
+  display: block;
+  margin-top: var(--space-1);
+  font-weight: 700;
+}
 .ui-toast-close {
   /* The body is click-through (see .ui-toast); its controls are not. */
   pointer-events: auto;
@@ -32229,6 +32235,16 @@ tr.sel .aprs-sym {
   flex: 1 1 12rem;
   min-width: 0;
   color: var(--text-dim);
+  font-size: 0.85em;
+}
+/* A restore refused as a duplicate: why, in words, and Restore anyway — a line of its own under the
+   row, never Restore relabelled where the pointer already is. */
+.recently-deleted-anyway {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
   font-size: 0.85em;
 }
 

@@ -68,4 +68,21 @@ describe('a toast action button decides whether its toast closes', () => {
     fireEvent.click(screen.getByRole('button', { name: /Go/ }))
     expect(action).toHaveBeenCalledTimes(2)
   })
+
+  it('a failed action outlives its expiry, says why, and closes once a second press succeeds', async () => {
+    // An Undo refused while transmitting: the operator stops, then presses it again — later than
+    // the toast's own expiry would have allowed.
+    const action = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.reject(new Error('Stop transmitting first')))
+      .mockImplementationOnce(() => Promise.resolve())
+    render(<Toasts />)
+    ids.push(pushToast('timed toast', 'success', 40, { action, actionLabel: 'Go' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Go/ }))
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Stop transmitting first')
+    await new Promise((r) => setTimeout(r, 120))
+    expect(screen.queryByText('timed toast')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Go/ }))
+    await waitFor(() => expect(screen.queryByText('timed toast')).toBeNull())
+  })
 })

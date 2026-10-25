@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { qsoHistory, undoHistoryRun, undoQsoChange, type QsoHistoryEntry, type UndoAnswer } from '../api'
 import { t } from '../i18n'
-import { pushToast, withErrorToast } from '../toast'
+import { failureText, pushToast, withErrorToast } from '../toast'
 
 /** The services' own names, which are tokens, not prose. */
 const SERVICE: Readonly<Record<string, string>> = { lotw: 'LoTW', eqsl: 'eQSL', qrz: 'QRZ', pota: 'POTA' }
@@ -93,10 +93,14 @@ export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => voi
   const run = answer.run
   pushToast(`${done}${kept}${keptContacts}${dups}`, 'success', 10_000, run ? {
     actionLabel: t('qso.history.redo'),
-    action: () => {
-      void withErrorToast(() => undoHistoryRun(run), t('qso.history.undo.failed')).then((a) => {
-        if (a) { sayUndone(a, t('qso.history.redone'), onChanged); onChanged() }
+    // A refusal rejects with its reason, so the toast stays up saying why and Redo can be
+    // pressed again (a redo of a large undo waits while the radio transmits).
+    action: async () => {
+      const a = await undoHistoryRun(run).catch((err: unknown) => {
+        throw new Error(failureText(t('qso.history.undo.failed'), err))
       })
+      sayUndone(a, t('qso.history.redone'), onChanged)
+      onChanged()
     },
   } : {})
 }

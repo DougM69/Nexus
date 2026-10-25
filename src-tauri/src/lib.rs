@@ -39121,6 +39121,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_by_id::delete_qso_by_id,
         log_history::qso_history,
         log_history::recently_deleted_qsos,
+        log_history::undoable_history_runs,
         log_history::undo_qso_change,
         log_history::undo_history_run,
         log_history::restore_deleted_qso,

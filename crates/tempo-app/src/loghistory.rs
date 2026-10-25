@@ -194,6 +194,24 @@ pub fn recently_deleted(engine: &Mutex<Engine>, limit: usize) -> Result<Vec<Entr
     read(engine, |db| db.history_deleted(limit))
 }
 
+/// The purges and imports whose whole-run undo can still be asked for, newest first, at most
+/// `limit` ([`tempo_core::logbook::sqlite::LogDb::history_undoable_runs`]): the lasting way to undo
+/// one once its toast has gone. Made within the days Settings keeps deleted contacts (all of them,
+/// at 0) — a purge's own contacts leave the history then, and an import is held to the same days.
+/// Undone through [`undo_run`], with its transmit check and its guards.
+pub fn undoable_runs(engine: &Mutex<Engine>, limit: usize) -> Result<Vec<RunSummary>, String> {
+    let days = engine_lock(engine).settings().history_snapshot_days;
+    let since_ms = if days == 0 {
+        i64::MIN
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            .saturating_sub(i64::from(days) * 86_400_000)
+    };
+    read(engine, |db| db.history_undoable_runs(since_ms, limit))
+}
+
 /// The latest run `source` made that changed a contact (any source's when `None`).
 pub fn latest_run(
     engine: &Mutex<Engine>,

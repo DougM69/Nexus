@@ -1378,6 +1378,16 @@ impl LogDb {
         super::history::latest_run(&self.conn, source)
     }
 
+    /// The purges and imports a whole-run undo can still be asked for, made at `since_ms` or
+    /// later, newest first, at most `limit` ([`super::history::undoable_runs`]).
+    pub fn history_undoable_runs(
+        &self,
+        since_ms: i64,
+        limit: usize,
+    ) -> Result<Vec<super::history::RunSummary>> {
+        super::history::undoable_runs(&self.conn, since_ms, limit)
+    }
+
     /// Every record, in the order they were stored.
     ///
     /// `rowid` order is arrival order, which is the same thing `log.adi`'s file order carries

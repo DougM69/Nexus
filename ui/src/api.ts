@@ -1699,6 +1699,22 @@ export async function undoHistoryRun(run: string): Promise<UndoAnswer> {
   return invoke<UndoAnswer>('undo_history_run', { run })
 }
 
+/** A purge or an import whose whole-run undo can still be asked for. */
+export interface HistoryRun {
+  /** What `undoHistoryRun` takes. */
+  run: string
+  kind: 'purge' | 'import'
+  atMs: number
+  /** How many contacts it changed. */
+  contacts: number
+}
+
+/** The purges and imports that can still be undone whole, newest first: the lasting way to undo
+ *  one after its toast has gone, through `undoHistoryRun`. */
+export async function undoableHistoryRuns(): Promise<HistoryRun[]> {
+  return invoke<HistoryRun[]>('undoable_history_runs')
+}
+
 /** Put a deleted contact back, as its latest delete took it out — unless it was logged again since
  *  (`duplicate`). `anyway`: put it back all the same, beside the one logged since. */
 export async function restoreDeletedQso(id: string, anyway = false): Promise<UndoAnswer> {

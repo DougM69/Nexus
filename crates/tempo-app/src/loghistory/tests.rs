@@ -626,6 +626,155 @@ fn a_large_undo_waits_until_transmit_is_off() {
     assert_eq!(engine.stored_log().len(), n);
 }
 
+/// ⛔ The same wait while the radio loop plays a voice-keyer message or an APRS frame on its own
+/// deadline: the engine handed it over and keeps nothing of it, so only the loop's word says the
+/// over is on the air ([`Engine::observe_loop_tx_hold`]). Once the over ends the undo is made.
+#[test]
+fn a_large_undo_waits_while_the_radio_loop_plays_a_message() {
+    let n = tempo_core::logbook::writer::CHUNK_ROWS + 20;
+    let d = Dir::new("history-large-undo-voice");
+    let engine = shared(&d, n);
+    let run = new_run();
+    let (_, dur) = engine_lock(&engine).with_log_tickets(|e| e.clear_logbook_in_run(&run));
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert!(
+        !engine_lock(&engine).transmit_needs_the_lock(),
+        "premise: nothing armed or keyed"
+    );
+    engine_lock(&engine).observe_loop_tx_hold(Some(60_000.0));
+
+    let (refused, _) = undo_run(&engine, &run);
+    assert_eq!(refused, Err(MUST_WAIT_FOR_TX.to_string()));
+    assert!(engine.stored_log().is_empty(), "nothing was made");
+
+    engine_lock(&engine).observe_loop_tx_hold(None);
+    let (undone, dur) = undo_run(&engine, &run);
+    assert_eq!(undone.expect("made once the over ends").changed, n);
+    dur.wait(DURABLE_WAIT).unwrap();
+}
+
+/// ★ A purge whose Undo was refused while transmitting can still be undone whole after its toast
+/// has gone: it is listed with the imports still to undo ([`undoable_runs`]), and its undo goes
+/// through the same run undo, with the same wait. Undone, it leaves the list; a single delete is
+/// never on it.
+#[test]
+fn a_refused_purge_undo_stays_reachable_after_the_toast() {
+    let n = tempo_core::logbook::writer::CHUNK_ROWS + 20;
+    let d = Dir::new("history-purge-listed");
+    let engine = shared(&d, n);
+    delete(&engine, id_at(&*engine, 0));
+    let run = new_run();
+    let (_, dur) = engine_lock(&engine).with_log_tickets(|e| e.clear_logbook_in_run(&run));
+    dur.wait(DURABLE_WAIT).unwrap();
+    engine_lock(&engine).set_tx_enabled(true);
+    let (refused, _) = undo_run(&engine, &run);
+    assert_eq!(refused, Err(MUST_WAIT_FOR_TX.to_string()));
+
+    let listed = undoable_runs(&engine, 20).unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|r| (r.run.as_str(), r.source.as_str(), r.contacts))
+            .collect::<Vec<_>>(),
+        vec![(run.as_str(), "operator", (n - 1) as u64)],
+        "the purge, and not the single delete before it"
+    );
+    let (again, _) = undo_run(&engine, &listed[0].run);
+    assert_eq!(again, Err(MUST_WAIT_FOR_TX.to_string()), "the same wait");
+
+    engine_lock(&engine).set_tx_enabled(false);
+    let (undone, dur) = undo_run(&engine, &listed[0].run);
+    assert_eq!(undone.expect("made").changed, n - 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert!(
+        undoable_runs(&engine, 20).unwrap().is_empty(),
+        "undone: off the list"
+    );
+}
+
+/// ★ A run's undo asks each contact it puts back about the contacts logged after ITS OWN delete.
+/// One run deletes X, then — after the same contact was logged again as Y — Z, a contact the log
+/// held beside X and Y all along. X is not put back beside Y; Z is, since Y was in the log beside
+/// it before its delete.
+#[test]
+fn a_runs_undo_judges_each_put_back_by_its_own_delete() {
+    let d = Dir::new("history-own-delete");
+    let engine = shared(&d, 0);
+    let t = 1_789_000_000;
+    let file = adif_header() + &record("W1ROV", t) + &record("W1ROV", t + 400);
+    let (made, dur) = logwrite::import_adif(&engine, &file);
+    assert_eq!(made.expect("the import").0, 2, "premise: two contacts");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let ids: Vec<RecordId> = engine.stored_log().iter().filter_map(|r| r.id).collect();
+    let (x, z) = (ids[0], ids[1]);
+    let run = new_run();
+    let in_run = || {
+        engine_lock(&engine).station_mut().origin = Some(Origin::in_run(Source::Operator, &run));
+    };
+    in_run();
+    delete(&engine, x);
+    // Y: the same contact again, 200 s from each — logged as SSB, so the log takes it, then
+    // corrected to CW by hand.
+    engine_lock(&engine).log_qso(QsoRecord {
+        mode: "SSB".into(),
+        ..qso("W1ROV", t + 200)
+    });
+    settle(&engine);
+    let y = engine
+        .stored_log()
+        .iter()
+        .find(|r| r.mode == "SSB")
+        .and_then(|r| r.id)
+        .expect("Y is logged");
+    let row = row_of(&engine, y).unwrap();
+    let (key, mut edit) = (QsoEdit::project(&row).key(), QsoEdit::project(&row));
+    edit.mode = "CW".into();
+    let (made, dur) = logwrite::edit_row(&engine, y, &key, &edit);
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    in_run();
+    delete(&engine, z);
+    assert_eq!(
+        read(&engine, |db| db.history_run(&run)).unwrap().len(),
+        2,
+        "premise: one run"
+    );
+
+    let (undone, dur) = undo_run(&engine, &run);
+    let undone = undone.expect("answered");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(undone.refused, vec![(x, CannotUndo::Duplicate)]);
+    assert_eq!(undone.changed, 1);
+    assert!(row_of(&engine, z).is_some(), "Z is back beside Y");
+    assert!(row_of(&engine, x).is_none());
+}
+
+/// ★ The same contact logged again while a restore is being made — after the history was read,
+/// before the change — is seen: the restore is planned again, and refused as a duplicate.
+#[test]
+fn a_contact_logged_again_during_the_restore_blocks_it() {
+    let d = Dir::new("history-logged-during-restore");
+    let engine = shared(&d, 2);
+    engine_lock(&engine).log_qso(qso("W3HND", 1_789_000_000));
+    settle(&engine);
+    let id = id_of(&engine, "W3HND");
+    delete(&engine, id);
+
+    let racer = Arc::clone(&engine);
+    let once = Cell::new(false);
+    let (back, _) = racing(
+        move || {
+            if !once.replace(true) {
+                engine_lock(&racer).log_qso(qso("W3HND", 1_789_000_030));
+            }
+        },
+        || restore_deleted(&engine, id),
+    );
+    let back = back.expect("answered");
+    assert_eq!(back.refused, vec![(id, CannotUndo::Duplicate)]);
+    assert_eq!(engine.stored_log().len(), 3, "once: not put back beside it");
+}
+
 /// ★ Nothing is put back twice. A purge undone after the same contacts were imported again (new
 /// ids, the log's duplicate rule: same station, band and mode within its window) puts none of
 /// them back, and says so; a deleted contact logged again is not restored over it either.

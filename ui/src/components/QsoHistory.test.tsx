@@ -13,16 +13,18 @@ const api = vi.hoisted(() => ({
   undoHistoryRun: vi.fn(),
   recentlyDeletedQsos: vi.fn(),
   restoreDeletedQso: vi.fn(),
+  undoableHistoryRuns: vi.fn(),
 }))
 vi.mock('../api', () => api)
 
 import { QsoHistory, sayUndone } from './QsoHistory'
-import { RecentlyDeleted } from './RecentlyDeleted'
+import { GUARD_MS, RecentlyDeleted } from './RecentlyDeleted'
 
 let toasts: Toast[] = []
 let unsubscribe = () => {}
 beforeEach(() => {
   for (const f of Object.values(api)) f.mockReset()
+  api.undoableHistoryRuns.mockResolvedValue([])
   unsubscribe = subscribeToasts((t) => { toasts = t })
 })
 afterEach(() => {
@@ -142,9 +144,59 @@ describe('recently deleted', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
     await waitFor(() => expect(api.restoreDeletedQso).toHaveBeenCalledWith('a', false))
     await waitFor(() => expect(toasts.some((t) => t.message.includes('logged again after it was deleted'))).toBe(true))
+    // Said in words on the row, not only in a tooltip.
+    expect(screen.getByText(/logged again after this contact was deleted/)).toBeTruthy()
     api.restoreDeletedQso.mockResolvedValueOnce(done)
+    const later = Date.now() + GUARD_MS + 1
+    vi.spyOn(Date, 'now').mockReturnValue(later)
     fireEvent.click(await screen.findByRole('button', { name: 'Restore anyway' }))
     await waitFor(() => expect(api.restoreDeletedQso).toHaveBeenLastCalledWith('a', true))
+    vi.restoreAllMocks()
+  })
+
+  it('never turns a double-click on Restore into Restore anyway', async () => {
+    api.recentlyDeletedQsos.mockResolvedValue([
+      { id: 'a', call: 'K1ABC', band: '20m', mode: 'FT8', whenUnix: 1_782_583_500, deletedAtMs: 0, source: 'operator' },
+    ])
+    api.restoreDeletedQso.mockResolvedValue({
+      ...done, changed: 0, run: null, duplicate: 1, duplicateCalls: ['K1ABC'],
+    })
+    render(<RecentlyDeleted open onClose={() => {}} onRestored={() => {}} />)
+    const restore = await screen.findByRole('button', { name: 'Restore' })
+    fireEvent.click(restore)
+    // The Duplicate answer is in; the double-click's second click lands where the first did, and
+    // a quick hand reaches for the new button too.
+    const anyway = await screen.findByRole('button', { name: 'Restore anyway' })
+    expect(anyway).not.toBe(restore)
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }))
+    fireEvent.click(anyway)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.restoreDeletedQso.mock.calls).toEqual([['a', false]])
+  })
+
+  it('undoes a whole purge after its toast has gone, and keeps it listed when the undo is refused', async () => {
+    api.recentlyDeletedQsos.mockResolvedValue([])
+    const purge = { run: 'purge-run', kind: 'purge', atMs: Date.UTC(2026, 9, 24, 12, 0, 0), contacts: 500 }
+    api.undoableHistoryRuns.mockResolvedValue([purge])
+    api.undoHistoryRun.mockRejectedValueOnce(
+      'Stop transmitting first: undoing this many contacts holds up the radio while it is made.',
+    )
+    const onRestored = vi.fn()
+    render(<RecentlyDeleted open onClose={() => {}} onRestored={onRestored} />)
+    expect(await screen.findByText('Purge of 500 contacts · 2026-10-24 12:00:00Z')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo this purge' }))
+    await waitFor(() => expect(toasts.some((t) => t.message.includes('Stop transmitting first'))).toBe(true))
+    expect(api.undoHistoryRun).toHaveBeenCalledWith('purge-run')
+    expect(onRestored).not.toHaveBeenCalled()
+
+    // Transmit off: pressed again, it is made.
+    api.undoHistoryRun.mockResolvedValueOnce({ ...done, changed: 500 })
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + GUARD_MS + 1)
+    fireEvent.click(screen.getByRole('button', { name: 'Undo this purge' }))
+    await waitFor(() => expect(onRestored).toHaveBeenCalled())
+    expect(api.undoHistoryRun.mock.calls).toEqual([['purge-run'], ['purge-run']])
+    expect(toasts.some((t) => t.message.startsWith('Purge undone'))).toBe(true)
+    vi.restoreAllMocks()
   })
 
   it('says when nothing has been deleted', async () => {

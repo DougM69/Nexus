@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as RToast from '@radix-ui/react-toast'
 import { t } from '../i18n'
-import { dismissToast, subscribePopups, type Toast, type ToastKind } from '../toast'
+import { dismissToast, keepToast, subscribePopups, type Toast, type ToastKind } from '../toast'
 
 const KIND_CLASS: Record<ToastKind, string> = {
   error: 'kind-error',
@@ -45,7 +45,12 @@ export function Toasts() {
             if (!o && !held.current.has(toast.id)) dismissToast(toast.id)
           }}
         >
-          <RToast.Description className="ui-toast-msg">{toast.message}</RToast.Description>
+          <RToast.Description className="ui-toast-msg">
+            {toast.message}
+            {/* Why its action did not happen: the toast stays so the operator can act and press
+                again, and this says what to do first. Announced as it appears. */}
+            {toast.note && <span role="alert" className="ui-toast-note">{toast.note}</span>}
+          </RToast.Description>
           {toast.action && (
             <RToast.Action asChild altText={toast.actionLabel ?? t('toast.action.default')}>
               <button
@@ -65,17 +70,22 @@ export function Toasts() {
                     return
                   }
                   // Runs BEFORE Radix's own close handler (Slot composes the child's onClick
-                  // first), so the id is parked by the time `onOpenChange` asks.
+                  // first), so the id is parked by the time `onOpenChange` asks. Its expiry is
+                  // called off too: an action can outlast it, and one that fails must not take
+                  // its toast with it (an Undo refused while transmitting is pressed again later).
                   held.current.add(toast.id)
+                  keepToast(toast.id)
                   void Promise.resolve(result).then(
                     () => {
                       held.current.delete(toast.id)
                       dismissToast(toast.id)
                     },
-                    () => {
+                    (err: unknown) => {
                       // The action reported its own failure. Release the hold so ✕ works again,
-                      // and leave the toast up.
+                      // and leave the toast up, saying why.
                       held.current.delete(toast.id)
+                      const why = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+                      keepToast(toast.id, why || undefined)
                     },
                   )
                 }}

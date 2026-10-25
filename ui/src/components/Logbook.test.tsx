@@ -130,10 +130,12 @@ describe('purge confirmation dialog', () => {
     })
     const text = dialog.textContent ?? ''
 
-    // What the purge deletes, and how it is undone: the message's Undo, then Recently deleted.
+    // What the purge deletes, and both ways it is undone whole: the message's Undo, and Undo this
+    // purge in Recently deleted — no time limit on the message, which stays when an undo is refused.
     expect(text).toMatch(/deletes all/i)
-    expect(text).toMatch(/undo it from the message that follows for 15 seconds/i)
-    expect(text).toMatch(/Recently deleted/)
+    expect(text).toMatch(/undo the whole purge from the message that follows/i)
+    expect(text).toMatch(/Undo this purge in Recently deleted/)
+    expect(text).not.toMatch(/15 seconds/)
     expect(text).not.toMatch(/no undo|permanently/i)
 
     // The new coupling warning: it must name BOTH services and say a full re-download follows.

@@ -697,6 +697,53 @@ pub(crate) fn latest_run(conn: &Connection, source: Option<&str>) -> Result<Opti
     Ok(found)
 }
 
+/// The runs a whole-run undo can still be asked for after its toast has gone, newest first, at
+/// most `limit`, made at `since_ms` or later: a purge (the operator's run of two or more deletes
+/// and nothing else) with a contact it took out still out of the log, and an import of two or more
+/// contacts with a contact it added still in it. Read off the log as it stands, so a run already
+/// undone, or put back a contact at a time, is not among them; a purge whose deleted contacts the
+/// history no longer keeps ([`trim`]) is gone with them. A companion program's one logged contact
+/// is an import of one, and is not listed.
+pub(crate) fn undoable_runs(
+    conn: &Connection,
+    since_ms: i64,
+    limit: usize,
+) -> Result<Vec<RunSummary>> {
+    let sql = format!(
+        "SELECT run, source, at_ms, n FROM ( \
+           SELECT r.id, r.run, r.source, r.at_ms, \
+                  (SELECT COUNT(*) FROM qso_history c WHERE c.run_id = r.id) AS n \
+           FROM history_run r \
+           WHERE r.at_ms >= ?1 AND r.source IN ('{operator}', '{import}')) r \
+         WHERE n >= 2 AND ( \
+           (r.source = '{operator}' \
+            AND NOT EXISTS (SELECT 1 FROM qso_history o WHERE o.run_id = r.id AND o.kind <> {delete}) \
+            AND EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id \
+                        AND NOT EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id))) \
+           OR (r.source = '{import}' \
+            AND EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id AND h.kind = {create} \
+                        AND EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id)))) \
+         ORDER BY r.id DESC LIMIT ?2",
+        operator = Source::Operator.code(),
+        import = Source::Import.code(),
+        delete = Kind::Delete.code(),
+        create = Kind::Create.code(),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        params![since_ms, i64::try_from(limit).unwrap_or(i64::MAX)],
+        |r| {
+            Ok(RunSummary {
+                run: r.get(0)?,
+                source: r.get(1)?,
+                at_ms: r.get(2)?,
+                contacts: r.get::<_, i64>(3)?.max(0) as u64,
+            })
+        },
+    )?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// What undoing an entry does to its contact, as it now stands.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Undo {
