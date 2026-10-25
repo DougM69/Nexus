@@ -2955,16 +2955,23 @@ impl Controller {
                         Err("tokenRemoved")
                     }
                     Ok((vouched, lan)) => {
-                        // A link for a listing that names a LAN key, the only kind with two roads.
-                        if device.lan_key.is_some() {
-                            let vault = &*self.accounts.vault;
-                            let mailbox = vouched.mailbox.as_deref();
-                            let _ = lan::enrol::tie_vouched(vault, &lan, &key, mailbox, now_s);
-                        }
-                        if removed_key(device) {
-                            back.push(key);
-                        }
-                        Ok((vouched, lan))
+                        // A link for a listing that names a LAN key, the only kind with two roads:
+                        // kept before it is granted, or nothing is (a Remove would miss a road), and
+                        // the next list tries again.
+                        let tied = match device.lan_key.is_some() {
+                            true => {
+                                let vault = &*self.accounts.vault;
+                                let mailbox = vouched.mailbox.as_deref();
+                                lan::enrol::tie_vouched(vault, &lan, &key, mailbox, now_s)
+                            }
+                            false => Ok(()),
+                        };
+                        tied.map(|()| {
+                            if removed_key(device) {
+                                back.push(key);
+                            }
+                            (vouched, lan)
+                        })
                     }
                     Err(reason) => Err(reason),
                 };

@@ -1663,10 +1663,71 @@ fn the_links_and_removals_kept_fit_the_smallest_credential_blob() {
         (kept.ties.len(), kept.removed.len()),
         (tempo_client::account::CACHED_DEVICES, 12)
     );
+    assert_ne!(
+        kept.floor, 0,
+        "premise: the removals pushed out left a floor"
+    );
+    // The worst case: every link a guest's, proved on both roads, and every time as long as unix
+    // seconds get (ten digits, to the year 2286).
     for tie in &mut kept.ties {
         tie.enrolled = true;
+        tie.vouched = true;
     }
-    assert!(serde_json::to_string(&kept).unwrap().len() <= 1280);
+    for removed in &mut kept.removed {
+        removed.at = 9_999_999_999;
+    }
+    kept.floor = 9_999_999_999;
+    let chars = serde_json::to_string(&kept).unwrap().chars().count();
+    assert!(chars <= 1280, "{chars} chars, over 2560 bytes of UTF-16");
+}
+
+/// ★ A GUEST'S COMPUTER IS THEIRS BY WHAT IT PROVED HERE ALONE: an invitation taken back names a
+/// computer that enrolled on the LAN as that guest, even before its listing was checked; never one
+/// the owner's link holds, however it was checked, nor one only that guest's listing claims; and
+/// a guest's computer kept with no proved link, whoever claims it, as one of unknown owner.
+#[test]
+fn a_guests_computers_are_those_they_proved_here() {
+    let guest = mailbox("K9.Guest@example.test");
+    let tag = lan_enrol::mailbox_tag(&guest);
+    let pin = |i: u8| tempo_client::hex(&[i; 32]);
+    let tie = |i: u8, mailbox: Option<String>, enrolled: bool, vouched: bool| Tie {
+        lan: lan_enrol::short(&pin(i)),
+        key: lan_enrol::short(&tempo_client::hex(&[i + 50; 32])),
+        mailbox,
+        enrolled,
+        vouched,
+    };
+    let vault = caching(vec![
+        kept(&[1; 32], true, issued_at()),
+        kept(&[2; 32], true, issued_at()),
+        kept(&[5; 32], true, issued_at()),
+    ]);
+    vault
+        .save_ties(
+            &DevicesHeld::take(&vault),
+            &Ties {
+                ties: vec![
+                    // Enrolled as the guest, its listing not checked yet.
+                    tie(1, Some(tag.clone()), true, false),
+                    // Only the guest's listing claims it.
+                    tie(2, Some(tag.clone()), false, true),
+                    // The owner's, checked on the internet road alone.
+                    tie(3, None, false, true),
+                    // The owner's, enrolled.
+                    tie(4, None, true, false),
+                ],
+                ..Ties::default()
+            },
+        )
+        .unwrap();
+    let enrolment = lan_enrol::Enrolment::kept_in(Arc::new(vault), fixture_now);
+    enrolment.load();
+    let (theirs, unknown) = enrolment.guests(&guest);
+    assert_eq!(theirs, vec![lan_enrol::short(&pin(1))]);
+    assert_eq!(
+        unknown,
+        vec![lan_enrol::short(&pin(2)), lan_enrol::short(&pin(5))]
+    );
 }
 
 /// ★ A REMOVAL HOLDS THROUGH THE CLOCKS' LEEWAY: the station's clock and the issuer's may differ by

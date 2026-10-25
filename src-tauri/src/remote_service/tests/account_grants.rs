@@ -3801,3 +3801,30 @@ async fn a_browser_keeps_no_link_and_no_removal_for_this_network() {
     assert!(!pinned(&service).contains(&BROWSER.to_string()));
     assert!(ties_kept(&vault).removed.is_empty());
 }
+
+/// ★ A LINK THE STORE WILL NOT KEEP GRANTS NOTHING: the removals read, and the store then refusing
+/// what links a computer's two roads, a computer's listing is granted nothing (a Remove would end
+/// only one road) and shown with why. CONTROL: once the store keeps it, the same listing is granted,
+/// with its link.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_the_store_will_not_keep_grants_nothing() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let (service, _store, _scratch, _) = on_both_roads(&cloud, &vault, &[], Vec::new()).await;
+    let enrolment = service.control.lock().unwrap().enrolment.clone();
+    assert!(enrolment.kept().is_some(), "premise: the removals read");
+    vault.refusing.lock().unwrap().insert("account-ties");
+    *cloud.devices.lock().unwrap() =
+        json!({ "devices": [computer_row(&token("computer"), "operate")] }).to_string();
+    let status = service.action(Action::Refresh {}).await.unwrap();
+    assert!(pinned(&service).is_empty(), "granted with no link kept");
+    assert_eq!(
+        status.account.unconfirmed.get(COMPUTER_ID).copied(),
+        Some("credentialStoreUnavailable")
+    );
+    vault.refusing.lock().unwrap().clear();
+    service.action(Action::Refresh {}).await.unwrap();
+    assert_eq!(pinned(&service), vec![COMPUTER_ID.to_string()]);
+    let road = short(&sha256(&key("road")));
+    assert!(ties_kept(&vault).ties.iter().any(|t| t.key == road));
+}
