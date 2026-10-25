@@ -29878,7 +29878,17 @@ contact yourself."
                 // must reach the journal like any other.
                 let rows_before = station.log.qsos().len();
                 let next_before = station.outgoing();
-                station.observe(decodes, slot);
+                // ⛔ A run calling CQ with TX off, or about to go off after its contact, takes
+                // no caller: no exchange is queued and nothing is logged until the operator calls
+                // CQ again. WSJT-X auto-sequences only with Enable Tx on (`m_auto`,
+                // mainwindow.cpp 7542-7543), and turning it off ends the CQ (3790-3793). A contact
+                // in progress and the contest's S&P are not gated.
+                let stopped = *running
+                    && station.state == tempo_core::fieldday::FdState::CallingCq
+                    && (!self.tx_enabled || self.pending_tx_disable);
+                if !stopped {
+                    station.observe(decodes, slot);
+                }
                 sequence_advanced = station.state != state_before;
                 self.ft_seq_moved = sequence_advanced || station.outgoing() != next_before;
                 // The FD sequencer logged a contact this slot → journal it

@@ -146,6 +146,10 @@ export function OperateQsoStrip({
   // 2026-08-16). cqRunning is the flag resume_cq and the sequencer actually key off.
   // In a contest there is no `qso`: the contest's own run is the one Call CQ started.
   const running = qso?.cqRunning ?? contestRunning ?? false
+  // A contest's Running stops after each contact: TX goes off and nothing is called until the
+  // operator calls CQ again, so its AUTO-CQ pill shows only while TX is on.
+  const contestRun = qso == null && (contestRunning ?? false)
+  const autoCq = running && (!contestRun || (radio?.txEnabled ?? false))
   const dxcall = qso?.dxcall ?? null
   const state = qso?.state ?? 'Idle'
   const txNow = qso?.txNow ?? null
@@ -333,8 +337,11 @@ export function OperateQsoStrip({
           {t('operate.strip.narrowFilter.label', { hz: filterHz })}
         </span>
       )}
-      {running && (
-        <span className="cq-autocq" title={t('operate.strip.autoCq.title')}>
+      {autoCq && (
+        <span
+          className="cq-autocq"
+          title={contestRun ? t('operate.strip.autoCq.contestTitle') : t('operate.strip.autoCq.title')}
+        >
           <span className="cq-autocq-dot" aria-hidden="true" />
           {AUTO_CQ_BADGE}
         </span>

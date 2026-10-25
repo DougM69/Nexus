@@ -215,9 +215,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normal QSO, as before.
 - **In a contest, FT8 and FT4 Running stops after each contact.** Once a contact is logged and your
   last over (the 73, or the RR73) has gone out, TX goes off and Nexus stops calling CQ, as WSJT-X does
-  with Auto Seq on. Press **Call CQ**, the Contest screen's **Running** or **TX On** to call CQ
-  again, in the same period as before. A station that answers your CQ while you are calling it is
-  worked as before, and the contact still runs itself to the log. The Contest screen's Running stops
+  with Auto Seq on. While TX is off the run takes no caller, as WSJT-X does with Enable Tx off: a
+  station that answers your earlier CQ is not answered and nothing is logged. Press **Call CQ**, the
+  Contest screen's **Running** or **TX On** to call CQ again, in the same period as before; each
+  sends the CQ. A station that answers your CQ while you are calling it is worked as before, and the
+  contact still runs itself to the log. The AUTO-CQ sign on the FT cockpit goes out while the run
+  is stopped. The Contest screen's Running stops
   the same way on FT2, FT1 and DX1. Outside a contest, Call CQ still goes back to CQ after each
   contact.
 - **Nexus Remote is free during the beta, with no 14-day limit.** Where the service runs the beta, the Remote

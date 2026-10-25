@@ -134,8 +134,10 @@ rather than 290 px of checkboxes between you and the log.
 
 On FT8 and FT4, **Running** on the Contest screen calls CQ and works whoever
 answers. After each contact, once it is logged and your last over has gone out,
-TX goes off and Running stops calling CQ, as WSJT-X does: press **Call CQ**,
-**Running** or **TX On** to call CQ again. **S&P** listens and never calls a station by itself, with TX on or off:
+TX goes off and Running stops calling CQ, as WSJT-X does. While TX is off it
+takes no caller: a station that answers your earlier CQ is not answered or
+logged. Press **Call CQ**, **Running** or **TX On** to call CQ again; each
+sends the CQ. **S&P** listens and never calls a station by itself, with TX on or off:
 you start each contact with a double-click on a CQ, or a reply to one from a
 logging program, as in WSJT-X. Your answer goes out in the period opposite
 the CQ's, and the contact then runs itself to RR73 and the log. After it, S&P
