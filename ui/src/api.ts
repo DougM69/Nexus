@@ -240,7 +240,12 @@ export async function getCredentialsStatus(): Promise<import('./types').CredStat
 export function getRemoteStationStatus(): Promise<RemoteStationStatus> { return invoke('get_remote_station_status') }
 /** Whether a stream watches this station's screen now; `remote-stream-watched` tells each change. */
 export function getStreamWatched(): Promise<boolean> { return invoke('get_stream_watched') }
-export function remoteStationAction(action: RemoteStationAction): Promise<RemoteStationStatus> { return invoke('remote_station_action', { action }) }
+/** A press on the shack's Remote settings, stamped with where it came from: the station takes nothing but a
+ *  read through a stream. Read here, before anything awaits, while the stream's dispatch is the one running;
+ *  every press reaches the station through this one function. */
+export function remoteStationAction(action: RemoteStationAction): Promise<RemoteStationStatus> {
+  return invoke('remote_station_action', { action, origin: isStreamInput() ? 'stream' : 'shack' })
+}
 
 export async function getSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_snapshot')

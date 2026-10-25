@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { APPROVAL_ARM_MS, APPROVAL_POLL_MS, RemoteApprovalPrompt } from './RemoteApprovalPrompt'
+import { StreamInputDispatcher } from './stream-input'
 import type { RemoteStationAction, RemoteStationStatus } from './types'
 import { EN } from '../i18n/en'
 
@@ -248,6 +249,52 @@ it('a held sign-in device: the shack asks to allow it to transmit, and Allow to 
   await flush()
   expect(actions).toEqual([{ type: 'allowTransmit', deviceId: device.id }])
   expect(dialog(), 'answered: it goes').toBeNull()
+})
+
+/** A click made over the stream's picture of the shack, on `button`. */
+function streamedClick(button: Element) {
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => button })
+  const stream = new StreamInputDispatcher(window)
+  try {
+    act(() => {
+      for (const action of ['down', 'up'] as const)
+        stream.handle({ type: 'pointer', action, x: 0.5, y: 0.5, button: 0, buttons: action === 'down' ? 1 : 0, modifiers: 0,
+          pointerType: 'mouse', clicks: 1 } as Parameters<StreamInputDispatcher['handle']>[0])
+    })
+  } finally { stream.dispose(); delete (document as { elementFromPoint?: unknown }).elementFromPoint }
+}
+
+it('ONLY THE SHACK DECIDES: Allow to transmit or Approve pressed through a stream sends nothing, says why, and the question stays', async () => {
+  const device = held()
+  status = station([device], { pinnedDevices: [device.id], heldDevices: [device.id] })
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  await wait(APPROVAL_ARM_MS)
+  expect(allow().disabled, 'premise: armed').toBe(false)
+  streamedClick(allow())
+  await flush()
+  expect(actions, 'a held device cannot allow itself').toEqual([])
+  expect(screen.getByRole('alert').textContent).toBe(EN['remote.lan.atShackOnly'])
+  expect(screen.getByRole('dialog', { name: 'Allow DESKTOP-7Q to transmit?' }), 'still asked').toBeTruthy()
+  // CONTROL: the same press at the shack goes.
+  fireEvent.click(allow())
+  await flush()
+  expect(actions).toEqual([{ type: 'allowTransmit', deviceId: device.id }])
+
+  cleanup(); actions.length = 0
+  const waiting = asking()
+  status = station([waiting])
+  render(<RemoteApprovalPrompt />)
+  await flush()
+  await wait(APPROVAL_ARM_MS)
+  streamedClick(approve())
+  await flush()
+  expect(actions, 'nothing approved through a stream').toEqual([])
+  expect(screen.getByRole('alert').textContent).toBe(EN['remote.lan.atShackOnly'])
+  streamedClick(deny())
+  await flush()
+  expect(actions, 'nor denied').toEqual([])
+  expect(dialog(), 'the question stays').toBeTruthy()
 })
 
 it('a held browser is asked about in a browser\'s words', async () => {

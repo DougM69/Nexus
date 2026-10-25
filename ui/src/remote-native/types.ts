@@ -33,6 +33,11 @@ export type RemoteStationStatus = {
   lan?: LanStatus
   /** The station's account: signing in at the shack, and the devices it granted on their own proof. */
   account?: AccountStatus
+  /** DISPLAY ONLY, for the shack's one Devices list: each device once, by its ids in `devices` and in
+   *  `lan.devices` (what a Remove on it takes together), whose it is (an invited person's address, or not
+   *  known for one added by a sign-in the station has not told), whether it holds the station now, and the
+   *  seconds left of its transmit hold where the remote PC is shown them. Absent from an older station. */
+  deviceRows?: { listed: string[]; lan: string[]; guest?: string | null; unknown: boolean; live: boolean; holdLeft?: number | null }[]
 }
 /** Remote over this network (`Status.lan`): the shack's own listener, its paired computers and its
  *  pairing window. `reason`: why it went off by itself, or why it is on and not listening

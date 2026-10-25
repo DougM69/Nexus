@@ -83,6 +83,48 @@ pub struct Status {
     /// The station's account (`account`): signing in at the shack, and the devices it granted on
     /// their own proof.
     account: AccountStatus,
+    /// DISPLAY ONLY, for the shack's one Devices list: each device once, with the ids it goes by on
+    /// each road as a Remove there takes them, and whose it is ([`Control::device_rows`]). Nothing
+    /// reads it to decide anything.
+    device_rows: Vec<DeviceRow>,
+    /// DISPLAY ONLY: whose each device added by a sign-in is, as its proof last held here
+    /// ([`Controller::recall_whose`]). Never read to decide anything.
+    #[serde(skip)]
+    whose: BTreeMap<String, Whose>,
+}
+/// One device of the shack's Devices list. DISPLAY ONLY: every button on it runs the action the
+/// shack ran before, by the ids here.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceRow {
+    /// Its ids in `devices`.
+    listed: Vec<String>,
+    /// Its ids in the LAN book (`lan.devices`).
+    lan: Vec<String>,
+    /// The invited person its proof was checked for, by address; `None` for the owner's, or one
+    /// added at the shack.
+    guest: Option<String>,
+    /// Added by a sign-in, and whose is not known here: no proof of it has held since Nexus started.
+    unknown: bool,
+    /// It holds the station's lease now.
+    live: bool,
+    /// Seconds left of its transmit window, only where the remote PC is shown them
+    /// (`operations::Authority::hold_display`): the window alone holds it and its owner was
+    /// notified.
+    hold_left: Option<u64>,
+}
+/// Whose a device added by a sign-in is, as its proof last held here: display only.
+#[derive(Clone, Debug, PartialEq)]
+enum Whose {
+    Owner,
+    Guest(String),
+    /// Its proof did not hold here, or could not be checked.
+    Unknown,
+}
+impl Whose {
+    fn of(vouched: &tempo_client::account::Vouched) -> Self {
+        vouched.mailbox.clone().map_or(Whose::Owner, Whose::Guest)
+    }
 }
 /// The station's account, as the shack shows it.
 #[derive(Clone, Serialize, Default)]
@@ -435,12 +477,62 @@ pub enum Action {
     },
     /// Allow to transmit, pressed at the shack for a device added by its own sign-in and held from
     /// transmit: the shack's waiver, as an Approve here gives it. ⛔ The shack's own screen only:
-    /// `remote_station_action` is refused from afar at both ends (`command_classes`), so a held
-    /// device can never allow itself.
+    /// `remote_station_action` is refused from afar at both ends (`command_classes`), and through
+    /// a stream of the shack's own screen ([`Origin`]), so a held device can never allow itself.
     AllowTransmit {
         #[serde(rename = "deviceId")]
         device_id: String,
     },
+}
+/// ⛔ Where a press on the shack's Remote settings came from. A streamed operator drives the
+/// shack's own window: their clicks and keys arrive as DOM events that the page's stream-input
+/// module dispatches (`ui/src/remote-native/stream-input.ts`), so every one of their presses
+/// reaches `remote_station_action` as a local call. The station cannot see a DOM dispatch, and a
+/// streamed operator runs no code of their own on the page: the page's one entry to this command
+/// (`remoteStationAction` in `ui/src/api.ts`) stamps each press with `isStreamInput()`, read
+/// before anything awaits, which only that module's own dispatch makes true. The stamp is a
+/// required argument, so a caller that does not give it is refused outright.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Origin {
+    /// A press at the shack: the shack operator's own mouse or keyboard.
+    Shack,
+    /// A press a streamed operator made over the picture.
+    Stream,
+}
+impl Action {
+    /// ⛔ Whether this press may come through a stream: only a read. Every other action grants,
+    /// removes or changes who may use the station, its transmit hold or Remote itself, and a
+    /// device driving the station through a stream must never decide that for itself ("only the
+    /// shack decides"). No wildcard: a new action is refused through a stream until it is placed.
+    fn through_a_stream(&self) -> bool {
+        match self {
+            Action::Refresh {} => true,
+            Action::StationPermission { .. }
+            | Action::TakeOverLogging {}
+            | Action::Begin { .. }
+            | Action::Cancel {}
+            | Action::Approve { .. }
+            | Action::Enable {}
+            | Action::Disable {}
+            | Action::Forget {}
+            | Action::Device { .. }
+            | Action::LanOn { .. }
+            | Action::LanOff {}
+            | Action::LanAddress { .. }
+            | Action::LanPair {}
+            | Action::LanCancel {}
+            | Action::LanRevoke { .. }
+            | Action::LanReset {}
+            | Action::SignIn { .. }
+            | Action::SignInAgain {}
+            | Action::CancelSignInAgain {}
+            | Action::Invite { .. }
+            | Action::Uninvite { .. }
+            | Action::DismissAdded { .. }
+            | Action::AllowTransmit { .. } => false,
+        }
+    }
 }
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// The most browsers a restart remembers grants for. The service lists at most eight per station,
@@ -1082,6 +1174,90 @@ impl Control {
                 .any(|c| !roads.lan.contains(&c.id) && listed_names.contains(&c.name));
         roads
     }
+    /// DISPLAY ONLY: the shack's Devices list, as `status` lists the devices and the LAN `book`
+    /// holds them, at `now`. One row per device: the ids a Remove pressed on any of them would end
+    /// together ([`Control::roads`], so the row is exactly what its Remove takes). Whose it is: an
+    /// invited person's where a proof of theirs held here (`status.whose`) or their sign-in on this
+    /// network enrolled it (`lan::enrol::Enrolment::guests`); not known for one added by a sign-in
+    /// the station has not told; else the owner's (a device added at the shack, or paired by code).
+    fn device_rows(
+        &self,
+        status: &Status,
+        book: &[Paired],
+        now: std::time::Instant,
+    ) -> Vec<DeviceRow> {
+        let devices = &status.devices;
+        let people = &status.account.people;
+        let theirs: Vec<(String, Vec<String>)> = people
+            .iter()
+            .map(|p| (p.mailbox.clone(), self.enrolment.guests(&p.mailbox).0))
+            .collect();
+        // The guests' computers kept with no link to say whose: the same whoever is asked about.
+        let (_, nobodys) = self.enrolment.guests("");
+        // The held devices' transmit windows, from one look at the grants for the whole list.
+        let holds = self.operations.hold_display(&status.held_devices, now);
+        let starts = devices
+            .iter()
+            .map(|d| Road::Listed(&d.id))
+            .chain(book.iter().map(|c| Road::Lan(&c.id)));
+        let mut rows: Vec<DeviceRow> = Vec::new();
+        for start in starts {
+            let placed = rows.iter().any(|row| match start {
+                Road::Listed(id) => row.listed.iter().any(|l| l == id),
+                Road::Lan(id) => row.lan.iter().any(|l| l == id),
+            });
+            if placed {
+                continue;
+            }
+            let roads = self.roads(Some(devices), book, start);
+            let listed: Vec<&Device> = devices
+                .iter()
+                .filter(|d| roads.listed.contains(&d.id))
+                .collect();
+            let lan: Vec<&Paired> = book.iter().filter(|c| roads.lan.contains(&c.id)).collect();
+            let (mut guest, mut owner, mut unknown) = (None, false, false);
+            for d in &listed {
+                match status.whose.get(&d.id) {
+                    // A guest's only while they are invited: once their invitation is taken back the
+                    // device is no longer shown as theirs, though the proof that named them is kept.
+                    Some(Whose::Guest(mailbox)) if people.iter().any(|p| p.mailbox == *mailbox) => {
+                        guest = guest.or(Some(mailbox.clone()))
+                    }
+                    Some(Whose::Owner) => owner = true,
+                    _ if d.added_by.as_deref() == Some("account") => unknown = true,
+                    _ => {}
+                }
+            }
+            for c in &lan {
+                let pin = lan::enrol::short(&c.pin);
+                match theirs.iter().find(|(_, lans)| lans.contains(&pin)) {
+                    Some((mailbox, _)) => guest = guest.or(Some(mailbox.clone())),
+                    None if nobodys.contains(&pin) => unknown = true,
+                    None => {}
+                }
+            }
+            let live = status.controller.as_deref().is_some_and(|holder| {
+                lan.iter().any(|c| c.id == holder)
+                    || listed
+                        .iter()
+                        .any(|d| self.holds_control(&d.id, &[holder.to_string()]))
+            });
+            let hold_left = listed
+                .iter()
+                .filter_map(|d| holds.get(&d.id).and_then(|hold| hold.left))
+                .max()
+                .map(|left| left.as_millis().div_ceil(1000) as u64);
+            rows.push(DeviceRow {
+                listed: listed.iter().map(|d| d.id.clone()).collect(),
+                lan: lan.iter().map(|c| c.id.clone()).collect(),
+                unknown: guest.is_none() && !owner && unknown,
+                guest,
+                live,
+                hold_left,
+            });
+        }
+        rows
+    }
 }
 /// Whether `device`'s key is one of those `removed` at the shack.
 fn removed_key(removed: &[vault::Removed], device: &Device) -> bool {
@@ -1455,6 +1631,17 @@ impl Service {
         status.key_refused = control.key_refused;
         status.account.removals_unreadable = control.enrolment.unreadable();
         status.lan = control.lan.as_deref().map(lan::Lan::status);
+        let book: Vec<Paired> = status.lan.as_ref().map_or_else(Vec::new, |lan| {
+            lan.devices
+                .iter()
+                .map(|computer| Paired {
+                    id: computer.id.clone(),
+                    name: computer.name.clone(),
+                    pin: computer.key.clone(),
+                })
+                .collect()
+        });
+        status.device_rows = control.device_rows(&status, &book, std::time::Instant::now());
         if !enabled && ["connected", "connecting", "reconnecting"].contains(&status.phase.as_str())
         {
             status.phase = "disabled".into();
@@ -1470,7 +1657,16 @@ impl Service {
             .lan
             .clone())
     }
-    pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
+    /// A press on the shack's Remote settings, from `origin`: through a stream, only a read is
+    /// taken ([`Action::through_a_stream`]); everything else is only at the station's own screen.
+    pub async fn press(&self, origin: Origin, action: Action) -> Result<Status, &'static str> {
+        if origin == Origin::Stream && !action.through_a_stream() {
+            return Err("atShackOnly");
+        }
+        self.action(action).await
+    }
+    /// ⛔ Private: [`Service::press`] is the only way in, so nothing can skip its origin check.
+    async fn action(&self, action: Action) -> Result<Status, &'static str> {
         match &action {
             Action::StationPermission { device_id, allow } => {
                 // Keep admission and grant under the same local control lock
@@ -2906,6 +3102,7 @@ impl Controller {
         let mut unconfirmed = BTreeMap::new();
         let mut reproof = None;
         let now_s = (self.accounts.now_s)();
+        let mut whose = Vec::new();
         if !waiting.is_empty() {
             let rows: Vec<serde_json::Value> = waiting.iter().map(|d| d.proof_row()).collect();
             let station_id = self
@@ -2979,6 +3176,10 @@ impl Controller {
                     }
                     Err(reason) => Err(reason),
                 };
+                // Display only: whose it is, for the shack's Devices list.
+                if let Ok((vouched, _)) = &result {
+                    whose.push((device.id.clone(), Whose::of(vouched)));
+                }
                 match result.and_then(|(vouched, lan)| {
                     let granted = self.grant_vouched(device, &vouched, &approved, at)?;
                     Ok(granted.then_some((vouched, lan)))
@@ -3027,7 +3228,9 @@ impl Controller {
         }
         // The issuer's keys may be new, and the owner or the people may have changed.
         self.arm_enrolment();
+        let recalled = self.recall_whose(devices, &whose, now_s);
         if let Ok(mut status) = self.status.lock() {
+            status.whose.extend(whose.into_iter().chain(recalled));
             status.account.unconfirmed = unconfirmed;
             // Known only when the issuer's keys were read for this list.
             if let Some(reproof) = reproof {
@@ -3249,6 +3452,62 @@ impl Controller {
             confirmed_at: now_s,
         })?;
         vault.save_device_cache(&held, &cache)
+    }
+    /// DISPLAY ONLY (the shack's Devices list): whose each device added by a sign-in is, for each
+    /// listed with a proof that neither this list (`learned`) nor an earlier one since Nexus started
+    /// has told. Its proof is checked as a waiting device's is, with the issuer's keys kept here and
+    /// nothing fetched, once a run; one that does not hold, or cannot be checked, is shown as not
+    /// known. The answer goes nowhere but the list: nothing is granted, pinned or kept on it.
+    fn recall_whose(
+        &self,
+        devices: &[Device],
+        learned: &[(String, Whose)],
+        now_s: u64,
+    ) -> Vec<(String, Whose)> {
+        let known = |id: &String| {
+            learned.iter().any(|(learned, _)| learned == id)
+                || self
+                    .status
+                    .lock()
+                    .is_ok_and(|status| status.whose.contains_key(id))
+        };
+        let asked: Vec<&Device> = devices
+            .iter()
+            .filter(|d| d.added_by.as_deref() == Some("account") && d.proof.is_some())
+            .filter(|d| !known(&d.id))
+            .collect();
+        if asked.is_empty() {
+            return Vec::new();
+        }
+        let vault = &*self.accounts.vault;
+        // As `account::vouch` refuses: an owner kept from another binding vouches for nobody here.
+        let bound = self.binding.as_ref().map(|b| b.station_id.as_str());
+        let owned = vault
+            .owner()
+            .ok()
+            .flatten()
+            .is_some_and(|owner| Some(owner.station_id.as_str()) == bound);
+        let checked = match &self.accounts.service {
+            Ok(service) if owned => vault
+                .account_keys()
+                .ok()
+                .flatten()
+                .filter(|kept| kept.issuer == service.tenant().issuer)
+                .map(|kept| (service.tenant(), kept.keys)),
+            _ => None,
+        };
+        asked
+            .into_iter()
+            .map(|d| {
+                let whose = checked
+                    .as_ref()
+                    .and_then(|(tenant, keys)| {
+                        account::vouch_listed(&d.proof_row(), vault, tenant, keys, now_s).ok()
+                    })
+                    .map_or(Whose::Unknown, |(vouched, _)| Whose::of(&vouched));
+                (d.id.clone(), whose)
+            })
+            .collect()
     }
     /// The notice of a device the station granted on its own proof, once.
     fn added(&self, device: &Device, vouched: &tempo_client::account::Vouched) {
@@ -3913,6 +4172,7 @@ pub fn get_remote_station_status(
 pub async fn remote_station_action(
     service: tauri::State<'_, Service>,
     action: Action,
+    origin: Origin,
 ) -> Result<Status, &'static str> {
-    service.action(action).await
+    service.press(origin, action).await
 }

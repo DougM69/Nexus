@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worked on one of them no longer shows as new there, tropo openings on them are detected (moonbounce is
   not), 33 cm gets a weak-signal channel and a CW calling dial, and the 70 cm and 23 cm CW dials move to
   the ARRL calling frequencies, out of the moonbounce segments.
+- **One Devices list at the shack.** Settings ▸ Remote access lists every computer, phone and browser
+  that can reach the station once, under you or the person you invited, with how it connects, where it
+  stands, and Approve, Allow to transmit and Remove on the row. It replaces the separate lists of
+  browsers, computers, paired computers and people.
 - **JTTY sends from a remote computer.** Driving a station from another computer, JTTY's Send,
   F-keys, live typing and sign-off now transmit, under the same guards and Stop as the other remote
   modes.

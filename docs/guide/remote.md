@@ -51,7 +51,11 @@ card holds:
 - **People** — invite someone by the address they sign in with, to **Operate** or to
   **Listen**. Someone invited to operate transmits with your station, under your callsign, and
   you stay responsible for it as the licensee.
-- Your browsers and computers, each with its key, **Approve**, and **Remove** or **Revoke**.
+- **Devices** — one list of every computer, phone and browser that can reach the station: yours
+  first, then each person you invited. Each row says how it connects (**Home network**,
+  **Internet**, **Browser**) and where it stands (live now, waiting for you, held from
+  transmitting, allowed to transmit), with **Approve** for a new device, **Allow to transmit**
+  and **Remove**. Keys, ids and dates fold under **Details**.
 - **End remote control** — turns Remote off (it stays off after a restart), disconnects every
   browser and every computer, and turns off Remote over this network.
 
