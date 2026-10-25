@@ -36,6 +36,10 @@ fn snapshot_id() -> Result<String, &'static str> {
 
 const LEASE: Duration = Duration::from_secs(5);
 const WINDOW: Duration = Duration::from_secs(2);
+/// How long the shack's grant waits for Core before it is refused `remoteBusy`: past the brief
+/// holds of a live computer's traffic and the radio loop's tick, short enough that a stuck Core
+/// never hangs an Approve.
+const GRANT_WAIT: Duration = Duration::from_millis(250);
 const MAX_COUNTER: u64 = 9_007_199_254_740_991;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -544,32 +548,38 @@ impl Authority {
     ///
     /// Beside the gate's answer it says, for the remote PC's display only, whether the owner of a
     /// held device was notified and, when only its window holds it, what is left of that window
-    /// ([`Self::hold_shown`]).
+    /// ([`Self::hold_shown`]). Only the gate's answer is decided under Core; the display is worked
+    /// out after Core is free, from the grants as the gate read them, so the tick holds Core no
+    /// longer than the gate needs and a request (the shack's grant among them) is not kept waiting.
     pub fn current_transmit_hold(&self, now: Instant) -> Option<RemoteTxHold> {
-        let mut c = self.core.try_lock().ok()?;
-        // Authority unavailable (Remote off past the counter, or saturated): no device can operate
-        // the station, so none is held and the local operator is free.
-        if self.reconcile(&mut c, now).is_err() {
-            return Some(RemoteTxHold::default());
-        }
-        Some(c.lease.as_ref().map_or_else(RemoteTxHold::default, |l| {
-            self.hold_shown(&l.device, &c.tx_grants, now)
-        }))
+        let (device, grants) = {
+            let mut c = self.core.try_lock().ok()?;
+            // Authority unavailable (Remote off past the counter, or saturated): no device can
+            // operate the station, so none is held and the local operator is free.
+            if self.reconcile(&mut c, now).is_err() {
+                return Some(RemoteTxHold::default());
+            }
+            match c.lease.as_ref() {
+                Some(l) if self.tx_held_for(&l.device, &c.tx_grants, now) => {
+                    (l.device.clone(), c.tx_grants.clone())
+                }
+                _ => return Some(RemoteTxHold::default()),
+            }
+        };
+        Some(self.hold_shown(&device, &grants, now))
     }
 
-    /// [`Self::tx_held_for`] for `device`, and what the remote PC may be told of it: notified only
-    /// when the service confirms a notice for every name it is held under ([`Self::hold_names`]),
-    /// and the time left only then, and only when each of those names is held by its window alone
-    /// (the provenance list loaded and naming it), the longest of them. Anything less says no time.
+    /// What the remote PC may be told of `device`, which the gate holds: notified only when the
+    /// service confirms a notice for every name it is held under ([`Self::hold_names`]), and the
+    /// time left only then, and only when each of those names is held by its window alone (the
+    /// provenance list loaded and naming it), the longest of them. Anything less says no time.
+    /// Display only, and taken without Core: it never decides the gate.
     fn hold_shown(
         &self,
         device: &str,
         grants: &BTreeMap<String, TxGrant>,
         now: Instant,
     ) -> RemoteTxHold {
-        if !self.tx_held_for(device, grants, now) {
-            return RemoteTxHold::default();
-        }
         let held: Vec<String> = self
             .hold_names(device)
             .unwrap_or_default()
@@ -808,7 +818,10 @@ impl Authority {
         Ok(true)
     }
     /// A revoke never waits for Core (#318): it is queued for `reconcile`, which applies it
-    /// before anything else consumes Core. A grant may still be refused `remoteBusy`.
+    /// before anything else consumes Core. A grant waits for Core up to [`GRANT_WAIT`], past the
+    /// brief holds of a live computer's traffic and the radio loop's tick, and is refused
+    /// `remoteBusy` only when Core is held longer. Its callers hold only Control, which no Core
+    /// holder ever takes, so the wait cannot deadlock.
     pub fn permit_station(&self, device: &str, allow: bool) -> Result<(), &'static str> {
         if !identifier(device) {
             return Err("invalidRequest");
@@ -816,10 +829,16 @@ impl Authority {
         if !allow {
             self.revoke_grant_device(device)?;
         }
-        let mut c = match self.core.try_lock() {
-            Ok(c) => c,
-            Err(std::sync::TryLockError::WouldBlock) if !allow => return Ok(()),
-            Err(_) => return Err("remoteBusy"),
+        let waited = Instant::now() + GRANT_WAIT;
+        let mut c = loop {
+            match self.core.try_lock() {
+                Ok(c) => break c,
+                Err(std::sync::TryLockError::WouldBlock) if !allow => return Ok(()),
+                Err(std::sync::TryLockError::WouldBlock) if Instant::now() < waited => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(_) => return Err("remoteBusy"),
+            }
         };
         self.reconcile(&mut c, Instant::now())?;
         if allow {

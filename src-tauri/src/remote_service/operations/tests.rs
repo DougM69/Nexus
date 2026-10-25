@@ -526,6 +526,44 @@ fn a_revoked_device_gets_local_permission_required_even_while_the_engine_is_busy
         );
     }
 }
+/// The shack's grant (an Approve, the restrict switch, a sign-in's grant) is not refused
+/// `remoteBusy` by the station's own traffic. A live computer's feed checks (`lan_controls`) and the
+/// radio loop's tick (`current_transmit_hold`) each take Core many times a second, and a grant that
+/// tried Core only once lost to one of them now and then. CONTROL: a Core held for longer than the
+/// grant waits still refuses it (`a_station_revoke_does_not_wait_for_a_busy_core`).
+#[test]
+fn the_shacks_grant_is_not_refused_while_the_station_is_busy() {
+    use std::sync::atomic::AtomicBool;
+    let f = Fixture::new();
+    f.wire_tx_hold();
+    let now = f.now();
+    f.acquire(now);
+    let done = Arc::new(AtomicBool::new(false));
+    let busy = |work: Box<dyn Fn() + Send>| {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            while !done.load(Ordering::SeqCst) {
+                work();
+                std::thread::sleep(Duration::from_micros(20));
+            }
+        })
+    };
+    let (authority, connection) = (f.authority.clone(), f.connection);
+    let feeds = busy(Box::new(move || {
+        authority.lan_controls(connection, DEVICE, now);
+    }));
+    let engine = f.engine.clone();
+    let ticks = busy(Box::new(move || {
+        engine.lock().unwrap().poll_remote_transmit(now);
+    }));
+    let refused = (0..2000)
+        .filter(|_| f.authority.permit_station(OTHER, true).is_err())
+        .count();
+    done.store(true, Ordering::SeqCst);
+    feeds.join().unwrap();
+    ticks.join().unwrap();
+    assert_eq!(refused, 0, "the shack's grant was refused remoteBusy");
+}
 /// #318: a station-control revoke must not fail because Core is busy — it used to
 /// return `remoteBusy` and leave the grant standing.
 #[test]
