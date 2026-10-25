@@ -11,6 +11,8 @@ import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LogExport, LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
+import { RecentlyDeleted } from './RecentlyDeleted'
+import { sayUndone } from './QsoHistory'
 import { gpuCapableForGlobe } from '../gpu'
 import { GlobeGuard } from './GlobeGuard'
 import { useLogbookGlobe } from '../features/logbookGlobe'
@@ -65,6 +67,9 @@ import {
   logOperators,
   logActivations,
   importAdif,
+  latestHistoryRun,
+  restoreDeletedQso,
+  undoHistoryRun,
   logQso,
   markLotwUploaded,
   markQslSentById,
@@ -475,6 +480,7 @@ export function Logbook({
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
   // arm the danger button — a deliberate, typed gate for an irreversible wipe.
   const [showPurge, setShowPurge] = useState(false)
+  const [showDeleted, setShowDeleted] = useState(false)
   const [purgeText, setPurgeText] = useState('')
   const [purging, setPurging] = useState(false)
   // "Mark all as already on LoTW" confirmation — for an imported legacy log that was
@@ -559,9 +565,21 @@ export function Logbook({
       pushToast(
         `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}`,
         'success',
+        10_000,
+        stats.added + stats.updated > 0 ? { actionLabel: t('logbook.undo'), action: () => void undoLatest('import', t('logbook.import.undone')) } : {},
       )
       load()
     }
+  }
+
+  // Undo the latest run of `source` — what an import or a clear just made — in one transaction.
+  const undoLatest = async (source: string, done: string) => {
+    const run = await withErrorToast(() => latestHistoryRun(source), t('qso.history.undo.failed'))
+    if (!run) return
+    const answer = await withErrorToast(() => undoHistoryRun(run.run), t('qso.history.undo.failed'))
+    if (!answer) return
+    sayUndone(answer, done, load)
+    load()
   }
 
   // Sync a LoTW (or any ADIF) confirmation report INTO the log: upgrades
@@ -1007,9 +1025,19 @@ export function Logbook({
       load()
       return false
     }
+    const id = q.id
     pushToast(
       answer.kind === 'gone' ? t('logbook.delete.gone', { call: q.call }) : t('logbook.delete.done', { call: q.call }),
       answer.kind === 'gone' ? 'info' : 'success',
+      10_000,
+      answer.kind === 'deleted' && id ? {
+        actionLabel: t('logbook.undo'),
+        action: () => {
+          void withErrorToast(() => restoreDeletedQso(id), t('logbook.deleted.failed')).then((a) => {
+            if (a) { sayUndone(a, t('logbook.deleted.restored', { call: q.call }), load); load() }
+          })
+        },
+      } : {},
     )
     if (editingKey === key) cancelForm()
     load()
@@ -1029,7 +1057,10 @@ export function Logbook({
     const removed = await withErrorToast(() => purgeLog(), t('logbook.purge.failed'))
     setPurging(false)
     if (removed !== null && removed !== undefined) {
-      pushToast(t('logbook.purge.done', { count: removed }), 'success')
+      pushToast(t('logbook.purge.done', { count: removed }), 'success', 15_000, removed > 0 ? {
+        actionLabel: t('logbook.undo'),
+        action: () => void undoLatest('operator', t('logbook.purge.undone')),
+      } : {})
       closePurge()
       cancelForm()
       load()
@@ -2259,6 +2290,9 @@ export function Logbook({
           >
             {showForm ? t('logbook.form.close') : t('logbook.form.open')}
           </button>
+          <button type="button" className="export-btn" onClick={() => setShowDeleted(true)}>
+            {t('logbook.deleted.button')}
+          </button>
           <button
             type="button"
             className="export-btn danger"
@@ -3413,7 +3447,8 @@ export function Logbook({
       />
       {/* Mounted beside SpotDialog at the section root, not inside the virtualised rows:
           the row that opened it can be recycled out from under the view while it is open. */}
-      <QsoDetail qso={viewing} onClose={() => setViewing(null)} />
+      <QsoDetail qso={viewing} onClose={() => setViewing(null)} onChanged={load} />
+      <RecentlyDeleted open={showDeleted} onClose={() => setShowDeleted(false)} onRestored={load} />
       <ParkStateReview open={showParkStates} onClose={() => setShowParkStates(false)} onApplied={load} />
       <ConfirmationReview open={showConfirmations} onClose={() => setShowConfirmations(false)} onApplied={load} />
     </section>

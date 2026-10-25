@@ -525,6 +525,37 @@ fn bench(n: usize) -> Vec<String> {
     settle(&shared);
     hold("the fill job's chunk", &watcher);
 
+    // The history: one change undone by its entry, and the fill chunk's run undone whole.
+    let edited = picked[16].id.expect("an id");
+    let last = tempo_app::loghistory::history_of(&shared, edited)
+        .expect("the history reads")
+        .last()
+        .expect("the edit above is recorded")
+        .seq;
+    let (undone, d) = tempo_app::loghistory::undo_entry(&shared, last);
+    undone.expect("undone");
+    wait(d);
+    hold("an undo of one change", &watcher);
+    let run = tempo_app::loghistory::latest_run(
+        &shared,
+        Some(tempo_core::logbook::history::Source::Fill),
+    )
+    .expect("reads")
+    .expect("the fill chunk's run");
+    let started = Instant::now();
+    let (undone, d) = tempo_app::loghistory::undo_run(&shared, &run.run);
+    let undone = undone.expect("undone");
+    wait(d);
+    println!(
+        "  the fill chunk's run undone whole: {} contacts in {:.2} s, until on disk",
+        undone.changed,
+        started.elapsed().as_secs_f64()
+    );
+    hold(
+        "an undo of a run (the fill job's chunk, one transaction)",
+        &watcher,
+    );
+
     // The bulk changes, on the rows of the calls they bring.
     let some = rows_every(&shared, (n / 100).max(1));
     let text = restating(&some, "<QSL_RCVD:1>Y") + &adif_record(&fresh(9_000));
@@ -590,6 +621,14 @@ fn bench(n: usize) -> Vec<String> {
     hold(
         "the fill job over the whole log (the first launch after an update)",
         &watcher,
+    );
+
+    // What the store holds on disk by now, its history included.
+    let size = |name: &str| std::fs::metadata(dir.join(name)).map_or(0, |m| m.len());
+    println!(
+        "  the store on disk before the purge: {:.1} MiB (and {:.1} MiB of write-ahead log)",
+        size("log.sqlite3") as f64 / 1_048_576.0,
+        size("log.sqlite3-wal") as f64 / 1_048_576.0,
     );
 
     // Last, since it ends the log: the purge, through the command's own entry point — made

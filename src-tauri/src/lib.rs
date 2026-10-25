@@ -84,6 +84,9 @@ mod log_by_id;
 /// The log's folds and lookups — needs, awards, Journey, statistics, hunted parks, a station's
 /// last grid, upload health — read from the logbook store off the Engine lock (SPEC-2 v3 C14).
 mod log_folds;
+/// The Logbook's change history and its undo: a contact's history, the contacts deleted and not
+/// put back, and the undo of a change, a run or a delete.
+mod log_history;
 /// The UI's log questions answered by the engine — pages, places, a call's history, an entity's
 /// slots (SPEC-2 v3 C17a).
 mod log_queries;
@@ -39101,6 +39104,12 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_by_id::set_sat_tag_by_id,
         log_by_id::set_dxcc_by_id,
         log_by_id::delete_qso_by_id,
+        log_history::qso_history,
+        log_history::recently_deleted_qsos,
+        log_history::latest_history_run,
+        log_history::undo_qso_change,
+        log_history::undo_history_run,
+        log_history::restore_deleted_qso,
         log_queries::ask_log,
         purge_log,
         get_awards,

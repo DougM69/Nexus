@@ -738,6 +738,10 @@ pub struct Batch<'a> {
     /// Other `log_meta` keys, set in the same transaction — a change's own facts about its
     /// rows, on its last chunk only, like the watermarks (`fill_ver`, SPEC-2 v3 D2-A).
     pub meta: &'a [(&'static str, i64)],
+    /// Where the change came from: with it, every contact the batch adds, changes or takes out
+    /// gets its history, written in this same transaction ([`super::history`]). `None` writes
+    /// none.
+    pub history: Option<&'a super::history::Note>,
     /// Move the shared [`INDEX_SEQ`] on by one, in the same transaction: the last chunk of a
     /// change a hot index must be built again for, when another window made it (every change
     /// but a stamp — [`super::writer::Change::stamp_only`]).
@@ -933,6 +937,9 @@ impl LogDb {
     /// transaction, and an index that is already there is left as it is — so a build cut short
     /// by a crash is finished by calling this again.
     pub fn build_indexes(&self, progress: &mut dyn FnMut(usize, usize)) -> Result<()> {
+        // The change history's, first: its tables are new or small, so these cost nothing a
+        // progress bar would show.
+        self.conn.execute_batch(super::history::INDEXES)?;
         progress(0, INDEXES.len());
         for (built, sql) in INDEXES.iter().enumerate() {
             self.conn.execute_batch(sql)?;
@@ -973,6 +980,9 @@ impl LogDb {
             }
         }
         db.conn.execute_batch(DDL)?;
+        // The change history's two tables, beside the log's own. An older build opens a store
+        // holding them as it always did, and never reads them.
+        db.conn.execute_batch(super::history::DDL)?;
         Ok(db)
     }
 
@@ -1104,13 +1114,47 @@ impl LogDb {
     /// which takes the write lock before it reads (`BEGIN IMMEDIATE`): no other connection can
     /// commit between the check and the writes. A row that is not as expected refuses the whole
     /// batch ([`Error::Conflict`]), and nothing of it is written.
+    ///
+    /// **A batch with a [`Batch::history`] note writes each contact's history in the same
+    /// transaction**, from the rows as this transaction read them before it wrote: a crash keeps
+    /// both or neither.
     pub fn apply(&mut self, b: Batch<'_>) -> Result<()> {
         let tx = rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         )?;
+        // The rows as the store holds them before the batch: what the check compares and what the
+        // history records the change against. Read once, inside the write lock.
+        let stored: HashMap<RecordId, QsoRecord> = if b.expect.is_some() || b.history.is_some() {
+            let ids: Vec<RecordId> = b
+                .remove
+                .iter()
+                .copied()
+                .chain(b.upsert.iter().filter_map(|w| w.rec.id))
+                .filter(|id| b.history.is_some() || b.expect.is_some_and(|e| e.contains_key(id)))
+                .collect();
+            if ids.is_empty() {
+                HashMap::new()
+            } else {
+                self.rows_by_ids(&ids)?
+                    .into_iter()
+                    .filter_map(|r| r.id.map(|id| (id, r)))
+                    .collect()
+            }
+        } else {
+            HashMap::new()
+        };
         if let Some(expect) = b.expect {
-            self.check_expected(&b, expect)?;
+            Self::check_expected(&b, expect, &stored)?;
+        }
+        if let Some(note) = b.history {
+            // A purge that names no row takes out every row the store holds.
+            let cleared = if b.clear {
+                self.read_all(&mut || {})?
+            } else {
+                Vec::new()
+            };
+            super::history::record(&tx, note, &stored, &cleared, b.remove, b.upsert)?;
         }
         {
             if b.clear {
@@ -1193,7 +1237,13 @@ impl LogDb {
     /// that the change expects something of is still as the change's plan read it — none there
     /// for a row put in, the same row for one changed, the same row or already gone for one
     /// taken out.
-    fn check_expected(&self, b: &Batch<'_>, expect: &HashMap<RecordId, Expect>) -> Result<()> {
+    /// `stored` holds the rows the store held before the batch, by id — at least every one the
+    /// change expects something of.
+    fn check_expected(
+        b: &Batch<'_>,
+        expect: &HashMap<RecordId, Expect>,
+        stored: &HashMap<RecordId, QsoRecord>,
+    ) -> Result<()> {
         let ids: Vec<RecordId> = b
             .remove
             .iter()
@@ -1204,11 +1254,6 @@ impl LogDb {
         if ids.is_empty() {
             return Ok(());
         }
-        let stored: HashMap<RecordId, QsoRecord> = self
-            .rows_by_ids(&ids)?
-            .into_iter()
-            .filter_map(|r| r.id.map(|id| (id, r)))
-            .collect();
         let taken_out: std::collections::HashSet<&RecordId> = b.remove.iter().collect();
         let rows: Vec<RecordId> = ids
             .into_iter()
@@ -1236,6 +1281,40 @@ impl LogDb {
             [INDEX_SEQ],
         )?;
         Ok(())
+    }
+
+    /// The connection, for a test that reads a table no method reads.
+    #[cfg(test)]
+    pub(crate) fn conn_for_tests(&self) -> &Connection {
+        &self.conn
+    }
+
+    /// One contact's history, oldest change first ([`super::history`]).
+    pub fn history_of(&self, id: RecordId) -> Result<Vec<super::history::Entry>> {
+        super::history::of_qso(&self.conn, id)
+    }
+
+    /// One entry of the history, by its place in the order of changes.
+    pub fn history_entry(&self, seq: i64) -> Result<Option<super::history::Entry>> {
+        super::history::entry(&self.conn, seq)
+    }
+
+    /// Every entry one run made, in the order it made them.
+    pub fn history_run(&self, run: &str) -> Result<Vec<super::history::Entry>> {
+        super::history::of_run(&self.conn, run)
+    }
+
+    /// The contacts deleted and not put back, newest first, at most `limit`.
+    pub fn history_deleted(&self, limit: usize) -> Result<Vec<super::history::Entry>> {
+        super::history::deleted(&self.conn, limit)
+    }
+
+    /// The latest run `source` made (any source's when `None`) that changed a contact.
+    pub fn history_latest_run(
+        &self,
+        source: Option<&str>,
+    ) -> Result<Option<super::history::RunSummary>> {
+        super::history::latest_run(&self.conn, source)
     }
 
     /// Every record, in the order they were stored.
@@ -3928,6 +4007,7 @@ mod tests {
             meta: &[],
             index_move: false,
             expect: None,
+            history: None,
         };
         db.apply(batch()).expect("first write");
         db.apply(batch()).expect("the same row written again");

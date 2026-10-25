@@ -14077,7 +14077,11 @@ impl Engine {
                 crate::station::fill_with(rec, country, number, state);
             }
             // The merge's append — the station's, as every contact's (SPEC-2 v3 C19): ids
-            // minted, the hot index told, the writer handed the rows. No SQL.
+            // minted, the hot index told, the writer handed the rows. No SQL. Its history names
+            // the contest.
+            self.station.origin = Some(crate::loghistory::Origin::from(
+                tempo_core::logbook::history::Source::Contest,
+            ));
             let (written, _) = self
                 .station
                 .append(std::mem::take(&mut report.written), false);

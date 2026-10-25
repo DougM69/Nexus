@@ -1,0 +1,478 @@
+//! The history's proofs through the engine and the real store: each path a contact changes by is
+//! recorded under its own source; an undo, a restore and a run's undo put the log back, through
+//! the same write path, so the `log.adi` mirror follows; a run's undo is all or nothing; and no
+//! undo ever queues an upload.
+
+use super::*;
+use crate::engine::with_session_rows_at_launch;
+use crate::logstore::tests::{engine_on_store, flush, id_at, legacy_log, open_fast, qso, Dir};
+use crate::logstore::DURABLE_WAIT;
+use crate::logwrite::{self, until_written};
+use crate::station::LogFill;
+use crate::test_util::StoredLog;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use tempo_core::logbook::{
+    adif_header, adif_record, adif_record_own_log, LogOp, QsoEdit, UploadOutcome, UploadService,
+    UploadStatus,
+};
+
+thread_local! {
+    // A writer racing the undo planned on this thread: run after its plan's read, with no lock
+    // held, before the undo is made. (A plain comment: a doc comment cannot attach through
+    // `thread_local!`.)
+    static RACE: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) };
+}
+
+/// [`undo_entries`]'s seam: the racing writer, if a test set one.
+pub(super) fn race() {
+    let hook = RACE.with(|r| r.borrow_mut().take());
+    if let Some(mut hook) = hook {
+        hook();
+        RACE.with(|r| *r.borrow_mut() = Some(hook));
+    }
+}
+
+fn racing<T>(hook: impl FnMut() + 'static, f: impl FnOnce() -> T) -> T {
+    RACE.with(|r| *r.borrow_mut() = Some(Box::new(hook)));
+    let out = f();
+    RACE.with(|r| *r.borrow_mut() = None);
+    out
+}
+
+/// A shared engine on the store of `d`, holding `n` contacts.
+fn shared(d: &Dir, n: usize) -> Arc<Mutex<Engine>> {
+    std::fs::write(d.log(), legacy_log(n)).unwrap();
+    let e = engine_on_store(d);
+    flush(&e);
+    Arc::new(Mutex::new(e))
+}
+
+fn row_of(engine: &Mutex<Engine>, id: RecordId) -> Option<Arc<QsoRecord>> {
+    engine.stored_log().into_iter().find(|r| r.id == Some(id))
+}
+
+fn id_of(engine: &Mutex<Engine>, call: &str) -> RecordId {
+    engine
+        .stored_log()
+        .iter()
+        .find(|r| r.call == call)
+        .and_then(|r| r.id)
+        .unwrap_or_else(|| panic!("{call} is in the log"))
+}
+
+/// Each entry of a contact's history, as `(kind, source)`.
+fn kinds(engine: &Mutex<Engine>, id: RecordId) -> Vec<(Kind, String)> {
+    history_of(engine, id)
+        .unwrap()
+        .into_iter()
+        .map(|e| (e.kind, e.source))
+        .collect()
+}
+
+fn k(kind: Kind, source: &str) -> (Kind, String) {
+    (kind, source.to_string())
+}
+
+fn mirror(d: &Dir) -> String {
+    std::fs::read_to_string(d.log()).unwrap()
+}
+
+/// The store and `log.adi` both hold every change made so far.
+fn settle(engine: &Mutex<Engine>) {
+    flush(&engine_lock(engine));
+}
+
+fn edit_comment(engine: &Mutex<Engine>, id: RecordId, comment: &str) {
+    let row = row_of(engine, id).expect("the contact");
+    let (key, mut edit) = (QsoEdit::project(&row).key(), QsoEdit::project(&row));
+    edit.comment = Some(comment.into());
+    let (made, d) = logwrite::edit_row(engine, id, &key, &edit);
+    made.expect("reads").expect("made");
+    d.wait(DURABLE_WAIT).expect("on disk");
+}
+
+/// ★ Every path a contact changes by is recorded, under the source that made it: the operator's
+/// log and edit and delete, a Remote client's logged contact, an import (a new contact, and a
+/// merge into one the log holds), a LoTW download, and the fill job. A stamp is not recorded.
+#[test]
+fn every_change_is_recorded_with_the_source_that_made_it() {
+    let d = Dir::new("history-sources");
+    let engine = shared(&d, 2);
+    engine_lock(&engine).log_qso(qso("W1AW", 1_789_000_000));
+    engine_lock(&engine).log_qso_for_sync(qso("W2AW", 1_789_000_100));
+    settle(&engine);
+    let (w1, w2) = (id_of(&engine, "W1AW"), id_of(&engine, "W2AW"));
+    assert_eq!(kinds(&engine, w1), vec![k(Kind::Create, "operator")]);
+    assert_eq!(kinds(&engine, w2), vec![k(Kind::Create, "remote")]);
+
+    edit_comment(&engine, w1, "edited");
+    let h = history_of(&engine, w1).unwrap();
+    assert_eq!((h[1].kind, h[1].source.as_str()), (Kind::Edit, "operator"));
+    assert_eq!(
+        h[1].changes()
+            .into_iter()
+            .map(|c| (c.tag, c.old, c.new))
+            .collect::<Vec<_>>(),
+        vec![("COMMENT".to_string(), None, Some("edited".to_string()))]
+    );
+
+    let w1_row = row_of(&engine, w1).unwrap();
+    let mut text = adif_header();
+    text.push_str(&adif_record(&qso("W3AW", 1_789_000_200)));
+    text.push_str(&adif_record(&w1_row).replace("<EOR>", "<QSL_RCVD:1>Y<EOR>"));
+    let (made, dur) = logwrite::import_adif(&engine, &text);
+    made.expect("the import");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let w3 = id_of(&engine, "W3AW");
+    assert_eq!(kinds(&engine, w3), vec![k(Kind::Create, "import")]);
+    assert_eq!(kinds(&engine, w1)[2], k(Kind::Merge, "import"));
+
+    let report = adif_header()
+        + &adif_record(&row_of(&engine, w1).unwrap()).replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
+    let (made, dur) = logwrite::merge_lotw_report(&engine, &report);
+    made.expect("the report");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(kinds(&engine, w1)[3], k(Kind::Merge, "lotw"));
+
+    logwrite::fill(
+        &engine,
+        &[LogFill {
+            id: w2,
+            country: Some("Filled".into()),
+            state: None,
+        }],
+        1,
+    )
+    .expect("the fill");
+    settle(&engine);
+    assert_eq!(kinds(&engine, w2)[1], k(Kind::Fill, "fill"));
+
+    // A connector's stamp: delivery bookkeeping, not history.
+    let before = kinds(&engine, w1).len();
+    let (_, dur) = logwrite::stamp_push(
+        &engine,
+        &row_of(&engine, w1).unwrap(),
+        UploadService::Qrz,
+        UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 1_900_000_000,
+            detail: None,
+        },
+    );
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert!(row_of(&engine, w1).unwrap().upload.qrz.is_some(), "stamped");
+    assert_eq!(kinds(&engine, w1).len(), before, "and nothing recorded");
+
+    let (made, dur) = logwrite::change_ops(&engine, w3, None, &[LogOp::Delete(w3)], "delete");
+    made.expect("reads").expect("deleted");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(kinds(&engine, w3)[1], k(Kind::Delete, "operator"));
+}
+
+/// The contest log's merge into the Logbook is recorded as the contest's.
+#[test]
+fn the_contest_merge_is_recorded_as_the_contests() {
+    let d = Dir::new("history-contest");
+    let mut s = Engine::new("W9XYZ", "EN51", 0).settings().clone();
+    s.mycall = "W9XYZ".into();
+    s.fd_active = true;
+    s.fd_event = "ilqp".into();
+    s.contest_qth_state = "IL".into();
+    s.contest_qth_county = "KANE".into();
+    s.fd_position_id = "a1b2c3d4".into();
+    let mut e = Engine::with_settings(s);
+    e.attach_log_store(open_fast(&d));
+    e.set_fd_log_path(d.0.join("fieldday.adi"));
+    let shared = Mutex::new(e);
+    with_session_rows_at_launch(
+        &shared,
+        |e| e.restore_opens_session(),
+        |e, rows| {
+            e.restore_field_day_if_enabled();
+            if let Some(rows) = rows {
+                e.open_session_from(rows);
+            }
+        },
+    )
+    .expect("the session's rows are read");
+    {
+        let mut e = engine_lock(&shared);
+        let rx = [("RST", "599"), ("QTH", "COOK")].map(|(k, v)| (k.to_string(), v.to_string()));
+        assert!(e.contest_log_manual("W9AAA", &rx, "CW", None).unwrap());
+    }
+    let (merged, dur) = logwrite::fd_merge_to_general(&shared);
+    assert_eq!(merged.expect("the merge").added(), 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    settle(&shared);
+    let id = id_of(&shared, "W9AAA");
+    assert_eq!(kinds(&shared, id), vec![k(Kind::Create, "contest")]);
+}
+
+/// ★ An undo puts an edit back — through the same write path, so `log.adi` follows — and is
+/// itself recorded, linked to what it undid, so undoing it is the redo.
+#[test]
+fn an_undo_puts_an_edit_back_and_undoing_the_undo_makes_it_again() {
+    let d = Dir::new("history-undo");
+    let engine = shared(&d, 3);
+    let id = id_at(&*engine, 1);
+    edit_comment(&engine, id, "edited by hand");
+    settle(&engine);
+    assert!(mirror(&d).contains("edited by hand"));
+    let seq = history_of(&engine, id).unwrap().last().unwrap().seq;
+
+    let (undone, dur) = undo_entry(&engine, seq);
+    let undone = undone.expect("undone");
+    dur.wait(DURABLE_WAIT).expect("on disk");
+    assert_eq!(undone.changed, 1);
+    assert_eq!(
+        row_of(&engine, id).unwrap().comment,
+        None,
+        "the edit is gone"
+    );
+    let h = history_of(&engine, id).unwrap();
+    let last = h.last().unwrap();
+    assert_eq!((last.kind, last.source.as_str()), (Kind::Edit, "undo"));
+    assert_eq!(last.undoes, Some(seq), "linked to the edit it undid");
+    settle(&engine);
+    assert!(
+        !mirror(&d).contains("edited by hand"),
+        "log.adi follows the undo"
+    );
+
+    let (redone, dur) = undo_run(&engine, undone.run.as_deref().expect("the undo's run"));
+    redone.expect("redone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(
+        row_of(&engine, id).unwrap().comment.as_deref(),
+        Some("edited by hand"),
+        "the redo makes the edit again"
+    );
+    settle(&engine);
+    assert!(mirror(&d).contains("edited by hand"));
+}
+
+/// ★ A deleted contact is listed under Recently deleted, survives a restart there, and comes
+/// back whole — every field, its id, the foreign field another logger left — and `log.adi`
+/// holds it again.
+#[test]
+fn a_deleted_contact_comes_back_whole_after_a_restart() {
+    let d = Dir::new("history-restore");
+    let engine = shared(&d, 3);
+    let id = id_at(&*engine, 2);
+    let was = row_of(&engine, id).unwrap();
+    let (made, dur) = logwrite::change_ops(&engine, id, None, &[LogOp::Delete(id)], "delete");
+    made.expect("reads").expect("deleted");
+    dur.wait(DURABLE_WAIT).unwrap();
+    settle(&engine);
+    assert!(!mirror(&d).contains(&was.call));
+    drop(engine);
+
+    // The restart.
+    let engine = Arc::new(Mutex::new(engine_on_store(&d)));
+    let gone = recently_deleted(&engine, 50).unwrap();
+    assert_eq!(gone.iter().map(|e| e.qso_id).collect::<Vec<_>>(), vec![id]);
+    let (back, dur) = restore_deleted(&engine, id);
+    assert_eq!(back.expect("restored").changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(
+        adif_record_own_log(&row_of(&engine, id).expect("back in the log")),
+        adif_record_own_log(&was),
+        "the contact as it was"
+    );
+    assert!(recently_deleted(&engine, 50).unwrap().is_empty());
+    settle(&engine);
+    assert!(mirror(&d).contains(&was.call), "log.adi holds it again");
+    // Restoring what is already there is refused, changing nothing.
+    let (again, _) = restore_deleted(&engine, id);
+    assert_eq!(again.unwrap().refused, vec![(id, CannotUndo::AlreadyThere)]);
+}
+
+/// ★ A run is undone whole, as one change: every contact an import added goes, the log it found
+/// stays; and the fill job's chunks are one run, undone together.
+#[test]
+fn a_run_is_undone_whole() {
+    let d = Dir::new("history-run");
+    let engine = shared(&d, 3);
+    let mut text = adif_header();
+    for i in 0..300u64 {
+        text.push_str(&adif_record(&qso(&format!("N{i}RUN"), 1_789_000_000 + i)));
+    }
+    let (made, dur) = logwrite::import_adif(&engine, &text);
+    made.expect("the import");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(engine.stored_log().len(), 303);
+    let run = latest_run(&engine, Some(Source::Import))
+        .unwrap()
+        .expect("the run");
+    assert_eq!(run.contacts, 300);
+    let (undone, dur) = undo_run(&engine, &run.run);
+    assert_eq!(undone.unwrap().changed, 300);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(
+        engine.stored_log().len(),
+        3,
+        "the log as the import found it"
+    );
+    settle(&engine);
+    assert!(!mirror(&d).contains("N7RUN"));
+}
+
+/// The fill job writes in chunks of [`logwrite::FILL_CHUNK`], each its own change: they are one
+/// run, undone together.
+#[test]
+fn the_fill_jobs_chunks_are_one_run_undone_together() {
+    let d = Dir::new("history-fill-run");
+    let n = logwrite::FILL_CHUNK + 6;
+    let engine = shared(&d, n);
+    let fills: Vec<LogFill> = engine
+        .stored_log()
+        .iter()
+        .map(|r| LogFill {
+            id: r.id.unwrap(),
+            country: Some("Filled".into()),
+            state: None,
+        })
+        .collect();
+    assert_eq!(logwrite::fill(&engine, &fills, 1).expect("the fill"), n);
+    settle(&engine);
+    let run = latest_run(&engine, Some(Source::Fill))
+        .unwrap()
+        .expect("the run");
+    assert_eq!(run.contacts as usize, n, "every chunk in one run");
+    let (undone, dur) = undo_run(&engine, &run.run);
+    assert_eq!(undone.unwrap().changed, n);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert!(engine.stored_log().iter().all(|r| r.country.is_none()));
+}
+
+/// ⛔ A run's undo is ONE transaction: when the store turns any of it back — another window
+/// changed one of its contacts after the undo read them — none of it lands, not the first chunk's
+/// worth. Made again, it is made whole.
+#[test]
+fn a_run_undo_the_store_turns_back_changes_nothing() {
+    let d = Dir::new("history-run-atomic");
+    let a = shared(&d, 3);
+    let mut text = adif_header();
+    for i in 0..300u64 {
+        text.push_str(&adif_record(&qso(&format!("N{i}RUN"), 1_789_000_000 + i)));
+    }
+    let (made, dur) = logwrite::import_adif(&a, &text);
+    made.expect("the import");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let run = latest_run(&a, Some(Source::Import)).unwrap().unwrap().run;
+    let last = id_of(&a, "N299RUN");
+    let b = Arc::new(Mutex::new(engine_on_store(&d)));
+    let plans = Rc::new(Cell::new(0usize));
+    let hook = {
+        let (b, plans) = (Arc::clone(&b), Rc::clone(&plans));
+        move || {
+            plans.set(plans.get() + 1);
+            if plans.get() == 1 {
+                // Window B marks the run's last contact, committed, inside A's plan-to-commit gap.
+                let (made, _) = logwrite::change_ops(
+                    &b,
+                    last,
+                    None,
+                    &[LogOp::MarkQslCard {
+                        id: last,
+                        received: true,
+                    }],
+                    "window B",
+                );
+                assert!(matches!(made, Ok(Ok(_))), "B's card is made");
+                engine_lock(&b)
+                    .log_store_writer()
+                    .flush(DURABLE_WAIT)
+                    .unwrap();
+            }
+        }
+    };
+    let (undone, dur) = racing(hook, || undo_run(&a, &run));
+    undone.expect("made");
+    assert!(dur.turned_back(DURABLE_WAIT), "the store turned it back");
+    let stored = tempo_core::logbook::sqlite::LogDb::open(&d.db())
+        .unwrap()
+        .load_all()
+        .unwrap();
+    assert_eq!(
+        stored.len(),
+        303,
+        "not one contact of the run is gone: the undo was one transaction"
+    );
+    let (undone, dur) = until_written(|| undo_run(&a, &run));
+    undone.expect("made again");
+    dur.wait(DURABLE_WAIT).expect("and this time stored");
+    assert_eq!(a.stored_log().len(), 3);
+}
+
+/// ⛔ AN UNDO NEVER QUEUES AN UPLOAD. A corrected call queues the contact to every connector
+/// (the positive control: the queue is watched, and moves); its undo puts the call back and
+/// queues nothing — the contact is only owed again, its stamps cleared as a corrected call's are.
+/// An undo that leaves the call alone keeps the stamps the contact has.
+#[test]
+fn an_undo_never_queues_an_upload() {
+    let d = Dir::new("history-no-upload");
+    let engine = shared(&d, 3);
+    let id = id_at(&*engine, 0);
+    let original = row_of(&engine, id).unwrap();
+    let (_, dur) = logwrite::stamp_push(
+        &engine,
+        &original,
+        UploadService::Qrz,
+        UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 1_900_000_000,
+            detail: None,
+        },
+    );
+    dur.wait(DURABLE_WAIT).unwrap();
+    engine_lock(&engine).take_pending_uploads();
+
+    // An ordinary edit's undo keeps the stamp, and queues nothing.
+    edit_comment(&engine, id, "note");
+    let seq = history_of(&engine, id).unwrap().last().unwrap().seq;
+    let (undone, dur) = undo_entry(&engine, seq);
+    undone.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert!(
+        row_of(&engine, id).unwrap().upload.qrz.is_some(),
+        "the stamp stays"
+    );
+    assert!(engine_lock(&engine).take_pending_uploads().is_empty());
+
+    // A corrected call queues the contact (the control) …
+    let row = row_of(&engine, id).unwrap();
+    let key = QsoEdit::project(&row).key();
+    let (made, dur) = logwrite::update_row(
+        &engine,
+        id,
+        &key,
+        |r| QsoRecord {
+            call: "K9FIX".into(),
+            ..r.clone()
+        },
+        |_, _| (),
+    );
+    made.unwrap().unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert!(
+        !engine_lock(&engine).take_pending_uploads().is_empty(),
+        "the control: a corrected call is queued"
+    );
+    // … and its undo puts the call back and queues nothing.
+    let seq = history_of(&engine, id).unwrap().last().unwrap().seq;
+    let (undone, dur) = undo_entry(&engine, seq);
+    assert_eq!(undone.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let now = row_of(&engine, id).unwrap();
+    assert_eq!(now.call, original.call, "the call is back");
+    assert!(
+        engine_lock(&engine).take_pending_uploads().is_empty(),
+        "and nothing was queued"
+    );
+    assert!(
+        now.upload.qrz.is_none(),
+        "owed again, as a corrected call is"
+    );
+}

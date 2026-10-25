@@ -20,6 +20,7 @@ import { Dialog } from './ui/Dialog'
 import { useFocusReturn } from '../focusReturn'
 import { t } from '../i18n'
 import { addedColumnText, columnName, logColumn, uploadMark, uploadOf, uploadWord } from '../features/logColumns'
+import { QsoHistory } from './QsoHistory'
 
 /** A rendered field: a label and a value that is definitely worth showing. */
 type Field = { label: string; value: string; mono?: boolean }
@@ -44,9 +45,11 @@ function utc(unix: number | null | undefined): string | null {
 export interface QsoDetailProps {
   qso: LoggedQso | null
   onClose: () => void
+  /** A change made from the History section (an undo): the log should be read again. */
+  onChanged?: () => void
 }
 
-export function QsoDetail({ qso, onClose }: QsoDetailProps) {
+export function QsoDetail({ qso, onClose, onChanged }: QsoDetailProps) {
   // Closed, the keyboard goes back to the row it was opened from (focusReturn.ts).
   const returnFocus = useFocusReturn(!!qso)
   if (!qso) return null
@@ -204,6 +207,9 @@ export function QsoDetail({ qso, onClose }: QsoDetailProps) {
             </dl>
           </section>
         )}
+        {/* THE CONTACT'S HISTORY, last: what changed it, and the undo of each change. Only a
+            contact the log holds has an id to ask by. */}
+        {q.id && <QsoHistory id={q.id} onChanged={onChanged} />}
         {/* ⚠️ THERE IS DELIBERATELY NO "nothing recorded" BRANCH. It cannot happen: every
             record carries `whenUnix`, so the contact section always holds at least the time,
             and the bare row this app can produce still shows a band, a mode and a date. A

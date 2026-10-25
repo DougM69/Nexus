@@ -2112,6 +2112,10 @@ pub struct StationCore {
     minter: Minter,
     /// This process's recent changes, by revision — what a commit's precondition reads.
     recent: Recent,
+    /// Where the next change made comes from, when its maker says so in the hold of the lock
+    /// that makes it — an undo, a job's run, the contest merge ([`crate::loghistory::Origin`]).
+    /// Taken by that change; otherwise the change's own context names its source.
+    pub(crate) origin: Option<crate::loghistory::Origin>,
     /// The store that owns the log — see [`crate::logstore`]: the operator's database, or on the
     /// 1.13 path a store in memory that `log.adi` is kept from. A new station holds an empty one in
     /// memory ([`LogStore::in_memory`]) until the launch gives it the operator's
@@ -2305,6 +2309,7 @@ impl StationCore {
             marks,
             minter: Minter::new(0, &HashSet::new()),
             recent: Recent::default(),
+            origin: None,
             store: empty_store(),
             store_problem: None,
             pending_take_in: None,
@@ -2693,7 +2698,10 @@ impl StationCore {
         context: &str,
         from_file: bool,
     ) -> Option<tempo_core::logbook::writer::Ticket> {
-        let _ = context;
+        // Where it came from, for each contact's history: the maker's word, or the context's.
+        let origin = self.origin.take();
+        let whole = origin.as_ref().is_some_and(|o| o.whole);
+        let note = crate::loghistory::note(origin, context);
         let (marks, taken) = self.make(&change);
         let appends = !change.purged && change.pairs.iter().all(|(before, _)| before.is_none());
         let store = &mut self.store;
@@ -2705,6 +2713,8 @@ impl StationCore {
             c = c.in_bulk();
         }
         c.meta = change.meta;
+        c.history = Some(note);
+        c.whole = whole;
         // A stamp on held rows, and nothing else, moves nothing a hot index reads: it costs
         // another window sharing the store no rebuild (SPEC-2 v3 C19, D4-A).
         c.stamp_only = change.class == OpClass::Stamp
@@ -2787,6 +2797,43 @@ impl StationCore {
             },
             context,
         ))
+    }
+
+    /// Make an undo planned off the Engine lock ([`crate::loghistory`]) — under it, from `origin`.
+    /// `pairs` are each contact as the plan read it (`None`: absent, for one put back) and as the
+    /// undo leaves it. [`Stale`], changing nothing, when a row it read has changed since, or a
+    /// contact it puts back has been changed here since the plan (another window's is the store's
+    /// to refuse: every pair is checked as it is written).
+    pub(crate) fn commit_undo(
+        &mut self,
+        plan: &LogPlan,
+        class: OpClass,
+        pairs: Vec<RowPair>,
+        origin: crate::loghistory::Origin,
+    ) -> Result<Option<tempo_core::logbook::writer::Ticket>, Stale> {
+        let read: Vec<Arc<QsoRecord>> = pairs.iter().filter_map(|(b, _)| b.clone()).collect();
+        let put_back: Vec<RecordId> = pairs
+            .iter()
+            .filter(|(b, _)| b.is_none())
+            .filter_map(|(_, a)| a.as_ref().and_then(|a| a.id))
+            .collect();
+        if !self.unchanged_since(plan, &read) || !self.recent.untouched_since(plan.rev, &put_back) {
+            return Err(Stale);
+        }
+        let bulk = pairs.len() > tempo_core::logbook::writer::CHUNK_ROWS;
+        self.origin = Some(origin);
+        let ticket = self.commit(
+            RowChange {
+                class,
+                pairs,
+                purged: false,
+                bulk,
+                meta: Vec::new(),
+                checked: true,
+            },
+            "undo",
+        );
+        Ok(ticket)
     }
 
     /// ★ Make a bulk change planned off the Engine lock on the candidate sub-log
@@ -2925,8 +2972,20 @@ impl StationCore {
         });
         // An append: on the 1.13 path its rows are appended to `log.adi`, as 1.13 appended them
         // (SPEC-2 v3 C19, D1-A), where the database takes them as any change.
+        // A contact logged from a Remote client proves itself on disk (`receipt`); every other
+        // append is the operator's here, unless its maker said otherwise (the contest merge).
+        let origin = self.origin.take().unwrap_or_else(|| {
+            crate::loghistory::Origin::from(if receipt {
+                tempo_core::logbook::history::Source::Remote
+            } else {
+                tempo_core::logbook::history::Source::Operator
+            })
+        });
+        let note = crate::loghistory::note(Some(origin), "append");
         let store = &mut self.store;
-        let ticket = store.submit_appended(Change::appended(&rows, marks, store.resolved()));
+        let mut change = Change::appended(&rows, marks, store.resolved());
+        change.history = Some(note);
+        let ticket = store.submit_appended(change);
         let receipts = match (ticket, receipt) {
             // Redeemed once the change is safe: committed, and on the 1.13 path in `log.adi` too.
             (Some(ticket), true) => Some(vec![store.receipt(ticket)]),

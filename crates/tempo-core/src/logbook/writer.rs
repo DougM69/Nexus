@@ -177,6 +177,14 @@ pub struct Change {
     /// rather than write over another window's commit ([`Refusal::conflict`]). Empty for a change
     /// that read nothing — an append — which is written as it is.
     pub expect: Vec<(RecordId, sqlite::Expect)>,
+    /// Where the change came from: with it, the store writes each contact's history beside its
+    /// rows, chunk by chunk, in the chunk's own transaction ([`super::history`]). `None` writes
+    /// none.
+    pub history: Option<Arc<super::history::Note>>,
+    /// Written in ONE transaction however many rows it has, never in chunks: all of it lands or
+    /// none of it does (an undo of a whole run). It is still overtaken by nothing it shares a row
+    /// with, and it holds the store's lock for as long as its rows take.
+    pub whole: bool,
 }
 
 impl Change {
@@ -246,6 +254,8 @@ impl Change {
             meta: Vec::new(),
             stamp_only: false,
             expect: Vec::new(),
+            history: None,
+            whole: false,
         }
     }
 
@@ -1150,8 +1160,10 @@ struct Job {
     /// rewrote every index page its rows sat on, so a purge of 150,000 contacts took 28.6 s
     /// against the statement's 2.1 s; whole, it takes the store's lock about as long as the
     /// statement did (1.65 s against 1.5 s), and a contact logged meanwhile waits for it, as it
-    /// waited for the statement.
+    /// waited for the statement. And a change that asked to be ([`Change::whole`]).
     whole: bool,
+    /// Where the change came from ([`Change::history`]): every chunk writes its rows' history.
+    history: Option<Arc<super::history::Note>>,
     cursor: Cursor,
 }
 
@@ -1181,7 +1193,8 @@ impl Job {
             slot,
             touched,
             expect: c.expect.into_iter().collect(),
-            whole: false,
+            whole: c.whole,
+            history: c.history,
             cursor: Cursor::default(),
         }
     }
@@ -1257,6 +1270,7 @@ fn plan(job: &Job) -> Chunk<'_> {
             meta: if finishes { &job.meta } else { &[] },
             index_move: finishes && job.index_move,
             expect: (!job.expect.is_empty()).then_some(&job.expect),
+            history: job.history.as_deref(),
         },
         removed,
         upserted,
@@ -2769,6 +2783,7 @@ mod tests {
             meta: &c.meta,
             index_move: !c.stamp_only,
             expect: None,
+            history: None,
         })
         .expect("the store accepts the change");
     }

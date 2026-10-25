@@ -790,7 +790,7 @@ impl LogStore {
         self.supersede(&change);
         let knew = taken.is_some();
         let taken = PurgedIndex::new(taken.unwrap_or_default(), &self.writer);
-        let held = Arc::new(Held::purge(Arc::new(taken), !knew));
+        let held = Arc::new(Held::purge(Arc::new(taken), !knew, change.history.clone()));
         // The rows it took out, as a purge sent again always was: listed on the writer's thread.
         let (change, later) = if knew {
             let later = held.remove_later();
@@ -1751,6 +1751,11 @@ pub(crate) struct Held {
     /// What the change expected of its rows when it was made ([`Change::expect`]): sent again, it
     /// expects the same, so it is never written over another window's change to them.
     expect: std::collections::HashMap<RecordId, sqlite::Expect>,
+    /// Where the change came from ([`Change::history`]): sent again, its rows' history is written
+    /// as the first send would have written it.
+    history: Option<Arc<tempo_core::logbook::history::Note>>,
+    /// Written in one transaction ([`Change::whole`]), sent again as it was sent first.
+    whole: bool,
 }
 
 impl Held {
@@ -1760,6 +1765,8 @@ impl Held {
             remove: change.remove.iter().copied().collect(),
             upsert: change.upsert.clone(),
             expect: change.expect.iter().cloned().collect(),
+            history: change.history.clone(),
+            whole: change.whole,
             ..Held::default()
         }
     }
@@ -1771,10 +1778,15 @@ impl Held {
 
     /// A purge on its way: the rows it took out, `taken`, gone — and every row, when `everything`
     /// (the index could not say what it held, so the store drops them all).
-    fn purge(taken: Arc<PurgedIndex>, everything: bool) -> Held {
+    fn purge(
+        taken: Arc<PurgedIndex>,
+        everything: bool,
+        history: Option<Arc<tempo_core::logbook::history::Note>>,
+    ) -> Held {
         Held {
             clear: everything,
             purged: Some(taken),
+            history,
             ..Held::default()
         }
     }
@@ -1828,6 +1840,8 @@ impl Held {
             // are as they now stand, and a stamp's are no exception worth the risk.
             stamp_only: false,
             expect: self.expect.iter().map(|(id, e)| (*id, e.clone())).collect(),
+            history: self.history.clone(),
+            whole: self.whole,
         }
     }
 
@@ -7826,7 +7840,11 @@ pub(crate) mod tests {
         let writer = open_fast(&d).store.writer();
         let rows = minted(&["K1AAA", "K2BBB", "K3CCC"], 1);
         let ids: Vec<RecordId> = rows.iter().filter_map(|r| r.id).collect();
-        let mut held = Held::purge(Arc::new(PurgedIndex::new(purged(&rows), &writer)), false);
+        let mut held = Held::purge(
+            Arc::new(PurgedIndex::new(purged(&rows), &writer)),
+            false,
+            None,
+        );
         let later = RecordId::Minted {
             posid: 0,
             nonce: 7,
@@ -7842,7 +7860,11 @@ pub(crate) mod tests {
             None,
             "on its way, a row it never held is not its to say"
         );
-        let everything = Held::purge(Arc::new(PurgedIndex::new(purged(&rows), &writer)), true);
+        let everything = Held::purge(
+            Arc::new(PurgedIndex::new(purged(&rows), &writer)),
+            true,
+            None,
+        );
         assert_eq!(
             everything.says(later),
             Some(None),
@@ -7904,7 +7926,11 @@ pub(crate) mod tests {
             ..Change::default()
         });
         writer.wait_durable(&seed, DURABLE_WAIT).expect("the log");
-        let held = Held::purge(Arc::new(PurgedIndex::new(purged(&rows), &writer)), false);
+        let held = Held::purge(
+            Arc::new(PurgedIndex::new(purged(&rows), &writer)),
+            false,
+            None,
+        );
 
         // Another program holds the database: the writer stalls inside the next write, and the
         // re-send, sent once it is retrying there, waits behind it holding the purge's rows.

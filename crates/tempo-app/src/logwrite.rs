@@ -770,6 +770,8 @@ fn fill_in_chunks(
     };
     let last = chunks.len() - 1;
     let mut filled = 0;
+    // Every chunk's fills are one run in the history, undone together.
+    let run = crate::loghistory::new_run();
     // The chunk made before the latest: in the store before the next is planned.
     let mut previous = Durability::default();
     for (k, chunk) in chunks.into_iter().enumerate() {
@@ -792,7 +794,12 @@ fn fill_in_chunks(
             let pairs = station::fill_pairs(&rows, chunk);
             let n = pairs.len();
             let (ok, durability) = engine_lock(engine).with_log_tickets(|e| {
-                e.station_mut()
+                e.station_mut().origin = Some(crate::loghistory::Origin::in_run(
+                    tempo_core::logbook::history::Source::Fill,
+                    &run,
+                ));
+                let ok = e
+                    .station_mut()
                     .commit_planned(
                         &plan,
                         station::fill_class(n),
@@ -801,7 +808,9 @@ fn fill_in_chunks(
                         meta.clone(),
                         "fill",
                     )
-                    .is_ok()
+                    .is_ok();
+                e.station_mut().origin = None;
+                ok
             });
             if ok {
                 made = Some((n, durability));

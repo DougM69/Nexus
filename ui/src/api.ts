@@ -1634,6 +1634,77 @@ export async function editQsoById(target: RowRef, edit: QsoEdit): Promise<RowAns
   return invoke<RowAnswer>('edit_qso_by_id', { target, edit })
 }
 
+/** One field a change to a contact changed (ADIF tag; `null` where the contact did not carry it). */
+export interface QsoFieldChange { tag: string; old: string | null; new: string | null }
+
+/** One entry of a contact's change history. `source` is a token (`operator`, `import`, `fill`,
+ *  `lotw`, `eqsl`, `qrz`, `pota`, `contest`, `remote`, `file`, `undo`), never prose. */
+export interface QsoHistoryEntry {
+  seq: number
+  kind: 'create' | 'edit' | 'delete' | 'merge' | 'fill'
+  source: string
+  run: string
+  atMs: number
+  undoes: number | null
+  undoneBy: number | null
+  changes: QsoFieldChange[]
+}
+
+/** A contact deleted from the log and not put back. */
+export interface DeletedQso {
+  id: string
+  call: string
+  band: string
+  mode: string
+  whenUnix: number
+  deletedAtMs: number
+  source: string
+}
+
+/** The latest run of changes of one kind. */
+export interface HistoryRun { run: string; source: string; atMs: number; contacts: number }
+
+/** What an undo made. `run` is the undo's own run: undoing it is the redo. The counts are the
+ *  contacts it could not change, by why. */
+export interface UndoAnswer {
+  changed: number
+  run: string | null
+  kept: string[]
+  gone: number
+  alreadyThere: number
+  changedSince: number
+}
+
+/** One contact's change history, oldest first. */
+export async function qsoHistory(id: string): Promise<QsoHistoryEntry[]> {
+  return invoke<QsoHistoryEntry[]>('qso_history', { id })
+}
+
+/** The contacts deleted and not put back, newest first. */
+export async function recentlyDeletedQsos(limit?: number): Promise<DeletedQso[]> {
+  return invoke<DeletedQso[]>('recently_deleted_qsos', { limit: limit ?? null })
+}
+
+/** The latest run made by `source` that changed a contact. */
+export async function latestHistoryRun(source: string | null): Promise<HistoryRun | null> {
+  return invoke<HistoryRun | null>('latest_history_run', { source })
+}
+
+/** Undo one change to a contact. Sends nothing to any service. Returns once it is on disk. */
+export async function undoQsoChange(seq: number): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('undo_qso_change', { seq })
+}
+
+/** Undo every change of one run, as one transaction. Sends nothing to any service. */
+export async function undoHistoryRun(run: string): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('undo_history_run', { run })
+}
+
+/** Put a deleted contact back, as its latest delete took it out. */
+export async function restoreDeletedQso(id: string): Promise<UndoAnswer> {
+  return invoke<UndoAnswer>('restore_deleted_qso', { id })
+}
+
 /** Mark the contact `target` QSL-sent (operator-declared): a card or request went out `via`
  *  "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT a confirmation — this never
  *  moves `confirmed`/`awardConfirmed`. `via: null` WITHDRAWS the mark (#180): sending is once-only,
