@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Import shows what a log file holds before anything is written.** Import ADIF in the Logbook now opens a preview: how many records and their date range, how many are new and how many are already in your log (by the log's own duplicate rule, and how many of those would gain confirmations), the problems it found with examples (no call, a date or time it cannot read, a value that is not of its field's type, an unknown band or mode), and which fields the file carries. You then choose Import, Import new only (contacts already in your log are left exactly as they are) or Cancel. Either import is still one step that Undo, or Recently deleted later, takes back. A file over 200 MB is refused with its size; split it and import the parts. A record with more than 2,000 fields, which only a damaged file has, is not imported at all, and the preview and the report say so. A file naming more than 10,000 different fields, which no real log does, is refused before its preview.
 - **ADX and Cabrillo logs can be imported.** ADX (ADIF's XML form) is read with the same field mapping as an .adi file. A Cabrillo contest log is read with its contest's own exchange template (Sweepstakes, CQ WW, CQ WPX, ARRL and Winter Field Day, ARRL VHF and the QSO parties), each column going to its ADIF field (serials, sections, zones, class, RST), with each side's whole exchange also kept as STX_STRING/SRX_STRING; a contest with no template keeps the call, band, mode and time, the RST when both sides send one for the line's mode, and the exchange as text. A line is never stored under a report, a serial or your own call: a line whose other station cannot be told is listed in the preview and not imported. Whatever has no field of its own is listed in the preview.
 - **A no-loss report after every import.** It accounts for every field of the file: stored, written back in the log's spelling (20M becomes 20m), kept byte for byte as another program's field, or not stored, with the reason. Save it as a text file from the import window.
+- **Novice and Advanced licence classes.** Holders of the grandfathered US Novice and Advanced
+  licences can now pick their class in the setup wizard and Settings ▸ Station, and the transmit
+  lockout holds them to their own segments: a Novice to CW on 80, 40 and 15 m, 10 m from 28.0 to
+  28.5 MHz (data below 28.3, single-sideband voice above), 222–225 MHz and 1270–1295 MHz; an
+  Advanced to everything a General has plus 3.700–3.800, 7.125–7.175, 14.175–14.225 and
+  21.225–21.275 MHz phone. Power limits (200 W on HF, 25 W on 222 MHz and 5 W on 23 cm for a
+  Novice) are still yours to keep: the lockout checks frequency and mode, not power. The settings
+  file stays readable by older versions of Nexus: they see a Novice as a Technician and an Advanced
+  as a General, and this version still opens it as the class you picked.
 - **Logbook filters, saved filters and sorting on up to three columns.** The new Filters button beside the search box filters the whole log by call (prefix or `*`/`?` pattern), band, mode, dates, DXCC entity, continent, CQ and ITU zone, grid, state, county, IOTA, park or summit reference, contest, words in the comment, name or QTH, QSL state per service (LoTW, eQSL, card, QRZ: confirmed, sent, not sent; Club Log: sent, not sent) and award need (contacts whose DXCC, WAS, WAZ, VUCC or FFMA band slot is worked but not yet confirmed). Save a filter under a name, recall, rename or delete it. Shift-click a column header to sort by it next; grid, state, IOTA, county and contest now sort too.
 - **Callbook answers are kept on this computer.** A call you looked up is answered from a local cache for 30 days (Settings ▸ Logging & Connectors ▸ Confirmations ▸ Callbook cache, adjustable), and offline at any age; refresh one call or clear the whole cache there. No password or sign-in key is ever kept. US calls that QRZ and HamQTH do not answer are also asked of the free callook.info.
 - **Station card.** Click a call (or press Enter on it) in the Logbook, Spots, the decode list's QRZ
@@ -291,6 +300,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **Technician and Novice: only CW and single-sideband voice on 28.3–28.5 MHz.** The transmit
+  lockout let a Technician send AM, FM and SSTV pictures there, which 47 CFR 97.307(f)(10) does
+  not allow. They are now refused for a Technician and a Novice, and the refusal says why. Nexus
+  cannot hear what another program sends, so there it no longer lets other programs key the radio
+  through the CAT broker or TCI, whatever the radio's mode; the connection log says why. Nexus's own
+  PTT, voice keyer and CW still key there. General, Advanced and Extra are unchanged.
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
 - **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone
