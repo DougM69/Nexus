@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::achievements::{self, Achievement, AchievementStats};
 use crate::awards_more::{
     Contact, Credited, DxccChart, MoreAwards, QslWant, SlotView, WaeProgress, WpxProgress,
-    WwffProgress,
+    WpxWaeWorked, WwffProgress,
 };
 use crate::callstats::CallStatsIndex;
 use crate::dxcc;
@@ -1455,6 +1455,12 @@ impl Awards {
             band_targets,
             band_needs,
         }
+    }
+
+    /// The WPX prefixes and WAE countries worked on each band in each mode class, for the Needed
+    /// board's opt-in chips ([`crate::awards_more::mark_award_needs`]).
+    pub fn wpx_wae_worked(&self) -> WpxWaeWorked {
+        self.more.slots_worked.clone()
     }
 
     /// The whole-log DXCC chart: every current entity × every DXCC band, by mode class

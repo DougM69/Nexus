@@ -76,8 +76,8 @@ pub use awards::{
     EntityNeed, QslChannels, RecordFields,
 };
 pub use awards_more::{
-    DxccChart, DxccChartRow, QslFor, QslSlot, QslWant, WaeCountry, WaeProgress, WpxProgress,
-    WwffProgress,
+    mark_award_needs, DxccChart, DxccChartRow, QslFor, QslSlot, QslWant, WaeCountry, WaeProgress,
+    WpxProgress, WpxWaeWorked, WwffProgress,
 };
 pub use callstats::{CallStats, CallStatsIndex, StatsGrid};
 pub use dxped::{

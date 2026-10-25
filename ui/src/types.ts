@@ -3023,6 +3023,12 @@ export interface NeedAlert {
    *  station is activating, its licence, or its grid. The STATE chip's tooltip says which. Absent
    *  from an older station, and a newer one may send a value this window does not know. */
   stateFrom?: 'park' | 'license' | 'grid' | null
+  /** The WPX prefix this station would be new on this band in this mode class. Sent only while
+   *  "Show WPX prefix needs" is on (off as it ships); the board shows a WPX chip for it. */
+  wpxNeed?: string | null
+  /** The WAE country this station would be new in on this band in this mode class. Sent only
+   *  while "Show WAE country needs" is on (off as it ships); the board shows a WAE chip for it. */
+  waeNeed?: string | null
 }
 
 /** One raw cluster/RBN spot for the Spots panel (the firehose).
@@ -5383,6 +5389,11 @@ export interface Settings {
   /** Show the worked-but-unconfirmed "Confirm" tier (LoTW confirmation opportunities)
    *  on the Needed board and the decode/roster chips. Ships ON; this is the opt-out. */
   alertConfirmTier?: boolean
+  /** Mark Needed-board rows whose station would be a new WPX prefix on that band and mode. Off as
+   *  it ships: almost every station heard is an unworked prefix. A chip only, never an alert. */
+  showWpxNeeds?: boolean
+  /** The same for a new WAE country. Off as it ships; a chip only. */
+  showWaeNeeds?: boolean
   /** WSJT-X's "dB reports to comments": the logged QSO's COMMENT carries
    *  "<mode>  Sent: <rpt>  Rcvd: <rpt>". Opt-in, exactly as WSJT-X ships it. */
   logReportsToComments?: boolean

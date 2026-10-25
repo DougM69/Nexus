@@ -10902,6 +10902,40 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.alerts.confirmTier.hint')}</span>
               </div>
 
+              {/* The Needed board's opt-in WPX and WAE chips (operator ruling 2026-10-25): off as they
+                  ship, since almost every station is an unworked WPX prefix. Chips only, no alert. */}
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.alerts.wpxNeeds.label')}</span>
+                  <button disabled={locked('showWpxNeeds')}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.showWpxNeeds === true}
+                    className={`toggle${form.showWpxNeeds === true ? ' on' : ''}`}
+                    onClick={() => updateBool('showWpxNeeds', form.showWpxNeeds !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.alerts.wpxNeeds.hint')}</span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.alerts.waeNeeds.label')}</span>
+                  <button disabled={locked('showWaeNeeds')}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.showWaeNeeds === true}
+                    className={`toggle${form.showWaeNeeds === true ? ' on' : ''}`}
+                    onClick={() => updateBool('showWaeNeeds', form.showWaeNeeds !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.alerts.waeNeeds.hint')}</span>
+              </div>
+
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.alerts.cq.label')}</span>

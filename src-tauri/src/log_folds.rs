@@ -295,6 +295,9 @@ pub(crate) struct AwardsKept {
     /// The whole-log DXCC chart and the What-to-QSL list, from the same fold.
     pub(crate) chart: Arc<propagation::DxccChart>,
     pub(crate) qsl_wants: Arc<Vec<propagation::QslWant>>,
+    /// The WPX prefixes and WAE countries worked per band and mode class, for the Needed board's
+    /// opt-in chips ([`award_need_chips`]).
+    pub(crate) wpx_wae: Arc<propagation::WpxWaeWorked>,
 }
 
 /// `get_awards`'s summary, folded again only when the log's content or the operator's call (the
@@ -329,6 +332,29 @@ pub(crate) fn what_to_qsl_kept(
     tallies: &LogTallies,
 ) -> Result<Arc<Vec<propagation::QslWant>>, String> {
     Ok(awards_fold_kept(engine, tallies)?.qsl_wants.clone())
+}
+
+/// The Needed board's opt-in WPX and WAE chips on `alerts` ([`propagation::mark_award_needs`]),
+/// from the award fold the Awards view counts with. `wpx` and `wae` are the operator's two
+/// settings; with both off, as they ship, the rows come back untouched and the fold is not asked
+/// for at all.
+///
+/// The chips only decorate the board: if the fold is refused (the writer is behind,
+/// [`Freshness::or_refuse`]) the rows come back without them, and the next poll asks again.
+pub(crate) fn award_need_chips(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+    mut alerts: Vec<propagation::NeedAlert>,
+    wpx: bool,
+    wae: bool,
+) -> Vec<propagation::NeedAlert> {
+    if !wpx && !wae {
+        return alerts;
+    }
+    if let Ok(kept) = awards_fold_kept(engine, tallies) {
+        propagation::mark_award_needs(&mut alerts, &kept.wpx_wae, wpx, wae);
+    }
+    alerts
 }
 
 /// The Stats pane's answer for `call` typed on `band` in `mode`, from the kept index
@@ -374,6 +400,7 @@ fn awards_fold_kept(
         summary: Arc::new(awards.summary()),
         chart: Arc::new(awards.dxcc_chart()),
         qsl_wants: Arc::new(awards.what_to_qsl()),
+        wpx_wae: Arc::new(awards.wpx_wae_worked()),
     };
     keep(&tallies.awards, mark, my_call, kept, fresh)
 }

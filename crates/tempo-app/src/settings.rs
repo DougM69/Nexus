@@ -3221,6 +3221,16 @@ pub struct Settings {
     /// upgrade would silently turn the tier off for everyone.
     #[serde(default = "default_on")]
     pub alert_confirm_tier: bool,
+    /// Mark Needed-board rows whose station would be a new CQ WPX prefix on that band in that
+    /// mode class (`propagation::mark_award_needs`). OFF by default, and off for a settings file
+    /// from before it (operator ruling, 2026-10-25): almost every station heard is an unworked
+    /// prefix, so a WPX need on every row flooded the board when it was tried. A chip only —
+    /// no headline, tier, sound or pop-up.
+    #[serde(default)]
+    pub show_wpx_needs: bool,
+    /// The same for a new WAE country (DARC's Worked All Europe): off by default, a chip only.
+    #[serde(default)]
+    pub show_wae_needs: bool,
     /// Band scope for new-DXCC alerts: "off" | "hf" | "vhf" | "all". `alert_new`
     /// stays the master gate (backward compat); these scopes refine it per type.
     #[serde(default = "default_alert_scope_all")]
@@ -6014,6 +6024,8 @@ impl Default for Settings {
             rtty_auto_repeats: default_rtty_auto_repeats(),
             alert_my_call: true,
             alert_confirm_tier: true, // the tier ships lit; the setting is the opt-out
+            show_wpx_needs: false,
+            show_wae_needs: false,
             log_reports_to_comments: false, // WSJT-X parity: dBtoComments defaults false
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
@@ -11459,6 +11471,44 @@ mod tests {
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
         assert_eq!(s.dial_hz(), 14_074_000); // default = FT8 20 m (the default mode)
+    }
+
+    /// The Needed board's WPX and WAE chips ship off, on the exact wire keys the UI writes, a
+    /// settings file from before them loads them off, and a choice of on survives a save.
+    #[test]
+    fn the_wpx_and_wae_need_chips_ship_off_on_their_wire_keys_and_round_trip() {
+        let s = Settings::default();
+        assert!(
+            !s.show_wpx_needs && !s.show_wae_needs,
+            "both chips ship off"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"showWpxNeeds\":false"),
+            "the wire key the UI writes"
+        );
+        assert!(
+            json.contains("\"showWaeNeeds\":false"),
+            "the wire key the UI writes"
+        );
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        older.as_object_mut().unwrap().remove("showWpxNeeds");
+        older.as_object_mut().unwrap().remove("showWaeNeeds");
+        let older: Settings = serde_json::from_value(older).unwrap();
+        assert!(
+            !older.show_wpx_needs && !older.show_wae_needs,
+            "a file from before them: off"
+        );
+        let on = Settings {
+            show_wpx_needs: true,
+            show_wae_needs: true,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(
+            back.show_wpx_needs && back.show_wae_needs,
+            "on survives a save and a load"
+        );
     }
 
     /// The CW turn cue's sound ships off, on the exact wire key the UI writes (`soundCwTurn`), a

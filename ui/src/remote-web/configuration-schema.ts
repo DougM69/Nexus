@@ -252,6 +252,8 @@ export const SETTINGS_KEYS = [
   'potaNewActivationAlert',
   'logReportsToComments',
   'alertConfirmTier',
+  'showWpxNeeds',
+  'showWaeNeeds',
   'alertDxccBands',
   'alertGridBands',
   'b4MatchMode',
@@ -379,6 +381,9 @@ export const NEWER_SETTINGS = {
   tciServerSpots: false,
   // A station that predates the CW turn cue's sound plays none: that setting's default.
   soundCwTurn: false,
+  // A station that predates the Needed board's WPX and WAE chips shows neither: both settings off.
+  showWpxNeeds: false,
+  showWaeNeeds: false,
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -673,6 +678,8 @@ export const SETTINGS_SHAPES = {
   "potaNewActivationAlert": "boolean",
   "logReportsToComments": "boolean",
   "alertConfirmTier": "boolean",
+  "showWpxNeeds": "boolean",
+  "showWaeNeeds": "boolean",
   "alertDxccBands": "string",
   "alertGridBands": "string",
   "b4MatchMode": "boolean",
