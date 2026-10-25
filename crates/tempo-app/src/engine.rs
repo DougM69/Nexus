@@ -17553,9 +17553,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// ([`Self::answer_cq_in_contest`]): the contest's messages, the contest log. WSJT-X answers
     /// a double-clicked CQ with its contest activity's messages (`processMessage`); this left the
     /// contest for FT8 QSO mode and the standard messages, which a WSJT-X station in its Field Day
-    /// or NA VHF activity never answers. **Already in the contest's S&P, a double-click on a CQ
-    /// stays in the contest on every tier** ([`Self::contest_cq`]): the contest's S&P answers no
-    /// CQ by itself, so this is how each of its contacts starts.
+    /// or NA VHF activity never answers. **Already in Field Day's or Winter Field Day's S&P, a
+    /// double-click on a CQ stays in the contest on FT1, DX1 and FT2 too**
+    /// ([`Self::sp_field_day_messages`]): the contest's S&P answers no CQ by itself, so this is
+    /// how each of its contacts starts there.
     ///
     /// The Remote page calls `call_station_ctx` directly, unchanged.
     pub fn work_station(
@@ -17599,30 +17600,53 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// The CQ a click hands to the running contest's S&P ([`Self::work_station`]): the click's
     /// message is a CQ from the clicked station, not from you, while the contest's own FT8/FT4
-    /// messages apply or the station is already in the contest's S&P. Those messages, and the
-    /// CQ's sender and grid.
+    /// messages apply, or Field Day's where the station is already in the contest's S&P
+    /// ([`Self::sp_field_day_messages`]). Those messages, and the CQ's sender and grid.
     fn contest_cq(
         &self,
         dxcall: &str,
         reply_msg: Option<&str>,
     ) -> Option<(FtMessages, String, String)> {
-        // ⭐ Already in the contest's S&P, a CQ double-clicked is answered in the station's own
-        // messages on every tier and in every contest, those WSJT-X has no contest messages for
-        // included (FT1, DX1 and FT2; Winter Field Day and the parties that ban FT8 and FT4):
-        // S&P answers no CQ by itself, so this is how each of its contacts starts there.
-        let messages = self.contest_ft_messages().or(match &self.mode {
-            Mode::FieldDay {
-                station,
-                running: false,
-            } => Some(station.messages()),
-            _ => None,
-        })?;
+        let messages = self
+            .contest_ft_messages()
+            .or_else(|| self.sp_field_day_messages())?;
         let Msg::Cq { de, grid, .. } = Msg::parse(reply_msg?) else {
             return None;
         };
         (tempo_core::message::same_call(&de, dxcall)
             && !tempo_core::message::same_call(&de, &self.settings.mycall))
         .then_some((messages, de, grid))
+    }
+
+    /// ⭐ **Field Day's messages, where a double-click from the contest's S&P answers in them
+    /// though the contest's own FT8/FT4 messages do not apply** ([`Self::contest_cq`]): the
+    /// station in the contest's S&P, in ARRL Field Day or Winter Field Day, on an FT-family tier
+    /// (FT8, FT4, FT2, FT1, DX1), with the session's CLASS and SECTION both filled in. That is
+    /// Field Day on FT1, DX1 and FT2, and Winter Field Day, where WSJT-X has no contest messages:
+    /// S&P answers no CQ by itself, so this is how each of its contacts starts there.
+    ///
+    /// ⛔ `None` everywhere else, and the click works the station outside the contest as before
+    /// ([`Self::call_station_ctx`]): Field Day's messages cannot carry another contest's
+    /// exchange, and without a class and section they go out as `W9XYZ K1ABC`, which no
+    /// station can answer.
+    fn sp_field_day_messages(&self) -> Option<FtMessages> {
+        let Mode::FieldDay {
+            station,
+            running: false,
+        } = &self.mode
+        else {
+            return None;
+        };
+        let session = &station.log.session;
+        let fits = station.messages() == FtMessages::FieldDay
+            && matches!(station.log.ruleset().event, "" | "arrlfd" | "wfd")
+            && matches!(
+                self.app.tier(),
+                Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::TempoFast | Tier::TempoDeep
+            )
+            && !session.field("CLASS").trim().is_empty()
+            && !session.field("SECTION").trim().is_empty();
+        fits.then_some(FtMessages::FieldDay)
     }
 
     /// Whether [`Self::work_station`] for this click opens a contest session: a CQ handed to a
@@ -17756,6 +17780,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err(format!(
                 "{de}'s CQ carries no grid: in this contest Nexus answers a CQ that carries one."
             ));
+        }
+        // Field Day's answer from the station already in the contest: without a class and a
+        // section it would go out as `W9XYZ K1ABC`, which completes nothing. Entering from
+        // outside, `set_mode` refuses an exchange that is not filled in.
+        if let (FtMessages::FieldDay, Mode::FieldDay { station, .. }) = (messages, &self.mode) {
+            let session = &station.log.session;
+            if session.field("CLASS").trim().is_empty()
+                || session.field("SECTION").trim().is_empty()
+            {
+                return Err(
+                    "Fill in your class and section for this contest before calling a station."
+                        .into(),
+                );
+            }
         }
         self.set_mode("fieldday-sp")?;
         if let Mode::FieldDay { station, .. } = &mut self.mode {

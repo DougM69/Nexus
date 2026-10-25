@@ -820,9 +820,14 @@ fn expected(contest: &str, role: Role, tier: &str) -> (Vec<String>, Option<Strin
             v(&["W9XYZ K1ABC 1H EMA", "W9XYZ K1ABC RR73"]),
             row("CLASS=1D,SECTION=WI", "CLASS=1H,SECTION=EMA"),
         ),
-        // …and the two parties keep sending what they sent, which completes nothing.
+        // …and the two parties' Running keeps sending what it sent, which completes nothing. A
+        // double-click leaves the contest and works the station in QSO mode, as it always has:
+        // Field Day's messages cannot carry the parties' exchange.
         ("ilqp" | "nyqp", Role::Running) => (v(&["CQ FD K1ABC FN42"; 8]), None),
-        ("ilqp" | "nyqp", _) => (v(&["W9XYZ K1ABC  "; 7]), None),
+        ("ilqp" | "nyqp", _) => (
+            v(&["W9XYZ K1ABC FN42", "W9XYZ K1ABC R-12", "W9XYZ K1ABC 73"]),
+            None,
+        ),
         // The ARRL VHF contests: WSJT-X's NA VHF Contest messages.
         ("arrlvhf_jan" | "arrlvhf_jun" | "arrlvhf_sep", Role::Running) => (
             v(&[
@@ -1053,22 +1058,22 @@ fn the_contests_sp_calls_nobody_until_a_double_click() {
     }
 }
 
-/// ⭐ Where WSJT-X has no contest messages (Field Day on FT1, DX1 and FT2; Winter Field Day and
-/// the Illinois and New York parties, which ban FT8 and FT4), the contest's S&P still answers no
-/// CQ by itself, with TX on or off, and a double-click on a CQ answers it in the contest's own
-/// messages, by value. Where those messages carry the exchange the contact is logged in the
-/// contest, and the next CQ heard starts nothing. (The two parties' exchange is no class and
-/// section, so Field Day's messages complete nothing there, as before.)
+/// ⭐ Where WSJT-X has no contest messages for Field Day's exchange (ARRL Field Day on FT1, DX1
+/// and FT2; Winter Field Day, which bans FT8 and FT4), the contest's S&P still answers no CQ by
+/// itself, with TX on or off, and a double-click on a CQ answers it in Field Day's messages, by
+/// value: the contact is logged in the contest, and the next CQ heard starts nothing.
 #[test]
-fn a_double_click_in_the_contests_sp_answers_in_its_messages_on_every_tier() {
-    // (contest, tier, the answer, the class W9XYZ sends where the contact completes)
+fn a_double_click_in_field_days_sp_answers_in_its_messages_on_every_ft_tier() {
+    // (contest, tier, the answer, the class W9XYZ sends)
     for (contest, tier, answer, class) in [
-        ("arrlfd", Tier::TempoFast, "W9XYZ K1ABC 2B EMA", Some("1D")),
-        ("arrlfd", Tier::TempoDeep, "W9XYZ K1ABC 2B EMA", Some("1D")),
-        ("arrlfd", Tier::Ft2, "W9XYZ K1ABC 2B EMA", Some("1D")),
-        ("wfd", Tier::Ft8, "W9XYZ K1ABC 1H EMA", Some("1H")),
-        ("ilqp", Tier::Ft8, "W9XYZ K1ABC  ", None),
-        ("nyqp", Tier::Ft8, "W9XYZ K1ABC  ", None),
+        ("arrlfd", Tier::TempoFast, "W9XYZ K1ABC 2B EMA", "1D"),
+        ("arrlfd", Tier::TempoDeep, "W9XYZ K1ABC 2B EMA", "1D"),
+        ("arrlfd", Tier::Ft2, "W9XYZ K1ABC 2B EMA", "1D"),
+        ("", Tier::Ft2, "W9XYZ K1ABC 2B EMA", "1D"),
+        ("wfd", Tier::Ft8, "W9XYZ K1ABC 1H EMA", "1H"),
+        ("wfd", Tier::Ft4, "W9XYZ K1ABC 1H EMA", "1H"),
+        ("wfd", Tier::TempoFast, "W9XYZ K1ABC 1H EMA", "1H"),
+        ("wfd", Tier::Ft2, "W9XYZ K1ABC 1H EMA", "1H"),
     ] {
         for tx_on in [true, false] {
             let what = format!("{contest:?} {} TX {}", tier_name(tier), on_off(tx_on));
@@ -1094,7 +1099,6 @@ fn a_double_click_in_the_contests_sp_answers_in_its_messages_on_every_tier() {
                 matches!(e.mode, Mode::FieldDay { running: false, .. }),
                 "{what}: still the contest's S&P"
             );
-            let Some(class) = class else { continue };
             e.ingest_decodes_for_test(&[heard(&format!("K1ABC W9XYZ R {class} WI"))], 8);
             assert_eq!(
                 keyed(&mut e, 8).as_deref(),
@@ -1111,6 +1115,89 @@ fn a_double_click_in_the_contests_sp_answers_in_its_messages_on_every_tier() {
             e.ingest_decodes_for_test(&[heard("CQ FD K2DEF FN31")], 12);
             assert_eq!(queued(&e), None, "{what}: the next CQ is not answered");
             assert_eq!(keyed(&mut e, 12), None, "{what}: and nothing keys");
+        }
+    }
+}
+
+/// ⛔ Where Field Day's messages cannot carry the contest's exchange, a double-click on a CQ from
+/// the contest's S&P works the station outside the contest, as it always has: the ARRL VHF
+/// contests on FT2, MSK144 and Q65, a state QSO party on FT1, and the Illinois and New York
+/// parties, which ban FT8 and FT4. The contact runs to its 73 in QSO mode, by value, and is in
+/// the station's own log; nothing goes out as Field Day's `W9XYZ K1ABC` with no exchange.
+#[test]
+fn a_double_click_from_sp_where_field_days_messages_do_not_fit_works_the_station_as_before() {
+    for (contest, tier, cq) in [
+        ("arrlvhf_jan", Tier::Ft2, "CQ TEST W9XYZ EN37"),
+        ("arrlvhf_jan", Tier::Msk144, "CQ TEST W9XYZ EN37"),
+        ("arrlvhf_jan", Tier::Q65, "CQ TEST W9XYZ EN37"),
+        ("txqp", Tier::TempoFast, "CQ W9XYZ EN37"),
+        ("ilqp", Tier::Ft8, "CQ W9XYZ EN37"),
+        ("nyqp", Tier::Ft4, "CQ W9XYZ EN37"),
+    ] {
+        let what = format!("{contest:?} {}", tier_name(tier));
+        let mut e = engine_for(contest, MY_GRID);
+        e.set_tier(tier);
+        e.set_mode("fieldday-sp").expect("S&P starts");
+        e.set_tx_enabled(true);
+        click(&mut e, cq, 2);
+        let mut sent = vec![keyed(&mut e, 2)];
+        e.ingest_decodes_for_test(&[heard(&format!("K1ABC W9XYZ {DX_RPT}"))], 4);
+        sent.push(keyed(&mut e, 4));
+        e.ingest_decodes_for_test(&[heard("K1ABC W9XYZ RR73")], 6);
+        sent.push(keyed(&mut e, 6));
+        assert_eq!(
+            sent,
+            [
+                Some("W9XYZ K1ABC FN42".to_string()),
+                Some("W9XYZ K1ABC R-12".to_string()),
+                Some("W9XYZ K1ABC 73".to_string()),
+            ],
+            "{what}: the contact"
+        );
+        assert!(matches!(e.mode, Mode::Qso { .. }), "{what}: QSO mode");
+        assert_eq!(
+            e.stored_log()
+                .iter()
+                .map(|r| r.call.as_str())
+                .collect::<Vec<_>>(),
+            [DX],
+            "{what}: in the station's own log"
+        );
+    }
+}
+
+/// ⛔ Field Day's answer never goes out without a class and a section. With either blanked in
+/// the running session, a double-click from the contest's S&P on FT1 works the station outside
+/// the contest instead, and on FT8, where the contest's own messages apply, it is refused and
+/// nothing is keyed.
+#[test]
+fn field_days_sp_sends_no_answer_without_a_class_and_section() {
+    for blank in ["CLASS", "SECTION"] {
+        for tier in [Tier::TempoFast, Tier::Ft8] {
+            let what = format!("{blank} blank, {}", tier_name(tier));
+            let mut e = engine_for("arrlfd", MY_GRID);
+            e.set_tier(tier);
+            e.set_mode("fieldday-sp").expect("S&P starts");
+            e.set_tx_enabled(true);
+            if let Mode::FieldDay { station, .. } = &mut e.mode {
+                station.log.session.my_exchange.retain(|v| v.key != blank);
+            }
+            e.ingest_decodes_for_test(&[heard("CQ FD W9XYZ EN37")], 2);
+            let r = e.work_station(DX, None, Some("CQ FD W9XYZ EN37"), Some(DX_SNR), None);
+            let first = keyed(&mut e, 2);
+            if tier == Tier::Ft8 {
+                assert!(r.is_err(), "{what}: refused, {r:?}");
+                assert_eq!(first, None, "{what}: nothing keyed");
+                assert!(listening(&e), "{what}: still listening");
+            } else {
+                assert_eq!(r, Ok(()), "{what}");
+                assert_eq!(
+                    first.as_deref(),
+                    Some("W9XYZ K1ABC FN42"),
+                    "{what}: worked outside the contest"
+                );
+                assert!(matches!(e.mode, Mode::Qso { .. }), "{what}: QSO mode");
+            }
         }
     }
 }
@@ -2239,12 +2326,9 @@ fn every_other_click_works_the_station_as_before() {
         Some(DX),
         "a roster click: FT8 QSO mode"
     );
-    // A double-click on a CQ on FT2, in a contest, from FT2 QSO mode. (From the contest's S&P it
-    // stays in the contest on every tier:
-    // `a_double_click_in_the_contests_sp_answers_in_its_messages_on_every_tier`.)
+    // A double-click on a CQ on FT2, in a contest.
     let mut e = engine_for("arrlvhf_jan", MY_GRID);
     e.set_tier(Tier::Ft2);
-    e.set_mode("qso-monitor").expect("FT2 QSO mode");
     e.ingest_decodes_for_test(&[heard("CQ TEST W9XYZ EN37")], 2);
     e.work_station(DX, None, Some("CQ TEST W9XYZ EN37"), Some(DX_SNR), None)
         .expect("worked");
@@ -2287,9 +2371,9 @@ fn bans_ft8(contest: &str) -> bool {
 /// value.** A double-click on the partner's CQ hands that station to the contest's S&P, which
 /// sends exactly what a double-click from S&P sends and logs the same row; the strip's Call CQ
 /// is the contest's Running and sends what Running sends. In the three contests that ban FT8 and
-/// FT4 Call CQ leaves the contest as it always has, and nothing reaches the contest log; a
-/// double-click from the contest's S&P stays in it there too, the one way that S&P starts a
-/// contact.
+/// FT4 both leave the contest as they always have, and nothing reaches the contest log, but for
+/// a double-click from Winter Field Day's S&P: Field Day's messages carry its exchange, and that
+/// S&P starts a contact no other way.
 #[test]
 fn the_cockpits_gestures_work_the_running_contest() {
     for contest in resolver_free() {
@@ -2298,7 +2382,7 @@ fn the_cockpits_gestures_work_the_running_contest() {
                 let what = format!("{contest:?} {} {role:?}", tier_name(tier));
                 let s = scene(contest, tier, role, act_of(contest), MY_GRID);
                 assert_eq!(s.entered, Ok(()), "{what}");
-                if bans_ft8(contest) && role == Role::CallCq {
+                if bans_ft8(contest) && (role == Role::CallCq || contest != "wfd") {
                     assert!(
                         s.end.starts_with("Qso"),
                         "{what}: left as before, {}",
@@ -3266,8 +3350,7 @@ fn tx_goes_off_after_a_double_clicked_contest_contact() {
 /// cockpit's. WSJT-X 3.0.2 clears the ID on every GUI tick in FT8 and FT4
 /// (`widgets/mainwindow.cpp:7673`), whatever the activity; FT2, FT1 and DX1 do as FT8 does. The
 /// gestures that leave the contest close an S&P contact with this station's 73 in QSO mode, the
-/// over the ID followed. The control: a gesture that leaves the contest on Q65, which keeps the
-/// ID, keys one.
+/// over the ID followed. The control: the same gesture on Q65, which keeps the ID, keys one.
 #[test]
 fn no_ft_mode_keys_a_cw_id_on_any_path() {
     let roles = [
@@ -3309,7 +3392,7 @@ fn no_ft_mode_keys_a_cw_id_on_any_path() {
     }
     assert_eq!(with_id, Vec::<String>::new(), "CW IDs keyed in an FT mode");
     assert_eq!(
-        cw_ids("txqp", Tier::Q65, Role::ClickFromQso),
+        cw_ids("txqp", Tier::Q65, Role::ClickFromSp),
         [7],
         "control: Q65 keys its CW ID after this station's 73"
     );

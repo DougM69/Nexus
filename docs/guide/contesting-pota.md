@@ -154,11 +154,14 @@ Outside Field Day, Running and S&P need your grid in Settings before they
 transmit. Winter Field Day and the Illinois and New York QSO parties ban FT8 and
 FT4, and FT1 has no WSJT-X contest messages: in those the two buttons send Field
 Day's messages, as they always have, and Field Day's runner closes without the
-73. There too S&P calls nobody by itself: while you are in the contest's S&P, a
-double-click on a CQ, or a reply to one from a logging program, answers it in
-the contest with Field Day's messages. Outside the
-contest's S&P, the FT cockpit's Call CQ and double-click work outside the
-contest, as before, and the UDP special operation is 0.
+73. There too S&P calls nobody by itself. In Winter Field Day, and in ARRL Field
+Day on FT1, DX1 and FT2, a double-click on a CQ while you are in the contest's
+S&P, or a reply to one from a logging program, answers it in the contest with
+your class and section. In the Illinois and New York QSO parties, and in other
+contests on FT1, DX1 and FT2, a double-click works the station as a normal QSO
+outside the contest, as before. Outside the contest's S&P, the FT cockpit's
+Call CQ and double-click work outside the contest, as before, and the UDP
+special operation is 0.
 
 ### An operator and a logger on one radio
 
