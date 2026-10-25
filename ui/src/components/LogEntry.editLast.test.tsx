@@ -86,11 +86,13 @@ function Strip({
   esmOn = false,
   remote = false,
   logger = false,
+  active = true,
 }: {
   fieldDay: FieldDayStatus
   esmOn?: boolean
   remote?: boolean
   logger?: boolean
+  active?: boolean
 }) {
   const esm = useEsmHost({
     cockpit: 'cw',
@@ -115,7 +117,7 @@ function Strip({
       fieldDay={fieldDay}
       fdMode="CW"
       esm={esm.host}
-      active
+      active={active}
       sharedEntry={logger ? 'logger' : undefined}
       remote={
         remote
@@ -360,5 +362,54 @@ describe('one edit of a contact at a time', () => {
     expect(callBox().value).toBe('N9XYZ')
     fireEvent.keyDown(callBox(), { key: 'w', code: 'KeyW', altKey: true })
     expect(callBox().value).toBe('')
+  })
+})
+
+describe('an edit left open in a cockpit that is then hidden', () => {
+  /** The PSK cockpit's strip, which stays mounted under `hidden` on another screen, and the screen
+   *  shown instead with a strip of its own (the Contest screen's). */
+  const Screens = ({ psk, log = LOG }: { psk: boolean; log?: FieldDayQso[] }) => (
+    <>
+      <div className="psk-host" hidden={!psk}>
+        <Strip fieldDay={party(log)} active={psk} />
+      </div>
+      {!psk && (
+        <div className="contest-screen">
+          <Strip fieldDay={party(log)} />
+        </div>
+      )}
+    </>
+  )
+  const pskEdit = () => document.querySelector<HTMLInputElement>('.psk-host .contest-edit input')
+  const screenEdit = () => document.querySelector<HTMLInputElement>('.contest-screen .contest-edit input')
+  const screenLine = () => document.querySelector('.contest-screen .le-fd-remove-line')?.textContent ?? null
+
+  it('holds back no edit on the screen shown instead, and is there as typed when the cockpit is back', () => {
+    const view = render(<Screens psk />)
+    ctrlY()
+    type(pskEdit()!, 'W9BBC')
+    view.rerender(<Screens psk={false} />)
+    ctrlY()
+    expect(screenLine(), 'no edit on screen holds this one back').not.toBe(t('contest.edit.open'))
+    expect(screenEdit(), 'the screen’s own edit opens').not.toBeNull()
+    expect(document.activeElement).toBe(screenEdit())
+    fireEvent.keyDown(screenEdit()!, { key: 'Escape', code: 'Escape' })
+    view.rerender(<Screens psk />)
+    expect(pskEdit()?.value, 'the cockpit’s edit, as typed').toBe('W9BBC')
+  })
+
+  it('closes when its contact is edited elsewhere meanwhile, so it cannot save over the change; CONTROL: unchanged, it stays', () => {
+    const view = render(<Screens psk />)
+    ctrlY()
+    type(pskEdit()!, 'W9BBC')
+    view.rerender(<Screens psk={false} />)
+    view.rerender(<Screens psk={false} log={[...LOG]} />)
+    view.rerender(<Screens psk log={[...LOG]} />)
+    expect(pskEdit()?.value, 'the same contact, re-sent as it was').toBe('W9BBC')
+    view.rerender(<Screens psk={false} log={[...LOG]} />)
+    view.rerender(<Screens psk={false} log={[LOG[0], row('W9BBB', 'COOK', T0 + 60)]} />)
+    view.rerender(<Screens psk log={[LOG[0], row('W9BBB', 'COOK', T0 + 60)]} />)
+    expect(pskEdit(), 'its county changed on the screen meanwhile').toBeNull()
+    expect(document.querySelector('.psk-host .le-fd-big'), 'the entry boxes are back').not.toBeNull()
   })
 })

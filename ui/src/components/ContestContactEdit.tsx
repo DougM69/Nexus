@@ -22,13 +22,17 @@ import { receivedCaption } from '../features/contestSlots'
 // strip's Ctrl+Y can each open one, and two open at once would race: the engine refuses the second
 // save as changed, and the losing edit's typing is gone. So a host that has none open asks here
 // first, and while one is open it opens nothing and the keyboard goes back to the open one as typed.
-let openEdit: HTMLElement | null = null
+// An edit counts only while it is on screen: the RTTY, PSK, JTTY and JS8 cockpits stay mounted under
+// `hidden`, and a strip's edit left open there keeps its typing for when the cockpit is back, but
+// nobody can see it or type into it meanwhile, so it holds back no other edit.
+const openEdits = new Set<HTMLElement>()
+const onScreen = (el: HTMLElement) => el.isConnected && !el.closest('[hidden]') && el.checkVisibility?.() !== false
 
 /** Is another contact's edit open in this window? If so it gets the keyboard back, and the caller
  *  opens nothing. A host asks only while it has no edit of its own open. */
 export function focusOpenContestEdit(): boolean {
-  const el = openEdit
-  if (!el?.isConnected) return false
+  const el = [...openEdits].find(onScreen)
+  if (!el) return false
   el.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true })
   el.scrollIntoView?.({ block: 'nearest' })
   return true
@@ -65,9 +69,10 @@ export function ContestContactEdit({
   const boxRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = boxRef.current
-    openEdit = el
+    if (!el) return
+    openEdits.add(el)
     return () => {
-      if (openEdit === el) openEdit = null
+      openEdits.delete(el)
     }
   }, [])
   // The country of the call in the form, as the strip resolves its own: from a station in the USA

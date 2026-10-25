@@ -147,8 +147,9 @@ function KeepInFront() {
  *
  *  The edit is the contact's, by its call and time, not a place in the list: contacts logged while it
  *  is open push its row down, and past the ten it stays open after them, as typed. The line it leaves
- *  is under the list, outside its scroller, so no scroll position hides it (the logbook-copy warning
- *  above all); it goes at the next edit or contact logged. */
+ *  is held to the bottom edge of the list's box, so no scroll position hides it (the logbook-copy
+ *  warning above all) and in a short window it takes its room from the list, never from the window;
+ *  it goes at the next edit or contact logged. */
 export function LastContacts({
   fieldDay,
   style,
@@ -269,12 +270,12 @@ export function LastContacts({
             )
           }).concat(editAt === -1 ? [edit] : [])}
         </div>
+        {note && (
+          <p className="fd-removed-note contest-logger-recent-note" role={note.alert ? 'alert' : 'status'}>
+            {note.text}
+          </p>
+        )}
       </section>
-      {note && (
-        <p className="fd-removed-note contest-logger-recent-note" role={note.alert ? 'alert' : 'status'}>
-          {note.text}
-        </p>
-      )}
     </>
   )
 }

@@ -9,11 +9,12 @@
 // large: the entry's parts on screen and nothing under it. Then both layouts again with the optional "RST
 // sent" box turned on, one more box in the entry, at the floor and large.
 //
-// Then THE LINE A LAST CONTACT'S EDIT LEAVES, at 1024×768 (the supported floor) and 1920×1080: twelve
-// contacts at a club, the newest one's Edit clicked, and the club's refusal it leaves must be on screen,
-// with every part of the entry where it was before the click (the same box, to the pixel) and still on
-// screen. Its control: the tenth row of the list, below the list's scrolled edge at 1024×768, must come
-// back NOT on screen, so the check can see a line the list's scroller hides.
+// Then THE LINE A LAST CONTACT'S EDIT LEAVES, at the 420×320 floor, 640×480, 1024×768 (the supported
+// floor) and 1920×1080: twelve contacts at a club, the newest one's Edit clicked, and the club's refusal
+// it leaves must be wholly on screen, with every part of the entry where it was before the click (the
+// same box, to the pixel) and still on screen. Its control: the tenth row of the list, below the list's
+// scrolled edge at 1024×768, must come back NOT on screen, so the check can see a line the list's
+// scroller hides.
 //
 // THE CONTROL, run every time: the same window 100 px shorter than the floor, where the newest contact
 // falls past the bottom of the window. It must come back NOT on screen; if it does not, the check cannot
@@ -149,7 +150,7 @@ async function measureEdit(w, h) {
 
 let code = 0
 try {
-  for (const { w, h } of [{ w: 1024, h: 768 }, { w: 1920, h: 1080 }]) {
+  for (const { w, h } of [FLOOR, SIZES[1], { w: 1024, h: 768 }, { w: 1920, h: 1080 }]) {
     const m = await measureEdit(w, h)
     console.log(`contestlog-probe: edit at a club, window ${w}×${h}: ${JSON.stringify(m)}`)
     const { note, tenth, newest, dupe, ...entryParts } = m?.seen ?? {}
@@ -215,7 +216,7 @@ try {
     console.error('contestlog-probe: CONTROL FAILED — the newest contact under the floor came back on screen; the check cannot fail')
     code = code || 1
   }
-  if (code === 0) console.log(`contestlog-probe: PASS — a last contact's edit line on screen, the entry unmoved, at 1024×768 and 1920×1080 (the tenth row clipped at 1024×768); the entry, the dupe warning, the newest contact and Keep in front on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the entry alone at ${FLOOR.w}×${FLOOR.h} and ${SIZES[2].w}×${SIZES[2].h}; both again with the RST sent box on; and the control below the floor clipped`)
+  if (code === 0) console.log(`contestlog-probe: PASS — a last contact's edit line on screen, the entry unmoved, at ${FLOOR.w}×${FLOOR.h}, ${SIZES[1].w}×${SIZES[1].h}, 1024×768 and 1920×1080 (the tenth row clipped at 1024×768); the entry, the dupe warning, the newest contact and Keep in front on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the entry alone at ${FLOOR.w}×${FLOOR.h} and ${SIZES[2].w}×${SIZES[2].h}; both again with the RST sent box on; and the control below the floor clipped`)
   process.exitCode = code
 } finally {
   await browser.stop()

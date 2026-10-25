@@ -41124,7 +41124,7 @@ mod tests {
     /// several zones, and cty.dat's per-prefix `(cq)` overrides are what say W6 is zone 3
     /// and W0 is zone 4. A zone derived from the entity alone would hint 5 for all of them.
     #[test]
-    fn the_contest_zone_hint_is_the_country_files_cq_zone() {
+    fn the_contest_place_zone_is_the_country_files_cq_zone() {
         for (call, zone) in [
             ("W1XYZ", 5),
             ("W6ABC", 3),

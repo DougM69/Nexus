@@ -240,12 +240,15 @@ describe('the line an edit leaves', () => {
     await settle()
   }
 
-  it('stands outside the scrolling list, so no scroll position hides it', async () => {
+  it('is the last thing in the list’s box, after every row, held to its bottom edge so no scroll position hides it', async () => {
     edited()
     show(cqww(LOG))
     await saveNewest()
     expect(note()).toContain(t('contest.edit.logbook', { call: 'K11AA' }))
-    expect(noteEl()!.closest('.contest-logger-recent'), 'not inside the scroller').toBeNull()
+    // Its place on screen, in every window size, is the contest logger probe's to measure.
+    const box = document.querySelector('.contest-logger-recent')!
+    expect(box.lastElementChild, 'after every row, not among them').toBe(noteEl())
+    expect(noteEl()!.closest('.contest-logger-recent-body'), 'not among the rows').toBeNull()
   })
 
   it('goes when a contact is logged, and stays while the log only changes otherwise', async () => {

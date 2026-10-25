@@ -20706,12 +20706,14 @@ button.cq-skiptx1.on {
 .contest-logger-recent .fd-mode-chip {
   font-size: calc(14px * var(--text-scale));
 }
-/* The line a last contact's edit leaves (ContestLogger `LastContacts`): under the list and OUTSIDE its
-   scroller, so it is on screen however far the list is scrolled (inside, after ten rows, it was below
-   the list's edge at 1024×768). A line of content height that never shrinks, on the list's surface,
-   its text on the list's 1600 px measure and inset. */
+/* The line a last contact's edit leaves (ContestLogger `LastContacts`): the last thing in the list's
+   scroller, held to its bottom edge, so it is on screen however far the list is scrolled (in the flow
+   alone, after ten rows, it was below the list's edge at 1024×768), and its room comes out of the
+   list's: under it, at 640×480 and the 420×320 floor, it was past the bottom of the window. Its text
+   on the list's 1600 px measure and inset, on an opaque surface the rows scroll under. */
 .contest-logger-recent-note {
-  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
   margin: 0;
   max-width: none;
   padding: var(--space-1) max(var(--space-4), calc(50% - 800px + var(--space-4)));
