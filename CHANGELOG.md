@@ -204,6 +204,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its 15 minutes, once your account's device list confirms it again.
 
 ### Changed
+- **The Tempo 23 cm channel moved from 1296.200 to 1296.185 MHz**, below the 1296.200–1296.400 beacon segment and inside the weak-signal segment of the ARRL band plan. Older Nexus builds still call on 1296.200 and will not hear this one; tune there by hand to reach them.
 - **Nexus Remote is free during the beta, with no 14-day limit.** Where the service runs the beta, the Remote
   page says "Free during the beta" instead of counting a trial's days, internet use no longer runs out, and
   attaching a station no longer promises a trial. Everything else about who may use Remote is unchanged.
