@@ -85,6 +85,7 @@ import type { FieldDayQso } from './types'
 import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { LogColumnsSaved } from './features/logColumns'
 import type { SavedLogFilter } from './features/logFilter'
+import type { LogQuery } from './features/logQuery'
 import type { StreetPack } from './features/streetPack'
 import type {
   StreetArea,
@@ -1730,6 +1731,107 @@ export async function undoableHistoryRuns(): Promise<HistoryRun[]> {
  *  (`duplicate`). `anyway`: put it back all the same, beside the one logged since. */
 export async function restoreDeletedQso(id: string, anyway = false): Promise<UndoAnswer> {
   return invoke<UndoAnswer>('restore_deleted_qso', { id, anyway })
+}
+
+// ── The Logbook's clean-up tools: duplicates and merge, bulk edit, the check ─────────────────
+// Each change is ONE run of the log's history (`run`, undone whole by `undoHistoryRun`). None
+// sends anything to a service: no tool changes a callsign, so every upload mark and confirmation
+// stays. The changes are the station's own: a computer driving it is refused, as a purge is.
+
+/** What a clean-up tool's change made. `run`: its undo; `null` when it changed nothing. The counts
+ *  are what it left alone: gone since shown, changed since shown, a merge whose conflict must be
+ *  chosen. */
+export interface ToolRun {
+  changed: number
+  run: string | null
+  gone: number
+  changedSince: number
+  needsChoice: number
+}
+
+/** A field two copies of a contact disagree on. `guarded`: must be chosen (a confirmed copy's
+ *  value, the QSL-sent mark, the contest exchange). `chosen`: the copy the suggested merge takes. */
+export interface DupeConflict {
+  tag: string
+  values: { id: string; value: string }[]
+  guarded: boolean
+  chosen: string
+}
+
+/** One contact logged more than once: its copies in log order, each with its edit key. */
+export interface DupeGroup {
+  copies: LoggedQso[]
+  editKeys: string[]
+  keep: number
+  conflicts: DupeConflict[]
+}
+
+export interface DupeScan {
+  scanned: number
+  groups: DupeGroup[]
+}
+
+/** `rule`: the log's own duplicate rule (the same station, band and mode within 5 minutes);
+ *  `possible`: within an hour. Changes nothing. */
+export async function findLogDuplicates(tier: 'rule' | 'possible'): Promise<DupeScan> {
+  return invoke<DupeScan>('find_log_duplicates', { tier })
+}
+
+/** One merge: the copy kept, every copy with the edit key it was shown with, and for a
+ *  conflicting field the copy whose value is taken. */
+export interface MergeAsk {
+  keep: string
+  copies: { id: string; editKey: string }[]
+  choices: Record<string, string>
+}
+
+export async function mergeLogDuplicates(merges: MergeAsk[]): Promise<ToolRun> {
+  return invoke<ToolRun>('merge_log_duplicates', { merges })
+}
+
+/** A field the clean-up tools set or clear, by its ADIF name. */
+export type CleanupField =
+  | 'MY_GRIDSQUARE' | 'MY_RIG' | 'OPERATOR' | 'STATION_CALLSIGN' | 'PROP_MODE' | 'SAT_NAME'
+  | 'TX_PWR' | 'MY_POTA_REF' | 'MY_SOTA_REF'
+  | 'GRIDSQUARE' | 'BAND' | 'DXCC' | 'IOTA' | 'POTA_REF' | 'SOTA_REF' | 'TIME_OFF'
+
+/** One field set (`value`) or cleared (`null`). */
+export interface FieldChange { field: CleanupField; value: string | null }
+
+/** The contacts a bulk edit acts on: those ticked, or every one the Logbook's filter shows. */
+export type BulkTarget = { ids: string[] } | { query: LogQuery }
+
+export interface BulkPreview { selected: number; change: number; unchanged: number; missing: number }
+
+export async function bulkEditPreview(target: BulkTarget, changes: FieldChange[]): Promise<BulkPreview> {
+  return invoke<BulkPreview>('bulk_edit_preview', { target, changes })
+}
+
+export async function bulkEditApply(target: BulkTarget, changes: FieldChange[]): Promise<ToolRun> {
+  return invoke<ToolRun>('bulk_edit_apply', { target, changes })
+}
+
+/** One problem the check found. `fix`: the proposed change (`value: null` clears the field), or
+ *  `null` when none can be proposed. */
+export interface LogProblem {
+  id: string
+  call: string
+  whenUnix: number
+  kind: 'grid' | 'myGrid' | 'dxcc' | 'noBand' | 'bandFreq' | 'future' | 'endBeforeStart' | 'iota' | 'pota' | 'sota'
+  field: CleanupField | null
+  current: string | null
+  fix: { value: string | null } | null
+}
+
+export async function checkLogbook(): Promise<{ checked: number; problems: LogProblem[] }> {
+  return invoke('check_logbook')
+}
+
+/** One ticked fix, with what the check found in its field: left out when that changed since. */
+export interface LogFix { id: string; field: CleanupField; expect: string | null; value: string | null }
+
+export async function applyLogFixes(fixes: LogFix[]): Promise<ToolRun> {
+  return invoke<ToolRun>('apply_log_fixes', { fixes })
 }
 
 /** Mark the contact `target` QSL-sent (operator-declared): a card or request went out `via`

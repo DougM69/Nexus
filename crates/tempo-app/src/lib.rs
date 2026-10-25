@@ -30,6 +30,7 @@ pub mod logexport;
 pub mod logfill;
 pub mod loghistory;
 pub mod logstore;
+pub mod logtools;
 pub mod logwrite;
 pub mod mic;
 pub mod needed_alert;

@@ -1974,6 +1974,167 @@ export const EN = {
   'logbook.deleted.confirm.cancel': 'Cancel',
   'logbook.deleted.restored': 'Restored {{call}}',
   'logbook.deleted.failed': 'The contact could not be restored.',
+  // The clean-up tools (LogTools.tsx): duplicates and merge, bulk edit, the check. Field names,
+  // calls, grids and references are tokens. Nothing they change is sent to any service.
+  'logbook.tools.button': 'Clean up',
+  'logbook.tools.title': 'Clean up the log',
+  'logbook.tools.intro': 'Each change here is one change in the history, undone whole by its Undo. Nothing is sent to any service: no tool changes a callsign, so upload marks and confirmations stay as they are.',
+  'logbook.tools.tab.dupes': 'Duplicates',
+  'logbook.tools.tab.bulk': 'Bulk edit',
+  'logbook.tools.tab.check': 'Check',
+  'logbook.tools.atStation': 'Only at the station: from here the tools read and preview, and change nothing.',
+  'logbook.tools.leftAlone': {
+    one: ' · {{count}} left as it was (changed or gone since it was shown, or a choice to make)',
+    other: ' · {{count}} left as they were (changed or gone since they were shown, or a choice to make)',
+  },
+  'logbook.tools.nothing': 'Nothing was changed',
+  'logbook.tools.undone': 'Clean-up undone',
+  'logbook.tools.working': 'Working…',
+  'logbook.tools.cancel': 'Cancel',
+  'logbook.tools.dupes.tierLabel': 'Find',
+  'logbook.tools.dupes.tier.rule': 'Duplicates: same station, band and mode within 5 minutes',
+  'logbook.tools.dupes.tier.possible': 'Possible duplicates: within an hour',
+  'logbook.tools.dupes.find': 'Find',
+  'logbook.tools.dupes.failed': 'The duplicates could not be found',
+  'logbook.tools.dupes.found': {
+    one: '{{count}} contact logged more than once, of {{scanned}}',
+    other: '{{count}} contacts logged more than once, of {{scanned}}',
+  },
+  'logbook.tools.dupes.mergeAll': {
+    one: 'Merge {{count}} ready',
+    other: 'Merge all {{count}} ready',
+  },
+  'logbook.tools.dupes.mergeAllAsk': {
+    one: 'Merge {{count}} contact, deleting {{copies}} copies into Recently deleted?',
+    other: 'Merge {{count}} contacts, deleting {{copies}} copies into Recently deleted?',
+  },
+  'logbook.tools.dupes.mergeAllConfirm': {
+    one: 'Merge {{count}}',
+    other: 'Merge {{count}}',
+  },
+  'logbook.tools.dupes.mergeFailed': 'The merge could not be made',
+  'logbook.tools.dupes.merged': {
+    one: 'Merged {{count}} contact',
+    other: 'Merged {{count}} contacts',
+  },
+  'logbook.tools.dupes.kept': 'kept',
+  'logbook.tools.dupes.confirmed': 'confirmed',
+  'logbook.tools.dupes.choose': 'choose one',
+  'logbook.tools.dupes.merge': {
+    one: 'Merge',
+    other: 'Merge {{count}} into one',
+  },
+  'logbook.tools.bulk.which': 'Contacts',
+  'logbook.tools.bulk.picked': {
+    one: '{{count}} ticked',
+    other: '{{count}} ticked',
+  },
+  'logbook.tools.bulk.shown': {
+    one: '{{count}} the list shows',
+    other: '{{count}} the list shows',
+  },
+  'logbook.tools.bulk.field': 'Field',
+  'logbook.tools.bulk.action': 'Set or clear',
+  'logbook.tools.bulk.set': 'Set to',
+  'logbook.tools.bulk.clear': 'Clear',
+  'logbook.tools.bulk.value': 'Value',
+  'logbook.tools.bulk.remove': 'Remove',
+  'logbook.tools.bulk.add': 'Add a field',
+  'logbook.tools.bulk.preview': 'Preview',
+  'logbook.tools.bulk.previewFailed': 'The preview could not be made',
+  'logbook.tools.bulk.uploads': 'A bulk edit never changes a callsign: upload marks and confirmations stay as they are, nothing is sent to any service, and no contact is uploaded again for it.',
+  'logbook.tools.bulk.previewed': '{{selected}} contacts: {{change}} will change, {{unchanged}} are already so or hold another programme’s reference, {{missing}} are no longer in the log.',
+  'logbook.tools.bulk.apply': {
+    one: 'Change {{count}} contact',
+    other: 'Change {{count}} contacts',
+  },
+  'logbook.tools.bulk.ask': {
+    one: 'Change {{count}} contact? It is one change you can undo.',
+    other: 'Change {{count}} contacts? It is one change you can undo.',
+  },
+  'logbook.tools.bulk.confirm': {
+    one: 'Yes, change {{count}}',
+    other: 'Yes, change {{count}}',
+  },
+  'logbook.tools.bulk.failed': 'The bulk edit could not be made',
+  'logbook.tools.bulk.done': {
+    one: 'Changed {{count}} contact',
+    other: 'Changed {{count}} contacts',
+  },
+  'logbook.tools.check.run': 'Check the log',
+  'logbook.tools.check.failed': 'The log could not be checked',
+  'logbook.tools.check.found': {
+    one: '{{count}} problem in {{checked}} contacts',
+    other: '{{count}} problems in {{checked}} contacts',
+  },
+  'logbook.tools.check.apply': {
+    one: 'Fix {{count}} ticked',
+    other: 'Fix {{count}} ticked',
+  },
+  'logbook.tools.check.ask': {
+    one: 'Make {{count}} fix? It is one change you can undo.',
+    other: 'Make {{count}} fixes? It is one change you can undo.',
+  },
+  'logbook.tools.check.confirm': {
+    one: 'Yes, fix {{count}}',
+    other: 'Yes, fix {{count}}',
+  },
+  'logbook.tools.check.applyFailed': 'The fixes could not be made',
+  'logbook.tools.check.done': {
+    one: 'Fixed {{count}} contact',
+    other: 'Fixed {{count}} contacts',
+  },
+  'logbook.tools.check.kind.grid': {
+    one: 'Grid not a locator ({{count}})',
+    other: 'Grid not a locator ({{count}})',
+  },
+  'logbook.tools.check.kind.myGrid': {
+    one: 'My grid not a locator ({{count}})',
+    other: 'My grid not a locator ({{count}})',
+  },
+  'logbook.tools.check.kind.dxcc': {
+    one: 'DXCC entity not the call’s prefix ({{count}})',
+    other: 'DXCC entity not the call’s prefix ({{count}})',
+  },
+  'logbook.tools.check.kind.noBand': {
+    one: 'Frequency and no band ({{count}})',
+    other: 'Frequency and no band ({{count}})',
+  },
+  'logbook.tools.check.kind.bandFreq': {
+    one: 'Band and frequency disagree ({{count}})',
+    other: 'Band and frequency disagree ({{count}})',
+  },
+  'logbook.tools.check.kind.endBeforeStart': {
+    one: 'Ends before it starts ({{count}})',
+    other: 'Ends before it starts ({{count}})',
+  },
+  'logbook.tools.check.kind.future': {
+    one: 'Dated in the future ({{count}})',
+    other: 'Dated in the future ({{count}})',
+  },
+  'logbook.tools.check.kind.iota': {
+    one: 'IOTA reference not in its format ({{count}})',
+    other: 'IOTA reference not in its format ({{count}})',
+  },
+  'logbook.tools.check.kind.pota': {
+    one: 'POTA reference not in its format ({{count}})',
+    other: 'POTA reference not in its format ({{count}})',
+  },
+  'logbook.tools.check.kind.sota': {
+    one: 'SOTA reference not in its format ({{count}})',
+    other: 'SOTA reference not in its format ({{count}})',
+  },
+  'logbook.tools.check.tickAll': {
+    one: 'Tick the {{count}} with a fix',
+    other: 'Tick all {{count}} with a fix',
+  },
+  'logbook.tools.check.empty': '(empty)',
+  'logbook.tools.check.fix': 'fix: {{value}}',
+  'logbook.tools.check.noFix': 'no fix: open the contact to correct it',
+  'logbook.tools.check.more': {
+    one: '{{count}} more not shown; ticking all of the kind includes them',
+    other: '{{count}} more not shown; ticking all of the kind includes them',
+  },
   // A contact's history, in the QSO detail view: each change, who made it, and its undo.
   'qso.history.title': 'History',
   'qso.history.empty': 'No changes recorded.',

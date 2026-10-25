@@ -32295,6 +32295,62 @@ tr.sel .aprs-sym {
   font-size: 0.85em;
 }
 
+/* The Logbook's clean-up tools (LogTools.tsx): a `ui/Dialog`, which scrolls its own content past
+   its capped height. Rows wrap on a narrow window rather than running wide; a question asked before
+   a change sits on a line of its own, never where the pointer already is. */
+.log-tools-tabs,
+.log-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-1) 0;
+}
+.log-tools-row input[type='text'] {
+  min-width: 0;
+  flex: 1 1 10rem;
+}
+.log-tools-list,
+.log-tools-copies,
+.log-tools-conflicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.log-tools-group {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.log-tools-copy,
+.log-tools-conflicts > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding: 2px 0;
+}
+.log-tools-choice {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.log-tools-note {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+/* A guarded conflict not chosen yet: its group cannot merge until it is. */
+.log-tools-note.danger {
+  color: var(--state-weak);
+  font-weight: 700;
+}
+.log-tools-confirm {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  font-size: 0.85em;
+}
+
 /* ===========================================================================
    THE STREET MAP'S DOWNLOAD SHEET (StreetDownloadSheet.tsx) and Settings ▸ Appearance ▸ Map & globe ▸
    Street maps (SettingsStreetMaps.tsx). The sheet is a `ui/Dialog`: its box keeps the portaled
