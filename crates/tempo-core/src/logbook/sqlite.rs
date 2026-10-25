@@ -5115,6 +5115,13 @@ mod tests {
             );
         }
         assert!(!plan.contains("SCAN x"), "{plan}");
+        // And each field's contest column beside it: on that table's own key, never a scan of
+        // every contest row for each contact.
+        assert!(
+            plan.contains("SEARCH c USING INDEX sqlite_autoindex_qso_contest_adif_1 (qso_id=?)"),
+            "{plan}"
+        );
+        assert!(!plan.contains("SCAN c"), "{plan}");
     }
 
     // ── a streamed read of whole records ─────────────────────────────────────

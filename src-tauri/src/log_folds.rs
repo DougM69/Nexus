@@ -108,13 +108,15 @@ const AWARDS: Narrow = Narrow {
 };
 
 /// The passthrough fields the award fold reads: [`AWARD_EXTRAS`], and the WWFF reference and QSL
-/// route its WWFF count and What-to-QSL list read ([`award_extras`]).
+/// route its WWFF count and What-to-QSL list read ([`award_extras`]). `STATE` brings a merged
+/// contest contact's exchange state, as there.
 const AWARDS_EXTRAS: &[&str] = &[
     "CQZ",
     tempo_core::logbook::LOTW_DXCC_FIELD,
     tempo_core::logbook::EQSL_AG_FIELD,
     "WWFF_REF",
     "QSL_VIA",
+    "STATE",
 ];
 
 /// [`journey_qso`]'s inputs.
@@ -255,21 +257,28 @@ pub(crate) fn needs_finish(
     let mut needs = propagation::LogNeeds::new();
     let fresh = rows
         .each_with(NEEDS, AWARD_EXTRAS, Scope::All, Order::Log, &mut |q| {
-            // A "needs confirmation" must be award-grade (LoTW/paper), not eQSL.
-            needs.add_qso(
-                &q.call,
-                &q.band,
-                &q.mode,
-                q.grid.as_deref(),
-                q.state.as_deref(),
-                q.award_confirmed,
-                qso_is_sat(q.prop_mode.as_deref()),
-                award_fields(q),
-            );
+            needs_add(&mut needs, q);
             ControlFlow::Continue(())
         })
         .map_err(unreadable)?;
     keep(kept, mark, (), needs, fresh)
+}
+
+/// One record into the needs model.
+fn needs_add(needs: &mut propagation::LogNeeds, q: &QsoRecord) {
+    // A "needs confirmation" must be award-grade (LoTW/paper), not eQSL.
+    needs.add_qso(
+        &q.call,
+        &q.band,
+        &q.mode,
+        q.grid.as_deref(),
+        // The state its upload carries: a merged contest contact's exchange, unless the
+        // operator has edited it (`record_field`).
+        tempo_core::logbook::record_field(q, "STATE"),
+        q.award_confirmed,
+        qso_is_sat(q.prop_mode.as_deref()),
+        award_fields(q),
+    );
 }
 
 /// The award-needs model of the whole log, folded again only when the log's content moves.
@@ -451,7 +460,8 @@ fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
         // The paper-card channel alone — IOTA's award gate (the IOTA program accepts cards and
         // Club Log matching, never LoTW).
         q.qsl_rcvd.card,
-        q.state.as_deref(),
+        // The state its upload carries (`record_field`), as the WAS needs and custom awards read.
+        tempo_core::logbook::record_field(q, "STATE"),
         q.grid.as_deref(),
         q.ota.iota.as_deref(),
         qso_is_sat(q.prop_mode.as_deref()),
@@ -2386,6 +2396,81 @@ mod tests {
                 ("CQZ".to_string(), 1)
             ]
         );
+    }
+
+    /// ★ WAS, the WAS needs and a custom award on STATE count the state a merged contest
+    /// contact's exchange carries — the state its upload carries — and not the resolver's guess
+    /// beside it; and once the operator edits State, all of them count the edit. Read the way
+    /// the folds read the log (the store's narrow reads) and as a whole record.
+    #[test]
+    fn every_state_reader_counts_the_state_the_upload_carries() {
+        use propagation::custom::{CustomAward, CustomAwards, CustomKind};
+        let merged = |own: &str, sent: &str| {
+            let mut r = merged_contest_contact();
+            r.state = Some(own.into());
+            r.contest
+                .as_mut()
+                .unwrap()
+                .adif
+                .push(("STATE".into(), sent.into()));
+            r
+        };
+        let counted = |r: &QsoRecord| {
+            let upload = tempo_core::logbook::adif_record(r);
+            let was = awards_for_records(&[r], "KD9TAW").was;
+            let mut db = tempo_core::logbook::sqlite::LogDb::open_in_memory().unwrap();
+            db.insert(r, Resolved::default()).unwrap();
+            let mut narrow_was = Vec::new();
+            let mut awards = propagation::Awards::new();
+            db.each_narrow_with(AWARDS, AWARDS_EXTRAS, Scope::All, Order::Log, &mut |q| {
+                award_add(&mut awards, q);
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+            narrow_was.push(awards.summary().was.needed);
+            let mut needs = propagation::LogNeeds::new();
+            db.each_narrow_with(NEEDS, AWARD_EXTRAS, Scope::All, Order::Log, &mut |q| {
+                needs_add(&mut needs, q);
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+            let defs = [CustomAward {
+                name: "states".into(),
+                kind: CustomKind::Field,
+                field: "STATE".into(),
+                targets: vec!["NY".into(), "NJ".into(), "PA".into()],
+                ..CustomAward::default()
+            }];
+            let mut custom = CustomAwards::new(&defs);
+            custom_add(&mut custom, r);
+            (
+                upload,
+                was.needed,
+                narrow_was.remove(0),
+                needs
+                    .worked_states()
+                    .iter()
+                    .map(|(state, _)| state.clone())
+                    .collect::<Vec<_>>(),
+                custom.progress()[0].worked,
+            )
+        };
+        // One state each, confirmed: WAS needs every state but the one it counted.
+        let check = |r: &QsoRecord, want: &str| {
+            let (upload, was, narrow, needs, custom) = counted(r);
+            assert_eq!(upload.matches("<STATE:").count(), 1, "{upload}");
+            assert!(upload.contains(&format!("<STATE:2>{want}")), "{upload}");
+            for needed in [&was, &narrow] {
+                assert_eq!(needed.len(), 49, "{needed:?}");
+                assert!(!needed.iter().any(|s| s == want), "{want}: {needed:?}");
+            }
+            assert_eq!(needs, [want], "the WAS needs");
+            assert_eq!(custom, 1);
+        };
+        // Unedited: the resolver said NJ, the station sent NY.
+        check(&merged("NJ", "NY"), "NY");
+        // The operator's edit, as the Logbook's edit writes it: the field and the exchange.
+        check(&merged("PA", "PA"), "PA");
     }
 
     /// One ADIF record, parsed as the log parses it, with no id.

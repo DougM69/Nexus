@@ -263,7 +263,11 @@ pub const EQSL_AG_FIELD: &str = "APP_EQSL_AG";
 /// The passthrough fields ([`QsoRecord::extra`]) the award folds read beside their columns: the
 /// contact's CQ zone, LoTW's DXCC and eQSL's Authenticity-Guaranteed mark. What a narrow read of
 /// the store asks for them by (`sqlite::LogDb::each_narrow_with`).
-pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD, EQSL_AG_FIELD];
+///
+/// And `STATE`, which no passthrough holds: asked for here, the narrow read brings a merged
+/// contest contact's exchange `STATE` with it, the state its upload carries and WAS counts
+/// ([`record_field`]).
+pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD, EQSL_AG_FIELD, "STATE"];
 
 /// A passthrough field's value, by its (uppercased) ADIF name.
 fn extra_value<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
@@ -3533,6 +3537,13 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         {
             continue;
         }
+        // Nor a tag the contest exchange already wrote (`contest_fields` writes every non-empty
+        // one): a confirmation download used to fill a CQ zone or county here beside the one
+        // the station sent, and the file then carried two, which can disagree. The exchange's
+        // is the one [`record_field`] reads; the other stays in the store.
+        if contest_adif.iter().any(|(t, cv)| t == k && !cv.is_empty()) {
+            continue;
+        }
         out.push_str(&field(k, v));
     }
     out.push_str("<EOR>\n");
@@ -5746,6 +5757,10 @@ mod tests {
                 .map(|rest| &rest[rest.find('>').unwrap() + 1..])
                 .map(|v| &v[..v.find('<').unwrap_or(v.len())]);
             assert_eq!(first, want, "the first {tag} the file writes: {out}");
+            // And the only one: a zone a service filled beside the one the station sent is
+            // never uploaded beside it.
+            let count = out.matches(&format!("<{tag}:")).count();
+            assert_eq!(count, usize::from(want.is_some()), "{tag}: {out}");
         }
         assert_eq!(record_cq_zone(&r), Some(3));
         // A blank value is none, wherever it is.

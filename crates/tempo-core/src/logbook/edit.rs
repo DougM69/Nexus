@@ -170,9 +170,35 @@ impl QsoEdit {
     /// The fields the form echoed from the row it opened (`confirmed`, `awardConfirmed`,
     /// `upload`) are echoed here from `stored`, and `update_record` overwrites them whatever they
     /// hold. The IOTA reference is the edit's where it carries one, else the stored one.
+    ///
+    /// ⭐ **A State edit replaces the state a merged contest exchange carries.** The exchange's
+    /// `STATE` is what the record's ADIF writes in place of the field (the duplicate-`STATE`
+    /// guard), and what WAS and the custom awards read ([`super::record_field`]), so an edit of the
+    /// field alone would reach none of them. Where the operator changed State, the stored contest
+    /// block comes back with its `STATE` set to theirs, in its place; everything else in it is
+    /// the stored block's, which `update_record` would have restored. An edit that leaves State as
+    /// it was leaves the exchange's alone.
     pub fn record(&self, stored: &QsoRecord) -> QsoRecord {
         // A reference the edit refuses is never written; the edit command refuses it first.
         let iota = self.iota().ok().flatten();
+        fn typed(v: &Option<String>) -> Option<&str> {
+            v.as_deref().map(str::trim).filter(|v| !v.is_empty())
+        }
+        let contest = stored
+            .contest
+            .as_deref()
+            .filter(|c| c.adif.iter().any(|(t, _)| t == "STATE"))
+            .zip(typed(&self.state))
+            .filter(|(_, state)| typed(&stored.state) != Some(*state))
+            .map(|(c, state)| {
+                let mut c = c.clone();
+                for (t, v) in &mut c.adif {
+                    if t == "STATE" {
+                        *v = state.to_string();
+                    }
+                }
+                Box::new(c)
+            });
         QsoRecord {
             // Identity is the log's: `update_record` restores the stored id.
             id: None,
@@ -229,7 +255,7 @@ impl QsoEdit {
             my_grid: self.my_grid.clone(),
             my_rig: self.my_rig.clone(),
             extra: Vec::new(),
-            contest: None,
+            contest,
         }
     }
 
@@ -836,5 +862,100 @@ mod tests {
             QsoEdit::project(&r).key(),
             QsoEdit::project(&record()).key()
         );
+    }
+
+    /// ★ A State edit on a merged contest contact is the state everywhere: the exchange's copy
+    /// becomes the operator's, so the upload, WAS and a custom award all read the one value. An
+    /// edit that leaves State alone leaves the state the other station sent where it was, and
+    /// an Undo of the State edit gives that state back to every reader.
+    #[test]
+    fn a_state_edit_replaces_the_state_a_merged_contests_exchange_carries() {
+        use crate::logbook::history::{self, Kind, Note, Source, Undo};
+        use crate::logbook::sqlite::{Batch, LogDb, RowWrite};
+        use crate::logbook::{adif_record, record_field, ContestFields, Logbook};
+        use std::sync::Arc;
+
+        let mut stored = record();
+        stored.call = "W2XYZ".into();
+        // The resolver's guess, and what the station said in the exchange.
+        stored.state = Some("NJ".into());
+        stored.contest = Some(Box::new(ContestFields {
+            session: "naqp".into(),
+            contest_id: "NAQP-CW".into(),
+            adif: vec![
+                ("ARRL_SECT".into(), "NNY".into()),
+                ("STATE".into(), "NY".into()),
+            ],
+            ..ContestFields::default()
+        }));
+        // What every reader takes for the contact's state: the accessor, and the upload.
+        let read = |r: &QsoRecord| {
+            let out = adif_record(r);
+            let tags = out.matches("<STATE:").count();
+            (record_field(r, "STATE").map(str::to_string), tags, out)
+        };
+        let mut lb = Logbook::new();
+        lb.add(stored.clone());
+
+        // An edit of the name only: the exchange's state stays the state.
+        let mut e = QsoEdit::project(&stored);
+        e.name = Some("Hiram".into());
+        assert!(lb.update_record(0, e.record(&stored)));
+        let unedited = QsoRecord::clone(&lb.records()[0]);
+        let (state, tags, out) = read(&unedited);
+        assert_eq!((state.as_deref(), tags), (Some("NY"), 1), "{out}");
+        assert!(out.contains("<STATE:2>NY"), "{out}");
+        assert_eq!(unedited.contest, stored.contest, "the block is untouched");
+
+        // The operator's State edit: one value, in the field and the exchange alike.
+        let mut e = QsoEdit::project(&unedited);
+        e.state = Some("PA".into());
+        assert!(lb.update_record(0, e.record(&unedited)));
+        let edited = QsoRecord::clone(&lb.records()[0]);
+        let (state, tags, out) = read(&edited);
+        assert_eq!((state.as_deref(), tags), (Some("PA"), 1), "{out}");
+        assert!(out.contains("<STATE:2>PA"), "{out}");
+        assert_eq!(edited.state.as_deref(), Some("PA"));
+        let block = edited.contest.as_deref().expect("the block stays");
+        assert_eq!(
+            block.adif,
+            [
+                ("ARRL_SECT".to_string(), "NNY".to_string()),
+                ("STATE".to_string(), "PA".to_string()),
+            ],
+            "only the exchange's state moved, in its place"
+        );
+        assert_eq!(block.session, "naqp", "the merge's key is kept");
+
+        // Undo, as the history records the edit: the state the station sent comes back.
+        let mut db = LogDb::open_in_memory().unwrap();
+        let mut row = unedited.clone();
+        row.id = Some(crate::logbook::RecordId::Provisional {
+            hash: 1,
+            ordinal: 0,
+        });
+        let mut after = edited.clone();
+        after.id = row.id;
+        let note = Note {
+            run: "e".into(),
+            at_ms: 1_700_000_000_000,
+            source: Source::Operator,
+            edit: Kind::Edit,
+            undoes: Default::default(),
+        };
+        for (r, note) in [(&row, None), (&after, Some(&note))] {
+            db.apply(Batch {
+                upsert: &[RowWrite::new(Arc::new(r.clone()))],
+                history: note,
+                ..Batch::default()
+            })
+            .unwrap();
+        }
+        let entries = db.history_of(row.id.unwrap()).unwrap();
+        let Ok(Undo::Revert { row: undone, .. }) = history::undo(&entries[0], Some(&after)) else {
+            panic!("the State edit undoes: {entries:?}");
+        };
+        let (state, tags, out) = read(&undone);
+        assert_eq!((state.as_deref(), tags), (Some("NY"), 1), "{out}");
     }
 }
