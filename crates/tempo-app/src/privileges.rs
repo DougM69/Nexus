@@ -20,6 +20,17 @@
 
 use crate::settings::{LicenseClass, OperatingMode};
 
+/// Every US licence class, in order of privilege, and the one list a test that claims to cover
+/// every US class iterates, so a class added here is swept by all of them. `Open` is not a US
+/// class: no US privilege model applies to it.
+pub const US_CLASSES: [LicenseClass; 5] = [
+    LicenseClass::Novice,
+    LicenseClass::Technician,
+    LicenseClass::General,
+    LicenseClass::Advanced,
+    LicenseClass::Extra,
+];
+
 /// One contiguous frequency segment and which emission types a class may use in it.
 #[derive(Debug, Clone, Copy)]
 struct Seg {
@@ -602,7 +613,7 @@ mod tests {
             "70cm", "23cm",
         ];
         let mut homes = 0;
-        for class in [Novice, Technician, General, Advanced, Extra, Open] {
+        for class in US_CLASSES.into_iter().chain([Open]) {
             for band in BANDS {
                 let Some((dial, sb)) = phone_home(class, band) else {
                     continue;
@@ -673,7 +684,7 @@ mod tests {
         // privilege into DISJOINT segments, the strip would shade the no-phone gap as legal. This
         // fails loudly at that point so the shading stays legally honest.
         use std::collections::BTreeMap;
-        for class in [Novice, Technician, General, Advanced, Extra] {
+        for class in US_CLASSES {
             let mut by_band: BTreeMap<&'static str, Vec<(f64, f64)>> = BTreeMap::new();
             for seg in segments(class).iter().filter(|s| s.phone) {
                 if let Some(b) = crate::bandplan::band_for_dial(seg.lo) {
@@ -707,7 +718,7 @@ mod tests {
     /// HF and 6 m, 100 Hz across 60 m's 2.8 kHz channels, 50 kHz from 4 m up.
     fn privilege_samples() -> Vec<f64> {
         let mut f = Vec::new();
-        for class in [Novice, Technician, General, Advanced, Extra, Open] {
+        for class in US_CLASSES.into_iter().chain([Open]) {
             for seg in segments(class) {
                 for edge in [seg.lo, seg.hi] {
                     f.extend([edge, edge - 1e-6, edge + 1e-6]);
@@ -743,7 +754,7 @@ mod tests {
     #[test]
     fn allowed_spans_agree_with_tx_allowed_for_every_class_and_mode() {
         let samples = privilege_samples();
-        for class in [Novice, Technician, General, Advanced, Extra, Open] {
+        for class in US_CLASSES.into_iter().chain([Open]) {
             for mode in [Digital, Phone, Cw, Rtty, Keyboard] {
                 let spans = allowed_spans(class, mode);
                 if matches!(class, Open) {
@@ -943,7 +954,7 @@ mod tests {
     /// Every other band keeps its lower sideband, and `Open` is trusted.
     #[test]
     fn lsb_phone_is_refused_anywhere_on_60_m() {
-        for class in [Novice, Technician, General, Advanced, Extra] {
+        for class in US_CLASSES {
             for carrier in [
                 5.3305, 5.3333, 5.3493, 5.3543, 5.3600, 5.3636, 5.3743, 5.4063,
             ] {

@@ -296,9 +296,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Technician and Novice: only CW and single-sideband voice on 28.3–28.5 MHz.** The transmit
-  lockout let a Technician send AM, FM and SSTV pictures there, and a Novice SSTV pictures, which
-  47 CFR 97.307(f)(10) does not allow. They are now refused, and the refusal says why. General,
-  Advanced and Extra are unchanged.
+  lockout let a Technician send AM, FM and SSTV pictures there, which 47 CFR 97.307(f)(10) does
+  not allow. They are now refused for a Technician and a Novice, and the refusal says why. Another
+  program keying the radio there through the CAT broker or TCI may key only while the radio is in
+  plain USB or LSB: with the radio in a DATA mode, or before Nexus has read its mode, the key is
+  refused and the connection log says why. General, Advanced and Extra are unchanged.
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
 - **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone

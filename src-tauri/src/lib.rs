@@ -20329,13 +20329,15 @@ fn get_band_plan(
     Ok(plan)
 }
 
-/// Set the operator's amateur license class (Technician/General/Extra/Open) — drives the
-/// transmit-privilege lockout + the licensed-segment band dropdown. Used by the first-run
-/// wizard and Settings.
+/// Set the operator's amateur license class (Novice/Technician/General/Advanced/Extra/Open) —
+/// drives the transmit-privilege lockout + the licensed-segment band dropdown. Used by the
+/// first-run wizard and Settings. A word that names no class is refused and nothing is saved.
 #[tauri::command(async)]
 fn set_license_class(state: State<'_, SharedEngine>, class: String) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.set_license_class(&class);
+    if !eng.set_license_class(&class) {
+        return Err(format!("unknown license class {class:?}"));
+    }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist license class: {e}")
     });
@@ -35536,6 +35538,7 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         let opted_in = e.settings().cat_broker_ptt;
         let tx_enabled = e.tx_enabled();
         let tx_allowed = e.tx_allowed();
+        let outside_key = e.outside_key_allowed();
         let owner = e.tx_owner();
         let clock_repair = e.clock_repair_holds_tx();
         let held = e.remote_transmit_held();
@@ -35559,6 +35562,8 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         } else if !tx_allowed {
             "transmit is not allowed here (license privileges or band edge on this dial)"
                 .to_string()
+        } else if !outside_key {
+            tempo_app::engine::OUTSIDE_KEY_VOICE_ONLY.to_string()
         } else if let Some(o) = owner {
             o.busy_reason()
         } else if held {
@@ -42929,6 +42934,46 @@ mod tests {
         }
     }
 
+    /// ⛔ A CAT broker client's key from 28.3 to 28.5 MHz for a Technician, with the radio in a DATA
+    /// submode: refused, and the connection log says why in the rule's own words. CONTROL: in
+    /// plain USB the same key is granted.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_broker_refuses_a_ten_meter_data_key_and_says_why() {
+        use tempo_app::settings::{OperatingMode, Settings};
+        use tempo_audio::rigctld_server::RigBackend;
+        let rig_in = |read_back: &str| {
+            let mut e = tempo_app::engine::Engine::with_settings(Settings {
+                operating_mode: OperatingMode::Phone,
+                band: "10m".into(),
+                dial_mhz: 28.400,
+                sideband: "USB".into(),
+                cat_broker_ptt: true,
+                ..Settings::default()
+            });
+            assert!(e.set_license_class("technician"));
+            e.set_tx_enabled(true);
+            e.observe_rig_mode(read_back.into());
+            assert!(e.tx_allowed(), "precondition: USB voice keys at 28.400");
+            super::EngineRig::new(std::sync::Arc::new(std::sync::Mutex::new(e)))
+        };
+        let line = format!(
+            "refused PTT from a client: {}",
+            tempo_app::engine::OUTSIDE_KEY_VOICE_ONLY
+        );
+        assert!(
+            !rig_in("PKTUSB").set_ptt(true),
+            "a key in PKTUSB is refused"
+        );
+        assert!(
+            super::get_connection_log()
+                .iter()
+                .any(|e| e.connector == "CAT broker" && e.message == line),
+            "the log names the rule: {line}"
+        );
+        assert!(rig_in("USB").set_ptt(true), "control: plain USB keys");
+    }
+
     /// #140, the reported half: the CAT broker answered `RPRT 0` to EVERY mode word. It
     /// collapsed anything that was not LSB or FM to plain USB and returned true, so VarAC or
     /// FreeDV asking for `PKTUSB`/`DATA-U` was told "done" while the rig sat in voice USB.
@@ -43252,7 +43297,7 @@ mod tests {
     /// returns can see a row that was never built.
     #[test]
     fn the_phone_and_cw_dropdowns_offer_4m_to_a_region_1_operator() {
-        use tempo_app::settings::LicenseClass::{Extra, General, Open, Technician};
+        use tempo_app::settings::LicenseClass::Open;
         use tempo_app::settings::OperatingMode::{Cw, Phone};
         let ch = |class, mode| {
             super::licensed_bands(class, mode)
@@ -43282,7 +43327,7 @@ mod tests {
         // The safety half did NOT change and is asserted here alongside: no US class may
         // KEY 4 m, and `privileges::tx_allowed` is what refuses it. Listing a band is not
         // permission to transmit on it.
-        for class in [Technician, General, Extra] {
+        for class in tempo_app::privileges::US_CLASSES {
             for mode in [Phone, Cw] {
                 let row = ch(class, mode).unwrap_or_else(|| {
                     panic!("{class:?} {mode:?}: 4 m must be listed so it can be listened to")
@@ -43295,10 +43340,11 @@ mod tests {
                     !tempo_app::privileges::tx_allowed(class, row.dial_mhz, mode),
                     "{class:?} {mode:?}: the US has no 4 m allocation — the gate must refuse"
                 );
+                // A Novice holds no 2 m: 1.25 m and 23 cm are its VHF-and-up bands.
                 assert!(
                     super::licensed_bands(class, mode)
                         .iter()
-                        .any(|c| c.band == "2m"),
+                        .any(|c| c.group == "VHF" && c.tx),
                     "control: {class:?} {mode:?} still gets the VHF bands they do hold"
                 );
             }
@@ -55092,7 +55138,9 @@ mod tests {
             ("TX off", |e| e.set_tx_enabled(false), "TX is off"),
             (
                 "outside the licence",
-                |e| e.set_license_class("technician"),
+                |e| {
+                    e.set_license_class("technician");
+                },
                 "TX locked",
             ),
             (
