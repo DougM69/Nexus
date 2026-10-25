@@ -32581,7 +32581,7 @@ tr.sel .aprs-sym {
   background: var(--panel, var(--bg));
   color: var(--text-dim);
   font-weight: 500;
-  padding: 2px 4px;
+  padding: 2px var(--space-1);
 }
 .aw-chart tbody th {
   position: sticky;
@@ -32618,7 +32618,7 @@ td.aw-cc {
 .aw-chart-only {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--fs-label);
   color: var(--text-dim);
 }
