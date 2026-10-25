@@ -28997,23 +28997,24 @@ fn note_lookup_answer(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::Q
 /// HamQTH fallback so it works without a QRZ subscription. Each path uses the same
 /// bounded cached-session → login-once → retry pattern; both produce the same DTO, so
 /// the command's return type and the whole UI are unchanged.
-#[tauri::command]
-async fn qrz_lookup(
-    callsign: String,
-    state: State<'_, SharedEngine>,
-    qrz_session: State<'_, SharedQrzSession>,
-    hamqth_session: State<'_, SharedHamQthSession>,
+///
+/// callook.info is asked last ([`tempo_core::callook`]), for a US-shaped call only and only with
+/// the setting on; it needs no account. This asks the network every time: the cache in front of
+/// it is [`callbook_lookup`]'s, and the answer is handed to the engine there too.
+async fn callbook_lookup_live(
+    call: &str,
+    state: &SharedEngine,
+    qrz_session: &SharedQrzSession,
+    hamqth_session: &SharedHamQthSession,
 ) -> Result<tempo_app::dto::QrzLookupDto, String> {
-    let call = callsign.trim().to_string();
-    if call.is_empty() {
-        return Err("Enter a callsign to look up.".to_string());
-    }
-    let (qrz_username, hamqth_username) = {
-        let eng = engine_lock(&state);
+    let call = call.to_string();
+    let (qrz_username, hamqth_username, callook_on) = {
+        let eng = engine_lock(state);
         let s = eng.settings();
         (
             s.qrz_username.trim().to_string(),
             s.hamqth_username.trim().to_string(),
+            s.callook_lookup,
         )
     };
 
@@ -29030,9 +29031,7 @@ async fn qrz_lookup(
     // for the typed call before either is asked for the base — a stroked call may be registered
     // in its own right, and the operator asked for THAT call.
     let candidates = callbook_candidates(&call);
-    for (i, cand) in candidates.iter().enumerate() {
-        let last_candidate = i + 1 == candidates.len();
-
+    for cand in &candidates {
         // 1) QRZ first, when configured (username + stored password). A missing username,
         //    a missing password, or a QRZ "not found" all fall through to HamQTH below.
         if !qrz_username.is_empty() {
@@ -29040,11 +29039,8 @@ async fn qrz_lookup(
                 queried_any = true;
                 // Blocking HTTP: on the blocking pool (see `get_aurora`).
                 let attempt = {
-                    let (cand, user, session) = (
-                        cand.clone(),
-                        qrz_username.clone(),
-                        qrz_session.inner().clone(),
-                    );
+                    let (cand, user, session) =
+                        (cand.clone(), qrz_username.clone(), qrz_session.clone());
                     tauri::async_runtime::spawn_blocking(move || {
                         qrz_lookup_attempt(&cand, &user, &password, &session)
                     })
@@ -29072,9 +29068,6 @@ async fn qrz_lookup(
                     _ => {}
                 }
                 if let QrzOutcome::Found(dto, _) = attempt.map_err(|f| f.message.into_string())? {
-                    note_lookup_name(&state, &call, &dto);
-                    note_lookup_fix(&state, &call, &dto);
-                    note_lookup_answer(&state, &call, &dto);
                     return Ok(*dto);
                 }
             }
@@ -29099,24 +29092,32 @@ async fn qrz_lookup(
                     .map_err(|e| e.to_string())?
                 };
                 if let Some(dto) = attempt? {
-                    note_lookup_name(&state, &call, &dto);
-                    note_lookup_fix(&state, &call, &dto);
-                    note_lookup_answer(&state, &call, &dto);
                     return Ok(dto);
                 }
-                // HamQTH was queried and answered — a genuine miss for THIS candidate. Only the
-                // last one is a miss for the lookup; before that there is still the base to try,
-                // and returning here is what would make the whole fix unreachable on any station
-                // with HamQTH configured.
-                if last_candidate {
-                    return Err(not_found());
-                }
+                // HamQTH was queried and answered — a genuine miss for THIS candidate. Never a
+                // return here: the base, and callook.info, are still to be asked, and returning
+                // is what would make the stroke fix unreachable on any station with HamQTH set.
+            }
+        }
+
+        // 3) callook.info, the free US licence lookup: no account, so nothing from the
+        //    keychain. A stroked candidate is never sent (it holds none); its base is.
+        if callook_on && tempo_core::callook::is_us_call(cand) {
+            queried_any = true;
+            let url = tempo_core::callook::build_lookup_url(cand);
+            let body = tauri::async_runtime::spawn_blocking(move || {
+                propagation::live::callook::fetch(&url)
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            if let Some(rec) = tempo_core::callook::parse_callsign(&body) {
+                return Ok(rec.into());
             }
         }
     }
 
-    // Neither callbook produced a record.
-    if qrz_username.is_empty() && hamqth_username.is_empty() {
+    // No callbook produced a record.
+    if !queried_any && qrz_username.is_empty() && hamqth_username.is_empty() {
         Err("Set your QRZ or HamQTH username in Settings first.".to_string())
     } else if !queried_any {
         // A username IS set but no password is stored, so no lookup actually ran.
@@ -29137,6 +29138,189 @@ async fn qrz_lookup(
     } else {
         Err(not_found())
     }
+}
+
+/// The on-disk callbook cache ([`tempo_core::callbook_cache`]), opened on first use beside
+/// `settings.json`. `None` inside when it cannot be opened: lookups then simply go to the network.
+/// A newtype for Tauri's TypeId-keyed state, like [`SharedHamQthSession`].
+#[derive(Default)]
+struct SharedCallbookCache(OnceLock<Option<Mutex<tempo_core::callbook_cache::CallbookCache>>>);
+
+impl SharedCallbookCache {
+    #[cfg(test)]
+    fn with(cache: tempo_core::callbook_cache::CallbookCache) -> Self {
+        let cell = OnceLock::new();
+        let _ = cell.set(Some(Mutex::new(cache)));
+        Self(cell)
+    }
+
+    fn store(&self) -> Option<&Mutex<tempo_core::callbook_cache::CallbookCache>> {
+        self.0
+            .get_or_init(|| {
+                // ⛔ Never the operator's file under test, as for `conn_health_path`.
+                #[cfg(test)]
+                let opened = tempo_core::callbook_cache::CallbookCache::open_in_memory(
+                    tempo_core::callbook_cache::CAPACITY,
+                );
+                #[cfg(not(test))]
+                let opened = tempo_core::callbook_cache::CallbookCache::open(
+                    &config_dir().join(tempo_core::callbook_cache::FILE_NAME),
+                );
+                match opened {
+                    Ok(c) => Some(Mutex::new(c)),
+                    Err(_) => {
+                        eprintln!("[callbook] the lookup cache could not be opened; lookups go to the network");
+                        None
+                    }
+                }
+            })
+            .as_ref()
+    }
+
+    /// The kept answer for `call` and when it was fetched, at any age. An unreadable row is no row.
+    fn get(&self, call: &str) -> Option<(tempo_app::dto::QrzLookupDto, i64)> {
+        let store = self.store()?.lock().ok()?;
+        let hit = store.get(call).ok()??;
+        let dto = serde_json::from_str(&hit.answer).ok()?;
+        Some((dto, hit.fetched_at))
+    }
+
+    /// Keep `dto` as the answer for `call`. Only the parsed public answer is stored: never the
+    /// response body, the request, or anything from the keychain (see the cache's header).
+    fn put(&self, call: &str, dto: &tempo_app::dto::QrzLookupDto, now: i64) {
+        let (Some(store), Ok(json)) = (self.store(), serde_json::to_string(dto)) else {
+            return;
+        };
+        if let Ok(store) = store.lock() {
+            let _ = store.put(call, &json, now);
+        }
+    }
+}
+
+/// The cache in front of a callbook lookup. A kept answer younger than `max_age` answers without
+/// the network; otherwise `live` asks, and its answer is kept. When `live` fails — offline, the
+/// callbook down, the sign-in gone — an older kept answer is still the answer. `refresh` skips the
+/// kept answer and reports the network's failure as it is, so "refresh" never pretends.
+async fn cached_callbook_lookup<F, Fut>(
+    cache: &SharedCallbookCache,
+    call: &str,
+    max_age: i64,
+    now: i64,
+    refresh: bool,
+    live: F,
+) -> Result<tempo_app::dto::QrzLookupDto, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<tempo_app::dto::QrzLookupDto, String>>,
+{
+    let kept = if refresh { None } else { cache.get(call) };
+    if let Some((dto, fetched_at)) = &kept {
+        let hit = tempo_core::callbook_cache::CachedAnswer {
+            answer: String::new(),
+            fetched_at: *fetched_at,
+        };
+        if hit.is_fresh(now, max_age) {
+            return Ok(dto.clone());
+        }
+    }
+    match live().await {
+        Ok(dto) => {
+            cache.put(call, &dto, now);
+            Ok(dto)
+        }
+        Err(e) => kept.map(|(dto, _)| dto).ok_or(e),
+    }
+}
+
+/// A lookup through the cache, its answer handed to the engine whichever way it came. That hand
+/// is what warms the engine's in-memory answers from the disk: at the moment a lookup would have
+/// run, never on the logging path, which reads memory only and so never waits for this.
+async fn callbook_lookup(
+    callsign: &str,
+    refresh: bool,
+    state: &SharedEngine,
+    qrz_session: &SharedQrzSession,
+    hamqth_session: &SharedHamQthSession,
+    cache: &SharedCallbookCache,
+) -> Result<tempo_app::dto::QrzLookupDto, String> {
+    let call = callsign.trim().to_string();
+    if call.is_empty() {
+        return Err("Enter a callsign to look up.".to_string());
+    }
+    let max_age = engine_lock(state).settings().callbook_cache_max_age_secs();
+    let dto = cached_callbook_lookup(cache, &call, max_age, now_unix(), refresh, || {
+        callbook_lookup_live(&call, state, qrz_session, hamqth_session)
+    })
+    .await?;
+    note_lookup_name(state, &call, &dto);
+    note_lookup_fix(state, &call, &dto);
+    note_lookup_answer(state, &call, &dto);
+    Ok(dto)
+}
+
+/// Look up a callsign: the kept answer while it is fresh, else the callbooks
+/// ([`callbook_lookup_live`]). See [`cached_callbook_lookup`].
+#[tauri::command]
+async fn qrz_lookup(
+    callsign: String,
+    state: State<'_, SharedEngine>,
+    qrz_session: State<'_, SharedQrzSession>,
+    hamqth_session: State<'_, SharedHamQthSession>,
+    cache: State<'_, SharedCallbookCache>,
+) -> Result<tempo_app::dto::QrzLookupDto, String> {
+    callbook_lookup(
+        &callsign,
+        false,
+        &state,
+        &qrz_session,
+        &hamqth_session,
+        &cache,
+    )
+    .await
+}
+
+/// Settings' "refresh this call": ask the callbooks again whatever the cache holds, and keep the
+/// new answer. A failure is reported, and the old answer stays.
+#[tauri::command]
+async fn callbook_refresh(
+    callsign: String,
+    state: State<'_, SharedEngine>,
+    qrz_session: State<'_, SharedQrzSession>,
+    hamqth_session: State<'_, SharedHamQthSession>,
+    cache: State<'_, SharedCallbookCache>,
+) -> Result<tempo_app::dto::QrzLookupDto, String> {
+    callbook_lookup(
+        &callsign,
+        true,
+        &state,
+        &qrz_session,
+        &hamqth_session,
+        &cache,
+    )
+    .await
+}
+
+/// How many calls the callbook cache holds (Settings shows it beside "clear").
+#[tauri::command]
+fn callbook_cache_count(cache: State<'_, SharedCallbookCache>) -> usize {
+    cache
+        .store()
+        .and_then(|s| s.lock().ok().and_then(|s| s.len().ok()))
+        .unwrap_or(0)
+}
+
+/// Settings' "clear cache": forget every kept callbook answer. This session's in-memory answers
+/// (the engine's) are left alone; they go when the app closes.
+#[tauri::command]
+fn callbook_cache_clear(cache: State<'_, SharedCallbookCache>) -> Result<(), String> {
+    let Some(store) = cache.store() else {
+        return Ok(());
+    };
+    store
+        .lock()
+        .map_err(|_| "The callbook cache is busy.".to_string())?
+        .clear()
+        .map_err(|_| "The callbook cache could not be cleared.".to_string())
 }
 
 /// Push one logged QSO to the operator's QRZ.com logbook (the Logbook API, a
@@ -39165,6 +39349,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_hamqth_password,
         clear_hamqth_password,
         qrz_lookup,
+        callbook_refresh,
+        callbook_cache_count,
+        callbook_cache_clear,
         check_for_update,
         open_download_page,
         update_route,
@@ -39328,6 +39515,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedConfirmationChecks::default())
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
+        .manage(SharedCallbookCache::default())
         .manage(BetaUpdateState::default())
         .manage(log_queries::LogQueries::default())
         .manage(street_map::StreetMapState::default())
@@ -44164,6 +44352,244 @@ mod tests {
         assert_eq!(
             (a.lotw, a.utc_offset, a.position),
             (Some(true), Some(-5.0), None)
+        );
+    }
+
+    /// A QRZ answer for W1ABC with every field the lookup parses, read through the real parser,
+    /// in a response that also carries the session key (QRZ echoes it on every lookup).
+    const CACHE_QRZ_BODY: &str = "<QRZDatabase><Session><Key>SESSIONKEY0123456789</Key>\
+<Count>12</Count></Session><Callsign><call>W1ABC</call><fname>David</fname><name>Smith</name>\
+<nickname>Dave</nickname><addr2>Newington</addr2><state>CT</state><county>Hartford</county>\
+<grid>FN31pr</grid><cqzone>5</cqzone><ituzone>8</ituzone><lat>41.7147</lat><lon>-72.7272</lon>\
+<geoloc>user</geoloc><email>dave@example.org</email><qslmgr>W1MGR</qslmgr><lotw>1</lotw>\
+</Callsign></QRZDatabase>";
+    const CACHE_PASSWORD: &str = "Hunter2-PasswordFixture";
+
+    fn cached_dto() -> tempo_app::dto::QrzLookupDto {
+        tempo_core::qrz::parse_callsign(CACHE_QRZ_BODY)
+            .unwrap()
+            .into()
+    }
+
+    fn fresh_cache() -> super::SharedCallbookCache {
+        super::SharedCallbookCache::with(
+            tempo_core::callbook_cache::CallbookCache::open_in_memory(100).unwrap(),
+        )
+    }
+
+    const DAY: i64 = 86_400;
+
+    /// Run one cached lookup at `now`, counting the network calls `live` stands for.
+    fn cached_at(
+        cache: &super::SharedCallbookCache,
+        now: i64,
+        refresh: bool,
+        live: Result<tempo_app::dto::QrzLookupDto, String>,
+        calls: &std::cell::Cell<u32>,
+    ) -> Result<tempo_app::dto::QrzLookupDto, String> {
+        tauri::async_runtime::block_on(super::cached_callbook_lookup(
+            cache,
+            "w1abc",
+            30 * DAY,
+            now,
+            refresh,
+            || {
+                calls.set(calls.get() + 1);
+                async move { live }
+            },
+        ))
+    }
+
+    /// A kept answer answers the next lookup without the network, until it expires.
+    #[test]
+    fn a_kept_answer_saves_the_network_until_it_expires() {
+        let cache = fresh_cache();
+        let calls = std::cell::Cell::new(0);
+        let dto = cached_dto();
+        assert_eq!(
+            cached_at(&cache, 0, false, Ok(dto.clone()), &calls),
+            Ok(dto.clone())
+        );
+        assert_eq!(calls.get(), 1, "the first lookup asks");
+        let other = tempo_app::dto::QrzLookupDto {
+            call: "W1ABC".into(),
+            name: Some("Changed".into()),
+            ..Default::default()
+        };
+        // A day later, and a second before thirty: the kept answer, no network.
+        for now in [DAY, 30 * DAY - 1] {
+            assert_eq!(
+                cached_at(&cache, now, false, Ok(other.clone()), &calls),
+                Ok(dto.clone())
+            );
+        }
+        assert_eq!(calls.get(), 1, "a fresh kept answer never asks");
+        // Thirty days on, it has expired: the callbook is asked and its new answer kept.
+        assert_eq!(
+            cached_at(&cache, 30 * DAY, false, Ok(other.clone()), &calls),
+            Ok(other.clone())
+        );
+        assert_eq!(calls.get(), 2);
+        assert_eq!(
+            cached_at(&cache, 30 * DAY + 1, false, Err("x".into()), &calls),
+            Ok(other)
+        );
+        assert_eq!(calls.get(), 2);
+    }
+
+    /// Offline, an expired answer is still the answer; with nothing kept the failure is reported.
+    #[test]
+    fn offline_reads_the_kept_answer_at_any_age() {
+        let cache = fresh_cache();
+        let calls = std::cell::Cell::new(0);
+        let offline = || Err::<tempo_app::dto::QrzLookupDto, String>("offline".into());
+        assert_eq!(
+            cached_at(&cache, 0, false, offline(), &calls),
+            Err("offline".into())
+        );
+        cached_at(&cache, 0, false, Ok(cached_dto()), &calls).unwrap();
+        assert_eq!(
+            cached_at(&cache, 400 * DAY, false, offline(), &calls),
+            Ok(cached_dto()),
+            "a year-old answer beats no answer"
+        );
+        assert_eq!(calls.get(), 3, "the expired answer did ask first");
+    }
+
+    /// Refresh asks whatever is kept and keeps the new answer; a failed refresh says so and leaves
+    /// the old answer. Clear forgets everything.
+    #[test]
+    fn refresh_and_clear() {
+        let cache = fresh_cache();
+        let calls = std::cell::Cell::new(0);
+        cached_at(&cache, 0, false, Ok(cached_dto()), &calls).unwrap();
+        let newer = tempo_app::dto::QrzLookupDto {
+            call: "W1ABC".into(),
+            grid: Some("FN42".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            cached_at(&cache, 1, true, Ok(newer.clone()), &calls),
+            Ok(newer.clone())
+        );
+        assert_eq!(
+            calls.get(),
+            2,
+            "refresh asked though the kept answer was fresh"
+        );
+        assert_eq!(
+            cached_at(&cache, 2, true, Err("down".into()), &calls),
+            Err("down".into())
+        );
+        assert_eq!(
+            cached_at(&cache, 3, false, Err("down".into()), &calls),
+            Ok(newer),
+            "the refreshed answer is kept, and a failed refresh left it"
+        );
+        assert_eq!(calls.get(), 3);
+        cache.store().unwrap().lock().unwrap().clear().unwrap();
+        assert_eq!(
+            cached_at(&cache, 4, false, Err("down".into()), &calls),
+            Err("down".into())
+        );
+    }
+
+    /// ⛔ Nothing secret reaches the disk: the stored rows hold the public answer and not the
+    /// session key its response carried, nor the password the sign-in used.
+    #[test]
+    fn no_secret_ever_lands_in_the_cache() {
+        let cache = fresh_cache();
+        let calls = std::cell::Cell::new(0);
+        // What a QRZ sign-in sends: the password rides the login URL.
+        let login = tempo_core::qrz::build_login_url(&tempo_core::qrz::QrzLogin {
+            username: "W1ABC".into(),
+            password: CACHE_PASSWORD.into(),
+            agent: "nexus/test".into(),
+        });
+        assert!(
+            login.contains(CACHE_PASSWORD),
+            "control: the fixture password is in the request"
+        );
+        assert!(
+            CACHE_QRZ_BODY.contains("SESSIONKEY0123456789"),
+            "control: the body has the key"
+        );
+        cached_at(&cache, 0, false, Ok(cached_dto()), &calls).unwrap();
+        let rows = cache
+            .store()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .stored_text()
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].contains("Hartford") && rows[0].contains("W1MGR"),
+            "control: {}",
+            rows[0]
+        );
+        for secret in ["SESSIONKEY0123456789", CACHE_PASSWORD, "Hunter2"] {
+            assert!(
+                !rows[0].contains(secret),
+                "{secret} reached the cache: {}",
+                rows[0]
+            );
+        }
+    }
+
+    /// ★ The FT auto-log never waits on the disk cache. A lookup warms the engine from the kept
+    /// answer (the network never asked); then, with the cache held locked by another thread, a
+    /// contact logged with the call still takes that answer, at once.
+    #[test]
+    fn the_logging_path_never_waits_on_the_disk_cache() {
+        let cache = std::sync::Arc::new(fresh_cache());
+        cache.put("W1ABC", &cached_dto(), super::now_unix());
+        let engine: super::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("K2DEF", "FN31", 0),
+        ));
+        let (qrz, hamqth) = (
+            super::SharedQrzSession::default(),
+            super::SharedHamQthSession::default(),
+        );
+        tauri::async_runtime::block_on(super::callbook_lookup(
+            "W1ABC", false, &engine, &qrz, &hamqth, &cache,
+        ))
+        .expect("answered from the cache: no callbook is set up, so the network would have failed");
+
+        let held = cache.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _guard = held.store().unwrap().lock().unwrap();
+            locked_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        locked_rx.recv().unwrap();
+        let started = std::time::Instant::now();
+        {
+            let mut e = engine_lock(&engine);
+            let mut parsed = tempo_core::logbook::Logbook::new();
+            parsed.import_adif(
+                "<CALL:5>W1ABC<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260910<TIME_ON:6>104000<EOR>",
+            );
+            let mut rec = tempo_core::logbook::QsoRecord::clone(&parsed.records()[0]);
+            rec.id = None;
+            e.log_qso(rec);
+        }
+        let took = started.elapsed();
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+        let logged = engine_lock(&engine).take_pending_udp_qsos();
+        assert_eq!(logged.len(), 1);
+        assert_eq!(
+            logged[0].name.as_deref(),
+            Some("Dave"),
+            "the warmed answer filled the contact"
+        );
+        assert_eq!(logged[0].grid.as_deref(), Some("FN31pr"));
+        assert!(
+            took < std::time::Duration::from_secs(2),
+            "logging waited {took:?}"
         );
     }
 

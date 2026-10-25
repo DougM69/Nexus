@@ -5337,6 +5337,11 @@ export interface Settings {
    *  QRZ isn't configured or has no match. Password is in the OS keychain (set via
    *  setHamqthPassword); the session id is cached in memory only. */
   hamqthUsername: string
+  /** Days a callbook answer kept on disk answers a lookup before the callbook is asked again
+   *  (default 30). Offline, a kept answer is used at any age. */
+  callbookCacheDays: number
+  /** Ask callook.info (free, no account, US calls only) when QRZ and HamQTH have no answer. */
+  callookLookup: boolean
   /** Auto-upload each logged QSO to the QRZ.com logbook. Needs the QRZ Logbook API
    *  key in the keychain (distinct from the lookup password). */
   qrzLogbookUpload: boolean

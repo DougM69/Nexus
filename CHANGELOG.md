@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Callbook answers are kept on this computer.** A call you looked up is answered from a local cache for 30 days (Settings ▸ Logging & Connectors ▸ Confirmations ▸ Callbook cache, adjustable), and offline at any age; refresh one call or clear the whole cache there. No password or sign-in key is ever kept. US calls that QRZ and HamQTH do not answer are also asked of the free callook.info.
 - **More from the callbook on every contact.** When you have looked a station up (the callsign card
   or the log strip), the contact you log with that call keeps what the lookup said: county, IOTA,
   CQ and ITU zones, position, e-mail, web page, QSL manager, whether they use LoTW, eQSL or paper

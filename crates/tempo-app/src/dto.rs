@@ -4644,6 +4644,24 @@ impl From<tempo_core::qrz::QrzLookup> for QrzLookupDto {
     }
 }
 
+/// callook.info, the third callbook, flows into the same DTO. It holds US licences only, so the
+/// country is the United States; the DXCC number is left to the country file, as for the others.
+impl From<tempo_core::callook::CallookLookup> for QrzLookupDto {
+    fn from(r: tempo_core::callook::CallookLookup) -> Self {
+        QrzLookupDto {
+            call: r.call,
+            name: r.name,
+            qth: r.qth,
+            grid: r.grid,
+            state: r.state,
+            country: Some("United States".to_string()),
+            lat: r.lat,
+            lon: r.lon,
+            ..Default::default()
+        }
+    }
+}
+
 /// The free HamQTH fallback flows into the SAME DTO — its [`HamQthLookup`] has
 /// identical fields, so QRZ and HamQTH results are interchangeable to the UI.
 ///

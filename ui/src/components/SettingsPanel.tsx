@@ -104,6 +104,9 @@ import {
   qrzTestConnection,
   syncQrz,
   n3fjpTestConnection,
+  callbookRefresh,
+  callbookCacheCount,
+  callbookCacheClear,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 import {
@@ -1572,6 +1575,15 @@ export function SettingsPanel({
   const [qrzKey, setQrzKey] = useState('')
   const [qrzSyncing, setQrzSyncing] = useState(false)
   const [hamqthPw, setHamqthPw] = useState('')
+  // The on-disk callbook cache: how many calls it holds, and the call typed for "refresh this call".
+  const [callbookCount, setCallbookCount] = useState<number | null>(null)
+  const [refreshCall, setRefreshCall] = useState('')
+  const [refreshingCall, setRefreshingCall] = useState(false)
+  useEffect(() => {
+    callbookCacheCount()
+      .then((n) => setCallbookCount(typeof n === 'number' ? n : null))
+      .catch(() => {})
+  }, [])
   const [clublogPw, setClublogPw] = useState('')
   // The ClubLog key shows as •••• until Reveal at the station's own screen; any press or key that
   // comes through a stream masks it again.
@@ -3425,6 +3437,35 @@ export function SettingsPanel({
     if (ok) {
       setHamqthPw('')
       pushToast(t('settings.connections.hamqth.password.cleared'), 'success')
+    }
+  }
+
+  const onRefreshCallbookCall = async () => {
+    const call = refreshCall.trim().toUpperCase()
+    if (!call) return
+    setRefreshingCall(true)
+    const ok = await withErrorToast(async () => {
+      await callbookRefresh(call)
+      return true
+    }, t('settings.confirmations.callbookCache.refresh.failed'))
+    setRefreshingCall(false)
+    if (ok) {
+      setRefreshCall('')
+      pushToast(t('settings.confirmations.callbookCache.refresh.done', { call }), 'success')
+      callbookCacheCount()
+        .then((n) => setCallbookCount(typeof n === 'number' ? n : null))
+        .catch(() => {})
+    }
+  }
+
+  const onClearCallbookCache = async () => {
+    const ok = await withErrorToast(async () => {
+      await callbookCacheClear()
+      return true
+    }, t('settings.confirmations.callbookCache.clear.failed'))
+    if (ok) {
+      setCallbookCount(0)
+      pushToast(t('settings.confirmations.callbookCache.clear.done'), 'success')
     }
   }
 
@@ -12557,6 +12598,99 @@ export function SettingsPanel({
                     {t('settings.confirmations.hamqth.password.hint')}
                   </span>
                 </label>
+              </div>
+            </div>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">
+                {t('settings.confirmations.callbookCache.title')}
+              </span>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.callbookCache.callook.label')}
+                  </span>
+                  <span className="settings-input-row">
+                    <input
+                      type="checkbox"
+                      checked={form.callookLookup ?? true}
+                      onChange={(e) => updateBool('callookLookup', e.target.checked)}
+                    />
+                    <span className="settings-hint">
+                      {t('settings.confirmations.callbookCache.callook.hint')}
+                    </span>
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.callbookCache.days.label')}
+                  </span>
+                  <input
+                    className="settings-input mono"
+                    type="number"
+                    min={1}
+                    max={3650}
+                    value={form.callbookCacheDays ?? 30}
+                    onChange={(e) =>
+                      updateNum(
+                        'callbookCacheDays',
+                        Math.min(3650, Math.max(1, Math.round(Number(e.target.value)) || 30)),
+                      )
+                    }
+                  />
+                  <span className="settings-hint">
+                    {t('settings.confirmations.callbookCache.days.hint')}
+                  </span>
+                </label>
+
+                <div className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.callbookCache.refresh.label')}
+                  </span>
+                  <div className="settings-input-row">
+                    <input
+                      className="settings-input mono"
+                      type="text"
+                      value={refreshCall}
+                      placeholder={t('settings.confirmations.callbookCache.refresh.placeholder')}
+                      aria-label={t('settings.confirmations.callbookCache.refresh.label')}
+                      onChange={(e) => setRefreshCall(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onRefreshCallbookCall}
+                      disabled={!refreshCall.trim() || refreshingCall}
+                    >
+                      {t('settings.confirmations.callbookCache.refresh.action')}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.callbookCache.clear.label')}
+                  </span>
+                  <div className="settings-input-row">
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onClearCallbookCache}
+                    >
+                      {t('settings.confirmations.callbookCache.clear.action')}
+                    </button>
+                    {callbookCount !== null && (
+                      <span className="settings-hint">
+                        {t('settings.confirmations.callbookCache.count', { count: callbookCount })}
+                      </span>
+                    )}
+                  </div>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.callbookCache.clear.hint')}
+                  </span>
+                </div>
               </div>
             </div>
             <div className="settings-featgroup">

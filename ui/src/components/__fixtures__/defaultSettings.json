@@ -262,6 +262,8 @@
   "eqslLastSync": "",
   "qrzUsername": "",
   "hamqthUsername": "",
+  "callbookCacheDays": 30,
+  "callookLookup": true,
   "qrzLogbookUpload": false,
   "clublogEmail": "",
   "clublogCallsign": "",

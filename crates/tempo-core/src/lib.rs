@@ -14,6 +14,8 @@
 pub use tempo_base::applog;
 pub mod aprs;
 pub mod beacon;
+pub mod callbook_cache;
+pub mod callook;
 pub mod channel;
 pub mod clublog;
 pub mod contest;

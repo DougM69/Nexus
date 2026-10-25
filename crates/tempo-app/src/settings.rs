@@ -3416,6 +3416,13 @@ pub struct Settings {
     /// only. Empty = HamQTH lookup not configured.
     #[serde(default)]
     pub hamqth_username: String,
+    /// How many days a callbook answer kept on disk answers a lookup before the callbook is asked
+    /// again (`tempo_core::callbook_cache`). Offline, a kept answer is used at any age. Read
+    /// through [`Self::callbook_cache_max_age_secs`], which clamps it.
+    pub callbook_cache_days: u32,
+    /// Ask callook.info, the free US-only licence lookup (no account), when QRZ and HamQTH have
+    /// no answer or are not set up. Only US-shaped calls are sent (`tempo_core::callook`).
+    pub callook_lookup: bool,
     /// Auto-upload each logged QSO to the QRZ.com logbook (push). Needs the QRZ
     /// Logbook **API key** in the keychain (distinct from the lookup password).
     /// Off by default.
@@ -3829,6 +3836,10 @@ pub const RTTY_AUTO_LISTEN_SECS_MIN: u32 = 5;
 pub const RTTY_AUTO_LISTEN_SECS_MAX: u32 = 120;
 pub const RTTY_AUTO_REPEATS_MIN: u32 = 1;
 pub const RTTY_AUTO_REPEATS_MAX: u32 = 10;
+
+/// The callbook cache's expiry: 30 days unless the operator sets another, at most ten years.
+pub const CALLBOOK_CACHE_DAYS_DEFAULT: u32 = 30;
+pub const CALLBOOK_CACHE_DAYS_MAX: u32 = 3_650;
 
 /// ⚠️ **Both of these are the sequencer's own shipped constants, deliberately.** They are
 /// read off [`tempo_core::rtty::SeqConfig::default`] rather than written out again, so the
@@ -6008,6 +6019,8 @@ impl Default for Settings {
             eqsl_last_sync: String::new(),
             qrz_username: String::new(),
             hamqth_username: String::new(),
+            callbook_cache_days: CALLBOOK_CACHE_DAYS_DEFAULT,
+            callook_lookup: true,
             qrz_logbook_upload: false,
             qrz_auto_sync: false,
             qrz_sync_hours: default_qrz_sync_hours(),
@@ -7520,6 +7533,13 @@ impl Settings {
                 .rtty_auto_repeats
                 .clamp(RTTY_AUTO_REPEATS_MIN, RTTY_AUTO_REPEATS_MAX),
         }
+    }
+
+    /// The callbook cache's expiry in seconds: [`Self::callbook_cache_days`] held to
+    /// 1 … [`CALLBOOK_CACHE_DAYS_MAX`] days, so a hand-edited `0` cannot turn every lookup into a
+    /// network one and a huge value cannot overflow.
+    pub fn callbook_cache_max_age_secs(&self) -> i64 {
+        i64::from(self.callbook_cache_days.clamp(1, CALLBOOK_CACHE_DAYS_MAX)) * 86_400
     }
 
     pub fn rig_mode(&self) -> String {

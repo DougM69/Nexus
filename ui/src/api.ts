@@ -1851,6 +1851,21 @@ export async function qrzLookup(callsign: string): Promise<QrzLookup> {
   return invoke<QrzLookup>('qrz_lookup', { callsign })
 }
 
+/** Look a callsign up again, skipping the callbook cache, and keep the new answer. */
+export async function callbookRefresh(callsign: string): Promise<QrzLookup> {
+  return invoke<QrzLookup>('callbook_refresh', { callsign })
+}
+
+/** How many calls the on-disk callbook cache holds. */
+export async function callbookCacheCount(): Promise<number> {
+  return invoke<number>('callbook_cache_count')
+}
+
+/** Forget every kept callbook answer. No contact is touched. */
+export async function callbookCacheClear(): Promise<void> {
+  await invoke<void>('callbook_cache_clear')
+}
+
 /** Store the QRZ Logbook API key in the OS keychain (write-only; empty clears). */
 export async function setQrzLogbookKey(key: string): Promise<void> {
   await invoke<void>('set_qrz_logbook_key', { key })

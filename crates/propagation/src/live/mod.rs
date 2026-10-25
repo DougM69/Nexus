@@ -6,6 +6,7 @@
 //! unit-testable offline.
 
 pub mod aurora;
+pub mod callook;
 pub mod cloudlog;
 pub mod clublog;
 pub mod contests;
