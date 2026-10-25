@@ -25,6 +25,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../api', () => api)
 
 import { LogTools, type LogTool } from './LogTools'
+import { LogBulkEdit } from './LogBulkEdit'
 
 /** The last of a list (the lib target here predates `Array.prototype.at`). */
 const last = <T,>(xs: T[]): T => xs[xs.length - 1]
@@ -41,7 +42,7 @@ afterEach(() => {
   setRemoteStation(false)
 })
 
-const made = { changed: 2, run: 'run-1', gone: 0, changedSince: 0, needsChoice: 0 }
+const made = { changed: 2, run: 'run-1', gone: 0, changedSince: 0, needsChoice: 0, distinct: 0 }
 
 const qso = (id: string, whenUnix: number, over: Partial<LoggedQso> = {}): LoggedQso =>
   ({ id, call: 'W1AW', band: '20m', mode: 'FT8', whenUnix, freqMhz: 14.074, ...over }) as LoggedQso
@@ -66,7 +67,7 @@ function open(tool: LogTool, picked: string[] = []) {
 describe('duplicates', () => {
   const group: DupeGroup = {
     copies: [qso('a', 1_767_268_800, { confirmed: true }), qso('b', 1_767_268_860)],
-    editKeys: ['ka', 'kb'],
+    revisions: ['ka', 'kb'],
     keep: 1,
     conflicts: [
       { tag: 'GRIDSQUARE', values: [{ id: 'a', value: 'FN31' }, { id: 'b', value: 'FN42' }], guarded: true, chosen: 'b' },
@@ -94,7 +95,7 @@ describe('duplicates', () => {
     await waitFor(() => expect(api.mergeLogDuplicates).toHaveBeenCalledTimes(1))
     expect(api.mergeLogDuplicates).toHaveBeenCalledWith([{
       keep: 'b',
-      copies: [{ id: 'a', editKey: 'ka' }, { id: 'b', editKey: 'kb' }],
+      copies: [{ id: 'a', revision: 'ka' }, { id: 'b', revision: 'kb' }],
       choices: { GRIDSQUARE: 'a', COMMENT: 'b' },
     }])
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
@@ -124,7 +125,7 @@ describe('duplicates', () => {
 
 describe('bulk edit', () => {
   it('previews, names the count, asks once more and sends exactly the fields and contacts', async () => {
-    api.bulkEditPreview.mockResolvedValue({ selected: 2, change: 2, unchanged: 0, missing: 0 })
+    api.bulkEditPreview.mockResolvedValue({ ids: ['x', 'y'], selected: 2, change: 2, unchanged: 0, missing: 0, resend: 0 })
     api.bulkEditApply.mockResolvedValue(made)
     open('bulk', ['x', 'y'])
     fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: ' EM10 ' } })
@@ -138,13 +139,32 @@ describe('bulk edit', () => {
     expect(api.bulkEditApply).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Yes, change 2' }))
     await waitFor(() => expect(api.bulkEditApply).toHaveBeenCalledWith(
-      { ids: ['x', 'y'] },
+      ['x', 'y'],
+      2,
       [{ field: 'MY_GRIDSQUARE', value: 'EM10' }],
     ))
   })
 
+  it('applies to the ids the preview answered, with its count, not to the filter as it now stands', async () => {
+    const ids = Array.from({ length: 42 }, (_, i) => `q${i}`)
+    api.bulkEditPreview.mockResolvedValue({ ids, selected: 42, change: 40, unchanged: 2, missing: 0, resend: 3 })
+    api.bulkEditApply.mockResolvedValue(made)
+    open('bulk')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Field' }), { target: { value: 'STATION_CALLSIGN' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: 'W6R' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change 40 contacts' }))
+    expect(screen.getByText(/3 of these were uploaded under another station call/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, change 40' }))
+    await waitFor(() => expect(api.bulkEditApply).toHaveBeenCalledWith(
+      ids,
+      42,
+      [{ field: 'STATION_CALLSIGN', value: 'W6R' }],
+    ))
+  })
+
   it('a change after the preview takes the apply away until it is previewed again', async () => {
-    api.bulkEditPreview.mockResolvedValue({ selected: 42, change: 40, unchanged: 2, missing: 0 })
+    api.bulkEditPreview.mockResolvedValue({ ids: [], selected: 42, change: 40, unchanged: 2, missing: 0, resend: 0 })
     open('bulk')
     fireEvent.change(screen.getByRole('combobox', { name: 'Set or clear' }), { target: { value: 'clear' } })
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
@@ -157,9 +177,26 @@ describe('bulk edit', () => {
     expect(screen.queryByRole('button', { name: 'Change 40 contacts' })).toBeNull()
   })
 
+  it('a change of the contacts chosen or of the filter after the preview takes the apply away', async () => {
+    api.bulkEditPreview.mockResolvedValue({ ids: ['x'], selected: 1, change: 1, unchanged: 0, missing: 0, resend: 0 })
+    const props = { onChanged: () => {}, afar: false, query: DEFAULT_LOG_QUERY, shown: 42 }
+    const { rerender } = render(<LogBulkEdit {...props} picked={new Set(['x'])} />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: 'EM10' } })
+    const preview = async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+      await screen.findByRole('button', { name: 'Change 1 contact' })
+    }
+    await preview()
+    rerender(<LogBulkEdit {...props} picked={new Set(['x', 'y'])} />)
+    expect(screen.queryByRole('button', { name: 'Change 1 contact' })).toBeNull()
+    await preview()
+    rerender(<LogBulkEdit {...props} picked={new Set(['x', 'y'])} query={{ ...DEFAULT_LOG_QUERY, search: 'W1AW' }} />)
+    expect(screen.queryByRole('button', { name: 'Change 1 contact' })).toBeNull()
+  })
+
   it('driving another station, the change cannot be pressed', async () => {
     setRemoteStation(true)
-    api.bulkEditPreview.mockResolvedValue({ selected: 42, change: 40, unchanged: 2, missing: 0 })
+    api.bulkEditPreview.mockResolvedValue({ ids: [], selected: 42, change: 40, unchanged: 2, missing: 0, resend: 0 })
     open('bulk')
     fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: 'EM10' } })
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
@@ -174,6 +211,25 @@ describe('the check', () => {
     { id: 'b', call: 'K1ABC', whenUnix: 1_767_268_800, kind: 'grid', field: 'GRIDSQUARE', current: 'ZZ', fix: { value: null } },
     { id: 'c', call: 'W3AA', whenUnix: 4_000_000_000, kind: 'future', field: null, current: null, fix: null },
   ]
+
+  it('two problems of one kind on one contact are ticked apart', async () => {
+    const both: LogProblem[] = [
+      { id: 'p', call: 'W1AW', whenUnix: 1_767_268_800, kind: 'pota', field: 'MY_POTA_REF', current: 'us1', fix: { value: 'US-0001' } },
+      { id: 'p', call: 'W1AW', whenUnix: 1_767_268_800, kind: 'pota', field: 'POTA_REF', current: 'us2', fix: { value: 'US-0002' } },
+    ]
+    api.checkLogbook.mockResolvedValue({ checked: 1, problems: both })
+    api.applyLogFixes.mockResolvedValue({ ...made, changed: 1 })
+    open('check')
+    fireEvent.click(screen.getByRole('button', { name: 'Check the log' }))
+    await screen.findByText('2 problems in 1 contacts')
+    const boxes = (screen.getAllByRole('checkbox') as HTMLInputElement[]).filter((b) => !b.name.startsWith('all'))
+    fireEvent.click(last(boxes))
+    fireEvent.click(screen.getByRole('button', { name: 'Fix 1 ticked' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, fix 1' }))
+    await waitFor(() => expect(api.applyLogFixes).toHaveBeenCalledWith([
+      { id: 'p', field: 'POTA_REF', expect: 'us2', value: 'US-0002' },
+    ]))
+  })
 
   it('sends only the fixes ticked, each with what it found, after asking', async () => {
     api.checkLogbook.mockResolvedValue({ checked: 3, problems })

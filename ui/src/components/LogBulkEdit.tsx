@@ -1,16 +1,19 @@
 // BULK EDIT — set or clear one or more fields on many contacts at once: the ones ticked in the
 // list, or every one the list's search and filters show. The operator's own station details
 // (MY_GRIDSQUARE, MY_RIG, OPERATOR, STATION_CALLSIGN, TX_PWR), the propagation mode and satellite,
-// and their own park or summit. Never a callsign: so every confirmation and upload mark stays as
-// it is, nothing is sent to any service, and nothing is uploaded again for it.
+// and their own park or summit. Never the worked call: every confirmation stays, and nothing is
+// sent from here. A changed STATION_CALLSIGN is the call a contact is uploaded under, so its upload
+// marks are cleared and the next upload sends it under the new call; the preview counts those.
 //
 // Preview first: how many contacts it would change and how many are already so. The button then
 // names that count, and asks once more, in the dialog, before it changes anything. The change is
-// one change the toast's Undo takes back.
+// made on exactly the contacts the preview counted (their ids, handed back with the count
+// confirmed, which the station checks), and a change of the contacts chosen, the filter or a field
+// makes the preview stale. The change is one change the toast's Undo takes back.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Field names are ADIF
 // tokens, shown as they are.
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   bulkEditApply,
   bulkEditPreview,
@@ -70,6 +73,10 @@ export function LogBulkEdit({
   const edit = (next: Row[]) => { setRows(next); setPreview(null); setAsking(false) }
   const fillable = rows.every((r) => r.clear || r.value.trim() !== '')
   const used = new Set(rows.map((r) => r.field))
+  // The contacts the preview was made of changed: preview again.
+  const queryKey = JSON.stringify(query)
+  const pickedKey = [...picked].join(' ')
+  useEffect(() => { setPreview(null); setAsking(false) }, [queryKey, pickedKey])
 
   const onPreview = async () => {
     setBusy(true)
@@ -83,7 +90,10 @@ export function LogBulkEdit({
     inFlight.current = true
     setBusy(true)
     setAsking(false)
-    const made = await withErrorToast(() => bulkEditApply(target(), changes()), t('logbook.tools.bulk.failed'))
+    const made = await withErrorToast(
+      () => bulkEditApply(preview.ids, preview.selected, changes()),
+      t('logbook.tools.bulk.failed'),
+    )
     inFlight.current = false
     setBusy(false)
     setPreview(null)
@@ -177,6 +187,9 @@ export function LogBulkEdit({
               missing: preview.missing,
             })}
           </p>
+          {preview.resend > 0 && (
+            <p className="qso-detail-bare">{t('logbook.tools.bulk.resend', { count: preview.resend })}</p>
+          )}
           <div className="log-tools-row">
             <button
               type="button"

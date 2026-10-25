@@ -10,7 +10,7 @@ import { sayUndone } from '../components/QsoHistory'
 
 /** What a tool's change made, said in a toast whose Undo takes the whole change back. */
 export function sayRun(made: ToolRun, done: string, onChanged: () => void): void {
-  const left = made.gone + made.changedSince + made.needsChoice
+  const left = made.gone + made.changedSince + made.needsChoice + made.distinct
   const tail = left > 0 ? t('logbook.tools.leftAlone', { count: left }) : ''
   if (made.changed === 0) {
     pushToast(`${t('logbook.tools.nothing')}${tail}`, 'info', 8000)

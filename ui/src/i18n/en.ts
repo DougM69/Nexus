@@ -1978,14 +1978,14 @@ export const EN = {
   // calls, grids and references are tokens. Nothing they change is sent to any service.
   'logbook.tools.button': 'Clean up',
   'logbook.tools.title': 'Clean up the log',
-  'logbook.tools.intro': 'Each change here is one change in the history, undone whole by its Undo. Nothing is sent to any service: no tool changes a callsign, so upload marks and confirmations stay as they are.',
+  'logbook.tools.intro': 'Each change here is one change in the history, undone whole by its Undo. Nothing is sent to any service, and no tool changes the worked call, so confirmations stay as they are.',
   'logbook.tools.tab.dupes': 'Duplicates',
   'logbook.tools.tab.bulk': 'Bulk edit',
   'logbook.tools.tab.check': 'Check',
   'logbook.tools.atStation': 'Only at the station: from here the tools read and preview, and change nothing.',
   'logbook.tools.leftAlone': {
-    one: ' · {{count}} left as it was (changed or gone since it was shown, or a choice to make)',
-    other: ' · {{count}} left as they were (changed or gone since they were shown, or a choice to make)',
+    one: ' · {{count}} left as it was (changed or gone since it was shown, a choice to make, or two different contacts)',
+    other: ' · {{count}} left as they were (changed or gone since they were shown, a choice to make, or two different contacts)',
   },
   'logbook.tools.nothing': 'Nothing was changed',
   'logbook.tools.undone': 'Clean-up undone',
@@ -2042,7 +2042,11 @@ export const EN = {
   'logbook.tools.bulk.add': 'Add a field',
   'logbook.tools.bulk.preview': 'Preview',
   'logbook.tools.bulk.previewFailed': 'The preview could not be made',
-  'logbook.tools.bulk.uploads': 'A bulk edit never changes a callsign: upload marks and confirmations stay as they are, nothing is sent to any service, and no contact is uploaded again for it.',
+  'logbook.tools.bulk.uploads': 'A bulk edit never changes the worked call, and confirmations stay as they are. Nothing is sent from here. A changed STATION_CALLSIGN is the call a contact is uploaded under, so its upload marks are cleared and the next upload sends it again under the new call; every other field keeps its upload marks.',
+  'logbook.tools.bulk.resend': {
+    one: '{{count}} of these was uploaded under another station call: it will be sent again under the new one.',
+    other: '{{count}} of these were uploaded under another station call: they will be sent again under the new one.',
+  },
   'logbook.tools.bulk.previewed': '{{selected}} contacts: {{change}} will change, {{unchanged}} are already so or hold another programme’s reference, {{missing}} are no longer in the log.',
   'logbook.tools.bulk.apply': {
     one: 'Change {{count}} contact',

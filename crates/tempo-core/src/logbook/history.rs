@@ -354,6 +354,18 @@ fn content_fields(r: &QsoRecord) -> Vec<(String, String)> {
     f
 }
 
+/// A contact's revision as a caller that showed it compares it: a hash of every field the
+/// operator's own log writes, upload stamps aside. Any change to what the contact holds — the
+/// contest exchange, the station, the passthrough, a confirmation — moves it; a stamp landing does
+/// not.
+pub fn content_key(r: &QsoRecord) -> String {
+    let mut text = String::new();
+    for (tag, value) in content_fields(r) {
+        text.push_str(&super::field(&tag, &value));
+    }
+    format!("{:016x}", super::id::fnv1a64(text.as_bytes()))
+}
+
 /// A contact's upload stamps, as the fragment a new contact's entry keeps them in: empty when it
 /// carries none.
 fn uploads_of(r: &QsoRecord) -> String {

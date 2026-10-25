@@ -1,10 +1,14 @@
-// DUPLICATES — contacts logged more than once, found by the log's own duplicate rule (the same
-// station, band and mode within 5 minutes) or, wider, within an hour. Each group shows its copies;
-// one is kept (the fullest is suggested) and takes the union of the others: every field one copy
-// holds and the kept one lacks, every confirmation and every upload mark. A field the copies
-// disagree on is shown with each value to choose from; one a confirmed copy holds, the QSL-sent
-// mark and a contest exchange must be chosen before that group can merge. The copies not kept are
-// deleted — whole, into Recently deleted — and the merge is one change the toast's Undo takes back.
+// DUPLICATES — contacts logged more than once, found by the log's own duplicate window (the same
+// call, band and mode within 5 minutes) or, wider, within an hour; a group spans no more than its
+// window. The call is the FULL logged call, and copies under two station calls, two operators,
+// two grids, two activations or two propagation modes are two contacts: never one group, and the
+// station refuses to merge them. Each group shows its copies; one is kept (the fullest is
+// suggested) and takes the union of the others: every field one copy holds and the kept one
+// lacks, and every confirmation. Its upload marks stay its own. A field the copies disagree on is
+// shown with each value to choose from; one a confirmed copy holds, the QSL-sent mark, a comment
+// or notes and a contest exchange must be chosen before that group can merge, and "Merge all"
+// takes only the groups with nothing left to choose. The copies not kept are deleted — whole, into
+// Recently deleted — and the merge is one change the toast's Undo takes back.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts).
 import { useRef, useState } from 'react'
@@ -40,7 +44,7 @@ function ask(g: DupeGroup, p: Pick): MergeAsk {
   }
   return {
     keep: g.copies[p.keep].id ?? '',
-    copies: g.copies.map((q, i) => ({ id: q.id ?? '', editKey: g.editKeys[i] })),
+    copies: g.copies.map((q, i) => ({ id: q.id ?? '', revision: g.revisions[i] })),
     choices,
   }
 }

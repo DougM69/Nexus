@@ -9,7 +9,8 @@ use crate::logstore::tests::{engine_on_store, flush, Dir};
 use crate::logwrite;
 use crate::test_util::StoredLog;
 use std::cell::RefCell;
-use tempo_core::logbook::{adif_header, UploadOutcome, UploadService, UploadStatus};
+use tempo_core::logbook::history::content_key;
+use tempo_core::logbook::{adif_header, QsoEdit, UploadOutcome, UploadService, UploadStatus};
 
 thread_local! {
     // A writer racing the change planned on this thread: run after its plan's read, with no lock
@@ -95,7 +96,7 @@ fn ask(g: &DupeGroup, choices: &[(&str, usize)]) -> MergeAsk {
         copies: g
             .copies
             .iter()
-            .map(|r| (r.id.unwrap(), QsoEdit::project(r).key()))
+            .map(|r| (r.id.unwrap(), content_key(r)))
             .collect(),
         choices: choices
             .iter()
@@ -130,10 +131,10 @@ fn dupes(d: &Dir) -> Arc<Mutex<Engine>> {
 
 /// ★ THE MERGE, END TO END. The finder groups the two copies by the log's rule (the contact an
 /// hour later only in the possible tier); the merge leaves ONE contact holding the union — the
-/// record asserted whole against the rule's own answer on the copies as stored, both stamps on
-/// it — deletes the other, and the mirror follows. It queues nothing. Its run's undo puts both
-/// copies back, each field for field as it was, the kept one's stamps aside: a stamp is never
-/// history, so the kept contact keeps the QRZ stamp the merge gave it.
+/// record asserted whole against the rule's own answer on the copies as stored, with the kept
+/// copy's own stamp and not the other's — deletes the other, and the mirror follows. It queues
+/// nothing. Its run's undo puts both copies back WHOLE, stamps and all: the merge gave the kept
+/// contact no stamp, so its undo leaves no upload claim behind.
 #[test]
 fn a_merge_keeps_the_union_and_its_undo_puts_both_copies_back() {
     let d = Dir::new("tools-merge");
@@ -155,7 +156,10 @@ fn a_merge_keeps_the_union_and_its_undo_puts_both_copies_back() {
     assert_eq!(g.keep, 1, "the fuller copy is suggested");
 
     let want = cleanup::merge(&g.copies, g.keep, &HashMap::new()).record;
-    assert_eq!(want.upload.lotw.as_ref().map(|s| s.when_unix), Some(100));
+    assert_eq!(
+        want.upload.lotw, None,
+        "the deleted copy's LoTW stamp is not the kept one's"
+    );
     assert_eq!(want.upload.qrz.as_ref().map(|s| s.when_unix), Some(200));
     assert!(want.qsl_rcvd.lotw && want.name.as_deref() == Some("Hiram"));
     assert_eq!(want.rst_sent.as_deref(), Some("-10"));
@@ -191,19 +195,7 @@ fn a_merge_keeps_the_union_and_its_undo_puts_both_copies_back() {
     assert_eq!(back.len(), 3);
     for was in &before {
         let now = back.iter().find(|r| r.id == was.id).expect("back by id");
-        if was.id == want.id {
-            assert_eq!(
-                QsoRecord {
-                    upload: was.upload.clone(),
-                    ..now.clone()
-                },
-                *was,
-                "the kept copy, every field but its stamps"
-            );
-            assert_eq!(now.upload, want.upload, "the stamps the merge gave it stay");
-        } else {
-            assert_eq!(now, was, "the copy merged in, whole");
-        }
+        assert_eq!(now, was, "each copy whole, its stamps its own");
     }
     assert!(engine_lock(&engine).take_pending_uploads().is_empty());
     settle(&engine);
@@ -218,14 +210,14 @@ fn a_guarded_conflict_waits_for_a_choice() {
     let engine = shared(
         &d,
         &[
-            adif("W1AW", "120000", "<LOTW_QSL_RCVD:1>Y<GRIDSQUARE:4>FN31"),
-            adif("W1AW", "120100", "<GRIDSQUARE:4>FN42<NAME:5>Hiram"),
+            adif("W1AW", "120000", "<LOTW_QSL_RCVD:1>Y<NAME:4>Bill"),
+            adif("W1AW", "120100", "<NAME:5>Hiram<QTH:9>Newington"),
         ],
     );
     let scan = find_duplicates(&engine, DupeTier::Rule).unwrap();
     let g = &scan.groups[0];
-    let grid = g.conflicts.iter().find(|c| c.tag == "GRIDSQUARE").unwrap();
-    assert!(grid.guarded);
+    let name = g.conflicts.iter().find(|c| c.tag == "NAME").unwrap();
+    assert!(name.guarded);
     let keep_other = MergeAsk {
         keep: g.copies[1].id.unwrap(),
         ..ask(g, &[])
@@ -239,7 +231,7 @@ fn a_guarded_conflict_waits_for_a_choice() {
     assert_eq!(rows(&engine).len(), 2, "nothing was merged");
 
     let chosen = MergeAsk {
-        choices: [("GRIDSQUARE".to_string(), g.copies[0].id.unwrap())].into(),
+        choices: [("NAME".to_string(), g.copies[0].id.unwrap())].into(),
         ..keep_other
     };
     let (made, dur) = merge_duplicates(&engine, &[chosen]);
@@ -248,12 +240,12 @@ fn a_guarded_conflict_waits_for_a_choice() {
     let left = rows(&engine);
     assert_eq!(left.len(), 1);
     assert_eq!(
-        left[0].grid.as_deref(),
-        Some("FN31"),
+        left[0].name.as_deref(),
+        Some("Bill"),
         "the confirmed copy's, as chosen"
     );
     assert!(left[0].qsl_rcvd.lotw);
-    assert_eq!(left[0].name.as_deref(), Some("Hiram"));
+    assert_eq!(left[0].qth.as_deref(), Some("Newington"));
 }
 
 /// A copy another writer edits after the merge was shown — even between the plan's read and the
@@ -329,7 +321,8 @@ fn a_bulk_edit_previews_applies_and_undoes_and_keeps_every_stamp() {
             selected: 3,
             change: 3,
             unchanged: 0,
-            missing: 0
+            missing: 0,
+            resend: 0,
         }
     );
     let only_grid = &changes[..1];
@@ -340,7 +333,7 @@ fn a_bulk_edit_previews_applies_and_undoes_and_keeps_every_stamp() {
         "K1ABC is already EM10"
     );
 
-    let (made, dur) = bulk_edit(&engine, &ids, &changes);
+    let (made, dur) = bulk_edit(&engine, &ids, ids.len(), &changes);
     let made = made.unwrap();
     dur.wait(DURABLE_WAIT).unwrap();
     assert_eq!(made.changed, 3);
@@ -366,7 +359,7 @@ fn a_bulk_edit_previews_applies_and_undoes_and_keeps_every_stamp() {
         value: Some("FN31".into()),
     }];
     assert!(
-        bulk_edit(&engine, &ids, &call).0.is_err(),
+        bulk_edit(&engine, &ids, ids.len(), &call).0.is_err(),
         "not a bulk field"
     );
 
@@ -487,6 +480,233 @@ fn the_check_finds_each_problem_and_makes_only_the_ticked_fixes() {
     assert_eq!(rows(&engine), before);
 }
 
+/// ★ TWO CONTACTS ARE NEVER MERGED. Copies a minute apart under two calls sharing a base call
+/// (`W1AW/KH6`, `W1AW/KL7` — two entities, one LoTW-confirmed), or under one call but two station
+/// calls (a club's two calls), and one call worked two hours apart, are no group in either tier;
+/// a merge of them asked by hand anyway is refused as `distinct`, even with every conflict
+/// chosen, and changes nothing.
+#[test]
+fn copies_under_two_calls_or_two_station_calls_are_never_merged() {
+    let d = Dir::new("tools-merge-distinct");
+    let engine = shared(
+        &d,
+        &[
+            adif("W1AW/KH6", "120000", ""),
+            adif(
+                "W1AW/KL7",
+                "120100",
+                "<LOTW_QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC",
+            ),
+            adif("K1ABC", "130000", "<STATION_CALLSIGN:3>W6R"),
+            adif("K1ABC", "130100", "<STATION_CALLSIGN:5>K2DEF<NAME:3>Bob"),
+            adif("N0XYZ", "090000", ""),
+            adif("N0XYZ", "110100", ""),
+        ],
+    );
+    for tier in [DupeTier::Rule, DupeTier::Possible] {
+        assert!(find_duplicates(&engine, tier).unwrap().groups.is_empty());
+    }
+    let before = rows(&engine);
+    // Two calls; two station calls; and one call two hours apart — wider than any window.
+    for pair in [&before[..2], &before[2..4], &before[4..]] {
+        let copies: Vec<QsoRecord> = pair.to_vec();
+        let conflicts = cleanup::merge(&copies, 0, &HashMap::new()).conflicts;
+        let g = DupeGroup {
+            copies,
+            keep: 0,
+            conflicts: conflicts.clone(),
+        };
+        let every: Vec<(&str, usize)> = conflicts.iter().map(|c| (c.tag.as_str(), 1)).collect();
+        let the_ask = ask(&g, &every);
+        let (made, _) = merge_duplicates(&engine, std::slice::from_ref(&the_ask));
+        let made = made.unwrap();
+        assert_eq!(made.changed, 0);
+        assert_eq!(made.run, None);
+        assert_eq!(made.refused, vec![(the_ask.keep, "distinct")]);
+    }
+    assert_eq!(rows(&engine), before, "nothing was merged");
+}
+
+/// A merge naming one contact twice — in one group, or in two — is refused whole, and a choice
+/// naming a copy that holds no value of its conflict is refused as unchosen: neither ever reaches
+/// the log.
+#[test]
+fn a_merge_of_a_malformed_ask_is_refused() {
+    let d = Dir::new("tools-merge-shape");
+    let engine = dupes(&d);
+    let scan = find_duplicates(&engine, DupeTier::Rule).unwrap();
+    let g = &scan.groups[0];
+    let the_ask = ask(g, &[]);
+    let before = rows(&engine);
+
+    let mut twice = the_ask.clone();
+    twice.copies.push(twice.copies[0].clone());
+    assert!(merge_duplicates(&engine, &[twice]).0.is_err());
+    assert!(
+        merge_duplicates(&engine, &[the_ask.clone(), the_ask.clone()])
+            .0
+            .is_err()
+    );
+
+    let mut stray = the_ask.clone();
+    stray
+        .choices
+        .insert("RST_SENT".into(), g.copies[g.keep].id.unwrap());
+    let (made, _) = merge_duplicates(&engine, &[stray]);
+    assert_eq!(made.unwrap().refused, vec![(the_ask.keep, "needsChoice")]);
+    assert_eq!(rows(&engine), before);
+}
+
+/// ★ The revision a merge was shown is the copy's whole content: a field the edit form does not
+/// carry (here the operator, set by a bulk edit) changed after the scan leaves the group as it is.
+#[test]
+fn a_copy_changed_outside_the_edit_form_is_not_merged_over() {
+    let d = Dir::new("tools-merge-revision");
+    let engine = dupes(&d);
+    let scan = find_duplicates(&engine, DupeTier::Rule).unwrap();
+    let the_ask = ask(&scan.groups[0], &[]);
+    let other = scan.groups[0].copies[0].id.unwrap();
+    let (made, dur) = bulk_edit(
+        &engine,
+        &[other],
+        1,
+        &[Change {
+            field: Field::Operator,
+            value: Some("N2XYZ".into()),
+        }],
+    );
+    assert_eq!(made.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let before = rows(&engine);
+    let (made, _) = merge_duplicates(&engine, std::slice::from_ref(&the_ask));
+    assert_eq!(made.unwrap().refused, vec![(the_ask.keep, "changed")]);
+    assert_eq!(rows(&engine), before);
+}
+
+/// ★ A bulk edit acts only on the count the operator confirmed: handed a different number of
+/// contacts it changes nothing.
+#[test]
+fn a_bulk_edit_acts_only_on_the_count_confirmed() {
+    let d = Dir::new("tools-bulk-count");
+    let engine = shared(
+        &d,
+        &[adif("W1AW", "120000", ""), adif("K1ABC", "120100", "")],
+    );
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let rig = [Change {
+        field: Field::MyRig,
+        value: Some("IC-7300".into()),
+    }];
+    for expect in [1, 3] {
+        let (made, _) = bulk_edit(&engine, &ids, expect, &rig);
+        assert_eq!(made, Err(NOT_AS_PREVIEWED.to_string()));
+    }
+    assert_eq!(rows(&engine), before);
+}
+
+/// ★ A STATION CALL CHANGED IN BULK. The preview counts the contacts uploaded under another call;
+/// the edit clears their upload stamps — the next upload sends them under the new call — keeps
+/// every confirmation, and queues nothing itself. A contact already under the new call is left
+/// as it is, stamps and all.
+#[test]
+fn a_bulk_station_call_change_owes_the_contact_to_every_service_again() {
+    let d = Dir::new("tools-bulk-station");
+    let engine = shared(
+        &d,
+        &[
+            adif(
+                "W1AW",
+                "120000",
+                "<STATION_CALLSIGN:5>KD0AA<LOTW_QSL_RCVD:1>Y",
+            ),
+            adif("K1ABC", "120100", "<STATION_CALLSIGN:3>W6R"),
+            adif("N0XYZ", "120200", "<STATION_CALLSIGN:5>KD0AA"),
+        ],
+    );
+    for r in rows(&engine) {
+        stamp(&engine, &r, UploadService::Lotw, 100);
+    }
+    engine_lock(&engine).take_pending_uploads();
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let w6r = [Change {
+        field: Field::StationCallsign,
+        value: Some("w6r".into()),
+    }];
+    let preview = bulk_preview(&engine, &ids, &w6r).unwrap();
+    assert_eq!((preview.change, preview.resend), (2, 2));
+
+    let (made, dur) = bulk_edit(&engine, &ids, 3, &w6r);
+    assert_eq!(made.unwrap().changed, 2);
+    dur.wait(DURABLE_WAIT).unwrap();
+    for (was, now) in before.iter().zip(rows(&engine)) {
+        assert_eq!(now.station_callsign.as_deref(), Some("W6R"));
+        assert_eq!(
+            now.qsl_rcvd, was.qsl_rcvd,
+            "{}: confirmations stay",
+            was.call
+        );
+        if was.call == "K1ABC" {
+            assert_eq!(now, *was, "already W6R: untouched, stamp and all");
+        } else {
+            assert_eq!(now.upload, Default::default(), "{}: owed again", was.call);
+        }
+    }
+    assert!(
+        engine_lock(&engine).take_pending_uploads().is_empty(),
+        "nothing queued by the tool"
+    );
+}
+
+/// The check proposes no fix it cannot stand behind: a confirmed contact's DXCC and band are
+/// listed with none, a grid holding two locators or a 10-character one is not cut, and an end
+/// before the start that is no midnight wrap is not cleared.
+#[test]
+fn the_check_lists_what_only_the_operator_can_settle() {
+    let mut r = tempo_core::logbook::parse_adif(&adif(
+        "W1AW",
+        "120000",
+        "<GRIDSQUARE:9>FN31,FN32<DXCC:1>1<QSO_DATE_OFF:8>20251231<TIME_OFF:6>060000",
+    ))
+    .remove(0);
+    r.id = Some("~0000000000000001".parse().unwrap());
+    r.band = "40m".into();
+    r.freq_mhz = 14.074;
+    let mismatch = |_: &str, n: u32| (n == 1).then_some(291);
+    let fixes = |r: &QsoRecord| -> Vec<(ProblemKind, Option<Option<String>>)> {
+        problems_of(r, &mismatch, 1_790_000_000)
+            .into_iter()
+            .map(|p| (p.kind, p.fix.map(|f| f.value)))
+            .collect()
+    };
+    let s = |v: &str| Some(Some(v.to_string()));
+    assert_eq!(
+        fixes(&r),
+        vec![
+            (ProblemKind::Grid, None),
+            (ProblemKind::Dxcc, s("291")),
+            (ProblemKind::BandFreq, s("20m")),
+            (ProblemKind::EndBeforeStart, None),
+        ]
+    );
+    r.grid = Some("FN31PR45AB".into());
+    r.qsl_rcvd.lotw = true;
+    assert_eq!(
+        fixes(&r),
+        vec![
+            (ProblemKind::Grid, None),
+            (ProblemKind::Dxcc, None),
+            (ProblemKind::BandFreq, None),
+            (ProblemKind::EndBeforeStart, None),
+        ],
+        "LoTW-confirmed: listed, never fixed"
+    );
+    r.qsl_rcvd.lotw = false;
+    r.credit_granted = vec!["DXCC".into()];
+    assert_eq!(fixes(&r)[1], (ProblemKind::Dxcc, None), "credit granted");
+}
+
 /// ⛔ A run of more than the writer's chunk is refused while the FT sequencer is armed and changes
 /// nothing — as a large undo is — while a small one is made; disarmed, the large one is made.
 #[test]
@@ -514,18 +734,18 @@ fn a_large_run_waits_until_transmit_is_off() {
         "premise: armed for FT"
     );
 
-    let (refused, _) = bulk_edit(&engine, &ids, &changes);
+    let (refused, _) = bulk_edit(&engine, &ids, ids.len(), &changes);
     assert_eq!(refused, Err(MUST_WAIT_FOR_TX.to_string()));
     assert!(
         rows(&engine).iter().all(|r| r.my_rig.is_none()),
         "nothing was made"
     );
-    let (small, d1) = bulk_edit(&engine, &ids[..3], &changes);
+    let (small, d1) = bulk_edit(&engine, &ids[..3], 3, &changes);
     assert_eq!(small.unwrap().changed, 3, "a small run is made");
     d1.wait(DURABLE_WAIT).unwrap();
 
     engine_lock(&engine).set_tx_enabled(false);
-    let (made, dur) = bulk_edit(&engine, &ids, &changes);
+    let (made, dur) = bulk_edit(&engine, &ids, ids.len(), &changes);
     assert_eq!(made.unwrap().changed, n - 3);
     dur.wait(DURABLE_WAIT).unwrap();
     assert!(rows(&engine)
@@ -555,6 +775,7 @@ fn a_run_made_in_several_changes_is_undone_whole() {
     let (made, dur) = bulk_edit(
         &engine,
         &ids,
+        ids.len(),
         &[Change {
             field: Field::StationCallsign,
             value: Some("K2DEF".into()),
@@ -624,6 +845,7 @@ fn bench_150k() {
     let (made, dur) = bulk_edit(
         &engine,
         &ids,
+        ids.len(),
         &[Change {
             field: Field::MyRig,
             value: Some("IC-7300".into()),

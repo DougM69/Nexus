@@ -4,7 +4,7 @@
 //
 // Every change a tool makes is ONE change in the log's history: the toast's Undo takes the whole
 // of it back, and so does Recently deleted for a merge's deleted copies. No tool sends anything to
-// a service — none changes a callsign, so every upload mark and confirmation stays. The changes are
+// a service, and none changes the worked call, so every confirmation stays. The changes are
 // the station's own, as a purge is: driving the station from another computer the tools read and
 // preview, and their buttons that change the log are off.
 //

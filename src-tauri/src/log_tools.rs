@@ -4,8 +4,13 @@
 //! Every read runs with the Engine lock released and changes nothing. Every change is planned
 //! with the lock released and made under it, a chunk at a time, as ONE run of the log's history —
 //! its `run` is what `undo_history_run` takes — and answers only once it is on disk
-//! ([`crate::durable_command`]). None sends anything anywhere: no tool changes a callsign, so by
-//! the edit rule every upload stamp and confirmation stays, and nothing is queued to a service.
+//! ([`crate::durable_command`]). None sends anything anywhere: no tool changes the worked call, so
+//! every confirmation stays and nothing is queued to a service. The one stamp a tool clears is a
+//! bulk STATION_CALLSIGN change's — the call the contact is uploaded under — so the next upload
+//! sends it under the new call (`tempo_app::logtools`' header).
+//!
+//! A bulk edit is made on exactly the contacts its preview counted: the preview answers their ids,
+//! and the edit takes those ids and the count the operator confirmed, and refuses a mismatch.
 //!
 //! The changes are the shack's own (`command_classes`): like a purge, a bulk change can reach
 //! every contact in the log.
@@ -17,8 +22,9 @@ use tauri::State;
 use tempo_app::dto::LoggedQso;
 use tempo_app::logtools::{self, DupeTier, Fix, MergeAsk, ProblemKind, ToolRun};
 use tempo_core::logbook::cleanup::{Change, Field};
+use tempo_core::logbook::history::content_key;
 use tempo_core::logbook::query::LogQuery;
-use tempo_core::logbook::{QsoEdit, RecordId};
+use tempo_core::logbook::RecordId;
 
 use crate::log_queries::LogQueries;
 use crate::{durable_command, SharedEngine};
@@ -47,10 +53,11 @@ pub struct ToolRunDto {
     /// nothing.
     pub run: Option<String>,
     /// What it left alone: contacts gone since they were shown, changed since, and (a merge) groups
-    /// with a conflict that must be chosen.
+    /// with a conflict that must be chosen, and groups whose copies are two contacts.
     pub gone: usize,
     pub changed_since: usize,
     pub needs_choice: usize,
+    pub distinct: usize,
 }
 
 fn run_dto(r: ToolRun) -> ToolRunDto {
@@ -60,6 +67,7 @@ fn run_dto(r: ToolRun) -> ToolRunDto {
         gone: count("gone"),
         changed_since: count("changed"),
         needs_choice: count("needsChoice"),
+        distinct: count("distinct"),
         run: r.run,
     }
 }
@@ -81,7 +89,7 @@ pub struct ConflictDto {
     pub tag: String,
     pub values: Vec<ConflictValueDto>,
     /// Must be chosen before the merge: a confirmed copy's value, the QSL-sent mark, the contest
-    /// exchange.
+    /// exchange, a comment or notes, an identity field.
     pub guarded: bool,
     /// The copy whose value the suggested merge takes.
     pub chosen: String,
@@ -93,8 +101,8 @@ pub struct ConflictDto {
 pub struct DupeGroupDto {
     /// The copies, in log order.
     pub copies: Vec<LoggedQso>,
-    /// Each copy's edit key, sent back with the merge: a copy changed since is not merged over.
-    pub edit_keys: Vec<String>,
+    /// Each copy's revision, sent back with the merge: a copy changed since is not merged over.
+    pub revisions: Vec<String>,
     /// The copy the suggested merge keeps.
     pub keep: usize,
     /// What the copies disagree on when that one is kept.
@@ -128,7 +136,7 @@ pub async fn find_log_duplicates(
             .groups
             .into_iter()
             .map(|g| DupeGroupDto {
-                edit_keys: g.copies.iter().map(|r| QsoEdit::project(r).key()).collect(),
+                revisions: g.copies.iter().map(content_key).collect(),
                 conflicts: g
                     .conflicts
                     .into_iter()
@@ -158,7 +166,7 @@ pub async fn find_log_duplicates(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MergeCopyDto {
     pub id: String,
-    pub edit_key: String,
+    pub revision: String,
 }
 
 /// One merge the operator asked for.
@@ -178,7 +186,7 @@ fn merge_ask(m: MergeDto) -> Result<MergeAsk, String> {
         copies: m
             .copies
             .into_iter()
-            .map(|c| Ok((id_of(&c.id)?, c.edit_key)))
+            .map(|c| Ok((id_of(&c.id)?, c.revision)))
             .collect::<Result<_, String>>()?,
         choices: m
             .choices
@@ -233,10 +241,14 @@ fn target_ids(
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BulkPreviewDto {
+    /// The contacts previewed: what `bulk_edit_apply` is handed back, so it acts on exactly these.
+    pub ids: Vec<String>,
     pub selected: usize,
     pub change: usize,
     pub unchanged: usize,
     pub missing: usize,
+    /// Of those it changes, the ones uploaded under the station call it changes: sent again.
+    pub resend: usize,
 }
 
 /// What a bulk edit would make of its contacts. Changes nothing.
@@ -252,30 +264,31 @@ pub async fn bulk_edit_preview(
         let ids = target_ids(&engine, &queries, &target)?;
         let p = logtools::bulk_preview(&engine, &ids, &changes)?;
         Ok(BulkPreviewDto {
+            ids: ids.iter().map(ToString::to_string).collect(),
             selected: p.selected,
             change: p.change,
             unchanged: p.unchanged,
             missing: p.missing,
+            resend: p.resend,
         })
     })
     .await
 }
 
-/// Set or clear fields on every contact named, as ONE run. Never a call; sends nothing.
+/// Set or clear fields on the contacts the preview counted — `ids`, as the preview answered them —
+/// as ONE run, only while they are the `expect_count` the operator confirmed. Never the worked
+/// call; sends nothing.
 #[tauri::command]
 pub async fn bulk_edit_apply(
     state: State<'_, SharedEngine>,
-    queries: State<'_, LogQueries>,
-    target: BulkTarget,
+    ids: Vec<String>,
+    expect_count: usize,
     changes: Vec<Change>,
 ) -> Result<ToolRunDto, String> {
-    let (engine, queries) = (Arc::clone(&state), queries.inner().clone());
+    let ids: Vec<RecordId> = ids.iter().map(|id| id_of(id)).collect::<Result<_, _>>()?;
+    let engine = Arc::clone(&state);
     durable_command(move || {
-        let ids = match target_ids(&engine, &queries, &target) {
-            Ok(ids) => ids,
-            Err(e) => return (Err(e), Default::default()),
-        };
-        let (made, durability) = logtools::bulk_edit(&engine, &ids, &changes);
+        let (made, durability) = logtools::bulk_edit(&engine, &ids, expect_count, &changes);
         (made.map(run_dto), durability)
     })
     .await
@@ -285,10 +298,12 @@ pub async fn bulk_edit_apply(
 
 /// The DXCC number the country file places `call` in, when the contact's own `logged` number is a
 /// current entity and the call's is another. A deleted entity's number is never judged: the
-/// prefix it was logged under may name another entity today.
+/// prefix it was logged under may name another entity today. Nor is a call the file cannot judge
+/// ([`propagation::dxcc::prefix_decides`]): an exact-call exception, or a DXpedition's call whose
+/// prefix the logged entity's own calls share.
 fn dxcc_mismatch(call: &str, logged: u32) -> Option<u32> {
     let entity = propagation::dxcc::entity_by_dxcc(logged)?;
-    if entity.deleted {
+    if entity.deleted || !propagation::dxcc::prefix_decides(call, logged) {
         return None;
     }
     let by_call = propagation::dxcc::resolve(call)?.dxcc?;
@@ -417,6 +432,25 @@ mod tests {
             .find(|e| e.deleted)
             .expect("a deleted entity");
         assert_eq!(dxcc_mismatch("W1AW", deleted.code), None);
+    }
+
+    /// ★ A DXpedition is never "fixed". `3Y0PI` (Peter I, 1994) and `3Y5X` (Bouvet, 1989) have no
+    /// exact entry in the country file and fall to Antarctica's bare `3Y`; logged as Peter I (199)
+    /// or Bouvet (24) — which they were — they are no mismatch. Logged as an entity with no `3Y`
+    /// call at all, they still are. An exact-call exception is never judged against the number.
+    #[test]
+    fn a_dxpedition_call_is_never_called_a_mismatch() {
+        let antarctica = propagation::dxcc::resolve("3Y0PI").and_then(|i| i.dxcc);
+        assert_eq!(antarctica, Some(13), "premise: the bare prefix places it");
+        assert_eq!(dxcc_mismatch("3Y0PI", 199), None);
+        assert_eq!(dxcc_mismatch("3Y5X", 24), None);
+        assert_eq!(
+            dxcc_mismatch("3Y0PI", 291),
+            Some(13),
+            "a US number is still wrong"
+        );
+        // =3Y0J is Bouvet's exact entry: whatever number it carries, the file does not judge it.
+        assert_eq!(dxcc_mismatch("3Y0J", 199), None);
     }
 
     /// A merge's ids that are not ids are refused before anything is read.

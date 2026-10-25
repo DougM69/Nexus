@@ -6,11 +6,21 @@
 //!
 //! # Duplicates ([`dupe_groups`])
 //!
-//! Two contacts are one logged twice by **the log's own duplicate rule**
-//! ([`super::dedup::is_recent_duplicate`]): the same station (base call, case aside), band and
-//! mode, within [`super::dedup::DEDUP_WINDOW_SECS`]. The wider "possible" tier asks the same
-//! question within [`POSSIBLE_WINDOW_SECS`]. A group is every contact chained to another by the
-//! window, so three copies a few minutes apart are one group.
+//! Two contacts are one logged twice by **the log's own duplicate window**
+//! ([`super::dedup::DEDUP_WINDOW_SECS`]) — the same band and mode — but on the **full logged
+//! call**, case and padding aside, never the base call the logging guard compares: `W1AW/KH6` and
+//! `W1AW/KL7` are two DXCC entities, `W1AW/4` and `W1AW/5` two call areas, and a merge of them
+//! would hand one the other's confirmation. The wider "possible" tier asks the same question
+//! within [`POSSIBLE_WINDOW_SECS`]. A group is measured from its FIRST contact, so it spans no
+//! more than its window: a station worked every 45 minutes all afternoon is several groups, never
+//! one that chains for hours.
+//!
+//! **Copies that differ in an identity field are two contacts** ([`distinct`]): the station call,
+//! the operator, either grid, the operator's park or summit, the propagation mode or satellite.
+//! A club log's two calls, a rover's grid corner and a satellite pass beside a simplex contact
+//! are each owed their own record. A copy holding NONE of a field is no difference — that is the
+//! gap a merge fills. [`split_distinct`] splits a window's group on them, and the app refuses a
+//! merge of copies that differ in one, whatever the operator chose.
 //!
 //! # A merge keeps everything it can ([`merge`])
 //!
@@ -19,15 +29,22 @@
 //!
 //! - a field one copy holds and the kept one lacks is taken;
 //! - **confirmations are unioned** — each channel's, `confirmed`, `award_confirmed`, credit granted
-//!   and submitted — never taken off;
-//! - **upload stamps are unioned**: a service only one copy was sent to keeps that stamp; where
-//!   both were, the later attempt stands ([`super::UploadState::merge_recent`], the rule two
-//!   windows sharing one log already use);
+//!   and submitted — never taken off, and **never taken from a copy logged under another call**;
+//! - **upload stamps are the kept copy's own**, never another copy's: neither a stamp nor the
+//!   `LOTW_QSL_SENT` mark a stamp is read back from. A stamp is not history, so a stamp the merge
+//!   gave the kept contact would outlive an undo of the merge and claim an upload that contact
+//!   never had. The price is honest: a service only a deleted copy reached is owed the merged
+//!   contact, and answers its upload as the duplicate it is;
 //! - a field two copies hold DIFFERENT values for is a [`Conflict`]: the merged contact takes the
 //!   value the caller chose, else the kept copy's (else the first copy's that has one). A conflict
 //!   is **guarded** — it must be chosen, never defaulted — when it is the contest exchange, the
-//!   QSL-sent mark, or a value a confirmed copy carries: a confirmation's own detail (a grid, a
-//!   state, a zone LoTW sent) is never overwritten without the operator's say.
+//!   QSL-sent mark (a mark the operator CLEARED is a value too, so a copy marked sent never brings
+//!   it back), operator-written text (COMMENT, NOTES), an identity field ([`IDENTITY`]), or a
+//!   value a confirmed copy carries: a confirmation's own detail (a grid, a state, a zone LoTW
+//!   sent) is never overwritten without the operator's say;
+//! - a side's passthrough references (the other programme's reference `take_ota_side` parks in
+//!   the passthrough) come from the copy whose side was taken, never from another: written after
+//!   the side, the next read would take a left-over one for it.
 //!
 //! The copies that are not kept are deleted by the merge, whole, into the history: nothing a
 //! copy held is lost, and the merge is undone as one run.
@@ -39,9 +56,17 @@
 //! # A bulk edit ([`changed`])
 //!
 //! Sets or clears the fields in [`BULK_FIELDS`] — the operator's own station details, the
-//! propagation mode, and the operator's park or summit. **Never the call**: a bulk edit changes no
-//! callsign, so by the edit rule ([`super::edited`]) it keeps every confirmation and every upload
-//! stamp, and queues nothing to any service. The marks that say Nexus or a callbook filled a field
+//! propagation mode, and the operator's park or summit. **Never the worked call**: by the edit
+//! rule ([`super::edited`]) it keeps every confirmation, and queues nothing to any service.
+//!
+//! **One exception for the stamps: a changed STATION_CALLSIGN.** It is the call both upload paths
+//! sign and book the contact under, so a contact uploaded under the old one is not on any service
+//! under the new one. Its upload stamps, and the `LOTW_QSL_SENT` mark a stamp is read back from,
+//! are cleared exactly as a corrected call's are ([`super::edited`]), so the next upload sends it
+//! under the call it now carries ([`resends`]). Unlike a corrected call it is not queued here —
+//! no clean-up tool sends anything — and its confirmations stay: what becomes of a confirmation
+//! matched under the old station call is the operator's ruling, not this tool's. The marks that
+//! say Nexus or a callbook filled a field
 //! come off a field it changes, as an edit takes them off. A park or summit is set only on a
 //! contact whose side holds no reference or one of the same programme: another programme's
 //! reference is never replaced by it, and such a contact is left as it is.
@@ -53,9 +78,8 @@ use serde::{Deserialize, Serialize};
 use super::callbook::{self, CALLBOOK_FILLED_FIELD};
 use super::{
     canonical, extra_value, self_filled, set_extra, set_self_filled, QsoRecord, RecordId,
-    SELF_FILLED_FIELD,
+    UploadState, SELF_FILLED_FIELD,
 };
-use crate::message::base_call;
 
 // ── duplicates ─────────────────────────────────────────────────────────────────────────────────
 
@@ -72,10 +96,15 @@ pub struct DupeKey {
     pub when_unix: u64,
 }
 
-/// The groups of contacts that are one contact logged more than once: the same station (base
-/// call, case aside — [`crate::message::same_call`]), band and mode (case aside), each within
-/// `window_secs` of the one before it. Each group in time order, two or more contacts; the groups
-/// newest first. A contact with no call is in none.
+/// A logged call as the duplicate finder compares it: the FULL call, trimmed, case aside.
+pub fn call_key(call: &str) -> String {
+    call.trim().to_ascii_uppercase()
+}
+
+/// The groups of contacts that are one contact logged more than once: the same full call
+/// ([`call_key`]), band and mode (case aside), each within `window_secs` of the group's FIRST
+/// contact. Each group in time order, two or more contacts; the groups newest first. A contact
+/// with no call is in none.
 pub fn dupe_groups(keys: Vec<DupeKey>, window_secs: u64) -> Vec<Vec<RecordId>> {
     type Slot = (String, String, String);
     let mut keyed: Vec<(Slot, u64, RecordId)> = keys
@@ -83,7 +112,7 @@ pub fn dupe_groups(keys: Vec<DupeKey>, window_secs: u64) -> Vec<Vec<RecordId>> {
         .filter(|k| !k.call.trim().is_empty())
         .map(|k| {
             let slot = (
-                base_call(&k.call),
+                call_key(&k.call),
                 k.band.to_ascii_lowercase(),
                 k.mode.to_ascii_lowercase(),
             );
@@ -93,14 +122,17 @@ pub fn dupe_groups(keys: Vec<DupeKey>, window_secs: u64) -> Vec<Vec<RecordId>> {
     keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     let mut groups: Vec<(u64, Vec<RecordId>)> = Vec::new();
     let mut current: Vec<RecordId> = Vec::new();
+    let mut first = 0;
     let mut latest = 0;
     for (i, (slot, when, id)) in keyed.iter().enumerate() {
-        let joins = i > 0 && keyed[i - 1].0 == *slot && when - keyed[i - 1].1 <= window_secs;
+        // Measured from the group's first contact: a group spans no more than the window.
+        let joins = i > 0 && keyed[i - 1].0 == *slot && when - first <= window_secs;
         if !joins {
             if current.len() > 1 {
                 groups.push((latest, std::mem::take(&mut current)));
             }
             current.clear();
+            first = *when;
         }
         current.push(*id);
         latest = *when;
@@ -110,6 +142,76 @@ pub fn dupe_groups(keys: Vec<DupeKey>, window_secs: u64) -> Vec<Vec<RecordId>> {
     }
     groups.sort_by(|a, b| b.0.cmp(&a.0));
     groups.into_iter().map(|(_, g)| g).collect()
+}
+
+/// The identity fields: copies holding different values for one are two contacts ([`distinct`]),
+/// and a merge's conflict on one is guarded. By the tag a merge's conflict names it.
+pub const IDENTITY: [&str; 6] = [
+    "STATION_CALLSIGN",
+    "OPERATOR",
+    "MY_GRIDSQUARE",
+    "GRIDSQUARE",
+    "MY_SIG",
+    "PROP_MODE",
+];
+
+/// The first field in which `a` and `b` are two contacts, not one: the call ([`call_key`]), the
+/// band or mode (case aside), or an identity field ([`IDENTITY`]) both hold and hold differently,
+/// case aside. A field one of them leaves empty is no difference. `None`: they may be one contact.
+pub fn distinct(a: &QsoRecord, b: &QsoRecord) -> Option<&'static str> {
+    if call_key(&a.call) != call_key(&b.call) {
+        return Some("CALL");
+    }
+    if !a.band.trim().eq_ignore_ascii_case(b.band.trim()) {
+        return Some("BAND");
+    }
+    if !a.mode.trim().eq_ignore_ascii_case(b.mode.trim()) {
+        return Some("MODE");
+    }
+    let differ = |x: &Option<String>, y: &Option<String>| match (text(x), text(y)) {
+        (Some(x), Some(y)) => !x.eq_ignore_ascii_case(&y),
+        _ => false,
+    };
+    let fields: [(&'static str, bool); 7] = [
+        (
+            "STATION_CALLSIGN",
+            differ(&a.station_callsign, &b.station_callsign),
+        ),
+        ("OPERATOR", differ(&a.operator, &b.operator)),
+        ("MY_GRIDSQUARE", differ(&a.my_grid, &b.my_grid)),
+        ("GRIDSQUARE", differ(&a.grid, &b.grid)),
+        // The operator's side: its programme and its reference (MY_SIG and MY_SIG_INFO).
+        (
+            "MY_SIG",
+            match (
+                side(&a.ota.my_program, &a.ota.my_ref),
+                side(&b.ota.my_program, &b.ota.my_ref),
+            ) {
+                (Some(x), Some(y)) => x.0 != y.0,
+                _ => false,
+            },
+        ),
+        ("PROP_MODE", differ(&a.prop_mode, &b.prop_mode)),
+        ("PROP_MODE", differ(&a.sat_name, &b.sat_name)),
+    ];
+    fields.into_iter().find(|(_, d)| *d).map(|(tag, _)| tag)
+}
+
+/// One window's group split into the groups that may be one contact each: every copy joins the
+/// first group it is [`distinct`] from no member of, in order. Only the groups of two or more.
+pub fn split_distinct(copies: Vec<QsoRecord>) -> Vec<Vec<QsoRecord>> {
+    let mut groups: Vec<Vec<QsoRecord>> = Vec::new();
+    for r in copies {
+        match groups
+            .iter_mut()
+            .find(|g| g.iter().all(|m| distinct(m, &r).is_none()))
+        {
+            Some(g) => g.push(r),
+            None => groups.push(vec![r]),
+        }
+    }
+    groups.retain(|g| g.len() > 1);
+    groups
 }
 
 // ── merge ──────────────────────────────────────────────────────────────────────────────────────
@@ -325,7 +427,14 @@ fn parts() -> Vec<Part> {
         },
         Part {
             tag: "QSL_SENT",
+            // A mark the operator CLEARED is a value too: a copy marked sent never fills it.
             get: |r| {
+                if !r.qsl_sent.sent {
+                    return r.qsl_sent.cleared_unix.map(|t| {
+                        let shown = format!("N {}", super::query::fmt_utc(t));
+                        (shown.clone(), shown)
+                    });
+                }
                 r.qsl_sent.sent.then(|| {
                     let via = r
                         .qsl_sent
@@ -428,6 +537,24 @@ fn confirmed(r: &QsoRecord) -> bool {
     r.confirmed || r.award_confirmed || r.qsl_rcvd.any()
 }
 
+/// Whether a conflict on `tag` must be chosen whoever holds it (see the module header).
+fn always_guarded(tag: &str) -> bool {
+    matches!(tag, "CONTEST" | "QSL_SENT" | "COMMENT" | "NOTES") || IDENTITY.contains(&tag)
+}
+
+/// Each side's passthrough references, by the part that holds the side: they follow the copy
+/// whose side the merge took.
+const SIDE_EXTRAS: [(&str, [&str; 4]); 2] = [
+    (
+        "MY_SIG",
+        ["MY_SIG", "MY_SIG_INFO", "MY_SOTA_REF", "MY_POTA_REF"],
+    ),
+    ("SIG", ["SIG", "SIG_INFO", "SOTA_REF", "POTA_REF"]),
+];
+
+/// The passthrough field an upload stamp is read back from: the kept copy's own, like a stamp.
+const STAMP_EXTRA: &str = "LOTW_QSL_SENT";
+
 /// ★ The copies of one contact merged into the copy `keep` (see the module header). `copies` in
 /// log order; `choices` names, for a conflicting field, the copy whose value the merged contact
 /// takes. The merged contact keeps `copies[keep]`'s id.
@@ -452,6 +579,19 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
     };
     let mut out = kept.clone();
     let mut conflicts = Vec::new();
+    // A copy logged under another call is another contact: named, guarded, and never a source of
+    // confirmation or credit (below).
+    let call = call_key(&kept.call);
+    if order.iter().any(|r| call_key(&r.call) != call) {
+        conflicts.push(Conflict {
+            tag: "CALL".to_string(),
+            values: order.iter().map(|r| (id_of(r), r.call.clone())).collect(),
+            guarded: true,
+            chosen: id_of(kept),
+        });
+    }
+    // The copy each side was taken from, by its part's tag.
+    let mut side_from: HashMap<&str, RecordId> = HashMap::new();
 
     for part in parts() {
         let holding: Vec<(&QsoRecord, (String, String))> = order
@@ -465,9 +605,9 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
         let records: Vec<&QsoRecord> = holding.iter().map(|(r, _)| *r).collect();
         let from = if differ { pick(part.tag, &records) } else { 0 };
         (part.put)(&mut out, records[from]);
+        side_from.insert(part.tag, id_of(records[from]));
         if differ {
-            let guarded =
-                matches!(part.tag, "CONTEST" | "QSL_SENT") || records.iter().any(|r| confirmed(r));
+            let guarded = always_guarded(part.tag) || records.iter().any(|r| confirmed(r));
             conflicts.push(Conflict {
                 tag: part.tag.to_string(),
                 values: holding
@@ -490,7 +630,22 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
     names.dedup();
     let mut extra: Vec<(String, String)> = Vec::new();
     for name in names {
-        let holding: Vec<(&QsoRecord, &str)> = order
+        // The copies this field may come from: the kept one alone for the stamp's mark, the one
+        // whose side was taken for a side's reference, else every copy.
+        let source = if name == STAMP_EXTRA {
+            Some(id_of(kept))
+        } else {
+            SIDE_EXTRAS
+                .iter()
+                .find(|(_, names)| names.contains(&name))
+                .and_then(|(tag, _)| side_from.get(tag).copied())
+        };
+        let from_copies: Vec<&QsoRecord> = order
+            .iter()
+            .copied()
+            .filter(|r| source.is_none_or(|id| id_of(r) == id))
+            .collect();
+        let holding: Vec<(&QsoRecord, &str)> = from_copies
             .iter()
             .filter_map(|r| extra_value(r, name).map(|v| (*r, v)))
             .filter(|(_, v)| !v.is_empty())
@@ -498,7 +653,7 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
         let Some(&(_, first)) = holding.first() else {
             // Held empty by every copy that holds it: kept as the kept copy holds it, or as the
             // first holds it.
-            if let Some((k, v)) = order
+            if let Some((k, v)) = from_copies
                 .iter()
                 .find_map(|r| r.extra.iter().find(|(k, _)| k == name))
             {
@@ -586,22 +741,22 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
         contest: _,
         // The passthrough, above.
         extra: _,
-        // Unioned, below.
+        // Unioned, below — from copies under the kept copy's call only.
         confirmed: _,
         award_confirmed: _,
         qsl_rcvd: _,
         credit_granted: _,
         credit_submitted: _,
+        // The kept copy's own: never another copy's (the module header).
         upload: _,
     } = &out;
-    for r in &order[1..] {
+    for r in order[1..].iter().filter(|r| call_key(&r.call) == call) {
         out.confirmed |= r.confirmed;
         out.award_confirmed |= r.award_confirmed;
         out.qsl_rcvd.merge(r.qsl_rcvd);
         out.credit_granted.extend(r.credit_granted.iter().cloned());
         out.credit_submitted
             .extend(r.credit_submitted.iter().cloned());
-        out.upload.merge_recent(&r.upload);
     }
     for list in [&mut out.credit_granted, &mut out.credit_submitted] {
         list.sort();
@@ -866,6 +1021,14 @@ fn set_side(
     }
 }
 
+/// Whether a change from `before` to `after` changes the station call the contact is uploaded
+/// under (trimmed, case aside; cleared counts): its stamps go, and the next upload sends it again
+/// under the call it now carries.
+pub fn resends(before: &QsoRecord, after: &QsoRecord) -> bool {
+    let call = |r: &QsoRecord| text(&r.station_callsign).map(|c| c.to_ascii_uppercase());
+    call(before) != call(after)
+}
+
 /// ★ The contact `row` with `changes` made (each already [`checked`]), as an edit makes them: the
 /// fill marks off a field changed, a side's left-over references gone with the side, the band in
 /// the log's one form. `country` names the `COUNTRY` a DXCC number gives the contact, as every
@@ -921,6 +1084,11 @@ pub fn changed(
         set_self_filled(&mut rec, tags);
     }
     callbook::unmark_edited(row, &mut rec);
+    // A changed station call: the stamps go, as a corrected call's do (the module header).
+    if resends(row, &rec) {
+        rec.upload = UploadState::default();
+        rec.extra.retain(|(k, _)| k != STAMP_EXTRA);
+    }
     if (&rec.ota.my_program, &rec.ota.my_ref) != (&row.ota.my_program, &row.ota.my_ref) {
         rec.extra.retain(|(k, _)| {
             !matches!(

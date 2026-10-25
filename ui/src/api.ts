@@ -1735,22 +1735,26 @@ export async function restoreDeletedQso(id: string, anyway = false): Promise<Und
 
 // ── The Logbook's clean-up tools: duplicates and merge, bulk edit, the check ─────────────────
 // Each change is ONE run of the log's history (`run`, undone whole by `undoHistoryRun`). None
-// sends anything to a service: no tool changes a callsign, so every upload mark and confirmation
-// stays. The changes are the station's own: a computer driving it is refused, as a purge is.
+// sends anything to a service, and none changes the worked call, so every confirmation stays. The
+// one upload mark a tool clears is a bulk STATION_CALLSIGN change's: the next upload sends the
+// contact under the new call. The changes are the station's own: a computer driving it is refused,
+// as a purge is.
 
 /** What a clean-up tool's change made. `run`: its undo; `null` when it changed nothing. The counts
  *  are what it left alone: gone since shown, changed since shown, a merge whose conflict must be
- *  chosen. */
+ *  chosen, a merge of copies that are two contacts. */
 export interface ToolRun {
   changed: number
   run: string | null
   gone: number
   changedSince: number
   needsChoice: number
+  distinct: number
 }
 
 /** A field two copies of a contact disagree on. `guarded`: must be chosen (a confirmed copy's
- *  value, the QSL-sent mark, the contest exchange). `chosen`: the copy the suggested merge takes. */
+ *  value, the QSL-sent mark, the contest exchange, a comment or notes, an identity field).
+ *  `chosen`: the copy the suggested merge takes. */
 export interface DupeConflict {
   tag: string
   values: { id: string; value: string }[]
@@ -1758,10 +1762,10 @@ export interface DupeConflict {
   chosen: string
 }
 
-/** One contact logged more than once: its copies in log order, each with its edit key. */
+/** One contact logged more than once: its copies in log order, each with its revision. */
 export interface DupeGroup {
   copies: LoggedQso[]
-  editKeys: string[]
+  revisions: string[]
   keep: number
   conflicts: DupeConflict[]
 }
@@ -1777,11 +1781,11 @@ export async function findLogDuplicates(tier: 'rule' | 'possible'): Promise<Dupe
   return invoke<DupeScan>('find_log_duplicates', { tier })
 }
 
-/** One merge: the copy kept, every copy with the edit key it was shown with, and for a
+/** One merge: the copy kept, every copy with the revision it was shown with, and for a
  *  conflicting field the copy whose value is taken. */
 export interface MergeAsk {
   keep: string
-  copies: { id: string; editKey: string }[]
+  copies: { id: string; revision: string }[]
   choices: Record<string, string>
 }
 
@@ -1801,14 +1805,25 @@ export interface FieldChange { field: CleanupField; value: string | null }
 /** The contacts a bulk edit acts on: those ticked, or every one the Logbook's filter shows. */
 export type BulkTarget = { ids: string[] } | { query: LogQuery }
 
-export interface BulkPreview { selected: number; change: number; unchanged: number; missing: number }
+/** What a bulk edit would make of its contacts. `ids`: the contacts previewed, which the apply is
+ *  handed back. `resend`: of those it changes, the ones uploaded under the station call it changes. */
+export interface BulkPreview {
+  ids: string[]
+  selected: number
+  change: number
+  unchanged: number
+  missing: number
+  resend: number
+}
 
 export async function bulkEditPreview(target: BulkTarget, changes: FieldChange[]): Promise<BulkPreview> {
   return invoke<BulkPreview>('bulk_edit_preview', { target, changes })
 }
 
-export async function bulkEditApply(target: BulkTarget, changes: FieldChange[]): Promise<ToolRun> {
-  return invoke<ToolRun>('bulk_edit_apply', { target, changes })
+/** The change, on exactly the contacts a preview counted (`preview.ids`): refused, changing nothing,
+ *  unless they are the `expectCount` the operator confirmed. */
+export async function bulkEditApply(ids: string[], expectCount: number, changes: FieldChange[]): Promise<ToolRun> {
+  return invoke<ToolRun>('bulk_edit_apply', { ids, expectCount, changes })
 }
 
 /** One problem the check found. `fix`: the proposed change (`value: null` clears the field), or

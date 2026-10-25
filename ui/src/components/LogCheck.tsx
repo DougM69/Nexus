@@ -47,7 +47,8 @@ function shown(p: LogProblem, v: string | null): string {
   return v
 }
 
-const keyOf = (p: LogProblem) => `${p.id} ${p.kind}`
+// A contact can have two problems of one kind (a bad reference on each side): the field tells them apart.
+const keyOf = (p: LogProblem) => `${p.id} ${p.kind} ${p.field ?? ''}`
 
 export function LogCheck({ onChanged, afar }: { onChanged: () => void; afar: boolean }) {
   const [problems, setProblems] = useState<LogProblem[] | null>(null)
