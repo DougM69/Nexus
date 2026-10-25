@@ -5,7 +5,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup, fireEvent, screen, waitFor, act } from '@testing-library/react'
 import type { QsoHistoryEntry } from '../api'
-import { subscribeToasts, type Toast } from '../toast'
+import { dismissToast, subscribeToasts, type Toast } from '../toast'
 import { setRemoteStation } from '../features/durableStore'
 
 const api = vi.hoisted(() => ({
@@ -51,7 +51,7 @@ const entry = (over: Partial<QsoHistoryEntry>): QsoHistoryEntry => ({
 })
 
 const done = {
-  changed: 1, run: 'undo-run', kept: [], held: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0,
+  changed: 1, run: 'undo-run', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0,
   unknownKind: 0, changedSinceCalls: [] as string[], duplicateCalls: [] as string[],
 }
 
@@ -106,12 +106,30 @@ describe("a contact's history", () => {
     expect(toasts.some((x) => x.message.startsWith('That change was made by a newer version'))).toBe(true)
   })
 
-  it('says which field it kept so as not to send a contact under another call', () => {
-    sayUndone({ ...done, changed: 2, held: ['STATION_CALLSIGN'] }, 'Bulk edit undone', () => {})
+  it('says which field it kept, and the Settings call a blank would have gone under', () => {
+    const held = { held: ['STATION_CALLSIGN'], heldUnder: 'KD9NEW' }
+    sayUndone({ ...done, changed: 2, ...held }, 'Bulk edit undone', () => {})
     const said = toasts.find((x) => x.message.startsWith('Bulk edit undone'))?.message ?? ''
-    expect(said).toBe('Bulk edit undone; STATION_CALLSIGN kept: put back blank, the contact would be sent under the call in Settings now, not the call it was made under')
-    sayUndone({ ...done, changed: 0, run: null, held: ['STATION_CALLSIGN'] }, 'Change undone', () => {})
-    expect(toasts.some((x) => x.message === 'Nothing undone: STATION_CALLSIGN was kept. Put back blank, the contact would be sent under the call in Settings now, not the call it was made under.')).toBe(true)
+    expect(said).toBe('Bulk edit undone; STATION_CALLSIGN kept: put back blank, these contacts would be sent under KD9NEW, the call in Settings now')
+    sayUndone({ ...done, changed: 0, run: null, ...held }, 'Change undone', () => {})
+    expect(toasts.some((x) => x.message === 'Nothing undone: STATION_CALLSIGN was kept. Put back blank, these contacts would be sent under KD9NEW, the call in Settings now.')).toBe(true)
+    // A redo that held everything says it redid nothing.
+    sayUndone({ ...done, changed: 0, run: null, ...held }, 'Change made again', () => {}, true)
+    expect(toasts.some((x) => x.message === 'Nothing redone: STATION_CALLSIGN was kept. Put back blank, these contacts would be sent under KD9NEW, the call in Settings now.')).toBe(true)
+  })
+
+  it("a Redo that held everything says nothing was redone", async () => {
+    for (const x of [...toasts]) dismissToast(x.id)
+    expect(toasts).toEqual([])
+    api.qsoHistory.mockResolvedValue([entry({ seq: 7, kind: 'edit', changes: [{ tag: 'STATION_CALLSIGN', old: 'KA1OLD', new: null }] })])
+    api.undoQsoChange.mockResolvedValue(done)
+    api.undoHistoryRun.mockResolvedValue({ ...done, changed: 0, run: null, held: ['STATION_CALLSIGN'], heldUnder: 'KD9NEW' })
+    render(<QsoHistory id="1:2:3" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(toasts.some((t) => t.message.startsWith('Change undone'))).toBe(true))
+    toasts.find((t) => t.message.startsWith('Change undone'))?.action?.()
+    await waitFor(() => expect(toasts.some((t) => t.message.startsWith('Nothing redone: STATION_CALLSIGN was kept'))).toBe(true))
+    expect(toasts.some((t) => t.message.startsWith('Nothing undone'))).toBe(false)
   })
 
   it('shows an undone change as undone, with no Undo of its own', async () => {

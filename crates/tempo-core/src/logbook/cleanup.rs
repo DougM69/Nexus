@@ -39,7 +39,12 @@
 //!   the next upload sends it. Where the kept copy's time is the uploaded copy's (one contact
 //!   imported twice) the service already holds that QSO and answers Duplicate; where the copies
 //!   were logged minutes apart, a service that matches on the time may keep both, and nothing here
-//!   can take one back;
+//!   can take one back. **One exception:** a copy whose station call is the kept copy's but for a
+//!   portable `/P` (`KD9TAW/P` beside `KD9TAW`) is the same QSO to these tools but another record
+//!   to LoTW, which can delete neither. A service only it was sent to keeps its stamp on the merged
+//!   contact, whichever spelling the merge keeps, so the next upload never signs the QSO a second
+//!   time under the other one. An undo of the merge leaves that stamp, as a `/P` edit leaves its
+//!   stamps: the same station call, and the restored copy carries its own;
 //! - a field two copies hold DIFFERENT values for is a [`Conflict`]: the merged contact takes the
 //!   value the caller chose, else the kept copy's (else the first copy's that has one). A conflict
 //!   is **guarded** — it must be chosen, never defaulted — when it is the contest exchange, the
@@ -87,8 +92,11 @@
 //! ([`confirmations_cleared`]), and the run's undo puts it back.
 //!
 //! Filling in a blank station call, or clearing one, is no change of call, whatever the call in
-//! Settings is (operator ruling): the field changes and nothing else. Only one call replaced by
-//! another is a change, and a portable `/P` added or taken off is not ([`resends`]).
+//! Settings is: no stamp or confirmation is cleared. Only one call replaced by another is a
+//! change, and a portable `/P` added or taken off is not ([`resends`]). But a contact naming no
+//! station call is uploaded under the call in Settings, so a fill with another call, or a clear of
+//! a call that is not the Settings call, does change the call it goes to a service not yet sent
+//! it under: the preview counts those ([`moves`]) for the operator to acknowledge.
 //!
 //! The marks that say Nexus or a callbook filled a field come off a field it changes, as an edit
 //! takes them off. A park or summit is set only on a contact whose side holds no reference or one
@@ -234,7 +242,7 @@ pub fn distinct(a: &QsoRecord, b: &QsoRecord, settings_call: Option<&str>) -> Op
 /// The call `r` is uploaded under, as the clean-up tools compare it: its STATION_CALLSIGN, else
 /// `settings_call`, the call in Settings ([`crate::reconcile::lotw_own_call`]), trimmed, case
 /// aside, a portable `/P` taken off ([`without_portable_p`]). `None` when neither names one.
-pub(crate) fn station_call(r: &QsoRecord, settings_call: Option<&str>) -> Option<String> {
+pub fn station_call(r: &QsoRecord, settings_call: Option<&str>) -> Option<String> {
     crate::reconcile::lotw_own_call(r, settings_call).map(without_portable_p)
 }
 
@@ -877,7 +885,7 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
         qsl_rcvd: _,
         credit_granted: _,
         credit_submitted: _,
-        // The kept copy's own: never another copy's (the module header).
+        // The kept copy's own: never another copy's but a `/P` spelling's (the module header).
         upload: _,
     } = &out;
     for r in order[1..].iter().filter(|r| call_key(&r.call) == call) {
@@ -891,6 +899,31 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
     for list in [&mut out.credit_granted, &mut out.credit_submitted] {
         list.sort();
         list.dedup();
+    }
+    // A copy whose station call is the kept copy's but for a portable `/P` is the same QSO here
+    // and another record on LoTW: its upload's stamp comes to the merged contact, so the next
+    // upload does not sign it again under the other spelling.
+    let spelled = |r: &QsoRecord| text(&r.station_callsign).map(|c| c.to_ascii_uppercase());
+    let under = station_call(kept, None);
+    for r in order[1..].iter().filter(|r| {
+        call_key(&r.call) == call
+            && under.is_some()
+            && station_call(r, None) == under
+            && spelled(r) != spelled(kept)
+    }) {
+        let (o, u) = (&mut out.upload, &r.upload);
+        for (mine, theirs) in [
+            (&mut o.lotw, &u.lotw),
+            (&mut o.eqsl, &u.eqsl),
+            (&mut o.qrz, &u.qrz),
+            (&mut o.clublog, &u.clublog),
+        ] {
+            let sent =
+                |s: &Option<super::UploadStatus>| s.as_ref().is_some_and(|s| s.outcome.is_sent());
+            if !sent(mine) && sent(theirs) {
+                mine.clone_from(theirs);
+            }
+        }
     }
     Merged {
         record: out,
@@ -1156,7 +1189,7 @@ fn set_side(
 /// aside). Its stamps go, and the next upload sends it again under the call it now carries.
 ///
 /// A blank station call filled in, or a station call cleared, is no change, whatever the call in
-/// Settings is (operator ruling). A contact naming no station call was uploaded under whatever call
+/// Settings is. A contact naming no station call was uploaded under whatever call
 /// was in Settings then, which Nexus does not record: the fill records the call it was made under,
 /// and clearing it never owes it to the services under a call it may never have been made under.
 pub fn resends(before: &QsoRecord, after: &QsoRecord) -> bool {
@@ -1164,6 +1197,25 @@ pub fn resends(before: &QsoRecord, after: &QsoRecord) -> bool {
         (station_call(before, None), station_call(after, None)),
         (Some(x), Some(y)) if x != y
     )
+}
+
+/// Whether a change from `before` to `after` sends the contact to a service under another call
+/// though it is no change of call ([`resends`]): a blank station call filled with a call other
+/// than `settings_call`, the call in Settings, or a station call other than it cleared — so the
+/// contact is uploaded under another call ([`station_call`], a portable `/P` aside) — while a
+/// service has not been sent it yet. Its stamps stay, so a service already sent it is not sent it
+/// again; every other service gets it under the new call, and LoTW cannot take one back.
+pub fn moves(before: &QsoRecord, after: &QsoRecord, settings_call: Option<&str>) -> bool {
+    let u = &after.upload;
+    let owed = [&u.lotw, &u.eqsl, &u.qrz, &u.clublog]
+        .into_iter()
+        .any(|s| !s.as_ref().is_some_and(|s| s.outcome.is_sent()));
+    !resends(before, after)
+        && owed
+        && matches!(
+            (station_call(before, settings_call), station_call(after, settings_call)),
+            (Some(x), Some(y)) if x != y
+        )
 }
 
 /// What a service matched under a station call, beside its confirmation flag: LoTW's and eQSL's

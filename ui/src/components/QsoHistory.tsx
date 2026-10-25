@@ -66,13 +66,17 @@ function callList(calls: string[]): string {
 
 /** What an undo made, said in a toast — with Redo where it changed something. A contact it left
  *  as it is because it changed since, and one it did not put back because the log holds it
- *  already, are named, and so is a field it held so as not to move a contact under another call. */
-export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => void): void {
+ *  already, are named, and so is a field it held so as not to move a contact under another call,
+ *  with the Settings call it would have gone under. `redo`: the undo was of an undo. */
+export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => void, redo = false): void {
+  const fields = answer.held.join(', ')
+  const settings = answer.heldUnder ?? ''
   const keptCalls = answer.changedSinceCalls
   const dupCalls = answer.duplicateCalls
   if (answer.changed === 0) {
     pushToast(
-      answer.held.length > 0 ? t('qso.history.undo.heldOnly', { fields: answer.held.join(', ') })
+      answer.held.length > 0
+        ? (redo ? t('qso.history.undo.heldOnlyRedo', { fields, settings }) : t('qso.history.undo.heldOnly', { fields, settings }))
         : dupCalls.length > 0 ? t('qso.history.undo.allDuplicates', { count: dupCalls.length, calls: callList(dupCalls) })
         : answer.alreadyThere > 0 ? t('qso.history.undo.alreadyThere')
         : keptCalls.length > 0 ? t('qso.history.undo.allKept', { count: keptCalls.length, calls: callList(keptCalls) })
@@ -85,7 +89,7 @@ export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => voi
     return
   }
   const kept = answer.kept.length ? t('qso.history.undo.kept', { fields: answer.kept.join(', ') }) : ''
-  const held = answer.held.length ? t('qso.history.undo.held', { fields: answer.held.join(', ') }) : ''
+  const held = answer.held.length ? t('qso.history.undo.held', { fields, settings }) : ''
   const keptContacts = keptCalls.length
     ? t('qso.history.undo.contactsKept', { count: keptCalls.length, calls: callList(keptCalls) })
     : ''
@@ -101,7 +105,7 @@ export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => voi
       const a = await undoHistoryRun(run).catch((err: unknown) => {
         throw new Error(failureText(t('qso.history.undo.failed'), err))
       })
-      sayUndone(a, t('qso.history.redone'), onChanged)
+      sayUndone(a, t('qso.history.redone'), onChanged, true)
       onChanged()
     },
   } : {})

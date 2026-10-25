@@ -819,7 +819,7 @@ fn a_copys_revision_moves_with_everything_but_a_stamp() {
 }
 
 /// ★ FILLING IN A BLANK STATION CALL, OR CLEARING ONE, IS NO CHANGE OF CALL, whatever the call in
-/// Settings is (operator ruling): a contact naming no station call was uploaded and confirmed
+/// Settings is: a contact naming no station call was uploaded and confirmed
 /// under whatever call was in Settings then, which nothing records, and the fill records it. The
 /// field changes and nothing else — every stamp, confirmation, date and credit stays — filled with
 /// any call, or cleared. Only one call replaced by ANOTHER is a change, and they go.
@@ -1106,4 +1106,88 @@ fn a_station_call_change_takes_off_an_older_records_confirmation() {
     let after = changed(&r, &to_w6r, &no_country).unwrap();
     assert!(!after.confirmed);
     assert_eq!(confirmations_cleared(&r, &after), 1);
+}
+
+/// ★ A FILL OR A CLEAR CAN MOVE A CONTACT TO ANOTHER UPLOAD CALL. A contact naming no station call
+/// is uploaded under the call in Settings, so filling one with another call, or clearing one that
+/// is not the Settings call, changes the call it goes to a service under, though it changes no
+/// stamp. Counted only while a service is still owed it; a /P aside, and a call replaced by another
+/// (counted as a resend instead), are no move.
+#[test]
+fn a_fill_or_a_clear_onto_another_upload_call_is_a_move() {
+    let to = |v: Option<&str>| {
+        checked(&[Change {
+            field: Field::StationCallsign,
+            value: v.map(str::to_string),
+        }])
+        .unwrap()
+    };
+    let mut old = contact("W1AW", T0, 1);
+    old.station_callsign = Some("KA1OLD".into());
+    old.upload.lotw = stamp(100);
+    let cleared = changed(&old, &to(None), &no_country).unwrap();
+    assert!(moves(&old, &cleared, Some("KD9NEW")), "KA1OLD to KD9NEW");
+    assert!(!moves(&old, &cleared, Some("ka1old")), "KA1OLD all along");
+
+    let blank = contact("K1ABC", T0, 2);
+    let filled = changed(&blank, &to(Some("KA1OLD")), &no_country).unwrap();
+    assert!(moves(&blank, &filled, Some("KD9NEW")), "KD9NEW to KA1OLD");
+    let own = changed(&blank, &to(Some("KD9NEW")), &no_country).unwrap();
+    assert!(!moves(&blank, &own, Some("KD9NEW")), "the Settings call");
+    assert!(
+        !moves(&blank, &filled, None),
+        "no Settings call: never sendable"
+    );
+
+    // A /P aside, the same call.
+    let mut tw = contact("N0XYZ", T0, 3);
+    tw.station_callsign = Some("KD9TAW/P".into());
+    let cleared = changed(&tw, &to(None), &no_country).unwrap();
+    assert!(!moves(&tw, &cleared, Some("KD9TAW")));
+
+    // Sent to every service: nothing goes anywhere again.
+    let mut sent = old.clone();
+    sent.upload.eqsl = stamp(101);
+    sent.upload.qrz = stamp(102);
+    sent.upload.clublog = stamp(103);
+    let cleared = changed(&sent, &to(None), &no_country).unwrap();
+    assert!(!moves(&sent, &cleared, Some("KD9NEW")));
+
+    // CONTROL: one call replaced by another is a resend, not a move.
+    let other = changed(&old, &to(Some("W6R")), &no_country).unwrap();
+    assert!(resends(&old, &other));
+    assert!(!moves(&old, &other, Some("KD9NEW")));
+}
+
+/// ★ A MERGE OF COPIES A PORTABLE /P APART KEEPS THE SENT COPY'S STAMPS. KD9TAW and KD9TAW/P are
+/// one station call to the clean-up tools but two records to LoTW: a stamp only the deleted copy
+/// held comes to the merged contact, whichever spelling it keeps, so the next upload does not put
+/// a second, undeletable QSO on LoTW. A stamp the kept copy holds stands. Any other call takes
+/// none.
+#[test]
+fn a_merge_of_copies_a_portable_p_apart_keeps_the_sent_copys_stamps() {
+    let (mut a, mut b) = pair("W1AW", "W1AW");
+    a.station_callsign = Some("KD9TAW".into());
+    a.upload.qrz = stamp(50);
+    b.station_callsign = Some("kd9taw/p".into());
+    b.upload.lotw = stamp(100);
+    b.upload.qrz = stamp(200);
+    b.upload.clublog = Some(UploadStatus {
+        outcome: UploadOutcome::Rejected,
+        when_unix: 300,
+        detail: None,
+    });
+    for chosen in [a.id.unwrap(), b.id.unwrap()] {
+        let choices = HashMap::from([("STATION_CALLSIGN".to_string(), chosen)]);
+        let merged = merge(&[a.clone(), b.clone()], 0, &choices).record;
+        assert_eq!(merged.upload.lotw, b.upload.lotw, "the sent copy's");
+        assert_eq!(merged.upload.qrz, a.upload.qrz, "the kept copy's own");
+        assert_eq!(merged.upload.clublog, None, "a failed upload is none");
+        assert_eq!(merged.upload.eqsl, None);
+    }
+
+    // CONTROL: /M is another call.
+    b.station_callsign = Some("KD9TAW/M".into());
+    let merged = merge(&[a.clone(), b], 0, &HashMap::new()).record;
+    assert_eq!(merged.upload, a.upload);
 }

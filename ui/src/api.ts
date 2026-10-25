@@ -1681,6 +1681,8 @@ export interface UndoAnswer {
   run: string | null
   kept: string[]
   held: string[]
+  /** The call in Settings a held blank station call would have sent the contacts under. */
+  heldUnder: string | null
   gone: number
   alreadyThere: number
   changedSince: number
@@ -1821,6 +1823,11 @@ export interface BulkPreview {
   recall: number
   resend: number
   unconfirm: number
+  /** Those a filled or cleared station call sends to a service not yet sent them under another
+   *  call: `moveTo`, instead of `moveFrom`. Their upload marks stay. */
+  moves: number
+  moveTo: string | null
+  moveFrom: string[]
 }
 
 export async function bulkEditPreview(target: BulkTarget, changes: FieldChange[]): Promise<BulkPreview> {

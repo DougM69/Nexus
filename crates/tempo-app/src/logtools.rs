@@ -28,8 +28,8 @@
 //! **No tool here calls a connector or queues an upload.** What a contact is owed to a service
 //! follows from its stamps, and:
 //!
-//! - **a merge** gives the kept contact no stamp of another copy's (`cleanup`'s header): the kept
-//!   copy's stamps are its own, so the merged contact is owed to every service the kept copy did
+//! - **a merge** gives the kept contact no stamp of another copy's but one only a copy a portable
+//!   `/P` apart reached (`cleanup`'s header): the kept copy's stamps are its own, so the merged contact is owed to every service the kept copy did
 //!   not reach, and the next upload sends it there. A service holding a deleted copy at the same
 //!   time answers it Duplicate; one holding a copy logged minutes apart may keep both. Its call is
 //!   the kept copy's, unchanged: no correction — and copies under different calls, or different
@@ -40,10 +40,13 @@
 //!   call's are, and the next upload sends it under the new call ([`cleanup::resends`]; the
 //!   preview counts them, [`BulkPreview::recall`] and [`BulkPreview::resend`]). Filling in a blank
 //!   station call, clearing one, or adding or taking off a portable `/P` changes the field and
-//!   nothing else, whatever the call in Settings is. It is not queued here. The LoTW, eQSL and QRZ confirmations matched
+//!   nothing else, whatever the call in Settings is; but a contact naming none is uploaded under
+//!   the Settings call, so the preview counts those a fill or a clear sends under another call to
+//!   a service not yet sent them ([`BulkPreview::moves`]). It is not queued here. The LoTW, eQSL and QRZ confirmations matched
 //!   under the old call go too; a paper card and the credit codes stay (`cleanup`'s header; the
 //!   preview counts them, [`BulkPreview::unconfirm`]), and the run's undo puts them back. A
-//!   push answered after the change is not stamped on it ([`station::push_target`]).
+//!   push answered after the change is not stamped on it, unless only a `/P` changed
+//!   ([`station::push_target`]).
 //! - **a fix** changes a grid, a band, a DXCC number, a reference or an end time, never a call:
 //!   every stamp stays.
 //!
@@ -60,7 +63,7 @@
 //! does not keep and nothing else, as an undo changes the general log only; the contest log is
 //! the contest's record of what went over the air.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -451,7 +454,7 @@ fn merged_pairs(
 // ── bulk edit ──────────────────────────────────────────────────────────────────────────────────
 
 /// What a bulk edit would make of the contacts it was handed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BulkPreview {
     /// The contacts named.
     pub selected: usize,
@@ -469,6 +472,14 @@ pub struct BulkPreview {
     pub resend: usize,
     /// The LoTW, eQSL and QRZ confirmations a changed station call takes off those it changes.
     pub unconfirm: usize,
+    /// Of those it changes, the ones a filled or cleared station call sends to a service not yet
+    /// sent them under another call than before ([`cleanup::moves`]): a contact naming none goes
+    /// under the call in Settings. Their stamps stay.
+    pub moves: usize,
+    /// The call those go under now ([`cleanup::station_call`]). `None` when none moves.
+    pub move_to: Option<String>,
+    /// The calls they went under before, sorted, each once.
+    pub move_from: Vec<String>,
 }
 
 /// Only fields a bulk edit offers, each value of its field's form.
@@ -494,6 +505,9 @@ pub fn bulk_preview(
 ) -> Result<BulkPreview, String> {
     let changes = bulk_changes(changes)?;
     let country = country_rule(engine);
+    let settings_call = settings_call(engine);
+    let settings_call = Some(settings_call.as_str());
+    let mut from = BTreeSet::new();
     let mut seen = HashSet::new();
     let ids: Vec<RecordId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
     let mut out = BulkPreview {
@@ -515,11 +529,17 @@ pub fn bulk_preview(
                         }
                     }
                     out.unconfirm += cleanup::confirmations_cleared(row, &after);
+                    if cleanup::moves(row, &after, settings_call) {
+                        out.moves += 1;
+                        out.move_to = cleanup::station_call(&after, settings_call);
+                        from.extend(cleanup::station_call(row, settings_call));
+                    }
                 }
                 None => out.unchanged += 1,
             }
         }
     }
+    out.move_from = from.into_iter().collect();
     Ok(out)
 }
 

@@ -663,7 +663,8 @@ const PUSH_KEY: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlit
 ///
 /// ⛔ **A push of a row the log holds NAMES that row, by its id, and the stamp lands there** —
 /// only while it is still the contact that was pushed (the same push key, under the same station
-/// call — its STATION_CALLSIGN, else `settings_call`, the call in Settings): one corrected since,
+/// call — its STATION_CALLSIGN, else `settings_call`, the call in Settings, a portable `/P` aside
+/// as the clean-up tools compare it, `tempo_core::logbook::cleanup::station_call`): one corrected since,
 /// or given another station call since, holds a contact the service never received, and one
 /// deleted since holds nothing. A push that
 /// names no row (from a page older than the ids) keeps the rule every push had, F9's fallback:
@@ -676,11 +677,11 @@ pub fn push_target(
     pushed: &QsoRecord,
     settings_call: Option<&str>,
 ) -> Result<Option<Arc<QsoRecord>>, String> {
+    use tempo_core::logbook::cleanup::station_call;
     use tempo_core::logbook::same_push_key;
-    use tempo_core::reconcile::lotw_own_call;
-    let sent_under = lotw_own_call(pushed, settings_call);
+    let sent_under = station_call(pushed, settings_call);
     let same =
-        |r: &QsoRecord| same_push_key(r, pushed) && lotw_own_call(r, settings_call) == sent_under;
+        |r: &QsoRecord| same_push_key(r, pushed) && station_call(r, settings_call) == sent_under;
     match pushed.id {
         Some(id) => Ok(plan.row(id)?.filter(|r| same(r))),
         None => plan.newest(&pushed.call, PUSH_KEY, same),

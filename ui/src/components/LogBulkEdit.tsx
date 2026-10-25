@@ -4,7 +4,10 @@
 // and their own park or summit. Never the worked call, and nothing is sent from here. A changed
 // STATION_CALLSIGN is the call a contact is uploaded under, so its upload marks are cleared and the
 // next upload sends it under the new call, and the LoTW, eQSL and QRZ confirmations matched under
-// the old call are cleared (a paper card stays); the preview counts both, before the confirm.
+// the old call are cleared (a paper card stays); the preview counts both, before the confirm. A
+// filled or cleared STATION_CALLSIGN clears nothing, but a contact naming none is uploaded under the
+// call in Settings, so it can send contacts to a service not yet sent them under another call: the
+// confirm names those, and the change waits for the operator to tick that they understand.
 //
 // Preview first: how many contacts it would change and how many are already so. The button then
 // names that count, and asks once more, in the dialog, before it changes anything. The change is
@@ -64,6 +67,7 @@ export function LogBulkEdit({
   const [rows, setRows] = useState<Row[]>([{ field: 'MY_GRIDSQUARE', clear: false, value: '' }])
   const [preview, setPreview] = useState<BulkPreview | null>(null)
   const [asking, setAsking] = useState(false)
+  const [understood, setUnderstood] = useState(false)
   const [busy, setBusy] = useState(false)
   const inFlight = useRef(false)
 
@@ -71,23 +75,26 @@ export function LogBulkEdit({
   const changes = (): FieldChange[] =>
     rows.map((r) => ({ field: r.field, value: r.clear ? null : r.value.trim() }))
   // Anything changed after a preview makes it stale: preview again before the change.
-  const edit = (next: Row[]) => { setRows(next); setPreview(null); setAsking(false) }
+  const edit = (next: Row[]) => { setRows(next); setPreview(null); setAsking(false); setUnderstood(false) }
   const fillable = rows.every((r) => r.clear || r.value.trim() !== '')
   const used = new Set(rows.map((r) => r.field))
   // The contacts the preview was made of changed: preview again.
   const queryKey = JSON.stringify(query)
   const pickedKey = [...picked].join(' ')
-  useEffect(() => { setPreview(null); setAsking(false) }, [queryKey, pickedKey])
+  useEffect(() => { setPreview(null); setAsking(false); setUnderstood(false) }, [queryKey, pickedKey])
 
   const onPreview = async () => {
     setBusy(true)
     const p = await withErrorToast(() => bulkEditPreview(target(), changes()), t('logbook.tools.bulk.previewFailed'))
     setBusy(false)
     setPreview(p)
+    setUnderstood(false)
   }
 
+  // Contacts it would send under another call wait for the operator's tick.
+  const moves = preview?.moves ?? 0
   const onApply = async () => {
-    if (changesRefusedHere() || inFlight.current || !preview) return
+    if (changesRefusedHere() || inFlight.current || !preview || (moves > 0 && !understood)) return
     inFlight.current = true
     setBusy(true)
     setAsking(false)
@@ -199,7 +206,7 @@ export function LogBulkEdit({
               type="button"
               className="export-btn"
               disabled={busy || afar || preview.change === 0}
-              onClick={() => setAsking(true)}
+              onClick={() => { setAsking(true); setUnderstood(false) }}
             >
               {t('logbook.tools.bulk.apply', { count: preview.change })}
             </button>
@@ -207,7 +214,27 @@ export function LogBulkEdit({
               <span className="log-tools-confirm">
                 <span>{t('logbook.tools.bulk.ask', { count: preview.change })}</span>
                 {preview.recall > 0 && <span>{t('logbook.tools.bulk.askUndo')}</span>}
-                <button type="button" className="export-btn danger" disabled={busy} onClick={() => void onApply()}>
+                {moves > 0 && (
+                  <>
+                    <strong>
+                      {t('logbook.tools.bulk.moves', {
+                        count: moves,
+                        to: preview.moveTo ?? '',
+                        from: preview.moveFrom.join(', '),
+                      })}
+                    </strong>
+                    <label>
+                      <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />{' '}
+                      {t('logbook.tools.bulk.movesAck', { to: preview.moveTo ?? '' })}
+                    </label>
+                  </>
+                )}
+                <button
+                  type="button"
+                  className="export-btn danger"
+                  disabled={busy || (moves > 0 && !understood)}
+                  onClick={() => void onApply()}
+                >
                   {t('logbook.tools.bulk.confirm', { count: preview.change })}
                 </button>
                 <button type="button" className="export-btn" onClick={() => setAsking(false)}>

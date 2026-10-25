@@ -2042,7 +2042,7 @@ export const EN = {
   'logbook.tools.bulk.add': 'Add a field',
   'logbook.tools.bulk.preview': 'Preview',
   'logbook.tools.bulk.previewFailed': 'The preview could not be made',
-  'logbook.tools.bulk.uploads': 'A bulk edit never changes the worked call. Nothing is sent from here. A STATION_CALLSIGN replaced with another call is the call a contact is uploaded under, so its upload marks are cleared and the next upload sends it again under the new call, and its LoTW, eQSL and QRZ confirmations, matched under the old call, are cleared; paper QSL cards stay. Filling in a blank STATION_CALLSIGN, clearing one, or adding or removing /P changes only that field. Every other field keeps its upload marks and confirmations.',
+  'logbook.tools.bulk.uploads': 'A bulk edit never changes the worked call. Nothing is sent from here. A STATION_CALLSIGN replaced with another call is the call a contact is uploaded under, so its upload marks are cleared and the next upload sends it again under the new call, and its LoTW, eQSL and QRZ confirmations, matched under the old call, are cleared; paper QSL cards stay. Filling in a blank STATION_CALLSIGN, clearing one, or adding or removing /P clears no upload mark or confirmation. But a contact with no STATION_CALLSIGN is uploaded under the call in Settings, so a fill or a clear can change the call a contact is sent under to a service it has not been sent to yet: the confirm names those. Every other field keeps its upload marks and confirmations.',
   'logbook.tools.bulk.resend': {
     one: '{{count}} of these was uploaded under another station call: it will be sent again under the new one.',
     other: '{{count}} of these were uploaded under another station call: they will be sent again under the new one.',
@@ -2060,6 +2060,11 @@ export const EN = {
     one: 'Change {{count}} contact? It is one change you can undo.',
     other: 'Change {{count}} contacts? It is one change you can undo.',
   },
+  'logbook.tools.bulk.moves': {
+    one: '{{count}} contact would be sent under {{to}} instead of {{from}} to any service it has not been sent to yet. Uploads already made stay as they are, and LoTW cannot take back a QSO it has accepted.',
+    other: '{{count}} contacts would be sent under {{to}} instead of {{from}} to any service they have not been sent to yet. Uploads already made stay as they are, and LoTW cannot take back a QSO it has accepted.',
+  },
+  'logbook.tools.bulk.movesAck': 'I understand: these contacts will be sent under {{to}}',
   'logbook.tools.bulk.askUndo': 'Undo puts the station call and its confirmations back. Anything uploaded under the new call stays on that service, and these contacts are sent again under the call they get back.',
   'logbook.tools.bulk.confirm': {
     one: 'Yes, change {{count}}',
@@ -2169,8 +2174,9 @@ export const EN = {
   'qso.history.undone': 'Change undone',
   'qso.history.redone': 'Change made again',
   'qso.history.undo.kept': '; {{fields}} changed since and kept',
-  'qso.history.undo.held': '; {{fields}} kept: put back blank, the contact would be sent under the call in Settings now, not the call it was made under',
-  'qso.history.undo.heldOnly': 'Nothing undone: {{fields}} was kept. Put back blank, the contact would be sent under the call in Settings now, not the call it was made under.',
+  'qso.history.undo.held': '; {{fields}} kept: put back blank, these contacts would be sent under {{settings}}, the call in Settings now',
+  'qso.history.undo.heldOnly': 'Nothing undone: {{fields}} was kept. Put back blank, these contacts would be sent under {{settings}}, the call in Settings now.',
+  'qso.history.undo.heldOnlyRedo': 'Nothing redone: {{fields}} was kept. Put back blank, these contacts would be sent under {{settings}}, the call in Settings now.',
   'qso.history.undo.nothing': 'Nothing to undo: every field it changed has changed since.',
   'qso.history.undo.gone': 'Nothing to undo: that contact is no longer in the log.',
   'qso.history.undo.alreadyThere': 'Nothing to restore: that contact is already in the log.',

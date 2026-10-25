@@ -171,6 +171,34 @@ describe('bulk edit', () => {
     ))
   })
 
+  it('names the contacts a fill or clear sends under another call and waits for the tick', async () => {
+    api.bulkEditPreview.mockResolvedValue({
+      ids: ['x', 'y', 'z'], selected: 3, change: 3, unchanged: 0, missing: 0, recall: 0, resend: 0, unconfirm: 0,
+      moves: 2, moveTo: 'KD9NEW', moveFrom: ['KA1OLD', 'W6R'],
+    })
+    api.bulkEditApply.mockResolvedValue(made)
+    open('bulk')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Field' }), { target: { value: 'STATION_CALLSIGN' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Set or clear' }), { target: { value: 'clear' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change 3 contacts' }))
+    expect(screen.getByText(
+      '2 contacts would be sent under KD9NEW instead of KA1OLD, W6R to any service they have not been sent to yet. Uploads already made stay as they are, and LoTW cannot take back a QSO it has accepted.',
+    )).toBeTruthy()
+    const yes = screen.getByRole('button', { name: 'Yes, change 3' }) as HTMLButtonElement
+    expect(yes.disabled).toBe(true)
+    fireEvent.click(yes)
+    expect(api.bulkEditApply).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'I understand: these contacts will be sent under KD9NEW' }))
+    expect(yes.disabled).toBe(false)
+    fireEvent.click(yes)
+    await waitFor(() => expect(api.bulkEditApply).toHaveBeenCalledWith(
+      ['x', 'y', 'z'],
+      3,
+      [{ field: 'STATION_CALLSIGN', value: null }],
+    ))
+  })
+
   it('a change after the preview takes the apply away until it is previewed again', async () => {
     api.bulkEditPreview.mockResolvedValue({ ids: [], selected: 42, change: 40, unchanged: 2, missing: 0, recall: 0, resend: 0, unconfirm: 0 })
     open('bulk')

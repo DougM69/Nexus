@@ -865,7 +865,11 @@ pub fn undo(
 /// the change itself cleared are not put back — they were never history — so the next upload sends
 /// the contact under the restored call, and a service already holding that QSO answers Duplicate.
 /// A blank station call filled with the Settings call, undone, keeps its stamps: the call it is
-/// uploaded under never moved.
+/// uploaded under never moved. Undoing a clear of a station call, or redoing an undone fill, while
+/// another call is in Settings does clear them, though the clear or the fill itself cleared none:
+/// the contact moves back from the Settings call to its own, and goes again under its own call,
+/// which the services answer as a duplicate. Keep it so: an upload under the Settings call may have
+/// been made in between, and keeping its stamps would leave the contact never sent under its own.
 ///
 /// **⛔ An undo never puts back a blank station call that would move the contact under another
 /// call.** A contact naming none goes out under the call in Settings NOW, and nothing records the

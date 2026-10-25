@@ -325,6 +325,9 @@ fn a_bulk_edit_previews_applies_and_undoes_and_keeps_every_stamp() {
             recall: 0,
             resend: 0,
             unconfirm: 0,
+            moves: 0,
+            move_to: None,
+            move_from: vec![],
         }
     );
     let only_grid = &changes[..1];
@@ -1340,6 +1343,11 @@ fn an_undo_never_puts_a_contact_under_a_call_it_was_not_made_under() {
         let undone = undone.unwrap();
         dur.wait(DURABLE_WAIT).unwrap();
         assert_eq!(undone.held, vec![(id, "STATION_CALLSIGN".to_string())]);
+        assert_eq!(
+            undone.held_under.as_deref(),
+            Some("KD9NEW"),
+            "the call a blank would go under"
+        );
         assert_eq!(undone.changed, 0, "nothing else to put back");
     }
     assert_eq!(rows(&engine), filled, "under KA1OLD, stamps and all");
@@ -1457,4 +1465,139 @@ fn an_unnamed_push_under_another_station_call_is_stamped() {
         rows(&engine)[0].upload.qrz.as_ref().map(|s| s.when_unix),
         Some(700)
     );
+}
+
+/// ★ A FILL OR A CLEAR THAT MOVES A CONTACT TO ANOTHER UPLOAD CALL IS COUNTED. Clearing KA1OLD
+/// while Settings says KD9NEW clears no stamp, but every service not yet sent the contact gets it
+/// as KD9NEW: the preview counts it, with both calls. Filling a blank with KA1OLD moves it the other
+/// way. Filling it with the Settings call, or a contact sent everywhere, moves nothing. The edit
+/// itself still clears nothing.
+#[test]
+fn a_fill_or_a_clear_that_moves_the_upload_call_is_counted() {
+    let d = Dir::new("tools-bulk-moves");
+    let engine = shared(
+        &d,
+        &[
+            adif(
+                "W1AW",
+                "120000",
+                "<STATION_CALLSIGN:6>KA1OLD<LOTW_QSL_RCVD:1>Y",
+            ),
+            adif("K1ABC", "120100", ""),
+            adif("N0XYZ", "120200", "<STATION_CALLSIGN:6>KA1OLD"),
+        ],
+    );
+    settings_call_is(&engine, "KD9NEW");
+    let w = rows(&engine);
+    stamp(&engine, &w[0], UploadService::Lotw, 100);
+    for service in [
+        UploadService::Lotw,
+        UploadService::Eqsl,
+        UploadService::Qrz,
+        UploadService::Clublog,
+    ] {
+        stamp(&engine, &w[2], service, 100);
+    }
+    engine_lock(&engine).take_pending_uploads();
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let counted = |p: &BulkPreview| (p.change, p.recall, p.resend, p.unconfirm, p.moves);
+
+    let clear = station_to(None);
+    let preview = bulk_preview(&engine, &ids[..1], &clear).unwrap();
+    assert_eq!(counted(&preview), (1, 0, 0, 0, 1));
+    assert_eq!(preview.move_to.as_deref(), Some("KD9NEW"));
+    assert_eq!(preview.move_from, vec!["KA1OLD".to_string()]);
+    let (made, dur) = bulk_edit(&engine, &ids[..1], 1, &clear);
+    assert_eq!(made.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let mut want = before[0].clone();
+    want.station_callsign = None;
+    assert_eq!(rows(&engine)[0], want, "stamps and confirmation stay");
+
+    let preview = bulk_preview(&engine, &ids[1..2], &station_to(Some("ka1old"))).unwrap();
+    assert_eq!(counted(&preview), (1, 0, 0, 0, 1));
+    assert_eq!(preview.move_to.as_deref(), Some("KA1OLD"));
+    assert_eq!(preview.move_from, vec!["KD9NEW".to_string()]);
+
+    let preview = bulk_preview(&engine, &ids[1..2], &station_to(Some("KD9NEW"))).unwrap();
+    assert_eq!(counted(&preview), (1, 0, 0, 0, 0), "the Settings call");
+    assert_eq!((preview.move_to, preview.move_from), (None, vec![]));
+
+    let preview = bulk_preview(&engine, &ids[2..], &clear).unwrap();
+    assert_eq!(counted(&preview), (1, 0, 0, 0, 0), "sent everywhere");
+}
+
+/// An upload answered after a bulk edit added /P to the station call it was sent under is stamped:
+/// a portable /P is the same station call, as the edit treated it. Another suffix is another call.
+#[test]
+fn an_answer_after_a_portable_p_edit_is_stamped() {
+    let d = Dir::new("tools-push-portable");
+    let engine = shared(
+        &d,
+        &[
+            adif("W1AW", "120000", "<STATION_CALLSIGN:6>KD9TAW"),
+            adif("K1ABC", "120100", "<STATION_CALLSIGN:6>KD9TAW"),
+        ],
+    );
+    let pushed = rows(&engine);
+    for (r, to) in [(&pushed[0], "KD9TAW/P"), (&pushed[1], "KD9TAW/M")] {
+        let (made, dur) = bulk_edit(&engine, &[r.id.unwrap()], 1, &station_to(Some(to)));
+        made.unwrap();
+        dur.wait(DURABLE_WAIT).unwrap();
+    }
+    for p in &pushed {
+        let (_, dur) = logwrite::stamp_push(
+            &engine,
+            p,
+            UploadService::Qrz,
+            UploadStatus {
+                outcome: UploadOutcome::Accepted,
+                when_unix: 800,
+                detail: None,
+            },
+        );
+        dur.wait(DURABLE_WAIT).unwrap();
+    }
+    let now = rows(&engine);
+    assert_eq!(
+        now[0].upload.qrz.as_ref().map(|s| s.when_unix),
+        Some(800),
+        "KD9TAW/P is KD9TAW"
+    );
+    assert_eq!(now[1].upload.qrz, None, "KD9TAW/M is another call");
+}
+
+/// ★ A MERGE OF COPIES A PORTABLE /P APART SENDS NOTHING AGAIN. The copy sent to LoTW under
+/// KD9TAW/P is deleted and the unsent KD9TAW copy kept: its stamp comes along, so no second LoTW
+/// QSO is signed under KD9TAW.
+#[test]
+fn a_merge_of_copies_a_portable_p_apart_sends_nothing_again() {
+    let d = Dir::new("tools-merge-portable");
+    let engine = shared(
+        &d,
+        &[
+            adif(
+                "W1AW",
+                "120000",
+                "<STATION_CALLSIGN:6>KD9TAW<NAME:5>Hiram<QTH:9>Newington",
+            ),
+            adif("W1AW", "120100", "<STATION_CALLSIGN:8>KD9TAW/P"),
+        ],
+    );
+    let w = rows(&engine);
+    stamp(&engine, &w[1], UploadService::Lotw, 100);
+    engine_lock(&engine).take_pending_uploads();
+    assert_eq!(owed_to_lotw(&engine), vec![w[0].id.unwrap()]);
+    let scan = find_duplicates(&engine, DupeTier::Rule).unwrap();
+    let g = &scan.groups[0];
+    assert_eq!(g.keep, 0, "the fuller, unsent copy");
+    let (made, dur) = merge_duplicates(&engine, &[ask(g, &[("STATION_CALLSIGN", 0)])]);
+    assert!(made.unwrap().refused.is_empty());
+    dur.wait(DURABLE_WAIT).unwrap();
+    let kept = rows(&engine);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].station_callsign.as_deref(), Some("KD9TAW"));
+    assert_eq!(kept[0].upload.lotw.as_ref().map(|s| s.when_unix), Some(100));
+    assert!(owed_to_lotw(&engine).is_empty(), "nothing owed to LoTW");
 }

@@ -202,6 +202,9 @@ pub struct UndoAnswer {
     /// The fields the undo left as they are because putting them back would move a contact under
     /// a call it was not made under: a blank station call, with another call in Settings.
     pub held: Vec<String>,
+    /// The call in Settings a blank put back would have sent those contacts under, when a field
+    /// was held.
+    pub held_under: Option<String>,
     /// How many contacts it could not change, by why: `gone` (no longer in the log),
     /// `alreadyThere` (nothing to put back), `changedSince` (every field changed again since, or
     /// a contact it would take out changed or uploaded since, which stays), `duplicate` (logged
@@ -242,6 +245,7 @@ fn answer(undone: tempo_app::loghistory::Undone) -> UndoAnswer {
         run: undone.run.clone(),
         kept,
         held,
+        held_under: undone.held_under.clone(),
         gone: count(CannotUndo::Gone),
         already_there: count(CannotUndo::AlreadyThere),
         changed_since: count(CannotUndo::ChangedSince),

@@ -254,6 +254,12 @@ pub struct BulkPreviewDto {
     pub resend: usize,
     /// The LoTW, eQSL and QRZ confirmations the changed station call takes off.
     pub unconfirm: usize,
+    /// Of those it changes, the ones a filled or cleared station call sends to a service not yet
+    /// sent them under another call than before; `move_to` that call, `move_from` the calls they
+    /// went under.
+    pub moves: usize,
+    pub move_to: Option<String>,
+    pub move_from: Vec<String>,
 }
 
 /// What a bulk edit would make of its contacts. Changes nothing.
@@ -277,6 +283,9 @@ pub async fn bulk_edit_preview(
             recall: p.recall,
             resend: p.resend,
             unconfirm: p.unconfirm,
+            moves: p.moves,
+            move_to: p.move_to,
+            move_from: p.move_from,
         })
     })
     .await
