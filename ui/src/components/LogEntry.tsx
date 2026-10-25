@@ -1604,6 +1604,13 @@ export function LogEntry({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logCall, remoteMode, zoneSlot?.key])
+  // The contest strip's country line: the country, and its CQ zone in a contest that receives one.
+  const fdCountryZone = logEntity != null && zoneSlot != null && zoneHint != null
+  const fdCountry = logEntity
+    ? fdCountryZone
+      ? t('logEntry.contest.country.zone', { country: logEntity, zone: zoneHint })
+      : logEntity
+    : ''
 
   // DXCC-Challenge axis: the entity is already worked, but is THIS band (or mode) a new
   // slot for it? Only meaningful once the entity is in the log (an ATNO is owned by
@@ -2787,6 +2794,21 @@ export function LogEntry({
                 )}
                 {fdWorkedLine}
               </span>
+              {/* ⭐ THE COUNTRY of the call being typed, from the country file (`logEntity`), with the
+                  CQ zone its prefix usually has where the contest receives one (`zoneHint`, the zone
+                  box's placeholder). Read-only: nothing here goes into the exchange, and the zone a
+                  station sends is still copied. On this same caption line, after the dupe badge,
+                  which it gives way to first, so it adds no height and no width in any host. Outside
+                  the live region, so a screen reader is not read a country per keystroke. Not in the
+                  Field Day events, where every station is W/VE. */}
+              {!fdEventIsFieldDay && fdCountry && (
+                <span
+                  className="le-fd-country"
+                  title={fdCountryZone ? t('logEntry.contest.country.zoneTitle') : t('logEntry.contest.country.title')}
+                >
+                  {fdCountry}
+                </span>
+              )}
             </span>
             <input
               ref={callInputRef}

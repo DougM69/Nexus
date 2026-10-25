@@ -76,11 +76,14 @@ import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { t } from '../i18n'
 import { pollSingleFlight } from '../singleFlight'
 import { withErrorToast } from '../toast'
-import type { AppSnapshot, FieldDayStatus } from '../types'
+import type { AppSnapshot, FieldDayQso, FieldDayStatus } from '../types'
 import { useContestSwitch } from '../contestSwitch'
+import { contactLabel } from '../features/contestRemoval'
+import { isStreamInput } from '../remote-native/stream-input'
 import { useOperatorBoxAsk } from '../features/contestKeys'
 import { useLoggerLayout } from '../features/contestLoggerLayout'
 import { contestLogMode, stationMode, usePskName } from '../features/contestMode'
+import { ContestContactEdit, type EditNote } from './ContestContactEdit'
 import { annotate, ContestLogHead, ContestLogRow, ContestView, logIsNumbered, OperatorBox } from './ContestView'
 import { NoCreditChip } from './FdAdvisories'
 import { LogEntry } from './LogEntry'
@@ -92,7 +95,7 @@ import { PaneSeam } from './PaneSeam'
 const TEXT_SCALE_KEY = 'nexus.contestLogger.textScale'
 
 /** How many of the newest contacts the entry lists under its boxes. */
-export const LAST_CONTACTS = 5
+export const LAST_CONTACTS = 10
 
 /** The text size as stored, clamped on load into the range A− / A+ writes — a Connect box's, 80–160 %
  *  in steps of 10 — and 100 % for anything that is not a size (nothing stored, a hand edit). */
@@ -137,7 +140,10 @@ function KeepInFront() {
   )
 }
 
-/** The newest contacts of the running contest, newest first, in the contest screen's own columns. */
+/** The newest contacts of the running contest, newest first, in the contest screen's own columns.
+ *  Each row's Edit opens the contest screen's own edit (`ContestContactEdit`) in the row's place, with
+ *  the screen's refusals: never through the Remote stream, and at a club the line says how a contact
+ *  is fixed there instead, because club sync cannot carry an edit to the other laptops. */
 export function LastContacts({
   fieldDay,
   style,
@@ -161,6 +167,34 @@ export function LastContacts({
         .reverse(),
     [fieldDay.log],
   )
+  const [editing, setEditing] = useState<{ call: string; whenUnix: number } | null>(null)
+  const [note, setNote] = useState<EditNote | null>(null)
+  // A county line is one contact: the edit takes all its rows from the whole log.
+  const editRows = editing
+    ? fieldDay.log.filter((q) => q.call === editing.call && q.whenUnix === editing.whenUnix)
+    : []
+  // A contact removed or edited elsewhere while its edit was open: the edit closes.
+  useEffect(() => {
+    if (editing && editRows.length === 0) setEditing(null)
+  }, [editing, editRows.length])
+  const editRow = (q: FieldDayQso) => {
+    if (isStreamInput()) {
+      setNote({ text: t('contest.edit.remote'), alert: true })
+      return
+    }
+    if (fieldDay.club) {
+      setNote({ text: t('contest.edit.club'), alert: true })
+      return
+    }
+    setNote(null)
+    setEditing({ call: q.call, whenUnix: q.whenUnix ?? 0 })
+  }
+  const editDone = (done: EditNote | null) => {
+    setEditing(null)
+    setNote(done)
+  }
+  // The edit stands in the place of the first of its rows shown here.
+  const editAt = rows.findIndex(({ row }) => editRows.includes(row.qso))
   return (
     <section className="contest-logger-recent" aria-labelledby={titleId} style={style} ref={boxRef}>
       <div className="contest-logger-recent-body">
@@ -175,15 +209,46 @@ export function LastContacts({
           numbered={numbered}
         />
         {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
-        {rows.map(({ row, at }) => (
-          <ContestLogRow
-            key={`${row.qso.call}-${at}`}
-            row={row}
-            fieldDayColumns={fieldDayColumns}
-            slotColumns={slotColumns}
-            numbered={numbered}
-          />
-        ))}
+        {rows.map(({ row, at }, i) => {
+          if (editRows.includes(row.qso)) {
+            return i === editAt ? (
+              <ContestContactEdit
+                key={`edit-${row.qso.call}-${row.qso.whenUnix}`}
+                rows={editRows}
+                receives={fieldDay.receives ?? []}
+                role={fieldDay.role}
+                bands={fieldDay.bands}
+                onDone={editDone}
+              />
+            ) : null
+          }
+          return (
+            <ContestLogRow
+              key={`${row.qso.call}-${at}`}
+              row={row}
+              fieldDayColumns={fieldDayColumns}
+              slotColumns={slotColumns}
+              numbered={numbered}
+            >
+              {row.qso.whenUnix ? (
+                <button
+                  type="button"
+                  className="fd-edit"
+                  title={t('contest.edit.title')}
+                  aria-label={t('contest.edit.aria', { contact: contactLabel([row.qso]) })}
+                  onClick={() => editRow(row.qso)}
+                >
+                  {t('contest.edit.label')}
+                </button>
+              ) : null}
+            </ContestLogRow>
+          )
+        })}
+        {note && (
+          <p className="fd-removed-note contest-logger-recent-note" role={note.alert ? 'alert' : 'status'}>
+            {note.text}
+          </p>
+        )}
       </div>
     </section>
   )

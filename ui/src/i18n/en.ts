@@ -2190,6 +2190,9 @@ export const EN = {
   'logEntry.contest.chip': 'CONTEST LOG',
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
   'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
+  'logEntry.contest.country.zone': '{{country}} · CQ {{zone}}',
+  'logEntry.contest.country.title': 'The country of this call, from the country file.',
+  'logEntry.contest.country.zoneTitle': 'The country of this call, from the country file, and the CQ zone its prefix usually has. Copy the zone the station sends: a portable or a station outside its prefix\'s zone sends another.',
   // THE SCORE CHIP in every contest log strip: the Contest screen's own numbers at a glance,
   // "ILQP · 212 pts · 48 Q · 19 mults · 41/hr". One entry per reading — a list of readings,
   // not a sentence. `{{rate}}` is a whole number, or the scoreboard's em dash before there is one.

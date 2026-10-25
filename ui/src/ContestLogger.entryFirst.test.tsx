@@ -317,14 +317,15 @@ describe('the contest logger window puts the entry first', () => {
     const dupe = within(entry).getByRole('alert')
     expect(dupe.textContent).toBe(t('logEntry.fd.dupe.own', { call: 'K9ABC', band: '20m', mode: 'PH' }))
     expect(entry.querySelector('.le-fd-big')!.compareDocumentPosition(dupe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    // The last contacts: the newest five, newest first, under the contest screen's own columns.
-    expect(LAST_CONTACTS).toBe(5)
+    // The last contacts: the newest ten (here all six), newest first, under the contest screen's own columns.
+    expect(LAST_CONTACTS).toBe(10)
     expect([...recent.querySelectorAll('.fd-log-row .fd-col.call')].map((c) => c.textContent)).toEqual([
       'K9DEF',
       'W0AAA',
       'N9AAA',
       'K9AAA',
       'K9ABC',
+      'W9XYZ',
     ])
     expect([...recent.querySelectorAll('.fd-log-row .fd-col.slot')].slice(0, 2).map((c) => c.textContent)).toEqual([
       '59',
