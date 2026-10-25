@@ -43009,8 +43009,8 @@ mod tests {
             super::EngineRig::new(std::sync::Arc::new(std::sync::Mutex::new(e)))
         };
         assert!(!rig_at(14.148).set_ptt(true), "the key is refused");
-        let line = "refused PTT from a client: outside your license privileges at the band edge: \
-                    the program's audio could reach 14.1510 MHz";
+        let line = "refused PTT from a client: outside your license privileges at the segment \
+                    edge: the program's audio could reach 14.1510 MHz";
         assert!(
             super::get_connection_log()
                 .iter()

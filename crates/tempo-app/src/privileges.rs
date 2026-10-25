@@ -123,13 +123,20 @@ const SIXTY: &[Seg] = &[
 /// 60 m's 5.3515–5.3665 MHz segment, all-mode. Every other [`SIXTY`] row is a channel's.
 const SIXTY_SEGMENT: Seg = s(5.3515, 5.3665, true, true, true);
 
-/// Is `mhz` on one of 60 m's four channels: in a [`SIXTY`] row other than the segment's, from a
-/// channel's phone carrier to its top? The segment is not a channel.
-pub fn on_sixty_meter_channel(mhz: f64) -> bool {
+/// How far a dial may sit from a 60 m channel's upper-sideband dial, its phone carrier, and still
+/// be on it ([`on_sixty_meter_channel_dial`]): 50 Hz either side, and half a hertz more, so no
+/// whole-hertz dial lands on an edge, where float rounding would decide it.
+const SIXTY_DIAL_TOL_MHZ: f64 = 0.000_050_5;
+
+/// Is `mhz` one of 60 m's four channel dials: a channel's phone carrier, 1.5 kHz under its centre,
+/// within [`SIXTY_DIAL_TOL_MHZ`]? The dial an upper-sideband program keys from on a channel
+/// (operator ruling, 2026-10-25). Anywhere else inside a channel is not a channel dial, and
+/// neither is the 5.3515–5.3665 MHz segment.
+pub fn on_sixty_meter_channel_dial(mhz: f64) -> bool {
     SIXTY
         .iter()
-        .filter(|seg| seg.hi <= SIXTY_SEGMENT.lo || seg.lo >= SIXTY_SEGMENT.hi)
-        .any(|seg| mhz >= seg.lo && mhz < seg.hi)
+        .filter(|seg| seg.phone && (seg.hi <= SIXTY_SEGMENT.lo || seg.lo >= SIXTY_SEGMENT.hi))
+        .any(|seg| (mhz - seg.lo).abs() < SIXTY_DIAL_TOL_MHZ)
 }
 
 /// How far a CW carrier may sit from a 60 m channel's centre and still key: 5 Hz either side
@@ -381,6 +388,35 @@ pub fn tx_span_allowed(class: LicenseClass, lo_mhz: f64, hi_mhz: f64, mode: Oper
     spans
         .iter()
         .any(|&span| inside(lo_mhz, span) && inside(hi_mhz, span))
+}
+
+/// Does any frequency from `lo_mhz` to `hi_mhz` lie where `class` may send only CW: CW allowed,
+/// neither data nor phone (a CW-only segment, 50.0–50.1 MHz for every class, a Technician's 80, 40
+/// and 15 m)? `Open` has none. Each mode's [`allowed_spans`] is constant between its edges, so
+/// the two ends, every edge between them and a point inside each piece answer for the whole span.
+pub fn cw_only_within(class: LicenseClass, lo_mhz: f64, hi_mhz: f64) -> bool {
+    let (Some(cw), Some(data), Some(phone)) = (
+        allowed_spans(class, OperatingMode::Cw),
+        allowed_spans(class, OperatingMode::Digital),
+        allowed_spans(class, OperatingMode::Phone),
+    ) else {
+        return false;
+    };
+    let inside = |f: f64, spans: &[(f64, f64)]| spans.iter().any(|&(lo, hi)| f >= lo && f < hi);
+    let mut points = vec![lo_mhz, hi_mhz];
+    points.extend(
+        cw.iter()
+            .chain(&data)
+            .chain(&phone)
+            .flat_map(|&(lo, hi)| [lo, hi])
+            .filter(|&f| f > lo_mhz && f < hi_mhz),
+    );
+    points.sort_by(f64::total_cmp);
+    let middles: Vec<f64> = points.windows(2).map(|w| (w[0] + w[1]) / 2.0).collect();
+    points
+        .iter()
+        .chain(&middles)
+        .any(|&f| inside(f, &cw) && !inside(f, &data) && !inside(f, &phone))
 }
 
 /// May `class` transmit a LOWER-sideband phone signal, its passband below the carrier at

@@ -270,21 +270,70 @@ fn a_held_outside_key_drops_when_a_retune_carries_the_passband_across_an_edge() 
     assert!(!e.broker_ptt_active());
 }
 
+/// One radio-loop tick of the programs' keys, as the loop polls it before it reads the PTT.
+fn loop_tick(e: &mut Engine) {
+    let _ = e.poll_tci(Instant::now(), 0.0, 0);
+}
+
+/// ⛔ A BROKER KEY THE LICENCE DROPPED DOES NOT COME BACK BY ITSELF. A General's broker key in
+/// Digital at 14.140 is held; a retune to 14.148 carries the passband across 14.150, so the loop's
+/// tick ends the latch; back at 14.140 the radio stays unkeyed until the program sends a new key,
+/// which keys. CONTROL: a tick while the key is allowed leaves it held.
+#[test]
+fn a_broker_key_the_licence_dropped_stays_unkeyed_until_a_new_key() {
+    let mut e = armed("general", "digital", "20m", "USB", 14.140);
+    assert!(
+        e.broker_ptt(true) && e.manual_ptt(),
+        "precondition: the broker keys at 14.140"
+    );
+    loop_tick(&mut e);
+    assert!(
+        e.broker_ptt_active() && e.manual_ptt(),
+        "control: a tick inside the licence keeps the key"
+    );
+    e.set_frequency(14.148, "20m", "USB");
+    assert!(!e.manual_ptt(), "the mask unkeys at 14.148");
+    loop_tick(&mut e);
+    assert!(!e.broker_ptt_active(), "the tick ends the latch");
+    e.set_frequency(14.140, "20m", "USB");
+    loop_tick(&mut e);
+    assert!(
+        !e.broker_ptt_active() && !e.manual_ptt(),
+        "back at 14.140 the radio stays unkeyed with no new key"
+    );
+    assert!(
+        e.broker_ptt(true) && e.manual_ptt(),
+        "a new key from the program keys"
+    );
+}
+
 /// The broker's refusal names the edge and how far the program's audio could reach, on the side
 /// the radio sends it: up from the carrier on USB, down on LSB. None where the passband fits.
 #[test]
 fn the_passband_refusal_says_where_the_programs_audio_could_reach() {
     let e = armed("general", "digital", "20m", "USB", 14.148);
     let why = e.outside_key_passband_refusal().expect("refused at 14.148");
-    for words in [
-        "outside your license privileges at the band edge",
-        "the program's audio could reach 14.1510 MHz",
-    ] {
-        assert!(why.contains(words), "{why:?} must say {words:?}");
-    }
+    assert_eq!(
+        why,
+        "outside your license privileges at the segment edge: the program's audio could reach \
+         14.1510 MHz"
+    );
     let e = armed("general", "digital", "20m", "LSB", 14.027);
     let why = e.outside_key_passband_refusal().expect("refused at 14.027");
+    assert!(why.contains("at the segment edge"), "{why:?}");
     assert!(why.contains("could reach 14.0240 MHz"), "{why:?}");
+    // The top of 6 m is the band's edge, not a segment's.
+    let e = armed("extra", "digital", "6m", "USB", 53.999);
+    let why = e.outside_key_passband_refusal().expect("refused at 53.999");
+    assert!(why.contains("at the band edge"), "{why:?}");
+    assert!(why.contains("could reach 54.0020 MHz"), "{why:?}");
+    // The side the radio reports, where the commanded side fits: the reach is on the reported side.
+    let mut e = armed("general", "digital", "20m", "USB", 14.026);
+    e.observe_rig_mode("PKTLSB".into());
+    let why = e
+        .outside_key_passband_refusal()
+        .expect("refused at 14.026 on PKTLSB");
+    assert!(why.contains("could reach 14.0230 MHz"), "{why:?}");
     let e = armed("general", "digital", "20m", "USB", 14.140);
     assert_eq!(e.outside_key_passband_refusal(), None, "control: inside");
 }
@@ -292,20 +341,43 @@ fn the_passband_refusal_says_where_the_programs_audio_could_reach() {
 /// The four 60 m channels' dials, each a channel's carrier, 1.5 kHz under its centre.
 const SIXTY_CHANNEL_DIALS: [f64; 4] = [5.3305, 5.3465, 5.3715, 5.4035];
 
-/// ⛔ ON A 60 M CHANNEL AN OUTSIDE KEY IS JUDGED AT THE CHANNEL, as before the passband rule
-/// (operator ruling, 2026-10-25): a channel is 2.8 kHz wide, so a 3 kHz passband never fits one
-/// and the rule would refuse every outside data key there. A General's or an Extra's broker key
-/// in Digital at each channel's dial keys as Nexus's own does; between channels it is still
-/// refused. The 5.3515–5.3665 segment keeps the passband rule: 3 kHz under its top refused where
-/// Nexus's own frame keys, 4 kHz under it granted.
+/// ⛔ ONLY ON A 60 M CHANNEL'S DIAL IS AN OUTSIDE KEY JUDGED AT THE CHANNEL (operator rulings,
+/// 2026-10-25): a channel is 2.8 kHz wide, so a 3 kHz passband never fits one, and the rule
+/// applies to the channel's upper-sideband dial, its phone carrier, within 50 Hz. A General's or
+/// an Extra's broker key in Digital keys at each dial and 40 Hz either side of it; 60 Hz off it,
+/// and at a channel's centre or 1 kHz under its top (common mis-set dials, where Nexus's own frame
+/// still keys), the passband rule refuses it. A lower-sideband read-back on a dial is refused.
+/// The 5.3515–5.3665 segment keeps the passband rule: 3 kHz under its top refused where Nexus's
+/// own frame keys, 4 kHz under it granted.
 #[test]
-fn on_a_60m_channel_an_outside_key_is_judged_at_the_channel() {
+fn only_on_a_60m_channel_dial_is_an_outside_key_judged_at_the_channel() {
     let mut wrong = Vec::new();
     for class in ["general", "extra"] {
         for dial in SIXTY_CHANNEL_DIALS {
+            for off_hz in [0.0, -40.0, 40.0] {
+                let at = dial + off_hz / 1e6;
+                let mut e = armed(class, "digital", "60m", "USB", at);
+                if !(e.tx_allowed() && e.outside_key_passband_allowed() && broker_keys(&mut e)) {
+                    wrong.push(format!("{class} on the channel dial at {at:.6}: refused"));
+                }
+            }
+            // 60 Hz off the dial, the channel's centre, 1 kHz under its top: Nexus's own frame
+            // keys, the program's passband leaves the channel.
+            for at in [dial - 60e-6, dial + 60e-6, dial + 0.0015, dial + 0.0025] {
+                let mut e = armed(class, "digital", "60m", "USB", at);
+                if !e.tx_allowed() {
+                    wrong.push(format!(
+                        "{class} at {at:.6}: premise, Nexus's own key refused"
+                    ));
+                }
+                if e.outside_key_passband_allowed() || broker_keys(&mut e) {
+                    wrong.push(format!("{class} off the channel dial at {at:.6}: granted"));
+                }
+            }
             let mut e = armed(class, "digital", "60m", "USB", dial);
-            if !(e.tx_allowed() && e.outside_key_passband_allowed() && broker_keys(&mut e)) {
-                wrong.push(format!("{class} at the channel dial {dial}: refused"));
+            e.observe_rig_mode("PKTLSB".into());
+            if e.outside_key_passband_allowed() || broker_keys(&mut e) {
+                wrong.push(format!("{class} at {dial} on a PKTLSB read-back: granted"));
             }
         }
         // Off every channel: between the 5.3320 and 5.3480 channels, and a hair under a carrier.
@@ -333,4 +405,121 @@ fn on_a_60m_channel_an_outside_key_is_judged_at_the_channel() {
         wrong.push("general at 14.148: not the passband".into());
     }
     assert!(wrong.is_empty(), "60 m outside keys: {wrong:#?}");
+}
+
+/// ⛔ THE RADIO'S OWN REPORTED SIDE COUNTS. A General in Digital, commanded and stored USB at
+/// 14.026, whose radio reports PKTLSB (a front-panel flip the loop does not re-assert): the
+/// program's audio would go out at 14.023–14.026, under the General floor of 14.025, so the key is
+/// refused, and a held one ends on the next tick. CONTROLS: a USB-side read-back keys; a read-back
+/// that names no side keys as before; Nexus's own key is unchanged throughout. In Phone, an
+/// Extra at 14.152 commanded USB whose radio reports LSB is refused (the voice would reach under
+/// 14.150), and with a USB read-back keys.
+#[test]
+fn the_radios_reported_side_is_judged_as_well_as_the_commanded_one() {
+    let mut wrong = Vec::new();
+    for (readback, keys) in [
+        ("PKTLSB", false),
+        ("LSB", false),
+        ("DATA-L", false),
+        ("PKTUSB", true),
+        ("USB", true),
+        ("DATA-U", true),
+        ("FM", true),
+    ] {
+        let mut e = armed("general", "digital", "20m", "USB", 14.026);
+        e.observe_rig_mode(readback.into());
+        if !e.tx_allowed() {
+            wrong.push(format!("{readback}: premise, Nexus's own key refused"));
+        }
+        if e.outside_key_passband_allowed() != keys || broker_keys(&mut e) != keys {
+            wrong.push(format!("{readback} at 14.026: want {keys}"));
+        }
+    }
+    let mut e = armed("general", "digital", "20m", "USB", 14.026);
+    assert!(e.broker_ptt(true), "precondition: the key is held");
+    e.observe_rig_mode("PKTLSB".into());
+    assert!(!e.manual_ptt(), "the flip unkeys");
+    loop_tick(&mut e);
+    assert!(!e.broker_ptt_active(), "and the tick ends the latch");
+    for (readback, keys) in [("LSB", false), ("USB", true)] {
+        let mut e = armed("extra", "phone", "20m", "USB", 14.152);
+        e.observe_rig_mode(readback.into());
+        if !e.tx_allowed() || broker_keys(&mut e) != keys {
+            wrong.push(format!("phone {readback} at 14.152: want {keys}"));
+        }
+    }
+    assert!(wrong.is_empty(), "read-back sides: {wrong:#?}");
+}
+
+/// ⛔ IN A CW-ONLY SEGMENT AN OUTSIDE KEY IS ALLOWED ONLY WHILE THE RADIO IS IN CW (operator ruling,
+/// 2026-10-25). Class by class at its CW-only segments, in the CW section with the radio's own
+/// keyer (commanded CW): no read-back or a CW one keys; a USB or DATA read-back, or the soundcard
+/// keyer's commanded DATA submode, is refused. CONTROL: just above the 6 m and 2 m CW-only
+/// segments, out of CW, the key is allowed; a passband from just under 50.1 that reaches into the
+/// segment is refused; Nexus's own CW is allowed everywhere here.
+#[test]
+fn in_a_cw_only_segment_an_outside_key_needs_the_radio_in_cw() {
+    use crate::settings::CwKeyerBackend;
+    let cases: &[(&str, f64, &str)] = &[
+        ("technician", 3.550, "80m"),
+        ("technician", 7.050, "40m"),
+        ("technician", 21.100, "15m"),
+        ("technician", 50.050, "6m"),
+        ("technician", 144.050, "2m"),
+        ("novice", 7.050, "40m"),
+        ("novice", 21.100, "15m"),
+        ("general", 50.050, "6m"),
+        ("advanced", 144.050, "2m"),
+        ("extra", 50.050, "6m"),
+    ];
+    let mut wrong = Vec::new();
+    let mut check = |class: &str, mhz: f64, band: &str, how: &str, want: bool| {
+        let mut e = armed(class, "cw", band, "USB", mhz);
+        match how {
+            "no read-back" => {}
+            "soundcard" => {
+                e.settings.cw_keyer = CwKeyerBackend::Soundcard;
+                e.settings.sync_active_from_flat();
+            }
+            readback => e.observe_rig_mode(readback.into()),
+        }
+        if !e.tx_allowed() {
+            wrong.push(format!(
+                "{class} {how} at {mhz}: premise, Nexus's own CW refused"
+            ));
+        }
+        let got = e.outside_key_passband_allowed() && broker_keys(&mut e);
+        if got != want {
+            wrong.push(format!("{class} {how} at {mhz}: want {want}, got {got}"));
+        }
+    };
+    for &(class, mhz, band) in cases {
+        for how in ["no read-back", "CW", "CWR"] {
+            check(class, mhz, band, how, true);
+        }
+        for how in ["USB", "PKTUSB", "DATA-U", "soundcard"] {
+            check(class, mhz, band, how, false);
+        }
+    }
+    for class in ["technician", "general", "extra"] {
+        check(class, 50.105, "6m", "USB", true);
+        check(class, 144.105, "2m", "PKTUSB", true);
+        // A passband that reaches into 50.0–50.1 from either side.
+        check(class, 50.098, "6m", "USB", false);
+        check(class, 50.102, "6m", "LSB", false);
+    }
+    assert!(wrong.is_empty(), "CW-only segments: {wrong:#?}");
+}
+
+/// The broker's refusal in a CW-only segment out of CW says so.
+#[test]
+fn the_cw_only_refusal_says_the_radio_is_not_in_cw() {
+    let mut e = armed("technician", "cw", "40m", "USB", 7.050);
+    e.observe_rig_mode("USB".into());
+    assert_eq!(
+        e.outside_key_passband_refusal().as_deref(),
+        Some(
+            "outside your license privileges: only CW is allowed here, and the radio is not in CW"
+        )
+    );
 }

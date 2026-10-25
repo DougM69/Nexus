@@ -306,11 +306,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   broker or TCI is now allowed only when everything from the dial to 3 kHz above it (below it on
   LSB) is inside your license privileges for the mode. With the dial at 14.149 MHz, a data
   program at its usual 1500 Hz sent at 14.1505 MHz, past a General's 14.150 MHz data limit. A key already held drops
-  if you retune that close to an edge, and the connection log says how far the program's audio
-  could reach. In Phone and CW the check is the one Nexus applies to its own voice and CW, and
-  Nexus's own transmissions are judged as before. On the 60 m channels, which are narrower than
-  3 kHz, other programs' keys are judged at the channel as before; the 60 m segment is checked
-  across the passband.
+  if you retune that close to an edge, and stays off until the program keys again; the connection
+  log says how far the program's audio could reach. If the radio reports a different sideband
+  than Nexus set (DATA-L after a front-panel change), that side is checked too. In a CW-only
+  segment, such as 50.0-50.1 MHz, other programs can key only while the radio is in CW. In Phone
+  and CW the check is the one Nexus applies to its own voice and CW, and Nexus's own transmissions
+  are judged as before. On 60 m, a key from a channel's USB dial (5.3305, 5.3465, 5.3715 or
+  5.4035 MHz, within 50 Hz) is judged at the channel as before, since a channel is narrower than
+  3 kHz; anywhere else on a channel, and in the 60 m segment, the whole passband is checked.
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
 - **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone

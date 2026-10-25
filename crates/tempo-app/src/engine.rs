@@ -11878,7 +11878,8 @@ impl Engine {
     /// server is held here as a CAT-broker client's is, masked by its own gates as well
     /// (`engine/tci.rs`). A broker client's key is masked by the outside-key rules too: its whole
     /// passband in the licence ([`Self::outside_key_passband_allowed`]) and none from 28.3 to
-    /// 28.5 MHz for a Novice or a Technician ([`Self::outside_key_allowed`]).
+    /// 28.5 MHz for a Novice or a Technician ([`Self::outside_key_allowed`]). The next radio-loop
+    /// tick then ends that latch ([`Self::drop_masked_broker_key`]), so it never re-keys by itself.
     pub fn manual_ptt(&self) -> bool {
         (self.manual_ptt
             || (self.broker_ptt
@@ -25784,63 +25785,228 @@ contact yourself."
     /// passband too, in that section's privileges. ANDed after [`Self::tx_allowed`] on every
     /// outside key and re-read while one is held, so it can only ever refuse more, and a held key
     /// drops when a retune carries the passband across an edge; an un-key is never judged.
-    /// Nexus's own transmissions keep their own judgement. On a 60 m channel the key is judged at
-    /// the channel, as [`Self::tx_allowed`] judges it: a channel is 2.8 kHz wide, so no 3 kHz
-    /// passband fits one (operator ruling, 2026-10-25). The 60 m segment keeps the passband.
+    /// Nexus's own transmissions keep their own judgement.
+    ///
+    /// The radio's own reported mode counts too ([`Self::readback_side_is_lsb`]): when it names a
+    /// sideband, the passband is judged on that side as well as on the commanded one, a front-panel
+    /// flip to DATA-L that the radio loop does not re-assert included; in Phone it is judged as a
+    /// voice on that side. A read-back that names no side changes nothing. Under a split the
+    /// read-back may be the receiving VFO's, so it can refuse a key near an edge that the
+    /// transmitting VFO's side would allow; it never allows one.
+    ///
+    /// In a CW-only segment the key is allowed only while the radio is in CW
+    /// ([`Self::outside_key_cw_only_allowed`]). On a 60 m channel dial (a channel's phone carrier,
+    /// [`crate::privileges::on_sixty_meter_channel_dial`]) the key is judged at the channel, as
+    /// [`Self::tx_allowed`] judges it, with no lower-sideband read-back: a channel is 2.8 kHz wide,
+    /// so no 3 kHz passband fits one (operator rulings, 2026-10-25). Anywhere else on a channel,
+    /// and in the 60 m segment, the passband rule applies.
     pub fn outside_key_passband_allowed(&self) -> bool {
         use crate::settings::OperatingMode;
         let om = self.settings.operating_mode;
-        if self.every_tx_frequency(om, crate::privileges::on_sixty_meter_channel) {
-            return self.tx_allowed();
+        let readback = self.readback_side_is_lsb();
+        if !self.outside_key_cw_only_allowed() {
+            return false;
         }
+        if self.every_tx_frequency(om, crate::privileges::on_sixty_meter_channel_dial) {
+            return self.tx_allowed() && readback != Some(true);
+        }
+        let class = self.settings.license_class;
+        let side_allowed = |mhz: f64, lsb: bool| {
+            let (lo, hi) = Self::outside_passband_span(mhz, lsb);
+            crate::privileges::tx_span_allowed(class, lo, hi, om)
+        };
         self.tx_allowed_for(tci::PASSBAND)
-            && (om == OperatingMode::Phone
-                || self.every_tx_frequency(om, |mhz| {
-                    let class = self.settings.license_class;
-                    let (near, far) = (
-                        tci::PASSBAND.f0_hz / 1_000_000.0,
-                        (tci::PASSBAND.f0_hz + tci::PASSBAND.bw_hz) / 1_000_000.0,
-                    );
-                    std::iter::once(self.tx_mode_effective())
-                        .chain(self.sat_uplink_word())
-                        .all(|word| match Self::side_is_lsb(&word) {
-                            Some(true) => {
-                                crate::privileges::tx_span_allowed(class, mhz - far, mhz - near, om)
-                            }
-                            Some(false) => {
-                                crate::privileges::tx_span_allowed(class, mhz + near, mhz + far, om)
-                            }
-                            // CW, AM, FM: the gate's own judgement of that emission.
-                            None => true,
-                        })
-                }))
+            && self.every_tx_frequency(om, |mhz| {
+                let commanded = om == OperatingMode::Phone
+                    || self.commanded_tx_words().all(|word| {
+                        // CW, AM, FM: the gate's own judgement of that emission.
+                        Self::side_is_lsb(&word).is_none_or(|lsb| side_allowed(mhz, lsb))
+                    });
+                let reported = match readback {
+                    None => true,
+                    Some(lsb) if om == OperatingMode::Phone => {
+                        self.phone_emission_allowed(mhz, if lsb { "LSB" } else { "USB" })
+                    }
+                    Some(lsb) => side_allowed(mhz, lsb),
+                };
+                commanded && reported
+            })
+    }
+
+    /// May a program outside Nexus key the transmitter as the radio stands, where its signal could
+    /// reach a CW-only segment ([`crate::privileges::cw_only_within`])? Only while the radio is in
+    /// CW: every word the transmitting VFO is commanded is CW, and so is the radio's read-back
+    /// when it has reported one (operator ruling, 2026-10-25). A program keying PTT sends whatever
+    /// it sends, and only a radio in CW turns that into a CW carrier. Out of CW, the span judged is
+    /// the program's passband on every side the commanded words and the read-back name, or both
+    /// sides when none names one. Nexus's own CW keyer is judged as Nexus's own CW, not here.
+    pub(crate) fn outside_key_cw_only_allowed(&self) -> bool {
+        let in_cw = self
+            .commanded_tx_words()
+            .all(|word| Self::is_cw_word(&word))
+            && self.rig_mode.as_deref().is_none_or(Self::is_cw_word);
+        if in_cw {
+            return true;
+        }
+        let mut sides: Vec<bool> = self
+            .commanded_tx_words()
+            .filter_map(|word| Self::side_is_lsb(&word))
+            .chain(self.readback_side_is_lsb())
+            .collect();
+        if sides.is_empty() {
+            sides = vec![true, false];
+        }
+        let class = self.settings.license_class;
+        self.every_tx_frequency(self.settings.operating_mode, |mhz| {
+            sides.iter().all(|&lsb| {
+                let (lo, hi) = Self::outside_passband_span(mhz, lsb);
+                !crate::privileges::cw_only_within(class, lo.min(mhz), hi.max(mhz))
+            })
+        })
+    }
+
+    /// The words the transmitting VFO is commanded: [`Self::tx_mode_effective`], and the satellite
+    /// uplink's own through a Doppler tick ([`Self::sat_uplink_word`]).
+    fn commanded_tx_words(&self) -> impl Iterator<Item = String> {
+        std::iter::once(self.tx_mode_effective()).chain(self.sat_uplink_word())
+    }
+
+    /// Which side of the dial the radio's own read-back mode puts a soundcard signal:
+    /// `Some(true)` below it (`LSB`, `PKTLSB`, `DATA-L`), `Some(false)` above it (`USB`,
+    /// `PKTUSB`, `DATA-U`), `None` when it names no side or the radio has reported nothing.
+    fn readback_side_is_lsb(&self) -> Option<bool> {
+        match self
+            .rig_mode
+            .as_deref()?
+            .trim()
+            .to_ascii_uppercase()
+            .replace('-', "")
+            .as_str()
+        {
+            "LSB" | "PKTLSB" | "DATAL" => Some(true),
+            "USB" | "PKTUSB" | "DATAU" => Some(false),
+            _ => None,
+        }
+    }
+
+    /// Is `word` a CW mode, the rig's normal or reverse CW in any spelling (`CW`, `CWR`, `CW-R`,
+    /// `CW-L`, `CW-U`)?
+    fn is_cw_word(word: &str) -> bool {
+        matches!(
+            word.trim().to_ascii_uppercase().replace('-', "").as_str(),
+            "CW" | "CWR" | "CWL" | "CWU"
+        )
+    }
+
+    /// The span, MHz, an outside program's audio could occupy from carrier `mhz` on one side:
+    /// [`tci::PASSBAND`] above it, or below it when `lsb`. Ascending.
+    fn outside_passband_span(mhz: f64, lsb: bool) -> (f64, f64) {
+        let (near, far) = (
+            tci::PASSBAND.f0_hz / 1_000_000.0,
+            (tci::PASSBAND.f0_hz + tci::PASSBAND.bw_hz) / 1_000_000.0,
+        );
+        if lsb {
+            (mhz - far, mhz - near)
+        } else {
+            (mhz + near, mhz + far)
+        }
     }
 
     /// Why [`Self::outside_key_passband_allowed`] refuses where [`Self::tx_allowed`] does not, in
-    /// the broker's connection-log line: the frequency the program's audio could reach, the far
-    /// edge of its passband on the side the transmitting VFO is commanded (the stored sideband
-    /// when the word names none). `None` while it allows.
+    /// the broker's connection-log line; `None` while it allows. In a CW-only segment out of CW it
+    /// says so. Otherwise it names the frequency the program's audio could reach, from the first
+    /// transmit frequency and side the passband is refused on ([`Self::outside_key_reach`]), and
+    /// whether that crosses a segment edge or the band's; when no side's span is what refused (an
+    /// AM or FM word, a phone-model term) it names no frequency rather than a wrong one.
     pub fn outside_key_passband_refusal(&self) -> Option<String> {
         if self.outside_key_passband_allowed() {
             return None;
         }
-        let width = if self.settings.operating_mode == crate::settings::OperatingMode::Phone {
-            crate::privileges::SSB_BW_MHZ
-        } else {
-            (tci::PASSBAND.f0_hz + tci::PASSBAND.bw_hz) / 1_000_000.0
-        };
-        let lsb = Self::side_is_lsb(&self.tx_mode_effective())
-            .unwrap_or_else(|| self.settings.sideband.eq_ignore_ascii_case("LSB"));
-        let carrier = self.tx_emission_mhz();
-        let reach = if lsb {
-            carrier - width
-        } else {
-            carrier + width
-        };
-        Some(format!(
-            "outside your license privileges at the band edge: the program's audio could reach \
-             {reach:.4} MHz"
-        ))
+        if !self.outside_key_cw_only_allowed() {
+            return Some(
+                "outside your license privileges: only CW is allowed here, and the radio is not \
+                 in CW"
+                    .to_string(),
+            );
+        }
+        Some(match self.outside_key_reach() {
+            Some((carrier, reach)) => {
+                let band = crate::bandplan::band_for_dial;
+                let edge = if band(carrier).is_some() && band(carrier) == band(reach) {
+                    "segment"
+                } else {
+                    "band"
+                };
+                format!(
+                    "outside your license privileges at the {edge} edge: the program's audio \
+                     could reach {reach:.4} MHz"
+                )
+            }
+            None => "outside your license privileges across the audio passband the program \
+                     could send"
+                .to_string(),
+        })
+    }
+
+    /// The first transmit frequency ([`Self::every_tx_frequency`], so the split and XIT ones too)
+    /// and side whose span the class may not send, as `(carrier, reach)`: the far end of that span.
+    /// The sides are those [`Self::outside_key_passband_allowed`] judges: every commanded word's,
+    /// the read-back's, and in Digital the stored sideband's. Phone's span is its 2.8 kHz voice
+    /// passband, every other section's the program's [`tci::PASSBAND`].
+    fn outside_key_reach(&self) -> Option<(f64, f64)> {
+        use crate::settings::OperatingMode;
+        let om = self.settings.operating_mode;
+        let class = self.settings.license_class;
+        let mut sides: Vec<bool> = self
+            .commanded_tx_words()
+            .filter_map(|word| Self::side_is_lsb(&word))
+            .chain(self.readback_side_is_lsb())
+            .collect();
+        if om == OperatingMode::Digital {
+            sides.push(self.settings.sideband.eq_ignore_ascii_case("LSB"));
+        }
+        let found = std::cell::Cell::new(None);
+        self.every_tx_frequency(om, |mhz| {
+            for &lsb in &sides {
+                let (lo, hi) = if om == OperatingMode::Phone {
+                    let bw = crate::privileges::SSB_BW_MHZ;
+                    if lsb {
+                        (mhz - bw, mhz)
+                    } else {
+                        (mhz, mhz + bw)
+                    }
+                } else {
+                    Self::outside_passband_span(mhz, lsb)
+                };
+                if !crate::privileges::tx_span_allowed(class, lo, hi, om) {
+                    found.set(Some((mhz, if lsb { lo } else { hi })));
+                    return false;
+                }
+            }
+            true
+        });
+        found.get()
+    }
+
+    /// The broker's held key, ended when the licence no longer allows an outside key where the
+    /// radio stands ([`Self::tx_allowed`], [`Self::outside_key_passband_allowed`],
+    /// [`Self::outside_key_allowed`]): a retune across an edge, a mode flip, a class change. The
+    /// [`Self::manual_ptt`] mask already unkeys the radio on that tick; this ends the latch, so
+    /// the key does not come back by itself when the condition clears, and the program must send
+    /// a new key, as a TCI program's microphone key ends ([`Self::poll_tci`]). Called on every
+    /// radio-loop tick from there.
+    pub(crate) fn drop_masked_broker_key(&mut self) {
+        if self.broker_ptt
+            && !(self.tx_allowed()
+                && self.outside_key_passband_allowed()
+                && self.outside_key_allowed())
+        {
+            self.broker_ptt = false;
+            tempo_core::applog::info(
+                "tx",
+                "A CAT broker client's key ended: outside the licence; the program must key again",
+            );
+        }
     }
 
     /// The words for a licence refusal: [`PHONE_USB_ONLY`] when the phone mode is the whole reason
