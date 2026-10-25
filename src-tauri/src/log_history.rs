@@ -276,6 +276,24 @@ pub async fn undo_history_run(
     .await
 }
 
+/// Undo a run that changed one contact: the Redo of one change's undo or of one restore, which a
+/// computer driving the station may ask for as it may the undo. A run over more than one contact
+/// is refused; that is `undo_history_run`'s, at the station.
+#[tauri::command]
+pub async fn redo_qso_change(
+    state: State<'_, SharedEngine>,
+    run: String,
+) -> Result<UndoAnswer, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let (made, durability) = tempo_app::logwrite::until_written(|| {
+            tempo_app::loghistory::undo_contact_run(&engine, &run)
+        });
+        (made.map(answer), durability)
+    })
+    .await
+}
+
 /// Put a deleted contact back, as its latest delete took it out — unless it was logged again
 /// since (`duplicate`). `anyway`: put it back all the same, the operator's "Restore anyway".
 #[tauri::command]

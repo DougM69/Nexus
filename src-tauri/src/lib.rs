@@ -39524,6 +39524,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_history::undoable_history_runs,
         log_history::undo_qso_change,
         log_history::undo_history_run,
+        log_history::redo_qso_change,
         log_history::restore_deleted_qso,
         log_queries::ask_log,
         purge_log,

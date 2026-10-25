@@ -299,6 +299,28 @@ pub fn undo_run(engine: &Mutex<Engine>, run: &str) -> (Result<Undone, String>, D
     }
 }
 
+/// [`undo_run`] of a run that changed one contact: the redo of one change's undo or of one
+/// restore. A run over more than one contact is refused ([`ONE_CONTACT_ONLY`]), so a whole run's
+/// undo, which can delete as much of the log as a purge, stays [`undo_run`]'s, asked only at the
+/// station (`command_classes`).
+pub fn undo_contact_run(engine: &Mutex<Engine>, run: &str) -> (Result<Undone, String>, Durability) {
+    match read(engine, |db| db.history_run(run)) {
+        Ok(entries) if entries.is_empty() => (
+            Err("That change is not in the logbook's history.".into()),
+            Durability::default(),
+        ),
+        Ok(entries) if entries.iter().any(|e| e.qso_id != entries[0].qso_id) => {
+            (Err(ONE_CONTACT_ONLY.into()), Durability::default())
+        }
+        Ok(entries) => undo_entries(engine, &entries, true, false),
+        Err(e) => (Err(e), Durability::default()),
+    }
+}
+
+/// What [`undo_contact_run`] answers for a run over more than one contact.
+pub const ONE_CONTACT_ONLY: &str =
+    "That changed more than one contact: undo it whole at the station.";
+
 /// What a whole run's undo too large to make in a moment answers while the radio transmits or
 /// the FT sequencer is armed ([`crate::engine::Engine::transmit_needs_the_lock`]).
 pub const MUST_WAIT_FOR_TX: &str =

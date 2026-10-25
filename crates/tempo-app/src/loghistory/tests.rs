@@ -252,6 +252,62 @@ fn an_undo_puts_an_edit_back_and_undoing_the_undo_makes_it_again() {
     assert!(mirror(&d).contains("edited by hand"));
 }
 
+/// ★ The Redo of one change's undo goes through [`undo_contact_run`], which a computer driving
+/// the station may ask for: it makes the change again, as [`undo_run`] does.
+#[test]
+fn a_one_contact_runs_redo_makes_the_change_again() {
+    let d = Dir::new("history-contact-redo");
+    let engine = shared(&d, 3);
+    let id = id_at(&*engine, 1);
+    edit_comment(&engine, id, "edited by hand");
+    settle(&engine);
+    let seq = history_of(&engine, id).unwrap().last().unwrap().seq;
+    let (undone, dur) = undo_entry(&engine, seq);
+    let undone = undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(row_of(&engine, id).unwrap().comment, None);
+
+    let (redone, dur) = undo_contact_run(&engine, undone.run.as_deref().expect("the undo's run"));
+    assert_eq!(redone.expect("redone").changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(
+        row_of(&engine, id).unwrap().comment.as_deref(),
+        Some("edited by hand"),
+        "the redo makes the edit again"
+    );
+    settle(&engine);
+    assert!(mirror(&d).contains("edited by hand"), "log.adi follows it");
+}
+
+/// A run over more than one contact is refused by [`undo_contact_run`], changing nothing: it stays
+/// [`undo_run`]'s, at the station.
+#[test]
+fn a_run_over_two_contacts_is_refused_as_one_contacts() {
+    let d = Dir::new("history-contact-refused");
+    let engine = shared(&d, 3);
+    let mut text = adif_header();
+    for i in 0..2u64 {
+        text.push_str(&adif_record(&qso(&format!("N{i}TWO"), 1_789_000_000 + i)));
+    }
+    let (made, dur) = logwrite::import_adif(&engine, &text);
+    made.expect("the import");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let run = latest_run(&engine, Some(Source::Import))
+        .unwrap()
+        .expect("the run");
+    assert_eq!(run.contacts, 2);
+
+    let (refused, _) = undo_contact_run(&engine, &run.run);
+    assert_eq!(refused, Err(ONE_CONTACT_ONLY.to_string()));
+    assert_eq!(engine.stored_log().len(), 5, "nothing taken out");
+
+    // The whole run's undo still takes both out.
+    let (undone, dur) = undo_run(&engine, &run.run);
+    assert_eq!(undone.unwrap().changed, 2);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(engine.stored_log().len(), 3);
+}
+
 /// ★ A deleted contact is listed under Recently deleted, survives a restart there, and comes
 /// back whole — every field, its id, the foreign field another logger left — and `log.adi`
 /// holds it again.

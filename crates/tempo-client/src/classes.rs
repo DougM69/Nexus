@@ -385,6 +385,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("recently_deleted_qsos",          RunsAtShack, "The contacts deleted from the shack's logbook and not put back."),
     ("recordings_location",            RunsAtShack, "The path of the shack's recordings, for display."),
     ("redecode",                       RunsAtShack, "Runs the shack's decoder again."),
+    ("redo_qso_change",                RunsAtShack, "Redoes one contact's undone change in the shack's logbook, as its undo; a run over more contacts is refused."),
     ("release_stream_mic",             StopsTx,     "Ends a microphone over armed through the stream."),
     ("remote_station_action",          RefusedHere, "Remote-access admin stays at the shack."),
     ("remove_freq_marker",             RunsAtShack, "Deletes a band map marker at the shack."),
