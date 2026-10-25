@@ -840,8 +840,9 @@ pub(crate) fn latest_run(conn: &Connection, source: Option<&str>) -> Result<Opti
 /// companion program's one logged contact is an import of one, and an undo of one contact is one
 /// too: neither is listed. The one-time copy of contest columns into their fields
 /// ([`Source::ContestColumns`]) is listed, however few contacts it changed, while a contact it
-/// changed is in the log and that change not undone: it is one change the operator never asked
-/// for, and one Undo of it is the way back. No other fill is ever listed.
+/// changed is in the log and that change not undone, and counts those contacts: it is one change the
+/// operator never asked for, and one Undo of it is the way back. No other fill is ever listed.
+/// Every run counts distinct contacts.
 pub(crate) fn undoable_runs(
     conn: &Connection,
     since_ms: i64,
@@ -850,20 +851,20 @@ pub(crate) fn undoable_runs(
     let sql = format!(
         "SELECT run, source, at_ms, n, removes FROM ( \
            SELECT r.id, r.run, r.source, r.at_ms, \
-                  (SELECT COUNT(*) FROM qso_history c WHERE c.run_id = r.id) AS n, \
+                  CASE WHEN r.source = '{copy}' THEN \
+                    (SELECT COUNT(DISTINCT h.qso_id) FROM qso_history h WHERE h.run_id = r.id \
+                     AND EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id) \
+                     AND NOT EXISTS (SELECT 1 FROM qso_history u \
+                                     WHERE u.qso_id = h.qso_id AND u.undoes = h.seq)) \
+                  ELSE (SELECT COUNT(DISTINCT c.qso_id) FROM qso_history c WHERE c.run_id = r.id) \
+                  END AS n, \
                   {removes} AS removes, \
                   EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id AND h.kind = {delete} \
-                          AND NOT EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id)) AS puts_back, \
-                  CASE WHEN r.source = '{copy}' THEN \
-                    EXISTS (SELECT 1 FROM qso_history h WHERE h.run_id = r.id \
-                            AND EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id) \
-                            AND NOT EXISTS (SELECT 1 FROM qso_history u \
-                                            WHERE u.qso_id = h.qso_id AND u.undoes = h.seq)) \
-                  ELSE 0 END AS standing \
+                          AND NOT EXISTS (SELECT 1 FROM qso q WHERE q.id = h.qso_id)) AS puts_back \
            FROM history_run r \
            WHERE r.at_ms >= ?1 \
              AND r.source IN ('{operator}', '{import}', '{undo}', '{copy}')) r \
-         WHERE (r.source = '{copy}' AND standing) OR (n >= 2 AND ( \
+         WHERE (r.source = '{copy}' AND n > 0) OR (n >= 2 AND ( \
            (r.source = '{operator}' AND puts_back \
             AND NOT EXISTS (SELECT 1 FROM qso_history o WHERE o.run_id = r.id AND o.kind <> {delete})) \
            OR (r.source = '{import}' AND removes) \

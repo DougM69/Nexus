@@ -193,7 +193,8 @@ pub struct CopyOutcome {
 /// Undo of the whole of it; no upload stamp moves and nothing is queued to a service, because
 /// every contact's ADIF carries the same tags and values as before. A copy a crash or a busy log
 /// cut short is taken up at the next launch in the SAME run (the one of that source the store
-/// holds), so it stays one Undo. Done once: [`CONTEST_COLUMNS_COPIED`] goes into the store with
+/// holds), so it stays one Undo, for the contacts it had not reached: each contact is copied
+/// into at most once, so one the operator undid stays as they left it. Done once: [`CONTEST_COLUMNS_COPIED`] goes into the store with
 /// the last change, and a store marked so is not read again. On the 1.13 path it does nothing:
 /// that path reads its contacts from `log.adi`, which gives a contest column back in the record's
 /// own field already.
@@ -227,6 +228,12 @@ pub(crate) fn copy_contest_columns_in_chunks(
             let started = db
                 .history_latest_run(Some(Source::ContestColumns.code()))?
                 .map(|r| r.run);
+            // A contact it copied into already is never copied again — whether that change still
+            // stands or the operator undid it, which is theirs to keep.
+            let done: std::collections::HashSet<_> = match &started {
+                Some(run) => db.history_run(run)?.into_iter().map(|e| e.qso_id).collect(),
+                None => Default::default(),
+            };
             let mut ids = Vec::new();
             db.each_narrow_with(
                 COPIES,
@@ -234,10 +241,10 @@ pub(crate) fn copy_contest_columns_in_chunks(
                 Scope::All,
                 Order::Log,
                 &mut |r| {
-                    if let Some(id) = r
-                        .id
-                        .filter(|_| tempo_core::logbook::with_contest_columns_copied(r).is_some())
-                    {
+                    if let Some(id) = r.id.filter(|id| {
+                        !done.contains(id)
+                            && tempo_core::logbook::with_contest_columns_copied(r).is_some()
+                    }) {
                         ids.push(id);
                     }
                     ControlFlow::Continue(())

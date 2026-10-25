@@ -3041,6 +3041,94 @@ pub(crate) mod tests {
             .all(|r| r.name.is_none()));
     }
 
+    /// ★ A copy cut short is listed already; undone in that session, the next launch copies none
+    /// of the undone contacts again — the operator's Undo stands — and only the contacts it never
+    /// reached, in the same run, which is listed with the contacts one Undo of it changes now.
+    #[test]
+    fn a_copy_undone_before_it_finished_is_not_copied_again() {
+        use tempo_core::logbook::{ContestFields, RecordId};
+        let d = Dir::new("contest-copy-undone");
+        std::fs::write(d.log(), legacy_log(1)).unwrap();
+        flush(&engine_on_store(&d));
+        let merged = |n: u64| {
+            let mut r = qso(&format!("K{n}NQP"), 1_790_000_000 + n);
+            r.id = Some(RecordId::Provisional {
+                hash: 9_000 + n,
+                ordinal: 0,
+            });
+            r.name = None;
+            r.contest = Some(Box::new(ContestFields {
+                session: "naqp".into(),
+                contest_id: "NAQP-CW".into(),
+                adif: vec![("NAME".into(), format!("OP{n}"))],
+                ..Default::default()
+            }));
+            r
+        };
+        let insert = |ns: std::ops::Range<u64>| {
+            let mut db = LogDb::open(&d.db()).unwrap();
+            for n in ns {
+                db.insert(&merged(n), Resolved::default()).unwrap();
+            }
+        };
+        let name = |n: u64| {
+            stored(&d)
+                .into_iter()
+                .find(|r| r.call == format!("K{n}NQP"))
+                .unwrap()
+                .name
+        };
+        insert(1..4);
+
+        // The first launch copies three, then stops before its marker is in the store.
+        let e = Mutex::new(engine_on_store(&d));
+        let done = crate::logfill::copy_contest_columns_in_chunks(&e, 2).expect("copies");
+        flush(&e.lock().unwrap());
+        let run = done.run.clone().expect("one run");
+        {
+            let db = LogDb::open(&d.db()).unwrap();
+            db.set_meta(crate::logfill::CONTEST_COLUMNS_COPIED, 0)
+                .unwrap();
+        }
+        // The operator presses Undo this copy in that session.
+        let (undone, _) = crate::loghistory::undo_run(&e, &run);
+        assert_eq!(undone.expect("undone").changed, 3);
+        flush(&e.lock().unwrap());
+        assert!((1..4).all(|n| name(n).is_none()));
+        drop(e);
+
+        // Two contacts the copy never reached; the next launch.
+        insert(4..6);
+        let e = Mutex::new(engine_on_store(&d));
+        let resumed = crate::logfill::copy_contest_columns_in_chunks(&e, 2).expect("copies");
+        flush(&e.lock().unwrap());
+        assert_eq!(resumed.copied, 2, "only the two never copied: {resumed:?}");
+        assert_eq!(resumed.run.as_deref(), Some(run.as_str()), "the same run");
+        for n in 1..4 {
+            assert_eq!(name(n), None, "K{n}NQP: the Undo stands");
+        }
+        for n in 4..6 {
+            assert_eq!(name(n), Some(format!("OP{n}")));
+        }
+        let listed = crate::loghistory::undoable_runs(&e, 20).unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|r| (r.run.as_str(), r.contacts))
+                .collect::<Vec<_>>(),
+            [(run.as_str(), 2)],
+            "the two one Undo would change"
+        );
+        assert!(crate::logfill::copy_contest_columns(&e).unwrap().current);
+
+        // One Undo of it: every name blank again, and the run off the list.
+        let (undone, _) = crate::loghistory::undo_run(&e, &run);
+        assert_eq!(undone.expect("undone").changed, 2);
+        flush(&e.lock().unwrap());
+        assert!((1..6).all(|n| name(n).is_none()));
+        assert!(crate::loghistory::undoable_runs(&e, 20).unwrap().is_empty());
+    }
+
     /// ★ D2-A: an imported US contact carries its state from the moment it is imported — in the
     /// store as in memory — where it used to gain it in memory only, at the next launch.
     #[test]
