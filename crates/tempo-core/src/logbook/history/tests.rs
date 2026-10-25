@@ -332,8 +332,8 @@ fn an_undo_puts_back_what_the_edit_changed_and_keeps_what_changed_since() {
     let mut c = b.clone();
     c.grid = Some("FN42".into());
     let (_, h) = entries_after(&[(&a, &b), (&b, &c)]);
-    match undo(&h[0], Some(&c)).unwrap() {
-        Undo::Revert { row, kept } => {
+    match undo(&h[0], Some(&c), None).unwrap() {
+        Undo::Revert { row, kept, .. } => {
             assert_eq!(row.name.as_deref(), Some("Bob"), "the name goes back");
             assert_eq!(row.grid.as_deref(), Some("FN42"), "the later grid stays");
             assert_eq!(kept, vec!["GRIDSQUARE".to_string()]);
@@ -343,8 +343,8 @@ fn an_undo_puts_back_what_the_edit_changed_and_keeps_what_changed_since() {
         other => panic!("{other:?}"),
     }
     // With nothing changed since, the undo is the contact as it was, field for field.
-    match undo(&h[1], Some(&c)).unwrap() {
-        Undo::Revert { row, kept } => {
+    match undo(&h[1], Some(&c), None).unwrap() {
+        Undo::Revert { row, kept, .. } => {
             assert!(kept.is_empty());
             assert_eq!(row, b, "the contact before the second edit, whole");
         }
@@ -353,7 +353,73 @@ fn an_undo_puts_back_what_the_edit_changed_and_keeps_what_changed_since() {
     // Every field it changed has moved since: nothing to undo.
     let mut d = c.clone();
     d.grid = Some("FN53".into());
-    assert_eq!(undo(&h[1], Some(&d)).err(), Some(CannotUndo::ChangedSince));
+    assert_eq!(
+        undo(&h[1], Some(&d), None).err(),
+        Some(CannotUndo::ChangedSince)
+    );
+}
+
+/// ⛔ An undo never puts back a blank station call that would put the contact under another call
+/// than the one it names: with the call in Settings another call (or none), the call stays, with
+/// its stamps, and the field is named as held. Every other field it changed still goes back. With
+/// the Settings call the one it names (a portable /P aside), the blank goes back and keeps the
+/// stamps. A named call put back over another is never held.
+#[test]
+fn an_undo_never_blanks_a_station_call_onto_another_call() {
+    let stamp = UploadStatus {
+        outcome: UploadOutcome::Accepted,
+        when_unix: 9,
+        detail: None,
+    };
+    let a = rec("K1ABC", 1);
+    let mut b = a.clone();
+    b.station_callsign = Some("KA1OLD".into());
+    b.name = Some("Robert".into());
+    let mut b_now = b.clone();
+    b_now.upload.lotw = Some(stamp.clone());
+    let (_, h) = entries_after(&[(&a, &b)]);
+
+    for settings in [Some("KD9NEW"), None] {
+        let Undo::Revert { row, kept, held } = undo(&h[0], Some(&b_now), settings).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            row.station_callsign.as_deref(),
+            Some("KA1OLD"),
+            "{settings:?}"
+        );
+        assert_eq!(row.upload, b_now.upload, "{settings:?}: its stamps stay");
+        assert_eq!(row.name.as_deref(), Some("Bob"), "the rest goes back");
+        assert!(kept.is_empty());
+        assert_eq!(held, vec!["STATION_CALLSIGN".to_string()]);
+    }
+    for settings in ["ka1old", "KA1OLD/P"] {
+        let Undo::Revert { row, held, .. } = undo(&h[0], Some(&b_now), Some(settings)).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(row.station_callsign, None, "{settings}");
+        assert_eq!(
+            row.upload, b_now.upload,
+            "{settings}: the same call all along"
+        );
+        assert!(held.is_empty());
+    }
+
+    // A named call put back over another: never held, and owed again under it.
+    let mut c = a.clone();
+    c.station_callsign = Some("KD0AA".into());
+    let mut d = c.clone();
+    d.station_callsign = Some("W6R".into());
+    let mut d_now = d.clone();
+    d_now.upload.lotw = Some(stamp);
+    let (_, h) = entries_after(&[(&c, &d)]);
+    let Undo::Revert { row, held, .. } = undo(&h[0], Some(&d_now), Some("KD9NEW")).unwrap() else {
+        panic!()
+    };
+    assert_eq!(row.station_callsign.as_deref(), Some("KD0AA"));
+    assert_eq!(row.upload, UploadState::default());
+    assert!(held.is_empty());
 }
 
 /// An undo keeps the stamps the contact has — unless it corrects the call, which owes the
@@ -371,7 +437,7 @@ fn an_undo_keeps_the_stamps_unless_it_changes_the_call() {
     let mut b_now = b.clone();
     b_now.upload.qrz = Some(stamp.clone());
     let (_, h) = entries_after(&[(&a, &b)]);
-    let Undo::Revert { row, .. } = undo(&h[0], Some(&b_now)).unwrap() else {
+    let Undo::Revert { row, .. } = undo(&h[0], Some(&b_now), None).unwrap() else {
         panic!()
     };
     assert_eq!(
@@ -385,7 +451,7 @@ fn an_undo_keeps_the_stamps_unless_it_changes_the_call() {
     let mut corrected_now = corrected.clone();
     corrected_now.upload.qrz = Some(stamp.clone());
     let (_, h) = entries_after(&[(&a, &corrected)]);
-    let Undo::Revert { row, .. } = undo(&h[0], Some(&corrected_now)).unwrap() else {
+    let Undo::Revert { row, .. } = undo(&h[0], Some(&corrected_now), None).unwrap() else {
         panic!()
     };
     assert_eq!(row.call, "K1ABC");
@@ -415,16 +481,16 @@ fn a_create_undoes_to_a_removal_and_a_delete_to_a_restore() {
     )
     .unwrap();
     let h = db.history_of(id(1)).unwrap();
-    assert_eq!(undo(&h[0], Some(&a)), Ok(Undo::Remove(id(1))));
-    assert_eq!(undo(&h[0], None), Err(CannotUndo::Gone));
-    match undo(&h[1], None).unwrap() {
+    assert_eq!(undo(&h[0], Some(&a), None), Ok(Undo::Remove(id(1))));
+    assert_eq!(undo(&h[0], None, None), Err(CannotUndo::Gone));
+    match undo(&h[1], None, None).unwrap() {
         Undo::Restore(back) => {
             assert_eq!(back, a, "the contact as it was, field for field");
             assert_eq!(adif_record_own_log(&back), adif_record_own_log(&a));
         }
         other => panic!("{other:?}"),
     }
-    assert_eq!(undo(&h[1], Some(&a)), Err(CannotUndo::AlreadyThere));
+    assert_eq!(undo(&h[1], Some(&a), None), Err(CannotUndo::AlreadyThere));
 }
 
 // ── the schema: a store from before the history ─────────────────────────────────────────────
@@ -494,7 +560,7 @@ fn a_store_from_before_the_history_gains_it_and_stays_readable() {
     let db = LogDb::open(&path).unwrap();
     let h = db.history_of(id(2)).unwrap();
     assert!(
-        matches!(undo(&h[0], None), Ok(Undo::Restore(_))),
+        matches!(undo(&h[0], None, None), Ok(Undo::Restore(_))),
         "restorable after a restart"
     );
     drop(db);
@@ -657,7 +723,7 @@ fn an_entry_of_an_unknown_kind_is_never_undone() {
     let mut now = a.clone();
     now.name = Some("Ann".into());
     assert_eq!(
-        undo(&h[1], Some(&now)),
+        undo(&h[1], Some(&now), None),
         Err(CannotUndo::UnknownKind),
         "an edit would have put Bob back"
     );

@@ -672,15 +672,15 @@ mod lockstep {
                 );
                 match rng.below(3) {
                     0 => assert_eq!(
-                        sc.stamp_qrz_upload(&pushed, outcome, when, None),
+                        sc.stamp_qrz_upload(&pushed, None, outcome, when, None),
                         s1.stamp_qrz_upload(&pushed, outcome, when, None)
                     ),
                     1 => assert_eq!(
-                        sc.stamp_clublog_upload(&pushed, outcome, when, None),
+                        sc.stamp_clublog_upload(&pushed, None, outcome, when, None),
                         s1.stamp_clublog_upload(&pushed, outcome, when, None)
                     ),
                     _ => assert_eq!(
-                        sc.stamp_eqsl_upload(&pushed, outcome, when, None),
+                        sc.stamp_eqsl_upload(&pushed, None, outcome, when, None),
                         s1.stamp_eqsl_upload(&pushed, outcome, when, None)
                     ),
                 };

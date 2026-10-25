@@ -161,6 +161,11 @@ const MIGRATED = [
   // The import preview and its no-loss report's words — born migrated.
   'components/ImportPreview.tsx',
   'features/logImport.ts',
+  'components/LogTools.tsx',
+  'components/LogDupes.tsx',
+  'components/LogBulkEdit.tsx',
+  'components/LogCheck.tsx',
+  'features/logCleanup.ts',
   // The Logbook's country picker — born migrated: the entity names and numbers it lists are data.
   'components/LogCountryPicker.tsx',
   'components/LogEntry.tsx',

@@ -52,13 +52,15 @@
 //!   beside it before the delete never blocks it: the log held both;
 //! - an edit: each field it changed goes back, **but only a field still holding what the change
 //!   wrote**. A field changed again since keeps the later value; an undo whose every field was
-//!   changed since is refused rather than made as nothing;
+//!   changed since is refused rather than made as nothing. A blank station call is not put back
+//!   where it would move the contact under another call than the one it names ([`revert`]);
 //! - an entry of a kind this build does not know (a later build wrote it): refused, never taken
 //!   for an edit.
 //!
 //! An undo never touches an upload stamp, with the one exception the edit rule already makes: an
-//! undo that changes the callsign clears the stamps, as a corrected call does
-//! ([`super::edited`]), so the contact is owed to the services under the call it now carries.
+//! undo that changes the callsign, or the station call the contact is uploaded under, clears the
+//! stamps, as a corrected call does ([`super::edited`]), so the contact is owed to the services
+//! under the call it now carries.
 //! Nothing here sends anything anywhere.
 //!
 //! # How long it is kept
@@ -352,6 +354,18 @@ fn content_fields(r: &QsoRecord) -> Vec<(String, String)> {
     let mut f = fields(&super::adif_record_own_log(r));
     f.retain(|(tag, _)| !UPLOAD_TAGS.contains(&tag.as_str()));
     f
+}
+
+/// A contact's revision as a caller that showed it compares it: a hash of every field the
+/// operator's own log writes, upload stamps aside. Any change to what the contact holds — the
+/// contest exchange, the station, the passthrough, a confirmation — moves it; a stamp landing does
+/// not.
+pub fn content_key(r: &QsoRecord) -> String {
+    let mut text = String::new();
+    for (tag, value) in content_fields(r) {
+        text.push_str(&super::field(&tag, &value));
+    }
+    format!("{:016x}", super::id::fnv1a64(text.as_bytes()))
 }
 
 /// A contact's upload stamps, as the fragment a new contact's entry keeps them in: empty when it
@@ -772,12 +786,17 @@ pub enum Undo {
     /// Put the contact back, whole: the entry deleted it.
     Restore(QsoRecord),
     /// The contact, with the entry's fields put back where they still hold what it wrote.
-    /// `kept` names the fields changed again since, which keep the later value.
+    /// `kept` names the fields changed again since, which keep the later value; `held` the fields
+    /// left as they are because putting them back would put the contact under another call.
     Revert {
         /// The contact as the undo leaves it.
         row: QsoRecord,
         /// Fields left as they are, because a later change moved them.
         kept: Vec<String>,
+        /// Fields left as they are, because putting them back would move the contact under a
+        /// call it was not made under: a blank STATION_CALLSIGN, while the call in Settings is
+        /// another call than the one it holds.
+        held: Vec<String>,
     },
 }
 
@@ -801,8 +820,13 @@ pub enum CannotUndo {
 }
 
 /// What undoing `entry` does to its contact, `current` — the contact as the log now holds it, or
-/// `None` where it holds none.
-pub fn undo(entry: &Entry, current: Option<&QsoRecord>) -> std::result::Result<Undo, CannotUndo> {
+/// `None` where it holds none. `settings_call`: the call in Settings, the one a contact naming no
+/// station call is uploaded under.
+pub fn undo(
+    entry: &Entry,
+    current: Option<&QsoRecord>,
+    settings_call: Option<&str>,
+) -> std::result::Result<Undo, CannotUndo> {
     match entry.kind {
         Kind::Create => match current {
             Some(_) => Ok(Undo::Remove(entry.qso_id)),
@@ -817,7 +841,7 @@ pub fn undo(entry: &Entry, current: Option<&QsoRecord>) -> std::result::Result<U
         },
         Kind::Edit | Kind::Merge | Kind::Fill => {
             let current = current.ok_or(CannotUndo::Gone)?;
-            revert(entry, current)
+            revert(entry, current, settings_call)
         }
         Kind::Unknown(_) => Err(CannotUndo::UnknownKind),
     }
@@ -834,7 +858,33 @@ pub fn undo(entry: &Entry, current: Option<&QsoRecord>) -> std::result::Result<U
 /// holds it under that call answers that upload as a duplicate; nothing is claimed sent that was
 /// not. Deliberate: the stamps belonged to the contact as it stood before
 /// the undo, and a stamp is only ever written by a service's answer.
-fn revert(entry: &Entry, current: &QsoRecord) -> std::result::Result<Undo, CannotUndo> {
+///
+/// **A change of the station call, undone,** is the same: the call the contact is uploaded under
+/// (its STATION_CALLSIGN, else `settings_call`, the call in Settings) moves back, so the stamps of
+/// uploads made under the call it no longer carries are cleared with `LOTW_QSL_SENT`. The stamps
+/// the change itself cleared are not put back — they were never history — so the next upload sends
+/// the contact under the restored call, and a service already holding that QSO answers Duplicate.
+/// A blank station call filled with the Settings call, undone, keeps its stamps: the call it is
+/// uploaded under never moved. Undoing a clear of a station call, or redoing an undone fill, while
+/// another call is in Settings does clear them, though the clear or the fill itself cleared none:
+/// the contact moves back from the Settings call to its own, and goes again under its own call,
+/// which the services answer as a duplicate. Keep it so: an upload under the Settings call may have
+/// been made in between, and keeping its stamps would leave the contact never sent under its own.
+///
+/// **⛔ An undo never puts back a blank station call that would move the contact under another
+/// call.** A contact naming none goes out under the call in Settings NOW, and nothing records the
+/// call a blank contact was uploaded under. Old contacts uploaded under KA1OLD, filled with KA1OLD,
+/// and the fill undone after Settings moved to KD9NEW would be owed to every service under KD9NEW,
+/// and LoTW cannot take back a QSO it accepted. So where the blank would land the contact under
+/// another call than the one its STATION_CALLSIGN names now, that call stays, with its stamps, and
+/// the field is `held`. The Settings call the edit was made under is not what decides: in that
+/// example it was KD9NEW too. Only the call the contact holds now is known to be one it was made
+/// under. Putting back a call that is named is always allowed: it is a call the operator wrote.
+fn revert(
+    entry: &Entry,
+    current: &QsoRecord,
+    settings_call: Option<&str>,
+) -> std::result::Result<Undo, CannotUndo> {
     let mut now = fields(&super::adif_record_own_log(current));
     let mut kept = Vec::new();
     let mut moved = false;
@@ -868,16 +918,26 @@ fn revert(entry: &Entry, current: &QsoRecord) -> std::result::Result<Undo, Canno
         .next()
         .ok_or(CannotUndo::ChangedSince)?;
     row.id = current.id;
+    let station = |r: &QsoRecord| super::cleanup::station_call(r, settings_call);
+    let mut held = Vec::new();
+    let named = |r: &QsoRecord| super::cleanup::station_call(r, None).is_some();
+    if !named(&row) && named(current) && station(&row) != station(current) {
+        row.station_callsign = current.station_callsign.clone();
+        held.push("STATION_CALLSIGN".to_string());
+    }
     // A stamp is never history, so it is never undone: the contact keeps the stamps it has —
-    // unless the undo corrects its call, which owes it to every service again, as a corrected
-    // call always has (`edited`), with the LoTW mark another logger left in it.
-    if row.call.trim().eq_ignore_ascii_case(current.call.trim()) {
+    // unless the undo corrects its call, or the station call it is uploaded under, which owes it
+    // to every service again, as a corrected call always has (`edited`), with the LoTW mark
+    // another logger left in it.
+    if row.call.trim().eq_ignore_ascii_case(current.call.trim())
+        && station(&row) == station(current)
+    {
         row.upload = current.upload.clone();
     } else {
         row.upload = super::UploadState::default();
         row.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
     }
-    Ok(Undo::Revert { row, kept })
+    Ok(Undo::Revert { row, kept, held })
 }
 
 #[cfg(test)]

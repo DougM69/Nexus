@@ -513,6 +513,53 @@ fn kg4_is_guantanamo(base: &str) -> bool {
 /// Resolve a callsign to a DXCC entity + representative location.
 pub fn resolve(call: &str) -> Option<DxccInfo> {
     let r = resolver();
+    let full = spelled(call);
+    if full.is_empty() {
+        return None;
+    }
+    // Exact-call exceptions win (full call, before affix stripping).
+    if let Some(&(i, zone)) = r.exact.get(&full) {
+        return Some(info(r, i, zone));
+    }
+    // Longest-prefix on the base call.
+    let prefix = matched_prefix(r, base_call(&full))?;
+    let &(i, zone) = r.prefixes.get(prefix)?;
+    Some(info(r, i, zone))
+}
+
+/// Whether the country file can call a contact logged under `call` with the DXCC number `logged`
+/// misfiled ([`resolve`] places the call elsewhere). Never when `call` is one of the file's
+/// exact-call exceptions — a DXpedition or special operation, whose entry is the file's whole
+/// knowledge of it — and never when the logged entity has an exception or prefix of its own that
+/// begins with the prefix the call resolved through. `3Y0PI` (Peter I, 1994) has no exact entry
+/// any more and resolves through Antarctica's bare `3Y`; Peter I's and Bouvet's calls are `3Y`
+/// calls too, so a 3Y call logged as either is no evidence of a mistake. AD1C drops an operation's
+/// exact entry once it is over, so the file cannot say which past operation a call was.
+pub fn prefix_decides(call: &str, logged: u32) -> bool {
+    let r = resolver();
+    let full = spelled(call);
+    if full.is_empty() || r.exact.contains_key(&full) {
+        return false;
+    }
+    let Some(prefix) = matched_prefix(r, base_call(&full)) else {
+        return false;
+    };
+    let of_logged = |&(i, _): &(u32, Option<u8>)| r.entities[i as usize].dxcc == Some(logged);
+    // An exception by the call it is under its affix: `=W0SD/VE2` is a Canadian `VE2` call, no
+    // sign that a `W` call may be Canadian.
+    let shares = r
+        .exact
+        .iter()
+        .any(|(call, at)| base_call(call).starts_with(prefix) && of_logged(at))
+        || r.prefixes
+            .iter()
+            .any(|(key, at)| key.starts_with(prefix) && of_logged(at));
+    !shares
+}
+
+/// A call as the country file is asked about it: up to its first non-ASCII character, out of its
+/// hashed-call brackets, trimmed and upper-cased. Empty when nothing of a call is left.
+fn spelled(call: &str) -> String {
     // ⚠️ A NON-ASCII CHARACTER ENDS THE CALL. A callsign is ASCII by definition, but what
     // reaches here is outside input — POTA spots, cluster lines, decodes, imported logs — and
     // the POTA feed carried `KK4JAB ☕️` (2026-09-23): the call, then decoration. The prefix
@@ -531,21 +578,15 @@ pub fn resolve(call: &str) -> Option<DxccInfo> {
     // — a worked DXpedition scoring as neither a new country nor a new band, which is exactly
     // what the reporter saw. Stripping here rather than at each call site because this is the
     // boundary: everything past this line is prefix arithmetic that assumes a bare call.
-    let full = call
-        .trim()
+    call.trim()
         .trim_start_matches('<')
         .trim_end_matches('>')
         .trim()
-        .to_ascii_uppercase();
-    if full.is_empty() {
-        return None;
-    }
-    // Exact-call exceptions win (full call, before affix stripping).
-    if let Some(&(i, zone)) = r.exact.get(&full) {
-        return Some(info(r, i, zone));
-    }
-    // Longest-prefix on the base call.
-    let base = base_call(&full);
+        .to_ascii_uppercase()
+}
+
+/// The longest prefix of `base` the country file holds: the one [`resolve`] places a call by.
+fn matched_prefix<'a>(r: &Resolver, base: &'a str) -> Option<&'a str> {
     for prefix in prefixes_longest_first(base) {
         // The one prefix in the file that is wrong on its own: `KG4` covers a block shared with
         // the United States, and only a 2-character suffix is Guantanamo Bay (#52). Skipping the
@@ -554,8 +595,8 @@ pub fn resolve(call: &str) -> Option<DxccInfo> {
         if prefix == "KG4" && !kg4_is_guantanamo(base) {
             continue;
         }
-        if let Some(&(i, zone)) = r.prefixes.get(prefix) {
-            return Some(info(r, i, zone));
+        if r.prefixes.contains_key(prefix) {
+            return Some(prefix);
         }
     }
     None
@@ -790,6 +831,29 @@ pub fn dxcc_entity_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The file judges an ordinary call by its prefix, and never a DXpedition's: an exact-call
+    /// exception, or a call whose prefix the logged entity's own calls share (`3Y0PI` falls to
+    /// Antarctica's bare `3Y`, and Peter I's and Bouvet's calls are `3Y` calls too).
+    #[test]
+    fn a_dxpedition_call_is_not_judged_by_its_prefix() {
+        assert!(prefix_decides("W1AW", 1), "a US call logged as Canada");
+        assert!(
+            prefix_decides("3Y0PI", 291),
+            "a 3Y call logged as the United States"
+        );
+        assert!(!prefix_decides("3Y0PI", 199), "Peter I");
+        assert!(!prefix_decides("3Y5X", 24), "Bouvet");
+        assert!(!prefix_decides("3Y0J", 199), "an exact-call exception");
+        // An exception is never judged, even against an entity sharing nothing with it: the
+        // file's entry is all it knows of the operation (=OP0LE is an Antarctic station).
+        assert!(
+            prefix_decides("OP4LE", 339),
+            "premise: an ordinary OP call is judged"
+        );
+        assert!(!prefix_decides("OP0LE", 339), "an exact-call exception");
+        assert!(!prefix_decides("", 1));
+    }
 
     #[test]
     fn entity_names_are_the_full_sorted_deduped_set() {

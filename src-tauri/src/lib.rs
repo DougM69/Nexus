@@ -90,6 +90,8 @@ mod log_history;
 /// The UI's log questions answered by the engine — pages, places, a call's history, an entity's
 /// slots (SPEC-2 v3 C17a).
 mod log_queries;
+/// The Logbook's clean-up tools: duplicates and their merge, bulk edit, and the check's fixes.
+mod log_tools;
 /// Parsec presence mode's watcher thread: stop latched transmissions when the operator's Parsec
 /// session drops (off by default; started on Windows only).
 mod parsec_presence;
@@ -39680,6 +39682,12 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_history::undo_history_run,
         log_history::redo_qso_change,
         log_history::restore_deleted_qso,
+        log_tools::find_log_duplicates,
+        log_tools::merge_log_duplicates,
+        log_tools::bulk_edit_preview,
+        log_tools::bulk_edit_apply,
+        log_tools::check_logbook,
+        log_tools::apply_log_fixes,
         log_queries::ask_log,
         purge_log,
         get_awards,

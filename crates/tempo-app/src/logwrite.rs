@@ -295,9 +295,10 @@ pub fn stamp_push(
     service: UploadService,
     status: UploadStatus,
 ) -> (bool, Durability) {
+    let settings_call = settings_call(engine);
     for _ in 0..PLANS {
         let plan = crate::engine::log_plan(engine);
-        let target = match station::push_target(&plan, pushed) {
+        let target = match station::push_target(&plan, pushed, Some(&settings_call)) {
             Ok(Some(row)) => row,
             Ok(None) => return (false, Durability::default()),
             Err(e) => {
@@ -683,7 +684,7 @@ pub fn import_logged_contact(
 
 /// The call in Settings: the one a LoTW merge takes a contact or a row naming no call of its own
 /// to be under (`tempo_core::reconcile::lotw_own_call`).
-fn settings_call(engine: &Mutex<Engine>) -> String {
+pub(crate) fn settings_call(engine: &Mutex<Engine>) -> String {
     engine_lock(engine).settings().mycall.clone()
 }
 

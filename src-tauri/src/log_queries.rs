@@ -505,6 +505,30 @@ impl LogQueries {
         }
     }
 
+    /// The ids of every row the order `query` gives, in that order: what a bulk change of "the
+    /// contacts the filter shows" acts on (`crate::log_tools`). Read with the Engine lock
+    /// released, as a page is.
+    pub(crate) fn ids_of(
+        &self,
+        engine: &SharedEngine,
+        query: &LogQuery,
+    ) -> Result<Vec<RecordId>, String> {
+        let need = match query.filter.need {
+            Some(award) => Some(self.need_slots(engine, award)?),
+            None => None,
+        };
+        let c = Capture::take(&engine_lock(engine));
+        let inputs = OrderInputs {
+            resolve: &shown,
+            need: need.as_ref(),
+        };
+        let order = self.order_of(&c, query, &inputs)?;
+        let found = match &c.rows {
+            LogRows::Store(reads) => read(reads, |db| db.rows_at(&order))?,
+        };
+        Ok(found.into_iter().flatten().filter_map(|r| r.id).collect())
+    }
+
     // ── the Logbook: order vectors, pages, places ────────────────────────────────────────────
 
     /// The order `query` gives at the capture's `index_rev`: kept, or built once however many

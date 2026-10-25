@@ -1027,6 +1027,7 @@ pub struct Logbook {
 
 pub mod callbook;
 pub mod canonical;
+pub mod cleanup;
 pub mod dedup;
 mod edit;
 pub mod history;

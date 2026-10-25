@@ -41,7 +41,10 @@
 //!   beside it before the delete never blocks it: the log held both, as an import that keeps two
 //!   contacts a second apart holds both. The operator can restore one anyway
 //!   ([`restore_deleted_anyway`]);
-//! - an entry of a kind a later build recorded ([`CannotUndo::UnknownKind`]).
+//! - an entry of a kind a later build recorded ([`CannotUndo::UnknownKind`]);
+//! - a blank station call it would put back where the call in Settings is another call than the
+//!   one the contact names: the contact would be owed to every service under a call it was not
+//!   made under, so the call stays, with its stamps ([`Undone::held`], [`history::undo`]).
 //!
 //! **A whole run's undo of more than [`tempo_core::logbook::writer::CHUNK_ROWS`] contacts waits
 //! while the radio transmits** ([`MUST_WAIT_FOR_TX`]): it is made in one hold of the Engine lock
@@ -231,6 +234,12 @@ pub struct Undone {
     pub run: Option<String>,
     /// Fields left as they are because a later change moved them, by contact.
     pub kept: Vec<(RecordId, String)>,
+    /// Fields left as they are because putting them back would move the contact under a call it
+    /// was not made under (a blank station call, [`history::undo`]), by contact.
+    pub held: Vec<(RecordId, String)>,
+    /// The call in Settings the undo read, when it held a field: the call a blank station call put
+    /// back would have sent those contacts under. `None` when Settings names no call.
+    pub held_under: Option<String>,
     /// Contacts it could not change, and why.
     pub refused: Vec<(RecordId, CannotUndo)>,
     /// The call of each contact it could not change that the log holds or would have held, so
@@ -354,7 +363,8 @@ struct Planned {
 /// contact that changes, the widest class among them, and the answer. `later` holds, for each
 /// contact an entry added, the latest change another run made to it since
 /// ([`tempo_core::logbook::sqlite::LogDb::history_changed_after`]): such a contact is kept, not
-/// taken out, as is one uploaded since ([`Entry::uploaded_since`]).
+/// taken out, as is one uploaded since ([`Entry::uploaded_since`]). `settings_call`: the call in
+/// Settings, the one a contact naming no station call is uploaded under ([`history::undo`]).
 ///
 /// Linear in the entries: each contact's are found through one index of them, built once.
 fn plan_undo(
@@ -362,6 +372,7 @@ fn plan_undo(
     ids: &[RecordId],
     rows: &HashMap<RecordId, Arc<QsoRecord>>,
     later: &HashMap<RecordId, i64>,
+    settings_call: &str,
 ) -> Planned {
     let mut by_id: HashMap<RecordId, Vec<&Entry>> = HashMap::with_capacity(ids.len());
     for e in entries {
@@ -387,7 +398,7 @@ fn plan_undo(
                 {
                     Err(CannotUndo::ChangedSince)
                 }
-                _ => history::undo(e, now.as_ref()),
+                _ => history::undo(e, now.as_ref(), Some(settings_call)),
             };
             match undo {
                 Ok(Undo::Remove(_)) => now = None,
@@ -395,8 +406,9 @@ fn plan_undo(
                     restored_from.get_or_insert(e.seq);
                     now = Some(row);
                 }
-                Ok(Undo::Revert { row, kept }) => {
+                Ok(Undo::Revert { row, kept, held }) => {
                     answer.kept.extend(kept.into_iter().map(|tag| (*id, tag)));
+                    answer.held.extend(held.into_iter().map(|tag| (*id, tag)));
                     now = Some(row);
                 }
                 Err(why) => {
@@ -414,6 +426,8 @@ fn plan_undo(
             continue;
         }
         match (before, now) {
+            // Every field it would put back held: the contact stays as it is.
+            (Some(b), Some(a)) if *b == a => {}
             (Some(b), Some(a)) => changed.push((Some(b), Some(Arc::new(a)))),
             (Some(b), None) => {
                 class = OpClass::Structural;
@@ -427,6 +441,10 @@ fn plan_undo(
             }
             (None, None) => {}
         }
+    }
+    if !answer.held.is_empty() {
+        answer.held_under =
+            Some(settings_call.trim().to_ascii_uppercase()).filter(|c| !c.is_empty());
     }
     // The contacts put back go in after the ones changed, as an append's rows go in last.
     changed.extend(put_back);
@@ -476,6 +494,7 @@ fn undo_entries(
         .map(|e| e.run.as_str())
         .collect();
     let run = new_run();
+    let settings_call = crate::logwrite::settings_call(engine);
     for _ in 0..PLANS {
         let plan = crate::engine::log_plan(engine);
         let rows = match plan.rows(&ids) {
@@ -504,7 +523,7 @@ fn undo_entries(
             undoes,
             deleted_at,
             mut answer,
-        } = plan_undo(entries, &ids, &rows, &later);
+        } = plan_undo(entries, &ids, &rows, &later, &settings_call);
         if pairs.is_empty() {
             return (Ok(answer), Durability::default());
         }

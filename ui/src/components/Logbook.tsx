@@ -12,6 +12,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import type { ImportStats, LogExport, LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
 import { RecentlyDeleted } from './RecentlyDeleted'
+import { LogTools, type LogTool } from './LogTools'
 import { sayUndone } from './QsoHistory'
 import { gpuCapableForGlobe } from '../gpu'
 import { GlobeGuard } from './GlobeGuard'
@@ -487,6 +488,8 @@ export function Logbook({
   // arm the danger button — a deliberate, typed gate for a wipe of the whole log.
   const [showPurge, setShowPurge] = useState(false)
   const [showDeleted, setShowDeleted] = useState(false)
+  // The clean-up tools (LogTools.tsx): which one the dialog shows, while it is open.
+  const [tools, setTools] = useState<LogTool | null>(null)
   const [purgeText, setPurgeText] = useState('')
   const [purging, setPurging] = useState(false)
   // "Mark all as already on LoTW" confirmation — for an imported legacy log that was
@@ -2324,6 +2327,9 @@ export function Logbook({
           <button type="button" className="export-btn" onClick={() => setShowDeleted(true)}>
             {t('logbook.deleted.button')}
           </button>
+          <button type="button" className="export-btn" onClick={() => setTools('dupes')}>
+            {t('logbook.tools.button')}
+          </button>
           <button
             type="button"
             className="export-btn danger"
@@ -3485,6 +3491,16 @@ export function Logbook({
           the row that opened it can be recycled out from under the view while it is open. */}
       <QsoDetail qso={viewing} onClose={() => setViewing(null)} onChanged={load} />
       <RecentlyDeleted open={showDeleted} onClose={() => setShowDeleted(false)} onRestored={load} />
+      <LogTools
+        open={tools !== null}
+        tool={tools ?? 'dupes'}
+        onTool={setTools}
+        onClose={() => setTools(null)}
+        onChanged={load}
+        picked={picked}
+        query={query}
+        shown={listTotal}
+      />
       <ParkStateReview open={showParkStates} onClose={() => setShowParkStates(false)} onApplied={load} />
       <ConfirmationReview open={showConfirmations} onClose={() => setShowConfirmations(false)} onApplied={load} />
     </section>

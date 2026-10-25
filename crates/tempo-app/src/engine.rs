@@ -31507,8 +31507,13 @@ contact yourself."
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
-        self.station
-            .stamp_qrz_upload(pushed, outcome, when_unix, detail)
+        self.station.stamp_qrz_upload(
+            pushed,
+            Some(&self.settings.mycall),
+            outcome,
+            when_unix,
+            detail,
+        )
     }
 
     /// See [`StationCore::stamp_clublog_upload`].
@@ -31519,8 +31524,13 @@ contact yourself."
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
-        self.station
-            .stamp_clublog_upload(pushed, outcome, when_unix, detail)
+        self.station.stamp_clublog_upload(
+            pushed,
+            Some(&self.settings.mycall),
+            outcome,
+            when_unix,
+            detail,
+        )
     }
 
     /// See [`StationCore::stamp_eqsl_upload`].
@@ -31531,8 +31541,13 @@ contact yourself."
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
-        self.station
-            .stamp_eqsl_upload(pushed, outcome, when_unix, detail)
+        self.station.stamp_eqsl_upload(
+            pushed,
+            Some(&self.settings.mycall),
+            outcome,
+            when_unix,
+            detail,
+        )
     }
 
     /// See [`StationCore::merge_eqsl_report`].
@@ -49728,6 +49743,7 @@ mod tests {
         let pushed = QsoRecord::clone(&e.stored_log()[3]);
         assert!(e.station.stamp_qrz_upload(
             &pushed,
+            None,
             tempo_core::logbook::UploadOutcome::Accepted,
             1_700_000_500,
             None

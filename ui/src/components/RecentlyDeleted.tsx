@@ -139,6 +139,7 @@ export function RecentlyDeleted({
         : run.kind === 'import' ? t('logbook.import.undone')
         : t('qso.history.redone'),
       changed,
+      run.kind === 'undo',
     )
     changed()
   }
