@@ -8367,6 +8367,48 @@ mod tests {
         std::env::temp_dir().join(format!("tempo_logtest_{}_{n}.adi", std::process::id()))
     }
 
+    /// The import refuses a record of more than `import::MAX_FIELDS` fields, but the log's own
+    /// reads never do: a record of `log.adi` past that many is still the operator's contact, read
+    /// whole, its last `CALL` and `BAND` (fields 2,000 and 2,001) the ones the file means. Capped,
+    /// it would vanish from the log on the next load.
+    #[test]
+    fn the_logs_own_reads_keep_a_record_of_any_number_of_fields() {
+        let mut fields = String::from(
+            "<CALL:5>K1AAA<BAND:3>15m<QSO_DATE:8>20240101<TIME_ON:6>120000<MODE:3>FT8",
+        );
+        for i in 5..import::MAX_FIELDS - 1 {
+            fields.push_str(&format!("<APP_X_F:{}>{i}", i.to_string().len()));
+        }
+        fields.push_str("<CALL:5>W9BBB<BAND:3>40m<EOR>\n");
+        let text = format!("{}{fields}", adif_header());
+        let row = |r: &QsoRecord| (r.call.clone(), r.band.clone());
+        let want = vec![("W9BBB".to_string(), "40m".to_string())];
+        assert_eq!(parse_adif(&text).iter().map(row).collect::<Vec<_>>(), want);
+        assert_eq!(file_calls_and_ids(&text).0, ["W9BBB"]);
+        let mut lb = Logbook::default();
+        lb.reconcile_disk(&text);
+        assert_eq!(
+            lb.records().iter().map(|r| row(r)).collect::<Vec<_>>(),
+            want
+        );
+        let mut lb = Logbook::default();
+        lb.import_adif(&text);
+        assert_eq!(
+            lb.records().iter().map(|r| row(r)).collect::<Vec<_>>(),
+            want
+        );
+
+        let path = scratch_adi();
+        std::fs::write(&path, &text).unwrap();
+        let lb = Logbook::load(&path);
+        let loaded: Vec<_> = lb.records().iter().map(|r| row(r)).collect();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("adi.bak"));
+        assert_eq!(loaded, want);
+        let read = import::adif_records(&text);
+        assert_eq!(read.records[0].fields.len(), import::MAX_FIELDS + 1);
+    }
+
     /// THE DATA-LOSS REGRESSION. A file with a record `parse_adif` cannot assemble (no `CALL`)
     /// loads lossily; a save then rewrites the file from the surviving records, which on the
     /// real pipeline is how the operator's oldest QSOs vanished from disk. The `.bak` written at

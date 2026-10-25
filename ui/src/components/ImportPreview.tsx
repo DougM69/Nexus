@@ -19,6 +19,7 @@ import { pushToast, failureText } from '../toast'
 import {
   droppedCount,
   formatName,
+  importFailure,
   noteAt,
   noteLabel,
   reportText,
@@ -33,6 +34,8 @@ import './ImportPreview.css'
 
 /** How many of the file's fields the coverage list shows before "show all". */
 const COVERAGE_SHOWN = 12
+/** How many of what is not stored the list shows; the rest are counted. */
+const UNMAPPED_SHOWN = 200
 
 export function ImportPreview({
   text,
@@ -57,7 +60,7 @@ export function ImportPreview({
     let live = true
     previewImport(text).then(
       (p) => live && setPreview(p),
-      (err: unknown) => live && setError(failureText(t('logbook.import.preview.failed'), err)),
+      (err: unknown) => live && setError(importFailure(t('logbook.import.preview.failed'), err)),
     )
     return () => {
       live = false
@@ -71,7 +74,7 @@ export function ImportPreview({
       setDone(d)
       onImported(d.stats)
     } catch (err) {
-      pushToast(failureText(t('logbook.import.failed'), err), 'error')
+      pushToast(importFailure(t('logbook.import.failed'), err), 'error')
     } finally {
       setBusy(false)
     }
@@ -150,11 +153,14 @@ export function ImportPreview({
               <>
                 <h3>{t('logbook.import.preview.unmapped')}</h3>
                 <ul className="import-preview-unmapped">
-                  {preview.unmapped.map((u, i) => (
+                  {preview.unmapped.slice(0, UNMAPPED_SHOWN).map((u, i) => (
                     <li key={i}>
                       <span className="mono">{unmappedName(u)}</span> ×{u.count} · {unmappedLabel(u.reason)}
                     </li>
                   ))}
+                  {preview.unmapped.length > UNMAPPED_SHOWN && (
+                    <li>{t('logbook.import.preview.moreUnmapped', { count: preview.unmapped.length - UNMAPPED_SHOWN })}</li>
+                  )}
                 </ul>
               </>
             )}

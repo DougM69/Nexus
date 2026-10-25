@@ -75,6 +75,23 @@ describe('the import preview', () => {
     expect(api.importLog).not.toHaveBeenCalled()
   })
 
+  it('lists the first 200 of what is not stored, and counts the rest', async () => {
+    const unmapped = Array.from({ length: 250 }, (_, i) => ({ what: `X${i}`, side: null, count: 1, reason: 'header' as const }))
+    vi.mocked(api.previewImport).mockResolvedValue({ ...PREVIEW, unmapped })
+    render(<ImportPreview text="FILE" fileName="mylog.adi" onClose={vi.fn()} onImported={vi.fn()} />)
+    expect(await screen.findByText(t('logbook.import.preview.moreUnmapped', { count: 50 }))).toBeTruthy()
+    const list = document.querySelector('.import-preview-unmapped')!
+    expect(list.querySelectorAll('li')).toHaveLength(201)
+    expect(list.textContent).toContain('X199')
+    expect(list.textContent).not.toContain('X200')
+  })
+
+  it('says why the engine refused a file naming too many fields', async () => {
+    vi.mocked(api.previewImport).mockRejectedValue('tooManyNames')
+    render(<ImportPreview text="FILE" fileName="mylog.adi" onClose={vi.fn()} onImported={vi.fn()} />)
+    expect(await screen.findByText(t('logbook.import.tooManyNames'))).toBeTruthy()
+  })
+
   it('imports new only on that choice, says the report, and saves it as text', async () => {
     const { onImported } = open()
     fireEvent.click(await screen.findByRole('button', { name: t('logbook.import.preview.importNew') }))

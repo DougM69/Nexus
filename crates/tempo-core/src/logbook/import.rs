@@ -386,6 +386,22 @@ impl Source {
     pub fn into_adif(self) -> Option<String> {
         self.adif
     }
+
+    /// Whether the file names more than `max` distinct fields: in its records, those left out,
+    /// its tail, and what it lists as not stored (a header's fields, a refused name, a Cabrillo
+    /// header tag). Stops counting past `max`.
+    fn names_more_than(&self, max: usize) -> bool {
+        let mut seen: HashSet<&str> = HashSet::new();
+        self.records
+            .iter()
+            .flat_map(|r| &r.fields)
+            .chain(&self.tail.list)
+            .map(|(k, _)| k)
+            .chain(self.tail.over.iter().flat_map(|o| o.names.keys()))
+            .chain(self.over.names.keys())
+            .chain(self.unmapped.iter().map(|u| &u.what))
+            .any(|k| seen.insert(k) && seen.len() > max)
+    }
 }
 
 /// Read `text` as `format`.
@@ -443,8 +459,18 @@ pub const MAX_FIELDS: usize = 2_000;
 /// larger file can be split and imported in parts; each part is its own run, undone as one.
 pub const MAX_BYTES: usize = 200_000_000;
 
+/// The most distinct field names a file is read with: 10,000. ADIF defines a few hundred, and a
+/// logger's own and user-defined ones add tens, so a real file names far fewer. Each name costs
+/// the preview and the report a row, so a file naming millions is built to exhaust memory, and is
+/// refused before its preview, as one larger than [`MAX_BYTES`] is ([`TOO_MANY_NAMES`]).
+pub const MAX_NAMES: usize = 10_000;
+
+/// Why [`read_file`] refuses a file naming more than [`MAX_NAMES`] fields: a key the UI words in
+/// the operator's language.
+pub const TOO_MANY_NAMES: &str = "tooManyNames";
+
 /// A file's text read in the format it is in ([`detect`], [`read`]), or why it is not read: it is
-/// larger than [`MAX_BYTES`].
+/// larger than [`MAX_BYTES`], or names more than [`MAX_NAMES`] fields.
 pub fn read_file(text: &str) -> Result<Source, String> {
     if text.len() > MAX_BYTES {
         return Err(format!(
@@ -453,7 +479,11 @@ pub fn read_file(text: &str) -> Result<Source, String> {
             MAX_BYTES / 1_000_000
         ));
     }
-    Ok(read(text, detect(text)))
+    let source = read(text, detect(text));
+    if source.names_more_than(MAX_NAMES) {
+        return Err(TOO_MANY_NAMES.to_string());
+    }
+    Ok(source)
 }
 
 fn read_adif(text: &str) -> Source {

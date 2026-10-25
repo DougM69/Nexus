@@ -10,7 +10,9 @@ import { FR } from '../i18n/fr'
 import { JA } from '../i18n/ja'
 import {
   IMPORT_MAX_BYTES,
+  IMPORT_TOO_MANY_NAMES,
   droppedCount,
+  importFailure,
   importTooLarge,
   noteLabel,
   reasonLabel,
@@ -110,6 +112,26 @@ describe('the field limit a record is read with', () => {
         for (const n of numbers) expect(n, `${lang} ${key}: ${text}`).toBe(max)
       }
     }
+  })
+})
+
+describe('a file naming too many fields', () => {
+  it('is refused in every language with the engine’s own limit', () => {
+    const max = ENGINE.match(/pub const MAX_NAMES: usize = ([0-9_]+);/)?.[1].replace(/_/g, '')
+    expect(max).toMatch(/^[0-9]+$/)
+    const catalogs: Record<string, Record<string, unknown>> = { EN, DE, ES, FR, JA }
+    for (const [lang, catalog] of Object.entries(catalogs)) {
+      const text = String(catalog['logbook.import.tooManyNames'] ?? '')
+      const numbers = (text.match(/\d(?:[\d.,\u00a0\u202f ]*\d)?/g) ?? []).map((n) => n.replace(/\D/g, ''))
+      expect(numbers.length, lang).toBeGreaterThan(0)
+      for (const n of numbers) expect(n, `${lang}: ${text}`).toBe(max)
+    }
+  })
+
+  it('is told by the engine’s own refusal, and any other failure keeps its detail', () => {
+    expect(ENGINE).toContain(`pub const TOO_MANY_NAMES: &str = "${IMPORT_TOO_MANY_NAMES}";`)
+    expect(importFailure('Failed', IMPORT_TOO_MANY_NAMES)).toBe(t('logbook.import.tooManyNames'))
+    expect(importFailure('Failed', 'disk full')).toBe('Failed: disk full')
   })
 })
 

@@ -1167,3 +1167,108 @@ fn a_huge_record_is_counted_not_held() {
     let a = r.fields.iter().find(|f| f.field == "A").unwrap();
     assert_eq!((a.occurrences, a.dropped), (2 * n, 2 * n));
 }
+
+/// An ADIF file naming `n` distinct fields: `CALL` and `X0`…, a thousand of them in the header, 2,500
+/// in a record over the field limit, the last thousand in the tail, and the rest in kept records.
+fn adif_naming(n: usize) -> String {
+    let x = |r: std::ops::Range<usize>| -> String { r.map(|i| format!("<X{i}:0>")).collect() };
+    let m = n - 1;
+    let mut s = format!("{}<EOH>\n<CALL:4>W1AW{}<EOR>\n", x(0..1000), x(1000..3500));
+    let mut i = 3500;
+    while i < m - 1000 {
+        let j = (i + 1000).min(m - 1000);
+        s.push_str(&format!("<CALL:5>K1ABC{}<EOR>\n", x(i..j)));
+        i = j;
+    }
+    s.push_str(&format!("<CALL:4>N0XX{}", x(m - 1000..m)));
+    s
+}
+
+#[test]
+fn a_file_naming_too_many_fields_is_refused_before_its_preview() {
+    let ok = read_file(&adif_naming(MAX_NAMES)).unwrap();
+    assert_eq!(ok.records.len(), 6);
+    assert_eq!(
+        read_file(&adif_naming(MAX_NAMES + 1)).unwrap_err(),
+        TOO_MANY_NAMES
+    );
+
+    // ADX field names, and Cabrillo header tags, count the same way.
+    let fields: String = (0..=MAX_NAMES).map(|i| format!("<F{i}/>")).collect();
+    let adx = format!("<ADX><RECORDS><RECORD>{fields}</RECORD></RECORDS></ADX>");
+    assert_eq!(read_file(&adx).unwrap_err(), TOO_MANY_NAMES);
+    let tags: String = (0..=MAX_NAMES).map(|i| format!("X{i}: v\n")).collect();
+    let cabrillo = format!("START-OF-LOG: 3.0\n{tags}END-OF-LOG:\n");
+    assert_eq!(detect(&cabrillo), Format::Cabrillo);
+    assert_eq!(read_file(&cabrillo).unwrap_err(), TOO_MANY_NAMES);
+}
+
+/// A record of a few fields, or one just over the field limit, as ADIF text after the text
+/// between records: `(its text, over the limit)`.
+fn a_record() -> impl proptest::strategy::Strategy<Value = (String, bool)> {
+    use proptest::prelude::*;
+    let names = ["CALL", "BAND", "APP_X_F", "QSO_DATE"];
+    let between = prop::sample::select(vec!["", "\n", "\r\n", " junk > ", "é ñ 漢 comment\n"]);
+    let eor = prop::sample::select(vec!["<EOR>", "<eor>", "<EoR>"]);
+    let value = ("[a-g0-9 <>:é漢\r\n]{0,6}", any::<bool>()).prop_map(|(v, eor)| {
+        if eor {
+            format!("{v}<EOR>")
+        } else {
+            v
+        }
+    });
+    let few = prop::collection::vec((0..names.len(), value), 0..5).prop_map(move |fields| {
+        let s: String = fields.iter().map(|(n, v)| tag(names[*n], v)).collect();
+        (s, false)
+    });
+    let over = (1usize..5, 1usize..4).prop_map(move |(extra, step)| {
+        let s: String = (0..MAX_FIELDS + extra)
+            .map(|i| tag(names[(i * step) % names.len()], "v"))
+            .collect();
+        (s, true)
+    });
+    (between, prop_oneof![3 => few, 1 => over], eor)
+        .prop_map(|(between, (fields, over), eor)| (format!("{between}{fields}{eor}"), over))
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: 64,
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// The text an import reads is the file without its records over the field limit, byte for
+    /// byte, header and tail as they were; and the report accounts for every field the file holds.
+    /// (The text after `<EOH>` and between records is the next record's, cut with it.)
+    #[test]
+    fn records_over_the_limit_are_cut_and_every_field_is_accounted(
+        header in proptest::sample::select(vec!["", "<eoh>", "<ADIF_VER:5>3.1.4<EOH>"]),
+        records in proptest::collection::vec(a_record(), 0..6),
+        tail in proptest::sample::select(vec!["", "\n", "<CALL:4>W1AW", "<CALL:99>W1", "junk"]),
+    ) {
+        let text: String = std::iter::once(header.to_string())
+            .chain(records.iter().map(|(r, _)| r.clone()))
+            .chain(std::iter::once(tail.to_string()))
+            .collect();
+        let kept: String = std::iter::once(header.to_string())
+            .chain(records.iter().filter(|(_, over)| !over).map(|(r, _)| r.clone()))
+            .chain(std::iter::once(tail.to_string()))
+            .collect();
+        let source = read(&text, Format::Adif);
+        let cut = source.adif(&text);
+        proptest::prop_assert_eq!(cut, kept.as_str());
+        let (whole, read_cut) = (adif_records(&text), adif_records(cut));
+        proptest::prop_assert_eq!(&read_cut, &adif_records(&kept));
+        proptest::prop_assert_eq!(&read_cut.header, &whole.header);
+        proptest::prop_assert_eq!(&read_cut.tail, &whole.tail);
+        let fields: Vec<_> = source.records.iter().map(|r| r.fields.clone()).collect();
+        let kept_fields: Vec<_> = read_cut.records.iter().map(|r| r.fields.clone()).collect();
+        proptest::prop_assert_eq!(fields, kept_fields);
+
+        let r = report(&source, (0, 0, 0), false);
+        proptest::prop_assert!(r.accounted);
+        let total: usize = whole.records.iter().map(|r| r.fields.len()).sum::<usize>() + whole.tail.len();
+        proptest::prop_assert_eq!(r.fields.iter().map(|f| f.occurrences).sum::<usize>(), total);
+        proptest::prop_assert_eq!(r.records, records.len());
+    }
+}

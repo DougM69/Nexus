@@ -9,6 +9,7 @@
 // in a switch so the catalog guard can read every call site.
 // ---------------------------------------------------------------------------
 import { t } from '../i18n'
+import { failureText } from '../toast'
 import type { ImportStats } from '../types'
 import { fmtUtc } from './logQuery'
 
@@ -120,6 +121,14 @@ export const IMPORT_MAX_BYTES = 200_000_000
 export function importTooLarge(size: number): string | null {
   if (size <= IMPORT_MAX_BYTES) return null
   return t('logbook.import.tooLarge', { size: (size / 1e6).toFixed(1), max: IMPORT_MAX_BYTES / 1e6 })
+}
+
+/** The engine's refusal of a file naming more distinct fields than it reads (`import::TOO_MANY_NAMES`). */
+export const IMPORT_TOO_MANY_NAMES = 'tooManyNames'
+
+/** What a failed preview or import says: the engine's refusal in the operator's words, else `fallback` with its detail. */
+export function importFailure(fallback: string, err: unknown): string {
+  return err === IMPORT_TOO_MANY_NAMES ? t('logbook.import.tooManyNames') : failureText(fallback, err)
 }
 
 export function formatName(f: ImportFormat): string {
