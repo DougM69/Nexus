@@ -54,7 +54,7 @@
 //! log's own (the line's sending call, or the `CALLSIGN:` header's): a report, a serial or the
 //! entrant's own call repeated in its exchange is never taken for the station worked.
 
-use super::{Note, NoteKind, SourceRecord, Unmapped, UnmappedReason};
+use super::{Listed, Note, NoteKind, SourceRecord, Unmapped, UnmappedReason};
 use crate::contest::spec::ExchangeSpec;
 use crate::contest::{cabrillo_contest_token, is_call_slot};
 use crate::fd_rules::{ruleset_by_contest_id, FdRuleset};
@@ -219,18 +219,9 @@ fn readings(spec: &ExchangeSpec, rs: &FdRuleset, n: usize) -> Vec<Reading> {
 /// Read a Cabrillo log.
 pub(crate) fn read(text: &str) -> Read {
     let mut notes = Vec::new();
-    let mut unmapped: Vec<Unmapped> = Vec::new();
-    let mut list = |what: &str, side: Option<&'static str>, reason: UnmappedReason| match unmapped
-        .iter_mut()
-        .find(|u| u.what == what && u.side == side && u.reason == reason)
-    {
-        Some(u) => u.count += 1,
-        None => unmapped.push(Unmapped {
-            what: what.to_string(),
-            side,
-            count: 1,
-            reason,
-        }),
+    let mut unmapped = Listed::default();
+    let mut list = |what: &str, side: Option<&'static str>, reason: UnmappedReason| {
+        unmapped.add(what, side, reason)
     };
     // The header first: the contest and the grid apply to every line, wherever they sit.
     let mut contest = String::new();
@@ -394,7 +385,7 @@ pub(crate) fn read(text: &str) -> Read {
     Read {
         records,
         notes,
-        unmapped,
+        unmapped: unmapped.list,
         template: ruleset.map(|r| r.contest_id.to_string()),
     }
 }

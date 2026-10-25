@@ -30,6 +30,7 @@ export type ImportNoteKind =
   | 'modeUnresolved'
   | 'excludedQso'
   | 'badXml'
+  | 'tooManyFields'
 
 export interface ImportNote {
   kind: ImportNoteKind
@@ -78,6 +79,7 @@ export type DropReason =
   | 'default'
   | 'rederived'
   | 'notWritten'
+  | 'tooManyFields'
 
 export interface FieldAccount {
   field: string
@@ -163,6 +165,8 @@ export function noteLabel(k: ImportNoteKind): string {
       return t('logbook.import.note.excludedQso')
     case 'badXml':
       return t('logbook.import.note.badXml')
+    case 'tooManyFields':
+      return t('logbook.import.note.tooManyFields')
   }
 }
 
@@ -197,6 +201,8 @@ export function reasonLabel(r: DropReason): string {
       return t('logbook.import.reason.rederived')
     case 'notWritten':
       return t('logbook.import.reason.notWritten')
+    case 'tooManyFields':
+      return t('logbook.import.reason.tooManyFields')
   }
 }
 

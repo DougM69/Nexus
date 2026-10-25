@@ -29,7 +29,7 @@
 pub mod adx;
 pub mod cabrillo;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -232,6 +232,8 @@ pub enum NoteKind {
     ExcludedQso,
     /// ADX markup that is not a field (a field inside a field, an unclosed element).
     BadXml,
+    /// A record with more than [`MAX_FIELDS`] fields: the fields past the limit are not imported.
+    TooManyFields,
 }
 
 /// One thing noticed: where, and the source text it is about (`QSO_DATE=2023-13-45`). The text
@@ -283,6 +285,8 @@ pub struct Source {
     pub template: Option<String>,
     /// The fields after the last `<EOR>` of an ADIF file.
     tail: Vec<(String, String)>,
+    /// The fields past [`MAX_FIELDS`] of the records that had more.
+    over: Vec<(String, String)>,
     /// The ADIF the import reads, for a format that is not ADIF already.
     adif: Option<String>,
 }
@@ -302,11 +306,10 @@ impl Source {
 
 /// Read `text` as `format`.
 pub fn read(text: &str, format: Format) -> Source {
-    match format {
+    let mut source = match format {
         Format::Adif => read_adif(text),
         Format::Adx => {
             let (records, notes, unmapped) = adx::read(text);
-            let adif = adif_text(&records);
             Source {
                 format,
                 records,
@@ -314,12 +317,12 @@ pub fn read(text: &str, format: Format) -> Source {
                 unmapped,
                 template: None,
                 tail: Vec::new(),
-                adif: Some(adif),
+                over: Vec::new(),
+                adif: None,
             }
         }
         Format::Cabrillo => {
             let c = cabrillo::read(text);
-            let adif = adif_text(&c.records);
             Source {
                 format,
                 records: c.records,
@@ -327,11 +330,35 @@ pub fn read(text: &str, format: Format) -> Source {
                 unmapped: c.unmapped,
                 template: c.template,
                 tail: Vec::new(),
-                adif: Some(adif),
+                over: Vec::new(),
+                adif: None,
             }
         }
+    };
+    // A record's fields past the limit are let go here, so the preview, the report and the import
+    // (which then reads the ADIF the kept fields make) all read the same record.
+    for r in &mut source.records {
+        if r.fields.len() > MAX_FIELDS {
+            source.notes.push(Note {
+                kind: NoteKind::TooManyFields,
+                at: r.at,
+                text: field_list(&r.fields[MAX_FIELDS..]),
+            });
+            source.over.extend(r.fields.drain(MAX_FIELDS..));
+        }
     }
+    if format != Format::Adif || !source.over.is_empty() {
+        source.adif = Some(adif_text(&source.records));
+    }
+    source
 }
+
+/// The most fields one record is read with: 2,000. ADIF defines a few hundred fields, and a
+/// logger's own (`APP_…`) and user-defined ones add tens, so a real contact carries far fewer; a
+/// record with more is damaged or built to be slow. The fields past the limit are not imported,
+/// and the preview and the report say so ([`NoteKind::TooManyFields`],
+/// [`DropReason::TooManyFields`]).
+pub const MAX_FIELDS: usize = 2_000;
 
 /// The largest file an import reads: 200 MB.
 ///
@@ -390,25 +417,45 @@ fn read_adif(text: &str) -> Source {
         unmapped: header_unmapped(&raw.header),
         template: None,
         tail: raw.tail,
+        over: Vec::new(),
         adif: None,
     }
 }
 
 /// A header's fields, each listed once as about the file.
 pub(crate) fn header_unmapped(header: &[(String, String)]) -> Vec<Unmapped> {
-    let mut out: Vec<Unmapped> = Vec::new();
+    let mut out = Listed::default();
     for (name, _) in header {
-        match out.iter_mut().find(|u| u.what == *name) {
-            Some(u) => u.count += 1,
-            None => out.push(Unmapped {
-                what: name.clone(),
-                side: None,
-                count: 1,
-                reason: UnmappedReason::Header,
-            }),
-        }
+        out.add(name, None, UnmappedReason::Header);
     }
-    out
+    out.list
+}
+
+/// The parts of a source listed as not stored, each once with its count, in the order first met.
+/// Indexed, so a file naming many of them is not searched once per name.
+#[derive(Default)]
+pub(crate) struct Listed {
+    pub(crate) list: Vec<Unmapped>,
+    index: HashMap<(String, Option<&'static str>, UnmappedReason), usize>,
+}
+
+impl Listed {
+    pub(crate) fn add(&mut self, what: &str, side: Option<&'static str>, reason: UnmappedReason) {
+        let next = self.list.len();
+        let i = *self
+            .index
+            .entry((what.to_string(), side, reason))
+            .or_insert(next);
+        if i == next {
+            self.list.push(Unmapped {
+                what: what.to_string(),
+                side,
+                count: 0,
+                reason,
+            });
+        }
+        self.list[i].count += 1;
+    }
 }
 
 /// A few fields as `NAME=value` text, for a note.
@@ -468,6 +515,8 @@ pub enum DropReason {
     Rederived,
     /// Read by the import but not written back by this version's ADIF export.
     NotWritten,
+    /// Past the [`MAX_FIELDS`] a record is read with: not imported.
+    TooManyFields,
 }
 
 /// The modelled fields whose value is parsed to a type, so that a value of another shape is not
@@ -515,22 +564,31 @@ fn fates(
         .enumerate()
         .map(|(i, (k, _))| (k.as_str(), i))
         .collect();
+    // Indexed once per record: a field is not found by scanning the others.
+    let mut back_of: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (k, v) in written {
+        back_of.entry(k.as_str()).or_default().push(v.as_str());
+    }
+    let kept: HashSet<(&str, &str)> = rec
+        .map(|r| {
+            r.extra
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
     fields
         .iter()
         .enumerate()
         .map(|(i, (name, value))| {
-            let Some(rec) = rec else {
+            if rec.is_none() {
                 return Fate::Dropped(DropReason::NoContact);
-            };
+            }
             if last.get(name.as_str()) != Some(&i) {
                 return Fate::Dropped(DropReason::Repeated);
             }
-            let back: Vec<&str> = written
-                .iter()
-                .filter(|(k, _)| k == name)
-                .map(|(_, v)| v.as_str())
-                .collect();
-            if rec.extra.iter().any(|(k, v)| k == name && v == value) {
+            let back = back_of.get(name.as_str()).map_or(&[][..], Vec::as_slice);
+            if kept.contains(&(name.as_str(), value.as_str())) {
                 return if back.contains(&value.as_str()) {
                     Fate::Passthrough
                 } else {
@@ -681,12 +739,10 @@ fn record_notes(
             .find(|(k, _)| k == n)
             .map(|(_, v)| v.as_str())
     };
-    let mut seen: Vec<&str> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
     for (k, _) in &r.fields {
-        if seen.contains(&k.as_str()) {
+        if !seen.insert(k) {
             note(NoteKind::Repeated, k.clone());
-        } else {
-            seen.push(k);
         }
     }
     match get("QSO_DATE") {
@@ -882,10 +938,9 @@ pub fn preview(source: &Source) -> Preview {
     });
     let mut coverage: BTreeMap<&str, usize> = BTreeMap::new();
     for r in &source.records {
-        let mut seen: Vec<&str> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
         for (k, _) in &r.fields {
-            if !seen.contains(&k.as_str()) {
-                seen.push(k);
+            if seen.insert(k) {
                 *coverage.entry(k).or_default() += 1;
             }
         }
@@ -1026,8 +1081,12 @@ pub fn report(source: &Source, counts: Counts, new_only: bool) -> Report {
     for (k, v) in &source.tail {
         account(k, v, Fate::Dropped(DropReason::Unterminated));
     }
-    let occurrences: usize =
-        source.records.iter().map(|r| r.fields.len()).sum::<usize>() + source.tail.len();
+    for (k, v) in &source.over {
+        account(k, v, Fate::Dropped(DropReason::TooManyFields));
+    }
+    let occurrences: usize = source.records.iter().map(|r| r.fields.len()).sum::<usize>()
+        + source.tail.len()
+        + source.over.len();
     for f in &mut fields {
         f.reasons.sort_by_key(|r| r.reason);
     }

@@ -885,3 +885,119 @@ fn a_preview_shows_the_first_examples_by_place_in_the_file() {
     let at: Vec<usize> = g.examples.iter().map(|n| n.at).collect();
     assert_eq!(at, [2, 3, 6]);
 }
+
+/// A file with a record, a header or a Cabrillo log of 50,000 fields: each read, previewed and
+/// reported in well under a second, so no step looks a field up by scanning the others.
+#[test]
+fn fifty_thousand_fields_read_in_linear_time() {
+    let many = |prefix: &str| -> String {
+        (0..50_000)
+            .map(|i| tag(&format!("{prefix}{i}"), "v"))
+            .collect()
+    };
+    let adif_record = format!("<EOH>{}{}<EOR>", tag("CALL", "W1AW"), many("APP_X_F"));
+    let adif_header = format!("{}<EOH>{}<EOR>", many("H"), tag("CALL", "W1AW"));
+    let adx = |header: String, fields: String| {
+        format!("<ADX><HEADER>{header}</HEADER><RECORDS><RECORD><CALL>W1AW</CALL>{fields}</RECORD></RECORDS></ADX>")
+    };
+    let adx_header = adx(
+        (0..50_000).map(|i| format!("<H{i}>v</H{i}>")).collect(),
+        String::new(),
+    );
+    let adx_record = adx(
+        String::new(),
+        (0..50_000).map(|i| format!("<F{i}>v</F{i}>")).collect(),
+    );
+    let adx_names = adx(
+        String::new(),
+        (0..50_000)
+            .map(|i| format!("<USERDEF FIELDNAME=\"A B{i}\">v</USERDEF>"))
+            .collect(),
+    );
+    let cabrillo = format!(
+        "START-OF-LOG: 3.0\nCONTEST: CQ-WW-CW\n{}QSO: 14025 CW 2024-11-23 1200 W1AW 599 05 K8MM 599 04\n",
+        (0..50_000).map(|i| format!("X-H{i}: v\n")).collect::<String>()
+    );
+    // Records at the field limit, many of them: a per-record search is quadratic in the limit.
+    let full: String = (0..MAX_FIELDS - 1)
+        .map(|i| tag(&format!("APP_X_F{i}"), "v"))
+        .collect();
+    let full_records = format!(
+        "<EOH>{}{}<EOR>{}",
+        tag("CALL", "W1AW"),
+        full,
+        (0..9)
+            .map(|_| format!("{}{full}<EOR>", tag("CALL", "K1ABC")))
+            .collect::<String>()
+    );
+    for (what, text) in [
+        ("an ADIF record", adif_record),
+        ("10 records at the limit", full_records),
+        ("an ADIF header", adif_header),
+        ("an ADX header", adx_header),
+        ("an ADX record", adx_record),
+        ("ADX field names ADIF cannot carry", adx_names),
+        ("Cabrillo headers", cabrillo),
+    ] {
+        let t = std::time::Instant::now();
+        let source = read(&text, detect(&text));
+        let p = preview(&source);
+        let r = report(&source, (1, 0, 0), false);
+        let took = t.elapsed();
+        assert!(p.contacts >= 1, "{what}");
+        assert!(r.accounted, "{what}");
+        assert!(took < std::time::Duration::from_secs(1), "{what}: {took:?}");
+    }
+}
+
+/// The limit bounds a record, but no step leans on it: a record of 20,000 fields that skipped it
+/// is still previewed and reported in linear time.
+#[test]
+fn a_record_past_the_limit_is_still_handled_in_linear_time() {
+    let mut fields = vec![("CALL".to_string(), "W1AW".to_string())];
+    fields.extend((0..20_000).map(|i| (format!("APP_X_F{i}"), "v".to_string())));
+    let mut source = read("", Format::Adif);
+    source.records.push(SourceRecord { at: 1, fields });
+    let t = std::time::Instant::now();
+    let p = preview(&source);
+    let r = report(&source, (1, 0, 0), false);
+    let took = t.elapsed();
+    assert_eq!((p.contacts, p.coverage.len()), (1, 20_001));
+    assert!(r.accounted);
+    assert!(took < std::time::Duration::from_secs(1), "{took:?}");
+}
+
+#[test]
+fn a_record_over_the_field_limit_keeps_the_first_and_reports_the_rest() {
+    let extra: String = (0..MAX_FIELDS + 500)
+        .map(|i| tag(&format!("APP_X_F{i}"), "v"))
+        .collect();
+    let text = format!(
+        "<EOH>{}{extra}<EOR>{}",
+        tag("CALL", "W1AW"),
+        rec(&[("CALL", "K1ABC")])
+    );
+    let source = read(&text, Format::Adif);
+    assert_eq!(source.records[0].fields.len(), MAX_FIELDS);
+    // The import reads what the preview reads: the first fields, not the rest.
+    let stored = parse_adif(source.adif(&text));
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[0].extra.len(), MAX_FIELDS - 1);
+    let p = preview(&source);
+    let g = p
+        .notes
+        .iter()
+        .find(|g| g.kind == NoteKind::TooManyFields)
+        .expect("noted");
+    assert_eq!((g.count, g.examples[0].at), (1, 1));
+    let r = report(&source, (2, 0, 0), false);
+    assert!(r.accounted);
+    let over: usize = r
+        .fields
+        .iter()
+        .flat_map(|f| &f.reasons)
+        .filter(|c| c.reason == DropReason::TooManyFields)
+        .map(|c| c.count)
+        .sum();
+    assert_eq!(over, 501);
+}

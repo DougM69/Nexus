@@ -17,7 +17,7 @@
 //! are read as `\n`, as an XML processor reads them. Anything else in a record — an element
 //! inside a field, a field left open — is noted ([`NoteKind::BadXml`]), never guessed at.
 
-use super::{header_unmapped, Note, NoteKind, SourceRecord, Unmapped, UnmappedReason};
+use super::{header_unmapped, Listed, Note, NoteKind, SourceRecord, Unmapped, UnmappedReason};
 
 /// The elements that are the file's structure, never a field's name.
 const STRUCTURE: &[&str] = &["ADX", "HEADER", "RECORDS", "RECORD"];
@@ -36,7 +36,7 @@ pub(crate) fn read(text: &str) -> (Vec<SourceRecord>, Vec<Note>, Vec<Unmapped>) 
     let mut records = Vec::new();
     let mut notes = Vec::new();
     let mut header = Vec::new();
-    let mut bad_names: Vec<Unmapped> = Vec::new();
+    let mut bad_names = Listed::default();
     // Where we are: inside HEADER, inside a RECORD (its fields so far), inside a field (its name
     // and text so far).
     let mut in_header = false;
@@ -141,15 +141,7 @@ pub(crate) fn read(text: &str) -> (Vec<SourceRecord>, Vec<Note>, Vec<Unmapped>) 
                     tag.name.clone()
                 };
                 if name.is_empty() || name.contains([':', '<', '>', ' ', ',']) {
-                    match bad_names.iter_mut().find(|u| u.what == name) {
-                        Some(u) => u.count += 1,
-                        None => bad_names.push(Unmapped {
-                            what: name.clone(),
-                            side: None,
-                            count: 1,
-                            reason: UnmappedReason::FieldName,
-                        }),
-                    }
+                    bad_names.add(&name, None, UnmappedReason::FieldName);
                     if !tag.empty {
                         // Read its text and let it go: it has nowhere to be stored.
                         field = Some((tag.name, String::new(), String::new()));
@@ -180,7 +172,7 @@ pub(crate) fn read(text: &str) -> (Vec<SourceRecord>, Vec<Note>, Vec<Unmapped>) 
         .for_each(|r| r.fields.retain(|(k, _)| !k.is_empty()));
     header.retain(|(k, _)| !k.is_empty());
     let mut unmapped = header_unmapped(&header);
-    unmapped.extend(bad_names);
+    unmapped.extend(bad_names.list);
     (records, notes, unmapped)
 }
 
