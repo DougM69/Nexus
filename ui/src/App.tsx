@@ -56,6 +56,7 @@ import {
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
+import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
 import { doubleBeep, processDecodes, txEarcon, type NeededAlert } from './alerts'
@@ -868,6 +869,10 @@ function App() {
       pushToast(keptFileMessage(file), 'error', 0)
     }
   }, [snap?.keptFiles])
+
+  // The activation said where the operator is, not on the POTA/SOTA view alone: one taken up at
+  // launch, and the 0000Z rollover.
+  useActivationNotices(snap?.activation)
 
   // The logbook database refused a change (C10b). The station keeps it in memory — sending it
   // again while the refusal can pass, holding it for the quit when it cannot — and the screen

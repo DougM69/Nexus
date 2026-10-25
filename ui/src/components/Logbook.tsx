@@ -54,6 +54,7 @@ import {
   type LogColumnsSaved,
   type UploadMark,
 } from '../features/logColumns'
+import { isLegacyUsRef } from '../features/potaActivation'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
 // Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
@@ -2213,6 +2214,11 @@ export function Logbook({
                     const n = (text.match(/<eor>/gi) ?? []).length
                     const path = await saveTextToDownloads(activationFilename(a), text)
                     pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                    // A K- park exports as it was logged; whether POTA's upload still takes the
+                    // pre-2024 prefix is not known, so the file is written and that is said.
+                    if (isLegacyUsRef(a.reference)) {
+                      pushToast(t('ota.activation.legacyRef', { reference: a.reference }), 'info', 12_000)
+                    }
                     sayExportLacks([exported])
                   }, t('logbook.export.failed'))
                 }
