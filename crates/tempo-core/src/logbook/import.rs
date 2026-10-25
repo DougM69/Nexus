@@ -52,7 +52,12 @@ pub enum Format {
 /// header is free text, so it is the one format with no signature).
 pub fn detect(text: &str) -> Format {
     let head = text.trim_start_matches('\u{feff}').trim_start();
-    let starts = |s: &str, p: &str| s.len() >= p.len() && s[..p.len()].eq_ignore_ascii_case(p);
+    // By bytes: the text's first characters may be any, and a signature is ASCII.
+    let starts = |s: &str, p: &str| {
+        s.as_bytes()
+            .get(..p.len())
+            .is_some_and(|h| h.eq_ignore_ascii_case(p.as_bytes()))
+    };
     if starts(head, "<?xml") || starts(head, "<ADX") {
         Format::Adx
     } else if head
@@ -287,6 +292,12 @@ impl Source {
     pub fn adif<'a>(&'a self, text: &'a str) -> &'a str {
         self.adif.as_deref().unwrap_or(text)
     }
+
+    /// The ADIF its fields make, for a format that is not ADIF already (`None` for an ADIF file,
+    /// whose text is its own), with the records let go.
+    pub fn into_adif(self) -> Option<String> {
+        self.adif
+    }
 }
 
 /// Read `text` as `format`.
@@ -320,6 +331,28 @@ pub fn read(text: &str, format: Format) -> Source {
             }
         }
     }
+}
+
+/// The largest file an import reads: 200 MB.
+///
+/// Measured on a 61 MB ADIF file of 143,906 contacts (about 420 bytes each): reading it and making
+/// its preview peaks at about 280 MB above the text, and planning the import parses it again, so
+/// an import holds several times the file at once. 200 MB is about 470,000 contacts, more than a
+/// lifetime log of a busy station, and still well inside a desktop's memory at that multiple. A
+/// larger file can be split and imported in parts; each part is its own run, undone as one.
+pub const MAX_BYTES: usize = 200_000_000;
+
+/// A file's text read in the format it is in ([`detect`], [`read`]), or why it is not read: it is
+/// larger than [`MAX_BYTES`].
+pub fn read_file(text: &str) -> Result<Source, String> {
+    if text.len() > MAX_BYTES {
+        return Err(format!(
+            "This file is {:.1} MB, and an import reads files of up to {} MB. Split it and import the parts.",
+            text.len() as f64 / 1e6,
+            MAX_BYTES / 1_000_000
+        ));
+    }
+    Ok(read(text, detect(text)))
 }
 
 fn read_adif(text: &str) -> Source {
@@ -597,11 +630,20 @@ const EXAMPLES: usize = 3;
 /// A record as the import stores it, and the fields its export writes back.
 type Stored = (QsoRecord, Vec<(String, String)>);
 
-/// Every note a source raises: the reader's own, and those its records' fields raise as the
-/// import reads them.
-fn all_notes(source: &Source) -> (Vec<Note>, Vec<Option<Stored>>) {
-    let mut notes = source.notes.clone();
-    let mut stored = Vec::with_capacity(source.records.len());
+/// Each record of `source` read as the import reads it and written back as the export writes it
+/// ([`stored_and_written`]), one at a time: `each` sees the record and what became of it, and
+/// none of it is kept after, so a large file is not held in the log's form all at once. Answers
+/// every note the source raises, grouped: the reader's own, and those its records' fields raise
+/// as the import reads them.
+fn each_stored(
+    source: &Source,
+    mut each: impl FnMut(&SourceRecord, Option<&Stored>),
+) -> Vec<NoteGroup> {
+    let mut groups = Vec::new();
+    for n in &source.notes {
+        group(&mut groups, n);
+    }
+    let mut notes = Vec::new();
     for r in &source.records {
         let s = stored_and_written(&r.fields);
         record_notes(
@@ -609,10 +651,11 @@ fn all_notes(source: &Source) -> (Vec<Note>, Vec<Option<Stored>>) {
             s.as_ref().map(|(rec, w)| (rec, w.as_slice())),
             &mut notes,
         );
-        stored.push(s);
+        notes.drain(..).for_each(|n| group(&mut groups, &n));
+        each(r, s.as_ref());
     }
-    notes.sort_by_key(|n| (n.kind, n.at));
-    (notes, stored)
+    groups.sort_by_key(|g| g.kind);
+    groups
 }
 
 fn record_notes(
@@ -798,30 +841,45 @@ fn mode_known(mode: &str) -> bool {
             || super::psk_submode(&m).is_some())
 }
 
-/// The notes grouped by kind, each with its first [`EXAMPLES`].
-fn grouped(notes: &[Note]) -> Vec<NoteGroup> {
-    let mut groups: Vec<NoteGroup> = Vec::new();
-    for n in notes {
-        match groups.iter_mut().find(|g| g.kind == n.kind) {
-            Some(g) => {
-                g.count += 1;
-                if g.examples.len() < EXAMPLES {
-                    g.examples.push(n.clone());
-                }
+/// A note counted in its kind's group, which keeps the first [`EXAMPLES`] by place in the file
+/// (on a tie, the one noticed first).
+fn group(groups: &mut Vec<NoteGroup>, n: &Note) {
+    match groups.iter_mut().find(|g| g.kind == n.kind) {
+        Some(g) => {
+            g.count += 1;
+            let i = g.examples.partition_point(|e| e.at <= n.at);
+            if i < EXAMPLES {
+                g.examples.insert(i, n.clone());
+                g.examples.truncate(EXAMPLES);
             }
-            None => groups.push(NoteGroup {
-                kind: n.kind,
-                count: 1,
-                examples: vec![n.clone()],
-            }),
         }
+        None => groups.push(NoteGroup {
+            kind: n.kind,
+            count: 1,
+            examples: vec![n.clone()],
+        }),
     }
-    groups
 }
 
 /// The preview of `source`, with the log's counts left at zero for the caller to fill.
 pub fn preview(source: &Source) -> Preview {
-    let (notes, stored) = all_notes(source);
+    let mut contacts = 0;
+    let (mut first_unix, mut last_unix): (Option<u64>, Option<u64>) = (None, None);
+    let notes = each_stored(source, |r, s| {
+        let Some((rec, _)) = s else { return };
+        contacts += 1;
+        // A record with no readable date is left out of the range.
+        if r.fields
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "QSO_DATE")
+            .is_some_and(|(_, d)| valid_date(d))
+        {
+            let t = rec.when_unix;
+            first_unix = Some(first_unix.map_or(t, |l| l.min(t)));
+            last_unix = Some(last_unix.map_or(t, |h| h.max(t)));
+        }
+    });
     let mut coverage: BTreeMap<&str, usize> = BTreeMap::new();
     for r in &source.records {
         let mut seen: Vec<&str> = Vec::new();
@@ -840,29 +898,17 @@ pub fn preview(source: &Source) -> Preview {
         })
         .collect();
     coverage.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.field.cmp(&b.field)));
-    let dated = source.records.iter().zip(&stored).filter_map(|(r, s)| {
-        let (rec, _) = s.as_ref()?;
-        let d = r.fields.iter().rev().find(|(k, _)| k == "QSO_DATE")?;
-        valid_date(&d.1).then_some(rec.when_unix)
-    });
-    let (first_unix, last_unix) =
-        dated.fold((None, None), |(lo, hi): (Option<u64>, Option<u64>), t| {
-            (
-                Some(lo.map_or(t, |l| l.min(t))),
-                Some(hi.map_or(t, |h| h.max(t))),
-            )
-        });
     Preview {
         format: source.format,
         template: source.template.clone(),
         records: source.records.len(),
-        contacts: stored.iter().filter(|s| s.is_some()).count(),
+        contacts,
         first_unix,
         last_unix,
         new: 0,
         duplicates: 0,
         updates: 0,
-        notes: grouped(&notes),
+        notes,
         coverage,
         unmapped: source.unmapped.clone(),
     }
@@ -918,7 +964,7 @@ pub type Counts = (usize, usize, usize);
 
 /// The no-loss report for `source`, imported with `counts`.
 pub fn report(source: &Source, counts: Counts, new_only: bool) -> Report {
-    let (notes, stored) = all_notes(source);
+    let mut contacts = 0;
     let mut fields: Vec<FieldAccount> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut total = 0usize;
@@ -967,15 +1013,16 @@ pub fn report(source: &Source, counts: Counts, new_only: bool) -> Report {
             }
         }
     };
-    for (r, s) in source.records.iter().zip(&stored) {
+    let notes = each_stored(source, |r, s| {
         let (rec, written) = match s {
             Some((rec, w)) => (Some(rec), w.as_slice()),
             None => (None, &[][..]),
         };
+        contacts += usize::from(rec.is_some());
         for ((k, v), fate) in r.fields.iter().zip(fates(&r.fields, rec, written)) {
             account(k, v, fate);
         }
-    }
+    });
     for (k, v) in &source.tail {
         account(k, v, Fate::Dropped(DropReason::Unterminated));
     }
@@ -993,14 +1040,14 @@ pub fn report(source: &Source, counts: Counts, new_only: bool) -> Report {
         format: source.format,
         template: source.template.clone(),
         records: source.records.len(),
-        contacts: stored.iter().filter(|s| s.is_some()).count(),
+        contacts,
         added: counts.0,
         duplicates: counts.1,
         updated: counts.2,
         new_only,
         fields,
         unmapped: source.unmapped.clone(),
-        notes: grouped(&notes),
+        notes,
         accounted: summed == occurrences && total == occurrences,
     }
 }

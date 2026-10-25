@@ -26,6 +26,7 @@ import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
 import { ImportPreview } from './ImportPreview'
+import { importTooLarge } from '../features/logImport'
 import { ParkStateReview } from './ParkStateReview'
 import { ConfirmationReview } from './ConfirmationReview'
 import { LogCountryPicker } from './LogCountryPicker'
@@ -561,6 +562,11 @@ export function Logbook({
     const f = e.target.files?.[0]
     e.target.value = '' // let the same file be re-selected later
     if (!f) return
+    const tooLarge = importTooLarge(f.size)
+    if (tooLarge) {
+      pushToast(tooLarge, 'error')
+      return
+    }
     setImportFile({ text: await f.text(), name: f.name })
   }
   const onImported = (stats: ImportStats) => {

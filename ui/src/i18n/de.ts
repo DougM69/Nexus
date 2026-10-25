@@ -2457,6 +2457,7 @@ export const DE: PartialCatalog = {
   "logbook.import.preview.title": "Log importieren",
   "logbook.import.preview.reading": "Datei wird gelesen…",
   "logbook.import.preview.failed": "Datei konnte nicht gelesen werden",
+  "logbook.import.tooLarge": "Diese Datei ist {{size}} MB groß; ein Import liest Dateien bis {{max}} MB. Teilen Sie sie und importieren Sie die Teile.",
   "logbook.import.preview.template": "Contest-Vorlage {{contest}}",
   "logbook.import.preview.records": { "one": "{{count}} Datensatz in der Datei", "other": "{{count}} Datensätze in der Datei" },
   "logbook.import.preview.range": "Von {{from}} bis {{to}} (UTC)",

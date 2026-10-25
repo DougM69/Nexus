@@ -912,6 +912,7 @@ export const JA: PartialCatalog = {
   "logbook.import.preview.title": "ログをインポート",
   "logbook.import.preview.reading": "ファイルを読み込み中…",
   "logbook.import.preview.failed": "ファイルを読み込めませんでした",
+  "logbook.import.tooLarge": "このファイルは {{size}} MB です。インポートで読み込めるのは {{max}} MB までです。分割して、部分ごとにインポートしてください。",
   "logbook.import.preview.template": "コンテストテンプレート {{contest}}",
   "logbook.import.preview.records": "ファイル内のレコード{{count}}件",
   "logbook.import.preview.range": "{{from}}〜{{to}}(UTC)",

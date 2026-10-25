@@ -41,11 +41,18 @@
 //!
 //! # A contest with no template: what can be known, and nothing guessed
 //!
-//! The call, band, mode and time, and an RST where the first column of a side looks like one
-//! (it is listed as read that way, [`NoteKind::UnknownContest`]); the rest kept as the exchange
-//! text. Which column is the other station's call is found by the template's own symmetry (each
-//! side the same width, a trailing transmitter id or not), checked against a call's shape. A line
-//! that fits no reading is not imported, and is listed ([`NoteKind::UnreadableLine`]).
+//! The call, band, mode and time, and an RST where the first column of BOTH sides is a report as
+//! the line's mode sends one (it is listed as read that way, [`NoteKind::UnknownContest`]); the
+//! rest kept as the exchange text. Which column is the other station's call is found by the
+//! template's own symmetry (each side the same width, a trailing transmitter id or not), checked
+//! against a call's shape. A line that fits no reading, or two, is not imported, and is listed
+//! ([`NoteKind::UnreadableLine`]).
+//!
+//! # The other station's call
+//!
+//! Whatever reading a line gets, the column stored as `CALL` is shaped like a call and is not the
+//! log's own (the line's sending call, or the `CALLSIGN:` header's): a report, a serial or the
+//! entrant's own call repeated in its exchange is never taken for the station worked.
 
 use super::{Note, NoteKind, SourceRecord, Unmapped, UnmappedReason};
 use crate::contest::spec::ExchangeSpec;
@@ -151,35 +158,47 @@ fn call_shaped(s: &str) -> bool {
             .is_some_and(|d| b[d..].iter().any(u8::is_ascii_alphabetic))
 }
 
-/// Shaped like a signal report: two or three digits, readability 1–5.
-fn rst_shaped(s: &str) -> bool {
-    (2..=3).contains(&s.len())
-        && s.bytes().all(|b| b.is_ascii_digit())
-        && (b'1'..=b'5').contains(&s.as_bytes()[0])
+/// A signal report as the line's mode sends one: two digits on phone, three on CW and the digital
+/// modes with the tone a 9; readability 1–5, strength 1–9. (A serial number can still have the
+/// same shape, which is why both sides of a line must hold one before either is read as a report.)
+fn rst_for(s: &str, mo: &str) -> bool {
+    let b = s.as_bytes();
+    let digits = match mo.to_ascii_uppercase().as_str() {
+        "PH" | "FM" => 2,
+        "CW" | "RY" | "DG" => 3,
+        _ => return false,
+    };
+    b.len() == digits
+        && b.iter().all(u8::is_ascii_digit)
+        && (b'1'..=b'5').contains(&b[0])
+        && b[1] != b'0'
+        && (digits == 2 || b[2] == b'9')
 }
 
-/// The template's columns for one line: the slot keys each side carries, the line's columns
-/// after the date and time being `mycall + sent + call + rcvd [+ t]`. The first role whose width
-/// fits; `None` when none does.
-fn columns(
-    spec: &ExchangeSpec,
-    rs: &FdRuleset,
-    n: usize,
-) -> Option<(Vec<&'static str>, Vec<&'static str>, bool)> {
-    let fits = |s: usize, r: usize| {
-        if 2 + s + r == n {
-            Some(false)
-        } else if 3 + s + r == n {
-            Some(true)
-        } else {
-            None
+/// One reading of a line by the template: the slot keys each side carries, and whether a
+/// transmitter id ends the line.
+type Reading = (Vec<&'static str>, Vec<&'static str>, bool);
+
+/// The template's readings of a line whose columns after the date and time are `n`, those being
+/// `mycall + sent + call + rcvd [+ t]`: the sponsor's fixed columns where it declares them, and
+/// each role's, each with and without a transmitter id where the width fits. Two roles of
+/// different widths can fit one line (a CQ WW RTTY DX entrant's line with a transmitter id is as
+/// wide as a W/VE entrant's without), so it is the caller that picks, by the call's column.
+fn readings(spec: &ExchangeSpec, rs: &FdRuleset, n: usize) -> Vec<Reading> {
+    let mut out: Vec<Reading> = Vec::new();
+    let mut add = |sent: Vec<&'static str>, rcvd: Vec<&'static str>| {
+        for t in [false, true] {
+            let r = (sent.clone(), rcvd.clone(), t);
+            if 2 + sent.len() + rcvd.len() + usize::from(t) == n && !out.contains(&r) {
+                out.push(r);
+            }
         }
     };
     if !rs.cabrillo_columns.is_empty() {
         let keys: Vec<&'static str> = rs.cabrillo_columns.iter().map(|c| c.key).collect();
-        return fits(keys.len(), keys.len()).map(|t| (keys.clone(), keys, t));
+        add(keys.clone(), keys);
     }
-    spec.roles.iter().find_map(|role| {
+    for role in spec.roles {
         let sent: Vec<&'static str> = role
             .sends
             .iter()
@@ -192,8 +211,9 @@ fn columns(
             .copied()
             .filter(|k| !is_call_slot(spec, k))
             .collect();
-        fits(sent.len(), rcvd.len()).map(|t| (sent, rcvd, t))
-    })
+        add(sent, rcvd);
+    }
+    out
 }
 
 /// Read a Cabrillo log.
@@ -215,6 +235,7 @@ pub(crate) fn read(text: &str) -> Read {
     // The header first: the contest and the grid apply to every line, wherever they sit.
     let mut contest = String::new();
     let mut grid = String::new();
+    let mut callsign = String::new();
     let mut qsos: Vec<(usize, &str, bool)> = Vec::new();
     for (i, line) in text.lines().enumerate() {
         let line = line.trim_start_matches('\u{feff}').trim_end();
@@ -235,6 +256,7 @@ pub(crate) fn read(text: &str) -> Read {
             "X-QSO" => qsos.push((i + 1, value, true)),
             "CONTEST" => contest = value.trim().to_string(),
             "GRID-LOCATOR" => grid = value.trim().to_ascii_uppercase(),
+            "CALLSIGN" => callsign = value.trim().to_ascii_uppercase(),
             _ => {}
         }
         if tag != "QSO" && tag != "X-QSO" && !MAPPED_HEADERS.contains(&tag.as_str()) {
@@ -265,18 +287,34 @@ pub(crate) fn read(text: &str) -> Read {
             continue;
         };
         let a = &tokens[4.min(tokens.len())..];
+        // The other station's call: shaped like a call, and never the log's own (the line's
+        // sending call, or the header's), whichever reading put it in that column.
+        let mine = a.first().copied().unwrap_or("");
+        let other = |c: &str| {
+            call_shaped(c) && !c.eq_ignore_ascii_case(mine) && !c.eq_ignore_ascii_case(&callsign)
+        };
         // Read with the template, or as an unknown contest's line.
-        let templated = ruleset.and_then(|rs| {
-            let spec = rs.exchange;
-            let (sent, rcvd, t) = columns(spec, rs, a.len())?;
-            Some((spec, sent, rcvd, t))
+        let mut fit: Vec<Reading> = ruleset.map_or_else(Vec::new, |rs| {
+            readings(rs.exchange, rs, a.len())
+                .into_iter()
+                .filter(|(sent, _, _)| other(a[1 + sent.len()]))
+                .collect()
         });
+        if fit.len() > 1 {
+            // Two readings of the template each find a call, in different columns: which station
+            // was worked is not known, so the line is listed, not guessed at.
+            note(NoteKind::UnreadableLine, super::clip(value.trim()));
+            continue;
+        }
+        let templated = ruleset
+            .zip(fit.pop())
+            .map(|(rs, (sent, rcvd, t))| (rs.exchange, sent, rcvd, t));
         if ruleset.is_some() && templated.is_none() {
             note(NoteKind::TemplateMismatch, super::clip(value.trim()));
         }
         let (their, rcvd_cols, t) = match &templated {
             Some((_, sent, rcvd, t)) => (1 + sent.len(), rcvd.len(), *t),
-            None => match unknown_split(a) {
+            None => match unknown_split(a, other) {
                 Some((their, rcvd, t)) => (their, rcvd, t),
                 None => {
                     note(NoteKind::UnreadableLine, super::clip(value.trim()));
@@ -333,7 +371,7 @@ pub(crate) fn read(text: &str) -> Read {
             }
             None => {
                 if let (Some(s), Some(r)) = (sent.first(), rcvd.first()) {
-                    if rst_shaped(s) && rst_shaped(r) {
+                    if rst_for(s, mo) && rst_for(r, mo) {
                         put(&mut fields, "RST_SENT", s);
                         put(&mut fields, "RST_RCVD", r);
                         note(NoteKind::UnknownContest, format!("RST {s} {r}"));
@@ -373,8 +411,9 @@ fn put(fields: &mut Vec<(String, String)>, k: &str, v: &str) {
 /// other call is, how wide the received side is, and whether a transmitter id ends the line.
 /// (The sent side is everything between the two calls.)
 /// Each side the same width first, as every template is, the transmitter id assumed only when the
-/// line is otherwise odd; then the first call-shaped column after the sender's.
-fn unknown_split(a: &[&str]) -> Option<(usize, usize, bool)> {
+/// line is otherwise odd; then the one column after the sender's that `other` takes for another
+/// station's call. With two such columns which station was worked is not known: `None`.
+fn unknown_split(a: &[&str], other: impl Fn(&str) -> bool) -> Option<(usize, usize, bool)> {
     let n = a.len();
     if n < 2 || !call_shaped(a[0]) {
         return None;
@@ -383,11 +422,12 @@ fn unknown_split(a: &[&str]) -> Option<(usize, usize, bool)> {
         let m = n - usize::from(t);
         if m >= 2 && m.is_multiple_of(2) {
             let k = (m - 2) / 2;
-            if call_shaped(a[1 + k]) {
+            if other(a[1 + k]) {
                 return Some((1 + k, k, t));
             }
         }
     }
-    let at = (1..n).find(|&i| call_shaped(a[i]))?;
-    Some((at, n - at - 1, false))
+    let mut calls = (1..n).filter(|&i| other(a[i]));
+    let at = calls.next()?;
+    calls.next().is_none().then_some((at, n - at - 1, false))
 }

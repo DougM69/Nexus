@@ -1226,6 +1226,7 @@ export const EN = {
   'logbook.import.preview.title': 'Import a log',
   'logbook.import.preview.reading': 'Reading the file…',
   'logbook.import.preview.failed': 'Could not read the file',
+  'logbook.import.tooLarge': 'This file is {{size}} MB, and an import reads files of up to {{max}} MB. Split it and import the parts.',
   'logbook.import.preview.template': 'contest template {{contest}}',
   'logbook.import.preview.records': { one: '{{count}} record in the file', other: '{{count}} records in the file' },
   'logbook.import.preview.range': 'From {{from}} to {{to}} (UTC)',

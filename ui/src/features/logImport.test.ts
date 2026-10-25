@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { t } from '../i18n'
-import { droppedCount, reportText, type ImportReport } from './logImport'
+import { IMPORT_MAX_BYTES, droppedCount, importTooLarge, reportText, type ImportReport } from './logImport'
 
 const REPORT: ImportReport = {
   format: 'cabrillo',
@@ -55,5 +58,23 @@ describe('the no-loss report as a text file', () => {
     expect(text).toContain(t('logbook.import.report.newOnly'))
     expect(text).toContain(t('logbook.import.report.accounted'))
     expect(droppedCount(REPORT)).toBe(1)
+  })
+})
+
+describe('a file too large to import', () => {
+  it('is refused with its size and the limit, before it is read', () => {
+    expect(importTooLarge(IMPORT_MAX_BYTES)).toBeNull()
+    const why = importTooLarge(IMPORT_MAX_BYTES + 500_001)
+    expect(why).toBe(t('logbook.import.tooLarge', { size: '200.5', max: 200 }))
+    expect(why).toContain('200.5')
+  })
+
+  it('is the engine’s own limit', () => {
+    const rust = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../../../crates/tempo-core/src/logbook/import.rs'),
+      'utf8',
+    )
+    const engine = rust.match(/pub const MAX_BYTES: usize = ([0-9_]+);/)
+    expect(engine?.[1].replace(/_/g, '')).toBe(String(IMPORT_MAX_BYTES))
   })
 })

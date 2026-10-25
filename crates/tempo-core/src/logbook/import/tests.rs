@@ -655,3 +655,233 @@ fn timing_a_hundred_thousand_records() {
         text.len() / 1_000_000
     );
 }
+
+// ── what a damaged or unusual file must never do ─────────────────────────────────────────────────
+
+#[test]
+fn a_file_that_starts_with_non_ascii_text_is_read() {
+    for text in [
+        "Журнал связей\n<EOH><CALL:4>W1AW<EOR>",
+        "\u{feff}Журнал\n<EOH><CALL:4>W1AW<EOR>",
+        "<NAME:6>日本<CALL:4>W1AW<EOR>",
+        "日本語のログ\n<EOH><CALL:4>W1AW<EOR>",
+        "\u{feff}日",
+        "Ж",
+    ] {
+        assert_eq!(detect(text), Format::Adif, "{text}");
+        let p = preview(&read(text, detect(text)));
+        assert_eq!(p.contacts, usize::from(text.contains("W1AW")), "{text}");
+    }
+    // The signatures still read after a byte-order mark, with non-ASCII text behind them.
+    assert_eq!(
+        detect("\u{feff}START-OF-LOG: 3.0\nNAME: Ӂ\n"),
+        Format::Cabrillo
+    );
+    assert_eq!(
+        detect("\u{feff}<ADX><HEADER>日本</HEADER></ADX>"),
+        Format::Adx
+    );
+}
+
+#[test]
+fn a_dx_multi_transmitter_rtty_line_reads_the_other_call_not_its_rst() {
+    // A DX entrant sends RST and zone, receives RST, zone and QTH, and ends the line with its
+    // transmitter id: eight columns, the width of a W/VE line with none.
+    let log = "START-OF-LOG: 3.0\nCONTEST: CQ-WW-RTTY\nCALLSIGN: DL1ABC\n\
+               QSO: 14080 RY 2024-09-28 0001 DL1ABC 599 14 K1ABC 599 05 MA 0\n\
+               QSO: 14081 RY 2024-09-28 0002 DL1ABC 599 14 DX JA1XYZ 599 25 DX\n\
+               QSO: 14082 RY 2024-09-28 0003 DL1ABC 599 14 VE3XX 599 04 ON\nEND-OF-LOG:\n";
+    let s = read(log, Format::Cabrillo);
+    assert_eq!(s.template.as_deref(), Some("CQ-WW-RTTY"));
+    let calls: Vec<_> = s.records.iter().map(|r| field(r, "CALL")).collect();
+    assert_eq!(calls, [Some("K1ABC"), Some("JA1XYZ"), Some("VE3XX")]);
+    let r = &s.records[0];
+    for (k, v) in [
+        ("RST_SENT", "599"),
+        ("MY_CQ_ZONE", "14"),
+        ("RST_RCVD", "599"),
+        ("CQZ", "05"),
+        ("STX_STRING", "599 14"),
+        ("SRX_STRING", "599 05 MA"),
+    ] {
+        assert_eq!(field(r, k), Some(v), "{k}");
+    }
+    assert!(s.notes.is_empty(), "{:?}", s.notes);
+    // Both readings find a call, in different columns: listed, not guessed at.
+    let s = read(
+        "START-OF-LOG: 3.0\nCONTEST: CQ-WW-RTTY\n\
+         QSO: 14080 RY 2024-09-28 0001 DL1ABC 599 14 K1ABC JA1XYZ 05 MA 0\nEND-OF-LOG:\n",
+        Format::Cabrillo,
+    );
+    assert!(s.records.is_empty(), "{:?}", s.records);
+    assert!(s
+        .notes
+        .iter()
+        .any(|n| n.kind == NoteKind::UnreadableLine && n.at == 3));
+}
+
+/// Every contest the rules table holds, and one it does not: lines of every width with the other
+/// call in every column and digits everywhere else. Whatever reading a line gets, the CALL stored is
+/// that call, never a report, a serial or a zone, and never the log's own call.
+#[test]
+fn an_imported_call_is_never_a_number_or_the_logs_own_call() {
+    let seed: serde_json::Value =
+        serde_json::from_str(include_str!("../../fd_rules.seed.json")).unwrap();
+    let mut contests: Vec<String> = seed["rulesets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["contest_id"].as_str().unwrap().to_string())
+        .collect();
+    contests.push("CLUB-X".to_string());
+    assert!(contests.len() > 10, "{contests:?}");
+    let filler = ["599", "14", "MA", "123", "DX", "05", "59", "7"];
+    for contest in &contests {
+        for n in 2..=11usize {
+            for p in 1..n {
+                for other in ["K1ABC", "W1AW"] {
+                    let mut a: Vec<&str> = (0..n).map(|i| filler[i % filler.len()]).collect();
+                    a[0] = "W1AW";
+                    a[p] = other;
+                    let log = format!(
+                        "START-OF-LOG: 3.0\nCONTEST: {contest}\nCALLSIGN: W1AW\n\
+                         QSO: 14025 CW 2024-09-28 0001 {}\nEND-OF-LOG:\n",
+                        a.join(" ")
+                    );
+                    for r in &read(&log, Format::Cabrillo).records {
+                        let call = field(r, "CALL").unwrap_or("");
+                        assert_eq!(call, "K1ABC", "{contest}: {}", a.join(" "));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_logs_own_call_is_never_stored_as_the_other_station() {
+    let s = read(
+        "START-OF-LOG: 3.0\nCONTEST: CLUB-X\n\
+         QSO: 14025 CW 2024-11-02 2100 W1AW 1 A W1AW 38 CT K8MM 12 Q 92 MI\nEND-OF-LOG:\n",
+        Format::Cabrillo,
+    );
+    assert_eq!(s.records.len(), 1);
+    assert_eq!(field(&s.records[0], "CALL"), Some("K8MM"));
+    assert_eq!(field(&s.records[0], "STATION_CALLSIGN"), Some("W1AW"));
+    // The only call besides the sender's is the header's own: not a contact, and listed.
+    let s = read(
+        "START-OF-LOG: 3.0\nCONTEST: CQ-WW-SSB\nCALLSIGN: N6TW\n\
+         QSO: 3799 PH 2024-10-26 0711 N6TW 59 03 N6TW 59 03\n\
+         QSO: 3799 PH 2024-10-26 0712 N6TW/7 59 03 N6TW 59 03\nEND-OF-LOG:\n",
+        Format::Cabrillo,
+    );
+    assert!(s.records.is_empty(), "{:?}", s.records);
+    let unreadable: Vec<usize> = s
+        .notes
+        .iter()
+        .filter(|n| n.kind == NoteKind::UnreadableLine)
+        .map(|n| n.at)
+        .collect();
+    assert_eq!(unreadable, [4, 5]);
+    // Two other calls and no template to say which one was worked: listed, not guessed.
+    let s = read(
+        "START-OF-LOG: 3.0\nCONTEST: CLUB-X\n\
+         QSO: 14025 CW 2024-11-02 2100 W1AW 1 K8MM 38 CT N0XYZ 12\nEND-OF-LOG:\n",
+        Format::Cabrillo,
+    );
+    assert!(s.records.is_empty(), "{:?}", s.records);
+    assert!(s
+        .notes
+        .iter()
+        .any(|n| n.kind == NoteKind::UnreadableLine && n.at == 3));
+}
+
+#[test]
+fn an_unknown_contests_serials_are_not_stored_as_reports() {
+    let s = read(
+        "START-OF-LOG: 3.0\nCONTEST: CLUB-SPRINT\n\
+         QSO: 14025 CW 2024-05-04 1500 W1AW 123 BOB CT K2XYZ 45 ANN NY\n\
+         QSO: 14025 CW 2024-05-04 1501 W1AW 123 BOB CT K2XYZ 145 ANN NY\n\
+         QSO: 14250 PH 2024-05-04 1502 W1AW 59 BOB CT K2XYZ 57 ANN NY\n\
+         QSO: 14250 PH 2024-05-04 1503 W1AW 599 BOB CT K2XYZ 579 ANN NY\nEND-OF-LOG:\n",
+        Format::Cabrillo,
+    );
+    assert_eq!(s.records.len(), 4);
+    let rst = |i: usize| {
+        (
+            field(&s.records[i], "RST_SENT"),
+            field(&s.records[i], "RST_RCVD"),
+        )
+    };
+    assert_eq!(rst(0), (None, None));
+    assert_eq!(rst(1), (None, None));
+    assert_eq!(rst(2), (Some("59"), Some("57")));
+    assert_eq!(rst(3), (None, None), "a CW report on a phone line");
+    // The exchange is kept whole as text either way.
+    assert_eq!(field(&s.records[0], "STX_STRING"), Some("123 BOB CT"));
+    assert_eq!(field(&s.records[0], "SRX_STRING"), Some("45 ANN NY"));
+}
+
+#[test]
+fn an_adx_field_left_open_ends_at_its_record() {
+    let adx = "<ADX><RECORDS><RECORD><CALL>W1AW</RECORD>\
+               <RECORD><CALL>K1ABC</CALL><BAND>20m</BAND></RECORD>\
+               <RECORD><CALL>N0XYZ</CALL>\
+               <RECORD><CALL>K2XX</CALL></RECORD></RECORDS></ADX>";
+    let s = read(adx, Format::Adx);
+    let calls: Vec<Option<&str>> = s.records.iter().map(|r| field(r, "CALL")).collect();
+    assert_eq!(calls, [None, Some("K1ABC"), Some("N0XYZ"), Some("K2XX")]);
+    assert!(
+        s.records
+            .iter()
+            .all(|r| r.fields.iter().all(|(k, _)| k != "RECORD")),
+        "{:?}",
+        s.records
+    );
+    assert_eq!(field(&s.records[1], "BAND"), Some("20m"));
+    let bad = s
+        .notes
+        .iter()
+        .filter(|n| n.kind == NoteKind::BadXml)
+        .count();
+    assert_eq!(bad, 2, "{:?}", s.notes);
+}
+
+#[test]
+fn adx_ampersands_read_in_linear_time() {
+    let amps = "&".repeat(1_000_000);
+    let adx = format!(
+        "<ADX><RECORDS><RECORD><CALL>W1AW</CALL><COMMENT>{amps}</COMMENT></RECORD></RECORDS></ADX>"
+    );
+    let t = std::time::Instant::now();
+    let s = read(&adx, Format::Adx);
+    let took = t.elapsed();
+    assert_eq!(field(&s.records[0], "COMMENT"), Some(amps.as_str()));
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+}
+
+#[test]
+fn a_file_over_the_limit_is_refused_with_its_size() {
+    let big = " ".repeat(MAX_BYTES + 1);
+    let err = read_file(&big).unwrap_err();
+    assert!(err.contains("MB"), "{err}");
+    let ok = read_file("<EOH><CALL:4>W1AW<EOR>").unwrap();
+    assert_eq!(ok.records.len(), 1);
+}
+
+#[test]
+fn a_preview_shows_the_first_examples_by_place_in_the_file() {
+    // The reader finds the stray lines of the header before the QSO lines it cannot read, which
+    // come earlier in the file.
+    let log = "START-OF-LOG: 3.0\nQSO: 14025\nQSO: 7025\nCONTEST: CQ-WW-CW\n\
+               QSO: 14025 CW 2024-11-23 1200 W1AW 599 05 K8MM 599 04\nstray\nstray\n";
+    let p = preview(&read(log, Format::Cabrillo));
+    let g = p
+        .notes
+        .iter()
+        .find(|g| g.kind == NoteKind::UnreadableLine)
+        .unwrap();
+    assert_eq!(g.count, 4);
+    let at: Vec<usize> = g.examples.iter().map(|n| n.at).collect();
+    assert_eq!(at, [2, 3, 6]);
+}

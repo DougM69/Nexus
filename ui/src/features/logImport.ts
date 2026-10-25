@@ -110,6 +110,16 @@ export interface ImportDone {
   report: ImportReport
 }
 
+/** The largest file an import reads, in bytes: the engine's own limit (`import::MAX_BYTES`), checked
+ *  here as well so that a larger file is refused before the webview reads it into memory. */
+export const IMPORT_MAX_BYTES = 200_000_000
+
+/** Why a file of `size` bytes is not imported, or null when it can be. */
+export function importTooLarge(size: number): string | null {
+  if (size <= IMPORT_MAX_BYTES) return null
+  return t('logbook.import.tooLarge', { size: (size / 1e6).toFixed(1), max: IMPORT_MAX_BYTES / 1e6 })
+}
+
 export function formatName(f: ImportFormat): string {
   switch (f) {
     case 'adif':

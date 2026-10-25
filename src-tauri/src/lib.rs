@@ -25447,10 +25447,12 @@ async fn preview_import(
     use tempo_core::logbook::import;
     let engine = Arc::clone(&state);
     tauri::async_runtime::spawn_blocking(move || {
-        let source = import::read(&text, import::detect(&text));
+        let source = import::read_file(&text)?;
         let mut preview = import::preview(&source);
+        // The records let go before the plan parses the text again.
+        let adif = source.into_adif();
         let (new, duplicates, updates) =
-            tempo_app::logwrite::preview_import(&engine, source.adif(&text))?;
+            tempo_app::logwrite::preview_import(&engine, adif.as_deref().unwrap_or(&text))?;
         preview.new = new;
         preview.duplicates = duplicates;
         preview.updates = updates;
@@ -25480,7 +25482,10 @@ async fn import_log(
     use tempo_core::logbook::import;
     let engine = Arc::clone(&state);
     durable_command(move || {
-        let source = import::read(&text, import::detect(&text));
+        let source = match import::read_file(&text) {
+            Ok(source) => source,
+            Err(e) => return (Err(e), Default::default()),
+        };
         let adif = source.adif(&text);
         let run = tempo_app::loghistory::new_run();
         let (made, durability) = tempo_app::logwrite::until_written(|| {

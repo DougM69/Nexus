@@ -19,6 +19,9 @@
 
 use super::{header_unmapped, Note, NoteKind, SourceRecord, Unmapped, UnmappedReason};
 
+/// The elements that are the file's structure, never a field's name.
+const STRUCTURE: &[&str] = &["ADX", "HEADER", "RECORDS", "RECORD"];
+
 /// One tag: its name (upper-cased), its attributes, and whether it closes or is empty.
 struct Tag {
     name: String,
@@ -82,20 +85,39 @@ pub(crate) fn read(text: &str) -> (Vec<SourceRecord>, Vec<Note>, Vec<Unmapped>) 
         if let Some((element, name, value)) = field.take() {
             if tag.closing && tag.name == element {
                 push(record.as_mut().unwrap_or(&mut header), name, value);
-            } else {
+                continue;
+            }
+            if !STRUCTURE.contains(&tag.name.as_str()) {
                 notes.push(Note {
                     kind: NoteKind::BadXml,
                     at,
                     text: format!("<{}> in <{element}>", tag.name),
                 });
                 field = Some((element, name, value));
+                continue;
             }
-            continue;
+            // The file's own structure ends a field left open, so that it never runs on into the
+            // next record: the field is let go, said, and the tag read as what it is.
+            notes.push(Note {
+                kind: NoteKind::BadXml,
+                at,
+                text: format!("<{element}> not closed"),
+            });
         }
         match (tag.name.as_str(), tag.closing) {
             ("HEADER", false) => in_header = !tag.empty,
             ("HEADER", true) => in_header = false,
-            ("RECORD", false) if record.is_none() => {
+            ("RECORD", false) => {
+                // A record not closed before the next one opens ends there.
+                if let Some(fields) = record.take() {
+                    notes.push(Note {
+                        kind: NoteKind::BadXml,
+                        at,
+                        text: "<RECORD> not closed".to_string(),
+                    });
+                    records.push(SourceRecord { at, fields });
+                }
+                let at = records.len() + 1;
                 if tag.empty {
                     records.push(SourceRecord {
                         at,
@@ -110,7 +132,7 @@ pub(crate) fn read(text: &str) -> (Vec<SourceRecord>, Vec<Note>, Vec<Unmapped>) 
                     records.push(SourceRecord { at, fields });
                 }
             }
-            (_, false) if record.is_some() || in_header => {
+            (n, false) if (record.is_some() || in_header) && !STRUCTURE.contains(&n) => {
                 // A header's USERDEF defines a field (by FIELDID) rather than holding one: listed
                 // under its element's own name.
                 let name = if record.is_some() {
@@ -253,7 +275,10 @@ fn unescape(s: &str) -> String {
     while let Some(amp) = rest.find('&') {
         out.push_str(&rest[..amp]);
         let after = &rest[amp..];
-        let decoded = after.find(';').filter(|&i| i <= 10).and_then(|semi| {
+        // The `;` looked for only as far as the longest reference read: a search to the end of the
+        // text for each `&` would make a run of them quadratic.
+        let semi = after.as_bytes().iter().take(11).position(|&b| b == b';');
+        let decoded = semi.and_then(|semi| {
             let name = &after[1..semi];
             let c = match name {
                 "lt" => Some('<'),
