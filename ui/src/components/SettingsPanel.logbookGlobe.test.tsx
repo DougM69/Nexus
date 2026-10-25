@@ -73,7 +73,7 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-async function openMapGlobe(over: Record<string, unknown> = {}) {
+async function openSection(tab: RegExp, id: string, over: Record<string, unknown> = {}) {
   if (Object.keys(over).length) {
     api.get('getSettings').mockImplementation(() =>
       Promise.resolve({ ...defaultSettings, ...RADIO, mycall: 'KD9TAW', mygrid: 'EN52', activeRadio: 0, radios: [RADIO], ...over }),
@@ -93,10 +93,13 @@ async function openMapGlobe(over: Record<string, unknown> = {}) {
       features={features}
     />,
   )
-  await screen.findByRole('tab', { name: /appearance/i })
-  fireEvent.click(screen.getByRole('tab', { name: /appearance/i }))
-  return document.getElementById('settings-map-globe')
+  await screen.findByRole('tab', { name: tab })
+  fireEvent.click(screen.getByRole('tab', { name: tab }))
+  return document.getElementById(`settings-${id}`)
 }
+const openMapGlobe = () => openSection(/appearance/i, 'map-globe')
+/** Settings ▸ Logbook ▸ Logbook display, where the columns' Reset moved on 2026-10-25. */
+const openLogbookDisplay = (over: Record<string, unknown> = {}) => openSection(/^logbook$/i, 'logbook-display', over)
 
 describe('Logbook globe switch (D#278)', () => {
   it('sits in Appearance ▸ Map & globe, on by default, and turning it off writes the setting', async () => {
@@ -114,15 +117,15 @@ describe('Logbook globe switch (D#278)', () => {
 })
 
 describe('Logbook columns reset', () => {
-  it('sits beside the globe, is off with nothing saved, and puts back the default table through the one writer', async () => {
-    let section = await openMapGlobe()
+  it('sits in Settings ▸ Logbook, is off with nothing saved, and puts back the default table through the one writer', async () => {
+    let section = await openLogbookDisplay()
     let reset = screen.getByRole('button', { name: 'Reset' }) as HTMLButtonElement
-    expect(section?.contains(reset), 'the reset is not inside the Map & globe section').toBe(true)
+    expect(section?.contains(reset), 'the reset is not inside the Logbook display section').toBe(true)
     expect(reset.disabled, 'nothing saved: nothing to reset').toBe(true)
     cleanup()
 
     localStorage.setItem('nexus.logbook.moreColumns', '1')
-    section = await openMapGlobe({ logbookColumns: { shown: ['iota'], hidden: [], widths: { call: 90 } } })
+    section = await openLogbookDisplay({ logbookColumns: { shown: ['iota'], hidden: [], widths: { call: 90 } } })
     reset = screen.getByRole('button', { name: 'Reset' }) as HTMLButtonElement
     expect(reset.disabled).toBe(false)
     fireEvent.click(reset)

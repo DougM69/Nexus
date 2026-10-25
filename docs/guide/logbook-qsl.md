@@ -50,8 +50,8 @@ each service's upload state, and a contest contact's exchange. Untick one to
 hide it. Drag the right edge of a column's header to change its width (or press
 Alt+← / Alt+→ on the header); double-click the edge to put it back. A table with
 added columns scrolls sideways. Nexus keeps the choice in your settings, and
-**Reset to the default columns** in the same menu, or Settings ▸ Appearance ▸
-Map & globe, puts the default table back.
+**Reset to the default columns** in the same menu, or Settings ▸ Logbook ▸
+Logbook display, puts the default table back.
 
 **What each contact records.** Besides the call, band, mode and reports, a contact you log
 carries:

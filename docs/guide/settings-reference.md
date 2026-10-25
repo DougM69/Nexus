@@ -1,6 +1,6 @@
 # Settings reference
 
-Settings is organized into eleven tabs. Only the active tab renders, so typing in
+Settings is organized into twelve tabs. Only the active tab renders, so typing in
 one field doesn't lag the whole panel. **Save** at the bottom applies your
 changes; most take effect live (a few say "takes effect on restart", and a few
 apply the instant you touch them — those say so too).
@@ -13,8 +13,8 @@ The tabs, in the order they appear:
 
 [Station](#station) · [Remote](#remote) · [Radio](#radio) · [Phone](#phone) ·
 [CW](#cw) · [Digital](#digital) · [Spots & Alerts](#spots--alerts) ·
-[Logging & Connectors](#logging--connectors) · [Contesting](#contesting) ·
-[Appearance](#appearance) · [Config](#config)
+[Logbook](#logbook) · [Logging & Connectors](#logging--connectors) ·
+[Contesting](#contesting) · [Appearance](#appearance) · [Config](#config)
 
 The panel header carries the **build stamp** (confirm a fresh install actually
 took), a **Check for updates** button and a **Licenses** button (the license
@@ -1822,6 +1822,104 @@ HF grids back.
 
 ---
 
+## Logbook
+
+The logbook's own settings: how the Logbook shows your contacts, how long a deleted
+contact can be put back, the callbook that fills in a station's name and grid, and the
+lists a logged contact is checked against. The services you upload to are on
+[Logging & Connectors](#logging--connectors).
+
+### Logbook display
+
+- **Logbook columns** — the columns and widths you chose in the Logbook (its
+  **Columns** button) are kept with your settings. **Reset** puts back the default
+  table; it is greyed out while nothing has been changed.
+- **Station card on hover** — off by default. A click on a call, or Enter on it,
+  always opens its station card; turn this on and resting the pointer on a call for
+  half a second opens it too. Remembered per computer, in every window.
+
+### Deleted contacts
+
+**Keep deleted contacts for (days)** — the logbook keeps a full copy of every
+contact you delete or purge, so **Recently deleted** and the **Undo** on the
+delete, import and purge messages can put it back exactly as it was. This sets
+how long, 90 days by default. After that the copy is removed, a little at a time
+in the background, when Nexus starts. The old and new values of every edit are
+kept for good whatever this says; `0` keeps deleted contacts for good too.
+
+### Callbook lookups
+
+What fills in a station's name, QTH, grid and state when you look a call up or
+log it. QRZ is asked first, then HamQTH, then callook.info.
+
+**QRZ**
+
+- **QRZ username** / **QRZ password** — "this is what powers callbook lookups"
+  (name, QTH, grid). Separate from the QRZ Logbook API key on
+  [Logging & Connectors ▸ Confirmations](#confirmations), which only uploads QSOs.
+  "Grid & state need a QRZ XML subscription; free accounts return only
+  name/address/country."
+
+**HamQTH**
+
+- **HamQTH username** / **HamQTH password** — "A **free** callbook used as a
+  fallback when QRZ isn't configured or has no match — a HamQTH account returns
+  name, grid & US state at no charge."
+
+**Callbook cache**
+
+- **Also ask callook.info** — free, no account: US licences only, asked after QRZ
+  and HamQTH. Only the callsign is sent. On by default.
+- **Keep answers for (days)** — a call looked up within this many days is answered
+  from this computer without asking the callbook again (30 by default). Offline, a
+  kept answer is used at any age.
+- **Refresh this call** — type a callsign and **Refresh** to look it up again now.
+- **Clear cache** — forgets every kept callbook answer. Your log is not touched, and
+  passwords are never kept here.
+
+### Worked-before (B4) & dupes
+
+What "worked before" means, everywhere it appears. The B4 chip on the roster and decode feed
+comes in two strengths: hollow — you have worked this callsign somewhere, on any band — and
+solid — you have worked them **on the band you are on now**. The log strip's **Dupe** badge uses
+the on-band scope.
+
+**Match mode too** (off by default, matching WSJT-X): when off, working a station on 40m marks
+them B4-on-band for 40m in every mode, and a 40m contact in any mode reads as a dupe on 40m.
+Turn it on and 40m FT8 and 40m phone become separate contacts — the solid chip and the Dupe
+badge then require the mode to match as well. The hollow any-band chip is unaffected either
+way. Most awards count band slots, not band-and-mode slots, which is why off is the default.
+
+### LoTW users list
+
+- **Fetch now** — downloads ARRL's weekly activity list; the status line shows
+  the call count and date. This powers the teal **L** marks on decode and roster
+  rows.
+- **Count as a LoTW user if uploaded within (days)** — the recency window
+  (default 365).
+
+"ARRL's activity list updates weekly — refetching more often just returns
+'unchanged'. Manual fetch by design (WSJT-X convention)."
+
+### Callsign → state database
+
+- **Update now** — "A callsign→state index (from the FCC license file) so a New
+  State lights up on cluster / CW / SSB spots that carry no grid." Downloads on
+  first launch, then auto-refreshes weekly from hamradiotools.io; a live decode
+  grid refines it for rovers.
+
+### Country file (DXCC)
+
+- **Update country file** — "The AD1C cty.dat country file maps callsigns to
+  DXCC entities — the country on decode rows, the Needed board and the log."
+  A copy ships built in, so entity resolution always works offline; Nexus
+  checks weekly for a newer AD1C release and downloads it automatically. The
+  resolver is fixed for a running session, so a downloaded update **applies at
+  the next launch** — the status line shows the active release date and notes
+  when a newer download is waiting.
+
+---
+
 ## Logging & Connectors
 
 Where QSOs go and what feeds come in. Credentials live in the **OS keychain**,
@@ -1861,19 +1959,6 @@ real history rather than a blank panel. HRDLog.net and Cloudlog leave no per-QSO
 stamp, so they read "not verified yet" after each restart until the next contact
 goes out. The QRZ callbook and RepeaterBook only ever look things up, so they
 carry no upload history at all.
-
-### Worked-before (B4) & dupes
-
-What "worked before" means, everywhere it appears. The B4 chip on the roster and decode feed
-comes in two strengths: hollow — you have worked this callsign somewhere, on any band — and
-solid — you have worked them **on the band you are on now**. The log strip's **Dupe** badge uses
-the on-band scope.
-
-**Match mode too** (off by default, matching WSJT-X): when off, working a station on 40m marks
-them B4-on-band for 40m in every mode, and a 40m contact in any mode reads as a dupe on 40m.
-Turn it on and 40m FT8 and 40m phone become separate contacts — the solid chip and the Dupe
-badge then require the mode to match as well. The hollow any-band chip is unaffected either
-way. Most awards count band slots, not band-and-mode slots, which is why off is the default.
 
 ### Integrations & Feeds
 
@@ -2019,34 +2104,6 @@ Test N3FJP button continue to the right.*
   the contest broadcast." Off by default; turning it on with a blank address
   fills in `127.0.0.1:12060` visibly, rather than as a hidden default.
 
-### LoTW users list
-
-- **Fetch now** — downloads ARRL's weekly activity list; the status line shows
-  the call count and date. This powers the teal **L** marks on decode and roster
-  rows.
-- **Count as a LoTW user if uploaded within (days)** — the recency window
-  (default 365).
-
-"ARRL's activity list updates weekly — refetching more often just returns
-'unchanged'. Manual fetch by design (WSJT-X convention)."
-
-### Callsign → state database
-
-- **Update now** — "A callsign→state index (from the FCC license file) so a New
-  State lights up on cluster / CW / SSB spots that carry no grid." Downloads on
-  first launch, then auto-refreshes weekly from hamradiotools.io; a live decode
-  grid refines it for rovers.
-
-### Country file (DXCC)
-
-- **Update country file** — "The AD1C cty.dat country file maps callsigns to
-  DXCC entities — the country on decode rows, the Needed board and the log."
-  A copy ships built in, so entity resolution always works offline; Nexus
-  checks weekly for a newer AD1C release and downloads it automatically. The
-  resolver is fixed for a running session, so a downloaded update **applies at
-  the next launch** — the status line shows the active release date and notes
-  when a newer download is waiting.
-
 ### Confirmations
 
 One group per service, in the order the panel shows them. Every password, key and
@@ -2112,12 +2169,9 @@ service looks like.*
 
 **QRZ**
 
-- **QRZ username** / **QRZ password** — "this is what powers callbook lookups"
-  (name, QTH, grid). Separate from the Logbook API key below, which only uploads
-  QSOs. "Grid & state need a QRZ XML subscription; free accounts return only
-  name/address/country."
 - **QRZ Logbook API key** — a **separate** key from your QRZ logbook's settings
-  page, used to upload logged QSOs.
+  page, used to upload logged QSOs. The QRZ login that powers callbook lookups is
+  on [Logbook ▸ Callbook lookups](#callbook-lookups).
 - **Auto-upload QSOs to QRZ** — push each logged QSO to your QRZ logbook.
 - **Pull confirmations automatically** — "As people confirm on QRZ, the
   confirmations flow in on their own — no need to press Sync. After the first run
@@ -2126,12 +2180,6 @@ service looks like.*
 - **Two-way sync** — **Sync from QRZ now** pulls your QRZ logbook **down**,
   adding QSOs you logged elsewhere (e.g. a phone app in the field) and marking
   QRZ-confirmed contacts. Safe to run repeatedly (deduped).
-
-**HamQTH**
-
-- **HamQTH username** / **HamQTH password** — "A **free** callbook used as a
-  fallback when QRZ isn't configured or has no match — a HamQTH account returns
-  name, grid & US state at no charge."
 
 **ClubLog**
 
@@ -2150,7 +2198,8 @@ service looks like.*
 ![Three groups stacked: QRZ with a username, empty password and Logbook API key boxes and Auto-upload switched on; HamQTH with empty username and password; and ClubLog with an email, a callsign, an empty app-password and an empty application API key.](../img/manual/settings-confirmations-qrz.webp)
 
 *QRZ, HamQTH and ClubLog in Nexus 1.10.3. QRZ takes two separate credentials —
-the login that powers callbook lookups, and a Logbook API key that only uploads.*
+the login that powers callbook lookups, and a Logbook API key that only uploads.
+The login and HamQTH have since moved to [Logbook ▸ Callbook lookups](#callbook-lookups).*
 
 **HRDLog**
 
@@ -2954,13 +3003,6 @@ Drive lets another computer reach your log, but two copies of Nexus writing the
 same logbook produce a *conflicted copy*, not a merged log. Nexus warns when the
 folder looks synced — it is a guess from the folder's name, so it can miss a
 renamed one. Run one, or keep one machine's Nexus closed.
-
-**Keep deleted contacts for (days)** — the logbook keeps a full copy of every
-contact you delete or purge, so **Recently deleted** and the **Undo** on the
-delete, import and purge messages can put it back exactly as it was. This sets
-how long, 90 days by default. After that the copy is removed, a little at a time
-in the background, when Nexus starts. The old and new values of every edit are
-kept for good whatever this says; `0` keeps deleted contacts for good too.
 
 ### Backup & reset
 

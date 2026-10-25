@@ -21621,7 +21621,7 @@ fn set_watch_list(
 
 /// Save the Logbook's column choice — the ONE write path for `logbookColumns`, called the moment
 /// the operator shows, hides or resizes a column (`null` is the default table, from the chooser's
-/// reset or Settings ▸ Map & globe). Narrow for the same stale-snapshot reason as
+/// reset or Settings ▸ Logbook ▸ Logbook display). Narrow for the same stale-snapshot reason as
 /// `set_beta_updates`, and because the settings form would also advance the transmit gate's
 /// generation for a change that has nothing to do with transmitting. `Engine::apply_settings`
 /// keeps the live value, so a form save cannot put an older choice back.
@@ -24232,7 +24232,7 @@ fn qrz_access(engine: &SharedEngine) -> Result<QrzAccess, String> {
     let owncall = engine_lock(engine).settings().mycall.trim().to_string();
     let key = qrz_logbook_keychain()?.get_password().map_err(|_| {
         "No QRZ Logbook API key stored — this is the per-logbook key from logbook.qrz.com \
-         (Settings ▸ Logbook & QSL ▸ QRZ), not your QRZ password."
+         (Settings ▸ Logging & Connectors ▸ Confirmations ▸ QRZ), not your QRZ password."
             .to_string()
     })?;
     Ok(QrzAccess {
@@ -28555,7 +28555,7 @@ use screen_reason::ScreenReason;
 /// No key stored. Not a service failure at all, and the remedy is a Settings field.
 const QRZ_SYNC_NO_KEY: ConnDetail = conn_detail!(
     "no QRZ Logbook API key is stored — this is the per-logbook key from logbook.qrz.com \
-     (Settings ▸ Logbook & QSL ▸ QRZ), not the QRZ password."
+     (Settings ▸ Logging & Connectors ▸ Confirmations ▸ QRZ), not the QRZ password."
 );
 /// The sync never got an answer. D#181's lesson: a transport failure is not a credential
 /// failure, and sending the operator to check their key is exactly the wrong misdirection.
@@ -28703,7 +28703,8 @@ fn sync_qrz_since(
             detail: QRZ_SYNC_NO_KEY,
             message: ScreenReason::new(
                 "No QRZ Logbook API key stored — this is the per-logbook key from \
-                 logbook.qrz.com (Settings ▸ Logbook & QSL ▸ QRZ), NOT your QRZ password."
+                 logbook.qrz.com (Settings ▸ Logging & Connectors ▸ Confirmations ▸ QRZ), NOT your \
+                 QRZ password."
                     .to_string(),
             ),
         })?;
@@ -29322,7 +29323,8 @@ async fn callbook_lookup_live(
             which.push("HamQTH");
         }
         Err(format!(
-            "Callbook lookup needs your {} password — add it in Settings ▸ Logbook & QSL. \
+            "Callbook lookup needs your {} password — add it in Settings ▸ Logbook ▸ Callbook \
+             lookups. \
              For QRZ this is your QRZ.com login password, NOT the Logbook API key (that key \
              only uploads QSOs).",
             which.join(" or ")
@@ -30093,7 +30095,9 @@ static QRZ_CORRECT_MISS: std::sync::Mutex<Option<tempo_core::qrz::QrzMissRecover
 /// and to nothing else — never to `conn_log`, never into an error, never into a stamp.
 fn qrz_correct_key() -> Result<String, String> {
     qrz_logbook_keychain()?.get_password().map_err(|_| {
-        "No QRZ Logbook API key stored — set it in Settings ▸ Logbook & QSL ▸ QRZ.".to_string()
+        "No QRZ Logbook API key stored — set it in Settings ▸ Logging & Connectors ▸ \
+         Confirmations ▸ QRZ."
+            .to_string()
     })
 }
 

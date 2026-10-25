@@ -821,6 +821,7 @@ type SettingsTab =
   | 'cw'
   | 'digital'
   | 'spots'
+  | 'logbook'
   | 'logging'
   | 'contesting'
   | 'appearance'
@@ -841,6 +842,7 @@ const SETTINGS_TABS: { id: SettingsTab; label: string; labelKey?: MessageKey }[]
   { id: 'cw', label: 'CW' },
   { id: 'digital', label: 'Digital' },
   { id: 'spots', label: 'Spots & Alerts', labelKey: 'settings.tabs.spots' },
+  { id: 'logbook', label: 'Logbook', labelKey: 'settings.tabs.logbook' },
   { id: 'logging', label: 'Logging & Connectors', labelKey: 'settings.tabs.logging' },
   { id: 'contesting', label: 'Contesting', labelKey: 'settings.tabs.contesting' },
   { id: 'appearance', label: 'Appearance', labelKey: 'settings.tabs.appearance' },
@@ -4122,27 +4124,6 @@ export function SettingsPanel({
                   <span className="settings-hint" role="status">{dataFolderNote}</span>
                 )}
               </div>
-              {/* How long the Logbook's history keeps a deleted contact whole (Recently deleted, the
-                  Undo of a delete, an import or a purge). Here because it is the log's storage: the
-                  copies are most of what the history costs on disk. Edits are kept for good. */}
-              <label className="settings-field">
-                <span className="settings-label">{t('settings.dataFolder.snapshots.label')}</span>
-                <input
-                  className="settings-input"
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  value={form.historySnapshotDays ?? 90}
-                  onChange={(e) => {
-                    // '' is back to the 90-day default; a typed value is whole days, never negative.
-                    markDirty()
-                    const n = e.target.value === '' ? 90 : Math.max(0, Math.trunc(Number(e.target.value)) || 0)
-                    setForm((prev) => (prev ? { ...prev, historySnapshotDays: n } : prev))
-                  }}
-                  autoComplete="off"
-                />
-                <span className="settings-hint">{t('settings.dataFolder.snapshots.hint')}</span>
-              </label>
             </fieldset>
           )}
 
@@ -4454,20 +4435,6 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.workspace.density.hint')}</span>
               </div>
-              {/* The station card on hover (features/callCardHover): off by default, per operator,
-                  in every window. A click or Enter on a call opens the card either way. */}
-              <label className="settings-field">
-                <span className="settings-label">{t('settings.workspace.callCardHover.label')}</span>
-                <span className="settings-input-row">
-                  <input
-                    type="checkbox"
-                    checked={callCardHover}
-                    onChange={(e) => setCallCardHover(e.target.checked)}
-                    aria-label={t('settings.workspace.callCardHover.aria')}
-                  />
-                  <span className="settings-hint">{t('settings.workspace.callCardHover.hint')}</span>
-                </span>
-              </label>
               {/* #253: an optional second clock in the top bar showing this computer's local
                   time. Per machine and off by default; UTC stays the station clock. */}
               {onLocalClockChange && (
@@ -4725,20 +4692,6 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.workspace.logbookGlobe.hint')}</span>
                 </span>
               </label>
-              <div className="settings-field">
-                <span className="settings-label">{t('settings.workspace.logbookColumns.label')}</span>
-                <span className="settings-input-row">
-                  <button
-                    type="button"
-                    className="settings-test-btn"
-                    onClick={resetLogbookColumns}
-                    disabled={!form.logbookColumns}
-                  >
-                    {t('settings.workspace.logbookColumns.reset')}
-                  </button>
-                  <span className="settings-hint">{t('settings.workspace.logbookColumns.hint')}</span>
-                </span>
-              </div>
               {/* STREET MAPS: shown only once the street map is offered (features/streetMaps.ts), and
                   never on the Remote page — a pack lives on the station's disk. */}
               <SettingsStreetMaps myGrid={form.mygrid} />
@@ -11092,6 +11045,491 @@ export function SettingsPanel({
           </>
           )}
 
+          {/* ---- Logbook: the logbook's own settings (operator, 2026-10-25) ----
+              Every control here kept its setting when it moved, so a stored choice is untouched:
+              the display rows came from Appearance, the deleted-contact retention from Config ▸
+              Data & log folder, the callbook lookups out of Confirmations, and worked-before and the
+              three reference lists from Logging & Connectors. */}
+          {tab === 'logbook' && (
+          <>
+          <fieldset className="settings-section" id="settings-logbook-display">
+            <legend>{t('settings.logbookDisplay.legend')}</legend>
+            <div className="settings-grid settings-grid--lone">
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.workspace.logbookColumns.label')}</span>
+                <span className="settings-input-row">
+                  <button
+                    type="button"
+                    className="settings-test-btn"
+                    onClick={resetLogbookColumns}
+                    disabled={!form.logbookColumns}
+                  >
+                    {t('settings.workspace.logbookColumns.reset')}
+                  </button>
+                  <span className="settings-hint">{t('settings.workspace.logbookColumns.hint')}</span>
+                </span>
+              </div>
+              {/* The station card on hover (features/callCardHover): off by default, per operator,
+                  in every window. A click or Enter on a call opens the card either way. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.workspace.callCardHover.label')}</span>
+                <span className="settings-input-row">
+                  <input
+                    type="checkbox"
+                    checked={callCardHover}
+                    onChange={(e) => setCallCardHover(e.target.checked)}
+                    aria-label={t('settings.workspace.callCardHover.aria')}
+                  />
+                  <span className="settings-hint">{t('settings.workspace.callCardHover.hint')}</span>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+          <fieldset className="settings-section" id="settings-logbook-history">
+            <legend>{t('settings.logbookHistory.legend')}</legend>
+            {/* How long the Logbook's history keeps a deleted contact whole (Recently deleted, the Undo
+                of a delete, an import or a purge). Edits are kept for good. */}
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.dataFolder.snapshots.label')}</span>
+              <input
+                className="settings-input"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                value={form.historySnapshotDays ?? 90}
+                onChange={(e) => {
+                  // '' is back to the 90-day default; a typed value is whole days, never negative.
+                  markDirty()
+                  const n = e.target.value === '' ? 90 : Math.max(0, Math.trunc(Number(e.target.value)) || 0)
+                  setForm((prev) => (prev ? { ...prev, historySnapshotDays: n } : prev))
+                }}
+                autoComplete="off"
+              />
+              <span className="settings-hint">{t('settings.dataFolder.snapshots.hint')}</span>
+            </label>
+          </fieldset>
+          <fieldset className="settings-section" id="settings-callbook">
+            <legend>{t('settings.callbook.legend')}</legend>
+            <div className="settings-featgroup">
+              {/* ⚠️ Every featgroup title here is a service's own name and nothing else — invariant,
+                  like a callsign. QRZ's callbook sign-in is here; its Logbook API key uploads, and
+                  stays with the uploads in Logging & Connectors ▸ Confirmations. */}
+              <span className="settings-featgroup-title">QRZ</span>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.qrz.username.label')}
+                  </span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.qrzUsername}
+                    placeholder={t('settings.confirmations.qrz.username.placeholder')}
+                    onChange={(e) => update('qrzUsername', e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">
+                    {t('settings.confirmations.qrz.username.hint')}
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.qrz.password.label')}
+                  </span>
+                  <div className="settings-input-row">
+                    <input
+                      className="settings-input"
+                      type="password"
+                      value={qrzPw}
+                      placeholder={t('settings.confirmations.qrz.password.placeholder')}
+                      onChange={(e) => setQrzPw(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onSaveQrzPassword}
+                      disabled={!qrzPw}
+                    >
+                      {t('settings.confirmations.credential.set.action')}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onForgetQrzPassword}
+                      title={t('settings.confirmations.credential.forget.title')}
+                    >
+                      {t('settings.confirmations.credential.forget.action')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">
+                    <T k="settings.confirmations.qrz.password.hint" tags={{ b: <strong /> }} />
+                  </span>
+                </label>
+              </div>
+            </div>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">HamQTH</span>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.hamqth.username.label')}
+                  </span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.hamqthUsername}
+                    placeholder={t('settings.confirmations.hamqth.username.placeholder')}
+                    onChange={(e) => update('hamqthUsername', e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">
+                    <T k="settings.confirmations.hamqth.username.hint" tags={{ b: <strong /> }} />
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.hamqth.password.label')}
+                  </span>
+                  <div className="settings-input-row">
+                    <input
+                      className="settings-input"
+                      type="password"
+                      value={hamqthPw}
+                      placeholder={t('settings.confirmations.hamqth.password.placeholder')}
+                      onChange={(e) => setHamqthPw(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onSaveHamqthPassword}
+                      disabled={!hamqthPw}
+                    >
+                      {t('settings.confirmations.credential.set.action')}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onForgetHamqthPassword}
+                      title={t('settings.confirmations.credential.forget.title')}
+                    >
+                      {t('settings.confirmations.credential.forget.action')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.hamqth.password.hint')}
+                  </span>
+                </label>
+              </div>
+            </div>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">
+                {t('settings.confirmations.callbookCache.title')}
+              </span>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.callbookCache.callook.label')}
+                  </span>
+                  <span className="settings-input-row">
+                    <input
+                      type="checkbox"
+                      checked={form.callookLookup ?? true}
+                      onChange={(e) => updateBool('callookLookup', e.target.checked)}
+                    />
+                    <span className="settings-hint">
+                      {t('settings.confirmations.callbookCache.callook.hint')}
+                    </span>
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.callbookCache.days.label')}
+                  </span>
+                  <input
+                    className="settings-input mono"
+                    type="number"
+                    min={1}
+                    max={3650}
+                    value={form.callbookCacheDays ?? 30}
+                    onChange={(e) =>
+                      updateNum(
+                        'callbookCacheDays',
+                        Math.min(3650, Math.max(1, Math.round(Number(e.target.value)) || 30)),
+                      )
+                    }
+                  />
+                  <span className="settings-hint">
+                    {t('settings.confirmations.callbookCache.days.hint')}
+                  </span>
+                </label>
+
+                <div className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.callbookCache.refresh.label')}
+                  </span>
+                  <div className="settings-input-row">
+                    <input
+                      className="settings-input mono"
+                      type="text"
+                      value={refreshCall}
+                      placeholder={t('settings.confirmations.callbookCache.refresh.placeholder')}
+                      aria-label={t('settings.confirmations.callbookCache.refresh.label')}
+                      onChange={(e) => setRefreshCall(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onRefreshCallbookCall}
+                      disabled={!refreshCall.trim() || refreshingCall}
+                    >
+                      {t('settings.confirmations.callbookCache.refresh.action')}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.callbookCache.clear.label')}
+                  </span>
+                  <div className="settings-input-row">
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onClearCallbookCache}
+                    >
+                      {t('settings.confirmations.callbookCache.clear.action')}
+                    </button>
+                    {callbookCount !== null && (
+                      <span className="settings-hint">
+                        {t('settings.confirmations.callbookCache.count', { count: callbookCount })}
+                      </span>
+                    )}
+                  </div>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.callbookCache.clear.hint')}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+          <fieldset className="settings-section" id="settings-connections-b4">
+            <legend>{t('settings.b4.legend')}</legend>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.b4.matchMode.label')}</span>
+                <button disabled={locked('b4MatchMode')}
+                  type="button"
+                  role="switch"
+                  aria-checked={form.b4MatchMode ?? false}
+                  className={`toggle${form.b4MatchMode ? ' on' : ''}`}
+                  onClick={() => updateBool('b4MatchMode', !form.b4MatchMode)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">{t('settings.b4.matchMode.hint')}</span>
+              </label>
+            </div>
+          </fieldset>
+          <fieldset className="settings-section" id="settings-lotw-users">
+            <legend>{t('settings.lotwUsers.legend')}</legend>
+            <div className="settings-field">
+              <div className="lotw-users-row">
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={lotwFetching}
+                  onClick={() => {
+                    setLotwFetching(true)
+                    fetchLotwUsers()
+                      .then((st) => {
+                        setLotwUsers(st)
+                        // The grouping is this call site's, not the catalog's — `t()` has no
+                        // locale-aware number path (see the invariant-token rule).
+                        pushToast(
+                          t('settings.lotwUsers.fetch.done', {
+                            count: st.count.toLocaleString(),
+                          }),
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((e) =>
+                        pushToast(
+                          t('settings.lotwUsers.fetch.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
+                          'error',
+                        ),
+                      )
+                      .finally(() => setLotwFetching(false))
+                  }}
+                >
+                  {lotwFetching
+                    ? t('settings.lotwUsers.fetch.busy')
+                    : t('settings.lotwUsers.fetch.action')}
+                </button>
+                <span className="settings-hint">
+                  {lotwUsers && lotwUsers.count > 0
+                    ? t('settings.lotwUsers.status', {
+                        count: lotwUsers.count.toLocaleString(),
+                        date: new Date(lotwUsers.fetchedAt * 1000).toISOString().slice(0, 10),
+                      })
+                    : t('settings.lotwUsers.empty')}
+                </span>
+              </div>
+              <label className="settings-label" htmlFor="lotw-max-age" style={{ marginTop: 8 }}>
+                {t('settings.lotwUsers.maxAge.label')}
+              </label>
+              <input
+                id="lotw-max-age"
+                className="settings-input"
+                type="number"
+                min="30"
+                max="3650"
+                step="1"
+                style={{ width: '7em' }}
+                value={form.lotwMaxAgeDays ?? 365}
+                onChange={(e) => {
+                  const n = Number(e.target.value)
+                  if (!Number.isNaN(n)) updateNum('lotwMaxAgeDays', n)
+                }}
+              />
+              <span className="settings-hint">{t('settings.lotwUsers.maxAge.hint')}</span>
+            </div>
+          </fieldset>
+
+          <fieldset className="settings-section" id="settings-callsign-state">
+            <legend>{t('settings.callsignState.legend')}</legend>
+            <div className="settings-field">
+              <div className="lotw-users-row">
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={fccFetching}
+                  onClick={() => {
+                    setFccFetching(true)
+                    fetchFccStates()
+                      .then((st) => {
+                        setFccStates(st)
+                        pushToast(
+                          t('settings.callsignState.update.done', {
+                            count: st.count.toLocaleString(),
+                          }),
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((e) =>
+                        pushToast(
+                          t('settings.callsignState.update.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
+                          'error',
+                        ),
+                      )
+                      .finally(() => setFccFetching(false))
+                  }}
+                >
+                  {fccFetching
+                    ? t('settings.callsignState.update.busy')
+                    : t('settings.callsignState.update.action')}
+                </button>
+                <span className="settings-hint">
+                  {fccStates && fccStates.count > 0
+                    ? t('settings.callsignState.status', {
+                        count: fccStates.count.toLocaleString(),
+                        date: new Date(fccStates.fetchedAt * 1000).toISOString().slice(0, 10),
+                      })
+                    : t('settings.callsignState.empty')}
+                </span>
+              </div>
+              <span className="settings-hint">{t('settings.callsignState.hint')}</span>
+            </div>
+          </fieldset>
+
+          <fieldset className="settings-section" id="settings-country-file">
+            <legend>{t('settings.countryFile.legend')}</legend>
+            <div className="settings-field">
+              <div className="lotw-users-row">
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={ctyFetching}
+                  onClick={() => {
+                    setCtyFetching(true)
+                    fetchCty()
+                      .then((st) => {
+                        setCtyStatus(st)
+                        const pending =
+                          st.installedVer !== '' && st.installedVer > st.activeVer
+                        pushToast(
+                          pending
+                            ? t('settings.countryFile.update.done', {
+                                ver: ctyVerDate(st.installedVer),
+                              })
+                            : t('settings.countryFile.update.current', {
+                                ver: ctyVerDate(st.activeVer),
+                              }),
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((e) =>
+                        pushToast(
+                          t('settings.countryFile.update.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
+                          'error',
+                        ),
+                      )
+                      .finally(() => setCtyFetching(false))
+                  }}
+                >
+                  {ctyFetching
+                    ? t('settings.countryFile.update.busy')
+                    : t('settings.countryFile.update.action')}
+                </button>
+                <span className="settings-hint">
+                  {ctyStatus === null
+                    ? t('settings.countryFile.empty')
+                    : ctyStatus.fetchedAt > 0
+                      ? t('settings.countryFile.status', {
+                          count: ctyStatus.count.toLocaleString(),
+                          ver: ctyVerDate(ctyStatus.activeVer),
+                          date: new Date(ctyStatus.fetchedAt * 1000).toISOString().slice(0, 10),
+                        })
+                      : t('settings.countryFile.statusBuiltIn', {
+                          count: ctyStatus.count.toLocaleString(),
+                          ver: ctyVerDate(ctyStatus.activeVer),
+                        })}
+                </span>
+              </div>
+              {ctyStatus !== null &&
+                ctyStatus.installedVer !== '' &&
+                ctyStatus.installedVer > ctyStatus.activeVer && (
+                  <span className="settings-hint">
+                    {t('settings.countryFile.pending', {
+                      ver: ctyVerDate(ctyStatus.installedVer),
+                    })}
+                  </span>
+                )}
+              <span className="settings-hint">{t('settings.countryFile.hint')}</span>
+            </div>
+          </fieldset>
+          </>
+          )}
+
           {/* ---- Connections (connector status + log) — moved from Logbook & QSL ---- */}
           {tab === 'logging' && (
           <fieldset className="settings-section" id="settings-connections">
@@ -11174,27 +11612,6 @@ export function SettingsPanel({
               )}
             </div>
           </fieldset>
-          )}
-
-          {tab === 'logging' && (
-            <fieldset className="settings-section" id="settings-connections-b4">
-              <legend>{t('settings.b4.legend')}</legend>
-              <div className="settings-grid">
-                <label className="settings-field">
-                  <span className="settings-label">{t('settings.b4.matchMode.label')}</span>
-                  <button disabled={locked('b4MatchMode')}
-                    type="button"
-                    role="switch"
-                    aria-checked={form.b4MatchMode ?? false}
-                    className={`toggle${form.b4MatchMode ? ' on' : ''}`}
-                    onClick={() => updateBool('b4MatchMode', !form.b4MatchMode)}
-                  >
-                    <span className="toggle-knob" />
-                  </button>
-                  <span className="settings-hint">{t('settings.b4.matchMode.hint')}</span>
-                </label>
-              </div>
-            </fieldset>
           )}
 
           {/* ---- Network integrations ---- */}
@@ -11910,192 +12327,6 @@ export function SettingsPanel({
           {/* ---- Confirmations (LoTW / eQSL / QRZ / ClubLog accounts) ---- */}
           {tab === 'logging' && (
           <>
-          <fieldset className="settings-section" id="settings-lotw-users">
-            <legend>{t('settings.lotwUsers.legend')}</legend>
-            <div className="settings-field">
-              <div className="lotw-users-row">
-                <button
-                  type="button"
-                  className="settings-test-btn"
-                  disabled={lotwFetching}
-                  onClick={() => {
-                    setLotwFetching(true)
-                    fetchLotwUsers()
-                      .then((st) => {
-                        setLotwUsers(st)
-                        // The grouping is this call site's, not the catalog's — `t()` has no
-                        // locale-aware number path (see the invariant-token rule).
-                        pushToast(
-                          t('settings.lotwUsers.fetch.done', {
-                            count: st.count.toLocaleString(),
-                          }),
-                          'success',
-                          5000,
-                        )
-                      })
-                      .catch((e) =>
-                        pushToast(
-                          t('settings.lotwUsers.fetch.failed', {
-                            detail: e instanceof Error ? e.message : String(e),
-                          }),
-                          'error',
-                        ),
-                      )
-                      .finally(() => setLotwFetching(false))
-                  }}
-                >
-                  {lotwFetching
-                    ? t('settings.lotwUsers.fetch.busy')
-                    : t('settings.lotwUsers.fetch.action')}
-                </button>
-                <span className="settings-hint">
-                  {lotwUsers && lotwUsers.count > 0
-                    ? t('settings.lotwUsers.status', {
-                        count: lotwUsers.count.toLocaleString(),
-                        date: new Date(lotwUsers.fetchedAt * 1000).toISOString().slice(0, 10),
-                      })
-                    : t('settings.lotwUsers.empty')}
-                </span>
-              </div>
-              <label className="settings-label" htmlFor="lotw-max-age" style={{ marginTop: 8 }}>
-                {t('settings.lotwUsers.maxAge.label')}
-              </label>
-              <input
-                id="lotw-max-age"
-                className="settings-input"
-                type="number"
-                min="30"
-                max="3650"
-                step="1"
-                style={{ width: '7em' }}
-                value={form.lotwMaxAgeDays ?? 365}
-                onChange={(e) => {
-                  const n = Number(e.target.value)
-                  if (!Number.isNaN(n)) updateNum('lotwMaxAgeDays', n)
-                }}
-              />
-              <span className="settings-hint">{t('settings.lotwUsers.maxAge.hint')}</span>
-            </div>
-          </fieldset>
-
-          <fieldset className="settings-section" id="settings-callsign-state">
-            <legend>{t('settings.callsignState.legend')}</legend>
-            <div className="settings-field">
-              <div className="lotw-users-row">
-                <button
-                  type="button"
-                  className="settings-test-btn"
-                  disabled={fccFetching}
-                  onClick={() => {
-                    setFccFetching(true)
-                    fetchFccStates()
-                      .then((st) => {
-                        setFccStates(st)
-                        pushToast(
-                          t('settings.callsignState.update.done', {
-                            count: st.count.toLocaleString(),
-                          }),
-                          'success',
-                          5000,
-                        )
-                      })
-                      .catch((e) =>
-                        pushToast(
-                          t('settings.callsignState.update.failed', {
-                            detail: e instanceof Error ? e.message : String(e),
-                          }),
-                          'error',
-                        ),
-                      )
-                      .finally(() => setFccFetching(false))
-                  }}
-                >
-                  {fccFetching
-                    ? t('settings.callsignState.update.busy')
-                    : t('settings.callsignState.update.action')}
-                </button>
-                <span className="settings-hint">
-                  {fccStates && fccStates.count > 0
-                    ? t('settings.callsignState.status', {
-                        count: fccStates.count.toLocaleString(),
-                        date: new Date(fccStates.fetchedAt * 1000).toISOString().slice(0, 10),
-                      })
-                    : t('settings.callsignState.empty')}
-                </span>
-              </div>
-              <span className="settings-hint">{t('settings.callsignState.hint')}</span>
-            </div>
-          </fieldset>
-
-          <fieldset className="settings-section" id="settings-country-file">
-            <legend>{t('settings.countryFile.legend')}</legend>
-            <div className="settings-field">
-              <div className="lotw-users-row">
-                <button
-                  type="button"
-                  className="settings-test-btn"
-                  disabled={ctyFetching}
-                  onClick={() => {
-                    setCtyFetching(true)
-                    fetchCty()
-                      .then((st) => {
-                        setCtyStatus(st)
-                        const pending =
-                          st.installedVer !== '' && st.installedVer > st.activeVer
-                        pushToast(
-                          pending
-                            ? t('settings.countryFile.update.done', {
-                                ver: ctyVerDate(st.installedVer),
-                              })
-                            : t('settings.countryFile.update.current', {
-                                ver: ctyVerDate(st.activeVer),
-                              }),
-                          'success',
-                          5000,
-                        )
-                      })
-                      .catch((e) =>
-                        pushToast(
-                          t('settings.countryFile.update.failed', {
-                            detail: e instanceof Error ? e.message : String(e),
-                          }),
-                          'error',
-                        ),
-                      )
-                      .finally(() => setCtyFetching(false))
-                  }}
-                >
-                  {ctyFetching
-                    ? t('settings.countryFile.update.busy')
-                    : t('settings.countryFile.update.action')}
-                </button>
-                <span className="settings-hint">
-                  {ctyStatus === null
-                    ? t('settings.countryFile.empty')
-                    : ctyStatus.fetchedAt > 0
-                      ? t('settings.countryFile.status', {
-                          count: ctyStatus.count.toLocaleString(),
-                          ver: ctyVerDate(ctyStatus.activeVer),
-                          date: new Date(ctyStatus.fetchedAt * 1000).toISOString().slice(0, 10),
-                        })
-                      : t('settings.countryFile.statusBuiltIn', {
-                          count: ctyStatus.count.toLocaleString(),
-                          ver: ctyVerDate(ctyStatus.activeVer),
-                        })}
-                </span>
-              </div>
-              {ctyStatus !== null &&
-                ctyStatus.installedVer !== '' &&
-                ctyStatus.installedVer > ctyStatus.activeVer && (
-                  <span className="settings-hint">
-                    {t('settings.countryFile.pending', {
-                      ver: ctyVerDate(ctyStatus.installedVer),
-                    })}
-                  </span>
-                )}
-              <span className="settings-hint">{t('settings.countryFile.hint')}</span>
-            </div>
-          </fieldset>
           <fieldset className="settings-section" id="settings-confirmations">
             <legend>{t('settings.confirmations.legend')}</legend>
             <div className="settings-featgroup">
@@ -12420,60 +12651,6 @@ export function SettingsPanel({
               <div className="settings-grid">
                 <label className="settings-field">
                   <span className="settings-label">
-                    {t('settings.confirmations.qrz.username.label')}
-                  </span>
-                  <input
-                    className="settings-input"
-                    type="text"
-                    value={form.qrzUsername}
-                    placeholder={t('settings.confirmations.qrz.username.placeholder')}
-                    onChange={(e) => update('qrzUsername', e.target.value)}
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                  <span className="settings-hint">
-                    {t('settings.confirmations.qrz.username.hint')}
-                  </span>
-                </label>
-
-                <label className="settings-field">
-                  <span className="settings-label">
-                    {t('settings.confirmations.qrz.password.label')}
-                  </span>
-                  <div className="settings-input-row">
-                    <input
-                      className="settings-input"
-                      type="password"
-                      value={qrzPw}
-                      placeholder={t('settings.confirmations.qrz.password.placeholder')}
-                      onChange={(e) => setQrzPw(e.target.value)}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                    <button
-                      type="button"
-                      className="settings-refresh"
-                      onClick={onSaveQrzPassword}
-                      disabled={!qrzPw}
-                    >
-                      {t('settings.confirmations.credential.set.action')}
-                    </button>
-                    <button
-                      type="button"
-                      className="settings-refresh"
-                      onClick={onForgetQrzPassword}
-                      title={t('settings.confirmations.credential.forget.title')}
-                    >
-                      {t('settings.confirmations.credential.forget.action')}
-                    </button>
-                  </div>
-                  <span className="settings-hint">
-                    <T k="settings.confirmations.qrz.password.hint" tags={{ b: <strong /> }} />
-                  </span>
-                </label>
-
-                <label className="settings-field">
-                  <span className="settings-label">
                     {t('settings.confirmations.qrz.apiKey.label')}
                   </span>
                   <div className="settings-input-row">
@@ -12576,157 +12753,6 @@ export function SettingsPanel({
                   </div>
                   <span className="settings-hint">
                     <T k="settings.confirmations.qrz.sync.hint" tags={{ b: <strong /> }} />
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div className="settings-featgroup">
-              <span className="settings-featgroup-title">HamQTH</span>
-              <div className="settings-grid">
-                <label className="settings-field">
-                  <span className="settings-label">
-                    {t('settings.confirmations.hamqth.username.label')}
-                  </span>
-                  <input
-                    className="settings-input"
-                    type="text"
-                    value={form.hamqthUsername}
-                    placeholder={t('settings.confirmations.hamqth.username.placeholder')}
-                    onChange={(e) => update('hamqthUsername', e.target.value)}
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                  <span className="settings-hint">
-                    <T k="settings.confirmations.hamqth.username.hint" tags={{ b: <strong /> }} />
-                  </span>
-                </label>
-
-                <label className="settings-field">
-                  <span className="settings-label">
-                    {t('settings.confirmations.hamqth.password.label')}
-                  </span>
-                  <div className="settings-input-row">
-                    <input
-                      className="settings-input"
-                      type="password"
-                      value={hamqthPw}
-                      placeholder={t('settings.confirmations.hamqth.password.placeholder')}
-                      onChange={(e) => setHamqthPw(e.target.value)}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                    <button
-                      type="button"
-                      className="settings-refresh"
-                      onClick={onSaveHamqthPassword}
-                      disabled={!hamqthPw}
-                    >
-                      {t('settings.confirmations.credential.set.action')}
-                    </button>
-                    <button
-                      type="button"
-                      className="settings-refresh"
-                      onClick={onForgetHamqthPassword}
-                      title={t('settings.confirmations.credential.forget.title')}
-                    >
-                      {t('settings.confirmations.credential.forget.action')}
-                    </button>
-                  </div>
-                  <span className="settings-hint">
-                    {t('settings.confirmations.hamqth.password.hint')}
-                  </span>
-                </label>
-              </div>
-            </div>
-            <div className="settings-featgroup">
-              <span className="settings-featgroup-title">
-                {t('settings.confirmations.callbookCache.title')}
-              </span>
-              <div className="settings-grid">
-                <label className="settings-field">
-                  <span className="settings-label">
-                    {t('settings.confirmations.callbookCache.callook.label')}
-                  </span>
-                  <span className="settings-input-row">
-                    <input
-                      type="checkbox"
-                      checked={form.callookLookup ?? true}
-                      onChange={(e) => updateBool('callookLookup', e.target.checked)}
-                    />
-                    <span className="settings-hint">
-                      {t('settings.confirmations.callbookCache.callook.hint')}
-                    </span>
-                  </span>
-                </label>
-
-                <label className="settings-field">
-                  <span className="settings-label">
-                    {t('settings.confirmations.callbookCache.days.label')}
-                  </span>
-                  <input
-                    className="settings-input mono"
-                    type="number"
-                    min={1}
-                    max={3650}
-                    value={form.callbookCacheDays ?? 30}
-                    onChange={(e) =>
-                      updateNum(
-                        'callbookCacheDays',
-                        Math.min(3650, Math.max(1, Math.round(Number(e.target.value)) || 30)),
-                      )
-                    }
-                  />
-                  <span className="settings-hint">
-                    {t('settings.confirmations.callbookCache.days.hint')}
-                  </span>
-                </label>
-
-                <div className="settings-field">
-                  <span className="settings-label">
-                    {t('settings.confirmations.callbookCache.refresh.label')}
-                  </span>
-                  <div className="settings-input-row">
-                    <input
-                      className="settings-input mono"
-                      type="text"
-                      value={refreshCall}
-                      placeholder={t('settings.confirmations.callbookCache.refresh.placeholder')}
-                      aria-label={t('settings.confirmations.callbookCache.refresh.label')}
-                      onChange={(e) => setRefreshCall(e.target.value)}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                    <button
-                      type="button"
-                      className="settings-refresh"
-                      onClick={onRefreshCallbookCall}
-                      disabled={!refreshCall.trim() || refreshingCall}
-                    >
-                      {t('settings.confirmations.callbookCache.refresh.action')}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="settings-field">
-                  <span className="settings-label">
-                    {t('settings.confirmations.callbookCache.clear.label')}
-                  </span>
-                  <div className="settings-input-row">
-                    <button
-                      type="button"
-                      className="settings-refresh"
-                      onClick={onClearCallbookCache}
-                    >
-                      {t('settings.confirmations.callbookCache.clear.action')}
-                    </button>
-                    {callbookCount !== null && (
-                      <span className="settings-hint">
-                        {t('settings.confirmations.callbookCache.count', { count: callbookCount })}
-                      </span>
-                    )}
-                  </div>
-                  <span className="settings-hint">
-                    {t('settings.confirmations.callbookCache.clear.hint')}
                   </span>
                 </div>
               </div>

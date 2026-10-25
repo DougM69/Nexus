@@ -6783,6 +6783,7 @@ export const EN = {
   'settings.tabs.remote': 'Remote',
   'settings.tabs.spots': 'Spots & Alerts',
   'settings.tabs.logging': 'Logging & Connectors',
+  'settings.tabs.logbook': 'Logbook',
   'settings.tabs.contesting': 'Contesting',
   'settings.tabs.appearance': 'Appearance',
   'settings.tabs.configurations': 'Config',
@@ -8867,7 +8868,15 @@ export const EN = {
   // On a computer driving a station: in place of the station's half of the Remote card.
   'settings.remote.atStation': 'Remote access is set up at the station, on its own screen.',
 
-  // ── Settings ▸ Logging & Connectors ▸ Worked-before (B4) & dupes ────────────────────
+  // ── Settings ▸ Logbook: its own sections (2026-10-25) ───────────────────────────────
+  // The rows they hold kept their keys when they moved here (`settings.workspace.*`,
+  // `settings.dataFolder.snapshots.*`, `settings.confirmations.qrz/hamqth/callbookCache.*`): an id
+  // is an invariant token, and the rows only moved.
+  'settings.logbookDisplay.legend': 'Logbook display',
+  'settings.logbookHistory.legend': 'Deleted contacts',
+  'settings.callbook.legend': 'Callbook lookups',
+
+  // ── Settings ▸ Logbook ▸ Worked-before (B4) & dupes ────────────────────────────────
   // ⚠️ B4 is the hobby's own shorthand for "worked before" and Dupe is what the badge is
   // called; band names (40m), mode names (FT8, phone) and the program name WSJT-X are
   // invariant. The legend holds a real `&` — the JSX wrote `&amp;`, but React escapes a text
@@ -9063,7 +9072,7 @@ export const EN = {
   'settings.n1mm.broadcastAll.hint':
     'Send the contact packet for <b>every</b> logged QSO, not just contest contacts — point a map app such as GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the contest broadcast, so it is safe to leave on through a contest. Off by default; with it off, packets go out <em>only</em> for the contacts you log in Contest mode.',
 
-  // ── Settings ▸ Logging & Connectors ▸ LoTW users list ──────────────────────────────
+  // ── Settings ▸ Logbook ▸ LoTW users list ──────────────────────────────────────────
   // ⚠️ `{{count}}` arrives ALREADY FORMATTED by the panel (the grouping is that call site's,
   // not this file's — `t()` has no locale-aware formatter and never will), `{{date}}` is an
   // ISO day stamp, `{{detail}}` is a fetch error, and `L` is the mark a decode line carries.
@@ -9080,7 +9089,7 @@ export const EN = {
   'settings.lotwUsers.maxAge.hint':
     'ARRL\'s activity list updates weekly — refetching more often just returns "unchanged". Manual fetch by design (WSJT-X convention).',
 
-  // ── Settings ▸ Logging & Connectors ▸ Callsign → state database ────────────────────
+  // ── Settings ▸ Logbook ▸ Callsign → state database ────────────────────────────────
   // ⚠️ `Callsign→state` names the index itself and keeps its arrow; `New State` is the need
   // category the Needed board lights up; FCC is the licensing authority and hamradiotools.io
   // is where the file comes from. `{{count}}` is formatted by the panel, as above.
@@ -9096,7 +9105,7 @@ export const EN = {
   'settings.callsignState.hint':
     'A callsign→state index (from the FCC license file) so a New State lights up on cluster / CW / SSB spots that carry no grid. Refreshed weekly from hamradiotools.io; a live decode grid refines it for rovers.',
 
-  // ── Settings ▸ Logging & Connectors ▸ Country file (DXCC) ─────────────────────────
+  // ── Settings ▸ Logbook ▸ Country file (DXCC) ─────────────────────────────────────
   // ⚠️ `AD1C` (the file's maintainer), `cty.dat` and `DXCC` are invariant tokens in every
   // catalog. `{{ver}}` is an AD1C release date the panel formats as YYYY-MM-DD; the resolver
   // is set once at launch, so every "applies at next launch" is literal, not caution.
@@ -9223,7 +9232,7 @@ export const EN = {
   'settings.confirmations.qrz.password.label': 'QRZ password',
   'settings.confirmations.qrz.password.placeholder': 'QRZ.com account password',
   'settings.confirmations.qrz.password.hint':
-    'Your QRZ.com login password — <b>this is what powers callbook lookups</b> (name, QTH, grid), and it is separate from the Logbook API key below (that key only uploads QSOs). Stored in the OS keychain, never on disk. Grid & state need a QRZ XML subscription; free accounts return only name/address/country.',
+    'Your QRZ.com login password — <b>this is what powers callbook lookups</b> (name, QTH, grid), and it is separate from the QRZ Logbook API key under Logging & Connectors (that key only uploads QSOs). Stored in the OS keychain, never on disk. Grid & state need a QRZ XML subscription; free accounts return only name/address/country.',
   'settings.confirmations.qrz.apiKey.label': 'QRZ Logbook API key',
   'settings.confirmations.qrz.apiKey.placeholder': 'from your QRZ logbook settings page',
   'settings.confirmations.qrz.apiKey.forget.title':
