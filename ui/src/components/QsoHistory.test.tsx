@@ -149,7 +149,8 @@ describe("a contact's history", () => {
     expect(toasts).toEqual([])
     api.qsoHistory.mockResolvedValue([entry({ seq: 7, kind: 'edit', changes: [{ tag: 'STATION_CALLSIGN', old: 'KA1OLD', new: null }] })])
     api.undoQsoChange.mockResolvedValue(done)
-    api.undoHistoryRun.mockResolvedValue({ ...done, changed: 0, run: null, held: ['STATION_CALLSIGN'], heldUnder: 'KD9NEW' })
+    // A one-contact undo is redone through the one-contact redo.
+    api.redoQsoChange.mockResolvedValue({ ...done, changed: 0, run: null, held: ['STATION_CALLSIGN'], heldUnder: 'KD9NEW' })
     render(<QsoHistory id="1:2:3" />)
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
     await waitFor(() => expect(toasts.some((t) => t.message.startsWith('Change undone'))).toBe(true))
