@@ -435,6 +435,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("send_cw_armed",                  StartsTx,    "Queues CW to transmit (Enter Sends Message); never turns TX on."),
     ("send_message",                   StartsTx,    "Queues a chat message to transmit."),
     ("set_activation",                 RunsAtShack, "Begins an activation at the shack."),
+    ("set_activation_grid",            RunsAtShack, "Sets the grid the shack's activation is made from."),
     ("set_activation_state",           RunsAtShack, "Picks the state a park on a state line is activated from."),
     ("set_active_radio",               RunsAtShack, "Switches the shack's active radio; any carrier is dropped first."),
     ("set_af_gain",                    RunsAtShack, "The shack's rig control."),

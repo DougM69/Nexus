@@ -5789,6 +5789,12 @@ mod fd_event_journal_path_tests {
     }
 }
 
+/// The activation running now, kept beside settings.json so a restart takes it up
+/// ([`tempo_app::station::StationCore::restore_activation`]).
+fn activation_path() -> PathBuf {
+    settings_path().with_file_name("activation.json")
+}
+
 /// Durable journal for the ONE QSO held by the prompt-to-log popup (beside settings.json).
 /// The engine rewrites it the moment the hold changes and deletes it once the operator
 /// confirms or discards, so a crash or power cut while the popup waits can't destroy a real
@@ -31901,38 +31907,10 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
 
 // ----- Parks / Summits On The Air -------------------------------------------
 
-/// Current activation state for the POTA/SOTA panel.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ActivationDto {
-    /// "POTA" | "SOTA", or null when not activating.
-    program: Option<String>,
-    /// Normalized park/summit reference, or null.
-    reference: Option<String>,
-    /// Logged QSOs carrying this activation's reference so far.
-    qso_count: usize,
-    /// Where the park or summit is ("US-ND"; two or more for a park on a state line), so the
-    /// panel can ask which state on a state line. Empty when not activating or not placed.
-    states: Vec<String>,
-    /// The state the activation's contacts carry as `MY_STATE` ("ND"), or null: none known yet.
-    my_state: Option<String>,
-}
-
-impl ActivationDto {
-    /// The engine's activation, as the panel shows it.
-    fn of(eng: &tempo_app::engine::Engine) -> Self {
-        let (program, reference) = match eng.activation() {
-            Some((p, r)) => (Some(p), Some(r)),
-            None => (None, None),
-        };
-        ActivationDto {
-            program,
-            reference,
-            qso_count: eng.activation_qso_count(),
-            states: eng.activation_places(),
-            my_state: eng.activation_state(),
-        }
-    }
+/// Current activation state for the POTA/SOTA panel ([`tempo_app::dto::ActivationDto`]), its
+/// counts of today's UTC day.
+fn activation_now(eng: &tempo_app::engine::Engine) -> tempo_app::dto::ActivationDto {
+    eng.activation_dto(u64::try_from(now_unix()).unwrap_or(0))
 }
 
 /// Activators currently on the air for `program` ("POTA" | "SOTA") — the hunter
@@ -33477,24 +33455,62 @@ fn set_activation(
     parks: State<'_, SharedParks>,
     program: String,
     reference: String,
-) -> Result<ActivationDto, String> {
+) -> Result<tempo_app::dto::ActivationDto, String> {
     set_activation_on(&state, &ota_cache, &parks, &program, &reference)
 }
 
 /// [`set_activation`]'s body, over plain handles so a test drives exactly what the command runs.
 /// The activation carries where its park or summit is, read before the Engine lock
-/// ([`ota_park_places`]): a park in one state names the `MY_STATE` its contacts carry.
+/// ([`ota_park_places`]): a park in one state names the `MY_STATE` its contacts carry. A two-fer
+/// ("US-1234, US-5678") is placed by every park it names, so a pair in one state names it and a
+/// pair across a line asks.
+///
+/// And the grid it is activated from: the park directory's grid of its first park
+/// ([`ota_park_grid`]), carried as the contacts' `MY_GRIDSQUARE` instead of the home grid. A park
+/// the directory does not hold starts with none; the strip takes one typed.
 fn set_activation_on(
     engine: &SharedEngine,
     ota_cache: &SharedOtaSpots,
     parks: &SharedParks,
     program: &str,
     reference: &str,
-) -> Result<ActivationDto, String> {
-    let places = ota_park_places(ota_cache, parks, program, reference);
+) -> Result<tempo_app::dto::ActivationDto, String> {
+    let refs: Vec<&str> = reference
+        .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .filter(|one| !one.is_empty())
+        .collect();
+    let mut places: Vec<String> = Vec::new();
+    for one in &refs {
+        for place in ota_park_places(ota_cache, parks, program, one) {
+            if !places.contains(&place) {
+                places.push(place);
+            }
+        }
+    }
+    let grid = refs
+        .first()
+        .and_then(|first| ota_park_grid(parks, program, first));
     let mut eng = engine_lock(engine);
     eng.set_activation(program, reference, places)?;
-    Ok(ActivationDto::of(&eng))
+    if let Some(grid) = grid {
+        // A directory grid that is not a locator is left out, never the activation refused.
+        let _ = eng.set_activation_grid(&grid);
+    }
+    Ok(activation_now(&eng))
+}
+
+/// The park directory's grid for a POTA park, if it holds one. A summit has none here.
+fn ota_park_grid(parks: &SharedParks, program: &str, reference: &str) -> Option<String> {
+    if tempo_core::pota::OtaProgram::from_code(program) != Some(tempo_core::pota::OtaProgram::Pota)
+    {
+        return None;
+    }
+    let grid = parks
+        .lock()
+        .ok()?
+        .lookup(reference.trim())
+        .map(|park| park.grid.trim().to_string())?;
+    (!grid.is_empty()).then_some(grid)
 }
 
 /// Pick the state you are activating from, of a park on a state line: its contacts carry it as
@@ -33503,31 +33519,39 @@ fn set_activation_on(
 fn set_activation_state(
     state: State<'_, SharedEngine>,
     my_state: String,
-) -> Result<ActivationDto, String> {
+) -> Result<tempo_app::dto::ActivationDto, String> {
     let mut eng = engine_lock(&state);
     eng.set_activation_state(&my_state)?;
-    Ok(ActivationDto::of(&eng))
+    Ok(activation_now(&eng))
+}
+
+/// The grid you are activating from, typed in the strip (a precise 6-character one, say): the
+/// contacts' `MY_GRIDSQUARE` until Stop. Never written to Settings. Blank clears it.
+#[tauri::command(async)]
+fn set_activation_grid(
+    state: State<'_, SharedEngine>,
+    grid: String,
+) -> Result<tempo_app::dto::ActivationDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_activation_grid(&grid)?;
+    Ok(activation_now(&eng))
 }
 
 /// End the current activation (subsequent QSOs untagged).
 #[tauri::command(async)]
-fn clear_activation(state: State<'_, SharedEngine>) -> Result<ActivationDto, String> {
+fn clear_activation(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::ActivationDto, String> {
     let mut eng = engine_lock(&state);
     eng.clear_activation();
-    Ok(ActivationDto {
-        program: None,
-        reference: None,
-        qso_count: 0,
-        states: Vec::new(),
-        my_state: None,
-    })
+    Ok(activation_now(&eng))
 }
 
 /// The current activation state (for the panel on load / after logging).
 #[tauri::command(async)]
-fn get_activation(state: State<'_, SharedEngine>) -> Result<ActivationDto, String> {
+fn get_activation(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::ActivationDto, String> {
     let eng = engine_lock(&state);
-    Ok(ActivationDto::of(&eng))
+    Ok(activation_now(&eng))
 }
 
 /// POTA all-parks export (CSV). Public list of every park's reference/name/location/grid. NOTE:
@@ -37748,6 +37772,11 @@ fn start_on_the_logbook(
         // was pending; one this build cannot read is kept aside, and the screen says where.
         eng.set_pending_qso_path(pending_qso_path());
         eng.restore_pending_qso_journal(now_unix());
+        // An activation the last session left running is taken up, not silently dropped: the
+        // contacts logged after a crash or a battery swap keep their park, and the screen asks
+        // whether it is still on.
+        eng.set_activation_path(activation_path());
+        eng.restore_activation();
         // The uploads contest mode held when the app last closed: still held while it is on, sent
         // once, paced, when it goes off. One this build cannot read is kept aside, and the screen
         // says where.
@@ -39754,6 +39783,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         export_channels,
         set_activation,
         set_activation_state,
+        set_activation_grid,
         clear_activation,
         get_activation,
         park_state_review,
@@ -50516,11 +50546,39 @@ mod tests {
         );
         engine_lock(&engine).set_activation_state("MT").unwrap();
         assert_eq!(
-            crate::ActivationDto::of(&engine_lock(&engine))
+            crate::activation_now(&engine_lock(&engine))
                 .my_state
                 .as_deref(),
             Some("MT")
         );
+    }
+
+    /// ⭐ An activation takes its grid from the park directory — the contacts' `MY_GRIDSQUARE`
+    /// while it runs — and a two-fer is placed by every park it names. A park the directory does
+    /// not hold starts with no grid; Settings' home grid is never touched.
+    #[test]
+    fn an_activation_takes_the_park_grid_and_a_two_fer_is_placed_by_both_parks() {
+        let engine = fresh_engine();
+        let cache = hunter_cache(&[]);
+        let parks: crate::SharedParks = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_core::pota::ParkIndex::parse_csv(
+                "reference,name,active,entityId,locationDesc,latitude,longitude,grid\n\
+                 US-0001,One,1,291,US-ND,47.0,-100.0,EN07ab\n\
+                 US-0002,Two,1,291,US-MT,47.0,-104.0,DN97\n",
+            ),
+        ));
+        let home = engine_lock(&engine).settings().mygrid.clone();
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "us-0001, US-0002")
+            .expect("the activation starts");
+        assert_eq!(dto.reference.as_deref(), Some("US-0001,US-0002"));
+        assert_eq!(dto.grid.as_deref(), Some("EN07AB"), "the first park's grid");
+        assert_eq!(dto.states, codes(&["US-ND", "US-MT"]));
+        assert_eq!(dto.my_state, None, "two states: asked, never guessed");
+        assert_eq!(dto.parks.len(), 2);
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003")
+            .expect("the activation starts");
+        assert_eq!(dto.grid, None, "a park the directory does not hold");
+        assert_eq!(engine_lock(&engine).settings().mygrid, home);
     }
 
     /// The log form places a typed park by the states its lookup names, read by the hunter feed's
