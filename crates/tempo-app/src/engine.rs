@@ -10987,6 +10987,26 @@ impl Engine {
         } else {
             String::new()
         };
+        // {MYPARK}: every park of a POTA activation (a two-fer is keyed "US-1234 US-5678");
+        // {HISPARK}: the park hunted from the station being worked, and only that station.
+        let myparks: Vec<String> = match self.activation() {
+            Some((program, reference)) if program == "POTA" => reference
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let hispark = match self.hunt_target() {
+            Some((program, reference, call))
+                if program == "POTA"
+                    && !hiscall.is_empty()
+                    && call.eq_ignore_ascii_case(&hiscall) =>
+            {
+                reference
+            }
+            _ => String::new(),
+        };
         let ctx = tempo_core::cw::CwContext {
             mycall: &self.settings.mycall,
             myname: &self.settings.op_name,
@@ -10999,6 +11019,8 @@ impl Engine {
             class,
             section,
             exch: &exch,
+            myparks: &myparks,
+            hispark: &hispark,
         };
         tempo_core::cw::expand(text, &ctx)
     }
@@ -54752,6 +54774,28 @@ mod tests {
         // …and outside any contest every exchange token is empty, as it always was.
         let e = Engine::new("W9XYZ", "EN61", 0);
         assert_eq!(e.preview_cw("! {EXCH} {CLASS} {SECTION} K"), "K");
+    }
+
+    /// ⭐ **`{MYPARK}` keys the park being activated and `{HISPARK}` the park of the station
+    /// being worked**, read from the station: the activation, and the hunt pending for the
+    /// worked call. A summit is no park, and a hunt for another call is not this station's.
+    #[test]
+    fn park_tokens_key_my_activation_and_the_worked_stations_hunted_park() {
+        let f2 = "! UR {RST} {MYPARK} BK";
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.select_peer("K2DEF");
+        assert_eq!(e.preview_cw(f2), "K2DEF UR 5NN BK", "no activation");
+        e.set_activation("POTA", "US-1234", Vec::new()).unwrap();
+        assert_eq!(e.preview_cw(f2), "K2DEF UR 5NN US-1234 BK");
+        assert_eq!(e.preview_cw("{HISPARK}"), "", "nothing hunted");
+        e.set_hunt_target("N0OTH", "POTA", "US-0042", Vec::new())
+            .unwrap();
+        assert_eq!(e.preview_cw("{HISPARK}"), "", "a hunt for another call");
+        e.set_hunt_target("K2DEF", "POTA", "US-0042", Vec::new())
+            .unwrap();
+        assert_eq!(e.preview_cw("P2P {HISPARK}"), "P2P US-0042");
+        e.set_activation("SOTA", "W9/WI-001", Vec::new()).unwrap();
+        assert_eq!(e.preview_cw(f2), "K2DEF UR 5NN BK", "a summit is no park");
     }
 
     /// M15: the Field Day contest log is memory-only, so the shell needs a way to

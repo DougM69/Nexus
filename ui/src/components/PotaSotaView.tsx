@@ -23,7 +23,19 @@ import {
   selfSpot,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { announceSelfSpot, confirmSelfSpot } from '../selfSpot'
+import {
+  DEFAULT_SPOT_COMMENT,
+  QRT_COMMENT,
+  SPOT_COMMENT_MAX,
+  announceSelfSpot,
+  confirmSelfSpot,
+  respotStep,
+  respotThresholdHz,
+  respotWatch,
+  spotComment,
+  type RespotWatch,
+  type SelfSpotReport,
+} from '../selfSpot'
 import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
 import { bandLabelForMhz } from '../band'
 import { placeCode, placeLabel, placeName } from '../features/otaStates'
@@ -48,6 +60,11 @@ const SOURCES: Record<Program, string> = {
   POTA: 'pota.app',
   SOTA: 'SOTAwatch',
   Both: 'pota.app + SOTAwatch',
+}
+
+/** A spot stands on the air after a press when either target took it now or had it already. */
+function spotStands(report: SelfSpotReport): boolean {
+  return report.pota === 'posted' || report.pota === 'throttled' || report.cluster === 'queued' || report.cluster === 'throttled'
 }
 
 /** kHz → "14.0740 MHz" display string (4 decimal places = 10 Hz resolution). */
@@ -419,11 +436,24 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     const a = await withErrorToast(() => setActivationState(code), t('ota.activation.state.failed'))
     if (a) setAct(a)
   }
+  // The spot's comment (QRV when blank), the frequency this activation was last spotted on from
+  // here (null: not spotted), and the QRT offer at Stop, which starts unticked every activation.
+  const [spotText, setSpotText] = useState(DEFAULT_SPOT_COMMENT)
+  const [spottedHz, setSpottedHz] = useState<number | null>(null)
+  const [postQrt, setPostQrt] = useState(false)
+  useEffect(() => {
+    setSpottedHz(null)
+    setPostQrt(false)
+    setSpotText(DEFAULT_SPOT_COMMENT)
+  }, [act?.reference])
   const handleStopActivation = async () => {
     if (observed) {
       remote?.stopActivation?.()
       return
     }
+    // Ticked, the QRT goes first — the station posts only for an activation still running — and
+    // through Spot me's own confirm. Declined or refused, the activation still ends.
+    if (postQrt) await handleSelfSpot(QRT_COMMENT)
     const a = await withErrorToast(() => clearActivation(), t('ota.activation.stopFailed'))
     if (a) {
       setAct(a)
@@ -431,31 +461,60 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       pushToast(t('ota.activation.ended'), 'info', 2000)
     }
   }
-  // "Spot me" — pota.app and the DX cluster, only on this press. Sends the park and dial the
-  // confirm showed; the backend refuses if either has moved.
-  const handleSelfSpot = async () => {
+  // "Spot me" — pota.app and the DX cluster, only on this press. Sends the park, dial and comment
+  // the confirm showed; the backend refuses if the park or dial has moved. Read through refs, so
+  // the re-spot prompt's button, pressed later, sends what is current then.
+  const dialMhzRef = useRef(snap.radio.dialMhz)
+  dialMhzRef.current = snap.radio.dialMhz
+  const handleSelfSpot = async (comment: string = spotText) => {
     if (observed) {
       remote?.selfSpot?.()
       return
     }
     const reference = act?.reference
     if (!reference) return
-    const dialHz = Math.round(snap.radio.dialMhz * 1e6)
-    if (!(await confirmSelfSpot(reference, dialHz))) return
+    const dialHz = Math.round(dialMhzRef.current * 1e6)
+    if (!(await confirmSelfSpot(reference, dialHz, comment))) return
     try {
-      announceSelfSpot(await selfSpot(reference, dialHz))
+      const report = await selfSpot(reference, dialHz, comment)
+      announceSelfSpot(report)
+      if (spotStands(report)) setSpottedHz(spotComment(comment) === QRT_COMMENT ? null : dialHz)
     } catch (e) {
       pushToast(
         e === 'contextChanged'
           ? t('ota.selfSpot.moved')
           : e === 'spotRfOnly'
             ? t('ota.selfSpot.rfOnly')
-            : t('ota.selfSpot.failed'),
+            : e === 'invalidComment'
+              ? t('ota.selfSpot.badComment', { max: SPOT_COMMENT_MAX })
+              : t('ota.selfSpot.failed'),
         'error',
         6000,
       )
     }
   }
+  const respotRef = useRef(handleSelfSpot)
+  respotRef.current = handleSelfSpot
+  // THE QSY PROMPT: once the dial has settled off the spotted frequency, one button that is Spot
+  // me. It never posts by itself. Looked at each second, so a dial that sits still is seen too.
+  const modeRef = useRef(snap.radio.operatingMode)
+  modeRef.current = snap.radio.operatingMode
+  useEffect(() => {
+    if (observed || spottedHz === null) return
+    let watch: RespotWatch = respotWatch(spottedHz)
+    const id = window.setInterval(() => {
+      const dialHz = Math.round(dialMhzRef.current * 1e6)
+      const step = respotStep(watch, dialHz, Date.now(), respotThresholdHz(modeRef.current))
+      watch = step.watch
+      if (step.prompt) {
+        pushToast(t('ota.respot.prompt', { freq: (dialHz / 1e6).toFixed(3) }), 'info', 30_000, {
+          action: () => void respotRef.current(),
+          actionLabel: t('ota.respot.button'),
+        })
+      }
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [observed, spottedHz])
 
   // Local park directory — download once / import a CSV, then search it offline in the log form.
   const [nativeParkN, setParkN] = useState(0)
@@ -651,10 +710,29 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 ))}
               </span>
             )}
-            {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
             {(!observed || remote?.selfSpot) && <button type="button" className="pota-hunt-clear" onClick={() => void handleSelfSpot()}>
               {t('ota.selfSpot.button')}
             </button>}
+            {!observed && (
+              <input
+                className="settings-input mono pota-spot-comment"
+                value={spotText}
+                maxLength={SPOT_COMMENT_MAX}
+                onChange={(e) => setSpotText(e.target.value.toUpperCase())}
+                placeholder={DEFAULT_SPOT_COMMENT}
+                aria-label={t('ota.selfSpot.comment.label')}
+                title={t('ota.selfSpot.comment.label')}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            )}
+            {!observed && spottedHz !== null && (
+              <label className="pota-spot-qrt" title={t('ota.selfSpot.qrt.title')}>
+                <input type="checkbox" checked={postQrt} onChange={(e) => setPostQrt(e.target.checked)} />
+                {t('ota.selfSpot.qrt.label')}
+              </label>
+            )}
+            {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
             {(!observed || remote?.stopActivation) && <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
               <X size={13} aria-hidden="true" /> {t('ota.activation.stop.label')}
             </button>}

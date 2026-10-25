@@ -23076,6 +23076,20 @@ button.cq-skiptx1.on {
 .pota-act-text {
   flex: 1;
 }
+/* The spot's comment beside Spot me, and the QRT offer beside Stop (unticked each activation). */
+.pota-spot-comment {
+  flex: 0 1 auto;
+  width: 9ch;
+  min-width: 5ch;
+}
+.pota-spot-qrt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
 /* The state an activation's contacts carry as MY_STATE, or, on a state line, the ask for it. */
 .pota-act-state {
   display: inline-flex;

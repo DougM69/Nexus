@@ -4298,7 +4298,7 @@ export const EN = {
   // desktop's board and the Remote page's. Each target reports on its own unless both took it.
   'ota.selfSpot.button': 'Spot me',
   'ota.selfSpot.confirm.title': 'Spot yourself on pota.app and the DX cluster?',
-  'ota.selfSpot.confirm.body': '{{reference}} on {{freq}} MHz, from your own call. Everyone on pota.app and the DX cluster sees it.',
+  'ota.selfSpot.confirm.body': '{{reference}} on {{freq}} MHz, comment “{{comment}}”, from your own call. Everyone on pota.app and the DX cluster sees it.',
   'ota.selfSpot.confirm.post': 'Post spot',
   'ota.selfSpot.both': 'Spotted on pota.app and the DX cluster',
   'ota.selfSpot.pota.posted': 'Spotted on pota.app',
@@ -4316,6 +4316,12 @@ export const EN = {
   'ota.selfSpot.moved': 'Your park or frequency changed after you pressed Spot me, so nothing was posted',
   'ota.selfSpot.failed': 'Couldn’t spot you. Nothing was posted.',
   'ota.selfSpot.rfOnly': 'Not spotted: the contest you are running allows spots only over amateur RF while it runs.',
+  'ota.selfSpot.comment.label': 'Spot comment (QRV when blank)',
+  'ota.selfSpot.badComment': 'Not spotted: a comment is up to {{max}} letters, digits and punctuation, without accents.',
+  'ota.selfSpot.qrt.label': 'Post QRT',
+  'ota.selfSpot.qrt.title': 'At Stop, spot QRT on pota.app and the DX cluster so hunters know you have gone. It asks first.',
+  'ota.respot.prompt': 'Moved to {{freq}}. Re-spot?',
+  'ota.respot.button': 'Re-spot',
 
   // The offline park directory. `{{formatted}}` is a park COUNT the call site has already
   // grouped for display — it never passes through a formatter here (see `logbook.markLotw`).
@@ -11939,6 +11945,7 @@ export const EN = {
   'cw.macro.reply.label': 'Reply',
   'cw.macro.exch.label': 'Exch',
   'cw.macro.myCall.label': 'My Call',
+  'cw.macro.myPark.label': 'My Park',
   'cw.macro.hisCall.label': 'His Call',
   'cw.macro.spExch.label': 'S&P exch',
   'cw.macro.empty.label': '(empty)',
