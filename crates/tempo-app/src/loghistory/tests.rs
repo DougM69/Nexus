@@ -1158,9 +1158,14 @@ fn an_undo_that_swaps_two_near_contacts_puts_the_deleted_one_back() {
             when_unix: was.when_unix + 60,
             ..was.clone()
         };
+        // Made now: a delete older than Settings keeps its contact is taken out of the history by
+        // the trim the next engine's launch starts in the background, and B could not come back.
         let note = Note {
             run: run.into(),
-            at_ms: 1,
+            at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64,
             source: Source::Operator,
             edit: Kind::Edit,
             undoes: HashMap::new(),
