@@ -1294,7 +1294,10 @@ fn an_older_builds_entry_on_a_contest_held_tag_is_kept_not_reverted() {
     // exchange's, so a revert would put a value in the field that was perhaps never the field's.
     let mut now = merged(1);
     now.state = Some("NY".into());
-    assert_eq!(undo(&older, Some(&now), None), Err(CannotUndo::ChangedSince));
+    assert_eq!(
+        undo(&older, Some(&now), None),
+        Err(CannotUndo::ChangedSince)
+    );
     // Control: the same entry, on a contact with no contest STATE, undoes.
     let mut plain = rec("W1AW", 1);
     plain.state = Some("NY".into());

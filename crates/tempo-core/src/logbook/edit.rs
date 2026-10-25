@@ -983,7 +983,8 @@ mod tests {
             .unwrap();
         }
         let entries = db.history_of(row.id.unwrap()).unwrap();
-        let Ok(Undo::Revert { row: undone, .. }) = history::undo(&entries[0], Some(&after), None) else {
+        let Ok(Undo::Revert { row: undone, .. }) = history::undo(&entries[0], Some(&after), None)
+        else {
             panic!("the State edit undoes: {entries:?}");
         };
         let (state, tags, out) = read(&undone);
