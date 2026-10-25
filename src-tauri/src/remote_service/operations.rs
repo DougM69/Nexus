@@ -569,17 +569,26 @@ impl Authority {
         Some(self.hold_shown(&device, &grants, now))
     }
 
-    /// [`Self::hold_shown`] for `device` at `now`, as the remote PC holding the lease under it would
-    /// be told, for the shack's Devices list: DISPLAY ONLY, never read to decide anything. Not held,
-    /// or a poisoned lock, says nothing.
-    pub(crate) fn hold_display(&self, device: &str, now: Instant) -> RemoteTxHold {
-        let Ok(grants) = self.core.lock().map(|c| c.tx_grants.clone()) else {
-            return RemoteTxHold::default();
-        };
-        if !self.tx_held_for(device, &grants, now) {
-            return RemoteTxHold::default();
+    /// [`Self::hold_shown`] for each of `devices` at `now`, as the remote PC holding the lease under
+    /// it would be told, for the shack's Devices list: DISPLAY ONLY, never read to decide anything.
+    /// One snapshot of the grants for them all, so a status read takes Core once however many
+    /// devices are held, and none with nobody held. One not held, or a poisoned lock, says nothing.
+    pub(crate) fn hold_display(
+        &self,
+        devices: &[String],
+        now: Instant,
+    ) -> BTreeMap<String, RemoteTxHold> {
+        if devices.is_empty() {
+            return BTreeMap::new();
         }
-        self.hold_shown(device, &grants, now)
+        let Ok(grants) = self.core.lock().map(|c| c.tx_grants.clone()) else {
+            return BTreeMap::new();
+        };
+        devices
+            .iter()
+            .filter(|device| self.tx_held_for(device, &grants, now))
+            .map(|device| (device.clone(), self.hold_shown(device, &grants, now)))
+            .collect()
     }
 
     /// What the remote PC may be told of `device`, which the gate holds: notified only when the

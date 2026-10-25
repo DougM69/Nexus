@@ -296,7 +296,8 @@ export class StreamInputDispatcher {
       if (k.key === 'ArrowLeft' || k.key === 'ArrowRight' || k.key === 'Home' || k.key === 'End') { moveCaret(target, k.key); return }
       if (k.key === 'Enter') {
         if (target instanceof this.win.HTMLTextAreaElement) this.insert(target, '\n', 'insertLineBreak')
-        else target.form?.requestSubmit()
+        // The form's submit is this Enter's own: its handlers run inside the mark, as a click's do.
+        else { dispatching++; try { target.form?.requestSubmit() } finally { dispatching-- } }
       }
       return
     }

@@ -4,6 +4,7 @@ import { Dialog } from '../components/ui/Dialog'
 import { t } from '../i18n'
 import { shortFingerprint } from '../remote-web/stream-protocol'
 import { isNative, offersAllowTransmit, PLATFORM_NAMES, waitsForApprove, type RemoteStationStatus } from './types'
+import { isStreamInput } from './stream-input'
 
 /** How often the shack looks for a browser asking to stream, while Remote is on. Each look is the
  *  Refresh the Remote access panel makes (one request to the service); with Remote off, none is made. */
@@ -62,6 +63,7 @@ export function RemoteApprovalPrompt() {
   const [busy, setBusy] = useState(false)
   const [armed, setArmed] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [refused, setRefused] = useState(false)
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -86,7 +88,7 @@ export function RemoteApprovalPrompt() {
   const device = asked?.device ?? null, held = !!asked?.held
   const current = asked ? question(asked) : null
   useEffect(() => {
-    setArmed(false); setFailed(false)
+    setArmed(false); setFailed(false); setRefused(false)
     if (!current) return
     const timer = setTimeout(() => setArmed(true), APPROVAL_ARM_MS)
     return () => clearTimeout(timer)
@@ -100,7 +102,10 @@ export function RemoteApprovalPrompt() {
     if (!approve && held) { settle(key); return }
     // A browser approved before keeps its approval on a Deny; only a waiting request is refused.
     if (!approve && device.approved === 1) { settle(key); return }
-    setBusy(true); setFailed(false)
+    // Only at the shack: an answer that sends something is refused through a stream, so a device driving this
+    // screen never approves or allows itself (the station refuses it too). The question stays.
+    if (isStreamInput()) { setRefused(true); return }
+    setBusy(true); setFailed(false); setRefused(false)
     try {
       const next = await remoteStationAction(held ? { type: 'allowTransmit', deviceId: device.id } : approve
         ? { type: 'device', deviceId: device.id, approve: true, key: device.key ?? undefined, kind: device.kind ?? 'browser' }
@@ -139,6 +144,7 @@ export function RemoteApprovalPrompt() {
     {device && !held && isNative(device) && status?.stationKey
       && <p>{t('remote.thisStationKey', { key: shortFingerprint(status.stationKey) })}</p>}
     {failed && <p role="alert">{t('remote.requestFailed')}</p>}
+    {refused && <p role="alert">{t('remote.lan.atShackOnly')}</p>}
     <div className="confirm-actions">
       <button type="button" className="settings-refresh" autoFocus disabled={busy} onClick={() => void answer(false)}>{held ? t('remote.approval.notNow') : t('remote.approval.deny')}</button>
       <button type="button" className="settings-save" disabled={busy || !armed} onClick={() => void answer(true)}>{held ? t('remote.account.allowTransmit') : t('remote.approve')}</button>

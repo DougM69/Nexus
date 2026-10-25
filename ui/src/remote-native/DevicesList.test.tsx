@@ -3,8 +3,8 @@
 // Settings ▸ Remote access ▸ Devices: one list at the shack, by person (the operator's ruling of 2026-10-25).
 // It replaces the separate lists of browsers, computers, paired computers and people, and the browser
 // approvals under Advanced. PRESENTATION ONLY: every button here is held to the action the old list it
-// replaces sent, by the same ids (each case names that list), and a Remove on this network's list is still
-// refused through a stream.
+// replaces sent, by the same ids (each case names that list), and every one of them is refused through a
+// stream.
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RemoteStation } from './RemoteStation'
@@ -70,14 +70,17 @@ afterEach(() => {
   delete window.__TAURI_INTERNALS__
 })
 
+/** Where each press sent was stamped as made: at the shack or through a stream. */
+let origins: string[] = []
 function mount(status: RemoteStationStatus, refuse?: (action: RemoteStationAction) => string | null) {
   const actions: RemoteStationAction[] = []
+  origins = []
   window.__TAURI_INTERNALS__ = { invoke: (async (command: string, input?: unknown) => {
     if (command === 'get_remote_station_status') return status
     if (command === 'get_settings') return {}
     if (command !== 'remote_station_action') throw new Error('unexpectedCommand')
-    const action = (input as { action: RemoteStationAction }).action
-    if (action.type !== 'refresh') actions.push(action)
+    const { action, origin } = input as { action: RemoteStationAction; origin: string }
+    if (action.type !== 'refresh') { actions.push(action); origins.push(origin) }
     const refused = refuse?.(action)
     if (refused) throw refused
     return status
@@ -204,6 +207,55 @@ it('a Remove on this network’s list is refused through a stream and said why; 
   expect(screen.getByRole('alert').textContent).toBe('Only at the station itself: this can’t be done through a stream.')
   fireEvent.click(within(rowOf('Den PC')).getByRole('button', { name: 'Remove' }))
   await waitFor(() => expect(actions).toEqual([{ type: 'lanRevoke', deviceId: DEN_LAN }]))
+})
+
+/** A click made over the stream's picture, on `button`. */
+const streamedClick = (button: Element) => act(() => {
+  under = button
+  const pointer = (action: 'down' | 'up') => ({ type: 'pointer', action, x: 0.5, y: 0.5, button: 0, buttons: action === 'down' ? 1 : 0,
+    modifiers: 0, pointerType: 'mouse', clicks: 1 }) as Parameters<StreamInputDispatcher['handle']>[0]
+  stream!.handle(pointer('down')); stream!.handle(pointer('up'))
+})
+/** Enter pressed over the stream's picture, on `button` holding the keyboard. */
+const streamedEnter = (button: HTMLElement) => act(() => {
+  button.focus()
+  for (const action of ['down', 'up'] as const)
+    stream!.handle({ type: 'key', action, key: 'Enter', code: 'Enter', modifiers: 0, repeat: false } as Parameters<StreamInputDispatcher['handle']>[0])
+})
+
+it('ONLY THE SHACK DECIDES: every Devices button pressed through a stream, by a click or by Enter, sends nothing and says why; at the shack each goes', async () => {
+  const actions = mount(station())
+  await list()
+  const buttons = () => [
+    within(rowOf('Firefox on Android')).getByRole('button', { name: 'Approve' }),
+    within(rowOf('Travel laptop')).getByRole('button', { name: 'Allow to transmit' }),
+    within(rowOf('Chrome on Windows')).getByRole('button', { name: 'Remove' }),
+    within(rowOf('Shack laptop')).getByRole('button', { name: 'Remove' }),
+    within(rowOf('Den PC')).getByRole('button', { name: 'Remove' }),
+    within(person(GUEST)).getAllByRole('button', { name: 'Remove' })[0],
+    within(rowOf('Chrome on Windows')).getByRole('button', { name: 'Revoke station controls' }),
+  ]
+  for (const button of buttons()) {
+    await streamedClick(button)
+    await streamedEnter(button)
+    await act(async () => { await Promise.resolve() })
+    expect(actions, button.textContent!).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe(EN['remote.lan.atShackOnly'])
+  }
+  // CONTROL: the same buttons pressed at the shack, with a stream still connected, each send, stamped as the shack's.
+  for (const button of buttons()) {
+    fireEvent.click(button)
+    await act(async () => { await Promise.resolve() })
+  }
+  await waitFor(() => expect(actions).toHaveLength(7))
+  expect(origins).toEqual(Array(7).fill('shack'))
+})
+
+it('the station’s own refusal of a streamed press is said in the same words', async () => {
+  mount(station(), action => action.type === 'stationPermission' ? 'atShackOnly' : null)
+  await list()
+  fireEvent.click(within(rowOf('Chrome on Windows')).getByRole('button', { name: 'Revoke station controls' }))
+  expect((await screen.findByRole('alert')).textContent).toBe(EN['remote.lan.atShackOnly'])
 })
 
 it('a refused Remove on this network’s list says what it needs, as the network card said it', async () => {

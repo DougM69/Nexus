@@ -477,12 +477,62 @@ pub enum Action {
     },
     /// Allow to transmit, pressed at the shack for a device added by its own sign-in and held from
     /// transmit: the shack's waiver, as an Approve here gives it. ⛔ The shack's own screen only:
-    /// `remote_station_action` is refused from afar at both ends (`command_classes`), so a held
-    /// device can never allow itself.
+    /// `remote_station_action` is refused from afar at both ends (`command_classes`), and through
+    /// a stream of the shack's own screen ([`Origin`]), so a held device can never allow itself.
     AllowTransmit {
         #[serde(rename = "deviceId")]
         device_id: String,
     },
+}
+/// ⛔ Where a press on the shack's Remote settings came from. A streamed operator drives the
+/// shack's own window: their clicks and keys arrive as DOM events that the page's stream-input
+/// module dispatches (`ui/src/remote-native/stream-input.ts`), so every one of their presses
+/// reaches `remote_station_action` as a local call. The station cannot see a DOM dispatch, and a
+/// streamed operator runs no code of their own on the page: the page's one entry to this command
+/// (`remoteStationAction` in `ui/src/api.ts`) stamps each press with `isStreamInput()`, read
+/// before anything awaits, which only that module's own dispatch makes true. The stamp is a
+/// required argument, so a caller that does not give it is refused outright.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Origin {
+    /// A press at the shack: the shack operator's own mouse or keyboard.
+    Shack,
+    /// A press a streamed operator made over the picture.
+    Stream,
+}
+impl Action {
+    /// ⛔ Whether this press may come through a stream: only a read. Every other action grants,
+    /// removes or changes who may use the station, its transmit hold or Remote itself, and a
+    /// device driving the station through a stream must never decide that for itself ("only the
+    /// shack decides"). No wildcard: a new action is refused through a stream until it is placed.
+    fn through_a_stream(&self) -> bool {
+        match self {
+            Action::Refresh {} => true,
+            Action::StationPermission { .. }
+            | Action::TakeOverLogging {}
+            | Action::Begin { .. }
+            | Action::Cancel {}
+            | Action::Approve { .. }
+            | Action::Enable {}
+            | Action::Disable {}
+            | Action::Forget {}
+            | Action::Device { .. }
+            | Action::LanOn { .. }
+            | Action::LanOff {}
+            | Action::LanAddress { .. }
+            | Action::LanPair {}
+            | Action::LanCancel {}
+            | Action::LanRevoke { .. }
+            | Action::LanReset {}
+            | Action::SignIn { .. }
+            | Action::SignInAgain {}
+            | Action::CancelSignInAgain {}
+            | Action::Invite { .. }
+            | Action::Uninvite { .. }
+            | Action::DismissAdded { .. }
+            | Action::AllowTransmit { .. } => false,
+        }
+    }
 }
 type Reply = oneshot::Sender<Result<(), &'static str>>;
 /// The most browsers a restart remembers grants for. The service lists at most eight per station,
@@ -1144,6 +1194,8 @@ impl Control {
             .collect();
         // The guests' computers kept with no link to say whose: the same whoever is asked about.
         let (_, nobodys) = self.enrolment.guests("");
+        // The held devices' transmit windows, from one look at the grants for the whole list.
+        let holds = self.operations.hold_display(&status.held_devices, now);
         let starts = devices
             .iter()
             .map(|d| Road::Listed(&d.id))
@@ -1166,7 +1218,11 @@ impl Control {
             let (mut guest, mut owner, mut unknown) = (None, false, false);
             for d in &listed {
                 match status.whose.get(&d.id) {
-                    Some(Whose::Guest(mailbox)) => guest = guest.or(Some(mailbox.clone())),
+                    // A guest's only while they are invited: once their invitation is taken back the
+                    // device is no longer shown as theirs, though the proof that named them is kept.
+                    Some(Whose::Guest(mailbox)) if people.iter().any(|p| p.mailbox == *mailbox) => {
+                        guest = guest.or(Some(mailbox.clone()))
+                    }
                     Some(Whose::Owner) => owner = true,
                     _ if d.added_by.as_deref() == Some("account") => unknown = true,
                     _ => {}
@@ -1188,8 +1244,7 @@ impl Control {
             });
             let hold_left = listed
                 .iter()
-                .filter(|d| status.held_devices.contains(&d.id))
-                .filter_map(|d| self.operations.hold_display(&d.id, now).left)
+                .filter_map(|d| holds.get(&d.id).and_then(|hold| hold.left))
                 .max()
                 .map(|left| left.as_millis().div_ceil(1000) as u64);
             rows.push(DeviceRow {
@@ -1601,6 +1656,14 @@ impl Service {
             .map_err(|_| "serviceUnavailable")?
             .lan
             .clone())
+    }
+    /// A press on the shack's Remote settings, from `origin`: through a stream, only a read is
+    /// taken ([`Action::through_a_stream`]); everything else is only at the station's own screen.
+    pub async fn press(&self, origin: Origin, action: Action) -> Result<Status, &'static str> {
+        if origin == Origin::Stream && !action.through_a_stream() {
+            return Err("atShackOnly");
+        }
+        self.action(action).await
     }
     pub async fn action(&self, action: Action) -> Result<Status, &'static str> {
         match &action {
@@ -4108,6 +4171,7 @@ pub fn get_remote_station_status(
 pub async fn remote_station_action(
     service: tauri::State<'_, Service>,
     action: Action,
+    origin: Origin,
 ) -> Result<Status, &'static str> {
-    service.action(action).await
+    service.press(origin, action).await
 }

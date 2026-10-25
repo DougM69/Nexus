@@ -12,7 +12,8 @@
 // waiting, or one whose key is not pinned here) and Approve again (an approval ending) as before, Allow to
 // transmit where `offersAllowTransmit` offers it, Remove as the list it came from removed it, the station
 // controls switch, and Remove on a person (the invitation taken back). A Remove on a computer known only to
-// this network goes through `removeLan`, refused through a stream as it always was.
+// this network goes through `removeLan`. Every one of them is refused through a stream, here (`RemoteStation.act`)
+// and at the station: only the shack decides.
 import { t } from '../i18n'
 import { shortFingerprint } from '../remote-web/stream-protocol'
 import { isNative, offersAllowTransmit, PLATFORM_NAMES, waitsForApprove, type AccountRole, type LanStatus,

@@ -8,12 +8,15 @@ import { lanErrorLine } from './LanStation'
 import { isStreamInput } from './stream-input'
 import '../remote-web/remote.css'
 
+/** The presses the Devices list makes: a refusal of one is said beside it. */
+const DEVICES_PRESSES: ReadonlySet<RemoteStationAction['type']> = new Set(['device', 'allowTransmit', 'stationPermission', 'uninvite', 'lanRevoke'])
+
 export function RemoteStation() {
   const [status, setStatus] = useState<RemoteStationStatus | null>(null)
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
-  // A Remove of a computer known only to this network: refused through a stream, and its own refusals, as
-  // the network card said them.
+  // A press on the Devices list refused through a stream, and a Remove of a computer known only to this
+  // network refused by the network, as the network card said them.
   const [lanError, setLanError] = useState<string | null>(null)
   const [refused, setRefused] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -58,9 +61,14 @@ export function RemoteStation() {
     })()
   }, [])
   async function act(action: RemoteStationAction) {
-    // Only at the shack: a Remove on this network's list that comes through a stream changes nothing. Read
-    // before anything awaits, while the stream's dispatch is still the one running.
-    if (action.type === 'lanRevoke' && isStreamInput()) { setRefused(true); return }
+    // Only at the shack: nothing but a read is pressed through a stream, so a device driving this screen can never
+    // approve, allow or remove itself or anyone else (the station refuses it too). Read before anything awaits,
+    // while the stream's dispatch is still the one running; said beside the Devices list for its own buttons.
+    if (action.type !== 'refresh' && isStreamInput()) {
+      if (DEVICES_PRESSES.has(action.type)) setRefused(true)
+      else setError('atShackOnly')
+      return
+    }
     // Disable cancels the native socket even while an HTTP request is pending; a Remove on this network's
     // list never waited for one.
     if (pending.current && action.type !== 'disable' && action.type !== 'takeOverLogging' && action.type !== 'lanRevoke') return
@@ -144,6 +152,7 @@ export function RemoteStation() {
       : issue === 'notSignInDevice' ? t('remote.account.allowTransmitGone')
       // Removed on every road the station could link it to; the other list may still hold it.
       : issue === 'removeElsewhere' ? t('remote.removeElsewhere')
+      : issue === 'atShackOnly' ? t('remote.lan.atShackOnly')
       : t('remote.requestFailed')}</p>}
     {/* S3-M1: browsers check this station's stream against the key the service recorded for it at
         pairing. Another one there is not fixed by waiting, so it gets its own line until it is. */}

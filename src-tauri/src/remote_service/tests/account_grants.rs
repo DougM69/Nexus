@@ -2064,6 +2064,122 @@ async fn allow_to_transmit_at_the_shack_lifts_a_held_devices_hold() {
     assert_eq!(after.station_permissions, before.station_permissions);
 }
 
+/// ★ A HELD DEVICE CANNOT ALLOW ITSELF THROUGH A STREAM: Allow to transmit pressed over the stream's
+/// picture of the shack's own Settings is refused at the station with "only at the station's own
+/// screen", and the device is still held, now and past its window. CONTROL: the same press made at
+/// the shack lifts the hold.
+#[tokio::test(flavor = "multi_thread")]
+async fn allow_to_transmit_through_a_stream_is_refused_and_the_device_stays_held() {
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(&cloud.origin, Vec::new());
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let before = listed(&service, &cloud, vec![notified_row(0)]).await;
+    assert_eq!(before.held_devices, vec![BROWSER.to_string()], "premise");
+
+    let streamed = service.press(Origin::Stream, allow(BROWSER)).await;
+    assert_eq!(streamed.err(), Some("atShackOnly"));
+    assert!(held_at(&service, past_the_window()), "still held");
+    let status = service.status().unwrap();
+    assert_eq!(status.held_devices, vec![BROWSER.to_string()], "shown held");
+
+    let local = service.press(Origin::Shack, allow(BROWSER)).await.unwrap();
+    assert!(
+        !held_at(&service, past_the_window()),
+        "the shack's press: free"
+    );
+    assert_eq!(local.held_devices, Vec::<String>::new());
+}
+
+/// Every press the shack's Remote settings can send that is not a read, as the page sends it.
+fn every_press_but_a_read() -> Vec<serde_json::Value> {
+    vec![
+        json!({"type":"stationPermission","deviceId":BROWSER,"allow":false}),
+        json!({"type":"stationPermission","deviceId":BROWSER,"allow":true}),
+        json!({"type":"takeOverLogging"}),
+        json!({"type":"begin","name":"K9XYZ"}),
+        json!({"type":"cancel"}),
+        json!({"type":"approve","enrollmentId":"e","accountId":"a"}),
+        json!({"type":"enable"}),
+        json!({"type":"disable"}),
+        json!({"type":"forget"}),
+        json!({"type":"device","deviceId":BROWSER,"approve":true,"kind":"browser"}),
+        json!({"type":"device","deviceId":BROWSER,"approve":false}),
+        json!({"type":"lanOn"}),
+        json!({"type":"lanOff"}),
+        json!({"type":"lanAddress"}),
+        json!({"type":"lanPair"}),
+        json!({"type":"lanCancel"}),
+        json!({"type":"lanRevoke","deviceId":BROWSER}),
+        json!({"type":"lanReset"}),
+        json!({"type":"signIn","name":"K9XYZ"}),
+        json!({"type":"signInAgain"}),
+        json!({"type":"cancelSignInAgain"}),
+        json!({"type":"invite","email":"k9.new@example.test","role":"operate"}),
+        json!({"type":"uninvite","email":"k9.guest@example.test"}),
+        json!({"type":"dismissAdded","deviceId":BROWSER}),
+        json!({"type":"allowTransmit","deviceId":BROWSER}),
+    ]
+}
+/// What a streamed press must leave as it was: who may use the station, its holds, and Remote on
+/// or off (the phase alone moves between connecting and reconnecting by itself).
+fn trust(status: &Status) -> serde_json::Value {
+    let shown = serde_json::to_value(status).unwrap();
+    json!([
+        shown["phase"] == "disabled",
+        shown["phase"] == "unpaired",
+        shown["devices"],
+        shown["stationPermissions"],
+        shown["heldDevices"],
+        shown["pinnedDevices"],
+        shown["account"]["people"],
+        shown["lan"]
+    ])
+}
+
+/// ★ ONLY A READ COMES THROUGH A STREAM: every other press the shack's Remote settings can send —
+/// approve, remove, allow to transmit, station control, invite and uninvite, the network's pairing
+/// and reset, signing in, Remote on and off — made over the stream's picture is refused at the
+/// station with "only at the station's own screen", and changes nothing. CONTROL: a read through
+/// the stream is answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_press_but_a_read_through_a_stream_is_refused_and_changes_nothing() {
+    let guest = mailbox("K9.Guest@example.test");
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(
+        &cloud.origin,
+        vec![Invite {
+            mailbox: guest,
+            role: Role::Operate,
+        }],
+    );
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let before = listed(&service, &cloud, vec![notified_row(0)]).await;
+    assert_eq!(before.held_devices, vec![BROWSER.to_string()], "premise");
+    for value in every_press_but_a_read() {
+        let action: Action = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            service.press(Origin::Stream, action).await.err(),
+            Some("atShackOnly"),
+            "{value}"
+        );
+        assert_eq!(trust(&service.status().unwrap()), trust(&before), "{value}");
+    }
+    assert!(held_at(&service, past_the_window()), "still held");
+    let read = service.press(Origin::Stream, Action::Refresh {}).await;
+    assert_eq!(trust(&read.unwrap()), trust(&before), "a read is answered");
+}
+
+/// The press's origin is one of the two the page stamps, by name; anything else is no press.
+#[test]
+fn a_presss_origin_is_the_shack_or_a_stream_and_nothing_else() {
+    let origin = |v: serde_json::Value| serde_json::from_value::<Origin>(v).ok();
+    assert_eq!(origin(json!("shack")), Some(Origin::Shack));
+    assert_eq!(origin(json!("stream")), Some(Origin::Stream));
+    for other in [json!("Stream"), json!(""), json!(true), json!(null)] {
+        assert_eq!(origin(other.clone()), None, "{other}");
+    }
+}
+
 /// ★ KEPT LIKE AN APPROVE: for a device whose notice the service confirmed, what the station keeps
 /// for a restart is its window ended (0) once it is allowed, as an Approve at the shack keeps it.
 #[tokio::test(flavor = "multi_thread")]
@@ -4182,6 +4298,46 @@ async fn a_guests_device_is_shown_under_the_guest_after_a_restart_too() {
             "{proof}: after a restart"
         );
     }
+}
+
+/// ★ A GUEST'S DEVICE IS NO LONGER SHOWN UNDER THEM ONCE THEIR INVITATION IS TAKEN BACK, though the
+/// service still lists it: not known whose, never the owner's, and with no restart. CONTROL: before
+/// the Uninvite it is theirs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guests_device_leaves_the_guest_when_their_invitation_is_taken_back() {
+    let guest = mailbox("K9.Guest@example.test");
+    let cloud = fake_cloud().await;
+    let vault = owned_vault(
+        &cloud.origin,
+        vec![Invite {
+            mailbox: guest.clone(),
+            role: Role::Operate,
+        }],
+    );
+    let rows = vec![computer_row(&token("guest"), "operate")];
+    let service = launch_granting_on_sign_in(&cloud, &vault);
+    let status = listed(&service, &cloud, rows.clone()).await;
+    assert_eq!(
+        device_rows(&status),
+        vec![(
+            vec![COMPUTER_ID.to_string()],
+            Vec::new(),
+            Some(guest),
+            false
+        )],
+        "premise: theirs"
+    );
+    service
+        .action(Action::Uninvite {
+            email: "K9.Guest@example.test".into(),
+        })
+        .await
+        .unwrap();
+    let status = listed(&service, &cloud, rows).await;
+    assert_eq!(
+        device_rows(&status),
+        vec![(vec![COMPUTER_ID.to_string()], Vec::new(), None, true)]
+    );
 }
 
 /// ★ A DEVICE ADDED BY A SIGN-IN WHOSE PROOF NO LONGER HOLDS HERE IS SHOWN AS NOT KNOWN, never as the
