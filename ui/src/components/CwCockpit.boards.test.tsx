@@ -48,6 +48,8 @@ const decodeState = {
   name: null,
 }
 const api = vi.hoisted(() => ({
+  // The Spots view sends its Spotted-from chips to Pounce (#174).
+  setPounceSpotterFilter: vi.fn(async () => {}),
   getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 }, rigModel: 0 })),
   getCatCwUnprovenRigModels: vi.fn(async () => []),
   setSettings: vi.fn(async () => ({})),
