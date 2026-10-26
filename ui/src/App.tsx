@@ -3780,7 +3780,7 @@ function App() {
       // policy entry needed — global sections leave the VFO alone).
       workspace = (
         <main className="layout single">
-          <RadioProgView myGrid={settings?.mygrid ?? ''} catOk={snap.radio.catOk === true} />
+          <RadioProgView myGrid={settings?.mygrid ?? ''} catOk={snap.radio.catOk === true} onOpenSettings={openSettingsAt} />
         </main>
       )
       break

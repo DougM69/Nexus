@@ -191,6 +191,8 @@ interface Props {
   myGrid: string
   /** CAT link alive — gates the per-row TUNE buttons. */
   catOk?: boolean
+  /** Open Settings at a place (App's `openSettingsAt`). Absent, a place in Settings is named, not linked. */
+  onOpenSettings?: (where: string) => void
 }
 
 /**
@@ -202,7 +204,7 @@ interface Props {
  * directory). Its one map, on request, shows hearham's listings alone
  * (RepeaterMap.tsx).
  */
-export function RadioProgView({ myGrid, catOk = false }: Props) {
+export function RadioProgView({ myGrid, catOk = false, onOpenSettings }: Props) {
   // A browser may Tune (never edit) while the station advertises the repeater transaction.
   // ── query state ──
   const [originKind, setOriginKind] = useState<'station' | 'grid' | 'city'>('station')
@@ -1245,7 +1247,15 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <div className="rp-note" role="status">
               <T
                 k="program.coverageGap"
-                tags={{ b: <strong /> }}
+                tags={{
+                  b: <strong />,
+                  // The RepeaterBook token's place in Settings (#358), which opens it when it can.
+                  link: onOpenSettings ? (
+                    <button type="button" className="settings-linkbtn" onClick={() => onOpenSettings('confirmations')} />
+                  ) : (
+                    <strong />
+                  ),
+                }}
                 vals={{ source: SOURCE_HEARHAM, band: result.coverageGap }}
               />
             </div>

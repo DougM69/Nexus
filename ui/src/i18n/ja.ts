@@ -4516,7 +4516,7 @@ export const JA: PartialCatalog = {
   "program.route.rbBeyond": "{{rb}}にはこのルートの始めの方の州だけを問い合わせ、通過するすべての州には問い合わせないため、<b>{{states}}</b>の局は{{hearham}}のものだけです。残りの区間は別のルートとして検索してください。",
   "program.projectsFile.setAside": "保存済みのチャンネルリストを読み込めなかったため、そのファイルを変更せずに<code>{{path}}</code>として残し、新しいリストを開始しました。削除されたものはありません。",
   "program.projectsFile.keptInPlace": "<code>{{path}}</code>にある保存済みのチャンネルリストを読み込めず、ファイルを退避することもできなかったため、ファイルが移動または修復されるまでレピータセクションは保存しません。削除されたものはありません。",
-  "program.coverageGap": "{{source}}にはこの地域の<b>{{band}}</b>レピータの登録がありません。レピータのある地域では珍しいことです — 地方のカバー率にむらがあるため、このリストには載っていない局がある可能性があります。<b>設定 ▸ 連携</b>でRepeaterBook APIトークンを追加すると補完できます。",
+  "program.coverageGap": "{{source}}にはこの地域の<b>{{band}}</b>レピータの登録がありません。レピータのある地域では珍しいことです — 地方のカバー率にむらがあるため、このリストには載っていない局がある可能性があります。<link>設定 ▸ ログと連携 ▸ コンファーム</link>でRepeaterBook APIトークンを追加すると補完できます。",
   "program.filters.aria": "結果フィルター",
   "program.filters.allBands": "すべて",
   "program.filters.fm.title": "FMレピータのみ — v1がプログラムする範囲",

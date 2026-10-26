@@ -5126,7 +5126,7 @@ export const FR: PartialCatalog = {
   "program.route.rbBeyond": "{{rb}} n'est interrogé que sur les États du début de cet itinéraire, pas sur tous ceux qu'il traverse ; les relais de <b>{{states}}</b> viennent donc de {{hearham}} seul. Cherchez le reste du trajet comme un itinéraire à part.",
   "program.projectsFile.setAside": "Nexus n'a pas pu lire vos listes de canaux enregistrées : il a donc conservé ce fichier, intact, sous <code>{{path}}</code> et commencé une nouvelle liste. Rien n'a été supprimé.",
   "program.projectsFile.keptInPlace": "Nexus n'a pas pu lire vos listes de canaux enregistrées dans <code>{{path}}</code> ni mettre ce fichier de côté : la section Relais n'enregistrera donc rien tant qu'il n'aura pas été déplacé ou réparé. Rien n'a été supprimé.",
-  "program.coverageGap": "{{source}} ne liste aucun relais <b>{{band}}</b> ici, ce qui est inhabituel pour une zone qui en a — sa couverture rurale est irrégulière, donc cette liste est sans doute incomplète. Ajouter un token API RepeaterBook dans <b>Réglages ▸ Intégrations</b> comble le manque.",
+  "program.coverageGap": "{{source}} ne liste aucun relais <b>{{band}}</b> ici, ce qui est inhabituel pour une zone qui en a — sa couverture rurale est irrégulière, donc cette liste est sans doute incomplète. Ajouter un token API RepeaterBook dans <link>Réglages ▸ Journal et connecteurs ▸ Confirmations</link> comble le manque.",
   "program.deliver.byHand.label": "Ajouter à la main…",
   "program.deliver.byHand.title": "Saisir un relais ou un canal simplex que l'annuaire n'a pas (ou a faux)",
   "program.deliver.clear.label": "Vider",

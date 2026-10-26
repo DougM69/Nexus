@@ -3810,7 +3810,7 @@ export const DE: PartialCatalog = {
   "program.route.rbBeyond": "{{rb}} wird nur nach den Bundesstaaten am Anfang dieser Route gefragt, nicht nach jedem, den sie durchquert, daher stammen die Relais in <b>{{states}}</b> nur von {{hearham}}. Den Rest der Reise als eigene Route suchen.",
   "program.projectsFile.setAside": "Nexus konnte Ihre gespeicherten Kanallisten nicht lesen. Die Datei ist unverändert unter <code>{{path}}</code> aufbewahrt, und eine neue Liste wurde begonnen. Es wurde nichts gelöscht.",
   "program.projectsFile.keptInPlace": "Nexus konnte Ihre gespeicherten Kanallisten unter <code>{{path}}</code> nicht lesen und die Datei auch nicht beiseitelegen. Der Bereich „Relais“ speichert daher nicht, bis sie verschoben oder repariert ist. Es wurde nichts gelöscht.",
-  "program.coverageGap": "{{source}} führt hier keine <b>{{band}}</b>-Relais, was für ein Gebiet mit überhaupt einem Relais ungewöhnlich ist — die Abdeckung im ländlichen Raum ist lückenhaft, in dieser Liste fehlen also wahrscheinlich Relais. Ein RepeaterBook-API-Token unter <b>Einstellungen ▸ Integrationen</b> schließt die Lücke.",
+  "program.coverageGap": "{{source}} führt hier keine <b>{{band}}</b>-Relais, was für ein Gebiet mit überhaupt einem Relais ungewöhnlich ist — die Abdeckung im ländlichen Raum ist lückenhaft, in dieser Liste fehlen also wahrscheinlich Relais. Ein RepeaterBook-API-Token unter <link>Einstellungen ▸ Logbuch & Konnektoren ▸ Bestätigungen</link> schließt die Lücke.",
   "program.filters.aria": "Ergebnisfilter",
   "program.filters.allBands": "Alle",
   "program.filters.fm.title": "Nur FM-Relais — das, was v1 programmiert",

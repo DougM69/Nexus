@@ -6888,7 +6888,7 @@ export const EN = {
   'program.age.days': '{{days}}d ago',
   // `{{source}}` is the directory's own name and `{{band}}` a band name — both tokens.
   'program.coverageGap':
-    '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <b>Settings ▸ Integrations</b> fills the gap.',
+    '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <link>Settings ▸ Logging & Connectors ▸ Confirmations</link> fills the gap.',
 
   // `{{states}}` is a list of 2-letter state codes — tokens, never translated.
   'program.missingStates':

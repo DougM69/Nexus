@@ -5126,7 +5126,7 @@ export const ES: PartialCatalog = {
   "program.route.rbBeyond": "A {{rb}} solo se le pregunta por los estados del comienzo de esta ruta, no por todos los que cruza, así que los equipos de <b>{{states}}</b> son solo de {{hearham}}. Busca el resto del viaje como una ruta aparte.",
   "program.projectsFile.setAside": "Nexus no pudo leer tus listas de canales guardadas, así que conservó ese archivo, intacto, en <code>{{path}}</code> y empezó una lista nueva. No se borró nada.",
   "program.projectsFile.keptInPlace": "Nexus no pudo leer tus listas de canales guardadas en <code>{{path}}</code> ni apartar ese archivo, así que Repetidores no guardará hasta que se mueva o se repare. No se borró nada.",
-  "program.coverageGap": "{{source}} no lista repetidores de <b>{{band}}</b> aquí, algo poco habitual en una zona que tiene alguno — su cobertura rural es irregular, así que seguramente falten equipos. Añadir un token de API de RepeaterBook en <b>Ajustes ▸ Integraciones</b> cubre el hueco.",
+  "program.coverageGap": "{{source}} no lista repetidores de <b>{{band}}</b> aquí, algo poco habitual en una zona que tiene alguno — su cobertura rural es irregular, así que seguramente falten equipos. Añadir un token de API de RepeaterBook en <link>Ajustes ▸ Log y conectores ▸ Confirmaciones</link> cubre el hueco.",
   "program.deliver.byHand.label": "Añadir a mano…",
   "program.deliver.byHand.title": "Escribir un repetidor o canal simplex que el directorio no tiene (o tiene mal)",
   "program.deliver.clear.label": "Vaciar",
