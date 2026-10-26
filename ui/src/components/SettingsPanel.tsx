@@ -11263,6 +11263,7 @@ export function SettingsPanel({
                   </span>
                 </label>
               </div>
+              <p className="settings-hint">{t('settings.confirmations.hamqth.credit')}</p>
             </div>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">

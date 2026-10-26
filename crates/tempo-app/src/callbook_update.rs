@@ -27,6 +27,9 @@
 //! - **A call the callbook does not know** is reported ([`Lookups::unknown`]) and its contacts left
 //!   alone. **A lookup that fails** (no sign-in, the network down) stops the run, [`Stop::Failed`]:
 //!   the next lookup would only fail the same way, and each failure is still a request to QRZ.
+//! - **A service down for a while** (callook.info is offline a few minutes each day) is not a
+//!   failure: the call is left for another run ([`Looked::Later`]) and the run goes on, and a
+//!   lookup that reached only that service is not counted against the cap.
 //! - **QRZ refusing** stops the run, [`Stop::Refused`]. QRZ answers an unknown call and a refused
 //!   lookup (its daily limit, a lapsed subscription, a suspended account) the same way, with no
 //!   record, and only its wording differs, which Nexus does not read. One such answer is an
@@ -59,6 +62,9 @@ pub enum Looked {
     Unknown,
     /// The lookup could not be made: the reason, as the operator reads it.
     Failed(String),
+    /// A service that is down for a while (callook.info's daily maintenance) did not answer: the
+    /// call is left for another run, and the run goes on.
+    Later,
 }
 
 /// What one network lookup of a call answered, and what it says about the services.
@@ -71,6 +77,9 @@ pub struct Asked {
     pub qrz_without_record: bool,
     /// The sign-ins the lookup made, beyond the lookups [`Callbook::cost`] counted.
     pub logins: usize,
+    /// The lookup reached no service that counts ([`Looked::Later`] from callook.info alone): what
+    /// was noted for it before it was made is taken back.
+    pub uncounted: bool,
 }
 
 impl Asked {
@@ -81,6 +90,7 @@ impl Asked {
             qrz_count: None,
             qrz_without_record: false,
             logins: 0,
+            uncounted: false,
         }
     }
 }
@@ -103,6 +113,8 @@ pub trait Callbook {
     fn spent(&mut self) -> usize;
     /// Note `n` network lookups, made now.
     fn note_spent(&mut self, n: usize);
+    /// Take back the last `n` noted: lookups that turned out not to count.
+    fn forget_spent(&mut self, n: usize);
     /// Look `call` up over the network.
     fn live(&mut self, call: &str) -> Asked;
     /// Wait `d`. `false`: the run was cancelled while it waited.
@@ -202,6 +214,9 @@ pub fn look_up(
         callbook.note_spent(cost);
         let asked = callbook.live(call);
         out.progress.looked_up += 1;
+        if asked.uncounted {
+            callbook.forget_spent(cost);
+        }
         if asked.logins > 0 {
             callbook.note_spent(asked.logins);
         }
@@ -228,6 +243,10 @@ pub fn look_up(
             Looked::Failed(why) => {
                 out.stop = Stop::Failed(why);
                 break;
+            }
+            Looked::Later => {
+                progress(&out.progress);
+                continue;
             }
         }
         out.progress.done += 1;
@@ -272,6 +291,8 @@ mod tests {
         elsewhere: Vec<&'static str>,
         /// Sign-ins each lookup makes.
         logins: usize,
+        /// Calls only a service that is down would answer: left for later, uncounted.
+        down: Vec<&'static str>,
         cancelled: Cell<bool>,
     }
 
@@ -302,12 +323,23 @@ mod tests {
                 self.tally.push(self.now_ms);
             }
         }
+        fn forget_spent(&mut self, n: usize) {
+            for _ in 0..n {
+                self.tally.pop();
+            }
+        }
         fn live(&mut self, call: &str) -> Asked {
             self.lookups.push((call.to_string(), self.now_ms));
             if self.cancel_after.is_some_and(|n| self.lookups.len() >= n) {
                 self.cancelled.set(true);
             }
             let count = self.qrz_base.map(|b| b + self.lookups.len());
+            if self.down.contains(&call) {
+                return Asked {
+                    uncounted: true,
+                    ..Asked::plain(Looked::Later)
+                };
+            }
             let looked = if self.failing.contains(&call) {
                 Looked::Failed("QRZ could not be reached".into())
             } else if self.known.contains(&call) || self.elsewhere.contains(&call) {
@@ -320,6 +352,7 @@ mod tests {
                 looked,
                 qrz_count: count,
                 logins: self.logins,
+                uncounted: false,
             }
         }
         fn wait(&mut self, d: Duration) -> bool {
@@ -582,5 +615,28 @@ mod tests {
             "1 + 1 sign-in each: the third would pass 4"
         );
         assert_eq!(cb.spent(), 4);
+    }
+
+    /// ★ A service down for a while is not a failure: the call is left for another run, the run
+    /// goes on to the next, and the lookup is not counted against the cap.
+    #[test]
+    fn a_service_down_for_a_while_leaves_the_call_for_later_and_costs_nothing() {
+        let mut cb = Script {
+            known: vec!["A1A", "C1C"],
+            down: vec!["W1AW"],
+            ..Script::default()
+        };
+        let run = look_up(
+            &calls(&["A1A", "W1AW", "C1C"]),
+            limits(250),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Done);
+        assert_eq!(cb.lookups.len(), 3, "C1C asked after it");
+        assert!(run.unknown.is_empty(), "not unknown");
+        assert_eq!(run.answers.len(), 2);
+        assert_eq!(run.progress.done, 2, "W1AW left for another run");
+        assert_eq!(cb.spent(), 2, "W1AW's lookup not counted");
     }
 }

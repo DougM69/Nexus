@@ -50,6 +50,21 @@ function serviceName(s: CallbookUpdatePreview['services'][number]): string {
 /** How often the progress is asked while an update runs. */
 export const POLL_MS = 1000
 
+/** What QRZ said, in its own words (its spec asks that its Message and Error reach the operator),
+ *  and whether it was left out for want of the XML subscription. */
+function QrzNotes({ skipped, said }: { skipped: boolean, said: string | null }) {
+  return (
+    <>
+      {skipped && <p className="qso-detail-bare">{t('logbook.tools.callbook.qrzSkipped')}</p>}
+      {said && (
+        <p className="qso-detail-bare">
+          {t('logbook.tools.callbook.qrzSaid')} <span className="mono">{said}</span>
+        </p>
+      )}
+    </>
+  )
+}
+
 /** Tell the operator how an update ended: the toast whose Undo takes its fill back (a fill stopped
  *  part-way too), why it stopped when it did not finish, and the list reloaded. */
 function reportEnd(end: CallbookUpdateEnd, onChanged: () => void): void {
@@ -168,7 +183,8 @@ export function LogCallbookUpdate({
     setPreview(null)
     setStatus({
       running: true, done: 0, total: preview.calls, fromCache: 0, lookedUp: 0,
-      spent: preview.spent, cap: preview.cap, waitingForTx: false, ended: null,
+      spent: preview.spent, cap: preview.cap, waitingForTx: false, qrzSaid: null, qrzSkipped: false,
+      ended: null,
     })
   }
 
@@ -223,6 +239,7 @@ export function LogCallbookUpdate({
                   .map(serviceName)
                   .join(t('logbook.tools.callbook.then')),
               })}
+              {preview.services.includes('hamqth') && <> {t('logbook.tools.callbook.hamqthCredit')}</>}
             </p>
           )}
           {preview.toLookUp > 0 && (
@@ -303,6 +320,7 @@ export function LogCallbookUpdate({
           </button>
         </div>
       )}
+      {status && running && <QrzNotes skipped={status.qrzSkipped} said={status.qrzSaid} />}
       {ended && (
         <div className="qso-detail-bare" role="status">
           <p>
@@ -312,6 +330,7 @@ export function LogCallbookUpdate({
               : ended.stop === 'refused' ? t('logbook.tools.callbook.end.refused')
               : t('logbook.tools.callbook.end.failed')}
           </p>
+          <QrzNotes skipped={ended.qrzSkipped} said={ended.qrzSaid} />
           {ended.notLookedUp > 0 && (
             <p>{t('logbook.tools.callbook.resume', { count: ended.notLookedUp })}</p>
           )}

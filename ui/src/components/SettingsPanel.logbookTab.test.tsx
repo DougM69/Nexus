@@ -173,6 +173,11 @@ describe('each moved control reads and writes the same setting', () => {
     expect([s.qrzUsername, s.hamqthUsername, s.callookLookup, s.callbookCacheDays]).toEqual(['N0QRZ', 'N0HQ', true, 12])
   })
 
+  it('callbook lookups credit HamQTH where the operator sees it', async () => {
+    await openTab('Logbook')
+    section('callbook').getByText('Data provided by HamQTH.com.')
+  })
+
   it('callbook cache: Refresh and Clear call the same verbs', async () => {
     await openTab('Logbook')
     const cb = section('callbook')

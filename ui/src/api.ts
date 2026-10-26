@@ -1900,6 +1900,10 @@ export interface CallbookUpdatePreview {
 export interface CallbookUpdateEnd {
   stop: 'done' | 'cancelled' | 'limit' | 'refused' | 'failed'
   error: string | null
+  /** QRZ's last Message/Error, in its own words (shown, as QRZ asks). */
+  qrzSaid: string | null
+  /** QRZ was left out: the account has no XML subscription. */
+  qrzSkipped: boolean
   unknown: string[]
   notLookedUp: number
   made: ToolRun | null
@@ -1915,6 +1919,10 @@ export interface CallbookUpdateStatus {
   cap: number
   /** The lookups are done, and the fill waits for the radio to stop transmitting. */
   waitingForTx: boolean
+  /** QRZ's last Message/Error this run, in its own words. */
+  qrzSaid: string | null
+  /** QRZ is left out of this run: the account has no XML subscription. */
+  qrzSkipped: boolean
   ended: CallbookUpdateEnd | null
 }
 

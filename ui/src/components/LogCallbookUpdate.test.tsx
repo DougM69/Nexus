@@ -45,7 +45,7 @@ afterEach(() => {
 
 const idle: CallbookUpdateStatus = {
   running: false, done: 0, total: 0, fromCache: 0, lookedUp: 0, spent: 0, cap: 250,
-  waitingForTx: false, ended: null,
+  waitingForTx: false, qrzSaid: null, qrzSkipped: false, ended: null,
 }
 
 const preview: CallbookUpdatePreview = {
@@ -124,7 +124,7 @@ describe('update from callbook', () => {
     screen.getByText(/Today’s limit stops it after 240 lookups\./)
     screen.getByText('GRIDSQUARE 3 · NAME 2')
     screen.getByText(
-      'Asks QRZ, then HamQTH, then callook.info (US calls), the next only when the one before has no record. The pace and the daily limit cover them all.',
+      'Asks QRZ, then HamQTH, then callook.info (US calls), the next only when the one before has no record. The pace and the daily limit cover them all. HamQTH data provided by HamQTH.com.',
     )
     screen.getByText(/^Location \(grid, QTH, state, county, IOTA, CQ and ITU zones, latitude\/longitude, UTC offset\) is filled only on contacts from the last 12 months/)
     expect(screen.queryByText(/older than 12 months/)).toBeNull()
@@ -164,13 +164,15 @@ describe('update from callbook', () => {
     const end: CallbookUpdateEnd = {
       stop: 'limit',
       error: null,
+      qrzSaid: null,
+      qrzSkipped: false,
       unknown: ['Q9QQQ'],
       notLookedUp: 1,
       made: { changed: 3, run: 'run-7', gone: 0, changedSince: 0, needsChoice: 0, distinct: 0 },
     }
     api.callbookUpdateStatus.mockResolvedValue({
       running: false, done: 1, total: 2, fromCache: 1, lookedUp: 0, spent: 250, cap: 250,
-      waitingForTx: false, ended: end,
+      waitingForTx: false, qrzSaid: null, qrzSkipped: false, ended: end,
     })
     api.callbookUpdateTakeEnd.mockResolvedValueOnce(end)
     await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS + 10) })
@@ -201,7 +203,7 @@ describe('update from callbook', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS * 3) })
     expect(toasts.find((x) => x.message === 'Updated 4 contacts from the callbook')).toBeUndefined()
     const end: CallbookUpdateEnd = {
-      stop: 'done', error: null, unknown: [], notLookedUp: 0,
+      stop: 'done', error: null, qrzSaid: null, qrzSkipped: false, unknown: [], notLookedUp: 0,
       made: { changed: 4, run: 'run-9', gone: 0, changedSince: 0, needsChoice: 0, distinct: 0 },
     }
     api.callbookUpdateTakeEnd.mockResolvedValueOnce(end)
@@ -223,7 +225,7 @@ describe('update from callbook', () => {
 
   it('an end that came while the Logbook was away is reported when it comes back', async () => {
     api.callbookUpdateTakeEnd.mockResolvedValueOnce({
-      stop: 'cancelled', error: null, unknown: [], notLookedUp: 3,
+      stop: 'cancelled', error: null, qrzSaid: null, qrzSkipped: false, unknown: [], notLookedUp: 3,
       made: { changed: 2, run: 'run-3', gone: 0, changedSince: 0, needsChoice: 0, distinct: 0 },
     } satisfies CallbookUpdateEnd)
     const onChanged = open()
@@ -237,7 +239,9 @@ describe('update from callbook', () => {
     api.callbookUpdateStart.mockResolvedValue(undefined)
     open(['x', 'y', 'z'])
     await start()
-    const end: CallbookUpdateEnd = { stop: 'refused', error: null, unknown: [], notLookedUp: 2, made: null }
+    const end: CallbookUpdateEnd = {
+      stop: 'refused', error: null, qrzSaid: null, qrzSkipped: false, unknown: [], notLookedUp: 2, made: null,
+    }
     api.callbookUpdateTakeEnd.mockResolvedValueOnce(end)
     api.callbookUpdateStatus.mockResolvedValue({ ...idle, ended: end })
     await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS + 10) })
@@ -285,6 +289,39 @@ describe('update from callbook', () => {
     await screen.findByText(/Today’s limit stops it after 1 lookup\./)
   })
 
+  it('credits HamQTH only when it is asked', async () => {
+    api.callbookUpdatePreview.mockResolvedValue({ ...preview, services: ['qrz', 'callook'] })
+    open(['x', 'y', 'z'])
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    await screen.findByText(/^Asks QRZ, then callook\.info/)
+    expect(screen.queryByText(/HamQTH\.com/)).toBeNull()
+  })
+
+  it('shows what QRZ said, in its words, and that QRZ is left out without the XML subscription', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    api.callbookUpdatePreview.mockResolvedValue(preview)
+    api.callbookUpdateStart.mockResolvedValue(undefined)
+    open(['x', 'y', 'z'])
+    await start()
+    api.callbookUpdateStatus.mockResolvedValue({
+      ...idle, running: true, done: 1, total: 2, qrzSkipped: true,
+      qrzSaid: 'A subscription is required to obtain the complete data.',
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS + 10) })
+    await screen.findByText('QRZ XML subscription needed for bulk updates; using HamQTH/callook.info.')
+    screen.getByText('A subscription is required to obtain the complete data.')
+    const end: CallbookUpdateEnd = {
+      stop: 'failed', error: 'QRZ refused service for this account ("Connection refused").',
+      qrzSaid: 'Connection refused', qrzSkipped: false, unknown: [], notLookedUp: 1, made: null,
+    }
+    api.callbookUpdateTakeEnd.mockResolvedValueOnce(end)
+    api.callbookUpdateStatus.mockResolvedValue({ ...idle, ended: end })
+    await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS + 10) })
+    await screen.findByText('Connection refused')
+    screen.getByText('QRZ says:', { exact: false })
+    await waitFor(() => expect(toasts.find((x) => x.message.startsWith('QRZ refused service'))?.kind).toBe('error'))
+  })
+
   it('reports the end once when two takes overlap: one toast', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false })
     api.callbookUpdatePreview.mockResolvedValue(preview)
@@ -305,7 +342,7 @@ describe('update from callbook', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS) })
     expect(pending.length).toBe(2)
     const end: CallbookUpdateEnd = {
-      stop: 'done', error: null, unknown: [], notLookedUp: 0,
+      stop: 'done', error: null, qrzSaid: null, qrzSkipped: false, unknown: [], notLookedUp: 0,
       made: { changed: 5, run: 'run-8', gone: 0, changedSince: 0, needsChoice: 0, distinct: 0 },
     }
     await act(async () => {

@@ -61,6 +61,17 @@ pub fn is_us_call(call: &str) -> bool {
         && suffix.chars().all(|ch| ch.is_ascii_alphabetic())
 }
 
+/// Whether `json` is callook.info answering: a `VALID` record or an `INVALID` (unknown) call.
+/// Anything else — an error page, a body that is not JSON, another status — is callook.info not
+/// answering, as in its few minutes offline each day around 11:00 AM US Eastern: try later, and
+/// never read it as "not in the callbook".
+pub fn answered(json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|v| v.get("status")?.as_str().map(str::to_string))
+        .is_some_and(|s| s == "VALID" || s == "INVALID")
+}
+
 /// Parse a callook.info JSON answer. `None` unless it is a `VALID` record with a call:
 /// an unknown call answers `{"status":"INVALID"}` and nothing else.
 pub fn parse_callsign(json: &str) -> Option<CallookLookup> {
@@ -122,6 +133,19 @@ pub fn parse_callsign(json: &str) -> Option<CallookLookup> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A record and an unknown call are answers; maintenance, an error page and other statuses
+    /// are not.
+    #[test]
+    fn only_valid_and_invalid_are_answers() {
+        assert!(answered(
+            r#"{"status":"VALID","current":{"callsign":"W1AW"}}"#
+        ));
+        assert!(answered(r#"{"status":"INVALID"}"#));
+        assert!(!answered(r#"{"status":"UPDATING"}"#));
+        assert!(!answered("<html>Service Unavailable</html>"));
+        assert!(!answered(""));
+    }
 
     /// callook.info's answer for W1AW, as served on 2026-10-24.
     const W1AW: &str = r#"{"status":"VALID","type":"CLUB","current":{"callsign":"W1AW","operClass":""},"previous":{"callsign":"","operClass":""},"trustee":{"callsign":"AF5ID","name":"WELLS, JOSHUA D"},"name":"ARRL HQ OPERATORS CLUB","address":{"line1":"225 MAIN ST","line2":"NEWINGTON, CT 06111","attn":"ATTN: JOSHUA D WELLS"},"location":{"latitude":"41.714707","longitude":"-72.728411","gridsquare":"FN31pr"},"otherInfo":{"grantDate":"12/08/2020","expiryDate":"02/26/2031","lastActionDate":"10/16/2026","frn":"0004511143","ulsUrl":"https://wireless2.fcc.gov/UlsApp/UlsSearch/license.jsp?licKey=780866"}}"#;

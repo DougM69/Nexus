@@ -29,7 +29,8 @@
 //! Only a time: never the call, the answer or anything else. "Clear" forgets the answers, not
 //! this tally, which would otherwise let a clear reset the cap.
 //! QRZ's own count of the account's lookups, from the last answer that carried one, is kept the
-//! same way ([`CallbookCache::note_qrz_count`]): the count and its time, nothing else.
+//! same way ([`CallbookCache::note_qrz_count`]): the count and its time, nothing else. So is the
+//! time until which QRZ is not asked after it refused service ([`CallbookCache::note_qrz_refused`]).
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -87,7 +88,8 @@ impl CallbookCache {
              CREATE INDEX IF NOT EXISTS callbook_answer_last_used
                  ON callbook_answer (last_used);
              CREATE TABLE IF NOT EXISTS lookup_spent (at INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS qrz_count (at INTEGER NOT NULL, count INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS qrz_count (at INTEGER NOT NULL, count INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS qrz_refused (until INTEGER NOT NULL);",
         )?;
         Ok(Self { conn, capacity })
     }
@@ -235,6 +237,38 @@ impl CallbookCache {
             )
             .optional()
             .map(|n| n.map(|n| n.max(0) as usize))
+    }
+
+    /// Forget the `n` lookups noted last: lookups noted before they were made that turned out not
+    /// to count (a service that was not answering).
+    pub fn forget_lookups(&self, n: usize) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "DELETE FROM lookup_spent WHERE rowid IN \
+             (SELECT rowid FROM lookup_spent ORDER BY rowid DESC LIMIT ?1)",
+            params![n as i64],
+        )?;
+        Ok(())
+    }
+
+    /// QRZ refused service: it is not asked until `until` (Unix seconds).
+    pub fn note_qrz_refused(&self, until: i64) -> rusqlite::Result<()> {
+        self.conn.execute("DELETE FROM qrz_refused", [])?;
+        self.conn.execute(
+            "INSERT INTO qrz_refused (until) VALUES (?1)",
+            params![until],
+        )?;
+        Ok(())
+    }
+
+    /// The time QRZ may be asked again, while it is after `now`.
+    pub fn qrz_refused_until(&self, now: i64) -> rusqlite::Result<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT until FROM qrz_refused WHERE until > ?1",
+                params![now],
+                |r| r.get(0),
+            )
+            .optional()
     }
 
     /// Every stored answer's text, for the tests that check what reached the disk.
@@ -413,6 +447,34 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM qrz_count", [], |r| r.get(0))
             .unwrap();
         assert_eq!(rows, 1);
+        assert!(c.stored_text().unwrap().is_empty());
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// QRZ's refusal holds until its time, across a restart and a clear; then it is gone. The
+    /// last lookups noted can be forgotten, and only they.
+    #[test]
+    fn qrzs_refusal_holds_until_its_time_and_lookups_can_be_forgotten() {
+        let dir = scratch("qrz-refused");
+        let path = dir.join(FILE_NAME);
+        {
+            let c = CallbookCache::open(&path).unwrap();
+            assert_eq!(c.qrz_refused_until(1_000).unwrap(), None);
+            c.note_qrz_refused(1_000 + DAY).unwrap();
+            c.clear().unwrap();
+            c.note_lookups(3, 900).unwrap();
+            c.note_lookups(2, 1_000).unwrap();
+            c.forget_lookups(2).unwrap();
+            assert_eq!(c.lookups_spent(1_000).unwrap(), 3, "the last two forgotten");
+        }
+        let c = CallbookCache::open(&path).unwrap();
+        assert_eq!(c.qrz_refused_until(1_000).unwrap(), Some(1_000 + DAY));
+        assert_eq!(
+            c.qrz_refused_until(1_000 + DAY - 1).unwrap(),
+            Some(1_000 + DAY)
+        );
+        assert_eq!(c.qrz_refused_until(1_000 + DAY).unwrap(), None, "over");
         assert!(c.stored_text().unwrap().is_empty());
         drop(c);
         let _ = std::fs::remove_dir_all(&dir);
