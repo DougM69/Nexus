@@ -34,6 +34,9 @@
 //! ONE run of the history, which the toast's Undo takes back. A later run takes the calls already
 //! answered from the cache at no cost. A large fill waits while the radio transmits (shown as
 //! waiting, and Stop ends the wait), and a fill stopped part-way still hands back its run.
+//! The fill happens only once the lookups end: if the app quits mid-run nothing is filled, which
+//! loses no contact data, and the answers already fetched are in the cache, so a re-run fills them
+//! at no network cost.
 //!
 //! **Its end is reported once, wherever the operator is.** The end is kept until the Logbook takes
 //! it ([`callbook_update_take_end`]): the dialog may have been closed long before the run ended,
