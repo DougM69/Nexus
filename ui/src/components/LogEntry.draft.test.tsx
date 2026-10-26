@@ -118,7 +118,7 @@ describe('the contact comes back with the strip', () => {
     type(rcvd, '55')
     type(input('le-name'), 'Pedro')
     type(input('le-qth'), 'Las Palmas')
-    type(input('le-comment'), 'first QSO')
+    fireEvent.change(document.querySelector('textarea.le-comment')!, { target: { value: 'first QSO' } })
     fireEvent.change(document.querySelector('textarea.le-notes')!, { target: { value: 'heard on 20m' } })
     comeBack(view)
     expect(call().value, 'the call did not come back').toBe('EA8XX')
@@ -126,7 +126,7 @@ describe('the contact comes back with the strip', () => {
     expect([sent2.value, rcvd2.value]).toEqual(['57', '55'])
     expect(input('le-name').value).toBe('Pedro')
     expect(input('le-qth').value).toBe('Las Palmas')
-    expect(input('le-comment').value).toBe('first QSO')
+    expect(document.querySelector<HTMLTextAreaElement>('textarea.le-comment')!.value).toBe('first QSO')
     expect(document.querySelector<HTMLTextAreaElement>('textarea.le-notes')!.value).toBe('heard on 20m')
   })
 

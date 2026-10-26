@@ -6,6 +6,7 @@
 
 import { Fragment, lazy, Suspense, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmDialog } from '../confirm'
+import { oneLineTyped } from '../typedInput'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -2472,10 +2473,6 @@ export function Logbook({
               <span>{t('logbook.field.qth.label')}</span>
               <input className="settings-input" value={draft.qth} onChange={(e) => setField('qth', e.target.value)} autoComplete="off" />
             </label>
-            <label className="logbook-field">
-              <span>{t('logbook.field.comment.label')}</span>
-              <input className="settings-input" value={draft.comment} onChange={(e) => setField('comment', e.target.value)} placeholder={t('logbook.field.comment.placeholder')} autoComplete="off" />
-            </label>
             {/* #239: your own location and rig for THIS contact (ADIF MY_GRIDSQUARE / MY_RIG). */}
             <>
               <label className="logbook-field">
@@ -2533,6 +2530,27 @@ export function Logbook({
                 </label>
               </>
             )}
+            {/* The shared comment: full width, always directly above Notes (it was a 140 px cell
+                among the short fields). It wraps over lines but holds ONE, as ADIF's COMMENT does:
+                a line break typed or pasted lands as a space, and Enter saves as the old box did.
+                A stored comment with line breaks (an import's) is shown and saved as it is unless
+                the operator edits this box. */}
+            <label className="logbook-field logbook-field-wide">
+              <span>{t('logbook.field.comment.label')}</span>
+              <textarea
+                className="settings-input logbook-comment"
+                value={draft.comment}
+                onChange={(e) => setField('comment', oneLineTyped(e.target))}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return
+                  e.preventDefault()
+                  e.currentTarget.form?.requestSubmit()
+                }}
+                placeholder={t('logbook.field.comment.placeholder')}
+                rows={2}
+                autoComplete="off"
+              />
+            </label>
             <label className="logbook-field logbook-field-wide">
               <span>{t('logbook.field.notes.label')}</span>
               <textarea

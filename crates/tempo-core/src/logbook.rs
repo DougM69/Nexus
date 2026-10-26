@@ -3280,6 +3280,27 @@ pub fn adif_header() -> String {
     "Nexus logbook\n<ADIF_VER:5>3.1.8\n<PROGRAMID:5>Nexus\n<EOH>\n".to_string()
 }
 
+/// `s` with each run of line breaks (CR, LF, CRLF, blank lines) turned into one space.
+fn one_line(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains(['\r', '\n']) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut in_break = false;
+    for ch in s.chars() {
+        if ch == '\r' || ch == '\n' {
+            if !in_break {
+                out.push(' ');
+            }
+            in_break = true;
+        } else {
+            out.push(ch);
+            in_break = false;
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// One `<FIELD:len>value` tag.
 fn field(name: &str, val: &str) -> String {
     format!("<{}:{}>{}", name, val.len(), val)
@@ -3467,8 +3488,14 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     if let Some(q) = &r.qth {
         out.push_str(&field("QTH", q));
     }
+    // COMMENT is an ADIF String, which has no line breaks (NOTES below is the MultilineString).
+    // The comment box never stores one, but an imported comment keeps what its file had, so a
+    // service gets it on one line. The operator's own log keeps it exactly as stored.
     if let Some(c) = &r.comment {
-        out.push_str(&field("COMMENT", c));
+        match audience {
+            Audience::OwnLog => out.push_str(&field("COMMENT", c)),
+            Audience::Outbound => out.push_str(&field("COMMENT", &one_line(c))),
+        }
     }
     // ⛔ THE PRIVATE FIELD — the only one this function withholds, and the reason [`Audience`]
     // exists. `COMMENT` directly above is labelled "shared on the QSL" and goes everywhere;
@@ -12837,6 +12864,42 @@ mod private_note_tests {
                 "{what} must keep the operator's private note: {text}"
             );
         }
+    }
+
+    /// COMMENT is an ADIF String — one line — where NOTES is the MultilineString. A comment that
+    /// holds line breaks (an imported one: the parser keeps what the file had) goes to a service
+    /// on one line, each run of breaks a single space. The operator's own log keeps it exactly.
+    #[test]
+    fn an_uploaded_comment_is_one_line_and_the_own_log_keeps_it() {
+        let mut r = mk("W1AW");
+        r.comment = Some("first line\nsecond\r\n\r\nthird".into());
+        let flat = "first line second third";
+
+        for (what, adif) in [
+            ("the outbound ADIF record", adif_record(&r)),
+            (
+                "the LoTW-signed record",
+                adif_record_with_station(&r, "KD9TAW", "EN37"),
+            ),
+        ] {
+            assert!(
+                adif.contains(&format!("<COMMENT:{}>{flat}", flat.len())),
+                "{what}: the comment must go out on one line: {adif:?}"
+            );
+            let back = &parse_adif(&(adif_header() + &adif))[0];
+            assert_eq!(
+                back.comment.as_deref(),
+                Some(flat),
+                "{what} reads back one line"
+            );
+        }
+
+        let own = adif_record_own_log(&r);
+        let back = &parse_adif(&(adif_header() + &own))[0];
+        assert_eq!(
+            back.comment, r.comment,
+            "the operator's own log keeps the comment as stored"
+        );
     }
 
     /// ⭐ **Nothing unclassified is ever exposed.** Destructuring `QsoRecord` field by field
