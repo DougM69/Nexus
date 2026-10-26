@@ -45,6 +45,11 @@ function preview(patch: Partial<Settings>): FdRulesetDto {
   const event = s.fdEvent || 'arrlfd'
   if (event === 'ilqp') {
     const county = (s.contestQthCounty ?? '').trim()
+    // A station outside Illinois sends its state.
+    const state = (s.contestQthState ?? '').trim()
+    if (state && state !== 'IL') {
+      return { ...preview({ ...patch, contestQthState: 'IL', contestQthCounty: 'COOK' }), role: 'out_of_state', exchange: ['599', state] }
+    }
     return {
       event,
       rulesYear: 2026,
@@ -58,6 +63,21 @@ function preview(patch: Partial<Settings>): FdRulesetDto {
       sentSettings: ['contest_qth_county', 'contest_qth_state'],
       cabrilloHeaders: ['CLAIMED-SCORE', 'EMAIL', 'IL-COUNTY', 'NAME', 'CLUB', 'ENTRY-CLASS', 'OPERATORS'],
       entryClasses: ['ILLINOIS FIXED HIGH POWER', 'UNLIMITED'],
+    }
+  }
+  // The ARRL VHF contests send the grid, from the station's own grid: not a location "I moved" changes.
+  if (event.startsWith('arrlvhf')) {
+    return {
+      event,
+      rulesYear: 2026,
+      bannedModes: [],
+      spottingAllowed: true,
+      clusterAllowed: true,
+      enforcement: 'warn',
+      role: '',
+      exchange: [s.mygrid ?? ''],
+      problem: '',
+      sentSettings: ['mygrid'],
     }
   }
   return {
@@ -464,6 +484,241 @@ describe('Change setup… on a running contest', () => {
     next()
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', '"XXXX" is not a il_counties value')
+    expect(writes()).toEqual([])
+  })
+})
+
+describe('the station changed while the setup was open', () => {
+  const RUNNING = {
+    event: 'ilqp',
+    running: false,
+    role: 'in_state',
+    composing: [
+      { key: 'RST', raw: '599' },
+      { key: 'QTH', raw: 'COOK', domain: 'il_counties' },
+    ],
+    composingText: '599 COOK',
+    dupeRule: { byCall: true, byBand: true, byModeClass: true, byFields: [], bySentFields: ['QTH'], modeClassGroups: [] },
+  }
+  const snapWith = (fieldDay: unknown) => ({
+    fieldDay,
+    mode: fieldDay ? 'fieldDay' : 'chat',
+    radio: { catOk: true, operatingMode: 'digital' },
+    link: { tier: 'FT8' },
+  })
+
+  it('Save changes after the contest was stopped elsewhere says it is not running, and shows no exchange', async () => {
+    station = { ...station, fdActive: true, contestQthCounty: 'COOK' }
+    api.get('getSnapshot').mockImplementation(() => Promise.resolve(snapWith(RUNNING)))
+    // The entry line's save: the contest was stopped from another surface in the meantime.
+    api.get('setSettings').mockImplementation((s: Partial<Settings>) => {
+      station = structuredClone(s)
+      return Promise.resolve({ mode: 'chat', fieldDay: null })
+    })
+    render(<ContestSetupWizard onClose={vi.fn()} startAt="sends" />)
+    await screen.findByText('You send: 599 COOK')
+    await nextWhenChecked()
+    fireEvent.change(screen.getByLabelText('Club'), { target: { value: 'Rock River ARC' } })
+    await nextWhenChecked()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByText('Illinois QSO Party is not running now. It was stopped while this setup was open.')).toBeTruthy()
+    expect(writes()).toEqual([{ ...station, contestClub: 'Rock River ARC' }])
+    expect(screen.queryByText(/You send:/)).toBeNull()
+    expect(screen.queryByText('Illinois QSO Party is on · S&P')).toBeNull()
+  })
+
+  it('Start never ends a contest started elsewhere: it stops, and shows the End choice', async () => {
+    station = { ...station, contestQthCounty: 'COOK' }
+    api.get('getSnapshot')
+      .mockImplementationOnce(() => Promise.resolve(snapWith(null)))
+      .mockImplementation(() => Promise.resolve(snapWith({ event: 'nyqp' })))
+    await open()
+    next()
+    await screen.findByText('You send: 599 COOK')
+    next()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Start Illinois QSO Party' }))
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      'The running contest changed while this setup was open. Check it here, then go on.',
+    )
+    // Nothing saved, nothing ended: back on the pick, with the tick unticked.
+    expect(writes()).toEqual([])
+    const tick = screen.getByRole('checkbox', { name: 'End New York QSO Party when I start Illinois QSO Party' }) as HTMLInputElement
+    expect(tick.checked).toBe(false)
+    expect(screen.getByRole('button', { name: 'Next' })).toHaveProperty('disabled', true)
+    // CONTROL: with the tick, the same Start goes ahead.
+    fireEvent.click(tick)
+    next()
+    await screen.findByText('You send: 599 COOK')
+    next()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Start Illinois QSO Party' }))
+    await screen.findByText('Illinois QSO Party is on · S&P')
+    expect(writes()).toEqual([{ ...station }])
+    expect(writes()[0]).toMatchObject({ fdEvent: 'ilqp', contestQthCounty: 'COOK', fdActive: true })
+    expect(api.get('setMode')).not.toHaveBeenCalled()
+  })
+})
+
+describe('Change setup… on other contests', () => {
+  const snapWith = (fieldDay: unknown) => ({
+    fieldDay,
+    mode: 'fieldDay',
+    radio: { catOk: true, operatingMode: 'digital' },
+    link: { tier: 'FT8' },
+  })
+
+  it('Field Day: a new class goes through I moved as CLASS, and nothing else is written', async () => {
+    station = { ...station, fdActive: true, fdEvent: 'arrlfd', fdClass: '1D', fdSection: 'WI' }
+    const FD = {
+      event: 'arrlfd',
+      running: false,
+      composing: [
+        { key: 'CLASS', raw: '1D' },
+        { key: 'SECTION', raw: 'WI' },
+      ],
+      composingText: '1D WI',
+    }
+    api.get('getSnapshot').mockImplementation(() => Promise.resolve(snapWith(FD)))
+    api.get('contestIMoved').mockImplementation(() => Promise.resolve({ mode: 'fieldDay', fieldDay: { ...FD, composingText: '2A WI' } }))
+    render(<ContestSetupWizard onClose={vi.fn()} startAt="sends" />)
+    await screen.findByText('You send: 1D WI')
+    expect(screen.getByText('A change here is "I moved": it takes effect on your next contact.')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('FD Class'), { target: { value: '2a' } })
+    await nextWhenChecked()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await screen.findByText('You send: 2A WI')
+    expect(api.get('contestIMoved')).toHaveBeenCalledWith([['CLASS', '2A']])
+    expect(writes()).toEqual([])
+  })
+
+  it('an out-of-state station moves by state, and County is not named as read at start', async () => {
+    station = { ...station, fdActive: true, contestQthState: 'IN', contestQthCounty: '' }
+    const OUT = {
+      event: 'ilqp',
+      running: false,
+      role: 'out_of_state',
+      composing: [
+        { key: 'RST', raw: '599' },
+        { key: 'QTH', raw: 'IN' },
+      ],
+      composingText: '599 IN',
+      dupeRule: { byCall: true, byBand: true, byModeClass: true, byFields: [], bySentFields: ['QTH'], modeClassGroups: [] },
+    }
+    api.get('getSnapshot').mockImplementation(() => Promise.resolve(snapWith(OUT)))
+    api.get('contestIMoved').mockImplementation(() => Promise.resolve({ mode: 'fieldDay', fieldDay: { ...OUT, composingText: '599 WI' } }))
+    render(<ContestSetupWizard onClose={vi.fn()} startAt="sends" />)
+    await screen.findByText('You send: 599 IN')
+    expect(screen.queryByLabelText('County')).toBeNull()
+    expect(document.querySelector('[data-read-at-start]')).toBeNull()
+    fireEvent.change(screen.getByLabelText('State or province'), { target: { value: 'wi' } })
+    await nextWhenChecked()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await screen.findByText('You send: 599 WI')
+    expect(api.get('contestIMoved')).toHaveBeenCalledWith([['QTH', 'WI']])
+    expect(writes()).toEqual([])
+  })
+
+  it('VHF: the grid is read at start, so no "I moved" hint and no move, even for an answer a host handed over', async () => {
+    station = { ...station, fdActive: true, fdEvent: 'arrlvhf_jan', mygrid: 'EN52' }
+    const VHF = {
+      event: 'arrlvhf_jan',
+      running: false,
+      role: '',
+      composing: [{ key: 'GRID', raw: 'EN52' }],
+      composingText: 'EN52',
+      dupeRule: { byCall: true, byBand: true, byModeClass: true, byFields: [], bySentFields: ['GRID'], modeClassGroups: [] },
+    }
+    api.get('getSnapshot').mockImplementation(() => Promise.resolve(snapWith(VHF)))
+    render(<ContestSetupWizard onClose={vi.fn()} startAt="sends" initial={{ contestQthState: 'WI' }} />)
+    await screen.findByText('You send: EN52')
+    expect(screen.queryByText('A change here is "I moved": it takes effect on your next contact.')).toBeNull()
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(document.querySelector('[data-read-at-start]')!.textContent).toBe(
+      'Read when the contest starts: Grid square. To change it, stop the contest, then start it again.',
+    )
+    await nextWhenChecked()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await screen.findByText('ARRL January VHF Contest is on · S&P')
+    expect(api.get('contestIMoved')).not.toHaveBeenCalled()
+    expect(writes()).toEqual([])
+  })
+
+  it('a move that took effect, then a failed save of the entry lines, says the move is on and hands the move to the host', async () => {
+    station = { ...station, fdActive: true, contestQthCounty: 'COOK' }
+    const RUNNING = {
+      event: 'ilqp',
+      running: false,
+      role: 'in_state',
+      composing: [
+        { key: 'RST', raw: '599' },
+        { key: 'QTH', raw: 'COOK' },
+      ],
+      composingText: '599 COOK',
+      dupeRule: { byCall: true, byBand: true, byModeClass: true, byFields: [], bySentFields: ['QTH'], modeClassGroups: [] },
+    }
+    api.get('getSnapshot').mockImplementation(() => Promise.resolve(snapWith(RUNNING)))
+    api.get('contestIMoved').mockImplementation(() => Promise.resolve({ mode: 'fieldDay', fieldDay: { ...RUNNING, composingText: '599 WILL' } }))
+    api.get('setSettings').mockImplementation(() => Promise.reject('disk full'))
+    const onSaved = vi.fn()
+    render(<ContestSetupWizard onClose={vi.fn()} startAt="sends" onSaved={onSaved} />)
+    await screen.findByText('You send: 599 COOK')
+    fireEvent.change(screen.getByLabelText('County'), { target: { value: 'will' } })
+    await nextWhenChecked()
+    fireEvent.change(screen.getByLabelText('Club'), { target: { value: 'Rock River ARC' } })
+    await nextWhenChecked()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      'Your move took effect: you send 599 WILL. Saving the other changes failed: disk full.',
+    )
+    expect(onSaved.mock.calls).toEqual([[{ contestQthCounty: 'WILL' }]])
+  })
+})
+
+describe('the smaller cases', () => {
+  it('a refused Start when Contest mode was already saved on does not say it is off again', async () => {
+    station = { ...station, fdActive: true }
+    snapAfterSave = { mode: 'chat', fieldDay: null }
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({ ...preview({}), problem: 'Your COUNTY is not one the Illinois QSO Party lists.' }),
+    )
+    const before = structuredClone(station)
+    await open()
+    next()
+    fireEvent.change(await screen.findByLabelText('County'), { target: { value: 'COOK' } })
+    await screen.findByText('You send: 599 COOK')
+    next()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Start Illinois QSO Party' }))
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      'The station did not enter Illinois QSO Party: Your COUNTY is not one the Illinois QSO Party lists. Your answers were put back. Contest mode was already saved on, so the station tries again at the next save.',
+    )
+    expect(writes()[1]).toEqual(before)
+  })
+
+  it('a preview that failed holds Next, and says so, rather than dropping the typed class', async () => {
+    station = { ...station, fdEvent: 'arrlfd', fdClass: '1D', fdSection: 'WI' }
+    await open()
+    next()
+    await screen.findByText('You send: 1D WI')
+    api.get('previewFdRuleset').mockImplementation(() => Promise.reject('no engine'))
+    fireEvent.change(screen.getByLabelText('FD Class'), { target: { value: '2A' } })
+    expect(await screen.findByText('The station could not check this exchange. Change a field to try again.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Next' })).toHaveProperty('disabled', true)
     expect(writes()).toEqual([])
   })
 })

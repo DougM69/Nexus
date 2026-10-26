@@ -5006,6 +5006,12 @@ export const EN = {
   'contestSetup.change': 'Change setup…',
   'contestSetup.soon': '{{contest}} this weekend: it starts {{when}}.',
   'contestSetup.soon.action': 'Set up…',
+  'contestSetup.start.stopped': '{{contest}} is not running now. It was stopped while this setup was open.',
+  'contestSetup.start.runningChanged': 'The running contest changed while this setup was open. Check it here, then go on.',
+  'contestSetup.start.refusedStillOn': 'The station did not enter {{contest}}: {{reason}} Your answers were put back. Contest mode was already saved on, so the station tries again at the next save.',
+  'contestSetup.start.refusedStillOnUnknown': 'The station did not enter {{contest}}. Your answers were put back. Contest mode was already saved on, so the station tries again at the next save.',
+  'contestSetup.sends.uncheckable': 'The station could not check this exchange. Change a field to try again.',
+  'contestSetup.save.movedOnly': 'Your move took effect: you send {{exchange}}. Saving the other changes failed: {{error}}.',
   'fieldDay.upload.label': 'Upload merged contacts to:',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
@@ -5657,6 +5663,7 @@ export const EN = {
   'settings.fieldDay.mode.stop': 'Stop contest…',
   'settings.fieldDay.mode.on': 'On: {{contest}}',
   'settings.fieldDay.mode.off': 'Off',
+  'settings.fieldDay.mode.waiting': 'Waiting for Class + Section',
   'settings.save.contestBlocked': 'Saving would switch the running contest to {{contest}}, which cannot start yet: {{reason}}',
   'settings.fieldDay.needExchange':
     "<b>Set your Class + Section to start operating.</b> Contest mode is on, but the station won't enter {{contest}} until both are filled in below.",

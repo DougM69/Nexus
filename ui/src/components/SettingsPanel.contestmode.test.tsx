@@ -159,8 +159,10 @@ describe('the Class + Section prompt: Field Day’s own line, naming the switch 
     renderPanel()
     await openTab('Contesting')
     // Saved on, but the station has not entered: no session, so Start contest… is offered.
-    await modeButton('Start contest…')
+    const sw = await modeButton('Start contest…')
     expect(prompt()).toBe(PROMPT('ARRL Field Day'))
+    // Not "Off" beside a prompt that says the mode is on.
+    expect(sw.closest('.settings-field')!.querySelector('[role="status"]')!.textContent).toBe('Waiting for Class + Section')
   })
 
   it('Winter Field Day the same way', async () => {
@@ -177,8 +179,9 @@ describe('the Class + Section prompt: Field Day’s own line, naming the switch 
     renderPanel()
     await openTab('Contesting')
     // Saved on, but the station has not entered: no session, so Start contest… is offered.
-    await modeButton('Start contest…')
+    const sw = await modeButton('Start contest…')
     expect(prompt()).toBeNull()
+    expect(sw.closest('.settings-field')!.querySelector('[role="status"]')!.textContent).toBe('Off')
   })
 })
 

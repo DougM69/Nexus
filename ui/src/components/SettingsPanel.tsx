@@ -13549,9 +13549,13 @@ export function SettingsPanel({
                   {/* The live station's state (the snapshot), not this form's copy: a contest started or
                       stopped elsewhere since Settings opened shows as it is. */}
                   <span role="status">
+                    {/* Saved on with a blank Field Day class or section: not entered, and the prompt
+                        below says why, so this does not say Off beside it. */}
                     {fieldDay
                       ? t('settings.fieldDay.mode.on', { contest: contestName(fieldDay.event || 'arrlfd') })
-                      : t('settings.fieldDay.mode.off')}
+                      : form.fdActive && isFieldDay(form.fdEvent) && (!form.fdClass.trim() || !form.fdSection.trim())
+                        ? t('settings.fieldDay.mode.waiting')
+                        : t('settings.fieldDay.mode.off')}
                   </span>{' '}
                   {fieldDay ? (
                     <button
