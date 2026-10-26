@@ -1038,6 +1038,7 @@ impl AppState {
             rx_freq_clear_tick: 0,
             logged_tick: 0,
             hunt: None,
+            activation: None,
             // Filled by the engine while coordinated QSY is enabled; None here.
             qsy: None,
             // Filled by the engine from its session HARQ tally; 0 at this layer.

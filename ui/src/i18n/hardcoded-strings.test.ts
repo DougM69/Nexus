@@ -313,6 +313,8 @@ const MIGRATED = [
   // "Spot me" (2026-09-14): born migrated — the confirm and every per-target result are catalog
   // keys; "pota.app" and "DX cluster" in them name the services.
   'selfSpot.ts',
+  // The activation's notices (2026-10-25): born migrated, both sentences catalog keys.
+  'useActivationNotices.ts',
   'components/ContestView.tsx',
   'components/ContestOperators.tsx',
   // The contest logger window (2026-10-10): born migrated — its one string is a catalog key; the

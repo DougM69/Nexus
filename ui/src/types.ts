@@ -1043,6 +1043,24 @@ export interface Activation {
   states?: string[]
   /** The state the activation's contacts carry as ADIF MY_STATE ("ND"), or null: none known. */
   myState?: string | null
+  /** Each park (one, or a two-fer's) with its distinct contacts on the current UTC day — a dupe
+   *  adds nothing — and how many were park to park. */
+  parks?: ActivationPark[]
+  /** The grid the contacts carry as MY_GRIDSQUARE while activating, or null: none. */
+  grid?: string | null
+  /** When it started, Unix seconds. */
+  startedAt?: number
+  /** The UTC day the counts are of (unix / 86400): when it moves on, they start again. */
+  utcDay?: number
+  /** Taken up at launch from the activation the last session left running. */
+  restored?: boolean
+}
+
+/** One park of the running activation and what it holds today. */
+export interface ActivationPark {
+  reference: string
+  count: number
+  p2p: number
 }
 
 /** A zero-config auto-detected USB radio (from `detect_rigs`). */
@@ -5804,6 +5822,8 @@ export interface AppSnapshot {
   /** `states`: where the hunted park or summit is ("US-ND"; two or more for a park on a state
    *  line), absent when the hunt could not place it. */
   hunt?: { program: string; reference: string; call: string; states?: string[] } | null
+  /** The activation running now (the strip, the log form's POTA dupe badge). Null = none. */
+  activation?: Activation | null
   /** Coordinated-QSY status — present only while the opt-in feature is enabled. */
   qsy?: QsyStatus | null
   /** Session count of IR-HARQ rescues (decodes recovered by combining

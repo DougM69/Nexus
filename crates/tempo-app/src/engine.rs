@@ -16205,8 +16205,19 @@ impl Engine {
         // Settings that is not the certificate's location would lose LoTW contacts without a
         // word; marked, LoTW gets exactly what it got before, and every other service gets the
         // grid. One somebody else put on the record carries no mark and goes to LoTW as always.
+        //
+        // ⭐ WHILE ACTIVATING, THE PARK'S GRID, NOT THE HOME ONE: a contact the activation will tag
+        // (one arriving with no park of its own) was made from the park, so it takes the
+        // activation's grid — the park directory's, or one typed in the activation strip — and,
+        // with none known, no grid at all rather than a home grid that is wrong for every service
+        // it reaches. Marked as Nexus's own for LoTW's reason above. Never Settings': the grid
+        // Nexus sends on the air is untouched.
         if rec.my_grid.is_none() && !rec.extra.iter().any(|(k, _)| k == "MY_GRIDSQUARE") {
-            if let Some(grid) = self.log_grid_now() {
+            let grid = match self.station.activation_record() {
+                Some(activation) if rec.ota.my_ref.is_none() => activation.grid.clone(),
+                _ => self.log_grid_now(),
+            };
+            if let Some(grid) = grid {
                 rec.my_grid = Some(grid);
                 tempo_core::logbook::mark_self_filled(rec, "MY_GRIDSQUARE");
             }
@@ -16387,11 +16398,14 @@ impl Engine {
         // assume your home. Never invented: no state known, none written; and a record carrying
         // its own `MY_STATE` keeps it. It rides in `extra`, where the parser keeps an imported
         // one, so a round trip through the log writes it exactly once.
-        if let Some((program, reference)) = &self.station.activation {
+        //
+        // A two-fer is ONE contact carrying both parks as a comma list (`Activation::my_ref`);
+        // the per-park export writes it into each park's file with that park alone.
+        if let Some(activation) = &self.station.activation {
             if rec.ota.my_ref.is_none() {
-                rec.ota.my_program = Some(program.clone());
-                rec.ota.my_ref = Some(reference.clone());
-                if let Some(st) = &self.station.activation_state {
+                rec.ota.my_program = Some(activation.program.clone());
+                rec.ota.my_ref = Some(activation.my_ref());
+                if let Some(st) = &activation.state {
                     if !rec.extra.iter().any(|(k, _)| k == "MY_STATE") {
                         let at = rec.extra.partition_point(|(k, _)| k.as_str() < "MY_STATE");
                         rec.extra.insert(at, ("MY_STATE".to_string(), st.clone()));
@@ -27722,6 +27736,11 @@ contact yourself."
                 call,
                 states: self.station.hunt_places(),
             });
+        s.activation = self
+            .station
+            .activation_record()
+            .is_some()
+            .then(|| self.activation_dto(now_unix_secs()));
         s.harq_rescues = self.harq_rescues;
         s.upload_note = self.station.upload_note.clone();
         s.upload_ok = self.station.upload_ok;
@@ -31282,9 +31301,58 @@ contact yourself."
         self.station.activation()
     }
 
-    /// See [`StationCore::activation_qso_count`].
-    pub fn activation_qso_count(&self) -> usize {
-        self.station.activation_qso_count()
+    /// The activation as the panel shows it, its counts of the UTC day of `now`.
+    pub fn activation_dto(&self, now: u64) -> crate::dto::ActivationDto {
+        let Some(a) = self.station.activation_record() else {
+            return crate::dto::ActivationDto::default();
+        };
+        let parks: Vec<crate::dto::ActivationParkDto> = self
+            .station
+            .activation_day_counts(now)
+            .into_iter()
+            .map(|(reference, count, p2p)| crate::dto::ActivationParkDto {
+                reference,
+                count,
+                p2p,
+            })
+            .collect();
+        crate::dto::ActivationDto {
+            program: Some(a.program.clone()),
+            reference: Some(a.my_ref()),
+            qso_count: parks.first().map_or(0, |p| p.count),
+            states: a.places.clone(),
+            my_state: a.state.clone(),
+            parks,
+            grid: a.grid.clone(),
+            started_at: a.started_at,
+            utc_day: now / 86_400,
+            restored: a.restored,
+        }
+    }
+
+    /// See [`StationCore::set_activation_grid`].
+    pub fn set_activation_grid(&mut self, grid: &str) -> Result<(), String> {
+        self.station.set_activation_grid(grid)
+    }
+
+    /// See [`StationCore::activation_record`].
+    pub fn activation_record(&self) -> Option<&crate::station::Activation> {
+        self.station.activation_record()
+    }
+
+    /// See [`StationCore::activation_day_counts`].
+    pub fn activation_day_counts(&self, now: u64) -> Vec<(String, usize, usize)> {
+        self.station.activation_day_counts(now)
+    }
+
+    /// See [`StationCore::set_activation_path`].
+    pub fn set_activation_path(&mut self, path: PathBuf) {
+        self.station.set_activation_path(path)
+    }
+
+    /// See [`StationCore::restore_activation`].
+    pub fn restore_activation(&mut self) {
+        self.station.restore_activation()
     }
 
     /// See [`StationCore::update_qso`] — plus the propagation of a correction back into
@@ -48012,6 +48080,197 @@ mod tests {
         let of = |call: &str| log.iter().find(|r| r.call == call).unwrap().clone();
         assert_eq!(my_states(&of("W1AAA")), Vec::<String>::new());
         assert_eq!(my_states(&of("W1BBB")), ["SD"]);
+    }
+
+    // ── The activation as the field needs it: kept, counted per UTC day, two-fers, grid, P2P ──
+
+    /// 2026-10-25 10:40:00Z — and the next 00:00Z is 48 000 s later.
+    const ACT_T0: u64 = 1_788_000_000;
+    const ACT_MIDNIGHT: u64 = ACT_T0 + 48_000;
+
+    /// Log `call` on `band`/`mode` at `when` through the funnel every log path uses.
+    fn act_log(e: &mut Engine, call: &str, band: &str, mode: &str, when: u64) {
+        let mut rec = e.qso_record(call.into(), None, Some(-5));
+        rec.band = band.into();
+        rec.mode = mode.into();
+        rec.when_unix = when;
+        e.log_qso(rec);
+    }
+
+    fn act_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nexus-act-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// ⭐ A restart mid-activation keeps tagging: the parks, the picked state, the grid and the
+    /// start time come back, marked as taken up so the screen can ask, and the next contact is
+    /// stamped. Stop forgets it on disk too, so the launch after a Stop starts with none.
+    #[test]
+    fn an_activation_survives_a_restart_and_stop_forgets_it() {
+        let path = act_dir("keep").join("activation.json");
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        e.set_activation_path(path.clone());
+        e.set_activation("POTA", "us-0001, US-0002", places(&["US-MT", "US-ND"]))
+            .unwrap();
+        e.set_activation_state("ND").unwrap();
+        e.set_activation_grid("dn96ab").unwrap();
+        let before = e.activation_record().cloned().unwrap();
+        assert!(!before.restored, "started here, not taken up");
+
+        let mut relaunched = Engine::new("K9AAA", "EN52", 0);
+        relaunched.set_activation_path(path.clone());
+        relaunched.restore_activation();
+        let after = relaunched.activation_record().cloned().expect("taken up");
+        assert_eq!(after.refs, ["US-0001", "US-0002"]);
+        assert_eq!(after.state.as_deref(), Some("ND"));
+        assert_eq!(after.grid.as_deref(), Some("DN96AB"));
+        assert_eq!(after.started_at, before.started_at);
+        assert!(after.restored, "the screen asks about one it took up");
+        assert!(relaunched.snapshot().activation.is_some_and(|a| a.restored));
+        let rec = relaunched.qso_record("W1ABC".into(), None, Some(-5));
+        relaunched.log_qso(rec);
+        assert_eq!(
+            relaunched.stored_log()[0].ota.my_ref.as_deref(),
+            Some("US-0001,US-0002"),
+            "the contact after the restart is still the activation's"
+        );
+
+        relaunched.clear_activation();
+        assert!(!path.exists(), "Stop forgets it on disk");
+        let mut third = Engine::new("K9AAA", "EN52", 0);
+        third.set_activation_path(path);
+        third.restore_activation();
+        assert!(third.activation_record().is_none());
+        assert!(third.snapshot().activation.is_none());
+    }
+
+    /// A two-fer is one contact carrying both parks, and each park's export holds it once, with
+    /// that park alone as `MY_SIG_INFO`. A summit is one; a bad park in the list refuses all.
+    #[test]
+    fn a_two_fer_stamps_one_row_and_each_park_exports_it() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        e.set_activation("POTA", "US-0001 us-0002", Vec::new())
+            .unwrap();
+        act_log(&mut e, "W1ABC", "20m", "SSB", ACT_T0);
+        let log = e.stored_log();
+        assert_eq!(log.len(), 1, "one contact, never one row per park");
+        assert_eq!(log[0].ota.my_ref.as_deref(), Some("US-0001,US-0002"));
+        let day = ACT_T0 / 86_400 * 86_400;
+        let source = crate::logexport::Source::of(&e);
+        for park in ["US-0001", "US-0002"] {
+            let text = crate::logexport::export_for_activation(&source, park, day, Some("K9AAA"))
+                .unwrap()
+                .text;
+            let rows = tempo_core::logbook::parse_adif(&text);
+            assert_eq!(rows.len(), 1, "{park}: {text}");
+            assert_eq!(rows[0].ota.my_ref.as_deref(), Some(park), "{text}");
+        }
+        assert!(e
+            .set_activation("POTA", "US-0001,BOGUS", Vec::new())
+            .is_err());
+        assert!(e
+            .set_activation("SOTA", "W7A/MN-001 W7A/MN-002", Vec::new())
+            .is_err());
+    }
+
+    /// ⭐ The counter is POTA's: the contacts of TODAY (UTC), each distinct call/band/mode/their
+    /// park once. A dupe — same call, band and mode later the same day — adds nothing; the same
+    /// call on another band does; and at 00:00Z the count starts again from the new day while
+    /// yesterday's stays yesterday's. The activation runs straight through.
+    #[test]
+    fn the_counter_counts_unique_contacts_per_utc_day_and_rolls_at_midnight() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        e.set_activation("POTA", "US-0001", Vec::new()).unwrap();
+        act_log(&mut e, "W1ABC", "20m", "SSB", ACT_T0);
+        act_log(&mut e, "W1ABC", "20m", "USB", ACT_T0 + 3_600); // a dupe: USB is SSB
+        act_log(&mut e, "W1ABC", "40m", "SSB", ACT_T0 + 3_700); // another band: counts
+        act_log(&mut e, "W1ABC/P", "20m", "SSB", ACT_T0 + 7_200); // another call: counts
+        act_log(&mut e, "W1ABC", "20m", "CW", ACT_T0 + 7_500); // another mode: counts
+        act_log(&mut e, "K2AAA", "20m", "CW", ACT_MIDNIGHT - 30); // 23:59:30Z
+        assert_eq!(e.stored_log().len(), 6, "a dupe is logged, never refused");
+        let today = |e: &Engine, now: u64| e.activation_day_counts(now)[0].1;
+        assert_eq!(today(&e, ACT_MIDNIGHT - 1), 5);
+        act_log(&mut e, "K3BBB", "20m", "CW", ACT_MIDNIGHT + 30); // 00:00:30Z
+        assert_eq!(today(&e, ACT_MIDNIGHT - 1), 5, "yesterday keeps its own");
+        assert_eq!(
+            today(&e, ACT_MIDNIGHT),
+            1,
+            "the new day counts from its own"
+        );
+        let dto = e.activation_dto(ACT_MIDNIGHT + 60);
+        assert_eq!((dto.qso_count, dto.utc_day), (1, ACT_MIDNIGHT / 86_400));
+        assert!(
+            e.activation_record().is_some(),
+            "it keeps running across 00:00Z"
+        );
+    }
+
+    /// ⭐ While activating, the contacts carry the activation's grid as `MY_GRIDSQUARE` — never
+    /// the home grid, which stays exactly as Settings hold it — and after Stop the home grid
+    /// again. An activation with no grid known stamps none rather than the home one.
+    #[test]
+    fn the_park_grid_is_my_grid_while_activating_and_settings_never_change() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        let mut settings = e.settings().clone();
+        settings.mygrid = "EN52".into();
+        e.apply_settings(settings);
+        // Made now: the station fields are stamped on a contact made now, never on an old one.
+        let now = now_unix_secs();
+        e.set_activation("POTA", "US-0001", Vec::new()).unwrap();
+        act_log(&mut e, "W1AAA", "20m", "SSB", now);
+        e.set_activation_grid("dn96").unwrap();
+        act_log(&mut e, "W1BBB", "20m", "SSB", now);
+        assert!(e.set_activation_grid("nonsense").is_err());
+        e.clear_activation();
+        act_log(&mut e, "W1CCC", "20m", "SSB", now);
+        assert!(e.set_activation_grid("DN96").is_err(), "no activation");
+        let log = e.stored_log();
+        let grid = |call: &str| log.iter().find(|r| r.call == call).unwrap().my_grid.clone();
+        assert_eq!(
+            grid("W1AAA"),
+            None,
+            "no park grid known: none, not the home one"
+        );
+        assert_eq!(grid("W1BBB").as_deref(), Some("DN96"));
+        assert_eq!(
+            grid("W1CCC").as_deref(),
+            Some("EN52"),
+            "after Stop, home again"
+        );
+        assert_eq!(
+            e.settings().mygrid,
+            "EN52",
+            "Settings never took the park's"
+        );
+    }
+
+    /// ⭐ Park to park: an activation and a pending hunt on one contact stamp BOTH sides — my
+    /// park as `MY_SIG_INFO`, theirs as `SIG_INFO` — and the day's P2P count sees it.
+    #[test]
+    fn activation_and_hunt_on_one_contact_stamp_both_sides() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        e.set_activation("POTA", "US-0001", Vec::new()).unwrap();
+        e.set_hunt_target("W1ABC", "POTA", "US-0099", Vec::new())
+            .unwrap();
+        act_log(&mut e, "W1ABC", "20m", "SSB", now_unix_secs());
+        act_log(&mut e, "K2AAA", "20m", "SSB", now_unix_secs());
+        let r = e
+            .stored_log()
+            .into_iter()
+            .find(|r| r.call == "W1ABC")
+            .unwrap();
+        assert_eq!(
+            (r.ota.my_ref.as_deref(), r.ota.their_ref.as_deref()),
+            (Some("US-0001"), Some("US-0099"))
+        );
+        let adif = tempo_core::logbook::adif_record(&r);
+        assert!(adif.contains("<MY_SIG_INFO:7>US-0001"), "{adif}");
+        assert!(adif.contains("<SIG_INFO:7>US-0099"), "{adif}");
+        assert_eq!(
+            e.activation_day_counts(now_unix_secs()),
+            [("US-0001".to_string(), 2, 1)]
+        );
     }
 
     /// Every connector sends what the log holds: the park's state goes out in the ADIF record the

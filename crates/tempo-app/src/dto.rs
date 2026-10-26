@@ -132,6 +132,52 @@ pub struct HuntDto {
     pub states: Vec<String>,
 }
 
+/// The operator's activation as the POTA/SOTA panel, the log form and the snapshot show it —
+/// every field null/empty when not activating.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivationDto {
+    /// "POTA" | "SOTA", or null when not activating.
+    pub program: Option<String>,
+    /// The reference the contacts carry: one park, or a two-fer's parks as a comma list. Null
+    /// when not activating.
+    pub reference: Option<String>,
+    /// The first park's contacts today (see `parks`), for a caller that shows one number.
+    pub qso_count: usize,
+    /// Where the park or summit is ("US-ND"; two or more for a park on a state line), so the
+    /// panel can ask which state on a state line. Empty when not activating or not placed.
+    pub states: Vec<String>,
+    /// The state the activation's contacts carry as `MY_STATE` ("ND"), or null: none known yet.
+    pub my_state: Option<String>,
+    /// Each park with its contacts on the current UTC day, distinct by POTA's rule (a dupe adds
+    /// nothing), and how many of them were park to park.
+    #[serde(default)]
+    pub parks: Vec<ActivationParkDto>,
+    /// The grid the contacts carry as `MY_GRIDSQUARE` while activating, or null: none.
+    #[serde(default)]
+    pub grid: Option<String>,
+    /// When the activation started, Unix seconds (0 when not activating).
+    #[serde(default)]
+    pub started_at: u64,
+    /// The UTC day the counts are of (`unix / 86400`): when it moves on, the counts start again.
+    #[serde(default)]
+    pub utc_day: u64,
+    /// The activation was taken up at launch from the one the last session left running.
+    #[serde(default)]
+    pub restored: bool,
+}
+
+/// One park of an activation, and what it holds today ([`ActivationDto::parks`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivationParkDto {
+    pub reference: String,
+    /// Distinct contacts from this park today.
+    pub count: usize,
+    /// Of those, park to park.
+    pub p2p: usize,
+}
+
 /// The park or summit a worked Needed row is an activation of ([`AppSnapshot::work_park`]). Not a
 /// hunt: the log line the work opens fills it with the call, and nothing else ever reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4943,6 +4989,10 @@ pub struct AppSnapshot {
     /// the park). None = not hunting.
     #[serde(default)]
     pub hunt: Option<HuntDto>,
+    /// The activation running now (the activator's strip and the log form's POTA dupe badge).
+    /// None = not activating.
+    #[serde(default)]
+    pub activation: Option<ActivationDto>,
     /// Coordinated-QSY status — present only while the (opt-in) feature is enabled.
     #[serde(default)]
     pub qsy: Option<QsyStatus>,

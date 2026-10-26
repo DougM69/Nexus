@@ -4729,6 +4729,11 @@ export async function setActivationState(myState: string): Promise<Activation> {
   return invoke<Activation>('set_activation_state', { myState })
 }
 
+/** The grid the activation's contacts carry as MY_GRIDSQUARE (blank clears it); never Settings'. */
+export async function setActivationGrid(grid: string): Promise<Activation> {
+  return invoke<Activation>('set_activation_grid', { grid })
+}
+
 /** End the current activation. */
 export async function clearActivation(): Promise<Activation> {
   return invoke<Activation>('clear_activation')

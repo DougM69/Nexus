@@ -28,6 +28,8 @@ import type {
 import { isRxOnly, isBeacon } from '../types'
 import type { NeedBandScopes } from '../features/needs'
 import { bandKey, modeKey } from '../features/callHistory'
+import { potaDupe } from '../features/potaActivation'
+import { sameCall } from '../callsign'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
 import { contestDupe } from '../features/contestDupe'
@@ -2496,6 +2498,16 @@ function OperateRecall({
     !slots.bandsWorked.includes(liveBand)
   const newModeSlot =
     slots.workedEver && !newBandSlot && !slots.modesWorked.includes(modeKey(mode))
+  // While activating: the POTA dupe (warn only) in place of "worked ever on this band". An FT
+  // message carries no park, so theirs is the hunt's when the hunt is this station.
+  const hunt = snap.hunt && sameCall(snap.hunt.call, cu) ? snap.hunt.reference : null
+  const potaDupeNow = potaDupe(hist.qsos, snap.activation, {
+    call: cu,
+    band: snap.radio.band,
+    mode,
+    theirRef: hunt,
+    nowUnix: Math.floor(Date.now() / 1000),
+  })
 
   return (
     <RecallPanel
@@ -2514,6 +2526,8 @@ function OperateRecall({
       image={book?.image}
       myGrid={snap.mygrid}
       hist={hist}
+      activating={snap.activation?.reference != null}
+      potaDupe={potaDupeNow}
       contestDupe={fdDupe}
       contestLogsDupes={snap.fieldDay?.dupeRule?.logDupes === true}
       // `!== false`, not `=== true`: an absent rule is `contestDupe`'s LEGACY_TRIPLE, which

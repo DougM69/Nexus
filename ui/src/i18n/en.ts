@@ -4472,7 +4472,7 @@ export const EN = {
   'ota.activation.started': 'Activating {{program}} {{reference}} — QSOs will be park-tagged',
   'ota.activation.startFailed': 'Could not start activation',
   'ota.activation.active':
-    '📻 Activating <b>{{program}} {{reference}}</b><note> · {{count}} logged — QSOs get your park tagged</note>',
+    '📻 Activating <b>{{program}} {{reference}}</b><note> — QSOs get your park tagged</note>',
   'ota.activation.stop.label': 'Stop',
   'ota.activation.stop.title': 'End activation',
   'ota.activation.ended': 'Activation ended',
@@ -4482,6 +4482,22 @@ export const EN = {
   'ota.activation.state.lotw':
     'Your contacts carry this state as MY_STATE. LoTW credits the state of the TQSL Station Location you sign with, so sign them with a location in this state.',
   'ota.activation.state.failed': 'Could not set your state',
+  'ota.activation.progress': '{{reference}} {{count}} of 10',
+  'ota.activation.toGo': '{{count}} to go',
+  'ota.activation.valid': 'valid',
+  'ota.activation.progress.title': 'Contacts from {{reference}} since 0000Z, each call, band, mode and their park counted once, as POTA counts them. Ten in one UTC day make a valid activation; the count starts again at 0000Z.',
+  'ota.activation.p2p': 'P2P {{count}}',
+  'ota.activation.p2p.title': 'Park-to-park contacts today: the other station was in a park too.',
+  'ota.activation.grid.label': 'Grid',
+  'ota.activation.grid.title': 'The grid your contacts carry as MY_GRIDSQUARE while you activate: the park’s, or type a more precise one. Your home grid in Settings is not changed and is used again after Stop.',
+  'ota.activation.grid.failed': 'Could not set the activation grid',
+  'ota.activation.restored': 'Still activating {{reference}}: contacts are still tagged with the park. Stop?',
+  'ota.activation.newDay': 'New UTC day: 0 of 10 at {{reference}}. The activation keeps running; yesterday’s contacts export as their own file.',
+  'ota.activation.legacyRef': '{{reference}} uses the old K- prefix. POTA now names US parks US-; check the park list before you upload.',
+  'ota.badge.p2p': 'P2P',
+  'ota.badge.p2p.title': 'You are activating: working this station is park to park, and both parks go on the contact.',
+  'recall.potaDupe.label': 'Dupe today @ {{park}}',
+  'recall.potaDupe.title': 'Already worked today from {{park}} on {{band}} {{mode}} at {{time}}Z. POTA counts it once. Log it anyway if they need it; it is never refused.',
   // "Spot me": your own activation, posted to pota.app and the DX cluster in one press, on the
   // desktop's board and the Remote page's. Each target reports on its own unless both took it.
   'ota.selfSpot.button': 'Spot me',

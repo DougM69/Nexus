@@ -2259,21 +2259,58 @@ pub struct StationCore {
     /// Orphans from the last QRZ two-way sync (own its slot so an eQSL/LoTW sync
     /// doesn't clobber them). Resets on restart until the next sync.
     pub(crate) last_qrz_reconcile: Option<tempo_core::reconcile::ReconcileSummary>,
-    /// Current Parks/Summits On The Air activation `(program, reference)` — when set,
-    /// each logged QSO is tagged as your activation (POTA/SOTA). Transient (an
-    /// activation ends), so not persisted. `None` = not activating.
-    pub(crate) activation: Option<(String, String)>,
-    /// Where the activation's park or summit is ("US-ND"; two or more for a park on a state line,
-    /// none where the caller could not place it), and the state you are activating from: the
-    /// park's own when it names one, else the one you picked of its states. Its contacts carry
-    /// it as `MY_STATE`. Never invented: no place, no pick, no `MY_STATE`. Cleared with the
-    /// activation.
-    pub(crate) activation_places: Vec<String>,
-    pub(crate) activation_state: Option<String>,
+    /// The Parks/Summits On The Air activation running now ([`Activation`]) — when set, each
+    /// logged QSO is tagged as your activation (POTA/SOTA). `None` = not activating. Kept in
+    /// [`Self::activation_path`] on every change, so a restart, a crash or a battery swap in the
+    /// field does not silently stop the tagging.
+    pub(crate) activation: Option<Activation>,
+    /// Where the activation is kept across a restart (`activation.json`, beside settings.json),
+    /// if the shell set one. Its own file, never a Settings field: the Settings screen saves the
+    /// whole of what it loaded, and an activation started or stopped since would be written back
+    /// over.
+    pub(crate) activation_path: Option<PathBuf>,
     /// Session gallery of saved SSTV images, newest last. Seeded from the
     /// persisted `gallery.json` at startup; the decode thread appends on each
     /// completed image. Capped at [`SSTV_GALLERY_CAP`].
     pub(crate) sstv_gallery: Vec<crate::dto::SstvGalleryEntry>,
+}
+
+/// A Parks/Summits On The Air activation as it runs ([`StationCore::activation`]), and as
+/// `activation.json` keeps it across a restart.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Activation {
+    /// "POTA" | "SOTA".
+    pub program: String,
+    /// The park or parks (a two-fer), normalized, in the order given; a summit is one.
+    pub refs: Vec<String>,
+    /// Where the park or summit is ("US-ND"; two or more for a park on a state line, none where
+    /// the caller could not place it).
+    #[serde(default)]
+    pub places: Vec<String>,
+    /// The state you are activating from: the park's own when it names one, else the one you
+    /// picked of its states. Its contacts carry it as `MY_STATE`. Never invented: no place, no
+    /// pick, no `MY_STATE`.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// The grid you are activating from — the park's, from the park directory, or one you typed —
+    /// carried as the contacts' `MY_GRIDSQUARE` instead of the home grid. Never Settings'.
+    #[serde(default)]
+    pub grid: Option<String>,
+    /// When it started, Unix seconds.
+    pub started_at: u64,
+    /// Taken up from the file at launch rather than started this session — what the screen's
+    /// "Still activating" question reads. Not kept.
+    #[serde(skip)]
+    pub restored: bool,
+}
+
+impl Activation {
+    /// The reference the contacts carry as `MY_SIG_INFO`: the park, or a two-fer's parks as a
+    /// comma list (the form the writer and the per-park export already read).
+    pub fn my_ref(&self) -> String {
+        self.refs.join(",")
+    }
 }
 
 /// The log a new station holds until the launch gives it the operator's: an empty store in memory
@@ -2376,8 +2413,7 @@ impl StationCore {
             last_eqsl_reconcile: None,
             last_qrz_reconcile: None,
             activation: None,
-            activation_places: Vec::new(),
-            activation_state: None,
+            activation_path: None,
             sstv_gallery: Vec::new(),
         }
     }
@@ -3730,9 +3766,15 @@ impl StationCore {
     /// Validates + normalizes the reference; returns the normalized `(program, ref)`
     /// or an error string for an unknown program / malformed reference.
     ///
-    /// `places` are where the park or summit is ([`Self::activation_places`]): one names the
+    /// A POTA `reference` may name several parks — a two-fer, "US-1234, US-5678" (commas,
+    /// semicolons or spaces) — each checked on its own; the contacts carry them as one comma list
+    /// in `MY_SIG_INFO`, which the per-park export splits into one file per park. A summit is one.
+    /// The returned reference is that list.
+    ///
+    /// `places` are where the park or summit is ([`Activation::places`]): one names the
     /// state its contacts carry as `MY_STATE`; on a state line the operator picks it
-    /// ([`Self::set_activation_state`]).
+    /// ([`Self::set_activation_state`]). The grid starts empty
+    /// ([`Self::set_activation_grid`]).
     pub fn set_activation(
         &mut self,
         program: &str,
@@ -3741,63 +3783,201 @@ impl StationCore {
     ) -> Result<(String, String), String> {
         let prog = tempo_core::pota::OtaProgram::from_code(program)
             .ok_or_else(|| format!("Unknown program '{program}' — use POTA or SOTA."))?;
-        let normalized = tempo_core::pota::normalize_ref(prog, reference)
-            .ok_or_else(|| format!("'{reference}' isn't a valid {} reference.", prog.code()))?;
-        self.activation = Some((prog.code().to_string(), normalized.clone()));
-        self.activation_state = match places.as_slice() {
+        let mut refs: Vec<String> = Vec::new();
+        for one in reference
+            .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+            .filter(|one| !one.is_empty())
+        {
+            let normalized = tempo_core::pota::normalize_ref(prog, one)
+                .ok_or_else(|| format!("'{one}' isn't a valid {} reference.", prog.code()))?;
+            if !refs.contains(&normalized) {
+                refs.push(normalized);
+            }
+        }
+        match (prog, refs.len()) {
+            (_, 0) => {
+                return Err(format!(
+                    "'{reference}' isn't a valid {} reference.",
+                    prog.code()
+                ))
+            }
+            (tempo_core::pota::OtaProgram::Sota, 2..) => {
+                return Err("A SOTA activation is one summit.".into());
+            }
+            _ => {}
+        }
+        let state = match places.as_slice() {
             [one] => Some(crate::engine::place_state(one).to_string()),
             _ => None,
         };
-        self.activation_places = places;
-        Ok((prog.code().to_string(), normalized))
+        let activation = Activation {
+            program: prog.code().to_string(),
+            refs,
+            places,
+            state,
+            grid: None,
+            started_at: now_unix_secs(),
+            restored: false,
+        };
+        let out = (activation.program.clone(), activation.my_ref());
+        self.activation = Some(activation);
+        self.persist_activation();
+        Ok(out)
     }
 
     /// The state you are activating from, picked from the park's own when it is on a state line.
     /// Refused with no activation, and for a state that is not one of the park's: a state the
     /// park is not in would be a `MY_STATE` nobody operated from.
     pub fn set_activation_state(&mut self, state: &str) -> Result<(), String> {
-        if self.activation.is_none() {
+        let Some(activation) = self.activation.as_mut() else {
             return Err("Not activating.".into());
-        }
+        };
         let wanted = state.trim().to_ascii_uppercase();
-        let place = self
-            .activation_places
+        let place = activation
+            .places
             .iter()
             .map(|p| crate::engine::place_state(p))
             .find(|st| *st == wanted)
             .ok_or_else(|| format!("'{state}' is not one of this park's states."))?;
-        self.activation_state = Some(place.to_string());
+        activation.state = Some(place.to_string());
+        self.persist_activation();
+        Ok(())
+    }
+
+    /// The grid you are activating from — the contacts' `MY_GRIDSQUARE` while the activation runs,
+    /// in place of Settings' home grid. Never written to Settings, so it goes with the activation.
+    /// Blank clears it (the contacts then carry no grid rather than the home one); anything but a
+    /// 4- or 6-character locator is refused. Refused with no activation.
+    pub fn set_activation_grid(&mut self, grid: &str) -> Result<(), String> {
+        let Some(activation) = self.activation.as_mut() else {
+            return Err("Not activating.".into());
+        };
+        let grid = grid.trim().to_ascii_uppercase();
+        if !grid.is_empty() && !tempo_core::message::is_valid_grid(&grid) {
+            return Err(format!("'{grid}' isn't a grid square."));
+        }
+        activation.grid = (!grid.is_empty()).then_some(grid);
+        self.persist_activation();
         Ok(())
     }
 
     /// Where the activation's park or summit is ("US-ND"), as the activation was started with.
     pub fn activation_places(&self) -> Vec<String> {
-        self.activation_places.clone()
+        self.activation
+            .as_ref()
+            .map(|a| a.places.clone())
+            .unwrap_or_default()
     }
 
     /// The state the activation's contacts carry as `MY_STATE` ("ND"), if one is known.
     pub fn activation_state(&self) -> Option<String> {
-        self.activation_state.clone()
+        self.activation.as_ref().and_then(|a| a.state.clone())
     }
 
-    /// End the current activation (subsequent QSOs are untagged).
+    /// End the current activation (subsequent QSOs are untagged), and forget it on disk.
     pub fn clear_activation(&mut self) {
         self.activation = None;
-        self.activation_places = Vec::new();
-        self.activation_state = None;
+        self.persist_activation();
     }
 
-    /// The current activation `(program, reference)`, if any.
+    /// The current activation `(program, reference)`, if any — the reference as the contacts
+    /// carry it: one park, or a two-fer's parks as a comma list.
     pub fn activation(&self) -> Option<(String, String)> {
-        self.activation.clone()
+        self.activation
+            .as_ref()
+            .map(|a| (a.program.clone(), a.my_ref()))
     }
 
-    /// How many logged QSOs carry the current activation reference (the live count
-    /// for the activation panel). 0 when not activating.
-    pub fn activation_qso_count(&self) -> usize {
-        match &self.activation {
-            Some((_, reference)) => self.hot().activation_count(reference),
-            None => 0,
+    /// The activation running now, whole.
+    pub fn activation_record(&self) -> Option<&Activation> {
+        self.activation.as_ref()
+    }
+
+    /// Each park of the running activation with its contacts on the UTC day of `now` — distinct
+    /// by POTA's rule ([`tempo_core::logbook::hot::pota_key`]), so a dupe adds nothing — and how
+    /// many of them were park to park. Empty when not activating. At 00:00Z the day moves on and
+    /// every count starts again from what the new day holds, as POTA counts it.
+    pub fn activation_day_counts(&self, now: u64) -> Vec<(String, usize, usize)> {
+        let Some(activation) = &self.activation else {
+            return Vec::new();
+        };
+        let day = now / 86_400;
+        let hot = self.hot();
+        activation
+            .refs
+            .iter()
+            .map(|park| {
+                (
+                    park.clone(),
+                    hot.activation_day_count(park, day),
+                    hot.activation_day_p2p(park, day),
+                )
+            })
+            .collect()
+    }
+
+    /// Point the activation at the file it is kept in. Called once by the shell at startup,
+    /// before [`Self::restore_activation`].
+    pub fn set_activation_path(&mut self, path: PathBuf) {
+        self.activation_path = Some(path);
+    }
+
+    /// Take up the activation a previous session left running, from [`Self::activation_path`],
+    /// marked [`Activation::restored`] so the screen can ask whether it is still on. A missing
+    /// file is no activation; one this build cannot read is left where it is, said in the
+    /// diagnostic log, and not taken up — an activation it cannot read is one it cannot stamp.
+    pub fn restore_activation(&mut self) {
+        let Some(path) = &self.activation_path else {
+            return;
+        };
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                tempo_core::applog::warn("activation", &format!("{}: {e}", path.display()));
+                return;
+            }
+        };
+        match serde_json::from_str::<Activation>(&text) {
+            Ok(mut activation) if !activation.refs.is_empty() => {
+                activation.restored = true;
+                self.activation = Some(activation);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tempo_core::applog::warn(
+                    "activation",
+                    &format!("{} could not be read: {e}", path.display()),
+                );
+            }
+        }
+    }
+
+    /// Keep the activation as it is now in [`Self::activation_path`]: written whole (temporary
+    /// file, fsync, rename, so a crash mid-write leaves the old one), or removed when none runs.
+    fn persist_activation(&self) {
+        let Some(path) = &self.activation_path else {
+            return;
+        };
+        let Some(activation) = &self.activation else {
+            let _ = std::fs::remove_file(path);
+            return;
+        };
+        let Ok(text) = serde_json::to_string_pretty(activation) else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let tmp = path.with_extension("json.tmp");
+        let res = std::fs::File::create(&tmp)
+            .and_then(|mut f| {
+                std::io::Write::write_all(&mut f, text.as_bytes())?;
+                f.sync_all()
+            })
+            .and_then(|()| std::fs::rename(&tmp, path));
+        if let Err(e) = res {
+            tempo_core::applog::warn("activation", &format!("not kept: {e}"));
         }
     }
 
@@ -5893,11 +6073,20 @@ mod hot_parity_tests {
             );
         }
         assert_eq!(
-            sc.activation_qso_count(),
+            sc.activation_day_counts(T0)[0].1,
             log.records()
                 .iter()
                 .filter(|r| r.ota.my_ref.as_deref() == Some("US-1234"))
-                .count(),
+                .map(|r| {
+                    tempo_core::logbook::hot::pota_key(
+                        &r.call,
+                        &r.band,
+                        &r.mode,
+                        r.ota.their_ref.as_deref(),
+                    )
+                })
+                .collect::<HashSet<_>>()
+                .len(),
             "after {what}: activation count"
         );
         assert_eq!(
@@ -5931,7 +6120,7 @@ mod hot_parity_tests {
             let mut sc = StationCore::new();
             sc.set_dxcc_resolver(resolve);
             sc.set_hunted_parks_import(["K-0001".to_string()]);
-            sc.activation = Some(("POTA".into(), "US-1234".into()));
+            sc.set_activation("POTA", "US-1234", Vec::new()).unwrap();
             // A contest session opened on the empty log, which needs no rows read: every write
             // below is followed into its sweep too.
             assert!(sc.worked_since(T0 + 1_000, &FD).is_some());

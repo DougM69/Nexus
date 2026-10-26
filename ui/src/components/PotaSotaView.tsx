@@ -13,6 +13,7 @@ import {
   setHuntTarget,
   setActivation,
   setActivationState,
+  setActivationGrid,
   clearActivation,
   getActivation,
   parksCount,
@@ -27,6 +28,7 @@ import { announceSelfSpot, confirmSelfSpot } from '../selfSpot'
 import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
 import { bandLabelForMhz } from '../band'
 import { placeCode, placeLabel, placeName } from '../features/otaStates'
+import { activationParks, isLegacyUsRef, parkProgress } from '../features/potaActivation'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { POTA_SPOTS, SOTA_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../features/connectFeeds'
 import { t } from '../i18n'
@@ -382,9 +384,12 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     huntedRowRef.current?.scrollIntoView?.({ block: 'nearest' })
   }, [huntedRowKey])
 
-  // My-side activation: the backend stamps my park ref onto every QSO I log while active.
+  // My-side activation: the backend stamps my park ref onto every QSO I log while active. The
+  // snapshot carries it live (today's counts move as contacts are logged, and roll at 0000Z), so
+  // it wins whenever the station sends it; the command answers stand in for a station that
+  // does not.
   const [nativeAct, setAct] = useState<Activation | null>(null)
-  const act = observation ? observation.activation : nativeAct
+  const act = observation ? observation.activation : snap.activation !== undefined ? snap.activation : nativeAct
   const [actRef, setActRef] = useState('')
   const [actProg, setActProg] = useState('POTA')
   useEffect(() => {
@@ -413,7 +418,23 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
         t('ota.activation.started', { program: a.program ?? '', reference: a.reference ?? '' }),
         'success',
       )
+      // A K- park is accepted: whether POTA's upload still takes the pre-2024 prefix is not
+      // known, so it is said, never refused or rewritten.
+      for (const park of activationParks(a).filter(isLegacyUsRef)) {
+        pushToast(t('ota.activation.legacyRef', { reference: park }), 'info', 12_000)
+      }
     }
+  }
+  // The grid the contacts carry as MY_GRIDSQUARE while activating: the park's, or a more precise
+  // one typed here. Never Settings'. Sent on Enter or when the box is left, only when changed.
+  const [gridDraft, setGridDraft] = useState<string | null>(null)
+  const handleGrid = async () => {
+    if (gridDraft == null) return
+    const typed = gridDraft.trim().toUpperCase()
+    setGridDraft(null)
+    if (typed === (act?.grid ?? '')) return
+    const a = await withErrorToast(() => setActivationGrid(typed), t('ota.activation.grid.failed'))
+    if (a) setAct(a)
   }
   // The state you are activating from, of a park on a state line: never guessed, so asked.
   const handlePickState = async (code: string) => {
@@ -623,11 +644,50 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 tags={{ b: <strong />, note: <span className="pota-act-sub" /> }}
                 vals={{
                   program: act?.program ?? '',
-                  reference: act?.reference ?? '',
-                  count: act?.qsoCount ?? 0,
+                  // A two-fer's parks, as an operator writes them: "US-1234, US-5678".
+                  reference: activationParks(act).join(', '),
                 }}
               />
             </span>
+            {/* Today's count per park, POTA's way: each call, band, mode and their park once,
+                since 0000Z. A two-fer shows each park; ten in one UTC day is valid. */}
+            {(act?.parks ?? []).map((p) => {
+              const g = parkProgress(p.count)
+              return (
+                <span
+                  key={p.reference}
+                  className={`pota-act-progress${g.valid ? ' valid' : ''}`}
+                  title={t('ota.activation.progress.title', { reference: p.reference })}
+                >
+                  {t('ota.activation.progress', { reference: p.reference, count: p.count })}
+                  {' · '}
+                  {g.valid ? t('ota.activation.valid') : t('ota.activation.toGo', { count: g.toGo })}
+                </span>
+              )
+            })}
+            {(act?.parks?.[0]?.p2p ?? 0) > 0 && (
+              <span className="pota-act-progress p2p" title={t('ota.activation.p2p.title')}>
+                {t('ota.activation.p2p', { count: act?.parks?.[0]?.p2p ?? 0 })}
+              </span>
+            )}
+            {!observed && (
+              <label className="pota-act-grid" title={t('ota.activation.grid.title')}>
+                <span>{t('ota.activation.grid.label')}</span>
+                <input
+                  className="settings-input mono pota-act-grid-input"
+                  value={gridDraft ?? act?.grid ?? ''}
+                  onChange={(e) => setGridDraft(e.target.value.toUpperCase())}
+                  onBlur={() => void handleGrid()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void handleGrid()
+                  }}
+                  maxLength={6}
+                  size={6}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+            )}
             {/* The state your contacts carry as MY_STATE: the park's own, or, on a state line,
                 the one you pick here. Never guessed. LoTW credits the state of the TQSL Station
                 Location you sign with, which the tooltip says. */}
@@ -965,6 +1025,14 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                           title={t('ota.badge.newPark.title')}
                         >
                           {t('ota.badge.newPark')}
+                        </span>
+                      )}
+                      {/* While you activate, every POTA activator on the board is a park-to-park
+                          contact: both parks go on it (the hunt tags theirs, the activation
+                          yours). */}
+                      {activating && act?.program === 'POTA' && s.program === 'POTA' && (
+                        <span className="pota-badge pota-badge-p2p" title={t('ota.badge.p2p.title')}>
+                          {t('ota.badge.p2p')}
                         </span>
                       )}
                       {s.bandOpen && (
