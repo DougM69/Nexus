@@ -4356,9 +4356,14 @@ pub struct Engine {
     /// The transmit stand-down generation the pending ATU press was made under: the drain drops a
     /// press made before the stand-down moved ([`Self::take_atu_tune`]).
     pending_atu_tune_stand_down: u64,
-    /// A pending "switch the rig's tuner out" click on ATU ON (#344) — drained by the radio loop via
-    /// [`Self::take_atu_bypass`], which re-checks that nothing is on the air.
-    pending_atu_bypass: bool,
+    /// A pending "Switch tuner out" (#344, the ATU button's menu), stamped with when it was asked
+    /// (unix seconds) — drained by the radio loop via [`Self::take_atu_bypass`], which re-checks
+    /// that nothing is on the air and drops it after [`ATU_REQUEST_MAX_AGE_SECS`], as a tune-up.
+    pending_atu_bypass: Option<u64>,
+    /// Whether THIS CAT path can switch the rig's tuner out (`U TUNER 0`), told by the radio loop
+    /// beside the tuner probe ([`Self::observe_rig_tuner_switch_out`]): Hamlib's rigctld can; Nexus's
+    /// own Flex client cannot (no switch-out). `false` until told, and on a breaker trip.
+    rig_atu_switch_out: bool,
     /// Rig RX passband width (Hz) from the poll; `None` = unknown / rig default. Observed-only.
     rig_passband: Option<u32>,
     /// The radio's RECEIVE frequency ranges (Hz, inclusive), read once per CAT confirmation from
@@ -6753,7 +6758,8 @@ impl Engine {
             rig_tuner: None,
             rig_atu_start_tune: true,
             pending_atu_tune: None,
-            pending_atu_bypass: false,
+            pending_atu_bypass: None,
+            rig_atu_switch_out: false,
             pending_atu_tune_stand_down: 0,
             rig_passband: None,
             pending_passband: None,
@@ -8208,7 +8214,7 @@ impl Engine {
         // keeps: the radio that may be playing is the one being left, and the loop would send
         // the STOP to the incoming one.
         self.pending_atu_tune = None;
-        self.pending_atu_bypass = false;
+        self.pending_atu_bypass = None;
         self.pending_voice_mem = None;
         // …and exactly like a QSY, take the queued split one-shot
         // (`set_frequency` / `observe_rig_freq` do the identical three lines).
@@ -10736,24 +10742,25 @@ impl Engine {
         }
     }
 
-    /// The FM-class word APRS commands: the radio's FM DATA mode (`PKTFM`) on a model whose plain
-    /// FM takes its transmit audio from the microphone only, otherwise [`Self::fm_mode_word`]'s
-    /// answer, exactly as before.
+    /// The FM-class word APRS commands: the radio's DATA-FM mode (`PKTFM`) when the operator turned
+    /// on "APRS uses DATA-FM" for this radio and the radio has one, otherwise
+    /// [`Self::fm_mode_word`]'s answer, exactly as before.
     ///
-    /// ⭐ #393 (W9TD, FT-991A): APRS is soundcard audio, and the FT-991/991A gives the packet path
-    /// to DATA-FM alone ("077 FM PKT PORT SELECT 1: DATA 2: USB"; plain FM's source is "074 FM MIC
-    /// SELECT", MIC by default — FT-991A CAT Operation Reference Manual, menu table). Every APRS
-    /// entry put his radio back in plain FM. Hamlib's `PKTFM` is `MD0A;` (DATA-FM) on that radio.
-    ///
-    /// PER MODEL, and only the one with that evidence (Hamlib 1035, the FT-991 and FT-991A share
-    /// it). The native Icom path keeps APRS in plain FM on purpose (`CivBackend::try_set_mode`),
-    /// and no other radio's plain FM is known to be deaf to its data port. The mic-jack opt-out
+    /// ⭐ #393 (FT-991A): APRS is soundcard audio, and the FT-991/991A can take it from the USB
+    /// codec in DATA-FM (menu 077 FM PKT PORT SELECT = USB) as well as in plain FM (menu 074 FM MIC
+    /// SELECT = REAR). Which one works depends on how THAT radio's menus are set, so it is the
+    /// operator's per-radio choice ([`crate::settings::RadioProfile::aprs_data_fm`]), off by
+    /// default: plain FM stays what an APRS setup that already works gets. Hamlib's `PKTFM` is
+    /// `MD0A;` (DATA-FM) on that radio. Obeyed only on a model
+    /// [`crate::settings::aprs_data_fm_available`] names, so a switch left on in a profile whose
+    /// model changed commands nothing new. The mic-jack opt-out
     /// ([`crate::settings::Settings::plain_ssb_if_configured`]) still turns it back into `FM`.
     ///
     /// ⚠️ NEEDS-BENCH: an FT-991A beaconing and decoding APRS in DATA-FM with its USB codec.
     fn aprs_mode_word(&self) -> String {
-        const APRS_IN_DATA_FM: &[u32] = &[1035]; // Yaesu FT-991 / FT-991A
-        if APRS_IN_DATA_FM.contains(&self.settings.rig_model) {
+        if self.settings.aprs_data_fm
+            && crate::settings::aprs_data_fm_available(self.settings.rig_model)
+        {
             self.settings.plain_ssb_if_configured("PKTFM")
         } else {
             self.fm_mode_word()
@@ -12934,12 +12941,26 @@ impl Engine {
         self.rig_atu_start_tune = start_tune;
     }
 
+    /// Whether this CAT path can switch the tuner OUT of line (#344) — the loop knows, as it knows
+    /// `start_tune`: Hamlib's rigctld sends `U TUNER 0`; Nexus's own Flex client has no switch-out.
+    pub fn observe_rig_tuner_switch_out(&mut self, can: bool) {
+        self.rig_atu_switch_out = can;
+    }
+
+    /// Is "Switch tuner out" offered (#344)? Only on a radio that reports a tuner, through a CAT
+    /// path that can send the switch-out, and never on Nexus's own Flex client. The native Icom
+    /// path has no tuner command at all, so it reports no tuner and never gets here.
+    pub fn atu_switch_out_supported(&self) -> bool {
+        self.rig_tuner.is_some() && self.rig_atu_switch_out && self.flex_atu.is_none()
+    }
+
     /// Drop the tuner capability (→ the ATU control hides) on a breaker trip — the same reason as
     /// [`Self::clear_rig_funcs`]: a half-open CAT link must never leave a stale capability behind,
     /// and this one offers the operator a button that keys their transmitter.
     pub fn clear_rig_tuner(&mut self) {
         self.rig_tuner = None;
         self.rig_atu_start_tune = true; // unknown again, and unknown means "as it always was"
+        self.rig_atu_switch_out = false;
     }
 
     /// ⚠️ THE ATU TX GATE. Running the radio's built-in antenna tuner **KEYS THE TRANSMITTER** —
@@ -13039,23 +13060,24 @@ impl Engine {
             && self.atu_tune_gate().is_ok()
     }
 
-    /// Switch the rig's built-in tuner OUT of line — the click on ATU ON (#344). The same CAT verb
-    /// that runs a tune-up with `2` takes the tuner out with `0` (`U TUNER 0`: Yaesu `AC000`,
-    /// "Tuner OFF", FT-991A CAT reference; Icom `1C 01 00`). Nothing keys, so the TX gates of
-    /// [`Self::atu_tune_gate`] are not asked; what is asked:
+    /// Switch the rig's built-in tuner OUT of line — "Switch tuner out" in the ATU button's menu
+    /// (#344; a click on the button always runs a tune-up). The same CAT verb that runs a tune-up
+    /// with `2` takes the tuner out with `0` (`U TUNER 0`: Yaesu `AC000`, "Tuner OFF", FT-991A CAT
+    /// reference; Icom `1C 01 00`). Nothing keys, so the TX gates of [`Self::atu_tune_gate`] are not
+    /// asked; what is asked:
     ///  * the radio reports its tuner IN line — there is nothing to switch out otherwise;
+    ///  * this CAT path can send it ([`Self::atu_switch_out_supported`]) — never Nexus's own Flex
+    ///    client, which has no switch-out, so the request says so instead of doing nothing;
     ///  * NOTHING is on the air ([`Self::on_air`]): a tuner's relays are not switched under power.
     ///    The radio loop asks again at the wire ([`Self::take_atu_bypass`]), and the poll block that
-    ///    sends it never runs while the rig is keyed;
-    ///  * not Nexus's own Flex client, which has no switch-out to send (`U TUNER 0` → not
-    ///    implemented), so the click says so instead of doing nothing.
+    ///    sends it never runs while the rig is keyed.
     pub fn atu_bypass(&mut self) -> Result<(), String> {
         if self.rig_tuner != Some(true) {
             return Err(
                 "The radio doesn't report its tuner in line — nothing to switch out".to_string(),
             );
         }
-        if self.flex_atu.is_some() {
+        if !self.atu_switch_out_supported() {
             return Err(
                 "This radio's tuner can't be switched out from Nexus — use the radio's ATU control"
                     .to_string(),
@@ -13064,15 +13086,38 @@ impl Engine {
         if self.on_air() {
             return Err("Not while transmitting — switch the tuner out between overs".to_string());
         }
-        self.pending_atu_bypass = true;
+        self.pending_atu_bypass = Some(now_unix_secs());
         Ok(())
     }
 
     /// Drain a pending tuner switch-out for the radio loop: `true` only while still nothing is on
-    /// the air. Consumed unconditionally, like [`Self::take_atu_tune`]: a click that cannot be acted
-    /// on is dropped, never held for later.
+    /// the air and the request is still fresh ([`ATU_REQUEST_MAX_AGE_SECS`], the tune-up's limit:
+    /// the poll block that drains it can be skipped for a while — a keyed rig, a CAT breaker — and
+    /// a switch-out asked for then must not land long after the operator has moved on). Consumed
+    /// unconditionally; a request dropped here is said on the CAT line, never dropped silently.
     pub fn take_atu_bypass(&mut self) -> bool {
-        std::mem::take(&mut self.pending_atu_bypass) && !self.on_air()
+        let Some(at) = self.pending_atu_bypass.take() else {
+            return false;
+        };
+        let why = if self.on_air() {
+            "something went on the air first"
+        } else if now_unix_secs().saturating_sub(at) > ATU_REQUEST_MAX_AGE_SECS {
+            "the radio could not be reached in time"
+        } else {
+            return true;
+        };
+        self.note_atu_switch_out_failed(why);
+        false
+    }
+
+    /// Tell the operator a "Switch tuner out" did not happen, and why, in the CAT line's lane (the
+    /// SWR cutoff's): the menu already answered the request, so without this it would vanish.
+    pub fn note_atu_switch_out_failed(&mut self, why: &str) {
+        let ok = self.cat_status.0;
+        self.set_cat_status(
+            ok,
+            format!("ATU: the tuner was not switched out — {why}. Try again from the ATU menu"),
+        );
     }
 
     /// ⭐ #322 — THE RADIO TOOK THE TUNE-UP, so in the Digital section the sequencer stands down
@@ -27944,6 +27989,7 @@ contact yourself."
         // The rig's own ATU: None = no tuner reported → the UI offers no ATU control at all.
         s.radio.atu = self.rig_tuner;
         s.radio.atu_start_tune_unsupported = !self.rig_atu_start_tune;
+        s.radio.atu_switch_out = self.atu_switch_out_supported();
         s.radio.filter_width_hz = self.rig_passband;
         s.radio.rit_hz = self.rit_hz;
         s.radio.xit_hz = self.xit_hz_effective();
@@ -37236,16 +37282,31 @@ mod tests {
     }
 
     /// ⭐ #344: "after running ATU maybe have it change to ATU ON (and then you could click to turn it
-    /// off)". The click on ATU ON queues ONE switch-out (`U TUNER 0`) for the radio loop — only when
-    /// the radio reports its tuner in line, and never while anything is on the air: a tuner's relays
-    /// are not switched under power. Nexus's own Flex client has no switch-out, so it says so.
+    /// off)". "Switch tuner out" (the ATU button's menu) queues ONE switch-out (`U TUNER 0`) for the
+    /// radio loop — only when the radio reports its tuner in line, only through a CAT path that can
+    /// send it, and never while anything is on the air: a tuner's relays are not switched under
+    /// power. A request the loop cannot act on in time is dropped AND said, never held.
     #[test]
-    fn atu_on_switches_the_tuner_out_only_when_it_is_in_and_nothing_is_on_the_air() {
+    fn switch_tuner_out_only_when_it_is_in_supported_and_nothing_is_on_the_air() {
         let mut e = phone_armed_engine();
         assert!(
             e.atu_bypass().is_err(),
             "no tuner reported: nothing to switch out"
         );
+        assert!(!e.snapshot().radio.atu_switch_out, "…and nothing offered");
+        e.observe_rig_tuner(Some(true), true);
+        assert!(
+            !e.snapshot().radio.atu_switch_out,
+            "not offered until the loop says this CAT path can send it"
+        );
+        let why = e.atu_bypass().expect_err("no switch-out on this path");
+        assert!(why.contains("can't be switched out"), "says why: {why}");
+        e.observe_rig_tuner_switch_out(true);
+        assert!(
+            e.snapshot().radio.atu_switch_out,
+            "offered: tuner + a path that can"
+        );
+
         e.observe_rig_tuner(Some(false), true);
         assert!(
             e.atu_bypass().is_err(),
@@ -37255,17 +37316,17 @@ mod tests {
 
         e.observe_rig_tuner(Some(true), true);
         e.atu_bypass()
-            .expect("the tuner is in line: the click switches it out");
+            .expect("the tuner is in line: the menu switches it out");
         assert!(e.take_atu_bypass(), "the loop is handed the switch-out");
         assert!(!e.take_atu_bypass(), "once");
 
-        // Not under power: a tune carrier is up, so the click is refused and nothing is queued.
+        // Not under power: a tune carrier is up, so the request is refused and nothing is queued.
         e.set_tune(true);
         assert!(e.on_air(), "scene guard: the tune carrier is on the air");
         let why = e.atu_bypass().expect_err("never switched out on the air");
         assert!(why.contains("transmitting"), "says why: {why}");
         assert!(!e.take_atu_bypass());
-        // …and a switch-out queued before a key does not fire under it either.
+        // …and a switch-out queued before a key does not fire under it either — and is said.
         e.set_tune(false);
         e.atu_bypass().unwrap();
         e.set_tune(true);
@@ -37273,10 +37334,35 @@ mod tests {
             !e.take_atu_bypass(),
             "dropped, not fired, once the transmitter is up"
         );
+        assert!(
+            e.snapshot().radio.cat_detail.contains("not switched out"),
+            "the operator is told: {:?}",
+            e.snapshot().radio.cat_detail
+        );
         e.set_tune(false);
 
-        // Nexus's own Flex client has no switch-out: the click says so rather than doing nothing.
+        // THE AGE LIMIT, the tune-up's: a request the loop could not reach in time is dropped,
+        // and said, never fired later.
+        e.set_cat_status(Some(true), String::new());
+        e.atu_bypass().unwrap();
+        e.pending_atu_bypass = Some(now_unix_secs().saturating_sub(ATU_REQUEST_MAX_AGE_SECS + 1));
+        assert!(!e.take_atu_bypass(), "a stale switch-out is dropped");
+        assert!(
+            e.snapshot().radio.cat_detail.contains("not switched out"),
+            "…and the operator is told: {:?}",
+            e.snapshot().radio.cat_detail
+        );
+        // CONTROL: one inside the limit still goes.
+        e.atu_bypass().unwrap();
+        e.pending_atu_bypass = Some(now_unix_secs().saturating_sub(ATU_REQUEST_MAX_AGE_SECS));
+        assert!(e.take_atu_bypass(), "a fresh one goes out");
+
+        // Nexus's own Flex client has no switch-out: not offered, and refused with the reason.
         e.observe_flex_atu(Some(crate::dto::FlexAtu::default()));
+        assert!(
+            !e.snapshot().radio.atu_switch_out,
+            "never offered on the Flex client"
+        );
         let why = e
             .atu_bypass()
             .expect_err("no switch-out on the Flex client");
@@ -60943,32 +61029,35 @@ mod tests {
         );
         assert_ne!(e.settings.active_radio, ic9700);
         assert!((e.settings.dial_mhz - 144.390).abs() < 1e-9);
-        assert_eq!(
-            e.rig_mode_effective(),
-            "PKTFM",
-            "still forces FM simplex — FM-DATA on the FT-991A (#393)"
-        );
+        assert_eq!(e.rig_mode_effective(), "FM", "still forces FM simplex");
     }
 
     /// ⭐ ISSUE #393 (W9TD): "Could FM-DATA on the FT-991a be selected when using APRS? When I go to
-    /// settings it is always set to FM when I come back to APRS." APRS is soundcard audio, and on
-    /// the FT-991/991A plain FM modulates from the microphone: its menu gives the packet path only
-    /// to DATA-FM ("077 FM PKT PORT SELECT 1: DATA 2: USB", FT-991A CAT Operation Reference Manual,
-    /// menu table; `MD` P2 `A: DATA-FM`). Hamlib's `PKTFM` is that mode on the wire (`MD0A;`,
-    /// captured from rigctl 4.5.5 model 1035 against a fake radio, with `PKTUSB` → `MD0C;` beside it).
-    ///
-    /// Per model, not for every radio: the native Icom path keeps APRS in plain FM on purpose
-    /// (`CivBackend::try_set_mode`), and nothing here says another radio's plain FM is deaf to its
-    /// data port. The mic-jack opt-out (`data_modes_plain_ssb`) still turns it back into FM.
+    /// settings it is always set to FM when I come back to APRS." On the FT-991/991A the packet
+    /// path from the USB codec can belong to DATA-FM ("077 FM PKT PORT SELECT 1: DATA 2: USB",
+    /// FT-991A CAT Operation Reference Manual, menu table; `MD` P2 `A: DATA-FM`) or to plain FM
+    /// (074 FM MIC SELECT = REAR), depending on how the radio is set. So it is a per-radio switch,
+    /// "APRS uses DATA-FM", OFF by default: an APRS setup that works in plain FM keeps working.
+    /// Hamlib's `PKTFM` is that mode on the wire (`MD0A;`, captured from rigctl 4.5.5 model 1035
+    /// against a fake radio, with `PKTUSB` → `MD0C;` beside it).
     #[test]
-    fn aprs_on_an_ft991a_uses_its_data_fm_mode_and_every_other_radio_keeps_fm() {
+    fn aprs_uses_data_fm_only_where_the_operator_switched_it_on_for_that_radio() {
         let (mut e, ic9700, ft991a) = three_radio_engine();
         e.aprs_tune(144.390).unwrap();
         assert_eq!(
             e.settings.active_radio, ft991a,
             "precondition: APRS on the FT-991A"
         );
-        assert_eq!(e.rig_mode_effective(), "PKTFM", "FT-991A: DATA-FM for APRS");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "off by default: plain FM, as before"
+        );
+
+        // The operator turns it on for the FT-991A (its own profile, through the flat mirror).
+        e.settings.aprs_data_fm = true;
+        e.settings.sync_active_from_flat();
+        assert_eq!(e.rig_mode_effective(), "PKTFM", "on: DATA-FM for APRS");
 
         // The mic-jack opt-out keeps working: the packet audio then has to go in the mic input.
         e.settings.data_modes_plain_ssb = true;
@@ -60985,27 +61074,43 @@ mod tests {
         assert_eq!(
             e.rig_mode_effective(),
             "FM",
-            "FT-991A repeater voice: plain FM"
+            "FT-991A repeater voice: plain FM, switch on or not"
         );
 
-        let _ = ic9700;
+        // PER RADIO: the IC-9700's profile never had it switched on.
+        assert!(
+            !e.settings
+                .radios
+                .iter()
+                .find(|r| r.id == ic9700)
+                .unwrap()
+                .aprs_data_fm,
+            "the switch belongs to the FT-991A's profile alone"
+        );
 
-        // CONTROL, one radio at a time so routing cannot pick: every other model keeps plain FM
-        // for APRS, exactly as before; the same scene on a 991A is the positive.
-        for (model, want) in [
-            (3081u32, "FM"),
-            (3085, "FM"),
-            (1051, "FM"),
-            (2014, "FM"),
-            (1035, "PKTFM"),
+        // CONTROL, one radio at a time so routing cannot pick: with the switch ON, only a radio
+        // that has the mode takes it; a switch left on in a profile whose model changed commands
+        // nothing new. The same scene on a 991A is the positive.
+        for (model, on, want) in [
+            (3081u32, true, "FM"),
+            (3085, true, "FM"),
+            (1051, true, "FM"),
+            (1036, true, "FM"),
+            (1035, false, "FM"),
+            (1035, true, "PKTFM"),
         ] {
             let mut one = Engine::new("KD9TAW", "EN52", 0);
             one.settings.ensure_radio_profiles();
             one.settings.rig_model = model;
+            one.settings.aprs_data_fm = on;
             one.settings.sync_active_from_flat();
             one.set_radio_bands(0, vec!["2m".into()]);
             one.aprs_tune(144.390).unwrap();
-            assert_eq!(one.rig_mode_effective(), want, "model {model} on APRS");
+            assert_eq!(
+                one.rig_mode_effective(),
+                want,
+                "model {model}, switch {on}, on APRS"
+            );
         }
     }
 
@@ -61823,6 +61928,7 @@ mod tests {
             tx_audio_source: p.tx_audio_source.clone(),
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
+            aprs_data_fm: p.aprs_data_fm,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,

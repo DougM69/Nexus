@@ -3,6 +3,7 @@ import { t } from '../i18n'
 import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { RadioTuneNote } from './RadioTuneNote'
+import { AtuSwitchOutMenu, useAtuSwitchOutMenu } from './AtuSwitchOutMenu'
 // ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), for the same
 // deferral `CockpitHeader` carried until these controls moved here: THE TX-ENABLE LATCH (and its
 // read-only rendering), TUNE, ATU AND STOP TX stay written here, labels and tooltips. One strip
@@ -23,8 +24,9 @@ export interface CockpitTxStripProps {
   onTune?: (on: boolean) => void
   /** Run the RADIO's own built-in ATU. Rendered only when the rig reports a tuner (`radio.atu`). */
   onAtuTune?: () => void
-  /** Switch the radio's tuner OUT of line — the click on ATU ON (#344). Without it, ATU ON still
-   *  shows the state and a click runs a tune-up, as before. */
+  /** Switch the radio's tuner OUT of line — "Switch tuner out" in the ATU button's menu (#344;
+   *  right-click, or a long press on touch). A click always runs a tune-up. Without it, or where the
+   *  radio's path has no switch-out (`radio.atuSwitchOut`), no menu is offered. */
   onAtuBypass?: () => void
   /** Stop TX — the screen's own stop (CW passes stopCw()+haltTx(), RTTY rttyStop()+haltTx()). */
   onStopTx?: () => void
@@ -67,11 +69,14 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
     !(radio.streamMic === 'armed' && !radio.transmitting && !radio.tuning && radio.rigKeyed !== true)
   const ref = useRef<HTMLDivElement>(null)
   useDockClearance(ref)
-  // ⭐ ATU ON (#344): the label says when the radio reports its tuner in line, and with a
-  // switch-out wired the click takes it out — no carrier, so not the tune-up's licence lockout.
-  // Never under power: the backend refuses it while anything is on the air and says so (a toast),
-  // and the radio loop never sends it to a keyed rig. `onAir` stays display-only here.
-  const atuOut = radio.atu === true && !!onAtuBypass
+  // ⭐ ATU ON (#344, operator ruling): the label says when the radio reports its tuner in line; a
+  // click ALWAYS runs a tune-up, as it always did. Switching the tuner out is the button's menu
+  // (right-click / long press), offered only where Nexus can send it and only while the tuner is
+  // in. It keys nothing, so the tune-up's lockouts do not grey the button while the menu is offered
+  // (`aria-disabled` keeps the click a no-op and the right-click alive); the backend refuses the
+  // switch-out on the air and says so.
+  const atuMenu = useAtuSwitchOutMenu(radio.atu === true && radio.atuSwitchOut === true && !!onAtuBypass)
+  const atuTuneBlocked = !radio.txAllowed || !!radio.atuStartTuneUnsupported
 
   return (
     <div className="cockpit-txstrip" ref={ref}>
@@ -124,21 +129,31 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
         {onAtuTune && radio.atu != null && (
           <button
             type="button"
+            ref={atuMenu.buttonRef}
             className={`op-btn atu${radio.atu ? ' on' : ''}`}
             aria-pressed={radio.atu}
-            onClick={atuOut ? onAtuBypass : onAtuTune}
-            disabled={!atuOut && (!radio.txAllowed || !!radio.atuStartTuneUnsupported)}
-            title={
-              atuOut
-                ? 'The tuner is switched in. Click to switch it out — nothing is transmitted, and not while transmitting.'
-                : `${
-                    radio.atuStartTuneUnsupported
-                      ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
-                      : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
-                  } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`
-            }
+            aria-haspopup={atuMenu.offered ? 'menu' : undefined}
+            onClick={atuMenu.click(atuTuneBlocked ? undefined : onAtuTune)}
+            disabled={!atuMenu.offered && atuTuneBlocked}
+            aria-disabled={atuMenu.offered && atuTuneBlocked ? true : undefined}
+            {...atuMenu.handlers}
+            title={`${
+              radio.atuStartTuneUnsupported
+                ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
+                : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
+            } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}${
+              atuMenu.offered ? ' Right-click or long-press to switch it out.' : ''
+            }`}
           >
             {radio.atu ? 'ATU ON' : 'ATU'}
+            {atuMenu.offered && onAtuBypass && (
+              <AtuSwitchOutMenu
+                open={atuMenu.open}
+                onOpenChange={atuMenu.setOpen}
+                onSwitchOut={onAtuBypass}
+                buttonRef={atuMenu.buttonRef}
+              />
+            )}
           </button>
         )}
         {/* THE stop control of every screen that draws this strip; its label is the accessible

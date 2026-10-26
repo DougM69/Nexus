@@ -12,7 +12,7 @@ import { js8CqTextRefused } from '../js8Compose'
 import { confirmDialog } from '../confirm'
 import { Js8FrequencySettings } from './Js8FrequencySettings'
 import { DraftNumberInput } from './DraftNumberInput'
-import { checkRigForm, blocks, dataModePickerShown, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
+import { checkRigForm, blocks, dataModePickerShown, APRS_DATA_FM_MODELS, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   clearDataFolder,
@@ -904,6 +904,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // path builds a RadioProfilePatch from this form, and a field the form drops is a field
     // the patch blanks on the profile it touches.
     sstvHoldDataSubmode: s.sstvHoldDataSubmode ?? false,
+    aprsDataFm: s.aprsDataFm ?? false,
     audioIn: s.audioIn ?? '',
     audioOut: s.audioOut ?? '',
     txLevel: s.txLevel ?? 1,
@@ -6543,6 +6544,27 @@ export function SettingsPanel({
                   <T k="settings.rigControl.sstvHoldData.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
+
+              {/* #393. APRS's mode word, beside the two switches above for the same reason. Off by
+                  default, so an APRS setup that works in plain FM keeps working; offered only on
+                  a radio with a DATA-FM mode the engine knows (`aprs_data_fm_available`). */}
+              {APRS_DATA_FM_MODELS.includes(form.rigModel) && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rigControl.aprsDataFm.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.aprsDataFm ?? false}
+                    className={`toggle${form.aprsDataFm ? ' on' : ''}`}
+                    onClick={() => updateBool('aprsDataFm', !form.aprsDataFm)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                  <span className="settings-hint">
+                    <T k="settings.rigControl.aprsDataFm.hint" tags={{ b: <strong /> }} />
+                  </span>
+                </label>
+              )}
 
               {/* Offered on the ENGINE's question — the model number — not on what the model
                   NAME happens to look like. And when the answer is "this radio qualifies but

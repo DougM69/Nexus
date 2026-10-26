@@ -7249,6 +7249,27 @@ select optgroup {
 .op-btn.monitor:not(.on) {
   color: var(--text-faint);
 }
+/* ATU ON (#344): the radio reports its tuner in line. Lit like Hold Tx's latch, from variables
+   both themes define. The menu that switches it out is anchored on an empty span inside the
+   button (AtuSwitchOutMenu.tsx); it takes no room. */
+.op-btn.atu.on {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-elev));
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+/* The anchor sits on the button's bottom-left corner, so the menu opens below (or, without room, above)
+   the strip's row and never over Stop TX beside it (measured by `scripts/browser-probe --desktop atu`). */
+.op-btn.atu {
+  position: relative;
+}
+.atu-menu-anchor {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
 .op-btn.tune.keyed {
   background: var(--state-ok);
   border-color: var(--state-ok);
@@ -20057,6 +20078,11 @@ button.cq-skiptx1.on {
    button's own font — sized to 'TX Off' plus the padding. */
 .cq-txctl .op-btn.monitor {
   min-width: 6.2em;
+}
+/* …and ATU flips ATU ↔ ATU ON with the radio's tuner (#344): a floor sized to 'ATU ON' plus the
+   padding (93 px at 1920×1080, measured), so Stop TX does not move when the tuner goes in or out. */
+.cq-txctl .op-btn.atu {
+  min-width: 7em;
 }
 /* The latch's READ-ONLY twin (Phone, CW): the same box, nothing to press. */
 .cq-txctl .op-btn.readonly {

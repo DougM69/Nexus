@@ -3377,6 +3377,10 @@ export interface RadioProfilePatch {
    * instead of only around a send (#130). Per radio, so it must ride the patch — a per-radio
    * field missing here is silently dropped on Save (the 2026-08-17 Flex-three data loss). */
   sstvHoldDataSubmode: boolean
+  /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
+   * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). Rides the patch like its
+   * neighbours — a per-radio field missing here is blanked on Save. */
+  aprsDataFm: boolean
   audioIn: string
   audioOut: string
   txLevel: number

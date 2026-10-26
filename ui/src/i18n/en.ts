@@ -7967,6 +7967,9 @@ export const EN = {
   'settings.rigControl.sstvHoldData.label': 'Hold the data mode while SSTV is receiving',
   'settings.rigControl.sstvHoldData.hint':
     "Keeps this radio in the <b>data</b> submode for the whole time the SSTV receiver is running, instead of only while a picture is queued or going out — FM-D / DATA-FM on an FM channel, and USB-D / LSB-D on HF. Off by default, which is what Nexus does today: it commands the data submode around a send and puts the radio back in plain FM or SSB in between, so a rig parked on an SSTV calling channel keeps dropping out of the data mode. That revert is deliberate — an SSTV send once keyed a data mode into an FM repeater input — but it is the wrong answer if you sit on an SSTV calling channel for the evening. <b>Stop the receiver before you go back to voice.</b> The receiver keeps running after you leave the SSTV screen, and while it runs this radio is held in the data submode, where transmit audio comes from the data port and your microphone modulates nothing. <b>Per radio</b>, since it depends on how that rig is cabled and what you use it for.",
+  'settings.rigControl.aprsDataFm.label': 'APRS uses DATA-FM',
+  'settings.rigControl.aprsDataFm.hint':
+    "Set the radio's menu 077 FM PKT PORT SELECT to USB, or beacons go out silent. With this on, APRS puts this radio in DATA-FM instead of plain FM; repeater voice stays plain FM. Off, APRS uses plain FM, as it always has.",
   'settings.rigControl.icomNative.label': 'Native Icom CI-V (early access)',
   'settings.rigControl.icomNative.hint':
     'Nexus drives this Icom\'s CI-V directly instead of launching rigctld — unlocking the rig\'s real spectrum scope in the waterfall ("CI-V RF") and instant dial tracking. The scope needs <b>115200 baud, set the same on BOTH the radio and Nexus</b>: (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" = <b>115200</b>; (2) on the rig, same menu, "CI-V USB Port" = "Unlink from [REMOTE]"; (3) the <b>Baud</b> field above = <b>115200</b> to match. Below that the rig refuses to stream the scope (CAT still works; the panadapter just stays off). Save to apply; turn off any time to return to the classic Hamlib path.',
@@ -10986,6 +10989,8 @@ export const EN = {
   'operate.strip.sandp.label': 'S&P',
   'operate.strip.sandp.title': 'Search & pounce — listens; double-click a CQ to call that station',
   'operate.strip.txControls.aria': 'Transmit controls',
+  'operate.strip.atu.switchOut': 'Switch tuner out',
+  'operate.strip.atu.menu.aria': 'ATU options',
   'operate.strip.holdTx.label': 'Hold Tx',
   'operate.strip.holdTx.title':
     'Hold Tx Freq: keep your TX offset where you put it when you double-click a station to work them. Off, your TX moves onto theirs (WSJT-X\'s behaviour). A plain waterfall click never moves TX either way.',

@@ -721,6 +721,8 @@ const MIGRATED = [
   'components/TciServerSettings.tsx',
   // The voice keyer's Delete and its Undo window — migrated from birth.
   'features/voiceDelete.ts',
+  // The ATU button's menu, "Switch tuner out" (#344) — migrated from birth.
+  'components/AtuSwitchOutMenu.tsx',
 ]
 
 /**

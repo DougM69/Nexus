@@ -17,6 +17,7 @@ import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { modeMismatch } from './TopBar'
 import { RadioTuneNote } from './RadioTuneNote'
+import { AtuSwitchOutMenu, useAtuSwitchOutMenu } from './AtuSwitchOutMenu'
 import { upperTyped } from '../typedInput'
 
 /** `TX` on the now-sending label and `AUTO-CQ` on the run pill are annunciator tokens, not
@@ -59,7 +60,8 @@ interface Props {
    * reports a tuner (`radio.atu` non-null) — an ATU button on a radio with no ATU is
    * worse than no button (CockpitHeader's rule, kept identical here). */
   onAtuTune?: () => void
-  /** Switch the radio's tuner OUT of line — the click on ATU ON (#344); see `CockpitTxStrip`. */
+  /** Switch the radio's tuner OUT of line — "Switch tuner out" in the ATU button's menu (#344); a
+   *  click always runs a tune-up. See `CockpitTxStrip`. */
   onAtuBypass?: () => void
   onHaltTx?: () => void
   onSetHoldTxFreq?: (on: boolean) => void
@@ -163,6 +165,9 @@ export function OperateQsoStrip({
   const txCount = qso?.txCount ?? 0
   const rpt = reportLabel(qso?.rxReport)
   const noTx = rxOnly ?? false
+  // ATU ON (#344): `CockpitTxStrip`'s rule — a click always tunes; the menu switches the tuner out.
+  const atuMenu = useAtuSwitchOutMenu(radio?.atu === true && radio?.atuSwitchOut === true && !!onAtuBypass)
+  const atuTuneBlocked = noTx || !!radio?.atuStartTuneUnsupported
   // WHY a mode cannot transmit / cannot run a QSO — prose about the MODE, shown on every
   // control it disables, so it moves with the strip rather than with the TX controls.
   const noTxWhy = t('operate.strip.rxOnly.why')
@@ -275,27 +280,37 @@ export function OperateQsoStrip({
               button in `CockpitHeader` for why (Hamlib's Icom and Kenwood backends clamp
               `set_func TUNER 2` to "tuner in line"; `icom.c:7085`). */}
           {onAtuTune && radio.atu != null && (
-            // ATU ON (#344) — the same rule as `CockpitTxStrip`'s: with a switch-out wired, the
-            // click on ATU ON takes the tuner out (no carrier; the backend refuses it on the air).
+            // ATU ON (#344) — `CockpitTxStrip`'s rule: a click always runs a tune-up; the menu
+            // (right-click / long press) switches the tuner out where that path can.
             <button
               type="button"
+              ref={atuMenu.buttonRef}
               className={`op-btn atu${radio.atu ? ' on' : ''}`}
               aria-pressed={radio.atu}
-              onClick={radio.atu && onAtuBypass ? onAtuBypass : onAtuTune}
-              disabled={!(radio.atu && onAtuBypass) && (noTx || !!radio.atuStartTuneUnsupported)}
-              title={
-                radio.atu && onAtuBypass
-                  ? 'The tuner is switched in. Click to switch it out — nothing is transmitted, and not while transmitting.'
-                  : noTx
-                    ? noTxWhy
-                    : `${
-                        radio.atuStartTuneUnsupported
-                          ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
-                          : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
-                      } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`
-              }
+              aria-haspopup={atuMenu.offered ? 'menu' : undefined}
+              onClick={atuMenu.click(atuTuneBlocked ? undefined : onAtuTune)}
+              disabled={!atuMenu.offered && atuTuneBlocked}
+              aria-disabled={atuMenu.offered && atuTuneBlocked ? true : undefined}
+              {...atuMenu.handlers}
+              title={`${
+                noTx
+                  ? noTxWhy
+                  : `${
+                      radio.atuStartTuneUnsupported
+                        ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
+                        : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
+                    } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`
+              }${atuMenu.offered ? ' Right-click or long-press to switch it out.' : ''}`}
             >
               {radio.atu ? 'ATU ON' : 'ATU'}
+              {atuMenu.offered && onAtuBypass && (
+                <AtuSwitchOutMenu
+                  open={atuMenu.open}
+                  onOpenChange={atuMenu.setOpen}
+                  onSwitchOut={onAtuBypass}
+                  buttonRef={atuMenu.buttonRef}
+                />
+              )}
             </button>
           )}
           <FtStopControl onHaltTx={onHaltTx} />

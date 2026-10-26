@@ -4118,14 +4118,51 @@ fn the_atu_button_on_a_flex_profile_is_the_clients_to_offer() {
     let probed = |session, config| {
         let s = atu_scene(session, Vec::new(), config);
         let radio = s.engine.lock().unwrap().snapshot().radio;
-        (radio.atu, radio.atu_start_tune_unsupported)
+        (
+            radio.atu,
+            radio.atu_start_tune_unsupported,
+            radio.atu_switch_out,
+        )
     };
+    // The third: "Switch tuner out" is never offered on Nexus's own Flex client (#344) — it has no
+    // switch-out to send.
     assert_eq!(
         probed(SimSession::v4_gui_client(), unbenched()),
-        (Some(false), false)
+        (Some(false), false, false)
     );
-    assert_eq!(probed(no_tuner(), unbenched()), (None, true));
-    assert_eq!(probed(SimSession::v4_gui_client(), shipped()), (None, true));
+    assert_eq!(probed(no_tuner(), unbenched()), (None, true, false));
+    assert_eq!(
+        probed(SimSession::v4_gui_client(), shipped()),
+        (None, true, false)
+    );
+}
+
+/// ⭐ #344 ON THE FLEX CLIENT: after a cycle the radio matched, the button reads ATU ON, and a
+/// tune-up can still be run (the click always tunes); "Switch tuner out" is not offered, and a
+/// request for it is refused with the reason and sends nothing.
+#[test]
+fn after_a_matched_cycle_the_flex_still_tunes_and_offers_no_switch_out() {
+    let mut s = atu_scene(SimSession::v4_gui_client(), Vec::new(), unbenched());
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("the press is taken");
+    run_until(&mut s, "the cycle's result", cycle_ended);
+    s.run(10_000); // the tuner is read once the tune-up's window is over
+    let radio = s.engine.lock().unwrap().snapshot().radio;
+    assert_eq!(
+        (radio.atu, radio.atu_switch_out),
+        (Some(true), false),
+        "ATU ON after the matched cycle, no switch-out offered"
+    );
+    let why = s.engine.lock().unwrap().atu_bypass().expect_err("refused");
+    assert!(why.contains("can't be switched out"), "{why}");
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("a second tune-up is still taken with the tuner in line");
 }
 
 /// ⭐ AN ATU PRESS RUNS ONE CYCLE OF THE RADIO'S OWN TUNER, AND ITS RESULT SHOWS BESIDE IT. Behind the

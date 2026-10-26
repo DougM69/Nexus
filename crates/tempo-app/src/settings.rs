@@ -428,6 +428,19 @@ pub fn rig_has_xit(rig_model: u32) -> bool {
     !NO_XIT_RIGS.contains(&rig_model)
 }
 
+/// Radios where APRS can be commanded in DATA-FM (`PKTFM`) instead of plain FM — the per-radio
+/// "APRS uses DATA-FM" switch ([`RadioProfile::aprs_data_fm`]) is offered and obeyed only here.
+///
+/// ⭐ #393 (FT-991A): APRS is soundcard audio, and the FT-991/991A takes it from the USB codec in
+/// DATA-FM when menu 077 FM PKT PORT SELECT is USB (its default is DATA, the rear jack), while
+/// plain FM takes 074 FM MIC SELECT. Hamlib's `PKTFM` is `MD0A;` (DATA-FM) on model 1035 — the
+/// FT-991 and FT-991A share it. Only the model with that evidence: the FT-891 (1036) has no 2 m,
+/// and the native Icom path keeps APRS in plain FM on purpose (`CivBackend::try_set_mode`).
+/// Mirrored in the UI as `APRS_DATA_FM_MODELS` (SettingsPanel).
+pub fn aprs_data_fm_available(rig_model: u32) -> bool {
+    rig_model == 1035
+}
+
 /// Full-duplex satellite rigs with no Main/Sub CAT path in this build: the
 /// VFO pair is A/B and which one is the uplink is a station wiring choice no
 /// model string answers. FT-847, FT-736R, TS-2000, TS-790.
@@ -2083,6 +2096,11 @@ pub struct Settings {
     /// [`RadioProfile::sstv_hold_data_submode`]). Default off.
     #[serde(default)]
     pub sstv_hold_data_submode: bool,
+    /// Command APRS in this radio's DATA-FM mode (`PKTFM`) instead of plain FM. Only on a
+    /// radio with a 2 m DATA-FM mode Nexus knows ([`aprs_data_fm_available`]); off by default,
+    /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
+    #[serde(default)]
+    pub aprs_data_fm: bool,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
     /// force their mode), so this opt-out is no longer consulted by
     /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
@@ -4587,6 +4605,11 @@ pub struct RadioProfile {
     /// rig, and only one of them should be held.
     #[serde(default)]
     pub sstv_hold_data_submode: bool,
+    /// Command APRS in this radio's DATA-FM mode (`PKTFM`) instead of plain FM. Only on a
+    /// radio with a 2 m DATA-FM mode Nexus knows ([`aprs_data_fm_available`]); off by default,
+    /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
+    #[serde(default)]
+    pub aprs_data_fm: bool,
     // --- audio (a rig's own RX codec) ---
     pub audio_in: String,
     pub audio_out: String,
@@ -4752,6 +4775,11 @@ pub struct RadioProfilePatch {
     /// deserializes, as OFF, which is the pre-field behaviour.
     #[serde(default)]
     pub sstv_hold_data_submode: bool,
+    /// Command APRS in this radio's DATA-FM mode (`PKTFM`) instead of plain FM. Only on a
+    /// radio with a 2 m DATA-FM mode Nexus knows ([`aprs_data_fm_available`]); off by default,
+    /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
+    #[serde(default)]
+    pub aprs_data_fm: bool,
     pub audio_in: String,
     pub audio_out: String,
     pub tx_level: f32,
@@ -4860,6 +4888,7 @@ impl RadioProfilePatch {
         p.tx_audio_source = self.tx_audio_source;
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
         p.sstv_hold_data_submode = self.sstv_hold_data_submode;
+        p.aprs_data_fm = self.aprs_data_fm;
         p.audio_in = self.audio_in;
         p.audio_out = self.audio_out;
         p.tx_level = self.tx_level;
@@ -5004,6 +5033,7 @@ impl Default for RadioProfile {
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
+            aprs_data_fm: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -5888,6 +5918,7 @@ impl Default for Settings {
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
+            aprs_data_fm: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             keyboard_modem: KeyboardModem::Psk,
@@ -6328,6 +6359,7 @@ impl Settings {
             tx_audio_source: self.tx_audio_source.clone(),
             data_modes_plain_ssb: self.data_modes_plain_ssb,
             sstv_hold_data_submode: self.sstv_hold_data_submode,
+            aprs_data_fm: self.aprs_data_fm,
             audio_in: self.audio_in.clone(),
             audio_out: self.audio_out.clone(),
             tx_level: self.tx_level,
@@ -6767,6 +6799,7 @@ impl Settings {
         self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.sstv_hold_data_submode = p.sstv_hold_data_submode;
+        self.aprs_data_fm = p.aprs_data_fm;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
         self.tx_level = p.tx_level;
@@ -6823,6 +6856,7 @@ impl Settings {
             yaesu_rf_scope,
             data_modes_plain_ssb,
             sstv_hold_data_submode,
+            aprs_data_fm,
             audio_in,
             audio_out,
             tx_level,
@@ -6867,6 +6901,7 @@ impl Settings {
             self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
             self.sstv_hold_data_submode,
+            self.aprs_data_fm,
             self.audio_in.clone(),
             self.audio_out.clone(),
             self.tx_level,
@@ -6912,6 +6947,7 @@ impl Settings {
             p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.sstv_hold_data_submode = sstv_hold_data_submode;
+            p.aprs_data_fm = aprs_data_fm;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
             p.tx_level = tx_level;
@@ -8096,6 +8132,7 @@ mod tests {
             tx_audio_source: "rear".into(),
             data_modes_plain_ssb: true,
             sstv_hold_data_submode: true,
+            aprs_data_fm: true,
             audio_in: "USB Audio CODEC #2".into(),
             audio_out: "USB Audio CODEC #2 out".into(),
             tx_level: 0.42,
@@ -8452,6 +8489,7 @@ mod tests {
             tx_audio_source: "rear".into(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
+            aprs_data_fm: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -8615,6 +8653,7 @@ mod tests {
             tx_audio_source: "front".into(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
+            aprs_data_fm: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -8951,6 +8990,7 @@ mod tests {
             tx_audio_source: p.tx_audio_source.clone(),
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
+            aprs_data_fm: p.aprs_data_fm,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,

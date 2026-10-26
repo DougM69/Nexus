@@ -1818,6 +1818,12 @@ pub struct RadioStatus {
     /// positive spelling would default a working ATU button to disabled.
     #[serde(default)]
     pub atu_start_tune_unsupported: bool,
+    /// The ATU button's menu offers "Switch tuner out" (#344): the radio reports a tuner and this
+    /// CAT path can switch it out (`Engine::atu_switch_out_supported` — never Nexus's own Flex
+    /// client, never the native Icom path). POSITIVE ON PURPOSE: a station older than the page
+    /// has no switch-out command, and `false` offers none.
+    #[serde(default)]
+    pub atu_switch_out: bool,
     /// Rig RX passband / filter width in Hz from CAT; `None` = unknown or the rig's own default.
     #[serde(default)]
     pub filter_width_hz: Option<u32>,
