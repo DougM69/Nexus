@@ -1578,3 +1578,90 @@ fn a_purges_undo_skips_a_contact_already_restored_on_its_own() {
     assert_eq!((undone.changed, undone.refused), (2, vec![]));
     assert_eq!(log_by_id(&engine), before, "the log as the purge found it");
 }
+
+/// ★ A single undo that kept a field changed since does not take the entry out of the whole run's
+/// undo: once the operator's own edit is undone and the field holds the run's value again, the
+/// whole run's undo reverts it with the rest, and names nothing refused.
+#[test]
+fn a_runs_undo_reverts_a_field_a_single_undo_kept() {
+    let d = Dir::new("history-run-after-partial");
+    let engine = shared(&d, 3);
+    let before = log_by_id(&engine);
+    let fills: Vec<LogFill> = engine
+        .stored_log()
+        .iter()
+        .map(|r| LogFill {
+            id: r.id.unwrap(),
+            country: Some("Filled".into()),
+            state: Some("FS".into()),
+        })
+        .collect();
+    assert_eq!(logwrite::fill(&engine, &fills, 1).expect("the fill"), 3);
+    settle(&engine);
+    let run = latest_run(&engine, Some(Source::Fill))
+        .unwrap()
+        .expect("the run")
+        .run;
+    let id = id_at(&*engine, 1);
+    let state_before = before
+        .iter()
+        .find(|r| r.id == Some(id))
+        .unwrap()
+        .state
+        .clone();
+    assert_ne!(state_before.as_deref(), Some("FS"));
+    // The operator edits the state.
+    let row = row_of(&engine, id).unwrap();
+    let (key, mut edit) = (QsoEdit::project(&row).key(), QsoEdit::project(&row));
+    edit.state = Some("XX".into());
+    let (made, dur) = logwrite::edit_row(&engine, id, &key, &edit);
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let edit_seq = history_of(&engine, id).unwrap().last().unwrap().seq;
+    // The fill's entry for the contact undone on its own: the country goes back, the state stays.
+    let fill_seq = history_of(&engine, id)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.run == run)
+        .unwrap()
+        .seq;
+    let (single, dur) = undo_entry(&engine, fill_seq);
+    assert_eq!(single.expect("undone").changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    // The operator's edit undone: the state holds the fill's value again.
+    let (own, dur) = undo_entry(&engine, edit_seq);
+    assert_eq!(own.expect("the edit undone").changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(row_of(&engine, id).unwrap().state.as_deref(), Some("FS"));
+
+    let (undone, dur) = undo_run(&engine, &run);
+    let undone = undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!((undone.changed, undone.refused), (3, vec![]));
+    assert_eq!(row_of(&engine, id).unwrap().state, state_before);
+    assert_eq!(log_by_id(&engine), before, "the log as the run found it");
+}
+
+/// ★ A purge's contact restored on its own and then deleted again by the operator comes back with
+/// the purge's undo: the purge's delete is planned as any other.
+#[test]
+fn a_purges_undo_puts_back_a_contact_restored_then_deleted_again() {
+    let d = Dir::new("history-purge-restored-deleted");
+    let engine = shared(&d, 3);
+    let before = log_by_id(&engine);
+    let run = new_run();
+    let (removed, dur) = engine_lock(&engine).with_log_tickets(|e| e.clear_logbook_in_run(&run));
+    assert_eq!(removed, 3);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let id = before[0].id.unwrap();
+    let (back, dur) = restore_deleted(&engine, id);
+    assert_eq!(back.expect("restored").changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    delete(&engine, id);
+
+    let (undone, dur) = undo_run(&engine, &run);
+    let undone = undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!((undone.changed, undone.refused), (3, vec![]));
+    assert_eq!(log_by_id(&engine), before, "the log as the purge found it");
+}

@@ -722,7 +722,8 @@ pub(crate) fn changed_after(conn: &Connection, run: &str) -> Result<HashMap<Reco
 
 /// The entries of `run` that stand undone now: the latest undo linked to one is not itself
 /// undone (a redo), and so on along the chain — an undo, its redo, an undo of that redo. What a
-/// whole run's undo leaves out, as the operator already took those changes back one at a time.
+/// whole run's undo does not name as refused, as the operator already took those changes back
+/// one at a time.
 /// Read off each contact's own history: an undo is linked to an entry of the contact it changes.
 pub(crate) fn undone_in(conn: &Connection, run: &str) -> Result<HashSet<i64>> {
     let mut latest: HashMap<i64, i64> = HashMap::new();
@@ -740,16 +741,21 @@ pub(crate) fn undone_in(conn: &Connection, run: &str) -> Result<HashSet<i64>> {
             latest.insert(undoes, seq);
         }
     }
+    let mut stmt = conn.prepare(
+        "SELECT h.seq FROM qso_history h JOIN history_run r ON r.id = h.run_id WHERE r.run = ?1",
+    )?;
+    let seqs = stmt.query_map([run], |r| r.get::<_, i64>(0))?;
     let mut undone = HashSet::new();
-    for e in of_run(conn, run)? {
+    for seq in seqs {
+        let seq = seq?;
         // Each link is later than what it undoes, so the chain ends; an odd length is undone.
-        let (mut at, mut links) = (e.seq, 0usize);
+        let (mut at, mut links) = (seq, 0usize);
         while let Some(&next) = latest.get(&at).filter(|&&next| next > at) {
             at = next;
             links += 1;
         }
         if links % 2 == 1 {
-            undone.insert(e.seq);
+            undone.insert(seq);
         }
     }
     Ok(undone)

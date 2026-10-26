@@ -82,7 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contact the log held beside it before the delete, such as a rover worked from two grids minutes
   apart, never stops it coming back. An import's undo keeps any contact you have edited, that has
   been confirmed or uploaded, or that you imported again, since; the message names them. A whole
-  undo passes over a contact you already undid on its own, and does not name it. Undoing
+  undo does not name a contact you already undid on its own as one it could not undo. Undoing
   more than a few hundred contacts at once waits until you stop transmitting, or a voice message or
   APRS frame finishes, because it holds up the radio while it is made; the message then stays up and
   says so, and its Undo works once you stop. Recently deleted also lists each recent purge and import
