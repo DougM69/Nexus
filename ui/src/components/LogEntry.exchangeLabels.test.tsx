@@ -215,6 +215,10 @@ describe('controls', () => {
     expect([...document.querySelectorAll<HTMLInputElement>('input')].map((i) => i.placeholder)).toEqual(
       NON_CONTEST_PLACEHOLDERS,
     )
+    // The shared comment is the line's one multi-line box, in a row of its own.
+    expect([...document.querySelectorAll<HTMLTextAreaElement>('textarea')].map((i) => i.placeholder)).toContain(
+      t('logEntry.comment.placeholder'),
+    )
   })
 
   it('what is logged is the slot ids and the typed values, as it was', async () => {
@@ -254,7 +258,6 @@ const NON_CONTEST_PLACEHOLDERS: string[] = [
   t('logEntry.qth.placeholder'),
   t('logEntry.state.placeholder'),
   t('logEntry.country.placeholder'),
-  t('logEntry.comment.placeholder'),
   t('logEntry.park.ref.placeholderPota'),
 ]
 
