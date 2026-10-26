@@ -12,6 +12,14 @@
 // the card is free to land on them. There the probe must see the card covering one; if it does not, the
 // check cannot fail and the probe says so instead of passing.
 //
+// PHONE'S CARD BUTTON, the operator's report of 2026-10-26: the card opened from the log strip's Card
+// button for a call the strip had already looked up showed the callsign's initials instead of the photo
+// and squeezed every line of text to the callsign's width. At 1366×768, 1024×768 (and there at a 175%
+// UI scale) and 2560×1440 the probe opens it for a long callbook answer with a photo, presses nothing
+// else, and asserts the photo is drawn, there is no Look up to press, and the text column takes most
+// of the card: wider than twice the callsign and at least 60% of the card's body, with the card drawn
+// whole (it scrolls neither way: its box once came out its border narrower and shorter than its body).
+//
 // exit: 0 every case clear · 1 a red, or a control that could not fail · 2 the page never drew the card
 import { createServer } from 'vite'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -66,8 +74,27 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
+/** Phone's card: the photo, the Look up button, and how wide the text column is against the card. */
+const MEASURE_PHONE = `(() => {
+  const card = document.querySelector('.callcard')
+  if (!card || card.dataset.placed !== 'yes' || document.documentElement.dataset.lookedUp !== 'yes') return null
+  const w = (sel) => { const e = card.querySelector(sel); return e ? Math.round(e.getBoundingClientRect().width) : 0 }
+  const img = card.querySelector('img.callcard-photo')
+  return {
+    card: w('.callcard-body'),
+    text: w('.callcard-id'),
+    call: w('.callcard-call'),
+    photo: !!img && img.complete && img.naturalWidth > 0 && getComputedStyle(img).display !== 'none' && img.getBoundingClientRect().width > 0,
+    lookup: !!card.querySelector('.callcard-lookup'),
+    sideways: card.scrollWidth > card.clientWidth + 1,
+    // Placed whole (the room is ample at every size here): it must not scroll either way.
+    clipped: card.scrollHeight > card.clientHeight + 1,
+    refused: window.__refused(),
+  }
+})()`
+
 /** One page: the case at `w`×`h`, the call clicked, the card measured once it has stopped moving. */
-async function measure(w, h, which, avoid) {
+async function measure(w, h, which, avoid, extra = '', expr = MEASURE) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -76,7 +103,7 @@ async function measure(w, h, which, avoid) {
     return r.exceptionDetails ? null : r.result.value
   }
   await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
-  await call('Page.navigate', { url: `${origin}/probe/callcard.html?case=${which}${avoid ? '' : '&avoid=off'}` })
+  await call('Page.navigate', { url: `${origin}/probe/callcard.html?case=${which}${avoid ? '' : '&avoid=off'}${extra}` })
   let at = null
   for (let i = 0; i < 100 && !at; i++) {
     await sleep(100)
@@ -89,7 +116,7 @@ async function measure(w, h, which, avoid) {
   let last = null
   for (let i = 0; i < 60; i++) {
     await sleep(150)
-    const now = await evaluate(MEASURE)
+    const now = await evaluate(expr)
     if (now && last && JSON.stringify(now) === JSON.stringify(last)) break
     last = now
   }
@@ -118,7 +145,25 @@ try {
       }
     }
   }
-  if (code === 0) console.log(`callcard-probe: PASS — the card clear of the TX strip, Stop TX, the TX dock and the QSO strip at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; each control covered with the transmit classes removed`)
+  for (const { w, h, zoom } of [{ w: 1366, h: 768 }, { w: 1024, h: 768 }, { w: 1024, h: 768, zoom: 1.75 }, { w: 2560, h: 1440 }]) {
+    const m = await measure(w, h, 'phone', true, zoom ? `&zoom=${zoom}` : '', MEASURE_PHONE)
+    const at = `${w}×${h}${zoom ? ` at ${zoom * 100}%` : ''}`
+    console.log(`callcard-probe: phone Card button, window ${at}: ${JSON.stringify(m)}`)
+    if (!m) {
+      console.error(`callcard-probe: the card was never drawn from Phone's Card button at ${at}`)
+      code = 2
+      continue
+    }
+    if (!m.photo || m.lookup) {
+      console.error(`callcard-probe: RED phone at ${at} — the strip's callbook answer is not on the card (photo drawn: ${m.photo}, Look up still offered: ${m.lookup})`)
+      code = code || 1
+    }
+    if (m.text < 2 * m.call || m.text < 0.6 * m.card || m.sideways || m.clipped) {
+      console.error(`callcard-probe: RED phone at ${at} — the text column is ${m.text}px of a ${m.card}px card (callsign ${m.call}px; scrolls sideways: ${m.sideways}; scrolls down: ${m.clipped})`)
+      code = code || 1
+    }
+  }
+  if (code === 0) console.log(`callcard-probe: PASS — the card clear of the TX strip, Stop TX, the TX dock and the QSO strip at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; each control covered with the transmit classes removed; from Phone's Card button the photo shows and the text takes the card's width`)
   process.exitCode = code
 } finally {
   await browser.stop()

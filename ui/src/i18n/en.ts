@@ -10058,6 +10058,8 @@ export const EN = {
   'callCard.open.title': "Show {{call}}'s station card: callbook, contacts, needs",
   'callCard.close': 'Close the station card',
   'callCard.looking': 'Looking up…',
+  'callCard.photo.none': 'The callbook sent no photo. QRZ sends photos only to XML subscribers, and only when the station posted one.',
+  'callCard.photo.failed': "The callbook's photo did not load.",
   'callCard.path.title': 'Great-circle distance and true bearing from your QTH, short path then long path',
   'callCard.path.short': 'SP {{dist}} · {{deg}}°',
   'callCard.path.long': 'LP {{dist}} · {{deg}}°',

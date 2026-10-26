@@ -5,7 +5,10 @@
    cannot grow anything under it.
 
    One size whatever it says: a fixed width, and a ceiling past which the card scrolls inside itself
-   (overflow: auto on the box), never a taller box.
+   (overflow: auto on the box), never a taller box. The width is a reading width (34em, about 400 px
+   at 100%): long names, addresses and e-mail lines wrap on it instead of running the card across the
+   screen. It was 24em with the head's three buttons beside the text, which left the text the
+   callsign's width (reported 2026-10-26); the buttons now sit on their own line (.callcard-actions).
 
    Below the tooltip (60) and the dialogs (90); above the app. Its height never meets a transmit
    control at all: placeCallCard keeps it off every one. */
@@ -26,7 +29,7 @@
 }
 .callcard-body {
   box-sizing: border-box;
-  width: 24em;
+  width: 34em;
   padding: var(--space-2) var(--space-3);
   font-size: var(--fs-label);
   display: flex;
@@ -86,6 +89,12 @@
 .callcard-where,
 .callcard-contact span {
   overflow-wrap: anywhere;
+}
+.callcard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin-top: 2px;
 }
 .callcard-dim,
 .callcard-tokens {

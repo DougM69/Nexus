@@ -9,6 +9,7 @@ import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
 import { isStreamInput } from './remote-native/stream-input'
 import { clientWords } from './features/clientWords'
+import { noteCallbookAnswer } from './features/callbookAnswers'
 import type { ActivationSpotReport } from './selfSpot'
 import type { ImportDone, ImportPreview } from './features/logImport'
 import type {
@@ -2275,14 +2276,19 @@ export async function clearHamqthPassword(): Promise<void> {
 }
 
 /** Look up a callsign on QRZ.com (uses the stored username + keychain password;
- *  session key cached server-side in memory). */
+ *  session key cached server-side in memory). The answer is kept for the window
+ *  (`features/callbookAnswers`), so the station card shows it whoever asked. */
 export async function qrzLookup(callsign: string): Promise<QrzLookup> {
-  return invoke<QrzLookup>('qrz_lookup', { callsign })
+  const r = await invoke<QrzLookup>('qrz_lookup', { callsign })
+  noteCallbookAnswer(callsign, r)
+  return r
 }
 
 /** Look a callsign up again, skipping the callbook cache, and keep the new answer. */
 export async function callbookRefresh(callsign: string): Promise<QrzLookup> {
-  return invoke<QrzLookup>('callbook_refresh', { callsign })
+  const r = await invoke<QrzLookup>('callbook_refresh', { callsign })
+  noteCallbookAnswer(callsign, r)
+  return r
 }
 
 /** How many calls the on-disk callbook cache holds. */

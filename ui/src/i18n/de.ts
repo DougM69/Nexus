@@ -2025,6 +2025,8 @@ export const DE: PartialCatalog = {
   "callCard.open.title": "Stationskarte von {{call}} zeigen: Callbook, Verbindungen, Bedarf",
   "callCard.close": "Stationskarte schließen",
   "callCard.looking": "Wird nachgeschlagen…",
+  "callCard.photo.none": "Das Callbook hat kein Foto geschickt. QRZ schickt Fotos nur an XML-Abonnenten und nur, wenn die Station eins eingestellt hat.",
+  "callCard.photo.failed": "Das Foto aus dem Callbook wurde nicht geladen.",
   "callCard.path.title": "Großkreisentfernung und rechtweisende Peilung vom eigenen QTH, kurzer und langer Weg",
   "callCard.path.short": "SP {{dist}} · {{deg}}°",
   "callCard.path.long": "LP {{dist}} · {{deg}}°",
