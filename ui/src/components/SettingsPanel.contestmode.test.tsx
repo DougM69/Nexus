@@ -91,18 +91,20 @@ afterEach(cleanup)
 const openTab = async (name: string) => fireEvent.click(await screen.findByRole('tab', { name }))
 
 /** The switch by its accessible name, and the hint printed beside it. */
-const switchNamed = async (name: string) => (await screen.findByRole('switch', { name })) as HTMLButtonElement
+/** Contest mode's button: Start contest… with the mode off, Stop contest… with it on. */
+const modeButton = async (name: 'Start contest…' | 'Stop contest…') =>
+  (await screen.findByRole('button', { name })) as HTMLButtonElement
 const hintOf = (sw: HTMLElement) => sw.closest('.settings-field')!.querySelector('.settings-hint')!.textContent
 
 const ON_CONTESTING = (contest: string) =>
-  `For ${contest}, the contest picked above. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Save to apply. The same switch is at the top of the Contest screen, where it takes effect at once.`
+  `For ${contest}, the contest picked above. Start contest… walks you through its setup and turns Contest mode on; Stop contest… offers the end-of-contest checklist and turns it off. Both take effect at once. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules.`
 
 describe('Settings ▸ Contesting: the switch is Contest mode, and names the picked contest', () => {
   it('a QSO party: its name on the switch and in the hint, and no Field Day anywhere on it', async () => {
     holding({ fdEvent: 'ilqp' })
     renderPanel()
     await openTab('Contesting')
-    const sw = await switchNamed('Enable Contest mode: Illinois QSO Party')
+    const sw = await modeButton('Start contest…')
     const field = sw.closest('.settings-field')!
     expect(field.querySelector('.settings-label')!.textContent).toBe('Contest mode')
     expect(hintOf(sw)).toBe(ON_CONTESTING('Illinois QSO Party'))
@@ -113,14 +115,19 @@ describe('Settings ▸ Contesting: the switch is Contest mode, and names the pic
     holding({ fdEvent: '' })
     renderPanel()
     await openTab('Contesting')
-    expect(hintOf(await switchNamed('Enable Contest mode: ARRL Field Day'))).toBe(ON_CONTESTING('ARRL Field Day'))
+    expect(hintOf(await modeButton('Start contest…'))).toBe(ON_CONTESTING('ARRL Field Day'))
   })
 
-  it('on, it says so by name: Disable Contest mode and the contest', async () => {
+  it('on, it says so by name, and offers Stop contest…', async () => {
     holding({ fdEvent: 'cqww_cw', fdActive: true })
     renderPanel()
     await openTab('Contesting')
-    expect((await switchNamed('Disable Contest mode: CQ World-Wide DX Contest (CW)')).getAttribute('aria-checked')).toBe('true')
+    const sw = await modeButton('Stop contest…')
+    expect(sw.closest('.settings-field')!.querySelector('[role="status"]')!.textContent).toBe(
+      'On: CQ World-Wide DX Contest (CW)',
+    )
+    // CONTROL: no Start beside it.
+    expect(screen.queryByRole('button', { name: 'Start contest…' })).toBeNull()
   })
 })
 
@@ -136,7 +143,7 @@ describe('Settings ▸ Appearance ▸ Features: no Contest mode switch, and no C
     expect(groups()).not.toContain('Contesting')
     // CONTROL: the Contesting tab still has it, named for the picked contest.
     await openTab('Contesting')
-    expect(await switchNamed('Enable Contest mode: Illinois QSO Party')).not.toBeNull()
+    expect(await modeButton('Start contest…')).not.toBeNull()
   })
 })
 
@@ -149,7 +156,7 @@ describe('the Class + Section prompt: Field Day’s own line, naming the switch 
     holding({ fdEvent: 'arrlfd', fdActive: true, fdClass: '', fdSection: 'WI' })
     renderPanel()
     await openTab('Contesting')
-    await switchNamed('Disable Contest mode: ARRL Field Day')
+    await modeButton('Stop contest…')
     expect(prompt()).toBe(PROMPT('ARRL Field Day'))
   })
 
@@ -157,7 +164,7 @@ describe('the Class + Section prompt: Field Day’s own line, naming the switch 
     holding({ fdEvent: 'wfd', fdActive: true, fdClass: '', fdSection: '' })
     renderPanel()
     await openTab('Contesting')
-    await switchNamed('Disable Contest mode: Winter Field Day')
+    await modeButton('Stop contest…')
     expect(prompt()).toBe(PROMPT('Winter Field Day'))
   })
 
@@ -165,7 +172,7 @@ describe('the Class + Section prompt: Field Day’s own line, naming the switch 
     holding({ fdEvent: 'ilqp', fdActive: true, fdClass: '', fdSection: '' })
     renderPanel()
     await openTab('Contesting')
-    await switchNamed('Disable Contest mode: Illinois QSO Party')
+    await modeButton('Stop contest…')
     expect(prompt()).toBeNull()
   })
 })
@@ -188,7 +195,7 @@ describe('the switch sits in Contest, under the picker, and says nothing of Fiel
     holding({ fdEvent: 'ilqp' })
     renderPanel()
     await openTab('Contesting')
-    const sw = await switchNamed('Enable Contest mode: Illinois QSO Party')
+    const sw = await modeButton('Start contest…')
     expect(sw.closest('fieldset')!.querySelector('legend')!.textContent).toBe('Contest')
     expect(rows(sw).flatMap(saidIn).filter((s) => /Field Day/.test(s))).toEqual([])
     expect(rows(sw)[1].textContent).toContain(
@@ -198,12 +205,12 @@ describe('the switch sits in Contest, under the picker, and says nothing of Fiel
     expect(document.querySelector('#settings-field-day')).toBeNull()
   })
 
-  it('CONTROL: on ARRL Field Day the same scan finds Field Day in the switch’s name, and its power multiplier in its own group', async () => {
+  it('CONTROL: on ARRL Field Day the same scan finds Field Day in the switch’s hint, and its power multiplier in its own group', async () => {
     holding({ fdEvent: 'arrlfd' })
     renderPanel()
     await openTab('Contesting')
-    const sw = await switchNamed('Enable Contest mode: ARRL Field Day')
-    expect(rows(sw).flatMap(saidIn).filter((s) => /Field Day/.test(s))).toContain('Enable Contest mode: ARRL Field Day')
+    const sw = await modeButton('Start contest…')
+    expect(rows(sw).flatMap(saidIn).filter((s) => s.includes(ON_CONTESTING('ARRL Field Day')))).toHaveLength(1)
     const fd = document.querySelector('#settings-field-day')!
     expect(fd.querySelector('legend')!.textContent).toBe('Field Day')
     expect(saidIn(fd)).toContain('Field Day power multiplier')

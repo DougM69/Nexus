@@ -4921,6 +4921,84 @@ export const EN = {
     one: '{{count}} contact from this laptop is not in the club\'s log yet. It still goes to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.',
     other: '{{count}} contacts from this laptop are not in the club\'s log yet. They still go to the host when this laptop is back with it, Contest mode on or off. Leave Nexus open, with club sync on, until then.',
   },
+  // The checklist's other end-of-contest items. {{contest}} is the contest's own name, invariant; the
+  // submission address is the sponsor's, shown to copy and never opened or sent by Nexus.
+  'contestOver.summary': 'Export the Summary to Downloads',
+  'contestOver.missing.legend': 'Lines {{contest}} requires that the Cabrillo log leaves out',
+  'contestOver.missing.note': 'What you fill in here is saved and written into the Cabrillo log when it is exported.',
+  'contestOver.missing.readAtStart':
+    'Read when Contest mode turned on. To set it, choose Not now, set it under Settings ▸ Contesting ▸ Your entry, then turn Contest mode off and on again before you export.',
+  'contestOver.submit.label': 'Send the Cabrillo log to {{contest}} at:',
+  'contestOver.submit.copy': 'Copy',
+  'contestOver.submit.copied': 'Copied',
+  'contestOver.submit.note': 'Nexus does not send it for you.',
+  // THE CONTEST SETUP (ContestSetupWizard.tsx): a dialog with steps, like the first-run setup. It saves
+  // nothing until Start, and Start enters the contest in S&P: it never calls CQ. {{contest}},
+  // {{running}} are contests' own names; {{mode}} an on-air mode, {{exchange}} what is sent, and
+  // {{start}}, {{end}}, {{when}} UTC times written as a contest calendar writes them — all invariant.
+  'contestSetup.title': 'Set up a contest',
+  'contestSetup.titleChange': 'Change contest setup',
+  'contestSetup.steps.aria': 'Step {{n}} of {{total}}: {{title}}',
+  'contestSetup.steps.pick': 'Contest',
+  'contestSetup.steps.sends': 'Exchange',
+  'contestSetup.steps.entry': 'Entry',
+  'contestSetup.steps.ready': 'Radio',
+  'contestSetup.steps.start': 'Start',
+  'contestSetup.pick.title': 'Which contest?',
+  'contestSetup.pick.sub': 'Contests running now or this week come first. Times are UTC.',
+  'contestSetup.pick.soon': 'Running now or this week',
+  'contestSetup.pick.later': 'Later',
+  'contestSetup.pick.running': 'Running now, until {{end}}',
+  'contestSetup.pick.window': '{{start}} to {{end}}',
+  'contestSetup.pick.switch':
+    '{{running}} is running now. Starting {{contest}} ends it, and its contacts stay apart from the new contest\'s.',
+  'contestSetup.pick.switch.confirm': 'End {{running}} when I start {{contest}}',
+  'contestSetup.sends.title': 'What {{contest}} sends',
+  'contestSetup.sends.sub': 'Filled in from Settings. Change anything that is different for this contest.',
+  'contestSetup.sends.exchange': 'You send: {{exchange}}',
+  'contestSetup.sends.none': 'This contest sends nothing you need to fill in.',
+  'contestSetup.sends.checking': 'Checking…',
+  'contestSetup.entry.title': 'Your entry',
+  'contestSetup.entry.sub': 'What your Cabrillo log declares, for the lines {{contest}} writes.',
+  'contestSetup.entry.unset': 'Not set',
+  'contestSetup.entry.readAtStart':
+    'Power category and Spotting assistance are read when the contest starts: a change here reaches the log after you stop the contest and start it again.',
+  'contestSetup.fdPower.label': 'Power',
+  'contestSetup.fdPower.aria': 'Your highest output power',
+  'contestSetup.fdPower.qrp': 'QRP: 5 W or less (×5)',
+  'contestSetup.fdPower.low': 'LOW: 100 W or less (×2)',
+  'contestSetup.fdPower.high': 'HIGH: over 100 W (×1)',
+  'contestSetup.fdPower.battery': 'Battery or other natural power, no mains and no generator',
+  'contestSetup.fdPower.noBattery': 'QRP on mains or generator power scores ×2.',
+  'contestSetup.ready.title': 'Radio and mode',
+  'contestSetup.ready.sub': 'Nothing here stops you starting. Fix what you want first.',
+  'contestSetup.ready.catOk': 'The radio is connected.',
+  'contestSetup.ready.catBad': 'The radio is not answering. Check Settings ▸ Radio before the contest.',
+  'contestSetup.ready.catNone': 'No radio control is set up. You can still log by hand.',
+  'contestSetup.ready.mode': 'You are on {{mode}}.',
+  'contestSetup.ready.banned':
+    '{{contest}} does not allow {{mode}}: contacts in it are logged but score nothing. Work it in CW or Phone instead.',
+  'contestSetup.ready.sp':
+    'Start turns the contest on in S&P. The setup never calls CQ: Running is your own press, on the Contest screen or a cockpit.',
+  'contestSetup.start.title': 'Start {{contest}}',
+  'contestSetup.start.sub':
+    'One save, with Contest mode on. You can change any of this later with Change setup… on the Contest screen.',
+  'contestSetup.start.button': 'Start {{contest}}',
+  'contestSetup.start.save': 'Save changes',
+  'contestSetup.start.busy': 'Starting…',
+  'contestSetup.start.on': '{{contest}} is on · S&P',
+  'contestSetup.start.onRunning': '{{contest}} is on · Running',
+  'contestSetup.start.onHint': 'Nexus sends nothing until you call a station or press Running.',
+  'contestSetup.start.refused': 'The station did not enter {{contest}}: {{reason}} Contest mode is off again.',
+  'contestSetup.start.refusedUnknown': 'The station did not enter {{contest}}. Contest mode is off again.',
+  'contestSetup.nav.back': 'Back',
+  'contestSetup.nav.next': 'Next',
+  'contestSetup.nav.cancel': 'Cancel',
+  'contestSetup.nav.close': 'Close',
+  'contestSetup.open': 'Set up a contest…',
+  'contestSetup.change': 'Change setup…',
+  'contestSetup.soon': '{{contest}} this weekend: it starts {{when}}.',
+  'contestSetup.soon.action': 'Set up…',
   'fieldDay.upload.label': 'Upload merged contacts to:',
   'fieldDay.upload.aria': 'Upload this session\'s merged contacts',
 
@@ -4928,6 +5006,7 @@ export const EN = {
   // children itself, so an entity here would render as the literal characters.
   'fieldDay.role.aria': 'Running or S&P',
   'fieldDay.role.running': 'Running',
+  'fieldDay.role.running.title': 'Running: you call CQ. On an FT mode (FT8, FT4) it turns TX on and starts calling CQ at once.',
   // Spot me (components/ContestSpotMe.tsx). `{{line}}` is the cluster line as sent: a token.
   'spotMe.button': 'Spot me',
   'spotMe.button.title': 'Post ONE spot of your call on this frequency to the DX cluster, with the comment beside it. Once per press; then a {{secs}} s wait.',
@@ -5028,7 +5107,7 @@ export const EN = {
     'Go to the Phone screen in the main window, with this contest on its log line: Enter Sends Message, Running / S&P and the F-key messages are there.',
   'fieldDay.workIn.hint.aria': 'Where sending happens',
   'fieldDay.workIn.hint':
-    'This screen logs and keeps score, and never transmits. To send, work the contest from the CW or Phone screen: its log line has Enter Sends Message, Running / S&P and the F-key messages.',
+    'This screen logs and keeps score. Its Running button turns TX on and calls CQ on an FT mode. To send on CW or Phone, work the contest from the CW or Phone screen: its log line has Enter Sends Message, Running / S&P and the F-key messages.',
   'fieldDay.workIn.hint.dismiss': 'Got it',
   // The CW and Phone log line with Contest mode on and the contest not running (LogEntry): one line, and
   // Resume, which re-enters the contest in S&P.
@@ -5566,7 +5645,12 @@ export const EN = {
   'settings.fieldDay.mode.aria.enable': 'Enable Contest mode: {{contest}}',
   'settings.fieldDay.mode.aria.disable': 'Disable Contest mode: {{contest}}',
   'settings.fieldDay.mode.hint':
-    'For {{contest}}, the contest picked above. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules. Off the rest of the year. Save to apply. The same switch is at the top of the Contest screen, where it takes effect at once.',
+    'For {{contest}}, the contest picked above. Start contest… walks you through its setup and turns Contest mode on; Stop contest… offers the end-of-contest checklist and turns it off. Both take effect at once. When it is on, the log strips in every mode, the Contest screen and the exports follow its rules.',
+  'settings.fieldDay.mode.start': 'Start contest…',
+  'settings.fieldDay.mode.stop': 'Stop contest…',
+  'settings.fieldDay.mode.on': 'On: {{contest}}',
+  'settings.fieldDay.mode.off': 'Off',
+  'settings.save.contestBlocked': 'Saving would switch the running contest to {{contest}}, which cannot start yet: {{reason}}',
   'settings.fieldDay.needExchange':
     "<b>Set your Class + Section to start operating.</b> Contest mode is on, but the station won't enter {{contest}} until both are filled in below.",
   // The exchange field, named as its own event names it. The letters quoted in the hints are

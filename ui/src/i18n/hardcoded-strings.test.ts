@@ -322,6 +322,11 @@ const MIGRATED = [
   // string is a catalog key; the screen it hosts is ContestView, above.
   'components/ContestScreenWindow.tsx',
   'components/ContestOverDialog.tsx',
+  // The contest setup (2026-10-26): born migrated — every string is a catalog key; contest names,
+  // Cabrillo tokens and UTC times are invariant tokens.
+  'components/ContestSetupWizard.tsx',
+  // What keeps a contest from starting, moved out of ContestView beside it: catalog keys only.
+  'features/contestStart.ts',
   'components/ContestScoreChip.tsx',
   // Winter Field Day's objectives checklist: born migrated — every word is a catalog key, and
   // the objective names are the sponsor's own worksheet names, invariant like the bonus names.

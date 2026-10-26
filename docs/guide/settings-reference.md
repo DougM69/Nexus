@@ -2326,7 +2326,7 @@ reads are here with it.
   Phone), the ARRL January, June and September VHF contests, CQ World-Wide DX (CW or
   SSB), the CQ World-Wide RTTY DX Contest, CQ WPX (CW or SSB), and the California,
   Illinois, New York, Ohio, Tennessee and Texas QSO Parties. **Contest mode**, under
-  it, is the switch that starts the contest picked here. While it is running a
+  it, starts and stops the contest picked here. While it is running a
   contest, a line under the picker says which one, and saving a different pick switches at once, exactly as
   turning Contest mode off and on does: the running contest ends, the new one starts in
   Search-and-Pounce without calling CQ, each keeps its own contacts, and the Contest screen
@@ -2340,14 +2340,24 @@ reads are here with it.
   out-of-state, W/VE or DX, and the same word sits beside **Sending** on the contest log
   strip. Both Field Day events work the same way for everyone, so there is no role to
   show yet.
-- **Contest mode** — the switch for whichever contest is picked above, named for it:
-  "For Illinois QSO Party, the contest picked above. When it is on, the log strips in
-  every mode, the Contest screen and the exports follow its rules. Off the rest of the
-  year." It stays on across restarts until you turn it
-  off. It was called Field Day mode; the setting is the same one. The **same switch** is
-  at the top of the **Contest** screen (the tent in the left bar), which saves it at once and
-  says what is missing when the picked contest cannot start yet. Those are its only two
-  places: it is not among the [Features](#features).
+- **Contest mode** — says Off, or On and the contest, with one button beside it.
+  **Start contest…** opens the contest setup: pick the contest (this week's first, in UTC),
+  fill in what it sends (filled in from these fields, with the reason it cannot start yet
+  shown as you type), declare the entry lines its Cabrillo log writes, check the radio and
+  mode (a mode the contest does not allow is a warning with a way to CW or Phone, never a
+  refusal), then **Start**: one save with the mode on, after which the setup checks that the
+  station really entered the contest and shows "Illinois QSO Party is on · S&P". If the
+  station did not enter, it says why and turns the mode off again, so Contest mode can no
+  longer be on with nothing running. Start never calls CQ. For ARRL Field Day the setup asks
+  your power once (QRP, LOW or HIGH, with ×5, ×2 or ×1 beside it, and whether you run on
+  battery or other natural power for ×5) and sets both Power category and the power
+  multiplier from it. **Stop contest…** opens the end-of-contest checklist. Both take effect
+  at once; neither waits for Save. The mode stays on across restarts until you stop it. It
+  was called Field Day mode; the setting is the same one. The same switch is at the top of
+  the **Contest** screen (the tent in the left bar), beside **Set up a contest…** (or
+  **Change setup…** while one runs). It is not among the [Features](#features). With a
+  contest running, a Save that picks a contest the station cannot enter yet is refused, with
+  the reason.
 - **Check for rules updates** — the rules data behind every contest on the list:
   scoring, dates, exchanges and multipliers. The line beside the button says which
   rules year and data date are in use; a downloaded update applies at the next

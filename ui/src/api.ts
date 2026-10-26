@@ -548,6 +548,34 @@ export interface FdRulesetDto {
    *  session exists. Filled by the preview only; absent from the Remote capture. */
   eventStartUnix?: number
   eventEndUnix?: number
+  /** ⭐ The settings this contest's exchange sends from, by their Rust names (`fd_class`,
+   *  `contest_qth_county`…), so the contest setup asks for this contest's and no other's. Filled by
+   *  the preview only. */
+  sentSettings?: string[]
+  /** The optional Cabrillo header lines the sponsor's template writes (`CATEGORY-POWER`, `EMAIL`,
+   *  `CLUB`…), so the contest setup asks only for what this contest's log declares. Preview only. */
+  cabrilloHeaders?: string[]
+  /** The only `CATEGORY-POWER` values the sponsor takes, when it names some (Winter Field Day's
+   *  `QRP` and `LOW`). Preview only. */
+  powerCategories?: string[]
+}
+
+/** The same preview for settings not saved yet: the saved settings with `patch`'s fields over them.
+ *  Read-only — what the contest setup shows while the operator answers its steps. */
+export async function previewFdRuleset(patch: Partial<import('./types').Settings>): Promise<FdRulesetDto> {
+  return invoke<FdRulesetDto>('preview_fd_ruleset', { patch })
+}
+
+/** One contest's running-or-next window (Unix UTC), from the rules data. */
+export interface ContestWindow {
+  id: string
+  startUnix: number
+  endUnix: number
+}
+
+/** When every contest the rules data holds runs: each one's running-or-next window. */
+export async function contestWindows(): Promise<ContestWindow[]> {
+  return invoke<ContestWindow[]>('contest_windows')
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of

@@ -119,7 +119,7 @@ describe('the contest picker', () => {
       (n) => n.textContent,
     )
     expect(legends[0]).toBe('Contest')
-    expect(sectionOf(await screen.findByRole('switch', { name: /^Enable Contest mode: / }))).toBe('Contest')
+    expect(sectionOf(await screen.findByRole('button', { name: 'Start contest…' }))).toBe('Contest')
     expect(legends).not.toContain('Field Day Setup')
     expect(legends).not.toContain('Contest mode')
   })

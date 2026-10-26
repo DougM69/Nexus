@@ -193,7 +193,9 @@ describe('the groups, in the order an entry is set up', () => {
     const where: Record<string, Element | null> = {
       'the contest picker': screen.getByRole('group', { name: 'Which contest you are entering' }),
       'Your role': fieldLabelled('Your role'),
-      'the Contest mode switch': screen.getByRole('switch', { name: /^(Enable|Disable) Contest mode: / }),
+      // Start contest… / Stop contest…: it opens the setup or the end-of-contest checklist; the form
+      // no longer saves the mode.
+      'the Contest mode switch': screen.getByRole('button', { name: /^(Start|Stop) contest…$/ }),
       'Check for rules updates': screen.getByRole('button', { name: 'Check for rules updates' }),
       County: boxLabelled('County'),
       'State or province': boxLabelled('State or province'),
@@ -354,7 +356,12 @@ describe('a stored settings file, every Contesting value set', () => {
       ) as HTMLSelectElement | null)?.value ?? null
     return {
       contest: pressedIn('Which contest you are entering'),
-      'Contest mode': checked(/ Contest mode: /),
+      // On shows Stop contest…, off shows Start contest….
+      'Contest mode': screen.queryByRole('button', { name: 'Stop contest…' })
+        ? 'true'
+        : screen.queryByRole('button', { name: 'Start contest…' })
+          ? 'false'
+          : null,
       County: value('County'),
       'State or province': value('State or province'),
       Check: value('Check'),

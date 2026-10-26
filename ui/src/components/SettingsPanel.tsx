@@ -206,7 +206,7 @@ import { continentName } from './CountryExclude'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
 import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
 import { fetchFdRules, getFdRulesStatus, type FdRulesStatus } from '../api'
-import { getFdRuleset, type FdRulesetDto } from '../api'
+import { getFdRuleset, previewFdRuleset, type FdRulesetDto } from '../api'
 import { locationWarningText } from '../features/contestLocation'
 import { fetchTlesNow, getTleStatus, importTles, type TleStatus } from '../api'
 import { tleRefreshMessage } from '../features/tleMessages'
@@ -243,6 +243,9 @@ import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
 import { SettingsSearch } from './SettingsSearch'
 import { SettingsLicenses } from './SettingsLicenses'
 import { ContestOverDialog, contestOverOffer, hasOffer, type ContestOverOffer } from './ContestOverDialog'
+import { ContestSetupWizard, SETUP_KEYS } from './ContestSetupWizard'
+import { contestSummaryText } from './ContestView'
+import { blockerText, startBlocker } from '../features/contestStart'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
 import { Js8ListsSettings } from './Js8ListsSettings'
 import { resolveTarget } from '../settings/registry'
@@ -2040,8 +2043,12 @@ export function SettingsPanel({
    * already marks precisely the moments the form equals what is stored.
    */
   const savedRef = useRef<Settings | null>(null)
-  // The contest-over checklist, while a Save that turns Contest mode off waits for its answer.
+  // The contest-over checklist, while a Save that turns Contest mode off waits for its answer — or
+  // while Stop contest… does (`overVia`), whose Turn off is its own save of the mode alone.
   const [overOffer, setOverOffer] = useState<ContestOverOffer | null>(null)
+  const [overVia, setOverVia] = useState<'save' | 'stop'>('save')
+  // The contest setup (ContestSetupWizard.tsx), opened by Start contest….
+  const [setupOpen, setSetupOpen] = useState(false)
   /** Marks the position-name box when a save is refused for it — the callsign refusal has
    *  always marked ITS field, and a refusal that routes you to a tab without saying which box
    *  is the problem is only half an answer. Cleared as soon as the operator types. */
@@ -3739,6 +3746,23 @@ export function SettingsPanel({
       )
       return
     }
+    // ⭐ A SAVE THAT WOULD SWITCH THE RUNNING CONTEST TO ONE THAT CANNOT START is refused, saying why.
+    // Saving a new pick ends the running contest (`save_switches_contest`), and a pick the engine
+    // cannot enter would leave Contest mode on with nothing running. Asked of the engine's own
+    // preview of what this Save would leave (`preview_fd_ruleset`), which saves nothing.
+    if (
+      savedRef.current?.fdActive === true &&
+      form.fdActive &&
+      (form.fdEvent ?? '').trim() !== (savedRef.current.fdEvent ?? '').trim()
+    ) {
+      const preview = await previewFdRuleset(changedSince(savedRef.current, form)).catch(() => null)
+      const blocked = startBlocker(form, preview)
+      if (blocked) {
+        setTab('contesting')
+        setError(t('settings.save.contestBlocked', { contest: pickedContest, reason: blockerText(blocked, pickedContest) }))
+        return
+      }
+    }
     // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): a Save that turns Contest mode off
     // offers it FIRST and saves nothing until it is answered — the merge and the export need the
     // session the mode holds. "Now" is what this Save would leave: the live settings, with this
@@ -3753,11 +3777,44 @@ export function SettingsPanel({
         fieldDay?.club?.queued ?? 0,
       )
       if (hasOffer(offer)) {
+        setOverVia('save')
         setOverOffer(offer)
         return
       }
     }
     await commitSave(form).catch(() => {})
+  }
+
+  // Fields saved outside the form (the contest setup, Stop contest…): the form and its baseline both
+  // take them, so the form neither shows them as unsaved nor sends its older values back on a Save.
+  const adoptSaved = (written: Partial<Settings>) => {
+    setForm((prev) => (prev ? { ...prev, ...written } : prev))
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...written }
+  }
+
+  // ⭐ STOP CONTEST… — the end-of-contest checklist first (ContestOverDialog.tsx), against the settings
+  // the station holds now; with nothing to offer or say, the mode simply goes off. Its own save of
+  // the mode and the ticked put-backs alone, through the patch seam: the form's other edits stay
+  // where they are, unsaved.
+  const stopContest = async () => {
+    const live = await getSettings()
+    const offer = contestOverOffer(live, fieldDay?.log?.length ?? 0, fieldDay?.event, fieldDay?.club?.queued ?? 0, {
+      missing: fieldDay?.cabrilloMissing,
+      choices: rulesetPreview,
+    })
+    if (hasOffer(offer)) {
+      setOverVia('stop')
+      setOverOffer(offer)
+      return
+    }
+    await stopTurnOff({}).catch((e) => setError(String(e)))
+  }
+  const stopTurnOff = async (putBack: Partial<Settings>) => {
+    const written: Partial<Settings> = { ...putBack, fdActive: false }
+    await patchSettings(() => written)
+    adoptSaved(written)
+    setOverOffer(null)
+    onSaved?.()
   }
 
   // THE SAVE ITSELF, once every check above has passed (and the checklist, when it was offered, has
@@ -4002,7 +4059,26 @@ export function SettingsPanel({
         <SettingsLicenses />
       </div>
 
-      <ContestOverDialog offer={overOffer} onNotNow={() => setOverOffer(null)} onTurnOff={turnOffWithChecklist} />
+      <ContestOverDialog
+        offer={overOffer}
+        onNotNow={() => setOverOffer(null)}
+        onTurnOff={overVia === 'stop' ? stopTurnOff : turnOffWithChecklist}
+        summaryText={fieldDay ? () => contestSummaryText(fieldDay, savedRef.current, fieldDay.event) : undefined}
+      />
+      {setupOpen && (
+        <ContestSetupWizard
+          // What the form holds and has not saved, for the fields the setup asks: a chip just clicked
+          // here is the contest it opens on.
+          initial={Object.fromEntries(
+            Object.entries(changedSince(savedRef.current, form)).filter(([k]) => SETUP_KEYS.includes(k as keyof Settings)),
+          )}
+          onClose={() => setSetupOpen(false)}
+          onSaved={(written) => {
+            adoptSaved(written)
+            onSaved?.()
+          }}
+        />
+      )}
       <form className="settings-form" onSubmit={handleSubmit}>
         <div className="settings-tabs" role="tablist" aria-label={t('settings.panel.tabs.aria')}>
           {/* Contesting is always visible now (0.17.0 decision) — capability, not config, gates
@@ -13436,28 +13512,37 @@ export function SettingsPanel({
                 })()}
               </div>
 
-              {/* The Contest mode switch, under the picker it starts (Contesting is always visible):
-                  turning it on starts the picked contest — its log strip in every cockpit, the
-                  Contest screen. It and the rules data serve every contest, so they sit here and
-                  not with Field Day's own fields below. */}
-              <label className="settings-field">
+              {/* ⭐ CONTEST MODE: Start contest… / Stop contest…, under the picker it starts. Not a switch
+                  the form saves any more: Start opens the contest setup (ContestSetupWizard.tsx),
+                  which saves the contest with the mode on and checks the engine entered it; Stop opens
+                  the end-of-contest checklist. So Settings can no longer save the mode on with a
+                  blank exchange and silently not start. Both take effect at once. */}
+              <div className="settings-field" data-contest-mode>
                 <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={!!form.fdActive}
-                  className={`toggle${form.fdActive ? ' on' : ''}`}
-                  onClick={() => updateBool('fdActive', !form.fdActive)}
-                  aria-label={
-                    form.fdActive
-                      ? t('settings.fieldDay.mode.aria.disable', { contest: pickedContest })
-                      : t('settings.fieldDay.mode.aria.enable', { contest: pickedContest })
-                  }
-                >
-                  <span className="toggle-knob" />
-                </button>
+                <span className="settings-mode-row">
+                  <span role="status">
+                    {form.fdActive ? t('settings.fieldDay.mode.on', { contest: pickedContest }) : t('settings.fieldDay.mode.off')}
+                  </span>{' '}
+                  {form.fdActive ? (
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={() => void stopContest()}
+                    >
+                      {t('settings.fieldDay.mode.stop')}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={() => setSetupOpen(true)}
+                    >
+                      {t('settings.fieldDay.mode.start')}
+                    </button>
+                  )}
+                </span>
                 <span className="settings-hint">{t('settings.fieldDay.mode.hint', { contest: pickedContest })}</span>
-              </label>
+              </div>
               {/* The entry's optional "RST sent" box (N1MM's Snt): off, the entry is what it always
                   was. It saves with the form, and shows only in a contest that sends a report. */}
               <div className="settings-field">
