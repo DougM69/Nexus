@@ -2850,7 +2850,12 @@ pub struct Activations(std::collections::HashMap<ActivationKey, ActivationTally>
 impl Activations {
     /// Take the next record of the log.
     pub fn add(&mut self, r: &QsoRecord) {
-        let call = worked_under(r);
+        self.add_under(r, worked_under(r));
+    }
+
+    /// Take the next record of the log as worked under `call` rather than its own — the POTA
+    /// account its activations are credited to (`crate::pota_awards::add`).
+    pub fn add_under(&mut self, r: &QsoRecord, call: Option<String>) {
         let day = day_start(r.when_unix);
         let key = hot::pota_key(&r.call, &r.band, &r.mode);
         for reference in my_refs(r) {

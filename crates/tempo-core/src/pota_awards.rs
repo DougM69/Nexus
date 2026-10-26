@@ -14,7 +14,11 @@
 //! owner of `STATION_CALLSIGN` ("uniqueness … User account that the log was uploaded under",
 //! docs.pota.app/docs/rules.html, read 2026-10-25). Six contacts under one call and six under
 //! another at one park on one day are two short activations, never one valid one, so the stats
-//! are kept per callsign ([`by_callsign`]), as the per-activation export keeps files.
+//! are kept per callsign ([`by_callsign`]). **A portable `/P` is the same call** (operator ruling,
+//! the log clean-up's rule, [`without_portable_p`]): `KD9TAW/P` and `KD9TAW` are one account, and
+//! their contacts at a park on a day are one activation, each distinct contact once. Only `/P` —
+//! `KD9TAW/M` or any other suffix stays a call of its own. The activations are folded for this by
+//! [`add`]; the per-activation export still keeps a file per call as signed.
 //!
 //! # The achievements, as POTA defines them
 //!
@@ -40,7 +44,16 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::logbook::LoggedActivation;
+use crate::logbook::cleanup::without_portable_p;
+use crate::logbook::{worked_under, Activations, LoggedActivation, QsoRecord};
+
+/// ★ Take the next record of the log (in log order) into `found` as its awards count it: under
+/// the call it was worked under with a portable `/P` taken off ([`without_portable_p`]), so a
+/// `/P` contact joins the plain call's activation that day. [`by_callsign`] of `found.finish()`
+/// is the standing.
+pub fn add(found: &mut Activations, r: &QsoRecord) {
+    found.add_under(r, worked_under(r).map(without_portable_p));
+}
 
 /// Distinct contacts in one UTC day a park needs for a valid activation.
 pub const VALID_QSOS: usize = 10;
@@ -205,7 +218,7 @@ fn one_call(callsign: Option<String>, acts: &[&LoggedActivation]) -> ActivatorSt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logbook::{adif_header, parse_adif, Activations};
+    use crate::logbook::{adif_header, parse_adif};
 
     const DAY: u64 = 86_400;
     /// 2026-01-01 00:00 UTC.
@@ -239,6 +252,42 @@ mod tests {
             .collect()
     }
 
+    /// The standing of a log's records, through [`add`] in log order.
+    fn from_adif(adif: &str) -> Vec<ActivatorStats> {
+        let mut found = Activations::default();
+        for r in parse_adif(adif) {
+            add(&mut found, &r);
+        }
+        by_callsign(&found.finish())
+    }
+
+    /// ★ `/P` is the plain call (operator ruling): KD9TAW's six and KD9TAW/P's four other
+    /// contacts at one park on one day are ONE valid activation of ten, and a contact made under
+    /// both spellings counts once. KD9TAW/M is another call: its ten are its own activation.
+    #[test]
+    fn a_portable_p_is_the_plain_call_and_mobile_is_not() {
+        let mut adif = adif_header();
+        adif += &contacts("US-0001", 1, "KD9TAW", 6, 0);
+        adif += &contacts("US-0001", 1, "KD9TAW/P", 4, 6);
+        // K0AA again under /P: the same contact, already counted.
+        adif += &contacts("US-0001", 1, "KD9TAW/P", 1, 0);
+        adif += &contacts("US-0001", 1, "KD9TAW/M", 10, 100);
+        let stats = from_adif(&adif);
+        let of = |call: &str| {
+            let s = stats
+                .iter()
+                .find(|s| s.callsign.as_deref() == Some(call))
+                .unwrap_or_else(|| panic!("{call} has no standing"));
+            (s.activations, s.attempts, s.qsos)
+        };
+        assert_eq!(stats.len(), 2, "KD9TAW (with /P) and KD9TAW/M");
+        assert_eq!(of("KD9TAW"), (1, 0, 10));
+        assert_eq!(of("KD9TAW/M"), (1, 0, 10));
+        assert!(stats
+            .iter()
+            .all(|s| s.callsign.as_deref() != Some("KD9TAW/P")));
+    }
+
     /// ★ A fixture log, through the log's own activation list: ten distinct contacts make a valid
     /// activation and a dupe adds nothing toward it, short days are attempts that still count
     /// toward Kilo, and a two-fer is an activation at each park.
@@ -254,11 +303,7 @@ mod tests {
         // A summit of mine is not a park.
         adif += "<CALL:4>K1AA<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20260103<TIME_ON:6>120000\
                  <STATION_CALLSIGN:6>KD9TAW<MY_SIG:4>SOTA<MY_SOTA_REF:10>W7A/MN-001<EOR>\n";
-        let mut found = Activations::default();
-        for r in parse_adif(&adif) {
-            found.add(&r);
-        }
-        let stats = by_callsign(&found.finish());
+        let stats = from_adif(&adif);
         assert_eq!(stats.len(), 1, "one callsign");
         let s = &stats[0];
         assert_eq!(s.callsign.as_deref(), Some("KD9TAW"));
@@ -292,7 +337,7 @@ mod tests {
     fn two_callsigns_are_counted_apart() {
         let stats = by_callsign(&[
             act("US-0001", 0, Some("W1A"), 6),
-            act("US-0001", 0, Some("W1A/P"), 6),
+            act("US-0001", 0, Some("W1A/M"), 6),
         ]);
         assert_eq!(stats.len(), 2);
         assert!(stats.iter().all(|s| s.activations == 0 && s.attempts == 1));

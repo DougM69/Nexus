@@ -675,8 +675,8 @@ const ACTIVATIONS: Narrow = Narrow {
     uploads: false,
 };
 
-/// The log's POTA activator standing per callsign (`tempo_core::pota_awards`), from its
-/// activations as the per-activation export lists them. Kept against `index_rev`: no stamp
+/// The log's POTA activator standing per callsign, a portable `/P` merged into the plain call
+/// (`tempo_core::pota_awards::add`). Kept against `index_rev`: no stamp
 /// changes a park, a call, a band, a mode or a time.
 pub(crate) fn pota_activator_kept(
     engine: &Mutex<Engine>,
@@ -693,7 +693,7 @@ pub(crate) fn pota_activator_kept(
     let mut found = tempo_core::logbook::Activations::default();
     let fresh = rows
         .each_with(ACTIVATIONS, &[], Scope::All, Order::Log, &mut |r| {
-            found.add(r);
+            tempo_core::pota_awards::add(&mut found, r);
             ControlFlow::Continue(())
         })
         .map_err(unreadable)?;

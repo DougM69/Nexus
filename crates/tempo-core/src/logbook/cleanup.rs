@@ -251,7 +251,7 @@ pub fn station_call(r: &QsoRecord, settings_call: Option<&str>) -> Option<String
 /// `call` without a portable `/P` at its end (operator ruling): `KD9TAW/P` is the same station call
 /// as `KD9TAW` to the duplicate finder and to a change of station call. Only `/P` — `/M`, `/MM`,
 /// `/QRP`, a prefix (`W1/KD9TAW`) or any other suffix is another call.
-fn without_portable_p(call: String) -> String {
+pub fn without_portable_p(call: String) -> String {
     match call.strip_suffix("/P") {
         Some(base) if !base.is_empty() => base.to_string(),
         _ => call,
