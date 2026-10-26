@@ -323,7 +323,6 @@ export function localTime(nowMs: number, offsetHours: number): { time: string; o
 /** The callbook page button's label: the service's name, a token in every language. */
 const QRZ_PAGE = 'QRZ ↗'
 
-/** The card's face, from answers alone: what the tests render from a fixture. */
 /** The callbook photo, or the call's initials until it draws. A callbook answer without one says why
  *  on hover: QRZ gives the photo only to an XML subscription, so a free account's answer never carries
  *  it. The station card's and the Logbook contact card's. */
@@ -348,6 +347,7 @@ export function CallbookPhoto({ call, book }: { call: string; book: QrzLookup | 
   )
 }
 
+/** The card's face, from answers alone: what the tests render from a fixture. */
 export function CallCardView({ data, onClose }: { data: CallCardData; onClose: () => void }) {
   const units = useUnits()
   const { call, book, hist, stats } = data
