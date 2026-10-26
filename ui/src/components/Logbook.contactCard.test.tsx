@@ -230,6 +230,22 @@ describe('Save is the edit form’s save, with only what was changed', () => {
     ])
   })
 
+  it('a contest contact shows its exchange columns, read only, and refuses a change to one', async () => {
+    engine.log = (engine.log as LoggedQso[]).map((r) =>
+      r.id === 'id-dl' ? { ...r, contest: { contestId: 'OH-QSO-PARTY', adif: [['CNTY', 'OH,FRANKLIN']] as [string, string][] } } : r,
+    )
+    engine.revision += 1
+    await mounted()
+    const card = await openCard()
+    fireEvent.click(within(card).getByText(t('contactCard.more')))
+    const shown = [...card.querySelectorAll('.contact-card-facts .qso-detail-field')].map((e) => e.textContent)
+    expect(shown).toContain('CNTYOH,FRANKLIN')
+    fireEvent.change(within(card).getByRole('textbox', { name: 'CNTY' }), { target: { value: 'OH,DELAWARE' } })
+    save(card)
+    await waitFor(() => expect(within(card).getByRole('alert').textContent).toBe(t('contactCard.error.contest', { tag: 'CNTY' })))
+    expect(api.editQsoById).not.toHaveBeenCalled()
+  })
+
   it('Save is not offered until something changed', async () => {
     await mounted()
     const card = await openCard()

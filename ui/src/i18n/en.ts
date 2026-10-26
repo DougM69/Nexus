@@ -1711,6 +1711,7 @@ export const EN = {
   'contactCard.error.power': 'TX power must be a number of watts.',
   'contactCard.error.tag': '{{tag}} is not an ADIF field name: use capitals, digits and _ only.',
   'contactCard.error.twice': '{{tag}} is on the card twice.',
+  'contactCard.error.contest': "{{tag}} is part of this contact's contest exchange, shown below: exports, uploads and awards read it from there, so it cannot be changed here.",
   'contactCard.dateOnly': 'Imported with a date only: no time of day was recorded. Leave the box empty to keep it that way.',
   'contactCard.program.theirs': 'Reference type (worked)',
   'contactCard.program.mine': 'Reference type (mine)',

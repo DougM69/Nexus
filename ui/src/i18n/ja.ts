@@ -9176,6 +9176,7 @@ export const JA: PartialCatalog = {
   "contactCard.error.power": "送信出力はワット単位の数値で入力してください。",
   "contactCard.error.tag": "{{tag}}はADIFのフィールド名ではありません。大文字、数字、_ だけを使ってください。",
   "contactCard.error.twice": "{{tag}}がカードに2回あります。",
+  "contactCard.error.contest": "{{tag}}はこの交信のコンテスト交換（下に表示）の一部です。エクスポート、アップロード、アワードはそこから読むため、ここでは変更できません。",
   "contactCard.dateOnly": "日付だけでインポートされ、時刻は記録されていません。そのままにするには欄を空のままにしてください。",
   "contactCard.program.theirs": "リファレンスの種類（相手）",
   "contactCard.program.mine": "リファレンスの種類（自局）",

@@ -9193,6 +9193,7 @@ export const FR: PartialCatalog = {
   "contactCard.error.power": "La puissance TX doit être un nombre en watts.",
   "contactCard.error.tag": "{{tag}} n’est pas un nom de champ ADIF : utilisez uniquement des majuscules, des chiffres et _.",
   "contactCard.error.twice": "{{tag}} figure deux fois sur la fiche.",
+  "contactCard.error.contest": "{{tag}} fait partie de l’échange de concours de ce contact (affiché plus bas) : les exports, les envois et les diplômes le lisent là, il ne peut donc pas être modifié ici.",
   "contactCard.dateOnly": "Importé avec une date seulement : aucune heure n’a été enregistrée. Laissez le champ vide pour le garder ainsi.",
   "contactCard.program.theirs": "Type de référence (contactée)",
   "contactCard.program.mine": "Type de référence (la mienne)",

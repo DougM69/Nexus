@@ -4398,6 +4398,7 @@ impl StationCore {
         }
         for (i, f) in fields.iter().enumerate() {
             f.check()?;
+            f.check_on(stored)?;
             if fields[..i].iter().any(|g| g.tag == f.tag) {
                 return Err(format!("{} is changed twice in one save.", f.tag));
             }
@@ -6333,7 +6334,7 @@ mod park_state_tests {
 #[cfg(test)]
 mod edit_ops_tests {
     use super::*;
-    use tempo_core::logbook::RecordId;
+    use tempo_core::logbook::{ContestFields, RecordId};
 
     /// A station whose resolver names every call's entity "United States".
     fn station() -> StationCore {
@@ -6419,5 +6420,28 @@ mod edit_ops_tests {
                 "an empty country ({empty:?}) is filled"
             );
         }
+    }
+
+    /// A field the contact's contest exchange holds is refused on the card — with nothing made —
+    /// because the exchange's value is the one every export, upload and award reads.
+    #[test]
+    fn a_card_change_to_a_contest_exchange_field_is_refused() {
+        let sc = station();
+        let mut r = QsoRecord::clone(&stored(Some("United States")));
+        r.contest = Some(Box::new(ContestFields {
+            contest_id: "OH-QSO-PARTY".into(),
+            adif: vec![("CNTY".into(), "OH,FRANKLIN".into())],
+            ..Default::default()
+        }));
+        let r = Arc::new(r);
+        let edit = QsoEdit::project(&r);
+        let e = edited(&sc, &r, &edit, &[cnty("OH,DELAWARE")]).expect_err("refused");
+        assert!(e.contains("CNTY") && e.contains("contest exchange"), "{e}");
+        let other = FieldEdit {
+            tag: "ITUZ".into(),
+            old: None,
+            new: Some("8".into()),
+        };
+        assert!(edited(&sc, &r, &edit, &[other]).is_ok(), "a field it does not hold");
     }
 }

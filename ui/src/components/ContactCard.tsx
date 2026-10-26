@@ -117,6 +117,8 @@ function errorText(e: CardError): string {
       return t('contactCard.error.tag', { tag: e.tag })
     case 'twice':
       return t('contactCard.error.twice', { tag: e.tag })
+    case 'contest':
+      return t('contactCard.error.contest', { tag: e.tag })
   }
 }
 
@@ -284,6 +286,9 @@ function CardBody({
     col('contest'),
     col('exchSent'),
     col('exchRcvd'),
+    // The contest exchange's own ADIF columns: what every export, upload and award reads for those
+    // fields, so shown here, read only (a change beside them is refused).
+    ...(q.contest?.adif ?? []).map(([tag, value]) => fact(tag, value)),
     upload('upLotw'),
     upload('upEqsl'),
     upload('upQrz'),
@@ -467,8 +472,8 @@ function CardBody({
           )}
           {facts.length > 0 && (
             <dl className="qso-detail-fields contact-card-facts">
-              {facts.map(([label, value]) => (
-                <div key={label} className="qso-detail-field">
+              {facts.map(([label, value], i) => (
+                <div key={`${i}-${label}`} className="qso-detail-field">
                   <dt>{label}</dt>
                   <dd className="mono">{value}</dd>
                 </div>

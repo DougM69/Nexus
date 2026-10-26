@@ -163,6 +163,26 @@ impl FieldEdit {
         }
         Ok(())
     }
+
+    /// `Err` for a change to a field the contest exchange of `stored` holds, saying why. A merged
+    /// contest contact keeps its exchange's ADIF columns (a QSO party's `CNTY`, `ARRL_SECT`,
+    /// `CLASS`, `CQZ` …) in its contest block, and the ADIF writer, the uploads and the awards
+    /// ([`super::record_field`]) read them from there: written as a field kept as written, the
+    /// change would be saved and shown, and reach none of them.
+    pub fn check_on(&self, stored: &QsoRecord) -> Result<(), String> {
+        let held = stored.contest.as_deref().is_some_and(|c| {
+            c.adif
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case(&self.tag) && !v.trim().is_empty())
+        });
+        if held {
+            return Err(format!(
+                "{} is part of this contact's contest exchange, which exports, uploads and awards read — it cannot be changed here.",
+                self.tag
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Whether the log reads `tag` = `value` as nothing but a field kept as written: a contact that
@@ -1143,5 +1163,34 @@ mod tests {
         assert!(!change("CNTY", None, Some("x")).is_fresh(&r));
         assert!(change("CQZ", None, Some("5")).is_fresh(&r));
         assert!(!change("CQZ", Some("5"), None).is_fresh(&r));
+    }
+
+    /// A merged contest contact keeps its exchange's ADIF columns (a QSO party's `CNTY`, a
+    /// section, a zone) in its contest block, and exports, uploads and awards read them from
+    /// there: a change to one kept as written would be saved and reach none of them, so it is
+    /// refused, saying why. A field the exchange does not hold is the card's as before.
+    #[test]
+    fn a_field_the_contest_exchange_holds_is_not_changed_beside_it() {
+        let mut r = record();
+        r.contest = Some(Box::new(crate::logbook::ContestFields {
+            contest_id: "OH-QSO-PARTY".into(),
+            adif: vec![("CNTY".into(), "OH,FRANKLIN".into()), ("CQZ".into(), " ".into())],
+            ..Default::default()
+        }));
+        for held in [
+            change("CNTY", None, Some("OH,DELAWARE")),
+            change("CNTY", Some("OH,DELAWARE"), None),
+        ] {
+            let e = held.check_on(&r).expect_err("the exchange holds CNTY");
+            assert!(e.contains("contest exchange"), "{e}");
+        }
+        assert_eq!(change("ITUZ", None, Some("8")).check_on(&r), Ok(()));
+        assert_eq!(
+            change("CQZ", None, Some("4")).check_on(&r),
+            Ok(()),
+            "an exchange column written blank holds nothing"
+        );
+        r.contest = None;
+        assert_eq!(change("CNTY", None, Some("OH,DELAWARE")).check_on(&r), Ok(()));
     }
 }

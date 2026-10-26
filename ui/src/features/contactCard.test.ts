@@ -89,3 +89,18 @@ describe('fields kept as written: only what the operator touched is sent', () =>
     ])
   })
 })
+
+describe('a merged contest contact', () => {
+  // The exchange holds the county and zone it was worked in; the record still carries a stale CNTY.
+  const C: LoggedQso = { ...Q, contest: { contestId: 'OH-QSO-PARTY', adif: [['CNTY', 'OH,FRANKLIN'], ['CQZ', '5']] } }
+
+  it('a field its contest exchange holds is refused, changed or added, and says why', () => {
+    const start = draftOf(C)
+    const changed = fieldsOf(C).map((f) => (f.tag === 'CNTY' ? { ...f, value: 'OH,DELAWARE' } : f))
+    expect(cardSave(C, start, start, changed)).toEqual({ ok: false, error: { code: 'contest', tag: 'CNTY' } })
+    const added = [...fieldsOf(C), { tag: 'CQZ', orig: null, value: '4', removed: false }]
+    expect(cardSave(C, start, start, added)).toEqual({ ok: false, error: { code: 'contest', tag: 'CQZ' } })
+    const other = [...fieldsOf(C), { tag: 'ITUZ', orig: null, value: '8', removed: false }]
+    expect(cardSave(C, start, start, other)).toEqual({ ok: true, edit: storedEdit(C), fields: [{ tag: 'ITUZ', old: null, new: '8' }] })
+  })
+})

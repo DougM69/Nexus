@@ -9183,6 +9183,7 @@ export const DE: PartialCatalog = {
   "contactCard.error.power": "Die Sendeleistung muss eine Zahl in Watt sein.",
   "contactCard.error.tag": "{{tag}} ist kein ADIF-Feldname: nur Großbuchstaben, Ziffern und _ verwenden.",
   "contactCard.error.twice": "{{tag}} steht zweimal auf der Karte.",
+  "contactCard.error.contest": "{{tag}} gehört zum Contest-Austausch dieser Verbindung (unten angezeigt): Exporte, Uploads und Diplome lesen ihn von dort, daher kann er hier nicht geändert werden.",
   "contactCard.dateOnly": "Nur mit Datum importiert: Es wurde keine Uhrzeit erfasst. Lass das Feld leer, damit es so bleibt.",
   "contactCard.program.theirs": "Referenztyp (gearbeitet)",
   "contactCard.program.mine": "Referenztyp (meiner)",

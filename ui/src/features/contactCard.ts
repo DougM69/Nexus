@@ -193,7 +193,7 @@ export type Unclearable = 'state' | 'timeOff' | 'iota' | 'myGrid' | 'myRig' | 'p
 export type CardError =
   | { code: 'cannotClear'; field: Unclearable }
   | { code: 'call' | 'when' | 'end' | 'freq' | 'power' | 'iota' }
-  | { code: 'tag' | 'twice'; tag: string }
+  | { code: 'tag' | 'twice' | 'contest'; tag: string }
 
 /** The edit and field changes Save sends — or why it cannot. */
 export type CardSave = { ok: true; edit: QsoEdit; fields: FieldEdit[] } | { ok: false; error: CardError }
@@ -282,5 +282,11 @@ export function cardSave(q: LoggedQso, start: CardDraft, d: CardDraft, fields: r
   const held = fields.filter((f) => f.orig !== null).map((f) => f.tag)
   const clash = changes.find((c) => c.old === null && held.includes(c.tag))
   if (dup || clash) return no({ code: 'twice', tag: (dup ?? clash?.tag) as string })
+  // A merged contest contact's exchange keeps its own ADIF columns (a QSO party's CNTY, a section,
+  // a zone), and exports, uploads and awards read them from there: a change to one beside it would
+  // be saved and reach none of them (`FieldEdit::check_on` refuses it too).
+  const exchange = (q.contest?.adif ?? []).filter(([, v]) => v.trim()).map(([k]) => k.toUpperCase())
+  const inExchange = changes.find((c) => exchange.includes(c.tag))
+  if (inExchange) return no({ code: 'contest', tag: inExchange.tag })
   return { ok: true, edit, fields: changes }
 }
