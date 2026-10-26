@@ -4126,6 +4126,12 @@ export async function jttyClear(): Promise<JttyState> {
   return invoke<JttyState>('jtty_clear')
 }
 
+/** Decode again (WSJT-X's Decode button, and a double-click on a waterfall row with that row's
+ * time): the receive audio still kept, or 40 s of it from 5 s before the row. Receive only. */
+export async function jttyDecodeAgain(atUtcMs: number | null = null): Promise<JttyState> {
+  return invoke<JttyState>('jtty_decode_again', { atUtcMs })
+}
+
 /** Send typed text (WSJT-X's Send): all of it, its macros expanded, ending the message (and a live
  * session). `hisCall` is the dock's Call (`%H`); `hisSnr` the SNR of the decode it was picked
  * from (`%R`), null when it was typed (WSJT-X's -10). */

@@ -28356,6 +28356,15 @@ button.sat-chip:disabled {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* WSJT-X's "JTTY review" spacer: a quiet rule with its words, before the first line a decode-again
+   found, in each pane. */
+.jtty-review-heading {
+  margin: var(--space-1) 0;
+  padding-top: var(--space-1);
+  border-top: 1px dashed var(--border);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
 /* The Log QSO prompt after a TU send: one quiet line at the top of the log pane, the question and its
    two buttons, wrapping on a narrow pane. It covers nothing; the strip below it is unchanged. */
 .jtty-log-prompt {

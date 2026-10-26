@@ -911,6 +911,10 @@ pub struct JttyLine {
     /// A message this station SENT (WSJT-X shows each in the QSO Frequency pane as it starts on
     /// the air, its SNR column blank): `snr` is 0 and `line` has no SNR.
     pub tx: bool,
+    /// A message found by decoding again (WSJT-X's review), and which review: the panes show
+    /// each review's lines together under a heading. Absent for live reception.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<u64>,
 }
 
 /// A JTTY station decoded in two separate messages a short time apart, at its latest message

@@ -1996,6 +1996,9 @@ export interface JttyLine {
   /** A message this station SENT (WSJT-X shows it in the QSO Frequency pane, its SNR blank);
    *  absent on a received one. */
   tx?: boolean
+  /** Found by decoding again (WSJT-X's review): which review, numbered from 1. The panes show
+   *  each review's lines together under a heading. Absent for live reception. */
+  review?: number
 }
 
 /** A JTTY station decoded in two separate messages (`tempo_app::dto::JttyHeard`). */

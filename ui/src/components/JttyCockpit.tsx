@@ -4,7 +4,7 @@
 // (`F1`…`F8`, `Esc`), WSJT-X's own F-key templates and the operator's (message text, sent as
 // written), the decoded lines, which are the station's text in WSJT-X's columns, and the engine's
 // own words.
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import type { AppSnapshot, BandChannel, JttyLine, JttyMessageStyle, JttySent, JttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
@@ -27,6 +27,7 @@ import {
   jttyArm,
   jttyAutoArm,
   jttyClear,
+  jttyDecodeAgain,
   jttyFkey,
   jttyLiveCommit,
   jttyLiveStart,
@@ -136,27 +137,42 @@ function JttyPaneLines({
   options: JttyLineOptions
   onCall: (call: string, line: JttyLine) => void
 }) {
+  // A line found by decoding again carries its review's number, and each review's first line
+  // follows WSJT-X's "JTTY review" heading (`insertLineSpacer`), in each pane.
+  const headed = new Set<number>()
   return (
     <>
-      {lines.map((l) => (
-        <div key={l.id} className={`jtty-line ${l.state}`} data-pin-key={l.id}>
-          {jttySegments(jttyPaneText(l, options), l.confirmedCalls).map((seg, i) =>
-            seg.call ? (
-              <button
-                key={i}
-                type="button"
-                className="jtty-call"
-                onClick={() => onCall(seg.call!, l)}
-                title={t('jtty.call.title', { call: seg.call })}
-              >
-                {seg.text}
-              </button>
-            ) : (
-              <span key={i}>{seg.text}</span>
-            ),
-          )}
-        </div>
-      ))}
+      {lines.map((l) => {
+        const key = l.review != null ? `r${l.review}:${l.id}` : String(l.id)
+        const heading = l.review != null && !headed.has(l.review)
+        if (l.review != null) headed.add(l.review)
+        return (
+          <Fragment key={key}>
+            {heading && (
+              <div className="jtty-review-heading" role="separator">
+                {t('jtty.review.heading')}
+              </div>
+            )}
+            <div className={`jtty-line ${l.state}`} data-pin-key={key}>
+              {jttySegments(jttyPaneText(l, options), l.confirmedCalls).map((seg, k) =>
+                seg.call ? (
+                  <button
+                    key={k}
+                    type="button"
+                    className="jtty-call"
+                    onClick={() => onCall(seg.call!, l)}
+                    title={t('jtty.call.title', { call: seg.call })}
+                  >
+                    {seg.text}
+                  </button>
+                ) : (
+                  <span key={k}>{seg.text}</span>
+                ),
+              )}
+            </div>
+          </Fragment>
+        )
+      })}
     </>
   )
 }
@@ -513,6 +529,15 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     allPin.repin()
     rxPin.repin()
   }
+  // DECODE AGAIN: WSJT-X's Decode button (`jtty_again`) decodes the receive audio still kept, and a
+  // double-click on a waterfall row decodes 40 s of it from 5 s before that row
+  // (`jttyDecodeAgainAtSample`, 3.3.0-beta4 `widgets/plotter.cpp` 1011-1021). Receive only: what it
+  // finds shows under a heading of its own; the engine says why when the audio is gone.
+  const decodeAgain = (atUtcMs: number | null) => {
+    void jttyDecodeAgain(atUtcMs)
+      .then(setJtty)
+      .catch((e) => pushToast(String(e), 'info'))
+  }
 
   // ---- panes ----
   // THE RF SCOPE PANE — the radio's own panadapter, hidden until ticked (JTTY_PANELS ships it
@@ -566,6 +591,9 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           </button>
           <button type="button" className="cw-decode-clear" onClick={erase} title={t('jtty.erase.title')}>
             {t('jtty.erase.label')}
+          </button>
+          <button type="button" className="cw-decode-clear" onClick={() => decodeAgain(null)} title={t('jtty.decode.title')}>
+            {t('jtty.decode.label')}
           </button>
         </div>
         <div className="cw-decode-text jtty-lines" ref={allPin.ref} onScroll={allPin.onScroll}>
@@ -794,6 +822,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               if (target !== 'rx') commitTx(hz)
               if (target !== 'tx') setRx(Math.min(RX_MAX_HZ, Math.max(RX_MIN_HZ, Math.round(hz))), ftolHz)
             }}
+            onRowDoubleClick={(at) => decodeAgain(at)}
             onViewChange={(lo, hi) => {
               void jttySetBand(Math.floor(lo), Math.ceil(hi))
                 .then(setJtty)

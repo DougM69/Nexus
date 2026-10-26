@@ -45,12 +45,13 @@ const wf = vi.hoisted(() => ({
   props: null as null | {
     onTune?: (hz: number, target: 'tx' | 'rx' | 'both') => void
     onViewChange?: (lo: number, hi: number) => void
+    onRowDoubleClick?: (utcMs: number) => void
     rxOffsetHz: number
     txOffsetHz: number
   },
 }))
 vi.mock('./Waterfall', () => ({
-  Waterfall: (p: { onTune?: (hz: number, target: WfTarget) => void; onViewChange?: (lo: number, hi: number) => void; rxOffsetHz: number; txOffsetHz: number }) => {
+  Waterfall: (p: { onTune?: (hz: number, target: WfTarget) => void; onViewChange?: (lo: number, hi: number) => void; onRowDoubleClick?: (utcMs: number) => void; rxOffsetHz: number; txOffsetHz: number }) => {
     wf.props = p
     return <div className="waterfall-wrap" />
   },
@@ -247,6 +248,45 @@ describe('the JTTY cockpit drives the engine’s receive controls, and nothing t
     act(() => wf.props!.onTune!(1405, 'both'))
     expect(m('jttySetTx')).toHaveBeenLastCalledWith(1405)
     expect(m('jttySetRx')).toHaveBeenLastCalledWith(1405, 20)
+  })
+
+  it('decode again: Decode decodes the kept audio, a waterfall row’s double-click from that row; the engine’s refusal is said', async () => {
+    await mount(state())
+    m('jttyDecodeAgain').mockResolvedValue(state())
+    fireEvent.click(screen.getByRole('button', { name: t('jtty.decode.label') }))
+    await flush()
+    expect(m('jttyDecodeAgain')).toHaveBeenLastCalledWith(null)
+    await waitFor(() => expect(wf.props?.onRowDoubleClick).toBeTruthy())
+    act(() => wf.props!.onRowDoubleClick!(T0 + 16_000))
+    await flush()
+    expect(m('jttyDecodeAgain')).toHaveBeenLastCalledWith(T0 + 16_000)
+    m('jttyDecodeAgain').mockRejectedValue('Audio for this waterfall row is no longer available.')
+    act(() => wf.props!.onRowDoubleClick!(T0 - 600_000))
+    await flush()
+    expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith('Audio for this waterfall row is no longer available.', 'info')
+  })
+
+  it('what a review found follows the live lines under its own JTTY review heading, once a review, in each pane', async () => {
+    const lines = [
+      line({ id: 7, startUtcMs: T0 + 20_000, line: '1500 -10  CQ K1ABC FN42', rx: true }),
+      line({ id: 3, startUtcMs: T0 + 2_000, line: '1500 -12  CQ W1AW FN31', rx: true, review: 1 }),
+      line({ id: 4, startUtcMs: T0 + 15_000, line: '1500 -11  CQ K1ABC FN42', rx: true, review: 1 }),
+      line({ id: 3, startUtcMs: T0 + 2_000, line: '1500 -12  CQ W1AW FN31', rx: true, review: 2 }),
+    ]
+    await mount(state({ lines }))
+    const heading = t('jtty.review.heading')
+    const rows = (id: 'all' | 'rx') => [...pane(id).children].map((el) => el.textContent)
+    await waitFor(() =>
+      expect(rows('all')).toEqual([
+        '1500 -10  CQ K1ABC FN42',
+        heading,
+        '1500 -12  CQ W1AW FN31',
+        '1500 -11  CQ K1ABC FN42',
+        heading,
+        '1500 -12  CQ W1AW FN31',
+      ]),
+    )
+    expect(rows('rx').filter((r) => r === heading)).toHaveLength(2)
   })
 
   it('hands the waterfall’s visible range to the decoder, and again when it moves', async () => {

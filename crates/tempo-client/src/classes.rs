@@ -316,6 +316,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("jtty_arm",                       RunsAtShack, "The shack's JTTY decoder; receive only."),
     ("jtty_auto_arm",                  RunsAtShack, "The shack's JTTY decoder; receive only."),
     ("jtty_clear",                     RunsAtShack, "The shack's JTTY receive window."),
+    ("jtty_decode_again",              RunsAtShack, "Decodes the shack's kept JTTY receive audio again."),
     ("jtty_fkey",                      StartsTx,    "Queues a JTTY F-key message to transmit."),
     ("jtty_live_commit",               StartsTx,    "Types into a live JTTY transmission."),
     ("jtty_live_start",                StartsTx,    "Keys a live JTTY transmission."),

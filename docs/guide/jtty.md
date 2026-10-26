@@ -37,7 +37,8 @@ they fall inside the waterfall's visible range, as WSJT-X searches them inside i
 Zooming the waterfall in narrows that range.
 
 **The waterfall.** A green **RX** cursor marks Rx and a red **TX** cursor marks Tx; a click on
-a signal moves Rx there, Shift+click (or a right-click) moves Tx, and Ctrl+click moves both.
+a signal moves Rx there, Shift+click (or a right-click) moves Tx, and Ctrl+click moves both. A
+double-click on a row decodes that stretch again (see **Decode** below).
 
 **The TX strip** under the waterfall carries **TX On / TX Off**, **Tune**, **ATU** and
 **Stop TX**, as on every cockpit. Stop TX, and Esc, stop whatever is on the air. Opening the JTTY
@@ -54,6 +55,11 @@ still arriving is dimmed until it ends. The head carries:
 - **Lower case** and **Include time** — WSJT-X's two display options: messages in lower case,
   and the UTC time each message started in front of it. Both are kept.
 - **Erase** — empties both panes. Stations already heard stay heard.
+- **Decode** — decodes again, as WSJT-X's Decode button does: the receive audio of the last
+  three minutes goes through a decoder of its own, and what it finds shows in both panes under a
+  **JTTY review** heading, after what was decoded live. A double-click on a waterfall row decodes
+  40 seconds from 5 seconds before that row. What a review finds is shown and nothing more: it
+  is not written to ALL.TXT, spotted, or counted toward the two-decode rule below.
 
 **QSO frequency** shows the messages first heard within F Tol of Rx: the station you are
 listening to.

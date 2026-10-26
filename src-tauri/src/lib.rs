@@ -18669,6 +18669,19 @@ fn jtty_clear(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyStat
     Ok(eng.jtty_state())
 }
 
+/// Decode again (WSJT-X's Decode button and a double-click on a waterfall row): the receive audio
+/// still kept, or, with `at_utc_ms`, 40 s of it from 5 s before that row. RECEIVE ONLY: what it
+/// finds is shown and nothing else. Refused, with WSJT-X's words, when that audio is gone.
+#[tauri::command(async)]
+fn jtty_decode_again(
+    state: State<'_, SharedEngine>,
+    at_utc_ms: Option<i64>,
+) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.jtty_decode_again(at_utc_ms)?;
+    Ok(eng.jtty_state())
+}
+
 // ---- JTTY transmit (`tempo_app::engine::jtty_tx`). Every send passes the engine's JTTY TX gate
 // (`Engine::jtty_tx_gate`: the JTTY screen, clock repair, TX on, the connection, a callsign, the
 // licence, the transmitter's owner) before anything reaches the radio. A send is planned under
@@ -40087,6 +40100,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         jtty_set_rx,
         jtty_set_band,
         jtty_clear,
+        jtty_decode_again,
         jtty_send,
         jtty_fkey,
         jtty_live_start,

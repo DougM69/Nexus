@@ -245,6 +245,10 @@ interface Props {
    *  pick, or the RX marker paging a zoomed view. JTTY's decoder searches its fixed channels
    *  only inside the range WSJT-X's wide graph shows, so its cockpit hands this on. */
   onViewChange?: (loHz: number, hiHz: number) => void
+  /** A left double-click (not with Ctrl) on a row of the flat picture: that row's time, UTC ms, as
+   *  it was drawn. JTTY decodes again from it, as WSJT-X's wide graph does
+   *  (`CPlotter::mouseDoubleClickEvent`). Omitted ⇒ a double-click is two clicks, as before. */
+  onRowDoubleClick?: (utcMs: number) => void
   /** A control of the host's own in the header row, after the hint (JS8's decode-filter plate,
    *  which opens its waterfall controls). Display and receive only: it hosts no stop control and
    *  no sender. Omitted ⇒ the header as before. */
@@ -352,6 +356,7 @@ export function Waterfall({
   onTag,
   tagLanes,
   keepRowRemainder = false,
+  onRowDoubleClick,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -504,6 +509,9 @@ export function Waterfall({
   /** Scrollback while paused: the age of the newest row on screen (0 = the live tail). A row
    *  committed while paused adds one, so the paused picture holds still. */
   const offsetRef = useRef(0)
+  /** The time a row of the flat picture was drawn, from its height in the canvas (CSS px), read
+   *  through the renderer's own row mapping; set by the drawing effect, which owns the geometry. */
+  const rowTimeAtRef = useRef<((yCss: number) => number | null) | null>(null)
   /** Cold-path re-render hook, owned by the canvas effect (null until mounted). */
   const rebuildRef = useRef<(() => void) | null>(null)
 
@@ -686,6 +694,18 @@ export function Waterfall({
       newestAtTop: newestAtTopRef.current,
       trace: null,
     })
+
+    // The row under a height in the canvas, by the mapping the paused time tape reads (newest row
+    // at the top by default, at the bottom when the flow is flipped): its drawn time, or null on
+    // the axis strip, past the history, or in the 3D view.
+    rowTimeAtRef.current = (yCss: number) => {
+      const wfH = cssH - axisHFor(cssH)
+      if (dssRef.current || yCss < 0 || yCss >= wfH) return null
+      const devRows = Math.max(1, Math.round(wfH * scaleY))
+      const yDev = Math.min(devRows - 1, Math.round(yCss * scaleY))
+      const age = offsetRef.current + (newestAtTopRef.current ? yDev : devRows - 1 - yDev)
+      return renderer.rowAt(age)?.tMs ?? null
+    }
 
     const resize = (entry?: ResizeObserverEntry) => {
       const rect = canvas.getBoundingClientRect()
@@ -1118,6 +1138,7 @@ export function Waterfall({
       running = false
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
       ro.disconnect()
+      rowTimeAtRef.current = null
       release()
     }
     // intentionally run once; live props read via refs
@@ -1349,6 +1370,16 @@ export function Waterfall({
           ref={canvasRef}
           className="waterfall-canvas"
           onMouseDown={handleMouseDown}
+          onDoubleClick={
+            onRowDoubleClick
+              ? (e) => {
+                  if (e.button !== 0 || e.ctrlKey || e.metaKey) return
+                  const rect = canvasRef.current!.getBoundingClientRect()
+                  const at = rowTimeAtRef.current?.(e.clientY - rect.top)
+                  if (at != null) onRowDoubleClick(at)
+                }
+              : undefined
+          }
           onContextMenu={(e) => e.preventDefault()}
           onWheel={(e) => {
             // Paused = scrollback mode. The wheel FOLLOWS THE FLOW: older rows lie the way
