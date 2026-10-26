@@ -2686,7 +2686,29 @@ impl Export {
                 }
                 let mut one = QsoRecord::clone(r);
                 one.ota.my_ref = Some(want.clone());
-                self.out.push_str(&adif_record_own_log(&one));
+                // ⭐ A HUNTER'S TWO-FER IS ONE ROW PER PARK HERE, one `SIG_INFO` each, as POTA's
+                // park-to-park page asks: POTA credits each row, and one row naming the pair
+                // would credit only the first. The log keeps the one contact.
+                let theirs: Vec<String> = match one.ota.their_program.as_deref() {
+                    Some(p) if p.trim().eq_ignore_ascii_case("POTA") => {
+                        let mut parks: Vec<String> = Vec::new();
+                        for park in hot::park_refs(one.ota.their_ref.as_deref().unwrap_or("")) {
+                            if !parks.contains(&park) {
+                                parks.push(park);
+                            }
+                        }
+                        parks
+                    }
+                    _ => Vec::new(),
+                };
+                if theirs.len() < 2 {
+                    self.out.push_str(&adif_record_own_log(&one));
+                    return;
+                }
+                for park in theirs {
+                    one.ota.their_ref = Some(park);
+                    self.out.push_str(&adif_record_own_log(&one));
+                }
             }
             ExportRule::Selected { ids } => {
                 if r.id.is_some_and(|id| ids.contains(&id)) {
@@ -2726,7 +2748,7 @@ impl Operators {
 
 /// An activation's key — your reference, its UTC day, the callsign it was worked under — and
 /// what [`Activations`] keeps against it: the program its first contact named, and its contacts'
-/// [`hot::pota_key`]s.
+/// [`hot::pota_keys`].
 type ActivationKey = (String, u64, Option<String>);
 type ActivationTally = (Option<String>, std::collections::HashSet<hot::PotaKey>);
 
@@ -2741,7 +2763,13 @@ impl Activations {
     pub fn add(&mut self, r: &QsoRecord) {
         let call = worked_under(r);
         let day = day_start(r.when_unix);
-        let key = hot::pota_key(&r.call, &r.band, &r.mode, r.ota.their_ref.as_deref());
+        let keys = hot::pota_keys(
+            &r.call,
+            &r.band,
+            &r.mode,
+            r.ota.their_program.as_deref(),
+            r.ota.their_ref.as_deref(),
+        );
         for reference in my_refs(r) {
             let slot = self.0.entry((reference, day, call.clone())).or_default();
             if slot.0.is_none() {
@@ -2752,7 +2780,7 @@ impl Activations {
                     .map(|p| p.trim().to_ascii_uppercase())
                     .filter(|p| !p.is_empty());
             }
-            slot.1.insert(key.clone());
+            slot.1.extend(keys.iter().cloned());
         }
     }
 
@@ -11339,6 +11367,7 @@ mod activation_split_tests {
             band: band.into(),
             mode: mode.into(),
             ota: Ota {
+                their_program: theirs.map(|_| "POTA".to_string()),
                 their_ref: theirs.map(str::to_string),
                 ..act(call, 0, Some("US-1234"), Some("KD9TAW")).ota
             },
@@ -11402,6 +11431,58 @@ mod activation_split_tests {
         let second = lb.adif_for_activation("US-5678", d, Some("KD9TAW"));
         assert!(second.contains("<MY_SIG_INFO:7>US-5678"), "got: {second}");
         assert!(!second.contains("US-1234"));
+    }
+
+    /// ⭐ A HUNTER'S TWO-FER (the other station in two parks) is ONE row in the log and, in the
+    /// activation's file, one row per park of theirs with that park alone as `SIG_INFO` and
+    /// `POTA_REF`, as POTA's park-to-park page asks — so each park's P2P credit reaches POTA. The
+    /// count is POTA's: one contact per park of theirs. Every other export keeps the one row, and a
+    /// summit on the other side is never split or counted as a park.
+    #[test]
+    fn a_hunters_two_fer_exports_one_row_per_park_of_theirs_and_counts_each() {
+        let d = day("2026-09-09");
+        let mut p2p = act("W9AAA", d + 3600, Some("US-1234"), Some("KD9TAW"));
+        p2p.ota.their_program = Some("POTA".into());
+        p2p.ota.their_ref = Some("US-0001, us-0002".into());
+        let mut summit = act("W9BBB", d + 3700, Some("US-1234"), Some("KD9TAW"));
+        summit.ota.their_program = Some("SOTA".into());
+        summit.ota.their_ref = Some("W9/WI-001".into());
+        let lb = Logbook {
+            minter: Default::default(),
+            records: vec![p2p, summit].into(),
+        };
+        assert_eq!(lb.records().len(), 2, "the log keeps one row per contact");
+        let acts = lb.activations();
+        assert_eq!(acts[0].qsos, 3, "the two-fer counts at each of their parks");
+
+        let file = lb.adif_for_activation("US-1234", d, Some("KD9TAW"));
+        let rows = parse_adif(&file);
+        let theirs: Vec<(String, Option<String>)> = rows
+            .iter()
+            .map(|r| (r.call.clone(), r.ota.their_ref.clone()))
+            .collect();
+        assert_eq!(
+            theirs,
+            [
+                ("W9AAA".to_string(), Some("US-0001".to_string())),
+                ("W9AAA".to_string(), Some("US-0002".to_string())),
+                ("W9BBB".to_string(), Some("W9/WI-001".to_string())),
+            ],
+            "{file}"
+        );
+        assert!(file.contains("<SIG_INFO:7>US-0001"), "{file}");
+        assert!(file.contains("<SIG_INFO:7>US-0002"), "{file}");
+        assert!(!file.contains("US-0001,"), "no row names the pair: {file}");
+        assert_eq!(
+            rows.iter().filter(|r| r.call == "W9AAA").count(),
+            2,
+            "one row per park of theirs"
+        );
+        assert_eq!(
+            qsos(&lb.adif()),
+            2,
+            "the whole-log export keeps the one row"
+        );
     }
 
     /// Two callsigns at one park on one day — a club weekend, or an operator who signs /P
@@ -12602,10 +12683,11 @@ mod export_rule_tests {
                         .map(|p| p.trim().to_ascii_uppercase())
                         .filter(|p| !p.is_empty());
                 }
-                slot.1.insert(hot::pota_key(
+                slot.1.extend(hot::pota_keys(
                     &r.call,
                     &r.band,
                     &r.mode,
+                    r.ota.their_program.as_deref(),
                     r.ota.their_ref.as_deref(),
                 ));
             }

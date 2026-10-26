@@ -15,6 +15,7 @@ import {
   setActivationState,
   setActivationGrid,
   clearActivation,
+  resumeActivation,
   getActivation,
   parksCount,
   huntedParksCount,
@@ -416,6 +417,13 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       .catch(() => {})
   }, [observed])
   const activating = act != null && act.reference != null
+  // Taken up at launch and not yet confirmed: PAUSED, nothing tagged, keyed or spotted, until
+  // "Still activating".
+  const paused = activating && act?.restored === true
+  const handleResumeActivation = async () => {
+    const a = await withErrorToast(() => resumeActivation(), t('ota.activation.resumeFailed'))
+    if (a) setAct(a)
+  }
 
   const handleStartActivation = async () => {
     const ref = actRef.trim().toUpperCase()
@@ -477,8 +485,9 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       return
     }
     // Ticked, the QRT goes first — the station posts only for an activation still running — and
-    // through Spot me's own confirm. Declined or refused, the activation still ends.
-    if (postQrt) await handleSelfSpot(QRT_COMMENT)
+    // through Spot me's own confirm, on the frequency the spot it ends stands on. Declined or
+    // refused, the activation still ends.
+    if (postQrt) await handleSelfSpot(QRT_COMMENT, spottedHz)
     const a = await withErrorToast(() => clearActivation(), t('ota.activation.stopFailed'))
     if (a) {
       setAct(a)
@@ -491,14 +500,15 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   // the re-spot prompt's button, pressed later, sends what is current then.
   const dialMhzRef = useRef(snap.radio.dialMhz)
   dialMhzRef.current = snap.radio.dialMhz
-  const handleSelfSpot = async (comment: string = spotText) => {
+  // `atHz`: the QRT's frequency, the last spot's; every other spot goes on the dial.
+  const handleSelfSpot = async (comment: string = spotText, atHz: number | null = null) => {
     if (observed) {
       remote?.selfSpot?.()
       return
     }
     const reference = act?.reference
     if (!reference) return
-    const dialHz = Math.round(dialMhzRef.current * 1e6)
+    const dialHz = atHz ?? Math.round(dialMhzRef.current * 1e6)
     if (!(await confirmSelfSpot(reference, dialHz, comment))) return
     try {
       const report = await selfSpot(reference, dialHz, comment)
@@ -701,7 +711,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
         {activating ? (
           <>
             <span className="pota-act-text">
-              <T
+              {paused ? t('ota.activation.paused', { reference: activationParks(act).join(', ') }) : <T
                 k="ota.activation.active"
                 tags={{ b: <strong />, note: <span className="pota-act-sub" /> }}
                 vals={{
@@ -709,7 +719,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                   // A two-fer's parks, as an operator writes them: "US-1234, US-5678".
                   reference: activationParks(act).join(', '),
                 }}
-              />
+              />}
             </span>
             {/* Today's count per park, POTA's way: each call, band, mode and their park once,
                 since 0000Z. A two-fer shows each park; ten in one UTC day is valid. */}
@@ -727,9 +737,14 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 </span>
               )
             })}
-            {(act?.parks?.[0]?.p2p ?? 0) > 0 && (
+            {/* Park to park, each park's: a hunter's two-fer counts at each of their parks. */}
+            {(act?.parks ?? []).some((p) => p.p2p > 0) && (
               <span className="pota-act-progress p2p" title={t('ota.activation.p2p.title')}>
-                {t('ota.activation.p2p', { count: act?.parks?.[0]?.p2p ?? 0 })}
+                {(act?.parks?.length ?? 0) > 1
+                  ? t('ota.activation.p2p.parks', {
+                      parks: (act?.parks ?? []).map((p) => `${p.reference} ${p.p2p}`).join(' · '),
+                    })
+                  : t('ota.activation.p2p', { count: act?.parks?.[0]?.p2p ?? 0 })}
               </span>
             )}
             {!observed && (
@@ -780,10 +795,15 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 ))}
               </span>
             )}
-            {(!observed || remote?.selfSpot) && <button type="button" className="pota-hunt-clear" onClick={() => void handleSelfSpot()}>
+            {!observed && paused && (
+              <button type="button" className="pota-hunt-clear" onClick={() => void handleResumeActivation()} title={t('ota.activation.resume.title')}>
+                {t('ota.activation.resume.label')}
+              </button>
+            )}
+            {!paused && (!observed || remote?.selfSpot) && <button type="button" className="pota-hunt-clear" onClick={() => void handleSelfSpot()}>
               {t('ota.selfSpot.button')}
             </button>}
-            {!observed && (
+            {!observed && !paused && (
               <input
                 className="settings-input mono pota-spot-comment"
                 value={spotText}
@@ -796,7 +816,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 spellCheck={false}
               />
             )}
-            {!observed && spottedHz !== null && (
+            {!observed && !paused && spottedHz !== null && (
               <label className="pota-spot-qrt" title={t('ota.selfSpot.qrt.title')}>
                 <input type="checkbox" checked={postQrt} onChange={(e) => setPostQrt(e.target.checked)} />
                 {t('ota.selfSpot.qrt.label')}

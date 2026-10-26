@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Activation, LoggedQso } from '../types'
-import { activationParks, isLegacyUsRef, parkProgress, potaDupe, potaKey } from './potaActivation'
+import { activationParks, isLegacyUsRef, parkProgress, potaDupe, potaKeys } from './potaActivation'
 
 // 2026-10-25 10:40:00Z; the next 00:00Z is 48 000 s later.
 const T0 = 1_788_000_000
@@ -24,7 +24,7 @@ function qso(over: Partial<LoggedQso> & { whenUnix: number }): LoggedQso {
   } as LoggedQso
 }
 
-const entry = { call: 'W1ABC', band: '20m', mode: 'SSB', nowUnix: T0 + 600 }
+const entry = { call: 'W1ABC', band: '20m', mode: 'SSB', whenUnix: T0 + 600 }
 
 describe('potaDupe — POTA’s key: call, band, mode, today, my park (+ theirs)', () => {
   it('same call, band, mode, UTC day and park is a dupe, naming the park and the contact', () => {
@@ -38,8 +38,15 @@ describe('potaDupe — POTA’s key: call, band, mode, today, my park (+ theirs)
 
   it('the next UTC day is a new activation day: not a dupe', () => {
     const late = qso({ whenUnix: MIDNIGHT - 30 })
-    expect(potaDupe([late], act, { ...entry, nowUnix: MIDNIGHT - 1 })?.park).toBe('US-1234')
-    expect(potaDupe([late], act, { ...entry, nowUnix: MIDNIGHT + 30 })).toBeNull()
+    expect(potaDupe([late], act, { ...entry, whenUnix: MIDNIGHT - 1 })?.park).toBe('US-1234')
+    expect(potaDupe([late], act, { ...entry, whenUnix: MIDNIGHT + 30 })).toBeNull()
+  })
+
+  it('a back-dated entry is checked against the contacts of the day typed, not today', () => {
+    const yesterday = qso({ whenUnix: T0 - 86_400 })
+    expect(potaDupe([yesterday], act, entry)).toBeNull()
+    expect(potaDupe([yesterday], act, { ...entry, whenUnix: T0 - 86_400 + 60 })).toEqual({ park: 'US-1234', qso: yesterday })
+    expect(potaDupe([qso({ whenUnix: T0 })], act, { ...entry, whenUnix: T0 - 86_400 + 60 })).toBeNull()
   })
 
   it('another park, band, mode, call or hunted park is not a dupe', () => {
@@ -47,11 +54,27 @@ describe('potaDupe — POTA’s key: call, band, mode, today, my park (+ theirs)
     expect(potaDupe([qso({ whenUnix: T0, band: '40m' })], act, entry)).toBeNull()
     expect(potaDupe([qso({ whenUnix: T0, mode: 'CW' })], act, entry)).toBeNull()
     expect(potaDupe([qso({ whenUnix: T0, call: 'W1ABC/P' })], act, entry)).toBeNull()
-    expect(potaDupe([qso({ whenUnix: T0, ota: { myRef: 'US-1234', theirRef: 'US-0099' } })], act, entry)).toBeNull()
+    const p2p = { myRef: 'US-1234', theirProgram: 'POTA', theirRef: 'US-0099' }
+    expect(potaDupe([qso({ whenUnix: T0, ota: p2p })], act, entry)).toBeNull()
     expect(
-      potaDupe([qso({ whenUnix: T0, ota: { myRef: 'US-1234', theirRef: 'us-0099' } })], act, { ...entry, theirRef: 'US-0099' })
+      potaDupe([qso({ whenUnix: T0, ota: { ...p2p, theirRef: 'us-0099' } })], act, { ...entry, theirProgram: 'POTA', theirRef: 'US-0099' })
         ?.park,
     ).toBe('US-1234')
+  })
+
+  it('a summit or another program’s reference is no part of POTA’s key', () => {
+    const summit = qso({ whenUnix: T0, ota: { myRef: 'US-1234', theirProgram: 'SOTA', theirRef: 'W9/WI-001' } })
+    expect(potaDupe([summit], act, entry)?.qso).toBe(summit)
+  })
+
+  it('a hunter’s two-fer is a dupe only once each of their parks is already in today', () => {
+    const pair = { ...entry, theirProgram: 'POTA', theirRef: 'US-0001, US-0002' }
+    const first = qso({ whenUnix: T0, ota: { myRef: 'US-1234', theirProgram: 'POTA', theirRef: 'US-0001' } })
+    expect(potaDupe([first], act, pair)).toBeNull()
+    const second = qso({ whenUnix: T0 + 60, ota: { myRef: 'US-1234', theirProgram: 'POTA', theirRef: 'US-0002' } })
+    expect(potaDupe([first, second], act, pair)).toEqual({ park: 'US-1234', qso: second })
+    const both = qso({ whenUnix: T0, ota: { myRef: 'US-1234', theirProgram: 'POTA', theirRef: 'US-0002,US-0001' } })
+    expect(potaDupe([both], act, { ...entry, theirProgram: 'POTA', theirRef: 'US-0001' })?.qso).toBe(both)
   })
 
   it('a two-fer contact is a dupe at whichever activation park it shares', () => {
@@ -60,16 +83,19 @@ describe('potaDupe — POTA’s key: call, band, mode, today, my park (+ theirs)
     expect(potaDupe([earlier], twoFer, entry)?.park).toBe('US-1234')
   })
 
-  it('not activating: no POTA dupe at all', () => {
+  it('not activating, or paused since launch: no POTA dupe at all', () => {
+    expect(potaDupe([qso({ whenUnix: T0 })], { ...act, restored: true }, entry)).toBeNull()
     expect(potaDupe([qso({ whenUnix: T0 })], null, entry)).toBeNull()
     expect(potaDupe([qso({ whenUnix: T0 })], { ...act, reference: null, parks: [] }, entry)).toBeNull()
   })
 })
 
 describe('the rest of the activator’s arithmetic', () => {
-  it('potaKey folds the same way the counter does', () => {
-    expect(potaKey(' w1abc ', '20M', 'lsb', ' us-1 ; us-2 ')).toBe(potaKey('W1ABC', '20m', 'SSB', 'US-1,US-2'))
-    expect(potaKey('W1ABC/P', '20m', 'SSB', null)).not.toBe(potaKey('W1ABC', '20m', 'SSB', null))
+  it('potaKeys folds the same way the counter does: one key per POTA park of theirs', () => {
+    expect(potaKeys(' w1abc ', '20M', 'lsb', 'pota', ' us-1 ; us-2 ; US-1')).toEqual(potaKeys('W1ABC', '20m', 'SSB', 'POTA', 'US-1,US-2'))
+    expect(potaKeys('W1ABC', '20m', 'SSB', 'POTA', 'US-1,US-2')).toHaveLength(2)
+    expect(potaKeys('W1ABC', '20m', 'SSB', 'SOTA', 'W9/WI-001')).toEqual(potaKeys('W1ABC', '20m', 'SSB', null, null))
+    expect(potaKeys('W1ABC/P', '20m', 'SSB', null, null)).not.toEqual(potaKeys('W1ABC', '20m', 'SSB', null, null))
   })
 
   it('parkProgress: 7 of 10 is 3 to go; 10 is valid', () => {

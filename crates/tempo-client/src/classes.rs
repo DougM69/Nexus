@@ -409,6 +409,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("resolve_entity",                 RunsAtShack, "From the shack's country file."),
     ("restart_app",                    RunsHere,    "Restarts this computer's Nexus to finish its update."),
     ("restore_deleted_qso",            RunsAtShack, "Puts a deleted contact back in the shack's logbook; sends nothing."),
+    ("resume_activation",              RunsAtShack, "Resumes the shack's activation taken up at launch."),
     ("resume_chat_cq",                 StartsTx,    "Resumes the chat CQ run."),
     ("retire_wanted_calls",            RunsAtShack, "Operator data kept at the shack."),
     ("reveal_all_txt",                 RefusedHere, "Opens the shack's file manager on its own screen."),

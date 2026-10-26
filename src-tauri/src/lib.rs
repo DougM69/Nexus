@@ -33577,6 +33577,17 @@ fn clear_activation(
     Ok(activation_now(&eng))
 }
 
+/// The operator's "Still activating": an activation taken up at launch, paused until now, stamps
+/// the contacts again.
+#[tauri::command(async)]
+fn resume_activation(
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::ActivationDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.resume_activation()?;
+    Ok(activation_now(&eng))
+}
+
 /// The current activation state (for the panel on load / after logging).
 #[tauri::command(async)]
 fn get_activation(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::ActivationDto, String> {
@@ -39824,6 +39835,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_activation_state,
         set_activation_grid,
         clear_activation,
+        resume_activation,
         get_activation,
         park_state_review,
         apply_park_states,

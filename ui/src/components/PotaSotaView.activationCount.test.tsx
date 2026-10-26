@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   getOtaSpots: vi.fn(async (_program: string, _cached?: boolean): Promise<OtaSpot[]> => []),
   getActivation: vi.fn(async () => ({ program: null, reference: null, qsoCount: 0 })),
   setActivationGrid: vi.fn(),
+  resumeActivation: vi.fn(),
   parksCount: vi.fn(async () => 0),
   huntedParksCount: vi.fn(async () => 0),
 }))
@@ -89,7 +90,7 @@ it('shows each park of a two-fer and the P2P count', () => {
           reference: 'US-1234,US-5678',
           parks: [
             { reference: 'US-1234', count: 4, p2p: 2 },
-            { reference: 'US-5678', count: 4, p2p: 2 },
+            { reference: 'US-5678', count: 4, p2p: 3 },
           ],
         }),
       )}
@@ -100,7 +101,31 @@ it('shows each park of a two-fer and the P2P count', () => {
     `${t('ota.activation.progress', { reference: 'US-1234', count: 4 })} · ${t('ota.activation.toGo', { count: 6 })}`,
     `${t('ota.activation.progress', { reference: 'US-5678', count: 4 })} · ${t('ota.activation.toGo', { count: 6 })}`,
   ])
-  expect(screen.getByText(t('ota.activation.p2p', { count: 2 }))).toBeTruthy()
+  expect(document.querySelector('.pota-act-progress.p2p')?.textContent).toBe(
+    t('ota.activation.p2p.parks', { parks: 'US-1234 2 · US-5678 3' }),
+  )
+})
+
+it('one park shows its P2P count alone', () => {
+  render(<PotaSotaView snap={snapWith(activation({ parks: [{ reference: 'US-1234', count: 4, p2p: 2 }] }))} />)
+  expect(document.querySelector('.pota-act-progress.p2p')?.textContent).toBe(t('ota.activation.p2p', { count: 2 }))
+})
+
+it('an activation taken up at launch shows as paused, with Still activating and Stop and no Spot me', async () => {
+  api.resumeActivation.mockResolvedValue(activation())
+  render(<PotaSotaView snap={snapWith(activation({ restored: true }))} />)
+  expect(screen.getByText(t('ota.activation.paused', { reference: 'US-1234' }))).toBeTruthy()
+  expect(screen.queryByRole('button', { name: t('ota.selfSpot.button') })).toBeNull()
+  expect(screen.queryByRole('textbox', { name: t('ota.selfSpot.comment.label') })).toBeNull()
+  expect(screen.getByRole('button', { name: new RegExp(t('ota.activation.stop.label')) })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: t('ota.activation.resume.label') }))
+  await waitFor(() => expect(api.resumeActivation).toHaveBeenCalledTimes(1))
+})
+
+it('a live activation offers no Still activating', () => {
+  render(<PotaSotaView snap={snapWith(activation())} />)
+  expect(screen.queryByRole('button', { name: t('ota.activation.resume.label') })).toBeNull()
+  expect(screen.getByRole('button', { name: t('ota.selfSpot.button') })).toBeTruthy()
 })
 
 it('the snapshot is live: the count follows it, and no activation shows the Start form', () => {

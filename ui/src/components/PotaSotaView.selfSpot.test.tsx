@@ -248,6 +248,20 @@ it('posts QRT at Stop only when ticked and confirmed, then ends the activation',
   expect(api.selfSpot.mock.invocationCallOrder[1]).toBeLessThan(api.clearActivation.mock.invocationCallOrder[1])
 })
 
+it('after a QSY the QRT goes on the frequency the spot stands on, not the new dial', async () => {
+  api.selfSpot.mockResolvedValue({ parks: [{ reference: 'US-0001', pota: 'posted' }], cluster: 'queued' })
+  const { rerender } = render(<><PotaSotaView snap={tuned(14.285, 'phone')} /><ConfirmHost /></>)
+  await spotOnce()
+  await waitFor(() => expect(api.selfSpot).toHaveBeenCalledWith('US-0001', 14_285_000, 'QRV'))
+  rerender(<><PotaSotaView snap={tuned(14.31, 'phone')} /><ConfirmHost /></>)
+  fireEvent.click(await screen.findByRole('checkbox', { name: t('ota.selfSpot.qrt.label') }))
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(t('ota.activation.stop.label')) }))
+  expect(await screen.findByText(t('ota.selfSpot.confirm.body', { reference: 'US-0001', freq: '14.2850', comment: 'QRT' }))).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: t('ota.selfSpot.confirm.post') }))
+  await waitFor(() => expect(api.clearActivation).toHaveBeenCalledTimes(1))
+  expect(api.selfSpot).toHaveBeenLastCalledWith('US-0001', 14_285_000, 'QRT')
+})
+
 it('says why when the comment is one the station refuses', async () => {
   api.selfSpot.mockRejectedValue('invalidComment')
   await view()

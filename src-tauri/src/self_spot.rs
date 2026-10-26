@@ -42,6 +42,13 @@ const DEFAULT_COMMENT: &str = "QRV";
 /// comment, and the cluster's carries the program and park ahead of it.
 const COMMENT_MAX: usize = 30;
 
+/// How much of a spot's comment a cluster node shows (a DXSpider-style node's comment column). The
+/// cluster line's program, parks and comment are fitted to it ([`cluster_comment`]).
+const CLUSTER_COLUMN: usize = 30;
+
+/// The comment that ends a spot.
+const QRT: &str = "QRT";
+
 /// A target that took a spot for a park and frequency is not sent the same one again for this long.
 pub const REPEAT: Duration = Duration::from_secs(60);
 
@@ -93,7 +100,21 @@ impl Context {
 
     /// Everything comes from the station; `reference` and `dial_hz` are only what the operator's
     /// confirm showed, checked against it. `comment` is the operator's own words.
+    ///
+    /// One frequency other than the dial is taken: a QRT on the frequency this activation was
+    /// last spotted on, which is where the spot it ends stands — after a QSY, a QRT on the new
+    /// dial would read on the cluster as a fresh spot there.
     pub fn confirmed(
+        engine: &Engine,
+        reference: &str,
+        dial_hz: u64,
+        comment: &str,
+    ) -> Result<Self, Refusal> {
+        Self::confirmed_in(&GATE, engine, reference, dial_hz, comment)
+    }
+
+    fn confirmed_in(
+        gate: &Gate,
         engine: &Engine,
         reference: &str,
         dial_hz: u64,
@@ -104,10 +125,24 @@ impl Context {
             return Err(Refusal::RfOnly);
         }
         let (program, active) = engine.activation().ok_or(Refusal::NoActivation)?;
-        if active != reference || engine.settings().dial_hz() != dial_hz {
+        if active != reference {
             return Err(Refusal::Moved);
         }
-        let comment = spot_comment(comment).ok_or(Refusal::Comment)?;
+        let comment = spot_comment(comment);
+        if engine.settings().dial_hz() != dial_hz {
+            let spotted = gate
+                .0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .spotted
+                .clone();
+            let ends_the_spot = comment.as_deref() == Some(QRT)
+                && spotted.is_some_and(|(at, hz)| at == active && hz == dial_hz);
+            if !ends_the_spot {
+                return Err(Refusal::Moved);
+            }
+        }
+        let comment = comment.ok_or(Refusal::Comment)?;
         Ok(Self {
             call: engine.settings().mycall.clone(),
             program,
@@ -234,6 +269,9 @@ struct GateState {
     /// Target, park (the cluster's: every park of the line), frequency and comment: a QRT is
     /// not a repeat of the spot it ends.
     recent: Vec<(Target, String, String, String, Instant)>,
+    /// The activation (as [`Context::reference`]) and dial a target last took a spot for, other
+    /// than a QRT: where a QRT is sent ([`Context::confirmed`]).
+    spotted: Option<(String, u64)>,
 }
 
 impl Default for Gate {
@@ -247,6 +285,7 @@ impl Gate {
         Self(Mutex::new(GateState {
             pota_off: false,
             recent: Vec::new(),
+            spotted: None,
         }))
     }
 }
@@ -269,6 +308,9 @@ impl GateState {
     fn took(&mut self, target: Target, park: &str, ctx: &Context, freq: &str, now: Instant) {
         self.recent
             .push((target, park.into(), freq.into(), ctx.comment.clone(), now));
+        if ctx.comment != QRT {
+            self.spotted = Some((ctx.reference.clone(), ctx.dial_hz));
+        }
     }
 }
 
@@ -318,7 +360,7 @@ pub fn send_with(
     } else if gate.repeat(Target::Cluster, &line_parks, ctx, &freq, now) {
         ClusterResult::Throttled
     } else {
-        let comment = format!("{} {} {}", ctx.program, line_parks, ctx.comment);
+        let comment = cluster_comment(&ctx.program, &parks, &ctx.comment);
         match post_cluster(freq_mhz, &call, &comment) {
             Ok(()) => {
                 gate.took(Target::Cluster, &line_parks, ctx, &freq, now);
@@ -383,6 +425,27 @@ pub fn send_with(
         })
         .collect();
     Report { parks, cluster }
+}
+
+/// The cluster line's comment: the program, the parks and the operator's comment, fitted to the
+/// node's comment column ([`CLUSTER_COLUMN`]) by naming the later parks as a count ("POTA US-1234
+/// +2 QRT") — never by cutting the comment, so a QRT always reads. The first park is always named;
+/// a comment too long for the column after it is the operator's, and goes as typed.
+fn cluster_comment(program: &str, parks: &[&str], comment: &str) -> String {
+    let line = |named: usize| {
+        let mut words = vec![program.to_string()];
+        words.extend(parks[..named].iter().map(|park| park.to_string()));
+        if named < parks.len() {
+            words.push(format!("+{}", parks.len() - named));
+        }
+        words.push(comment.to_string());
+        words.join(" ")
+    };
+    (1..=parks.len())
+        .rev()
+        .map(line)
+        .find(|text| text.len() <= CLUSTER_COLUMN)
+        .unwrap_or_else(|| line(parks.len().min(1)))
 }
 
 /// kHz as text at 100 Hz, the way pota.app's feed carries it ("14222", "10120.5").
@@ -979,6 +1042,94 @@ mod tests {
                 mode: Some("FT8"),
                 comment: "QRV".into(),
             }
+        );
+    }
+
+    /// The cluster line fits the node's comment column by naming the later parks as a count,
+    /// never by cutting the comment: a QRT always reads.
+    #[test]
+    fn the_cluster_line_fits_the_comment_column_by_counting_parks_never_cutting_the_comment() {
+        assert_eq!(
+            cluster_comment("POTA", &["US-1234", "US-5678"], "QRT"),
+            "POTA US-1234 US-5678 QRT"
+        );
+        let three = ["US-1234", "US-5678", "US-9012"];
+        assert_eq!(
+            cluster_comment("POTA", &three, "QRT"),
+            "POTA US-1234 US-5678 +1 QRT"
+        );
+        assert!(cluster_comment("POTA", &three, "QRT").len() <= CLUSTER_COLUMN);
+        assert_eq!(
+            cluster_comment("POTA", &three, "CW 20 WPM"),
+            "POTA US-1234 +2 CW 20 WPM"
+        );
+        let long = "A".repeat(COMMENT_MAX);
+        assert_eq!(
+            cluster_comment("POTA", &three, &long),
+            format!("POTA US-1234 +2 {long}"),
+            "the operator's words go whole"
+        );
+        // Through a press: the queued line is the fitted one.
+        let (gate, posts) = (Gate::new(), Posts::default());
+        let qrt = Context {
+            reference: "US-1234,US-5678,US-9012".into(),
+            comment: "QRT".into(),
+            ..ctx()
+        };
+        press(
+            &gate,
+            Instant::now(),
+            &qrt,
+            &posts,
+            Ok(SpotAnswer::Posted),
+            Ok(()),
+        );
+        assert_eq!(posts.borrow().1[0].2, "POTA US-1234 US-5678 +1 QRT");
+    }
+
+    /// ⭐ The QRT goes where the spot it ends stands: the frequency a target last took this
+    /// activation's spot on, though the dial has moved since. Only a QRT, only that frequency.
+    #[test]
+    fn a_qrt_goes_on_the_frequency_last_spotted_and_nothing_else_leaves_the_dial() {
+        let mut engine = Engine::new("W9XYZ", "EN52", 0);
+        engine
+            .set_activation("POTA", "US-0001", Vec::new())
+            .unwrap();
+        let dial = engine.settings().dial_hz();
+        let spotted = dial + 10_000;
+        let gate = Gate::new();
+        let confirm = |hz: u64, comment: &str| {
+            Context::confirmed_in(&gate, &engine, "US-0001", hz, comment).map(|c| c.dial_hz)
+        };
+        assert_eq!(
+            confirm(spotted, "QRT"),
+            Err(Refusal::Moved),
+            "never spotted"
+        );
+        let posts = Posts::default();
+        let at = Context {
+            dial_hz: spotted,
+            ..ctx()
+        };
+        press(
+            &gate,
+            Instant::now(),
+            &at,
+            &posts,
+            Ok(SpotAnswer::Posted),
+            Ok(()),
+        );
+        assert_eq!(confirm(spotted, "qrt"), Ok(spotted));
+        assert_eq!(confirm(spotted, "QRV"), Err(Refusal::Moved), "only a QRT");
+        assert_eq!(confirm(spotted + 1_000, "QRT"), Err(Refusal::Moved));
+        assert_eq!(confirm(dial, "QRT"), Ok(dial), "the dial, as always");
+        engine
+            .set_activation("POTA", "US-0002", Vec::new())
+            .unwrap();
+        assert_eq!(
+            Context::confirmed_in(&gate, &engine, "US-0002", spotted, "QRT"),
+            Err(Refusal::Moved),
+            "another activation's spot"
         );
     }
 

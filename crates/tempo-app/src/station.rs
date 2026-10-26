@@ -2299,8 +2299,11 @@ pub struct Activation {
     pub grid: Option<String>,
     /// When it started, Unix seconds.
     pub started_at: u64,
-    /// Taken up from the file at launch rather than started this session — what the screen's
-    /// "Still activating" question reads. Not kept.
+    /// Taken up from the file at launch rather than started this session, and not yet confirmed
+    /// with the screen's "Still activating" ([`StationCore::resume_activation`]). While set the
+    /// activation is PAUSED: it stamps nothing on any contact, keys no park and spots nothing. A
+    /// file left by a session that ended without Stop may be days old, and the contacts made at
+    /// home since are not the park's. Not kept: every launch asks again.
     #[serde(skip)]
     pub restored: bool,
 }
@@ -3880,17 +3883,33 @@ impl StationCore {
         self.persist_activation();
     }
 
-    /// The current activation `(program, reference)`, if any — the reference as the contacts
-    /// carry it: one park, or a two-fer's parks as a comma list.
+    /// The operator's "Still activating": an activation taken up at launch
+    /// ([`Activation::restored`]) stamps the contacts from now on. Refused with no activation.
+    pub fn resume_activation(&mut self) -> Result<(), String> {
+        let Some(activation) = self.activation.as_mut() else {
+            return Err("Not activating.".into());
+        };
+        activation.restored = false;
+        Ok(())
+    }
+
+    /// The current activation `(program, reference)`, if one is live — the reference as the
+    /// contacts carry it: one park, or a two-fer's parks as a comma list. `None` while paused
+    /// ([`Activation::restored`]).
     pub fn activation(&self) -> Option<(String, String)> {
-        self.activation
-            .as_ref()
+        self.live_activation()
             .map(|a| (a.program.clone(), a.my_ref()))
     }
 
-    /// The activation running now, whole.
+    /// The activation, whole, paused or not — what the screen shows.
     pub fn activation_record(&self) -> Option<&Activation> {
         self.activation.as_ref()
+    }
+
+    /// The activation that stamps contacts now: `None` with none, and while one taken up at
+    /// launch waits for the operator's "Still activating" ([`Activation::restored`]).
+    pub fn live_activation(&self) -> Option<&Activation> {
+        self.activation.as_ref().filter(|a| !a.restored)
     }
 
     /// Each park of the running activation with its contacts on the UTC day of `now` — distinct
@@ -3923,7 +3942,7 @@ impl StationCore {
     }
 
     /// Take up the activation a previous session left running, from [`Self::activation_path`],
-    /// marked [`Activation::restored`] so the screen can ask whether it is still on. A missing
+    /// PAUSED ([`Activation::restored`]) until the operator says it is still on. A missing
     /// file is no activation; one this build cannot read is left where it is, said in the
     /// diagnostic log, and not taken up — an activation it cannot read is one it cannot stamp.
     pub fn restore_activation(&mut self) {
@@ -3960,7 +3979,11 @@ impl StationCore {
             return;
         };
         let Some(activation) = &self.activation else {
-            let _ = std::fs::remove_file(path);
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tempo_core::applog::warn("activation", &format!("not removed: {e}")),
+            }
             return;
         };
         let Ok(text) = serde_json::to_string_pretty(activation) else {
@@ -6077,11 +6100,12 @@ mod hot_parity_tests {
             log.records()
                 .iter()
                 .filter(|r| r.ota.my_ref.as_deref() == Some("US-1234"))
-                .map(|r| {
-                    tempo_core::logbook::hot::pota_key(
+                .flat_map(|r| {
+                    tempo_core::logbook::hot::pota_keys(
                         &r.call,
                         &r.band,
                         &r.mode,
+                        r.ota.their_program.as_deref(),
                         r.ota.their_ref.as_deref(),
                     )
                 })

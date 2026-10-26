@@ -4741,6 +4741,11 @@ export async function clearActivation(): Promise<Activation> {
   return invoke<Activation>('clear_activation')
 }
 
+/** "Still activating": an activation taken up at launch, paused until now, tags contacts again. */
+export async function resumeActivation(): Promise<Activation> {
+  return invoke<Activation>('resume_activation')
+}
+
 /** Read the current activation state. */
 export async function getActivation(): Promise<Activation> {
   return invoke<Activation>('get_activation')

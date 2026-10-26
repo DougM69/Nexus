@@ -1,6 +1,6 @@
 // The activator's side of POTA, as the screen reads it — no React, no IO, fully node-testable.
 //
-// What the station counts lives in the hot index (`tempo_core::logbook::hot::pota_key`): the
+// What the station counts lives in the hot index (`tempo_core::logbook::hot::pota_keys`): the
 // contacts of one park on one UTC day, each `(call, band, mode, their park)` once. The warn-only
 // dupe badge in the log form asks the SAME rule of the prior contacts it already holds for the
 // typed call, so the badge and the counter cannot disagree about what a dupe is. Keep the two
@@ -23,11 +23,20 @@ export function parkRefs(list: string | null | undefined): string[] {
     .filter((p) => p !== '')
 }
 
-/** POTA's uniqueness key for a contact (`pota_key` in the hot index): the call exactly as logged
+/** POTA's uniqueness keys for a contact (`pota_keys` in the hot index): the call exactly as logged
  *  (W1ABC/P is not W1ABC), the band, the mode through the log's fold (USB and LSB are SSB), and
- *  the other station's park list. */
-export function potaKey(call: string, band: string, mode: string, theirRef: string | null | undefined): string {
-  return [call.trim().toUpperCase(), band.trim().toLowerCase(), modeKey(mode), parkRefs(theirRef).join(',')].join('\u0001')
+ *  one POTA park of the other station's — one key per park of a hunter's two-fer, as POTA counts
+ *  each; one key with no park when they named none, or a reference of another program. */
+export function potaKeys(
+  call: string,
+  band: string,
+  mode: string,
+  theirProgram: string | null | undefined,
+  theirRef: string | null | undefined,
+): string[] {
+  const head = [call.trim().toUpperCase(), band.trim().toLowerCase(), modeKey(mode)]
+  const theirs = (theirProgram ?? '').trim().toUpperCase() === 'POTA' ? [...new Set(parkRefs(theirRef))] : []
+  return (theirs.length ? theirs : ['']).map((park) => [...head, park].join('\u0001'))
 }
 
 /** The parks of the activation running now; empty when not activating. */
@@ -43,9 +52,10 @@ export interface PotaDupe {
   qso: LoggedQso
 }
 
-/** ⭐ The warn-only POTA dupe: an earlier contact with this call, made TODAY (UTC) from a park
- *  of the activation running now, with the same band, mode and other station's park — one POTA
- *  counts once. `null` when not activating or there is none. It never blocks: the hunter may
+/** ⭐ The warn-only POTA dupe: earlier contacts with this call, made on the contact's UTC day
+ *  (`whenUnix`: now, or the time typed for a back-dated one) from a park of the activation running
+ *  now, already holding every POTA key this one would add — one POTA counts once. `null` when not
+ *  activating (or paused: nothing is tagged) or there is none. It never blocks: the hunter may
  *  still need the contact, and the upload check drops a dupe harmlessly.
  *
  *  `qsos` are the typed call's prior contacts (the history answer's — the call already matches,
@@ -53,22 +63,32 @@ export interface PotaDupe {
 export function potaDupe(
   qsos: readonly LoggedQso[],
   act: Activation | null | undefined,
-  entry: { call: string; band: string; mode: string; theirRef?: string | null; nowUnix: number },
+  entry: {
+    call: string
+    band: string
+    mode: string
+    theirProgram?: string | null
+    theirRef?: string | null
+    whenUnix: number
+  },
 ): PotaDupe | null {
-  const parks = activationParks(act)
+  const parks = act?.restored ? [] : activationParks(act)
   if (parks.length === 0 || !entry.band) return null
-  const day = Math.floor(entry.nowUnix / DAY)
-  const want = potaKey(entry.call, entry.band, entry.mode, entry.theirRef)
+  const day = Math.floor(entry.whenUnix / DAY)
+  const want = potaKeys(entry.call, entry.band, entry.mode, entry.theirProgram, entry.theirRef)
+  const held = new Set<string>()
   let found: PotaDupe | null = null
   for (const q of qsos) {
     if (Math.floor(q.whenUnix / DAY) !== day) continue
     const park = parkRefs(q.ota?.myRef).find((p) => parks.includes(p))
     if (!park) continue
-    if (potaKey(q.call, q.band ?? '', q.mode ?? '', q.ota?.theirRef) !== want) continue
+    const keys = potaKeys(q.call, q.band ?? '', q.mode ?? '', q.ota?.theirProgram, q.ota?.theirRef)
+    if (!keys.some((k) => want.includes(k))) continue
+    for (const k of keys) held.add(k)
     // The latest, so the badge names the contact the operator most likely remembers.
     if (!found || q.whenUnix > found.qso.whenUnix) found = { park, qso: q }
   }
-  return found
+  return want.every((k) => held.has(k)) ? found : null
 }
 
 /** One park's standing today: its distinct contacts, how many more make it valid, and whether it

@@ -1052,7 +1052,9 @@ export interface Activation {
   startedAt?: number
   /** The UTC day the counts are of (unix / 86400): when it moves on, they start again. */
   utcDay?: number
-  /** Taken up at launch from the activation the last session left running. */
+  /** Taken up at launch from the activation the last session left running, and PAUSED until the
+   *  operator answers "Still activating" (`resumeActivation`): nothing is tagged with the park,
+   *  keyed or spotted meanwhile. */
   restored?: boolean
 }
 

@@ -18,7 +18,7 @@
 //! | B4, band and band·mode scope | [`Logbook::worked_band_set`], both folds |
 //! | the contest session's sweep | [`Logbook::worked_keys_since`] |
 //! | NEW GRID / DXCC / BAND, confirmed, NEW PARK badges | a full rebuild of the station's worked index |
-//! | an activation day's contact count | the distinct POTA keys ([`pota_key`]) of the rows whose `MY_SIG_INFO` list names that park, on that UTC day |
+//! | an activation day's contact count | the distinct POTA keys ([`pota_keys`]) of the rows whose `MY_SIG_INFO` list names that park, on that UTC day |
 //!
 //! # How it is kept
 //!
@@ -121,17 +121,43 @@ pub type PotaKey = (String, String, String, String);
 /// ★ POTA's uniqueness rule for a contact made from a park on a given UTC day — the call exactly
 /// as logged (trimmed and upper-cased: `W1ABC/P` is not `W1ABC`, as the upload check has it), the
 /// band (lower-cased), the mode through the log's own mode fold (USB and LSB are SSB), and the
-/// park the other station was in, if any (upper-cased, a list joined by commas). Two contacts with
-/// equal keys are one contact to POTA, and the second earns nothing. The UI's warn-only dupe
-/// badge applies the same rule (`ui/src/features/potaDupe.ts`).
-pub fn pota_key(call: &str, band: &str, mode: &str, their_ref: Option<&str>) -> PotaKey {
-    let their: Vec<String> = their_ref.map(park_refs).into_iter().flatten().collect();
-    (
-        super::query::js_upper(super::query::js_trim(call)),
-        super::query::js_lower(super::query::js_trim(band)),
-        super::query::mode_key(mode),
-        their.join(","),
-    )
+/// POTA park the other station was in, if any (upper-cased). Two contacts with equal keys are one
+/// contact to POTA, and the second earns nothing. The UI's warn-only dupe badge applies the same
+/// rule (`ui/src/features/potaActivation.ts`).
+///
+/// ONE KEY PER PARK OF THE OTHER STATION: a hunter's two-fer is exported as one row per park, one
+/// `SIG_INFO` each, as POTA's park-to-park page asks, and POTA counts each row — so the contact
+/// counts once for each of their parks. A reference of another program (a summit, a WWFF area) is
+/// no part of POTA's key: such a contact has the one key of a contact with no park.
+pub fn pota_keys(
+    call: &str,
+    band: &str,
+    mode: &str,
+    their_program: Option<&str>,
+    their_ref: Option<&str>,
+) -> Vec<PotaKey> {
+    let call = super::query::js_upper(super::query::js_trim(call));
+    let band = super::query::js_lower(super::query::js_trim(band));
+    let mode = super::query::mode_key(mode);
+    let pota = their_program.is_some_and(|p| p.trim().eq_ignore_ascii_case("POTA"));
+    let mut theirs: Vec<String> = Vec::new();
+    for park in their_ref
+        .filter(|_| pota)
+        .map(park_refs)
+        .into_iter()
+        .flatten()
+    {
+        if !theirs.contains(&park) {
+            theirs.push(park);
+        }
+    }
+    if theirs.is_empty() {
+        theirs.push(String::new());
+    }
+    theirs
+        .into_iter()
+        .map(|park| (call.clone(), band.clone(), mode.clone(), park))
+        .collect()
 }
 
 /// The parks of a reference list ("US-0001,US-0002"), split on the separators the activator
@@ -163,6 +189,7 @@ struct Project<'a> {
     when: u64,
     grid: Option<&'a str>,
     prop_mode: Option<&'a str>,
+    their_program: Option<&'a str>,
     their_ref: Option<&'a str>,
     my_ref: Option<&'a str>,
     award_confirmed: bool,
@@ -178,6 +205,7 @@ fn project(r: &QsoRecord) -> Project<'_> {
         when: r.when_unix,
         grid: r.grid.as_deref(),
         prop_mode: r.prop_mode.as_deref(),
+        their_program: r.ota.their_program.as_deref(),
         their_ref: r.ota.their_ref.as_deref(),
         my_ref: r.ota.my_ref.as_deref(),
         award_confirmed: r.award_confirmed,
@@ -347,6 +375,7 @@ pub const STORE_COLUMNS: &[&str] = &[
     "when_unix",
     "grid",
     "prop_mode",
+    "ota_their_program",
     "ota_their_ref",
     "ota_my_ref",
     "qsl_card_rcvd_raw",
@@ -394,7 +423,7 @@ pub struct HotIndex {
     /// Every park or summit reference on the hunter side, split and upper-cased.
     parks: Counted<String>,
     /// Each activation day — `(park, UTC day)`, every park of a two-fer's `MY_SIG_INFO` list, split
-    /// and upper-cased — and the POTA keys ([`pota_key`]) of its rows. A day is present while a
+    /// and upper-cased — and the POTA keys ([`pota_keys`]) of its rows. A day is present while a
     /// row contributes to it, so its count is the number of keys it holds.
     activations: HashMap<(String, u64), Counted<PotaKey>>,
     /// The contest session's sweep, once a session asks for it.
@@ -797,12 +826,14 @@ impl HotIndex {
             }
         }
         if let Some(mine) = p.my_ref {
-            let key = pota_key(p.call, p.band, p.mode, p.their_ref);
+            let these = pota_keys(p.call, p.band, p.mode, p.their_program, p.their_ref);
             let day = p.when / SECS_PER_DAY;
             for park in park_refs(mine) {
                 let at = (park, day);
                 let keys = self.activations.entry(at.clone()).or_default();
-                d.apply(keys, key.clone());
+                for key in &these {
+                    d.apply(keys, key.clone());
+                }
                 if keys.0.is_empty() {
                     self.activations.remove(&at);
                 }
@@ -930,7 +961,7 @@ impl HotIndex {
     }
 
     /// How many distinct contacts the log holds from park `reference` (upper-cased by the caller)
-    /// on UTC day `day` (`when_unix / 86400`), by POTA's own uniqueness rule ([`pota_key`]): what
+    /// on UTC day `day` (`when_unix / 86400`), by POTA's own uniqueness rule ([`pota_keys`]): what
     /// counts toward the ten a valid activation needs. A dupe — the same call, band, mode and
     /// hunted park again that day — adds nothing; a two-fer's contact counts at each park.
     pub fn activation_day_count(&self, reference: &str, day: u64) -> usize {
@@ -939,7 +970,8 @@ impl HotIndex {
             .map_or(0, |keys| keys.0.len())
     }
 
-    /// How many of those contacts are park to park: the other station named a park of its own.
+    /// How many of those contacts are park to park: the other station named a POTA park of its
+    /// own (one per park of a hunter's two-fer, as POTA counts them).
     pub fn activation_day_p2p(&self, reference: &str, day: u64) -> usize {
         self.activations
             .get(&(reference.to_string(), day))
@@ -1179,9 +1211,10 @@ mod tests {
         (g.len() == 4).then_some(g)
     }
 
-    /// An activation day's contacts, by a scan: the distinct `(call, band, mode, their parks)` of
-    /// the rows on `day` whose `MY_SIG_INFO` list names `reference`, restated here from the rule
-    /// rather than through [`pota_key`].
+    /// An activation day's contacts, by a scan: the distinct `(call, band, mode, their park)` of
+    /// the rows on `day` whose `MY_SIG_INFO` list names `reference` — one per POTA park of the
+    /// other station, or one with none — restated here from the rule rather than through
+    /// [`pota_keys`].
     fn old_activation_day(log: &Logbook, reference: &str, day: u64) -> HashSet<PotaKey> {
         let parks = |s: &str| -> Vec<String> {
             s.split([',', ';'])
@@ -1198,7 +1231,7 @@ mod tests {
                     .as_deref()
                     .is_some_and(|m| parks(m).iter().any(|p| p == reference))
             })
-            .map(|r| {
+            .flat_map(|r| {
                 let mode = r.mode.trim().to_uppercase();
                 let mode = match mode.as_str() {
                     "USB" | "LSB" => "SSB".to_string(),
@@ -1206,17 +1239,23 @@ mod tests {
                     "BPSK63" => "PSK63".to_string(),
                     _ => mode,
                 };
-                (
-                    r.call.trim().to_uppercase(),
-                    r.band.trim().to_lowercase(),
-                    mode,
-                    r.ota
-                        .their_ref
-                        .as_deref()
-                        .map(parks)
-                        .unwrap_or_default()
-                        .join(","),
-                )
+                let pota = r
+                    .ota
+                    .their_program
+                    .as_deref()
+                    .is_some_and(|p| p.trim().eq_ignore_ascii_case("POTA"));
+                let mut theirs = if pota {
+                    r.ota.their_ref.as_deref().map(parks).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                if theirs.is_empty() {
+                    theirs.push(String::new());
+                }
+                let (call, band) = (r.call.trim().to_uppercase(), r.band.trim().to_lowercase());
+                theirs
+                    .into_iter()
+                    .map(move |park| (call.clone(), band.clone(), mode.clone(), park))
             })
             .collect()
     }
@@ -1317,6 +1356,21 @@ mod tests {
         Some("US-0001,US-0002"),
         Some(" us-0003 ; K-0001"),
         Some(""),
+        Some("US-0001,US-0002"),
+        Some("W9/WI-001"),
+        Some("US-0002, us-0002"),
+    ];
+    /// The program each of [`THEIR_REFS`] names: only a POTA park is part of POTA's key.
+    const THEIR_PROGRAMS: &[Option<&str>] = &[
+        None,
+        Some("POTA"),
+        Some("POTA"),
+        Some("POTA"),
+        Some(" pota "),
+        Some("POTA"),
+        None,
+        Some("SOTA"),
+        Some("POTA"),
     ];
     const MY_REFS: &[Option<&str>] = &[
         None,
@@ -1365,6 +1419,7 @@ mod tests {
         r.when_unix = (T0 as i64 + f.dt) as u64;
         r.grid = GRIDS[f.grid].map(str::to_string);
         r.prop_mode = PROPS[f.prop].map(str::to_string);
+        r.ota.their_program = THEIR_PROGRAMS[f.their].map(str::to_string);
         r.ota.their_ref = THEIR_REFS[f.their].map(str::to_string);
         r.ota.my_ref = MY_REFS[f.mine].map(str::to_string);
         r.award_confirmed = f.confirmed;
@@ -1520,6 +1575,7 @@ mod tests {
             Step::Refs(i, t, m) if n > 0 => {
                 let rows = log.records_mut(OpClass::Upgrade);
                 let r = Arc::make_mut(&mut rows[i % n]);
+                r.ota.their_program = THEIR_PROGRAMS[t].map(str::to_string);
                 r.ota.their_ref = THEIR_REFS[t].map(str::to_string);
                 r.ota.my_ref = MY_REFS[m].map(str::to_string);
             }

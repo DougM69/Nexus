@@ -1988,13 +1988,16 @@ export function LogEntry({
   // today from the activation's park on the band and mode this contact will log on (and the park
   // in the box, if any). The "worked ever on this band" badge is hidden meanwhile: last week's
   // contact is no dupe for today's activation.
-  const activating = snap.activation?.reference != null
+  // A paused activation (taken up at launch, not yet confirmed) tags nothing, so it is not one.
+  const activating = snap.activation?.reference != null && snap.activation.restored !== true
   const potaDupeNow = potaDupe(hist.qsos, snap.activation, {
     call: logCall,
     band: effBand,
     mode: effMode,
+    theirProgram: logParkProgram,
     theirRef: logParkRef,
-    nowUnix: Math.floor(Date.now() / 1000),
+    // The day the contact will log on: the hand-entered UTC time of a back-dated one, else now.
+    whenUnix: ovWhen ?? Math.floor(Date.now() / 1000),
   })
 
   useEffect(() => {
