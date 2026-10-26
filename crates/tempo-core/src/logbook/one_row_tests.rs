@@ -77,7 +77,18 @@ mod vec_bodies {
                     // stay empty until a lookup supplies them; the country is
                     // the edit's own, the corrected call's.
                     rec.dxcc = None;
-                    rec.state = None;
+                    // ⚠️ AMENDED, not verbatim (2026-10-26): a State typed in the same save as a
+                    // corrected call is the operator's and stays; only the old call's goes.
+                    let state = |s: &Option<String>| {
+                        s.as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_ascii_uppercase)
+                    };
+                    let typed = state(&rec.state);
+                    if typed.is_none() || typed == state(&old.state) {
+                        rec.state = None;
+                    }
                 }
                 // Never clobber a known country/state to None on an ORDINARY
                 // edit (the form doesn't carry them) — but on a call correction
@@ -166,6 +177,26 @@ mod vec_bodies {
                         // the extra set came from the payload or from `old`.
                         rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
                     }
+                }
+                // ⚠️ AMENDED, not verbatim (2026-10-26): a corrected call takes off what
+                // described the old one — LoTW's DXCC, the LoTW/eQSL received dates, eQSL's AG
+                // mark, the zones, continent and county — where the row held it as it is; a
+                // value the edit changed is the edit's.
+                if call_changed {
+                    const OF_OLD_CALL: [&str; 8] = [
+                        "LOTW_QSLRDATE",
+                        "EQSL_QSLRDATE",
+                        "APP_EQSL_AG",
+                        "APP_NEXUS_LOTW_DXCC",
+                        "CQZ",
+                        "ITUZ",
+                        "CONT",
+                        "CNTY",
+                    ];
+                    rec.extra.retain(|(k, v)| {
+                        !(OF_OLD_CALL.contains(&k.as_str())
+                            && old.extra.iter().any(|(ok, ov)| ok == k && ov == v))
+                    });
                 }
                 // The same resurrection, for a park. A side's OTHER programme's reference rides
                 // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
@@ -354,6 +385,16 @@ const EXTRA: &[(&str, &str)] = &[
     ("SOTA_REF", "W7A/MN-001"),
     ("POTA_REF", "US-0002"),
     ("APP_OTHER_X", "1"),
+    // What a corrected call takes off (two zones, so an edit both keeps and changes one).
+    ("CQZ", "5"),
+    ("CQZ", "8"),
+    ("ITUZ", "11"),
+    ("CONT", "NA"),
+    ("CNTY", "MA,ESSEX"),
+    ("APP_NEXUS_LOTW_DXCC", "182"),
+    ("LOTW_QSLRDATE", "20250301"),
+    ("EQSL_QSLRDATE", "20250302"),
+    ("APP_EQSL_AG", "Y"),
 ];
 const T0: u64 = 1_788_000_000;
 

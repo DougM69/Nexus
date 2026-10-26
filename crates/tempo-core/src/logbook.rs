@@ -2978,7 +2978,18 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
         // (the station resolves it, whatever a whole-contact edit sent
         // back), and the stored one is never written back below.
         rec.dxcc = None;
-        rec.state = None;
+        // …but a State the edit itself changed is the operator's, typed beside the corrected
+        // call: kept. Only the old call's, sent back as it was, goes.
+        let state = |s: &Option<String>| {
+            s.as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_ascii_uppercase)
+        };
+        let typed = state(&rec.state);
+        if typed.is_none() || typed == state(&old.state) {
+            rec.state = None;
+        }
     }
     // Never clobber a known country/state to None on an ORDINARY
     // edit (the form doesn't carry them) — but on a call correction
@@ -8283,6 +8294,29 @@ mod tests {
         named.grid = Some("FN42".into());
         assert!(lb.update_record(0, named));
         assert_eq!(held(&lb.records()[0]), held(&original));
+    }
+
+    /// ★ A corrected call drops the old call's State only where the edit leaves it as it was: a
+    /// State typed in the same save is the operator's, and stays. Upper/lower case and padding
+    /// are the same state.
+    #[test]
+    fn a_call_correction_keeps_a_state_typed_in_the_same_save() {
+        let mut original = rec("K1N", "20m", 1_423_571_640);
+        original.state = Some("MA".into());
+        for (typed, want) in [
+            (Some("CT"), Some("CT")),
+            (Some("MA"), None),
+            (Some(" ma "), None),
+            (Some("  "), None),
+            (None, None),
+        ] {
+            let mut lb = Logbook::new();
+            lb.add(original.clone());
+            let mut fixed = rec("K1NX", "20m", 1_423_571_640);
+            fixed.state = typed.map(str::to_string);
+            assert!(lb.update_record(0, fixed));
+            assert_eq!(lb.records()[0].state.as_deref(), want, "typed {typed:?}");
+        }
     }
 
     #[test]
