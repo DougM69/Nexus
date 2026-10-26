@@ -188,7 +188,7 @@ export function ContestOverDialog({
   offer: ContestOverOffer | null
   /** The Summary export's text, as the Contest screen's Summary button writes it, read when the
    *  export runs. Absent, the checklist offers no Summary. */
-  summaryText?: () => string
+  summaryText?: () => string | Promise<string>
   /** Nothing is done: the dialog closes and Contest mode stays on. */
   onNotNow: () => void
   /** Turn Contest mode off, in ONE save, with these settings put back. Rejects with the reason. */
@@ -246,7 +246,7 @@ export function ContestOverDialog({
       }
       if (ticked.has('summary') && summaryText) {
         // The Contest screen's own Summary: the same text and the same file name.
-        const path = await saveTextToDownloads(`${contestFileStem(offer.event)}-summary-${stamp}.txt`, summaryText())
+        const path = await saveTextToDownloads(`${contestFileStem(offer.event)}-summary-${stamp}.txt`, await summaryText())
         pushToast(t('fieldDay.export.done', { path }), 'success')
       }
       const back: Partial<Settings> = {}

@@ -3748,15 +3748,27 @@ export function SettingsPanel({
     }
     // ⭐ A SAVE THAT WOULD SWITCH THE RUNNING CONTEST TO ONE THAT CANNOT START is refused, saying why.
     // Saving a new pick ends the running contest (`save_switches_contest`), and a pick the engine
-    // cannot enter would leave Contest mode on with nothing running. Asked of the engine's own
-    // preview of what this Save would leave (`preview_fd_ruleset`), which saves nothing.
-    if (
-      savedRef.current?.fdActive === true &&
-      form.fdActive &&
-      (form.fdEvent ?? '').trim() !== (savedRef.current.fdEvent ?? '').trim()
-    ) {
-      const preview = await previewFdRuleset(changedSince(savedRef.current, form)).catch(() => null)
-      const blocked = startBlocker(form, preview)
+    // cannot enter would leave Contest mode on with nothing running. "Running" is the live station's
+    // (the snapshot), never this form's copy, which a start on the Contest screen does not update.
+    // Asked of the engine's own preview of what this Save would leave (`preview_fd_ruleset`), which
+    // saves nothing, over the settings held now. When that cannot be asked, the Save is refused.
+    const writing = changedSince(savedRef.current, form)
+    if (fieldDay && 'fdEvent' in writing && ((writing.fdEvent ?? '').trim() || 'arrlfd') !== (fieldDay.event || 'arrlfd')) {
+      let leaves: Partial<Settings>
+      let preview: FdRulesetDto | null
+      try {
+        leaves = { ...(await getSettings()), ...writing }
+        preview = (await previewFdRuleset(writing)) ?? null
+      } catch {
+        preview = null
+        leaves = {}
+      }
+      if (!preview) {
+        setTab('contesting')
+        setError(t('settings.save.contestUncheckable', { contest: pickedContest }))
+        return
+      }
+      const blocked = startBlocker({ fdEvent: leaves.fdEvent ?? '', fdClass: leaves.fdClass ?? '', fdSection: leaves.fdSection ?? '' }, preview)
       if (blocked) {
         setTab('contesting')
         setError(t('settings.save.contestBlocked', { contest: pickedContest, reason: blockerText(blocked, pickedContest) }))
@@ -3797,7 +3809,12 @@ export function SettingsPanel({
   // the mode and the ticked put-backs alone, through the patch seam: the form's other edits stay
   // where they are, unsaved.
   const stopContest = async () => {
-    const live = await getSettings()
+    setError(null)
+    const live = await getSettings().catch((e) => {
+      setError(String(e))
+      return null
+    })
+    if (!live) return
     const offer = contestOverOffer(live, fieldDay?.log?.length ?? 0, fieldDay?.event, fieldDay?.club?.queued ?? 0, {
       missing: fieldDay?.cabrilloMissing,
       choices: rulesetPreview,
@@ -4063,7 +4080,8 @@ export function SettingsPanel({
         offer={overOffer}
         onNotNow={() => setOverOffer(null)}
         onTurnOff={overVia === 'stop' ? stopTurnOff : turnOffWithChecklist}
-        summaryText={fieldDay ? () => contestSummaryText(fieldDay, savedRef.current, fieldDay.event) : undefined}
+        // Scored from the settings held now: bonus ticks on the Contest screen save at once.
+        summaryText={fieldDay ? async () => contestSummaryText(fieldDay, await getSettings(), fieldDay.event) : undefined}
       />
       {setupOpen && (
         <ContestSetupWizard
@@ -13520,10 +13538,14 @@ export function SettingsPanel({
               <div className="settings-field" data-contest-mode>
                 <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
                 <span className="settings-mode-row">
+                  {/* The live station's state (the snapshot), not this form's copy: a contest started or
+                      stopped elsewhere since Settings opened shows as it is. */}
                   <span role="status">
-                    {form.fdActive ? t('settings.fieldDay.mode.on', { contest: pickedContest }) : t('settings.fieldDay.mode.off')}
+                    {fieldDay
+                      ? t('settings.fieldDay.mode.on', { contest: contestName(fieldDay.event || 'arrlfd') })
+                      : t('settings.fieldDay.mode.off')}
                   </span>{' '}
-                  {form.fdActive ? (
+                  {fieldDay ? (
                     <button
                       type="button"
                       className="settings-refresh"

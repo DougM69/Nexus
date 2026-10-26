@@ -40,10 +40,14 @@ vi.mock('../toast', () => ({
 
 let station: Record<string, unknown> = {}
 
+/** The snapshot's contest block for a contest the station is running now. */
+const running = (event: string) =>
+  ({ running: false, state: 'Idle', qsoCount: 0, sections: 0, points: 0, event, log: [] }) as unknown as FieldDayStatus
+
 /** The end of a club weekend at the Illinois QSO Party: the club's call on the air, the mode on, and
  *  the engine's note of the station's own call. `fieldDay` is the snapshot's contest block, as App
  *  passes it. */
-function openOn(held: Partial<Settings> = {}, fieldDay: FieldDayStatus | null = null) {
+function openOn(held: Partial<Settings> = {}, live?: FieldDayStatus | null) {
   station = structuredClone({
     ...defaultSettings,
     mycall: 'W9CLB',
@@ -63,6 +67,8 @@ function openOn(held: Partial<Settings> = {}, fieldDay: FieldDayStatus | null = 
     },
     ...held,
   })
+  // The snapshot follows what is saved unless a test says otherwise: on is a running session.
+  const fieldDay = live !== undefined ? live : station.fdActive ? running(String(station.fdEvent)) : null
   const features = {
     enabled: () => true,
     setEnabled: vi.fn(),
@@ -70,7 +76,7 @@ function openOn(held: Partial<Settings> = {}, fieldDay: FieldDayStatus | null = 
     profile: 'full',
     setProfile: vi.fn(),
   } as unknown as FeaturesApi
-  render(
+  const panel = (fd: FieldDayStatus | null) => (
     <SettingsPanel
       activeRadioId={0}
       scale={1 as never}
@@ -82,9 +88,12 @@ function openOn(held: Partial<Settings> = {}, fieldDay: FieldDayStatus | null = 
       onDensityChange={() => {}}
       onResetLayout={() => {}}
       features={features}
-      fieldDay={fieldDay}
-    />,
+      fieldDay={fd}
+    />
   )
+  const { rerender } = render(panel(fieldDay))
+  /** The next snapshot: the live contest block as the station now reports it. */
+  return { snapshot: (fd: FieldDayStatus | null) => rerender(panel(fd)) }
 }
 
 beforeEach(() => {
@@ -148,7 +157,7 @@ describe('Stop contest…', () => {
   })
 
   it('Turn off saves the mode off with the ticked settings put back, and nothing else the form holds', async () => {
-    openOn()
+    const { snapshot } = openOn()
     await screen.findAllByDisplayValue('W9CLB')
     fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
     // An edit the operator has not saved: Stop is not a Save of the form.
@@ -159,6 +168,8 @@ describe('Stop contest…', () => {
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0]).toMatchObject({ fdActive: false, mycall: 'K9ABC', contestQthCounty: 'COOK' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // The station's next snapshot has no session.
+    snapshot(null)
     // The form follows: Start contest… now, and the edit is still there, unsaved.
     expect(within(document.getElementById('settings-contest-pick')!).getByRole('button', { name: 'Start contest…' })).toBeTruthy()
     expect(screen.getByDisplayValue('WILL')).toBeTruthy()
@@ -278,5 +289,83 @@ describe('any other Save', () => {
     pressSave()
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
+describe('Settings reads the contest state off the live station, not its own copy', () => {
+  it('a contest started elsewhere after Settings opened shows Stop contest…, naming the running one', async () => {
+    openOn({ fdActive: false, contestBefore: undefined }, running('nyqp'))
+    await screen.findAllByDisplayValue('W9CLB')
+    fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
+    const group = document.getElementById('settings-contest-pick')!
+    expect(within(group).getByRole('button', { name: 'Stop contest…' })).toBeTruthy()
+    expect(within(group).queryByRole('button', { name: 'Start contest…' })).toBeNull()
+    expect(group.querySelector('[data-contest-mode] [role="status"]')!.textContent).toBe('On: New York QSO Party')
+  })
+
+  it('CONTROL: saved on with nothing running offers Start contest…', async () => {
+    openOn({ fdActive: true }, null)
+    await screen.findAllByDisplayValue('W9CLB')
+    fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
+    const group = document.getElementById('settings-contest-pick')!
+    expect(within(group).getByRole('button', { name: 'Start contest…' })).toBeTruthy()
+    expect(group.querySelector('[data-contest-mode] [role="status"]')!.textContent).toBe('Off')
+  })
+
+  it('the switch guard holds for a contest started elsewhere: a pick that cannot start is refused, nothing saved', async () => {
+    // Settings opened with the mode off; the Illinois QSO Party was started on the Contest screen since.
+    openOn({ fdActive: false, fdClass: '', fdSection: '', contestBefore: undefined }, running('ilqp'))
+    api.get('previewFdRuleset').mockImplementation(() => Promise.resolve({ event: 'arrlfd', problem: '' }))
+    await screen.findAllByDisplayValue('W9CLB')
+    fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ARRL Field Day' }))
+    pressSave()
+    expect(
+      await screen.findByText(
+        'Saving would switch the running contest to ARRL Field Day, which cannot start yet: The station cannot enter ARRL Field Day until your FD Class and ARRL Section are set.',
+      ),
+    ).toBeTruthy()
+    expect(writes()).toEqual([])
+  })
+
+  it('the guard fails closed: when the preview cannot be asked, the switching Save is refused, nothing saved', async () => {
+    openOn({ fdClass: '1D', fdSection: 'WI' })
+    api.get('previewFdRuleset').mockImplementation(() => Promise.reject('unknown command preview_fd_ruleset'))
+    await screen.findAllByDisplayValue('W9CLB')
+    fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ARRL Field Day' }))
+    pressSave()
+    expect(
+      await screen.findByText(
+        'Not saved: picking ARRL Field Day would end the running contest, and the station could not check that ARRL Field Day can start.',
+      ),
+    ).toBeTruthy()
+    expect(writes()).toEqual([])
+  })
+
+  it("the checklist's Summary scores from the live settings: a bonus ticked since Settings opened counts", async () => {
+    // One contact in the session: the checklist offers its exports.
+    const log = [{ call: 'W1AW', class: '2A', section: 'CT', band: '20m', mode: 'CW', whenUnix: 1 }]
+    openOn({ fdEvent: 'arrlfd', fdClass: '1D', fdSection: 'WI', fdBonuses: [] }, { ...running('arrlfd'), log, qsoCount: 1 })
+    api.get('saveTextToDownloads').mockImplementation((name: string) => Promise.resolve(`/dl/${name}`))
+    await screen.findAllByDisplayValue('W9CLB')
+    // Ticked on the Contest screen after Settings opened (bonus ticks save at once).
+    station = { ...station, fdBonuses: ['emergency-power'] }
+    await pressStop()
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Export the Summary to Downloads' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
+    await waitFor(() => expect(api.get('saveTextToDownloads')).toHaveBeenCalled())
+    const text = api.get('saveTextToDownloads').mock.calls[0][1] as string
+    expect(text).toContain('Bonuses claimed (1, 100 pts):')
+    expect(text).toContain('  Emergency Power — 100 pts')
+  })
+
+  it('Stop contest… says so when the station cannot be read', async () => {
+    openOn()
+    await screen.findAllByDisplayValue('W9CLB')
+    api.get('getSettings').mockImplementation(() => Promise.reject('station unreachable'))
+    await pressStop()
+    expect(await screen.findByText('station unreachable')).toBeTruthy()
+    expect(writes()).toEqual([])
   })
 })

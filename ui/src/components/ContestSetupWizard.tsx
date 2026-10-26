@@ -15,7 +15,13 @@
 //
 // ⛔ IT NEVER TRANSMITS. Start always enters S&P; Running stays the operator's own press. Nothing here
 // calls `set_mode`, and a banned mode on the station is a warning with a way to CW or Phone, never a
-// refusal (the advisories are warn-only by operator ruling).
+// refusal (the advisories are warn-only by design).
+//
+// ⭐ CHANGE SETUP… ON A RUNNING CONTEST never shows an exchange the station is not sending. The running
+// session read its exchange when it started; a settings save does not reach it. So the boxes "I
+// moved" can change (`contest_i_moved`: Field Day's class and section, another contest's location
+// where its rules let a station move) go through that call, and every other sent field is named as
+// read at start. "You send" is the session's own exchange, from the snapshot the move returned.
 //
 // ⚠️ A CONTEST ALREADY RUNNING ends when a different one starts (`save_switches_contest`); its
 // contacts stay in its own journal. The pick step says so and asks for a tick before it goes on.
@@ -24,10 +30,19 @@ import { useEffect, useRef, useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
-import type { AppSnapshot, Settings } from '../types'
-import { contestWindows, getFdRuleset, getSnapshot, getSettings, previewFdRuleset, type ContestWindow, type FdRulesetDto } from '../api'
+import type { AppSnapshot, FieldDayStatus, Settings } from '../types'
+import {
+  contestIMoved,
+  contestWindows,
+  getFdRuleset,
+  getSnapshot,
+  getSettings,
+  previewFdRuleset,
+  type ContestWindow,
+  type FdRulesetDto,
+} from '../api'
 import { patchSettings } from '../settings/patch'
-import { CONTESTS, contestName, contestRoleWords } from '../fdEvent'
+import { CONTESTS, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
 import { blockerText, startBlocker } from '../features/contestStart'
 import { locationWarningText } from '../features/contestLocation'
 import { stationMode } from '../features/contestMode'
@@ -79,6 +94,24 @@ export function fdPowerFrom(s: Partial<Settings>): { power: FdPower; battery: bo
 /** Did the save enter the picked contest? The snapshot the save returned is the engine's answer. */
 export function enteredContest(snap: AppSnapshot | null | undefined, event: string): boolean {
   return snap?.mode === 'fieldDay' && (snap.fieldDay?.event || 'arrlfd') === event
+}
+
+/** The sent boxes "I moved" changes on a running session, by the slot each one moves, as
+ *  `Engine::contest_i_moved` takes them: Field Day's class and section; any other contest's location,
+ *  only where its rules make a station that moves a new one (the dupe rule's sent slots), and as the
+ *  setting the engine writes back (the county for an in-state station, else the state). */
+export function movableBoxes(session: FieldDayStatus | null, event: string): Partial<Record<keyof Settings, string>> {
+  if (!session) return {}
+  const composing = (session.composing ?? []).map((v) => v.key)
+  if (isFieldDay(event)) {
+    const out: Partial<Record<keyof Settings, string>> = {}
+    if (composing.includes('CLASS')) out.fdClass = 'CLASS'
+    if (composing.includes('SECTION')) out.fdSection = 'SECTION'
+    return out
+  }
+  const moves = (session.dupeRule?.bySentFields ?? []).filter((k) => composing.includes(k))
+  if (moves.length !== 1) return {}
+  return { [session.role === 'in_state' ? 'contestQthCounty' : 'contestQthState']: moves[0] }
 }
 
 /** Every setting this setup can write: what a host may hand it as unsaved answers. */
@@ -220,6 +253,8 @@ export function ContestSetupWizard({
 }) {
   const [base, setBase] = useState<Settings | null>(null)
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  // The snapshot has answered (or failed): until then a running contest is not known, and Start waits.
+  const [snapRead, setSnapRead] = useState(false)
   const [windows, setWindows] = useState<ContestWindow[] | null>(null)
   const [draft, setDraft] = useState<Partial<Settings>>(() => {
     const out: Record<string, unknown> = {}
@@ -233,7 +268,7 @@ export function ContestSetupWizard({
   const [busy, setBusy] = useState(false)
   const [refused, setRefused] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [started, setStarted] = useState<{ event: string; running: boolean } | null>(null)
+  const [started, setStarted] = useState<{ event: string; running: boolean; sends: string } | null>(null)
 
   useEffect(() => {
     let live = true
@@ -243,6 +278,7 @@ export function ContestSetupWizard({
     getSnapshot()
       .then((s) => live && setSnap(s ?? null))
       .catch(() => {})
+      .finally(() => live && setSnapRead(true))
     contestWindows()
       .then((w) => live && setWindows(Array.isArray(w) ? w : []))
       .catch(() => live && setWindows([]))
@@ -271,8 +307,17 @@ export function ContestSetupWizard({
   const session = snap?.fieldDay ?? null
   const runningEvent = session ? session.event || 'arrlfd' : null
   const switching = runningEvent !== null && runningEvent !== event
+  // Change setup…: this contest runs, and its exchange changes only through "I moved".
+  const changing = session !== null && !switching
+  const movable = changing ? movableBoxes(session, event) : {}
+  const liveSlot = (slot: string) => session?.composing?.find((v) => v.key === slot)?.raw ?? ''
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setDraft((d) => ({ ...d, [key]: value }))
   const str = (key: keyof Settings): string => String(merged[key] ?? '')
+  // A movable box starts from what the session sends now, not from the settings.
+  const sentStr = (key: keyof Settings): string => {
+    const slot = movable[key]
+    return slot && !(key in draft) ? liveSlot(slot) : str(key)
+  }
 
   // What keeps the contest from starting, in the engine's words, for the answers so far. Field Day's
   // blanks are known before the preview answers; any other contest waits for it.
@@ -285,6 +330,10 @@ export function ContestSetupWizard({
   const sent = preview?.event === event ? (preview.sentSettings ?? []) : []
   const sendBoxes = sent.map((n) => sendBox(n, event)).filter((b): b is SendBox => b !== null)
   const sentAxes = sent.filter((n) => n in CATEGORY_AXES)
+  // On a running contest: the sent fields "I moved" cannot change, read when it started.
+  const readAtStart = changing
+    ? [...sendBoxes.filter((b) => !movable[b.key]).map((b) => b.label()), ...sentAxes.map((n) => CATEGORY_AXES[n].label())]
+    : []
   const headers = preview?.cabrilloHeaders ?? []
   const multiOp = str('contestCategoryOperator') === 'MULTI-OP'
   const arrlFd = event === 'arrlfd'
@@ -296,41 +345,114 @@ export function ContestSetupWizard({
       (headers.includes(AXIS_HEADER[n]) || (n === 'contest_category_power' && (preview?.powerCategories?.length ?? 0) > 0)),
   )
 
+  // The fields this setup shows for the picked contest, and so the only ones a save writes. An answer
+  // a host handed over (Settings' unsaved form) or one left from a contest picked and then changed
+  // stays unsaved when it is not shown here.
+  const shownKeys = new Set<keyof Settings>([
+    'fdEvent',
+    'contestCategoryOperator',
+    ...sendBoxes.map((b) => b.key),
+    ...sentAxes.map((n) => CATEGORY_AXES[n].key),
+    ...entryAxes.map((n) => CATEGORY_AXES[n].key),
+    ...(arrlFd ? (['contestCategoryPower', 'fdPowerMult'] as const) : []),
+    ...(multiOp && (preview?.transmitterCategories?.length ?? 0) > 0 ? (['contestCategoryTransmitter'] as const) : []),
+    ...((preview?.bandCategories?.length ?? 0) > 0 ? (['contestCategoryBand'] as const) : []),
+    ...((preview?.overlayCategories?.length ?? 0) > 0 ? (['contestCategoryOverlay'] as const) : []),
+    ...((preview?.entryClasses?.length ?? 0) > 0 ? (['contestEntryClass'] as const) : []),
+    ...(headers.includes('CLUB') ? (['contestClub'] as const) : []),
+    ...(headers.includes('OPERATORS') || (multiOp && (preview?.transmitterCategories?.length ?? 0) > 0)
+      ? (['contestOperators'] as const)
+      : []),
+    ...(headers.includes('EMAIL') ? (['contestEmail'] as const) : []),
+  ])
+  const shownAnswers = (): Partial<Settings> =>
+    Object.fromEntries(Object.entries(draft).filter(([k]) => shownKeys.has(k as keyof Settings))) as Partial<Settings>
+  // What the station sends now: the session's own exchange, never the preview of unsaved answers.
+  const liveSends = session?.composingText ?? ''
+
   // Step 4: the station as it is now. Read-only; nothing here is a refusal.
   const mode = snap ? stationMode(snap.radio.operatingMode, snap.link?.tier, null) : ''
   const banned = !!mode && (preview?.bannedModes ?? []).some((m) => m.toUpperCase() === mode.toUpperCase())
   const catOk = snap?.radio.catOk
   const workIn = (view: WorkInView) => (onWorkIn ?? askMainToWorkIn)(view)
 
+  const errorText = (e: unknown) => (typeof e === 'string' ? e : e instanceof Error ? e.message : String(e))
+
+  // ⭐ SAVE CHANGES on the running contest: the moved exchange through "I moved" first (the engine
+  // checks it and writes the setting too; a refusal saves nothing), then the other shown answers —
+  // the entry's lines — through the patch seam. Sent fields read at start are never written here.
+  const saveChanges = async () => {
+    const norm = (v: unknown) => String(v ?? '').trim().toUpperCase()
+    const moved = (Object.entries(movable) as [keyof Settings, string][]).filter(
+      ([k, slot]) => k in draft && norm(draft[k]) !== norm(liveSlot(slot)),
+    )
+    const sentKeys = new Set<keyof Settings>([...sendBoxes.map((b) => b.key), ...sentAxes.map((n) => CATEGORY_AXES[n].key)])
+    const rest = Object.fromEntries(
+      Object.entries(shownAnswers()).filter(([k]) => !sentKeys.has(k as keyof Settings) && k !== 'fdEvent'),
+    ) as Partial<Settings>
+    let now: AppSnapshot | null = null
+    if (moved.length > 0) now = await contestIMoved(moved.map(([k, slot]) => [slot, norm(draft[k])]))
+    if (Object.keys(rest).length > 0) now = await patchSettings(() => rest)
+    const written = { ...rest, ...Object.fromEntries(moved.map(([k]) => [k, norm(draft[k])])) } as Partial<Settings>
+    if (Object.keys(written).length > 0) {
+      onSaved?.(written)
+      window.dispatchEvent(new CustomEvent(CONTEST_SETUP_SAVED_EVENT))
+    }
+    const fd = now?.fieldDay ?? session
+    setStarted({ event, running: fd?.running === true, sends: fd?.composingText ?? '' })
+  }
+
   const start = async () => {
     setBusy(true)
     setError(null)
     setRefused(null)
-    const written: Partial<Settings> = { ...draft, fdActive: true }
     try {
-      const after = await patchSettings(() => written)
+      if (changing) {
+        await saveChanges()
+        return
+      }
+      const written: Partial<Settings> = { ...shownAnswers(), fdActive: true }
+      // The values this save replaces, read in the same patch: what a refusal puts back.
+      let before: Partial<Settings> = {}
+      const after = await patchSettings((current) => {
+        before = Object.fromEntries(Object.keys(written).map((k) => [k, current[k as keyof Settings]])) as Partial<Settings>
+        return written
+      })
       onSaved?.(written)
       window.dispatchEvent(new CustomEvent(CONTEST_SETUP_SAVED_EVENT))
       if (enteredContest(after, event)) {
-        setStarted({ event, running: after.fieldDay?.running === true })
+        setStarted({ event, running: after.fieldDay?.running === true, sends: after.fieldDay?.composingText ?? '' })
         return
       }
-      // The engine did not enter. Never leave the mode saved on with nothing running: turn it off
-      // again, and say why in the engine's own words, read against what is saved now.
+      // The engine did not enter. Never leave the mode saved on with nothing running: put back every
+      // value this save replaced — the answers, the contest it ended and the mode — and say why in the
+      // engine's own words, read against what the refused save left.
       const why = await getFdRuleset().catch(() => null)
       const saved = await getSettings().catch(() => null)
       const b = startBlocker(saved, why)
-      await patchSettings(() => ({ fdActive: false }))
-      onSaved?.({ fdActive: false })
+      let back: AppSnapshot
+      try {
+        back = await patchSettings(() => before)
+      } catch (e) {
+        setError(t('contestSetup.start.restoreFailed', { contest: name, error: errorText(e) }))
+        setStep(1)
+        return
+      }
+      onSaved?.(before)
       window.dispatchEvent(new CustomEvent(CONTEST_SETUP_SAVED_EVENT))
+      const reason = b ? blockerText(b, name) : null
       setRefused(
-        b
-          ? t('contestSetup.start.refused', { contest: name, reason: blockerText(b, name) })
-          : t('contestSetup.start.refusedUnknown', { contest: name }),
+        switching && runningEvent && enteredContest(back, runningEvent)
+          ? reason
+            ? t('contestSetup.start.refusedRestored', { contest: name, reason, running: contestName(runningEvent) })
+            : t('contestSetup.start.refusedRestoredUnknown', { contest: name, running: contestName(runningEvent) })
+          : reason
+            ? t('contestSetup.start.refused', { contest: name, reason })
+            : t('contestSetup.start.refusedUnknown', { contest: name }),
       )
       setStep(1)
     } catch (e) {
-      setError(typeof e === 'string' ? e : e instanceof Error ? e.message : String(e))
+      setError(errorText(e))
     } finally {
       setBusy(false)
     }
@@ -358,6 +480,7 @@ export function ContestSetupWizard({
               ? t('contestSetup.start.onRunning', { contest: contestName(started.event) })
               : t('contestSetup.start.on', { contest: contestName(started.event) })}
           </p>
+          {started.sends && <p className="contest-setup-exchange mono">{t('contestSetup.sends.exchange', { exchange: started.sends })}</p>}
           {!started.running && <p className="wizard-sub">{t('contestSetup.start.onHint')}</p>}
         </div>
         <div className="wizard-actions">
@@ -457,7 +580,7 @@ export function ContestSetupWizard({
             </p>
           )}
           <div className="wizard-fields">
-            {sendBoxes.map((b) => (
+            {sendBoxes.filter((b) => !changing || movable[b.key]).map((b) => (
               <label key={b.key} className="wizard-field">
                 <span>{b.label()}</span>
                 {b.zone ? (
@@ -472,7 +595,7 @@ export function ContestSetupWizard({
                   <input
                     type="text"
                     className="mono"
-                    value={str(b.key)}
+                    value={sentStr(b.key)}
                     onChange={(e) => set(b.key, upperTyped(e.target) as never)}
                     autoComplete="off"
                     spellCheck={false}
@@ -480,11 +603,12 @@ export function ContestSetupWizard({
                 )}
               </label>
             ))}
-            {sentAxes.map((n) => {
-              const axis = CATEGORY_AXES[n]
-              return <AxisSelect key={n} axis={axis} value={str(axis.key)} onChange={(v) => set(axis.key, v as never)} />
-            })}
-            {sentAxes.length > 0 && (
+            {!changing &&
+              sentAxes.map((n) => {
+                const axis = CATEGORY_AXES[n]
+                return <AxisSelect key={n} axis={axis} value={str(axis.key)} onChange={(v) => set(axis.key, v as never)} />
+              })}
+            {!changing && sentAxes.length > 0 && (
               <AxisSelect
                 axis={OPERATOR_AXIS}
                 value={str('contestCategoryOperator') || 'SINGLE-OP'}
@@ -501,12 +625,26 @@ export function ContestSetupWizard({
             <p className="contest-setup-bad" role="alert" data-blocker>
               {blockerText(blocker, name)}
             </p>
+          ) : changing ? (
+            liveSends && (
+              <p className="contest-setup-exchange">
+                <span className="mono">{t('contestSetup.sends.exchange', { exchange: liveSends })}</span>
+              </p>
+            )
           ) : preview?.exchange?.length ? (
             <p className="contest-setup-exchange">
               {preview.role ? `${t('settings.contestPick.role.value', { role: contestRoleWords(preview.role) })} ` : ''}
               <span className="mono">{t('contestSetup.sends.exchange', { exchange: preview.exchange.join(' ') })}</span>
             </p>
           ) : null}
+          {changing && Object.keys(movable).length > 0 && <p className="wizard-field-hint">{t('contestSetup.sends.moved')}</p>}
+          {readAtStart.length > 0 && (
+            <p className="wizard-field-hint" data-read-at-start>
+              {readAtStart.length === 1
+                ? t('contestSetup.sends.readAtStart.one', { fields: readAtStart[0] })
+                : t('contestSetup.sends.readAtStart', { fields: readAtStart.join(', ') })}
+            </p>
+          )}
           {!previewing && preview?.locationWarning && (
             <p className="contest-setup-warn" role="status">
               {locationWarningText(preview.locationWarning)}
@@ -550,7 +688,7 @@ export function ContestSetupWizard({
             </div>
           )}
           <div className="wizard-fields">
-            {sentAxes.length === 0 && (
+            {(sentAxes.length === 0 || changing) && (
               <AxisSelect
                 axis={OPERATOR_AXIS}
                 value={str('contestCategoryOperator') || 'SINGLE-OP'}
@@ -651,7 +789,9 @@ export function ContestSetupWizard({
         <>
           <h2 className="wizard-title">{t('contestSetup.start.title', { contest: name })}</h2>
           <p className="wizard-sub">{t('contestSetup.start.sub')}</p>
-          {preview?.exchange?.length ? (
+          {changing ? (
+            liveSends && <p className="contest-setup-exchange mono">{t('contestSetup.sends.exchange', { exchange: liveSends })}</p>
+          ) : preview?.exchange?.length ? (
             <p className="contest-setup-exchange mono">{t('contestSetup.sends.exchange', { exchange: preview.exchange.join(' ') })}</p>
           ) : null}
           {switching && runningEvent && (
@@ -686,7 +826,7 @@ export function ContestSetupWizard({
               {t('contestSetup.nav.next')}
             </button>
           ) : (
-            <button type="button" className="wizard-go" disabled={busy || exchangeHeld || (switching && !switchOk)} onClick={() => void start()}>
+            <button type="button" className="wizard-go" disabled={busy || !snapRead || exchangeHeld || (switching && !switchOk)} onClick={() => void start()}>
               {busy
                 ? t('contestSetup.start.busy')
                 : runningEvent === event

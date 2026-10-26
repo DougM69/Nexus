@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
+import type { FieldDayStatus } from '../types'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
 const api = vi.hoisted(() => {
@@ -46,10 +47,11 @@ const features: FeaturesApi = {
   setProfile: vi.fn(),
 } as unknown as FeaturesApi
 
-function renderPanel() {
+/** `fieldDay` is the live snapshot's contest block: a running session, or none. */
+function renderPanel(fieldDay: FieldDayStatus | null = null) {
   return render(
     <SettingsPanel
-      fieldDay={null}
+      fieldDay={fieldDay}
       activeRadioId={0}
       scale={1 as never}
       scaleMode={'auto' as never}
@@ -120,7 +122,7 @@ describe('Settings ▸ Contesting: the switch is Contest mode, and names the pic
 
   it('on, it says so by name, and offers Stop contest…', async () => {
     holding({ fdEvent: 'cqww_cw', fdActive: true })
-    renderPanel()
+    renderPanel({ event: 'cqww_cw', log: [] } as unknown as FieldDayStatus)
     await openTab('Contesting')
     const sw = await modeButton('Stop contest…')
     expect(sw.closest('.settings-field')!.querySelector('[role="status"]')!.textContent).toBe(
@@ -156,7 +158,8 @@ describe('the Class + Section prompt: Field Day’s own line, naming the switch 
     holding({ fdEvent: 'arrlfd', fdActive: true, fdClass: '', fdSection: 'WI' })
     renderPanel()
     await openTab('Contesting')
-    await modeButton('Stop contest…')
+    // Saved on, but the station has not entered: no session, so Start contest… is offered.
+    await modeButton('Start contest…')
     expect(prompt()).toBe(PROMPT('ARRL Field Day'))
   })
 
@@ -164,7 +167,8 @@ describe('the Class + Section prompt: Field Day’s own line, naming the switch 
     holding({ fdEvent: 'wfd', fdActive: true, fdClass: '', fdSection: '' })
     renderPanel()
     await openTab('Contesting')
-    await modeButton('Stop contest…')
+    // Saved on, but the station has not entered: no session, so Start contest… is offered.
+    await modeButton('Start contest…')
     expect(prompt()).toBe(PROMPT('Winter Field Day'))
   })
 
@@ -172,7 +176,8 @@ describe('the Class + Section prompt: Field Day’s own line, naming the switch 
     holding({ fdEvent: 'ilqp', fdActive: true, fdClass: '', fdSection: '' })
     renderPanel()
     await openTab('Contesting')
-    await modeButton('Stop contest…')
+    // Saved on, but the station has not entered: no session, so Start contest… is offered.
+    await modeButton('Start contest…')
     expect(prompt()).toBeNull()
   })
 })

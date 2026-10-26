@@ -275,6 +275,7 @@ describe('Start', () => {
     api.get('getFdRuleset').mockImplementation(() =>
       Promise.resolve({ ...preview({}), problem: 'Your COUNTY is not one the Illinois QSO Party lists.' }),
     )
+    const before = structuredClone(station)
     await toStart()
     expect(await screen.findByRole('alert')).toHaveProperty(
       'textContent',
@@ -282,6 +283,8 @@ describe('Start', () => {
     )
     await waitFor(() => expect(writes()).toHaveLength(2))
     expect(writes()[1].fdActive).toBe(false)
+    // Everything the Start saved is put back, by value: the county it typed too.
+    expect(station).toEqual(before)
     expect(screen.queryByText('Illinois QSO Party is on · S&P')).toBeNull()
     // Back on the exchange, where it can be fixed.
     expect(screen.getByRole('heading', { name: 'What Illinois QSO Party sends' })).toBeTruthy()
@@ -304,5 +307,163 @@ describe('Start', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'End New York QSO Party when I start Illinois QSO Party' }))
     expect(screen.getByRole('button', { name: 'Next' })).toHaveProperty('disabled', false)
     expect(api.get('setMode')).not.toHaveBeenCalled()
+  })
+})
+
+describe('Start saves only what it showed, and a refusal puts all of it back', () => {
+  it('answers handed over but never shown for the picked contest stay unsaved', async () => {
+    // Settings' form held a call and a grid it had not saved; the Illinois QSO Party shows neither.
+    await open({ initial: { fdEvent: 'ilqp', mycall: 'N0NEW', mygrid: 'EN99', contestQthCounty: 'COOK' } })
+    const before = structuredClone(station)
+    next()
+    await screen.findByText('You send: 599 COOK')
+    next()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Start Illinois QSO Party' }))
+    await screen.findByText('Illinois QSO Party is on · S&P')
+    expect(writes()).toHaveLength(1)
+    // Exactly the shown answers and the mode over what the station held: the call and grid are not.
+    expect(writes()[0]).toEqual({ ...before, fdEvent: 'ilqp', contestQthCounty: 'COOK', fdActive: true })
+  })
+
+  it('a refused switch puts back the answers, the contest it ended and the mode, exactly', async () => {
+    station = { ...station, fdActive: true, fdEvent: 'nyqp', contestQthCounty: '' }
+    const before = structuredClone(station)
+    api.get('getSnapshot').mockImplementation(() =>
+      Promise.resolve({ fieldDay: { event: 'nyqp' }, mode: 'fieldDay', radio: { catOk: true }, link: { tier: 'FT8' } }),
+    )
+    // The Start's save: nothing entered. The put-back's: New York QSO Party again.
+    api.get('setSettings')
+      .mockImplementationOnce((s: Partial<Settings>) => {
+        station = structuredClone(s)
+        return Promise.resolve({ mode: 'chat', fieldDay: null })
+      })
+      .mockImplementationOnce((s: Partial<Settings>) => {
+        station = structuredClone(s)
+        return Promise.resolve({ mode: 'fieldDay', fieldDay: { event: 'nyqp' } })
+      })
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({ ...preview({}), problem: 'Your COUNTY is not one the Illinois QSO Party lists.' }),
+    )
+    await open()
+    fireEvent.click(screen.getByRole('radio', { name: /Illinois QSO Party/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'End New York QSO Party when I start Illinois QSO Party' }))
+    next()
+    fireEvent.change(await screen.findByLabelText('County'), { target: { value: 'COOK' } })
+    await screen.findByText('You send: 599 COOK')
+    next()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Start Illinois QSO Party' }))
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      'The station did not enter Illinois QSO Party: Your COUNTY is not one the Illinois QSO Party lists. Your answers were put back, and New York QSO Party is on again.',
+    )
+    expect(writes()).toHaveLength(2)
+    expect(writes()[1]).toEqual(before)
+    expect(station).toEqual(before)
+  })
+
+  it('a put-back that fails says what may still be saved', async () => {
+    snapAfterSave = { mode: 'chat', fieldDay: null }
+    api.get('setSettings')
+      .mockImplementationOnce((s: Partial<Settings>) => {
+        station = structuredClone(s)
+        return Promise.resolve(snapAfterSave)
+      })
+      .mockImplementationOnce(() => Promise.reject('disk full'))
+    await open()
+    next()
+    fireEvent.change(await screen.findByLabelText('County'), { target: { value: 'COOK' } })
+    await screen.findByText('You send: 599 COOK')
+    next()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Start Illinois QSO Party' }))
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      'The station did not enter Illinois QSO Party, and putting the earlier settings back failed: disk full. Contest mode may still be saved on: check Settings ▸ Contesting.',
+    )
+  })
+})
+
+describe('Change setup… on a running contest', () => {
+  /** The Illinois QSO Party running in S&P from Cook County, an in-state station whose rules let it move. */
+  const RUNNING = {
+    event: 'ilqp',
+    running: false,
+    role: 'in_state',
+    composing: [
+      { key: 'RST', raw: '599' },
+      { key: 'QTH', raw: 'COOK', domain: 'il_counties' },
+    ],
+    composingText: '599 COOK',
+    dupeRule: { byCall: true, byBand: true, byModeClass: true, byFields: [], bySentFields: ['QTH'], modeClassGroups: [] },
+  }
+  beforeEach(() => {
+    station = { ...station, fdActive: true, contestQthCounty: 'COOK' }
+    api.get('getSnapshot').mockImplementation(() =>
+      Promise.resolve({ fieldDay: RUNNING, mode: 'fieldDay', radio: { catOk: true, operatingMode: 'digital' }, link: { tier: 'FT8' } }),
+    )
+    api.get('contestIMoved').mockImplementation(() =>
+      Promise.resolve({ mode: 'fieldDay', fieldDay: { ...RUNNING, composingText: '599 WILL' } }),
+    )
+  })
+  async function openChange() {
+    render(<ContestSetupWizard onClose={vi.fn()} startAt="sends" />)
+    await screen.findByRole('dialog', { name: 'Change contest setup' })
+  }
+
+  it('a new county goes on the air through I moved, and You send is what the engine sends', async () => {
+    await openChange()
+    const county = (await screen.findByLabelText('County')) as HTMLInputElement
+    await screen.findByText('You send: 599 COOK')
+    fireEvent.change(county, { target: { value: 'will' } })
+    await waitFor(() => expect(api.get('previewFdRuleset')).toHaveBeenLastCalledWith({ contestQthCounty: 'WILL' }))
+    await nextWhenChecked()
+    // Not sent yet, so not shown as sent.
+    expect(screen.queryByText('You send: 599 WILL')).toBeNull()
+    next()
+    next()
+    expect(screen.getByText('You send: 599 COOK')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    // The engine's own answer, from the snapshot the move returned.
+    await screen.findByText('You send: 599 WILL')
+    expect(api.get('contestIMoved')).toHaveBeenCalledWith([['QTH', 'WILL']])
+    // The move writes the setting itself: no settings save beside it.
+    expect(writes()).toEqual([])
+    expect(api.get('setMode')).not.toHaveBeenCalled()
+  })
+
+  it('a field read at start is shown read-only with the live exchange, and nothing saves it', async () => {
+    await openChange()
+    await screen.findByText('You send: 599 COOK')
+    // An in-state station moves by county; the state is not a box here.
+    expect(screen.queryByLabelText('State or province')).toBeNull()
+    expect(
+      screen.getByText('Read when the contest starts: State or province. To change it, stop the contest, then start it again.'),
+    ).toBeTruthy()
+    await nextWhenChecked()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await screen.findByText('Illinois QSO Party is on · S&P')
+    // Nothing changed, so nothing was written and nothing moved.
+    expect(writes()).toEqual([])
+    expect(api.get('contestIMoved')).not.toHaveBeenCalled()
+  })
+
+  it('a move the engine refuses saves nothing and says why in its words', async () => {
+    api.get('contestIMoved').mockImplementation(() => Promise.reject('"XXXX" is not a il_counties value'))
+    await openChange()
+    fireEvent.change(await screen.findByLabelText('County'), { target: { value: 'XXXX' } })
+    await waitFor(() => expect(api.get('previewFdRuleset')).toHaveBeenLastCalledWith({ contestQthCounty: 'XXXX' }))
+    await nextWhenChecked()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', '"XXXX" is not a il_counties value')
+    expect(writes()).toEqual([])
   })
 })
