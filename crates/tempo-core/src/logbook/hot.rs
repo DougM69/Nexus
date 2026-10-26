@@ -18,7 +18,7 @@
 //! | B4, band and band·mode scope | [`Logbook::worked_band_set`], both folds |
 //! | the contest session's sweep | [`Logbook::worked_keys_since`] |
 //! | NEW GRID / DXCC / BAND, confirmed, NEW PARK badges | a full rebuild of the station's worked index |
-//! | an activation day's contact count | the distinct POTA keys ([`pota_keys`]) of the rows whose `MY_SIG_INFO` list names that park, on that UTC day |
+//! | an activation day's contact count | the distinct POTA keys ([`pota_key`]) of the rows whose `MY_SIG_INFO` list names that park, on that UTC day |
 //!
 //! # How it is kept
 //!
@@ -114,50 +114,43 @@ pub fn grid4(grid: &str) -> Option<String> {
 /// Seconds in a UTC day: an activation is one park on one UTC day.
 const SECS_PER_DAY: u64 = 86_400;
 
-/// One contact as POTA's log check tells contacts apart within an activation day:
-/// `(CALL, band, mode, their park)`.
-pub type PotaKey = (String, String, String, String);
+/// One contact as POTA's activator count tells contacts apart within an activation day:
+/// `(CALL, band, mode)`.
+pub type PotaKey = (String, String, String);
 
-/// ★ POTA's uniqueness rule for a contact made from a park on a given UTC day — the call exactly
-/// as logged (trimmed and upper-cased: `W1ABC/P` is not `W1ABC`, as the upload check has it), the
-/// band (lower-cased), the mode through the log's own mode fold (USB and LSB are SSB), and the
-/// POTA park the other station was in, if any (upper-cased). Two contacts with equal keys are one
-/// contact to POTA, and the second earns nothing. The UI's warn-only dupe badge applies the same
-/// rule (`ui/src/features/potaActivation.ts`).
+/// ★ POTA's uniqueness rule for the contacts counted toward an activation's ten, made from a park
+/// on a given UTC day — the call exactly as logged (trimmed and upper-cased: `W1ABC/P` is not
+/// `W1ABC`, as the upload check has it), the band (lower-cased) and the mode through the log's own
+/// mode fold (USB and LSB are SSB). Two contacts with equal keys are one contact toward the ten,
+/// and the second adds nothing.
 ///
-/// ONE KEY PER PARK OF THE OTHER STATION: a hunter's two-fer is exported as one row per park, one
-/// `SIG_INFO` each, as POTA's park-to-park page asks, and POTA counts each row — so the contact
-/// counts once for each of their parks. A reference of another program (a summit, a WWFF area) is
-/// no part of POTA's key: such a contact has the one key of a contact with no park.
-pub fn pota_keys(
-    call: &str,
-    band: &str,
-    mode: &str,
-    their_program: Option<&str>,
-    their_ref: Option<&str>,
-) -> Vec<PotaKey> {
-    let call = super::query::js_upper(super::query::js_trim(call));
-    let band = super::query::js_lower(super::query::js_trim(band));
-    let mode = super::query::mode_key(mode);
-    let pota = their_program.is_some_and(|p| p.trim().eq_ignore_ascii_case("POTA"));
+/// THE OTHER STATION'S PARK IS NO PART OF IT: a hunter's two-fer, or the same hunter again from
+/// another park, is ONE contact toward the ten — the count never claims a contact the upload
+/// might not credit. Park-to-park credit is per park of theirs: the per-activation export writes
+/// one row per park ([`their_pota_parks`]), and the UI's warn-only dupe badge
+/// (`ui/src/features/potaActivation.ts`) keys on those rows.
+pub fn pota_key(call: &str, band: &str, mode: &str) -> PotaKey {
+    (
+        super::query::js_upper(super::query::js_trim(call)),
+        super::query::js_lower(super::query::js_trim(band)),
+        super::query::mode_key(mode),
+    )
+}
+
+/// The POTA parks the other station named (`SIG_INFO`), split, upper-cased and each once, in the
+/// order given: one row each in the per-activation export, as POTA's park-to-park page asks. Empty
+/// when they named none, or a reference of another program (a summit, a WWFF area): such a
+/// contact is not park to park.
+pub fn their_pota_parks(their_program: Option<&str>, their_ref: Option<&str>) -> Vec<String> {
     let mut theirs: Vec<String> = Vec::new();
-    for park in their_ref
-        .filter(|_| pota)
-        .map(park_refs)
-        .into_iter()
-        .flatten()
-    {
-        if !theirs.contains(&park) {
-            theirs.push(park);
+    if their_program.is_some_and(|p| p.trim().eq_ignore_ascii_case("POTA")) {
+        for park in park_refs(their_ref.unwrap_or("")) {
+            if !theirs.contains(&park) {
+                theirs.push(park);
+            }
         }
     }
-    if theirs.is_empty() {
-        theirs.push(String::new());
-    }
     theirs
-        .into_iter()
-        .map(|park| (call.clone(), band.clone(), mode.clone(), park))
-        .collect()
 }
 
 /// The parks of a reference list ("US-0001,US-0002"), split on the separators the activator
@@ -214,6 +207,15 @@ fn project(r: &QsoRecord) -> Project<'_> {
             .as_deref()
             .map(|c| (c.rcvd.as_slice(), c.sent.as_slice())),
     }
+}
+
+/// One activation day's contacts ([`HotIndex::activation_day_count`]) and the park-to-park ones
+/// among them ([`HotIndex::activation_day_p2p`]): the POTA keys of its rows, and of those of its
+/// rows that name a POTA park of the other station's.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ActivationDay {
+    contacts: Counted<PotaKey>,
+    p2p: Counted<PotaKey>,
 }
 
 /// A set counted by the rows that put each key in: a key is present while at least one row
@@ -423,9 +425,9 @@ pub struct HotIndex {
     /// Every park or summit reference on the hunter side, split and upper-cased.
     parks: Counted<String>,
     /// Each activation day — `(park, UTC day)`, every park of a two-fer's `MY_SIG_INFO` list, split
-    /// and upper-cased — and the POTA keys ([`pota_keys`]) of its rows. A day is present while a
+    /// and upper-cased — and the POTA keys ([`pota_key`]) of its rows. A day is present while a
     /// row contributes to it, so its count is the number of keys it holds.
-    activations: HashMap<(String, u64), Counted<PotaKey>>,
+    activations: HashMap<(String, u64), ActivationDay>,
     /// The contest session's sweep, once a session asks for it.
     session: Option<Session>,
 }
@@ -826,15 +828,17 @@ impl HotIndex {
             }
         }
         if let Some(mine) = p.my_ref {
-            let these = pota_keys(p.call, p.band, p.mode, p.their_program, p.their_ref);
+            let key = pota_key(p.call, p.band, p.mode);
+            let p2p = !their_pota_parks(p.their_program, p.their_ref).is_empty();
             let day = p.when / SECS_PER_DAY;
             for park in park_refs(mine) {
                 let at = (park, day);
-                let keys = self.activations.entry(at.clone()).or_default();
-                for key in &these {
-                    d.apply(keys, key.clone());
+                let tally = self.activations.entry(at.clone()).or_default();
+                d.apply(&mut tally.contacts, key.clone());
+                if p2p {
+                    d.apply(&mut tally.p2p, key.clone());
                 }
-                if keys.0.is_empty() {
+                if tally.contacts.0.is_empty() {
                     self.activations.remove(&at);
                 }
             }
@@ -961,21 +965,22 @@ impl HotIndex {
     }
 
     /// How many distinct contacts the log holds from park `reference` (upper-cased by the caller)
-    /// on UTC day `day` (`when_unix / 86400`), by POTA's own uniqueness rule ([`pota_keys`]): what
-    /// counts toward the ten a valid activation needs. A dupe — the same call, band, mode and
-    /// hunted park again that day — adds nothing; a two-fer's contact counts at each park.
+    /// on UTC day `day` (`when_unix / 86400`), by POTA's own uniqueness rule ([`pota_key`]): what
+    /// counts toward the ten a valid activation needs. A dupe — the same call, band and mode again
+    /// that day, from whatever park of theirs — adds nothing; a contact made from an activator's
+    /// two-fer counts at each of those parks.
     pub fn activation_day_count(&self, reference: &str, day: u64) -> usize {
         self.activations
             .get(&(reference.to_string(), day))
-            .map_or(0, |keys| keys.0.len())
+            .map_or(0, |a| a.contacts.0.len())
     }
 
     /// How many of those contacts are park to park: the other station named a POTA park of its
-    /// own (one per park of a hunter's two-fer, as POTA counts them).
+    /// own. A hunter's two-fer is one of them, as it is one contact.
     pub fn activation_day_p2p(&self, reference: &str, day: u64) -> usize {
         self.activations
             .get(&(reference.to_string(), day))
-            .map_or(0, |keys| keys.0.keys().filter(|k| !k.3.is_empty()).count())
+            .map_or(0, |a| a.p2p.0.len())
     }
 
     /// ★ The contest session's sweep — [`Logbook::worked_keys_since`]'s answer — as it was
@@ -1211,53 +1216,51 @@ mod tests {
         (g.len() == 4).then_some(g)
     }
 
-    /// An activation day's contacts, by a scan: the distinct `(call, band, mode, their park)` of
-    /// the rows on `day` whose `MY_SIG_INFO` list names `reference` — one per POTA park of the
-    /// other station, or one with none — restated here from the rule rather than through
-    /// [`pota_keys`].
-    fn old_activation_day(log: &Logbook, reference: &str, day: u64) -> HashSet<PotaKey> {
+    /// An activation day's contacts, by a scan: the distinct `(call, band, mode)` of the rows on
+    /// `day` whose `MY_SIG_INFO` list names `reference`, each with whether any of its rows named a
+    /// POTA park of the other station's (park to park) — restated here from the rule rather than
+    /// through [`pota_key`].
+    fn old_activation_day(log: &Logbook, reference: &str, day: u64) -> HashMap<PotaKey, bool> {
         let parks = |s: &str| -> Vec<String> {
             s.split([',', ';'])
                 .map(|p| p.trim().to_ascii_uppercase())
                 .filter(|p| !p.is_empty())
                 .collect()
         };
-        log.records()
-            .iter()
-            .filter(|r| r.when_unix / 86_400 == day)
-            .filter(|r| {
-                r.ota
-                    .my_ref
+        let mut out: HashMap<PotaKey, bool> = HashMap::new();
+        for r in log.records().iter().filter(|r| r.when_unix / 86_400 == day) {
+            if !r
+                .ota
+                .my_ref
+                .as_deref()
+                .is_some_and(|m| parks(m).iter().any(|p| p == reference))
+            {
+                continue;
+            }
+            let mode = r.mode.trim().to_uppercase();
+            let mode = match mode.as_str() {
+                "USB" | "LSB" => "SSB".to_string(),
+                "BPSK31" => "PSK31".to_string(),
+                "BPSK63" => "PSK63".to_string(),
+                _ => mode,
+            };
+            let p2p = r
+                .ota
+                .their_program
+                .as_deref()
+                .is_some_and(|p| p.trim().eq_ignore_ascii_case("POTA"))
+                && r.ota
+                    .their_ref
                     .as_deref()
-                    .is_some_and(|m| parks(m).iter().any(|p| p == reference))
-            })
-            .flat_map(|r| {
-                let mode = r.mode.trim().to_uppercase();
-                let mode = match mode.as_str() {
-                    "USB" | "LSB" => "SSB".to_string(),
-                    "BPSK31" => "PSK31".to_string(),
-                    "BPSK63" => "PSK63".to_string(),
-                    _ => mode,
-                };
-                let pota = r
-                    .ota
-                    .their_program
-                    .as_deref()
-                    .is_some_and(|p| p.trim().eq_ignore_ascii_case("POTA"));
-                let mut theirs = if pota {
-                    r.ota.their_ref.as_deref().map(parks).unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-                if theirs.is_empty() {
-                    theirs.push(String::new());
-                }
-                let (call, band) = (r.call.trim().to_uppercase(), r.band.trim().to_lowercase());
-                theirs
-                    .into_iter()
-                    .map(move |park| (call.clone(), band.clone(), mode.clone(), park))
-            })
-            .collect()
+                    .is_some_and(|t| !parks(t).is_empty());
+            let key = (
+                r.call.trim().to_uppercase(),
+                r.band.trim().to_lowercase(),
+                mode,
+            );
+            *out.entry(key).or_default() |= p2p;
+        }
+        out
     }
 
     #[derive(Debug, Default, PartialEq)]
@@ -1694,7 +1697,7 @@ mod tests {
                 );
                 prop_assert_eq!(
                     index.activation_day_p2p(r, day),
-                    old.iter().filter(|k| !k.3.is_empty()).count(),
+                    old.values().filter(|p2p| **p2p).count(),
                     "park to park {:?} day {}",
                     r,
                     day

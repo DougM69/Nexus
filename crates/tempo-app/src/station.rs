@@ -6100,15 +6100,7 @@ mod hot_parity_tests {
             log.records()
                 .iter()
                 .filter(|r| r.ota.my_ref.as_deref() == Some("US-1234"))
-                .flat_map(|r| {
-                    tempo_core::logbook::hot::pota_keys(
-                        &r.call,
-                        &r.band,
-                        &r.mode,
-                        r.ota.their_program.as_deref(),
-                        r.ota.their_ref.as_deref(),
-                    )
-                })
+                .map(|r| tempo_core::logbook::hot::pota_key(&r.call, &r.band, &r.mode))
                 .collect::<HashSet<_>>()
                 .len(),
             "after {what}: activation count"

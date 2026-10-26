@@ -4485,7 +4485,7 @@ export const EN = {
   'ota.activation.progress': '{{reference}} {{count}} of 10',
   'ota.activation.toGo': '{{count}} to go',
   'ota.activation.valid': 'valid',
-  'ota.activation.progress.title': 'Contacts from {{reference}} since 0000Z, each call, band, mode and their park counted once, as POTA counts them. Ten in one UTC day make a valid activation; the count starts again at 0000Z.',
+  'ota.activation.progress.title': 'Contacts from {{reference}} since 0000Z, each call, band and mode counted once, from whatever park of theirs. Ten in one UTC day make a valid activation; the count starts again at 0000Z.',
   'ota.activation.p2p': 'P2P {{count}}',
   'ota.activation.p2p.title': 'Park-to-park contacts today: the other station was in a park too.',
   'ota.activation.grid.label': 'Grid',

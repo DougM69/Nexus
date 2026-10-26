@@ -4968,7 +4968,7 @@ export const DE: PartialCatalog = {
   "ota.activation.progress": "{{reference}} {{count}} von 10",
   "ota.activation.toGo": "noch {{count}}",
   "ota.activation.valid": "gültig",
-  "ota.activation.progress.title": "Verbindungen aus {{reference}} seit 0000Z; jedes Rufzeichen, Band, jede Betriebsart und ihr Park zählen einmal, wie POTA zählt. Zehn an einem UTC-Tag ergeben eine gültige Aktivierung; um 0000Z beginnt die Zählung neu.",
+  "ota.activation.progress.title": "Verbindungen aus {{reference}} seit 0000Z; jede Kombination aus Rufzeichen, Band und Betriebsart zählt einmal, aus welchem Park die Gegenstation auch funkt. Zehn an einem UTC-Tag ergeben eine gültige Aktivierung; um 0000Z beginnt die Zählung neu.",
   "ota.activation.p2p": "P2P {{count}}",
   "ota.activation.p2p.title": "Park-zu-Park-Verbindungen heute: Die Gegenstation war ebenfalls in einem Park.",
   "ota.activation.grid.label": "Locator",

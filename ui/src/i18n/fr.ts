@@ -4515,7 +4515,7 @@ export const FR: PartialCatalog = {
   "ota.activation.progress": "{{reference}} {{count}} sur 10",
   "ota.activation.toGo": "encore {{count}}",
   "ota.activation.valid": "valide",
-  "ota.activation.progress.title": "Contacts depuis {{reference}} depuis 0000Z ; chaque indicatif, bande, mode et leur parc comptent une fois, comme POTA les compte. Dix dans un jour UTC font une activation valide ; le compte repart à 0000Z.",
+  "ota.activation.progress.title": "Contacts depuis {{reference}} depuis 0000Z ; chaque indicatif, bande et mode comptent une fois, quel que soit le parc de l’autre station. Dix dans un jour UTC font une activation valide ; le compte repart à 0000Z.",
   "ota.activation.p2p": "P2P {{count}}",
   "ota.activation.p2p.title": "Contacts parc à parc aujourd’hui : l’autre station était aussi dans un parc.",
   "ota.activation.grid.label": "Locator",

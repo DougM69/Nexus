@@ -1,10 +1,12 @@
 // The activator's side of POTA, as the screen reads it — no React, no IO, fully node-testable.
 //
-// What the station counts lives in the hot index (`tempo_core::logbook::hot::pota_keys`): the
-// contacts of one park on one UTC day, each `(call, band, mode, their park)` once. The warn-only
-// dupe badge in the log form asks the SAME rule of the prior contacts it already holds for the
-// typed call, so the badge and the counter cannot disagree about what a dupe is. Keep the two
-// in step.
+// What the station counts lives in the hot index (`tempo_core::logbook::hot::pota_key`): the
+// contacts of one park on one UTC day, each `(call, band, mode)` once — a hunter's two-fer, or the
+// same hunter again from another park, is one contact toward the ten. The warn-only dupe badge in
+// the log form asks a wider question of the prior contacts it already holds for the typed call:
+// whether this contact would add any row the upload credits, which is per park of theirs
+// (`hot::their_pota_parks`, one export row each). So a hunter calling again from a NEW park of
+// theirs is no dupe here though it adds nothing to the count: they need it for their own P2P.
 
 import type { Activation, LoggedQso } from '../types'
 import { modeKey } from './callHistory'
@@ -23,10 +25,11 @@ export function parkRefs(list: string | null | undefined): string[] {
     .filter((p) => p !== '')
 }
 
-/** POTA's uniqueness keys for a contact (`pota_keys` in the hot index): the call exactly as logged
- *  (W1ABC/P is not W1ABC), the band, the mode through the log's fold (USB and LSB are SSB), and
- *  one POTA park of the other station's — one key per park of a hunter's two-fer, as POTA counts
- *  each; one key with no park when they named none, or a reference of another program. */
+/** The upload rows a contact makes, as keys: the call exactly as logged (W1ABC/P is not W1ABC),
+ *  the band, the mode through the log's fold (USB and LSB are SSB) — the counter's key
+ *  (`pota_key` in the hot index) — and one POTA park of the other station's: one key per park of a
+ *  hunter's two-fer, as the per-activation export writes one row each (`their_pota_parks`); one key
+ *  with no park when they named none, or a reference of another program. */
 export function potaKeys(
   call: string,
   band: string,

@@ -36,7 +36,7 @@ const settingsState = {
 /** The backend's "CAT CW keying is unproven on this model" list. Empty = rule unread. */
 let unprovenModels: number[] = []
 /** The activation the snapshot carries (`snap.activation`). */
-let activation: { program: string | null; reference: string | null; qsoCount: number } = {
+let activation: { program: string | null; reference: string | null; qsoCount: number; restored?: boolean } = {
   program: null,
   reference: null,
   qsoCount: 0,
@@ -199,6 +199,20 @@ describe('the POTA set while a park activation runs', () => {
     r.rerender(<CwCockpit snap={withActivation()} theme="dark" onWorkSpot={() => {}} spots={[]} />)
     await pressF(1)
     expect(api.sendCw).toHaveBeenLastCalledWith('CQ CQ DE {MYCALL} {MYCALL} K')
+  })
+
+  it('a paused activation (taken up at launch, not yet confirmed) keys the everyday set until it is resumed', async () => {
+    const api = (await import('../api')) as unknown as Record<string, ReturnType<typeof vi.fn>>
+    activation = { program: 'POTA', reference: 'US-1234', qsoCount: 0, restored: true }
+    const r = await renderCockpit()
+    await pressF(1)
+    expect(api.sendCw).toHaveBeenLastCalledWith('CQ CQ DE {MYCALL} {MYCALL} K')
+    await pressF(2)
+    expect(api.sendCw).not.toHaveBeenLastCalledWith('! UR 5NN 5NN {MYSTATE} {MYPARK} BK')
+    activation = { program: 'POTA', reference: 'US-1234', qsoCount: 0, restored: false }
+    r.rerender(<CwCockpit snap={withActivation()} theme="dark" onWorkSpot={() => {}} spots={[]} />)
+    await pressF(1)
+    expect(api.sendCw).toHaveBeenLastCalledWith('CQ POTA DE {MYCALL} {MYCALL} K')
   })
 
   it('an operator’s own profile keys win over the POTA set', async () => {

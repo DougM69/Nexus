@@ -808,8 +808,10 @@ export function CwCockpit({
   >([])
   const [activeProfile, setActiveProfile] = useState(0)
   // A park activation running: the built-in keys are the POTA set's. Read from the snapshot, so an
-  // activation started or stopped with the cockpit open changes the keys at once.
-  const parkActivation = snap.activation?.program === 'POTA' && !!snap.activation.reference
+  // activation started or stopped with the cockpit open changes the keys at once. A paused one
+  // (taken up at launch, not yet confirmed) tags nothing, so it keys the home set.
+  const parkActivation =
+    snap.activation?.program === 'POTA' && !!snap.activation.reference && snap.activation.restored !== true
   useEffect(() => {
     if (!active) return
     let alive = true

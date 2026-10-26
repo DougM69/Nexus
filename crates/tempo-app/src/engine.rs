@@ -48500,11 +48500,12 @@ mod tests {
         );
     }
 
-    /// ⭐ The strip counts as POTA does: a hunter in two parks is a contact — and a park-to-park
-    /// one — at each of their parks (the export sends one row per park), and a hunter on a summit
-    /// is a contact but no park to park.
+    /// ⭐ The strip never counts a contact the upload might not credit: a hunter in two parks is
+    /// ONE contact toward the ten, and one park-to-park contact (the export still sends one row
+    /// per park of theirs, for their P2P credit); the same hunter again from another park on the
+    /// same band and mode adds nothing; a hunter on a summit is a contact but no park to park.
     #[test]
-    fn a_hunters_two_fer_counts_at_each_of_their_parks_and_a_summit_is_not_p2p() {
+    fn a_hunters_two_fer_counts_once_and_a_summit_is_not_p2p() {
         let mut e = Engine::new("K9AAA", "EN52", 0);
         e.set_activation("POTA", "US-0001", Vec::new()).unwrap();
         let mut two_fer = e.qso_record("W1ABC".into(), None, Some(-5));
@@ -48518,7 +48519,16 @@ mod tests {
         assert_eq!(e.stored_log().len(), 2, "one row per contact in the log");
         assert_eq!(
             e.activation_day_counts(now_unix_secs()),
-            [("US-0001".to_string(), 3, 2)]
+            [("US-0001".to_string(), 2, 1)]
+        );
+        let mut moved = e.qso_record("W1ABC".into(), None, Some(-5));
+        moved.ota.their_program = Some("POTA".into());
+        moved.ota.their_ref = Some("US-0097".into());
+        e.log_qso(moved);
+        assert_eq!(
+            e.activation_day_counts(now_unix_secs()),
+            [("US-0001".to_string(), 2, 1)],
+            "the same call, band and mode from another park of theirs adds nothing"
         );
     }
 

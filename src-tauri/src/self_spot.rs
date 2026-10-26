@@ -288,6 +288,13 @@ impl Gate {
             spotted: None,
         }))
     }
+
+    fn forget_spotted(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .spotted = None;
+    }
 }
 
 impl GateState {
@@ -316,6 +323,12 @@ impl GateState {
 
 /// The process's one gate: the desktop and the Remote station share a session.
 static GATE: Gate = Gate::new();
+
+/// Stop: the activation's spot is over, so no QRT may later go on the frequency it was spotted
+/// on — the same park started again in this session is a new activation, spotted afresh.
+pub fn activation_ended() {
+    GATE.forget_spotted();
+}
 
 /// Post one press through the real doors (the refusing ones in a test build).
 pub fn send(ctx: &Context) -> Report {
@@ -1123,6 +1136,22 @@ mod tests {
         assert_eq!(confirm(spotted, "QRV"), Err(Refusal::Moved), "only a QRT");
         assert_eq!(confirm(spotted + 1_000, "QRT"), Err(Refusal::Moved));
         assert_eq!(confirm(dial, "QRT"), Ok(dial), "the dial, as always");
+        // Stop, and the same park started again later: its old spot is not this activation's.
+        gate.forget_spotted();
+        assert_eq!(
+            confirm(spotted, "QRT"),
+            Err(Refusal::Moved),
+            "a stopped activation's spot"
+        );
+        assert_eq!(confirm(dial, "QRT"), Ok(dial));
+        press(
+            &gate,
+            Instant::now(),
+            &at,
+            &posts,
+            Ok(SpotAnswer::Posted),
+            Ok(()),
+        );
         engine
             .set_activation("POTA", "US-0002", Vec::new())
             .unwrap();

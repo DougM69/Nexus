@@ -209,6 +209,8 @@ export type OtaRemote = {
   clearHunt?: () => void
   startActivation?: (program: string, reference: string) => void
   stopActivation?: () => void
+  /** "Still activating" for an activation the station took up paused at launch. */
+  resumeActivation?: () => void
   /** Public: the parent confirms on every click before anything is sent. */
   selfSpot?: () => void
 }
@@ -421,6 +423,10 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   // "Still activating".
   const paused = activating && act?.restored === true
   const handleResumeActivation = async () => {
+    if (observed) {
+      remote?.resumeActivation?.()
+      return
+    }
     const a = await withErrorToast(() => resumeActivation(), t('ota.activation.resumeFailed'))
     if (a) setAct(a)
   }
@@ -737,7 +743,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 </span>
               )
             })}
-            {/* Park to park, each park's: a hunter's two-fer counts at each of their parks. */}
+            {/* Park to park, each park's: each of YOUR parks of a two-fer; a hunter's two-fer is one contact. */}
             {(act?.parks ?? []).some((p) => p.p2p > 0) && (
               <span className="pota-act-progress p2p" title={t('ota.activation.p2p.title')}>
                 {(act?.parks?.length ?? 0) > 1
@@ -795,7 +801,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 ))}
               </span>
             )}
-            {!observed && paused && (
+            {paused && (!observed || remote?.resumeActivation) && (
               <button type="button" className="pota-hunt-clear" onClick={() => void handleResumeActivation()} title={t('ota.activation.resume.title')}>
                 {t('ota.activation.resume.label')}
               </button>

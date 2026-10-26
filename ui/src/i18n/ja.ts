@@ -3030,7 +3030,7 @@ export const JA: PartialCatalog = {
   "ota.activation.progress": "{{reference}} {{count}}/10",
   "ota.activation.toGo": "あと {{count}}",
   "ota.activation.valid": "成立",
-  "ota.activation.progress.title": "0000Z 以降の {{reference}} からの交信。POTA の数え方どおり、コールサイン・バンド・モード・相手のパークの組み合わせごとに 1 回数えます。1 つの UTC 日に 10 交信でアクティベーション成立。0000Z に数え直します。",
+  "ota.activation.progress.title": "0000Z 以降の {{reference}} からの交信。コールサイン・バンド・モードの組み合わせごとに 1 回数えます (相手がどのパークからでも)。1 つの UTC 日に 10 交信でアクティベーション成立。0000Z に数え直します。",
   "ota.activation.p2p": "P2P {{count}}",
   "ota.activation.p2p.title": "今日のパーク・トゥ・パーク交信：相手局もパークにいました。",
   "ota.activation.grid.label": "グリッド",

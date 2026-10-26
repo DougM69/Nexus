@@ -122,6 +122,26 @@ it('an activation taken up at launch shows as paused, with Still activating and 
   await waitFor(() => expect(api.resumeActivation).toHaveBeenCalledTimes(1))
 })
 
+it('an observed station: Still activating and Stop are each the station’s action, offered as Stop is', async () => {
+  const observation = {
+    feeds: [],
+    activation: activation({ restored: true }),
+    hunt: null,
+    parkCount: 0,
+    huntedCount: 0,
+  }
+  const remote = { stopActivation: vi.fn(), resumeActivation: vi.fn() }
+  api.resumeActivation.mockClear()
+  const { rerender } = render(<PotaSotaView snap={snapWith(null)} observation={observation} remote={remote} />)
+  fireEvent.click(screen.getByRole('button', { name: t('ota.activation.resume.label') }))
+  expect(remote.resumeActivation).toHaveBeenCalledTimes(1)
+  expect(api.resumeActivation).not.toHaveBeenCalled()
+  // Not offered by the station: neither button, as with Stop.
+  rerender(<PotaSotaView snap={snapWith(null)} observation={observation} remote={{}} />)
+  expect(screen.queryByRole('button', { name: t('ota.activation.resume.label') })).toBeNull()
+  expect(screen.queryByRole('button', { name: new RegExp(t('ota.activation.stop.label')) })).toBeNull()
+})
+
 it('a live activation offers no Still activating', () => {
   render(<PotaSotaView snap={snapWith(activation())} />)
   expect(screen.queryByRole('button', { name: t('ota.activation.resume.label') })).toBeNull()

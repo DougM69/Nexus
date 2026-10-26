@@ -33574,6 +33574,7 @@ fn clear_activation(
 ) -> Result<tempo_app::dto::ActivationDto, String> {
     let mut eng = engine_lock(&state);
     eng.clear_activation();
+    self_spot::activation_ended();
     Ok(activation_now(&eng))
 }
 
