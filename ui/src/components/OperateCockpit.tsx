@@ -42,6 +42,7 @@ import {
   snrForCall,
   stdMessageList,
   toggleIgnored,
+  txRowIndex,
 } from '../txMessages'
 import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
@@ -1056,11 +1057,9 @@ export function OperateCockpit({
   const contestCqTyped = snap.contestCqTyped === true
 
   // The six panel rows (Tx5 + Tx6 = the live editable texts). The "next" dot
-  // follows qso.txNow when it matches a row, else the operator's local pick.
+  // follows the row qso.txNow stands for (txRowIndex), else the operator's local pick.
   const rowTexts = stdMessageList({ ...msgs, tx5, tx6: contestCq ?? tx6 })
-  const txNow = snap.qso?.txNow ?? null
-  const liveNext = txNow ? rowTexts.indexOf(txNow) : -1
-  const nextIndex = liveNext >= 0 ? liveNext : localNext
+  const nextIndex = txRowIndex(rowTexts, snap.qso?.txNow) ?? localNext
 
   /** #254's refusal of a Tx6 text that is not a CQ in WSJT-X's grammar, naming the form that
    *  would work when `cqSuggestionFromText` can derive one from the operator's own words. */
