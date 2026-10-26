@@ -28700,6 +28700,57 @@ mod tests {
         );
     }
 
+    /// A voice-keyer message in Phone on a Hamlib CAT radio (a Flex on SmartSDR CAT is one) keys
+    /// with the same rigctld `T 1` an FT8 over keys with, before its audio is played, and the
+    /// over ends with `T 0`. A field report had a Flex on SmartSDR CAT play the message without
+    /// transmitting while FT8 keyed: this pins that Nexus's half of the key is the same for both.
+    #[test]
+    fn a_voice_message_keys_a_hamlib_cat_rig_with_the_ft8_key_and_unkeys_after() {
+        let (addr, seen, _live_mode) = band_stacking_rigctld_stub(14_250_000, &[]);
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+            e.set_tx_enabled(true);
+        }
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+            state
+                .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                .unwrap();
+        };
+        let t0 = now_unix_ms();
+        run(&mut state, &mut rig, &mut backend, t0);
+        seen.lock().unwrap().clear();
+        assert!(backend.played.is_empty(), "the control: nothing played yet");
+        engine
+            .lock()
+            .unwrap()
+            .send_voice(vec![0.05; 12_000])
+            .expect("the voice keyer takes it");
+        run(&mut state, &mut rig, &mut backend, t0 + 100.0);
+        let wire = seen.lock().unwrap().clone();
+        assert!(
+            wire.iter().any(|l| l == "T 1"),
+            "the message keys the radio with T 1, as an FT8 over does. wire={wire:?}"
+        );
+        assert_eq!(backend.played.len(), 12_000, "…and its audio is played");
+        run(&mut state, &mut rig, &mut backend, t0 + 3_000.0);
+        let wire = seen.lock().unwrap().clone();
+        let key = wire.iter().position(|l| l == "T 1").unwrap();
+        assert!(
+            wire[key..].iter().any(|l| l == "T 0"),
+            "the over ends with T 0, never left keyed. wire={wire:?}"
+        );
+        assert!(state.tx_until_ms.is_none(), "the loop believes idle");
+    }
+
     /// ⭐ THE INVARIANT THAT OUTRANKS THE FIX (same 2026-09 report): a mode the OPERATOR set on
     /// the rig's own front panel MUST STAND. The periodic read-back is display-only by design
     /// (`observe_rig_mode`, and the loop's `// display-only; never adopted into operating_mode`
