@@ -205,6 +205,7 @@ import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { ContestView } from './components/ContestView'
+import { CONTEST_SETUP_SAVED_EVENT } from './components/ContestSetupWizard'
 import { ContestLargeEntry } from './components/ContestLogger'
 import { openContestLogger } from './features/contestLoggerLayout'
 import { ContestScreenAway, useContestScreenWindow } from './components/ContestScreenWindow'
@@ -2737,6 +2738,13 @@ function App() {
     reloadSettings()
     setSettingsSaves((n) => n + 1)
   }, [reloadSettings])
+
+  // The contest setup saves from wherever it is opened (the Contests pane has no line to App of its
+  // own), and says so on this window: read the settings and the snapshot again, as after a Save.
+  useEffect(() => {
+    window.addEventListener(CONTEST_SETUP_SAVED_EVENT, handleSettingsSaved)
+    return () => window.removeEventListener(CONTEST_SETUP_SAVED_EVENT, handleSettingsSaved)
+  }, [handleSettingsSaved])
 
   const handleDismissOnboarding = useCallback(() => {
     localStorage.setItem(ONBOARD_KEY, '1')

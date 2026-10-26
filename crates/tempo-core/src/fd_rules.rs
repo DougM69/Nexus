@@ -611,6 +611,45 @@ impl FdRuleset {
             self.event_window(year + 1)
         }
     }
+
+    /// ⭐ **The settings this contest's exchange sends from**: every `setting:` source, and every
+    /// input of a `derived:` one, among the slots any role sends, in field order and each once.
+    /// What a setup screen asks for before the contest starts, so it asks for this contest's and
+    /// no other's. Rust field names, as [`SENT_SLOT_SETTINGS`] holds them.
+    pub fn sent_settings(&self) -> Vec<&'static str> {
+        let sent = |key: &str| self.exchange.roles.iter().any(|r| r.sends.contains(&key));
+        let mut out: Vec<&'static str> = Vec::new();
+        for field in self.exchange.fields.iter().filter(|f| sent(f.key)) {
+            let names: &[&'static str] = match field.source.split_once(':') {
+                Some(("setting", name)) => SENT_SLOT_SETTINGS
+                    .iter()
+                    .find(|s| **s == name)
+                    .map_or(&[], std::slice::from_ref),
+                Some(("derived", what)) => SENT_SLOT_DERIVATIONS
+                    .iter()
+                    .find(|(id, _)| *id == what)
+                    .map_or(&[], |(_, inputs)| *inputs),
+                _ => &[],
+            };
+            for name in names {
+                if !out.contains(name) {
+                    out.push(name);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// The rules-file ids of every contest the loaded table holds, in its order, each once.
+pub fn ruleset_ids() -> Vec<&'static str> {
+    let mut ids: Vec<&'static str> = Vec::new();
+    for r in table().rulesets.iter() {
+        if !ids.contains(&r.event) {
+            ids.push(r.event);
+        }
+    }
+    ids
 }
 
 /// The active ruleset for an event + year: the newest `rules_year` ≤ `year`,
@@ -4475,6 +4514,65 @@ mod tests {
         let s26 = sfd.event_window(2026);
         assert_eq!(sfd.next_or_running(s26.end_unix - 1), s26);
         assert_eq!(sfd.next_or_running(s26.end_unix), sfd.event_window(2027));
+    }
+
+    #[test]
+    fn sent_settings_names_what_each_contest_sends_and_nothing_else() {
+        let sent = |id: &str| {
+            ruleset_by_id(id, CURRENT_RULES_YEAR)
+                .unwrap()
+                .sent_settings()
+        };
+        assert_eq!(sent("arrlfd"), vec!["fd_class", "fd_section"]);
+        assert_eq!(sent("wfd"), vec!["fd_class", "fd_section"]);
+        // A QSO party's QTH is a derivation: county in state, state outside it.
+        assert_eq!(
+            sent("ilqp"),
+            vec!["contest_qth_county", "contest_qth_state"]
+        );
+        assert_eq!(sent("cqww_cw"), vec!["contest_cq_zone"]);
+        assert_eq!(sent("arrlvhf_jun"), vec!["mygrid"]);
+        // Sweepstakes sends a serial, its precedence (the four category axes), its call, its check
+        // and its section.
+        let ss = sent("arrlss_cw");
+        for name in [
+            "contest_category_operator",
+            "contest_category_power",
+            "contest_category_assisted",
+            "contest_category_station",
+            "mycall",
+            "contest_check",
+            "fd_section",
+        ] {
+            assert!(ss.contains(&name), "{name} missing from {ss:?}");
+        }
+        assert!(!ss.contains(&"fd_class"), "{ss:?}");
+        // Each name once, and every one a setting this build can supply.
+        let mut seen = ss.clone();
+        seen.dedup();
+        assert_eq!(seen.len(), ss.len());
+        assert!(ss.iter().all(|n| SENT_SLOT_SETTINGS.contains(n)));
+    }
+
+    #[test]
+    fn ruleset_ids_lists_every_contest_the_table_holds_once() {
+        let ids = ruleset_ids();
+        for id in [
+            "arrlfd",
+            "wfd",
+            "ilqp",
+            "nyqp",
+            "cqww_rtty",
+            "arrlvhf_sep",
+            "arrlss_ssb",
+        ] {
+            assert_eq!(
+                ids.iter().filter(|i| **i == id).count(),
+                1,
+                "{id} in {ids:?}"
+            );
+        }
+        assert_eq!(ids.len(), 18, "{ids:?}");
     }
 
     #[test]

@@ -32165,6 +32165,148 @@ tr.sel .aprs-sym {
   font-size: var(--fs-body);
   color: var(--state-weak);
 }
+.contest-over-missing {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.contest-over-missing legend {
+  padding: 0 var(--space-1);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.contest-over-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 0;
+  font-size: var(--fs-body);
+}
+.contest-over-line .contest-over-note {
+  margin: 0;
+}
+.contest-over-line input,
+.contest-over-line select {
+  min-width: 0;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-body);
+  padding: 3px 6px;
+}
+/* Where the sponsor takes the log: shown to copy, never a link Nexus opens. */
+.contest-over-submit {
+  font-size: var(--fs-body);
+  overflow-wrap: anywhere;
+}
+.contest-over-submit .contest-over-note {
+  margin: 0;
+}
+.contest-over-address {
+  font-family: var(--font-mono);
+  user-select: all;
+}
+
+/* ============ Contest setup (ContestSetupWizard.tsx): the first-run wizard's step framework ============ */
+.contest-setup .wizard-dots {
+  flex-wrap: wrap;
+}
+.contest-setup-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+.contest-setup-pick {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  text-align: left;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: calc(13px * var(--text-scale));
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+.contest-setup-pick.sel {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.contest-setup-pick-name {
+  font-weight: 700;
+  min-width: 0;
+}
+.contest-setup-pick-when {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+}
+.contest-setup-tick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-body);
+}
+.contest-setup-warn {
+  margin: 0 0 var(--space-2);
+  color: var(--alert-warning);
+  font-size: var(--fs-body);
+}
+.contest-setup-warn p {
+  margin: 0 0 var(--space-1);
+}
+.contest-setup-bad {
+  margin: 0 0 var(--space-2);
+  color: var(--state-weak);
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+.contest-setup-exchange {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-body);
+}
+.contest-setup-checks {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-4);
+  font-size: var(--fs-body);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.contest-setup-checks .warn {
+  color: var(--alert-warning);
+}
+.contest-setup-on {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-title);
+  font-weight: 700;
+}
+/* "Set up a contest…" / "Change setup…" in the Contest screen's banner. */
+.fd-setup-btn {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* The quiet "this weekend" line (Contest screen, Contests pane). */
+.contest-soon {
+  margin: 0 0 var(--space-2);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-dim);
+}
 /* The affirmative button of a DESTRUCTIVE confirm (`danger: true`). Without this the class was
    inert — there is no `.settings-save.danger` or bare `.danger` rule — so all eleven destructive
    confirms painted as an ordinary accent save button, and the one visual cue that this button
