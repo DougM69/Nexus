@@ -89,6 +89,7 @@ import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
+import { ActivationPane } from './components/ActivationPane'
 import { BandMap } from './components/BandMap'
 import { ConnectView } from './components/ConnectView'
 import { DashboardBar, StayBehindToggle } from './components/DashboardBar'
@@ -833,6 +834,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
           fieldDay={snap?.fieldDay ?? null}
+          activation={snap ? { act: snap.activation ?? null, logTick: snap.logTick } : undefined}
           // The Spots, POTA/SOTA and Needed boxes, with THIS window's boards (its Spots and
           // Needed boards above, `huntOta`) and the board's own feed, the spot poll above. The
           // POTA/SOTA box waits for the first snapshot, as this window's POTA/SOTA arm does.
@@ -892,6 +894,24 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           // The QSY half of a hunt (`huntOta`, above): the board tags the hunt itself first.
           onHunt={huntOta}
         />
+      </DetachedShell>
+    )
+  }
+
+  if (panel === 'activation') {
+    // THE ACTIVATION WINDOW: the Activation pane on a monitor of its own, beside the cockpit. It reads
+    // the snapshot this window polls and asks the logbook through this window's source; it sends
+    // nothing (components/ActivationPane).
+    return (
+      <DetachedShell className="detached-activation">
+        <h2 className="act-window-title">{t('connect.pane.activation.title')}</h2>
+        {snap ? (
+          <ActivationPane act={snap.activation ?? null} logTick={snap.logTick} />
+        ) : (
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        )}
       </DetachedShell>
     )
   }

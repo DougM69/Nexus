@@ -251,7 +251,7 @@ pub fn station_call(r: &QsoRecord, settings_call: Option<&str>) -> Option<String
 /// `call` without a portable `/P` at its end (operator ruling): `KD9TAW/P` is the same station call
 /// as `KD9TAW` to the duplicate finder and to a change of station call. Only `/P` — `/M`, `/MM`,
 /// `/QRP`, a prefix (`W1/KD9TAW`) or any other suffix is another call.
-fn without_portable_p(call: String) -> String {
+pub fn without_portable_p(call: String) -> String {
     match call.strip_suffix("/P") {
         Some(base) if !base.is_empty() => base.to_string(),
         _ => call,
@@ -1128,7 +1128,10 @@ fn checked_value(field: Field, value: &str) -> Result<String, String> {
         }
         Field::Dxcc if v.parse::<u32>().is_err() => bad("a DXCC entity number"),
         Field::TimeOff if v.parse::<u64>().is_err() => bad("a time"),
-        Field::MyPotaRef | Field::PotaRef if !valid_pota(&v.to_ascii_uppercase()) => {
+        // A two-fer may be typed with ';' between its parks; it is stored with ','.
+        Field::MyPotaRef | Field::PotaRef
+            if !valid_pota(&v.replace(';', ",").to_ascii_uppercase()) =>
+        {
             bad("a POTA park reference")
         }
         Field::MySotaRef | Field::SotaRef if !valid_sota(&v.to_ascii_uppercase()) => {
@@ -1138,9 +1141,18 @@ fn checked_value(field: Field, value: &str) -> Result<String, String> {
         Field::Band if v.is_empty() => bad("a band"),
         _ if v.is_empty() => Err("A value to set cannot be blank; clear the field instead.".into()),
         Field::Operator | Field::StationCallsign | Field::PropMode => Ok(v.to_ascii_uppercase()),
-        Field::MyPotaRef | Field::PotaRef | Field::MySotaRef | Field::SotaRef | Field::Iota => {
-            Ok(v.to_ascii_uppercase())
+        // A two-fer as the activation stamps one: the parks upper case, comma-separated with no
+        // spaces, each once.
+        Field::MyPotaRef | Field::PotaRef => {
+            let mut parks: Vec<String> = Vec::new();
+            for park in v.split([',', ';']).map(|p| p.trim().to_ascii_uppercase()) {
+                if !parks.contains(&park) {
+                    parks.push(park);
+                }
+            }
+            Ok(parks.join(","))
         }
+        Field::MySotaRef | Field::SotaRef | Field::Iota => Ok(v.to_ascii_uppercase()),
         _ => Ok(v.to_string()),
     }
 }

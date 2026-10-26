@@ -31795,11 +31795,17 @@ contact yourself."
         let Some(a) = self.station.activation_record() else {
             return crate::dto::ActivationDto::default();
         };
-        let parks: Vec<crate::dto::ActivationParkDto> = self
-            .station
-            .activation_day_counts(now)
+        let counts = self.station.activation_day_counts(now);
+        // Taken after the counts, which take it themselves: never twice at once.
+        let hot = self.station.hot();
+        let parks: Vec<crate::dto::ActivationParkDto> = counts
             .into_iter()
             .map(|(reference, count, p2p)| crate::dto::ActivationParkDto {
+                calls: hot
+                    .activation_day_calls(&reference, now / 86_400)
+                    .into_iter()
+                    .map(|(callsign, count)| crate::dto::ActivationCallDto { callsign, count })
+                    .collect(),
                 reference,
                 count,
                 p2p,
@@ -31842,6 +31848,30 @@ contact yourself."
     /// See [`StationCore::restore_activation`].
     pub fn restore_activation(&mut self) {
         self.station.restore_activation()
+    }
+
+    /// Keep the record of exported activation files in `path`, taking up what it holds
+    /// ([`crate::pota_exports`]). Called once by the shell at startup.
+    pub fn set_pota_exports_path(&mut self, path: PathBuf) {
+        self.station.pota_exports = crate::pota_exports::ExportedActivations::open(path);
+    }
+
+    /// The activation file for `reference`, the UTC day holding `day_unix` and `callsign` was
+    /// exported ([`crate::pota_exports::ExportedActivations::note`]).
+    pub fn note_activation_exported(
+        &mut self,
+        reference: &str,
+        day_unix: u64,
+        callsign: Option<&str>,
+    ) {
+        self.station
+            .pota_exports
+            .note(reference, day_unix, callsign)
+    }
+
+    /// The record of exported activation files.
+    pub fn exported_activations(&self) -> &crate::pota_exports::ExportedActivations {
+        &self.station.pota_exports
     }
 
     /// See [`StationCore::update_qso`] — plus the propagation of a correction back into
@@ -48850,6 +48880,44 @@ mod tests {
         assert!(
             e.activation_record().is_some(),
             "it keeps running across 00:00Z"
+        );
+    }
+
+    /// A day at a park with contacts under more than one call: the park's count is every call's,
+    /// and the panel is also given each call's own — one file each, as signed — so it can say
+    /// that POTA counts each call separately. One call, one entry.
+    #[test]
+    fn a_park_day_under_two_calls_gives_each_calls_count() {
+        let mut e = Engine::new("K9AAA", "EN52", 0);
+        e.set_activation("POTA", "US-0001", Vec::new()).unwrap();
+        for (i, call) in ["W1ABC", "W2ABC", "W3ABC"].into_iter().enumerate() {
+            act_log(&mut e, call, "20m", "SSB", ACT_T0 + i as u64);
+        }
+        let calls = |e: &Engine| -> Vec<(Option<String>, usize)> {
+            e.activation_dto(ACT_T0 + 60).parks[0]
+                .calls
+                .iter()
+                .map(|c| (c.callsign.clone(), c.count))
+                .collect()
+        };
+        assert_eq!(calls(&e), vec![(Some("K9AAA".into()), 3)]);
+        for (i, call) in ["W4ABC", "W1ABC"].into_iter().enumerate() {
+            let mut rec = e.qso_record(call.into(), None, Some(-5));
+            rec.band = "20m".into();
+            rec.mode = "SSB".into();
+            rec.when_unix = ACT_T0 + 3_600 * (i as u64 + 1);
+            rec.station_callsign = Some("K9AAA/M".into());
+            e.log_qso(rec);
+        }
+        assert_eq!(e.stored_log().len(), 5);
+        let dto = e.activation_dto(ACT_T0 + 60);
+        assert_eq!(
+            dto.parks[0].count, 4,
+            "W1ABC once at the park, whatever the call"
+        );
+        assert_eq!(
+            calls(&e),
+            vec![(Some("K9AAA".into()), 3), (Some("K9AAA/M".into()), 2)]
         );
     }
 

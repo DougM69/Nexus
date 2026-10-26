@@ -657,6 +657,50 @@ pub(crate) fn journey_kept(
     keep(&tallies.journey, mark, key, model, fresh)
 }
 
+// ── POTA activator achievements ─────────────────────────────────────────────
+
+/// What [`pota_activator_kept`] reads: what keys a contact to an activation
+/// (`tempo_core::logbook::Activations`) and what tells its contacts apart by POTA's rule.
+const ACTIVATIONS: Narrow = Narrow {
+    columns: &[
+        "call",
+        "band",
+        "mode",
+        "when_unix",
+        "ota_my_program",
+        "ota_my_ref",
+        "station_callsign",
+        "operator",
+    ],
+    uploads: false,
+};
+
+/// The log's POTA activator standing per callsign, a portable `/P` merged into the plain call
+/// (`tempo_core::pota_awards::add`). Kept against `index_rev`: no stamp
+/// changes a park, a call, a band, a mode or a time.
+pub(crate) fn pota_activator_kept(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+) -> Result<Arc<Vec<tempo_core::pota_awards::ActivatorStats>>, String> {
+    let eng = engine_lock(engine);
+    let mark = eng.log_index_rev();
+    if let Some(kept) = tallies.pota_activator.get(mark, &()) {
+        return Ok(kept);
+    }
+    let rows = eng.log_rows();
+    drop(eng);
+    tempo_core::logbook::io_fence::whole_log_off_engine_lock("the POTA activator fold");
+    let mut found = tempo_core::logbook::Activations::default();
+    let fresh = rows
+        .each_with(ACTIVATIONS, &[], Scope::All, Order::Log, &mut |r| {
+            tempo_core::pota_awards::add(&mut found, r);
+            ControlFlow::Continue(())
+        })
+        .map_err(unreadable)?;
+    let stats = tempo_core::pota_awards::by_callsign(&found.finish());
+    keep(&tallies.pota_activator, mark, (), stats, fresh)
+}
+
 /// One logged record as the Journey reads it.
 pub(crate) fn journey_qso(r: &QsoRecord) -> propagation::JourneyQso {
     use propagation::model::{Band, ModeClass};

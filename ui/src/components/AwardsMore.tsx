@@ -7,7 +7,7 @@
 // names, band and mode names, calls, prefixes, grids and references (data).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Grid3x3, Send, Award } from 'lucide-react'
+import { Grid3x3, Send, Award, Trees } from 'lucide-react'
 import type {
   CustomAward,
   CustomAwardsView,
@@ -17,10 +17,12 @@ import type {
   QslFor,
   QslWant,
 } from '../types'
+import type { ActivatorStats, PotaActivator } from '../api'
 import {
   exportCustomAwards,
   getCustomAwards,
   getDxccChart,
+  getPotaActivator,
   getWhatToQsl,
   readCustomAwardsFile,
   saveTextToDownloads,
@@ -231,6 +233,149 @@ export function WhatToQslPanel() {
               {t('awards.qsl.showAll', { count: wants.length })}
             </button>
           )}
+        </>
+      )}
+    </div>
+  )
+}
+
+/** POTA's achievement names — the programme's own, invariant tokens, never translated. */
+const POTA_NAMES = { repeat: 'Repeat Offender', kilo: 'Kilo', rover: 'Rover' }
+/** POTA's Rover tiers: parks validly activated in one UTC day, by name (docs.pota.app). */
+const ROVER_TIERS: Array<[number, string]> = [
+  [5, 'Warthog'],
+  [10, 'Rhino'],
+  [15, 'Cheetah'],
+  [20, 'Ostrich'],
+  [25, 'Leopard'],
+  [30, 'Lion'],
+]
+/** Repeat Offender: a tier per this many valid activations of one park; Kilo: contacts from one. */
+const REPEAT_STEP = 20
+const KILO_QSOS = 1000
+const POTA_PARKS_SHOWN = 10
+
+/** One callsign's achievements, each counted as POTA defines it (`tempo_core::pota_awards`). */
+function ActivatorBlock({ s, many }: { s: ActivatorStats; many: boolean }) {
+  const [all, setAll] = useState(false)
+  // The park nearest its next Repeat Offender tier is the one with the most activations; Kilo's
+  // is the one with the most contacts.
+  const repeat = s.parks[0]
+  const kilo = s.parks.reduce<ActivatorStats['parks'][number] | undefined>(
+    (best, p) => (!best || p.qsos > best.qsos ? p : best),
+    undefined,
+  )
+  const kilos = s.parks.filter((p) => p.qsos >= KILO_QSOS).length
+  const shown = all ? s.parks : s.parks.slice(0, POTA_PARKS_SHOWN)
+  return (
+    <div className="aw-pota-call">
+      {many && (
+        <h4>{s.callsign ? t('awards.pota.call', { call: s.callsign }) : t('awards.pota.noCall')}</h4>
+      )}
+      <p className="aw-empty">
+        {t('awards.pota.summary', { activations: s.activations, parks: s.parksActivated, qsos: s.qsos })}
+        {s.attempts > 0 && <> · {t('awards.pota.attempts', { count: s.attempts })}</>}
+      </p>
+      <ul className="aw-needed aw-pota-ladders">
+        <li>
+          <span className="aw-entity">{t('awards.pota.parksLabel')}</span>
+          <span className="aw-needbands">
+            {s.nextParkTier !== null
+              ? t('awards.pota.parksNext', { count: s.parksActivated, next: s.nextParkTier })
+              : t('awards.pota.parksDone', { count: s.parksActivated })}
+          </span>
+        </li>
+        <li>
+          <span className="aw-entity">{POTA_NAMES.repeat}</span>
+          <span className="aw-needbands">
+            {repeat && repeat.activations > 0
+              ? t('awards.pota.repeat', {
+                  park: repeat.reference,
+                  count: repeat.activations,
+                  next: (Math.floor(repeat.activations / REPEAT_STEP) + 1) * REPEAT_STEP,
+                })
+              : t('awards.pota.repeatNone')}
+          </span>
+        </li>
+        <li>
+          <span className="aw-entity">{POTA_NAMES.kilo}</span>
+          <span className="aw-needbands">
+            {kilo && t('awards.pota.kilo', { park: kilo.reference, count: kilo.qsos, target: KILO_QSOS })}
+            {kilos > 0 && <> · {t('awards.pota.kiloDone', { count: kilos })}</>}
+          </span>
+        </li>
+        <li>
+          <span className="aw-entity">{POTA_NAMES.rover}</span>
+          <span className="aw-needbands">
+            {s.roverBest > 0 && s.roverBestDate
+              ? t('awards.pota.rover', { count: s.roverBest, date: s.roverBestDate })
+              : t('awards.pota.roverNone')}
+            {ROVER_TIERS.map(([n, name], k) =>
+              (s.roverDays[k] ?? 0) > 0 ? (
+                <span className="aw-chip" key={name} title={t('awards.pota.roverTier', { count: n })}>
+                  {name} × {s.roverDays[k]}
+                </span>
+              ) : null,
+            )}
+          </span>
+        </li>
+      </ul>
+      <table className="aw-bn-table aw-pota-parks">
+        <thead>
+          <tr>
+            <th>{t('awards.pota.col.park')}</th>
+            <th>{t('awards.pota.col.activations')}</th>
+            <th>{t('awards.pota.col.attempts')}</th>
+            <th>{t('awards.pota.col.qsos')}</th>
+            <th>{t('awards.pota.col.last')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((p) => (
+            <tr key={p.reference}>
+              <td>
+                {p.reference}
+                {p.name && <span className="aw-qsl-via"> · {p.name}</span>}
+              </td>
+              <td>{p.activations}</td>
+              <td>{p.attempts}</td>
+              <td>{p.qsos}</td>
+              <td>{p.lastDate}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!all && s.parks.length > POTA_PARKS_SHOWN && (
+        <button type="button" className="aw-needsort" onClick={() => setAll(true)}>
+          {t('awards.pota.showAll', { count: s.parks.length })}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** POTA's activator achievements, counted from the log: valid activations, parks activated,
+ *  Repeat Offender, Kilo and Rover, per callsign the activations were worked under. */
+export function PotaActivatorPanel() {
+  const [pota, failed] = useStationRead<PotaActivator>(getPotaActivator)
+  const calls = pota?.calls ?? []
+  return (
+    <div className="aw-panel aw-pota-panel">
+      <h3>
+        <Trees size={14} aria-hidden="true" /> {t('awards.pota.head')}
+      </h3>
+      {failed ? (
+        <p className="aw-empty">{t('awards.pota.error')}</p>
+      ) : !pota ? (
+        <p className="aw-empty">{t('awards.chart.loading')}</p>
+      ) : calls.length === 0 ? (
+        <p className="aw-empty">{t('awards.pota.empty')}</p>
+      ) : (
+        <>
+          <p className="aw-empty">{t('awards.pota.note')}</p>
+          {calls.map((s) => (
+            <ActivatorBlock key={s.callsign ?? ''} s={s} many={calls.length > 1} />
+          ))}
         </>
       )}
     </div>

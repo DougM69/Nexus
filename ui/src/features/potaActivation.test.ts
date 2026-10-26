@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import type { Activation, LoggedQso } from '../types'
-import { activationParks, isLegacyUsRef, parkProgress, potaDupe, potaKeys } from './potaActivation'
+import type { Activation, LoggedActivation, LoggedQso } from '../types'
+import {
+  activationFiles,
+  activationFilter,
+  activationParks,
+  isLegacyUsRef,
+  mixedCallsNote,
+  parkProgress,
+  potaDupe,
+  potaKeys,
+  spanLabel,
+  toUtcMidnight,
+} from './potaActivation'
 
 // 2026-10-25 10:40:00Z; the next 00:00Z is 48 000 s later.
 const T0 = 1_788_000_000
@@ -113,5 +124,85 @@ describe('the rest of the activator’s arithmetic', () => {
     expect(isLegacyUsRef('k-1234')).toBe(true)
     expect(isLegacyUsRef('US-1234')).toBe(false)
     expect(isLegacyUsRef('KA-1234')).toBe(false)
+  })
+})
+
+describe('this activation, as the Logbook and the export see it', () => {
+  // A two-fer started at 23:30Z, running across 0000Z.
+  const DAY = 86_400
+  const start = MIDNIGHT - 1_800
+  const twoFer: Activation = {
+    program: 'POTA',
+    reference: 'US-1234,US-5678',
+    qsoCount: 3,
+    parks: [
+      { reference: 'US-1234', count: 3, p2p: 0 },
+      { reference: 'US-5678', count: 3, p2p: 0 },
+    ],
+    startedAt: start,
+    utcDay: Math.floor(MIDNIGHT / DAY),
+  }
+
+  it('is the first park, whole, from 0000Z of the day it started — both days of a run across 0000Z', () => {
+    expect(activationFilter(twoFer)).toEqual({ myRef: 'US-1234', fromUnix: MIDNIGHT - DAY })
+    expect(activationFilter(null)).toBeNull()
+    expect(activationFilter({ ...twoFer, reference: null, parks: [] })).toBeNull()
+    // No start time (a station older than the record): no filter rather than every contact ever.
+    expect(activationFilter({ ...twoFer, startedAt: 0 })).toBeNull()
+  })
+
+  it('its files: each park on each day since it started, oldest day first, parks in its order', () => {
+    const f = (reference: string, dayStartUnix: number, qsos = 5, callsign = 'K1ABC'): LoggedActivation => ({
+      program: 'POTA',
+      reference,
+      dayStartUnix,
+      date: new Date(dayStartUnix * 1000).toISOString().slice(0, 10),
+      callsign,
+      qsos,
+    })
+    const today = MIDNIGHT
+    const yesterday = MIDNIGHT - DAY
+    const list = [
+      f('US-5678', today),
+      f('US-1234', today),
+      f('US-9999', today), // another park: not this activation's
+      f('US-1234', yesterday - DAY), // the day before it started: not this activation's
+      f('US-5678', yesterday),
+      f('US-1234', yesterday),
+    ]
+    expect(activationFiles(list, twoFer).map((a) => `${a.reference}@${a.dayStartUnix}`)).toEqual([
+      `US-1234@${yesterday}`,
+      `US-5678@${yesterday}`,
+      `US-1234@${today}`,
+      `US-5678@${today}`,
+    ])
+    expect(activationFiles(list, null)).toEqual([])
+  })
+
+  it('reads spans in hours and minutes, and the time to 0000Z', () => {
+    expect(spanLabel(0)).toBe('0 m')
+    expect(spanLabel(59 * 60 + 59)).toBe('59 m')
+    expect(spanLabel(3_900)).toBe('1 h 05 m')
+    expect(toUtcMidnight(T0)).toBe(48_000)
+    expect(toUtcMidnight(MIDNIGHT)).toBe(DAY)
+  })
+})
+
+describe('mixedCallsNote', () => {
+  it('names each call with its count when a park’s day holds more than one, and nothing for one', () => {
+    expect(
+      mixedCallsNote({
+        reference: 'US-1234',
+        count: 10,
+        p2p: 0,
+        calls: [
+          { callsign: 'KD9TAW', count: 6 },
+          { callsign: 'KD9TAW/M', count: 4 },
+          { callsign: null, count: 1 },
+        ],
+      }),
+    ).toBe('US-1234: contacts under 3 calls (KD9TAW 6, KD9TAW/M 4, no call 1) — POTA counts each call separately')
+    expect(mixedCallsNote({ reference: 'US-1234', count: 6, p2p: 0, calls: [{ callsign: 'KD9TAW', count: 6 }] })).toBeNull()
+    expect(mixedCallsNote({ reference: 'US-1234', count: 6, p2p: 0 })).toBeNull()
   })
 })

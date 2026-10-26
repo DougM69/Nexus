@@ -4,6 +4,7 @@
     "myState": null,
     "parks": [
       {
+        "calls": [],
         "count": 0,
         "p2p": 0,
         "reference": "K-1234"

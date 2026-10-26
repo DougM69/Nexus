@@ -185,6 +185,9 @@ struct Project<'a> {
     their_program: Option<&'a str>,
     their_ref: Option<&'a str>,
     my_ref: Option<&'a str>,
+    /// The call it was worked under, as written: `STATION_CALLSIGN`, else `OPERATOR`
+    /// ([`super::worked_under`]).
+    under: Option<&'a str>,
     award_confirmed: bool,
     /// The contest exchange, received and sent — what a session's dupe key may name.
     exchange: Option<Exchange<'a>>,
@@ -201,6 +204,7 @@ fn project(r: &QsoRecord) -> Project<'_> {
         their_program: r.ota.their_program.as_deref(),
         their_ref: r.ota.their_ref.as_deref(),
         my_ref: r.ota.my_ref.as_deref(),
+        under: r.station_callsign.as_deref().or(r.operator.as_deref()),
         award_confirmed: r.award_confirmed,
         exchange: r
             .contest
@@ -211,11 +215,13 @@ fn project(r: &QsoRecord) -> Project<'_> {
 
 /// One activation day's contacts ([`HotIndex::activation_day_count`]) and the park-to-park ones
 /// among them ([`HotIndex::activation_day_p2p`]): the POTA keys of its rows, and of those of its
-/// rows that name a POTA park of the other station's.
+/// rows that name a POTA park of the other station's. And the same keys by the call each row was
+/// worked under ([`HotIndex::activation_day_calls`]): one activation file each, as signed.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct ActivationDay {
     contacts: Counted<PotaKey>,
     p2p: Counted<PotaKey>,
+    calls: HashMap<Option<String>, Counted<PotaKey>>,
 }
 
 /// A set counted by the rows that put each key in: a key is present while at least one row
@@ -380,6 +386,8 @@ pub const STORE_COLUMNS: &[&str] = &[
     "ota_their_program",
     "ota_their_ref",
     "ota_my_ref",
+    "station_callsign",
+    "operator",
     "qsl_card_rcvd_raw",
     "lotw_rcvd_raw",
 ];
@@ -831,12 +839,21 @@ impl HotIndex {
             let key = pota_key(p.call, p.band, p.mode);
             let p2p = !their_pota_parks(p.their_program, p.their_ref).is_empty();
             let day = p.when / SECS_PER_DAY;
+            let under = p
+                .under
+                .map(|c| c.trim().to_ascii_uppercase())
+                .filter(|c| !c.is_empty());
             for park in park_refs(mine) {
                 let at = (park, day);
                 let tally = self.activations.entry(at.clone()).or_default();
                 d.apply(&mut tally.contacts, key.clone());
                 if p2p {
                     d.apply(&mut tally.p2p, key.clone());
+                }
+                let by_call = tally.calls.entry(under.clone()).or_default();
+                d.apply(by_call, key.clone());
+                if by_call.0.is_empty() {
+                    tally.calls.remove(&under);
                 }
                 if tally.contacts.0.is_empty() {
                     self.activations.remove(&at);
@@ -973,6 +990,25 @@ impl HotIndex {
         self.activations
             .get(&(reference.to_string(), day))
             .map_or(0, |a| a.contacts.0.len())
+    }
+
+    /// The calls the contacts of park `reference` on UTC day `day` were worked under
+    /// (`STATION_CALLSIGN`, else `OPERATOR`, upper-cased; `None` for neither), each with its
+    /// distinct contacts by [`pota_key`] — one activation file each, as signed, so the count the
+    /// Logbook's export picker gives that file. Most contacts first, then by call.
+    pub fn activation_day_calls(&self, reference: &str, day: u64) -> Vec<(Option<String>, usize)> {
+        let mut calls: Vec<(Option<String>, usize)> = self
+            .activations
+            .get(&(reference.to_string(), day))
+            .map(|a| {
+                a.calls
+                    .iter()
+                    .map(|(call, keys)| (call.clone(), keys.0.len()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        calls.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        calls
     }
 
     /// How many of those contacts are park to park: the other station named a POTA park of its
@@ -1382,6 +1418,16 @@ mod tests {
         Some("us-1234"),
         Some("US-1234, US-5678"),
     ];
+    /// The calls a row was worked under: `STATION_CALLSIGN`, `OPERATOR`. A day at a park can
+    /// hold several, a file each.
+    const STATIONS: &[(Option<&str>, Option<&str>)] = &[
+        (None, None),
+        (Some("KD9TAW"), None),
+        (Some(" kd9taw "), Some("N0OP")),
+        (Some("KD9TAW/M"), None),
+        (None, Some("N0OP")),
+        (Some(""), Some("N0OP")),
+    ];
     const T0: u64 = 1_788_000_000;
 
     const FD: DupeRule = DupeRule {
@@ -1410,6 +1456,7 @@ mod tests {
         prop: usize,
         their: usize,
         mine: usize,
+        station: usize,
         confirmed: bool,
         qth: Option<&'static str>,
     }
@@ -1425,6 +1472,9 @@ mod tests {
         r.ota.their_program = THEIR_PROGRAMS[f.their].map(str::to_string);
         r.ota.their_ref = THEIR_REFS[f.their].map(str::to_string);
         r.ota.my_ref = MY_REFS[f.mine].map(str::to_string);
+        let (station, operator) = STATIONS[f.station];
+        r.station_callsign = station.map(str::to_string);
+        r.operator = operator.map(str::to_string);
         r.award_confirmed = f.confirmed;
         r.contest = f.qth.map(|q| {
             Box::new(ContestFields {
@@ -1451,21 +1501,24 @@ mod tests {
                 -2_000i64..2_000,
             ],
             (0..GRIDS.len(), 0..PROPS.len(), 0..THEIR_REFS.len()),
-            (0..MY_REFS.len(), any::<bool>()),
+            (0..MY_REFS.len(), 0..STATIONS.len(), any::<bool>()),
             prop_oneof![Just(None), Just(Some("FRAN")), Just(Some("COOK"))],
         )
             .prop_map(
-                |((call, band, mode), dt, (grid, prop, their), (mine, confirmed), qth)| Fields {
-                    call,
-                    band,
-                    mode,
-                    dt,
-                    grid,
-                    prop,
-                    their,
-                    mine,
-                    confirmed,
-                    qth,
+                |((call, band, mode), dt, (grid, prop, their), (mine, station, confirmed), qth)| {
+                    Fields {
+                        call,
+                        band,
+                        mode,
+                        dt,
+                        grid,
+                        prop,
+                        their,
+                        mine,
+                        station,
+                        confirmed,
+                        qth,
+                    }
                 },
             )
     }
@@ -1673,14 +1726,34 @@ mod tests {
         );
         prop_assert_eq!(keys(&index.confirmed), old.confirmed_entities, "confirmed");
         prop_assert_eq!(keys(&index.parks), old.worked_parks, "parks");
-        // The Logbook export picker counts each listed activation as the strip does.
+        // Each file the Logbook's export picker lists — park × day × call — is one of the
+        // index's calls at that park and day, with the same count, and the index lists no other.
+        type Calls = Vec<(Option<String>, usize)>;
+        let mut files: HashMap<(String, u64), Calls> = HashMap::new();
         for a in log.activations() {
+            files
+                .entry((a.reference.clone(), a.day_start_unix / 86_400))
+                .or_default()
+                .push((a.callsign.clone(), a.qsos));
+        }
+        for ((reference, day), mut want) in files {
+            want.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             prop_assert_eq!(
-                a.qsos,
-                index.activation_day_count(&a.reference, a.day_start_unix / 86_400),
-                "the export picker's count of {:?} on {}",
-                a.reference,
-                a.date
+                index.activation_day_calls(&reference, day),
+                want,
+                "the export picker's files of {:?} on day {}",
+                reference,
+                day
+            );
+        }
+        for (reference, day) in index.activations.keys() {
+            prop_assert!(
+                log.activations()
+                    .iter()
+                    .any(|a| &a.reference == reference && a.day_start_unix / 86_400 == *day),
+                "{:?} on day {} is in no listed file",
+                reference,
+                day
             );
         }
         // The activation day's count and its park-to-park share, for every park the log could
@@ -2018,6 +2091,7 @@ mod tests {
             prop: 0,
             their: 0,
             mine: 0,
+            station: 0,
             confirmed: false,
             qth: None,
         })

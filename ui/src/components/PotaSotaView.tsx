@@ -41,7 +41,8 @@ import {
 import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
 import { bandLabelForMhz } from '../band'
 import { placeCode, placeLabel, placeName } from '../features/otaStates'
-import { activationParks, isLegacyUsRef, parkProgress } from '../features/potaActivation'
+import { activationParks, isLegacyUsRef, mixedCallsNote, parkProgress } from '../features/potaActivation'
+import { ActivationOverDialog } from './ActivationOverDialog'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { POTA_SPOTS, SOTA_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../features/connectFeeds'
 import { t } from '../i18n'
@@ -475,25 +476,29 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     const a = await withErrorToast(() => setActivationState(code), t('ota.activation.state.failed'))
     if (a) setAct(a)
   }
-  // The spot's comment (QRV when blank), the frequency this activation was last spotted on from
-  // here (null: not spotted), and the QRT offer at Stop, which starts unticked every activation.
+  // The spot's comment (QRV when blank), and the frequency this activation was last spotted on from
+  // here (null: not spotted): what the checklist's QRT offer goes on.
   const [spotText, setSpotText] = useState(DEFAULT_SPOT_COMMENT)
   const [spottedHz, setSpottedHz] = useState<number | null>(null)
-  const [postQrt, setPostQrt] = useState(false)
   useEffect(() => {
     setSpottedHz(null)
-    setPostQrt(false)
     setSpotText(DEFAULT_SPOT_COMMENT)
   }, [act?.reference])
-  const handleStopActivation = async () => {
+  // Stop opens the "Activation over?" checklist (ActivationOverDialog); it ends the activation.
+  const [overOpen, setOverOpen] = useState(false)
+  const handleStopActivation = () => {
     if (observed) {
       remote?.stopActivation?.()
       return
     }
+    setOverOpen(true)
+  }
+  const endActivation = async ({ qrt }: { qrt: boolean }) => {
+    setOverOpen(false)
     // Ticked, the QRT goes first — the station posts only for an activation still running — and
     // through Spot me's own confirm, on the frequency the spot it ends stands on. Declined or
     // refused, the activation still ends.
-    if (postQrt) await handleSelfSpot(QRT_COMMENT, spottedHz)
+    if (qrt) await handleSelfSpot(QRT_COMMENT, spottedHz)
     const a = await withErrorToast(() => clearActivation(), t('ota.activation.stopFailed'))
     if (a) {
       setAct(a)
@@ -743,6 +748,15 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 </span>
               )
             })}
+            {/* A park's day under more than one call: POTA counts each call's file on its own. */}
+            {(act?.parks ?? []).map((p) => {
+              const note = mixedCallsNote(p)
+              return note ? (
+                <span key={`calls-${p.reference}`} className="pota-act-calls">
+                  {note}
+                </span>
+              ) : null
+            })}
             {/* Park to park, each park's: each of YOUR parks of a two-fer; a hunter's two-fer is one contact. */}
             {(act?.parks ?? []).some((p) => p.p2p > 0) && (
               <span className="pota-act-progress p2p" title={t('ota.activation.p2p.title')}>
@@ -822,14 +836,19 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 spellCheck={false}
               />
             )}
-            {!observed && !paused && spottedHz !== null && (
-              <label className="pota-spot-qrt" title={t('ota.selfSpot.qrt.title')}>
-                <input type="checkbox" checked={postQrt} onChange={(e) => setPostQrt(e.target.checked)} />
-                {t('ota.selfSpot.qrt.label')}
-              </label>
+            {/* The Activation pane in a window of its own (DetachedPanel `activation`). */}
+            {!observed && (
+              <button
+                type="button"
+                className="pota-hunt-clear"
+                onClick={() => void openPanelWindow('activation').catch(() => {})}
+                title={t('activation.window.title')}
+              >
+                {t('activation.window.label')}
+              </button>
             )}
             {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
-            {(!observed || remote?.stopActivation) && <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
+            {(!observed || remote?.stopActivation) && <button type="button" className="pota-hunt-clear" onClick={handleStopActivation} title={t('ota.activation.stop.title')}>
               <X size={13} aria-hidden="true" /> {t('ota.activation.stop.label')}
             </button>}
           </>
@@ -1224,6 +1243,14 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       {!observed && !pane && <p className="settings-hint pota-source-hint">
         {t('ota.source.hint', { source: SOURCES[program] })}
       </p>}
+      {!observed && (
+        <ActivationOverDialog
+          act={overOpen && activating ? act : null}
+          canQrt={!paused && spottedHz !== null}
+          onKeep={() => setOverOpen(false)}
+          onEnd={endActivation}
+        />
+      )}
     </section>
   )
 }

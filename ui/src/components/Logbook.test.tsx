@@ -37,6 +37,7 @@ vi.mock('../api', () => {
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     // Same contract for the per-activation export: asked for on mount, so it must answer.
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
+    noteActivationExported: vi.fn(async () => {}),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
     lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(),

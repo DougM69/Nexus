@@ -35,6 +35,7 @@ pub mod logtools;
 pub mod logwrite;
 pub mod mic;
 pub mod needed_alert;
+pub mod pota_exports;
 pub mod presence;
 pub mod privileges;
 pub mod remote_control;
