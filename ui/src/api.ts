@@ -1540,6 +1540,16 @@ export async function contestPlace(call: string, event: string): Promise<{ entit
   return invoke<{ entity: string; cqZone: number | null } | null>('contest_place', { call, event })
 }
 
+/** Every call of the contest log placed for the Stats tab, in one ask: the country the contest
+ *  `event` counts each as (`contestPlace`'s) and the country file's point for it; null where the
+ *  file cannot place a call. Local: the country file, no network. */
+export async function contestStatsPlaces(
+  calls: string[],
+  event: string,
+): Promise<({ entity: string; lat: number; lon: number } | null)[]> {
+  return invoke<({ entity: string; lat: number; lon: number } | null)[]>('contest_stats_places', { calls, event })
+}
+
 /** What the log last said of `call`'s county or state, for the contest entry's box receiving
  *  `slot`: this contest's received value on a row of this contest (any year), else a row's
  *  STATE, with that contact's time; null when no contact with the call says. Raw as logged: the

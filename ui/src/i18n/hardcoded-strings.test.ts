@@ -328,6 +328,8 @@ const MIGRATED = [
   'components/ContestScreenWindow.tsx',
   'components/ContestOverDialog.tsx',
   'components/ContestScoreChip.tsx',
+  'components/ContestStats.tsx',
+  'features/contestStatsCard.ts',
   // Winter Field Day's objectives checklist: born migrated — every word is a catalog key, and
   // the objective names are the sponsor's own worksheet names, invariant like the bonus names.
   'components/WfdObjectivesSection.tsx',

@@ -38,12 +38,13 @@ import { contestUnsavedText } from '../features/contestUnsaved'
 import { closedText } from '../features/contestEdit'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { bandRank, operatorSummaryLines } from '../features/contestOperators'
-import { formatOpTime, OFF_TIME_MIN_SEC, operatingTime } from '../features/contestOpTime'
+import { formatOpTime, OFF_TIME_MIN_SEC, offTimeRule, operatingTime } from '../features/contestOpTime'
 import { OperatorStatsBoard } from './ContestOperators'
 import { stationMode, usePskName } from '../features/contestMode'
 import { CLEAR_TOAST_MS, REMOVE_CONFIRM_MS, SERVICE_NAMES, clearText, contactCount, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { ContestContactEdit, focusOpenContestEdit, type EditNote } from './ContestContactEdit'
 import { ContestSpotMe } from './ContestSpotMe'
+import { ContestStats } from './ContestStats'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
@@ -636,6 +637,8 @@ interface SummaryArgs {
   /** Winter Field Day's completed objectives and the multiplier they earn, when the station
    *  scores by them — `totalScore` is then QSO points × (om + 1). */
   objectives?: { om: number; done: WfdObjective[] }
+  /** The break that counts as off time in this contest (`offTimeRule`); 30 minutes when absent. */
+  minOffSec?: number
   /** A contest that is NOT Field Day: what the session sends and how many multipliers the
    *  log has. Absent means Field Day's summary, byte for byte — class, section, sections
    *  worked, power multiplier and bonuses are Field Day's words and nobody else's. */
@@ -676,10 +679,11 @@ export function buildSummaryText(a: SummaryArgs): string {
   const bands = bandCounts(a.log)
   L.push(`  By band:  ${bands.length ? bands.map((b) => `${b.band} ${b.n}`).join('   ') : '—'}`)
   // How long the station was on, by the sponsors' off-time rule (features/contestOpTime).
-  const op = operatingTime(a.log)
+  const minOff = a.minOffSec ?? OFF_TIME_MIN_SEC
+  const op = operatingTime(a.log, minOff)
   if (op) {
     L.push(
-      `Operating time:  on ${formatOpTime(op.onSec)}   off ${formatOpTime(op.offSec)} (breaks of ${OFF_TIME_MIN_SEC / 60} min or more)`,
+      `Operating time:  on ${formatOpTime(op.onSec)}   off ${formatOpTime(op.offSec)} (breaks of ${minOff / 60} min or more)`,
     )
   }
   L.push('')
@@ -2732,14 +2736,14 @@ export function RateTiles({ log, nowUnix }: { log: FieldDayQso[]; nowUnix: numbe
 
 /**
  * ⭐ **ON TIME AND OFF TIME** — two `.fd-score` tiles beside the rate meter, the shipped tile idiom
- * as `RateTiles` uses it: a break of 30 minutes or more between two contacts is off time, the rest
- * from the first contact to the last is on time (`features/contestOpTime`). Nothing before the
- * first contact.
+ * as `RateTiles` uses it: a break of the contest's own minimum or more between two contacts is off
+ * time (`offTimeRule`: 60 minutes in CQ WW and WPX, else 30), the rest from the first contact to the
+ * last is on time (`features/contestOpTime`). Nothing before the first contact.
  */
-export function OperatingTimeTiles({ log }: { log: FieldDayQso[] }) {
-  const op = useMemo(() => operatingTime(log), [log])
+export function OperatingTimeTiles({ log, minOffSec = OFF_TIME_MIN_SEC }: { log: FieldDayQso[]; minOffSec?: number }) {
+  const op = useMemo(() => operatingTime(log, minOffSec), [log, minOffSec])
   if (!op) return null
-  const minutes = OFF_TIME_MIN_SEC / 60
+  const minutes = minOffSec / 60
   return (
     <>
       <div
@@ -2857,6 +2861,64 @@ export function OperatorBox({
  * box is on the log line above this scoreboard (ContestView's `operatorBoxAbove`), so its row
  * holds the buttons alone and the screen has one box.
  */
+/**
+ * The score's arithmetic in one line, as the contest scores: points × multipliers, Winter Field
+ * Day's objectives, or Field Day's power and bonuses. The scoreboard and the Stats tab draw this one.
+ */
+export function ScoreMath({ fieldDay, settings }: { fieldDay: FieldDayStatus | null; settings: FdDisplaySettings | null }) {
+  const isWfd = (fieldDay?.event ?? '') === 'wfd'
+  const { fdPowerMult, qsoPts, poweredPoints, bonusPoints, totalScore, multCount } = computeFdScore(fieldDay, settings)
+  return multCount !== null ? (
+      /* ⭐ A CONTEST WITH MULTIPLIERS scores points × mults. Showing Field Day's
+         power×+bonus line here would print `× power ×1` for a contest that has no
+         power multiplier and omit the factor that actually decides the total. */
+      <div className="fd-score-math">
+        <span className="fd-score-math-line">
+          <T
+            k="fieldDay.score.mathMults"
+            tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
+            vals={{ qsoPts, multCount, totalScore }}
+          />
+        </span>
+      </div>
+    ) : isWfd && typeof fieldDay?.objectiveMultiplier === 'number' ? (
+      /* ⭐ WINTER FIELD DAY'S CLAIMED TOTAL — the sponsor's QSO points × (OM + 1), all
+         three numbers the engine's, so the line and the total cannot disagree. */
+      <div className="fd-score-math">
+        <span className="fd-score-math-line">
+          <T
+            k="fieldDay.score.wfdObjectives"
+            tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
+            vals={{ qsoPts, om: fieldDay.objectiveMultiplier, totalScore }}
+          />
+        </span>
+      </div>
+    ) : isWfd ? (
+      /* A station that does not score Winter Field Day's objectives (a Remote view of an
+         older one): its total is raw QSO points, so the honest line says so rather than
+         claiming ARRL power×+bonus arithmetic WFD never produces. */
+      <div className="fd-score-math">{t('fieldDay.score.wfd', { points: qsoPts })}</div>
+    ) : (
+      <div className="fd-score-math">
+        <span className="fd-score-math-line">
+          {/* The whole sum as ONE message — the eight fragments it used to be could not be
+              reordered by a language that words the arithmetic differently. */}
+          <T
+            k="fieldDay.score.math"
+            tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
+            vals={{
+              qsoPts,
+              powerMult: fdPowerMult,
+              poweredPoints,
+              bonusPoints,
+              totalScore,
+            }}
+          />
+        </span>
+      </div>
+    )
+}
+
 export function FieldDayScoreboard({
   fieldDay,
   settings,
@@ -2878,14 +2940,10 @@ export function FieldDayScoreboard({
   onOperatorFocused?: () => void
 }) {
   const log = fieldDay?.log ?? []
-  const isWfd = (fieldDay?.event ?? '') === 'wfd'
   const nowUnix = useNowUnix()
   const modes = useMemo(() => modeCounts(log), [log])
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
-  const { fdPowerMult, qsoPts, poweredPoints, bonusPoints, totalScore, multCount } = computeFdScore(
-    fieldDay,
-    settings,
-  )
+  const { multCount } = computeFdScore(fieldDay, settings)
 
   return (
     <>
@@ -2965,7 +3023,7 @@ export function FieldDayScoreboard({
             timestamps and nothing about the score touches it. */}
         <RateTiles log={log} nowUnix={nowUnix} />
         {/* …and how long the station has been on, by the sponsors' off-time rule. */}
-        <OperatingTimeTiles log={log} />
+        <OperatingTimeTiles log={log} minOffSec={offTimeRule(fieldDay?.event).minOffSec} />
         {/* Per-mode chips — a count and a mode code, both invariant. */}
         <div className="fd-mode-chips">
           {modes.dig > 0 && <span className="fd-mode-chip dig">{modes.dig} {FD_MODE_CODES.dig}</span>}
@@ -2973,55 +3031,7 @@ export function FieldDayScoreboard({
           {modes.ph > 0 && <span className="fd-mode-chip ph">{modes.ph} {FD_MODE_CODES.ph}</span>}
         </div>
         {/* Score math */}
-        {multCount !== null ? (
-          /* ⭐ A CONTEST WITH MULTIPLIERS scores points × mults. Showing Field Day's
-             power×+bonus line here would print `× power ×1` for a contest that has no
-             power multiplier and omit the factor that actually decides the total. */
-          <div className="fd-score-math">
-            <span className="fd-score-math-line">
-              <T
-                k="fieldDay.score.mathMults"
-                tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
-                vals={{ qsoPts, multCount, totalScore }}
-              />
-            </span>
-          </div>
-        ) : isWfd && typeof fieldDay?.objectiveMultiplier === 'number' ? (
-          /* ⭐ WINTER FIELD DAY'S CLAIMED TOTAL — the sponsor's QSO points × (OM + 1), all
-             three numbers the engine's, so the line and the total cannot disagree. */
-          <div className="fd-score-math">
-            <span className="fd-score-math-line">
-              <T
-                k="fieldDay.score.wfdObjectives"
-                tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
-                vals={{ qsoPts, om: fieldDay.objectiveMultiplier, totalScore }}
-              />
-            </span>
-          </div>
-        ) : isWfd ? (
-          /* A station that does not score Winter Field Day's objectives (a Remote view of an
-             older one): its total is raw QSO points, so the honest line says so rather than
-             claiming ARRL power×+bonus arithmetic WFD never produces. */
-          <div className="fd-score-math">{t('fieldDay.score.wfd', { points: qsoPts })}</div>
-        ) : (
-          <div className="fd-score-math">
-            <span className="fd-score-math-line">
-              {/* The whole sum as ONE message — the eight fragments it used to be could not be
-                  reordered by a language that words the arithmetic differently. */}
-              <T
-                k="fieldDay.score.math"
-                tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
-                vals={{
-                  qsoPts,
-                  powerMult: fdPowerMult,
-                  poweredPoints,
-                  bonusPoints,
-                  totalScore,
-                }}
-              />
-            </span>
-          </div>
-        )}
+        <ScoreMath fieldDay={fieldDay} settings={settings} />
         <div className="fd-state-chip" title={t('fieldDay.state.title')}>
           {fieldDay?.state ?? t('fieldDay.state.idle')}
         </div>
@@ -3452,6 +3462,9 @@ export function ContestView({
   // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): what turning the mode off offers, while
   // it is open. The save that turns the mode off waits for its answer.
   const [overOffer, setOverOffer] = useState<ContestOverOffer | null>(null)
+  // ⭐ THE STATS TAB (ContestStats.tsx): the scoreboard's place, or the contest's stats in it. The
+  // log below stays either way.
+  const [statsTab, setStatsTab] = useState(false)
   const toggleMode = async () => {
     if (observed || logger || modeBusy) return
     const next = !modeOn
@@ -3571,6 +3584,7 @@ export function ContestView({
         text = buildSummaryText({
           eventName,
           isWfd,
+          minOffSec: offTimeRule(fieldDay?.event).minOffSec,
           rulesYear: fieldDay?.rulesYear ?? 0,
           rulesGenerated: fieldDay?.rulesGenerated ?? '',
           myClass: composingSlot(fieldDay?.composing, 'CLASS'),
@@ -3705,7 +3719,15 @@ export function ContestView({
 
   return (
     <section className="conversation panel fieldday">
-      <ContestOverDialog offer={overOffer} onNotNow={() => setOverOffer(null)} onTurnOff={turnOffWithChecklist} />
+      <ContestOverDialog
+        offer={overOffer}
+        onNotNow={() => setOverOffer(null)}
+        onTurnOff={turnOffWithChecklist}
+        onStats={() => {
+          setOverOffer(null)
+          setStatsTab(true)
+        }}
+      />
       {/* EVENT BANNER: the Contest mode switch, beside the contest and its window. */}
       <div className="fd-event-banner">
         {/* ⭐ THE MODE SWITCH, with Settings' own label and accessible names so every place
@@ -4137,6 +4159,49 @@ export function ContestView({
         />
       )}
 
+      {/* SCOREBOARD or STATS — two tabs over the same session, read-only both. */}
+      <div className="filter-row contest-tabs" role="tablist" aria-label={t('contestStats.tabs.aria')}>
+        <button type="button" role="tab" aria-selected={!statsTab} className={`filter-chip${statsTab ? '' : ' active'}`} onClick={() => setStatsTab(false)}>
+          {t('contestStats.tab.score')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={statsTab}
+          aria-controls={statsTab ? 'contest-stats-panel' : undefined}
+          className={`filter-chip${statsTab ? ' active' : ''}`}
+          onClick={() => setStatsTab(true)}
+        >
+          {t('contestStats.tab.stats')}
+        </button>
+      </div>
+      {statsTab ? (
+        <ContestStats
+          fieldDay={fieldDay}
+          nowUnix={nowUnix}
+          myCall={nativeSettings?.mycall ?? ''}
+          myGrid={nativeSettings?.mygrid ?? ''}
+          contest={eventName}
+          score={
+            <>
+              {fieldDay?.scoreNoteKey && SCORE_NOTE_KEYS.has(fieldDay.scoreNoteKey) && (
+                <p className="fd-score-note" role="note">
+                  {t(fieldDay.scoreNoteKey as MessageKey)}
+                </p>
+              )}
+              <ScoreMath fieldDay={fieldDay} settings={settings} />
+            </>
+          }
+          mults={
+            fieldDay?.boards?.length ? (
+              <MultiplierBoards boards={fieldDay.boards} />
+            ) : (
+              <SectionsBoard workedSet={workedSectionSet(fieldDay)} />
+            )
+          }
+        />
+      ) : (
+      <>
       {/* SCOREBOARD (operator + score tiles + sections board) */}
       <FieldDayScoreboard
         fieldDay={fieldDay}
@@ -4291,6 +4356,8 @@ export function ContestView({
           </div>
         )}
       </div>
+      )}
+      </>
       )}
 
       {/* THE LOG'S DIVIDER (the Illinois QSO Party, 2026-10-18: "splitters to resize sub-windows (county

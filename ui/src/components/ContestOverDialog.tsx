@@ -149,6 +149,7 @@ export function ContestOverDialog({
   offer,
   onNotNow,
   onTurnOff,
+  onStats,
 }: {
   /** What to offer; `null` is closed. */
   offer: ContestOverOffer | null
@@ -156,6 +157,8 @@ export function ContestOverDialog({
   onNotNow: () => void
   /** Turn Contest mode off, in ONE save, with these settings put back. Rejects with the reason. */
   onTurnOff: (putBack: Partial<Settings>) => Promise<void>
+  /** Show the contest's Stats tab instead, Contest mode still on. Not offered when absent. */
+  onStats?: () => void
 }) {
   const [ticked, setTicked] = useState<Set<Tick>>(new Set())
   const [busy, setBusy] = useState(false)
@@ -272,6 +275,11 @@ export function ContestOverDialog({
               </label>
             ))}
           </fieldset>
+        )}
+        {onStats && offer.contacts > 0 && (
+          <button type="button" className="settings-refresh contest-over-stats" onClick={onStats} disabled={busy} title={t('contestOver.stats.title')}>
+            {t('contestOver.stats')}
+          </button>
         )}
         {error && (
           <p className="contest-over-error" role="alert">
