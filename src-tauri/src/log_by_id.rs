@@ -1047,11 +1047,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The Logbook form names COUNTRY by the DXCC number the contact keeps, not by its call: a K1N
-    /// contact imported as 182 beside the United States is Navassa Island once the operator saves
-    /// any edit to it. With no number left, the form names the call's entity, as it always has.
+    /// The Logbook form writes a stored COUNTRY back exactly on an edit that leaves the call alone,
+    /// even where the DXCC number the contact keeps names another entity: a K1N contact imported as
+    /// 182 beside "United States" keeps that text when the operator corrects its name (it goes out
+    /// under the number's name either way — the test below). Once the number is cleared by hand,
+    /// the country is the call's entity.
     #[test]
-    fn an_edit_names_the_country_by_the_dxcc_number_the_contact_keeps() {
+    fn an_edit_writes_the_stored_country_back_beside_the_dxcc_number() {
         let (dir, engine) = engine_with("edit-country", K1N_2015_CONTRADICTED);
         let rt = runtime();
         let (target, held) = row_ref(&engine, 0);
@@ -1068,10 +1070,10 @@ mod tests {
         let stored = on_disk(&dir, &target.id).expect("held");
         assert_eq!(
             (pair(&stored), stored.name.as_deref()),
-            ((Some(182), Some("Navassa Island".into())), Some("Navassa")),
-            "the edit, and the country its number gives"
+            ((Some(182), Some("United States".into())), Some("Navassa")),
+            "the edit, and the country as it was stored"
         );
-        assert_eq!(now.row.country.as_deref(), Some("Navassa Island"));
+        assert_eq!(now.row.country.as_deref(), Some("United States"));
 
         // Control: the number cleared by hand, the next edit names the call's entity.
         let now = current(
