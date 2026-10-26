@@ -1283,12 +1283,6 @@ export async function openPanelWindow(panel: string): Promise<void> {
   await invoke('open_panel_window', { panel })
 }
 
-/** Open (or bring forward) the Remote stations window: the hosted Remote page in a Nexus window
- *  of its own. Windows only; rejects elsewhere, and when the Remote service cannot be reached. */
-export async function openRemoteStationsWindow(): Promise<void> {
-  await invoke('open_remote_stations_window')
-}
-
 /** Open (or bring forward) the Stations on this network window: stations paired over the shack's
  *  own network, with no internet, its page in `locale`. Windows only; rejects elsewhere. */
 export async function openLanStationsWindow(locale: string): Promise<void> {
