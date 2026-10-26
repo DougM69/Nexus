@@ -3,7 +3,7 @@
  * absent. The operator finds activators on the air now, clicks Hunt to QSY and
  * tag the next logged QSO with the park/summit reference.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { TreePine, Mountain, RefreshCw, X } from 'lucide-react'
 import type { AppSnapshot, OtaSpot, Activation } from '../types'
 import {
@@ -35,7 +35,7 @@ import {
   respotWatch,
   spotComment,
   type RespotWatch,
-  type SelfSpotReport,
+  type ActivationSpotReport,
 } from '../selfSpot'
 import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
 import { bandLabelForMhz } from '../band'
@@ -66,8 +66,8 @@ const SOURCES: Record<Program, string> = {
 }
 
 /** A spot stands on the air after a press when either target took it now or had it already. */
-function spotStands(report: SelfSpotReport): boolean {
-  return report.pota === 'posted' || report.pota === 'throttled' || report.cluster === 'queued' || report.cluster === 'throttled'
+function spotStands(report: ActivationSpotReport): boolean {
+  return report.parks.some((p) => p.pota === 'posted' || p.pota === 'throttled') || report.cluster === 'queued' || report.cluster === 'throttled'
 }
 
 /** kHz → "14.0740 MHz" display string (4 decimal places = 10 Hz resolution). */
@@ -445,6 +445,9 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   // The grid the contacts carry as MY_GRIDSQUARE while activating: the park's, or a more precise
   // one typed here. Never Settings'. Sent on Enter or when the box is left, only when changed.
   const [gridDraft, setGridDraft] = useState<string | null>(null)
+  const gridNoteId = useId()
+  // With no grid known the contacts carry none (never the home one), so the strip says so.
+  const gridMissing = !act?.grid
   const handleGrid = async () => {
     if (gridDraft == null) return
     const typed = gridDraft.trim().toUpperCase()
@@ -734,6 +737,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 <span>{t('ota.activation.grid.label')}</span>
                 <input
                   className="settings-input mono pota-act-grid-input"
+                  aria-describedby={gridMissing ? gridNoteId : undefined}
                   value={gridDraft ?? act?.grid ?? ''}
                   onChange={(e) => setGridDraft(e.target.value.toUpperCase())}
                   onBlur={() => void handleGrid()}
@@ -746,6 +750,11 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                   spellCheck={false}
                 />
               </label>
+            )}
+            {!observed && gridMissing && (
+              <span id={gridNoteId} className="pota-act-grid-none">
+                {t(act?.program === 'SOTA' ? 'ota.activation.grid.noSummit' : 'ota.activation.grid.noPark')}
+              </span>
             )}
             {/* The state your contacts carry as MY_STATE: the park's own, or, on a state line,
                 the one you pick here. Never guessed. LoTW credits the state of the TQSL Station

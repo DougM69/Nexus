@@ -23137,6 +23137,15 @@ button.cq-skiptx1.on {
   padding: 1px 6px;
   flex: 0 0 auto;
 }
+/* No grid known: the contacts carry none, so the strip says it beside the box — the state ask's
+   warning frame, the text in the body colour. */
+.pota-act-grid-none {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--state-warn) 45%, transparent);
+  background: color-mix(in srgb, var(--state-warn) 8%, transparent);
+}
 /* The spot's comment beside Spot me, and the QRT offer beside Stop (unticked each activation). */
 .pota-spot-comment {
   flex: 0 1 auto;

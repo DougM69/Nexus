@@ -71,7 +71,6 @@ import { NeededPanel, type NeededPanelProps } from './NeededPanel'
 import type { ModeClass } from '../neededFilters'
 import {
   getSettings,
-  getActivation,
   sendCw,
   sendCwArmed,
   setCwKeyer,
@@ -808,9 +807,9 @@ export function CwCockpit({
     { name: string; macros: { key: string; label: string; text: string }[]; esmRoles?: EsmRoleMap }[]
   >([])
   const [activeProfile, setActiveProfile] = useState(0)
-  // A park activation running: the built-in keys are the POTA set's. Read as the profiles are, when
-  // the view opens.
-  const [parkActivation, setParkActivation] = useState(false)
+  // A park activation running: the built-in keys are the POTA set's. Read from the snapshot, so an
+  // activation started or stopped with the cockpit open changes the keys at once.
+  const parkActivation = snap.activation?.program === 'POTA' && !!snap.activation.reference
   useEffect(() => {
     if (!active) return
     let alive = true
@@ -820,14 +819,6 @@ export function CwCockpit({
         setCwSettings(s)
         setProfiles(s.macros?.cwProfiles ?? [])
         setActiveProfile(s.macros?.activeCwProfile ?? 0)
-      })
-      .catch(() => {})
-    // Asked inside the chain, so a station that cannot answer (an older shack, a build without the
-    // command) leaves the everyday keys rather than the screen.
-    void Promise.resolve()
-      .then(() => getActivation())
-      .then((a) => {
-        if (alive) setParkActivation(a.program === 'POTA' && !!a.reference)
       })
       .catch(() => {})
     void getCatCwUnprovenRigModels()

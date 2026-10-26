@@ -6,10 +6,10 @@ import { pushToast } from './toast'
 import { t } from './i18n'
 // The two result lists live in their own leaf module: the protocol validator that reads them is
 // also compiled by the Cloudflare Worker, which has neither DOM nor JSX. See selfSpotReport.ts.
-import type { SelfSpotReport } from './selfSpotReport'
+import type { ActivationSpotReport, SelfSpotReport } from './selfSpotReport'
 
 export { POTA_SPOT_RESULTS, CLUSTER_SPOT_RESULTS } from './selfSpotReport'
-export type { SelfSpotReport } from './selfSpotReport'
+export type { ActivationSpotReport, SelfSpotReport } from './selfSpotReport'
 
 function potaMessage(result: SelfSpotReport['pota']): string {
   switch (result) {
@@ -44,13 +44,15 @@ export function spotComment(raw: string): string {
   return raw.trim().split(/ +/).join(' ').toUpperCase() || DEFAULT_SPOT_COMMENT
 }
 
-/** A public post: ask on every press, never remember the answer, and show exactly the park, dial
- *  and comment that will be sent. */
+/** A public post: ask on every press, never remember the answer, and show exactly the parks, dial
+ *  and comment that will be sent. `reference` is the activation's, a two-fer's parks as a comma
+ *  list: one confirm names them all, and each is then spotted on its own. */
 export function confirmSelfSpot(reference: string, dialHz: number, comment: string): Promise<boolean> {
+  const parks = reference.split(',').map((p) => p.trim()).filter(Boolean).join(', ')
   return confirmDialog({
     title: t('ota.selfSpot.confirm.title'),
     confirmLabel: t('ota.selfSpot.confirm.post'),
-    body: t('ota.selfSpot.confirm.body', { reference, freq: (dialHz / 1e6).toFixed(4), comment: spotComment(comment) }),
+    body: t('ota.selfSpot.confirm.body', { reference: parks, freq: (dialHz / 1e6).toFixed(4), comment: spotComment(comment) }),
   })
 }
 
@@ -101,16 +103,20 @@ export function respotStep(
   return { watch: due ? { ...next, promptedHz: next.awayHz } : next, prompt: due }
 }
 
-/** One message when both targets took the spot. Otherwise one per target, cluster first, so a
- *  failure of one never hides what the other did. */
-export function announceSelfSpot(report: SelfSpotReport): void {
-  if (report.pota === 'posted' && report.cluster === 'queued') {
+/** One message when every target took the spot. Otherwise one for the cluster, then one per park
+ *  (named when there are two or more), so a failure of one never hides what another did. */
+export function announceSelfSpot(report: ActivationSpotReport): void {
+  if (report.parks.every((p) => p.pota === 'posted') && report.cluster === 'queued') {
     pushToast(t('ota.selfSpot.both'), 'success')
     return
   }
   const say = (message: string, ok: boolean, notice: boolean) =>
     ok ? pushToast(message, 'success') : pushToast(message, notice ? 'info' : 'error', 8000)
   say(clusterMessage(report.cluster), report.cluster === 'queued', report.cluster === 'throttled')
-  say(potaMessage(report.pota), report.pota === 'posted',
-    report.pota === 'throttled' || report.pota === 'notPark' || report.pota === 'unknownMode')
+  const named = report.parks.length > 1
+  for (const { reference, pota } of report.parks) {
+    const message = potaMessage(pota)
+    say(named ? t('ota.selfSpot.park', { reference, message }) : message, pota === 'posted',
+      pota === 'throttled' || pota === 'notPark' || pota === 'unknownMode')
+  }
 }

@@ -125,6 +125,19 @@ it('the grid box shows the activation’s grid and sends a typed one on Enter, o
   await waitFor(() => expect(api.setActivationGrid).toHaveBeenCalledWith('EN52WA'))
 })
 
+it('with no park grid known the strip says so beside the box, and a grid takes the note away', () => {
+  const { rerender } = render(<PotaSotaView snap={snapWith(activation({ grid: null }))} />)
+  const note = screen.getByText(t('ota.activation.grid.noPark'))
+  const box = screen.getByRole('textbox', { name: t('ota.activation.grid.label') })
+  expect(box.getAttribute('aria-describedby')).toBe(note.id)
+  rerender(<PotaSotaView snap={snapWith(activation({ program: 'SOTA', reference: 'W7A/MN-001', parks: [], grid: null }))} />)
+  expect(screen.getByText(t('ota.activation.grid.noSummit'))).toBeTruthy()
+  expect(screen.queryByText(t('ota.activation.grid.noPark'))).toBeNull()
+  rerender(<PotaSotaView snap={snapWith(activation({ grid: 'EN52' }))} />)
+  expect(screen.queryByText(t('ota.activation.grid.noPark'))).toBeNull()
+  expect(screen.getByRole('textbox', { name: t('ota.activation.grid.label') }).getAttribute('aria-describedby')).toBeNull()
+})
+
 it('badges every POTA activator P2P while you activate, and none when you do not', async () => {
   api.getOtaSpots.mockImplementation(async (program: string) =>
     program === 'POTA' ? [spot('K1ABC', 'US-0001')] : [spot('W7XYZ', 'W7A/MN-001', 'SOTA')],

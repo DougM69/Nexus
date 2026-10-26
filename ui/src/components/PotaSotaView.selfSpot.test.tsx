@@ -48,7 +48,7 @@ async function view() {
 }
 
 it('posts nothing until the operator presses Spot me and confirms, then posts once', async () => {
-  api.selfSpot.mockResolvedValue({ pota: 'posted', cluster: 'queued' })
+  api.selfSpot.mockResolvedValue({ parks: [{ reference: 'US-0001', pota: 'posted' }], cluster: 'queued' })
   const button = await view()
   expect(api.selfSpot).not.toHaveBeenCalled()
   fireEvent.click(button)
@@ -64,8 +64,39 @@ it('posts nothing until the operator presses Spot me and confirms, then posts on
   await waitFor(() => expect(toast.pushToast).toHaveBeenCalledWith(t('ota.selfSpot.both'), 'success'))
 })
 
+it('a two-fer: one confirm names both parks, one press, and each park’s answer is said by name', async () => {
+  api.getActivation.mockResolvedValueOnce({ program: 'POTA', reference: 'US-1234,US-5678', qsoCount: 0 })
+  api.selfSpot.mockResolvedValue({
+    parks: [{ reference: 'US-1234', pota: 'posted' }, { reference: 'US-5678', pota: 'failed' }],
+    cluster: 'queued',
+  })
+  fireEvent.click(await view())
+  expect(await screen.findByText(t('ota.selfSpot.confirm.body', { reference: 'US-1234, US-5678', freq: '14.2850', comment: 'QRV' }))).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: t('ota.selfSpot.confirm.post') }))
+  await waitFor(() => expect(toast.pushToast).toHaveBeenCalledTimes(3))
+  expect(api.selfSpot).toHaveBeenCalledTimes(1)
+  expect(api.selfSpot).toHaveBeenCalledWith('US-1234,US-5678', 14_285_000, 'QRV')
+  expect(toast.pushToast.mock.calls).toEqual([
+    [t('ota.selfSpot.cluster.queued'), 'success'],
+    [t('ota.selfSpot.park', { reference: 'US-1234', message: t('ota.selfSpot.pota.posted') }), 'success'],
+    [t('ota.selfSpot.park', { reference: 'US-5678', message: t('ota.selfSpot.pota.failed') }), 'error', 8000],
+  ])
+  // Every park taken and the cluster's line queued: the one message.
+  toast.pushToast.mockClear()
+  api.getActivation.mockResolvedValueOnce({ program: 'POTA', reference: 'US-1234,US-5678', qsoCount: 0 })
+  api.selfSpot.mockResolvedValue({
+    parks: [{ reference: 'US-1234', pota: 'posted' }, { reference: 'US-5678', pota: 'posted' }],
+    cluster: 'queued',
+  })
+  cleanup()
+  fireEvent.click(await view())
+  fireEvent.click(await screen.findByRole('button', { name: t('ota.selfSpot.confirm.post') }))
+  await waitFor(() => expect(toast.pushToast).toHaveBeenCalledWith(t('ota.selfSpot.both'), 'success'))
+  expect(toast.pushToast).toHaveBeenCalledTimes(1)
+})
+
 it('reports each target on its own when they differ, so one failure never hides the other', async () => {
-  api.selfSpot.mockResolvedValue({ pota: 'loginRequired', cluster: 'queued' })
+  api.selfSpot.mockResolvedValue({ parks: [{ reference: 'US-0001', pota: 'loginRequired' }], cluster: 'queued' })
   fireEvent.click(await view())
   fireEvent.click(await screen.findByRole('button', { name: t('ota.selfSpot.confirm.post') }))
   await waitFor(() => expect(toast.pushToast).toHaveBeenCalledTimes(2))
@@ -94,7 +125,7 @@ it('says why when a contest that allows spotting only over RF is running', async
 
 it('gives the keyboard back to Spot me when the question closes, answered either way', async () => {
   // The question is opened by code, and closed with the keyboard left on the page itself.
-  api.selfSpot.mockResolvedValue({ pota: 'posted', cluster: 'queued' })
+  api.selfSpot.mockResolvedValue({ parks: [{ reference: 'US-0001', pota: 'posted' }], cluster: 'queued' })
   const button = await view()
   act(() => button.focus())
   fireEvent.click(button)
@@ -119,7 +150,7 @@ async function spotOnce() {
 const prompts = () => toast.pushToast.mock.calls.filter((c) => c[3]?.actionLabel === t('ota.respot.button'))
 
 it('carries the operator’s comment to the confirm and the post, upper case', async () => {
-  api.selfSpot.mockResolvedValue({ pota: 'posted', cluster: 'queued' })
+  api.selfSpot.mockResolvedValue({ parks: [{ reference: 'US-0001', pota: 'posted' }], cluster: 'queued' })
   await view()
   const comment = screen.getByRole('textbox', { name: t('ota.selfSpot.comment.label') }) as HTMLInputElement
   expect(comment.value, 'QRV by default').toBe('QRV')
@@ -132,7 +163,7 @@ it('carries the operator’s comment to the confirm and the post, upper case', a
 
 it('the QSY prompt waits for the move and the dwell, never posts by itself, and its button is Spot me', async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
-  api.selfSpot.mockResolvedValue({ pota: 'posted', cluster: 'queued' })
+  api.selfSpot.mockResolvedValue({ parks: [{ reference: 'US-0001', pota: 'posted' }], cluster: 'queued' })
   const { rerender } = render(<><PotaSotaView snap={tuned(14.062)} /><ConfirmHost /></>)
   await spotOnce()
   await waitFor(() => expect(api.selfSpot).toHaveBeenCalledTimes(1))
@@ -179,7 +210,7 @@ it('phone needs 3 kHz before it is a new frequency', () => {
 })
 
 it('offers QRT at Stop only once spotted, unticked; Stop alone posts nothing', async () => {
-  api.selfSpot.mockResolvedValue({ pota: 'posted', cluster: 'queued' })
+  api.selfSpot.mockResolvedValue({ parks: [{ reference: 'US-0001', pota: 'posted' }], cluster: 'queued' })
   await view()
   expect(screen.queryByRole('checkbox', { name: t('ota.selfSpot.qrt.label') }), 'not spotted yet').toBeNull()
   await spotOnce()
@@ -192,7 +223,7 @@ it('offers QRT at Stop only once spotted, unticked; Stop alone posts nothing', a
 })
 
 it('posts QRT at Stop only when ticked and confirmed, then ends the activation', async () => {
-  api.selfSpot.mockResolvedValue({ pota: 'posted', cluster: 'queued' })
+  api.selfSpot.mockResolvedValue({ parks: [{ reference: 'US-0001', pota: 'posted' }], cluster: 'queued' })
   await view()
   await spotOnce()
   fireEvent.click(await screen.findByRole('checkbox', { name: t('ota.selfSpot.qrt.label') }))

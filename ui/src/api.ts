@@ -9,7 +9,7 @@ import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
 import { isStreamInput } from './remote-native/stream-input'
 import { clientWords } from './features/clientWords'
-import type { SelfSpotReport } from './selfSpot'
+import type { ActivationSpotReport } from './selfSpot'
 import type { ImportDone, ImportPreview } from './features/logImport'
 import type {
   AppSnapshot,
@@ -4504,12 +4504,13 @@ export async function postSpot(freqMhz: number, call: string, comment: string): 
   return invoke('post_spot', { freqMhz, call, comment })
 }
 
-/** "Spot me": your own activation to pota.app and the DX cluster, once, with each result. The call,
- *  park, dial and mode sent are the station's; `reference` and `dialHz` are what the confirm showed,
- *  `comment` the operator's ("QRV" when absent or blank). Rejects with `contextChanged` if either
- *  has moved since, `noActivation` with none on, `invalidComment` for one neither target takes. */
-export async function selfSpot(reference: string, dialHz: number, comment?: string): Promise<SelfSpotReport> {
-  return invoke<SelfSpotReport>('self_spot_activation', { reference, dialHz, comment })
+/** "Spot me": your own activation to pota.app and the DX cluster, once, with each result — each park
+ *  of a two-fer to pota.app on its own. The call, parks, dial and mode sent are the station's;
+ *  `reference` and `dialHz` are what the confirm showed, `comment` the operator's ("QRV" when
+ *  absent or blank). Rejects with `contextChanged` if either has moved since, `noActivation` with
+ *  none on, `invalidComment` for one neither target takes. */
+export async function selfSpot(reference: string, dialHz: number, comment?: string): Promise<ActivationSpotReport> {
+  return invoke<ActivationSpotReport>('self_spot_activation', { reference, dialHz, comment })
 }
 
 /** What the contest screen's Spot me posted (`contest_spot.rs`). */

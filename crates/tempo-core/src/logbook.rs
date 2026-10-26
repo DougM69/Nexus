@@ -628,8 +628,10 @@ pub struct LoggedActivation {
     /// The callsign worked under — `STATION_CALLSIGN`, else `OPERATOR`, uppercased. `None` when
     /// the records carry neither.
     pub callsign: Option<String>,
-    /// Contacts in this activation. POTA needs ten for it to count, which is why the number is
-    /// carried rather than left for the operator to discover after uploading.
+    /// Contacts in this activation as POTA counts them — distinct by [`hot::pota_key`], the
+    /// activation strip's rule, so a dupe adds nothing (the file still holds it). POTA needs ten
+    /// for it to count, which is why the number is carried rather than left for the operator to
+    /// discover after uploading.
     pub qsos: usize,
 }
 
@@ -2723,9 +2725,10 @@ impl Operators {
 }
 
 /// An activation's key — your reference, its UTC day, the callsign it was worked under — and
-/// what [`Activations`] keeps against it: the program its first contact named, and how many.
+/// what [`Activations`] keeps against it: the program its first contact named, and its contacts'
+/// [`hot::pota_key`]s.
 type ActivationKey = (String, u64, Option<String>);
-type ActivationTally = (Option<String>, usize);
+type ActivationTally = (Option<String>, std::collections::HashSet<hot::PotaKey>);
 
 /// The distinct activations of a log, taken a contact at a time IN LOG ORDER —
 /// [`Logbook::activations`]' rule, for whoever holds the log. Holds one entry per activation,
@@ -2738,11 +2741,9 @@ impl Activations {
     pub fn add(&mut self, r: &QsoRecord) {
         let call = worked_under(r);
         let day = day_start(r.when_unix);
+        let key = hot::pota_key(&r.call, &r.band, &r.mode, r.ota.their_ref.as_deref());
         for reference in my_refs(r) {
-            let slot = self
-                .0
-                .entry((reference, day, call.clone()))
-                .or_insert((None, 0));
+            let slot = self.0.entry((reference, day, call.clone())).or_default();
             if slot.0.is_none() {
                 slot.0 = r
                     .ota
@@ -2751,7 +2752,7 @@ impl Activations {
                     .map(|p| p.trim().to_ascii_uppercase())
                     .filter(|p| !p.is_empty());
             }
-            slot.1 += 1;
+            slot.1.insert(key.clone());
         }
     }
 
@@ -2760,7 +2761,7 @@ impl Activations {
         let mut out: Vec<LoggedActivation> = self
             .0
             .into_iter()
-            .map(|((reference, day_start_unix, callsign), (program, qsos))| {
+            .map(|((reference, day_start_unix, callsign), (program, keys))| {
                 let (y, mo, d, ..) = datetime_utc(day_start_unix);
                 LoggedActivation {
                     program,
@@ -2768,7 +2769,7 @@ impl Activations {
                     day_start_unix,
                     date: format!("{y:04}-{mo:02}-{d:02}"),
                     callsign,
-                    qsos,
+                    qsos: keys.len(),
                 }
             })
             .collect();
@@ -11328,6 +11329,46 @@ mod activation_split_tests {
         assert_eq!(acts[0].qsos, 4, "the count POTA will measure against ten");
     }
 
+    /// The picker's count is POTA's, the one the activation strip counts: a contact repeated on
+    /// the same band and mode (USB is SSB, the call's case aside) adds nothing; another band, a
+    /// portable call or the other station's park is a new one. The file still holds every row.
+    #[test]
+    fn the_listed_count_is_unique_contacts_by_potas_rule_not_rows() {
+        let d = day("2026-09-09");
+        let at = |call: &str, i: u64, band: &str, mode: &str, theirs: Option<&str>| QsoRecord {
+            band: band.into(),
+            mode: mode.into(),
+            ota: Ota {
+                their_ref: theirs.map(str::to_string),
+                ..act(call, 0, Some("US-1234"), Some("KD9TAW")).ota
+            },
+            ..act(call, d + 3600 + i * 60, Some("US-1234"), Some("KD9TAW"))
+        };
+        let lb = Logbook {
+            minter: Default::default(),
+            records: vec![
+                at("W9AAA", 0, "20m", "SSB", None),
+                at("W9AAA", 1, "20m", "SSB", None),
+                at("w9aaa", 2, "20m", "USB", None),
+                at("W9AAA", 3, "40m", "SSB", None),
+                at("W9AAA/P", 4, "20m", "SSB", None),
+                at("W9AAA", 5, "20m", "SSB", Some("US-0001")),
+            ]
+            .into(),
+        };
+        let acts = lb.activations();
+        assert_eq!(acts.len(), 1);
+        assert_eq!(
+            acts[0].qsos, 4,
+            "two repeats of W9AAA on 20m SSB count once"
+        );
+        assert_eq!(
+            qsos(&lb.adif_for_activation("US-1234", d, Some("KD9TAW"))),
+            6,
+            "the file keeps every contact"
+        );
+    }
+
     /// A two-fer: one QSO at a site where two park boundaries overlap. POTA permits it and wants
     /// a SEPARATE log per park, the same QSO in both. `my_ref` is one ADIF value, so the only
     /// way to say it today is both references in the one field — and then each file must carry
@@ -12545,15 +12586,14 @@ mod export_rule_tests {
 
     fn activations_old(lb: &Logbook) -> Vec<LoggedActivation> {
         type Key = (String, u64, Option<String>);
-        let mut seen: std::collections::HashMap<Key, (Option<String>, usize)> =
+        type Keys = std::collections::HashSet<hot::PotaKey>;
+        let mut seen: std::collections::HashMap<Key, (Option<String>, Keys)> =
             std::collections::HashMap::new();
         for r in &lb.records {
             let call = worked_under(r);
             let day = day_start(r.when_unix);
             for reference in my_refs(r) {
-                let slot = seen
-                    .entry((reference, day, call.clone()))
-                    .or_insert((None, 0));
+                let slot = seen.entry((reference, day, call.clone())).or_default();
                 if slot.0.is_none() {
                     slot.0 = r
                         .ota
@@ -12562,12 +12602,17 @@ mod export_rule_tests {
                         .map(|p| p.trim().to_ascii_uppercase())
                         .filter(|p| !p.is_empty());
                 }
-                slot.1 += 1;
+                slot.1.insert(hot::pota_key(
+                    &r.call,
+                    &r.band,
+                    &r.mode,
+                    r.ota.their_ref.as_deref(),
+                ));
             }
         }
         let mut out: Vec<LoggedActivation> = seen
             .into_iter()
-            .map(|((reference, day_start_unix, callsign), (program, qsos))| {
+            .map(|((reference, day_start_unix, callsign), (program, keys))| {
                 let (y, mo, d, ..) = datetime_utc(day_start_unix);
                 LoggedActivation {
                     program,
@@ -12575,7 +12620,7 @@ mod export_rule_tests {
                     day_start_unix,
                     date: format!("{y:04}-{mo:02}-{d:02}"),
                     callsign,
-                    qsos,
+                    qsos: keys.len(),
                 }
             })
             .collect();

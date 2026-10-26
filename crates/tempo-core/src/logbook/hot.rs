@@ -1614,6 +1614,16 @@ mod tests {
         );
         prop_assert_eq!(keys(&index.confirmed), old.confirmed_entities, "confirmed");
         prop_assert_eq!(keys(&index.parks), old.worked_parks, "parks");
+        // The Logbook export picker counts each listed activation as the strip does.
+        for a in log.activations() {
+            prop_assert_eq!(
+                a.qsos,
+                index.activation_day_count(&a.reference, a.day_start_unix / 86_400),
+                "the export picker's count of {:?} on {}",
+                a.reference,
+                a.date
+            );
+        }
         // The activation day's count and its park-to-park share, for every park the log could
         // hold, on the day of T0 and on either side of its midnights.
         for r in ["US-1234", "US-5678", "us-1234"] {

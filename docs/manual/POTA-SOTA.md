@@ -8,7 +8,7 @@ The board is built around hunting, with your own activation in a strip above the
 
 - **Hunting** — the spot list, filters and the HUNT button, described below.
 - **I'm activating** — pick POTA or SOTA, type your reference (`K-1234`, `W7A/MN-001`) and press **Start**. Every contact you log while the activation runs is stamped with your park (`MY_SIG`/`MY_SIG_INFO` or `MY_SOTA_REF`), and the strip counts them. **Stop** ends the activation; it never stops a transmission.
-- **Spot me** (shown while you are activating) posts your park and dial frequency to pota.app and to the DX cluster — only when you press it, and only after you confirm the park and frequency it will send. If either changes between the press and the post, nothing is sent.
+- **Spot me** (shown while you are activating) posts your park and dial frequency to pota.app and to the DX cluster — only when you press it, and only after you confirm the park and frequency it will send. If either changes between the press and the post, nothing is sent. On a two-fer the confirm names every park, each park is spotted on pota.app on its own, and the cluster spot names them all.
 - **Park list** — download the POTA park directory once, or import a CSV, and search it offline from the log form.
 - **Import Hunted Parks** — load the `Hunted Parks.CSV` from your POTA stats page, so parks you hunted on CW (where the park reference is not in the exchange and your log cannot know it) stop showing as NEW PARK.
 
