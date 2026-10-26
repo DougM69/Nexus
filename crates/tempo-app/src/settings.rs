@@ -5232,6 +5232,20 @@ pub fn net_rigctl_address_clashes(
     clashes
 }
 
+/// The port Nexus's own CAT broker holds, for every "never talk to ourselves" check (#165):
+/// where the broker reports it is serving (`serving`), else the Sharing port while sharing is on,
+/// else none.
+///
+/// The broker steps aside when another program holds the Sharing port, so a NET rigctl radio
+/// pointed at THAT program's rigctld on the Sharing port's number is not Nexus talking to itself,
+/// and is allowed once the broker serves elsewhere. Until the broker has bound (the radio connects
+/// first at a launch), or while its bind keeps failing, the Sharing port is where it is about to
+/// be, so the check stays on it. A port it is still serving on counts after sharing is switched
+/// off, until it has let go.
+pub fn sharing_self_port(s: &Settings, serving: Option<u16>) -> Option<u16> {
+    serving.or(s.cat_broker.then_some(s.cat_broker_port))
+}
+
 /// The first [`AddressClash`], in words: what the status lane says (`radio_config_warning`) while
 /// one is stored, as an older build's port repair could leave it. Nothing renumbers it: the
 /// rigctld TCP Port to change is the operator's to choose.
