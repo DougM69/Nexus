@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Contest contacts made during a POTA activation count for the activation.** A contest contact logged while an activation runs carries its park or parks, program, state and the park's grid, exactly as any other contact made then, and keeps them when it is merged into the Logbook, so it counts toward the activation's ten, shows in its contacts and export, and counts in the activator awards. They are recorded when the contact is logged, not at the merge: a contact logged while the activation is paused (taken up at launch, before Still activating) or after Stop carries none, and editing a contest contact before the merge keeps them. Your Cabrillo and the contest ADIF export are unchanged. Contest logs from earlier versions open as before.
 - **POTA activator achievements in Awards.** A new POTA activator panel counts your activations from the log, by the same rule as the activation strip (ten different contacts — call, band and mode — from a park in one UTC day): valid activations, days that fell short, parks activated and the next achievement (10, 20, 30, 40, 50, 75, 100 …), Repeat Offender (activations at one park, a tier every 20), Kilo (1000 contacts from one park) and Rover (parks activated in one UTC day: Warthog 5 up to Lion 30), each as POTA defines it, with a table of your parks. Each call you activated under is counted on its own, as POTA counts each account; a portable /P counts as the plain call (KD9TAW/P is KD9TAW), while /M or any other suffix stays a call of its own. pota.app still awards from the logs you upload there.
 - **Your park on the map.** With the Parks on the air layer on, the park you are activating is a filled, named diamond, and parks you have activated are outlined diamonds. The park list you downloaded now keeps each park's own position, so a park is drawn at its pin rather than its grid square.
-- **Re-tag contacts with your park after the fact.** Logbook ▸ Clean up ▸ Bulk edit already sets or clears MY_POTA_REF; a two-fer typed as `us-1234, US-5678` (or with `;` between the parks) is now stored the way an activation stamps it (`US-1234,US-5678`), and the preview now says which of the contacts were already sent to LoTW, eQSL, QRZ or Club Log (they keep the park they were sent with; nothing is sent again) and which are in an activation file you already exported, naming the files to export again. That warning covers any bulk edit of those contacts (a grid or power set on them too), not only a park change; a two-fer re-ordered changes no file and is not flagged. A file is remembered as exported only once it is saved. It is one change, undone with one Undo. Activation files exported before this version are not known to it.
+- **Re-tag contacts with your park after the fact.** Logbook ▸ Clean up ▸ Bulk edit (below) sets or clears MY_POTA_REF; a two-fer typed as `us-1234, US-5678` (or with `;` between the parks) is stored the way an activation stamps it (`US-1234,US-5678`), and the preview says which of the contacts were already sent to LoTW, eQSL, QRZ or Club Log (they keep the park they were sent with; nothing is sent again) and which are in an activation file you already exported, naming the files to export again. That warning covers any bulk edit of those contacts (a grid or power set on them too), not only a park change; a two-fer re-ordered changes no file and is not flagged. A file is remembered as exported only once it is saved. It is one change, undone with one Undo. Activation files exported before this version are not known to it.
 - **POTA activators: a spot comment, a re-spot prompt when you move, and QRT at Stop.** Spot me now has a comment box beside it (QRV when left blank, up to 30 characters), and the comment goes to both pota.app and the DX cluster. On a two-fer, one confirm names every park and each park is spotted on pota.app on its own, under the same one-minute repeat limit; the cluster spot names them all ("POTA US-1234 US-5678 QRV"). Re-spot and QRT work the same way. When the dial has sat at least 1 kHz (CW and digital) or 3 kHz (phone) away from where you were spotted for 20 seconds, a notice says "Moved to 14.062. Re-spot?" with one button; the button is Spot me, with the same confirm and the same one-minute repeat limit, and nothing is posted unless you press it and confirm. Once you have spotted, the checklist Stop opens offers Post QRT, unticked every time; tick it and End activation asks before spotting QRT on the frequency you were spotted on, then ends the activation. The cluster spot is kept within a node's 30-character comment column by naming the later parks of a two-fer or more as a count ("POTA US-1234 US-5678 +1 QRT"), never by cutting your comment.
 - **An Activation pane, an "Activation over?" checklist and a Logbook view of the activation.** A new Activation box shows the activation running now: each park's count today in the strip's own words ("US-1234 7 of 10", "3 to go" or "valid") with its park-to-park count, how long the activation has run, how long until 0000Z starts the counts again, the rate (as the contest rate meter reads it) and this activation's contacts, newest first. Put it in any cockpit's box, the dashboard rail or Conditions like any other box, or open it in a window of its own with Activation window on the POTA/SOTA strip. It sends nothing. Stop on the strip now opens a checklist before the activation ends: each park's count, Export the ADIF files for POTA (one per park per UTC day the activation ran, exactly the files the Logbook's per-activation export writes, to Downloads), Post QRT once you have spotted, and reminders for a K- park, contacts that carried no grid, a state line with no state picked, and that you upload the files at pota.app yourself. Nothing is ticked until you tick it, Keep activating changes nothing, and a QRT still asks before it posts. When a park's contacts today were made under more than one call (KD9TAW and KD9TAW/M, say), the strip, the pane and the checklist say so with each call's count, because POTA counts each call separately; the checklist lists each call's file. If the log cannot be read for the checklist it says so instead of offering no files, and a checklist left open past 0000Z lists the new day's file. While an activation runs, the Logbook has a This activation button that shows only its contacts: its park, on each UTC day it ran, a two-fer and a run past 0000Z included; Filters ▸ Save keeps it under a name, and Filters has a new My park / summit field (your own reference, matched whole: US-1000 does not find US-10000, and a contact hunting that park is not yours).
 - **`{MYPARK}` and `{HISPARK}` in CW macros, and a POTA set.** `{MYPARK}` sends every park of the activation, separated by spaces as a two-fer is sent on CW; `{HISPARK}` sends the park of the station you are hunting. Each is left out when there is none. While a park activation runs and no contest does, the CW keys you have not made your own are the POTA set: F1 `CQ POTA DE {MYCALL} {MYCALL} K`, F2 `! UR 5NN 5NN {MYSTATE} {MYPARK} BK`, F3 `TU 73 {MYCALL} POTA`, F6 your parks. Edit a key from the dock as usual. While you activate, `{MYSTATE}` sends the state your contacts carry (the park's, or the one you picked on a state line), not your home state.
@@ -103,7 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contacts, from when, and whether they leave the log or come back to it. Undoing a whole purge,
   import or undo is done only at the station: a computer driving it through Remote sees the list
   but cannot press it. The history is kept in the logbook
-  database, so it survives a restart. Every edit is kept for good; a deleted or purged contact's full
+  database, so it survives a restart. Undoing a change to a contact merged from a contest, or putting
+  back a deleted one, keeps what its exchange carried (the zone, county, state or grid the other
+  station sent) in the contest's own columns, and the history shows a change to one of them as, for
+  example, `STATE (contest)`. Every edit is kept for good; a deleted or purged contact's full
   copy is kept for 90 days, which **Keep deleted contacts for (days)** under Settings › Config ›
   Data & log folder changes. An undo never sends anything to QRZ, Club Log, eQSL or LoTW; an undo that
   changes a callsign marks the contact to be sent again with your next upload, as correcting a
@@ -123,7 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it listening and tuning only, and the button stays in Settings ▸ Remote access. The held computer
   now says the same: listening and tuning only, until Allow to transmit is pressed at the shack.
 - **A held remote computer sees its hold in every mode**, with "or about N min" when the station would lift it by itself; a voice message cut short by leaving Phone is now announced.
-- **Approvals given at the shack now last across a station restart.** A browser added by signing in
+- **Approvals given at the shack last across a station restart.** A browser added by signing in
   that you let transmit (with **Approve** or **Allow to transmit**) stays allowed after Nexus or the
   station restarts, once the station has heard the device list again, and so do your own computers and
   phones once the station has sent you the new-device notice. A guest's computer or phone is held again after a restart until you press **Allow to
@@ -162,7 +165,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   box and a serial number; and Live, which keeps the transmitter up while you type and sends your words as you go.
   Every send needs TX On and your license class across the whole signal, and the TX watchdog runs for JTTY,
   though WSJT-X's does not. Stop TX, Esc and the dock's Esc/Stop cut it at once, and leaving the JTTY screen
-  stops it. Opening JTTY turns TX on as opening PSK does, but not after a Stop. A call becomes clickable, is
+  stops it. A JTTY session stops 10 minutes after it starts, the text still going out after Send, the
+  sign-off or live typing included, at the station and from afar. Opening JTTY turns TX on as opening
+  PSK does, but not after a Stop. A call becomes clickable, is
   spotted to PSK Reporter and reaches the Needed board only once it has been decoded in two separate messages. JTTY
   comes from the WSJT-X 3.3.0-beta4 test release and no WSJT-X general release has it yet, so the other station
   needs a WSJT-X 3.2 or 3.3 test release. Not yet tried on the air: a bench check should confirm keying, power and
@@ -188,7 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A disabled radio leaves the radio switcher.** Its pill is gone from the header's radio switcher, and its
   **Make active** button in Settings ▸ Radio is greyed out until you enable it, so a click can't open its port
   again. Enable it and the pill comes back. With only one radio left enabled, the switcher hides as it does for a
-  one-radio station.
+  one-radio station. A computer driving the station through Remote cannot make a disabled radio active either.
 - **The Call Roster's Hide worked can reach back a set time.** Beside Hide worked on the FT8/FT4 Call Roster is
   the same window picker the Spots panel has: Any time (the default, and what Hide worked did before), Until 0000Z,
   1 h, 4 h, 24 h or 7 days. A station you last worked before the window shows again, which suits special-event
@@ -211,7 +216,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Activity's −B4 chip picks what it hides: **Any band** (every station worked before, as −B4
   always did, and still the default) or **This band**, which keeps a station you have worked only
   on another band on screen so you can work it for a new band. The Rx Frequency pane follows the
-  same choice.
+  same choice, and with This band chosen, hovering over its −B4 says it hides only stations worked
+  on this band, and where to change that.
 - **Tempo can come off the left-hand menu.** Settings ▸ Appearance ▸ Features now has a switch for
   **Tempo** (the TempoFast/TempoDeep chat) under Operate, like the ones for RTTY, SSTV and the
   other modes. It is on, as before, unless you turn it off; off, Tempo leaves the menu, and if
@@ -359,7 +365,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Merging a contest into the logbook keeps the grid the other station sent.** In the ARRL VHF contests the grid in the exchange went into the exported file but not the logbook's own Grid column, so those contacts were missing from the Grid column, grid searches and anything that counts grids until the log was imported again. A name and a QTH sent in an exchange now land in the Name and QTH columns the same way. Contacts merged before this get theirs once, on the first start of this version, wherever their own Grid, Name or QTH is empty; one you filled in yourself is never touched. Their uploads carry the same grid, name and QTH as before. The copy is one change: **Recently deleted** in the Logbook lists it for as long as Settings keeps deleted contacts (90 days unless you changed it), and one Undo there blanks every field it filled again, while the contest exchange keeps the values; after that, each contact's own history still undoes its copy.
 - **WAZ counts the zone a CQ WW contact sent.** A contest merged into the logbook kept the CQ zone the other station sent only with the contest's columns, and the awards counted the zone of its callsign's country instead: a W1 station operating from California sends zone 3 and was credited zone 5. The same contacts now count for a custom award on the county, section or class their exchange carried, a LoTW download no longer adds a second, different grid, zone or county beside the ones they sent, and a contact that already got one that way uploads only the one the station sent. With **Sign from ADIF location** on, a LoTW upload of a merged VHF contest contact signs the grid you sent in the exchange (a rover's grid at that moment) rather than adding the grid in Settings beside it; with a named TQSL Station Location, nothing about the signing changes.
 - **A merged contest contact's state is the one its exchange carried, everywhere.** Its uploads already carried the state the other station sent; WAS, the WAS needs, the statistics, the Logbook's State column, its sort and filter and the edit form now show and count that state too, where they used the state looked up from the callsign. Editing State in the Logbook replaces the exchange's state, so the upload, WAS and custom awards all follow the edit.
-- **Undo puts a merged contest contact back exactly as it was.** Undoing a change to a contact merged from a contest, or putting back a deleted one, used to move what its exchange carried (the zone, county, state or grid the other station sent) out of the contest's own columns into the contact's ordinary fields. The history now keeps those columns as they were, and shows a change to one of them as, for example, `STATE (contest)`.
 - **Other programs can no longer transmit past a band or segment edge from a dial just inside it.**
   Nexus cannot tell where in the sideband another program puts its audio, so a key from the CAT
   broker or TCI is now allowed only when everything from the dial to 3 kHz above it (below it on
@@ -390,18 +395,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   press or a program on TCI could start transmitting over a message still going out. Both are now
   refused until the message ends, and Stop still ends it at once. A TCI program that sends a
   transmit-off while a message plays now stops the message, as it already stops FT, CW, RTTY and Tune.
-- **Remove at the shack now removes a computer everywhere.** Removing it from Paired computers also ends its internet access, and removing it from Your computers also takes it off your network, when Nexus can confirm they are the same computer; if it cannot, it says to check the other list. If the computer signs in again, it comes back held until you allow it to transmit. Taking back an invitation also takes that person's computers off your network at once, even while the internet is down; a guest's computer Nexus cannot tell the owner of goes too, and is named on the card so whoever uses it can sign in again.
+- **Remove at the shack now removes a computer everywhere.** Remove on the Devices list ends both its internet access and its place on your network, when Nexus can confirm they are the same computer; one it cannot confirm is listed on a row of its own for each, each with its own Remove. If the computer signs in again, it comes back held until you allow it to transmit. Taking back an invitation also takes that person's computers off your network at once, even while the internet is down; a guest's computer Nexus cannot tell the owner of goes too, and is named on the card so whoever uses it can sign in again.
 - **Driving the shack from another computer: the screen now shows the shack's own mode.** It follows
   the shack's Phone, CW or FT section instead of the last one this computer showed, so a Phone band
   change gives USB or LSB, never DATA; picking a mode is sent to the shack, and a refusal is shown
   instead of switching. The TX On/Off button beside Tune in Phone now works from there, through all
   of the shack's transmit checks, and a refused Tune is shown.
-- **A computer or phone added by signing in is now held from transmitting over the internet too.** The
-  hold on a device added by signing in did not apply to a computer or phone driving the station over the
-  internet, so it could transmit at once. It is now held like a browser, and shows at the shack as
-  waiting. The hold lifts by itself 15 minutes after it signs in, once the station knows you were told
-  it was added, or at once when you press **Allow to transmit** or **Approve**. Stop is never held, and
-  computers on your own network are unaffected.
 - **Driving the shack from another computer: CW's TX On/Off button beside Tune now works**, as Phone's does, so
   Enter Sends Message can send once you turn TX on; a refusal is shown, and Enter still never turns TX on.
 - **Driving the shack from another computer: a refused press now says why, and nothing that belongs to the shack
@@ -411,8 +410,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused because TX is off now says "turn TX on first". Repair clock, Clear test contacts, the Field Day club's
   Give and Remove, the Remote access card and the Connections log say they are at the shack, and the first-run
   setup wizard no longer opens by itself on that computer.
-- **JTTY's 10-minute limit now covers the text still going out after live typing ends.** After Send or the
-  sign-off, the transmission now stops at 10 minutes from the start of the session, at the station and from afar.
 - **Driving a station from another computer, TX no longer turns itself off after a second, or after every over.**
   Letting go of the PTT, Tune off, Phone's Lock, leaving Phone or hiding the voice keyer, and the contest S&P chip
   each stopped everything at the station, the TX On you had just pressed included. Each now ends only its own
@@ -511,8 +508,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A contest's contacts keep their operator and station call in the Logbook.** Merging a
   contest into the Logbook dropped the "Operator at the key" each contact was logged with, and
   stamped the station call in use at the merge rather than the one the contact was made on.
-- **The WSJT-X QSOLogged message carries the contact's power** in its Tx power field, so N1MM,
-  HRD and Log4OM receive it.
 - **Linux: the PC .deb and AppImage run on Ubuntu 22.04, Mint 21, and Debian 12.** They were built on Ubuntu
   24.04, which made glibc 2.39 the minimum, so on Debian 12 (bookworm), Ubuntu 22.04 and Mint 21.x the package
   installed and then the app did not start, and an installed Nexus could not take an update without upgrading
@@ -537,13 +532,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until the TX watchdog turns transmit off, and the strip then showed only "AwaitReport" beside TX off. It now
   shows "TX watchdog stopped the call" in red in place of the state, and the window's taskbar button flashes
   once (a dock bounce on macOS), as WSJT-X does. TX On calls again. How long Nexus calls is unchanged.
-- **A disabled radio can't be made active from Remote either.** Disabling a radio takes it out of the switcher so
-  that its port stays free for another program, but a computer driving the station could still select it and open
-  the port again. The station now refuses a disabled radio from Remote as it does at the desktop. Enable the radio
-  to use it again.
-- **The Rx Frequency pane's −B4 says which worked stations it hides.** That pane has no menu of its own for
-  −B4's Any band / This band choice, but it follows the one in Band Activity. With This band chosen, hovering over
-  its −B4 now says it hides only stations worked on this band, and where to change that.
 - **Signing in and pairing again from another computer.** A sign-in refused because your email address
   is not confirmed yet now says to confirm it, not "The sign-in was cancelled"; Stations on this network
   has one **Sign in…** button, with **Link to your account…** on a station paired with a code; and a
