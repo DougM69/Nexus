@@ -2050,6 +2050,10 @@ export interface JttyTxState {
   pending: string
   /** WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped. */
   notice: string | null
+  /** WSJT-X's "Frames: sent/total" for this over (the filler in neither). Absent in an older
+   *  fixture. */
+  framesSent?: number
+  framesTotal?: number
   /** The newest Log QSO prompt: a send starting "TU " went out (WSJT-X's `logQSOTimer`). A
    *  prompt only; nothing is logged unless the operator logs it. Absent in an older fixture. */
   logPrompt?: JttyLogPrompt | null

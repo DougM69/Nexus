@@ -85,6 +85,11 @@ const RX_PLATE = 'RX ▼'
 const ESC_KEY = 'Esc'
 const LIVE_KEY = 'TX'
 const SERIAL_LABEL = '#'
+/** WSJT-X's Rx→Tx and Tx→Rx copy buttons (`pbR2T_2`, `pbT2R_2`), named by its own control names. */
+const R2T_LABEL = 'Rx→Tx'
+const T2R_LABEL = 'Tx→Rx'
+/** WSJT-X's chat opener (Ctrl+H, `insertJttyChatOpener`): the DX call and mine, expanded on send. */
+const CHAT_OPENER = '%H %M '
 /** WSJT-X's Rx and Tx spin box ranges for JTTY (`RxFreqSpinBox_2`, `TxFreqSpinBox_2`). */
 const RX_MIN_HZ = 200
 const RX_MAX_HZ = 5000
@@ -399,6 +404,22 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     void jttyStop()
       .then(setJtty)
       .catch(() => {})
+  }
+  // Ctrl+H (WSJT-X's `insertJttyChatOpener`, 3.3.0-beta4 `widgets/mainwindow_jtty.cpp` 232-236):
+  // `%H %M ` typed where the caret is, as ordinary typing, expanded when it is sent.
+  const insertOpener = (box: HTMLInputElement) => {
+    const start = box.selectionStart ?? box.value.length
+    const end = box.selectionEnd ?? start
+    onDraft(box.value.slice(0, start) + CHAT_OPENER + box.value.slice(end))
+    requestAnimationFrame(() => box.setSelectionRange(start + CHAT_OPENER.length, start + CHAT_OPENER.length))
+  }
+  // Ctrl+Shift+K (WSJT-X's `clearJttyLiveEntry`, `mainwindow_jtty.cpp` 183-203): the box emptied,
+  // what it sent cleared, and anything still going stopped, as WSJT-X aborts it.
+  const clearBox = () => {
+    if (going) stopJtty()
+    draftRef.current = ''
+    setDraft('')
+    setCommitted('')
   }
   // Tx (WSJT-X's Tx spin box) and the serial: drafts committed on Enter or leaving the box.
   const [txDraft, setTxDraft] = useState<string | null>(null)
@@ -775,6 +796,23 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               />
               <span>{HZ}</span>
             </label>
+            <button
+              type="button"
+              className="rtty-arm"
+              onClick={() => commitTx(rxHz)}
+              disabled={going}
+              title={t('jtty.r2t.title')}
+            >
+              {R2T_LABEL}
+            </button>
+            <button
+              type="button"
+              className="rtty-arm"
+              onClick={() => setRx(Math.min(RX_MAX_HZ, Math.max(RX_MIN_HZ, Math.round(txHz))), ftolHz)}
+              title={t('jtty.t2r.title')}
+            >
+              {T2R_LABEL}
+            </button>
             <label className="jtty-rx-field" title={t('jtty.ftol.title')}>
               <span>{FTOL_LABEL}</span>
               <select
@@ -1006,6 +1044,17 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             value={draft}
             onChange={(e) => onDraft(e.target.value)}
             onKeyDown={(e) => {
+              const key = e.key.toLowerCase()
+              if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && key === 'h') {
+                e.preventDefault()
+                insertOpener(e.currentTarget)
+                return
+              }
+              if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && key === 'k') {
+                e.preventDefault()
+                clearBox()
+                return
+              }
               if (e.key !== 'Enter') return
               e.preventDefault()
               if (live) commitLive(true)
@@ -1016,6 +1065,11 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             autoComplete="off"
             spellCheck={false}
           />
+          {(tx?.framesTotal ?? 0) > 0 && (
+            <span className="jtty-frames" title={t('jtty.frames.title')}>
+              {t('jtty.frames', { sent: tx?.framesSent ?? 0, total: tx?.framesTotal ?? 0 })}
+            </span>
+          )}
           <button
             type="button"
             className="cw-send-btn"

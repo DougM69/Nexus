@@ -192,6 +192,9 @@ pub struct JttyTx {
     /// nothing; the operator does, from the log strip.
     log_prompt: Option<crate::dto::JttyLogPrompt>,
     log_prompts: u64,
+    /// Frames of what was sent (not the filler) this over has put on the air: WSJT-X's "Frames:
+    /// sent/total" (`updateJttyLiveEntryFrameLabel`), from the first send of an over to the next.
+    over_frames_sent: u32,
 }
 
 impl JttyTx {
@@ -214,6 +217,7 @@ impl JttyTx {
             gen: 0,
             log_prompt: None,
             log_prompts: 0,
+            over_frames_sent: 0,
         }
     }
 
@@ -244,6 +248,23 @@ impl JttyTx {
             .collect::<Vec<_>>()
             .join("\n");
         (segs.len() as u32, text)
+    }
+
+    /// The frames of what was sent (not the filler) still to go, the rest of the segment being
+    /// fed included.
+    fn frames_left(&self) -> u32 {
+        let left = self
+            .playing
+            .as_ref()
+            .filter(|p| !p.seg.filler)
+            .map_or(0, |p| p.seg.pcm.len().saturating_sub(p.at));
+        let queued: usize = self
+            .queue
+            .iter()
+            .filter(|s| !s.filler)
+            .map(|s| s.pcm.len())
+            .sum();
+        ((left + queued) / FRAME_SAMPLES) as u32
     }
 
     /// Air time still queued, the rest of the segment being fed included (ms).
@@ -1258,6 +1279,10 @@ impl Engine {
             self.jtty_tx.filler = rendered.filler;
             self.jtty_tx.live_keyed = false;
         }
+        if !rendered.segments.is_empty() && !self.jtty_tx.active() {
+            // A new over: WSJT-X's frame count starts again.
+            self.jtty_tx.over_frames_sent = 0;
+        }
         if !rendered.segments.is_empty() {
             tempo_core::applog::info(
                 "tx",
@@ -1630,6 +1655,9 @@ impl Engine {
             self.jtty_tx.playing = Some(Playing { seg: next, at: 0 });
         }
         let p = self.jtty_tx.playing.as_mut()?;
+        if !p.seg.filler {
+            self.jtty_tx.over_frames_sent += 1;
+        }
         let end = (p.at + FRAME_SAMPLES).min(p.seg.pcm.len());
         let frame = p.seg.pcm[p.at..end].to_vec();
         p.at = end;
@@ -1690,6 +1718,8 @@ impl Engine {
             pending,
             notice: self.jtty_tx.notice.clone(),
             log_prompt: self.jtty_tx.log_prompt.clone(),
+            frames_sent: self.jtty_tx.over_frames_sent,
+            frames_total: self.jtty_tx.over_frames_sent + self.jtty_tx.frames_left(),
             style: self.settings.jtty_message_style,
             fkeys: (1..=8)
                 .map(|n| self.jtty_fkey_template(n).unwrap_or_default())
@@ -2287,6 +2317,42 @@ mod tests {
         send_text(&e, "W1AW TU", "").unwrap();
         drain(&e);
         assert_eq!(engine_lock(&e).jtty_serial(), 3, "only at the start");
+    }
+
+    /// WSJT-X'S "FRAMES: SENT/TOTAL" (`updateJttyLiveEntryFrameLabel`): the frames of what was sent
+    /// this over that are on the air, and those plus what is still queued; the filler counts in
+    /// neither, and the next over starts the count again.
+    #[test]
+    fn the_frame_count_is_sent_over_total_for_the_over() {
+        let e = jtty_engine();
+        let count = || {
+            let st = engine_lock(&e).jtty_tx_state();
+            (st.frames_sent, st.frames_total)
+        };
+        assert_eq!(count(), (0, 0));
+        send_fkey(&e, 2, "W1AW").unwrap();
+        send_fkey(&e, 1, "").unwrap();
+        assert_eq!(count(), (0, 3), "F2 is two atoms, F1 one");
+        frames(&e, 1);
+        assert_eq!(count(), (1, 3));
+        drain(&e);
+        assert_eq!(count(), (3, 3), "kept once the over has gone");
+        send_fkey(&e, 1, "").unwrap();
+        assert_eq!(count(), (0, 1), "a new over counts again");
+        drain(&e);
+        // A live session's filler is not counted.
+        live_start(&e, "", "").unwrap();
+        live_commit(&e, "HI ", "", JttyCommit::Flush).unwrap();
+        let typed = count().1;
+        for _ in 0..(typed as usize + 3) {
+            engine_lock(&e).poll_jtty(true, 0.0);
+        }
+        assert_eq!(
+            count(),
+            (typed, typed),
+            "the filler that followed is not a frame sent"
+        );
+        engine_lock(&e).jtty_stop();
     }
 
     /// THE LOG QSO PROMPT, as WSJT-X raises it (`handleJttyContestSerial` starts `logQSOTimer`,

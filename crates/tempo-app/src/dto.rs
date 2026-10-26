@@ -857,6 +857,10 @@ pub struct JttyTxState {
     pub pending: String,
     /// WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped.
     pub notice: Option<String>,
+    /// WSJT-X's "Frames: sent/total" for this over: frames of what was sent that are on the air,
+    /// and those plus what is still queued (the filler in neither).
+    pub frames_sent: u32,
+    pub frames_total: u32,
     /// The newest Log QSO prompt (a send starting "TU " went out), or `None`.
     pub log_prompt: Option<JttyLogPrompt>,
     /// WSJT-X's "Message style": which of the two F-key sets F1-F8 send.

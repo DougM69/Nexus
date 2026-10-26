@@ -2,8 +2,8 @@
 //! `engine` (declared with `#[path]` there, as `js8` is), so it reaches the engine's private
 //! fields without widening any visibility.
 //!
-//! ⛔ NOTHING HERE TRANSMITS, AND NOTHING HERE MAY. JTTY's transmitter is `jtty_tx`, switched
-//! off in every build; this file decodes, shows, logs and reports what was heard, and shows what
+//! ⛔ NOTHING HERE TRANSMITS, AND NOTHING HERE MAY. JTTY's transmitter is `jtty_tx`, behind
+//! every transmit guard; this file decodes, shows, logs and reports what was heard, and shows what
 //! the transmitter sent. While JTTY transmits the tap stops and the reception ends (WSJT-X ends
 //! it on Transmission), and a message decoded inside our own keyed time is our own echo: it is
 //! shown, but never counts toward the two-decode rule.
@@ -170,6 +170,9 @@ pub struct JttySpot {
     pub snr: i32,
     /// Unix seconds of the message's first frame.
     pub time_secs: u32,
+    /// The sender's grid, when the message's third word is one (`CQ W1AW FN31`): WSJT-X spots
+    /// it with the grid (`JttyReceiveResultController.cpp` 76-79, 3.3.0-beta4).
+    pub grid: Option<String>,
 }
 
 /// The newest sender-shaped message for a call (the board's heard station, once confirmed).
@@ -998,6 +1001,7 @@ impl Engine {
                     freq_hz: rf,
                     snr: u.snr_db,
                     time_secs: (start_ms.max(0) / 1000) as u32,
+                    grid: grid.map(str::to_string),
                 };
                 if j.confirm.is_confirmed(call) {
                     if uploading {
@@ -1982,6 +1986,27 @@ mod tests {
         let pcm = j.kept_pcm(2, 49 * second as i64, 51 * second as i64);
         assert_eq!(pcm.len(), 2 * second);
         assert_eq!((pcm[0], pcm[pcm.len() - 1]), (2, 3));
+    }
+
+    /// A SPOT CARRIES THE GRID when the message names one, as WSJT-X's does (its third word, when
+    /// grid-shaped): the held spot and the confirming one alike; a message without one, none.
+    #[test]
+    fn a_spot_carries_the_senders_grid() {
+        let mut e = rx_engine();
+        let s = begun(&mut e);
+        e.apply_jtty_updates(
+            s,
+            &[
+                upd(1, "CQ W1AW FN31", 3.0, Terminal::Complete),
+                upd(2, "CQ W1AW FN31", 13.0, Terminal::Complete),
+                upd(3, "CQ W1AW CQ", 23.0, Terminal::Complete),
+            ],
+        );
+        let grids: Vec<Option<String>> = e.take_jtty_spots().into_iter().map(|s| s.grid).collect();
+        assert_eq!(
+            grids,
+            [Some("FN31".to_string()), Some("FN31".to_string()), None]
+        );
     }
 
     /// OUR OWN ECHO NEVER CONFIRMS A CALL. Two messages naming W1AW that started inside our own

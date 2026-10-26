@@ -564,6 +564,40 @@ describe('the JTTY dock, wired to the engine (a state saying the transmitter is 
     expect(document.querySelector('.jtty-log-prompt')).toBeNull()
   })
 
+  it('Ctrl+H types WSJT-X’s chat opener where the caret is; Ctrl+Shift+K clears the box and stops what is going', async () => {
+    await mount(state({ tx: txState({ sending: true, left: 1 }) }))
+    m('jttyStop').mockResolvedValue(state({ tx: txState() }))
+    fireEvent.change(compose(), { target: { value: 'HELLO' } })
+    compose().setSelectionRange(0, 0)
+    fireEvent.keyDown(compose(), { key: 'h', ctrlKey: true })
+    expect(compose().value).toBe('%H %M HELLO')
+    expect(m('jttySend'), 'Ctrl+H sends nothing').not.toHaveBeenCalled()
+    fireEvent.keyDown(compose(), { key: 'K', ctrlKey: true, shiftKey: true })
+    expect(compose().value).toBe('')
+    expect(m('jttyStop')).toHaveBeenCalledTimes(1)
+    cleanup()
+    // Nothing going: Ctrl+Shift+K only clears.
+    m('jttyStop').mockClear()
+    await mount(state({ tx: txState() }))
+    fireEvent.change(compose(), { target: { value: 'HELLO' } })
+    fireEvent.keyDown(compose(), { key: 'K', ctrlKey: true, shiftKey: true })
+    expect(compose().value).toBe('')
+    expect(m('jttyStop')).not.toHaveBeenCalled()
+  })
+
+  it('Rx→Tx and Tx→Rx copy one into the other, as WSJT-X’s buttons do; the frame count shows sent/total', async () => {
+    await mount(state({ rxHz: 1320, tx: txState({ txHz: 1700, framesSent: 2, framesTotal: 5 }) }))
+    m('jttySetTx').mockResolvedValue(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Rx→Tx' }))
+    expect(m('jttySetTx')).toHaveBeenLastCalledWith(1320)
+    fireEvent.click(screen.getByRole('button', { name: 'Tx→Rx' }))
+    expect(m('jttySetRx')).toHaveBeenLastCalledWith(1700, 20)
+    expect(document.querySelector('.jtty-frames')?.textContent).toBe(t('jtty.frames', { sent: 2, total: 5 }))
+    cleanup()
+    await mount(state({ tx: txState() }))
+    expect(document.querySelector('.jtty-frames'), 'nothing to count, nothing shown').toBeNull()
+  })
+
   it('what this station sent shows in the QSO frequency pane only', async () => {
     const lines = [
       line({ id: 3, line: '1500 -12  CQ K1ABC CQ', rx: true }),

@@ -11557,8 +11557,7 @@ export const EN = {
   'jtty.pane.all.hint':
     'Every JTTY message decoded, in the order it started. A call becomes clickable once it has been heard in two separate messages.',
   'jtty.pane.rx.hint': 'The messages first heard within F Tol of Rx.',
-  'jtty.header.mode.title':
-    'JTTY, the WSJT-X keyboard mode. This build receives it; transmitting comes in a later build.',
+  'jtty.header.mode.title': 'JTTY, the WSJT-X keyboard mode.',
   'jtty.header.band.title': "Showing the rig's current band",
   'jtty.rx.group.aria': 'JTTY receive frequency',
   'jtty.rx.title':
@@ -11591,11 +11590,15 @@ export const EN = {
   'jtty.compose.aria': 'JTTY message',
   'jtty.compose.send.label': 'Send',
   'jtty.compose.placeholder.live': 'Live: what you type goes out as you type it',
-  'jtty.compose.hint': 'Enter sends. Live keeps the transmitter up while you type; Esc stops.',
+  'jtty.compose.hint': 'Enter sends. Live keeps the transmitter up while you type; Esc stops. Ctrl+H puts in both calls; Ctrl+Shift+K clears the box and stops.',
   'jtty.compose.committed.title': 'Already sent in this transmission',
   'jtty.compose.send.title': "Send the message, ending it (WSJT-X's Send)",
   'jtty.compose.send.left': 'Send ({{n}} left)',
   'jtty.compose.pending.title': 'Still to go:\n{{text}}',
+  'jtty.frames': 'Frames: {{sent}}/{{total}}',
+  'jtty.frames.title': 'Frames of this transmission on the air, of all it has queued',
+  'jtty.r2t.title': 'Put Tx where Rx is',
+  'jtty.t2r.title': 'Put Rx where Tx is',
   'jtty.tx.title': 'Where JTTY transmits: its lowest tone, the others above it. Back to 1500 Hz whenever JTTY is opened, as in WSJT-X, and it cannot move while JTTY is transmitting. Shift+click the waterfall to set it.',
   'jtty.tx.aria': 'Tx frequency in Hz',
   'jtty.macros.aria': 'JTTY messages F1 to F8',

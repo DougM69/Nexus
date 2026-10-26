@@ -29,6 +29,7 @@ Beside them are the frequency controls WSJT-X has for JTTY:
 - **Tx** — where JTTY transmits: its lowest tone, the other three above it. As in WSJT-X, it
   goes back to 1500 Hz each time JTTY is opened from another mode. The license check judges the
   whole signal at this offset. It cannot move while anything is queued or on the air.
+- **Rx→Tx** and **Tx→Rx** — WSJT-X's two copy buttons: Tx to where Rx is, or Rx to where Tx is.
 - **F Tol** — how far either side of Rx the decoder always searches, from WSJT-X's list
   (2 to 500 Hz). It is kept between sessions, as in WSJT-X; a new install starts at 20 Hz.
 
@@ -98,6 +99,11 @@ The dock at the bottom of the screen is WSJT-X's JTTY transmitter.
 - **Live** — keeps the transmitter up while you type: your words go out as you finish them, and
   JTTY's filler holds the carrier between them. **Sign off** sends `DE <your call> K` and ends it.
   A live session ends at ten minutes whatever you are typing.
+- **Ctrl+H** in the compose bar types `%H %M ` (the other station's call and yours) where the
+  caret is, as WSJT-X's chat opener; **Ctrl+Shift+K** empties the box and stops whatever of JTTY
+  is still going, as in WSJT-X.
+- **Frames** — beside Send while a transmission runs: its frames on the air, of all it has
+  queued, as WSJT-X counts them (the filler is not counted).
 - **Esc/Stop** — cuts JTTY at once: what is on the air and everything queued.
 
 Every send needs **TX On** and your license class across the whole signal at the Tx offset; a
@@ -125,7 +131,8 @@ does not. So a call heard only once is plain text, and nothing looks it up.
 Clicking a confirmed call puts it in the log strip's call box, and the log strip looks it up
 in your callbook. The same rule keeps single decodes off PSK Reporter and off the
 [Needed](needed-dx.md) board: a JTTY station appears there, labelled JTTY, once it has been heard
-twice.
+twice. A spot of a message that carries the sender's grid (`CQ W1AW FN31`)
+includes the grid, as WSJT-X's does.
 
 ## Logging and LoTW
 

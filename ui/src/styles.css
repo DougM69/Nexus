@@ -28377,6 +28377,14 @@ button.sat-chip:disabled {
   border-radius: var(--radius-sm);
   font-size: var(--fs-label);
 }
+/* WSJT-X's "Frames: sent/total" before Send: a quiet count, its digits steady as they change. */
+.jtty-frames {
+  flex: 0 0 auto;
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 /* The message style beside the Call box and the serial: a label and WSJT-X's two choices. */
 .jtty-style {
   display: inline-flex;
