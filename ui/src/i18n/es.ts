@@ -4877,6 +4877,8 @@ export const ES: PartialCatalog = {
   "phone.keyer.restored": "F{{slot}} restaurado ({{label}})",
   "phone.keyer.empty": "F{{slot}} aún no tiene grabación — graba una o impórtala",
   "phone.keyer.fd.hint": "Concurso: graba un slot con tu intercambio <b>“{{exchange}}”</b> para enviarlo con una tecla.",
+  "phone.keyer.flexDax.note": "Los equipos Flex transmiten desde su propio micrófono en SSB salvo que DAX esté activado para voz. En el panel P/CW de SmartSDR, activa DAX para que salgan los mensajes de voz de Nexus.",
+  "phone.keyer.flexDax.dismiss": "Entendido",
   "phone.keyer.hide.discarded": "Grabación de F{{slot}} descartada — el keyer de voz se cerró",
   "phone.keyer.hide.recorderStuck": "No se pudo parar el grabador de F{{slot}} — puede seguir en marcha. Vuelve a abrir el keyer de voz.",
   "phone.keyer.hide.stoppedOver": "F{{slot}} estaba en el aire — el keyer de voz se cerró y lo paró",

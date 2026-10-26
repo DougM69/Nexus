@@ -254,6 +254,12 @@ playing.*
    slot is how a canned call goes on the air with the wrong voice in it.
 2. Press a slot to play it. Playback keys PTT for the duration; **Esc** aborts.
 
+**On a FlexRadio through SmartSDR CAT**, turn on DAX for voice in SmartSDR's P/CW
+panel first. In SSB the Flex transmits from its own mic unless DAX is on, so a
+message keys the radio with no RF. Nexus shows a note saying so the first time a
+message plays, until you dismiss it. See
+[Phone (SSB) on a Flex](../rigs/flexradio.md#phone-ssb-on-a-flex).
+
 If you never use it, untick **Voice Keyer** in ⊞ Panels and the pane goes away.
 Closing the pane is itself a stop: a message that is playing is aborted rather
 than left transmitting behind a pane you just closed. A recording running at that

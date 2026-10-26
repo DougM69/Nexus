@@ -8216,6 +8216,8 @@ export const JA: PartialCatalog = {
   "phone.keyer.hint": "スロットをクリックするか、そのFキーで送信・Escで停止",
   "phone.keyer.hint.mac": "スロットをクリックするか、Fn+そのFキーで送信・Escで停止",
   "phone.keyer.fd.hint": "コンテスト: ナンバー<b>「{{exchange}}」</b>をスロットに録音しておくと、ワンキーで送信できます。",
+  "phone.keyer.flexDax.note": "Flexの無線機は、音声用にDAXをオンにしない限り、SSBでは本体のマイクから送信します。Nexusのボイスメッセージを送信するには、SmartSDRのP/CWパネルでDAXをオンにしてください。",
+  "phone.keyer.flexDax.dismiss": "了解",
   "phone.keyer.slot.play.title": "F{{slot}}を再生 ({{label}})",
   "phone.keyer.slot.record.title": "F{{slot}}を録音します。録音元は入力デバイスで、マイクではなく無線機のRX音声になっていることがよくあります。その場合は別の場所でメッセージを録音し、インポート (⤓) を使ってください。",
   "phone.keyer.slot.unnamed": "スロット{{slot}}",

@@ -308,6 +308,9 @@ const SHARED = [
   // buttons, dismissed once for this computer whichever window showed it.
   'nexus.contest.workIn',
   'nexus.contest.workInHint',
+  // The Flex DAX note in the voice keyer (features/flexDaxNote), dismissed once for this computer like
+  // the work-in hint above.
+  'nexus.phone.flexDaxNote',
   'nexus.freqMarkers.changed',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',
