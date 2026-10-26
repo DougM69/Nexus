@@ -10766,6 +10766,8 @@ input.cw-pitch::-webkit-inner-spin-button {
 [data-pane='log'] > .pane-body {
   scroll-padding-bottom: 6em;
 }
+/* The shared comment sits on its own line above Notes and is drawn like it (LogEntry.tsx). */
+.le-comment,
 .le-notes {
   width: 100%;
   resize: vertical;
@@ -10775,6 +10777,10 @@ input.cw-pitch::-webkit-inner-spin-button {
   padding: 6px var(--space-3);
   line-height: 1.4;
   font-family: inherit;
+}
+.le-comment {
+  display: block;
+  margin-bottom: var(--space-2);
 }
 .le-hint {
   display: block;
@@ -17717,6 +17723,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .logbook-field-call .settings-input {
   flex: 1 1 120px;
+}
+/* The shared comment (above Notes) is drawn like it, a line shorter. */
+.logbook-comment {
+  resize: vertical;
+  min-height: 40px;
+  font-family: inherit;
+  line-height: 1.4;
 }
 .logbook-notes {
   resize: vertical;

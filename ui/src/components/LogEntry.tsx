@@ -62,7 +62,7 @@ import { RecallPanel } from './RecallPanel'
 import { ContestScoreChip } from './ContestScoreChip'
 import { pushToast, withErrorToast } from '../toast'
 import { isStreamInput } from '../remote-native/stream-input'
-import { normaliseTyped, upperTyped } from '../typedInput'
+import { normaliseTyped, oneLineTyped, upperTyped } from '../typedInput'
 
 // ---------------------------------------------------------------------------
 // THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
@@ -3390,14 +3390,6 @@ export function LogEntry({
           autoComplete="off"
           title={t('logEntry.country.title')}
         />
-        <input
-          className="settings-input le-comment"
-          value={logComment}
-          onChange={(e) => setLogComment(e.target.value)}
-          onKeyDown={onEnter}
-          placeholder={t('logEntry.comment.placeholder')}
-          autoComplete="off"
-        />
       </div>
 
       {/* THE PARK/SUMMIT REFERENCE — part of the terrestrial exchange only.
@@ -3514,6 +3506,25 @@ export function LogEntry({
           })}
         </div>
       )}
+
+      {/* THE SHARED COMMENT: its own full-width box, always directly above Notes. It was the
+          fourth field of the QTH row, where a wrapped line squeezed it to a few words (operator,
+          1.21.0). It wraps over several lines but holds ONE: ADIF's COMMENT is a String and
+          NOTES the multi-line field, so a pasted line break lands as a space, and Enter logs
+          the contact, as it always did from this box. */}
+      <textarea
+        className="settings-input le-comment"
+        value={logComment}
+        onChange={(e) => setLogComment(oneLineTyped(e.target))}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.preventDefault()
+          onEnter(e)
+        }}
+        placeholder={t('logEntry.comment.placeholder')}
+        rows={2}
+        autoComplete="off"
+        spellCheck
+      />
 
       <textarea
         className="settings-input le-notes"

@@ -761,7 +761,7 @@ describe('Phone, over the stream', () => {
   })
 
   it('a streamed space typed into a field is typed there, and keys nothing', async () => {
-    const comment = [...document.querySelectorAll<HTMLInputElement>('input.le-comment')].find((el) => el.closest('[hidden]') == null)
+    const comment = [...document.querySelectorAll<HTMLTextAreaElement>('textarea.le-comment')].find((el) => el.closest('[hidden]') == null)
     expect(comment, 'the log strip\'s comment field is not on screen').toBeTruthy()
     at(comment!)
     const m = mark()

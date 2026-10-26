@@ -97,7 +97,7 @@ describe('the ordinary log line', () => {
 
   it('keeps the word labels', () => {
     strip(null)
-    const shown = [...document.querySelectorAll<HTMLInputElement>('input')].map((i) => i.placeholder)
+    const shown = [...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')].map((i) => i.placeholder)
     for (const word of ['Call', 'Name', 'QTH (city)', 'State', 'Country', 'Comment (sharable)', 'RST']) {
       expect(shown, word).toContain(word)
     }

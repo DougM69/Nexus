@@ -480,13 +480,15 @@ describe('LogEntry — the exchange each consumer asks for', () => {
     expect(surface()).toEqual(terrestrial)
   })
 
-  it('the QTH row is BYTE-FOR-BYTE the same four fields in both exchanges', () => {
+  it('the QTH row is BYTE-FOR-BYTE the same three fields in both exchanges', () => {
     // The height claim's structural half. Grid was first put in this row, where
     // it does not fit: at the Satellites column's real width the four fields are
     // a single full line, so a fifth pushed it to two (+52 px) and made the
     // satellite strip TALLER than the park row it had just removed (−48). It
     // moved to the exchange row, where the wrap leaves slack. Nothing here may
-    // change without re-measuring — the numbers are in the CHANGELOG.
+    // change without re-measuring — the numbers are in the CHANGELOG. Comment left this
+    // row for a full-width box of its own above Notes (operator, 1.21.0: it was squeezed
+    // here); LogEntry.comment.test.tsx holds that placement.
     const qthRow = () =>
       Array.from(document.querySelectorAll('.le-row'))
         .find((r) => r.querySelector('.le-qth'))!
@@ -496,7 +498,7 @@ describe('LogEntry — the exchange each consumer asks for', () => {
       expect(
         Array.from(qthRow(), (n) => n.className.split(/\s+/).find((c) => c.startsWith('le-'))),
         `the QTH row changed in the ${ex} exchange`,
-      ).toEqual(['le-qth', 'le-state', 'le-country', 'le-comment'])
+      ).toEqual(['le-qth', 'le-state', 'le-country'])
       cleanup()
     }
   })
