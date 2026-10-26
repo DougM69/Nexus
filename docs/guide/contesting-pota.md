@@ -137,8 +137,10 @@ operate; the log stays below it. It reads your contest log and nothing else:
 
 - **Totals**: contacts, on time and breaks, the overall rate over your on time, your best 60
   minutes, the current rate (over your last ten contacts), the time since your last contact, and
-  today's contacts (UTC). A break of 30 minutes or more between two contacts is off time; the
-  contest rules data names no minimum yet, so the tab states the 30 minutes it uses.
+  today's contacts (UTC). A break between two contacts is off time when it reaches the contest's
+  own minimum: 60 minutes in CQ WW and CQ WPX, 30 in Sweepstakes. A contest with no minimum on
+  record uses 30 minutes, and the tab says it is a default. The scoreboard's On time and Off time
+  and the Score Summary count the same way.
 - **Contacts per hour**: a bar for each UTC hour of the contest window. Contacts logged outside the
   window (test contacts before the start) are counted under the chart, not drawn.
 - **Distance**: your longest contact, with its call and country, and the average. Each is measured

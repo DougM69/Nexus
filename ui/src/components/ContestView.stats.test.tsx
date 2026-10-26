@@ -136,7 +136,7 @@ describe('the Contest screen’s Stats tab', () => {
     tile(panel, t('contestStats.best60'), '3')
     tile(panel, t('contestStats.sinceLast'), '0:10')
     tile(panel, t('contestStats.today'), '5')
-    expect(within(panel).getByText(t('contestStats.offRule', { minutes: 30 }))).toBeTruthy()
+    expect(within(panel).getByText(t('contestStats.offRule.default', { minutes: 30 }))).toBeTruthy()
   })
 
   it('draws one bar per UTC hour of the window', async () => {
@@ -223,5 +223,37 @@ describe('the Contest screen’s Stats tab', () => {
       getContext.mockRestore()
       toDataURL.mockRestore()
     }
+  })
+
+  it('in CQ WW takes the contest’s own 60-minute off time: a 45-minute gap is on time, 61 minutes a break', async () => {
+    // 0 → 45 (45 min: on in CQ WW, a break under the 30-minute default) → 106 (61 min: a break).
+    const cqww = {
+      ...FD,
+      event: 'cqww_cw',
+      receives: [{ key: 'RST', kind: 'rst', required: true }, { key: 'ZONE', kind: 'number', required: true, min: 1, max: 40 }],
+      boards: [],
+      log: [q('DL1ABC', 0, '20m', '14'), q('JA1ABC', 45, '20m', '25'), q('W9BBB', 106, '20m', '4')],
+      qsoCount: 3,
+    } as unknown as FieldDayStatus
+    render(
+      <main className="layout single">
+        <ContestView fieldDay={cqww} onSetMode={() => {}} fdActive />
+      </main>,
+    )
+    await settle()
+    // The scoreboard's own tiles follow the same rule.
+    expect(screen.getByRole('group', { name: t('fieldDay.opTime.on.aria', { time: '0:45' }) })).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: t('contestStats.tab.stats') }))
+    await settle()
+    const panel = screen.getByRole('tabpanel')
+    tile(panel, t('contestStats.onTime'), '0:45')
+    tile(panel, t('contestStats.breaks', { count: 1 }), '1:01')
+    expect(within(panel).getByText(t('contestStats.offRule', { minutes: 60 }))).toBeTruthy()
+    expect(within(panel).queryByText(t('contestStats.offRule.default', { minutes: 30 }))).toBeNull()
+  })
+
+  it('names the 30-minute default as a default where the contest has no minimum on record', async () => {
+    const panel = await openStats()
+    expect(within(panel).getByText(t('contestStats.offRule.default', { minutes: 30 }))).toBeTruthy()
   })
 })

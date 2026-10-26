@@ -38,7 +38,7 @@ import { contestUnsavedText } from '../features/contestUnsaved'
 import { closedText } from '../features/contestEdit'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { bandRank, operatorSummaryLines } from '../features/contestOperators'
-import { formatOpTime, OFF_TIME_MIN_SEC, operatingTime } from '../features/contestOpTime'
+import { formatOpTime, OFF_TIME_MIN_SEC, offTimeRule, operatingTime } from '../features/contestOpTime'
 import { OperatorStatsBoard } from './ContestOperators'
 import { stationMode, usePskName } from '../features/contestMode'
 import { CLEAR_TOAST_MS, REMOVE_CONFIRM_MS, SERVICE_NAMES, clearText, contactCount, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
@@ -637,6 +637,8 @@ interface SummaryArgs {
   /** Winter Field Day's completed objectives and the multiplier they earn, when the station
    *  scores by them — `totalScore` is then QSO points × (om + 1). */
   objectives?: { om: number; done: WfdObjective[] }
+  /** The break that counts as off time in this contest (`offTimeRule`); 30 minutes when absent. */
+  minOffSec?: number
   /** A contest that is NOT Field Day: what the session sends and how many multipliers the
    *  log has. Absent means Field Day's summary, byte for byte — class, section, sections
    *  worked, power multiplier and bonuses are Field Day's words and nobody else's. */
@@ -677,10 +679,11 @@ export function buildSummaryText(a: SummaryArgs): string {
   const bands = bandCounts(a.log)
   L.push(`  By band:  ${bands.length ? bands.map((b) => `${b.band} ${b.n}`).join('   ') : '—'}`)
   // How long the station was on, by the sponsors' off-time rule (features/contestOpTime).
-  const op = operatingTime(a.log)
+  const minOff = a.minOffSec ?? OFF_TIME_MIN_SEC
+  const op = operatingTime(a.log, minOff)
   if (op) {
     L.push(
-      `Operating time:  on ${formatOpTime(op.onSec)}   off ${formatOpTime(op.offSec)} (breaks of ${OFF_TIME_MIN_SEC / 60} min or more)`,
+      `Operating time:  on ${formatOpTime(op.onSec)}   off ${formatOpTime(op.offSec)} (breaks of ${minOff / 60} min or more)`,
     )
   }
   L.push('')
@@ -2733,14 +2736,14 @@ export function RateTiles({ log, nowUnix }: { log: FieldDayQso[]; nowUnix: numbe
 
 /**
  * ⭐ **ON TIME AND OFF TIME** — two `.fd-score` tiles beside the rate meter, the shipped tile idiom
- * as `RateTiles` uses it: a break of 30 minutes or more between two contacts is off time, the rest
- * from the first contact to the last is on time (`features/contestOpTime`). Nothing before the
- * first contact.
+ * as `RateTiles` uses it: a break of the contest's own minimum or more between two contacts is off
+ * time (`offTimeRule`: 60 minutes in CQ WW and WPX, else 30), the rest from the first contact to the
+ * last is on time (`features/contestOpTime`). Nothing before the first contact.
  */
-export function OperatingTimeTiles({ log }: { log: FieldDayQso[] }) {
-  const op = useMemo(() => operatingTime(log), [log])
+export function OperatingTimeTiles({ log, minOffSec = OFF_TIME_MIN_SEC }: { log: FieldDayQso[]; minOffSec?: number }) {
+  const op = useMemo(() => operatingTime(log, minOffSec), [log, minOffSec])
   if (!op) return null
-  const minutes = OFF_TIME_MIN_SEC / 60
+  const minutes = minOffSec / 60
   return (
     <>
       <div
@@ -3020,7 +3023,7 @@ export function FieldDayScoreboard({
             timestamps and nothing about the score touches it. */}
         <RateTiles log={log} nowUnix={nowUnix} />
         {/* …and how long the station has been on, by the sponsors' off-time rule. */}
-        <OperatingTimeTiles log={log} />
+        <OperatingTimeTiles log={log} minOffSec={offTimeRule(fieldDay?.event).minOffSec} />
         {/* Per-mode chips — a count and a mode code, both invariant. */}
         <div className="fd-mode-chips">
           {modes.dig > 0 && <span className="fd-mode-chip dig">{modes.dig} {FD_MODE_CODES.dig}</span>}
@@ -3581,6 +3584,7 @@ export function ContestView({
         text = buildSummaryText({
           eventName,
           isWfd,
+          minOffSec: offTimeRule(fieldDay?.event).minOffSec,
           rulesYear: fieldDay?.rulesYear ?? 0,
           rulesGenerated: fieldDay?.rulesGenerated ?? '',
           myClass: composingSlot(fieldDay?.composing, 'CLASS'),
@@ -4177,7 +4181,6 @@ export function ContestView({
           nowUnix={nowUnix}
           myCall={nativeSettings?.mycall ?? ''}
           myGrid={nativeSettings?.mygrid ?? ''}
-          minOffSec={OFF_TIME_MIN_SEC}
           contest={eventName}
           score={
             <>

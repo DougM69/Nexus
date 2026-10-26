@@ -19,7 +19,7 @@ import { contestStatsPlaces } from '../api'
 import { contestStats, distanceStats, entityStats, type StatsPlace, type Tally } from '../features/contestStats'
 import { renderStatsCard, saveStatsCard } from '../features/contestStatsCard'
 import { contestRate } from '../features/contestRate'
-import { formatOpTime } from '../features/contestOpTime'
+import { formatOpTime, offTimeRule } from '../features/contestOpTime'
 import { utcHhmm } from '../features/contestRemoval'
 import { contestFileStem } from '../fdEvent'
 import { gridToLatLon } from '../grid'
@@ -65,7 +65,6 @@ export function ContestStats({
   nowUnix,
   myCall,
   myGrid,
-  minOffSec,
   contest,
   mults,
   score,
@@ -76,8 +75,6 @@ export function ContestStats({
   myCall: string
   /** The station's grid, the point every distance is measured from; empty when not set. */
   myGrid: string
-  /** The break that counts as off time. */
-  minOffSec: number
   /** The contest, as the screen's header names it. */
   contest: string
   /** The contest's own multiplier boards, as the scoreboard draws them. */
@@ -88,6 +85,8 @@ export function ContestStats({
   const units = useUnits()
   const log = useMemo(() => fieldDay?.log ?? [], [fieldDay?.log])
   const event = fieldDay?.event ?? ''
+  // The break that counts as off time: this contest's own, or the default where none is on record.
+  const { minOffSec, fromRules } = offTimeRule(event)
   const gridSlot = useMemo(() => {
     const i = (fieldDay?.receives ?? []).findIndex((r) => r.kind === 'grid')
     return i >= 0 ? i : null
@@ -195,7 +194,7 @@ export function ContestStats({
         ))}
       </div>
       <p className="contest-stats-note">
-        {t('contestStats.offRule', { minutes })}
+        {fromRules ? t('contestStats.offRule', { minutes }) : t('contestStats.offRule.default', { minutes })}
       </p>
       {stats.best60 && (
         <p className="contest-stats-note">{t('contestStats.best60.from', { time: utcHhmm(stats.best60.startUnix) })}</p>
