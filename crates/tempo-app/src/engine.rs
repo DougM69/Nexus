@@ -10731,6 +10731,30 @@ impl Engine {
         }
     }
 
+    /// The FM-class word APRS commands: the radio's FM DATA mode (`PKTFM`) on a model whose plain
+    /// FM takes its transmit audio from the microphone only, otherwise [`Self::fm_mode_word`]'s
+    /// answer, exactly as before.
+    ///
+    /// ⭐ #393 (W9TD, FT-991A): APRS is soundcard audio, and the FT-991/991A gives the packet path
+    /// to DATA-FM alone ("077 FM PKT PORT SELECT 1: DATA 2: USB"; plain FM's source is "074 FM MIC
+    /// SELECT", MIC by default — FT-991A CAT Operation Reference Manual, menu table). Every APRS
+    /// entry put his radio back in plain FM. Hamlib's `PKTFM` is `MD0A;` (DATA-FM) on that radio.
+    ///
+    /// PER MODEL, and only the one with that evidence (Hamlib 1035, the FT-991 and FT-991A share
+    /// it). The native Icom path keeps APRS in plain FM on purpose (`CivBackend::try_set_mode`),
+    /// and no other radio's plain FM is known to be deaf to its data port. The mic-jack opt-out
+    /// ([`crate::settings::Settings::plain_ssb_if_configured`]) still turns it back into `FM`.
+    ///
+    /// ⚠️ NEEDS-BENCH: an FT-991A beaconing and decoding APRS in DATA-FM with its USB codec.
+    fn aprs_mode_word(&self) -> String {
+        const APRS_IN_DATA_FM: &[u32] = &[1035]; // Yaesu FT-991 / FT-991A
+        if APRS_IN_DATA_FM.contains(&self.settings.rig_model) {
+            self.settings.plain_ssb_if_configured("PKTFM")
+        } else {
+            self.fm_mode_word()
+        }
+    }
+
     /// Does SSTV need this radio in a DATA submode right now — either because a picture is
     /// queued or on the air, or because this radio is configured to HOLD it for as long as the
     /// receiver runs ([`Self::sstv_holds_data_submode`])?
@@ -10807,7 +10831,7 @@ impl Engine {
         // never leave FM forced on another band (the `fm_does_not_follow_the_operator_down_to_hf`
         // invariant). The flag is also cleared by every QSY / section change / radio switch.
         if self.aprs_fm && self.settings.band.eq_ignore_ascii_case("2m") {
-            return self.fm_mode_word();
+            return self.aprs_mode_word();
         }
         // A repeater/FM-simplex channel parks the rig in FM the same way, from whatever section the
         // operator tuned it out of. Dial-gated (not band-gated like APRS) because an FM channel can
@@ -60829,7 +60853,70 @@ mod tests {
         );
         assert_ne!(e.settings.active_radio, ic9700);
         assert!((e.settings.dial_mhz - 144.390).abs() < 1e-9);
-        assert_eq!(e.rig_mode_effective(), "FM", "still forces FM simplex");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTFM",
+            "still forces FM simplex — FM-DATA on the FT-991A (#393)"
+        );
+    }
+
+    /// ⭐ ISSUE #393 (W9TD): "Could FM-DATA on the FT-991a be selected when using APRS? When I go to
+    /// settings it is always set to FM when I come back to APRS." APRS is soundcard audio, and on
+    /// the FT-991/991A plain FM modulates from the microphone: its menu gives the packet path only
+    /// to DATA-FM ("077 FM PKT PORT SELECT 1: DATA 2: USB", FT-991A CAT Operation Reference Manual,
+    /// menu table; `MD` P2 `A: DATA-FM`). Hamlib's `PKTFM` is that mode on the wire (`MD0A;`,
+    /// captured from rigctl 4.5.5 model 1035 against a fake radio, with `PKTUSB` → `MD0C;` beside it).
+    ///
+    /// Per model, not for every radio: the native Icom path keeps APRS in plain FM on purpose
+    /// (`CivBackend::try_set_mode`), and nothing here says another radio's plain FM is deaf to its
+    /// data port. The mic-jack opt-out (`data_modes_plain_ssb`) still turns it back into FM.
+    #[test]
+    fn aprs_on_an_ft991a_uses_its_data_fm_mode_and_every_other_radio_keeps_fm() {
+        let (mut e, ic9700, ft991a) = three_radio_engine();
+        e.aprs_tune(144.390).unwrap();
+        assert_eq!(
+            e.settings.active_radio, ft991a,
+            "precondition: APRS on the FT-991A"
+        );
+        assert_eq!(e.rig_mode_effective(), "PKTFM", "FT-991A: DATA-FM for APRS");
+
+        // The mic-jack opt-out keeps working: the packet audio then has to go in the mic input.
+        e.settings.data_modes_plain_ssb = true;
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "FT-991A wired to the mic: plain FM"
+        );
+        e.settings.data_modes_plain_ssb = false;
+
+        // A voice repeater on the same radio is still plain FM — only APRS is data.
+        e.repeater_tune(146.940, "minus", 600_000, 103.5).unwrap();
+        assert_eq!(e.settings.active_radio, ft991a);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "FT-991A repeater voice: plain FM"
+        );
+
+        let _ = ic9700;
+
+        // CONTROL, one radio at a time so routing cannot pick: every other model keeps plain FM
+        // for APRS, exactly as before; the same scene on a 991A is the positive.
+        for (model, want) in [
+            (3081u32, "FM"),
+            (3085, "FM"),
+            (1051, "FM"),
+            (2014, "FM"),
+            (1035, "PKTFM"),
+        ] {
+            let mut one = Engine::new("KD9TAW", "EN52", 0);
+            one.settings.ensure_radio_profiles();
+            one.settings.rig_model = model;
+            one.settings.sync_active_from_flat();
+            one.set_radio_bands(0, vec!["2m".into()]);
+            one.aprs_tune(144.390).unwrap();
+            assert_eq!(one.rig_mode_effective(), want, "model {model} on APRS");
+        }
     }
 
     #[test]
