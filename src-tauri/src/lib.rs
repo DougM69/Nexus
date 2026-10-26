@@ -9946,13 +9946,16 @@ fn queue_spot(freq_mhz: f64, call: String, comment: String) -> Result<(), String
 /// "Spot me": the operator's own activation, posted to pota.app AND the DX cluster, once per
 /// press, each result reported. `reference` and `dial_hz` are only what the confirm showed: the
 /// call, park, dial and mode posted are read from the station, and a park or dial that has moved
-/// since is refused (`"contextChanged"`) with nothing posted. Policy in [`self_spot`]. Blocking
-/// HTTP, so it runs on the blocking pool, never on an async worker.
+/// since is refused (`"contextChanged"`) with nothing posted. `comment` is the operator's ("QRV"
+/// when absent or blank; a comment neither target would take is refused, `"invalidComment"`).
+/// Policy in [`self_spot`]. Blocking HTTP, so it runs on the blocking pool, never on an async
+/// worker.
 #[tauri::command]
 async fn self_spot_activation(
     state: State<'_, SharedEngine>,
     reference: String,
     dial_hz: u64,
+    comment: Option<String>,
 ) -> Result<self_spot::Report, String> {
     let engine = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -9961,11 +9964,13 @@ async fn self_spot_activation(
             &engine_lock_result(&engine).unwrap_or_else(std::sync::PoisonError::into_inner),
             &reference,
             dial_hz,
+            comment.as_deref().unwrap_or_default(),
         )
         .map_err(|refusal| match refusal {
             self_spot::Refusal::NoActivation => "noActivation".to_string(),
             self_spot::Refusal::Moved => "contextChanged".to_string(),
             self_spot::Refusal::RfOnly => SPOT_RF_ONLY.to_string(),
+            self_spot::Refusal::Comment => "invalidComment".to_string(),
         })?;
         Ok(self_spot::send(&ctx))
     })

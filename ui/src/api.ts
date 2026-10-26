@@ -4505,10 +4505,11 @@ export async function postSpot(freqMhz: number, call: string, comment: string): 
 }
 
 /** "Spot me": your own activation to pota.app and the DX cluster, once, with each result. The call,
- *  park, dial and mode sent are the station's; `reference` and `dialHz` are what the confirm showed.
- *  Rejects with `contextChanged` if either has moved since, `noActivation` with none on. */
-export async function selfSpot(reference: string, dialHz: number): Promise<SelfSpotReport> {
-  return invoke<SelfSpotReport>('self_spot_activation', { reference, dialHz })
+ *  park, dial and mode sent are the station's; `reference` and `dialHz` are what the confirm showed,
+ *  `comment` the operator's ("QRV" when absent or blank). Rejects with `contextChanged` if either
+ *  has moved since, `noActivation` with none on, `invalidComment` for one neither target takes. */
+export async function selfSpot(reference: string, dialHz: number, comment?: string): Promise<SelfSpotReport> {
+  return invoke<SelfSpotReport>('self_spot_activation', { reference, dialHz, comment })
 }
 
 /** What the contest screen's Spot me posted (`contest_spot.rs`). */

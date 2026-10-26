@@ -32,14 +32,73 @@ function clusterMessage(result: SelfSpotReport['cluster']): string {
   }
 }
 
-/** A public post: ask on every press, never remember the answer, and show exactly the park and
- *  dial that will be sent. */
-export function confirmSelfSpot(reference: string, dialHz: number): Promise<boolean> {
+/** What a spot's comment says when the operator leaves it blank: on the air. */
+export const DEFAULT_SPOT_COMMENT = 'QRV'
+/** What a spot's comment says to end the activation's spot. */
+export const QRT_COMMENT = 'QRT'
+/** The longest comment the station takes (`self_spot::COMMENT_MAX`). */
+export const SPOT_COMMENT_MAX = 30
+
+/** The comment as the station sends it: upper case, one space between words, QRV when blank. */
+export function spotComment(raw: string): string {
+  return raw.trim().split(/ +/).join(' ').toUpperCase() || DEFAULT_SPOT_COMMENT
+}
+
+/** A public post: ask on every press, never remember the answer, and show exactly the park, dial
+ *  and comment that will be sent. */
+export function confirmSelfSpot(reference: string, dialHz: number, comment: string): Promise<boolean> {
   return confirmDialog({
     title: t('ota.selfSpot.confirm.title'),
     confirmLabel: t('ota.selfSpot.confirm.post'),
-    body: t('ota.selfSpot.confirm.body', { reference, freq: (dialHz / 1e6).toFixed(4) }),
+    body: t('ota.selfSpot.confirm.body', { reference, freq: (dialHz / 1e6).toFixed(4), comment: spotComment(comment) }),
   })
+}
+
+// RE-SPOT ON A QSY: A PROMPT, NEVER A POST. Hunters find an activator by the spot's frequency, so
+// one who moves needs a new spot — but a spot is a public post, and only the operator's press
+// sends one. Once the dial has sat away from the spotted frequency for RESPOT_DWELL_MS, by at least
+// a filter's width for the mode, the board offers one button; that button is Spot me, confirm and
+// repeat limit and all.
+
+/** How far the dial must move from the spotted frequency to be a new one: a phone signal is about
+ *  3 kHz wide, a CW or digital one well under 1 kHz. */
+export function respotThresholdHz(operatingMode: string | undefined): number {
+  return operatingMode === 'phone' ? 3000 : 1000
+}
+
+/** How long the dial must stay on the new frequency before the prompt: tuning across the band is
+ *  not a move. */
+export const RESPOT_DWELL_MS = 20_000
+
+/** Where the dial is against the last spot. `awayHz` is where it settled off the spotted
+ *  frequency, since `awaySince`; `promptedHz` is the frequency already offered, so each move is
+ *  offered once. */
+export interface RespotWatch {
+  spotHz: number
+  awayHz: number | null
+  awaySince: number
+  promptedHz: number | null
+}
+
+export function respotWatch(spotHz: number): RespotWatch {
+  return { spotHz, awayHz: null, awaySince: 0, promptedHz: null }
+}
+
+/** One look at the dial: the watch to keep, and whether to offer a re-spot now. Pure. */
+export function respotStep(
+  watch: RespotWatch,
+  dialHz: number,
+  nowMs: number,
+  thresholdHz: number,
+): { watch: RespotWatch; prompt: boolean } {
+  if (Math.abs(dialHz - watch.spotHz) < thresholdHz) {
+    return { watch: respotWatch(watch.spotHz), prompt: false }
+  }
+  // A new resting place restarts the dwell; a nudge within the threshold does not.
+  const settled = watch.awayHz !== null && Math.abs(dialHz - watch.awayHz) < thresholdHz
+  const next = settled ? watch : { ...watch, awayHz: dialHz, awaySince: nowMs }
+  const due = next.awayHz !== null && nowMs - next.awaySince >= RESPOT_DWELL_MS && next.promptedHz !== next.awayHz
+  return { watch: due ? { ...next, promptedHz: next.awayHz } : next, prompt: due }
 }
 
 /** One message when both targets took the spot. Otherwise one per target, cluster first, so a

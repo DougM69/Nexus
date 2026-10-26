@@ -71,6 +71,7 @@ import { NeededPanel, type NeededPanelProps } from './NeededPanel'
 import type { ModeClass } from '../neededFilters'
 import {
   getSettings,
+  getActivation,
   sendCw,
   sendCwArmed,
   setCwKeyer,
@@ -400,6 +401,20 @@ const DEFAULT_MACROS: CwMacro[] = [
   { key: 'F4', label: '73', text: '! DE {MYCALL} TU 73 SK' },
   { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
   { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
+  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
+  { key: 'F8', label: '?', text: '? ' },
+]
+
+/** THE POTA SET — the built-in keys while a park activation runs and no contest does. {MYPARK} is
+ *  every park of the activation, space-separated as a two-fer sends them; the report is the
+ *  activator's fixed 5NN, sent twice. On-air shorthand, invariant; the operator's to change. */
+export const CW_POTA_SET: CwMacro[] = [
+  { key: 'F1', label: 'CQ', text: 'CQ POTA DE {MYCALL} {MYCALL} K' },
+  { key: 'F2', labelKey: 'cw.macro.reply.label', text: '! UR 5NN 5NN {MYSTATE} {MYPARK} BK' },
+  { key: 'F3', label: 'TU', text: 'TU 73 {MYCALL} POTA' },
+  { key: 'F4', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
+  { key: 'F5', labelKey: 'cw.macro.hisCall.label', text: '! ' },
+  { key: 'F6', labelKey: 'cw.macro.myPark.label', text: '{MYPARK} {MYPARK}' },
   { key: 'F7', label: 'AGN', text: 'AGN AGN' },
   { key: 'F8', label: '?', text: '? ' },
 ]
@@ -793,6 +808,9 @@ export function CwCockpit({
     { name: string; macros: { key: string; label: string; text: string }[]; esmRoles?: EsmRoleMap }[]
   >([])
   const [activeProfile, setActiveProfile] = useState(0)
+  // A park activation running: the built-in keys are the POTA set's. Read as the profiles are, when
+  // the view opens.
+  const [parkActivation, setParkActivation] = useState(false)
   useEffect(() => {
     if (!active) return
     let alive = true
@@ -802,6 +820,14 @@ export function CwCockpit({
         setCwSettings(s)
         setProfiles(s.macros?.cwProfiles ?? [])
         setActiveProfile(s.macros?.activeCwProfile ?? 0)
+      })
+      .catch(() => {})
+    // Asked inside the chain, so a station that cannot answer (an older shack, a build without the
+    // command) leaves the everyday keys rather than the screen.
+    void Promise.resolve()
+      .then(() => getActivation())
+      .then((a) => {
+        if (alive) setParkActivation(a.program === 'POTA' && !!a.reference)
       })
       .catch(() => {})
     void getCatCwUnprovenRigModels()
@@ -826,7 +852,9 @@ export function CwCockpit({
       : fieldDay.receives?.some((f) => f.kind === 'rst')
         ? CW_CONTEST_SETS.report
         : CW_CONTEST_SETS.noReport
-    : DEFAULT_MACROS
+    : parkActivation
+      ? CW_POTA_SET
+      : DEFAULT_MACROS
   const macros: CwMacro[] = profileMacros && profileMacros.length ? profileMacros : builtIn
   // Switch the active macro profile from the cockpit (optimistic) and persist it — the index
   // alone, over the live settings. Saving the view's copy with the index merged in wrote every
