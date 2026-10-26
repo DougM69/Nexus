@@ -1754,3 +1754,73 @@ fn a_card_save_with_passthrough_fields_is_one_change_and_one_undo() {
         "the undo puts the whole row back"
     );
 }
+
+/// ★ A CORRECTED CALL'S UNDO puts back everything the correction took off with the old call
+/// (operator ruling): LoTW's DXCC, the zones, continent and county, LoTW's and eQSL's received
+/// dates and eQSL's Authenticity-Guaranteed mark, the confirmations and the DXCC number — one save,
+/// one history entry, and the undo restores the row exactly.
+#[test]
+fn a_corrected_calls_undo_puts_back_what_the_old_call_carried() {
+    let d = Dir::new("history-call-fix");
+    let engine = shared(&d, 3);
+    let id = id_at(&*engine, 1);
+    let (seeded, dur) = logwrite::change_ops(
+        &engine,
+        id,
+        None,
+        &[LogOp::SetFields {
+            id,
+            fields: [
+                ("APP_EQSL_AG", "Y"),
+                ("APP_NEXUS_LOTW_DXCC", "182"),
+                ("CNTY", "MA,ESSEX"),
+                ("CONT", "NA"),
+                ("CQZ", "8"),
+                ("EQSL_QSLRDATE", "20150302"),
+                ("ITUZ", "11"),
+                ("LOTW_QSLRDATE", "20150301"),
+            ]
+            .map(|(k, v)| (k.to_string(), Some(v.to_string())))
+            .to_vec(),
+        }],
+        "seed",
+    );
+    seeded.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let before = QsoRecord::clone(&row_of(&engine, id).unwrap());
+    let entries = history_of(&engine, id).unwrap().len();
+
+    let mut edit = QsoEdit::project(&before);
+    edit.call = format!("{}X", before.call);
+    let (made, dur) = logwrite::edit_row(&engine, id, &QsoEdit::project(&before).key(), &edit);
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let fixed = row_of(&engine, id).unwrap();
+    assert_eq!(fixed.call, edit.call);
+    assert!(
+        fixed.extra.iter().all(|(k, _)| !matches!(
+            k.as_str(),
+            "APP_EQSL_AG"
+                | "APP_NEXUS_LOTW_DXCC"
+                | "CNTY"
+                | "CONT"
+                | "CQZ"
+                | "EQSL_QSLRDATE"
+                | "ITUZ"
+                | "LOTW_QSLRDATE"
+        )),
+        "the old call's taken off: {:?}",
+        fixed.extra
+    );
+    let h = history_of(&engine, id).unwrap();
+    assert_eq!(h.len(), entries + 1, "one save, one entry");
+
+    let (undone, dur) = undo_entry(&engine, h.last().unwrap().seq);
+    assert_eq!(undone.expect("undone").changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(
+        *row_of(&engine, id).unwrap(),
+        before,
+        "the undo puts the whole row back"
+    );
+}

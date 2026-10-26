@@ -168,12 +168,13 @@ impl FieldEdit {
     /// contest contact keeps its exchange's ADIF columns (a QSO party's `CNTY`, `ARRL_SECT`,
     /// `CLASS`, `CQZ` …) in its contest block, and the ADIF writer, the uploads and the awards
     /// ([`super::record_field`]) read them from there: written as a field kept as written, the
-    /// change would be saved and shown, and reach none of them.
+    /// change would be saved and shown, and reach none of them. A column holding only blanks holds
+    /// the field as well: the writer writes every non-empty column, in place of a field beside it.
     pub fn check_on(&self, stored: &QsoRecord) -> Result<(), String> {
         let held = stored.contest.as_deref().is_some_and(|c| {
             c.adif
                 .iter()
-                .any(|(k, v)| k.eq_ignore_ascii_case(&self.tag) && !v.trim().is_empty())
+                .any(|(k, v)| k.eq_ignore_ascii_case(&self.tag) && !v.is_empty())
         });
         if held {
             return Err(format!(
@@ -1188,10 +1189,19 @@ mod tests {
             assert!(e.contains("contest exchange"), "{e}");
         }
         assert_eq!(change("ITUZ", None, Some("8")).check_on(&r), Ok(()));
+        // A column holding only blanks is still written by the ADIF writer, before (and so in
+        // place of) a field kept beside it: it holds the field as any other value does.
+        let e = change("CQZ", None, Some("4"))
+            .check_on(&r)
+            .expect_err("a blank column the writer writes holds CQZ");
+        assert!(e.contains("contest exchange"), "{e}");
+        if let Some(c) = r.contest.as_deref_mut() {
+            c.adif.push(("ITUZ".into(), String::new()));
+        }
         assert_eq!(
-            change("CQZ", None, Some("4")).check_on(&r),
+            change("ITUZ", None, Some("8")).check_on(&r),
             Ok(()),
-            "an exchange column written blank holds nothing"
+            "an empty column, which the writer skips, holds nothing"
         );
         r.contest = None;
         assert_eq!(

@@ -4112,3 +4112,67 @@ fn an_edit_corrects_a_contradicted_country_and_a_corrected_call_takes_its_own() 
         "the whole-contact edit's corrected call takes the new call's country, not the one sent"
     );
 }
+
+/// ★ A corrected call saved from the contact card together with changes to fields kept as written
+/// goes back out to the connectors with those changes: the copy queued for QRZ, Club Log, eQSL and
+/// the others is the row as the whole save left it, not as the call's edit alone did — the store
+/// and the services hold the same contact.
+#[test]
+fn a_corrected_call_saved_with_card_fields_is_queued_with_them() {
+    let d = Dir::new("call-fix-with-fields");
+    let engine = holding(
+        &d,
+        &contacts(&[adif_row(
+            "DL1ABC",
+            "20m",
+            "CW",
+            "120000",
+            "<CNTY:8>MA,ESSEX<QTH:6>Berlin",
+        )]),
+    );
+    engine_lock(&engine).take_pending_uploads();
+    let dl = contact_at(&engine, "DL1ABC", "120000");
+    let mut edit = QsoEdit::project(&dl);
+    edit.call = "K1ABC".into();
+    let card = [
+        FieldEdit {
+            tag: "CNTY".into(),
+            old: Some("MA,ESSEX".into()),
+            new: Some("MA,SUFFOLK".into()),
+        },
+        FieldEdit {
+            tag: "CQZ".into(),
+            old: None,
+            new: Some("5".into()),
+        },
+    ];
+    let (made, dur) = edit_row_with_fields(
+        &engine,
+        dl.id.unwrap(),
+        &QsoEdit::project(&dl).key(),
+        &edit,
+        &card,
+    );
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let stored = contact_at(&engine, "K1ABC", "120000");
+    let queued = engine_lock(&engine).take_pending_uploads();
+    assert_eq!(queued.len(), 1, "the corrected call goes out again");
+    let fields = |r: &QsoRecord| {
+        (
+            r.call.clone(),
+            tempo_core::logbook::extra_field(r, "CNTY").map(str::to_string),
+            tempo_core::logbook::extra_field(r, "CQZ").map(str::to_string),
+        )
+    };
+    assert_eq!(
+        fields(&stored),
+        ("K1ABC".into(), Some("MA,SUFFOLK".into()), Some("5".into())),
+        "premise: the store holds the card's values"
+    );
+    assert_eq!(
+        fields(&queued[0].rec),
+        fields(&stored),
+        "the connectors get the same"
+    );
+}

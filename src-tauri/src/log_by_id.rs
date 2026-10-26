@@ -931,6 +931,99 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ★ The re-review's probe. The K1N contact, logged as the United States (291), is confirmed by
+    /// LoTW as Navassa (182, kept beside the log's) with LoTW's zone. The operator then corrects
+    /// the call to K1NX: LoTW's number described the old call's QSO, so the contact no longer
+    /// counts as Navassa — not in the Awards, the Needed board's needs or the statistics, which all
+    /// read `award_fields` — and LoTW's zone goes with it. By the form and by the whole-contact
+    /// edit a Remote browser sends back with the old extras in it.
+    #[test]
+    fn a_corrected_call_no_longer_counts_under_lotws_number_for_the_old_one() {
+        for remote in [false, true] {
+            let (dir, engine) = engine_with("lotw-call-fix", K1N_2015);
+            let rt = runtime();
+            let (target, _) = row_ref(&engine, 0);
+            current(
+                rt.block_on(set_dxcc(engine.clone(), target.clone(), Some(291)))
+                    .expect("made"),
+            );
+            let report = format!(
+                "{}<CALL:3>K1N<QSO_DATE:8>20150210<TIME_ON:6>123400<BAND:3>20m<MODE:2>CW\
+                 <LOTW_QSL_RCVD:1>Y<DXCC:3>182<CQZ:1>8<EOR>\n",
+                tempo_core::logbook::adif_header()
+            );
+            let (summary, _) = tempo_app::logwrite::until_written(|| {
+                tempo_app::logwrite::merge_lotw_report(&engine, &report)
+            });
+            assert_eq!(summary.expect("merged").matched, 1, "premise: paired");
+            let held = on_disk(&dir, &target.id).expect("held");
+            let counted = |r: &QsoRecord| {
+                propagation::awards::counted_entity(None, &crate::log_folds::award_fields(r))
+                    .and_then(|c| c.code)
+            };
+            assert_eq!(
+                (
+                    counted(&held),
+                    tempo_core::logbook::record_cq_zone(&held),
+                    awards(&engine).dxcc_confirmed
+                ),
+                (Some(182), Some(8), 1),
+                "premise: Navassa, LoTW's zone, confirmed"
+            );
+
+            let key = QsoEdit::project(&held).key();
+            if remote {
+                // As the `edit_qso` command takes it: the row the client was shown, sent back.
+                let mut shown = LoggedQso::from(held.clone());
+                shown.call = "K1NX".into();
+                let sent: QsoRecord = shown.into();
+                let (made, durability) = tempo_app::logwrite::update_row(
+                    &engine,
+                    target.id.parse().expect("an id"),
+                    &key,
+                    |stored| crate::edited_whole(&sent, stored),
+                    |_, _| (),
+                );
+                made.expect("reads").expect("made");
+                durability
+                    .wait(tempo_app::logstore::DURABLE_WAIT)
+                    .expect("durable");
+            } else {
+                let mut fix = QsoEdit::project(&held);
+                fix.call = "K1NX".into();
+                let next = RowRef {
+                    id: target.id.clone(),
+                    edit_key: key,
+                };
+                current(
+                    rt.block_on(edit_row(engine.clone(), next, fix))
+                        .expect("made"),
+                );
+            }
+            let after = on_disk(&dir, &target.id).expect("held");
+            assert_eq!(after.call, "K1NX", "remote: {remote}");
+            assert_eq!(
+                (
+                    tempo_core::logbook::record_lotw_dxcc(&after),
+                    tempo_core::logbook::record_cq_zone(&after)
+                ),
+                (None, None),
+                "LoTW's number and zone for the old call are gone (remote: {remote})"
+            );
+            assert_ne!(counted(&after), Some(182), "remote: {remote}");
+            let summary = awards(&engine);
+            assert!(
+                summary.dxcc_disagreements.is_empty() && summary.dxcc_confirmed == 0,
+                "remote: {remote}"
+            );
+            assert!(
+                !chase(&engine).iter().any(|e| e == "Navassa Island"),
+                "remote: {remote}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     /// The number set by hand survives the edit form, which carries no DXCC and leaves it alone as
     /// it leaves every field it does not carry; a callsign correction drops it with the call it
     /// described.

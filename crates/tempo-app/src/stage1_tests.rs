@@ -118,22 +118,33 @@ impl Stage1 {
 
     /// `StationCore::update_qso`.
     pub(crate) fn update_qso(&mut self, id: RecordId, mut rec: QsoRecord) -> bool {
-        // Keep country populated on edits (the edit form doesn't carry it); a corrected call takes
-        // its own, whatever the edit carries.
-        let call_changed = self
+        // A corrected call takes its own country, whatever the edit carries; with the call left
+        // alone, a country sent back as stored (or not sent) is filled only where the contact
+        // holds none, as the edit form's is — this station names no number's entity, so no
+        // stored country is contradicted here — and one the client changed is the client's.
+        let Some(stored) = self
             .logbook
             .records()
             .iter()
             .find(|r| r.id == Some(id))
-            .is_some_and(|r| !rec.call.trim().eq_ignore_ascii_case(r.call.trim()));
-        if call_changed {
+            .cloned()
+        else {
+            return false;
+        };
+        if !rec.call.trim().eq_ignore_ascii_case(stored.call.trim()) {
             rec.country = self
                 .dxcc_resolve
                 .as_ref()
                 .and_then(|resolve| resolve(&rec.call));
-        } else if rec.country.is_none() {
-            if let Some(resolve) = &self.dxcc_resolve {
-                rec.country = resolve(&rec.call);
+        } else if rec.country.is_none() || rec.country == stored.country {
+            let no_country = stored
+                .country
+                .as_deref()
+                .is_none_or(|c| c.trim().is_empty());
+            if no_country {
+                if let Some(resolve) = &self.dxcc_resolve {
+                    rec.country = resolve(&rec.call).or(rec.country);
+                }
             }
         }
         !self

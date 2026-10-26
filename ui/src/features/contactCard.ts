@@ -80,9 +80,15 @@ export function multiLine(f: CardField): boolean {
 }
 
 /** What a multi-line box typed, with the line breaks the field was written with: a browser's box
- *  gives back bare line feeds, and a field written with CR LF (ADIF's own) keeps CR LF. */
+ *  gives back bare line feeds. While the text is the stored text (typed away and back included),
+ *  it is the stored value exactly, mixed breaks and all; once edited, a field written with CR LF
+ *  (ADIF's own) keeps CR LF, and one written with bare CRs keeps those. */
 export function typedLines(f: CardField, typed: string): string {
-  return f.orig?.includes('\r\n') ? typed.replace(/\r?\n/g, '\r\n') : typed
+  const orig = f.orig ?? ''
+  if (f.orig !== null && typed === orig.replace(/\r\n?/g, '\n')) return orig
+  if (orig.includes('\r\n')) return typed.replace(/\r?\n/g, '\r\n')
+  if (orig.includes('\r')) return typed.replace(/\r?\n/g, '\r')
+  return typed
 }
 
 const IOTA_RE = /^(AF|AN|AS|EU|NA|OC|SA)-\d{3}$/
@@ -307,8 +313,9 @@ export function cardSave(q: LoggedQso, start: CardDraft, d: CardDraft, fields: r
   if (dup || clash) return no({ code: 'twice', tag: (dup ?? clash?.tag) as string })
   // A merged contest contact's exchange keeps its own ADIF columns (a QSO party's CNTY, a section,
   // a zone), and exports, uploads and awards read them from there: a change to one beside it would
-  // be saved and reach none of them (`FieldEdit::check_on` refuses it too).
-  const exchange = (q.contest?.adif ?? []).filter(([, v]) => v.trim()).map(([k]) => k.toUpperCase())
+  // be saved and reach none of them (`FieldEdit::check_on` refuses it too). A column holding only
+  // blanks holds it as well: the writer writes every non-empty column in place of a field beside it.
+  const exchange = (q.contest?.adif ?? []).filter(([, v]) => v !== '').map(([k]) => k.toUpperCase())
   const inExchange = changes.find((c) => exchange.includes(c.tag))
   if (inExchange) return no({ code: 'contest', tag: inExchange.tag })
   return { ok: true, edit, fields: changes }

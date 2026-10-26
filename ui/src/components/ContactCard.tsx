@@ -76,6 +76,9 @@ export interface ContactCardProps {
   save: (ref: RowRef, edit: QsoEdit, fields: FieldEdit[], call: string) => Promise<RowAnswer | null>
   /** A change was made (a save, or an undo from the history): the list reads the log again. */
   onChanged: () => void
+  /** Read the contact `id` again onto the card, if the card is still open on it: after an Undo or
+   *  Redo in its History, which change the contact behind the card's back. */
+  onReload: (id: string) => void
   logTick?: number
 }
 
@@ -123,7 +126,7 @@ function errorText(e: CardError): string {
   }
 }
 
-export function ContactCard({ open, onClose, onSwitch, save, onChanged, logTick }: ContactCardProps) {
+export function ContactCard({ open, onClose, onSwitch, save, onChanged, onReload, logTick }: ContactCardProps) {
   const returnFocus = useFocusReturn(!!open)
   if (!open) return null
   return (
@@ -138,6 +141,7 @@ export function ContactCard({ open, onClose, onSwitch, save, onChanged, logTick 
       onSwitch={onSwitch}
       save={save}
       onChanged={onChanged}
+      onReload={onReload}
       logTick={logTick}
       returnFocus={returnFocus}
     />
@@ -150,6 +154,7 @@ function CardBody({
   onSwitch,
   save,
   onChanged,
+  onReload,
   logTick,
   returnFocus,
 }: Omit<ContactCardProps, 'open'> & { contact: CardContact; returnFocus: (e: Event) => void }) {
@@ -548,7 +553,16 @@ function CardBody({
           </table>
         </section>
 
-        {q.id && <QsoHistory id={q.id} onChanged={onChanged} />}
+        {/* An Undo here changes the contact the card shows: the card reads it again. */}
+        {q.id && (
+          <QsoHistory
+            id={q.id}
+            onChanged={() => {
+              onChanged()
+              if (q.id) onReload(q.id)
+            }}
+          />
+        )}
 
         <div className="contact-card-actions">
           {err && (

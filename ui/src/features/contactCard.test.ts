@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cardDirty, cardSave, draftOf, fieldChanges, fieldsOf, ownStationNotResent, storedEdit, type CardDraft, type CardField } from './contactCard'
+import { cardDirty, cardSave, draftOf, fieldChanges, fieldsOf, ownStationNotResent, storedEdit, typedLines, type CardDraft, type CardField } from './contactCard'
 import type { LoggedQso } from '../types'
 
 const Q: LoggedQso = {
@@ -103,6 +103,16 @@ describe('a merged contest contact', () => {
     const other = [...fieldsOf(C), { tag: 'ITUZ', orig: null, value: '8', removed: false }]
     expect(cardSave(C, start, start, other)).toEqual({ ok: true, edit: storedEdit(C), fields: [{ tag: 'ITUZ', old: null, new: '8' }] })
   })
+
+  it('a column holding only blanks holds the field too; an empty one does not', () => {
+    // The ADIF writer writes a blank column (in place of a field beside it) and skips an empty one.
+    const B: LoggedQso = { ...Q, contest: { contestId: 'OH-QSO-PARTY', adif: [['CQZ', ' '], ['ITUZ', '']] } }
+    const start = draftOf(B)
+    const blank = [...fieldsOf(B), { tag: 'CQZ', orig: null, value: '4', removed: false }]
+    expect(cardSave(B, start, start, blank)).toEqual({ ok: false, error: { code: 'contest', tag: 'CQZ' } })
+    const empty = [...fieldsOf(B), { tag: 'ITUZ', orig: null, value: '8', removed: false }]
+    expect(cardSave(B, start, start, empty)).toEqual({ ok: true, edit: storedEdit(B), fields: [{ tag: 'ITUZ', old: null, new: '8' }] })
+  })
 })
 
 describe('own-station fields on a contact already uploaded to LoTW', () => {
@@ -125,5 +135,23 @@ describe('own-station fields on a contact already uploaded to LoTW', () => {
     expect(own({ ...UP, upload: { lotw: { outcome: 'pending', whenUnix: 1 } } }, { myGrid: 'EN53' })).toEqual([])
     expect(own({ ...UP, upload: undefined }, { myGrid: 'EN53' })).toEqual([])
     expect(own(UP, { myGrid: 'EN53', call: 'W1AX' })).toEqual([])
+  })
+})
+
+describe('a multi-line field’s line breaks', () => {
+  // A browser's box gives back bare line feeds, whatever the field was written with.
+  const field = (orig: string): CardField => ({ tag: 'ADDRESS', orig, value: orig, removed: false })
+
+  it('are the stored ones exactly while the text is as stored — typed away and back included', () => {
+    for (const orig of ['1 Main St\r\nTown\nState', '1 Main St\rTown', '1 Main St\r\nTown', '1 Main St\nTown']) {
+      const shown = orig.replace(/\r\n?/g, '\n')
+      expect(typedLines(field(orig), shown)).toBe(orig)
+    }
+  })
+
+  it('follow the field’s own once its text is edited: CR LF, a bare CR, or a line feed', () => {
+    expect(typedLines(field('1 Main St\r\nTown'), '2 Main St\nTown')).toBe('2 Main St\r\nTown')
+    expect(typedLines(field('1 Main St\rTown'), '2 Main St\nTown')).toBe('2 Main St\rTown')
+    expect(typedLines(field('1 Main St\nTown'), '2 Main St\nTown')).toBe('2 Main St\nTown')
   })
 })

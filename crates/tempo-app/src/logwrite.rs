@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 
 use tempo_core::logbook::history::Source;
 use tempo_core::logbook::{
-    FieldEdit, LogOp, QsoEdit, QsoRecord, RecordId, RowAfter, UploadService, UploadStatus,
+    FieldEdit, LogOp, QsoEdit, QsoRecord, RecordId, UploadService, UploadStatus,
 };
 
 use crate::engine::{engine_lock, Engine};
@@ -212,8 +212,9 @@ pub fn edit_row_with_fields(
     Durability,
 ) {
     let mut bad = None;
-    // The row as the field edit alone leaves it: what a corrected call goes back out to the
-    // connectors as, as it did when the marks were commands of their own.
+    // The row as the field edit and the card's fields leave it: what a corrected call goes back
+    // out to the connectors as — with the card's changes, which the store holds too, but without
+    // the QSL marks, as it did when the marks were commands of their own.
     let edited: std::cell::RefCell<Option<QsoRecord>> = std::cell::RefCell::new(None);
     let (made, durability) = change_row(
         engine,
@@ -221,10 +222,12 @@ pub fn edit_row_with_fields(
         "edit_qso",
         |e, stored| match e.station().edit_ops(id, edit_key, edit, fields, stored) {
             Ok(Ok(ops)) => {
-                *edited.borrow_mut() = ops.first().and_then(|op| match op.apply_to(stored) {
-                    RowAfter::Now(row) => Some(*row),
-                    RowAfter::Gone | RowAfter::Unchanged => None,
-                });
+                let fields = ops
+                    .iter()
+                    .take_while(|op| matches!(op, LogOp::Edit { .. } | LogOp::SetFields { .. }))
+                    .count();
+                *edited.borrow_mut() =
+                    station::ops_on(stored, &ops[..fields]).and_then(|(_, row)| row);
                 Ok(station::ops_on(stored, &ops))
             }
             Ok(Err(refusal)) => Err(refusal),

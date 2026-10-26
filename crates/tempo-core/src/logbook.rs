@@ -2919,6 +2919,10 @@ impl Activations {
     }
 }
 
+/// Where the contact was, as its call's callbook entry or LoTW's QSL detail gave it: the CQ and
+/// ITU zones, continent and county. A corrected call takes them off with the call ([`edited`]).
+const OLD_CALL_PLACE: [&str; 4] = ["CQZ", "ITUZ", "CONT", "CNTY"];
+
 /// The contact `old` corrected by an operator edit whose fields are `rec` — a busted call, a
 /// wrong band, a name. The sync-DERIVED state (confirmed / award_confirmed / credit / upload) is
 /// preserved from `old` so an edit can never fabricate a confirmation; the next reconcile
@@ -3061,6 +3065,18 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
             // the extra set came from the payload or from `old`.
             rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
         }
+    }
+    if call_changed {
+        // What described the OLD call goes with it (operator ruling): what LoTW and eQSL matched
+        // under it beside their confirmations (stripped above) — their received dates, eQSL's
+        // Authenticity-Guaranteed mark and LoTW's DXCC, which the awards count before the log's
+        // own number — and its zones, continent and county. A value the edit itself changed is
+        // the edit's; only one the row held as it is goes. The fill marks follow below.
+        rec.extra.retain(|(k, v)| {
+            let of_old_call = cleanup::ELECTRONIC_EXTRAS.contains(&k.as_str())
+                || OLD_CALL_PLACE.contains(&k.as_str());
+            !(of_old_call && old.extra.iter().any(|(ok, ov)| ok == k && ov == v))
+        });
     }
     // A grid or state Nexus filled in itself that the operator has now changed is the operator's:
     // it goes to LoTW like one they typed ([`SELF_FILLED_FIELD`]).
@@ -8179,6 +8195,94 @@ mod tests {
             !lb.update_record(9, rec("X", "20m", 1)),
             "out-of-range is false"
         );
+    }
+
+    /// ★ A corrected call takes off what belonged to the old one (operator ruling): LoTW's DXCC
+    /// for it (which the awards count first), its zones, continent and county, and LoTW's and
+    /// eQSL's received dates and eQSL's Authenticity-Guaranteed mark — whether the edit carries
+    /// the extras or leaves them to the row. A value the edit itself changes is the edit's, and
+    /// whatever did not describe the old call stays exactly. An ordinary edit takes nothing off.
+    #[test]
+    fn a_call_correction_clears_what_the_old_call_carried() {
+        let old_call: &[(&str, &str)] = &[
+            (LOTW_DXCC_FIELD, "182"),
+            ("CQZ", "8"),
+            ("ITUZ", "11"),
+            ("CONT", "NA"),
+            ("CNTY", "MA,ESSEX"),
+            ("LOTW_QSLRDATE", "20150301"),
+            ("EQSL_QSLRDATE", "20150302"),
+            (EQSL_AG_FIELD, "Y"),
+        ];
+        let kept: &[(&str, &str)] = &[
+            ("PFX", "K1"),
+            ("APP_OTHER_X", "1"),
+            ("QSLRDATE", "20150303"),
+        ];
+        let mut original = rec("K1N", "20m", 1_423_571_640);
+        original.dxcc = Some(291);
+        original.country = Some("United States".into());
+        original.qsl_rcvd.lotw = true;
+        original.qsl_rcvd.eqsl = true;
+        original.confirmed = true;
+        original.award_confirmed = true;
+        for (k, v) in old_call.iter().chain(kept) {
+            original.extra.push((k.to_string(), v.to_string()));
+        }
+        original.grid = Some("FN42".into());
+        original.extra.push((
+            callbook::CALLBOOK_FILLED_FIELD.into(),
+            "CQZ,GRIDSQUARE".into(),
+        ));
+        original.extra.sort(); // as a read keeps them: in name order
+        let held = |r: &QsoRecord| {
+            let mut x: Vec<(String, String)> = r.extra.clone();
+            x.sort();
+            x
+        };
+        let mut want: Vec<(String, String)> = kept
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        // The callbook's mark names what it still filled: the grid, not the zone.
+        want.push((callbook::CALLBOOK_FILLED_FIELD.into(), "GRIDSQUARE".into()));
+        want.sort();
+
+        // The edit form's payload (extras empty, taken from the row) and a whole-contact edit's
+        // (the row's extras sent back) alike.
+        for sent_back in [false, true] {
+            let mut lb = Logbook::new();
+            lb.add(original.clone());
+            let mut fixed = rec("K1NX", "20m", 1_423_571_640);
+            fixed.grid = Some("FN42".into());
+            if sent_back {
+                fixed.extra = original.extra.clone();
+            }
+            assert!(lb.update_record(0, fixed));
+            let r = &lb.records()[0];
+            assert_eq!(held(r), want, "sent back: {sent_back}");
+            assert_eq!(record_lotw_dxcc(r), None);
+            assert_eq!((r.dxcc, r.qsl_rcvd.any()), (None, false));
+        }
+
+        // A zone the whole-contact edit changes with the call is the edit's.
+        let mut lb = Logbook::new();
+        lb.add(original.clone());
+        let mut fixed = rec("K1NX", "20m", 1_423_571_640);
+        fixed.extra = original.extra.clone();
+        fixed.extra.retain(|(k, _)| k != "CQZ");
+        fixed.extra.push(("CQZ".into(), "5".into()));
+        assert!(lb.update_record(0, fixed));
+        assert_eq!(extra_value(&lb.records()[0], "CQZ"), Some("5"));
+
+        // An ordinary edit keeps every one of them.
+        let mut lb = Logbook::new();
+        lb.add(original.clone());
+        let mut named = rec("K1N", "20m", 1_423_571_640);
+        named.name = Some("Bob".into());
+        named.grid = Some("FN42".into());
+        assert!(lb.update_record(0, named));
+        assert_eq!(held(&lb.records()[0]), held(&original));
     }
 
     #[test]

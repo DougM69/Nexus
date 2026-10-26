@@ -1407,12 +1407,12 @@ export function Logbook({
   const keysId = useId()
   const [focusKey, setFocusKey] = useState<string | null>(null)
   const [focusTo, setFocusTo] = useState<number | null>(null)
-  /** A contact deleted from the keys: the focus waits for the row that takes its place. */
   /** The row whose pencil opened the form (the keyboard goes back to it when it closes), and
    *  whether the keyboard is still to go INTO the form. */
   const formFromGrid = useRef<string | null>(null)
   const formWanted = useRef(false)
   const formRef = useRef<HTMLFormElement>(null)
+  /** A contact deleted from the keys: the focus waits for the row that takes its place. */
   const focusAfter = useRef<string | null>(null)
   /** The pinned search box + headers' height, as of the last commit. */
   const stickyH = useRef(0)
@@ -1711,6 +1711,17 @@ export function Logbook({
           setCard(null)
           pushToast(t('logbook.form.editGone', { call: card?.row.call ?? '' }), 'error')
         }
+      })
+  }
+
+  /** The contact `id` read again onto the card — only while the card is still open on it (a Redo
+   *  pressed in a toast after the card closed opens nothing). */
+  const reloadCard = (id: string) => {
+    void keyedRow(id)
+      .catch(() => null)
+      .then((found) => {
+        if (!alive.current || !found) return
+        setCard((c) => (c?.row.id === id ? { row: found.row, ref: { id, editKey: found.editKey } } : c))
       })
   }
 
@@ -3581,6 +3592,7 @@ export function Logbook({
         onSwitch={openCard}
         save={saveEdit}
         onChanged={load}
+        onReload={reloadCard}
         logTick={logTick}
       />
       <RecentlyDeleted open={showDeleted} onClose={() => setShowDeleted(false)} onRestored={load} />

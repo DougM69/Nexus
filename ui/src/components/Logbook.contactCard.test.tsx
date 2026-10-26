@@ -324,6 +324,24 @@ describe('Save is the edit form’s save, with only what was changed', () => {
     fireEvent.click(await within(card).findByRole('button', { name: t('qso.history.undo') }))
     await waitFor(() => expect(api.undoQsoChange).toHaveBeenCalledWith(7))
   })
+
+  it('after an Undo on the card, the card is the contact as the undo left it', async () => {
+    vi.mocked(api.qsoHistory).mockResolvedValue([
+      { seq: 7, kind: 'edit', source: 'operator', run: 'r7', atMs: 1_700_000_100_000, undoes: null, undoneBy: null, changes: [{ tag: 'QTH', old: 'Bonn', new: 'Koln' }] },
+    ])
+    vi.mocked(api.undoQsoChange).mockImplementation(async () => {
+      engine.log = (engine.log as LoggedQso[]).map((r) => (r.id === 'id-dl' ? { ...r, qth: 'Bonn' } : r))
+      engine.revision += 1
+      return {
+        changed: 1, run: 'u', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [],
+      } as never
+    })
+    await mounted()
+    const card = await openCard()
+    expect(box(card, t('logbook.field.qth.label')).value).toBe('Koln')
+    fireEvent.click(await within(card).findByRole('button', { name: t('qso.history.undo') }))
+    await waitFor(() => expect(box(cardEl()!, t('logbook.field.qth.label')).value).toBe('Bonn'))
+  })
 })
 
 describe('the recent contacts with the call', () => {
