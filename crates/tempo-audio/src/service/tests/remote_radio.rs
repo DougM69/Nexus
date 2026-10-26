@@ -379,7 +379,7 @@ fn mode_worker_adopts_confirmed_power_without_raising_or_reissuing_it() {
         } else {
             assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
         }
-        let mut expected = vec!["M PKTUSB 3000", "F 14074000"];
+        let mut expected = vec!["M PKTUSB -1", "F 14074000"];
         if initial > 0.4 {
             expected.push("L RFPOWER 0.400");
         }
@@ -417,7 +417,7 @@ fn unconfirmed_power_does_not_commit_mode_or_defer_a_radio_retry() {
     let receipt = s.queue_mode("digital", false);
     s.step();
     assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
-    let expected = ["M PKTUSB 3000", "F 14074000", "L RFPOWER 0.400"];
+    let expected = ["M PKTUSB -1", "F 14074000", "L RFPOWER 0.400"];
     assert_eq!(writes(&peer), expected);
     s.authority.revoke();
     for _ in 0..3 {
@@ -457,7 +457,7 @@ fn frequency_crosses_the_actual_worker_once_then_persists_without_native_replay(
         );
         assert_eq!(Settings::load(&s.path).dial_hz(), hz);
         assert_eq!(Settings::load(&s.path).band, band);
-        let expected = vec!["M PKTUSB 3000".to_string(), format!("F {hz}")];
+        let expected = vec!["M PKTUSB -1".to_string(), format!("F {hz}")];
         assert_eq!(writes(&peer), expected);
         s.authority.revoke();
         for _ in 0..3 {
@@ -482,7 +482,7 @@ fn failed_frequency_does_not_leave_a_target_for_ordinary_worker_retries() {
     for _ in 0..3 {
         s.step();
     }
-    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 7074000"]);
+    assert_eq!(writes(&peer), ["M PKTUSB -1", "F 7074000"]);
     assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 14_074_000);
     assert!(!s.path.exists());
 }
@@ -499,7 +499,7 @@ fn worker_save_failure_is_unknown_and_does_not_reissue_the_confirmed_qsy() {
         s.step();
     }
     assert_eq!(engine_lock(&s.engine).settings().dial_hz(), 7_074_000);
-    assert_eq!(writes(&peer), ["M PKTUSB 3000", "F 7074000"]);
+    assert_eq!(writes(&peer), ["M PKTUSB -1", "F 7074000"]);
 }
 
 #[test]

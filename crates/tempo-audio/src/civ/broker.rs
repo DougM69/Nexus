@@ -1060,10 +1060,12 @@ impl CivBackend {
 
     // ---- THE IF FILTER WIDTH (`1A 03`), Main's — the passband the scope's filter edges move ----
     //
-    // ⚠️ DELIBERATELY NOT THROUGH `M` / `m`. The rigctld mode verb carries a width, and the radio
-    // loop sends one with every DATA-mode assert (`M PKTUSB 3000`): honouring it there would
-    // rewrite the operator's DATA filter on every FT8 arm, which this daemon has never done.
-    // `m` keeps answering width 0 for the same reason — the FT8 arm's width check reads it. So
+    // ⚠️ DELIBERATELY NOT THROUGH `M` / `m`. The rigctld mode verb carries a width, and a client
+    // may send one with a DATA-mode assert (the radio loop itself sent `M PKTUSB 3000` until it
+    // stopped asking for widths, #82/#107): honouring it there would rewrite the operator's DATA
+    // filter on every FT8 arm, which this daemon has never done.
+    // `m` keeps answering width 0 for the same reason, so nothing reading it argues with that
+    // filter. So
     // these two are the daemon's own verbs, called by the radio loop beside its scope controls.
 
     /// Main's IF filter width in `mode`, the name the `m` read just reported.
