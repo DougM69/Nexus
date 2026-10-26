@@ -1174,7 +1174,10 @@ mod tests {
         let mut r = record();
         r.contest = Some(Box::new(crate::logbook::ContestFields {
             contest_id: "OH-QSO-PARTY".into(),
-            adif: vec![("CNTY".into(), "OH,FRANKLIN".into()), ("CQZ".into(), " ".into())],
+            adif: vec![
+                ("CNTY".into(), "OH,FRANKLIN".into()),
+                ("CQZ".into(), " ".into()),
+            ],
             ..Default::default()
         }));
         for held in [
@@ -1191,6 +1194,9 @@ mod tests {
             "an exchange column written blank holds nothing"
         );
         r.contest = None;
-        assert_eq!(change("CNTY", None, Some("OH,DELAWARE")).check_on(&r), Ok(()));
+        assert_eq!(
+            change("CNTY", None, Some("OH,DELAWARE")).check_on(&r),
+            Ok(())
+        );
     }
 }

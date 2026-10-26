@@ -4418,7 +4418,10 @@ impl StationCore {
         // name. (On a corrected call that policy clears the country whatever the edit carries.) It
         // follows the DXCC number the contact keeps, and else the call.
         let call_changed = !rec.call.trim().eq_ignore_ascii_case(stored.call.trim());
-        let no_country = stored.country.as_deref().is_none_or(|c| c.trim().is_empty());
+        let no_country = stored
+            .country
+            .as_deref()
+            .is_none_or(|c| c.trim().is_empty());
         if call_changed || no_country {
             rec.country = self.country_for(&rec.call, rec.dxcc.or(stored.dxcc));
         }
@@ -6405,7 +6408,10 @@ mod edit_ops_tests {
         // The edit policy (`edited`) clears a corrected call's country whatever the edit carries —
         // it describes the busted call — so the stored one is gone, never written back.
         assert_ne!(
-            edited(&sc, &germany, &call, &[]).unwrap().country.as_deref(),
+            edited(&sc, &germany, &call, &[])
+                .unwrap()
+                .country
+                .as_deref(),
             Some("Germany"),
             "a corrected call does not keep the old call's country"
         );
@@ -6442,6 +6448,9 @@ mod edit_ops_tests {
             old: None,
             new: Some("8".into()),
         };
-        assert!(edited(&sc, &r, &edit, &[other]).is_ok(), "a field it does not hold");
+        assert!(
+            edited(&sc, &r, &edit, &[other]).is_ok(),
+            "a field it does not hold"
+        );
     }
 }
