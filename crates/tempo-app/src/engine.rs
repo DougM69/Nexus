@@ -47120,8 +47120,8 @@ mod tests {
         };
         assert_eq!(
             logged(&icom(3085), &plain),
-            Some(100.0),
-            "an IC-705 on the 100 W curve"
+            Some(25.0),
+            "an IC-705 on its own scale"
         );
         assert_eq!(
             logged(&icom(3073), &plain),

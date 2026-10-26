@@ -352,28 +352,28 @@ pub fn swr_scale_verified(
 }
 
 /// The CI-V radios whose forward-power meter Nexus's own CI-V daemon turns into watts on the
-/// radio's own scale: the 100 W Icoms whose Po curve is the one the daemon applies
-/// (`civ::commands::PO_WATTS_CAL`, Hamlib's IC-7300/IC-9700 table).
+/// radio's own scale: Icom's Po percentage (`civ::commands::PO_PERCENT_CAL`) of the rated output
+/// for the model and the band it transmits on (`civ::commands::po_full_scale_watts`), for every
+/// model the daemon serves. Where the daemon has no sourced figure (the IC-905 on 10 GHz, the
+/// IC-9700 transmitting on the other band of a satellite split) it reports no watts at all, so
+/// nothing reaches the log.
 ///
-/// ⚠️ An ALLOW-list for the reason [`SWR_VERIFIED_CIV_RIGS`] is one: the daemon applies that one
-/// curve to every radio it serves. The IC-705 and IC-905 are 10 W radios, so the same raw reading
-/// means a tenth of the watts, and the IC-9700 divides its scale by ten above 1 GHz.
-pub const PO_SCALE_CIV_RIGS: [u32; 3] = [3073, 3078, 3081];
+/// ⚠️ An ALLOW-list for the reason [`SWR_VERIFIED_CIV_RIGS`] is one: a model added to the daemon
+/// without a sourced scale must not have its watts logged.
+pub const PO_SCALE_CIV_RIGS: [u32; 7] = [3073, 3078, 3081, 3085, 3090, 3092, 3094];
 
 /// Is the forward power the active radio reports in watts the radio's own figure, so that it may
 /// be written on a contact as the power it was made at (ADIF `TX_PWR`)?
 ///
 /// Yes for every path whose watts come from the radio's own scale: Hamlib's
 /// `RFPOWER_METER_WATTS`, the SDR program's TCI sensors, the FlexRadio meter stream. On Nexus's own
-/// CI-V daemon (serial or the Icom network connection) only for [`PO_SCALE_CIV_RIGS`], and for the
-/// IC-9700 only below 1 GHz.
+/// CI-V daemon (serial or the Icom network connection) only for [`PO_SCALE_CIV_RIGS`].
 pub fn po_watts_scale_known(
     rig_model: u32,
     rig_conn: &str,
     rig_addr: &str,
     icom_lan_host: &str,
     icom_native_cat: bool,
-    dial_hz: u64,
 ) -> bool {
     let native_civ = icom_native_cat
         && !rig_conn_is_network(rig_conn, rig_addr)
@@ -384,7 +384,7 @@ pub fn po_watts_scale_known(
     if !native_civ && !icom_lan_reachable(rig_model, rig_conn, icom_lan_host) {
         return true;
     }
-    PO_SCALE_CIV_RIGS.contains(&rig_model) && dial_hz < 1_000_000_000
+    PO_SCALE_CIV_RIGS.contains(&rig_model)
 }
 
 /// Hamlib model numbers of the radios that have NO XIT (transmit incremental tuning) at all.
@@ -7594,7 +7594,7 @@ impl Settings {
         cap.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0)
     }
 
-    /// [`po_watts_scale_known`] over the flat mirror of the active profile, at the current dial.
+    /// [`po_watts_scale_known`] over the flat mirror of the active profile.
     pub fn po_watts_scale_is_known(&self) -> bool {
         po_watts_scale_known(
             self.rig_model,
@@ -7602,7 +7602,6 @@ impl Settings {
             &self.rig_addr,
             &self.icom_lan_host,
             self.icom_native_cat,
-            self.dial_hz(),
         )
     }
 
