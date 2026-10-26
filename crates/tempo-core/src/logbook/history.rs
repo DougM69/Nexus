@@ -720,6 +720,47 @@ pub(crate) fn changed_after(conn: &Connection, run: &str) -> Result<HashMap<Reco
     ids_with_seq(conn, &sql, [run])
 }
 
+/// The entries of `run` that stand undone now: the latest undo linked to one is not itself
+/// undone (a redo), and so on along the chain — an undo, its redo, an undo of that redo. What a
+/// whole run's undo does not name as refused, as the operator already took those changes back
+/// one at a time.
+/// Read off each contact's own history: an undo is linked to an entry of the contact it changes.
+pub(crate) fn undone_in(conn: &Connection, run: &str) -> Result<HashSet<i64>> {
+    let mut latest: HashMap<i64, i64> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT u.undoes, MAX(u.seq) FROM qso_history u \
+             WHERE u.undoes IS NOT NULL AND u.qso_id IN ( \
+               SELECT c.qso_id FROM qso_history c JOIN history_run cr ON cr.id = c.run_id \
+               WHERE cr.run = ?1) \
+             GROUP BY u.undoes",
+        )?;
+        let rows = stmt.query_map([run], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+        for row in rows {
+            let (undoes, seq) = row?;
+            latest.insert(undoes, seq);
+        }
+    }
+    let mut stmt = conn.prepare(
+        "SELECT h.seq FROM qso_history h JOIN history_run r ON r.id = h.run_id WHERE r.run = ?1",
+    )?;
+    let seqs = stmt.query_map([run], |r| r.get::<_, i64>(0))?;
+    let mut undone = HashSet::new();
+    for seq in seqs {
+        let seq = seq?;
+        // Each link is later than what it undoes, so the chain ends; an odd length is undone.
+        let (mut at, mut links) = (seq, 0usize);
+        while let Some(&next) = latest.get(&at).filter(|&&next| next > at) {
+            at = next;
+            links += 1;
+        }
+        if links % 2 == 1 {
+            undone.insert(seq);
+        }
+    }
+    Ok(undone)
+}
+
 /// The contacts added to the log after the change `after_seq` — logged, imported, downloaded or
 /// taken in — each with the latest such entry's place in the order. A contact an undo put back is
 /// not one of them (its entry undoes another): it was in the log before. What a restore of a
