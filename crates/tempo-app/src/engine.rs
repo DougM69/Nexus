@@ -7958,6 +7958,7 @@ impl Engine {
         // …and the radio, the power and the grid, which a radio switch or a Save changes the
         // same way.
         let (rig, tx_power, grid) = self.fd_row_kit();
+        let activation = self.fd_row_activation();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
             station.log.dial_khz = dial_khz;
@@ -7968,7 +7969,45 @@ impl Engine {
             station.log.rig = rig;
             station.log.tx_power = tx_power;
             station.log.grid = grid;
+            station.log.activation = activation;
         }
+    }
+
+    /// The running contest log's activation and grid, again: called whenever the activation
+    /// starts, pauses, resumes, stops or changes its state or grid, so the next contest contact —
+    /// the sequencer's own included — is stamped with the activation as it is now
+    /// (`LoggedQso::activation`).
+    fn sync_fd_activation(&mut self) {
+        let (activation, grid) = (self.fd_row_activation(), self.fd_row_grid());
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            station.log.activation = activation;
+            station.log.grid = grid;
+        }
+    }
+
+    /// The activation a contest row records (`LoggedQso::activation`): the live one's program,
+    /// reference and state, as [`Self::stamp_activation`] stamps an ordinary contact — empty with
+    /// none, and while one taken up at launch is paused.
+    fn fd_row_activation(&self) -> tempo_core::fieldday::RowActivation {
+        self.station
+            .live_activation()
+            .map(|a| tempo_core::fieldday::RowActivation {
+                program: a.program.clone(),
+                reference: a.my_ref(),
+                state: a.state.clone().unwrap_or_default(),
+            })
+            .unwrap_or_default()
+    }
+
+    /// The grid a contest row records (`LoggedQso::grid`): while an activation runs, the park's,
+    /// or none when none is known, as [`Self::stamp_station_now`] gives an ordinary contact made
+    /// from the park; otherwise Settings' ([`Self::log_grid_now`]).
+    fn fd_row_grid(&self) -> String {
+        match self.station.live_activation() {
+            Some(activation) => activation.grid.clone(),
+            None => self.log_grid_now(),
+        }
+        .unwrap_or_default()
     }
 
     /// Who is at the key, as a contest row records it (`LoggedQso::operator`): the Field Day
@@ -7981,7 +8020,7 @@ impl Engine {
 
     /// The radio, the power and the grid a contest row records (`LoggedQso::rig`,
     /// `LoggedQso::tx_power`, `LoggedQso::grid`): the general log's own answers
-    /// ([`Self::log_rig_now`], [`Self::log_power_now`], [`Self::log_grid_now`]), as the text the
+    /// ([`Self::log_rig_now`], [`Self::log_power_now`], [`Self::fd_row_grid`]), as the text the
     /// row keeps, `""` for none — so a contest contact merged into the Logbook names the same
     /// radio, power and grid an ordinary contact logged at that moment would.
     fn fd_row_kit(&self) -> (String, String, String) {
@@ -7990,7 +8029,7 @@ impl Engine {
             self.log_power_now()
                 .map(|w| w.to_string())
                 .unwrap_or_default(),
-            self.log_grid_now().unwrap_or_default(),
+            self.fd_row_grid(),
         )
     }
 
@@ -17168,6 +17207,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     st.log.operator = self.fd_row_operator();
                     st.log.on_air_call = self.fd_row_call();
                     (st.log.rig, st.log.tx_power, st.log.grid) = self.fd_row_kit();
+                    st.log.activation = self.fd_row_activation();
                     st
                 }),
                 running: true,
@@ -17180,6 +17220,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     st.log.operator = self.fd_row_operator();
                     st.log.on_air_call = self.fd_row_call();
                     (st.log.rig, st.log.tx_power, st.log.grid) = self.fd_row_kit();
+                    st.log.activation = self.fd_row_activation();
                     st
                 }),
                 running: false,
@@ -31757,12 +31798,16 @@ contact yourself."
         reference: &str,
         places: Vec<String>,
     ) -> Result<(String, String), String> {
-        self.station.set_activation(program, reference, places)
+        let started = self.station.set_activation(program, reference, places);
+        self.sync_fd_activation();
+        started
     }
 
     /// See [`StationCore::set_activation_state`].
     pub fn set_activation_state(&mut self, state: &str) -> Result<(), String> {
-        self.station.set_activation_state(state)
+        self.station.set_activation_state(state)?;
+        self.sync_fd_activation();
+        Ok(())
     }
 
     /// See [`StationCore::activation_places`].
@@ -31777,12 +31822,15 @@ contact yourself."
 
     /// See [`StationCore::clear_activation`].
     pub fn clear_activation(&mut self) {
-        self.station.clear_activation()
+        self.station.clear_activation();
+        self.sync_fd_activation();
     }
 
     /// See [`StationCore::resume_activation`].
     pub fn resume_activation(&mut self) -> Result<(), String> {
-        self.station.resume_activation()
+        self.station.resume_activation()?;
+        self.sync_fd_activation();
+        Ok(())
     }
 
     /// See [`StationCore::activation`].
@@ -31821,7 +31869,9 @@ contact yourself."
 
     /// See [`StationCore::set_activation_grid`].
     pub fn set_activation_grid(&mut self, grid: &str) -> Result<(), String> {
-        self.station.set_activation_grid(grid)
+        self.station.set_activation_grid(grid)?;
+        self.sync_fd_activation();
+        Ok(())
     }
 
     /// See [`StationCore::activation_record`].
@@ -31841,7 +31891,8 @@ contact yourself."
 
     /// See [`StationCore::restore_activation`].
     pub fn restore_activation(&mut self) {
-        self.station.restore_activation()
+        self.station.restore_activation();
+        self.sync_fd_activation();
     }
 
     /// Keep the record of exported activation files in `path`, taking up what it holds
@@ -48593,6 +48644,204 @@ mod tests {
         let of = |call: &str| log.iter().find(|r| r.call == call).unwrap().clone();
         assert_eq!(my_states(&of("W1AAA")), Vec::<String>::new());
         assert_eq!(my_states(&of("W1BBB")), ["SD"]);
+    }
+
+    // ── Contest contacts made during an activation ──
+
+    /// A contest session at home (EN61, Wisconsin), with no contact in it yet.
+    fn contest_at_home() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        s.fd_position_id = "a1b2c3d4".into();
+        s.op_state = "WI".into();
+        e.apply_settings(s);
+        e.set_mode("fieldday-run").unwrap();
+        e
+    }
+
+    /// The Logbook's copy of the contest contact with `call`, after the merge.
+    fn merged(e: &Engine, call: &str) -> tempo_core::logbook::QsoRecord {
+        e.stored_log()
+            .into_iter()
+            .find(|r| r.call == call)
+            .map(|r| (*r).clone())
+            .unwrap_or_else(|| panic!("{call} reached the Logbook"))
+    }
+
+    /// ⭐ A contest contact made while the activation runs is the activation's: the merged record
+    /// carries the park, the program, the park's state and the park's grid, exactly as an ordinary
+    /// contact logged then would — and it counts toward the activation's day.
+    #[test]
+    fn a_contest_contact_made_during_a_live_activation_carries_the_park() {
+        let mut e = contest_at_home();
+        e.set_activation("POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        e.set_activation_grid("DN96").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        // The ordinary contact logged at the same moment, for the comparison.
+        let rec = e.qso_record("W1ORD".into(), None, Some(-5));
+        e.log_qso(rec);
+        assert_eq!(e.fd_merge_to_general().unwrap().added(), 1);
+        let (contest, ordinary) = (merged(&e, "K1ABC"), merged(&e, "W1ORD"));
+        assert_eq!(contest.ota.my_program.as_deref(), Some("POTA"));
+        assert_eq!(contest.ota.my_ref.as_deref(), Some("US-0001"));
+        assert_eq!(my_states(&contest), ["ND"]);
+        assert_eq!(contest.my_grid.as_deref(), Some("DN96"));
+        assert_eq!(
+            (
+                &contest.ota.my_program,
+                &contest.ota.my_ref,
+                my_states(&contest),
+                &contest.my_grid
+            ),
+            (
+                &ordinary.ota.my_program,
+                &ordinary.ota.my_ref,
+                my_states(&ordinary),
+                &ordinary.my_grid
+            ),
+            "the same my-side as an ordinary activation contact"
+        );
+        let adif = tempo_core::logbook::adif_record(&contest);
+        for want in [
+            "<MY_SIG:4>POTA",
+            "<MY_SIG_INFO:7>US-0001",
+            "<MY_POTA_REF:7>US-0001",
+            "<MY_STATE:2>ND",
+        ] {
+            assert_eq!(adif.matches(want).count(), 1, "{want} once: {adif}");
+        }
+        assert_eq!(
+            e.activation_day_counts(now_unix_secs()),
+            [("US-0001".to_string(), 2, 0)],
+            "the merged contest contact counts for the activation's day"
+        );
+    }
+
+    /// A two-fer's contest contact is ONE contact carrying both parks, and it counts for each.
+    #[test]
+    fn a_two_fer_contest_contact_carries_both_parks() {
+        let mut e = contest_at_home();
+        e.set_activation("POTA", "US-0001,US-0002", places(&["US-ND"]))
+            .unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        e.fd_merge_to_general().unwrap();
+        let r = merged(&e, "K1ABC");
+        assert_eq!(r.ota.my_ref.as_deref(), Some("US-0001,US-0002"));
+        assert_eq!(
+            e.activation_day_counts(now_unix_secs()),
+            [("US-0001".to_string(), 1, 0), ("US-0002".to_string(), 1, 0)]
+        );
+    }
+
+    /// The park is stamped when the contact is LOGGED, never at the merge: one logged after Stop
+    /// carries no park and the home grid and state, and one logged before Stop keeps its park
+    /// though the merge runs after it. An activation started mid-session stamps from its Start.
+    #[test]
+    fn a_contest_contact_is_stamped_at_log_time_not_at_merge() {
+        let mut e = contest_at_home();
+        assert!(e.fd_log_manual("K1BEF", "2A", "EMA", "CW").unwrap());
+        e.set_activation("POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        e.set_activation_grid("DN96").unwrap();
+        assert!(e.fd_log_manual("K1DUR", "2A", "EMA", "CW").unwrap());
+        e.clear_activation();
+        assert!(e.fd_log_manual("K1AFT", "2A", "EMA", "CW").unwrap());
+        assert_eq!(e.fd_merge_to_general().unwrap().added(), 3);
+        let during = merged(&e, "K1DUR");
+        assert_eq!(during.ota.my_ref.as_deref(), Some("US-0001"));
+        assert_eq!(during.my_grid.as_deref(), Some("DN96"));
+        for call in ["K1BEF", "K1AFT"] {
+            let r = merged(&e, call);
+            assert_eq!(r.ota.my_program, None, "{call}");
+            assert_eq!(r.ota.my_ref, None, "{call}");
+            assert_eq!(my_states(&r), Vec::<String>::new(), "{call}");
+            assert_eq!(r.my_grid.as_deref(), Some("EN61"), "{call}: the home grid");
+        }
+        // …and a merge while an activation runs stamps nothing on contacts logged without one.
+        let mut later = contest_at_home();
+        assert!(later.fd_log_manual("K1PRE", "2A", "EMA", "CW").unwrap());
+        later
+            .set_activation("POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        later.fd_merge_to_general().unwrap();
+        assert_eq!(merged(&later, "K1PRE").ota.my_ref, None);
+    }
+
+    /// A paused activation — taken up at launch, not yet resumed — stamps no contest contact, as
+    /// it stamps no ordinary one. "Still activating" resumes the stamping.
+    #[test]
+    fn a_paused_activation_stamps_no_contest_contact() {
+        let path = act_dir("contest-paused").join("activation.json");
+        let mut before = Engine::new("W9XYZ", "EN61", 0);
+        before.set_activation_path(path.clone());
+        before
+            .set_activation("POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        before.set_activation_grid("DN96").unwrap();
+
+        let mut e = contest_at_home();
+        e.set_activation_path(path);
+        e.restore_activation();
+        assert!(e.activation_record().is_some_and(|a| a.restored));
+        assert!(e.fd_log_manual("K1PAU", "2A", "EMA", "CW").unwrap());
+        e.resume_activation().unwrap();
+        assert!(e.fd_log_manual("K1RES", "2A", "EMA", "CW").unwrap());
+        e.fd_merge_to_general().unwrap();
+        let paused = merged(&e, "K1PAU");
+        assert_eq!(paused.ota.my_ref, None);
+        assert_eq!(my_states(&paused), Vec::<String>::new());
+        assert_eq!(paused.my_grid.as_deref(), Some("EN61"));
+        let resumed = merged(&e, "K1RES");
+        assert_eq!(resumed.ota.my_ref.as_deref(), Some("US-0001"));
+        assert_eq!(resumed.my_grid.as_deref(), Some("DN96"));
+    }
+
+    /// The running contest log follows the activation the moment it changes, not only when a
+    /// contact is typed: the sequencer logs its own contacts with no Save between them, from
+    /// whatever the log holds then.
+    #[test]
+    fn the_running_contest_log_follows_the_activation_as_it_changes() {
+        let held = |e: &Engine| {
+            let Mode::FieldDay { station, .. } = &e.mode else {
+                panic!("in Field Day");
+            };
+            (
+                station.log.activation.reference.clone(),
+                station.log.activation.state.clone(),
+                station.log.grid.clone(),
+            )
+        };
+        let owned = |r: &str, st: &str, g: &str| (r.to_string(), st.to_string(), g.to_string());
+        let path = act_dir("contest-follows").join("activation.json");
+        let mut e = contest_at_home();
+        e.set_activation_path(path.clone());
+        assert_eq!(held(&e), owned("", "", "EN61"));
+        e.set_activation("POTA", "US-0003", places(&["US-MT", "US-ND"]))
+            .unwrap();
+        assert_eq!(
+            held(&e),
+            owned("US-0003", "", ""),
+            "Start; no park grid known"
+        );
+        e.set_activation_state("ND").unwrap();
+        e.set_activation_grid("DN96").unwrap();
+        assert_eq!(held(&e), owned("US-0003", "ND", "DN96"));
+        e.clear_activation();
+        assert_eq!(held(&e), owned("", "", "EN61"), "Stop");
+        // Taken up at launch: paused, then resumed.
+        let mut before = Engine::new("W9XYZ", "EN61", 0);
+        before.set_activation_path(path.clone());
+        before
+            .set_activation("POTA", "US-0001", places(&["US-ND"]))
+            .unwrap();
+        e.restore_activation();
+        assert_eq!(held(&e), owned("", "", "EN61"), "paused");
+        e.resume_activation().unwrap();
+        assert_eq!(held(&e), owned("US-0001", "ND", ""), "resumed");
     }
 
     // ── The activation as the field needs it: kept, counted per UTC day, two-fers, grid, P2P ──
