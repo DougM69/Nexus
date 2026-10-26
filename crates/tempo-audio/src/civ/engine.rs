@@ -551,6 +551,9 @@ pub(crate) mod tests_support {
         /// wrong receiver is visible by its number rather than by luck.
         pub smeter_raw: u16,
         pub sub_smeter_raw: u16,
+        /// Raw 0..255 Po (forward power) meter, `15 11`. Zero by default: a radio not
+        /// transmitting.
+        pub po_raw: u16,
         /// Does this radio answer Icom's BAND-DIRECTED command `29` ("regardless of
         /// active/inactive the Main or Sub band, you can directly specify the Main or Sub
         /// band", IC-7610 CI-V Reference Guide A7380-7EX-4, p. 9)? True only at the IC-7610's
@@ -931,6 +934,11 @@ pub(crate) mod tests_support {
                 });
                 Some((0x15, vec![0x02, hi, lo]))
             }
+            // The Po meter (`15 11`), one register for the radio: only Main transmits.
+            (0x15, Some(0x11)) => {
+                let [hi, lo] = bcd2(r.po_raw);
+                Some((0x15, vec![0x11, hi, lo]))
+            }
             // THE `0x14` LEVEL FAMILY — see [`Regs::levels`]. A bare
             // sub-command reads; a sub-command plus two BCD bytes writes.
             (0x14, Some(sub)) => {
@@ -1145,6 +1153,7 @@ pub(crate) mod tests_support {
                         sub_att_raw: 0,
                         smeter_raw: 120, // S9 — what every existing reading expects
                         sub_smeter_raw: 60,
+                        po_raw: 0,
                         cmd29: addr == 0x98, // the IC-7610 has `29`; the IC-9700 does not
                         dial_by_band: addr == 0x98, // `25`/`26` name MAIN/SUB on the IC-7610 only
                         ten_ghz_12_digits: addr == 0xAC, // the IC-905's 10 GHz band

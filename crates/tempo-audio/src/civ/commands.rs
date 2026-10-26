@@ -1368,7 +1368,13 @@ fn interp_cal(raw: u16, table: &[(u16, f32)]) -> f32 {
 // which is not the same thing as the protocol.
 const SWR_CAL: &[(u16, f32)] = &[(0, 1.0), (48, 1.5), (80, 2.0), (120, 3.0), (240, 6.0)];
 const ALC_CAL: &[(u16, f32)] = &[(0, 0.0), (120, 1.0)];
-const PO_WATTS_CAL: &[(u16, f32)] = &[
+// The Po meter, in PERCENT of the radio's output. Icom's own CI-V references give three points
+// for `15 11` - `0000=0% ~ 0143=50% ~ 0213=100%` (IC-705 A7560-8EX-6, IC-905 A7711-9EX-2,
+// IC-9700 A7508-3EX-4, IC-7300MK2 rev 0, IC-7300 Full Manual A7292-4EX-12 ch. 19; the IC-7610
+// A7380-7EX-4 and IC-7760 A7788-8EX-2 put 100% at 0212). The points between are Hamlib's 100 W
+// curve read as percent, which agrees with all three; they are NEEDS-BENCH like the curve above.
+// [`po_full_scale_watts`] turns a percentage into watts for the radio and band.
+const PO_PERCENT_CAL: &[(u16, f32)] = &[
     (0, 0.0),
     (21, 5.0),
     (43, 10.0),
@@ -1394,10 +1400,60 @@ pub fn swr_from_raw(raw: u16) -> f32 {
 pub fn alc_frac_from_raw(raw: u16) -> f32 {
     interp_cal(raw, ALC_CAL)
 }
-/// Transmit power in WATTS from the Po meter (per the rig's own scale; the 9700 divides by
-/// 10 above 1 GHz, which this table does not model — the low band is the common case).
-pub fn po_watts_from_raw(raw: u16) -> f32 {
-    interp_cal(raw, PO_WATTS_CAL)
+/// Transmit power in WATTS from the Po meter: its percentage ([`PO_PERCENT_CAL`]) of
+/// `full_scale_w`, the radio's output at the meter's 100% ([`po_full_scale_watts`]).
+pub fn po_watts_from_raw(raw: u16, full_scale_w: f32) -> f32 {
+    interp_cal(raw, PO_PERCENT_CAL) / 100.0 * full_scale_w
+}
+
+/// The watts at 100% on `model`'s Po meter, transmitting on `tx_hz`. `None` = no figure Nexus
+/// can source for that radio and band, or the band could not be told: the daemon then reports
+/// no watts at all rather than a number on another radio's scale.
+///
+/// The Po meter is "the relative RF output power" (each radio's Basic Manual, "Meter display")
+/// in percent (the CI-V references, at [`PO_PERCENT_CAL`]), so 100% is the radio's rated
+/// output on that band. The IC-7760 reference says so in watts: `0143=100W ~ 0212=200W`. The
+/// rated outputs, SSB/CW/RTTY/FM, from each Basic Manual's specifications:
+/// - IC-7300 (Full Manual A7292-4EX-12) and IC-7300MK2 (IC-7300MK2_ENG_Basic_2b): 100 W on HF
+///   and 50 MHz, 50 W on the 70 MHz band some versions have.
+/// - IC-7610 (IC-7610_ENG_BM_10): 100 W. It has no band above 50 MHz.
+/// - IC-7760: 200 W (above).
+/// - IC-705 (IC-705_ENG_Basic_9): 10 W on external 13.8 V DC on every band. On its battery
+///   pack it makes 5 W, and its MAX TX PWR setting can lower it; whether the meter's 100%
+///   follows either is not stated. NEEDS-BENCH.
+/// - IC-9700 (IC-9700_ENG_Basic_7): 100 W on 144 MHz, 75 W on 430 MHz, 10 W on 1200 MHz.
+/// - IC-905 (IC-905_ENG_Basic_1c): 10 W on 144, 430 and 1200 MHz, 2 W on 2400 and 5600 MHz. Its
+///   10 GHz band needs the optional CX-10G transverter, whose output the manual does not give.
+///
+/// In AM every one of them makes a quarter of that carrier. Whether the meter's 100% moves
+/// with it is not stated either, so AM keeps the figures above. NEEDS-BENCH.
+pub fn po_full_scale_watts(model: IcomModel, tx_hz: Option<u64>) -> Option<f32> {
+    const MHZ: u64 = 1_000_000;
+    match model {
+        IcomModel::Ic7610 => Some(100.0),
+        IcomModel::Ic7760 => Some(200.0),
+        IcomModel::Ic705 => Some(10.0),
+        // HF and 6 m transmit up to 54 MHz; the only band above that is 70 MHz.
+        IcomModel::Ic7300 | IcomModel::Ic7300Mk2 => match tx_hz? {
+            0 => None,
+            hz if hz <= 54 * MHZ => Some(100.0),
+            _ => Some(50.0),
+        },
+        // Transmit coverage: 144-148, 430-450 and 1240-1300 MHz.
+        IcomModel::Ic9700 => match tx_hz? {
+            0 => None,
+            hz if hz < 300 * MHZ => Some(100.0),
+            hz if hz < 1_000 * MHZ => Some(75.0),
+            _ => Some(10.0),
+        },
+        // Transmit coverage: 144 to 1300 MHz, 2300-2450 and 5650-5925 MHz, then 10 GHz.
+        IcomModel::Ic905 => match tx_hz? {
+            0 => None,
+            hz if hz < 2_000 * MHZ => Some(10.0),
+            hz if hz < 6_000 * MHZ => Some(2.0),
+            _ => None,
+        },
+    }
 }
 /// Speech compression in dB from the COMP meter.
 pub fn comp_db_from_raw(raw: u16) -> f32 {
@@ -2779,5 +2835,27 @@ mod tests {
         // Another `1A` reply is not this one.
         let data = Frame::parse(&[0xFE, 0xFE, 0xE0, 0xA2, 0x1A, 0x06, 0x01, 0x01, 0xFD]).unwrap();
         assert_eq!(parse_filter_width_code(&data), None);
+    }
+
+    /// The radios the daemon test does not drive, at their own figures: the IC-7760 says its
+    /// scale in watts (`0143=100W ~ 0212=200W`), the IC-7610 has no band above 6 m, and the
+    /// IC-7300MK2 makes 50 W on 70 MHz as the IC-7300 does.
+    #[test]
+    fn the_po_full_scale_follows_each_radios_rated_output() {
+        assert_eq!(po_full_scale_watts(IcomModel::Ic7760, None), Some(200.0));
+        assert_eq!(po_watts_from_raw(143, 200.0), 100.0);
+        assert_eq!(po_full_scale_watts(IcomModel::Ic7610, None), Some(100.0));
+        assert_eq!(po_full_scale_watts(IcomModel::Ic705, None), Some(10.0));
+        assert_eq!(
+            po_full_scale_watts(IcomModel::Ic7300Mk2, Some(14_074_000)),
+            Some(100.0)
+        );
+        assert_eq!(
+            po_full_scale_watts(IcomModel::Ic7300Mk2, Some(70_200_000)),
+            Some(50.0)
+        );
+        // A per-band radio whose dial is not known has no scale.
+        assert_eq!(po_full_scale_watts(IcomModel::Ic9700, None), None);
+        assert_eq!(po_full_scale_watts(IcomModel::Ic9700, Some(0)), None);
     }
 }

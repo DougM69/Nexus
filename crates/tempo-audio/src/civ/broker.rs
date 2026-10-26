@@ -611,12 +611,31 @@ impl CivBackend {
 
     /// Read a `15 <sub>` transmit meter and format it through `cal` (raw 0–255 → engineering
     /// unit) to `decimals` places. Returns None if the rig doesn't answer (e.g. not keyed).
-    fn tx_meter(&self, sub: u8, cal: fn(u16) -> f32, decimals: usize) -> Option<String> {
+    fn tx_meter(&self, sub: u8, cal: impl Fn(u16) -> f32, decimals: usize) -> Option<String> {
         let f = self
             .read(commands::read_meter(self.addr, sub), 0x15, Some(sub))
             .ok()?;
         let raw = commands::parse_meter_raw(&f, sub)?;
         Some(format!("{:.*}", decimals, cal(raw)))
+    }
+
+    /// The frequency the radio is transmitting on, for the Po meter's per-band scale: the dial
+    /// the engine's state already holds, so the meter costs no extra frame. `None` when that
+    /// dial may not be the transmitting one — a split riding satellite mode transmits out of the
+    /// Sub band, and a stray selection may have left Sub's dial in the state — or when a Main/Sub
+    /// sequence holds the band lock right now (mid-sequence the state can hold either band, and
+    /// a meter read must not queue behind tuning).
+    fn po_tx_hz(&self) -> Option<u64> {
+        let g = match self.band.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        if g.engaged || g.sel_stray {
+            return None;
+        }
+        drop(g);
+        self.h.state().freq_hz
     }
 
     /// Read a `14 <sub>` DSP level as a 0..1 fraction string (the rigctld level convention),
@@ -812,8 +831,15 @@ impl CivBackend {
             // 0..1 fraction while _WATTS is watts, and Nexus polls _WATTS so the reading is watts
             // on any rig. The native daemon has only the one calibrated Po meter, so it serves
             // watts for either name (a Hamlib rig lacking _WATTS returns None → the row hides).
+            // The meter is a percentage of THIS radio's output on THIS band; with no figure for
+            // either, nothing is asked and nothing answered ([`commands::po_full_scale_watts`]).
             "RFPOWER_METER" | "RFPOWER_METER_WATTS" => {
-                self.tx_meter(commands::METER_PO, commands::po_watts_from_raw, 1)
+                let full = commands::po_full_scale_watts(self.model?, self.po_tx_hz())?;
+                self.tx_meter(
+                    commands::METER_PO,
+                    |raw| commands::po_watts_from_raw(raw, full),
+                    1,
+                )
             }
             "COMP_METER" => self.tx_meter(commands::METER_COMP, commands::comp_db_from_raw, 1),
             // ATTENUATOR and PREAMP — INTEGER DECIBELS, not the 0..1 fractions everything
@@ -4570,8 +4596,18 @@ mod tests {
         let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
         regs.lock().unwrap().no_satmode = true; // a real 7300 NAKs `16 5A`
         drive_every_touched_verb(&b);
+        // The Po meter (`15 11`) is asked only where its watts are known, and on the IC-7300,
+        // the IC-905 and an unknown model that takes the dial, which this script never reads
+        // (`the_po_meter_reads_watts_on_the_radios_own_scale`). The IC-705's needs no band.
+        let without_po = |frames: &[&'static str]| -> Vec<&'static str> {
+            frames
+                .iter()
+                .copied()
+                .filter(|f| !f.ends_with(" 15 11 FD"))
+                .collect()
+        };
         let got = hex_frames(&regs.lock().unwrap().wire);
-        assert_eq!(got, IC7300_WIRE_BEFORE, "IC-7300 bytes moved");
+        assert_eq!(got, without_po(IC7300_WIRE_BEFORE), "IC-7300 bytes moved");
         assert_eq!(b.attenuator_steps_db(), vec![20]);
         assert_eq!(b.preamp_steps_db(), vec![1, 2]);
 
@@ -4612,7 +4648,7 @@ mod tests {
             drive_every_touched_verb(&b);
             assert_eq!(
                 hex_frames(&regs.lock().unwrap().wire),
-                at(addr, no_pads.as_slice()),
+                at(addr, &without_po(&no_pads)),
                 "{model:?} bytes moved"
             );
         }
@@ -5325,6 +5361,103 @@ mod tests {
             wire,
             vec![(0x1C, vec![0x00, 0x00])],
             "the key-up, once, and nothing else"
+        );
+    }
+
+    // ===== THE Po METER IN WATTS, PER RADIO AND BAND =====
+    //
+    // Icom's own CI-V references give the Po meter as a PERCENTAGE of the radio's output
+    // (`0000=0% ~ 0143=50% ~ 0213=100%`), and the manuals call it "the relative RF output
+    // power". So the same raw reading is a different number of watts on a 10 W radio and on
+    // a 100 W one — and on the IC-9700 and IC-905, on a different band. Citations at
+    // [`commands::po_full_scale_watts`].
+
+    /// The watts the daemon answers for a Po meter reading of `raw`, with the radio's dial
+    /// at `hz` (read back, so the engine's state holds it, as the dial poll leaves it).
+    fn po_watts_at(addr: u8, model: Option<IcomModel>, hz: u64, raw: u16) -> Option<String> {
+        let (_e, b, regs) = backend_on(addr, model);
+        assert!(b.set_freq(hz), "the fixture tunes {hz}");
+        assert_eq!(b.freq_hz(), hz);
+        regs.lock().unwrap().po_raw = raw;
+        b.level("RFPOWER_METER_WATTS")
+    }
+
+    #[test]
+    fn the_po_meter_reads_watts_on_the_radios_own_scale() {
+        let ic705 = Some(IcomModel::Ic705);
+        let ic9700 = Some(IcomModel::Ic9700);
+        let ic905 = Some(IcomModel::Ic905);
+        let ic7300 = Some(IcomModel::Ic7300);
+        // THE REPORT: a 10 W IC-705 at full output read about 100 W.
+        assert_eq!(
+            po_watts_at(0xA4, ic705, 14_074_000, 213).as_deref(),
+            Some("10.0")
+        );
+        assert_eq!(
+            po_watts_at(0xA4, ic705, 144_174_000, 143).as_deref(),
+            Some("5.0")
+        );
+        // IC-9700: 100 W on 2 m, 75 W on 70 cm, 10 W on 23 cm, all at the meter's 100%.
+        assert_eq!(
+            po_watts_at(0xA2, ic9700, 144_174_000, 213).as_deref(),
+            Some("100.0")
+        );
+        assert_eq!(
+            po_watts_at(0xA2, ic9700, 432_174_000, 213).as_deref(),
+            Some("75.0")
+        );
+        assert_eq!(
+            po_watts_at(0xA2, ic9700, 1_296_174_000, 213).as_deref(),
+            Some("10.0")
+        );
+        // IC-905: 10 W up to 23 cm, 2 W on 2.4/5.6 GHz, and no rated figure for 10 GHz
+        // (an option transverter's), so no watts at all rather than a guessed number.
+        assert_eq!(
+            po_watts_at(0xAC, ic905, 432_174_000, 213).as_deref(),
+            Some("10.0")
+        );
+        assert_eq!(
+            po_watts_at(0xAC, ic905, 2_304_100_000, 213).as_deref(),
+            Some("2.0")
+        );
+        assert_eq!(po_watts_at(0xAC, ic905, 10_368_100_000, 213), None);
+        // The IC-7300 is unchanged on HF and 6 m — and 50 W on its 70 MHz band.
+        assert_eq!(
+            po_watts_at(0x94, ic7300, 14_074_000, 213).as_deref(),
+            Some("100.0")
+        );
+        assert_eq!(
+            po_watts_at(0x94, ic7300, 50_313_000, 143).as_deref(),
+            Some("50.0")
+        );
+        assert_eq!(
+            po_watts_at(0x94, ic7300, 70_200_000, 213).as_deref(),
+            Some("50.0")
+        );
+        // A radio this build cannot name has no known scale: no watts.
+        assert_eq!(po_watts_at(0x94, None, 14_074_000, 213), None);
+    }
+
+    #[test]
+    fn the_po_meter_has_no_band_to_scale_by_while_a_satellite_split_transmits_on_sub() {
+        // Satellite mode transmits out of the SUB band, whose dial the state does not hold:
+        // downlink 435 MHz (75 W) on Main, uplink 145 MHz (100 W) on Sub. Either scale could
+        // be wrong, so no watts. The positive control: the same radio, same reading, before
+        // the split, answers.
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 435640000\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "f\n"), "435640000\n");
+        regs.lock().unwrap().po_raw = 213;
+        assert_eq!(
+            roundtrip(&mut c, &mut rd, "l RFPOWER_METER_WATTS\n"),
+            "75.0\n"
+        );
+        assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT 0\n");
+        assert_eq!(roundtrip(&mut c, &mut rd, "I 145965000\n"), "RPRT 0\n");
+        assert_eq!(
+            roundtrip(&mut c, &mut rd, "l RFPOWER_METER_WATTS\n"),
+            "RPRT -11\n"
         );
     }
 }
