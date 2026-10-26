@@ -132,6 +132,9 @@ pub struct JttySegment {
     first: bool,
     /// The Tx offset it was rendered at.
     tx_hz: f32,
+    /// The DX call the send was made with (the Call box, `%H`), on its first segment: whom a
+    /// "TU " send's Log QSO prompt names.
+    his_call: String,
 }
 
 impl JttySegment {
@@ -184,6 +187,11 @@ pub struct JttyTx {
     notice: Option<String>,
     /// Bumped by every stop, drop and Tx change: a send planned before one is not committed.
     pub(super) gen: u64,
+    /// The newest Log QSO prompt, raised when a send starting "TU " goes out (WSJT-X's
+    /// `logQSOTimer`), and its number: the cockpit asks the operator once per prompt. It logs
+    /// nothing; the operator does, from the log strip.
+    log_prompt: Option<crate::dto::JttyLogPrompt>,
+    log_prompts: u64,
 }
 
 impl JttyTx {
@@ -204,6 +212,8 @@ impl JttyTx {
             keyed_since_ms: None,
             notice: None,
             gen: 0,
+            log_prompt: None,
+            log_prompts: 0,
         }
     }
 
@@ -288,6 +298,8 @@ pub struct JttyPlan {
     pub sent: String,
     /// Characters outside the JTTY alphabet were replaced.
     substituted: bool,
+    /// The DX call the send was made with (`%H`), for its Log QSO prompt.
+    his_call: String,
 }
 
 #[derive(Debug, Clone)]
@@ -854,6 +866,7 @@ fn segment(
         filler,
         first: false,
         tx_hz,
+        his_call: String::new(),
     })
 }
 
@@ -880,10 +893,15 @@ pub fn render(plan: &JttyPlan) -> Result<JttyRendered, String> {
                 filler: false,
                 first: true,
                 tx_hz: plan.tx_hz,
+                his_call: String::new(),
             }]
         }
         Planned::Nothing => Vec::new(),
     };
+    let mut segments = segments;
+    if let Some(first) = segments.first_mut() {
+        first.his_call = plan.his_call.clone();
+    }
     let filler = if plan.start_live {
         let encoded = jtty::encode_segment(FILLER, plan.profile, false)
             .map_err(|_| "JTTY could not encode its filler.".to_string())?;
@@ -986,6 +1004,7 @@ impl Engine {
             consumed: 0,
             sent: String::new(),
             substituted: false,
+            his_call: String::new(),
         }
     }
 
@@ -1009,6 +1028,7 @@ impl Engine {
             text: prepared.clone(),
             last: true,
         });
+        plan.his_call = ctx.his_call.clone();
         plan.end_live = true;
         plan.consumed = text.encode_utf16().count();
         plan.sent = prepared;
@@ -1058,7 +1078,19 @@ impl Engine {
             ));
         }
         let ctx = self.jtty_macro_context(his_call, his_snr);
-        match compile_macro(n, &template, &ctx)? {
+        let mut plan = self.jtty_fkey_plan(n, &template, &ctx)?;
+        plan.his_call = ctx.his_call;
+        Ok(plan)
+    }
+
+    /// F-key `n`'s template compiled and planned ([`Engine::jtty_plan_fkey`]).
+    fn jtty_fkey_plan(
+        &self,
+        n: u8,
+        template: &str,
+        ctx: &MacroContext,
+    ) -> Result<JttyPlan, String> {
+        match compile_macro(n, template, ctx)? {
             Compiled::Native(atoms, text) => {
                 let mut plan = self.jtty_new_plan(Planned::Atoms {
                     atoms,
@@ -1170,6 +1202,7 @@ impl Engine {
             text: prepared.clone(),
             last,
         });
+        plan.his_call = ctx.his_call.clone();
         plan.consumed = part.encode_utf16().count();
         plan.sent = prepared;
         plan.substituted = substituted;
@@ -1625,9 +1658,22 @@ impl Engine {
                 .get(..3)
                 .is_some_and(|t| t.eq_ignore_ascii_case("TU "))
         {
-            let next = (self.jtty_tx.serial + 1).min(JTTY_SERIAL_MAX);
+            // `handleJttyContestSerial` (3.3.0-beta4 `widgets/mainwindow_jtty.cpp` 701-709): the
+            // serial moves on, and WSJT-X starts `logQSOTimer`, which opens its Log QSO dialog
+            // (`on_logQSOButton_clicked`, `widgets/mainwindow.cpp` 1552-1553) with the exchange
+            // sent (`m_xSent`) the serial that went. Here that is a PROMPT for the cockpit: it
+            // logs nothing, and the operator confirms it from the log strip, or not.
+            let sent = self.jtty_tx.serial;
+            let next = (sent + 1).min(JTTY_SERIAL_MAX);
             self.jtty_tx.serial = next;
             self.settings.jtty_serial = next;
+            self.jtty_tx.log_prompts += 1;
+            self.jtty_tx.log_prompt = Some(crate::dto::JttyLogPrompt {
+                id: self.jtty_tx.log_prompts,
+                call: seg.his_call.clone(),
+                serial: sent,
+                at_utc_ms: at_ms,
+            });
         }
     }
 
@@ -1643,6 +1689,7 @@ impl Engine {
             left,
             pending,
             notice: self.jtty_tx.notice.clone(),
+            log_prompt: self.jtty_tx.log_prompt.clone(),
             style: self.settings.jtty_message_style,
             fkeys: (1..=8)
                 .map(|n| self.jtty_fkey_template(n).unwrap_or_default())
@@ -2240,6 +2287,50 @@ mod tests {
         send_text(&e, "W1AW TU", "").unwrap();
         drain(&e);
         assert_eq!(engine_lock(&e).jtty_serial(), 3, "only at the start");
+    }
+
+    /// THE LOG QSO PROMPT, as WSJT-X raises it (`handleJttyContestSerial` starts `logQSOTimer`,
+    /// 3.3.0-beta4 `widgets/mainwindow_jtty.cpp` 701-709): when a send starting "TU " starts on
+    /// the air, naming the call it was sent with and the serial that went, and after no other
+    /// send. It is a prompt and nothing more: no contact is logged or held for logging, and
+    /// nothing more is queued.
+    #[test]
+    fn a_tu_send_raises_a_log_prompt_and_logs_nothing() {
+        let e = jtty_engine();
+        let logged = || {
+            use crate::test_util::StoredLog;
+            let pending = engine_lock(&e).pending_log().is_some();
+            (e.stored_log().len(), pending)
+        };
+        let before = logged();
+        let prompt = || engine_lock(&e).jtty_tx_state().log_prompt;
+        send_fkey(&e, 2, "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(prompt(), None, "F2 is no TU");
+        send_fkey(&e, 6, "w1aw").unwrap();
+        assert_eq!(prompt(), None, "not before it is on the air");
+        frames(&e, 1);
+        let first = prompt().expect("F6 raised it");
+        assert_eq!(
+            (first.id, first.call.as_str(), first.serial),
+            (1, "W1AW", 1)
+        );
+        assert_eq!(engine_lock(&e).jtty_serial(), 2, "and the serial moved on");
+        drain(&e);
+        assert_eq!(engine_lock(&e).tx_owner(), None, "nothing more was queued");
+        send_text(&e, "tu 73", "").unwrap();
+        drain(&e);
+        let second = prompt().expect("typed TU raised it");
+        assert_eq!((second.id, second.call.as_str(), second.serial), (2, "", 2));
+        send_text(&e, "W1AW TU", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(prompt().map(|p| p.id), Some(2), "only at the start");
+        assert_eq!(logged(), before, "a prompt logs nothing");
+        let json = serde_json::to_string(&engine_lock(&e).jtty_tx_state()).unwrap();
+        assert!(
+            json.contains(r#""logPrompt":{"id":2,"call":"","serial":2,"atUtcMs":"#),
+            "{json}"
+        );
     }
 
     /// The JTTY screen in a contest session: `event` ("" is ARRL Field Day), class `class`,

@@ -434,6 +434,33 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const fkeys = tx?.fkeys ?? FKEY_DEFAULTS[style]
   const [editingKeys, setEditingKeys] = useState(false)
   const [keyDrafts, setKeyDrafts] = useState<Record<number, string>>({})
+  // THE LOG QSO PROMPT. When a send starting "TU " goes out, WSJT-X opens its Log QSO dialog
+  // (`handleJttyContestSerial` starts `logQSOTimer`, 3.3.0-beta4 `widgets/mainwindow_jtty.cpp`
+  // 701-709). Here the engine raises a prompt and this asks, once per prompt: the call the TU went
+  // to is put in the log strip (as a click on a call does), and Log QSO presses the strip's own Log
+  // button, with every check that button makes. Nothing is logged unless the operator presses it;
+  // Not now just closes the question.
+  const mainRef = useRef<HTMLElement>(null)
+  const logPrompt = tx?.logPrompt ?? null
+  const [promptDone, setPromptDone] = useState<number | null>(null)
+  const askToLog = logPrompt && logPrompt.id !== promptDone ? logPrompt : null
+  useEffect(() => {
+    if (askToLog?.call) setGrabbed(askToLog.call)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askToLog?.id])
+  const logPrompted = () => {
+    if (!askToLog) return
+    const button = mainRef.current?.querySelector<HTMLButtonElement>(
+      '[data-pane="log"] .le-actions > .le-log-btn, [data-pane="log"] .le-fd-log-btn',
+    )
+    if (!button || button.disabled) {
+      pushToast(t('jtty.logPrompt.notReady'), 'info')
+      return
+    }
+    button.click()
+    setPromptDone(askToLog.id)
+  }
+
   const refreshAfterSave = (s: AppSnapshot) => {
     onSnap?.(s)
     return getJttyState().then(setJtty)
@@ -578,6 +605,21 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       actions={snap.fieldDay ? <ContestScoreChip place="head" fieldDay={snap.fieldDay} /> : undefined}
       weight={1.5}
     >
+      {askToLog && (
+        <div className="jtty-log-prompt" role="group" aria-label={t('jtty.logPrompt.aria')}>
+          <span role="status">
+            {askToLog.call
+              ? t('jtty.logPrompt.text', { call: askToLog.call })
+              : t('jtty.logPrompt.textNoCall')}
+          </span>
+          <button type="button" className="le-qrz jtty-log-prompt-log" onClick={logPrompted}>
+            {t('jtty.logPrompt.log')}
+          </button>
+          <button type="button" className="le-qrz" onClick={() => setPromptDone(askToLog.id)}>
+            {t('jtty.logPrompt.dismiss')}
+          </button>
+        </div>
+      )}
       <LogEntry
         onOpenLogbook={onOpenLogbook}
         snap={snap}
@@ -615,7 +657,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         : [['main', lead], ['aux', aux]]
 
   return (
-    <main className="layout single jtty-cockpit">
+    <main className="layout single jtty-cockpit" ref={mainRef}>
       {snap && (
         <CockpitHeader
           snap={snap}

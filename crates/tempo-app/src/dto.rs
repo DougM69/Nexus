@@ -857,10 +857,27 @@ pub struct JttyTxState {
     pub pending: String,
     /// WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped.
     pub notice: Option<String>,
+    /// The newest Log QSO prompt (a send starting "TU " went out), or `None`.
+    pub log_prompt: Option<JttyLogPrompt>,
     /// WSJT-X's "Message style": which of the two F-key sets F1-F8 send.
     pub style: crate::settings::JttyMessageStyle,
     /// The eight templates F1-F8 send in that style (the keys' captions).
     pub fkeys: Vec<String>,
+}
+
+/// WSJT-X's Log QSO prompt after a JTTY send starting "TU " goes out (`logQSOTimer`): whom the
+/// send named and the serial it sent. A prompt only: nothing is logged unless the operator logs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyLogPrompt {
+    /// Numbered from 1 each session: the cockpit asks once per prompt.
+    pub id: u64,
+    /// The DX call the send was made with (the Call box); empty when there was none.
+    pub call: String,
+    /// The serial number the exchange sent (WSJT-X's `m_xSent`), before it moved on.
+    pub serial: u32,
+    /// When the send started on the air, UTC milliseconds.
+    pub at_utc_ms: i64,
 }
 
 /// One message in the JTTY receive window.

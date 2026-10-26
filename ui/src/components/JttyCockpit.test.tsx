@@ -56,10 +56,18 @@ vi.mock('./Waterfall', () => ({
   },
 }))
 vi.mock('./RfScopePane', () => ({ RfScopePane: () => null }))
+/** The strip's own Log button, as the stub draws it: what a press of it did, and whether it is
+ *  disabled (the real strip disables it until it can log). */
+const strip = vi.hoisted(() => ({ logged: [] as string[], disabled: false }))
 vi.mock('./LogEntry', () => ({
   LogEntry: (p: { cwLive?: { call: string | null; confirmed: boolean } | null; mode: string }) => (
     <div data-testid="log-stub" data-mode={p.mode}>
-      {p.cwLive?.call ?? ''}
+      <span className="stub-call">{p.cwLive?.call ?? ''}</span>
+      <div className="le-row le-actions">
+        <button type="button" className="le-log-btn" disabled={strip.disabled} onClick={() => strip.logged.push(p.cwLive?.call ?? '')}>
+          Log
+        </button>
+      </div>
     </div>
   ),
 }))
@@ -175,9 +183,9 @@ describe('the JTTY cockpit shows what the engine decoded', () => {
     const all = within(pane('all'))
     expect(all.queryByRole('button', { name: 'K1ABC' }), 'heard once: not a button').toBeNull()
     fireEvent.click(all.getByText('K1ABC', { exact: false }))
-    expect(screen.getByTestId('log-stub').textContent).toBe('')
+    expect(screen.getByTestId('log-stub').querySelector('.stub-call')?.textContent).toBe('')
     fireEvent.click(all.getByRole('button', { name: 'W1AW' }))
-    expect(screen.getByTestId('log-stub').textContent).toBe('W1AW')
+    expect(screen.getByTestId('log-stub').querySelector('.stub-call')?.textContent).toBe('W1AW')
     expect(screen.getByTestId('log-stub').dataset.mode).toBe('JTTY')
   })
 })
@@ -473,6 +481,47 @@ describe('the JTTY dock, wired to the engine (a state saying the transmitter is 
       ...live,
       jttyFkeys: ['CQ %M CQ', '%H %E', '%H TU CQ %M CQ', '%M', '%H', 'TU NOW %Q %E', '%H AGN?', '%E'],
     })
+  })
+
+  it('a TU send asks to log the contact, once: the call goes in the log strip, Log QSO presses the strip’s own Log, Not now logs nothing', async () => {
+    strip.logged = []
+    strip.disabled = false
+    const prompt = (id: number, call = 'W1AW') => state({ tx: txState({ logPrompt: { id, call, serial: 7, atUtcMs: T0 } }) })
+    await mount(prompt(1))
+    const ask = () => document.querySelector('.jtty-log-prompt') as HTMLElement | null
+    await waitFor(() => expect(ask()?.textContent).toContain(t('jtty.logPrompt.text', { call: 'W1AW' })))
+    expect(screen.getByTestId('log-stub').querySelector('.stub-call')?.textContent, 'the call is in the strip').toBe('W1AW')
+    expect(strip.logged, 'asking logs nothing').toEqual([])
+    fireEvent.click(within(ask()!).getByRole('button', { name: t('jtty.logPrompt.log') }))
+    expect(strip.logged, 'the strip’s own Log, once').toEqual(['W1AW'])
+    expect(ask(), 'asked once').toBeNull()
+    // The engine still reports the same prompt on its next poll: it is not asked again.
+    m('getJttyState').mockResolvedValue(prompt(1))
+    await flush()
+    expect(ask()).toBeNull()
+    cleanup()
+    // Not now: nothing is logged.
+    strip.logged = []
+    await mount(prompt(2, 'K1ABC'))
+    await waitFor(() => expect(ask()).not.toBeNull())
+    fireEvent.click(within(ask()!).getByRole('button', { name: t('jtty.logPrompt.dismiss') }))
+    expect(ask()).toBeNull()
+    expect(strip.logged).toEqual([])
+    cleanup()
+    // A strip that cannot log yet: nothing is pressed, the question stays, and it says why.
+    strip.disabled = true
+    await mount(prompt(3))
+    await waitFor(() => expect(ask()).not.toBeNull())
+    fireEvent.click(within(ask()!).getByRole('button', { name: t('jtty.logPrompt.log') }))
+    expect(strip.logged).toEqual([])
+    expect(ask()).not.toBeNull()
+    expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith(t('jtty.logPrompt.notReady'), 'info')
+    strip.disabled = false
+  })
+
+  it('no prompt, no question: a state without one shows nothing', async () => {
+    await mount(state({ tx: txState() }))
+    expect(document.querySelector('.jtty-log-prompt')).toBeNull()
   })
 
   it('what this station sent shows in the QSO frequency pane only', async () => {

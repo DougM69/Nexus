@@ -116,6 +116,20 @@ describe('a JTTY call is looked up only once two separate messages confirmed it'
     expect(logCall().value, 'the log line was not filled').toBe('')
   })
 
+  it('the Log QSO prompt after a TU send fills the REAL strip and logs through its own Log, once, only when pressed', async () => {
+    const prompted: JttyState = { ...STATE, tx: { refusal: null, txHz: 1500, serial: 8, sending: false, live: false, left: 0, pending: '', notice: null, logPrompt: { id: 1, call: 'W1AW', serial: 7, atUtcMs: T0 } } }
+    vi.mocked(api.logQso).mockResolvedValue(snap)
+    await mount()
+    vi.mocked(api.getJttyState).mockResolvedValue(prompted)
+    await waitFor(() => expect(document.querySelector('.jtty-log-prompt')).not.toBeNull(), { timeout: 3_000 })
+    await waitFor(() => expect(logCall().value).toBe('W1AW'))
+    await act(pastTheLookupWait)
+    expect(api.logQso, 'the question alone logs nothing').not.toHaveBeenCalled()
+    fireEvent.click(within(document.querySelector('.jtty-log-prompt') as HTMLElement).getByRole('button', { name: /QSO/ }))
+    await waitFor(() => expect(api.logQso).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.logQso).mock.calls[0][0]).toMatchObject({ call: 'W1AW', mode: 'JTTY' })
+  })
+
   it('POSITIVE CONTROL: the confirmed call, clicked, fills the log line and is looked up once', async () => {
     await mount()
     fireEvent.click(within(allPane()).getByRole('button', { name: 'W1AW' }))

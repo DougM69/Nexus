@@ -2047,11 +2047,25 @@ export interface JttyTxState {
   pending: string
   /** WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped. */
   notice: string | null
+  /** The newest Log QSO prompt: a send starting "TU " went out (WSJT-X's `logQSOTimer`). A
+   *  prompt only; nothing is logged unless the operator logs it. Absent in an older fixture. */
+  logPrompt?: JttyLogPrompt | null
   /** WSJT-X's "Message style": which of the two F-key sets F1-F8 send. Absent in an older
    *  fixture, which reads as Contest. */
   style?: JttyMessageStyle
   /** The eight templates F1-F8 send in that style: the keys' captions. */
   fkeys?: string[]
+}
+
+/** The Log QSO prompt after a JTTY "TU " send (`tempo_app::dto::JttyLogPrompt`). */
+export interface JttyLogPrompt {
+  /** Numbered from 1 each session: the cockpit asks once per prompt. */
+  id: number
+  /** The DX call the send was made with; empty when there was none. */
+  call: string
+  /** The serial number the exchange sent, before it moved on. */
+  serial: number
+  atUtcMs: number
 }
 
 /** WSJT-X's two JTTY F-key sets (`Jtty::MessageStyle`): Contest, and FT8 style. */

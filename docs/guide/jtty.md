@@ -123,6 +123,12 @@ twice.
 
 ## Logging and LoTW
 
+When a message starting `TU` goes out (F6's `TU NOW`, or `TU` typed), WSJT-X opens its Log QSO
+window. Nexus asks instead, at the top of the log pane: "TU went to W1AW: log the contact?",
+with the call from the Call box put in the log strip. **Log QSO** presses the strip's own Log
+button, with every check it makes; **Not now** closes the question. Nothing is logged unless you
+press it.
+
 The log strip logs a JTTY contact as **JTTY**, and an ADIF export writes it as
 `MODE=MFSK SUBMODE=JTTY`, as ADIF 3.1.8 registers it. A log that holds a bare `MODE=JTTY`
 still reads as JTTY. LoTW does not list the JTTY mode yet and TQSL would drop such a contact
