@@ -137,9 +137,10 @@ describe('Frame + bar — the default view to try', () => {
     })
     expect(A().slots.bottom3).toBe('scope')
     // Placed, shown or behind a tab: all but the three boards, which are whole screens of their own, and
-    // the Operators box, which has something to show only while a contest runs.
+    // the Operators box, which has something to show only while a contest runs, and the Activation box,
+    // which has something to show only while a park activation runs.
     const placed = SLOT_IDS.flatMap((s) => slotBoxes({ slots: A().slots, tabs: A().tabs as Partial<Record<SlotId, PaneId[]>> }, s))
-    expect(PANE_IDS.filter((p) => !placed.includes(p))).toEqual(['spots', 'pota', 'needed', 'operators'])
+    expect(PANE_IDS.filter((p) => !placed.includes(p))).toEqual(['spots', 'pota', 'needed', 'operators', 'activation'])
   })
 
   it('reads back as itself whichever tab a slot shows: showing a tab is not an arrangement change', () => {
