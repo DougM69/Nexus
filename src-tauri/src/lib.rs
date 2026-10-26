@@ -43,7 +43,7 @@ mod bench_road_switch;
 /// WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P print, Ctrl+F find…) off in every Nexus
 /// window, set on each webview as Tauri makes it.
 mod browser_keys;
-/// The Logbook's "Update from QRZ": many calls looked up slowly, their answers filled into empty
+/// The Logbook's "Update from callbook": many calls looked up slowly, their answers filled into empty
 /// fields as one run.
 mod callbook_update;
 /// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label

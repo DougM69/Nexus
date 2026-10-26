@@ -51,7 +51,8 @@
 //! - **a fix** changes a grid, a band, a DXCC number, a reference or an end time, never a call:
 //!   every stamp stays.
 //! - **an update from the callbook** ([`callbook_fill`]) fills empty fields only, by the log's own
-//!   callbook rule, never a call, a stamp or a confirmation: every stamp stays.
+//!   callbook rule, never a call, a stamp or a confirmation: every stamp stays. Where the station
+//!   is ([`LOCATION_FIELDS`]) goes only on contacts from the last 12 months.
 //!
 //! An undo of any of them sends nothing either ([`crate::loghistory`]). A stamp is never history:
 //! the undo of a merge leaves the kept contact the stamps it had before the merge, because the
@@ -620,7 +621,82 @@ pub fn bulk_edit(
 
 // ── update from the callbook ───────────────────────────────────────────────────────────────────
 
-/// What "Update from QRZ" would do with the contacts it was handed: read with the Engine lock
+/// How recent a contact must be for "Update from callbook" to give it where the station is: 12
+/// months (365 days). A callbook says where a station is NOW; a contact from years ago was made
+/// wherever the station was then, so an older contact takes only who the operator is.
+pub const LOCATION_MAX_AGE_SECS: u64 = 365 * 86_400;
+
+/// The fields the callbook rule ([`callbook::fill_from_callbook`]) derives from where the station
+/// is now — its "location fields", by ADIF name: the grid, QTH, state, county, IOTA, the CQ and ITU
+/// zones, the position and the UTC offset. "Update from callbook" fills them only on a contact
+/// from the last [`LOCATION_MAX_AGE_SECS`]; the name, e-mail, web page, QSL route and the
+/// LoTW/eQSL/paper-QSL habits go on any contact.
+pub const LOCATION_FIELDS: [&str; 10] = [
+    "GRIDSQUARE",
+    "QTH",
+    "STATE",
+    "CNTY",
+    "IOTA",
+    "CQZ",
+    "ITUZ",
+    "LAT",
+    "LON",
+    callbook::UTC_OFFSET_FIELD,
+];
+
+/// Whether "Update from callbook" may give `r` the station's location: logged within the last
+/// [`LOCATION_MAX_AGE_SECS`] of `now_unix` (or after it).
+fn location_current(r: &QsoRecord, now_unix: u64) -> bool {
+    r.when_unix.saturating_add(LOCATION_MAX_AGE_SECS) >= now_unix
+}
+
+/// `a` with where the station is taken out ([`LOCATION_FIELDS`]): who the operator is, and nothing
+/// that places them. Destructured whole, so a field added to the answer must be sorted here.
+fn without_location(a: &CallbookAnswer) -> CallbookAnswer {
+    let CallbookAnswer {
+        call,
+        name,
+        qth: _,
+        grid: _,
+        state: _,
+        county: _,
+        iota: _,
+        cq_zone: _,
+        itu_zone: _,
+        position: _,
+        email,
+        web,
+        qsl_via,
+        lotw,
+        eqsl,
+        paper_qsl,
+        utc_offset: _,
+    } = a.clone();
+    CallbookAnswer {
+        call,
+        name,
+        email,
+        web,
+        qsl_via,
+        lotw,
+        eqsl,
+        paper_qsl,
+        ..CallbookAnswer::default()
+    }
+}
+
+/// The bulk update's fill of one contact: the log's own callbook rule
+/// ([`callbook::fill_from_callbook`]), unchanged, given the whole answer for a contact from the
+/// last 12 months and the answer without its location for an older one.
+fn fill_bulk(rec: &mut QsoRecord, a: &CallbookAnswer, now_unix: u64) {
+    if location_current(rec, now_unix) {
+        callbook::fill_from_callbook(rec, a);
+    } else {
+        callbook::fill_from_callbook(rec, &without_location(a));
+    }
+}
+
+/// What "Update from callbook" would do with the contacts it was handed: read with the Engine lock
 /// released, changing nothing and asking no callbook.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CallbookPreview {
@@ -639,6 +715,10 @@ pub struct CallbookPreview {
     /// answers; at most, for a call still to be looked up (every empty field the rule would fill
     /// from a complete answer).
     pub fields: std::collections::BTreeMap<String, usize>,
+    /// The contacts older than 12 months the answer would have given a location field
+    /// ([`LOCATION_FIELDS`]) and the update leaves it blank on: exactly for a kept answer, at most
+    /// for a call still to be looked up.
+    pub location_too_old: usize,
 }
 
 /// A complete answer for `r`'s own call: every field the rule fills, each a well-formed value,
@@ -681,12 +761,14 @@ fn newly_filled(before: &QsoRecord, after: &QsoRecord) -> Vec<String> {
         .collect()
 }
 
-/// ★ What [`callbook_fill`] could make of `ids`: the calls to look up, those `kept` (the lookup
-/// cache, fresh) already answers, and the fields the fill could give, by the fill's own rule
-/// ([`callbook::fill_from_callbook`]). Changes nothing; asks no callbook.
+/// ★ What [`callbook_fill`] could make of `ids` at `now_unix`: the calls to look up, those `kept`
+/// (the lookup cache, fresh) already answers, the fields the fill could give, by the fill's own
+/// rule and its 12-month location gate, and the older contacts the gate leaves a location field
+/// blank on. Changes nothing; asks no callbook.
 pub fn callbook_preview(
     engine: &Mutex<Engine>,
     ids: &[RecordId],
+    now_unix: u64,
     kept: &mut dyn FnMut(&str) -> Option<CallbookAnswer>,
 ) -> Result<CallbookPreview, String> {
     let mut seen = HashSet::new();
@@ -714,8 +796,16 @@ pub fn callbook_preview(
             });
             let answer = answer.clone().unwrap_or_else(|| every_field(row));
             let mut after = QsoRecord::clone(row);
-            callbook::fill_from_callbook(&mut after, &answer);
+            fill_bulk(&mut after, &answer, now_unix);
             let filled = newly_filled(row, &after);
+            if !location_current(row, now_unix) {
+                let mut whole = QsoRecord::clone(row);
+                callbook::fill_from_callbook(&mut whole, &answer);
+                let lost = newly_filled(row, &whole)
+                    .iter()
+                    .any(|t| LOCATION_FIELDS.contains(&t.as_str()));
+                out.location_too_old += usize::from(lost);
+            }
             out.could_change += usize::from(!filled.is_empty());
             for tag in filled {
                 *out.fields.entry(tag).or_default() += 1;
@@ -729,14 +819,17 @@ pub fn callbook_preview(
 /// ([`callbook::fill_from_callbook`]): **only empty fields**, never one a contest exchange
 /// carries, the location only from the station's own record and never over a park; never the
 /// call, the country or the DXCC number, never an upload stamp or a confirmation, and nothing
-/// queued to any service. ONE run of the history, undone whole. `answers` are by
-/// [`cleanup::call_key`]; a contact whose call has none is left as it is. Refused, changing
-/// nothing, unless `ids` are the `expect` contacts the operator confirmed.
+/// queued to any service. **Where the station is ([`LOCATION_FIELDS`]) only on a contact from the
+/// 12 months before `now_unix`**: an older one takes the rest of the answer and no location. ONE
+/// run of the history, undone whole. `answers` are by [`cleanup::call_key`]; a contact whose call
+/// has none is left as it is. Refused, changing nothing, unless `ids` are the `expect` contacts
+/// the operator confirmed.
 pub fn callbook_fill(
     engine: &Mutex<Engine>,
     ids: &[RecordId],
     expect: usize,
     answers: &HashMap<String, CallbookAnswer>,
+    now_unix: u64,
 ) -> (Result<ToolRun, String>, Durability) {
     let mut seen = HashSet::new();
     let ids: Vec<RecordId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
@@ -756,7 +849,7 @@ pub fn callbook_fill(
                 continue;
             };
             let mut after = QsoRecord::clone(row);
-            callbook::fill_from_callbook(&mut after, answer);
+            fill_bulk(&mut after, answer, now_unix);
             if after != **row {
                 pairs.push((Arc::clone(row), Some(Arc::new(after))));
             }

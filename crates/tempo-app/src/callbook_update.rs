@@ -1,4 +1,4 @@
-//! The Logbook's "Update from QRZ": many calls looked up in the callbook, slowly, and their
+//! The Logbook's "Update from callbook": many calls looked up in the callbook, slowly, and their
 //! answers handed to the fill ([`crate::logtools::callbook_fill`]), which writes each into the
 //! EMPTY fields of the contacts logged with that call and nowhere else.
 //!

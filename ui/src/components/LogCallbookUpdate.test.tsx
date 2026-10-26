@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// UPDATE FROM QRZ — what the tab asks the station for and tells the operator: the preview's
+// UPDATE FROM CALLBOOK — what the tab asks the station for and tells the operator: the preview's
 // counts, time and the day's lookups against the cap; a start only after asking, on exactly the
 // contacts previewed with their count; the progress while it runs, and Stop; and however it ends,
 // the toast whose Undo takes the whole fill back, the calls nobody knows and the calls left for
@@ -58,6 +58,8 @@ const preview: CallbookUpdatePreview = {
   couldChange: 2,
   fields: [['GRIDSQUARE', 3], ['NAME', 2]],
   configured: true,
+  services: ['qrz', 'hamqth', 'callook'],
+  locationTooOld: 0,
 }
 
 function open(picked: string[] = []) {
@@ -77,7 +79,7 @@ function open(picked: string[] = []) {
   return onChanged
 }
 
-describe('update from QRZ', () => {
+describe('update from callbook', () => {
   it('previews the calls, the time, the day’s lookups and the fields, by value', async () => {
     api.callbookUpdatePreview.mockResolvedValue({ ...preview, toLookUp: 300, estimateSecs: 600 })
     open(['x', 'y', 'z'])
@@ -88,6 +90,20 @@ describe('update from QRZ', () => {
     screen.getByText('Lookups today: 10 of 250 (Settings ▸ Logbook ▸ Callbook lookups).')
     screen.getByText(/Today’s limit stops it after 240 lookups\./)
     screen.getByText('GRIDSQUARE 3 · NAME 2')
+    screen.getByText(
+      'Asks QRZ, then HamQTH, then callook.info (US calls), the next only when the one before has no record. The pace and the daily limit cover them all.',
+    )
+    screen.getByText(/^Location \(grid, QTH, state, county, IOTA, CQ and ITU zones, latitude\/longitude, UTC offset\) is filled only on contacts from the last 12 months/)
+    expect(screen.queryByText(/older than 12 months/)).toBeNull()
+  })
+
+  it('names only the services set up, and counts the older contacts whose location stays blank', async () => {
+    api.callbookUpdatePreview.mockResolvedValue({ ...preview, services: ['hamqth'], locationTooOld: 7 })
+    open(['x', 'y', 'z'])
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    await screen.findByText('7 contacts are older than 12 months: their location stays blank.')
+    screen.getByText(/^Asks HamQTH, the next only when/)
+    expect(screen.queryByText(/^Asks QRZ/)).toBeNull()
   })
 
   it('starts only after asking, on the contacts previewed with their count, then shows progress', async () => {
@@ -141,6 +157,39 @@ describe('update from QRZ', () => {
     const n = toasts.length
     await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS * 3) })
     expect(toasts.length).toBe(n)
+  })
+
+  it('reports the end once when two polls overlap: one toast', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false })
+    api.callbookUpdatePreview.mockResolvedValue(preview)
+    api.callbookUpdateStart.mockResolvedValue(undefined)
+    open(['x', 'y', 'z'])
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByRole('button', { name: 'Update 2 contacts' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(api.callbookUpdateStart).toHaveBeenCalled()
+    // Each poll waits on the station until released: the second starts while the first is out.
+    const pending: ((s: CallbookUpdateStatus) => void)[] = []
+    api.callbookUpdateStatus.mockImplementation(
+      () => new Promise<CallbookUpdateStatus>((resolve) => { pending.push(resolve) }),
+    )
+    await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS) })
+    expect(pending.length).toBe(2)
+    const ended: CallbookUpdateStatus = {
+      running: false, done: 2, total: 2, fromCache: 1, lookedUp: 1, spent: 11, cap: 250,
+      ended: {
+        stop: 'done', error: null, unknown: [], notLookedUp: 0,
+        made: { changed: 5, run: 'run-8', gone: 0, changedSince: 0, needsChoice: 0, distinct: 0 },
+      },
+    }
+    await act(async () => {
+      for (const resolve of pending) resolve(ended)
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(toasts.filter((x) => x.message === 'Updated 5 contacts from the callbook')).toHaveLength(1)
   })
 
   it('with no callbook set up, says so and cannot start', async () => {

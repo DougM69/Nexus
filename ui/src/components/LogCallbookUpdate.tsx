@@ -1,13 +1,18 @@
-// UPDATE FROM QRZ — fill the EMPTY fields of many contacts from the callbook: the ones ticked in
+// UPDATE FROM CALLBOOK — fill the EMPTY fields of many contacts from the callbook: the ones ticked in
 // the list, or every one the list's search and filters show. Each distinct call is looked up once,
 // through the same lookup (and its cache) the callsign card uses, at the station, slowly: one
 // network lookup every few seconds (Settings ▸ Callbook lookups), never more in a day than the cap
-// set there. A call the cache already answers costs nothing. The fill is the log's own callbook
-// rule: a field the contact holds is never replaced, a contest exchange's fields are never touched,
-// the call, country, upload marks and confirmations stay, and nothing is uploaded.
+// set there. A call the cache already answers costs nothing. Each call asks the services set up in
+// order — QRZ, then HamQTH, then callook.info for a US call — the next only when the one before has
+// no record, all in the call's one paced turn. The fill is the log's own callbook rule: a field the
+// contact holds is never replaced, a contest exchange's fields are never touched, the call,
+// country, upload marks and confirmations stay, and nothing is uploaded. Where the station is
+// (grid, QTH, state, county, IOTA, zones, position, UTC offset) goes only on a contact from the
+// last 12 months: a callbook says where a station is now.
 //
-// Preview first: the contacts, the calls, how many are already looked up, the time the rest take,
-// the day's lookups against the cap, and per field how many contacts it could fill. The button
+// Preview first: the contacts, the calls, the services asked, how many are already looked up, the
+// time the rest take, the day's lookups against the cap, per field how many contacts it could fill,
+// and how many older contacts keep their location blank. The button
 // then asks once more before it starts. Progress shows while it runs, with Cancel; whatever stops
 // it (done, cancelled, the day's cap, a failed lookup), what it found is ONE change the toast's
 // Undo takes back, and a later run picks up the rest from the cache at no cost.
@@ -28,6 +33,13 @@ import { t } from '../i18n'
 import { pushToast, withErrorToast } from '../toast'
 import type { LogQuery } from '../features/logQuery'
 import { changesRefusedHere, sayRun } from '../features/logCleanup'
+
+/** Each service's name, as the preview lists the ones each call is asked of. */
+function serviceName(s: CallbookUpdatePreview['services'][number]): string {
+  return s === 'qrz' ? t('logbook.tools.callbook.service.qrz')
+    : s === 'hamqth' ? t('logbook.tools.callbook.service.hamqth')
+    : t('logbook.tools.callbook.service.callook')
+}
 
 /** How often the progress is asked while an update runs. */
 export const POLL_MS = 1000
@@ -159,6 +171,15 @@ export function LogCallbookUpdate({
               toLookUp: preview.toLookUp,
             })}
           </p>
+          {preview.services.length > 0 && (
+            <p className="qso-detail-bare">
+              {t('logbook.tools.callbook.services', {
+                services: preview.services
+                  .map(serviceName)
+                  .join(t('logbook.tools.callbook.then')),
+              })}
+            </p>
+          )}
           {preview.toLookUp > 0 && (
             <p className="qso-detail-bare">
               {t('logbook.tools.callbook.time', { minutes, pace: preview.paceSecs })}
@@ -181,6 +202,12 @@ export function LogCallbookUpdate({
             <p className="qso-detail-bare">
               {t('logbook.tools.callbook.fields')}{' '}
               <span className="mono">{preview.fields.map(([tag, n]) => `${tag} ${n}`).join(' · ')}</span>
+            </p>
+          )}
+          <p className="qso-detail-bare">{t('logbook.tools.callbook.location')}</p>
+          {preview.locationTooOld > 0 && (
+            <p className="qso-detail-bare">
+              {t('logbook.tools.callbook.locationTooOld', { count: preview.locationTooOld })}
             </p>
           )}
           <div className="log-tools-row">

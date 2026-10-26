@@ -496,7 +496,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     neededInHourOne: true,
     keywords: ['qrz', 'qrz lookup', 'qrz xml', 'qrz password', 'qrz username', 'hamqth', 'callook',
       'callook.info', 'name lookup', 'autofill', 'name and grid', 'callbook cache', 'lookup cache',
-      'offline lookup', 'clear cache', 'refresh', 'refresh a call', 'update from qrz',
+      'offline lookup', 'clear cache', 'refresh', 'refresh a call', 'update from callbook', 'update from qrz',
       'lookups per day', 'daily limit', 'lookup pace'],
   },
   {

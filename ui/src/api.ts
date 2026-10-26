@@ -1864,10 +1864,11 @@ export async function bulkEditApply(
   return invoke<ToolRun>('bulk_edit_apply', { ids, expectCount, expectMoves, expectMoveTo, changes })
 }
 
-/** What "Update from QRZ" would do with its contacts: the distinct calls, those the lookup cache
- *  answers (`kept`, no lookup), the rest at the pace (`estimateSecs`), the day's network lookups
- *  (`spent`) under the `cap`, and per ADIF field how many contacts the fill could give it — exact
- *  for a kept answer, at most for a call still to look up. Changes nothing, looks nothing up. */
+/** What "Update from callbook" would do with its contacts: the distinct calls, those the lookup
+ *  cache answers (`kept`, no lookup), the rest at the pace (`estimateSecs`), the day's network
+ *  lookups (`spent`) under the `cap`, and per ADIF field how many contacts the fill could give it —
+ *  exact for a kept answer, at most for a call still to look up. Changes nothing, looks nothing
+ *  up. */
 export interface CallbookUpdatePreview {
   ids: string[]
   selected: number
@@ -1882,6 +1883,10 @@ export interface CallbookUpdatePreview {
   couldChange: number
   fields: [string, number][]
   configured: boolean
+  /** The services each call is asked of, in order, as set up (callook.info: US calls only). */
+  services: ('qrz' | 'hamqth' | 'callook')[]
+  /** Contacts older than 12 months left without a location field the answer would have given. */
+  locationTooOld: number
 }
 
 /** How an update ended: `done`, `cancelled`, `limit` (the day's cap) or `failed` (`error` says

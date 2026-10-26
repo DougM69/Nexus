@@ -1,4 +1,4 @@
-//! The Logbook's "Update from QRZ" as the UI asks for it: a preview, a start, the progress, and a
+//! The Logbook's "Update from callbook" as the UI asks for it: a preview, a start, the progress, and a
 //! cancel ([`tempo_app::callbook_update`], [`tempo_app::logtools::callbook_fill`]).
 //!
 //! **The same lookup the callsign card makes.** Each call goes through the lookup cache
@@ -9,7 +9,11 @@
 //! now: a few hundred old calls would push out the ones the operator just looked up.
 //!
 //! **Paced and capped** by the operator's settings (`callbook_update_pace_secs`,
-//! `callbook_update_daily_cap`). The station's own tally of the day's network lookups lives in the
+//! `callbook_update_daily_cap`). The fallbacks are paced the same: each call is ONE paced turn, in
+//! which QRZ is asked first and HamQTH, then callook.info (a US call), only when the one before
+//! has no record, so no service is asked more often than one call per pace (the call and then its
+//! base for a stroked call, which the cap counts as two). The cap counts every turn's lookups,
+//! whichever service answered. The station's own tally of the day's network lookups lives in the
 //! cache file ([`tempo_core::callbook_cache::CallbookCache::note_lookups`]), and QRZ's own count of
 //! the account's lookups ([`note_qrz_count`]) holds the cap too when an answer carries it.
 //!
@@ -17,6 +21,10 @@
 //! cancelled, the cap reached or a lookup failed — the answers in hand are filled as ONE run of
 //! the history, which the toast's Undo takes back. A later run takes the calls already answered
 //! from the cache at no cost.
+//!
+//! **Where the station is, only on the last 12 months' contacts** (operator ruling): the fill
+//! gives an older contact the answer without its location ([`logtools::LOCATION_FIELDS`]), and the
+//! preview counts the contacts that leaves without one.
 //!
 //! **Where it runs.** The preview, the progress and the cancel run at the station from either
 //! computer; the start is the shack's own, as a bulk edit's is (`command_classes`): it changes
@@ -225,9 +233,34 @@ pub struct UpdatePreviewDto {
     pub fields: Vec<(String, usize)>,
     /// Whether a callbook is set up at all (a QRZ or HamQTH username, or callook.info on).
     pub configured: bool,
+    /// The services each call is asked of, in order, as set up: `qrz`, `hamqth`, `callook`
+    /// (US calls only).
+    pub services: Vec<&'static str>,
+    /// Contacts older than 12 months left without a location field the answer would have given.
+    pub location_too_old: usize,
 }
 
-/// What "Update from QRZ" would do with its contacts. Changes nothing and asks no callbook.
+/// The callbooks [`crate::callbook_lookup_live`] asks, in its order, as the settings set them up.
+fn services(s: &tempo_app::settings::Settings) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if !s.qrz_username.trim().is_empty() {
+        out.push("qrz");
+    }
+    if !s.hamqth_username.trim().is_empty() {
+        out.push("hamqth");
+    }
+    if s.callook_lookup {
+        out.push("callook");
+    }
+    out
+}
+
+/// Now, as the fill's 12-month location gate reads it.
+fn now_secs() -> u64 {
+    u64::try_from(crate::now_unix()).unwrap_or(0)
+}
+
+/// What "Update from callbook" would do with its contacts. Changes nothing and asks no callbook.
 #[tauri::command]
 pub async fn callbook_update_preview(
     app: AppHandle,
@@ -238,20 +271,20 @@ pub async fn callbook_update_preview(
     let (engine, queries) = (Arc::clone(&state), queries.inner().clone());
     tokio::task::spawn_blocking(move || {
         let ids = target_ids(&engine, &queries, &target)?;
-        let (max_age, pace, cap, configured) = {
+        let (max_age, pace, cap, services) = {
             let e = engine_lock(&engine);
             let s = e.settings();
             (
                 s.callbook_cache_max_age_secs(),
                 s.callbook_update_pace(),
                 s.callbook_update_daily_cap(),
-                !s.qrz_username.trim().is_empty()
-                    || !s.hamqth_username.trim().is_empty()
-                    || s.callook_lookup,
+                services(s),
             )
         };
         let cache = app.state::<SharedCallbookCache>();
-        let p = logtools::callbook_preview(&engine, &ids, &mut |call| kept(&cache, call, max_age))?;
+        let p = logtools::callbook_preview(&engine, &ids, now_secs(), &mut |call| {
+            kept(&cache, call, max_age)
+        })?;
         let to_look_up = p.calls.len() - p.kept;
         let mut fields: Vec<(String, usize)> = p.fields.into_iter().collect();
         fields.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -268,7 +301,9 @@ pub async fn callbook_update_preview(
             cap,
             could_change: p.could_change,
             fields,
-            configured,
+            configured: !services.is_empty(),
+            services,
+            location_too_old: p.location_too_old,
         })
     })
     .await
@@ -357,7 +392,7 @@ fn run(
     max_age: i64,
     limits: Limits,
 ) -> UpdateEndDto {
-    let calls = match logtools::callbook_preview(engine, ids, &mut |_| None) {
+    let calls = match logtools::callbook_preview(engine, ids, now_secs(), &mut |_| None) {
         Ok(p) => p.calls,
         Err(e) => {
             return UpdateEndDto {
@@ -396,7 +431,8 @@ fn run(
     if found.answers.is_empty() {
         return end;
     }
-    let (made, durability) = logtools::callbook_fill(engine, ids, expect, &found.answers);
+    let (made, durability) =
+        logtools::callbook_fill(engine, ids, expect, &found.answers, now_secs());
     match made {
         Ok(made) => {
             let wait = if durability.turned_back(tempo_app::logstore::DURABLE_WAIT) {

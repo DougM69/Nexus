@@ -5499,10 +5499,10 @@ export interface Settings {
   /** Days a callbook answer kept on disk answers a lookup before the callbook is asked again
    *  (default 30). Offline, a kept answer is used at any age. */
   callbookCacheDays: number
-  /** The Logbook's Update from QRZ: the least seconds before each network lookup (default 2,
+  /** The Logbook's Update from callbook: the least seconds before each network lookup (default 2,
    *  1 to 60). */
   callbookUpdatePaceSecs?: number
-  /** The most network lookups Update from QRZ makes in 24 hours, across runs (default 250). */
+  /** The most network lookups Update from callbook makes in 24 hours, across runs (default 250). */
   callbookUpdateDailyCap?: number
   /** Ask callook.info (free, no account, US calls only) when QRZ and HamQTH have no answer. */
   callookLookup: boolean

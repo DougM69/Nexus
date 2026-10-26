@@ -1701,6 +1701,10 @@ fn qrz_answer(call: &str) -> CallbookAnswer {
     }
 }
 
+/// 2 January 2026, 00:00 UTC: a day after the `adif` contacts, well inside the 12 months the
+/// update gives a contact the station's location.
+const JAN_2026: u64 = 1_767_225_600 + 86_400;
+
 fn answers(calls: &[&str]) -> HashMap<String, CallbookAnswer> {
     calls
         .iter()
@@ -1753,7 +1757,7 @@ fn an_update_fills_only_empty_fields_keeps_stamps_and_undoes_whole() {
     let before = rows(&engine);
     let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
 
-    let (made, dur) = callbook_fill(&engine, &ids, ids.len(), &answers(&["W1AW"]));
+    let (made, dur) = callbook_fill(&engine, &ids, ids.len(), &answers(&["W1AW"]), JAN_2026);
     let made = made.unwrap();
     dur.wait(DURABLE_WAIT).unwrap();
     assert_eq!(made.changed, 2, "both W1AW contacts gained a field");
@@ -1812,7 +1816,7 @@ fn an_update_fills_only_empty_fields_keeps_stamps_and_undoes_whole() {
     );
 
     // Run again: every field it could fill is filled, so nothing changes and no run is made.
-    let (again, _) = callbook_fill(&engine, &ids, ids.len(), &answers(&["W1AW"]));
+    let (again, _) = callbook_fill(&engine, &ids, ids.len(), &answers(&["W1AW"]), JAN_2026);
     let again = again.unwrap();
     assert_eq!((again.changed, again.run), (0, None));
 
@@ -1841,7 +1845,7 @@ fn an_update_never_overrides_a_contest_exchange() {
     );
     let before = rows(&engine);
     let ids = [before[0].id.unwrap()];
-    let (made, dur) = callbook_fill(&engine, &ids, 1, &answers(&["W1AW"]));
+    let (made, dur) = callbook_fill(&engine, &ids, 1, &answers(&["W1AW"]), JAN_2026);
     assert_eq!(made.unwrap().changed, 1);
     dur.wait(DURABLE_WAIT).unwrap();
     let r = &rows(&engine)[0];
@@ -1871,7 +1875,7 @@ fn the_update_preview_counts_calls_and_fields() {
     let mut ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
     ids.push(ids[0]);
     let mut asked = Vec::new();
-    let p = callbook_preview(&engine, &ids, &mut |call| {
+    let p = callbook_preview(&engine, &ids, JAN_2026, &mut |call| {
         asked.push(call.to_string());
         (call == "W1AW").then(|| qrz_answer("W1AW"))
     })
@@ -1902,7 +1906,136 @@ fn an_update_acts_only_on_the_count_confirmed() {
     let engine = shared(&d, &[adif("W1AW", "120000", "")]);
     let before = rows(&engine);
     let ids = [before[0].id.unwrap()];
-    let (refused, _) = callbook_fill(&engine, &ids, 2, &answers(&["W1AW"]));
+    let (refused, _) = callbook_fill(&engine, &ids, 2, &answers(&["W1AW"]), JAN_2026);
     assert_eq!(refused, Err(NOT_AS_PREVIEWED.to_string()));
     assert_eq!(rows(&engine), before);
+}
+
+/// One ADIF record like [`adif`]'s, on `date` (`YYYYMMDD`).
+fn adif_on(call: &str, date: &str, more: &str) -> String {
+    format!(
+        "<CALL:{}>{call}<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>{date}<TIME_ON:6>120000\
+         {more}<EOR>\n",
+        call.len()
+    )
+}
+
+/// ★ THE 12-MONTH LOCATION GATE (operator ruling). A callbook says where a station is NOW: the
+/// bulk update gives a contact from the last 12 months the whole answer, and an older one only who
+/// the operator is: the name (and e-mail, QSL route, habits), never the grid, QTH, state, county,
+/// zones, position or UTC offset. By value, on the stored contacts.
+#[test]
+fn an_update_gives_the_location_only_to_contacts_from_the_last_12_months() {
+    let d = Dir::new("tools-callbook-age");
+    let engine = shared(
+        &d,
+        &[
+            // Two years before "now": the name only.
+            adif_on("W1AW", "20240101", "<COUNTRY:13>United States"),
+            // Three months before "now": everything.
+            adif_on("W1AW", "20251001", "<COUNTRY:13>United States"),
+        ],
+    );
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let mut full = qrz_answer("W1AW");
+    full.position = Some((41.7, -72.7));
+    full.utc_offset = Some(-5.0);
+    full.email = Some("w1aw@example.org".into());
+    let answers = HashMap::from([("W1AW".to_string(), full)]);
+
+    // The preview first: the old contact is counted as left without its location.
+    let p = callbook_preview(&engine, &ids, JAN_2026, &mut |_| {
+        Some(answers["W1AW"].clone())
+    })
+    .unwrap();
+    assert_eq!(p.location_too_old, 1);
+    assert_eq!(p.fields.get("NAME"), Some(&2));
+    assert_eq!(
+        p.fields.get("GRIDSQUARE"),
+        Some(&1),
+        "the recent contact only"
+    );
+    assert_eq!(p.fields.get("EMAIL"), Some(&2));
+
+    let (made, dur) = callbook_fill(&engine, &ids, ids.len(), &answers, JAN_2026);
+    assert_eq!(made.unwrap().changed, 2);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let after = rows(&engine);
+    let extra =
+        |r: &QsoRecord, t: &str| r.extra.iter().find(|(k, _)| k == t).map(|(_, v)| v.clone());
+
+    let old = &after[0];
+    assert_eq!(
+        old.when_unix,
+        1_704_067_200 + 12 * 3600,
+        "premise: the 2024 contact"
+    );
+    assert_eq!(
+        callbook_fields(old),
+        vec![
+            ("NAME", Some("Hiram".into())),
+            ("QTH", None),
+            ("GRIDSQUARE", None),
+            ("STATE", None),
+            ("CNTY", None),
+            ("CQZ", None),
+            ("ITUZ", None),
+        ]
+    );
+    assert_eq!(extra(old, "EMAIL").as_deref(), Some("w1aw@example.org"));
+    for tag in ["LAT", "LON", callbook::UTC_OFFSET_FIELD] {
+        assert_eq!(
+            extra(old, tag),
+            None,
+            "{tag}: no location on a 2-year-old contact"
+        );
+    }
+
+    let recent = &after[1];
+    assert_eq!(
+        callbook_fields(recent),
+        vec![
+            ("NAME", Some("Hiram".into())),
+            ("QTH", Some("Newington".into())),
+            ("GRIDSQUARE", Some("FN31pr".into())),
+            ("STATE", Some("CT".into())),
+            ("CNTY", Some("CT,Hartford".into())),
+            ("CQZ", Some("5".into())),
+            ("ITUZ", Some("8".into())),
+        ]
+    );
+    assert_eq!(extra(recent, "EMAIL").as_deref(), Some("w1aw@example.org"));
+    for tag in ["LAT", "LON", callbook::UTC_OFFSET_FIELD] {
+        assert!(
+            extra(recent, tag).is_some(),
+            "{tag}: a 3-month-old contact takes it"
+        );
+    }
+}
+
+/// The control: the single-contact rule the callsign card and the log time use
+/// ([`callbook::fill_from_callbook`]) has no age gate. The same 2-year-old contact, filled by it,
+/// takes the whole answer.
+#[test]
+fn the_single_contact_fill_has_no_age_gate() {
+    let d = Dir::new("tools-callbook-age-control");
+    let engine = shared(
+        &d,
+        &[adif_on("W1AW", "20240101", "<COUNTRY:13>United States")],
+    );
+    let mut r = QsoRecord::clone(&rows(&engine)[0]);
+    callbook::fill_from_callbook(&mut r, &qrz_answer("W1AW"));
+    assert_eq!(
+        callbook_fields(&r),
+        vec![
+            ("NAME", Some("Hiram".into())),
+            ("QTH", Some("Newington".into())),
+            ("GRIDSQUARE", Some("FN31pr".into())),
+            ("STATE", Some("CT".into())),
+            ("CNTY", Some("CT,Hartford".into())),
+            ("CQZ", Some("5".into())),
+            ("ITUZ", Some("8".into())),
+        ]
+    );
 }

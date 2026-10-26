@@ -3478,11 +3478,11 @@ pub struct Settings {
     /// again (`tempo_core::callbook_cache`). Offline, a kept answer is used at any age. Read
     /// through [`Self::callbook_cache_max_age_secs`], which clamps it.
     pub callbook_cache_days: u32,
-    /// The Logbook's "Update from QRZ": the least time between two of its network lookups, in
+    /// The Logbook's "Update from callbook": the least time between two of its network lookups, in
     /// seconds. Read through [`Self::callbook_update_pace`], which holds it to
     /// [`CALLBOOK_UPDATE_PACE_SECS_MIN`] … [`CALLBOOK_UPDATE_PACE_SECS_MAX`].
     pub callbook_update_pace_secs: u32,
-    /// The most network lookups "Update from QRZ" makes in 24 hours, across its runs. Read
+    /// The most network lookups "Update from callbook" makes in 24 hours, across its runs. Read
     /// through [`Self::callbook_update_daily_cap`].
     pub callbook_update_daily_cap: u32,
     /// Ask callook.info, the free US-only licence lookup (no account), when QRZ and HamQTH have
@@ -3910,14 +3910,14 @@ pub const RTTY_AUTO_REPEATS_MAX: u32 = 10;
 pub const CALLBOOK_CACHE_DAYS_DEFAULT: u32 = 30;
 pub const CALLBOOK_CACHE_DAYS_MAX: u32 = 3_650;
 
-/// "Update from QRZ"'s pace: a lookup every 2 seconds unless the operator sets another, never
+/// "Update from callbook"'s pace: a lookup every 2 seconds unless the operator sets another, never
 /// faster than one a second. QRZ publishes no rate; the floor keeps a long run from looking like
 /// a flood (`tempo_app::callbook_update`).
 pub const CALLBOOK_UPDATE_PACE_SECS_DEFAULT: u32 = 2;
 pub const CALLBOOK_UPDATE_PACE_SECS_MIN: u32 = 1;
 pub const CALLBOOK_UPDATE_PACE_SECS_MAX: u32 = 60;
 
-/// "Update from QRZ"'s cap on network lookups in 24 hours. QRZ publishes no number, so the
+/// "Update from callbook"'s cap on network lookups in 24 hours. QRZ publishes no number, so the
 /// default is a conservative 250 the operator can change.
 pub const CALLBOOK_UPDATE_DAILY_CAP_DEFAULT: u32 = 250;
 pub const CALLBOOK_UPDATE_DAILY_CAP_MAX: u32 = 10_000;
@@ -7682,7 +7682,7 @@ impl Settings {
         i64::from(self.callbook_cache_days.clamp(1, CALLBOOK_CACHE_DAYS_MAX)) * 86_400
     }
 
-    /// "Update from QRZ"'s least time between two network lookups:
+    /// "Update from callbook"'s least time between two network lookups:
     /// [`Self::callbook_update_pace_secs`] held to its bounds, so a hand-edited `0` cannot make it
     /// a flood.
     pub fn callbook_update_pace(&self) -> std::time::Duration {
@@ -7692,7 +7692,7 @@ impl Settings {
         ))
     }
 
-    /// "Update from QRZ"'s cap on network lookups in 24 hours, held to 1 …
+    /// "Update from callbook"'s cap on network lookups in 24 hours, held to 1 …
     /// [`CALLBOOK_UPDATE_DAILY_CAP_MAX`]: a hand-edited `0` or a huge value cannot lift it.
     pub fn callbook_update_daily_cap(&self) -> usize {
         self.callbook_update_daily_cap
@@ -11650,7 +11650,7 @@ mod tests {
     /// compiles clean on both sides, never matches, and the control silently does
     /// nothing while the backend keeps the default. Literal strings, therefore, and
     /// `ui/src/types.ts` + `defaultSettings.json` are copy-pasted from here.
-    /// "Update from QRZ"'s pace and daily cap: the defaults, the wire keys `ui/src/types.ts`
+    /// "Update from callbook"'s pace and daily cap: the defaults, the wire keys `ui/src/types.ts`
     /// carries, and the bounds a hand-edited value is held to.
     #[test]
     fn callbook_update_pace_and_cap_defaults_wire_keys_and_bounds() {

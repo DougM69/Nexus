@@ -23,7 +23,7 @@
 //! **Expiry** is the caller's: [`CallbookCache::get`] returns any row with its age and lets the
 //! caller decide, because the same row is fresh for a lookup and still worth having offline.
 //!
-//! **The lookups a Logbook update spent** ([`CallbookCache::note_lookups`]). "Update from QRZ"
+//! **The lookups a Logbook update spent** ([`CallbookCache::note_lookups`]). "Update from callbook"
 //! looks many calls up at once, and QRZ counts an account's lookups over 24 hours. Each network
 //! lookup it makes is noted here with its time, so its daily cap holds across runs and restarts.
 //! Only a time: never the call, the answer or anything else. "Clear" forgets the answers, not
