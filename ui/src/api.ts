@@ -4466,6 +4466,12 @@ export async function setHoldTxFreq(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_hold_tx_freq', { on })
 }
 
+/** The Spots view's "Spotted from" chips, which Pounce follows (#174): continent codes and
+ * DXCC countries, as the chips carry them. Empty lists = every spot. Kept for the session. */
+export async function setPounceSpotterFilter(conts: string[], entities: string[]): Promise<void> {
+  return invoke<void>('set_pounce_spotter_filter', { conts, entities })
+}
+
 /** Replace the blocked-callsigns list — the ONE write path (Alt-double-click gesture and
  * the Settings editor). Narrow write: never routes through the heavyweight settings save,
  * so it is safe mid-QSO. The auto-responder honors the list on the next slot. */

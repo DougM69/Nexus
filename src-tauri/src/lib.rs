@@ -766,7 +766,22 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
                     .to_string()
             }),
         spotted_unix: sp.received_unix as i64,
+        voices: std::iter::once(&sp.spotter)
+            .chain(&sp.corroborators)
+            .cloned()
+            .collect(),
     });
+}
+
+/// The Spots board's "Spotted from" chips, which Pounce follows (#174; [`pouncer::SpotterFilter`]).
+/// The board sends them whenever they change; kept for the session, as the chips are.
+#[tauri::command]
+fn set_pounce_spotter_filter(
+    filter: State<'_, pouncer::SharedSpotterFilter>,
+    conts: Vec<String>,
+    entities: Vec<String>,
+) {
+    filter.set(pouncer::SpotterFilter { conts, entities });
 }
 
 /// Outbound command queue for the HUMAN DX-cluster nodes — the `post_spot`
@@ -39633,10 +39648,14 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
             let emit_handle = handle.clone();
             let recent = d.pounces.clone();
             let ota = d.ota_spots.clone();
+            let spotted_from = handle
+                .state::<pouncer::SharedSpotterFilter>()
+                .inner()
+                .clone();
             std::thread::Builder::new()
                 .name("nexus-pounce".into())
                 .spawn(move || {
-                    pouncer::run(eng, needs, ota, rx, recent, move |p| {
+                    pouncer::run(eng, needs, ota, rx, recent, spotted_from, move |p| {
                         let _ = emit_handle.emit(alert::EVENT, &alert::raised("pounce", &p));
                     });
                 })
@@ -40218,6 +40237,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_rx_gain,
         set_active_radio,
         set_peg_lock,
+        set_pounce_spotter_filter,
         confirm_sat_uplink,
         add_radio,
         remove_radio,
@@ -40565,6 +40585,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedCallbookCache::default())
         .manage(callbook_update::CallbookUpdate::default())
         .manage(BetaUpdateState::default())
+        .manage(pouncer::SharedSpotterFilter::default())
         // The Logbook's award-need filter reads the award fold the Awards view keeps.
         .manage(log_queries::LogQueries::with_tallies(log_tallies))
         .manage(street_map::StreetMapState::default())

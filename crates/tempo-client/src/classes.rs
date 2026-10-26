@@ -502,6 +502,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("set_nr_level",                   RunsAtShack, "The shack's rig control."),
     ("set_operating_mode",             RunsAtShack, "The shack's section and rig mode; each transmission is its own press."),
     ("set_peg_lock",                   RunsAtShack, "The shack's band routing."),
+    ("set_pounce_spotter_filter",      RunsAtShack, "Where the shack's rare-DX alert listens from: the Spots board's Spotted-from chips; keys nothing."),
     ("set_preamp_db",                  RunsAtShack, "The shack's rig control."),
     ("set_psk_macros",                 RunsAtShack, "The shack's PSK macros; sends nothing."),
     ("set_ptt",                        StartsTx,    "Keys the rig; from another computer it becomes a held press."),

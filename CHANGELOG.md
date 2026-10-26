@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Tune is in the same place on the FT8/FT4 screen as everywhere else.** The FT8/FT4 strip now opens with TX On/Off, Tune, ATU, Stop TX and Hold Tx, then Call CQ and S&P, so Tune sits right after TX On/Off exactly where every other operating screen's TX strip has it. What each button does is unchanged.
+- **Pounce follows the Spots view's "Spotted from" chips.** Narrow the Spots view to spots heard from a continent or a country and the Pounce alert listens only to spots heard from there too: with France chosen, a new one heard only by a US skimmer stays quiet, and the same station heard from France then fires. With no chip chosen Pounce hears every spot, as before. The chips of a Spots pane on another screen do not change Pounce.
 
 ## [1.21.0] — 2026-10-26
 
