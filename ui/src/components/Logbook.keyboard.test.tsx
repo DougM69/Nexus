@@ -232,6 +232,17 @@ describe('the Logbook is a keyboard grid', () => {
     await waitFor(() => expect(focusedIndex()).toBe(3))
   })
 
+  it('the row’s pencil puts the keyboard in the edit form, and its close gives the row back', async () => {
+    await openAt(2)
+    fireEvent.click(screen.getByRole('button', { name: t('logbook.row.edit', { call: callAt(2) }) }))
+    await waitFor(() => expect(document.querySelector('.logbook-form')).not.toBeNull())
+    const form = document.querySelector('.logbook-form') as HTMLElement
+    await waitFor(() => expect(form.contains(document.activeElement), 'the keyboard is in the form').toBe(true))
+    press('Escape')
+    await waitFor(() => expect(document.querySelector('.logbook-form')).toBeNull())
+    await waitFor(() => expect(focusedIndex()).toBe(2))
+  })
+
   it('Escape on the grid closes the edit form', async () => {
     await openAt(2)
     fireEvent.click(screen.getByRole('button', { name: t('logbook.row.edit', { call: callAt(2) }) }))

@@ -1408,6 +1408,11 @@ export function Logbook({
   const [focusKey, setFocusKey] = useState<string | null>(null)
   const [focusTo, setFocusTo] = useState<number | null>(null)
   /** A contact deleted from the keys: the focus waits for the row that takes its place. */
+  /** The row whose pencil opened the form (the keyboard goes back to it when it closes), and
+   *  whether the keyboard is still to go INTO the form. */
+  const formFromGrid = useRef<string | null>(null)
+  const formWanted = useRef(false)
+  const formRef = useRef<HTMLFormElement>(null)
   const focusAfter = useRef<string | null>(null)
   /** The pinned search box + headers' height, as of the last commit. */
   const stickyH = useRef(0)
@@ -1513,6 +1518,19 @@ export function Logbook({
     el.focus({ preventScroll: true })
     if (!el.classList.contains('placeholder')) setFocusTo(null)
   })
+  // A row's pencil: the keyboard goes into the form, and back to that row when it closes.
+  useEffect(() => {
+    if (showForm && formWanted.current) {
+      formWanted.current = false
+      formRef.current?.querySelector<HTMLElement>('input, select, textarea')?.focus()
+    } else if (!showForm && formFromGrid.current !== null) {
+      const key = formFromGrid.current
+      formFromGrid.current = null
+      const at = virtualRows.find((v) => rowAt(v.index)?.key === key)
+      if (at) moveFocus(at.index)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- on the form opening and closing only
+  }, [showForm])
   // The swapped-in order is placed after the render that shows it, before the browser paints —
   // its open rows' heights moved first, so the list is laid out, and placed, as the rows are.
   // (Declared before the swap below: effects run in order, so the swap's own render has passed.)
@@ -2377,6 +2395,7 @@ export function Logbook({
         <form
           className="logbook-form"
           onSubmit={submit}
+          ref={formRef}
           onKeyDown={(e) => {
             if (e.key !== 'Escape') return
             e.preventDefault()
@@ -3291,7 +3310,11 @@ export function Logbook({
                             <button
                               type="button"
                               className="log-rowbtn"
-                              onClick={() => startEdit(q, key, ref)}
+                              onClick={() => {
+                                formFromGrid.current = key
+                                formWanted.current = true
+                                startEdit(q, key, ref)
+                              }}
                               title={t('logbook.row.edit', { call: q.call })}
                               aria-label={t('logbook.row.edit', { call: q.call })}
                             >
