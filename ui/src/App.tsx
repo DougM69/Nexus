@@ -3176,6 +3176,7 @@ function App() {
     amp: snap.radio.amp ?? null,
     rigBand: snap.radio.band ?? null,
     fieldDay: snap.fieldDay ?? null,
+    activation: { act: snap.activation ?? null, logTick: snap.logTick },
     onWorkSpot: handleWorkMapSpot,
     onPoint: (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim() ? handlePointAntenna : undefined,
     spotsFeed: { rows: allSpots, board: spotsBoard },
@@ -3467,6 +3468,7 @@ function App() {
             focusCall={logFocus}
             onConsumeFocusCall={() => setLogFocus(null)}
             logTick={snap.logTick}
+            activation={snap.activation ?? null}
             // The column choice lives in settings.json, saved through its one writer: a settings
             // save from an older copy keeps the live one (`set_logbook_columns`).
             columns={settings?.logbookColumns}
@@ -3638,6 +3640,7 @@ function App() {
           amp={snap?.radio.amp ?? null}
           rigBand={snap?.radio.band ?? null}
           fieldDay={snap?.fieldDay ?? null}
+          activation={snap ? { act: snap.activation ?? null, logTick: snap.logTick } : undefined}
           // The Spots, POTA/SOTA and Needed boxes are the boards themselves: the Spots view's own
           // `spotsBoard` and feed, the POTA/SOTA view's own hunt wiring and the Needed view's own
           // `neededBoard`, handed over whole so a Work or a HUNT from a box is the view's act. A

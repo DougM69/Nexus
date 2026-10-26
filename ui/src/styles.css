@@ -23152,14 +23152,6 @@ button.cq-skiptx1.on {
   width: 9ch;
   min-width: 5ch;
 }
-.pota-spot-qrt {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex: none;
-  white-space: nowrap;
-  color: var(--text-dim);
-}
 /* The state an activation's contacts carry as MY_STATE, or, on a state line, the ask for it. */
 .pota-act-state {
   display: inline-flex;
@@ -32778,6 +32770,142 @@ tr.sel .aprs-sym {
 .recent-qso-bm {
   color: var(--text);
   font-weight: 600;
+}
+
+/* THE ACTIVATION PANE (ActivationPane): the activation's head line, each park's count on the
+   strip's hairline, the rate, and its contacts in plain rows. No size of its own: a box sizes it
+   (the shared list's fill role), and the window scrolls it in its own pop-out. */
+.act-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.act-pane-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+.act-pane-ref {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.act-pane-time,
+.act-pane-rate,
+.act-pane-more,
+.act-pane-paused {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+}
+.act-pane-parks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.act-pane-park {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  align-items: baseline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--text) 35%, transparent);
+}
+.act-pane-park.valid {
+  border-color: var(--state-good);
+  background: color-mix(in srgb, var(--state-good) 14%, transparent);
+}
+.act-pane-count {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.act-pane-togo,
+.act-pane-p2p {
+  white-space: nowrap;
+  font-size: var(--fs-micro);
+}
+.act-pane-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.act-pane-row {
+  display: grid;
+  /* Every column may give way, so a narrow box never scrolls sideways: the call first. */
+  grid-template-columns: max-content minmax(0, 1fr) minmax(0, max-content) minmax(0, max-content);
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-micro);
+}
+.act-pane-row:nth-child(even) {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.act-pane-row.empty {
+  display: block;
+  color: var(--text-dim);
+}
+.act-pane-when {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.act-pane-call {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+.act-pane-bm,
+.act-pane-their {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-pane-their {
+  color: var(--text-dim);
+}
+/* Its own window: the shell is the one scroll owner. */
+.detached-activation {
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+.act-window-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-title);
+}
+/* The "Activation over?" checklist (ActivationOverDialog), on the contest checklist's items. */
+.activation-over {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.activation-over-parks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.activation-over-files,
+.activation-over-notes {
+  margin: 0;
+  padding-left: 1.4em;
+  font-size: var(--fs-micro);
+}
+.activation-over-files li {
+  overflow-wrap: anywhere;
+}
+.activation-over-notes {
+  color: var(--text-dim);
 }
 
 /* NEEDED BY BAND (AwardsView): per band, never worked and worked-not-confirmed, each count a

@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   getActivation: vi.fn(async () => ({ program: 'POTA', reference: 'US-0001', qsoCount: 3 })),
   parksCount: vi.fn(async () => 0),
   huntedParksCount: vi.fn(async () => 0),
+  logActivations: vi.fn(async () => []),
 }))
 vi.mock('../api', () => ({
   ...api,
@@ -209,27 +210,42 @@ it('phone needs 3 kHz before it is a new frequency', () => {
   expect(respotStep(w, 14_288_100, RESPOT_DWELL_MS, 3000).prompt, 'a nudge keeps the dwell').toBe(true)
 })
 
-it('offers QRT at Stop only once spotted, unticked; Stop alone posts nothing', async () => {
+/** Press Stop: the "Activation over?" checklist opens, and nothing has ended yet. */
+async function stop() {
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(t('ota.activation.stop.label')) }))
+  await screen.findByRole('dialog', { name: t('activationOver.title') })
+}
+const endButton = () => screen.getByRole('button', { name: t('activationOver.end') })
+
+it('Stop asks first; its checklist offers QRT only once spotted, unticked; End alone posts nothing', async () => {
   api.selfSpot.mockResolvedValue({ parks: [{ reference: 'US-0001', pota: 'posted' }], cluster: 'queued' })
   await view()
+  await stop()
+  expect(api.clearActivation, 'Stop alone ends nothing').not.toHaveBeenCalled()
   expect(screen.queryByRole('checkbox', { name: t('ota.selfSpot.qrt.label') }), 'not spotted yet').toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: t('activationOver.keep') }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(api.clearActivation).not.toHaveBeenCalled()
   await spotOnce()
+  await waitFor(() => expect(api.selfSpot).toHaveBeenCalledTimes(1))
+  await stop()
   const qrt = (await screen.findByRole('checkbox', { name: t('ota.selfSpot.qrt.label') })) as HTMLInputElement
   expect(qrt.checked, 'unticked').toBe(false)
-  fireEvent.click(screen.getByRole('button', { name: new RegExp(t('ota.activation.stop.label')) }))
+  fireEvent.click(endButton())
   await waitFor(() => expect(api.clearActivation).toHaveBeenCalledTimes(1))
   expect(api.selfSpot).toHaveBeenCalledTimes(1)
   expect(screen.queryByRole('dialog')).toBeNull()
 })
 
-it('posts QRT at Stop only when ticked and confirmed, then ends the activation', async () => {
+it('posts QRT at the end only when ticked in the checklist and confirmed, then ends the activation', async () => {
   api.selfSpot.mockResolvedValue({ parks: [{ reference: 'US-0001', pota: 'posted' }], cluster: 'queued' })
   await view()
   await spotOnce()
-  fireEvent.click(await screen.findByRole('checkbox', { name: t('ota.selfSpot.qrt.label') }))
-  const stop = screen.getByRole('button', { name: new RegExp(t('ota.activation.stop.label')) })
+  await waitFor(() => expect(api.selfSpot).toHaveBeenCalledTimes(1))
   // Ticked, but declined at the confirm: nothing posted, the activation still ends.
-  fireEvent.click(stop)
+  await stop()
+  fireEvent.click(await screen.findByRole('checkbox', { name: t('ota.selfSpot.qrt.label') }))
+  fireEvent.click(endButton())
   expect(await screen.findByText(t('ota.selfSpot.confirm.body', { reference: 'US-0001', freq: '14.2850', comment: 'QRT' }))).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   await waitFor(() => expect(api.clearActivation).toHaveBeenCalledTimes(1))
@@ -239,8 +255,10 @@ it('posts QRT at Stop only when ticked and confirmed, then ends the activation',
   // Ticked and confirmed: the QRT goes first, while the activation still runs.
   await view()
   await spotOnce()
+  await waitFor(() => expect(api.selfSpot).toHaveBeenCalledTimes(1))
+  await stop()
   fireEvent.click(await screen.findByRole('checkbox', { name: t('ota.selfSpot.qrt.label') }))
-  fireEvent.click(screen.getByRole('button', { name: new RegExp(t('ota.activation.stop.label')) }))
+  fireEvent.click(endButton())
   fireEvent.click(await screen.findByRole('button', { name: t('ota.selfSpot.confirm.post') }))
   await waitFor(() => expect(api.clearActivation).toHaveBeenCalledTimes(2))
   expect(api.selfSpot).toHaveBeenCalledTimes(2)
@@ -254,8 +272,9 @@ it('after a QSY the QRT goes on the frequency the spot stands on, not the new di
   await spotOnce()
   await waitFor(() => expect(api.selfSpot).toHaveBeenCalledWith('US-0001', 14_285_000, 'QRV'))
   rerender(<><PotaSotaView snap={tuned(14.31, 'phone')} /><ConfirmHost /></>)
+  await stop()
   fireEvent.click(await screen.findByRole('checkbox', { name: t('ota.selfSpot.qrt.label') }))
-  fireEvent.click(screen.getByRole('button', { name: new RegExp(t('ota.activation.stop.label')) }))
+  fireEvent.click(endButton())
   expect(await screen.findByText(t('ota.selfSpot.confirm.body', { reference: 'US-0001', freq: '14.2850', comment: 'QRT' }))).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: t('ota.selfSpot.confirm.post') }))
   await waitFor(() => expect(api.clearActivation).toHaveBeenCalledTimes(1))

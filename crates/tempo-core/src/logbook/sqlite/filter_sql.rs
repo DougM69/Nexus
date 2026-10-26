@@ -196,6 +196,14 @@ pub(crate) fn where_of(f: &LogFilter) -> Where {
             [text(reference.clone()), text(reference)],
         );
     }
+    let my_ref = field(&f.my_ref).to_ascii_uppercase();
+    if !my_ref.is_empty() {
+        // One whole element of the list, as the export splits it (`,` or `;`, spaces aside).
+        w.push(
+            "instr(',' || replace(replace(upper(q.ota_my_ref), ' ', ''), ';', ',') || ',', ?) > 0",
+            [text(format!(",{},", my_ref.replace(' ', "")))],
+        );
+    }
     let contest = field(&f.contest).to_ascii_uppercase();
     if !contest.is_empty() {
         w.push("upper(trim(q.contest_id)) = ?", [text(contest)]);
@@ -403,6 +411,60 @@ mod tests {
         })
         .unwrap();
         out
+    }
+
+    /// An activation's contacts: the station's own park, whole, in a one-park or two-fer list
+    /// however it is spelled, across 0000Z — never a longer reference that starts with it, and
+    /// never a hunter's contact with that park.
+    #[test]
+    fn my_ref_keeps_the_station_s_own_park_whole() {
+        let day = 1_767_225_600 + 3 * 86_400; // a 0000Z
+        let row = |call: &str, mine: Option<&str>, theirs: Option<&str>, when: u64| {
+            let mut r = qso(call, "20m", "SSB", 0);
+            r.when_unix = when;
+            r.ota.my_ref = mine.map(Into::into);
+            r.ota.their_ref = theirs.map(Into::into);
+            r
+        };
+        let rows = [
+            row("W1BEFORE", Some("US-1000"), None, day - 86_400 + 600),
+            row("W1LATE", Some("US-1000,US-2000"), None, day - 1_200),
+            row("W1AFTER", Some("US-1000, US-2000"), None, day + 600),
+            row("W1SEMI", Some("us-2000;us-1000"), None, day + 900),
+            row("W1LONGER", Some("US-10000"), None, day + 1_000),
+            row("W1HUNTED", None, Some("US-1000"), day + 1_100),
+            row("W1OTHER", Some("US-2000"), None, day + 1_200),
+        ];
+        let mut rows = rows;
+        for (i, r) in rows.iter_mut().enumerate() {
+            r.id = Some(RecordId::Provisional {
+                hash: 900 + i as u64,
+                ordinal: 0,
+            });
+        }
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert_all(rows.iter().map(|r| (r, Resolved::default())))
+            .unwrap();
+        let f = |my_ref: &str, from_unix: Option<u64>| LogFilter {
+            my_ref: my_ref.into(),
+            from_unix,
+            ..Default::default()
+        };
+        assert_eq!(
+            through(&db, &f(" us-1000 ", Some(day - 86_400))),
+            ["W1BEFORE", "W1LATE", "W1AFTER", "W1SEMI"]
+        );
+        assert_eq!(
+            through(&db, &f("US-1000", Some(day - 3_600))),
+            ["W1LATE", "W1AFTER", "W1SEMI"]
+        );
+        assert_eq!(
+            through(&db, &f("US-2000", None)),
+            ["W1LATE", "W1AFTER", "W1SEMI", "W1OTHER"]
+        );
+        assert_eq!(through(&db, &f("US-10000", None)), ["W1LONGER"]);
+        assert!(!f("US-1000", None).is_empty());
+        assert!(f("  ", None).is_empty());
     }
 
     #[test]

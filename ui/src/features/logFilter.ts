@@ -53,6 +53,9 @@ export interface LogFilter {
   iota?: string
   /** A park, summit or WWFF reference, theirs or yours. */
   reference?: string
+  /** One of YOUR references, whole: a contact whose park list (one, or a two-fer's) holds it. With
+   *  `fromUnix`, what an activation's contacts are (`features/potaActivation` `activationFilter`). */
+  myRef?: string
   qsl?: QslFilter
   contest?: string
   need?: AwardNeed
@@ -74,7 +77,7 @@ export type QslService = (typeof QSL_SERVICES)[number]
 export const AWARD_NEEDS: readonly AwardNeed[] = ['dxcc', 'was', 'waz', 'vucc', 'ffma']
 export const CONTINENTS = ['AF', 'AN', 'AS', 'EU', 'NA', 'OC', 'SA'] as const
 
-const TEXT_FIELDS = ['call', 'band', 'mode', 'entity', 'continent', 'grid', 'state', 'county', 'iota', 'reference', 'contest', 'text'] as const
+const TEXT_FIELDS = ['call', 'band', 'mode', 'entity', 'continent', 'grid', 'state', 'county', 'iota', 'reference', 'myRef', 'contest', 'text'] as const
 const QSL_STATES: readonly string[] = ['confirmed', 'sent', 'notSent']
 const SENT_STATES: readonly string[] = ['sent', 'notSent']
 

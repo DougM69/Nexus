@@ -85,6 +85,10 @@ export const SHARED_PANES: readonly SharedPane[] = [
   // Who is at the key and one row per operator: a short table of its own height. Not offered on the
   // hosted page until the contest status it reads is checked there.
   { id: 'operators', pane: 'operators', role: 'content', remote: false },
+  // The running activation: each park's count, the rate and this activation's contacts, a list that
+  // grows. Not on the hosted page: its contacts are a question to the station's logbook, which a
+  // browser does not ask.
+  { id: 'activation', pane: 'activation', role: 'fill', weight: 1, remote: false },
 ]
 
 const BY_ID = new Map<string, SharedPane>(SHARED_PANES.map((e) => [e.id, e]))

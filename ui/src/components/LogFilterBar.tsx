@@ -115,7 +115,7 @@ function LogFilterPanel({ id, filter, onChange }: Props & { id: string }) {
     setSaved(next)
     void setLogbookFilters(next).catch(() => {})
   }
-  const text = (k: 'call' | 'entity' | 'grid' | 'state' | 'county' | 'iota' | 'reference' | 'contest' | 'text', label: string) => (
+  const text = (k: 'call' | 'entity' | 'grid' | 'state' | 'county' | 'iota' | 'reference' | 'myRef' | 'contest' | 'text', label: string) => (
     <label className="log-filter-field">
       <span>{label}</span>
       <input
@@ -301,6 +301,7 @@ function LogFilterPanel({ id, filter, onChange }: Props & { id: string }) {
         {text('county', t('logbook.column.county'))}
         {text('iota', t('logbook.column.iota'))}
         {text('reference', t('logbook.filters.reference'))}
+        {text('myRef', t('logbook.filters.myRef'))}
         {text('contest', t('logbook.column.contest'))}
         <label className="log-filter-field">
           <span>{t('logbook.filters.need')}</span>

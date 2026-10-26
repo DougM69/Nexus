@@ -9,7 +9,7 @@ import { confirmDialog } from '../confirm'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { ImportStats, LogExport, LoggedActivation, LoggedQso } from '../types'
+import type { Activation, ImportStats, LogExport, LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
 import { RecentlyDeleted } from './RecentlyDeleted'
 import { LogTools, type LogTool } from './LogTools'
@@ -34,7 +34,8 @@ import { ConfirmationReview } from './ConfirmationReview'
 import { LogCountryPicker } from './LogCountryPicker'
 import { LogColumnsMenu } from './LogColumnsMenu'
 import { LogFilterBar } from './LogFilterBar'
-import { clickSort, sortPlace, type LogFilter, type LogSort } from '../features/logFilter'
+import { clickSort, filterKey, sortPlace, type LogFilter, type LogSort } from '../features/logFilter'
+import { activationFilter } from '../features/potaActivation'
 import { useViewportClass, useViewportSize } from '../useViewport'
 import {
   addedColumnText,
@@ -56,7 +57,7 @@ import {
   type LogColumnsSaved,
   type UploadMark,
 } from '../features/logColumns'
-import { isLegacyUsRef } from '../features/potaActivation'
+import { POTA_MIN_QSOS, activationKeyOf, exportActivation } from '../features/activationExport'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
 // Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
@@ -70,7 +71,6 @@ import {
   exportGeneralLog,
   exportSelectedLog,
   exportLogForOperator,
-  exportLogForActivation,
   logOperators,
   logActivations,
   restoreDeletedQso,
@@ -115,6 +115,9 @@ interface Props {
   columns?: LogColumnsSaved | null
   /** A changed column choice, to save — `null` forgets it (the default table). */
   onColumnsChange?: (columns: LogColumnsSaved | null) => void
+  /** The activation running now, off the snapshot: while there is one, "This activation" filters
+   *  the list to its contacts (features/potaActivation `activationFilter`). */
+  activation?: Activation | null
 }
 
 interface DraftQso {
@@ -185,46 +188,6 @@ async function keyedRow(id: string): Promise<{ row: LoggedQso; editKey: string }
     if (page.keys[0] === id && page.rows[0]) return { row: page.rows[0], editKey: page.editKeys[0] }
   }
   return null
-}
-
-/**
- * Contacts POTA requires before a park-day counts as an activation: "A successful activation
- * requires a minimum of 10 QSOs from a park in the designated list within a single UTC day (Zulu
- * day)" — docs.pota.app/docs/rules.html, read 2026-09-09. Shown, never enforced: a four-contact
- * afternoon is a real day at a park, and POTA accepts the log either way.
- */
-const POTA_MIN_QSOS = 10
-
-/** The three fields that identify an activation, as one `<select>` value. */
-function activationKeyOf(a: LoggedActivation): string {
-  return `${a.reference}|${a.dayStartUnix}|${a.callsign ?? ''}`
-}
-
-/**
- * POTA's own submission filename: `callsign@parkNumber-activationDate.adi`
- * (docs.pota.app/docs/activator_reference/submitting_logs.html, read 2026-09-09 — their example
- * is `KA8H@US-1515-20201127.adi`). A correctly named file is half the submission, so this writes
- * the name POTA documents rather than a Nexus-shaped one.
- *
- * Two departures, both forced:
- * - A portable callsign carries a `/`, and no filesystem holds one — `KD9TAW/P` becomes
- *   `KD9TAW-P` IN THE FILENAME ONLY. The ADIF inside still carries the call exactly as logged,
- *   and that copy is the one POTA reads. POTA's documentation does not address portable suffixes
- *   anywhere (checked 2026-09-09), so nothing here is a guess at a convention that exists.
- * - A SOTA summit is not a POTA submission, so it gets a plain name instead of POTA's `@` form.
- *   Naming a summit file under POTA's convention would be a claim about a program POTA does not
- *   run.
- */
-function activationFilename(a: LoggedActivation): string {
-  const safe = (v: string) => v.replace(/[^A-Za-z0-9._-]+/g, '-')
-  const call = safe(a.callsign ?? '')
-  const ref = safe(a.reference)
-  const ymd = a.date.replace(/-/g, '')
-  const isPota = (a.program ?? 'POTA').toUpperCase() === 'POTA'
-  if (isPota && call) return `${call}@${ref}-${ymd}.adi`
-  // No callsign stamped on the records (a log imported from before Nexus stamped one), or a
-  // program that is not POTA: name it plainly rather than half-filling POTA's convention.
-  return ['nexus-log', call, ref, ymd].filter(Boolean).join('-') + '.adi'
 }
 
 /** Q-codes and service names printed as labels. Proper nouns and shorthand, not words. */
@@ -328,6 +291,7 @@ export function Logbook({
   logTick,
   columns,
   onColumnsChange,
+  activation,
 }: Props) {
   // The desktop asks `LogSource` for the pages of the list it shows (below, after the sort and
   // search state they are cut by). The source follows `logTick`, so the list moves when the log
@@ -444,6 +408,7 @@ export function Logbook({
   const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
   // The field filters (features/logFilter), answered by the engine; deferred as the search is.
   const [filter, setFilter] = useState<LogFilter>({})
+  const thisActivation = activationFilter(activation)
   const deferredFilter = useDeferredValue(filter)
   // The rows picked for "Export selected", by contact id, and the row a Shift-click's run starts
   // from. A new search or filter clears them: a picked row the list no longer shows would be
@@ -2210,22 +2175,7 @@ export function Logbook({
                   withErrorToast(async () => {
                     const a = activations.find((x) => activationKeyOf(x) === activationKey)
                     if (!a) return
-                    const exported = await exportLogForActivation(
-                      a.reference,
-                      a.dayStartUnix,
-                      a.callsign ?? null,
-                    )
-                    const text = exported.text
-                    // Count what the file actually holds, as the ranged export does.
-                    const n = (text.match(/<eor>/gi) ?? []).length
-                    const path = await saveTextToDownloads(activationFilename(a), text)
-                    pushToast(t('logbook.export.done', { count: n, path }), 'success')
-                    // A K- park exports as it was logged; whether POTA's upload still takes the
-                    // pre-2024 prefix is not known, so the file is written and that is said.
-                    if (isLegacyUsRef(a.reference)) {
-                      pushToast(t('ota.activation.legacyRef', { reference: a.reference }), 'info', 12_000)
-                    }
-                    sayExportLacks([exported])
+                    await exportActivation(a)
                   }, t('logbook.export.failed'))
                 }
                 title={t('logbook.export.activation.buttonTitle')}
@@ -2685,6 +2635,19 @@ export function Logbook({
           {t('logbook.filter.needsConfirmation.label')}
         </button>
         <LogFilterBar filter={filter} onChange={setFilter} />
+        {/* THE ACTIVATION'S OWN VIEW: the same rows, scoped — its parks' contacts on each UTC day it has
+            run. A filter like any other, so Filters ▸ Save keeps it under a name. */}
+        {thisActivation && (
+          <button
+            type="button"
+            className={`log-filter-chip${filterKey(filter) === filterKey(thisActivation) ? ' active' : ''}`}
+            aria-pressed={filterKey(filter) === filterKey(thisActivation)}
+            onClick={() => setFilter(filterKey(filter) === filterKey(thisActivation) ? {} : thisActivation)}
+            title={t('logbook.filters.activation.title', { reference: activation?.reference ?? '' })}
+          >
+            {t('logbook.filters.activation.label')}
+          </button>
+        )}
         {/* The column chooser (features/logColumns.ts). It took the place of "More columns" (#239),
             which showed eight extra columns or none. */}
         <LogColumnsMenu choice={colChoice} onChange={changeColumns} onReset={resetColumns} />

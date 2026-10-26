@@ -530,6 +530,34 @@ when you log it, and **Clear** on the log line clears both. An FT8, FT4 or RTTY
 activator clicked there still sets a hunt, because the hunt is how its park
 reaches the contact.
 
+### The Activation pane
+
+While you activate (**I'm activating** on POTA / SOTA), the **Activation** box shows:
+
+- each park's contacts today, as the strip counts them: `US-1234 7 of 10`, then **3 to go** or
+  **valid**, and the park-to-park count. A two-fer has a line per park;
+- how long the activation has run, and how long until 0000Z, when the counts start again at 0;
+- the rate over your last ten contacts and the contacts in the last hour, read as the contest rate
+  meter reads them;
+- the activation's contacts, newest first.
+
+Add it to a cockpit's box, the dashboard rail or Conditions like any other box, or press
+**Activation window** on the POTA / SOTA strip to open it in a window of its own beside the
+cockpit. It sends nothing and has no buttons.
+
+The Logbook's **This activation** button (shown while one runs) lists the same contacts: your
+park, on every UTC day the activation has run — so a run past 0000Z shows both days, and a
+contact from the same park earlier that UTC day is in it too, as it is in POTA's file for that
+day. **Filters ▸ Save** keeps the view under a name, and **Filters ▸ My park / summit** finds
+any activation of yours later: your own reference, matched whole.
+
+**Stop** opens the *Activation over?* checklist. Tick **Export the ADIF files for POTA** to write
+one file per park per UTC day (`CALL@US-1234-20261026.adi`, the Logbook's own per-activation
+export), and **Post QRT** (once you have spotted) to spot QRT after its usual confirm. Below them
+it reminds you of a `K-` reference, contacts that carried no grid, a state line with no state
+picked, and that the files are yours to upload at pota.app. Nothing is ticked to begin with;
+**Keep activating** changes nothing.
+
 ## Honest limits
 
 - **The POTA/SOTA section is hunter-only** — Nexus helps you *chase* activators;

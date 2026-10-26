@@ -8,8 +8,9 @@
 // (`hot::their_pota_parks`, one export row each). So a hunter calling again from a NEW park of
 // theirs is no dupe here though it adds nothing to the count: they need it for their own P2P.
 
-import type { Activation, LoggedQso } from '../types'
+import type { Activation, LoggedActivation, LoggedQso } from '../types'
 import { modeKey } from './callHistory'
+import type { LogFilter } from './logFilter'
 
 /** Contacts POTA requires from one park in one UTC day for a valid activation. */
 export const POTA_VALID_QSOS = 10
@@ -104,4 +105,52 @@ export function parkProgress(count: number): { count: number; toGo: number; vali
  *  the upload still takes the old prefix is not known, so the screen says so. */
 export function isLegacyUsRef(ref: string): boolean {
   return /^K-\d{4,5}$/.test(ref.trim().toUpperCase())
+}
+
+/** The instant the UTC day of `unix` starts. */
+export function utcDayStart(unix: number): number {
+  return Math.floor(unix / DAY) * DAY
+}
+
+/** ⭐ THIS ACTIVATION'S CONTACTS, as the Logbook asks for them: the first park, whole, from 0000Z of
+ *  the UTC day the activation started — so a run across 0000Z is both days, and a two-fer is every
+ *  contact once (each carries all its parks). POTA's unit is the park's UTC day, and the counter's
+ *  and the export's are too, so a contact from the park earlier that day, before a Stop and a Start,
+ *  is this activation's as well: it is in the same count and the same file. `null` when not
+ *  activating. */
+export function activationFilter(act: Activation | null | undefined): LogFilter | null {
+  const parks = activationParks(act)
+  if (parks.length === 0 || !act?.startedAt) return null
+  return { myRef: parks[0], fromUnix: utcDayStart(act.startedAt) }
+}
+
+/** The per-park, per-UTC-day files this activation has made so far — the Logbook's export list,
+ *  narrowed to the activation's parks and the days since it started — oldest day first, each day's
+ *  parks in the activation's order. */
+export function activationFiles(
+  list: readonly LoggedActivation[],
+  act: Activation | null | undefined,
+): LoggedActivation[] {
+  const parks = activationParks(act)
+  if (parks.length === 0 || !act?.startedAt) return []
+  const from = utcDayStart(act.startedAt)
+  return list
+    .filter((a) => parks.includes(a.reference.toUpperCase()) && a.dayStartUnix >= from)
+    .sort(
+      (a, b) =>
+        a.dayStartUnix - b.dayStartUnix ||
+        parks.indexOf(a.reference.toUpperCase()) - parks.indexOf(b.reference.toUpperCase()),
+    )
+}
+
+/** A span of seconds as hours and minutes ("1 h 05 m"; "12 m" under an hour). Invariant tokens. */
+export function spanLabel(secs: number): string {
+  const m = Math.max(0, Math.floor(secs / 60))
+  const h = Math.floor(m / 60)
+  return h > 0 ? `${h} h ${String(m % 60).padStart(2, '0')} m` : `${m} m`
+}
+
+/** Seconds from `nowUnix` to the next 0000Z, when the counts start again. */
+export function toUtcMidnight(nowUnix: number): number {
+  return utcDayStart(nowUnix) + DAY - nowUnix
 }
