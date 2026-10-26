@@ -23,6 +23,8 @@ import { pushToast } from '../toast'
 import { t } from '../i18n'
 import type { LogQuestion } from '../features/logAnswers'
 import type { LoggedQso } from '../types'
+import { columnName, logColumn } from '../features/logColumns'
+import { fmtUtc } from '../features/logQuery'
 
 vi.setConfig({ testTimeout: 15_000 })
 
@@ -260,6 +262,31 @@ describe('Save is the edit form’s save, with only what was changed', () => {
     save(card)
     await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
     expect(vi.mocked(api.editQsoById).mock.calls[0][1].myGrid, 'still saved').toBe('EN53')
+  })
+
+  it('shows what the record holds beyond the boxes: QSL sent and its date, the confirmations, upload times, places', async () => {
+    engine.log = (engine.log as LoggedQso[]).map((r) =>
+      r.id === 'id-dl'
+        ? { ...r, upload: { lotw: { outcome: 'accepted', whenUnix: 1_700_200_000 } }, extra: [...(r.extra ?? []), ['CONT', 'EU'] as [string, string], ['DISTANCE', '6870.4'] as [string, string]] }
+        : r,
+    )
+    engine.revision += 1
+    await mounted()
+    const card = await openCard()
+    fireEvent.click(within(card).getByText(t('contactCard.more')))
+    const facts = new Map(
+      [...card.querySelectorAll('.contact-card-facts .qso-detail-field')].map((e) => [e.querySelector('dt')?.textContent, e.querySelector('dd')?.textContent]),
+    )
+    const col = (id: string) => columnName(logColumn(id)!)
+    expect(facts.get(t('qso.detail.qsl.sent'))).toBe(`B · ${fmtUtc(1_700_100_000)}`)
+    expect(facts.get(t('qso.detail.qsl.confirmed'))).toBe(t('qso.detail.qsl.yes'))
+    expect(facts.get(t('qso.detail.qsl.awardConfirmed'))).toBe(t('qso.detail.qsl.yes'))
+    expect(facts.get(col('upLotw'))).toBe(`${t('logbook.upload.done')} · ${fmtUtc(1_700_200_000)}`)
+    expect(facts.get(col('county'))).toBe('X,Y')
+    expect(facts.get(col('cqz'))).toBe('14')
+    expect(facts.get(col('ituz'))).toBe('28')
+    expect(facts.get(col('cont'))).toBe('EU')
+    expect(facts.get(col('distance'))).toBe('6870')
   })
 
   it('Save is not offered until something changed', async () => {

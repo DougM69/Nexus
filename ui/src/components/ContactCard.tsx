@@ -265,12 +265,17 @@ function CardBody({
     const c = logColumn(cid)
     return c ? fact(columnName(c), addedColumnText(q, cid)) : null
   }
+  // One service's upload stamp: its state, and when the service answered.
   const upload = (cid: string) => {
     const c = logColumn(cid)
     const st = uploadOf(q, cid)
-    return c && st ? fact(columnName(c), uploadWord(uploadMark(st))) : null
+    if (!c || !st) return null
+    const word = uploadWord(uploadMark(st))
+    return fact(columnName(c), st.whenUnix ? `${word} · ${fmtUtc(st.whenUnix)}` : word)
   }
   const rcvd = q.qslRcvd
+  const sent = q.qslSent
+  const yes = t('qso.detail.qsl.yes')
   const facts = [
     fact(t('logbook.column.country'), q.entity ?? q.country),
     fact('DXCC', q.dxcc),
@@ -283,8 +288,22 @@ function CardBody({
       t('qso.detail.qsl.received'),
       [rcvd?.card && t('qso.detail.qsl.card'), rcvd?.lotw && 'LoTW', rcvd?.eqsl && 'eQSL', rcvd?.qrz && 'QRZ'].filter(Boolean).join(' · '),
     ),
+    // The card sent, by which route and when (the box above sets the route; the date is the mark's).
+    fact(t('qso.detail.qsl.sent'), sent?.sent ? [sent.via, sent.dateUnix ? fmtUtc(sent.dateUnix) : null].filter(Boolean).join(' · ') || yes : null),
+    fact(t('qso.detail.qsl.confirmed'), q.confirmed ? yes : null),
+    fact(t('qso.detail.qsl.awardConfirmed'), q.awardConfirmed ? yes : null),
+    col('qslRcvdDate'),
+    col('lotwRcvdDate'),
+    col('eqslRcvdDate'),
     fact(t('qso.detail.credit.granted'), q.creditGranted),
     fact(t('qso.detail.credit.submitted'), q.creditSubmitted),
+    // Where the station was, under the names the Logbook's columns give these ADIF fields (each is
+    // also under More fields above, as written, to correct).
+    col('county'),
+    col('cqz'),
+    col('ituz'),
+    col('cont'),
+    col('distance'),
     col('contest'),
     col('exchSent'),
     col('exchRcvd'),
