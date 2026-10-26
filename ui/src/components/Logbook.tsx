@@ -577,23 +577,32 @@ export function Logbook({
     load()
   }
 
-  // #348: ONE button for every confirmation service set up — LoTW, QRZ and eQSL, one after another,
-  // through the same commands their own buttons and Settings run — and one toast that says what each
-  // one did. A service not set up is not asked (LoTW and eQSL by their username; QRZ by its Logbook
-  // key, which Settings switches upload on and off with as it saves and forgets it).
-  const [fetchingAll, setFetchingAll] = useState(false)
+  // #348: ONE button for the confirmation downloads set up — LoTW and eQSL, one after another,
+  // through the same commands their own button and Settings run — and one toast that says what each
+  // one did. A service not set up is not asked (by its username).
+  //
+  // ⚠️ NOT the QRZ sync. It is two-way: it fetches the whole QRZ logbook and ADDS the contacts logged
+  // elsewhere, which a button named for confirmations must not do. It keeps its own button.
+  //
+  // One download at a time: while this runs, LoTW's own button waits, and the other way round.
+  const [fetching, setFetching] = useState<'all' | 'lotw' | null>(null)
+  const fetchingAll = fetching === 'all'
   const onDownloadConfirmations = async () => {
+    if (fetching) return
+    setFetching('all')
     const s = await withErrorToast(() => getSettings(), t('logbook.confirmations.all.label'))
-    if (!s) return
+    if (!s) {
+      setFetching(null)
+      return
+    }
     const sources: [string, () => Promise<{ newlyConfirmedAny: number }>][] = []
     if (s.lotwUsername.trim()) sources.push(['LoTW', downloadLotwReport])
-    if (s.qrzLogbookUpload || s.qrzAutoSync) sources.push(['QRZ', syncQrz])
     if (s.eqslUsername.trim()) sources.push(['eQSL', downloadEqslReport])
     if (sources.length === 0) {
+      setFetching(null)
       pushToast(t('logbook.confirmations.all.none'), 'info', 8000)
       return
     }
-    setFetchingAll(true)
     const said: string[] = []
     let failed = false
     for (const [service, run] of sources) {
@@ -605,7 +614,7 @@ export function Logbook({
         said.push(t('logbook.confirmations.all.failed', { service, reason: err instanceof Error ? err.message : String(err) }))
       }
     }
-    setFetchingAll(false)
+    setFetching(null)
     pushToast(said.join(' · '), failed ? 'error' : 'success', 10000)
     load()
   }
@@ -2039,7 +2048,7 @@ export function Logbook({
             type="button"
             className="export-btn"
             onClick={() => void onDownloadConfirmations()}
-            disabled={fetchingAll}
+            disabled={fetching !== null}
             title={t('logbook.confirmations.all.title')}
           >
             {fetchingAll ? t('logbook.confirmations.all.busy') : t('logbook.confirmations.all.label')}
@@ -2047,14 +2056,17 @@ export function Logbook({
           <button
             type="button"
             className="export-btn"
+            disabled={fetching !== null}
             onClick={async () => {
               // The authenticated in-app LoTW download also existed but hid in Settings
               // (same story as QRZ, same day): fetches lotwreport.adi with the keychain
               // credentials + the incremental high-water cursor, merges confirmations.
+              if (fetching) return
+              setFetching('lotw')
               const r = await withErrorToast(
                 () => downloadLotwReport(),
                 t('logbook.fetchLotw.failed'),
-              )
+              ).finally(() => setFetching(null))
               if (r) {
                 pushToast(
                   t('logbook.fetchLotw.done', {

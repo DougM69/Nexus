@@ -9202,9 +9202,9 @@ export const DE: PartialCatalog = {
   "contactCard.lotwNotResent": "Bereits zu LoTW hochgeladen — wird nicht erneut gesendet: {{fields}}",
   "contactCard.cancel": "Abbrechen",
   "logbook.confirmations.all.label": "Bestätigungen laden",
-  "logbook.confirmations.all.title": "Neue Bestätigungen von jedem eingerichteten Dienst laden: LoTW, QRZ und eQSL",
+  "logbook.confirmations.all.title": "Neue Bestätigungen von LoTW und eQSL laden, sofern eingerichtet. Die QRZ-Synchronisierung hat ihre eigene Schaltfläche.",
   "logbook.confirmations.all.busy": "Wird geladen…",
-  "logbook.confirmations.all.none": "Kein Bestätigungsdienst eingerichtet. Füge LoTW, QRZ oder eQSL unter Einstellungen, Verbindungen hinzu.",
+  "logbook.confirmations.all.none": "Weder LoTW noch eQSL ist eingerichtet. Füge einen Dienst unter Einstellungen, Verbindungen hinzu.",
   "logbook.confirmations.all.ok": "{{service}}: {{confirmed}} neu bestätigt",
   "logbook.confirmations.all.failed": "{{service}}: {{reason}}",
 }

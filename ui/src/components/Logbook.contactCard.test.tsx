@@ -372,8 +372,10 @@ describe('Download confirmations (#348)', () => {
   const button = () => screen.getByRole('button', { name: t('logbook.confirmations.all.label') })
   const settings = (over: object) => ({ lotwUsername: '', eqslUsername: '', qrzLogbookUpload: false, qrzAutoSync: false, ...over })
 
-  it('asks every service set up, and only those, and says what each did', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(settings({ lotwUsername: 'KD9XXX', eqslUsername: 'KD9XXX' }) as never)
+  it('asks LoTW and eQSL where set up, never the QRZ sync, and says what each did', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(
+      settings({ lotwUsername: 'KD9XXX', eqslUsername: 'KD9XXX', qrzLogbookUpload: true, qrzAutoSync: true }) as never,
+    )
     vi.mocked(api.downloadLotwReport).mockResolvedValue({ newlyConfirmedAny: 3 } as never)
     vi.mocked(api.downloadEqslReport).mockRejectedValue(new Error('bad password'))
     await mounted()
@@ -381,7 +383,7 @@ describe('Download confirmations (#348)', () => {
     await waitFor(() => expect(pushToast).toHaveBeenCalled())
     expect(api.downloadLotwReport).toHaveBeenCalledTimes(1)
     expect(api.downloadEqslReport).toHaveBeenCalledTimes(1)
-    expect(api.syncQrz, 'QRZ is not set up').not.toHaveBeenCalled()
+    expect(api.syncQrz, 'the QRZ sync is its own button: it can add contacts, not just confirm them').not.toHaveBeenCalled()
     expect(vi.mocked(pushToast).mock.calls[vi.mocked(pushToast).mock.calls.length - 1]?.slice(0, 2)).toEqual([
       [
         t('logbook.confirmations.all.ok', { service: 'LoTW', confirmed: 3 }),
@@ -389,6 +391,25 @@ describe('Download confirmations (#348)', () => {
       ].join(' · '),
       'error',
     ])
+  })
+
+  it('a download runs once at a time: its own button and Download confirmations each wait for the other', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(settings({ lotwUsername: 'KD9XXX' }) as never)
+    let finish: (v: unknown) => void = () => {}
+    vi.mocked(api.downloadLotwReport).mockReset().mockImplementation(() => new Promise((r) => (finish = r)) as never)
+    await mounted()
+    const lotw = () => screen.getByRole('button', { name: t('logbook.fetchLotw.label') }) as HTMLButtonElement
+    const all = () => screen.getByRole('button', { name: /^(Download confirmations|Downloading…)$/ }) as HTMLButtonElement
+    await act(async () => fireEvent.click(button()))
+    await waitFor(() => expect(api.downloadLotwReport).toHaveBeenCalledTimes(1))
+    expect(lotw().disabled, 'LoTW’s own button waits for the combined run').toBe(true)
+    await act(async () => finish({ newlyConfirmedAny: 0, newlyConfirmed: 0, newlyCredited: 0 }))
+    await waitFor(() => expect(lotw().disabled).toBe(false))
+    await act(async () => fireEvent.click(lotw()))
+    expect(all().disabled, 'the combined run waits for LoTW’s own').toBe(true)
+    await act(async () => finish({ newlyConfirmedAny: 0, newlyConfirmed: 0, newlyCredited: 0 }))
+    await waitFor(() => expect(all().disabled).toBe(false))
+    expect(api.downloadLotwReport).toHaveBeenCalledTimes(2)
   })
 
   it('with none set up, says where to set one up and asks nothing', async () => {

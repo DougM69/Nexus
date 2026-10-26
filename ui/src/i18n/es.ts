@@ -9212,9 +9212,9 @@ export const ES: PartialCatalog = {
   "contactCard.lotwNotResent": "Ya subido a LoTW — no se vuelve a enviar: {{fields}}",
   "contactCard.cancel": "Cancelar",
   "logbook.confirmations.all.label": "Descargar confirmaciones",
-  "logbook.confirmations.all.title": "Descargar las confirmaciones nuevas de cada servicio configurado: LoTW, QRZ y eQSL",
+  "logbook.confirmations.all.title": "Descargar las confirmaciones nuevas de LoTW y eQSL, si están configurados. La sincronización con QRZ tiene su propio botón.",
   "logbook.confirmations.all.busy": "Descargando…",
-  "logbook.confirmations.all.none": "No hay ningún servicio de confirmaciones configurado. Añade LoTW, QRZ o eQSL en Ajustes, Conexiones.",
+  "logbook.confirmations.all.none": "Ni LoTW ni eQSL están configurados. Añade uno en Ajustes, Conexiones.",
   "logbook.confirmations.all.ok": "{{service}}: {{confirmed}} confirmados nuevos",
   "logbook.confirmations.all.failed": "{{service}}: {{reason}}",
 }

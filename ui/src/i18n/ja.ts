@@ -9195,9 +9195,9 @@ export const JA: PartialCatalog = {
   "contactCard.lotwNotResent": "LoTWにアップロード済み — 再送信しません: {{fields}}",
   "contactCard.cancel": "キャンセル",
   "logbook.confirmations.all.label": "コンファームをダウンロード",
-  "logbook.confirmations.all.title": "設定済みの各サービス（LoTW、QRZ、eQSL）から新しいコンファームをダウンロードします",
+  "logbook.confirmations.all.title": "設定済みのLoTWとeQSLから新しいコンファームをダウンロードします。QRZの同期は専用のボタンです。",
   "logbook.confirmations.all.busy": "ダウンロード中…",
-  "logbook.confirmations.all.none": "コンファームのサービスが設定されていません。設定の「接続」でLoTW、QRZ、eQSLを追加してください。",
+  "logbook.confirmations.all.none": "LoTWもeQSLも設定されていません。設定の「接続」で追加してください。",
   "logbook.confirmations.all.ok": "{{service}}：新たに{{confirmed}}件コンファーム",
   "logbook.confirmations.all.failed": "{{service}}：{{reason}}",
 }
