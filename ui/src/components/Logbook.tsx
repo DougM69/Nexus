@@ -11,7 +11,7 @@ import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Activation, ImportStats, LogExport, LoggedActivation, LoggedQso } from '../types'
-import { QsoDetail } from './QsoDetail'
+import { ContactCard, type CardContact } from './ContactCard'
 import { RecentlyDeleted } from './RecentlyDeleted'
 import { LogTools, type LogTool } from './LogTools'
 import { useCallbookUpdateEnd } from './LogCallbookUpdate'
@@ -88,12 +88,14 @@ import {
   saveTextToDownloads,
   syncLotwReport,
   uploadLotwReport,
+  downloadEqslReport,
+  getSettings,
 } from '../api'
 import { failureText, pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
 import { callCardTrigger, qrzPageOf } from './CallCard'
-import type { QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
+import type { FieldEdit, QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -480,9 +482,10 @@ export function Logbook({
   // rather than being overwritten (null on a Remote browser, which names the row its own way).
   // null = the form logs a NEW QSO.
   const [editing, setEditing] = useState<{ key: string; row: LoggedQso; ref: RowRef | null } | null>(null)
-  /** The contact open in the detail view (#313 — "there's no View capability"). Read-only:
-   *  the pencil beside it is still the one editing path, so there is one writer. */
-  const [viewing, setViewing] = useState<LoggedQso | null>(null)
+  /** The contact open on the contact card (#313's "there's no View capability", and the card the
+   *  operator asked for after it): every field shown and editable, saved through `saveEdit` — the
+   *  edit form's one write path — so there is still one writer. */
+  const [card, setCard] = useState<CardContact | null>(null)
   const editingKey = editing?.key ?? null
   // Column sort — the order the engine cuts the list's pages in (`features/logQuery`). Default
   // newest-first (the log's own order is oldest-first, which the test user disliked).
@@ -571,6 +574,39 @@ export function Logbook({
       throw new Error(failureText(t('qso.history.undo.failed'), err))
     })
     sayUndone(answer, done, load)
+    load()
+  }
+
+  // #348: ONE button for every confirmation service set up — LoTW, QRZ and eQSL, one after another,
+  // through the same commands their own buttons and Settings run — and one toast that says what each
+  // one did. A service not set up is not asked (LoTW and eQSL by their username; QRZ by its Logbook
+  // key, which Settings switches upload on and off with as it saves and forgets it).
+  const [fetchingAll, setFetchingAll] = useState(false)
+  const onDownloadConfirmations = async () => {
+    const s = await withErrorToast(() => getSettings(), t('logbook.confirmations.all.label'))
+    if (!s) return
+    const sources: [string, () => Promise<{ newlyConfirmedAny: number }>][] = []
+    if (s.lotwUsername.trim()) sources.push(['LoTW', downloadLotwReport])
+    if (s.qrzLogbookUpload || s.qrzAutoSync) sources.push(['QRZ', syncQrz])
+    if (s.eqslUsername.trim()) sources.push(['eQSL', downloadEqslReport])
+    if (sources.length === 0) {
+      pushToast(t('logbook.confirmations.all.none'), 'info', 8000)
+      return
+    }
+    setFetchingAll(true)
+    const said: string[] = []
+    let failed = false
+    for (const [service, run] of sources) {
+      try {
+        const r = await run()
+        said.push(t('logbook.confirmations.all.ok', { service, confirmed: r.newlyConfirmedAny }))
+      } catch (err) {
+        failed = true
+        said.push(t('logbook.confirmations.all.failed', { service, reason: err instanceof Error ? err.message : String(err) }))
+      }
+    }
+    setFetchingAll(false)
+    pushToast(said.join(' · '), failed ? 'error' : 'success', 10000)
     load()
   }
 
@@ -1354,7 +1390,7 @@ export function Logbook({
 
   // THE KEYBOARD GRID (v2 §6). The list is ONE Tab stop — a row, held by id so the operator's place
   // survives a newer order — and grid-local keys move it (no global shortcuts): ↑/↓ a row, PgUp/PgDn
-  // a visible page, Home/End the first/last contact; Enter edits the contact, Delete asks the
+  // a visible page, Home/End the first/last contact; Enter opens its contact card, Delete asks the
   // existing delete question, Esc closes the form (the question closes itself). A key on a row's own
   // control (its QSL menu, its buttons) stays that control's. The row the keys land on is scrolled
   // in whole, under the pinned search box and headers, and focused once it is drawn; a row whose
@@ -1362,13 +1398,8 @@ export function Logbook({
   const keysId = useId()
   const [focusKey, setFocusKey] = useState<string | null>(null)
   const [focusTo, setFocusTo] = useState<number | null>(null)
-  /** The row whose Enter opened the form (the keyboard goes back to it when it closes), and
-   *  whether the keyboard is still to go INTO the form. */
-  const formFromGrid = useRef<string | null>(null)
-  const formWanted = useRef(false)
   /** A contact deleted from the keys: the focus waits for the row that takes its place. */
   const focusAfter = useRef<string | null>(null)
-  const formRef = useRef<HTMLFormElement>(null)
   /** The pinned search box + headers' height, as of the last commit. */
   const stickyH = useRef(0)
   /** Where rows start to be SEEN, in the list's coordinates, at scroll `top`: under the sticky
@@ -1448,9 +1479,9 @@ export function Logbook({
           setFocusTo(index)
         })
       } else {
-        formFromGrid.current = row.key
-        formWanted.current = true
-        startEdit(row.q, row.key, row.ref)
+        // Enter opens the row's contact card, as a double-click does; its pencil still opens the
+        // edit form.
+        setCard({ row: row.q, ref: row.ref })
       }
     }
   }
@@ -1473,20 +1504,6 @@ export function Logbook({
     el.focus({ preventScroll: true })
     if (!el.classList.contains('placeholder')) setFocusTo(null)
   })
-  // Enter from the grid: the keyboard goes into the form, and back to that row when it closes.
-  useEffect(() => {
-    if (showForm && formWanted.current) {
-      formWanted.current = false
-      formRef.current?.querySelector<HTMLElement>('input, select, textarea')?.focus()
-    } else if (!showForm && formFromGrid.current !== null) {
-      const key = formFromGrid.current
-      formFromGrid.current = null
-      const at = virtualRows.find((v) => rowAt(v.index)?.key === key)
-      if (at) moveFocus(at.index)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- on the form opening and closing only
-  }, [showForm])
-
   // The swapped-in order is placed after the render that shows it, before the browser paints —
   // its open rows' heights moved first, so the list is laid out, and placed, as the rows are.
   // (Declared before the swap below: effects run in order, so the swap's own render has passed.)
@@ -1628,6 +1645,48 @@ export function Logbook({
     return () => ro.disconnect()
   })
 
+  /** THE ONE SAVE of an edit to a logged contact — the edit form's and the contact card's: one change
+   *  through `editQsoById` (one history entry, one Undo), and the toast for each answer. A refusal
+   *  changed nothing; the caller shows the contact as it now is. */
+  const saveEdit = async (ref: RowRef, edit: QsoEdit, fields: FieldEdit[], call: string): Promise<RowAnswer | null> => {
+    const answer = await withErrorToast(
+      // The form's save sends no field changes, and its command is exactly the one it always was.
+      () => (fields.length ? editQsoById(ref, edit, fields) : editQsoById(ref, edit)),
+      t('logbook.form.saveFailed'),
+    )
+    if (!answer) return null
+    if (answer.kind === 'busy') {
+      // The logbook was too busy to take it: nothing saved, and what was typed stays, so Save
+      // again tries the same change against the same version.
+      pushToast(t('logbook.change.busy', { call }), 'error', 8000)
+    } else if (answer.kind === 'changed') {
+      // Changed since it was opened (another window, or a sync): nothing was saved.
+      pushToast(t('logbook.change.changed', { call }), 'error', 8000)
+      load()
+    } else if (answer.kind === 'gone') {
+      pushToast(t('logbook.change.gone', { call }), 'error', 8000)
+      load()
+    } else {
+      pushToast(t('logbook.form.updated', { call: edit.call }), 'success')
+      load()
+    }
+    return answer
+  }
+
+  /** Open the contact card on the contact `id`, as the engine holds it now. */
+  const openCard = (id: string) => {
+    void keyedRow(id)
+      .catch(() => null)
+      .then((found) => {
+        if (!alive.current) return
+        if (found) setCard({ row: found.row, ref: { id, editKey: found.editKey } })
+        else {
+          setCard(null)
+          pushToast(t('logbook.form.editGone', { call: card?.row.call ?? '' }), 'error')
+        }
+      })
+  }
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     const call = draft.call.trim().toUpperCase()
@@ -1765,32 +1824,19 @@ export function Logbook({
         qslSentVia: (draft.qslSentVia || null) as QsoEdit['qslSentVia'],
         qslCard: draft.qslCard === '1',
       }
-      const answer = await withErrorToast(() => editQsoById(ref, edit), t('logbook.form.saveFailed'))
-      if (!answer) return
-      if (answer.kind === 'busy') {
-        // The logbook was too busy to take it: nothing saved, and the form keeps what was typed,
-        // so Save again tries the same change against the same version.
-        pushToast(t('logbook.change.busy', { call: existing.call }), 'error', 8000)
-        return
-      }
+      const answer = await saveEdit(ref, edit, [], existing.call)
+      if (!answer || answer.kind === 'busy') return
       if (answer.kind === 'changed') {
-        // Changed since the form opened (another window, or a sync): nothing was saved. The form
-        // now shows the contact as it is, and a save from it goes against that version.
-        pushToast(t('logbook.change.changed', { call: existing.call }), 'error', 8000)
+        // The form now shows the contact as it is, and a save from it goes against that version.
         startEdit(answer.current.row, editing.key, { id: ref.id, editKey: answer.current.editKey })
-        load()
         return
       }
       if (answer.kind === 'gone') {
-        pushToast(t('logbook.change.gone', { call: existing.call }), 'error', 8000)
         cancelForm()
-        load()
         return
       }
-      pushToast(t('logbook.form.updated', { call: record.call }), 'success')
       cancelForm()
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', iota: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
-      load()
       return
     }
     const snap = await withErrorToast(() => logQso(record), t('logbook.form.logFailed'))
@@ -1988,6 +2034,15 @@ export function Logbook({
             title={t('logbook.confirmations.buttonTitle')}
           >
             {t('logbook.confirmations.button')}
+          </button>
+          <button
+            type="button"
+            className="export-btn"
+            onClick={() => void onDownloadConfirmations()}
+            disabled={fetchingAll}
+            title={t('logbook.confirmations.all.title')}
+          >
+            {fetchingAll ? t('logbook.confirmations.all.busy') : t('logbook.confirmations.all.label')}
           </button>
           <button
             type="button"
@@ -2310,7 +2365,6 @@ export function Logbook({
         <form
           className="logbook-form"
           onSubmit={submit}
-          ref={formRef}
           onKeyDown={(e) => {
             if (e.key !== 'Escape') return
             e.preventDefault()
@@ -2583,6 +2637,10 @@ export function Logbook({
             {editingKey !== null && (
               <span className="logbook-editing-note">{t('logbook.form.editingNote')}</span>
             )}
+            {/* #239: leave the form without saving, as Esc does. */}
+            <button type="button" className="logconfirm-discard" onClick={cancelForm}>
+              {t('logbook.form.cancel')}
+            </button>
             <button type="submit" className="settings-save" disabled={!draft.call.trim()}>
               {editingKey !== null ? t('logbook.form.save') : t('logbook.form.log')}
             </button>
@@ -2844,7 +2902,7 @@ export function Logbook({
                               ⚠️ `timeKnown: false` is an imported record whose source carried a DATE and
                               no time; `whenUnix` anchors it at midnight FOR ORDERING and its clock
                               reading is an artefact. The combined column printed that artefact as fact —
-                              a column of its own cannot. `QsoDetail` already refuses the same thing, and
+                              a column of its own cannot. the contact card already refuses the same thing, and
                               a bare 00:00 read as fact is what leaves those contacts unmatched at LoTW
                               and eQSL forever. */}
                           <span
@@ -3255,7 +3313,7 @@ export function Logbook({
                     // callsign selectable so it can still be copied, and is the idiom this app
                     // already uses in the decoded text (#262). The row title carries it,
                     // because the affordance is otherwise invisible.
-                    onDoubleClick={() => setViewing(q)}
+                    onDoubleClick={() => setCard({ row: q, ref })}
                     // Ctrl/⌘-click picks the row for "Export selected", Shift-click a run — on the
                     // row itself, never through one of its controls.
                     onClick={(e) => {
@@ -3482,7 +3540,14 @@ export function Logbook({
       />
       {/* Mounted beside SpotDialog at the section root, not inside the virtualised rows:
           the row that opened it can be recycled out from under the view while it is open. */}
-      <QsoDetail qso={viewing} onClose={() => setViewing(null)} onChanged={load} />
+      <ContactCard
+        open={card}
+        onClose={() => setCard(null)}
+        onSwitch={openCard}
+        save={saveEdit}
+        onChanged={load}
+        logTick={logTick}
+      />
       <RecentlyDeleted open={showDeleted} onClose={() => setShowDeleted(false)} onRestored={load} />
       <LogTools
         open={tools !== null}

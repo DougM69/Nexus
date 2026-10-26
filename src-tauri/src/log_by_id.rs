@@ -31,7 +31,7 @@ use tempo_app::engine::Engine;
 use tempo_app::logstore::LogRows;
 use tempo_app::station::{MadeRow, RowRefusal};
 use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Scope};
-use tempo_core::logbook::{LogOp, QsoEdit, QsoRecord, RecordId};
+use tempo_core::logbook::{FieldEdit, LogOp, QsoEdit, QsoRecord, RecordId};
 
 mod picture;
 
@@ -147,24 +147,39 @@ async fn change_row(
 /// paper-card mark (`QsoEdit`'s rules). Refused as `gone` / `changed` like every change here;
 /// an `Err` is an edit that must not be sent again as it is (a QSL-sent code the form does not
 /// offer).
+///
+/// `fields`: the Logbook contact card's changes to the fields kept as written (`FieldEdit`), in
+/// the same change; absent from the edit form.
 #[tauri::command]
 pub async fn edit_qso_by_id(
     state: State<'_, SharedEngine>,
     target: RowRef,
     edit: QsoEdit,
+    fields: Option<Vec<FieldEdit>>,
 ) -> Result<RowAnswer, String> {
-    edit_row(Arc::clone(&state), target, edit).await
+    edit_row_with_fields(Arc::clone(&state), target, edit, fields.unwrap_or_default()).await
 }
 
+/// [`edit_row_with_fields`] with no field changes — the edit form's save, as the tests make it.
+#[cfg(test)]
 pub(crate) async fn edit_row(
     engine: SharedEngine,
     target: RowRef,
     edit: QsoEdit,
 ) -> Result<RowAnswer, String> {
+    edit_row_with_fields(engine, target, edit, Vec::new()).await
+}
+
+pub(crate) async fn edit_row_with_fields(
+    engine: SharedEngine,
+    target: RowRef,
+    edit: QsoEdit,
+    fields: Vec<FieldEdit>,
+) -> Result<RowAnswer, String> {
     let id = id_of(&target)?;
     durable_command(move || {
         let (made, durability) = tempo_app::logwrite::until_written(|| {
-            tempo_app::logwrite::edit_row(&engine, id, &target.edit_key, &edit)
+            tempo_app::logwrite::edit_row_with_fields(&engine, id, &target.edit_key, &edit, &fields)
         });
         (
             made.map(|made| match made {

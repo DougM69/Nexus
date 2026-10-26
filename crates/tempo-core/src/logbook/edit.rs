@@ -93,6 +93,97 @@ pub struct OtaEdit {
     pub iota: Option<String>,
 }
 
+/// ⭐ **One change to a field the log keeps as it was written** ([`QsoRecord::extra`]: the ADIF
+/// fields the record does not model — a county, a zone, a QSL date, a tag another program wrote),
+/// from the Logbook's contact card. `new: None` removes the field. A blank value is a removal.
+///
+/// **A CHANGE, not the field list.** It travels beside a [`QsoEdit`], never inside it: the edit
+/// key is a hash of what an edit can write, and the passthrough is also where a LoTW or eQSL
+/// download writes its dates, so a key over it would refuse an operator's edit every time a
+/// confirmation landed. Instead each change carries the value it was made against (`old`), and
+/// is refused when the contact no longer holds that value — the same refusal, field by field.
+/// A field nobody changed is never sent, so it is never written: what a download put there
+/// meanwhile stays.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FieldEdit {
+    /// The ADIF field name, in capitals as the log keeps it (`CNTY`).
+    pub tag: String,
+    /// The value the contact held when the card opened it; `None` for a field it did not have.
+    pub old: Option<String>,
+    /// The value to write; `None` (or blank) removes the field.
+    pub new: Option<String>,
+}
+
+impl FieldEdit {
+    /// What the change writes: its value, or `None` — a removal — for none or a blank one.
+    pub fn value(&self) -> Option<String> {
+        self.new.clone().filter(|v| !v.trim().is_empty())
+    }
+
+    /// Whether `stored` still holds the value the change was made against, exactly.
+    pub fn is_fresh(&self, stored: &QsoRecord) -> bool {
+        let held = stored
+            .extra
+            .iter()
+            .find(|(k, _)| *k == self.tag)
+            .map(|(_, v)| v.as_str());
+        held == self.old.as_deref()
+    }
+
+    /// `Err` for a change this card may not make, saying why: a name that is not one, a field
+    /// Nexus or a service keeps for itself, or one the log reads as part of a field it models
+    /// (a park's `MY_SIG`, a contest's `STX`, an upload's `LOTW_QSL_SENT`) — written here, it
+    /// would change that field behind its own box, or be undone by the next read of the log.
+    pub fn check(&self) -> Result<(), String> {
+        let tag = self.tag.as_str();
+        let named = !tag.is_empty()
+            && tag
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+        if !named {
+            return Err(format!(
+                "'{tag}' is not an ADIF field name — use capitals, digits and _ only, such as CNTY."
+            ));
+        }
+        if tag.starts_with("APP_NEXUS_")
+            || tag.starts_with("APP_TEMPO_")
+            || tag == super::EQSL_AG_FIELD
+        {
+            return Err(format!(
+                "{tag} is kept by Nexus or by a service, not typed — it cannot be changed here."
+            ));
+        }
+        for v in [&self.old, &self.new].into_iter().flatten() {
+            if !v.trim().is_empty() && !passthrough_only(tag, v) {
+                return Err(format!(
+                    "{tag} is part of a field the card edits in its own box (or a service keeps) — change it there."
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether the log reads `tag` = `value` as nothing but a field kept as written: a contact that
+/// carries it parses to the contact without it, plus that one passthrough field. Asked of the
+/// log's own reader, so the answer is the reader's, never a list kept beside it.
+fn passthrough_only(tag: &str, value: &str) -> bool {
+    const BASE: &str =
+        "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:6>120000<BAND:3>20m<FREQ:6>14.074<MODE:2>CW";
+    let without = super::parse_adif(&format!("{BASE}<EOR>\n"));
+    let with = super::parse_adif(&format!("{BASE}{}<EOR>\n", super::field(tag, value)));
+    let (Some(a), Some(b)) = (without.first(), with.first()) else {
+        return false;
+    };
+    if !b.extra.iter().any(|(k, _)| k == tag) || a.extra.iter().any(|(k, _)| k == tag) {
+        return false;
+    }
+    let mut b = b.clone();
+    b.extra.retain(|(k, _)| k != tag);
+    &b == a
+}
+
 /// A park box the form reads as empty: no value, or an empty one (the form's own truthiness).
 fn blank(r: &Option<String>) -> bool {
     r.as_deref().is_none_or(str::is_empty)
@@ -993,5 +1084,64 @@ mod tests {
             undone, row,
             "the contact before the edit, whole: NJ in the field, NY sent"
         );
+    }
+
+    fn change(tag: &str, old: Option<&str>, new: Option<&str>) -> FieldEdit {
+        FieldEdit {
+            tag: tag.into(),
+            old: old.map(str::to_string),
+            new: new.map(str::to_string),
+        }
+    }
+
+    /// The contact card's passthrough changes: a field the log keeps only as written may be
+    /// set, corrected and removed; a name that is not one, Nexus's or a service's own field, and
+    /// a field the log reads as part of one it models are refused, with the reason.
+    #[test]
+    fn a_field_change_is_made_only_on_a_field_kept_as_written() {
+        for ok in [
+            change("CNTY", None, Some("MA,MIDDLESEX")),
+            change("CQZ", Some("5"), Some("4")),
+            change("QSLRDATE", Some("20240101"), None),
+            change("APP_OTHERPROG_FOO", None, Some("bar")),
+        ] {
+            assert_eq!(ok.check(), Ok(()), "{}", ok.tag);
+        }
+        for bad in [
+            change("cnty", None, Some("x")),
+            change("", None, Some("x")),
+            change("C NTY", None, Some("x")),
+            change("APP_NEXUS_SELF_FILLED", Some("MY_GRIDSQUARE"), None),
+            change("APP_TEMPO_UL_LOTW", None, Some("x")),
+            change(crate::logbook::EQSL_AG_FIELD, None, Some("Y")),
+            // Read into the park, the contest block, the end time and the upload state.
+            change("MY_SIG", None, Some("WWFF")),
+            change("SIG_INFO", None, Some("K-0001")),
+            change("STX", None, Some("12")),
+            change("TIME_OFF", None, Some("1210")),
+            change("NAME", None, Some("Hans")),
+            change("LOTW_QSL_SENT", None, Some("Y")),
+        ] {
+            assert!(bad.check().is_err(), "{} must be refused", bad.tag);
+        }
+        // A blank value is a removal, never a field written empty.
+        assert_eq!(change("CNTY", Some("x"), Some("  ")).value(), None);
+        assert_eq!(
+            change("CNTY", None, Some("y")).value().as_deref(),
+            Some("y")
+        );
+    }
+
+    /// The change is made against the value the card showed: any other value — another, none, or
+    /// one where the card saw none — is not the contact it was made on.
+    #[test]
+    fn a_field_change_is_fresh_only_against_the_value_it_was_made_on() {
+        let mut r = record();
+        r.extra = vec![("CNTY".into(), "MA,MIDDLESEX".into())];
+        assert!(change("CNTY", Some("MA,MIDDLESEX"), None).is_fresh(&r));
+        assert!(!change("CNTY", Some("MA,ESSEX"), None).is_fresh(&r));
+        assert!(!change("CNTY", None, Some("x")).is_fresh(&r));
+        assert!(change("CQZ", None, Some("5")).is_fresh(&r));
+        assert!(!change("CQZ", Some("5"), None).is_fresh(&r));
     }
 }

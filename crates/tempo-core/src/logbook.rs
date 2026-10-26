@@ -482,6 +482,23 @@ pub(crate) fn set_extra(r: &mut QsoRecord, name: &str, value: Option<String>) {
     }
 }
 
+/// ★ THE one implementation of [`LogOp::SetFields`] (SPEC-2 v3 §4.6): set — or with `None`
+/// remove — fields kept as written ([`QsoRecord::extra`]), each in its place in name order. A
+/// field Nexus or a callbook filled in that the operator has now changed is theirs from then on,
+/// as it is through an edit of its own box ([`edited`]).
+pub(crate) fn fields_set(r: &mut QsoRecord, fields: &[(String, Option<String>)]) {
+    let before = r.clone();
+    for (tag, value) in fields {
+        set_extra(r, tag, value.clone());
+        if SELF_FILLED_TAGS.contains(&tag.as_str())
+            && extra_value(&before, tag) != extra_value(r, tag)
+        {
+            unmark_self_filled(r, tag);
+        }
+    }
+    callbook::unmark_edited(&before, r);
+}
+
 /// The contest provenance of one general-log row (§3).
 ///
 /// ⭐ **`sent`/`rcvd` are PAIRS, not the contest log's `FieldValue` triples, and that
@@ -1133,7 +1150,7 @@ pub mod reader;
 mod records;
 pub mod sqlite;
 pub mod writer;
-pub use edit::{edited_state, OtaEdit, QsoEdit};
+pub use edit::{edited_state, FieldEdit, OtaEdit, QsoEdit};
 pub use id::{Minter, RecordId};
 pub use op::{Effects, LogOp, RowAfter, UploadService};
 use records::Records;

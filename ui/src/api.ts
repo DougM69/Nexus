@@ -1682,8 +1682,18 @@ export interface QsoEdit {
  *  and paper-card marks where the form changed them — one write, where the form used to send three
  *  commands. Confirmation, credit and upload state are kept as they are; a callsign correction
  *  re-queues the uploads (the backend's one edit policy). Returns once it is on disk. */
-export async function editQsoById(target: RowRef, edit: QsoEdit): Promise<RowAnswer> {
-  return invoke<RowAnswer>('edit_qso_by_id', { target, edit })
+export async function editQsoById(target: RowRef, edit: QsoEdit, fields?: FieldEdit[]): Promise<RowAnswer> {
+  return invoke<RowAnswer>('edit_qso_by_id', fields?.length ? { target, edit, fields } : { target, edit })
+}
+
+/** One change the Logbook's contact card makes to a field the log keeps as it was written (`extra`:
+ *  a county, a zone, a tag another program wrote) — tempo-core's `FieldEdit`. `old` is the value the
+ *  card showed (null: the contact had none); the change is refused as `changed` when the contact no
+ *  longer holds it. `new: null` removes the field. Sent beside the edit, in the same change. */
+export interface FieldEdit {
+  tag: string
+  old: string | null
+  new: string | null
 }
 
 /** One field a change to a contact changed (ADIF tag; `null` where the contact did not carry it). */

@@ -1665,3 +1665,92 @@ fn a_purges_undo_puts_back_a_contact_restored_then_deleted_again() {
     assert_eq!((undone.changed, undone.refused), (3, vec![]));
     assert_eq!(log_by_id(&engine), before, "the log as the purge found it");
 }
+
+/// ★ THE CONTACT CARD'S SAVE: one change, one history entry, one Undo. A save that corrects a
+/// field the form has a box for AND fields kept as written (set one, correct one, remove one)
+/// changes exactly those and nothing else on the row, is recorded once, and its undo puts the
+/// whole row back as it was. A change made against a value the contact no longer holds is
+/// refused, writing nothing; one naming a field the card may not write is an error.
+#[test]
+fn a_card_save_with_passthrough_fields_is_one_change_and_one_undo() {
+    use tempo_core::logbook::FieldEdit;
+    let d = Dir::new("history-card-fields");
+    let engine = shared(&d, 3);
+    let id = id_at(&*engine, 1);
+    let change = |old: Option<&str>, new: Option<&str>, tag: &str| FieldEdit {
+        tag: tag.into(),
+        old: old.map(str::to_string),
+        new: new.map(str::to_string),
+    };
+    // Seed two passthrough fields, as an import would have left them.
+    let (seeded, dur) = logwrite::change_ops(
+        &engine,
+        id,
+        None,
+        &[LogOp::SetFields {
+            id,
+            fields: vec![
+                ("CNTY".into(), Some("MA,MIDDLESEX".into())),
+                ("CQZ".into(), Some("5".into())),
+            ],
+        }],
+        "seed",
+    );
+    seeded.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let before = QsoRecord::clone(&row_of(&engine, id).unwrap());
+    let entries = history_of(&engine, id).unwrap().len();
+
+    let mut edit = QsoEdit::project(&before);
+    edit.name = Some("Hans".into());
+    let fields = [
+        change(Some("MA,MIDDLESEX"), Some("MA,ESSEX"), "CNTY"),
+        change(Some("5"), None, "CQZ"),
+        change(None, Some("8"), "ITUZ"),
+    ];
+    let key = QsoEdit::project(&before).key();
+
+    // Made against a value the contact no longer holds: refused, nothing written.
+    let stale = [change(Some("MA,SUFFOLK"), Some("MA,ESSEX"), "CNTY")];
+    let (made, _) = logwrite::edit_row_with_fields(&engine, id, &key, &edit, &stale);
+    assert!(
+        matches!(made, Ok(Err(crate::station::RowRefusal::Changed(_)))),
+        "{made:?}"
+    );
+    // A field the card may not write: an error, nothing written.
+    let modeled = [change(None, Some("WWFF"), "MY_SIG")];
+    let (made, _) = logwrite::edit_row_with_fields(&engine, id, &key, &edit, &modeled);
+    assert!(made.is_err(), "{made:?}");
+    settle(&engine);
+    assert_eq!(
+        *row_of(&engine, id).unwrap(),
+        before,
+        "neither wrote anything"
+    );
+
+    let (made, dur) = logwrite::edit_row_with_fields(&engine, id, &key, &edit, &fields);
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let mut want = before.clone();
+    want.name = Some("Hans".into());
+    want.extra.retain(|(k, _)| k != "CNTY" && k != "CQZ");
+    want.extra.push(("CNTY".into(), "MA,ESSEX".into()));
+    want.extra.push(("ITUZ".into(), "8".into()));
+    want.extra.sort();
+    assert_eq!(
+        *row_of(&engine, id).unwrap(),
+        want,
+        "exactly the fields changed"
+    );
+    let h = history_of(&engine, id).unwrap();
+    assert_eq!(h.len(), entries + 1, "one save, one entry");
+
+    let (undone, dur) = undo_entry(&engine, h.last().unwrap().seq);
+    assert_eq!(undone.expect("undone").changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(
+        *row_of(&engine, id).unwrap(),
+        before,
+        "the undo puts the whole row back"
+    );
+}

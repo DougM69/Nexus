@@ -24,8 +24,8 @@ use std::sync::Arc;
 use tempo_core::logbook::hot::{HotIndex, HotKeys, RowPair};
 use tempo_core::logbook::writer::Change;
 use tempo_core::logbook::{
-    LogOp, Logbook, Minter, OpClass, QsoEdit, QsoRecord, RecordId, RowAfter, UploadService,
-    Watermarks, WorkedSince,
+    FieldEdit, LogOp, Logbook, Minter, OpClass, QsoEdit, QsoRecord, RecordId, RowAfter,
+    UploadService, Watermarks, WorkedSince,
 };
 
 use crate::logstore::{LogStore, Opened, SessionRows};
@@ -4380,15 +4380,30 @@ impl StationCore {
     /// used to send as three commands, each its own write (`QsoEdit`'s header). Refused when the
     /// row is no longer the version whose key is `edit_key`; `Err` for an edit the caller must not
     /// send again as it is (its QSL-sent code is not one the form offers).
+    ///
+    /// `fields`: the contact card's changes to fields kept as written ([`FieldEdit`]), made in the
+    /// same change as one more op after the field edit. Each is refused — the whole change with it
+    /// — when the contact no longer holds the value it was made against (`Changed`), and is an
+    /// `Err` when it names a field the card may not write. Empty from the edit form.
     pub(crate) fn edit_ops(
         &self,
         id: RecordId,
         edit_key: &str,
         edit: &QsoEdit,
+        fields: &[FieldEdit],
         stored: &Arc<QsoRecord>,
     ) -> Result<Result<Vec<LogOp>, RowRefusal>, String> {
         if let Err(refusal) = Self::fresh_row(stored, edit_key) {
             return Ok(Err(refusal));
+        }
+        for (i, f) in fields.iter().enumerate() {
+            f.check()?;
+            if fields[..i].iter().any(|g| g.tag == f.tag) {
+                return Err(format!("{} is changed twice in one save.", f.tag));
+            }
+        }
+        if !fields.iter().all(|f| f.is_fresh(stored)) {
+            return Ok(Err(RowRefusal::Changed(Arc::clone(stored))));
         }
         let sent = edit.qsl_sent_change(stored)?;
         // An IOTA box holding something that is not a reference: refused, never stored as junk.
@@ -4403,6 +4418,12 @@ impl StationCore {
             id,
             rec: Box::new(rec),
         }];
+        if !fields.is_empty() {
+            ops.push(LogOp::SetFields {
+                id,
+                fields: fields.iter().map(|f| (f.tag.clone(), f.value())).collect(),
+            });
+        }
         if let Some(via) = sent {
             ops.push(LogOp::MarkQslSent {
                 id,
@@ -4461,7 +4482,7 @@ impl StationCore {
         let mut bad = None;
         let mut edited = None;
         let made = self.change_by_id(id, "edit_qso", |sc, stored| {
-            match sc.edit_ops(id, edit_key, edit, stored) {
+            match sc.edit_ops(id, edit_key, edit, &[], stored) {
                 Ok(Ok(ops)) => {
                     // The row as the field edit alone leaves it — what a corrected call goes back
                     // out to the connectors as, below.
