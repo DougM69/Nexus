@@ -290,6 +290,8 @@ fn no_outside_key_on_ten_meter_phone_for_novice_and_technician_whatever_the_radi
                     let mut e = outside_at(&token, dial, rig);
                     // The licence for that sideband's voice, as Nexus's own PTT judges it.
                     let voice = e.tx_allowed();
+                    // …and the outside key's own licence term, which judges an FM read-back as FM.
+                    let passband = e.outside_key_passband_allowed();
                     let want = voice && !held;
                     let got = outside_key(&mut e, how);
                     if got.is_ok() != want || got == Err(Some(Refusal::Owner)) {
@@ -297,6 +299,7 @@ fn no_outside_key_on_ten_meter_phone_for_novice_and_technician_whatever_the_radi
                     }
                     // A TCI refusal names this rule, where the licence passed.
                     if voice
+                        && passband
                         && held
                         && !matches!(how, Outside::Broker)
                         && got != Err(Some(Refusal::VoiceOnly))

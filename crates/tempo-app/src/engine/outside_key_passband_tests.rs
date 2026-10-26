@@ -411,7 +411,7 @@ fn only_on_a_60m_channel_dial_is_an_outside_key_judged_at_the_channel() {
 /// 14.026, whose radio reports PKTLSB (a front-panel flip the loop does not re-assert): the
 /// program's audio would go out at 14.023–14.026, under the General floor of 14.025, so the key is
 /// refused, and a held one ends on the next tick. CONTROLS: a USB-side read-back keys; a read-back
-/// that names no side keys as before; Nexus's own key is unchanged throughout. In Phone, an
+/// that names no emission (RTTY) keys as before; Nexus's own key is unchanged throughout. In Phone, an
 /// Extra at 14.152 commanded USB whose radio reports LSB is refused (the voice would reach under
 /// 14.150), and with a USB read-back keys.
 #[test]
@@ -424,7 +424,7 @@ fn the_radios_reported_side_is_judged_as_well_as_the_commanded_one() {
         ("PKTUSB", true),
         ("USB", true),
         ("DATA-U", true),
-        ("FM", true),
+        ("RTTY", true),
     ] {
         let mut e = armed("general", "digital", "20m", "USB", 14.026);
         e.observe_rig_mode(readback.into());
@@ -522,4 +522,200 @@ fn the_cw_only_refusal_says_the_radio_is_not_in_cw() {
             "outside your license privileges: only CW is allowed here, and the radio is not in CW"
         )
     );
+}
+
+/// ⛔ AN AM-FAMILY OR FM READ-BACK IS JUDGED TOO (only ever refusing more). A General in Digital,
+/// commanded and stored USB at 14.026, whose radio reports AM, DSB or SAM: the lower sideband
+/// reaches under the 14.025 floor, so the key is refused, as on an LSB read-back; an FM read-back
+/// is judged as the gate's phone model judges FM, and a General may not send phone at 14.026.
+/// At 14.100 an AM read-back still keys (both sides inside). In Phone, an Extra at 14.152 on an AM
+/// read-back is refused (the lower side reaches under 14.150) and keys at 14.200. CONTROL: FM
+/// simplex at 146.52 on an FM read-back keys; Nexus's own key is unchanged throughout.
+#[test]
+fn an_am_or_fm_read_back_is_judged_across_what_it_sends() {
+    let mut wrong = Vec::new();
+    let mut check = |class: &str, section: &str, band: &str, sb: &str, mhz: f64, rb: &str, want| {
+        let mut e = armed(class, section, band, sb, mhz);
+        e.observe_rig_mode(rb.into());
+        if !e.tx_allowed() {
+            wrong.push(format!(
+                "{class} {section} {rb} at {mhz}: premise, Nexus's own key"
+            ));
+        }
+        let got = e.outside_key_passband_allowed();
+        if got != want || broker_keys(&mut e) != want {
+            wrong.push(format!(
+                "{class} {section} {rb} at {mhz}: want {want}, got {got}"
+            ));
+        }
+    };
+    for rb in ["AM", "DSB", "SAM", "AMN", "FM", "FMN", "PKTFM"] {
+        check("general", "digital", "20m", "USB", 14.026, rb, false);
+    }
+    for rb in ["AM", "DSB", "SAM"] {
+        check("general", "digital", "20m", "USB", 14.100, rb, true);
+    }
+    check("extra", "phone", "20m", "USB", 14.152, "AM", false);
+    check("extra", "phone", "20m", "USB", 14.200, "AM", true);
+    check("technician", "phone", "2m", "FM", 146.52, "FM", true);
+    check("technician", "digital", "2m", "FM", 146.52, "FM", true);
+    assert!(wrong.is_empty(), "AM and FM read-backs: {wrong:#?}");
+}
+
+/// ⛔ ON A 60 M CHANNEL DIAL ONLY AN UPPER-SIDEBAND READ-BACK, OR NONE, KEYS. A General's broker
+/// key in Digital at each channel dial is refused on an AM, DSB, SAM, FM, CW, RTTY or LSB-side
+/// read-back, and the refusal says so; USB, PKTUSB, DATA-U or no read-back keys.
+#[test]
+fn on_a_60m_channel_dial_only_an_upper_sideband_read_back_keys() {
+    let mut wrong = Vec::new();
+    for dial in SIXTY_CHANNEL_DIALS {
+        for (rb, want) in [
+            (None, true),
+            (Some("USB"), true),
+            (Some("PKTUSB"), true),
+            (Some("DATA-U"), true),
+            (Some("AM"), false),
+            (Some("DSB"), false),
+            (Some("SAM"), false),
+            (Some("FM"), false),
+            (Some("CW"), false),
+            (Some("RTTY"), false),
+            (Some("PKTLSB"), false),
+            (Some("DATA-L"), false),
+        ] {
+            let mut e = armed("general", "digital", "60m", "USB", dial);
+            if let Some(rb) = rb {
+                e.observe_rig_mode(rb.into());
+            }
+            if !e.tx_allowed() {
+                wrong.push(format!(
+                    "{rb:?} at {dial}: premise, Nexus's own key refused"
+                ));
+            }
+            let why = e.outside_key_passband_refusal();
+            if !want
+                && why.as_deref()
+                    != Some(
+                        "outside your license privileges: on a 60 m channel the radio must be in \
+                         upper sideband",
+                    )
+            {
+                wrong.push(format!("{rb:?} at {dial}: refusal {why:?}"));
+            }
+            if e.outside_key_passband_allowed() != want || broker_keys(&mut e) != want {
+                wrong.push(format!("{rb:?} at {dial}: want {want}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "60 m dial read-backs: {wrong:#?}");
+}
+
+/// ⛔ A RETUNE NEXUS COMMANDS DOES NOT CLEAR THE READ-BACK THE GATE JUDGES. A Technician in the CW
+/// section at 7.030 whose radio reports USB is refused; Nexus retunes to 7.031 and the loop clears
+/// the displayed read-back until its next poll: a broker key in that window is still refused, on
+/// the last reading. The display copy is cleared. CONTROLS: a CAT drop clears both, and the key
+/// is judged on the commanded CW as before; the next poll's CW read-back keys.
+#[test]
+fn a_retune_keeps_the_last_read_back_for_an_outside_key() {
+    let mut e = armed("technician", "cw", "40m", "USB", 7.030);
+    e.observe_rig_mode("USB".into());
+    assert!(e.tx_allowed(), "premise: Nexus's own CW keys");
+    assert!(
+        !e.outside_key_passband_allowed(),
+        "precondition: refused on USB"
+    );
+    e.set_frequency(7.031, "40m", "USB");
+    e.clear_rig_mode_for_retune();
+    assert_eq!(e.snapshot().radio.rig_mode, None, "the display copy clears");
+    assert!(
+        !e.outside_key_passband_allowed() && !broker_keys(&mut e),
+        "a key in the window is judged on the last read-back"
+    );
+    e.observe_rig_mode("CW".into());
+    assert!(
+        broker_keys(&mut e),
+        "control: the next poll's CW read-back keys"
+    );
+    e.observe_rig_mode("USB".into());
+    e.clear_rig_mode();
+    assert!(
+        broker_keys(&mut e),
+        "control: a CAT drop clears the gate's copy too"
+    );
+}
+
+/// Age the rig's split reading by `secs`, and the start of a hold on it, as the clock moving on
+/// would: both are unix seconds, so moving them back is the same as time passing.
+fn age_split(e: &mut Engine, secs: u64) {
+    if let Some((_, _, at)) = e.observed_split.as_mut() {
+        *at -= secs;
+    }
+    if let Some(since) = e.observed_split_held_since.as_mut() {
+        *since -= secs;
+    }
+}
+
+/// A General in Digital at 14.074 with split detect on, the radio on a front-panel split sending
+/// at 14.075, the reading fresh.
+fn on_a_rig_split() -> Engine {
+    let mut e = armed("general", "digital", "20m", "USB", 14.074);
+    e.settings.split_detect_enabled = true;
+    e.observe_rig_split(true, Some(14_075_000));
+    assert!(e.tx_allowed(), "precondition: a fresh rig split keys");
+    e
+}
+
+/// ⛔ A RIG-REPORTED SPLIT DOES NOT GO STALE WHILE NEXUS'S OWN KEY HOLDS OFF THE POLL THAT READS IT
+/// (operator ruling, 2026-10-25). A broker's FT8 over (12.6 s) on a front-panel split, fresh at the
+/// key: the loop holds the reading's age while keyed, so the key stays held and the loop's tick
+/// does not end it. After the over the reading has the age it had at the key, the loop is told to
+/// read the split again, and with no read it ages again and refuses after the TTL; a read keys.
+/// The operator's own key (Nexus's gate, `tx_allowed`) holds the same way.
+#[test]
+fn a_rig_split_reading_does_not_age_while_nexus_is_keyed() {
+    let mut e = on_a_rig_split();
+    assert!(
+        e.broker_ptt(true) && e.manual_ptt(),
+        "precondition: the broker keys"
+    );
+    assert!(!e.hold_observed_split_age(true), "the loop sees the key");
+    for _ in 0..13 {
+        age_split(&mut e, 1);
+        loop_tick(&mut e);
+        assert!(
+            e.broker_ptt_active() && e.manual_ptt() && e.tx_allowed(),
+            "the over runs to its end"
+        );
+    }
+    assert!(e.broker_ptt(false), "the over ends");
+    assert!(
+        e.hold_observed_split_age(false),
+        "the loop reads the split again after the over"
+    );
+    assert!(e.tx_allowed(), "the reading has the age it had at the key");
+    age_split(&mut e, OBSERVED_SPLIT_TTL_SECS + 1);
+    assert!(
+        !e.tx_allowed(),
+        "unkeyed, with no read, it ages and refuses"
+    );
+    e.observe_rig_split(true, Some(14_075_000));
+    assert!(
+        e.broker_ptt(true) && e.manual_ptt(),
+        "the poll's read refreshes it, and the next over keys"
+    );
+}
+
+/// ⛔ A READING ALREADY STALE AT THE KEY STILL REFUSES, held or not: the hold keeps its age, it
+/// never makes it younger.
+#[test]
+fn a_rig_split_reading_stale_at_the_key_still_refuses() {
+    let mut e = on_a_rig_split();
+    age_split(&mut e, OBSERVED_SPLIT_TTL_SECS + 1);
+    assert!(!e.tx_allowed(), "stale before the key");
+    assert!(!e.broker_ptt(true), "the broker's key is refused");
+    e.hold_observed_split_age(true);
+    age_split(&mut e, 5);
+    assert!(!e.tx_allowed(), "still stale under a hold");
+    e.hold_observed_split_age(false);
+    assert!(!e.tx_allowed(), "and after it");
 }

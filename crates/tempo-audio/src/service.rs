@@ -8848,6 +8848,17 @@ impl RadioLoop {
                 self.fm_push_misses = 0;
             }
 
+            // Nexus's own key holds the heavy poll below off, and with it the only read of the
+            // rig's split: the split reading does not age while it does, and is read again on
+            // the first poll after (`Engine::hold_observed_split_age`). The same three keyed
+            // states as the poll's own guard; a key from the radio's own microphone is not
+            // Nexus's and holds nothing.
+            let nexus_keyed =
+                self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
+            if engine_lock(engine).hold_observed_split_age(nexus_keyed) {
+                self.read_turns.owe(HeavyRead::Split);
+            }
+
             // Live READ-BACK of the rig's actual dial, so a manual VFO knob turn (or another
             // app on the CAT broker) is mirrored in the UI. CAT-only — read_freq no-ops
             // (cheap) on VOX/serial. We adopt a reported change AND advance last_dial so the
@@ -8871,7 +8882,9 @@ impl RadioLoop {
                                       // prior mode's filter width before the next poll reads the rig's true state.
                 {
                     let mut eng = engine_lock(engine);
-                    eng.clear_rig_mode();
+                    // The outside-key gate keeps its copy until that poll: a reading only ever
+                    // refuses more (`Engine::clear_rig_mode_for_retune`).
+                    eng.clear_rig_mode_for_retune();
                     eng.clear_rig_passband();
                 }
                 // A CAT command (set_freq/set_mode) just SUCCEEDED, so CAT is alive — clear
@@ -22642,6 +22655,58 @@ mod tests {
             &RadioConfig::default(),
         )
     }
+    /// ⛔ NEXUS'S OWN KEY HOLDS THE SPLIT READING'S AGE, AND THE POLL AFTER IT READS THE SPLIT AGAIN.
+    /// The heavy poll, the only reader of the rig's split, is held off while Nexus is keyed; the
+    /// loop tells the engine so on every tick (`Engine::hold_observed_split_age`), and on the
+    /// first tick after the key the split read is owed, so it is the next poll's. CONTROL: an
+    /// unkeyed tick owes nothing.
+    #[test]
+    fn nexus_keyed_holds_the_split_reading_and_the_tick_after_owes_a_split_read() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let sinks = Sinks {
+            wsjtx: None,
+            psk: None,
+            cfg_dial_hz: 14_074_000,
+        };
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let split = 1u32 << HeavyRead::Split as u32;
+        let mut tick = |state: &mut RadioLoop, now: f64| {
+            state.read_turns.owed = 0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            state.read_turns.owed & split != 0
+        };
+        assert!(
+            !tick(&mut state, 100.0),
+            "control: an unkeyed tick owes nothing"
+        );
+        state.manual_ptt_applied = true;
+        assert!(
+            !tick(&mut state, 200.0),
+            "a keyed tick holds, and owes nothing"
+        );
+        state.manual_ptt_applied = false;
+        assert!(
+            tick(&mut state, 300.0),
+            "the tick after the key owes the split read"
+        );
+        assert!(!tick(&mut state, 400.0), "once");
+    }
+
     /// [`loop_state`] pinned to the ENGINE's rig model.
     ///
     /// Load-bearing, not tidiness: the sat scenes below run on the FIELD-REPORT
