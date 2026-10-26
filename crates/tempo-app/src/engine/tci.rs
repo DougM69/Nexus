@@ -103,9 +103,10 @@ use tempo_net::tci::wire::Word;
 
 mod cw;
 
-/// What a program's audio over is judged as: the whole transmit passband, 0 to 3 kHz of
-/// audio on the sideband's side of the carrier. In Phone the gate judges its own phone passband.
-const PASSBAND: DataFrame = DataFrame {
+/// What a program's audio over, and every other key from a program outside Nexus, is judged as:
+/// the whole transmit passband, 0 to 3 kHz of audio on the sideband's side of the carrier
+/// ([`Engine::outside_key_passband_allowed`]). In Phone the gate judges its own phone passband.
+pub(super) const PASSBAND: DataFrame = DataFrame {
     f0_hz: 0.0,
     bw_hz: 3_000.0,
 };
@@ -246,7 +247,8 @@ impl Engine {
         }
         let licensed = match ask {
             Ask::Over => self.tci_over_licensed(),
-            Ask::Mic => self.tx_allowed(),
+            // As Nexus's own PTT, and across the program's whole passband.
+            Ask::Mic => self.tx_allowed() && self.outside_key_passband_allowed(),
             Ask::Tune => self.tune_allowed(),
             // As Nexus's own CW asks before it queues (`send_cw_armed`): at the dial, and as CW
             // where the keyer puts it, which in the CW section are the one judgement.
@@ -314,10 +316,12 @@ impl Engine {
         }
     }
 
-    /// The licence for a program's audio over: its whole passband ([`PASSBAND`]), every other term
-    /// of the gate as for Nexus's own overs.
+    /// The licence for a program's audio over: the gate as for Nexus's own overs
+    /// ([`Engine::tx_allowed`]) and its whole passband ([`PASSBAND`],
+    /// [`Engine::outside_key_passband_allowed`]). Both, so it can never allow what the gate
+    /// refuses, whatever section an over is admitted in.
     pub(super) fn tci_over_licensed(&self) -> bool {
-        self.tx_allowed_for(PASSBAND)
+        self.tx_allowed() && self.outside_key_passband_allowed()
     }
 
     /// ⛔ A program's audio over never goes out on the radio's own microphone: the radio must take
@@ -587,7 +591,7 @@ impl Engine {
             Some("a transmit gate went down")
         } else if self.settings.operating_mode != k.section {
             Some("the section changed")
-        } else if !self.tx_allowed() {
+        } else if !self.tx_allowed() || !self.outside_key_passband_allowed() {
             Some("outside the licence")
         } else if !self.outside_key_allowed() {
             Some(Refusal::VoiceOnly.text())
@@ -654,13 +658,16 @@ impl Engine {
     ///
     /// `budget_ms` is how much audio the output ring can take this tick (clamped to the push cap
     /// here as well); `route` is the loop's transmit-route generation (G7). A microphone key and a
-    /// program's tune are re-gated here too.
+    /// program's tune are re-gated here too, and so is a CAT broker client's held key
+    /// ([`Self::drop_masked_broker_key`]).
     pub fn poll_tci(&mut self, now: Instant, budget_ms: f64, route: u64) -> MicTick {
         self.poll_tci_at(now, now_unix_millis(), budget_ms, route)
     }
 
     /// [`Self::poll_tci`] at the wall clock `now_ms`.
     fn poll_tci_at(&mut self, now: Instant, now_ms: u64, budget_ms: f64, route: u64) -> MicTick {
+        // A CAT broker client's key outside the licence ends too, as a microphone key does.
+        self.drop_masked_broker_key();
         if let Some(k) = self.tci.key.filter(|k| k.mic) {
             if let Some(why) = self.tci_mic_down(k, now_ms) {
                 self.drop_tci_key(why);

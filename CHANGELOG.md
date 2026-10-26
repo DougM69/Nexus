@@ -338,6 +338,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WAZ counts the zone a CQ WW contact sent.** A contest merged into the logbook kept the CQ zone the other station sent only with the contest's columns, and the awards counted the zone of its callsign's country instead: a W1 station operating from California sends zone 3 and was credited zone 5. The same contacts now count for a custom award on the county, section or class their exchange carried, a LoTW download no longer adds a second, different grid, zone or county beside the ones they sent, and a contact that already got one that way uploads only the one the station sent. With **Sign from ADIF location** on, a LoTW upload of a merged VHF contest contact signs the grid you sent in the exchange (a rover's grid at that moment) rather than adding the grid in Settings beside it; with a named TQSL Station Location, nothing about the signing changes.
 - **A merged contest contact's state is the one its exchange carried, everywhere.** Its uploads already carried the state the other station sent; WAS, the WAS needs, the statistics, the Logbook's State column, its sort and filter and the edit form now show and count that state too, where they used the state looked up from the callsign. Editing State in the Logbook replaces the exchange's state, so the upload, WAS and custom awards all follow the edit.
 - **Undo puts a merged contest contact back exactly as it was.** Undoing a change to a contact merged from a contest, or putting back a deleted one, used to move what its exchange carried (the zone, county, state or grid the other station sent) out of the contest's own columns into the contact's ordinary fields. The history now keeps those columns as they were, and shows a change to one of them as, for example, `STATE (contest)`.
+- **Other programs can no longer transmit past a band or segment edge from a dial just inside it.**
+  Nexus cannot tell where in the sideband another program puts its audio, so a key from the CAT
+  broker or TCI is now allowed only when everything from the dial to 3 kHz above it (below it on
+  LSB) is inside your license privileges for the mode. With the dial at 14.149 MHz, a data
+  program at its usual 1500 Hz sent at 14.1505 MHz, past a General's 14.150 MHz data limit. A key already held drops
+  if you retune that close to an edge, and stays off until the program keys again; the connection
+  log says how far the program's audio could reach. If the radio reports a different sideband
+  than Nexus set (DATA-L after a front-panel change), that side is checked too. In a CW-only
+  segment, such as 50.0-50.1 MHz, other programs can key only while the radio is in CW. In Phone
+  and CW the check is the one Nexus applies to its own voice and CW, and Nexus's own transmissions
+  are judged as before. On 60 m, a key from a channel's USB dial (5.3305, 5.3465, 5.3715 or
+  5.4035 MHz, within 50 Hz) is judged at the channel as before, since a channel is narrower than
+  3 kHz; anywhere else on a channel, and in the 60 m segment, the whole passband is checked.
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
 - **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone

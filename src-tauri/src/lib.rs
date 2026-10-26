@@ -35804,6 +35804,7 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         let opted_in = e.settings().cat_broker_ptt;
         let tx_enabled = e.tx_enabled();
         let tx_allowed = e.tx_allowed();
+        let passband = e.outside_key_passband_refusal();
         let outside_key = e.outside_key_allowed();
         let owner = e.tx_owner();
         let clock_repair = e.clock_repair_holds_tx();
@@ -35828,6 +35829,8 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         } else if !tx_allowed {
             "transmit is not allowed here (license privileges or band edge on this dial)"
                 .to_string()
+        } else if let Some(why) = passband {
+            why
         } else if !outside_key {
             tempo_app::engine::OUTSIDE_KEY_VOICE_ONLY.to_string()
         } else if let Some(o) = owner {
@@ -43287,6 +43290,47 @@ mod tests {
         assert!(
             rig_in("general", "PKTUSB").set_ptt(true),
             "control: a General keys"
+        );
+    }
+
+    /// ⛔ A CAT broker client's key in Digital 2 kHz under a General's 14.150 data top: Nexus's own
+    /// frame keys there, the program's 3 kHz passband does not, so the key is refused and the
+    /// connection log says how far the program's audio could reach. CONTROL: 5 kHz under, it keys.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_broker_refuses_a_key_whose_passband_crosses_an_edge_and_says_why() {
+        use tempo_app::settings::{OperatingMode, Settings};
+        use tempo_audio::rigctld_server::RigBackend;
+        let rig_at = |dial: f64| {
+            let mut e = tempo_app::engine::Engine::with_settings(Settings {
+                operating_mode: OperatingMode::Digital,
+                band: "20m".into(),
+                dial_mhz: dial,
+                sideband: "USB".into(),
+                cat_broker_ptt: true,
+                ..Settings::default()
+            });
+            assert!(e.set_license_class("general"));
+            e.set_tx_offset(300.0);
+            e.set_tx_enabled(true);
+            assert!(
+                e.tx_allowed(),
+                "precondition: Nexus's own frame keys at {dial}"
+            );
+            super::EngineRig::new(std::sync::Arc::new(std::sync::Mutex::new(e)))
+        };
+        assert!(!rig_at(14.148).set_ptt(true), "the key is refused");
+        let line = "refused PTT from a client: outside your license privileges at the segment \
+                    edge: the program's audio could reach 14.1510 MHz";
+        assert!(
+            super::get_connection_log()
+                .iter()
+                .any(|e| e.connector == "CAT broker" && e.message == line),
+            "the log names the edge: {line}"
+        );
+        assert!(
+            rig_at(14.145).set_ptt(true),
+            "control: 5 kHz under, it keys"
         );
     }
 
