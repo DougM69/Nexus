@@ -93,7 +93,12 @@ const OTHER: LoggedQso = { ...DL, id: 'id-k1', call: 'K1XYZ', whenUnix: 1_700_00
 beforeEach(() => {
   engine.log = [OTHER, DL, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
   engine.revision += 1
-  vi.mocked(api.editQsoById).mockClear()
+  vi.mocked(api.editQsoById)
+    .mockReset()
+    .mockImplementation(async (target: api.RowRef) => ({
+      kind: 'applied',
+      current: { row: (engine.log as LoggedQso[]).find((r) => r.id === target.id)!, editKey: 'k2' },
+    }) as never)
   vi.mocked(api.qsoHistory).mockResolvedValue([])
   vi.mocked(pushToast).mockClear()
 })
@@ -175,6 +180,35 @@ describe('Save is the edit form’s save, with only what was changed', () => {
       { tag: 'MY_CITY', old: null, new: 'Boston' },
     ])
     expect(edit.name, 'and the fields with boxes are as stored').toBeNull()
+  })
+
+  it('after a save of More fields alone the card is the contact as saved: not changed, and a second save goes', async () => {
+    // The engine applies the change and keeps the edit key: `extra` is not under it.
+    vi.mocked(api.editQsoById).mockImplementation(async (target: api.RowRef, _edit, fields) => {
+      engine.log = (engine.log as LoggedQso[]).map((r) =>
+        r.id === target.id
+          ? { ...r, extra: (r.extra ?? []).map(([k, v]) => [k, fields?.find((f) => f.tag === k)?.new ?? v] as [string, string]) }
+          : r,
+      )
+      engine.revision += 1
+      const row = (engine.log as LoggedQso[]).find((r) => r.id === target.id)!
+      return { kind: 'applied', current: { row, editKey: target.editKey } } as never
+    })
+    await mounted()
+    const card = await openCard()
+    fireEvent.click(within(card).getByText(t('contactCard.more')))
+    fireEvent.change(within(card).getByRole('textbox', { name: 'CNTY' }), { target: { value: 'MA,ESSEX' } })
+    save(card)
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
+    const button = () => within(cardEl()!).getByRole('button', { name: t('logbook.form.save') }) as HTMLButtonElement
+    await waitFor(() => expect(button().disabled, 'saved: nothing left unsaved').toBe(true))
+    expect((within(cardEl()!).getByRole('textbox', { name: 'CNTY' }) as HTMLInputElement).value).toBe('MA,ESSEX')
+    fireEvent.change(within(cardEl()!).getByRole('textbox', { name: 'CNTY' }), { target: { value: 'MA,SUFFOLK' } })
+    save(cardEl()!)
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.editQsoById).mock.calls[1][2], 'made against the value saved').toEqual([
+      { tag: 'CNTY', old: 'MA,ESSEX', new: 'MA,SUFFOLK' },
+    ])
   })
 
   it('Save is not offered until something changed', async () => {

@@ -123,8 +123,11 @@ export function ContactCard({ open, onClose, onSwitch, save, onChanged, logTick 
   if (!open) return null
   return (
     <CardBody
-      // A new contact is a new card: nothing typed on one carries to the next.
-      key={`${open.row.id ?? ''}|${open.ref?.editKey ?? ''}`}
+      // A new contact is a new card: nothing typed on one carries to the next. So is the same
+      // contact as it now is — after a save, or a refusal that reads it again. The edit key does not
+      // cover the fields kept as written (a confirmation download writes there), so the key is the
+      // whole row the card is filled from: anything it shows changed, it is filled again.
+      key={`${open.row.id ?? ''}|${open.ref?.editKey ?? ''}|${JSON.stringify(open.row)}`}
       contact={open}
       onClose={onClose}
       onSwitch={onSwitch}
