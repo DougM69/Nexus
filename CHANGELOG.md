@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Tx panel's dot follows the FT8/FT4 contact.** In Classic, the dot beside the next message sometimes stayed put while the contact went on normally: when the report Nexus sends (from the decode it answered) differed from the station's latest one in the list, when Tx5 was edited, or when another decode was clicked mid-contact. The dot now follows the message actually going out.
 
 ### Added
+- **ATU ON (#344).** The ATU button now reads ATU ON while the radio reports its built-in tuner in line: after a tune-up, and within about ten seconds of switching it at the radio. A click on ATU ON switches the tuner out, with the same CAT command Nexus starts a tune-up with (`AC000` on a Yaesu). Switching out puts nothing on the air and is refused while anything is transmitting; a click on ATU runs a tune-up as before. On a Flex run by Nexus's own connection the click says the tuner can't be switched out from Nexus. Needs a check on the radios.
 - **A note about DAX for a Flex over SmartSDR CAT.** In SSB a Flex transmits from its own mic unless DAX is on for voice, so a voice-keyer message keys the radio with no RF. The first time a voice message plays on a Flex controlled through SmartSDR CAT, a note in the voice keyer says to turn on DAX in SmartSDR's P/CW panel; Got it hides it for good. It never holds up the message. The Flex page of the manual says the same.
 
 ## [1.21.0] — 2026-10-26

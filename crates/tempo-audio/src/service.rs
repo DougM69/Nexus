@@ -986,6 +986,17 @@ const TX_HOLD_RETELL_MS: f64 = 100.0;
 /// How often to run the FULL rig read-back over CAT — RF power, S-meter, mode mirror, DSP funcs.
 /// Each is a blocking TCP round-trip, so the heavy set is throttled well below the loop rate.
 const RIG_POLL_MS: f64 = 750.0;
+
+/// How long after a tune-up the radio took to read its tuner state again (#344). Not at once: while
+/// it tunes a Yaesu answers `AC002` and Hamlib reads that as "off" (`u TUNER` → `0`, captured from
+/// rigctl 4.5.5, model 1035), so the read waits for the cycle to end. The read also waits out a
+/// keyed rig on its own — the heavy poll that makes it is skipped while the rig is keyed.
+const ATU_REPROBE_AFTER_TUNE_MS: f64 = 8_000.0;
+/// How often the tuner state is read again while the radio reports a tuner (#344): slow — one
+/// `u TUNER` every ten seconds — because only a switch made at the radio needs it.
+const TUNER_REFRESH_MS: f64 = 10_000.0;
+/// Misses in a row before that slow re-read stops (see `RadioLoop::tuner_misses`).
+const TUNER_MISS_LIMIT: u8 = 3;
 /// How much WALL TIME one heavy poll may spend on blocking CAT read-back before it abandons the
 /// rest of this tick's reads and picks them up on the next heavy poll.
 ///
@@ -4378,11 +4389,22 @@ struct RadioLoop {
     read_turns: ReadTurns,
     /// Whether the rig's BUILT-IN ATU (Hamlib `TUNER`) has been probed for the current CAT
     /// confirmation. Probed ONCE per confirmation like [`Self::rx_ranges`] rather than round-robin
-    /// like the DSP funcs — it is a capability the cockpit shows or hides a TRANSMIT control on,
-    /// not a value that moves under the operator's hand — so a rig with no tuner costs one
-    /// round-trip per confirmation, not one per poll. The answer itself lives on the engine
-    /// (`Engine::rig_tuner`), which is what the gate and the snapshot both read.
+    /// like the DSP funcs — it is a capability the cockpit shows or hides a TRANSMIT control on —
+    /// so a rig with no tuner costs one round-trip per confirmation, not one per poll. A rig that
+    /// HAS one is re-read slowly for its in-line state (ATU ON, #344; [`Self::tuner_reprobe_at`]).
+    /// The answer itself lives on the engine (`Engine::rig_tuner`), which is what the gate and the
+    /// snapshot both read.
     tuner_probed: bool,
+    /// When to read the tuner's state again (#344): every [`TUNER_REFRESH_MS`] while the radio
+    /// reports a tuner, so a switch made at the radio shows; sooner after Nexus moved it — a
+    /// tune-up the radio took puts it in line, a switch-out takes it out. The button shows ATU ON
+    /// from this read, never from the click. `None` = no re-read owed.
+    tuner_reprobe_at: Option<f64>,
+    /// Consecutive re-reads of the tuner state the radio did not answer. At [`TUNER_MISS_LIMIT`]
+    /// the slow refresh stops until the next CAT confirmation — the give-up latch every periodic
+    /// read needs, because a read that times out drops the CAT socket. A miss keeps the state
+    /// shown (it never hides the ATU button).
+    tuner_misses: u8,
     /// Where every spectrum source publishes. Held here so the CI-V native row can be published
     /// WITHOUT the engine mutex — that mutex is held across this loop's own blocking CAT at the
     /// slot boundary, which is what starved the panadapter along with the audio row.
@@ -4728,6 +4750,8 @@ impl RadioLoop {
             func_read_next: 0,
             read_turns: ReadTurns::default(),
             tuner_probed: false,
+            tuner_reprobe_at: None,
+            tuner_misses: 0,
             spectrum_feed: cfg.spectrum_feed.clone(),
             rx_tap: cfg.rx_tap.clone(),
             meter_feed: cfg.meter_feed.clone(),
@@ -9111,8 +9135,8 @@ impl RadioLoop {
                         // Does this radio have a built-in ATU? ONE round-trip per CAT
                         // confirmation, like the range table above and deliberately NOT the
                         // round-robin the DSP funcs use: this is a capability the cockpit shows
-                        // or hides a TRANSMIT control on, not a value that moves under the
-                        // operator's hand. A rig that doesn't answer `u TUNER` stays `None` and
+                        // or hides a TRANSMIT control on. (Its in-line STATE is re-read slowly
+                        // below, #344.) A rig that doesn't answer `u TUNER` stays `None` and
                         // is offered no ATU button — an ATU control on a radio with no ATU is
                         // worse than no control.
                         //
@@ -9131,7 +9155,15 @@ impl RadioLoop {
                         // is Hamlib rigctld (the native CI-V gap above), so the model settles it;
                         // Nexus's own Flex client answers it only behind its ATU switch, and says
                         // itself whether it can start a tune.
-                        if !self.tuner_probed {
+                        // ⭐ AND AGAIN, SLOWLY, WHILE THERE IS A TUNER (#344: the button reads ATU ON
+                        // while it is in line). A re-read is a periodic mirror: it waits for the
+                        // poll's read budget, a miss keeps what is shown, and three in a row stop it.
+                        let first_probe = !self.tuner_probed;
+                        let poll_budget_left =
+                            poll_started.elapsed().as_millis() < HEAVY_POLL_BUDGET_MS;
+                        if first_probe
+                            || (poll_budget_left && self.tuner_reprobe_at.is_some_and(|t| now >= t))
+                        {
                             self.tuner_probed = true;
                             let tuner = rig.read_func("TUNER");
                             // Nexus's own Flex client, once it runs the radio's ATU, says itself
@@ -9147,10 +9179,18 @@ impl RadioLoop {
                                         self.applied.rig_model,
                                     ),
                                 };
-                            {
+                            if first_probe || tuner.is_some() {
+                                self.tuner_misses = 0;
                                 let mut eng = engine_lock(engine);
                                 eng.observe_rig_tuner(tuner, start_tune);
+                            } else {
+                                self.tuner_misses = self.tuner_misses.saturating_add(1);
                             }
+                            // A radio that reports no tuner is never asked again on this
+                            // confirmation, as before.
+                            self.tuner_reprobe_at = (tuner.is_some()
+                                || (!first_probe && self.tuner_misses < TUNER_MISS_LIMIT))
+                                .then_some(now + TUNER_REFRESH_MS);
                         }
                         // ⚠️ THE READ BUDGET (see `HEAVY_POLL_BUDGET_MS`). Every read-back
                         // below this line asks it; every WRITE and operator action below it does
@@ -9846,6 +9886,8 @@ impl RadioLoop {
                                 // `may_key()` beside it — is not a tune-up either.
                                 FuncSet::Ok => {
                                     engine_lock(engine).note_atu_tune_started();
+                                    // The tuner is now in line: read it once the cycle is over (#344).
+                                    self.tuner_reprobe_at = Some(now + ATU_REPROBE_AFTER_TUNE_MS);
                                 }
                                 // The rig ANSWERED and said no, so nothing is tuning and the
                                 // operator's QSO is none of our business — the ruling. NOT
@@ -9869,8 +9911,27 @@ impl RadioLoop {
                                          because the rig may be tuning"
                                     ));
                                     engine_lock(engine).note_atu_tune_started();
+                                    self.tuner_reprobe_at = Some(now + ATU_REPROBE_AFTER_TUNE_MS);
                                 }
                             }
+                        }
+                        // ⭐ THE CLICK ON ATU ON (#344): switch the tuner OUT of line, `U TUNER 0` —
+                        // the same verb the tune-up sends with `2`. NOT a keying command, but never
+                        // sent under power: `take_atu_bypass` re-asks the engine that nothing is on
+                        // the air, and this whole block is skipped while the rig is keyed by anyone.
+                        // What the button shows next is the radio's own answer, read on the next
+                        // heavy poll — a refusal (Nexus's Flex client has no switch-out, and a
+                        // backend may not either) leaves it reading ATU ON, as it is.
+                        if engine_lock(engine).take_atu_bypass() && self.may_key() {
+                            match rig.set_func_value("TUNER", 0) {
+                                FuncSet::Ok => crate::civ::diag::note("ATU: tuner switched out"),
+                                FuncSet::Refused(why) | FuncSet::Uncertain(why) => {
+                                    crate::civ::diag::note(&format!(
+                                        "ATU: the tuner switch-out was not confirmed: {why}"
+                                    ));
+                                }
+                            }
+                            self.tuner_reprobe_at = Some(now);
                         }
                         // Apply pending RIT/XIT/VFO clarifier requests (CAT-panel controls). Drain
                         // under the lock, RELEASE it, then do the CAT round-trip. Write-only +
@@ -33923,6 +33984,191 @@ mod tests {
              \"switch the tuner in\" (1 = AC001, the dead-button bug) — saw {:?}",
             log.lock().unwrap()
         );
+    }
+
+    /// A rig whose tuner REMEMBERS: `u TUNER` answers what the last `U TUNER` left (a tune-up, `2`,
+    /// leaves it in line; `0` takes it out). Starts in line. The returned cell is the radio's own
+    /// state — `Some(in_line)`, set by a test to model a switch made at the radio's front panel —
+    /// and `None` makes `u TUNER` answer `RPRT -11`, a radio that stopped answering the read.
+    #[allow(clippy::type_complexity)]
+    fn mock_rigctld_with_a_tuner_that_remembers(
+        dial_hz: u64,
+    ) -> (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<Option<bool>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        let tuner = Arc::new(Mutex::new(Some(true)));
+        let tuner2 = Arc::clone(&tuner);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let mut tuner_in = tuner2.lock().unwrap();
+                    let reply = match (l.as_str(), *tuner_in) {
+                        ("f", _) => format!("{dial_hz}\n"),
+                        ("u TUNER", Some(on)) => format!("{}\n", u8::from(on)),
+                        ("u TUNER", None) => "RPRT -11\n".to_string(),
+                        ("U TUNER 0", _) => {
+                            *tuner_in = Some(false);
+                            "RPRT 0\n".to_string()
+                        }
+                        ("U TUNER 2", _) => {
+                            *tuner_in = Some(true);
+                            "RPRT 0\n".to_string()
+                        }
+                        _ => "RPRT 0\n".to_string(),
+                    };
+                    drop(tuner_in);
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log, tuner)
+    }
+
+    /// ⭐ #344 ON THE WIRE: the click on ATU ON sends `U TUNER 0` and the button then shows what the
+    /// RADIO says — ATU, the tuner out. A tune-up puts it back in line, and the button reads ATU ON
+    /// again once the cycle is over (`ATU_REPROBE_AFTER_TUNE_MS`), from the radio's answer, not
+    /// from the click.
+    #[test]
+    fn atu_on_switches_the_tuner_out_and_the_button_follows_the_radio() {
+        let engine = atu_engine();
+        let (addr, log, _radio) = mock_rigctld_with_a_tuner_that_remembers(14_290_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let atu = |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.atu;
+
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 2);
+        assert_eq!(
+            atu(&engine),
+            Some(true),
+            "scene guard: the tuner reads in line"
+        );
+
+        engine
+            .lock()
+            .unwrap()
+            .atu_bypass()
+            .expect("the tuner is in: ATU ON switches it out");
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 2);
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "U TUNER 0"),
+            "the switch-out reaches the radio: {:?}",
+            log.lock().unwrap()
+        );
+        assert!(
+            !log.lock().unwrap().iter().any(|l| l == "U TUNER 2"),
+            "a switch-out never runs a tune-up"
+        );
+        assert_eq!(
+            atu(&engine),
+            Some(false),
+            "the button follows the radio: tuner out"
+        );
+
+        engine.lock().unwrap().atu_tune().expect("the gate passes");
+        let reprobes = (ATU_REPROBE_AFTER_TUNE_MS / 400.0) as usize + 3;
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, reprobes);
+        assert!(log.lock().unwrap().iter().any(|l| l == "U TUNER 2"));
+        assert_eq!(
+            atu(&engine),
+            Some(true),
+            "after the tune-up the radio's tuner reads in line again: ATU ON"
+        );
+    }
+
+    /// ⭐ #344, THE RADIO'S OWN HAND: a tuner switched at the front panel shows within a slow
+    /// re-read ([`TUNER_REFRESH_MS`]), and a re-read the radio stops answering keeps what is shown
+    /// — never hides the ATU button — and gives up after [`TUNER_MISS_LIMIT`] misses, so a radio
+    /// that will not answer is not asked forever (a read that times out drops the CAT socket).
+    #[test]
+    fn the_atu_button_follows_a_switch_made_at_the_radio_and_a_silent_radio_is_not_asked_forever() {
+        let engine = atu_engine();
+        let (addr, log, radio) = mock_rigctld_with_a_tuner_that_remembers(14_290_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let atu = |e: &Arc<Mutex<Engine>>| e.lock().unwrap().snapshot().radio.atu;
+        let reads = |log: &Arc<Mutex<Vec<String>>>| {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|l| *l == "u TUNER")
+                .count()
+        };
+        // Heavy polls on ONE clock, 400 ms apart (`run_heavy_polls` restarts its clock at every
+        // call, which would hide a re-read owed further out than one call reaches).
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut polls = |state: &mut RadioLoop, rig: &mut Rig, ms: f64| {
+            let end = tick + ms;
+            while tick < end {
+                state.last_rig_poll = tick - RIG_POLL_MS - 1.0;
+                tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+
+        polls(&mut state, &mut rig, 800.0);
+        assert_eq!(atu(&engine), Some(true), "scene guard: in line");
+
+        *radio.lock().unwrap() = Some(false); // switched out at the radio
+        polls(&mut state, &mut rig, TUNER_REFRESH_MS + 800.0);
+        assert_eq!(
+            atu(&engine),
+            Some(false),
+            "the button follows the radio: ATU"
+        );
+
+        *radio.lock().unwrap() = None; // the radio stops answering the read
+        let before = reads(&log);
+        polls(
+            &mut state,
+            &mut rig,
+            TUNER_REFRESH_MS * f64::from(TUNER_MISS_LIMIT + 2),
+        );
+        assert_eq!(
+            atu(&engine),
+            Some(false),
+            "a missed re-read keeps the state and the button"
+        );
+        assert_eq!(
+            reads(&log) - before,
+            usize::from(TUNER_MISS_LIMIT),
+            "the radio is asked until the miss limit and no more"
+        );
+        let asked = reads(&log);
+        polls(&mut state, &mut rig, TUNER_REFRESH_MS * 5.0);
+        assert_eq!(reads(&log), asked, "…not until the next CAT confirmation");
     }
 
     #[test]

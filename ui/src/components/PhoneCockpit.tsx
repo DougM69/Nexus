@@ -87,6 +87,7 @@ import {
   startQsoRecording,
   stopQsoRecording,
   setTune,
+  atuBypass,
   atuTune,
   haltTx,
   setTxEnabled,
@@ -2632,6 +2633,11 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
       }
       onAtuTune={() =>
         void atuTune()
+          .then((s) => onSnap?.(s))
+          .catch((e) => pushToast(String(e), 'error'))
+      }
+      onAtuBypass={() =>
+        void atuBypass()
           .then((s) => onSnap?.(s))
           .catch((e) => pushToast(String(e), 'error'))
       }

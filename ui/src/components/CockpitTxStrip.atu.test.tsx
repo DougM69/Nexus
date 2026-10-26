@@ -36,17 +36,23 @@ const snapWith = (over: Record<string, unknown> = {}) =>
     },
   }) as unknown as AppSnapshot
 
-function mount(snap: AppSnapshot, onAtuTune: (() => void) | undefined = () => {}) {
+function mount(
+  snap: AppSnapshot,
+  onAtuTune: (() => void) | undefined = () => {},
+  onAtuBypass?: () => void,
+) {
   return render(
     <CockpitTxStrip
       radio={snap.radio}
       onTune={() => {}}
       onAtuTune={onAtuTune}
+      onAtuBypass={onAtuBypass}
     />,
   )
 }
 
-const atuButton = () => screen.queryByRole('button', { name: 'ATU' })
+// "ATU", or "ATU ON" while the radio reports its tuner in line (#344).
+const atuButton = () => screen.queryByRole('button', { name: /^ATU( ON)?$/ })
 
 afterEach(cleanup)
 
@@ -125,6 +131,43 @@ describe("the rig's own ATU control", () => {
   // Kenwood backends the start-tune command is clamped to "switch the tuner in line", so the
   // press tunes nothing. The button STAYS — the tuner and its in-line state are real, and this
   // is where the operator reads them — and says what to do instead.
+  // ⭐ #344 (RaptorFlight): "after running ATU maybe have it change to ATU ON (and then you could
+  // click to turn it off)". The label follows the radio's own tuner state; with a switch-out wired
+  // (every screen wires one), the click on ATU ON takes the tuner out instead of running a tune-up.
+  it('reads ATU ON while the tuner is in line, and ATU while it is out', () => {
+    mount(snapWith({ atu: true }), () => {}, () => {})
+    expect(screen.getByRole('button', { name: 'ATU ON' }).getAttribute('aria-pressed')).toBe('true')
+    cleanup()
+    mount(snapWith({ atu: false }), () => {}, () => {})
+    expect(screen.getByRole('button', { name: 'ATU' }).getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('a click on ATU ON switches the tuner out and runs no tune-up', () => {
+    const tune = vi.fn()
+    const out = vi.fn()
+    mount(snapWith({ atu: true }), tune, out)
+    screen.getByRole('button', { name: 'ATU ON' }).click()
+    expect([out.mock.calls.length, tune.mock.calls.length]).toEqual([1, 0])
+    // CONTROL: with the tuner out, the same button runs the tune-up and switches nothing.
+    cleanup()
+    mount(snapWith({ atu: false }), tune, out)
+    screen.getByRole('button', { name: 'ATU' }).click()
+    expect([out.mock.calls.length, tune.mock.calls.length]).toEqual([1, 1])
+  })
+
+  it('the switch-out keys nothing, so the tune-up lockouts do not hold it', () => {
+    // Outside privileges, or on a CAT path that cannot START a tune: the tune-up stays locked,
+    // and switching the tuner OUT is still offered — it puts no carrier on the air.
+    for (const over of [{ txAllowed: false }, { atuStartTuneUnsupported: true }]) {
+      mount(snapWith({ atu: true, ...over }), () => {}, () => {})
+      expect(screen.getByRole('button', { name: 'ATU ON' }).hasAttribute('disabled')).toBe(false)
+      cleanup()
+      mount(snapWith({ atu: false, ...over }), () => {}, () => {})
+      expect(screen.getByRole('button', { name: 'ATU' }).hasAttribute('disabled')).toBe(true)
+      cleanup()
+    }
+  })
+
   it('stays, disabled and explaining itself, where the CAT path cannot start a tune', () => {
     mount(snapWith({ atu: true, atuStartTuneUnsupported: true }))
     const atu = atuButton()

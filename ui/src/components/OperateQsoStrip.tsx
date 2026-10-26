@@ -59,6 +59,8 @@ interface Props {
    * reports a tuner (`radio.atu` non-null) — an ATU button on a radio with no ATU is
    * worse than no button (CockpitHeader's rule, kept identical here). */
   onAtuTune?: () => void
+  /** Switch the radio's tuner OUT of line — the click on ATU ON (#344); see `CockpitTxStrip`. */
+  onAtuBypass?: () => void
   onHaltTx?: () => void
   onSetHoldTxFreq?: (on: boolean) => void
   /** The active tier decodes but cannot transmit. NO SHIPPED TIER IS RX-ONLY TODAY —
@@ -127,6 +129,7 @@ export function OperateQsoStrip({
   onSetTxEnabled,
   onSetTune,
   onAtuTune,
+  onAtuBypass,
   onHaltTx,
   onSetHoldTxFreq,
   rxOnly,
@@ -272,22 +275,27 @@ export function OperateQsoStrip({
               button in `CockpitHeader` for why (Hamlib's Icom and Kenwood backends clamp
               `set_func TUNER 2` to "tuner in line"; `icom.c:7085`). */}
           {onAtuTune && radio.atu != null && (
+            // ATU ON (#344) — the same rule as `CockpitTxStrip`'s: with a switch-out wired, the
+            // click on ATU ON takes the tuner out (no carrier; the backend refuses it on the air).
             <button
               type="button"
-              className="op-btn atu"
-              onClick={onAtuTune}
-              disabled={noTx || !!radio.atuStartTuneUnsupported}
+              className={`op-btn atu${radio.atu ? ' on' : ''}`}
+              aria-pressed={radio.atu}
+              onClick={radio.atu && onAtuBypass ? onAtuBypass : onAtuTune}
+              disabled={!(radio.atu && onAtuBypass) && (noTx || !!radio.atuStartTuneUnsupported)}
               title={
-                noTx
-                  ? noTxWhy
-                  : `${
-                      radio.atuStartTuneUnsupported
-                        ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
-                        : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
-                    } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`
+                radio.atu && onAtuBypass
+                  ? 'The tuner is switched in. Click to switch it out — nothing is transmitted, and not while transmitting.'
+                  : noTx
+                    ? noTxWhy
+                    : `${
+                        radio.atuStartTuneUnsupported
+                          ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
+                          : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
+                      } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`
               }
             >
-              ATU
+              {radio.atu ? 'ATU ON' : 'ATU'}
             </button>
           )}
           <FtStopControl onHaltTx={onHaltTx} />

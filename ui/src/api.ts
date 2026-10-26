@@ -3465,6 +3465,12 @@ export async function atuTune(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('atu_tune')
 }
 
+/** Switch the radio's built-in tuner OUT of line — the click on ATU ON (#344). Keys nothing;
+ * rejects with the reason while anything is on the air or when the tuner is not in line. */
+export async function atuBypass(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('atu_bypass')
+}
+
 /** Emergency stop: halt any transmit immediately. Returns the fresh snapshot. */
 export async function haltTx(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('halt_tx')

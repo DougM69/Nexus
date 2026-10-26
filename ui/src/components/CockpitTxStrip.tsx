@@ -23,6 +23,9 @@ export interface CockpitTxStripProps {
   onTune?: (on: boolean) => void
   /** Run the RADIO's own built-in ATU. Rendered only when the rig reports a tuner (`radio.atu`). */
   onAtuTune?: () => void
+  /** Switch the radio's tuner OUT of line — the click on ATU ON (#344). Without it, ATU ON still
+   *  shows the state and a click runs a tune-up, as before. */
+  onAtuBypass?: () => void
   /** Stop TX — the screen's own stop (CW passes stopCw()+haltTx(), RTTY rttyStop()+haltTx()). */
   onStopTx?: () => void
   /** Hold Tx, the slot modes' fifth control (Tempo; FT draws its own strip). */
@@ -48,7 +51,7 @@ export interface CockpitTxStripProps {
  * the header's did: in RTTY and SSTV the latch is a STOP (set_tx_enabled(false) arms the mode's
  * abort) and must stay a button through their overs, which `radio.transmitting` never marks.
  */
-export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onStopTx, hold }: CockpitTxStripProps) {
+export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold }: CockpitTxStripProps) {
   const onAir = isOnAir(radio)
   // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
   // 2026-09-28; the sign moved here from the header with the rest of the strip). A streamed
@@ -64,6 +67,11 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onSto
     !(radio.streamMic === 'armed' && !radio.transmitting && !radio.tuning && radio.rigKeyed !== true)
   const ref = useRef<HTMLDivElement>(null)
   useDockClearance(ref)
+  // ⭐ ATU ON (#344): the label says when the radio reports its tuner in line, and with a
+  // switch-out wired the click takes it out — no carrier, so not the tune-up's licence lockout.
+  // Never under power: the backend refuses it while anything is on the air and says so (a toast),
+  // and the radio loop never sends it to a keyed rig. `onAir` stays display-only here.
+  const atuOut = radio.atu === true && !!onAtuBypass
 
   return (
     <div className="cockpit-txstrip" ref={ref}>
@@ -116,16 +124,21 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onSto
         {onAtuTune && radio.atu != null && (
           <button
             type="button"
-            className="op-btn atu"
-            onClick={onAtuTune}
-            disabled={!radio.txAllowed || !!radio.atuStartTuneUnsupported}
-            title={`${
-              radio.atuStartTuneUnsupported
-                ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
-                : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
-            } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`}
+            className={`op-btn atu${radio.atu ? ' on' : ''}`}
+            aria-pressed={radio.atu}
+            onClick={atuOut ? onAtuBypass : onAtuTune}
+            disabled={!atuOut && (!radio.txAllowed || !!radio.atuStartTuneUnsupported)}
+            title={
+              atuOut
+                ? 'The tuner is switched in. Click to switch it out — nothing is transmitted, and not while transmitting.'
+                : `${
+                    radio.atuStartTuneUnsupported
+                      ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
+                      : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
+                  } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`
+            }
           >
-            ATU
+            {radio.atu ? 'ATU ON' : 'ATU'}
           </button>
         )}
         {/* THE stop control of every screen that draws this strip; its label is the accessible

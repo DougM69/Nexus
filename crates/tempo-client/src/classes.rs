@@ -54,6 +54,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("archive_conversation",           RunsAtShack, "Deletes a chat thread and drops its queued messages."),
     ("arm_stream_mic",                 RefusedHere, "The stream's microphone; another computer's PTT is a held press of its own."),
     ("ask_log",                        RunsAtShack, "A question about the shack's logbook."),
+    ("atu_bypass",                     RunsAtShack, "Switches the rig's own tuner out of line; keys nothing, and is refused on the air."),
     ("atu_tune",                       StartsTx,    "The rig's own tuner puts a carrier on the air."),
     ("broadcast",                      StartsTx,    "Queues an open broadcast message to transmit."),
     ("bulk_edit_apply",                RefusedHere, "Changes fields on many contacts of the shack's logbook at once, as large as a purge."),

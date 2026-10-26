@@ -4356,6 +4356,9 @@ pub struct Engine {
     /// The transmit stand-down generation the pending ATU press was made under: the drain drops a
     /// press made before the stand-down moved ([`Self::take_atu_tune`]).
     pending_atu_tune_stand_down: u64,
+    /// A pending "switch the rig's tuner out" click on ATU ON (#344) — drained by the radio loop via
+    /// [`Self::take_atu_bypass`], which re-checks that nothing is on the air.
+    pending_atu_bypass: bool,
     /// Rig RX passband width (Hz) from the poll; `None` = unknown / rig default. Observed-only.
     rig_passband: Option<u32>,
     /// The radio's RECEIVE frequency ranges (Hz, inclusive), read once per CAT confirmation from
@@ -6750,6 +6753,7 @@ impl Engine {
             rig_tuner: None,
             rig_atu_start_tune: true,
             pending_atu_tune: None,
+            pending_atu_bypass: false,
             pending_atu_tune_stand_down: 0,
             rig_passband: None,
             pending_passband: None,
@@ -8204,6 +8208,7 @@ impl Engine {
         // keeps: the radio that may be playing is the one being left, and the loop would send
         // the STOP to the incoming one.
         self.pending_atu_tune = None;
+        self.pending_atu_bypass = false;
         self.pending_voice_mem = None;
         // …and exactly like a QSY, take the queued split one-shot
         // (`set_frequency` / `observe_rig_freq` do the identical three lines).
@@ -13032,6 +13037,42 @@ impl Engine {
         self.pending_atu_tune_stand_down == self.remote_transmit_stand_down.generation()
             && now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
             && self.atu_tune_gate().is_ok()
+    }
+
+    /// Switch the rig's built-in tuner OUT of line — the click on ATU ON (#344). The same CAT verb
+    /// that runs a tune-up with `2` takes the tuner out with `0` (`U TUNER 0`: Yaesu `AC000`,
+    /// "Tuner OFF", FT-991A CAT reference; Icom `1C 01 00`). Nothing keys, so the TX gates of
+    /// [`Self::atu_tune_gate`] are not asked; what is asked:
+    ///  * the radio reports its tuner IN line — there is nothing to switch out otherwise;
+    ///  * NOTHING is on the air ([`Self::on_air`]): a tuner's relays are not switched under power.
+    ///    The radio loop asks again at the wire ([`Self::take_atu_bypass`]), and the poll block that
+    ///    sends it never runs while the rig is keyed;
+    ///  * not Nexus's own Flex client, which has no switch-out to send (`U TUNER 0` → not
+    ///    implemented), so the click says so instead of doing nothing.
+    pub fn atu_bypass(&mut self) -> Result<(), String> {
+        if self.rig_tuner != Some(true) {
+            return Err(
+                "The radio doesn't report its tuner in line — nothing to switch out".to_string(),
+            );
+        }
+        if self.flex_atu.is_some() {
+            return Err(
+                "This radio's tuner can't be switched out from Nexus — use the radio's ATU control"
+                    .to_string(),
+            );
+        }
+        if self.on_air() {
+            return Err("Not while transmitting — switch the tuner out between overs".to_string());
+        }
+        self.pending_atu_bypass = true;
+        Ok(())
+    }
+
+    /// Drain a pending tuner switch-out for the radio loop: `true` only while still nothing is on
+    /// the air. Consumed unconditionally, like [`Self::take_atu_tune`]: a click that cannot be acted
+    /// on is dropped, never held for later.
+    pub fn take_atu_bypass(&mut self) -> bool {
+        std::mem::take(&mut self.pending_atu_bypass) && !self.on_air()
     }
 
     /// ⭐ #322 — THE RADIO TOOK THE TUNE-UP, so in the Digital section the sequencer stands down
@@ -37192,6 +37233,55 @@ mod tests {
         e.clear_rig_tuner();
         assert!(e.snapshot().radio.atu.is_none());
         assert!(e.atu_tune().is_err());
+    }
+
+    /// ⭐ #344: "after running ATU maybe have it change to ATU ON (and then you could click to turn it
+    /// off)". The click on ATU ON queues ONE switch-out (`U TUNER 0`) for the radio loop — only when
+    /// the radio reports its tuner in line, and never while anything is on the air: a tuner's relays
+    /// are not switched under power. Nexus's own Flex client has no switch-out, so it says so.
+    #[test]
+    fn atu_on_switches_the_tuner_out_only_when_it_is_in_and_nothing_is_on_the_air() {
+        let mut e = phone_armed_engine();
+        assert!(
+            e.atu_bypass().is_err(),
+            "no tuner reported: nothing to switch out"
+        );
+        e.observe_rig_tuner(Some(false), true);
+        assert!(
+            e.atu_bypass().is_err(),
+            "a tuner already out is not switched out again"
+        );
+        assert!(!e.take_atu_bypass(), "…and nothing was queued");
+
+        e.observe_rig_tuner(Some(true), true);
+        e.atu_bypass()
+            .expect("the tuner is in line: the click switches it out");
+        assert!(e.take_atu_bypass(), "the loop is handed the switch-out");
+        assert!(!e.take_atu_bypass(), "once");
+
+        // Not under power: a tune carrier is up, so the click is refused and nothing is queued.
+        e.set_tune(true);
+        assert!(e.on_air(), "scene guard: the tune carrier is on the air");
+        let why = e.atu_bypass().expect_err("never switched out on the air");
+        assert!(why.contains("transmitting"), "says why: {why}");
+        assert!(!e.take_atu_bypass());
+        // …and a switch-out queued before a key does not fire under it either.
+        e.set_tune(false);
+        e.atu_bypass().unwrap();
+        e.set_tune(true);
+        assert!(
+            !e.take_atu_bypass(),
+            "dropped, not fired, once the transmitter is up"
+        );
+        e.set_tune(false);
+
+        // Nexus's own Flex client has no switch-out: the click says so rather than doing nothing.
+        e.observe_flex_atu(Some(crate::dto::FlexAtu::default()));
+        let why = e
+            .atu_bypass()
+            .expect_err("no switch-out on the Flex client");
+        assert!(why.contains("can't be switched out"), "says why: {why}");
+        assert!(!e.take_atu_bypass());
     }
 
     #[test]

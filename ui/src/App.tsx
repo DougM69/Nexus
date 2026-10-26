@@ -43,6 +43,7 @@ import {
   setActiveRadio as apiSetActiveRadio,
   setPegLock as apiSetPegLock,
   setTune as apiSetTune,
+  atuBypass as apiAtuBypass,
   atuTune as apiAtuTune,
   haltTx as apiHaltTx,
   setTxEven as apiSetTxEven,
@@ -1924,6 +1925,12 @@ function App() {
   // lockout, no tuner) WITH ITS REASON, and the toast shows it.
   const handleAtuTune = useCallback(() => {
     void apiAtuTune()
+      .then((s) => setSnap(s))
+      .catch((e) => pushToast(String(e), 'error'))
+  }, [])
+  // The click on ATU ON (#344): the tuner out of line. Keys nothing; refused on the air.
+  const handleAtuBypass = useCallback(() => {
+    void apiAtuBypass()
       .then((s) => setSnap(s))
       .catch((e) => pushToast(String(e), 'error'))
   }, [])
@@ -3831,6 +3838,7 @@ function App() {
               onSetTxEnabled={handleSetTxEnabled}
               onSetTune={handleSetTune}
               onAtuTune={handleAtuTune}
+              onAtuBypass={handleAtuBypass}
               onHaltTx={handleHaltTx}
               onSetHoldTxFreq={handleSetHoldTxFreq}
             />,
@@ -4219,6 +4227,7 @@ function App() {
                     onSetTxEnabled={handleSetTxEnabled}
                     onTune={snap.radio.atu != null ? handleSetTune : undefined}
                     onAtuTune={handleAtuTune}
+                    onAtuBypass={handleAtuBypass}
                     onStopTx={handleHaltTx}
                   />
                 }
