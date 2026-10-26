@@ -211,6 +211,25 @@ describe('Save is the edit form’s save, with only what was changed', () => {
     ])
   })
 
+  it('a multi-line field is edited in a multi-line box, and keeps its line breaks as written', async () => {
+    engine.log = (engine.log as LoggedQso[]).map((r) =>
+      r.id === 'id-dl' ? { ...r, extra: [...(r.extra ?? []), ['ADDRESS', '1 Main St\r\nTown'] as [string, string]] } : r,
+    )
+    engine.revision += 1
+    await mounted()
+    const card = await openCard()
+    fireEvent.click(within(card).getByText(t('contactCard.more')))
+    const address = within(card).getByRole('textbox', { name: 'ADDRESS' })
+    expect(address.tagName, 'a box that holds lines').toBe('TEXTAREA')
+    expect(within(card).getByRole('textbox', { name: 'CNTY' }).tagName, 'a one-line field keeps its one-line box').toBe('INPUT')
+    fireEvent.change(address, { target: { value: '1 Main Street\nTown' } })
+    save(card)
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.editQsoById).mock.calls[0][2]).toEqual([
+      { tag: 'ADDRESS', old: '1 Main St\r\nTown', new: '1 Main Street\r\nTown' },
+    ])
+  })
+
   it('Save is not offered until something changed', async () => {
     await mounted()
     const card = await openCard()

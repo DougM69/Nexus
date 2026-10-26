@@ -67,6 +67,24 @@ export function ownField(tag: string): boolean {
   return tag.startsWith('APP_NEXUS_') || tag.startsWith('APP_TEMPO_') || tag === 'APP_EQSL_AG'
 }
 
+/** The ADIF fields whose type is a multi-line string. */
+const MULTILINE_TAGS: ReadonlySet<string> = new Set([
+  'ADDRESS', 'ADDRESS_INTL', 'NOTES', 'NOTES_INTL', 'QSLMSG', 'QSLMSG_INTL', 'QSLMSG_RCVD', 'RIG', 'RIG_INTL',
+])
+
+/** Whether a field kept as written is edited in a box that holds lines: an ADIF multi-line field,
+ *  or any value that holds a line break. A one-line box drops line breaks from what it shows, so
+ *  the first keystroke in it would glue the lines together. */
+export function multiLine(f: CardField): boolean {
+  return MULTILINE_TAGS.has(f.tag.trim().toUpperCase()) || /[\r\n]/.test(f.orig ?? '') || /[\r\n]/.test(f.value)
+}
+
+/** What a multi-line box typed, with the line breaks the field was written with: a browser's box
+ *  gives back bare line feeds, and a field written with CR LF (ADIF's own) keeps CR LF. */
+export function typedLines(f: CardField, typed: string): string {
+  return f.orig?.includes('\r\n') ? typed.replace(/\r?\n/g, '\r\n') : typed
+}
+
 const IOTA_RE = /^(AF|AN|AS|EU|NA|OC|SA)-\d{3}$/
 
 /** The card's boxes, filled from the contact as stored. */

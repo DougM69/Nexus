@@ -35,9 +35,13 @@
   color: var(--text-dim);
 }
 .contact-card-field.removed .contact-card-tag,
-.contact-card-field.removed input {
+.contact-card-field.removed input,
+.contact-card-field.removed textarea {
   text-decoration: line-through;
   opacity: 0.6;
+}
+.contact-card-field textarea {
+  resize: vertical;
 }
 .contact-card-more > summary {
   cursor: pointer;

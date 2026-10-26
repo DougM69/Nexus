@@ -44,7 +44,9 @@ import {
   cardSave,
   draftOf,
   fieldsOf,
+  multiLine,
   ownField,
+  typedLines,
   type CardDraft,
   type CardError,
   type CardField,
@@ -413,15 +415,28 @@ function CardBody({
                   ) : (
                     <span className="mono contact-card-tag">{f.tag}</span>
                   )}
-                  <input
-                    className="settings-input mono"
-                    value={f.value}
-                    onChange={(e) => setField(i, { value: e.target.value })}
-                    readOnly={own || f.removed || !canSave}
-                    aria-label={f.tag || t('contactCard.field.value')}
-                    spellCheck={false}
-                    autoComplete="off"
-                  />
+                  {multiLine(f) ? (
+                    // A field that holds lines (an address, a QSL message): edited with its lines.
+                    <textarea
+                      className="settings-input mono"
+                      value={f.value}
+                      onChange={(e) => setField(i, { value: typedLines(f, e.target.value) })}
+                      readOnly={own || f.removed || !canSave}
+                      aria-label={f.tag || t('contactCard.field.value')}
+                      spellCheck={false}
+                      rows={Math.min(6, Math.max(2, f.value.split('\n').length))}
+                    />
+                  ) : (
+                    <input
+                      className="settings-input mono"
+                      value={f.value}
+                      onChange={(e) => setField(i, { value: e.target.value })}
+                      readOnly={own || f.removed || !canSave}
+                      aria-label={f.tag || t('contactCard.field.value')}
+                      spellCheck={false}
+                      autoComplete="off"
+                    />
+                  )}
                   {!own && canSave && (
                     <button
                       type="button"
