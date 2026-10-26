@@ -753,7 +753,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             )}
             {!observed && gridMissing && (
               <span id={gridNoteId} className="pota-act-grid-none">
-                {t(act?.program === 'SOTA' ? 'ota.activation.grid.noSummit' : 'ota.activation.grid.noPark')}
+                {act?.program === 'SOTA' ? t('ota.activation.grid.noSummit') : t('ota.activation.grid.noPark')}
               </span>
             )}
             {/* The state your contacts carry as MY_STATE: the park's own, or, on a state line,
