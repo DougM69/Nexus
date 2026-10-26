@@ -1,0 +1,247 @@
+// UPDATE FROM QRZ — fill the EMPTY fields of many contacts from the callbook: the ones ticked in
+// the list, or every one the list's search and filters show. Each distinct call is looked up once,
+// through the same lookup (and its cache) the callsign card uses, at the station, slowly: one
+// network lookup every few seconds (Settings ▸ Callbook lookups), never more in a day than the cap
+// set there. A call the cache already answers costs nothing. The fill is the log's own callbook
+// rule: a field the contact holds is never replaced, a contest exchange's fields are never touched,
+// the call, country, upload marks and confirmations stay, and nothing is uploaded.
+//
+// Preview first: the contacts, the calls, how many are already looked up, the time the rest take,
+// the day's lookups against the cap, and per field how many contacts it could fill. The button
+// then asks once more before it starts. Progress shows while it runs, with Cancel; whatever stops
+// it (done, cancelled, the day's cap, a failed lookup), what it found is ONE change the toast's
+// Undo takes back, and a later run picks up the rest from the cache at no cost.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Field names and calls are
+// invariant tokens, shown as they are.
+import { useEffect, useRef, useState } from 'react'
+import {
+  callbookUpdateCancel,
+  callbookUpdatePreview,
+  callbookUpdateStart,
+  callbookUpdateStatus,
+  type BulkTarget,
+  type CallbookUpdatePreview,
+  type CallbookUpdateStatus,
+} from '../api'
+import { t } from '../i18n'
+import { pushToast, withErrorToast } from '../toast'
+import type { LogQuery } from '../features/logQuery'
+import { changesRefusedHere, sayRun } from '../features/logCleanup'
+
+/** How often the progress is asked while an update runs. */
+export const POLL_MS = 1000
+
+export function LogCallbookUpdate({
+  onChanged,
+  afar,
+  picked,
+  query,
+  shown,
+}: {
+  onChanged: () => void
+  afar: boolean
+  picked: ReadonlySet<string>
+  query: LogQuery
+  shown: number
+}) {
+  const [which, setWhich] = useState<'picked' | 'shown'>(picked.size > 0 ? 'picked' : 'shown')
+  const [preview, setPreview] = useState<CallbookUpdatePreview | null>(null)
+  const [asking, setAsking] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState<CallbookUpdateStatus | null>(null)
+  const inFlight = useRef(false)
+  // The update this pane follows, whose end it reports: once, even when two polls overlap.
+  const watching = useRef(false)
+
+  const target = (): BulkTarget => (which === 'picked' ? { ids: [...picked] } : { query })
+  const queryKey = JSON.stringify(query)
+  const pickedKey = [...picked].join(' ')
+  useEffect(() => { setPreview(null); setAsking(false) }, [queryKey, pickedKey])
+
+  // One already running (started before this dialog opened): show its progress.
+  useEffect(() => {
+    let live = true
+    callbookUpdateStatus().then((s) => {
+      if (!live || !s.running) return
+      watching.current = true
+      setStatus(s)
+    }).catch(() => {})
+    return () => { live = false }
+  }, [])
+
+  const running = status?.running ?? false
+  useEffect(() => {
+    if (!running) return
+    const timer = setInterval(() => {
+      callbookUpdateStatus().then((s) => {
+        setStatus(s)
+        if (!s.running && s.ended && watching.current) {
+          watching.current = false
+          const end = s.ended
+          if (end.error) pushToast(end.error, 'error', 12_000)
+          if (end.made) sayRun(end.made, t('logbook.tools.callbook.done', { count: end.made.changed }), onChanged)
+          else if (!end.error) pushToast(t('logbook.tools.nothing'), 'info', 8000)
+          if (end.made && end.made.changed > 0) onChanged()
+        }
+      }).catch(() => {})
+    }, POLL_MS)
+    return () => clearInterval(timer)
+  }, [running, onChanged])
+
+  const onPreview = async () => {
+    setBusy(true)
+    const p = await withErrorToast(() => callbookUpdatePreview(target()), t('logbook.tools.bulk.previewFailed'))
+    setBusy(false)
+    setPreview(p)
+    setAsking(false)
+  }
+
+  const onStart = async () => {
+    if (changesRefusedHere() || inFlight.current || !preview) return
+    inFlight.current = true
+    setBusy(true)
+    setAsking(false)
+    const started = await withErrorToast(
+      () => callbookUpdateStart(preview.ids, preview.selected).then(() => true),
+      t('logbook.tools.callbook.failed'),
+    )
+    inFlight.current = false
+    setBusy(false)
+    if (!started) return
+    watching.current = true
+    setPreview(null)
+    setStatus({
+      running: true, done: 0, total: preview.calls, fromCache: 0, lookedUp: 0,
+      spent: preview.spent, cap: preview.cap, ended: null,
+    })
+  }
+
+  const left = preview ? Math.max(0, preview.cap - preview.spent) : 0
+  const minutes = preview ? Math.max(1, Math.ceil(preview.estimateSecs / 60)) : 0
+  const ended = status && !status.running ? status.ended : null
+
+  return (
+    <div className="log-tools-pane">
+      <p className="qso-detail-bare">{t('logbook.tools.callbook.intro')}</p>
+      <fieldset className="log-tools-row" disabled={running}>
+        <legend>{t('logbook.tools.bulk.which')}</legend>
+        <label>
+          <input
+            type="radio"
+            name="callbook-which"
+            checked={which === 'picked'}
+            disabled={picked.size === 0}
+            onChange={() => { setWhich('picked'); setPreview(null) }}
+          />{' '}
+          {t('logbook.tools.bulk.picked', { count: picked.size })}
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="callbook-which"
+            checked={which === 'shown'}
+            onChange={() => { setWhich('shown'); setPreview(null) }}
+          />{' '}
+          {t('logbook.tools.bulk.shown', { count: shown })}
+        </label>
+        <button type="button" className="export-btn" disabled={busy || running} onClick={() => void onPreview()}>
+          {t('logbook.tools.bulk.preview')}
+        </button>
+      </fieldset>
+      {preview && !running && (
+        <>
+          <p className="qso-detail-bare">
+            {t('logbook.tools.callbook.previewed', {
+              selected: preview.selected,
+              calls: preview.calls,
+              kept: preview.kept,
+              toLookUp: preview.toLookUp,
+            })}
+          </p>
+          {preview.toLookUp > 0 && (
+            <p className="qso-detail-bare">
+              {t('logbook.tools.callbook.time', { minutes, pace: preview.paceSecs })}
+            </p>
+          )}
+          <p className="qso-detail-bare">
+            {t('logbook.tools.callbook.today', { spent: preview.spent, cap: preview.cap })}
+          </p>
+          {preview.toLookUp > left && (
+            <p className="qso-detail-bare">
+              <strong>{t('logbook.tools.callbook.overCap', { count: left })}</strong>
+            </p>
+          )}
+          {!preview.configured && (
+            <p className="qso-detail-bare">
+              <strong>{t('logbook.tools.callbook.notSetUp')}</strong>
+            </p>
+          )}
+          {preview.fields.length > 0 && (
+            <p className="qso-detail-bare">
+              {t('logbook.tools.callbook.fields')}{' '}
+              <span className="mono">{preview.fields.map(([tag, n]) => `${tag} ${n}`).join(' · ')}</span>
+            </p>
+          )}
+          <div className="log-tools-row">
+            <button
+              type="button"
+              className="export-btn"
+              disabled={busy || afar || preview.couldChange === 0 || !preview.configured}
+              onClick={() => setAsking(true)}
+            >
+              {t('logbook.tools.callbook.apply', { count: preview.couldChange })}
+            </button>
+            {asking && (
+              <span className="log-tools-confirm">
+                <span>{t('logbook.tools.callbook.ask', { count: preview.toLookUp })}</span>
+                <button type="button" className="export-btn danger" disabled={busy} onClick={() => void onStart()}>
+                  {t('logbook.tools.callbook.confirm')}
+                </button>
+                <button type="button" className="export-btn" onClick={() => setAsking(false)}>
+                  {t('logbook.tools.cancel')}
+                </button>
+              </span>
+            )}
+          </div>
+        </>
+      )}
+      {status && running && (
+        <div className="log-tools-row" role="status">
+          <span>
+            {t('logbook.tools.callbook.progress', {
+              done: status.done,
+              total: status.total,
+              fromCache: status.fromCache,
+              spent: status.spent,
+              cap: status.cap,
+            })}
+          </span>
+          <button type="button" className="export-btn" onClick={() => void callbookUpdateCancel().catch(() => {})}>
+            {t('logbook.tools.callbook.stop')}
+          </button>
+        </div>
+      )}
+      {ended && (
+        <div className="qso-detail-bare" role="status">
+          <p>
+            {ended.stop === 'done' ? t('logbook.tools.callbook.end.done')
+              : ended.stop === 'cancelled' ? t('logbook.tools.callbook.end.cancelled')
+              : ended.stop === 'limit' ? t('logbook.tools.callbook.end.limit', { cap: status?.cap ?? 0 })
+              : t('logbook.tools.callbook.end.failed')}
+          </p>
+          {ended.notLookedUp > 0 && (
+            <p>{t('logbook.tools.callbook.resume', { count: ended.notLookedUp })}</p>
+          )}
+          {ended.unknown.length > 0 && (
+            <p>
+              {t('logbook.tools.callbook.unknown', { count: ended.unknown.length })}{' '}
+              <span className="mono">{ended.unknown.join(' ')}</span>
+            </p>
+          )}
+        </div>
+      )}
+      <p className="qso-detail-bare">{t('logbook.tools.callbook.rules')}</p>
+    </div>
+  )
+}

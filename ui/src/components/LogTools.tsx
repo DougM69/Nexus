@@ -1,6 +1,7 @@
 // CLEAN UP — the Logbook's three clean-up tools in one dialog: Duplicates (find contacts logged
 // more than once, merge each into one), Bulk edit (set or clear fields on many contacts at once)
-// and Check (list problems, each with a proposed fix, and make only the ones ticked).
+// and Check (list problems, each with a proposed fix, and make only the ones ticked) — and Update
+// from QRZ, which fills the empty fields of many contacts from the callbook (LogCallbookUpdate.tsx).
 //
 // Every change a tool makes is ONE change in the log's history: the toast's Undo takes the whole
 // of it back, and so does Recently deleted for a merge's deleted copies. No tool sends anything to
@@ -17,8 +18,9 @@ import { Dialog } from './ui/Dialog'
 import { LogDupes } from './LogDupes'
 import { LogBulkEdit } from './LogBulkEdit'
 import { LogCheck } from './LogCheck'
+import { LogCallbookUpdate } from './LogCallbookUpdate'
 
-export type LogTool = 'dupes' | 'bulk' | 'check'
+export type LogTool = 'dupes' | 'bulk' | 'check' | 'callbook'
 
 export function LogTools({
   open,
@@ -53,7 +55,7 @@ export function LogTools({
       className="log-tools-dialog"
     >
       <div className="log-tools-tabs" role="tablist" aria-label={t('logbook.tools.title')}>
-        {(['dupes', 'bulk', 'check'] as const).map((id) => (
+        {(['dupes', 'bulk', 'check', 'callbook'] as const).map((id) => (
           <button
             key={id}
             type="button"
@@ -64,7 +66,8 @@ export function LogTools({
           >
             {id === 'dupes' ? t('logbook.tools.tab.dupes')
               : id === 'bulk' ? t('logbook.tools.tab.bulk')
-              : t('logbook.tools.tab.check')}
+              : id === 'check' ? t('logbook.tools.tab.check')
+              : t('logbook.tools.tab.callbook')}
           </button>
         ))}
       </div>
@@ -74,6 +77,9 @@ export function LogTools({
         <LogBulkEdit onChanged={onChanged} afar={afar} picked={picked} query={query} shown={shown} />
       )}
       {open && tool === 'check' && <LogCheck onChanged={onChanged} afar={afar} />}
+      {open && tool === 'callbook' && (
+        <LogCallbookUpdate onChanged={onChanged} afar={afar} picked={picked} query={query} shown={shown} />
+      )}
     </Dialog>
   )
 }

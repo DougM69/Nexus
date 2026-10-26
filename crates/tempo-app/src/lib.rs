@@ -15,6 +15,7 @@
 pub mod alltxt;
 pub mod bandplan;
 pub mod call_history;
+pub mod callbook_update;
 pub mod clocksync;
 pub mod club_firewall;
 pub mod clubclock;

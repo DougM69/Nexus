@@ -263,6 +263,8 @@
   "qrzUsername": "",
   "hamqthUsername": "",
   "callbookCacheDays": 30,
+  "callbookUpdatePaceSecs": 2,
+  "callbookUpdateDailyCap": 250,
   "callookLookup": true,
   "qrzLogbookUpload": false,
   "clublogEmail": "",

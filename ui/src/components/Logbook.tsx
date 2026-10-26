@@ -2330,6 +2330,9 @@ export function Logbook({
           <button type="button" className="export-btn" onClick={() => setTools('dupes')}>
             {t('logbook.tools.button')}
           </button>
+          <button type="button" className="export-btn" onClick={() => setTools('callbook')}>
+            {t('logbook.tools.callbook.button')}
+          </button>
           <button
             type="button"
             className="export-btn danger"

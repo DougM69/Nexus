@@ -50,6 +50,8 @@
 //!   ([`station::push_target`]).
 //! - **a fix** changes a grid, a band, a DXCC number, a reference or an end time, never a call:
 //!   every stamp stays.
+//! - **an update from the callbook** ([`callbook_fill`]) fills empty fields only, by the log's own
+//!   callbook rule, never a call, a stamp or a confirmation: every stamp stays.
 //!
 //! An undo of any of them sends nothing either ([`crate::loghistory`]). A stamp is never history:
 //! the undo of a merge leaves the kept contact the stamps it had before the merge, because the
@@ -69,6 +71,7 @@ use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use tempo_core::logbook::callbook::{self, CallbookAnswer};
 use tempo_core::logbook::cleanup::{self, Change, Conflict, DupeKey, Field};
 use tempo_core::logbook::history::{content_key, Source};
 use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
@@ -609,6 +612,153 @@ pub fn bulk_edit(
                         pairs.push((Arc::clone(row), Some(Arc::new(after))));
                     }
                 }
+            }
+        }
+        (pairs, refused)
+    })
+}
+
+// ── update from the callbook ───────────────────────────────────────────────────────────────────
+
+/// What "Update from QRZ" would do with the contacts it was handed: read with the Engine lock
+/// released, changing nothing and asking no callbook.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallbookPreview {
+    /// The contacts named.
+    pub selected: usize,
+    /// Those no longer in the log.
+    pub missing: usize,
+    /// The distinct calls to look up, each once by [`cleanup::call_key`], in the order the
+    /// contacts were named. A contact with no call names none.
+    pub calls: Vec<String>,
+    /// Of those, the calls the lookup cache answers while fresh: no network lookup.
+    pub kept: usize,
+    /// The contacts with at least one field the callbook could fill.
+    pub could_change: usize,
+    /// By ADIF field name, how many contacts the fill could give it: exactly, for a call the cache
+    /// answers; at most, for a call still to be looked up (every empty field the rule would fill
+    /// from a complete answer).
+    pub fields: std::collections::BTreeMap<String, usize>,
+}
+
+/// A complete answer for `r`'s own call: every field the rule fills, each a well-formed value,
+/// the state the contact holds where it holds one (so a county is counted only where it could go).
+/// What a preview counts the fields a lookup still to come could fill against.
+fn every_field(r: &QsoRecord) -> CallbookAnswer {
+    let some = |v: &str| Some(v.to_string());
+    CallbookAnswer {
+        call: r.call.clone(),
+        name: some("-"),
+        qth: some("-"),
+        grid: some("AA00"),
+        state: r
+            .state
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| some("XX")),
+        county: some("-"),
+        iota: some("NA-001"),
+        cq_zone: Some(1),
+        itu_zone: Some(1),
+        position: Some((0.0, 0.0)),
+        email: some("-"),
+        web: some("-"),
+        qsl_via: some("-"),
+        lotw: Some(true),
+        eqsl: Some(true),
+        paper_qsl: Some(true),
+        utc_offset: Some(0.0),
+    }
+}
+
+/// The fields the fill gave `after` that `before` did not have from the callbook.
+fn newly_filled(before: &QsoRecord, after: &QsoRecord) -> Vec<String> {
+    let had = callbook::callbook_filled(before);
+    callbook::callbook_filled(after)
+        .into_iter()
+        .filter(|t| !had.contains(t))
+        .map(str::to_string)
+        .collect()
+}
+
+/// ★ What [`callbook_fill`] could make of `ids`: the calls to look up, those `kept` (the lookup
+/// cache, fresh) already answers, and the fields the fill could give, by the fill's own rule
+/// ([`callbook::fill_from_callbook`]). Changes nothing; asks no callbook.
+pub fn callbook_preview(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    kept: &mut dyn FnMut(&str) -> Option<CallbookAnswer>,
+) -> Result<CallbookPreview, String> {
+    let mut seen = HashSet::new();
+    let ids: Vec<RecordId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+    let mut out = CallbookPreview {
+        selected: ids.len(),
+        ..CallbookPreview::default()
+    };
+    let mut answers: HashMap<String, Option<CallbookAnswer>> = HashMap::new();
+    for part in ids.chunks(CHUNK) {
+        let plan = crate::engine::log_plan(engine);
+        let rows = plan.rows(part)?;
+        out.missing += part.len() - rows.len();
+        for id in part {
+            let Some(row) = rows.get(id) else { continue };
+            let key = cleanup::call_key(&row.call);
+            if key.is_empty() {
+                continue;
+            }
+            let answer = answers.entry(key.clone()).or_insert_with(|| {
+                out.calls.push(key.clone());
+                let hit = kept(&key);
+                out.kept += usize::from(hit.is_some());
+                hit
+            });
+            let answer = answer.clone().unwrap_or_else(|| every_field(row));
+            let mut after = QsoRecord::clone(row);
+            callbook::fill_from_callbook(&mut after, &answer);
+            let filled = newly_filled(row, &after);
+            out.could_change += usize::from(!filled.is_empty());
+            for tag in filled {
+                *out.fields.entry(tag).or_default() += 1;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// ★ Fill each contact `ids` names from the callbook's answer for its call, by the log's own rule
+/// ([`callbook::fill_from_callbook`]): **only empty fields**, never one a contest exchange
+/// carries, the location only from the station's own record and never over a park; never the
+/// call, the country or the DXCC number, never an upload stamp or a confirmation, and nothing
+/// queued to any service. ONE run of the history, undone whole. `answers` are by
+/// [`cleanup::call_key`]; a contact whose call has none is left as it is. Refused, changing
+/// nothing, unless `ids` are the `expect` contacts the operator confirmed.
+pub fn callbook_fill(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    expect: usize,
+    answers: &HashMap<String, CallbookAnswer>,
+) -> (Result<ToolRun, String>, Durability) {
+    let mut seen = HashSet::new();
+    let ids: Vec<RecordId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+    if ids.len() != expect {
+        return (Err(NOT_AS_PREVIEWED.into()), Durability::default());
+    }
+    let parts: Vec<Vec<RecordId>> = ids.chunks(CHUNK).map(<[RecordId]>::to_vec).collect();
+    run_in_parts(engine, &parts, "callbook_update", |k, rows| {
+        let mut pairs = Vec::new();
+        let mut refused = Vec::new();
+        for id in &parts[k] {
+            let Some(row) = rows.get(id) else {
+                refused.push((*id, "gone"));
+                continue;
+            };
+            let Some(answer) = answers.get(&cleanup::call_key(&row.call)) else {
+                continue;
+            };
+            let mut after = QsoRecord::clone(row);
+            callbook::fill_from_callbook(&mut after, answer);
+            if after != **row {
+                pairs.push((Arc::clone(row), Some(Arc::new(after))));
             }
         }
         (pairs, refused)

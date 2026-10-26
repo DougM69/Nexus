@@ -43,6 +43,9 @@ mod bench_road_switch;
 /// WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P print, Ctrl+F find…) off in every Nexus
 /// window, set on each webview as Tauri makes it.
 mod browser_keys;
+/// The Logbook's "Update from QRZ": many calls looked up slowly, their answers filled into empty
+/// fields as one run.
+mod callbook_update;
 /// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
@@ -29064,6 +29067,9 @@ fn qrz_try_lookup(session_key: &str, callsign: &str) -> Result<QrzOutcome, QrzFa
     let url = tempo_core::qrz::build_lookup_url(session_key, callsign);
     let body = propagation::live::qrz::fetch(&url, env!("CARGO_PKG_VERSION"))
         .map_err(QrzFailure::unreachable)?;
+    // QRZ's count of the account's lookups in the last 24 hours: the Logbook's update holds its
+    // daily cap to it.
+    callbook_update::note_qrz_count(tempo_core::qrz::parse_session(&body).count);
     qrz_outcome_from_body(&body)
 }
 
@@ -29351,6 +29357,13 @@ fn note_lookup_answer(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::Q
     engine_lock(engine).note_callbook_answer(call, callbook_answer(dto));
 }
 
+/// What [`callbook_lookup_live`] answers when every callbook it asked holds no such call — the one
+/// failure the Logbook's update tells apart from the rest (`callbook_update`): a call nobody knows
+/// is reported and the run goes on, any other failure stops it.
+fn callbook_not_found(call: &str) -> String {
+    format!("{} is not in the callbook.", call.to_uppercase())
+}
+
 /// Look up a callsign, enriching with name / grid / QTH / state. QRZ is tried first
 /// (its paid tier carries grid/state); when QRZ is **unconfigured** (no username or
 /// no stored password) or has **no match**, the lookup falls through to the FREE
@@ -29378,7 +29391,7 @@ async fn callbook_lookup_live(
         )
     };
 
-    let not_found = || format!("{} is not in the callbook.", call.to_uppercase());
+    let not_found = || callbook_not_found(&call);
     // Did any callbook actually RUN? A username set with no stored password means
     // the query is silently skipped — without this flag that lands on `not_found()`
     // below and misreports a *missing credential* as "not in the callbook" (the
@@ -39705,6 +39718,10 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_tools::bulk_edit_apply,
         log_tools::check_logbook,
         log_tools::apply_log_fixes,
+        callbook_update::callbook_update_preview,
+        callbook_update::callbook_update_start,
+        callbook_update::callbook_update_status,
+        callbook_update::callbook_update_cancel,
         log_queries::ask_log,
         purge_log,
         get_awards,
@@ -39909,6 +39926,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .manage(SharedCallbookCache::default())
+        .manage(callbook_update::CallbookUpdate::default())
         .manage(BetaUpdateState::default())
         // The Logbook's award-need filter reads the award fold the Awards view keeps.
         .manage(log_queries::LogQueries::with_tallies(log_tallies))

@@ -22,6 +22,12 @@
 //!
 //! **Expiry** is the caller's: [`CallbookCache::get`] returns any row with its age and lets the
 //! caller decide, because the same row is fresh for a lookup and still worth having offline.
+//!
+//! **The lookups a Logbook update spent** ([`CallbookCache::note_lookups`]). "Update from QRZ"
+//! looks many calls up at once, and QRZ counts an account's lookups over 24 hours. Each network
+//! lookup it makes is noted here with its time, so its daily cap holds across runs and restarts.
+//! Only a time: never the call, the answer or anything else. "Clear" forgets the answers, not
+//! this tally, which would otherwise let a clear reset the cap.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -77,7 +83,8 @@ impl CallbookCache {
                  last_used  INTEGER NOT NULL
              );
              CREATE INDEX IF NOT EXISTS callbook_answer_last_used
-                 ON callbook_answer (last_used);",
+                 ON callbook_answer (last_used);
+             CREATE TABLE IF NOT EXISTS lookup_spent (at INTEGER NOT NULL);",
         )?;
         Ok(Self { conn, capacity })
     }
@@ -175,6 +182,32 @@ impl CallbookCache {
     /// Whether nothing is stored.
     pub fn is_empty(&self) -> rusqlite::Result<bool> {
         self.len().map(|n| n == 0)
+    }
+
+    /// Note `n` network lookups made at `at` (Unix seconds), forgetting those more than a day
+    /// before it. See the module header.
+    pub fn note_lookups(&self, n: usize, at: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "DELETE FROM lookup_spent WHERE at <= ?1",
+            params![at - 86_400],
+        )?;
+        for _ in 0..n {
+            self.conn
+                .execute("INSERT INTO lookup_spent (at) VALUES (?1)", params![at])?;
+        }
+        Ok(())
+    }
+
+    /// How many lookups [`Self::note_lookups`] noted in the 24 hours before `now`. One noted
+    /// after `now` (the clock stepped back) still counts: a cap never loosens on a clock step.
+    pub fn lookups_spent(&self, now: i64) -> rusqlite::Result<usize> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM lookup_spent WHERE at > ?1",
+                params![now - 86_400],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n as usize)
     }
 
     /// Every stored answer's text, for the tests that check what reached the disk.
@@ -284,6 +317,46 @@ mod tests {
         assert_eq!(c.len().unwrap(), 1);
         c.clear().unwrap();
         assert!(c.is_empty().unwrap());
+    }
+
+    /// The tally of a day's lookups: counted for 24 hours, then gone; kept across a restart and
+    /// across a clear of the answers; never moved by a clock that steps back.
+    #[test]
+    fn the_lookups_spent_count_for_a_day_and_survive_a_clear_and_a_restart() {
+        let dir = scratch("spent");
+        let path = dir.join(FILE_NAME);
+        {
+            let c = CallbookCache::open(&path).unwrap();
+            c.note_lookups(1, 1_000).unwrap();
+            c.note_lookups(2, 5_000).unwrap();
+            assert_eq!(c.lookups_spent(5_000).unwrap(), 3);
+            c.put("W1ABC", "a", 1).unwrap();
+            c.clear().unwrap();
+            assert_eq!(
+                c.lookups_spent(5_000).unwrap(),
+                3,
+                "a clear keeps the tally"
+            );
+        }
+        let c = CallbookCache::open(&path).unwrap();
+        assert_eq!(c.lookups_spent(5_000).unwrap(), 3, "kept across a restart");
+        assert_eq!(c.lookups_spent(1_000 + DAY - 1).unwrap(), 3);
+        assert_eq!(c.lookups_spent(1_000 + DAY).unwrap(), 2, "a day old: gone");
+        assert_eq!(c.lookups_spent(5_000 + DAY).unwrap(), 0);
+        assert_eq!(c.lookups_spent(0).unwrap(), 3, "a clock stepped back");
+        // A note forgets what is more than a day before it; the table does not grow.
+        c.note_lookups(1, 5_000 + DAY + 1).unwrap();
+        let rows: i64 = c
+            .conn
+            .query_row("SELECT COUNT(*) FROM lookup_spent", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+        assert!(
+            c.stored_text().unwrap().is_empty(),
+            "the tally holds no call and no answer"
+        );
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The bound, measured: a full cache of full answers, and the file it makes. The answer is

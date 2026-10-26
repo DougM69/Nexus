@@ -1864,6 +1864,67 @@ export async function bulkEditApply(
   return invoke<ToolRun>('bulk_edit_apply', { ids, expectCount, expectMoves, expectMoveTo, changes })
 }
 
+/** What "Update from QRZ" would do with its contacts: the distinct calls, those the lookup cache
+ *  answers (`kept`, no lookup), the rest at the pace (`estimateSecs`), the day's network lookups
+ *  (`spent`) under the `cap`, and per ADIF field how many contacts the fill could give it — exact
+ *  for a kept answer, at most for a call still to look up. Changes nothing, looks nothing up. */
+export interface CallbookUpdatePreview {
+  ids: string[]
+  selected: number
+  missing: number
+  calls: number
+  kept: number
+  toLookUp: number
+  paceSecs: number
+  estimateSecs: number
+  spent: number
+  cap: number
+  couldChange: number
+  fields: [string, number][]
+  configured: boolean
+}
+
+/** How an update ended: `done`, `cancelled`, `limit` (the day's cap) or `failed` (`error` says
+ *  why). `made`: the fill's change, undone whole by its run. `notLookedUp`: calls a later run picks
+ *  up. */
+export interface CallbookUpdateEnd {
+  stop: 'done' | 'cancelled' | 'limit' | 'failed'
+  error: string | null
+  unknown: string[]
+  notLookedUp: number
+  made: ToolRun | null
+}
+
+export interface CallbookUpdateStatus {
+  running: boolean
+  done: number
+  total: number
+  fromCache: number
+  lookedUp: number
+  spent: number
+  cap: number
+  ended: CallbookUpdateEnd | null
+}
+
+export async function callbookUpdatePreview(target: BulkTarget): Promise<CallbookUpdatePreview> {
+  return invoke<CallbookUpdatePreview>('callbook_update_preview', { target })
+}
+
+/** Start the update on exactly the contacts a preview counted; refused unless they are the
+ *  `expectCount` the operator confirmed. Answers at once: the progress is `callbookUpdateStatus`. */
+export async function callbookUpdateStart(ids: string[], expectCount: number): Promise<void> {
+  return invoke<void>('callbook_update_start', { ids, expectCount })
+}
+
+export async function callbookUpdateStatus(): Promise<CallbookUpdateStatus> {
+  return invoke<CallbookUpdateStatus>('callbook_update_status')
+}
+
+/** Stop after the lookup in hand: what was found is filled as one change. */
+export async function callbookUpdateCancel(): Promise<void> {
+  return invoke<void>('callbook_update_cancel')
+}
+
 /** One problem the check found. `fix`: the proposed change (`value: null` clears the field), or
  *  `null` when none can be proposed. */
 export interface LogProblem {

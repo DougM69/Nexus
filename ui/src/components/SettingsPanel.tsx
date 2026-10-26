@@ -11307,6 +11307,50 @@ export function SettingsPanel({
                   </span>
                 </label>
 
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.callbookCache.pace.label')}
+                  </span>
+                  <input
+                    className="settings-input mono"
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={form.callbookUpdatePaceSecs ?? 2}
+                    onChange={(e) =>
+                      updateNum(
+                        'callbookUpdatePaceSecs',
+                        Math.min(60, Math.max(1, Math.round(Number(e.target.value)) || 2)),
+                      )
+                    }
+                  />
+                  <span className="settings-hint">
+                    {t('settings.confirmations.callbookCache.pace.hint')}
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.callbookCache.cap.label')}
+                  </span>
+                  <input
+                    className="settings-input mono"
+                    type="number"
+                    min={1}
+                    max={10000}
+                    value={form.callbookUpdateDailyCap ?? 250}
+                    onChange={(e) =>
+                      updateNum(
+                        'callbookUpdateDailyCap',
+                        Math.min(10000, Math.max(1, Math.round(Number(e.target.value)) || 250)),
+                      )
+                    }
+                  />
+                  <span className="settings-hint">
+                    {t('settings.confirmations.callbookCache.cap.hint')}
+                  </span>
+                </label>
+
                 <div className="settings-field">
                   <span className="settings-label">
                     {t('settings.confirmations.callbookCache.refresh.label')}
