@@ -2149,6 +2149,10 @@ enum OverOnDax {
 /// after the first tick that ran with the route gone; `own end`: at its own deadline, keyed until
 /// then), whether TX is on, what the status lane got (as the UI receives it), and whether the
 /// receive floor's banner is up.
+///
+/// The clock waits short of the boundary while the decoder is busy with an earlier pass, as
+/// [`one_over`]'s does and for its reason: another test's decode can hold this scene's past the
+/// boundary, and the busy-decoder path then drops the over against the real clock.
 fn route_gone_mid_over(over: OverOnDax, floor: bool, when: When) -> String {
     let mut s = if floor {
         on_dax_without_receive_audio()
@@ -2164,8 +2168,12 @@ fn route_gone_mid_over(over: OverOnDax, floor: bool, when: When) -> String {
     }
     s.state.prev_slot_was_tx = true;
     let boundary = first_boundary();
-    let w0 = Instant::now();
+    let period = s.engine.lock().unwrap().active_slot_secs() * 1000.0;
+    let ended = (boundary / period) as u64 - 1;
+    let mut w0 = Instant::now();
     let start_v = boundary - 1_500.0;
+    let mut crossed = false;
+    let give_up = Instant::now() + Duration::from_secs(60);
     let mut keyed: Option<f64> = None;
     let mut deadline = 0.0;
     let mut gone: Option<(usize, Instant, f64)> = None;
@@ -2175,7 +2183,20 @@ fn route_gone_mid_over(over: OverOnDax, floor: bool, when: When) -> String {
     // the tick returns.
     let mut beacon_due = matches!(over, OverOnDax::Beacon);
     for tick in 0.. {
-        let v = start_v + w0.elapsed().as_secs_f64() * 1000.0;
+        let mut v = start_v + w0.elapsed().as_secs_f64() * 1000.0;
+        if !crossed
+            && v >= boundary
+            && s.state.decode_in_flight
+            && s.state.full_done_slot != Some(ended)
+        {
+            assert!(
+                Instant::now() < give_up,
+                "the decoder was busy for a minute before the boundary"
+            );
+            v = boundary - 1.0;
+            w0 = Instant::now() - Duration::from_secs_f64((v - start_v) / 1000.0);
+        }
+        crossed |= v >= boundary;
         if beacon_due && v >= start_v + 500.0 {
             beacon_due = false;
             beacon(&s);
