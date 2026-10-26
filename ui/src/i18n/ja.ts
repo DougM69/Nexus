@@ -6371,6 +6371,8 @@ export const JA: PartialCatalog = {
   "callCard.open.title": "{{call}} の局カードを表示: コールブック、交信、必要",
   "callCard.close": "局カードを閉じる",
   "callCard.looking": "検索中…",
+  "callCard.photo.none": "コールブックから写真が届きませんでした。QRZ は XML 購読者にのみ、局が写真を載せている場合に限って写真を送ります。",
+  "callCard.photo.failed": "コールブックの写真を読み込めませんでした。",
   "callCard.path.title": "自局QTHからの大圏距離と真方位(ショートパス、ロングパス)",
   "callCard.path.short": "SP {{dist}} · {{deg}}°",
   "callCard.path.long": "LP {{dist}} · {{deg}}°",

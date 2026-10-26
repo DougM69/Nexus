@@ -10,12 +10,19 @@
 // near the top. Each Stop TX stands under the call, where the card would go if nothing kept it off.
 // `&avoid=off` is the CONTROL: the same boxes without their transmit classes, so the card
 // is free to land on them, and the probe must see it there.
+//
+// `?case=phone`: Phone's log strip Card button, for a call the strip has ALREADY looked up (the
+// callbook answer, with a photo and a long name and address, is asked once through `qrzLookup` before
+// the card opens, as the strip's own lookup does). The card must show that answer and its photo
+// without a Look up of its own, and its text must use the card's width, not the callsign's.
+// `&zoom=<n>` sets the app's UI scale (`--ui-zoom`).
 import '../styles.css'
 import '../cockpit-panes.css'
 import type { CSSProperties } from 'react'
 import { createRoot } from 'react-dom/client'
 import { CallCardHost, callCardTrigger } from '../components/CallCard'
-import type { AppSnapshot } from '../types'
+import { qrzLookup } from '../api'
+import type { AppSnapshot, QrzLookup } from '../types'
 
 const params = new URLSearchParams(location.search)
 const which = params.get('case') ?? 'strip'
@@ -24,7 +31,17 @@ const avoid = params.get('avoid') !== 'off'
 const tx = (cls: string) => (avoid ? cls : 'probe-not-tx')
 
 document.documentElement.setAttribute('data-theme', 'dark')
+if (params.get('zoom')) document.documentElement.style.setProperty('--ui-zoom', params.get('zoom')!)
 localStorage.clear()
+
+/** A photo the page draws without the network: a 64×64 square. */
+const PHOTO = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#3a7"/></svg>')}`
+const BOOK: QrzLookup = {
+  call: 'EC1DD', name: 'Pedro Antonio Gomez de la Fuente', nickname: null, qth: 'Santiago de Compostela', grid: 'IN52TK',
+  state: 'Galicia', country: 'Spain', dxcc: 281, cqZone: 14, ituZone: 37, image: PHOTO, county: 'A Coruna', iota: 'EU-080',
+  email: 'pedro.gomez.delafuente@example.invalid', web: 'https://www.example.invalid/ec1dd/station', qslVia: 'EA1RCI',
+  lotw: true, eqsl: false, paperQsl: true, utcOffset: 1,
+}
 
 const answers: Record<string, () => unknown> = {
   get_call_stats: () => ({
@@ -32,6 +49,7 @@ const answers: Record<string, () => unknown> = {
     dxcc: null, wasFamily: false, was: null, waz: null, countryQsl: null, callQsl: {},
   }),
   rotator_bearing_to_call: () => ({ pointed: { bearing: 227.4, to: 'grid', grid: 'IN52TK', country: null }, km: 1530.6 }),
+  ...(which === 'phone' ? { qrz_lookup: () => BOOK } : {}),
 }
 const refused = new Set<string>()
 window.__TAURI_INTERNALS__ = {
@@ -55,7 +73,16 @@ function Probe() {
   return (
     <div className="app">
       <CallCardHost snap={SNAP} spots={[]} needAlertsByCall={new Map()} />
-      {which === 'strip' ? (
+      {which === 'phone' ? (
+        <>
+          <button type="button" className="probe-call le-qrz le-lookup le-card" style={at({ left: 420, top: 300, height: 24 })} {...callCardTrigger('EC1DD')}>
+            Card
+          </button>
+          <div className={tx('cockpit-txdock')} data-tx="TX dock" style={at({ left: 0, right: 0, bottom: 0, height: 90 })}>
+            <button type="button">PTT</button>
+          </div>
+        </>
+      ) : which === 'strip' ? (
         <>
           <button type="button" className="probe-call" style={at({ left: 120, top: 560, height: 24 })} {...callCardTrigger('EC1DD')}>
             EC1DD
@@ -82,4 +109,6 @@ function Probe() {
   )
 }
 
+// The log strip's lookup, before the card is opened.
+if (which === 'phone') void qrzLookup('EC1DD').then(() => document.documentElement.setAttribute('data-looked-up', 'yes'))
 createRoot(document.getElementById('root')!).render(<Probe />)

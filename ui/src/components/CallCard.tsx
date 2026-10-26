@@ -15,8 +15,10 @@
 // FAST, AND NOTHING NEW ON THE WIRE. Opening the card asks nothing that leaves the computer: every
 // block is an answer the station already holds, and until the callbook has been asked the who-block
 // shows what the newest logged contact recorded (name, QTH, grid). The callbook is asked only when the
-// operator presses the card's own Look up (the log strip Lookup's command, `qrzLookup`), and its answer
-// is kept for the session, so a call is asked at most once however often its card opens.
+// operator presses the card's own Look up (the log strip Lookup's command, `qrzLookup`). Every answer a
+// lookup in this window brought back is kept for the session (`features/callbookAnswers`), so a call
+// the log strip, the Logbook or the roster already looked up opens with that answer and its photo, and
+// a call is asked at most once however often its card opens.
 //
 // ⛔ IT NEVER COVERS A TRANSMIT CONTROL. The card is placed by `placeCallCard`, which keeps it off
 // every visible TX strip, TX dock, FT QSO strip and Stop button (`TX_AVOID`) and off the call it was
@@ -44,6 +46,7 @@ import type { AppSnapshot, CallStats, NeedAlert, NeedTag, QrzLookup, SpotRow } f
 import type { CallHistory } from '../features/callHistory'
 import { modeKey } from '../features/callHistory'
 import { useLogAnswer } from '../features/logSource'
+import { callbookAnswer, subscribeCallbookAnswers } from '../features/callbookAnswers'
 import { emptyAnswer } from '../features/logAnswers'
 import { useCallBearings, type CallAim } from '../features/callBearing'
 import { callCardHoverOn } from '../features/callCardHover'
@@ -237,10 +240,6 @@ export const qrzPageOf = (call: string) => () =>
 
 // ---- the answers it shows --------------------------------------------------------------------
 
-/** The callbook answers the card's Look up got this session. Only answers: a failed lookup (no
- *  credentials yet, offline) leaves the button there to try again. */
-const books = new Map<string, QrzLookup>()
-
 /** The mode the radio is working now, as the log names it: what a NEW MODE is new against. */
 export function liveMode(snap: Pick<AppSnapshot, 'radio' | 'link'>): string {
   switch (snap.radio.operatingMode) {
@@ -348,8 +347,13 @@ export function CallCardView({ data, onClose }: { data: CallCardData; onClose: (
   const chips = data.needs.filter((n) => NEED_CHIP[n])
   return (
     <>
+      {/* The text column takes the whole width beside the photo: Look up and the callbook page sit on
+          their own line under it, and only × shares its row. With all three in this row, the name and
+          the address were squeezed to the callsign's width (reported 2026-10-26). */}
       <div className="callcard-head">
-        <span className="callcard-avatar" aria-hidden>
+        {/* Initials until the photo draws. A callbook answer without one says why on hover: QRZ gives
+            the photo only to an XML subscription, so a free account's answer never carries it. */}
+        <span className="callcard-avatar" aria-hidden title={book && !book.image ? t('callCard.photo.none') : undefined}>
           <span className="callcard-initials">{call.slice(0, 2)}</span>
           {book?.image && (
             <img
@@ -360,6 +364,7 @@ export function CallCardView({ data, onClose }: { data: CallCardData; onClose: (
               loading="lazy"
               onError={(e) => {
                 e.currentTarget.style.display = 'none'
+                e.currentTarget.parentElement?.setAttribute('title', t('callCard.photo.failed'))
               }}
             />
           )}
@@ -371,15 +376,17 @@ export function CallCardView({ data, onClose }: { data: CallCardData; onClose: (
           </div>
           {where && <div className="callcard-where">{where}</div>}
           {tokens.length > 0 && <div className="callcard-tokens mono">{tokens.join(' · ')}</div>}
+          <div className="callcard-actions">
+            {!book && data.onLookup && (
+              <button type="button" className="callcard-lookup" onClick={data.onLookup} disabled={data.looking} title={t('logEntry.lookup.title')}>
+                {data.looking ? t('callCard.looking') : t('logEntry.lookup.label')}
+              </button>
+            )}
+            <button type="button" className="callcard-qrz" onClick={qrzPageOf(call)} title={t('callbook.qrzPage.title', { call })}>
+              {QRZ_PAGE}
+            </button>
+          </div>
         </div>
-        {!book && data.onLookup && (
-          <button type="button" className="callcard-lookup" onClick={data.onLookup} disabled={data.looking} title={t('logEntry.lookup.title')}>
-            {data.looking ? t('callCard.looking') : t('logEntry.lookup.label')}
-          </button>
-        )}
-        <button type="button" className="callcard-qrz" onClick={qrzPageOf(call)} title={t('callbook.qrzPage.title', { call })}>
-          {QRZ_PAGE}
-        </button>
         <button type="button" className="callcard-close" onClick={onClose} aria-label={t('callCard.close')} title={t('callCard.close')}>
           ×
         </button>
@@ -492,8 +499,9 @@ export function CallCardView({ data, onClose }: { data: CallCardData; onClose: (
 function useCardData(call: string, snap: AppSnapshot, spots: readonly SpotRow[], needAlertsByCall: ReadonlyMap<string, NeedAlert[]>): CallCardData {
   const band = snap.radio.band
   const mode = liveMode(snap)
-  // Nothing asked of the callbook on open: only the operator's Look up asks it.
-  const [book, setBook] = useState<QrzLookup | null>(() => books.get(call) ?? null)
+  // Nothing asked of the callbook on open: only the operator's Look up asks it. Any lookup of the call
+  // in this window, the card's own or another surface's, lands here (`qrzLookup` keeps the answer).
+  const book = useSyncExternalStore(subscribeCallbookAnswers, () => callbookAnswer(call))
   const [looking, setLooking] = useState(false)
   const live = useRef(true)
   useEffect(() => {
@@ -504,11 +512,8 @@ function useCardData(call: string, snap: AppSnapshot, spots: readonly SpotRow[],
   }, [])
   const onLookup = () => {
     setLooking(true)
-    void withErrorToast(() => qrzLookup(call), t('callbook.lookupFailed')).then((r) => {
-      if (r) books.set(call, r)
-      if (!live.current) return
-      setLooking(false)
-      if (r) setBook(r)
+    void withErrorToast(() => qrzLookup(call), t('callbook.lookupFailed')).then(() => {
+      if (live.current) setLooking(false)
     })
   }
   const [stats, setStats] = useState<{ key: string; s: CallStats | null } | null>(null)
@@ -560,10 +565,15 @@ function CallCardPopover({ open, snap, spots, needAlertsByCall }: { open: Opened
       if (!open.anchor.isConnected) return closeCallCard()
       const a = open.anchor.getBoundingClientRect()
       const c = inner.current?.getBoundingClientRect()
-      if (!c) return
+      if (!c || !box.current) return
+      // The box is border-box with a border round the body: the size it needs is the body's plus that
+      // border. Placed at the body's size alone, it came out 2 px short each way and scrolled both ways.
+      const b = getComputedStyle(box.current)
+      const bw = (parseFloat(b.borderLeftWidth) || 0) + (parseFloat(b.borderRightWidth) || 0)
+      const bh = (parseFloat(b.borderTopWidth) || 0) + (parseFloat(b.borderBottomWidth) || 0)
       const p = placeCallCard(
         { left: a.left, top: a.top, right: a.right, bottom: a.bottom },
-        { w: c.width, h: c.height },
+        { w: c.width + bw, h: c.height + bh },
         { w: window.innerWidth, h: window.innerHeight },
         txBoxes(),
       )

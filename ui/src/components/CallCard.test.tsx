@@ -19,6 +19,7 @@ import {
   type CallCardData,
 } from './CallCard'
 import { callCardHoverOn, setCallCardHover } from '../features/callCardHover'
+import { qrzLookup } from '../api'
 import type { AppSnapshot, LoggedQso, QrzLookup, SpotRow } from '../types'
 import type { CallHistory } from '../features/callHistory'
 
@@ -119,6 +120,18 @@ describe('the card shows what Nexus knows about the call', () => {
     expect(container.querySelector('img')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Lookup' }))
     expect(lookup).toHaveBeenCalledTimes(1)
+  })
+
+  it('a callbook answer with no photo says why the initials show, instead of saying nothing', () => {
+    const { container } = render(<CallCardView data={data({ book: { ...BOOK, image: null } })} onClose={() => {}} />)
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelector('.callcard-avatar')?.getAttribute('title')).toBe(
+      'The callbook sent no photo. QRZ sends photos only to XML subscribers, and only when the station posted one.',
+    )
+    cleanup()
+    // Not asked yet: nothing to explain, the Look up is there.
+    const before = render(<CallCardView data={data({ book: null, onLookup: () => {} })} onClose={() => {}} />)
+    expect(before.container.querySelector('.callcard-avatar')?.hasAttribute('title')).toBe(false)
   })
 
   it('the grid orders bands by wavelength and a confirmed contact wins its cell', () => {
@@ -252,6 +265,27 @@ describe('opening and closing', () => {
     expect(sent.filter((c) => c === 'qrz_lookup')).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: /QRZ/ }))
     await waitFor(() => expect(sent).toContain('open_qrz_page'))
+  })
+
+  it("a call the window already looked up (Phone's log strip) opens with that answer and its photo, asking nothing more", async () => {
+    // The log strip's lookup, before its Card button is pressed. A call no other test has looked up.
+    await act(async () => {
+      await qrzLookup('k1abc')
+    })
+    expect(sent.filter((c) => c === 'qrz_lookup')).toHaveLength(1)
+    render(
+      <>
+        <CallCardHost snap={SNAP} spots={[]} needAlertsByCall={new Map()} />
+        <button type="button" {...callCardTrigger('K1ABC')}>K1ABC</button>
+      </>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'K1ABC' }))
+    const open = screen.getByRole('dialog', { name: 'Station card for K1ABC' })
+    expect(open.textContent).toContain('Pedro Gomez')
+    expect(open.querySelector('img.callcard-photo')?.getAttribute('src')).toBe(BOOK.image)
+    expect(screen.queryByRole('button', { name: 'Lookup' })).toBeNull()
+    await waitFor(() => expect(sent).toContain('get_call_stats'))
+    expect(sent.filter((c) => c === 'qrz_lookup')).toHaveLength(1)
   })
 
   it('Esc closes it, and the key is not swallowed (it is the stop key too)', () => {

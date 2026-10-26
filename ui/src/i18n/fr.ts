@@ -8068,6 +8068,8 @@ export const FR: PartialCatalog = {
   "callCard.open.title": "Afficher la fiche de {{call}} : annuaire, contacts, besoins",
   "callCard.close": "Fermer la fiche de la station",
   "callCard.looking": "Recherche…",
+  "callCard.photo.none": "Le callbook n'a pas envoyé de photo. QRZ n'envoie les photos qu'aux abonnés XML, et seulement si la station en a publié une.",
+  "callCard.photo.failed": "La photo du callbook ne s'est pas chargée.",
   "callCard.path.title": "Distance orthodromique et azimut vrai depuis votre QTH, chemin court puis chemin long",
   "callCard.path.short": "SP {{dist}} · {{deg}}°",
   "callCard.path.long": "LP {{dist}} · {{deg}}°",
