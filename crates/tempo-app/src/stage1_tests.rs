@@ -148,9 +148,18 @@ impl Stage1 {
         let sent = edit.qsl_sent_change(&stored)?;
         let card = edit.qsl_card_change(&stored);
         let mut rec = edit.record(&stored);
-        // Keep country populated on edits, as `update_qso` does: the form does not carry it.
-        if let Some(resolve) = &self.dxcc_resolve {
-            rec.country = resolve(&rec.call);
+        // Keep country populated on edits, as `update_qso` does: the form does not carry it. Only
+        // where the stored one cannot stand — a corrected call, or a contact that holds none; else
+        // the edit policy writes the stored one back exactly.
+        let call_changed = !rec.call.trim().eq_ignore_ascii_case(stored.call.trim());
+        let no_country = stored
+            .country
+            .as_deref()
+            .is_none_or(|c| c.trim().is_empty());
+        if call_changed || no_country {
+            if let Some(resolve) = &self.dxcc_resolve {
+                rec.country = resolve(&rec.call);
+            }
         }
         self.logbook.apply(LogOp::Edit {
             id,
