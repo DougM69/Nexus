@@ -1122,7 +1122,9 @@ fn revert_columns(
 /// service under the call it now carries, and goes with the next upload. A service that already
 /// holds it under that call answers that upload as a duplicate; nothing is claimed sent that was
 /// not. Deliberate: the stamps belonged to the contact as it stood before
-/// the undo, and a stamp is only ever written by a service's answer.
+/// the undo, and a stamp is only ever written by a service's answer. (The app, which holds the
+/// upload queue, puts the correction's own marks back where it can show that nothing went out
+/// under the corrected call: `tempo_app::loghistory`'s header.)
 ///
 /// **A change of the station call, undone,** is the same: the call the contact is uploaded under
 /// (its STATION_CALLSIGN, else `settings_call`, the call in Settings) moves back, so the stamps of

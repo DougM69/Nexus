@@ -24,9 +24,17 @@
 //! **An undo never sends anything to a service.** It calls no connector and queues no upload. It
 //! does not touch an upload stamp either — except as the edit rule already does: an undo that
 //! changes a contact's callsign clears its stamps, as a corrected call does, so the contact is
-//! owed to the services under the call it now carries and goes with the next upload. A corrected
-//! call made by an edit is queued to the connectors at once (`requeue_if_corrected`); an undo's is
-//! not.
+//! owed to the services under the call it now carries and goes with the next upload, and the
+//! answer names it ([`Undone::owed`]). A corrected call made by an edit is queued to the
+//! connectors at once (`requeue_if_corrected`); an undo's is not.
+//!
+//! **The undo of a callsign correction whose re-send has not gone out** (operator ruling) is the
+//! one undo that puts stamps back. While the correction's re-send is still on the queue, untried,
+//! and no service has stamped the corrected contact, nothing was sent under the corrected call: the
+//! undo takes the re-send off the queue and gives the contact back the upload stamps and the
+//! `LOTW_QSL_SENT` mark the correction took off, in the same hold of the Engine lock
+//! ([`corrections_undone`]). Once anything may have gone out, it does not: no upload state is
+//! recorded that cannot be shown to be true.
 //!
 //! **What the undo of a run leaves alone**, and names in the answer ([`Undone`]):
 //!
@@ -248,6 +256,11 @@ pub struct Undone {
     /// The call of each contact it could not change that the log holds or would have held, so
     /// the answer can name it.
     pub calls: HashMap<RecordId, String>,
+    /// The contacts whose callsign it changed while the call it replaced may already have gone to
+    /// the services, each with the call it now carries: left owed to them, its upload marks
+    /// cleared, for the answer to say so. A correction whose re-send was still queued and
+    /// untried is not here: its undo cancelled the re-send and put the marks back.
+    pub owed: Vec<(RecordId, String)>,
 }
 
 /// Undo the entry `seq`.
@@ -466,6 +479,48 @@ fn plan_undo(
     }
 }
 
+/// The undo's pairs that change a contact's callsign — the undo of a callsign correction, or the
+/// redo of one — decided under the Engine lock against the upload queue (operator ruling). Where
+/// nothing has gone out under the call the undo replaces
+/// ([`crate::station::StationCore::unsent_correction`]), the contact gets back the upload marks the
+/// correction took off — the stamps and `LOTW_QSL_SENT` — and its id is returned, for the queued
+/// re-send to be cancelled once the undo is made. Otherwise it stays owed to the services, its
+/// marks cleared as [`history::undo`] leaves them, and is returned with its call for the answer to
+/// say so.
+#[allow(clippy::type_complexity)]
+fn corrections_undone(
+    station: &crate::station::StationCore,
+    pairs: &mut [RowPair],
+) -> (Vec<RecordId>, Vec<(RecordId, String)>) {
+    let mut cancel = Vec::new();
+    let mut owed = Vec::new();
+    for (before, after) in pairs.iter_mut() {
+        let (Some(b), Some(a)) = (before.as_ref(), after.as_mut()) else {
+            continue;
+        };
+        let Some(id) = b.id else { continue };
+        if a.call.trim().eq_ignore_ascii_case(b.call.trim()) {
+            continue;
+        }
+        match station.unsent_correction(b, a) {
+            Some(from) => {
+                let row = Arc::make_mut(a);
+                row.upload = from.upload.clone();
+                let sent = row
+                    .extra
+                    .iter()
+                    .any(|(k, _)| k.eq_ignore_ascii_case("LOTW_QSL_SENT"));
+                if let (Some(v), false) = (&from.lotw_qsl_sent, sent) {
+                    row.extra.push(("LOTW_QSL_SENT".into(), v.clone()));
+                }
+                cancel.push(id);
+            }
+            None => owed.push((id, a.call.clone())),
+        }
+    }
+    (cancel, owed)
+}
+
 /// `f` against the store once it holds every change this process made before it was asked —
 /// `None` when it still does not after [`READ_WAIT`]: what a plan must not decide on, since the
 /// change it has not taken may be the one that matters. ⚠️ Never under the Engine lock.
@@ -590,19 +645,31 @@ fn undo_entries(
             if large && e.transmit_needs_the_lock() {
                 return Err(MUST_WAIT_FOR_TX);
             }
+            let (cancel, owed) = corrections_undone(e.station(), &mut pairs);
             let made =
                 e.station_mut()
                     .commit_undo(&plan, class, &mut pairs, &mut origin, &restores);
             // Taken by the change it was set for — or by none, when the plan went stale.
             e.station_mut().origin = None;
-            Ok(made
+            let made = made
                 .ok()
-                .map(|(ticket, duplicates)| (ticket.is_some(), duplicates)))
+                .map(|(ticket, duplicates)| (ticket.is_some(), duplicates));
+            // The re-sends of the corrections it undid with their marks put back go only with
+            // the change, in the same hold: the upload worker never sees them in between.
+            if matches!(made, Some((true, _))) {
+                for id in cancel {
+                    e.station_mut().cancel_queued_uploads(id);
+                }
+            }
+            Ok(made.map(|(committed, duplicates)| (committed, duplicates, owed)))
         });
         match made {
             Err(why) => return (Err(why.into()), Durability::default()),
             Ok(None) => {}
-            Ok(Some((committed, duplicates))) => {
+            Ok(Some((committed, duplicates, owed))) => {
+                if committed {
+                    answer.owed = owed;
+                }
                 // The contacts logged again since they were deleted were left out of it.
                 answer.changed -= duplicates.len();
                 for id in &duplicates {

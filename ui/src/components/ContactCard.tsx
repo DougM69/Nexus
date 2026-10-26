@@ -42,12 +42,14 @@ import {
   PROGRAMS,
   cardDirty,
   cardSave,
+  clearedByCallFix,
   draftOf,
   fieldsOf,
   multiLine,
   ownField,
   ownStationNotResent,
   typedLines,
+  type CallFixClear,
   type CardDraft,
   type CardError,
   type CardField,
@@ -56,6 +58,15 @@ import {
 
 /** Service names and the QRZ button: proper nouns, not words. */
 const QRZ_PAGE = 'QRZ ↗'
+/** A value a corrected call takes off, as the card names it: a place under its Logbook column's
+ *  name, a confirmation in words. */
+function callFixLabel(c: CallFixClear): string {
+  if (c === 'lotw') return t('contactCard.callFix.lotw')
+  if (c === 'eqsl') return t('contactCard.callFix.eqsl')
+  const column = logColumn({ CQZ: 'cqz', ITUZ: 'ituz', CONT: 'cont', CNTY: 'county' }[c])
+  return column ? columnName(column) : c
+}
+
 /** How many of the call's contacts the card lists. */
 export const RECENT = 10
 
@@ -208,6 +219,20 @@ function CardBody({
     const made = cardSave(q, start, draft, fields)
     if (!made.ok) {
       setErr(errorText(made.error))
+      return
+    }
+    // A corrected call takes off what belonged to the old one: say which of the values on the card
+    // go before they do, and save only once the operator says so.
+    const clears = clearedByCallFix(q, draft, fields)
+    if (
+      clears.length &&
+      !(await confirmDialog({
+        title: t('contactCard.callFix.title', { old: q.call, call: made.edit.call }),
+        body: t('contactCard.callFix.body', { old: q.call, fields: clears.map(callFixLabel).join(', ') }),
+        confirmLabel: t('contactCard.callFix.confirm'),
+        cancelLabel: t('contactCard.discard.keep'),
+      }))
+    ) {
       return
     }
     setBusy(true)

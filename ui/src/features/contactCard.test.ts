@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cardDirty, cardSave, draftOf, fieldChanges, fieldsOf, ownStationNotResent, storedEdit, typedLines, type CardDraft, type CardField } from './contactCard'
+import { cardDirty, cardSave, clearedByCallFix, draftOf, fieldChanges, fieldsOf, ownStationNotResent, storedEdit, typedLines, type CardDraft, type CardField } from './contactCard'
 import type { LoggedQso } from '../types'
 
 const Q: LoggedQso = {
@@ -153,5 +153,34 @@ describe('a multi-line field’s line breaks', () => {
     expect(typedLines(field('1 Main St\r\nTown'), '2 Main St\nTown')).toBe('2 Main St\r\nTown')
     expect(typedLines(field('1 Main St\rTown'), '2 Main St\nTown')).toBe('2 Main St\rTown')
     expect(typedLines(field('1 Main St\nTown'), '2 Main St\nTown')).toBe('2 Main St\nTown')
+  })
+})
+
+describe('what a corrected call takes off, said before the save', () => {
+  const HELD: LoggedQso = {
+    ...Q,
+    qslRcvd: { card: true, lotw: true, eqsl: false, qrz: false },
+    extra: [['CNTY', 'CT,HARTFORD'], ['CQZ', '5'], ['ITUZ', '8'], ['CONT', 'NA'], ['EQSL_QSLRDATE', '20260101'], ['PFX', 'W1']],
+  }
+  const clears = (over: Partial<CardDraft>, fields: CardField[] = fieldsOf(HELD)) =>
+    clearedByCallFix(HELD, { ...draftOf(HELD), ...over }, fields)
+
+  it('names the zones, continent, county and the LoTW and eQSL confirmations the contact holds', () => {
+    expect(clears({ call: 'W1AX' })).toEqual(['CQZ', 'ITUZ', 'CONT', 'CNTY', 'lotw', 'eqsl'])
+  })
+
+  it('nothing when the call is not corrected: the same call in other capitals or padded is not', () => {
+    expect(clears({})).toEqual([])
+    expect(clears({ call: ' w1aw ' })).toEqual([])
+  })
+
+  it('a value changed or removed in the same save is not named: changed it stays, removed it goes anyway', () => {
+    const fields = fieldsOf(HELD).map((f) =>
+      f.tag === 'CQZ' ? { ...f, value: '4' } : f.tag === 'ITUZ' ? { ...f, removed: true } : f)
+    expect(clears({ call: 'W1AX' }, fields)).toEqual(['CONT', 'CNTY', 'lotw', 'eqsl'])
+  })
+
+  it('names only what the contact holds', () => {
+    expect(clearedByCallFix(Q, { ...draftOf(Q), call: 'W1AX' }, fieldsOf(Q))).toEqual(['CNTY'])
   })
 })

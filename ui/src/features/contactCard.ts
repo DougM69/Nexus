@@ -198,6 +198,24 @@ function ownStationTag(tag: string): boolean {
   return t.startsWith('MY_') || t === 'OWNER_CALLSIGN'
 }
 
+/** What a callsign correction takes off, among the values the card shows. */
+export type CallFixClear = 'CQZ' | 'ITUZ' | 'CONT' | 'CNTY' | 'lotw' | 'eqsl'
+
+/** The shown values a save that corrects the call will take off with the old call (the backend's
+ *  edit policy): the zones, continent and county the contact holds, where this save leaves them as
+ *  they are — one changed in the same save is the operator's and stays — and the LoTW and eQSL
+ *  confirmations. Empty when the call is not corrected: the backend compares it trimmed, in any
+ *  capitals, and so does this. */
+export function clearedByCallFix(q: LoggedQso, d: CardDraft, fields: readonly CardField[]): CallFixClear[] {
+  if (d.call.trim().toUpperCase() === q.call.trim().toUpperCase()) return []
+  const left = (tag: string) =>
+    fields.some((f) => f.orig !== null && f.tag.trim().toUpperCase() === tag && !f.removed && f.value === f.orig)
+  const out: CallFixClear[] = (['CQZ', 'ITUZ', 'CONT', 'CNTY'] as const).filter(left)
+  if (q.qslRcvd?.lotw || left('LOTW_QSLRDATE')) out.push('lotw')
+  if (q.qslRcvd?.eqsl || left('EQSL_QSLRDATE')) out.push('eqsl')
+  return out
+}
+
 /** The own-station fields this save changes on a contact LoTW has already taken, by ADIF name:
  *  your grid's box and any `MY_…` or `OWNER_CALLSIGN` field kept as written.
  *

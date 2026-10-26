@@ -1731,6 +1731,11 @@ export const EN = {
   'contactCard.recent.qsl': 'QSL',
   'contactCard.recent.open': 'Open this contact on the card',
   'contactCard.readOnly': 'Read only here: contacts are edited at the station.',
+  'contactCard.callFix.title': 'Correct {{old}} to {{call}}?',
+  'contactCard.callFix.body': 'Saving takes off what belonged to {{old}}: {{fields}}. Undo puts it back.',
+  'contactCard.callFix.confirm': 'Save the correction',
+  'contactCard.callFix.lotw': 'the LoTW confirmation',
+  'contactCard.callFix.eqsl': 'the eQSL confirmation',
   'contactCard.lotwNotResent': 'Already uploaded to LoTW — not sent again: {{fields}}',
   'contactCard.cancel': 'Cancel',
   'logbook.confirmations.all.label': 'Download confirmations',
@@ -2369,6 +2374,10 @@ export const EN = {
   'qso.history.undo.duplicates': {
     one: '; {{calls}} was not put back: the same station, band and mode within 5 minutes was logged again after it was deleted',
     other: '; {{count}} contacts were not put back: the same station, band and mode within 5 minutes was logged again after each was deleted: {{calls}}',
+  },
+  'qso.history.undo.owed': {
+    one: '; {{calls}} is marked not uploaded: the call this replaced may already be at your logging services, so it goes again with the next upload',
+    other: '; {{count}} contacts are marked not uploaded: the calls this replaced may already be at your logging services, so they go again with the next upload: {{calls}}',
   },
   'qso.history.undo.allKept': {
     one: 'Nothing undone: {{calls}} was changed since, and kept.',

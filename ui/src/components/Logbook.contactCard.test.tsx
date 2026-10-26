@@ -316,7 +316,7 @@ describe('Save is the edit form’s save, with only what was changed', () => {
       { seq: 7, kind: 'edit', source: 'operator', run: 'r7', atMs: 1_700_000_100_000, undoes: null, undoneBy: null, changes: [{ tag: 'NAME', old: null, new: 'Hans' }] },
     ])
     vi.mocked(api.undoQsoChange).mockResolvedValue({
-      changed: 1, run: 'u', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [],
+      changed: 1, run: 'u', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [], owedCalls: [],
     } as never)
     await mounted()
     const card = await openCard()
@@ -333,7 +333,7 @@ describe('Save is the edit form’s save, with only what was changed', () => {
       engine.log = (engine.log as LoggedQso[]).map((r) => (r.id === 'id-dl' ? { ...r, qth: 'Bonn' } : r))
       engine.revision += 1
       return {
-        changed: 1, run: 'u', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [],
+        changed: 1, run: 'u', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [], owedCalls: [],
       } as never
     })
     await mounted()
@@ -384,6 +384,35 @@ describe('the recent contacts with the call', () => {
     fireEvent.click(cardEl()!.querySelectorAll('.contact-card-recent tbody tr')[2])
     fireEvent.click(await screen.findByRole('button', { name: t('contactCard.discard.confirm') }))
     await waitFor(() => expect(box(cardEl()!, t('logbook.field.band.label')).value).toBe('40m'))
+  })
+
+  it('a corrected call says which shown values it takes off, and saves only on confirm', async () => {
+    await mounted()
+    const card = await openCard()
+    fireEvent.change(box(card, t('logbook.field.call.label')), { target: { value: 'DL1ABD' } })
+    save(card)
+    const title = await screen.findByText(t('contactCard.callFix.title', { old: 'DL1ABC', call: 'DL1ABD' }))
+    const dialog = title.closest('[role="dialog"], [role="alertdialog"]') as HTMLElement
+    const said = dialog.textContent ?? ''
+    for (const cid of ['cqz', 'ituz', 'county']) expect(said).toContain(columnName(logColumn(cid)!))
+    expect(said).toContain(t('contactCard.callFix.lotw'))
+    expect(said, 'eQSL never confirmed it').not.toContain(t('contactCard.callFix.eqsl'))
+    fireEvent.click(within(dialog).getByRole('button', { name: t('contactCard.discard.keep') }))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(api.editQsoById, 'Keep editing saves nothing').not.toHaveBeenCalled()
+    save(cardEl()!)
+    fireEvent.click(await screen.findByRole('button', { name: t('contactCard.callFix.confirm') }))
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.editQsoById).mock.calls[0][1].call).toBe('DL1ABD')
+  })
+
+  it('a save that leaves the call alone asks nothing', async () => {
+    await mounted()
+    const card = await openCard()
+    fireEvent.change(box(card, t('logbook.field.qth.label')), { target: { value: 'Bonn' } })
+    save(card)
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText(t('contactCard.callFix.confirm'))).toBeNull()
   })
 
   it('Escape with unsaved changes asks too; with none it just closes', async () => {

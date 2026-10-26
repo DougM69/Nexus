@@ -2796,6 +2796,22 @@ pub struct PendingUpload {
     /// with widening gaps instead of hammered once per 2 s tick. `0` = due now (a fresh
     /// log, no prior failure). See [`upload_backoff_secs`].
     pub retry_after_unix: i64,
+    /// For a corrected call's re-send ([`crate::station::StationCore::requeue_if_corrected`]):
+    /// the upload marks the correction took off the contact. While this entry is still queued
+    /// and untried, nothing went out under the corrected call, so an undo of the correction
+    /// cancels it and puts these back. Every other entry, and every re-queue, carries `None`.
+    pub corrected: Option<Box<CorrectedFrom>>,
+}
+
+/// What a callsign correction took off a contact that its undo may put back
+/// ([`PendingUpload::corrected`]): the call and station call the marks were earned under, the
+/// upload stamps, and the `LOTW_QSL_SENT` mark another logger may have left.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CorrectedFrom {
+    pub call: String,
+    pub station_callsign: Option<String>,
+    pub upload: tempo_core::logbook::UploadState,
+    pub lotw_qsl_sent: Option<String>,
 }
 
 /// Backoff delay (secs) before the `attempts`-th retry: 2·2^(attempts-1), capped at
@@ -16842,6 +16858,7 @@ impl Engine {
                 legs: upload_legs::ALL,
                 attempts: 0,
                 retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
+                corrected: None,
             });
         }
         match persisted {

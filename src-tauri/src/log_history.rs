@@ -255,6 +255,11 @@ pub struct UndoAnswer {
     /// put back because the log holds them already: sorted, each once.
     pub changed_since_calls: Vec<String>,
     pub duplicate_calls: Vec<String>,
+    /// The calls of the contacts whose callsign it changed while the call it replaced may already
+    /// have gone to the logging services: left owed to them, marked not uploaded. Sorted, each
+    /// once. A correction whose re-send had not gone out is not named: its undo cancelled the
+    /// re-send and put the upload marks back.
+    pub owed_calls: Vec<String>,
 }
 
 fn answer(undone: tempo_app::loghistory::Undone) -> UndoAnswer {
@@ -276,6 +281,9 @@ fn answer(undone: tempo_app::loghistory::Undone) -> UndoAnswer {
         calls.dedup();
         calls
     };
+    let mut owed_calls: Vec<String> = undone.owed.iter().map(|(_, c)| c.clone()).collect();
+    owed_calls.sort();
+    owed_calls.dedup();
     UndoAnswer {
         changed: undone.changed,
         run: undone.run.clone(),
@@ -289,6 +297,7 @@ fn answer(undone: tempo_app::loghistory::Undone) -> UndoAnswer {
         unknown_kind: count(CannotUndo::UnknownKind),
         changed_since_calls: calls(CannotUndo::ChangedSince),
         duplicate_calls: calls(CannotUndo::Duplicate),
+        owed_calls,
     }
 }
 

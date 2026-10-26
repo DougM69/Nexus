@@ -1755,17 +1755,13 @@ fn a_card_save_with_passthrough_fields_is_one_change_and_one_undo() {
     );
 }
 
-/// ★ A CORRECTED CALL'S UNDO puts back everything the correction took off with the old call
-/// (operator ruling): LoTW's DXCC, the zones, continent and county, LoTW's and eQSL's received
-/// dates and eQSL's Authenticity-Guaranteed mark, the confirmations and the DXCC number — one save,
-/// one history entry, and the undo restores the row exactly.
-#[test]
-fn a_corrected_calls_undo_puts_back_what_the_old_call_carried() {
-    let d = Dir::new("history-call-fix");
-    let engine = shared(&d, 3);
-    let id = id_at(&*engine, 1);
+/// A contact as an uploaded one stands: the old call's extras (LoTW's DXCC, zones, continent,
+/// county, received dates, eQSL's AG mark), another logger's `LOTW_QSL_SENT=Y`, and the QRZ and
+/// LoTW stamps of real uploads. Returns its id and the row as read back.
+fn uploaded_contact(engine: &Arc<Mutex<Engine>>) -> (RecordId, QsoRecord) {
+    let id = id_at(&**engine, 1);
     let (seeded, dur) = logwrite::change_ops(
-        &engine,
+        engine,
         id,
         None,
         &[LogOp::SetFields {
@@ -1779,6 +1775,7 @@ fn a_corrected_calls_undo_puts_back_what_the_old_call_carried() {
                 ("EQSL_QSLRDATE", "20150302"),
                 ("ITUZ", "11"),
                 ("LOTW_QSLRDATE", "20150301"),
+                ("LOTW_QSL_SENT", "Y"),
             ]
             .map(|(k, v)| (k.to_string(), Some(v.to_string())))
             .to_vec(),
@@ -1787,16 +1784,63 @@ fn a_corrected_calls_undo_puts_back_what_the_old_call_carried() {
     );
     seeded.expect("reads").expect("made");
     dur.wait(DURABLE_WAIT).unwrap();
-    let before = QsoRecord::clone(&row_of(&engine, id).unwrap());
-    let entries = history_of(&engine, id).unwrap().len();
+    for (service, when) in [
+        (UploadService::Qrz, 1_900_000_000),
+        (UploadService::Lotw, 1_900_000_050),
+    ] {
+        let (stamped, dur) = logwrite::stamp_push(
+            engine,
+            &row_of(engine, id).unwrap(),
+            service,
+            UploadStatus {
+                outcome: UploadOutcome::Accepted,
+                when_unix: when,
+                detail: None,
+            },
+        );
+        assert!(stamped, "seeded the {service:?} stamp");
+        dur.wait(DURABLE_WAIT).unwrap();
+    }
+    engine_lock(engine).take_pending_uploads();
+    let before = QsoRecord::clone(&row_of(engine, id).unwrap());
+    assert!(
+        before.upload.qrz.is_some()
+            && before.upload.lotw.is_some()
+            && before
+                .extra
+                .iter()
+                .any(|(k, v)| k == "LOTW_QSL_SENT" && v == "Y"),
+        "premise: real upload marks on the row: {before:?}"
+    );
+    (id, before)
+}
 
-    let mut edit = QsoEdit::project(&before);
+/// The edit form's correction of `before`'s call to the same call with an X, made.
+fn correct_call(engine: &Arc<Mutex<Engine>>, id: RecordId, before: &QsoRecord) -> String {
+    let mut edit = QsoEdit::project(before);
     edit.call = format!("{}X", before.call);
-    let (made, dur) = logwrite::edit_row(&engine, id, &QsoEdit::project(&before).key(), &edit);
+    let (made, dur) = logwrite::edit_row(engine, id, &QsoEdit::project(before).key(), &edit);
     made.expect("reads").expect("made");
     dur.wait(DURABLE_WAIT).unwrap();
+    edit.call
+}
+
+/// ★ A CORRECTED CALL'S UNDO puts back everything the correction took off with the old call
+/// (operator ruling): LoTW's DXCC, the zones, continent and county, LoTW's and eQSL's received
+/// dates and eQSL's Authenticity-Guaranteed mark, the confirmations and the DXCC number — one save,
+/// one history entry. On an UPLOADED contact whose re-send under the corrected call has not gone
+/// out (still queued, untried), the undo also cancels that re-send and puts back the upload stamps
+/// and `LOTW_QSL_SENT`: the row comes back exactly, and nothing is left queued.
+#[test]
+fn a_corrected_calls_undo_puts_back_what_the_old_call_carried() {
+    let d = Dir::new("history-call-fix");
+    let engine = shared(&d, 3);
+    let (id, before) = uploaded_contact(&engine);
+    let entries = history_of(&engine, id).unwrap().len();
+
+    let call = correct_call(&engine, id, &before);
     let fixed = row_of(&engine, id).unwrap();
-    assert_eq!(fixed.call, edit.call);
+    assert_eq!(fixed.call, call);
     assert!(
         fixed.extra.iter().all(|(k, _)| !matches!(
             k.as_str(),
@@ -1808,19 +1852,106 @@ fn a_corrected_calls_undo_puts_back_what_the_old_call_carried() {
                 | "EQSL_QSLRDATE"
                 | "ITUZ"
                 | "LOTW_QSLRDATE"
+                | "LOTW_QSL_SENT"
         )),
         "the old call's taken off: {:?}",
         fixed.extra
     );
+    assert_eq!(
+        (fixed.upload.qrz.as_ref(), fixed.upload.lotw.as_ref()),
+        (None, None),
+        "the correction clears the stamps"
+    );
     let h = history_of(&engine, id).unwrap();
     assert_eq!(h.len(), entries + 1, "one save, one entry");
+    assert_eq!(
+        engine_lock(&engine)
+            .station()
+            .pending_uploads
+            .iter()
+            .filter(|p| p.rec.id == Some(id) && p.rec.call == call)
+            .count(),
+        1,
+        "premise: the re-send under the corrected call is queued, untried"
+    );
 
     let (undone, dur) = undo_entry(&engine, h.last().unwrap().seq);
-    assert_eq!(undone.expect("undone").changed, 1);
+    let undone = undone.expect("undone");
+    assert_eq!(undone.changed, 1);
+    assert!(undone.owed.is_empty(), "nothing owed: {:?}", undone.owed);
     dur.wait(DURABLE_WAIT).unwrap();
     assert_eq!(
         *row_of(&engine, id).unwrap(),
         before,
-        "the undo puts the whole row back"
+        "the undo puts the whole row back, its upload marks with it"
     );
+    assert!(
+        engine_lock(&engine).take_pending_uploads().is_empty(),
+        "the re-send under the corrected call is cancelled"
+    );
+}
+
+/// ★ Once the corrected call's re-send HAS gone out — the upload worker took it off the queue —
+/// the undo still puts the contact back, but not its upload marks: they would claim the services
+/// hold the contact as the log now has it, which is not known. It is left owed to them (stamps and
+/// `LOTW_QSL_SENT` cleared) and the answer names it. The same where the re-send is still queued
+/// but a service already stamped the corrected contact (a LoTW batch is not in the queue).
+#[test]
+fn a_corrected_calls_undo_after_the_resend_went_out_leaves_it_owed_and_says_so() {
+    for lotw_batch in [false, true] {
+        let d = Dir::new("history-call-fix-sent");
+        let engine = shared(&d, 3);
+        let (id, before) = uploaded_contact(&engine);
+        let call = correct_call(&engine, id, &before);
+        if lotw_batch {
+            let (stamped, dur) = logwrite::stamp_push(
+                &engine,
+                &row_of(&engine, id).unwrap(),
+                UploadService::Lotw,
+                UploadStatus {
+                    outcome: UploadOutcome::Accepted,
+                    when_unix: 1_900_000_200,
+                    detail: None,
+                },
+            );
+            assert!(stamped);
+            dur.wait(DURABLE_WAIT).unwrap();
+        } else {
+            let taken = engine_lock(&engine).take_pending_uploads();
+            assert!(
+                taken.iter().any(|p| p.rec.call == call),
+                "the worker took it"
+            );
+        }
+        let seq = history_of(&engine, id)
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|e| e.changes().iter().any(|c| c.tag == "CALL"))
+            .unwrap()
+            .seq;
+        let (undone, dur) = undo_entry(&engine, seq);
+        let undone = undone.expect("undone");
+        dur.wait(DURABLE_WAIT).unwrap();
+        assert_eq!(
+            undone.owed,
+            vec![(id, before.call.clone())],
+            "named (LoTW batch: {lotw_batch})"
+        );
+        let now = row_of(&engine, id).unwrap();
+        assert_eq!(now.call, before.call, "the call is back");
+        assert_eq!(
+            now.upload,
+            Default::default(),
+            "no stamp it cannot show (LoTW batch: {lotw_batch})"
+        );
+        assert!(
+            !now.extra.iter().any(|(k, _)| k == "LOTW_QSL_SENT"),
+            "no LOTW_QSL_SENT"
+        );
+        let mut want = before.clone();
+        want.upload = Default::default();
+        want.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
+        assert_eq!(*now, want, "the rest of the row comes back exactly");
+    }
 }

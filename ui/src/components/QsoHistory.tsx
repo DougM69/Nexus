@@ -102,8 +102,11 @@ export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => voi
   const dups = dupCalls.length
     ? t('qso.history.undo.duplicates', { count: dupCalls.length, calls: callList(dupCalls) })
     : ''
+  const owed = answer.owedCalls.length
+    ? t('qso.history.undo.owed', { count: answer.owedCalls.length, calls: callList(answer.owedCalls) })
+    : ''
   const run = answer.run
-  pushToast(`${done}${kept}${held}${keptContacts}${dups}`, 'success', 10_000, run ? {
+  pushToast(`${done}${kept}${held}${keptContacts}${dups}${owed}`, 'success', 10_000, run ? {
     actionLabel: t('qso.history.redo'),
     // A refusal rejects with its reason, so the toast stays up saying why and Redo can be
     // pressed again (a redo of a large undo waits while the radio transmits). An undo of one

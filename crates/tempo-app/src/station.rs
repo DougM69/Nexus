@@ -715,6 +715,14 @@ pub(crate) fn stamped_rows(
     (!pairs.is_empty()).then_some(pairs)
 }
 
+/// The `LOTW_QSL_SENT` mark `r` carries (another logger's record of a LoTW upload), as kept.
+fn lotw_qsl_sent(r: &QsoRecord) -> Option<&str> {
+    r.extra
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("LOTW_QSL_SENT"))
+        .map(|(_, v)| v.as_str())
+}
+
 /// What a change that answers [`RowRefusal::Busy`] says where a string is the answer.
 pub const LOG_BUSY: &str = "The logbook kept changing while this was being saved, so it was not \
                             saved. Try again.";
@@ -3766,6 +3774,7 @@ impl StationCore {
             legs,
             attempts,
             retry_after_unix: due,
+            corrected: None,
         });
     }
 
@@ -4450,9 +4459,68 @@ impl StationCore {
         if !after.call.trim().eq_ignore_ascii_case(before.call.trim()) {
             // Every leg: every stamp was just cleared, so every connector is owed. The disabled
             // ones are dropped by the worker's own toggle check, the same way a freshly logged
-            // contact's are.
-            self.requeue_upload(after.clone(), crate::engine::upload_legs::ALL, 0);
+            // contact's are. Live and due now, as `requeue_upload` queues it, with the marks the
+            // correction took off, for its undo while this is still untried.
+            self.enqueue_upload(crate::engine::PendingUpload {
+                rec: after.clone(),
+                origin: crate::engine::UploadOrigin::Live,
+                legs: crate::engine::upload_legs::ALL,
+                attempts: 0,
+                retry_after_unix: 0,
+                corrected: Some(Box::new(crate::engine::CorrectedFrom {
+                    call: before.call.clone(),
+                    station_callsign: before.station_callsign.clone(),
+                    upload: before.upload.clone(),
+                    lotw_qsl_sent: lotw_qsl_sent(before).map(str::to_string),
+                })),
+            });
         }
+    }
+
+    /// The marks an undo of a callsign correction puts back (operator ruling): `current` is the
+    /// contact as the correction left it, `restored` as the undo would leave it. `Some` only while
+    /// nothing has gone out under the corrected call — the correction's re-send is still queued
+    /// and untried, no other send of the contact has been tried, and no service has stamped it
+    /// (a LoTW batch is not in the queue: its stamp is how it shows) — and only where the undo
+    /// puts back the call, and the station call, the marks were earned under. Anything else is
+    /// `None`: the undo leaves the contact owed to the services, as a corrected call is, and
+    /// never claims an upload that cannot be shown to be true.
+    pub(crate) fn unsent_correction(
+        &self,
+        current: &QsoRecord,
+        restored: &QsoRecord,
+    ) -> Option<&crate::engine::CorrectedFrom> {
+        let id = current.id?;
+        let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+        let queued: Vec<&crate::engine::PendingUpload> = self
+            .pending_uploads
+            .iter()
+            .filter(|p| p.rec.id == Some(id))
+            .collect();
+        if queued.is_empty() || queued.iter().any(|p| p.attempts > 0) {
+            return None;
+        }
+        let u = &current.upload;
+        let stamped =
+            u.lotw.is_some() || u.eqsl.is_some() || u.qrz.is_some() || u.clublog.is_some();
+        if stamped || lotw_qsl_sent(current).is_some() {
+            return None;
+        }
+        let from = queued
+            .iter()
+            .filter(|p| same(&p.rec.call, &current.call))
+            .find_map(|p| p.corrected.as_deref())?;
+        let station = |s: &Option<String>| s.as_deref().map(|s| s.trim().to_ascii_uppercase());
+        (same(&from.call, &restored.call)
+            && station(&from.station_callsign) == station(&restored.station_callsign))
+        .then_some(from)
+    }
+
+    /// Take the contact `id`'s queued uploads off the queue: an undo of its callsign correction
+    /// that put back the marks [`Self::unsent_correction`] found, made — what is queued would
+    /// send the call the log no longer holds.
+    pub(crate) fn cancel_queued_uploads(&mut self, id: RecordId) {
+        self.pending_uploads.retain(|p| p.rec.id != Some(id));
     }
 
     /// The Logbook form's edit of the contact `id`, as ops on the row as it stands: the field

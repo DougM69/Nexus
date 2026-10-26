@@ -41673,6 +41673,7 @@ mod tests {
             legs: legs::ALL,
             attempts: 0,
             retry_after_unix: 0,
+            corrected: None,
         }];
 
         let lines = super::upload_dropped_lines(&dropped, legs::QRZ | legs::CLUBLOG);

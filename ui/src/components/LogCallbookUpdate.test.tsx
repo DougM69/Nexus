@@ -101,7 +101,7 @@ const toggle = () => fireEvent.click(screen.getByRole('button', { name: 'toggle 
 
 const undoAnswer = {
   changed: 3, run: 'undo-1', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0,
-  changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [],
+  changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [], owedCalls: [],
 }
 
 /** Preview, the button, Start: an update running. */
