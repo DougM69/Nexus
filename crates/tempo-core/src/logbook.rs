@@ -2826,8 +2826,20 @@ impl Operators {
 /// An activation's key — your reference, its UTC day, the callsign it was worked under — and
 /// what [`Activations`] keeps against it: the program its first contact named, and its contacts'
 /// [`hot::pota_key`].
-type ActivationKey = (String, u64, Option<String>);
+pub type ActivationKey = (String, u64, Option<String>);
 type ActivationTally = (Option<String>, std::collections::HashSet<hot::PotaKey>);
+
+/// The activations one record belongs to — each reference of yours it names ([`my_refs`]), its UTC
+/// day and the callsign it was worked under — keyed exactly as [`Activations`] keys them, so the
+/// per-activation file a record is in is the one its key names. Empty for a record naming none.
+pub fn activation_keys(r: &QsoRecord) -> Vec<ActivationKey> {
+    let call = worked_under(r);
+    let day = day_start(r.when_unix);
+    my_refs(r)
+        .into_iter()
+        .map(|reference| (reference, day, call.clone()))
+        .collect()
+}
 
 /// The distinct activations of a log, taken a contact at a time IN LOG ORDER —
 /// [`Logbook::activations`]' rule, for whoever holds the log. Holds one entry per activation,

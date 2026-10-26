@@ -511,6 +511,29 @@ pub struct BulkPreview {
     pub move_to: Option<String>,
     /// The calls they went under before, as sent, sorted, each once.
     pub move_from: Vec<String>,
+    /// Of those it changes, the ones it moves into or out of an activation: a park or summit of
+    /// yours set, cleared or replaced, or the call it was worked under changed
+    /// ([`tempo_core::logbook::activation_keys`]).
+    pub activation_changes: usize,
+    /// Of those, the ones already sent to a service (LoTW, eQSL, QRZ, Club Log). Their stamps
+    /// stay and nothing is sent again: the service keeps the contact as it was sent.
+    pub activation_uploaded: usize,
+    /// Of those, the ones in an activation file already exported, before or after the change
+    /// ([`crate::pota_exports`]): that file, and an upload of it at pota.app, no longer match
+    /// the log.
+    pub activation_exported: usize,
+    /// Those files, as "US-1234 2026-10-20 KD9TAW" (the call left off a file naming none),
+    /// sorted, each once.
+    pub activation_files: Vec<String>,
+}
+
+/// An activation file's name as the preview gives it: the reference, the UTC date and the call.
+fn activation_file(key: &tempo_core::logbook::ActivationKey) -> String {
+    let (y, m, d, ..) = tempo_core::logbook::datetime_utc(key.1);
+    match &key.2 {
+        Some(call) => format!("{} {y:04}-{m:02}-{d:02} {call}", key.0),
+        None => format!("{} {y:04}-{m:02}-{d:02}", key.0),
+    }
 }
 
 /// The contacts a preview said a fill or clear sends under another call ([`BulkPreview::moves`],
@@ -554,6 +577,9 @@ pub fn bulk_preview(
         selected: ids.len(),
         ..BulkPreview::default()
     };
+    // Each changed contact's activation files, before and after: which were exported is asked
+    // once the store has been read, under the lock.
+    let mut moved: Vec<HashSet<tempo_core::logbook::ActivationKey>> = Vec::new();
     for part in ids.chunks(CHUNK) {
         let plan = crate::engine::log_plan(engine);
         let rows = plan.rows(part)?;
@@ -569,6 +595,21 @@ pub fn bulk_preview(
                         }
                     }
                     out.unconfirm += cleanup::confirmations_cleared(row, &after);
+                    let (was, now) = (
+                        tempo_core::logbook::activation_keys(row),
+                        tempo_core::logbook::activation_keys(&after),
+                    );
+                    if was != now {
+                        out.activation_changes += 1;
+                        let u = &row.upload;
+                        if [&u.lotw, &u.eqsl, &u.qrz, &u.clublog]
+                            .into_iter()
+                            .any(|s| s.as_ref().is_some_and(|s| s.outcome.is_sent()))
+                        {
+                            out.activation_uploaded += 1;
+                        }
+                        moved.push(was.into_iter().chain(now).collect());
+                    }
                     // Decided /P aside, named as sent: LoTW holds KD9TAW/P and KD9TAW apart.
                     if cleanup::moves(row, &after, settings_call) {
                         out.moves += 1;
@@ -581,6 +622,18 @@ pub fn bulk_preview(
         }
     }
     out.move_from = from.into_iter().collect();
+    let eng = engine_lock(engine);
+    let exported = eng.exported_activations();
+    let mut files = BTreeSet::new();
+    for keys in &moved {
+        let hit: Vec<_> = keys.iter().filter(|k| exported.contains(k)).collect();
+        if !hit.is_empty() {
+            out.activation_exported += 1;
+            files.extend(hit.into_iter().map(activation_file));
+        }
+    }
+    drop(eng);
+    out.activation_files = files.into_iter().collect();
     Ok(out)
 }
 

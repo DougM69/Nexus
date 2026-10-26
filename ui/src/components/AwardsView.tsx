@@ -26,7 +26,7 @@ import { VIEW_COLUMN_FLOOR, columnShareStyle, parseColumnShare } from '../featur
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { pushToast } from '../toast'
 import { StateBlock } from './StateBlock'
-import { CustomAwardsPanel, DxccChartPanel, WhatToQslPanel } from './AwardsMore'
+import { CustomAwardsPanel, DxccChartPanel, PotaActivatorPanel, WhatToQslPanel } from './AwardsMore'
 
 /** The programmes' own names. Award names are invariant tokens — DXCC is DXCC in every
  * language, and a translated one names no award anybody can apply for. */
@@ -1311,6 +1311,7 @@ export function AwardsView({
           {/* The station's own reads: an observed summary carries none of them. */}
           {!observation && <WhatToQslPanel />}
           {!observation && <CustomAwardsPanel />}
+          {!observation && <PotaActivatorPanel />}
           {(aw.dxccDisagreements ?? []).length > 0 && (
             <div className="aw-panel">
               <h3>

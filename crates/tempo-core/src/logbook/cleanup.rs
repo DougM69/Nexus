@@ -1138,9 +1138,18 @@ fn checked_value(field: Field, value: &str) -> Result<String, String> {
         Field::Band if v.is_empty() => bad("a band"),
         _ if v.is_empty() => Err("A value to set cannot be blank; clear the field instead.".into()),
         Field::Operator | Field::StationCallsign | Field::PropMode => Ok(v.to_ascii_uppercase()),
-        Field::MyPotaRef | Field::PotaRef | Field::MySotaRef | Field::SotaRef | Field::Iota => {
-            Ok(v.to_ascii_uppercase())
+        // A two-fer as the activation stamps one: the parks upper case, comma-separated with no
+        // spaces, each once.
+        Field::MyPotaRef | Field::PotaRef => {
+            let mut parks: Vec<String> = Vec::new();
+            for park in v.split(',').map(|p| p.trim().to_ascii_uppercase()) {
+                if !parks.contains(&park) {
+                    parks.push(park);
+                }
+            }
+            Ok(parks.join(","))
         }
+        Field::MySotaRef | Field::SotaRef | Field::Iota => Ok(v.to_ascii_uppercase()),
         _ => Ok(v.to_string()),
     }
 }

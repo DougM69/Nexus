@@ -31844,6 +31844,30 @@ contact yourself."
         self.station.restore_activation()
     }
 
+    /// Keep the record of exported activation files in `path`, taking up what it holds
+    /// ([`crate::pota_exports`]). Called once by the shell at startup.
+    pub fn set_pota_exports_path(&mut self, path: PathBuf) {
+        self.station.pota_exports = crate::pota_exports::ExportedActivations::open(path);
+    }
+
+    /// The activation file for `reference`, the UTC day holding `day_unix` and `callsign` was
+    /// exported ([`crate::pota_exports::ExportedActivations::note`]).
+    pub fn note_activation_exported(
+        &mut self,
+        reference: &str,
+        day_unix: u64,
+        callsign: Option<&str>,
+    ) {
+        self.station
+            .pota_exports
+            .note(reference, day_unix, callsign)
+    }
+
+    /// The record of exported activation files.
+    pub fn exported_activations(&self) -> &crate::pota_exports::ExportedActivations {
+        &self.station.pota_exports
+    }
+
     /// See [`StationCore::update_qso`] — plus the propagation of a correction back into
     /// the CONTEST log, which is this function's own job.
     ///

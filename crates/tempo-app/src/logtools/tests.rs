@@ -328,6 +328,10 @@ fn a_bulk_edit_previews_applies_and_undoes_and_keeps_every_stamp() {
             moves: 0,
             move_to: None,
             move_from: vec![],
+            activation_changes: 0,
+            activation_uploaded: 0,
+            activation_exported: 0,
+            activation_files: vec![],
         }
     );
     let only_grid = &changes[..1];
@@ -374,6 +378,103 @@ fn a_bulk_edit_previews_applies_and_undoes_and_keeps_every_stamp() {
     assert_eq!(undone.unwrap().changed, 3);
     dur.wait(DURABLE_WAIT).unwrap();
     assert_eq!(rows(&engine), before, "every contact back, whole");
+}
+
+/// ★ A PARK RE-TAG. Contacts logged without the activation running, and one under the wrong park,
+/// take a two-fer as one run: the preview counts what changes, names the contact already uploaded
+/// and the exported activation file the change puts out of date; the edit keeps every stamp and
+/// queues nothing, the day's counter follows, and ONE undo puts back the log byte for byte.
+#[test]
+fn a_park_re_tag_previews_exports_applies_and_one_undo_restores_byte_identical() {
+    let d = Dir::new("tools-bulk-retag");
+    let me = "<STATION_CALLSIGN:6>KD9TAW";
+    let engine = shared(
+        &d,
+        &[
+            adif("W1AW", "120000", me),
+            adif(
+                "K1ABC",
+                "120100",
+                &format!("{me}<MY_SIG:4>POTA<MY_SIG_INFO:7>US-0001"),
+            ),
+            adif(
+                "N0XYZ",
+                "120200",
+                &format!("{me}<MY_SIG:4>SOTA<MY_SOTA_REF:10>W7A/MN-001"),
+            ),
+        ],
+    );
+    let rows0 = rows(&engine);
+    stamp(&engine, &rows0[1], UploadService::Lotw, 300);
+    engine_lock(&engine).take_pending_uploads();
+    // The wrong park's file for that day was already exported.
+    let exports = d.log().with_file_name("pota_exports.json");
+    engine_lock(&engine).set_pota_exports_path(exports);
+    engine_lock(&engine).note_activation_exported("US-0001", rows0[1].when_unix, Some("KD9TAW"));
+    settle(&engine);
+    let before = rows(&engine);
+    let mirror_before = mirror(&d);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let retag = [Change {
+        field: Field::MyPotaRef,
+        value: Some("us-0002, US-0003".into()),
+    }];
+
+    let p = bulk_preview(&engine, &ids, &retag).unwrap();
+    assert_eq!(
+        (p.selected, p.change, p.unchanged),
+        (3, 2, 1),
+        "the summit of mine is SOTA's: no park goes over it"
+    );
+    assert_eq!(p.activation_changes, 2);
+    assert_eq!(p.activation_uploaded, 1, "K1ABC was sent to LoTW");
+    assert_eq!(
+        p.activation_exported, 1,
+        "K1ABC is in the exported US-0001 file"
+    );
+    assert_eq!(
+        p.activation_files,
+        vec!["US-0001 2026-01-01 KD9TAW".to_string()]
+    );
+
+    let (made, dur) = bulk_edit(&engine, &ids, ids.len(), &MovesAck::default(), &retag);
+    let made = made.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(made.changed, 2);
+    let after = rows(&engine);
+    for i in 0..2 {
+        assert_eq!(after[i].ota.my_program.as_deref(), Some("POTA"));
+        assert_eq!(after[i].ota.my_ref.as_deref(), Some("US-0002,US-0003"));
+        assert_eq!(after[i].upload, before[i].upload, "every stamp kept");
+    }
+    assert_eq!(after[2], before[2]);
+    assert!(
+        engine_lock(&engine).take_pending_uploads().is_empty(),
+        "a re-tag queues nothing"
+    );
+    let day = before[0].when_unix / 86_400;
+    let count = |park: &str| {
+        engine_lock(&engine)
+            .station()
+            .hot()
+            .activation_day_count(park, day)
+    };
+    assert_eq!(
+        (count("US-0001"), count("US-0002"), count("US-0003")),
+        (0, 2, 2),
+        "the day's counter follows the re-tag, at each park of the two-fer"
+    );
+
+    let (undone, dur) = undo_run(&engine, &made.run.unwrap());
+    assert_eq!(undone.unwrap().changed, 2, "one undo takes back both");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(rows(&engine), before, "every contact back, whole");
+    settle(&engine);
+    assert_eq!(mirror(&d), mirror_before, "log.adi back byte for byte");
+    assert_eq!(
+        (count("US-0001"), count("US-0002"), count("US-0003")),
+        (1, 0, 0)
+    );
 }
 
 /// ★ THE CHECK. Each kind of problem is found with its proposed fix; only the fixes ticked are

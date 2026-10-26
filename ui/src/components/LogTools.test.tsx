@@ -149,6 +149,42 @@ describe('bulk edit', () => {
     ))
   })
 
+  it('a park re-tag names the contacts already uploaded and the exported activation files it puts out of date', async () => {
+    api.bulkEditPreview.mockResolvedValue({
+      ids: ['x', 'y', 'z'], selected: 3, change: 2, unchanged: 1, missing: 0, recall: 0, resend: 0, unconfirm: 0,
+      moves: 0, moveTo: null, moveFrom: [],
+      activationChanges: 2, activationUploaded: 1, activationExported: 2,
+      activationFiles: ['US-0001 2026-01-01 KD9TAW', 'US-0004 2026-01-02 KD9TAW'],
+    })
+    open('bulk', ['x', 'y', 'z'])
+    fireEvent.change(screen.getByRole('combobox', { name: 'Field' }), { target: { value: 'MY_POTA_REF' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: 'US-0002,US-0003' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    await screen.findByRole('button', { name: 'Change 2 contacts' })
+    expect(api.bulkEditPreview).toHaveBeenCalledWith(
+      { ids: ['x', 'y', 'z'] },
+      [{ field: 'MY_POTA_REF', value: 'US-0002,US-0003' }],
+    )
+    expect(screen.getByText(/1 of these was already sent to LoTW, eQSL, QRZ or Club Log/)).toBeTruthy()
+    expect(
+      screen.getByText(/2 of these are in activation files you already exported \(US-0001 2026-01-01 KD9TAW, US-0004 2026-01-02 KD9TAW\)/),
+    ).toBeTruthy()
+  })
+
+  it('a preview that moves no exported or uploaded contact says nothing of activation files', async () => {
+    api.bulkEditPreview.mockResolvedValue({
+      ids: ['x'], selected: 1, change: 1, unchanged: 0, missing: 0, recall: 0, resend: 0, unconfirm: 0,
+      moves: 0, moveTo: null, moveFrom: [],
+      activationChanges: 1, activationUploaded: 0, activationExported: 0, activationFiles: [],
+    })
+    open('bulk', ['x'])
+    fireEvent.change(screen.getByRole('textbox', { name: 'Value' }), { target: { value: 'EM10' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    await screen.findByRole('button', { name: 'Change 1 contact' })
+    expect(screen.queryByText(/activation file/)).toBeNull()
+    expect(screen.queryByText(/already sent to LoTW/)).toBeNull()
+  })
+
   it('applies to the ids the preview answered, with its count, not to the filter as it now stands', async () => {
     const ids = Array.from({ length: 42 }, (_, i) => `q${i}`)
     api.bulkEditPreview.mockResolvedValue({ ids, selected: 42, change: 40, unchanged: 2, missing: 0, recall: 4, resend: 3, unconfirm: 5 })

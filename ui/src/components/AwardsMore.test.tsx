@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, waitFor, fireEvent, within } from '@testing-library/react'
 import { AwardsView } from './AwardsView'
-import { chartCell, CustomAwardsPanel, DxccChartPanel, WhatToQslPanel } from './AwardsMore'
+import { chartCell, CustomAwardsPanel, DxccChartPanel, PotaActivatorPanel, WhatToQslPanel } from './AwardsMore'
 import type { AwardSummary, CustomAward, CustomAwardsView, DxccChart, QslWant } from '../types'
 import { EN } from '../i18n'
 import {
@@ -15,6 +15,7 @@ import {
   getCustomAwards,
   getDxccChart,
   getWhatToQsl,
+  getPotaActivator,
   readCustomAwardsFile,
   saveTextToDownloads,
   setCustomAwards,
@@ -30,6 +31,7 @@ vi.mock('../api', () => ({
   eqslPushQso: vi.fn(),
   getDxccChart: vi.fn(),
   getWhatToQsl: vi.fn(),
+  getPotaActivator: vi.fn(),
   getCustomAwards: vi.fn(),
   setCustomAwards: vi.fn(),
   readCustomAwardsFile: vi.fn(),
@@ -111,6 +113,7 @@ beforeEach(() => {
   vi.mocked(getAwards).mockReset()
   vi.mocked(getDxccChart).mockResolvedValue(CHART)
   vi.mocked(getWhatToQsl).mockResolvedValue(WANTS)
+  vi.mocked(getPotaActivator).mockResolvedValue({ calls: [], parks: [] })
   vi.mocked(getCustomAwards).mockResolvedValue({ awards: [], progress: [] })
   vi.mocked(setCustomAwards).mockReset()
   vi.mocked(readCustomAwardsFile).mockReset()
@@ -208,6 +211,65 @@ describe('Awards: What to QSL', () => {
     vi.mocked(getWhatToQsl).mockResolvedValue([])
     render(<WhatToQslPanel />)
     expect(await screen.findByText(EN['awards.qsl.empty'])).toBeTruthy()
+  })
+})
+
+describe('Awards: POTA activator', () => {
+  const stats = {
+    callsign: 'KD9TAW',
+    activations: 23,
+    attempts: 2,
+    qsos: 1240,
+    parksActivated: 3,
+    nextParkTier: 10,
+    roverBest: 5,
+    roverBestDate: '2026-05-02',
+    roverDays: [2, 0, 0, 0, 0, 0],
+    parks: [
+      { reference: 'US-0001', name: 'Acadia', activations: 21, attempts: 1, qsos: 1100, lastDate: '2026-10-01' },
+      { reference: 'US-0002', name: '', activations: 1, attempts: 1, qsos: 110, lastDate: '2026-05-02' },
+      { reference: 'US-0003', name: '', activations: 1, attempts: 0, qsos: 30, lastDate: '2026-05-02' },
+    ],
+  }
+
+  it('shows each achievement from the station’s counts, as POTA names them', async () => {
+    vi.mocked(getPotaActivator).mockResolvedValue({ calls: [stats], parks: [] })
+    render(<PotaActivatorPanel />)
+    await screen.findByText(/Acadia/)
+    const ladder = (name: string) =>
+      [...document.querySelectorAll('.aw-pota-ladders li')].find(
+        (li) => li.querySelector('.aw-entity')!.textContent === name,
+      )!.querySelector('.aw-needbands')!.textContent
+    expect(ladder(EN['awards.pota.parksLabel'])).toBe('3 · next achievement at 10')
+    // 21 activations at one park: past the first tier (20), the next at 40.
+    expect(ladder('Repeat Offender')).toBe('US-0001: 21 activations · next tier at 40')
+    expect(ladder('Kilo')).toBe('US-0001: 1100 of 1000 contacts · reached at 1 park')
+    expect(ladder('Rover')).toBe('most parks in one UTC day: 5 (2026-05-02)Warthog × 2')
+    expect([...document.querySelectorAll('.aw-pota-parks tbody tr')].map((r) => r.firstElementChild!.textContent)).toEqual([
+      'US-0001 · Acadia',
+      'US-0002',
+      'US-0003',
+    ])
+    expect(screen.queryByText(/Worked as/)).toBeNull()
+  })
+
+  it('keeps two calls apart, and says so when the log holds no activation', async () => {
+    vi.mocked(getPotaActivator).mockResolvedValue({ calls: [stats, { ...stats, callsign: 'W1AW' }], parks: [] })
+    render(<PotaActivatorPanel />)
+    expect(await screen.findByText('Worked as KD9TAW')).toBeTruthy()
+    expect(screen.getByText('Worked as W1AW')).toBeTruthy()
+    cleanup()
+    vi.mocked(getPotaActivator).mockResolvedValue({ calls: [], parks: [] })
+    render(<PotaActivatorPanel />)
+    expect(await screen.findByText(EN['awards.pota.empty'])).toBeTruthy()
+  })
+
+  it('is a station read: an observed summary shows none of it', async () => {
+    vi.mocked(getAwards).mockResolvedValue(BASE)
+    render(<AwardsView showGamification={false} observation={BASE} />)
+    await screen.findAllByText(/DXCC/i)
+    expect(document.querySelector('.aw-pota-panel')).toBeNull()
+    expect(getPotaActivator).not.toHaveBeenCalled()
   })
 })
 
