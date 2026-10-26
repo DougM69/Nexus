@@ -202,8 +202,8 @@ vi.mock('./api', async (importOriginal) => {
     // …and what its Contesting tab reads (the assistance record is a list).
     getAssistanceJournal: vi.fn(async () => []),
     getFdRulesStatus: vi.fn(async () => null),
-    // The contest setup's reads: the preview of its unsaved answers (the saved pick's, here), the
-    // contests' windows and the snapshot it checks the station against.
+    // The contest setup's reads: the preview of its unsaved answers (the saved pick's, here) and the
+    // contests' windows (the snapshot it checks the station against is `getSnapshot` above).
     previewFdRuleset: vi.fn(async () => ({
       event: String(station.current.fdEvent || 'arrlfd'),
       rulesYear: 2026,
@@ -217,7 +217,6 @@ vi.mock('./api', async (importOriginal) => {
       sentSettings: ['fd_class', 'fd_section'],
     })),
     contestWindows: vi.fn(async () => []),
-    getSnapshot: vi.fn(async () => snapshot()),
   }
 })
 vi.mock('./toast', async (importOriginal) => ({
