@@ -323,6 +323,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls to give it control.
 
 ### Fixed
+- **Contest DX multipliers: Sicily is Italy, except in CQ WW.** The Tennessee, Texas and Illinois
+  QSO Parties counted a WAE area (Sicily, African Italy, Shetland, Bear Island, European Turkey,
+  the Vienna International Centre) as a DX multiplier separate from its DXCC country, so working
+  IT9 and I claimed two where those contests count one. They now count DXCC countries only, and the
+  contest entry names the country the same way (IT9 shows Italy). CQ WW, whose rules count the WAE
+  areas as countries, still counts Sicily and Italy as two and shows IT9 as Sicily. Logs with no
+  WAE-area contact score as before.
 - **Technician and Novice: only CW and single-sideband voice on 28.3–28.5 MHz.** The transmit
   lockout let a Technician send AM, FM and SSTV pictures there, which 47 CFR 97.307(f)(10) does
   not allow. They are now refused for a Technician and a Novice, and the refusal says why. Nexus

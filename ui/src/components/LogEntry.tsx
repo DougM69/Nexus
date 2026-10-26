@@ -1604,14 +1604,16 @@ export function LogEntry({
   // under, for the country line, and the country file's zone, as a HINT in a contest that
   // receives a CQ zone — the slot the DTO tags with ADIF's `CQZ`. Both from ONE answer about
   // the call in the box, so the line never names a country the scorer does not count (IT9 is
-  // Sicily here, where the badges' `logEntity` says Italy) and never pairs one call's country
-  // with another's zone. The zone is the placeholder of that box and never its value: a
+  // Sicily in CQ WW, where the badges' `logEntity` says Italy; Italy in every other contest) and
+  // never pairs one call's country with another's zone. The zone is the placeholder of that box
+  // and never its value: a
   // prefix's zone is the likely one, and a station in a zone other than its prefix's
   // (a portable, a W6 in zone 4) is exactly what the operator must still copy.
   const zoneSlot = fdActive ? fdReceives.find((f) => f.adif === 'CQZ') : undefined
   const [place, setPlace] = useState<{ call: string; entity: string; cqZone: number | null } | null>(null)
   // Not asked in the Field Day events, which show no country and receive no zone.
   const placeAsked = fdActive && !isFieldDay(fieldDay?.event)
+  const placeEvent = fieldDay?.event ?? ''
   useEffect(() => {
     const call = logCall.trim()
     if (remoteMode || !placeAsked || !call) {
@@ -1619,7 +1621,7 @@ export function LogEntry({
       return
     }
     let stale = false
-    void contestPlace(call)
+    void contestPlace(call, placeEvent)
       .then((p) => {
         if (!stale) setPlace(p ? { call, ...p } : null)
       })
@@ -1627,7 +1629,7 @@ export function LogEntry({
     return () => {
       stale = true
     }
-  }, [logCall, remoteMode, placeAsked])
+  }, [logCall, remoteMode, placeAsked, placeEvent])
   const placed = place != null && place.call === logCall.trim() ? place : null
   const zoneHint = zoneSlot && logCall.trim().length >= 3 && placed?.cqZone != null ? String(placed.cqZone) : null
   // The contest strip's country line: the country, and its CQ zone in a contest that receives one.

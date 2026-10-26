@@ -1762,7 +1762,13 @@ enum MultSourceSpec {
         key: String,
         domain: String,
     },
-    DxccEntity,
+    /// `wae: true` is CQ WW's and WAE DX's country list, where a WAE area is a country
+    /// of its own; absent or `false` is the DXCC list. Additive: a build that predates the
+    /// key reads the variant and ignores it.
+    DxccEntity {
+        #[serde(default)]
+        wae: bool,
+    },
     Prefix,
 }
 
@@ -3174,7 +3180,8 @@ fn build(spec: FileSpec) -> RulesTable {
                                 // `None` makes in the type.
                                 domain: (!domain.is_empty()).then(|| leak_str(domain) as &str),
                             },
-                            MultSourceSpec::DxccEntity => MultSource::DxccEntity,
+                            MultSourceSpec::DxccEntity { wae: false } => MultSource::DxccEntity,
+                            MultSourceSpec::DxccEntity { wae: true } => MultSource::WaeCountry,
                             MultSourceSpec::Prefix => MultSource::Prefix,
                         },
                         scope: match m.scope {

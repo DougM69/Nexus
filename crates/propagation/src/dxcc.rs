@@ -728,6 +728,30 @@ pub fn card_entity(resolved: Option<&DxccInfo>, dxcc: Option<u32>) -> Option<&'s
         .or_else(|| shown_entity(resolved, resolved.and_then(|i| i.dxcc)))
 }
 
+/// The DXCC entity a WAE/CQ-only area belongs to, by the number it carries (Sicily → Italy,
+/// European Turkey → Turkey); `None` for every other name, a DXCC entity's included. Read by
+/// the contest scorer, which keeps a row's entity as [`resolve`] named it and counts a WAE area
+/// as a country of its own only in the contests whose list has them (CQ WW, WAE DX).
+pub fn wae_parent(entity: &str) -> Option<&'static str> {
+    // Six areas in the vendored file: the scan is over those, never over every entity.
+    static AREAS: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
+    AREAS
+        .get_or_init(|| {
+            let r = resolver();
+            r.entities
+                .iter()
+                .filter(|e| !e.is_dxcc)
+                .filter_map(|e| {
+                    let parent = r.by_dxcc.get(&e.dxcc?)?;
+                    Some((e.name.as_str(), r.entities[*parent as usize].name.as_str()))
+                })
+                .collect()
+        })
+        .iter()
+        .find(|(area, _)| *area == entity)
+        .map(|(_, parent)| *parent)
+}
+
 /// The subdivision an ENTITY settles on its own, because the entity IS one state (#171).
 ///
 /// Alaska and Hawaii are single-state DXCC entities: a call the prefix places there is in AK
@@ -1460,6 +1484,33 @@ mod dxcc_numbers {
             assert_eq!(named.name, resolve(parent).unwrap().entity, "{code}");
             assert!(!named.deleted);
         }
+    }
+
+    /// Every WAE area the file holds folds into the DXCC entity its own number names, and a DXCC
+    /// entity folds into nothing — the contest scorer keeps it as it is.
+    #[test]
+    fn a_wae_area_folds_into_its_dxcc_entity_and_nothing_else_folds() {
+        let areas: Vec<_> = resolver()
+            .entities
+            .iter()
+            .filter(|e| !e.is_dxcc)
+            .map(|e| (e.name.as_str(), wae_parent(&e.name)))
+            .collect();
+        assert_eq!(
+            areas,
+            [
+                ("Vienna Intl Ctr", Some("Austria")),
+                ("Shetland Islands", Some("Scotland")),
+                ("African Italy", Some("Italy")),
+                ("Sicily", Some("Italy")),
+                ("Bear Island", Some("Svalbard")),
+                ("European Turkey", Some("Asiatic Turkey")),
+            ]
+        );
+        for dxcc in ["Italy", "Austria", "United States", "Fed. Rep. of Germany"] {
+            assert_eq!(wae_parent(dxcc), None, "{dxcc}");
+        }
+        assert_eq!(wae_parent(""), None);
     }
 
     /// Each number the reports and the awards' tests rest on, checked against the table: it names

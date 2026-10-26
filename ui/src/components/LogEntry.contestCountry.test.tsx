@@ -3,7 +3,8 @@
 // THE COUNTRY ON THE CONTEST ENTRY — the call's country as the contest places it (`contestPlace`, the
 // scorer's own resolve), read-only on the Call caption's line: "Fed. Rep. of Germany · CQ 14" in a
 // contest that receives a CQ zone, the country alone in one that does not. The country and the zone come
-// from that one answer, so a WAE area the scorer counts on its own (IT9 is Sicily) is named as it counts.
+// from that one answer, and the contest is asked by its event, so a WAE area is named as that contest's
+// scorer counts it: on its own in CQ WW (IT9 is Sicily), its DXCC entity elsewhere (IT9 is Italy).
 // The zone stays the zone box's placeholder and never becomes its value.
 //
 // ⚠️ jsdom lays out nothing; that the label moves no box is the browser measurement's to say.
@@ -132,14 +133,24 @@ describe('the country on the contest entry', () => {
     expect(country()!.textContent).toBe('Fed. Rep. of Germany')
   })
 
-  it('names a WAE area as the contest counts it, Sicily for IT9, not the DXCC entity; CONTROL: a plain call as before', async () => {
+  it('names a WAE area as the contest counts it, Sicily for IT9 in CQ WW and Italy elsewhere; CONTROL: a plain call as before', async () => {
     placeAll()
+    // The backend's answer follows the event it is asked for: only CQ WW counts Sicily on its own.
+    api.contestPlace.mockImplementation((c: string, event: string) =>
+      Promise.resolve(c === 'IT9XYZ' && !event.startsWith('cqww') ? { entity: 'Italy', cqZone: 15 } : (PLACE[c] ?? null)),
+    )
     render(strip(cqww))
     await typeCall('IT9XYZ')
+    expect(api.contestPlace).toHaveBeenLastCalledWith('IT9XYZ', 'cqww_ssb')
     expect(country()!.textContent).toBe('Sicily · CQ 15')
     expect(zoneBox().placeholder).toBe('15')
     await typeCall('DL1ABC')
     expect(country()!.textContent).toBe('Fed. Rep. of Germany · CQ 14')
+    cleanup()
+    render(strip(serial))
+    await typeCall('IT9XYZ')
+    expect(api.contestPlace).toHaveBeenLastCalledWith('IT9XYZ', 'wpx_ssb')
+    expect(country()!.textContent).toBe('Italy')
   })
 
   it("never pairs one call's country with another's zone while the new call's answer is on its way", async () => {

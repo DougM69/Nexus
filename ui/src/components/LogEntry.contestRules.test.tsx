@@ -271,7 +271,7 @@ describe('6 — the country file’s zone is a hint, and a W/VE contact with no 
     await act(async () => {
       fireEvent.change(callBox(), { target: { value: 'W1AW' } })
     })
-    expect(api.contestPlace).toHaveBeenCalledWith('W1AW')
+    expect(api.contestPlace).toHaveBeenCalledWith('W1AW', 'cqww_rtty')
     expect(box('Zone').placeholder).toBe('5')
     expect(box('Zone').value).toBe('')
     api.contestPlace.mockImplementation(() => Promise.resolve(null))
