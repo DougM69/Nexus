@@ -81,8 +81,9 @@ The dock at the bottom of the screen is WSJT-X's JTTY transmitter.
   sends it: a line longer than 80 characters goes in pieces, and a line break ends a message.
   While a message is still going, Send shows how many pieces are left; another Send queues behind
   it and goes on the same transmission. `%M` is your call, `%H` the call in the Call box, `%E`
-  your exchange, `%N` the serial, `%G` your grid and `%R` the SNR of the decode you clicked the
-  call in (-10 when you typed the call).
+  your exchange, `%N` the serial, `%G` your grid and `%R` the SNR of the newest decode naming the
+  call you clicked, in the pane you clicked it in (-10 when you typed the call). A report goes only
+  with the call it was taken for: change the Call box and it goes.
 - **F1 to F8** — WSJT-X's two sets of messages, picked with **Messages**: **Contest** (`CQ %M CQ`,
   `%H %E`, `%H TU CQ %M CQ`, `%M`, `%H`, `TU NOW %Q %E`, `%H AGN?` and `%E`) and **FT8 style**
   for a chat-style contact (`%H %M %G`, `%H %M %R`, `%H %M R%R`, `%H %M RRR`, `%H %M 73` and
@@ -137,9 +138,15 @@ includes the grid, as WSJT-X's does.
 ## Logging and LoTW
 
 When a message starting `TU` goes out (F6's `TU NOW`, or `TU` typed), WSJT-X opens its Log QSO
-window. Nexus asks instead, at the top of the log pane: "TU went to W1AW: log the contact?",
-with the call from the Call box put in the log strip. **Log QSO** presses the strip's own Log
-button, with every check it makes; **Not now** closes the question. Nothing is logged unless you
+window. Nexus asks instead, at the top of the log pane: "Log the contact with W1AW?", naming
+the station the TU thanked. F6 thanks one station while it calls the next, whose call is in the
+Call box by then, so the question names the station before it. Asking changes nothing: the Call
+box and the log strip stay as you have them. **Log QSO** logs through the strip's own Log, with
+every check it makes, and only when the strip holds that call. With the strip empty, the press
+puts the call in it for you to check, and the next press logs it; with another call in it,
+nothing is logged and Nexus says so. **Not now** closes the question. The first answer, from
+this screen or a Remote one, closes it everywhere, so a contact cannot be logged twice from two
+screens, and a question nobody answered is dropped after two minutes. Nothing is logged unless you
 press it.
 
 The log strip logs a JTTY contact as **JTTY**, and an ADIF export writes it as

@@ -57,20 +57,25 @@ vi.mock('./Waterfall', () => ({
   },
 }))
 vi.mock('./RfScopePane', () => ({ RfScopePane: () => null }))
-/** The strip's own Log button, as the stub draws it: what a press of it did, and whether it is
- *  disabled (the real strip disables it until it can log). */
-const strip = vi.hoisted(() => ({ logged: [] as string[], disabled: false }))
+/** The strip as the stub draws it: the call it was filled with, and the last props it was given
+ *  (the Log QSO prompt's request and where its outcome goes). The real strip's handling of a
+ *  request is tested against the real strip (`JttyCockpit.lookup.test.tsx`). */
+type StubProps = {
+  cwLive?: { call: string | null; confirmed: boolean } | null
+  mode: string
+  logRequest?: { id: number; call: string; claim: () => Promise<boolean> } | null
+  onLogRequest?: (id: number, outcome: { kind: string; held?: string }) => void
+}
+const strip = vi.hoisted(() => ({ last: null as StubProps | null }))
 vi.mock('./LogEntry', () => ({
-  LogEntry: (p: { cwLive?: { call: string | null; confirmed: boolean } | null; mode: string }) => (
-    <div data-testid="log-stub" data-mode={p.mode}>
-      <span className="stub-call">{p.cwLive?.call ?? ''}</span>
-      <div className="le-row le-actions">
-        <button type="button" className="le-log-btn" disabled={strip.disabled} onClick={() => strip.logged.push(p.cwLive?.call ?? '')}>
-          Log
-        </button>
+  LogEntry: (p: StubProps) => {
+    strip.last = p
+    return (
+      <div data-testid="log-stub" data-mode={p.mode}>
+        <span className="stub-call">{p.cwLive?.call ?? ''}</span>
       </div>
-    </div>
-  ),
+    )
+  },
 }))
 
 const snap = {
@@ -523,40 +528,77 @@ describe('the JTTY dock, wired to the engine (a state saying the transmitter is 
     })
   })
 
-  it('a TU send asks to log the contact, once: the call goes in the log strip, Log QSO presses the strip’s own Log, Not now logs nothing', async () => {
-    strip.logged = []
-    strip.disabled = false
+  it('a TU send asks to log the thanked station and changes nothing until pressed: Log QSO hands the strip a request for that call, the engine takes the answer', async () => {
     const prompt = (id: number, call = 'W1AW') => state({ tx: txState({ logPrompt: { id, call, serial: 7, atUtcMs: T0 } }) })
+    m('jttyLogPromptAnswer').mockResolvedValue(true)
     await mount(prompt(1))
     const ask = () => document.querySelector('.jtty-log-prompt') as HTMLElement | null
     await waitFor(() => expect(ask()?.textContent).toContain(t('jtty.logPrompt.text', { call: 'W1AW' })))
-    expect(screen.getByTestId('log-stub').querySelector('.stub-call')?.textContent, 'the call is in the strip').toBe('W1AW')
-    expect(strip.logged, 'asking logs nothing').toEqual([])
+    expect(screen.getByTestId('log-stub').querySelector('.stub-call')?.textContent, 'the strip is not touched').toBe('')
+    expect((screen.getByRole('textbox', { name: t('jtty.hisCall.aria') }) as HTMLInputElement).value, 'nor the Call box').toBe('')
+    expect(strip.last?.logRequest ?? null, 'asking requests nothing').toBeNull()
     fireEvent.click(within(ask()!).getByRole('button', { name: t('jtty.logPrompt.log') }))
-    expect(strip.logged, 'the strip’s own Log, once').toEqual(['W1AW'])
-    expect(ask(), 'asked once').toBeNull()
+    const req = strip.last?.logRequest
+    expect(req?.call).toBe('W1AW')
+    expect(m('jttyLogPromptAnswer'), 'nothing answered before the strip asks').not.toHaveBeenCalled()
+    await expect(req!.claim()).resolves.toBe(true)
+    expect(m('jttyLogPromptAnswer')).toHaveBeenCalledWith(1)
+    // Each press is a request of its own.
+    fireEvent.click(within(ask()!).getByRole('button', { name: t('jtty.logPrompt.log') }))
+    expect(strip.last?.logRequest?.id).not.toBe(req!.id)
+    // The strip's outcomes: said, and the question stays, until it is logging.
+    act(() => strip.last!.onLogRequest!(req!.id, { kind: 'not-ready' }))
+    expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith(t('jtty.logPrompt.notReady'), 'info')
+    act(() => strip.last!.onLogRequest!(req!.id, { kind: 'other-call', held: 'K1ABC' }))
+    expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith(t('jtty.logPrompt.otherCall', { call: 'W1AW', held: 'K1ABC' }), 'info')
+    expect(ask()).not.toBeNull()
+    act(() => strip.last!.onLogRequest!(req!.id, { kind: 'logging' }))
+    expect(ask(), 'answered').toBeNull()
     // The engine still reports the same prompt on its next poll: it is not asked again.
     m('getJttyState').mockResolvedValue(prompt(1))
     await flush()
     expect(ask()).toBeNull()
     cleanup()
-    // Not now: nothing is logged.
-    strip.logged = []
+    // Not now: the engine is told, for every screen, and nothing is requested of the strip.
     await mount(prompt(2, 'K1ABC'))
     await waitFor(() => expect(ask()).not.toBeNull())
     fireEvent.click(within(ask()!).getByRole('button', { name: t('jtty.logPrompt.dismiss') }))
     expect(ask()).toBeNull()
-    expect(strip.logged).toEqual([])
-    cleanup()
-    // A strip that cannot log yet: nothing is pressed, the question stays, and it says why.
-    strip.disabled = true
-    await mount(prompt(3))
-    await waitFor(() => expect(ask()).not.toBeNull())
-    fireEvent.click(within(ask()!).getByRole('button', { name: t('jtty.logPrompt.log') }))
-    expect(strip.logged).toEqual([])
-    expect(ask()).not.toBeNull()
-    expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith(t('jtty.logPrompt.notReady'), 'info')
-    strip.disabled = false
+    expect(m('jttyLogPromptAnswer')).toHaveBeenLastCalledWith(2)
+    expect(strip.last?.logRequest ?? null).toBeNull()
+  })
+
+  it('M1: %R goes only with the call it was taken for, however the Call box changed; the newest decode naming the call gives it (WSJT-X’s snrForSelectedWord)', async () => {
+    const lines = [
+      line({ id: 3, snr: -15, text: 'CQ W1AW CQ', line: '1500 -15  CQ W1AW CQ', confirmedCalls: ['W1AW'] }),
+      line({ id: 4, startUtcMs: T0 + 9_000, snr: -7, text: 'KD9TAW W1AW 599', line: '1500 -7  KD9TAW W1AW 599', confirmedCalls: [] }),
+      line({ id: 5, startUtcMs: T0 + 12_000, snr: -20, text: 'CQ K1ABC CQ', line: '1500 -20  CQ K1ABC CQ', confirmedCalls: [] }),
+    ]
+    await mount(state({ lines, tx: txState() }))
+    m('jttyFkey').mockResolvedValue(sent(0, 'x', state({ lines, tx: txState() })))
+    const box = () => screen.getByRole('textbox', { name: t('jtty.hisCall.aria') }) as HTMLInputElement
+    await waitFor(() => expect(within(pane('all')).getByRole('button', { name: 'W1AW' })).toBeTruthy())
+    // Clicked in the older line: the newest decode naming W1AW gives the report.
+    fireEvent.click(within(pane('all')).getByRole('button', { name: 'W1AW' }))
+    fireEvent.click(screen.getByRole('button', { name: /^F2/ }))
+    await flush()
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(2, 'W1AW', -7)
+    // Typed over, then W1AW clicked again: the box is W1AW again, with W1AW's report.
+    fireEvent.change(box(), { target: { value: 'K1ABC' } })
+    fireEvent.click(within(pane('all')).getByRole('button', { name: 'W1AW' }))
+    expect(box().value).toBe('W1AW')
+    fireEvent.click(screen.getByRole('button', { name: /^F2/ }))
+    await flush()
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(2, 'W1AW', -7)
+    // Typed to another station: no report goes with it, and typing W1AW back does not bring one.
+    fireEvent.change(box(), { target: { value: 'K1ABC' } })
+    fireEvent.click(screen.getByRole('button', { name: /^F2/ }))
+    await flush()
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(2, 'K1ABC', null)
+    fireEvent.change(box(), { target: { value: 'W1AW' } })
+    fireEvent.click(screen.getByRole('button', { name: /^F2/ }))
+    await flush()
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(2, 'W1AW', null)
   })
 
   it('no prompt, no question: a state without one shows nothing', async () => {

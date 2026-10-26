@@ -89,6 +89,9 @@ const HEARD_SHOWN_MS: i64 = 10 * 60 * 1000;
 /// The receive audio kept for decoding again: WSJT-X's `Jtty::ReceiveHistory::capacity`, 180 s
 /// at 12 kHz over every reception it still holds (3.3.0-beta4 `JttyReceiveHistory.hpp` 13).
 const JTTY_HISTORY_SAMPLES: usize = 180 * 12_000;
+/// The kept audio is held in pieces of at most a second, so letting the oldest go never moves
+/// more than a second of samples (it runs under the engine lock, on every feed once full).
+const JTTY_HISTORY_PIECE: usize = 12_000;
 /// What a double-click on a waterfall row decodes again: from 5 s before that row, 40 s of it
 /// (`MainWindow::startJttyReview`, 3.3.0-beta4 `widgets/mainwindow_jtty_receive.cpp` 685-728).
 const JTTY_REVIEW_BEFORE_SAMPLES: i64 = 5 * 12_000;
@@ -137,6 +140,9 @@ struct Line {
     tx: bool,
     /// The review (decode again) that found it, numbered from 1; `None` for live reception.
     review: Option<u64>,
+    /// Which of that review's decoders found it (one per reception): message numbers are each
+    /// decoder's own. 0 for live reception.
+    review_job: u64,
 }
 
 /// A stretch of retained receive audio decoded again (WSJT-X's review job): taken by the decode
@@ -152,8 +158,12 @@ pub struct JttyReview {
 /// Which review a decode belongs to, and where its audio sits.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct JttyReviewOf {
-    /// The review's number: its lines are shown together under one heading.
+    /// The review's number: its lines are shown together under one heading. One press of
+    /// Decode is one review, however many receptions it decodes again.
     pub group: u64,
+    /// This reception's decoder within the review, numbered across reviews: its lines are told
+    /// apart from another decoder's by it, as message numbers are each decoder's own.
+    pub job: u64,
     /// UTC milliseconds of the review audio's first sample, and the dial it was received on.
     pub anchor_ms: i64,
     pub dial_hz: u64,
@@ -176,7 +186,7 @@ pub struct JttySpot {
 }
 
 /// The newest sender-shaped message for a call (the board's heard station, once confirmed).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Sender {
     freq_hz: u64,
     snr: i32,
@@ -275,6 +285,8 @@ pub struct JttyRx {
     /// Reviews asked for and not yet taken by the decode thread, and the last review's number.
     reviews: Vec<JttyReview>,
     last_review: u64,
+    /// The last review decoder's number ([`JttyReviewOf::job`]).
+    last_job: u64,
 }
 
 impl Default for JttyRx {
@@ -301,6 +313,7 @@ impl Default for JttyRx {
             history: VecDeque::new(),
             reviews: Vec::new(),
             last_review: 0,
+            last_job: 0,
         }
     }
 }
@@ -379,10 +392,9 @@ impl JttyRx {
             rx: true,
             tx: true,
             review: None,
+            review_job: 0,
         });
-        while self.lines.len() > JTTY_LINES_CAP {
-            self.lines.pop_front();
-        }
+        cap_lines(&mut self.lines, false);
     }
 
     fn start_session(&mut self, anchor_ms: i64, dial_hz: u64) -> u64 {
@@ -405,11 +417,28 @@ impl JttyRx {
     /// Keep `pcm`, reception `session`'s audio from sample `first`, for decoding again; the
     /// oldest goes once more than [`JTTY_HISTORY_SAMPLES`] are kept.
     fn remember(&mut self, session: u64, first: i64, pcm: &[i16]) {
-        match self.history.back_mut() {
-            Some((s, at, kept)) if *s == session && *at + kept.len() as i64 == first => {
-                kept.extend_from_slice(pcm)
-            }
-            _ => self.history.push_back((session, first, pcm.to_vec())),
+        let mut at_sample = first;
+        let mut rest = pcm;
+        while !rest.is_empty() {
+            let room = match self.history.back_mut() {
+                Some((s, at, kept))
+                    if *s == session
+                        && *at + kept.len() as i64 == at_sample
+                        && kept.len() < JTTY_HISTORY_PIECE =>
+                {
+                    let n = rest.len().min(JTTY_HISTORY_PIECE - kept.len());
+                    kept.extend_from_slice(&rest[..n]);
+                    n
+                }
+                _ => {
+                    let n = rest.len().min(JTTY_HISTORY_PIECE);
+                    self.history
+                        .push_back((session, at_sample, rest[..n].to_vec()));
+                    n
+                }
+            };
+            at_sample += room as i64;
+            rest = &rest[room..];
         }
         let mut total: usize = self.history.iter().map(|(_, _, p)| p.len()).sum();
         while total > JTTY_HISTORY_SAMPLES {
@@ -448,6 +477,29 @@ impl JttyRx {
         }
         out
     }
+}
+
+/// Hold the receive window to [`JTTY_LINES_CAP`] lines of the kind just added, the oldest of that
+/// kind going first: live copy and what a review found are capped each on its own, so decoding
+/// again never pushes the live copy out of the window.
+fn cap_lines(lines: &mut VecDeque<Line>, review: bool) {
+    let kind = |l: &Line| l.review.is_some() == review;
+    let mut over = lines
+        .iter()
+        .filter(|l| kind(l))
+        .count()
+        .saturating_sub(JTTY_LINES_CAP);
+    if over == 0 {
+        return;
+    }
+    lines.retain(|l| {
+        if over > 0 && kind(l) {
+            over -= 1;
+            false
+        } else {
+            true
+        }
+    });
 }
 
 /// One reception's audio for the decode thread: what the tap took since the last take, in
@@ -790,15 +842,18 @@ impl Engine {
         // A new review replaces any not yet taken (WSJT-X's `cancelJttyReview`); the decode
         // thread drops one it is running when it takes these.
         j.reviews.clear();
+        j.last_review += 1;
+        let group = j.last_review;
         for (session, first, end) in jobs {
             let Some(s) = j.session(session).cloned() else {
                 continue;
             };
-            j.last_review += 1;
+            j.last_job += 1;
             let pcm = j.kept_pcm(session, first, end);
             j.reviews.push(JttyReview {
                 of: JttyReviewOf {
-                    group: j.last_review,
+                    group,
+                    job: j.last_job,
                     anchor_ms: s.anchor_ms + first / 12,
                     dial_hz: s.dial_hz,
                     band,
@@ -831,7 +886,7 @@ impl Engine {
                 .lines
                 .iter_mut()
                 .rev()
-                .find(|l| l.review == Some(review.group) && l.id == u.message_id)
+                .find(|l| l.review_job == review.job && l.id == u.message_id)
             {
                 Some(line) => {
                     line.text = text;
@@ -852,10 +907,9 @@ impl Engine {
                         rx: near,
                         tx: false,
                         review: Some(review.group),
+                        review_job: review.job,
                     });
-                    while j.lines.len() > JTTY_LINES_CAP {
-                        j.lines.pop_front();
-                    }
+                    cap_lines(&mut j.lines, true);
                 }
             }
         }
@@ -934,10 +988,9 @@ impl Engine {
                         rx: (u.freq_hz - center).abs() < tolerance,
                         tx: false,
                         review: None,
+                        review_job: 0,
                     });
-                    while j.lines.len() > JTTY_LINES_CAP {
-                        j.lines.pop_front();
-                    }
+                    cap_lines(&mut j.lines, false);
                     start_ms
                 }
             };
@@ -1216,7 +1269,7 @@ impl JttyDriver {
                 self.reviews.clear();
                 return None;
             };
-            live.begin(review.of.group as i64);
+            live.begin(review.of.job as i64);
             self.reviewing = Some((review, live, 0));
         }
         let (review, live, pushed) = self.reviewing.as_mut()?;
@@ -1918,6 +1971,13 @@ mod tests {
         );
         e.jtty_clear();
         e.take_jtty_spots();
+        // What live reception counted toward hearing a station: a review adds nothing to it.
+        let senders = e.jtty.senders.clone();
+        let heard = e.jtty_state().heard;
+        assert!(
+            !senders.is_empty(),
+            "CONTROL: live reception counts its senders"
+        );
         let sample0 = T0_MS - 100;
         e.jtty_decode_again(None).unwrap();
         assert_eq!(e.jtty_state().notice.as_deref(), Some(JTTY_REVIEW_STARTED));
@@ -1946,6 +2006,15 @@ mod tests {
         );
         assert!(e.take_all_txt_pending().is_empty(), "a review logs nothing");
         assert!(e.take_jtty_spots().is_empty(), "nor spots");
+        assert_eq!(
+            e.jtty.senders, senders,
+            "nor counts a sender toward the two-decode rule"
+        );
+        assert_eq!(e.jtty_state().heard, heard, "nor hears a station");
+        assert!(
+            st.lines.iter().all(|l| l.confirmed_calls.is_empty()),
+            "nor confirms a call"
+        );
         // A row's double-click: from 5 s before it, so the message at 15 s and not the one at 2.
         e.jtty_clear();
         e.jtty_decode_again(Some(sample0 + 16_000)).unwrap();
@@ -1986,6 +2055,112 @@ mod tests {
         let pcm = j.kept_pcm(2, 49 * second as i64, 51 * second as i64);
         assert_eq!(pcm.len(), 2 * second);
         assert_eq!((pcm[0], pcm[pcm.len() - 1]), (2, 3));
+    }
+
+    /// THE KEPT AUDIO IS HELD IN PIECES OF AT MOST A SECOND, so letting the oldest go moves at most
+    /// a second of samples, under the engine lock the keying path also takes, rather than the
+    /// whole three minutes on every 20 ms feed; and what is read back across the pieces is the
+    /// audio as it was fed, in its places.
+    #[test]
+    fn the_kept_audio_is_held_in_pieces_and_read_back_whole() {
+        let mut j = JttyRx::default();
+        let feed = 240; // 20 ms at 12 kHz, the radio loop's step
+        let feeds = 200 * 12_000 / feed;
+        for k in 0..feeds {
+            let at = (k * feed) as i64;
+            let pcm: Vec<i16> = (0..feed)
+                .map(|n| ((k * feed + n) % 30_000) as i16)
+                .collect();
+            j.remember(1, at, &pcm);
+        }
+        // A single long delivery is split the same way.
+        j.remember(2, 0, &vec![7; 5 * 12_000]);
+        let total: usize = j.history.iter().map(|(_, _, p)| p.len()).sum();
+        assert_eq!(total, JTTY_HISTORY_SAMPLES);
+        assert!(
+            j.history
+                .iter()
+                .all(|(_, _, p)| p.len() <= JTTY_HISTORY_PIECE),
+            "no piece over a second"
+        );
+        let (first, end) = j.kept(1).unwrap();
+        assert_eq!(end, (feeds * feed) as i64);
+        assert_eq!(first, end - (JTTY_HISTORY_SAMPLES - 5 * 12_000) as i64);
+        let pcm = j.kept_pcm(1, first, end);
+        assert_eq!(pcm.len() as i64, end - first);
+        assert!(
+            pcm.iter()
+                .enumerate()
+                .all(|(n, &v)| v == ((first as usize + n) % 30_000) as i16),
+            "every sample in its place"
+        );
+        assert_eq!(j.kept(2), Some((0, 5 * 12_000)));
+    }
+
+    /// ONE DECODE PRESS IS ONE REVIEW: every reception it decodes again shows under the same
+    /// heading, while each reception's decoder keeps its own message numbers, so two messages
+    /// numbered alike by two decoders stay two lines. And a review never pushes the live copy
+    /// out: review lines and live lines are each kept to the window's 500 on their own.
+    #[test]
+    fn one_press_is_one_review_and_never_pushes_out_the_live_copy() {
+        let mut e = rx_engine();
+        let a = e.jtty.start_session(T0_MS, 14_090_000);
+        e.jtty.remember(a, 0, &vec![1; 12_000]);
+        let b = e.jtty.start_session(T0_MS + 60_000, 14_090_000);
+        e.jtty.remember(b, 0, &vec![2; 12_000]);
+        e.jtty_decode_again(None).unwrap();
+        let reviews = e.take_jtty_reviews();
+        assert_eq!(reviews.len(), 2, "both receptions");
+        assert_eq!(
+            reviews[0].of.group, reviews[1].of.group,
+            "under one heading"
+        );
+        assert_ne!(reviews[0].of.job, reviews[1].of.job, "each its own decoder");
+        e.apply_jtty_review(
+            &reviews[0].of,
+            &[upd(1, "CQ W1AW FN31", 0.0, Terminal::Complete)],
+        );
+        e.apply_jtty_review(
+            &reviews[1].of,
+            &[upd(1, "CQ K1ABC FN42", 0.0, Terminal::Complete)],
+        );
+        let texts: Vec<String> = e
+            .jtty_state()
+            .lines
+            .iter()
+            .map(|l| l.text.clone())
+            .collect();
+        assert_eq!(texts, ["CQ W1AW FN31", "CQ K1ABC FN42"]);
+        // A full live window, then a review: the live lines all stay, and so does the review's.
+        e.jtty_clear();
+        for k in 0..JTTY_LINES_CAP {
+            e.jtty
+                .push_sent(T0_MS + k as i64, 14_090_000, 1500.0, &format!("LINE {k}"));
+        }
+        e.apply_jtty_review(
+            &reviews[0].of,
+            &[upd(9, "CQ W1AW FN31", 0.0, Terminal::Complete)],
+        );
+        let st = e.jtty_state();
+        assert_eq!(
+            st.lines.iter().filter(|l| l.review.is_none()).count(),
+            JTTY_LINES_CAP
+        );
+        assert_eq!(st.lines.iter().filter(|l| l.review.is_some()).count(), 1);
+        // …and the review's own are held to 500 too.
+        let many: Vec<Update> = (0..JTTY_LINES_CAP as i64 + 20)
+            .map(|k| upd(100 + k, "CQ W1AW FN31", 0.0, Terminal::Complete))
+            .collect();
+        e.apply_jtty_review(&reviews[0].of, &many);
+        let st = e.jtty_state();
+        assert_eq!(
+            st.lines.iter().filter(|l| l.review.is_none()).count(),
+            JTTY_LINES_CAP
+        );
+        assert_eq!(
+            st.lines.iter().filter(|l| l.review.is_some()).count(),
+            JTTY_LINES_CAP
+        );
     }
 
     /// A SPOT CARRIES THE GRID when the message names one, as WSJT-X's does (its third word, when

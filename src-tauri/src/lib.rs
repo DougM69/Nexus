@@ -18682,6 +18682,14 @@ fn jtty_decode_again(
     Ok(eng.jtty_state())
 }
 
+/// Answer the JTTY Log QSO prompt `id` (Log QSO or Not now): true for the first answer of the
+/// prompt still asked, which takes it for every screen, shack and Remote alike; a screen logs the
+/// contact only on true, so one TU is never logged twice. Logs and sends nothing itself.
+#[tauri::command(async)]
+fn jtty_log_prompt_answer(state: State<'_, SharedEngine>, id: u64) -> bool {
+    engine_lock(&state).jtty_log_prompt_answer(id)
+}
+
 // ---- JTTY transmit (`tempo_app::engine::jtty_tx`). Every send passes the engine's JTTY TX gate
 // (`Engine::jtty_tx_gate`: the JTTY screen, clock repair, TX on, the connection, a callsign, the
 // licence, the transmitter's owner) before anything reaches the radio. A send is planned under
@@ -40101,6 +40109,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         jtty_set_band,
         jtty_clear,
         jtty_decode_again,
+        jtty_log_prompt_answer,
         jtty_send,
         jtty_fkey,
         jtty_live_start,

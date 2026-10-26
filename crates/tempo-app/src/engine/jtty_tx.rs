@@ -117,6 +117,11 @@ const WATCHDOG_TRIPPED: &str = "JTTY stopped by the TX watchdog: nothing was typ
 const STOPPED_FOR_PREP: &str =
     "JTTY was stopped while the message was being prepared; nothing was sent.";
 
+/// How long a Log QSO prompt nobody answered is still asked: two minutes after its TU went on the
+/// air. Later, a press would log the contact at that later time, and a screen opened then (a
+/// reload, a Remote client) would ask about a contact long over.
+pub(crate) const JTTY_LOG_PROMPT_MS: i64 = 120_000;
+
 /// One segment ready for the transmitter: its audio, made at the Tx offset it was sent at.
 #[derive(Debug, Clone)]
 pub struct JttySegment {
@@ -192,6 +197,10 @@ pub struct JttyTx {
     /// nothing; the operator does, from the log strip.
     log_prompt: Option<crate::dto::JttyLogPrompt>,
     log_prompts: u64,
+    /// The station the last send that named the Call box's call went to: the one a later TU
+    /// thanks. F6 (`TU NOW %Q %E`) goes out with the NEXT station in the Call box, so the station
+    /// it closes is this one, not the Call box's.
+    addressed: String,
     /// Frames of what was sent (not the filler) this over has put on the air: WSJT-X's "Frames:
     /// sent/total" (`updateJttyLiveEntryFrameLabel`), from the first send of an over to the next.
     over_frames_sent: u32,
@@ -217,6 +226,7 @@ impl JttyTx {
             gen: 0,
             log_prompt: None,
             log_prompts: 0,
+            addressed: String::new(),
             over_frames_sent: 0,
         }
     }
@@ -1372,6 +1382,9 @@ impl Engine {
     /// (`noteTxModeChange`), and so does this.
     pub(super) fn jtty_left(&mut self) {
         self.jtty_drop(LEFT_SCREEN);
+        // The question about the last contact ends with the screen, and so does whom it was with.
+        self.jtty_tx.log_prompt = None;
+        self.jtty_tx.addressed.clear();
     }
 
     /// JTTY was selected: the Tx offset goes back to 1500 Hz with the Rx frequency, as WSJT-X's
@@ -1680,11 +1693,13 @@ impl Engine {
                 pending.drain(0..len - 5000);
             }
         }
-        if seg.first
-            && seg
-                .text
-                .get(..3)
-                .is_some_and(|t| t.eq_ignore_ascii_case("TU "))
+        if !seg.first {
+            return;
+        }
+        if seg
+            .text
+            .get(..3)
+            .is_some_and(|t| t.eq_ignore_ascii_case("TU "))
         {
             // `handleJttyContestSerial` (3.3.0-beta4 `widgets/mainwindow_jtty.cpp` 701-709): the
             // serial moves on, and WSJT-X starts `logQSOTimer`, which opens its Log QSO dialog
@@ -1695,14 +1710,55 @@ impl Engine {
             let next = (sent + 1).min(JTTY_SERIAL_MAX);
             self.jtty_tx.serial = next;
             self.settings.jtty_serial = next;
+            //
+            // The prompt names the station the TU THANKED: the one the last send naming its
+            // station went to (F6 thanks it while calling the next), else the Call box's.
+            let thanked = if self.jtty_tx.addressed.is_empty() {
+                seg.his_call.clone()
+            } else {
+                self.jtty_tx.addressed.clone()
+            };
             self.jtty_tx.log_prompts += 1;
             self.jtty_tx.log_prompt = Some(crate::dto::JttyLogPrompt {
                 id: self.jtty_tx.log_prompts,
-                call: seg.his_call.clone(),
+                call: thanked,
                 serial: sent,
                 at_utc_ms: at_ms,
             });
         }
+        // Whom this send went to, for the next TU: the Call box's station, when the message
+        // names it (a CQ sent with a call in the box names nobody).
+        if !seg.his_call.is_empty()
+            && seg
+                .text
+                .split_whitespace()
+                .any(|w| w.eq_ignore_ascii_case(&seg.his_call))
+        {
+            self.jtty_tx.addressed = seg.his_call.clone();
+        }
+    }
+
+    /// The Log QSO prompt still to be asked: the newest, unanswered, and no older than
+    /// [`JTTY_LOG_PROMPT_MS`].
+    fn jtty_open_log_prompt(&self, now_ms: i64) -> Option<&crate::dto::JttyLogPrompt> {
+        self.jtty_tx
+            .log_prompt
+            .as_ref()
+            .filter(|p| now_ms - p.at_utc_ms <= JTTY_LOG_PROMPT_MS)
+    }
+
+    /// Answer Log QSO prompt `id` (Log QSO or Not now, from any screen): true for the first answer
+    /// of the prompt still asked, which takes it, so no screen asks again; false for anything else
+    /// (answered already, superseded, too old). A screen logs only on true, so one TU is never
+    /// logged twice from two screens. Logs and sends nothing itself.
+    pub fn jtty_log_prompt_answer(&mut self, id: u64) -> bool {
+        let open = self
+            .jtty_open_log_prompt(now_unix_millis() as i64)
+            .is_some_and(|p| p.id == id);
+        if open {
+            self.jtty_tx.log_prompt = None;
+        }
+        open
     }
 
     /// The cockpit's view of the transmitter.
@@ -1717,7 +1773,7 @@ impl Engine {
             left,
             pending,
             notice: self.jtty_tx.notice.clone(),
-            log_prompt: self.jtty_tx.log_prompt.clone(),
+            log_prompt: self.jtty_open_log_prompt(now_unix_millis() as i64).cloned(),
             frames_sent: self.jtty_tx.over_frames_sent,
             frames_total: self.jtty_tx.over_frames_sent + self.jtty_tx.frames_left(),
             style: self.settings.jtty_message_style,
@@ -2387,16 +2443,114 @@ mod tests {
         send_text(&e, "tu 73", "").unwrap();
         drain(&e);
         let second = prompt().expect("typed TU raised it");
-        assert_eq!((second.id, second.call.as_str(), second.serial), (2, "", 2));
+        // The station F6 last named is the one a TU typed with an empty Call box thanks.
+        assert_eq!(
+            (second.id, second.call.as_str(), second.serial),
+            (2, "W1AW", 2)
+        );
         send_text(&e, "W1AW TU", "W1AW").unwrap();
         drain(&e);
         assert_eq!(prompt().map(|p| p.id), Some(2), "only at the start");
         assert_eq!(logged(), before, "a prompt logs nothing");
         let json = serde_json::to_string(&engine_lock(&e).jtty_tx_state()).unwrap();
         assert!(
-            json.contains(r#""logPrompt":{"id":2,"call":"","serial":2,"atUtcMs":"#),
+            json.contains(r#""logPrompt":{"id":2,"call":"W1AW","serial":2,"atUtcMs":"#),
             "{json}"
         );
+    }
+
+    /// THE PROMPT NAMES THE STATION THE TU THANKED. F6 (`TU NOW %Q %E`) thanks the station just
+    /// worked and calls the next one, whose call is in the Call box by then; a typed "TU 73"
+    /// thanks the station last sent to, whatever the Call box holds now. The station a send last
+    /// named is the one a later TU closes; with none named yet, the Call box's.
+    #[test]
+    fn the_prompt_names_the_station_the_tu_thanked() {
+        let e = jtty_engine();
+        let prompt_call = || {
+            engine_lock(&e)
+                .jtty_tx_state()
+                .log_prompt
+                .map(|p| p.call)
+                .unwrap_or_default()
+        };
+        // First send of the session, a TU with the Call box W1AW: nothing named before it.
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(
+            prompt_call(),
+            "W1AW",
+            "the Call box, with nothing named before"
+        );
+        send_fkey(&e, 2, "K1ABC").unwrap();
+        drain(&e);
+        // The next caller is put in the Call box, and F6 thanks K1ABC as it calls him.
+        send_fkey(&e, 6, "N0XX").unwrap();
+        drain(&e);
+        assert_eq!(
+            prompt_call(),
+            "K1ABC",
+            "F6 thanked K1ABC, not the next station"
+        );
+        // A CQ does not name the Call box's station: it moves nothing.
+        send_fkey(&e, 1, "W9ZZZ").unwrap();
+        drain(&e);
+        send_text(&e, "tu 73", "W9ZZZ").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "N0XX", "the station F6 last sent to");
+        // Leaving the screen forgets it.
+        engine_lock(&e).jtty_left();
+        engine_lock(&e).set_operating_mode("jtty", false);
+        engine_lock(&e).set_tx_enabled(true);
+        send_text(&e, "TU 73", "W2AA").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "W2AA");
+    }
+
+    /// A PROMPT IS ANSWERED ONCE, FOR EVERY SCREEN. The first answer (Log QSO or Not now, from
+    /// the shack or a Remote client) takes it and every screen stops asking; a second answer of
+    /// the same prompt, an answer of an older one, a prompt older than two minutes and leaving
+    /// the screen all leave nothing to take, so one TU can never be logged twice.
+    #[test]
+    fn a_prompt_is_answered_once_for_every_screen() {
+        let e = jtty_engine();
+        let shown = || engine_lock(&e).jtty_tx_state().log_prompt.map(|p| p.id);
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(shown(), Some(2));
+        assert!(
+            !engine_lock(&e).jtty_log_prompt_answer(1),
+            "an older prompt"
+        );
+        assert_eq!(shown(), Some(2), "is no answer to this one");
+        assert!(
+            engine_lock(&e).jtty_log_prompt_answer(2),
+            "the first answer takes it"
+        );
+        assert_eq!(shown(), None, "and no screen asks again");
+        assert!(
+            !engine_lock(&e).jtty_log_prompt_answer(2),
+            "a second screen's answer takes nothing"
+        );
+        // Two minutes on, a prompt nobody answered is not asked, nor can it be taken.
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(shown(), Some(3));
+        engine_lock(&e)
+            .jtty_tx
+            .log_prompt
+            .as_mut()
+            .unwrap()
+            .at_utc_ms -= JTTY_LOG_PROMPT_MS + 1_000;
+        assert_eq!(shown(), None, "too old to ask");
+        assert!(!engine_lock(&e).jtty_log_prompt_answer(3));
+        // Leaving the screen ends the question.
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(shown(), Some(4));
+        engine_lock(&e).jtty_left();
+        assert_eq!(shown(), None, "left the screen");
     }
 
     /// The JTTY screen in a contest session: `event` ("" is ARRL Field Day), class `class`,

@@ -31,6 +31,7 @@ import {
   jttyFkey,
   jttyLiveCommit,
   jttyLiveStart,
+  jttyLogPromptAnswer,
   jttySend,
   jttySetBand,
   jttySetRx,
@@ -319,18 +320,27 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const txHz = tx?.txHz ?? 1500
   const serial = tx?.serial ?? 1
   // The Call box: WSJT-X's DX Call, what `%H`/`%Q` send. A confirmed call clicked in a pane fills it
-  // as it fills the log strip.
+  // as it fills the log strip; only a click or typing changes it.
   const [hisCall, setHisCall] = useState('')
-  useEffect(() => {
-    if (grabbed) setHisCall(grabbed)
-  }, [grabbed])
   // `%R`: the SNR of the decode the DX call was picked from, as WSJT-X captures it
-  // (`m_jttyHisCallSnr`, 3.3.0-beta4 `widgets/mainwindow.cpp` 9276-9283); null — WSJT-X's -10 —
-  // once the Call box is typed in (`mainwindow.cpp` 10565) or for a call picked from our own line.
-  const [hisSnr, setHisSnr] = useState<number | null>(null)
-  const pickCall = (call: string, line: JttyLine) => {
+  // (`m_jttyHisCallSnr`, 3.3.0-beta4 `widgets/mainwindow.cpp` 9276-9283) — the newest decode in
+  // the pane clicked that contains the call (`snrForSelectedWord`) — kept WITH the call it was
+  // taken for, and sent only while the Call box still holds that call: a report never goes to
+  // another station. Null — WSJT-X's -10 — once the Call box is typed in (`mainwindow.cpp`
+  // 10565) or for a call picked from our own line.
+  const [picked, setPicked] = useState<{ call: string; snr: number } | null>(null)
+  const hisSnr = picked && picked.call === hisCall.trim().toUpperCase() ? picked.snr : null
+  const pickCall = (call: string, line: JttyLine, pane: JttyLine[]) => {
+    const up = call.toUpperCase()
     setGrabbed(call)
-    setHisSnr(line.tx ? null : line.snr)
+    setHisCall(up)
+    if (line.tx) {
+      setPicked(null)
+      return
+    }
+    const named = (l: JttyLine) => !l.tx && l.text.toUpperCase().split(/\s+/).includes(up)
+    const newest = pane.filter(named).reduce<JttyLine>((a, l) => (l.startUtcMs >= a.startUtcMs ? l : a), line)
+    setPicked({ call: up, snr: newest.snr })
   }
   // The compose box holds what is not yet sent; `committed` is what this transmission has sent of
   // it (WSJT-X's locked, painted prefix), shown before it until the transmission is over.
@@ -473,29 +483,49 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const [keyDrafts, setKeyDrafts] = useState<Record<number, string>>({})
   // THE LOG QSO PROMPT. When a send starting "TU " goes out, WSJT-X opens its Log QSO dialog
   // (`handleJttyContestSerial` starts `logQSOTimer`, 3.3.0-beta4 `widgets/mainwindow_jtty.cpp`
-  // 701-709). Here the engine raises a prompt and this asks, once per prompt: the call the TU went
-  // to is put in the log strip (as a click on a call does), and Log QSO presses the strip's own Log
-  // button, with every check that button makes. Nothing is logged unless the operator presses it;
-  // Not now just closes the question.
-  const mainRef = useRef<HTMLElement>(null)
+  // 701-709). Here the engine raises a prompt naming the station the TU thanked, and this asks.
+  // ASKING CHANGES NOTHING: the Call box and the log strip stay as the operator has them. Log QSO
+  // hands the strip a request for THAT station: it logs through its own Log, with every check that
+  // makes, only if it holds that call (an empty strip is filled for the operator to check and press
+  // again; another call is left alone and nothing is logged). The engine takes the first answer
+  // (Log QSO or Not now) for every screen, so a reload or a Remote client does not ask again and
+  // the contact is never logged twice; it stops asking after two minutes.
   const logPrompt = tx?.logPrompt ?? null
   const [promptDone, setPromptDone] = useState<number | null>(null)
   const askToLog = logPrompt && logPrompt.id !== promptDone ? logPrompt : null
-  useEffect(() => {
-    if (askToLog?.call) setGrabbed(askToLog.call)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [askToLog?.id])
+  const [logRequest, setLogRequest] = useState<{ id: number; call: string; claim: () => Promise<boolean> } | null>(null)
   const logPrompted = () => {
     if (!askToLog) return
-    const button = mainRef.current?.querySelector<HTMLButtonElement>(
-      '[data-pane="log"] .le-actions > .le-log-btn, [data-pane="log"] .le-fd-log-btn',
-    )
-    if (!button || button.disabled) {
-      pushToast(t('jtty.logPrompt.notReady'), 'info')
-      return
+    const promptId = askToLog.id
+    setLogRequest((r) => ({ id: (r?.id ?? 0) + 1, call: askToLog.call, claim: () => jttyLogPromptAnswer(promptId) }))
+  }
+  const onLogRequest = (
+    _id: number,
+    outcome: { kind: 'logging' | 'filled' | 'not-ready' | 'taken' } | { kind: 'other-call'; held: string },
+  ) => {
+    const call = askToLog?.call ?? ''
+    switch (outcome.kind) {
+      case 'logging':
+        if (askToLog) setPromptDone(askToLog.id)
+        return
+      case 'taken':
+        if (askToLog) setPromptDone(askToLog.id)
+        pushToast(t('jtty.logPrompt.taken'), 'info')
+        return
+      case 'filled':
+        pushToast(t('jtty.logPrompt.filled', { call }), 'info')
+        return
+      case 'other-call':
+        pushToast(t('jtty.logPrompt.otherCall', { call, held: outcome.held }), 'info')
+        return
+      case 'not-ready':
+        pushToast(t('jtty.logPrompt.notReady'), 'info')
     }
-    button.click()
+  }
+  const notNow = () => {
+    if (!askToLog) return
     setPromptDone(askToLog.id)
+    void jttyLogPromptAnswer(askToLog.id).catch(() => {})
   }
 
   const refreshAfterSave = (s: AppSnapshot) => {
@@ -619,7 +649,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
         <div className="cw-decode-text jtty-lines" ref={allPin.ref} onScroll={allPin.onScroll}>
           {allLines.length > 0 ? (
-            <JttyPaneLines lines={allLines} options={options} onCall={pickCall} />
+            <JttyPaneLines lines={allLines} options={options} onCall={(c, l) => pickCall(c, l, allLines)} />
           ) : (
             <span className="cw-decode-idle">{armed ? t('jtty.all.listening') : t('jtty.all.idle')}</span>
           )}
@@ -634,7 +664,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       <div className="cw-decode jtty-pane" title={t('jtty.pane.rx.hint')}>
         <div className="cw-decode-text jtty-lines" ref={rxPin.ref} onScroll={rxPin.onScroll}>
           {rxLines.length > 0 ? (
-            <JttyPaneLines lines={rxLines} options={options} onCall={pickCall} />
+            <JttyPaneLines lines={rxLines} options={options} onCall={(c, l) => pickCall(c, l, rxLines)} />
           ) : (
             <span className="cw-decode-idle">{t('jtty.rx.empty')}</span>
           )}
@@ -664,7 +694,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           <button type="button" className="le-qrz jtty-log-prompt-log" onClick={logPrompted}>
             {t('jtty.logPrompt.log')}
           </button>
-          <button type="button" className="le-qrz" onClick={() => setPromptDone(askToLog.id)}>
+          <button type="button" className="le-qrz" onClick={notNow}>
             {t('jtty.logPrompt.dismiss')}
           </button>
         </div>
@@ -678,6 +708,8 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         titled={false}
         cwLive={grabbed ? { call: grabbed, rst: null, name: null, confirmed: true } : null}
         onReset={() => setGrabbed(null)}
+        logRequest={logRequest}
+        onLogRequest={onLogRequest}
         onSnap={onSnap}
         fieldDay={snap.fieldDay ?? null}
         scoreChip={false}
@@ -706,7 +738,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         : [['main', lead], ['aux', aux]]
 
   return (
-    <main className="layout single jtty-cockpit" ref={mainRef}>
+    <main className="layout single jtty-cockpit">
       {snap && (
         <CockpitHeader
           snap={snap}
@@ -966,7 +998,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               value={hisCall}
               onChange={(e) => {
                 setHisCall(upperTyped(e.target))
-                setHisSnr(null)
+                setPicked(null)
               }}
               placeholder={t('jtty.hisCall.placeholder')}
               aria-label={t('jtty.hisCall.aria')}

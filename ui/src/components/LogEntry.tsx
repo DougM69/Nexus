@@ -360,6 +360,20 @@ interface Props {
   onEntryCall?: (call: string) => void
   /** Called when the entry is cleared for the next contact: after one is logged, or by ✕. */
   onReset?: () => void
+  /**
+   * A host's question about a contact, answered "log it" by the operator (JTTY's Log QSO prompt
+   * after a TU): a new `id` per press. The strip logs ONLY the station it names: when the strip's
+   * call is `call` (trimmed, uppercased) and it could log, `claim` is asked (the host's guard
+   * against a second screen logging the same contact) and on true the strip logs exactly as its
+   * own Log does. Otherwise it logs nothing: an empty strip is filled with `call` for the operator
+   * to check and press again, and a strip holding another call is left as it is. An empty `call`
+   * names no station, so the strip's own is logged. The outcome is reported to `onLogRequest`.
+   */
+  logRequest?: { id: number; call: string; claim: () => Promise<boolean> } | null
+  onLogRequest?: (
+    id: number,
+    outcome: { kind: 'logging' | 'filled' | 'not-ready' | 'taken' } | { kind: 'other-call'; held: string },
+  ) => void
   /** Called with the snapshot `clearHuntTarget` answered, after the hunt tag's ✕ ended the hunt, so
    *  the host applies it at once: the POTA / SOTA view's `onSnap`, for its banner ✕. */
   onSnap?: (s: AppSnapshot) => void
@@ -508,6 +522,8 @@ export function LogEntry({
   onCallChange,
   onEntryCall,
   onReset,
+  logRequest,
+  onLogRequest,
   onSnap,
   fieldDay,
   fdMode,
@@ -2246,6 +2262,49 @@ export function LogEntry({
       reset()
     }
   }
+
+  // A host's "log it" (`logRequest`): this strip's own Log, for the station the request names and
+  // no other. Keyed on the request's id, so one press is one answer.
+  const logRequestRef = useRef(onLogRequest)
+  logRequestRef.current = onLogRequest
+  useEffect(() => {
+    if (!logRequest) return
+    const report = logRequestRef.current ?? (() => {})
+    const want = logRequest.call.trim().toUpperCase()
+    const held = logCall.trim().toUpperCase()
+    if (want && !held) {
+      // Filled for the operator to check: a sure call, looked up as a click-to-work is.
+      setLogCall(want)
+      humanCallEditRef.current = false
+      settledCallRef.current = true
+      report(logRequest.id, { kind: 'filled' })
+      return
+    }
+    if (want && held !== want) {
+      report(logRequest.id, { kind: 'other-call', held })
+      return
+    }
+    // What disables this strip's Log button refuses the request too.
+    const ready = fdActive
+      ? held !== '' && fdExchangeOk && sentRstGood
+      : held !== '' && !overrideBlocked && !gridBlocked && !(remote != null && (!remote.canSubmit || remote.busy || remote.pending))
+    if (!ready) {
+      report(logRequest.id, { kind: 'not-ready' })
+      return
+    }
+    const { id, claim } = logRequest
+    void claim()
+      .catch(() => false)
+      .then((mine) => {
+        if (!mine) {
+          report(id, { kind: 'taken' })
+          return
+        }
+        report(id, { kind: 'logging' })
+        void logIt()
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logRequest?.id])
 
   const onEnter = (e: React.KeyboardEvent) => {
     if (e.key !== 'Enter') return

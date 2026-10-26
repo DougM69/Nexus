@@ -320,6 +320,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("jtty_fkey",                      StartsTx,    "Queues a JTTY F-key message to transmit."),
     ("jtty_live_commit",               StartsTx,    "Types into a live JTTY transmission."),
     ("jtty_live_start",                StartsTx,    "Keys a live JTTY transmission."),
+    ("jtty_log_prompt_answer",         RunsAtShack, "Answers the shack's JTTY Log QSO prompt for every screen; logs and sends nothing."),
     ("jtty_send",                      StartsTx,    "Queues JTTY text to transmit."),
     ("jtty_set_band",                  RunsAtShack, "The audio range the shack's JTTY decoder searches."),
     ("jtty_set_rx",                    RunsAtShack, "The shack's JTTY Rx frequency and F Tol."),
