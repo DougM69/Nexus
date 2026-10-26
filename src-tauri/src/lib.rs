@@ -22044,6 +22044,7 @@ async fn open_panel_window(
         "contestlog" => "Nexus — Contest logger".to_string(),
         "contestscreen" => "Nexus — Contest screen".to_string(),
         "pota" => "Nexus — POTA / SOTA".to_string(),
+        "activation" => "Nexus — Activation".to_string(),
         "operatemap" => "Nexus — Map".to_string(),
         "waterfall" => "Nexus — Waterfall".to_string(),
         "sstvviewer" => "Nexus — SSTV picture".to_string(),

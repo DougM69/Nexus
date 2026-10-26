@@ -60,6 +60,7 @@ import { ageLabel } from '../SpotsPanel'
 import { SpotsBox } from './SpotsBox'
 import { NeededBox } from './NeededBox'
 import { OperatorsBox } from '../ContestOperators'
+import { ActivationPane } from '../ActivationPane'
 import {
   NEED_CHIP,
   dxpedWorkMode,
@@ -787,6 +788,18 @@ export const PANES: PaneDef[] = [
     category: 'activity',
     basic: () => t('connect.pane.operators.basic'),
     expert: (c) => (c.fieldDay ? <OperatorsBox fieldDay={c.fieldDay} /> : null),
+  },
+  {
+    // THE ACTIVATION BOX — the activator's pane (ActivationPane): each park's count today, park to
+    // park, the rate and this activation's contacts. With none running, its one line says so. A window
+    // with no activation to lend (the TV page, the hosted page) gets the Basic line.
+    id: 'activation',
+    get title() {
+      return t('connect.pane.activation.title')
+    },
+    category: 'activity',
+    basic: () => t('connect.pane.activation.basic'),
+    expert: (c) => (c.activation ? <ActivationPane act={c.activation.act} logTick={c.activation.logTick} /> : null),
   },
 ]
 

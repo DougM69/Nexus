@@ -134,6 +134,11 @@ pub struct LogFilter {
     /// Part of a park, summit or WWFF reference — theirs or the station's own.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reference: String,
+    /// One of the station's own references, whole: a row whose `MY_SIG_INFO` list (one park, or a
+    /// two-fer's comma list) holds it. `US-1000` never finds `US-10000`, and a hunter's contact
+    /// with that park finds nothing. What an activation's contacts are, with `from_unix`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub my_ref: String,
     #[serde(default, skip_serializing_if = "QslFilter::is_empty")]
     pub qsl: QslFilter,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -170,14 +175,15 @@ impl LogFilter {
             county,
             iota,
             reference,
+            my_ref,
             qsl,
             contest,
             need,
             text,
         } = self;
         [
-            call, band, mode, entity, continent, grid, state, county, iota, reference, contest,
-            text,
+            call, band, mode, entity, continent, grid, state, county, iota, reference, my_ref,
+            contest, text,
         ]
         .iter()
         .all(|s| field(s).is_empty())

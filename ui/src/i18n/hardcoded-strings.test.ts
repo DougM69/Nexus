@@ -315,6 +315,10 @@ const MIGRATED = [
   'useActivationNotices.ts',
   'components/ContestView.tsx',
   'components/ContestOperators.tsx',
+  // The activator's pane and its Stop checklist (2026-10-25): born migrated.
+  'components/ActivationPane.tsx',
+  'components/ActivationOverDialog.tsx',
+  'features/activationExport.ts',
   // The contest logger window (2026-10-10): born migrated — its one string is a catalog key; the
   // modes it logs under are ADIF mode names, tokens.
   'components/ContestLogger.tsx',
