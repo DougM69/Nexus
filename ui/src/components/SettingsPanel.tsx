@@ -3022,7 +3022,10 @@ export function SettingsPanel({
   // has not caught up with yet. Its flat rig fields describe its own radio, the live ones the other
   // radio, and the backend folds a payload's flat fields into the radio its `activeRadio` names, so
   // a mix would stamp one radio's ports onto the other. That form goes whole, as it always did, and
-  // the backend's own rule for a form that is not about the active radio applies.
+  // the backend's own rule for a form that is not about the active radio applies. Except the contest's
+  // master and pick: station-wide, and started, stopped or switched elsewhere since without this form
+  // knowing, so they go as the station holds them unless this form changed them. A pick this form did
+  // change is in `changes`, so the switch guard in `save` has already checked it.
   //
   // `forced` reaches the backend whatever the form held when it loaded: the contest-over checklist's
   // put-backs, which "what changed since" would drop when a value was changed elsewhere after Settings
@@ -3034,7 +3037,12 @@ export function SettingsPanel({
   const saveForm = (payload: NonNullable<typeof form>, forced: Partial<Settings> = {}) => {
     const changes = changedSince(savedRef.current, payload)
     return patchSettings((live) => {
-      const sent: Partial<Settings> = { ...(live.activeRadio === payload.activeRadio ? changes : payload), ...forced }
+      const whole: Partial<Settings> = {
+        ...payload,
+        fdActive: 'fdActive' in changes ? payload.fdActive : live.fdActive,
+        fdEvent: 'fdEvent' in changes ? payload.fdEvent : live.fdEvent,
+      }
+      const sent: Partial<Settings> = { ...(live.activeRadio === payload.activeRadio ? changes : whole), ...forced }
       if ('js8HbAckDeny' in sent) {
         sent.js8HbAckDeny = mergeListEdit(savedRef.current?.js8HbAckDeny ?? [], payload.js8HbAckDeny ?? [], live.js8HbAckDeny ?? [])
       }

@@ -369,3 +369,67 @@ describe('Settings reads the contest state off the live station, not its own cop
     expect(writes()).toEqual([])
   })
 })
+
+// A form describing a radio other than the one operated now goes whole (its flat rig fields are that
+// radio's). The contest's master and pick are station-wide, not the radio's: they go as the station
+// holds them, unless this form changed them.
+describe('a Save after the active radio changed elsewhere', () => {
+  const contestFields = (w: Record<string, unknown>) => ({
+    fdActive: w.fdActive,
+    fdEvent: w.fdEvent,
+    contestQthCounty: w.contestQthCounty,
+    activeRadio: w.activeRadio,
+  })
+
+  it('keeps a contest started elsewhere on, and on its own pick', async () => {
+    // Settings opened with the mode off on the Illinois QSO Party; since then New York QSO Party was
+    // started on the Contest screen and another radio was picked.
+    openOn({ fdActive: false, contestBefore: undefined }, running('nyqp'))
+    await screen.findAllByDisplayValue('W9CLB')
+    station = { ...station, fdActive: true, fdEvent: 'nyqp', activeRadio: 1 }
+    fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
+    fireEvent.change(screen.getByDisplayValue('COOK'), { target: { value: 'WILL' } })
+    pressSave()
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    expect(contestFields(writes()[0])).toEqual({ fdActive: true, fdEvent: 'nyqp', contestQthCounty: 'WILL', activeRadio: 0 })
+  })
+
+  it('keeps a contest stopped elsewhere off', async () => {
+    openOn({}, running('ilqp'))
+    await screen.findAllByDisplayValue('W9CLB')
+    station = { ...station, fdActive: false, activeRadio: 1 }
+    fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
+    fireEvent.change(screen.getByDisplayValue('COOK'), { target: { value: 'WILL' } })
+    pressSave()
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    expect(contestFields(writes()[0])).toEqual({ fdActive: false, fdEvent: 'ilqp', contestQthCounty: 'WILL', activeRadio: 0 })
+  })
+
+  it('runs the switch guard on a pick this form changed: one that cannot start is refused, nothing saved', async () => {
+    openOn({ fdClass: '', fdSection: '' })
+    api.get('previewFdRuleset').mockImplementation(() => Promise.resolve({ event: 'arrlfd', problem: '' }))
+    await screen.findAllByDisplayValue('W9CLB')
+    station = { ...station, activeRadio: 1 }
+    fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ARRL Field Day' }))
+    pressSave()
+    expect(
+      await screen.findByText(
+        'Saving would switch the running contest to ARRL Field Day, which cannot start yet: The station cannot enter ARRL Field Day until your FD Class and ARRL Section are set.',
+      ),
+    ).toBeTruthy()
+    expect(writes()).toEqual([])
+  })
+
+  it('CONTROL: a pick this form changed, that can start, is saved', async () => {
+    openOn({ fdClass: '1D', fdSection: 'WI' })
+    api.get('previewFdRuleset').mockImplementation(() => Promise.resolve({ event: 'arrlfd', problem: '' }))
+    await screen.findAllByDisplayValue('W9CLB')
+    station = { ...station, activeRadio: 1 }
+    fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ARRL Field Day' }))
+    pressSave()
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    expect(contestFields(writes()[0])).toEqual({ fdActive: true, fdEvent: 'arrlfd', contestQthCounty: 'COOK', activeRadio: 0 })
+  })
+})
