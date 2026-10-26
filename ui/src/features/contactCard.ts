@@ -147,16 +147,22 @@ export function cardDirty(start: CardDraft, draft: CardDraft, fields: readonly C
   )
 }
 
-/** The changes to fields kept as written: a corrected, removed or added one — never one left alone. */
+/** The changes to fields kept as written: a corrected, removed or added one — never one left alone.
+ *
+ *  ⚠️ A field is a removal only when the OPERATOR removed or emptied it. An import keeps a field
+ *  written empty (`<QSLMSG:0>`) as it was, so an empty value the card opened with is a field left
+ *  alone, never one to take off. A typed value is trimmed, as the edit form trims its boxes; one
+ *  that trims to what the field held is no change. */
 export function fieldChanges(fields: readonly CardField[]): FieldEdit[] {
   const out: FieldEdit[] = []
   for (const f of fields) {
+    const typed = f.value.trim()
     if (f.orig === null) {
-      if (!f.removed && f.value.trim()) out.push({ tag: f.tag.trim().toUpperCase(), old: null, new: f.value })
-    } else if (f.removed || !f.value.trim()) {
+      if (!f.removed && typed) out.push({ tag: f.tag.trim().toUpperCase(), old: null, new: typed })
+    } else if (f.removed || (f.value !== f.orig && !typed)) {
       out.push({ tag: f.tag, old: f.orig, new: null })
-    } else if (f.value !== f.orig) {
-      out.push({ tag: f.tag, old: f.orig, new: f.value })
+    } else if (f.value !== f.orig && typed !== f.orig) {
+      out.push({ tag: f.tag, old: f.orig, new: typed })
     }
   }
   return out

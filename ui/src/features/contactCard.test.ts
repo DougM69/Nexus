@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cardSave, draftOf, fieldsOf, storedEdit, type CardDraft } from './contactCard'
+import { cardDirty, cardSave, draftOf, fieldChanges, fieldsOf, storedEdit, type CardDraft, type CardField } from './contactCard'
 import type { LoggedQso } from '../types'
 
 const Q: LoggedQso = {
@@ -48,5 +48,44 @@ describe('the contact card’s save', () => {
     const start = draftOf(Q)
     const fields = [...fieldsOf(Q), { tag: 'cnty', orig: null, value: 'x', removed: false }]
     expect(cardSave(Q, start, start, fields)).toEqual({ ok: false, error: { code: 'twice', tag: 'CNTY' } })
+  })
+})
+
+describe('fields kept as written: only what the operator touched is sent', () => {
+  // Imported with values that are empty or blank: the ADIF reader keeps `<QSLMSG:0>` as written.
+  const IMPORTED: LoggedQso = { ...Q, extra: [['APP_NEXUS_X', ''], ['APP_X_NOTE', ' '], ['CNTY', 'CT,HARTFORD'], ['QSLMSG', '']] }
+
+  it('an untouched empty or blank field is not removed, and the card does not open changed', () => {
+    const start = draftOf(IMPORTED)
+    const fields = fieldsOf(IMPORTED)
+    expect(fieldChanges(fields)).toEqual([])
+    expect(cardDirty(start, start, fields)).toBe(false)
+    expect(cardSave(IMPORTED, start, { ...start, name: 'Hiram' }, fields)).toEqual({
+      ok: true,
+      edit: { ...storedEdit(IMPORTED), name: 'Hiram' },
+      fields: [],
+    })
+  })
+
+  it('a field the operator emptied or removed goes as a removal', () => {
+    const fields = fieldsOf(IMPORTED).map((f) =>
+      f.tag === 'CNTY' ? { ...f, value: '  ' } : f.tag === 'QSLMSG' ? { ...f, removed: true } : f,
+    )
+    expect(fieldChanges(fields)).toEqual([
+      { tag: 'CNTY', old: 'CT,HARTFORD', new: null },
+      { tag: 'QSLMSG', old: '', new: null },
+    ])
+  })
+
+  it('a typed value is trimmed, and one that trims to what it held is no change', () => {
+    const fields: CardField[] = [
+      { tag: 'CNTY', orig: 'CT,HARTFORD', value: ' CT,TOLLAND ', removed: false },
+      { tag: 'CQZ', orig: '5', value: '5 ', removed: false },
+      { tag: 'ITUZ', orig: null, value: ' 8\t', removed: false },
+    ]
+    expect(fieldChanges(fields)).toEqual([
+      { tag: 'CNTY', old: 'CT,HARTFORD', new: 'CT,TOLLAND' },
+      { tag: 'ITUZ', old: null, new: '8' },
+    ])
   })
 })
