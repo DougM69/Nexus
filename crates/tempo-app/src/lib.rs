@@ -370,6 +370,7 @@ impl AppState {
                 audio_error: None,
                 audio_error_kind: None,
                 cat_share_error: None,
+                cat_share_port: None,
                 tci_server: None,
                 scope_error: None,
                 scope_span_refused: None,

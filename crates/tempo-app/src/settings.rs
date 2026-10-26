@@ -6651,6 +6651,23 @@ impl Settings {
         next_id
     }
 
+    /// The ports the CAT broker must never step onto when its own port is taken by another program
+    /// (#165): every radio's rigctld and rotctld port (a daemon of Nexus's own may not be up yet),
+    /// the TCI server's while it serves, and wherever a NET rigctl radio's Network Address points
+    /// on this computer (the operator's own rigctld is there).
+    pub fn ports_the_broker_steps_around(&self) -> Vec<u16> {
+        let mut ports: Vec<u16> = self
+            .radios
+            .iter()
+            .flat_map(|p| [p.rigctld_port, p.rotctld_port])
+            .collect();
+        if self.tci_server {
+            ports.push(self.tci_server_port);
+        }
+        ports.extend(self.radios.iter().filter_map(net_rigctl_port_here));
+        ports
+    }
+
     /// Auto-repair colliding daemon ports so every radio can run its OWN persistent rigctld/rotctld at
     /// the same time (true dual-radio needs two live daemons — a shared port would make the monitor
     /// connect through the active radio's daemon). Bumps any duplicate `rigctld_port`/`rotctld_port`
@@ -7954,6 +7971,32 @@ impl Settings {
 mod tests {
     #![allow(clippy::field_reassign_with_default)]
     use super::*;
+
+    /// #165: when another program holds the sharing port, the broker moves, and it must not move
+    /// onto a port this station's own daemons or the operator's NET rigctl address will want.
+    #[test]
+    fn the_broker_steps_around_the_stations_own_ports() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let id = s.add_radio_profile();
+        let r = s.radios.iter().find(|p| p.id == id).unwrap().clone();
+        s.tci_server = true;
+        s.tci_server_port = 40001;
+        let ports = s.ports_the_broker_steps_around();
+        for p in [
+            r.rigctld_port,
+            r.rotctld_port,
+            s.radios[0].rigctld_port,
+            s.radios[0].rotctld_port,
+            40001,
+        ] {
+            assert!(ports.contains(&p), "{p} missing from {ports:?}");
+        }
+        assert!(
+            !ports.contains(&s.cat_broker_port),
+            "the broker's own port is not one it steps around"
+        );
+    }
 
     /// A scratch settings directory no CONCURRENT test process can reach.
     ///

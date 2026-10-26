@@ -1680,6 +1680,10 @@ export interface RadioStatus {
    *  renders this INSTEAD of the address, because with the bind refused that address is one
    *  nothing is listening on. */
   catShareError?: string | null
+  /** The port the CAT broker is actually serving on (#165); absent while it is not serving.
+   *  Settings' "Sharing port" unless another program already held that, in which case sharing
+   *  stepped aside to the next free port and this is the address programs must use. */
+  catSharePort?: number | null
   /** "Share by TCI" as the station runs it: where programs connect, why it is not serving, and the
    *  programs connected. Absent while the server is off (mirror of the Rust TciServerStatus). */
   tciServer?: TciServerStatus | null

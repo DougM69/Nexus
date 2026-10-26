@@ -7985,6 +7985,7 @@ export const FR: PartialCatalog = {
   "settings.transmit.restore.action": "Restaurer…",
   "settings.transmit.restore.title": "Remplacer votre configuration actuelle par une sauvegarde",
   "settings.transmit.share.copy.action": "Copier",
+  "settings.transmit.share.moved": "Un autre programme écoute déjà sur {{wanted}} : Nexus le laisse tranquille et partage sur {{port}} à la place. Dirigez les autres programmes vers cette adresse.",
   "settings.transmit.share.copy.title": "Copier l'adresse à coller dans l'autre programme",
   "settings.transmit.share.hint.direct": "Pour piloter une radio précise qui n'est <em>pas</em> l'active : utilisez son adresse directe <code>{{address}}</code> (par radio ; ce lien tombe brièvement chaque fois que Nexus reconfigure cette radio).",
   "settings.transmit.share.hint.off": "Désactivé — les autres programmes ne peuvent pas utiliser la radio pendant que Nexus tourne. Activez-le et pointez-les vers l'adresse qui apparaît ici (<em>Hamlib NET rigctl</em>).",
