@@ -5,6 +5,18 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A contact's power is the power the radio measured.** 1.21.0 stamped every new contact with Settings ▸ Station power, whatever the radio was doing. A contact now carries the forward power the radio reported during its own over (the over's peak, in watts), on every path that reads the radio's power in watts: Hamlib, TCI, a Flex on its own connection and Nexus's built-in Icom connection. Settings ▸ Station power is used only when the radio reports nothing; with an amplifier set up on the radio, whose meter then reads the amplifier's drive; and during a tune. No new reading is asked of the radio, and contacts already in the log are not changed.
+- **Icom forward power in watts on each radio's own scale.** On the built-in Icom connection the power meter used one 100 W scale for every radio, so an IC-705 or IC-905 read about ten times its output and an IC-9700 read wrong on 70 cm and 23 cm. The meter now reads Icom's percentage of the radio's rated output on the band it transmits on (IC-705 10 W; IC-905 10 W up to 23 cm and 2 W on 2.4 and 5.6 GHz; IC-9700 100, 75 and 10 W; IC-7300 100 W, 50 W on 4 m; IC-7610 100 W; IC-7760 200 W). Where Icom gives no figure (the IC-905 on 10 GHz, the IC-9700 transmitting on the other band of a satellite split) the power row is hidden rather than wrong.
+- **The shared comment has room.** In the log strip and the Logbook's edit form, Comments (sharable) now has a full-width box of its own directly above Notes, and long text wraps over several lines instead of scrolling sideways in a narrow box. It is still one line in the log, as ADIF's COMMENT is: a line break you type becomes a space, and Enter still logs. Editing any other field of a contact whose stored comment holds line breaks (an imported one) no longer runs its words together.
+- **The station card uses its width and shows the callbook photo.** The card's text was squeezed to about the width of the callsign; it now uses the card's width, with Look up and QRZ on a line of their own. A card opened after the log strip had looked the call up showed initials and a Look up button; it now shows that answer, photo included, straight away. When the callbook sent no photo, hovering the circle says why (QRZ sends photos only to XML subscribers, and only when the station posted one).
+- **The Tx panel's dot follows the FT8/FT4 contact.** In Classic, the dot beside the next message sometimes stayed put while the contact went on normally: when the report Nexus sends (from the decode it answered) differed from the station's latest one in the list, when Tx5 was edited, or when another decode was clicked mid-contact. The dot now follows the message actually going out.
+
+### Added
+- **A note about DAX for a Flex over SmartSDR CAT.** In SSB a Flex transmits from its own mic unless DAX is on for voice, so a voice-keyer message keys the radio with no RF. The first time a voice message plays on a Flex controlled through SmartSDR CAT, a note in the voice keyer says to turn on DAX in SmartSDR's P/CW panel; Got it hides it for good. It never holds up the message. The Flex page of the manual says the same.
+
 ## [1.21.0] — 2026-10-26
 
 ### Added
