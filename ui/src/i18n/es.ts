@@ -9069,6 +9069,7 @@ export const ES: PartialCatalog = {
   "contestSetup.soon.action": "Preparar…",
   "contestSetup.start.stopped": "{{contest}} no está en marcha ahora. Se detuvo mientras esta preparación estaba abierta.",
   "contestSetup.start.runningChanged": "El concurso en marcha cambió mientras esta preparación estaba abierta. Revísalo aquí y luego continúa.",
+  "contestSetup.start.snapshotFailed": "No se guardó nada: la estación no pudo decir si hay un concurso en marcha ahora. Inténtalo de nuevo.",
   "contestSetup.start.refusedStillOn": "La estación no entró en {{contest}}: {{reason}} Tus respuestas se han restaurado. El modo Concurso ya estaba guardado como activo, así que la estación lo vuelve a intentar al guardar la próxima vez.",
   "contestSetup.start.refusedStillOnUnknown": "La estación no entró en {{contest}}. Tus respuestas se han restaurado. El modo Concurso ya estaba guardado como activo, así que la estación lo vuelve a intentar al guardar la próxima vez.",
   "contestSetup.sends.uncheckable": "La estación no pudo comprobar este intercambio. Cambia un campo para volver a intentarlo.",

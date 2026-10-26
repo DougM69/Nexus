@@ -722,3 +722,34 @@ describe('the smaller cases', () => {
     expect(writes()).toEqual([])
   })
 })
+
+describe('Start fails closed', () => {
+  it('when the station cannot say what is running, Start saves nothing, says why, and can be pressed again', async () => {
+    station = { ...station, contestQthCounty: 'COOK' }
+    const snap = { fieldDay: null, mode: 'chat', radio: { catOk: true, operatingMode: 'digital' }, link: { tier: 'FT8' } }
+    api.get('getSnapshot')
+      .mockImplementationOnce(() => Promise.resolve(snap))
+      .mockImplementationOnce(() => Promise.reject('no engine'))
+      .mockImplementation(() => Promise.resolve(snap))
+    await open()
+    next()
+    await screen.findByText('You send: 599 COOK')
+    next()
+    next()
+    next()
+    fireEvent.click(screen.getByRole('button', { name: 'Start Illinois QSO Party' }))
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      'Nothing was saved: the station could not say whether a contest is running now. Try again.',
+    )
+    expect(writes()).toEqual([])
+    // Still on Start, and Start can be pressed again.
+    const again = screen.getByRole('button', { name: 'Start Illinois QSO Party' })
+    expect(again).toHaveProperty('disabled', false)
+    // CONTROL: once the station answers, the same Start goes ahead.
+    fireEvent.click(again)
+    await screen.findByText('Illinois QSO Party is on · S&P')
+    expect(writes()).toEqual([{ ...station }])
+    expect(writes()[0]).toMatchObject({ fdEvent: 'ilqp', contestQthCounty: 'COOK', fdActive: true })
+  })
+})

@@ -9052,6 +9052,7 @@ export const JA: PartialCatalog = {
   "contestSetup.soon.action": "準備…",
   "contestSetup.start.stopped": "{{contest}} は現在動作していません。このセットアップを開いている間に終了されました。",
   "contestSetup.start.runningChanged": "このセットアップを開いている間に、動作中のコンテストが変わりました。ここで確認してから進んでください。",
+  "contestSetup.start.snapshotFailed": "何も保存されていません: 現在コンテストが動作中かどうかを局が返せませんでした。もう一度お試しください。",
   "contestSetup.start.refusedStillOn": "{{contest}} に入れませんでした: {{reason}} 回答は元に戻されました。コンテストモードは既にオンで保存されていたため、次の保存時に局が再び入ろうとします。",
   "contestSetup.start.refusedStillOnUnknown": "{{contest}} に入れませんでした。回答は元に戻されました。コンテストモードは既にオンで保存されていたため、次の保存時に局が再び入ろうとします。",
   "contestSetup.sends.uncheckable": "局はこの交換内容を確認できませんでした。もう一度試すには、いずれかの欄を変更してください。",

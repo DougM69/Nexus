@@ -5008,6 +5008,7 @@ export const EN = {
   'contestSetup.soon.action': 'Set up…',
   'contestSetup.start.stopped': '{{contest}} is not running now. It was stopped while this setup was open.',
   'contestSetup.start.runningChanged': 'The running contest changed while this setup was open. Check it here, then go on.',
+  'contestSetup.start.snapshotFailed': 'Nothing was saved: the station could not say whether a contest is running now. Try again.',
   'contestSetup.start.refusedStillOn': 'The station did not enter {{contest}}: {{reason}} Your answers were put back. Contest mode was already saved on, so the station tries again at the next save.',
   'contestSetup.start.refusedStillOnUnknown': 'The station did not enter {{contest}}. Your answers were put back. Contest mode was already saved on, so the station tries again at the next save.',
   'contestSetup.sends.uncheckable': 'The station could not check this exchange. Change a field to try again.',

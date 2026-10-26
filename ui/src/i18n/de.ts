@@ -9059,6 +9059,7 @@ export const DE: PartialCatalog = {
   "contestSetup.soon.action": "Einrichten…",
   "contestSetup.start.stopped": "{{contest}} läuft gerade nicht. Er wurde beendet, während diese Einrichtung offen war.",
   "contestSetup.start.runningChanged": "Der laufende Contest hat sich geändert, während diese Einrichtung offen war. Prüfe ihn hier und mach dann weiter.",
+  "contestSetup.start.snapshotFailed": "Nichts wurde gespeichert: Die Station konnte nicht sagen, ob gerade ein Contest läuft. Versuche es erneut.",
   "contestSetup.start.refusedStillOn": "Die Station ist {{contest}} nicht beigetreten: {{reason}} Deine Antworten wurden zurückgesetzt. Der Contest-Modus war schon als an gespeichert, deshalb versucht es die Station beim nächsten Speichern erneut.",
   "contestSetup.start.refusedStillOnUnknown": "Die Station ist {{contest}} nicht beigetreten. Deine Antworten wurden zurückgesetzt. Der Contest-Modus war schon als an gespeichert, deshalb versucht es die Station beim nächsten Speichern erneut.",
   "contestSetup.sends.uncheckable": "Die Station konnte diesen Austausch nicht prüfen. Ändere ein Feld, um es erneut zu versuchen.",

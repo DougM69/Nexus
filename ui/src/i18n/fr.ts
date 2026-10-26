@@ -9069,6 +9069,7 @@ export const FR: PartialCatalog = {
   "contestSetup.soon.action": "Préparer…",
   "contestSetup.start.stopped": "{{contest}} n'est pas en cours. Il a été arrêté pendant que cette préparation était ouverte.",
   "contestSetup.start.runningChanged": "Le concours en cours a changé pendant que cette préparation était ouverte. Vérifiez-le ici, puis continuez.",
+  "contestSetup.start.snapshotFailed": "Rien n'a été enregistré : la station n'a pas pu dire si un concours est en cours. Réessayez.",
   "contestSetup.start.refusedStillOn": "La station n'est pas entrée dans {{contest}} : {{reason}} Vos réponses ont été remises. Le mode Concours était déjà enregistré comme actif, la station réessaiera donc au prochain enregistrement.",
   "contestSetup.start.refusedStillOnUnknown": "La station n'est pas entrée dans {{contest}}. Vos réponses ont été remises. Le mode Concours était déjà enregistré comme actif, la station réessaiera donc au prochain enregistrement.",
   "contestSetup.sends.uncheckable": "La station n'a pas pu vérifier cet échange. Modifiez un champ pour réessayer.",

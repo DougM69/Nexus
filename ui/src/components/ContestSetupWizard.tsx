@@ -439,8 +439,15 @@ export function ContestSetupWizard({
       // ⭐ THE STATION AS IT IS NOW, not as it was when this opened: a contest started or stopped
       // elsewhere meanwhile goes back to the pick, where a contest this Start would end asks for its
       // tick again. Never ended, nor started in place of an edit, without the operator seeing it.
-      // A read that fails leaves what the dialog opened on, as the first read does.
-      const fresh = await getSnapshot().catch(() => snap)
+      // A read that fails refuses, as the Settings switch guard does: nothing is saved, and Start can
+      // be pressed again.
+      let fresh: AppSnapshot | null
+      try {
+        fresh = (await getSnapshot()) ?? null
+      } catch {
+        setError(t('contestSetup.start.snapshotFailed'))
+        return
+      }
       const freshSession = fresh?.fieldDay ?? null
       if ((freshSession ? freshSession.event || 'arrlfd' : null) !== runningEvent) {
         setSnap(fresh ?? null)
