@@ -8670,12 +8670,15 @@ fn country_resolver() -> Arc<tempo_app::station::DxccResolve> {
     Arc::clone(&SHARED)
 }
 
-/// The station's two country resolvers, wired as the launch wires them: the entity a call places
-/// a contact in ([`country_resolver`]), and the country a record's own DXCC number gives it
-/// ([`log_queries::dxcc_country`]), which the contact's `COUNTRY` follows.
+/// The station's country resolvers, wired as the launch wires them: the entity a call places a
+/// contact in ([`country_resolver`]), the country a record's own DXCC number gives it
+/// ([`log_queries::dxcc_country`]), which the contact's `COUNTRY` follows, and the number a
+/// `COUNTRY` text names (`propagation::dxcc::dxcc_by_name`), which tells an edit a stored country
+/// that contradicts the number.
 fn wire_country_resolvers(eng: &mut Engine) {
     eng.set_dxcc_resolver_shared(country_resolver());
     eng.set_dxcc_country_resolver(log_queries::dxcc_country);
+    eng.set_country_dxcc_resolver(propagation::dxcc::dxcc_by_name);
 }
 
 /// The fill rule's own version in [`log_fill_version`]. Bump it whenever the rule changes, so a

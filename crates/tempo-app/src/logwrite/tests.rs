@@ -3984,3 +3984,131 @@ fn an_edit_writes_an_imported_country_back_exactly() {
         "filled where empty"
     );
 }
+
+/// ★ Through the store, the country rules of an edit: a stored country naming ANOTHER entity than
+/// the contact's DXCC number becomes the number's name (the form's save and the card's), one the
+/// table cannot place stays exactly as stored, and a corrected call takes the new call's country —
+/// by the form, and by the whole-contact edit a Remote browser sends back with the old country in
+/// it.
+#[test]
+fn an_edit_corrects_a_contradicted_country_and_a_corrected_call_takes_its_own() {
+    let d = Dir::new("edit-country-rules");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            adif_row(
+                "K1N",
+                "20m",
+                "CW",
+                "100000",
+                "<DXCC:3>182<COUNTRY:13>United States",
+            ),
+            adif_row(
+                "KG1ABC",
+                "20m",
+                "CW",
+                "110000",
+                "<DXCC:3>230<COUNTRY:7>Germany",
+            ),
+            adif_row(
+                "DL1ABC",
+                "20m",
+                "CW",
+                "120000",
+                "<DXCC:3>230<COUNTRY:20>Fed. Rep. of Germany",
+            ),
+            adif_row(
+                "DL2ABC",
+                "20m",
+                "CW",
+                "130000",
+                "<DXCC:3>230<COUNTRY:20>Fed. Rep. of Germany",
+            ),
+        ]),
+    );
+    {
+        let mut e = engine_lock(&engine);
+        e.set_dxcc_country_resolver(|n| (n == 182).then(|| "Navassa Island".to_string()));
+        e.set_country_dxcc_resolver(|text| match text {
+            "United States" => Some(291),
+            "Fed. Rep. of Germany" => Some(230),
+            _ => None,
+        });
+    }
+    let row = |call: &str, hhmmss: &str| contact_at(&engine, call, hhmmss);
+    let named = |r: &QsoRecord| {
+        let mut edit = QsoEdit::project(r);
+        edit.name = Some("Hans".into());
+        edit
+    };
+    let k1n = row("K1N", "100000");
+    let (made, dur) = edit_row(
+        &engine,
+        k1n.id.unwrap(),
+        &QsoEdit::project(&k1n).key(),
+        &named(&k1n),
+    );
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let after = row("K1N", "100000");
+    assert_eq!(
+        (after.dxcc, after.country.as_deref(), after.name.as_deref()),
+        (Some(182), Some("Navassa Island"), Some("Hans")),
+        "the form's save names the number's entity"
+    );
+
+    let kept = row("KG1ABC", "110000");
+    let card = [FieldEdit {
+        tag: "CNTY".into(),
+        old: None,
+        new: Some("MA,ESSEX".into()),
+    }];
+    let (made, dur) = edit_row_with_fields(
+        &engine,
+        kept.id.unwrap(),
+        &QsoEdit::project(&kept).key(),
+        &named(&kept),
+        &card,
+    );
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let after = row("KG1ABC", "110000");
+    assert_eq!(
+        (after.dxcc, after.country.as_deref(), after.name.as_deref()),
+        (Some(230), Some("Germany"), Some("Hans")),
+        "the card's save keeps a text the table cannot place"
+    );
+
+    let dl = row("DL1ABC", "120000");
+    let mut edit = QsoEdit::project(&dl);
+    edit.call = "K1XYZ".into();
+    let (made, dur) = edit_row(&engine, dl.id.unwrap(), &QsoEdit::project(&dl).key(), &edit);
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let after = row("K1XYZ", "120000");
+    assert_eq!(
+        (after.dxcc, after.country.as_deref()),
+        (None, Some("United States")),
+        "the form's corrected call takes the new call's country"
+    );
+
+    let remote = row("DL2ABC", "130000");
+    let (made, dur) = update_row(
+        &engine,
+        remote.id.unwrap(),
+        &QsoEdit::project(&remote).key(),
+        |r| QsoRecord {
+            call: "K2XYZ".into(),
+            ..r.clone()
+        },
+        |_, _| (),
+    );
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let after = row("K2XYZ", "130000");
+    assert_eq!(
+        (after.dxcc, after.country.as_deref()),
+        (None, Some("United States")),
+        "the whole-contact edit's corrected call takes the new call's country, not the one sent"
+    );
+}

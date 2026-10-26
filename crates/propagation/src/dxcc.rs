@@ -712,6 +712,41 @@ pub fn country_by_dxcc(code: u32) -> Option<&'static str> {
     entity_by_dxcc(code).map(|e| e.name)
 }
 
+/// The DXCC number of the entity a contact's `COUNTRY` text names, read against the names of the
+/// current entities, as cty.dat gives them (a WAE area's carries its parent's number, as in ADIF),
+/// case and spacing aside. So "fed. rep. of  GERMANY" is 230 and "Sicily" 248.
+///
+/// `None` where the text names nothing the table holds — another program's spelling, "Germany"
+/// for the Fed. Rep. of Germany — and where it cannot say which entity: a name entities of
+/// different numbers share, or one whose entity has no number. A caller comparing the text with
+/// a contact's number reads `None` as "cannot tell", never as "differs". The deleted entities'
+/// names are not read: the ARRL's are the plain ones today's programs write for a current entity
+/// ("GERMANY", 81; "OKINAWA", 193), so they cannot say which of the two a text means.
+pub fn dxcc_by_name(text: &str) -> Option<u32> {
+    let folded = |s: &str| {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let want = folded(text);
+    if want.is_empty() {
+        return None;
+    }
+    let mut found = None;
+    for e in &resolver().entities {
+        if folded(&e.name) != want {
+            continue;
+        }
+        let code = e.dxcc?;
+        if found.is_some_and(|f| f != code) {
+            return None;
+        }
+        found = Some(code);
+    }
+    found
+}
+
 /// The entity a contact is under on the callsign card: [`shown_entity`] for the contact as it
 /// would be with its DXCC number — its record's own where that names an entity, else the number its
 /// call carries. A typed call has no record (`dxcc` is `None`) and asks its card for this, and an
@@ -855,6 +890,35 @@ pub fn dxcc_entity_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `COUNTRY` text names the current entity whose name it is, case and spacing aside — a WAE
+    /// area under its parent's number — and nothing for a text the table does not hold. A deleted
+    /// entity's name is not read: "Germany" is deleted 81's, and a QRZ "Germany" means 230.
+    #[test]
+    fn a_country_text_names_the_entity_the_table_calls_by_it() {
+        for (text, code) in [
+            ("Fed. Rep. of Germany", Some(230)),
+            ("  fed. rep. of   GERMANY ", Some(230)),
+            ("United States", Some(291)),
+            ("NAVASSA ISLAND", Some(182)),
+            ("Sicily", Some(248)),
+            ("Germany", None),
+            ("UNITED STATES OF AMERICA", None),
+            ("", None),
+            ("   ", None),
+        ] {
+            assert_eq!(dxcc_by_name(text), code, "{text:?}");
+        }
+        assert_eq!(
+            country_by_dxcc(81),
+            Some("GERMANY"),
+            "premise: deleted 81's name"
+        );
+        for deleted in ["GERMANY", "Okinawa", "CANAL ZONE"] {
+            assert_eq!(dxcc_by_name(deleted), None, "{deleted}");
+        }
+        assert_eq!(dxcc_by_name("Palestine"), Some(510), "the current entity");
+    }
 
     /// The file judges an ordinary call by its prefix, and never a DXpedition's: an exact-call
     /// exception, or a call whose prefix the logged entity's own calls share (`3Y0PI` falls to

@@ -118,8 +118,20 @@ impl Stage1 {
 
     /// `StationCore::update_qso`.
     pub(crate) fn update_qso(&mut self, id: RecordId, mut rec: QsoRecord) -> bool {
-        // Keep country populated on edits (the edit form doesn't carry it).
-        if rec.country.is_none() {
+        // Keep country populated on edits (the edit form doesn't carry it); a corrected call takes
+        // its own, whatever the edit carries.
+        let call_changed = self
+            .logbook
+            .records()
+            .iter()
+            .find(|r| r.id == Some(id))
+            .is_some_and(|r| !rec.call.trim().eq_ignore_ascii_case(r.call.trim()));
+        if call_changed {
+            rec.country = self
+                .dxcc_resolve
+                .as_ref()
+                .and_then(|resolve| resolve(&rec.call));
+        } else if rec.country.is_none() {
             if let Some(resolve) = &self.dxcc_resolve {
                 rec.country = resolve(&rec.call);
             }
@@ -156,7 +168,12 @@ impl Stage1 {
             .country
             .as_deref()
             .is_none_or(|c| c.trim().is_empty());
-        if call_changed || no_country {
+        if call_changed {
+            rec.country = self
+                .dxcc_resolve
+                .as_ref()
+                .and_then(|resolve| resolve(&rec.call));
+        } else if no_country {
             if let Some(resolve) = &self.dxcc_resolve {
                 rec.country = resolve(&rec.call);
             }

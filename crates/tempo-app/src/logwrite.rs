@@ -274,7 +274,10 @@ pub fn update_row<T>(
         "update_qso",
         |e, row| {
             StationCore::fresh_row(row, edit_key)?;
-            Ok(station::ops_on(row, &[e.station().edit_op(id, edit(row))]))
+            Ok(station::ops_on(
+                row,
+                &[e.station().edit_op(id, edit(row), row)],
+            ))
         },
         |e, made| {
             if let (before, Some(after)) = &made {

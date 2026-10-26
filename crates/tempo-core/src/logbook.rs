@@ -2968,16 +2968,17 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
         // call's upload; it goes with the stamps.
         rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
         // Call-derived identity re-derives from the NEW call: the
-        // busted call's entity/state must not ride along. (country
-        // refills from the resolver on the save path; dxcc/state
-        // stay empty until a lookup supplies them.)
+        // busted call's entity/state must not ride along. dxcc/state
+        // stay empty until a lookup supplies them. The country is the
+        // edit's own: whoever makes the edit names the corrected call's
+        // (the station resolves it, whatever a whole-contact edit sent
+        // back), and the stored one is never written back below.
         rec.dxcc = None;
-        rec.country = None;
         rec.state = None;
     }
     // Never clobber a known country/state to None on an ORDINARY
     // edit (the form doesn't carry them) — but on a call correction
-    // the old values describe the busted call and stay cleared.
+    // the old values describe the busted call and are not restored.
     if !call_changed {
         if rec.country.is_none() {
             rec.country = old.country.clone();

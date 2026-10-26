@@ -1047,13 +1047,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The Logbook form writes a stored COUNTRY back exactly on an edit that leaves the call alone,
-    /// even where the DXCC number the contact keeps names another entity: a K1N contact imported as
-    /// 182 beside "United States" keeps that text when the operator corrects its name (it goes out
-    /// under the number's name either way — the test below). Once the number is cleared by hand,
-    /// the country is the call's entity.
+    /// The Logbook form corrects a stored COUNTRY that names another entity than the DXCC number
+    /// the contact keeps: a K1N contact imported as 182 beside "United States" is Navassa Island
+    /// once the operator saves any edit to it. With no number left, the form names the call's
+    /// entity, as it always has.
     #[test]
-    fn an_edit_writes_the_stored_country_back_beside_the_dxcc_number() {
+    fn an_edit_names_the_country_by_the_dxcc_number_the_contact_keeps() {
         let (dir, engine) = engine_with("edit-country", K1N_2015_CONTRADICTED);
         let rt = runtime();
         let (target, held) = row_ref(&engine, 0);
@@ -1070,10 +1069,10 @@ mod tests {
         let stored = on_disk(&dir, &target.id).expect("held");
         assert_eq!(
             (pair(&stored), stored.name.as_deref()),
-            ((Some(182), Some("United States".into())), Some("Navassa")),
-            "the edit, and the country as it was stored"
+            ((Some(182), Some("Navassa Island".into())), Some("Navassa")),
+            "the edit, and the country its number gives"
         );
-        assert_eq!(now.row.country.as_deref(), Some("United States"));
+        assert_eq!(now.row.country.as_deref(), Some("Navassa Island"));
 
         // Control: the number cleared by hand, the next edit names the call's entity.
         let now = current(
@@ -1089,6 +1088,84 @@ mod tests {
         assert_eq!(
             pair(&on_disk(&dir, &target.id).expect("held")),
             (None, Some("United States".into()))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ Under the launch's own resolvers, an edit keeps a stored COUNTRY that names the contact's
+    /// DXCC entity in another spelling ("fed. rep. of germany") or that the entity table cannot
+    /// place ("Germany", QRZ's) exactly as stored; and a corrected callsign takes the new call's
+    /// country — by the form, and by the whole-contact edit a Remote browser sends with the old
+    /// call's country in it.
+    #[test]
+    fn an_edit_keeps_an_agreeing_country_and_a_corrected_call_takes_its_own() {
+        let rows = [
+            "<CALL:6>DL1ABC<QSO_DATE:8>20240101<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <DXCC:3>230<COUNTRY:7>Germany<EOR>\n",
+            "<CALL:6>DL2ABC<QSO_DATE:8>20240102<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <DXCC:3>230<COUNTRY:20>fed. rep. of germany<EOR>\n",
+            "<CALL:6>DL3ABC<QSO_DATE:8>20240103<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <DXCC:3>230<COUNTRY:20>Fed. Rep. of Germany<EOR>\n",
+            "<CALL:6>DL4ABC<QSO_DATE:8>20240104<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW\
+             <DXCC:3>230<COUNTRY:20>Fed. Rep. of Germany<EOR>\n",
+        ]
+        .concat();
+        let (dir, engine) = engine_with("edit-country-kept", &rows);
+        let rt = runtime();
+        for (at, country) in [(0, "Germany"), (1, "fed. rep. of germany")] {
+            let (target, held) = row_ref(&engine, at);
+            let mut edit = QsoEdit::project(&held);
+            edit.name = Some("Hans".into());
+            current(
+                rt.block_on(edit_row(engine.clone(), target.clone(), edit))
+                    .expect("made"),
+            );
+            let stored = on_disk(&dir, &target.id).expect("held");
+            assert_eq!(
+                (pair(&stored), stored.name.as_deref()),
+                ((Some(230), Some(country.into())), Some("Hans")),
+                "kept exactly as stored"
+            );
+        }
+
+        let (target, held) = row_ref(&engine, 2);
+        let mut edit = QsoEdit::project(&held);
+        edit.call = "K1ABC".into();
+        let now = current(
+            rt.block_on(edit_row(engine.clone(), target.clone(), edit))
+                .expect("made"),
+        );
+        assert_eq!(
+            pair(&on_disk(&dir, &target.id).expect("held")),
+            (None, Some("United States".into())),
+            "the form's corrected call"
+        );
+        assert_eq!(now.row.country.as_deref(), Some("United States"));
+
+        let (target, held) = row_ref(&engine, 3);
+        let id = target.id.parse().expect("an id");
+        let mut sent = held.clone();
+        sent.call = "K2ABC".into();
+        assert_eq!(
+            sent.country.as_deref(),
+            Some("Fed. Rep. of Germany"),
+            "premise"
+        );
+        let (made, durability) = tempo_app::logwrite::update_row(
+            &engine,
+            id,
+            &target.edit_key,
+            |stored| crate::edited_whole(&sent, stored),
+            |_, _| (),
+        );
+        made.expect("reads").expect("made");
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .expect("durable");
+        assert_eq!(
+            pair(&on_disk(&dir, &target.id).expect("held")),
+            (None, Some("United States".into())),
+            "the whole-contact edit's corrected call"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

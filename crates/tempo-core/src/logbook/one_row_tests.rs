@@ -73,11 +73,10 @@ mod vec_bodies {
                     // call's upload; it goes with the stamps.
                     rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
                     // Call-derived identity re-derives from the NEW call: the
-                    // busted call's entity/state must not ride along. (country
-                    // refills from the resolver on the save path; dxcc/state
-                    // stay empty until a lookup supplies them.)
+                    // busted call's entity/state must not ride along. dxcc/state
+                    // stay empty until a lookup supplies them; the country is
+                    // the edit's own, the corrected call's.
                     rec.dxcc = None;
-                    rec.country = None;
                     rec.state = None;
                 }
                 // Never clobber a known country/state to None on an ORDINARY
