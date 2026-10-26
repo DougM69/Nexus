@@ -349,6 +349,30 @@ pub struct LoggedQso {
     /// `GRID` already writes `MY_GRIDSQUARE`, and that one wins) and carried into the Logbook by
     /// the merge, marked as Nexus's own so the LoTW upload leaves it out.
     pub grid: String,
+    /// ⭐ **The activation this contact was made during** — the program (`POTA`/`SOTA`), the
+    /// reference as an ordinary contact carries it (one park, or a two-fer's parks as a comma
+    /// list) and the state activated from, as [`FieldDayLog::activation`] held them when it was
+    /// logged. Empty strings for none: no activation running, or a paused one, or a row logged
+    /// before this was recorded. While one runs, [`grid`](Self::grid) is the park's.
+    ///
+    /// Stamped at LOG time, never at the merge: a contact logged after Stop is not the
+    /// activation's though the merge runs while another is on. Journaled under private tags
+    /// and carried into the Logbook by the merge as the my-side park fields, so the contact
+    /// counts for the activation too; no contest file writes it.
+    pub activation: RowActivation,
+}
+
+/// The my-side activation a contest row was logged during ([`LoggedQso::activation`]): empty
+/// strings when none.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RowActivation {
+    /// `POTA` or `SOTA` (ADIF `MY_SIG`).
+    pub program: String,
+    /// The reference: one park or summit, or a two-fer's parks as a comma list
+    /// (ADIF `MY_SIG_INFO`).
+    pub reference: String,
+    /// The state activated from (ADIF `MY_STATE`), `""` when none is known.
+    pub state: String,
 }
 
 impl LoggedQso {
@@ -988,6 +1012,10 @@ pub struct FieldDayLog {
     /// The station grid RIGHT NOW (Settings ▸ Station, uppercase, `""` = none), stamped and
     /// copied as [`rig`](Self::rig) is ([`LoggedQso::grid`]).
     pub grid: String,
+    /// The LIVE activation RIGHT NOW (empty when none, or paused), stamped by the engine at
+    /// contest entry and whenever the activation changes, and copied as [`rig`](Self::rig) is
+    /// ([`LoggedQso::activation`]).
+    pub activation: RowActivation,
     /// The LIVE rows: what is scored, duped, exported, merged and synced.
     qsos: Vec<LoggedQso>,
     /// ⭐ **The contacts the operator took out of the live log — kept, never deleted**
@@ -1089,6 +1117,7 @@ impl FieldDayLog {
             rig: String::new(),
             tx_power: String::new(),
             grid: String::new(),
+            activation: RowActivation::default(),
             qsos: Vec::new(),
             removed: Vec::new(),
             worked: HashSet::new(),
@@ -1895,6 +1924,7 @@ impl FieldDayLog {
             rig: self.rig.clone(),
             tx_power: self.tx_power.clone(),
             grid: self.grid.clone(),
+            activation: self.activation.clone(),
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -2539,6 +2569,15 @@ impl FieldDayLog {
             if journal && !q.grid.is_empty() {
                 s.push_str(&adif_field("APP_NEXUS_MYGRID", &q.grid));
             }
+            // …and the activation it was made during, under private tags for the same reason:
+            // a state QSO party's sent state already writes `MY_STATE` on this record.
+            if journal && !q.activation.reference.is_empty() {
+                s.push_str(&adif_field("APP_NEXUS_MYSIG", &q.activation.program));
+                s.push_str(&adif_field("APP_NEXUS_MYSIGINFO", &q.activation.reference));
+                if !q.activation.state.is_empty() {
+                    s.push_str(&adif_field("APP_NEXUS_MYSTATE", &q.activation.state));
+                }
+            }
             // A contact the operator removed: kept, with when (`restore_row` reads it back).
             if let Some(at) = removed_unix {
                 s.push_str(&adif_field("APP_NEXUS_REMOVED", &at.to_string()));
@@ -3111,6 +3150,21 @@ impl FieldDayLog {
                 .get("APP_NEXUS_MYGRID")
                 .map(|g| g.trim().to_ascii_uppercase())
                 .unwrap_or_default(),
+            // The activation, from the journal's private tags: none on an older row.
+            activation: match f.get("APP_NEXUS_MYSIGINFO").map(|r| r.trim()) {
+                Some(reference) if !reference.is_empty() => RowActivation {
+                    program: f
+                        .get("APP_NEXUS_MYSIG")
+                        .map(|p| p.trim().to_ascii_uppercase())
+                        .unwrap_or_default(),
+                    reference: reference.to_ascii_uppercase(),
+                    state: f
+                        .get("APP_NEXUS_MYSTATE")
+                        .map(|st| st.trim().to_ascii_uppercase())
+                        .unwrap_or_default(),
+                },
+                _ => RowActivation::default(),
+            },
         };
         match removed_unix {
             Some(at) => self.keep_removed(row, at),
@@ -8201,6 +8255,139 @@ mod tests {
         let mut old = ilqp_from_kane();
         old.merge_adif(&older, 0);
         assert_eq!(grids(&old), owned([("K9AAA", ""), ("K9BBB", "")]));
+    }
+
+    fn activation(program: &str, reference: &str, state: &str) -> RowActivation {
+        RowActivation {
+            program: program.into(),
+            reference: reference.into(),
+            state: state.into(),
+        }
+    }
+
+    /// **Each row keeps the activation it was logged during**, stamped at log time from the log's
+    /// RIGHT NOW activation — a two-fer's parks, a park with no state, none at all — through the
+    /// journal and a restart, under private tags no contest file writes; and a journal written
+    /// before it was recorded still reads, its rows carrying none.
+    #[test]
+    fn the_journal_keeps_the_activation_each_contact_was_logged_during() {
+        let mut log = ilqp_from_kane();
+        log.activation = activation("POTA", "US-0001,US-0002", "ND");
+        ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+        log.activation = activation("SOTA", "W0D/BH-001", "");
+        ilqp_contact(&mut log, "K9BBB", "599", "WILL", "CW");
+        log.activation = RowActivation::default();
+        ilqp_contact(&mut log, "K9CCC", "599", "LAKE", "CW");
+        let journal = log.journal_adif();
+        assert!(
+            record_for(&journal, "K9AAA").contains(
+                "<APP_NEXUS_MYSIG:4>POTA <APP_NEXUS_MYSIGINFO:15>US-0001,US-0002 \
+                 <APP_NEXUS_MYSTATE:2>ND "
+            ),
+            "{journal}"
+        );
+        assert!(
+            record_for(&journal, "K9BBB")
+                .contains("<APP_NEXUS_MYSIG:4>SOTA <APP_NEXUS_MYSIGINFO:10>W0D/BH-001 "),
+            "{journal}"
+        );
+        assert!(!record_for(&journal, "K9BBB").contains("APP_NEXUS_MYSTATE"));
+        assert!(!record_for(&journal, "K9CCC").contains("APP_NEXUS_MYSIG"));
+        for export in [log.adif(), log.submission_adif()] {
+            assert!(
+                !export.contains("APP_NEXUS_MYSIG")
+                    && !export.contains("APP_NEXUS_MYSTATE")
+                    && !export.contains("US-0001"),
+                "{export}"
+            );
+        }
+        let acts = |log: &FieldDayLog| -> Vec<RowActivation> {
+            log.qsos().iter().map(|q| q.activation.clone()).collect()
+        };
+        let mut back = ilqp_from_kane();
+        back.merge_adif(&journal, 0);
+        assert_eq!(acts(&back), acts(&log));
+        assert_eq!(
+            acts(&back),
+            [
+                activation("POTA", "US-0001,US-0002", "ND"),
+                activation("SOTA", "W0D/BH-001", ""),
+                RowActivation::default()
+            ]
+        );
+        let older = journal
+            .replace(
+                "<APP_NEXUS_MYSIG:4>POTA <APP_NEXUS_MYSIGINFO:15>US-0001,US-0002 \
+                 <APP_NEXUS_MYSTATE:2>ND ",
+                "",
+            )
+            .replace(
+                "<APP_NEXUS_MYSIG:4>SOTA <APP_NEXUS_MYSIGINFO:10>W0D/BH-001 ",
+                "",
+            );
+        assert!(!older.contains("APP_NEXUS_MYSIG"), "the control: {older}");
+        let mut old = ilqp_from_kane();
+        old.merge_adif(&older, 0);
+        assert_eq!(acts(&old), vec![RowActivation::default(); 3]);
+        // The rest of each older row reads exactly as before.
+        let mut plain = ilqp_from_kane();
+        plain.merge_adif(&older, 0);
+        assert_eq!(old.qsos(), plain.qsos());
+        assert_eq!(old.journal_adif(), older);
+    }
+
+    /// The activation is no part of any contest file: the Cabrillo and both ADIF exports of a log
+    /// whose contacts were made during one are byte for byte those of the same log made without.
+    #[test]
+    fn the_activation_changes_no_contest_file() {
+        let made = |stamp: RowActivation| {
+            let mut log = ilqp_from_kane();
+            log.activation = stamp;
+            ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+            ilqp_contact(&mut log, "K9BBB", "599", "WILL", "CW");
+            log
+        };
+        let (with, without) = (
+            made(activation("POTA", "US-0001,US-0002", "ND")),
+            made(RowActivation::default()),
+        );
+        assert!(with
+            .qsos()
+            .iter()
+            .all(|q| !q.activation.reference.is_empty()));
+        assert_eq!(
+            with.cabrillo(14_025).unwrap(),
+            without.cabrillo(14_025).unwrap()
+        );
+        assert_eq!(with.adif(), without.adif());
+        assert_eq!(with.submission_adif(), without.submission_adif());
+        // CONTROL: the journal, which carries it, differs.
+        assert_ne!(with.journal_adif(), without.journal_adif());
+    }
+
+    /// A contact edited before the merge keeps the activation it was logged during — the edit
+    /// changes what the operator corrected, not where the contact was made — though the log's
+    /// activation has since stopped.
+    #[test]
+    fn an_edited_contact_keeps_its_activation() {
+        let mut log = ilqp_from_kane();
+        log.activation = activation("POTA", "US-0001", "ND");
+        ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+        log.activation = RowActivation::default();
+        let when = log.qsos()[0].when_unix;
+        let edit = ContactEdit {
+            call: "K9AAB".into(),
+            rows: vec![vec![
+                ("RST".into(), "579".into()),
+                ("QTH".into(), "WILL".into()),
+            ]],
+            band: "40m".into(),
+            mode: "CW".into(),
+        };
+        log.edit_contact("K9AAA", when, &edit).unwrap();
+        let row = &log.qsos()[0];
+        assert_eq!(row.call, "K9AAB", "the edit took");
+        assert_eq!(row.activation, activation("POTA", "US-0001", "ND"));
     }
 }
 

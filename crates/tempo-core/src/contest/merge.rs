@@ -604,9 +604,16 @@ fn record_for(
         credit_granted: Vec::new(),
         credit_submitted: Vec::new(),
         upload: UploadState::default(),
-        // Nor a park, summit or island reference, either side's: no exchange carries one and the
-        // row has no field for one, so there is nothing here to carry, not something dropped.
-        ota: crate::logbook::Ota::default(),
+        // MY side: the activation the row was logged during ([`LoggedQso::activation`]), as the
+        // general log's funnel stamps an ordinary contact made then — so it counts for the
+        // activation too. THEIR side: no exchange carries a park, summit or island, so there is
+        // nothing to carry, not something dropped.
+        ota: crate::logbook::Ota {
+            my_program: Some(q.activation.program.clone())
+                .filter(|_| !q.activation.reference.is_empty()),
+            my_ref: Some(q.activation.reference.clone()).filter(|r| !r.is_empty()),
+            ..crate::logbook::Ota::default()
+        },
         dxcc: None,
         // ⭐ **THE BIRD SURVIVES THE MERGE.** These were hardcoded `None`, which was true
         // of every contest row there had ever been — and became a silent data loss the
@@ -653,6 +660,18 @@ fn record_for(
     // it out and TQSL signs from the Station Location as it did before.
     if rec.my_grid.is_some() {
         crate::logbook::mark_self_filled(&mut rec, "MY_GRIDSQUARE");
+    }
+    // The state the activation was made from, as the funnel writes it on an ordinary activation
+    // contact (unmarked: it is the park's, not Settings'), unless the exchange itself sent one —
+    // a state QSO party's `MY_STATE` — which is written from the contest's own columns, and wins.
+    if !q.activation.state.is_empty()
+        && !q.activation.reference.is_empty()
+        && !rec
+            .contest
+            .as_deref()
+            .is_some_and(|c| c.adif.iter().any(|(t, _)| t == "MY_STATE"))
+    {
+        crate::logbook::fill_extra(&mut rec, "MY_STATE", q.activation.state.clone());
     }
     // Into the lifetime log in its one form: a phone row worked on a sideband is SSB, with the
     // sideband as its SUBMODE ([`crate::logbook::canonical`]).
@@ -1276,6 +1295,11 @@ mod tests {
         log.rig = "IC-9700".into();
         log.tx_power = "50".into();
         log.grid = "EN51".into();
+        log.activation = crate::fieldday::RowActivation {
+            program: "POTA".into(),
+            reference: "US-0001,US-0002".into(),
+            state: "ND".into(),
+        };
         let rx = [("GRID".to_string(), "FN31".to_string())];
         assert!(log.log_fields_at("K1ABC", &rx, "PH", "USB", 7, 1_782_583_500));
         {
@@ -1347,6 +1371,7 @@ mod tests {
             rig,
             tx_power,
             grid,
+            activation,
         } = row.clone();
         let checks: Vec<(&str, bool)> = vec![
             ("call", rec.call == call && reborn.call == call),
@@ -1417,6 +1442,18 @@ mod tests {
             ("tx_power", rec.tx_power == tx_power.parse().ok()),
             // The exchange's own sent grid wins over this stamp (`a_vhf_rows_sent_grid_wins…`).
             ("grid", grid == "EN51" && !out.contains("EN51")),
+            (
+                "activation",
+                // A two-fer writes as the general log writes one: its first park as
+                // `MY_SIG_INFO`, both as `MY_POTA_REF`.
+                once("MY_SIG", &activation.program)
+                    && once("MY_SIG_INFO", "US-0001")
+                    && once("MY_POTA_REF", &activation.reference)
+                    && once("MY_STATE", &activation.state)
+                    && [&rec, &reborn, &stored]
+                        .iter()
+                        .all(|r| r.ota.my_ref.as_deref() == Some("US-0001,US-0002")),
+            ),
         ];
         let failed: Vec<&str> = checks
             .iter()
@@ -1434,10 +1471,18 @@ mod tests {
         assert_eq!(merge_into_general(&log, "pos", &mut own).added(), 1);
         assert_eq!(own.records()[0].station_callsign.as_deref(), Some("K9AIR"));
 
-        // A contest row holds no park, summit, comment, note or name of the other operator
-        // outside its exchange: the entry strip takes the call and the exchange, nothing else.
-        // So the Logbook row has none, rather than having had one taken away.
-        assert_eq!(rec.ota, crate::logbook::Ota::default());
+        // A contest row holds no park or summit of THEIRS, nor a comment, note or name of the
+        // other operator outside its exchange: the entry strip takes the call and the exchange,
+        // nothing else. So the Logbook row has none, rather than having had one taken away. Its
+        // own side is the activation it was logged during (`activation` above).
+        assert_eq!(
+            rec.ota,
+            crate::logbook::Ota {
+                my_program: Some("POTA".into()),
+                my_ref: Some("US-0001,US-0002".into()),
+                ..crate::logbook::Ota::default()
+            }
+        );
         assert_eq!(
             (&rec.name, &rec.qth, &rec.comment, &rec.notes),
             (&None, &None, &None, &None)
@@ -1449,6 +1494,59 @@ mod tests {
             (again.added(), again.already, lb.records().len()),
             (0, 1, 1)
         );
+    }
+
+    /// A row logged during an activation carries the park's state as `MY_STATE`, unless its own
+    /// exchange SENT a state — a QSO party worked from outside it — which is the one the merged
+    /// contact keeps, written once. A row logged with none carries no park and no state.
+    #[test]
+    fn a_rows_sent_state_wins_over_the_activations() {
+        let mut session = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        session.exchange = crate::contest::exchanges::qso_party_shaped();
+        let spec = session.exchange;
+        let mut log = FieldDayLog::new("W9XYZ", session, "20m");
+        log.activation = crate::fieldday::RowActivation {
+            program: "POTA".into(),
+            reference: "US-0001".into(),
+            state: "ND".into(),
+        };
+        assert!(log.log_mode_at("K9AAA", "", "", "CW", 0, 1_792_000_000));
+        log.activation = crate::fieldday::RowActivation::default();
+        assert!(log.log_mode_at("K9BBB", "", "", "CW", 0, 1_792_000_060));
+        // What the first row SENT: its state, under the arm that exports as `MY_STATE`.
+        log.qsos_mut()[0].tx = vec![
+            crate::contest::FieldValue {
+                key: spec.field("RST").expect("declared slot").key,
+                raw: "599".into(),
+                domain: None,
+            },
+            crate::contest::FieldValue {
+                key: spec.field("QTH").expect("declared slot").key,
+                raw: "TN".into(),
+                domain: Some("us_ca"),
+            },
+        ];
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "pos", &mut lb).added(), 2);
+        let of = |call: &str| {
+            lb.records()
+                .iter()
+                .find(|r| r.call == call)
+                .cloned()
+                .unwrap()
+        };
+        let (park, home) = (of("K9AAA"), of("K9BBB"));
+        let adif = crate::logbook::adif_record(&park);
+        assert_eq!(adif.matches("<MY_STATE:").count(), 1, "{adif}");
+        assert!(adif.contains("<MY_STATE:2>TN"), "the exchange's: {adif}");
+        assert!(
+            !park.extra.iter().any(|(k, _)| k == "MY_STATE"),
+            "no second, disagreeing state on the record: {:?}",
+            park.extra
+        );
+        assert_eq!(park.ota.my_ref.as_deref(), Some("US-0001"));
+        assert_eq!(home.ota, crate::logbook::Ota::default());
+        assert!(!home.extra.iter().any(|(k, _)| k == "MY_STATE"));
     }
 
     /// A name and a QTH the other station SENT, in an exchange that carries them, are the
