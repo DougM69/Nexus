@@ -5922,6 +5922,8 @@ export const DE: PartialCatalog = {
   "settings.transmit.backup.hint": "Ihre Funkgeräte, Betriebseinstellungen, Speicherkanäle, Beobachtungsliste und Jagdlisten in einer Datei — für einen neuen Rechner oder vor einer Neuinstallation. <b>Passwörter und API-Schlüssel sind nicht enthalten</b>: Die bleiben im Schlüsselbund des Betriebssystems, eine Wiederherstellung fragt sie also erneut ab, und die Datei kann bedenkenlos auf einem USB-Stick liegen. Ihr QSO-Log ist davon getrennt — das im Logbuch exportieren. Eine Wiederherstellung ersetzt die aktuelle Einrichtung.",
   "settings.transmit.backup.appearance": "Die Datei enthält auch das Aussehen von Nexus: Design, Farben, Textgröße, Dichte, Nacht und die Wasserfall-Paletten; eine Wiederherstellung stellt es wieder her. Feldmodus und UI-Skalierung gelten weiterhin pro Computer.",
   "settings.transmit.backup.done": "Einstellungen gesichert → {{path}}",
+  "settings.transmit.backup.saveAs": "Speichern unter…",
+  "settings.transmit.backup.saveAs.title": "In einem Ordner deiner Wahl sichern (Sichern speichert direkt in Downloads)",
   "settings.transmit.backup.failed": "Sicherung fehlgeschlagen",
   "settings.transmit.restore.action": "Wiederherstellen…",
   "settings.transmit.restore.title": "Die aktuelle Einrichtung durch eine gespeicherte Sicherung ersetzen",

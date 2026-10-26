@@ -31,6 +31,7 @@ import {
   resetSettings,
   importSettingsBundle,
   saveTextToDownloads,
+  saveTextAs,
   setBlockedCalls as apiSetBlockedCalls,
   type SerialPortInfo,
 } from '../api'
@@ -4261,6 +4262,23 @@ export function SettingsPanel({
                     title={t('settings.transmit.backup.title')}
                   >
                     {t('settings.transmit.backup.action')}
+                  </button>
+                  {/* #306: the same file, in a folder the operator picks. The dialog opens in
+                      Downloads with the dated name filled in; cancelling saves nothing. */}
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() =>
+                      withErrorToast(async () => {
+                        const text = withAppearance(await exportSettingsBundle(), appearanceNow())
+                        const stamp = new Date().toISOString().slice(0, 10)
+                        const path = await saveTextAs(`nexus-settings-${stamp}.json`, text)
+                        if (path) pushToast(t('settings.transmit.backup.done', { path }), 'success')
+                      }, t('settings.transmit.backup.failed'))
+                    }
+                    title={t('settings.transmit.backup.saveAs.title')}
+                  >
+                    {t('settings.transmit.backup.saveAs')}
                   </button>
                   <input
                     ref={backupFileRef}

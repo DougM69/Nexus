@@ -442,6 +442,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("rtty_type",                      StartsTx,    "Types into a live RTTY transmission."),
     ("sat_track_status",               RunsAtShack, "The shack's satellite tracking."),
     ("save_png_to_downloads",          RunsHere,    "Saves a file in this computer's Downloads folder."),
+    ("save_text_as",                   RunsHere,    "Saves a file where the operator picks in this computer's save dialog."),
     ("save_text_to_downloads",         RunsHere,    "Saves a file in this computer's Downloads folder."),
     ("scp_ensure",                     RunsAtShack, "Downloads the shack's Super Check Partial list, or checks for a newer one."),
     ("search_parks",                   RunsAtShack, "The shack's park list."),

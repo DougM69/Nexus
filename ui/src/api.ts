@@ -2700,6 +2700,12 @@ export async function saveTextToDownloads(filename: string, text: string): Promi
   return invoke<string>('save_text_to_downloads', { filename, text })
 }
 
+/** Save As: the OS save dialog, opening in Downloads with `filename` filled in, then the text
+ *  written where the operator picked. The saved path, or null when the dialog was cancelled. */
+export async function saveTextAs(filename: string, text: string): Promise<string | null> {
+  return invoke<string | null>('save_text_as', { filename, text })
+}
+
 /** Binary sibling of saveTextToDownloads for the share-card PNG (base64-encoded bytes) —
  *  on macOS wry cancels `<a download>` navigations outright, so a blob anchor saves nothing. */
 export async function savePngToDownloads(filename: string, base64: string): Promise<string> {

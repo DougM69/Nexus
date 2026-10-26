@@ -7937,6 +7937,8 @@ export const ES: PartialCatalog = {
   "settings.tabs.station": "Estación",
   "settings.transmit.backup.action": "Copia de seguridad",
   "settings.transmit.backup.done": "Ajustes guardados → {{path}}",
+  "settings.transmit.backup.saveAs": "Guardar como…",
+  "settings.transmit.backup.saveAs.title": "Hacer la copia en la carpeta que elijas (Copia de seguridad la guarda directamente en Descargas)",
   "settings.transmit.backup.failed": "Falló la copia de seguridad",
   "settings.transmit.backup.hint": "Tus equipos, preferencias de operación, canales de memoria, lista de vigilancia y conjuntos de caza en un solo archivo — para un ordenador nuevo, o antes de reinstalar. <b>No contiene contraseñas ni claves de API</b>: esas se quedan en el llavero del sistema operativo, así que al restaurar se vuelven a pedir, y el archivo se puede llevar sin riesgo en un USB. Tu log de contactos va aparte — exporta eso desde el Log. Al restaurar se reemplaza tu montaje actual.",
   "settings.transmit.backup.appearance": "También guarda el aspecto de Nexus: el tema, los colores, el tamaño del texto, la densidad, Noche y las paletas de la cascada, y al restaurar se recuperan. El modo campo y la escala de la interfaz se quedan en cada ordenador.",

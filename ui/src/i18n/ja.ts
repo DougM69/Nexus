@@ -5469,6 +5469,8 @@ export const JA: PartialCatalog = {
   "settings.transmit.backup.hint": "無線機、運用設定、メモリーチャンネル、ウォッチリスト、チェイスセットを1つのファイルにまとめます — 新しいコンピューターへの移行や、再構築の前に。<b>パスワードやAPIキーは含まれません</b>: それらはOSのキーチェーンに保存されるため、復元時に再入力を求められます。ファイルはUSBメモリに置いても安全です。交信ログは別です — ログブックからエクスポートしてください。復元すると現在の設定は置き換えられます。",
   "settings.transmit.backup.appearance": "Nexusの見た目(テーマ、カラー、文字サイズ、表示密度、夜間、ウォーターフォールのパレット)も含まれ、復元で元に戻ります。フィールドモードとUI拡大率はコンピューターごとのままです。",
   "settings.transmit.backup.done": "設定をバックアップしました → {{path}}",
+  "settings.transmit.backup.saveAs": "名前を付けて保存…",
+  "settings.transmit.backup.saveAs.title": "選んだフォルダーにバックアップします（バックアップはダウンロードフォルダーに直接保存します）",
   "settings.transmit.backup.failed": "バックアップに失敗しました",
   "settings.transmit.restore.action": "復元…",
   "settings.transmit.restore.title": "現在の設定を保存済みのバックアップで置き換えます",

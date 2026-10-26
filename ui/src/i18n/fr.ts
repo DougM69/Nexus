@@ -7937,6 +7937,8 @@ export const FR: PartialCatalog = {
   "settings.tabs.station": "Station",
   "settings.transmit.backup.action": "Sauvegarder",
   "settings.transmit.backup.done": "Réglages sauvegardés → {{path}}",
+  "settings.transmit.backup.saveAs": "Enregistrer sous…",
+  "settings.transmit.backup.saveAs.title": "Sauvegarder dans un dossier de votre choix (Sauvegarder enregistre directement dans Téléchargements)",
   "settings.transmit.backup.failed": "Échec de la sauvegarde",
   "settings.transmit.backup.hint": "Vos radios, vos préférences d'exploitation, vos mémoires, votre liste de veille et vos listes de chasse dans un seul fichier — pour un nouvel ordinateur, ou avant une réinstallation. <b>Il ne contient aucun mot de passe ni clé d'API</b> : ceux-ci restent dans le trousseau de votre système, une restauration les redemande, et le fichier peut sans risque rester sur une clé USB. Votre journal de trafic est à part — exportez-le depuis le Journal. Restaurer remplace votre configuration actuelle.",
   "settings.transmit.backup.appearance": "Il contient aussi l’apparence de Nexus : le thème, les couleurs, la taille du texte, la densité, Nuit et les palettes de la cascade, et une restauration les remet en place. Le mode Field et l’échelle de l’interface restent propres à chaque ordinateur.",

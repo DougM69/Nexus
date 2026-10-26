@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **A note about DAX for a Flex over SmartSDR CAT.** In SSB a Flex transmits from its own mic unless DAX is on for voice, so a voice-keyer message keys the radio with no RF. The first time a voice message plays on a Flex controlled through SmartSDR CAT, a note in the voice keyer says to turn on DAX in SmartSDR's P/CW panel; Got it hides it for good. It never holds up the message. The Flex page of the manual says the same.
+- **Save the settings backup where you like.** Settings ▸ Config ▸ Backup & reset now has Save as… beside Back up: it opens your system's save dialog in Downloads with the usual dated name filled in, so you can pick a USB stick or any other folder. Back up still saves straight to Downloads.
 
 ### Changed
 - **Tune is in the same place on the FT8/FT4 screen as everywhere else.** The FT8/FT4 strip now opens with TX On/Off, Tune, ATU, Stop TX and Hold Tx, then Call CQ and S&P, so Tune sits right after TX On/Off exactly where every other operating screen's TX strip has it. What each button does is unchanged.

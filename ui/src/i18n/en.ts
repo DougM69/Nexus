@@ -8592,6 +8592,8 @@ export const EN = {
     'It also carries how Nexus looks: the theme, colours, text size, density, Night and waterfall palettes, and a restore puts them back. Field mode and UI scale stay with each computer.',
   // `{{path}}` is where the file landed — a path, printed verbatim.
   'settings.transmit.backup.done': 'Settings backed up → {{path}}',
+  'settings.transmit.backup.saveAs': 'Save as…',
+  'settings.transmit.backup.saveAs.title': 'Back up to a folder you choose (Back up saves straight to Downloads)',
   'settings.transmit.backup.failed': 'Backup failed',
   'settings.transmit.restore.action': 'Restore…',
   'settings.transmit.restore.title': 'Replace your current setup with a saved backup',

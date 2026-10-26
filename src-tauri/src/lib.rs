@@ -15299,6 +15299,46 @@ fn save_text_to_downloads(
     Ok(path.display().to_string())
 }
 
+/// Save As for the settings backup (#306): the OS save dialog, opening in Downloads (as
+/// [`save_text_to_downloads`] finds it) with `filename` reduced to its bare name and filled in,
+/// then `text` written wherever the operator picked. `None` when the dialog is cancelled or
+/// vanishes, which writes nothing. The callback form of the dialog, for the reason
+/// [`pick_data_folder`] gives; driven from Rust, so the webview needs no dialog permission.
+#[tauri::command]
+async fn save_text_as(
+    app: tauri::AppHandle,
+    filename: String,
+    text: String,
+) -> Result<Option<String>, String> {
+    use tauri::Manager;
+    use tauri_plugin_dialog::DialogExt;
+    let name = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .ok_or("Invalid file name")?
+        .to_string();
+    let mut dialog = app.dialog().file().set_file_name(&name);
+    if let Ok(dir) = app.path().download_dir().or_else(|_| app.path().home_dir()) {
+        dialog = dialog.set_directory(dir);
+    }
+    if let Some(ext) = std::path::Path::new(&name)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
+        dialog = dialog.add_filter(ext.to_uppercase(), &[ext]);
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    dialog.save_file(move |picked| {
+        let _ = tx.send(picked);
+    });
+    let Some(path) = rx.await.ok().flatten().and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    std::fs::write(&path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    Ok(Some(path.display().to_string()))
+}
+
 /// Binary sibling of [`save_text_to_downloads`] for the Journey share card's PNG: on macOS
 /// wry cancels every `<a download>` navigation when no download handler is wired (WKWebView
 /// `shouldPerformDownload` → Cancel), so the blob-anchor fallback silently produced no file
@@ -39987,6 +40027,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         export_general_log,
         export_selected_log,
         save_text_to_downloads,
+        save_text_as,
         save_png_to_downloads,
         civ_diagnostic_log,
         all_txt_location,
