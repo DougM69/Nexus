@@ -1064,6 +1064,8 @@ struct ReadTurns {
     /// Sub-cadenced reads whose tick has come round and that no poll has afforded yet, one bit
     /// per [`HeavyRead`].
     owed: u32,
+    /// The owed reads that do not wait for the lap to come round to them ([`Self::owe_now`]).
+    pressing: u32,
 }
 
 impl ReadTurns {
@@ -1076,6 +1078,13 @@ impl ReadTurns {
     /// A sub-cadenced read's tick has come round.
     fn owe(&mut self, read: HeavyRead) {
         self.owed |= 1 << read as u32;
+    }
+
+    /// [`Self::owe`] a read the next poll that can afford it makes even if its lap has already
+    /// passed it: the split read after a key, so a slow link reads it between overs.
+    fn owe_now(&mut self, read: HeavyRead) {
+        self.owe(read);
+        self.pressing |= 1 << read as u32;
     }
 
     /// May this poll issue `read`? Not if this lap has already read it, and not once the budget
@@ -1094,10 +1103,13 @@ impl ReadTurns {
     /// [`Self::take`] for a sub-cadenced read: only while it is owed, and the turn pays it.
     fn take_owed(&mut self, read: HeavyRead, have_budget: bool) -> bool {
         let bit = 1 << read as u32;
-        if self.owed & bit == 0 || !self.take(read, have_budget) {
+        // A pressing read asks the budget only, not where the lap is.
+        let pressing = self.pressing & bit != 0 && have_budget;
+        if self.owed & bit == 0 || !(pressing || self.take(read, have_budget)) {
             return false;
         }
         self.owed &= !bit;
+        self.pressing &= !bit;
         true
     }
 }
@@ -8848,15 +8860,16 @@ impl RadioLoop {
                 self.fm_push_misses = 0;
             }
 
-            // Nexus's own key holds the heavy poll below off, and with it the only read of the
-            // rig's split: the split reading does not age while it does, and is read again on
-            // the first poll after (`Engine::hold_observed_split_age`). The same three keyed
-            // states as the poll's own guard; a key from the radio's own microphone is not
-            // Nexus's and holds nothing.
+            // A key Nexus applies (its own, or another program's through Nexus) holds the heavy
+            // poll below off, and with it the only read of the rig's split: the split reading
+            // does not age while it does (up to a cap), and is read again on the first poll
+            // after (`Engine::hold_observed_split_age`). The same three keyed states as the
+            // poll's own guard; a key from the radio's own microphone is not applied by Nexus
+            // and holds nothing.
             let nexus_keyed =
                 self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
             if engine_lock(engine).hold_observed_split_age(nexus_keyed) {
-                self.read_turns.owe(HeavyRead::Split);
+                self.read_turns.owe_now(HeavyRead::Split);
             }
 
             // Live READ-BACK of the rig's actual dial, so a manual VFO knob turn (or another
@@ -22704,7 +22717,85 @@ mod tests {
             tick(&mut state, 300.0),
             "the tick after the key owes the split read"
         );
+        assert!(
+            state.read_turns.pressing & split != 0,
+            "…ahead of the lap, so a slow link reads it between overs"
+        );
         assert!(!tick(&mut state, 400.0), "once");
+    }
+
+    /// ⛔ A KEY FROM THE RADIO'S OWN MICROPHONE HOLDS NOTHING. It holds the heavy poll off like
+    /// Nexus's keys, but Nexus did not apply it, so a front-panel split reading ages through it
+    /// and refuses after the TTL as it always did, and its end owes no split read. CONTROL: the
+    /// same ageing under a key Nexus applies keeps the reading fresh.
+    #[test]
+    fn a_key_from_the_radios_own_microphone_holds_no_split_reading() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("general");
+            e.set_operating_mode("digital", false);
+            e.set_frequency(14.074, "20m", "USB");
+            let mut settings = e.settings().clone();
+            settings.split_detect_enabled = true;
+            e.apply_settings(settings);
+        }
+        let fresh_split = || {
+            let mut e = engine.lock().unwrap();
+            e.observe_rig_split(true, Some(14_075_000));
+            assert!(e.tx_allowed(), "precondition: a fresh rig split keys");
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let split = 1u32 << HeavyRead::Split as u32;
+        let mut tick = |state: &mut RadioLoop, now: f64, rig_keyed: bool, nexus_keyed: bool| {
+            state.rig_keyed = rig_keyed;
+            state.manual_ptt_applied = nexus_keyed;
+            state.read_turns.owed = 0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            state.read_turns.owed & split != 0
+        };
+        let age = |secs| engine.lock().unwrap().age_observed_split_for_test(secs);
+        // Past the engine's 6 s TTL for a rig's split reading.
+        let stale = 7;
+        let allowed = || engine.lock().unwrap().tx_allowed();
+
+        fresh_split();
+        tick(&mut state, 100.0, false, true);
+        age(stale);
+        tick(&mut state, 200.0, false, true);
+        assert!(allowed(), "control: a key Nexus applies holds the reading");
+        assert!(tick(&mut state, 300.0, false, false), "control: released");
+
+        fresh_split();
+        assert!(
+            !tick(&mut state, 400.0, true, false),
+            "the radio's mic keys"
+        );
+        age(stale);
+        assert!(!tick(&mut state, 500.0, true, false), "still keyed");
+        assert!(
+            !allowed(),
+            "the reading aged through the radio's own key and refuses"
+        );
+        assert!(
+            !tick(&mut state, 600.0, false, false),
+            "its end owes no split read: there was no hold"
+        );
     }
 
     /// [`loop_state`] pinned to the ENGINE's rig model.
@@ -23819,6 +23910,42 @@ mod tests {
             "still owed after its tick"
         );
         assert!(!t.take_owed(HeavyRead::Mode, true), "paid");
+    }
+
+    /// An owed read made pressing ([`ReadTurns::owe_now`]) is read on the next poll with budget
+    /// even though that poll's lap resumes past it; it still waits for budget. CONTROL: the
+    /// same read owed the ordinary way waits for the lap.
+    #[test]
+    fn a_pressing_read_does_not_wait_for_the_lap() {
+        let lap_past_split = |t: &mut ReadTurns| {
+            t.start_poll();
+            assert!(
+                !t.take(HeavyRead::Vfo, false),
+                "this poll stops at the VFO read"
+            );
+            t.start_poll();
+        };
+        let mut t = ReadTurns::default();
+        t.owe(HeavyRead::Split);
+        lap_past_split(&mut t);
+        assert!(
+            !t.take_owed(HeavyRead::Split, true),
+            "control: an ordinary owed read waits for the lap"
+        );
+
+        let mut t = ReadTurns::default();
+        t.owe_now(HeavyRead::Split);
+        lap_past_split(&mut t);
+        assert!(
+            !t.take_owed(HeavyRead::Split, false),
+            "pressing, but the budget is spent"
+        );
+        assert!(
+            t.take_owed(HeavyRead::Split, true),
+            "pressing: read on this poll, past the lap"
+        );
+        assert!(!t.take_owed(HeavyRead::Split, true), "paid");
+        assert_eq!(t.pressing, 0, "and no longer pressing");
     }
 
     /// ⭐ FAILING-FIRST, #381 (Kenwood TS-590S): "the software keeps changing my power output to

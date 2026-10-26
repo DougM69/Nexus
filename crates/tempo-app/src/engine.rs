@@ -1687,11 +1687,20 @@ const ZERO_RF_POWER: f32 = 0.005;
 
 /// How long a rig's own report of its split may be trusted before the gate stops granting on it.
 ///
-/// The heavy poll refreshes well inside this, and while Nexus's own key holds that poll off the
-/// reading does not age ([`Engine::hold_observed_split_age`]). Expiry LOCKS — it never reverts to
-/// the dial — so an operator who cancels split at the front panel on a rig we then stop hearing
-/// from gets a refusal, not a transmission on the receive frequency.
+/// The heavy poll refreshes well inside this, and while a key Nexus applies (its own or another
+/// program's through Nexus) holds that poll off the reading does not age, for at most
+/// [`OBSERVED_SPLIT_HOLD_MAX_SECS`] ([`Engine::hold_observed_split_age`]). Expiry LOCKS — it never
+/// reverts to the dial — so an operator who cancels split at the front panel on a rig we then stop
+/// hearing from gets a refusal, not a transmission on the receive frequency.
 const OBSERVED_SPLIT_TTL_SECS: u64 = 6;
+
+/// The longest a key may hold a rig's split reading fresh ([`Engine::hold_observed_split_age`]).
+///
+/// 120 s is well past the longest over that should run on one reading: an FT8 over (12.6 s), a
+/// JS8 Slow frame (30 s) and a tune (60 s at most). Past it the reading ages again, so a key held
+/// far longer on a radio split (a program's PTT that never releases) refuses after this plus the
+/// TTL, as it did after the TTL alone before the hold.
+const OBSERVED_SPLIT_HOLD_MAX_SECS: u64 = 120;
 
 /// How long the rig's own report of WHICH VFO it is on may stand before the indicator goes back
 /// to reporting the last commanded selection.
@@ -4008,9 +4017,10 @@ pub struct Engine {
     /// asymmetry is the safety: "split off" REVOKES a confirmation unconditionally, while
     /// "split on at X" may only GRANT when the operator opted in and the reading is fresh.
     observed_split: Option<(bool, Option<u64>, u64)>,
-    /// Since when (unix secs) Nexus's own key has held the heavy poll off, so `observed_split`
-    /// cannot be re-read: while set, the reading is aged only up to this moment
-    /// ([`Self::hold_observed_split_age`]). `None` while the poll may run.
+    /// Since when (unix secs) a key Nexus applies has held the heavy poll off, so `observed_split`
+    /// cannot be re-read: while set, the reading is aged only up to this moment, for at most
+    /// [`OBSERVED_SPLIT_HOLD_MAX_SECS`] ([`Self::hold_observed_split_age`]). `None` while the
+    /// poll may run.
     observed_split_held_since: Option<u64>,
     /// RIT / XIT clarifier offsets in Hz (0 = off) and the active VFO — the CAT-panel controls.
     /// RIT and XIT are write-only + optimistic (no read-back): the loop applies a change once
@@ -20728,13 +20738,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
-    /// The radio loop's word, every tick, on whether Nexus's own key (an over, a tune, a held
-    /// PTT) is holding off the heavy poll, the only reader of the rig's split. While it is, the
-    /// split reading does not age (operator ruling, 2026-10-25): a reading fresh when the key went
+    /// The radio loop's word, every tick, on whether a key Nexus applies (its own over, tune or
+    /// held PTT, or another program's key through Nexus) is holding off the heavy poll, the only
+    /// reader of the rig's split. While it is, the split reading does not age (operator ruling,
+    /// 2026-10-25) for up to [`OBSERVED_SPLIT_HOLD_MAX_SECS`]: a reading fresh when the key went
     /// down stays fresh until the over ends, so a long over on a front-panel split is not cut off
     /// half way for want of a read the loop itself suppressed. A reading already stale at the key
-    /// stays stale and still refuses. When the hold ends the reading resumes the age it had at
-    /// the key, and this returns `true` so the loop reads the split again on its next poll.
+    /// stays stale and still refuses, and past the cap it ages again. When the hold ends the
+    /// reading resumes the age it had at the key plus anything past the cap, and this returns
+    /// `true` so the loop reads the split again on its next poll.
     pub fn hold_observed_split_age(&mut self, keyed: bool) -> bool {
         let now = now_unix_secs();
         match (keyed, self.observed_split_held_since) {
@@ -20742,15 +20754,36 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 self.observed_split_held_since = Some(now);
                 false
             }
-            (false, Some(since)) => {
+            (false, Some(_)) => {
+                let held = self.observed_split_held_secs(now);
                 self.observed_split_held_since = None;
                 if let Some((_, _, at)) = self.observed_split.as_mut() {
-                    *at = (*at + now.saturating_sub(since)).min(now);
+                    *at = (*at + held).min(now);
                 }
                 true
             }
             _ => false,
         }
+    }
+
+    /// For tests outside this crate: the clock moving on `secs` for the rig's split reading and
+    /// any hold on it, which both count in whole unix seconds.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn age_observed_split_for_test(&mut self, secs: u64) {
+        if let Some((_, _, at)) = self.observed_split.as_mut() {
+            *at -= secs;
+        }
+        if let Some(since) = self.observed_split_held_since.as_mut() {
+            *since -= secs;
+        }
+    }
+
+    /// How many seconds up to `now` the split reading has not aged under the current hold:
+    /// the hold's length, capped at [`OBSERVED_SPLIT_HOLD_MAX_SECS`]; 0 with no hold.
+    fn observed_split_held_secs(&self, now: u64) -> u64 {
+        self.observed_split_held_since.map_or(0, |since| {
+            now.saturating_sub(since).min(OBSERVED_SPLIT_HOLD_MAX_SECS)
+        })
     }
 
     /// [`Self::rig_split_applied_on`] for a split on MAIN — its VFO B, which is every terrestrial
@@ -26290,9 +26323,10 @@ contact yourself."
             // The rig told us it is split. Whether that GRANTS anything depends on the opt-in,
             // on freshness, and on our knowing the frequency at all.
             Some((true, tx, at)) => {
-                // Aged only up to the key while Nexus's own key holds the poll off
+                // Not aged while a key Nexus applies holds the poll off, for up to the cap
                 // ([`Self::hold_observed_split_age`]).
-                let as_of = self.observed_split_held_since.unwrap_or_else(now_unix_secs);
+                let now = now_unix_secs();
+                let as_of = now - self.observed_split_held_secs(now);
                 let fresh = as_of.saturating_sub(at) <= OBSERVED_SPLIT_TTL_SECS;
                 match tx {
                     Some(hz) if self.settings.split_detect_enabled && fresh => {

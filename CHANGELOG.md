@@ -322,8 +322,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **With Follow the radio's split on, a long over on a split set at the radio runs to its end.**
   Nexus cannot read the radio's split while it transmits, and the last reading counted as too old
   after 6 seconds, so an FT8 over or a phone over was cut off part way. The reading now holds until
-  the over ends and is read again right after. A reading already too old when you key is still
-  refused.
+  the over ends, for up to 2 minutes, and is read again right after; this covers another program's
+  over through Nexus too. A reading already too old when you key is still refused, and a key held
+  past 2 minutes on a split set at the radio is refused as before.
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
 - **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone

@@ -665,12 +665,13 @@ fn on_a_rig_split() -> Engine {
     e
 }
 
-/// ⛔ A RIG-REPORTED SPLIT DOES NOT GO STALE WHILE NEXUS'S OWN KEY HOLDS OFF THE POLL THAT READS IT
-/// (operator ruling, 2026-10-25). A broker's FT8 over (12.6 s) on a front-panel split, fresh at the
-/// key: the loop holds the reading's age while keyed, so the key stays held and the loop's tick
-/// does not end it. After the over the reading has the age it had at the key, the loop is told to
-/// read the split again, and with no read it ages again and refuses after the TTL; a read keys.
-/// The operator's own key (Nexus's gate, `tx_allowed`) holds the same way.
+/// ⛔ A RIG-REPORTED SPLIT DOES NOT GO STALE WHILE A KEY NEXUS APPLIES HOLDS OFF THE POLL THAT READS
+/// IT (operator ruling, 2026-10-25), here another program's key through the broker. A broker's
+/// FT8 over (12.6 s) on a front-panel split, fresh at the key: the loop holds the reading's age
+/// while keyed, so the key stays held and the loop's tick does not end it. After the over the
+/// reading has the age it had at the key, the loop is told to read the split again, and with no
+/// read it ages again and refuses after the TTL; a read keys. The operator's own key (Nexus's
+/// gate, `tx_allowed`) holds the same way.
 #[test]
 fn a_rig_split_reading_does_not_age_while_nexus_is_keyed() {
     let mut e = on_a_rig_split();
@@ -718,4 +719,32 @@ fn a_rig_split_reading_stale_at_the_key_still_refuses() {
     assert!(!e.tx_allowed(), "still stale under a hold");
     e.hold_observed_split_age(false);
     assert!(!e.tx_allowed(), "and after it");
+}
+
+/// ⛔ THE HOLD IS CAPPED: a reading fresh at the key stays fresh for at most
+/// `OBSERVED_SPLIT_HOLD_MAX_SECS` of the key, then ages again, so a key that never releases on a
+/// front-panel split (a program's hung PTT through the broker) is refused that cap plus the TTL
+/// after it went down, and the loop's tick ends it. Checked one second either side, so a tick of
+/// the real clock mid-test cannot flip it. The reading keeps that age after the key ends.
+#[test]
+fn a_rig_split_reading_held_past_the_cap_ages_again_and_refuses() {
+    let mut e = on_a_rig_split();
+    assert!(
+        e.broker_ptt(true) && e.manual_ptt(),
+        "precondition: the broker keys"
+    );
+    e.hold_observed_split_age(true);
+    for _ in 0..OBSERVED_SPLIT_HOLD_MAX_SECS + OBSERVED_SPLIT_TTL_SECS - 1 {
+        age_split(&mut e, 1);
+        loop_tick(&mut e);
+        assert!(e.manual_ptt(), "keyed up to the cap plus the TTL");
+    }
+    age_split(&mut e, 2);
+    loop_tick(&mut e);
+    assert!(
+        !e.tx_allowed() && !e.manual_ptt(),
+        "refused past the cap plus the TTL, and the key ends"
+    );
+    e.hold_observed_split_age(false);
+    assert!(!e.tx_allowed(), "and still stale once the key is gone");
 }
