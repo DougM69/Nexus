@@ -351,6 +351,42 @@ pub fn swr_scale_verified(
     native_civ || icom_lan || flex_vita
 }
 
+/// The CI-V radios whose forward-power meter Nexus's own CI-V daemon turns into watts on the
+/// radio's own scale: the 100 W Icoms whose Po curve is the one the daemon applies
+/// (`civ::commands::PO_WATTS_CAL`, Hamlib's IC-7300/IC-9700 table).
+///
+/// ⚠️ An ALLOW-list for the reason [`SWR_VERIFIED_CIV_RIGS`] is one: the daemon applies that one
+/// curve to every radio it serves. The IC-705 and IC-905 are 10 W radios, so the same raw reading
+/// means a tenth of the watts, and the IC-9700 divides its scale by ten above 1 GHz.
+pub const PO_SCALE_CIV_RIGS: [u32; 3] = [3073, 3078, 3081];
+
+/// Is the forward power the active radio reports in watts the radio's own figure, so that it may
+/// be written on a contact as the power it was made at (ADIF `TX_PWR`)?
+///
+/// Yes for every path whose watts come from the radio's own scale: Hamlib's
+/// `RFPOWER_METER_WATTS`, the SDR program's TCI sensors, the FlexRadio meter stream. On Nexus's own
+/// CI-V daemon (serial or the Icom network connection) only for [`PO_SCALE_CIV_RIGS`], and for the
+/// IC-9700 only below 1 GHz.
+pub fn po_watts_scale_known(
+    rig_model: u32,
+    rig_conn: &str,
+    rig_addr: &str,
+    icom_lan_host: &str,
+    icom_native_cat: bool,
+    dial_hz: u64,
+) -> bool {
+    let native_civ = icom_native_cat
+        && !rig_conn_is_network(rig_conn, rig_addr)
+        && !rig_conn_is_omnirig(rig_conn)
+        && !rig_conn_is_icom_lan(rig_conn)
+        && !rig_conn_is_tci(rig_conn)
+        && SWR_VERIFIED_CIV_RIGS.contains(&rig_model);
+    if !native_civ && !icom_lan_reachable(rig_model, rig_conn, icom_lan_host) {
+        return true;
+    }
+    PO_SCALE_CIV_RIGS.contains(&rig_model) && dial_hz < 1_000_000_000
+}
+
 /// Hamlib model numbers of the radios that have NO XIT (transmit incremental tuning) at all.
 /// Nexus offers no XIT on them and refuses one aimed at them.
 ///
@@ -7556,6 +7592,25 @@ impl Settings {
             }
         };
         cap.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0)
+    }
+
+    /// [`po_watts_scale_known`] over the flat mirror of the active profile, at the current dial.
+    pub fn po_watts_scale_is_known(&self) -> bool {
+        po_watts_scale_known(
+            self.rig_model,
+            &self.rig_conn,
+            &self.rig_addr,
+            &self.icom_lan_host,
+            self.icom_native_cat,
+            self.dial_hz(),
+        )
+    }
+
+    /// Is an amplifier configured on the active radio? Then the radio's forward power is the
+    /// amplifier's drive, not the station's output.
+    pub fn amp_configured(&self) -> bool {
+        self.active_profile()
+            .is_some_and(|p| !p.amp_model.trim().is_empty() && !p.amp_port.trim().is_empty())
     }
 
     /// Is the ACTIVE radio's SWR reading one Nexus can put a number to?

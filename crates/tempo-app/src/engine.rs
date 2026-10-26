@@ -4302,6 +4302,9 @@ pub struct Engine {
     /// [`Self::observe_rig_tx_alc_zone`]. `None` = 1.0 is the top of the zone.
     rig_tx_alc_zone: Option<f32>,
     rig_tx_po_w: Option<f32>,
+    /// The forward power the radio measured during its latest over, for the contact it is logged
+    /// on ([`Self::log_power_now`]). Kept past the unkey, unlike `rig_tx_po_w`.
+    measured_over: Option<MeasuredOver>,
     rig_tx_comp_db: Option<f32>,
     /// Rig's actual mode read back over CAT (Hamlib name, e.g. "USB"/"LSB"/"FM").
     /// DISPLAY-ONLY — the cockpit flags a mismatch with the commanded mode, but this
@@ -5999,6 +6002,35 @@ fn wsjtx_msgsent(tier: Tier, waveform: &TxWaveform) -> String {
     format!("{text:<width$}")
 }
 
+/// The forward power the radio measured during one over ([`Engine::note_measured_power`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MeasuredOver {
+    /// The highest reading of the over, in watts.
+    peak_w: f32,
+    /// When its latest reading came, unix seconds.
+    last_unix: u64,
+    /// Still keyed: no unkey has been seen since its first reading.
+    open: bool,
+}
+
+/// A forward-power reading this long after the last one belongs to a new over.
+const MEASURED_OVER_GAP_SECS: u64 = 5;
+
+/// How long before a contact's start its over may have ended and still be its power: the reply
+/// to a call can go out before the call is typed into the log strip.
+const MEASURED_OVER_SLACK_SECS: u64 = 120;
+
+/// Measured watts as the log writes them: whole watts from 10 W, tenths below (a QRP station's
+/// 0.5 W is not 1 W).
+fn watts_for_log(w: f32) -> f64 {
+    let w = f64::from(w);
+    if w >= 10.0 {
+        w.round()
+    } else {
+        (w * 10.0).round() / 10.0
+    }
+}
+
 /// A keying source that currently owns the transmitter — see [`Engine::tx_owner`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxOwner {
@@ -6707,6 +6739,7 @@ impl Engine {
             rig_tx_alc: None,
             rig_tx_alc_zone: None,
             rig_tx_po_w: None,
+            measured_over: None,
             rig_tx_comp_db: None,
             rig_mode: None,
             gate_rig_mode: None,
@@ -8026,9 +8059,7 @@ impl Engine {
     fn fd_row_kit(&self) -> (String, String, String) {
         (
             self.log_rig_now().unwrap_or_default(),
-            self.log_power_now()
-                .map(|w| w.to_string())
-                .unwrap_or_default(),
+            self.fd_row_power(),
             self.fd_row_grid(),
         )
     }
@@ -12624,6 +12655,9 @@ impl Engine {
         if po_w.is_some() {
             self.rig_tx_po_w = po_w;
         }
+        if let Some(w) = po_w {
+            self.note_measured_power(w);
+        }
         self.observe_mic_power(po_w);
         if comp_db.is_some() {
             self.rig_tx_comp_db = comp_db;
@@ -12718,6 +12752,53 @@ impl Engine {
         self.rig_tx_alc_zone = None;
         self.rig_tx_po_w = None;
         self.rig_tx_comp_db = None;
+        // The over is over: the next reading starts another. Its power is kept for the log.
+        if let Some(over) = &mut self.measured_over {
+            over.open = false;
+        }
+    }
+
+    /// Fold one forward-power reading (watts) into the over it was measured on, for the log.
+    ///
+    /// Only a reading that is the station's output on the radio's own scale counts: none during a
+    /// tune carrier (a tune-up's power is not the contact's), none with an amplifier on the radio
+    /// (the radio's power is then the amplifier's drive), none on a path whose watts are not the
+    /// radio's own ([`crate::settings::po_watts_scale_known`]), and no zero (between words, or
+    /// before the RF rises). The over's figure is its PEAK, which on SSB is the nearest the meter
+    /// comes to PEP. A reading more than [`MEASURED_OVER_GAP_SECS`] after the last starts a new
+    /// over, so a path that never reports an unkey still separates them.
+    fn note_measured_power(&mut self, w: f32) {
+        if !w.is_finite()
+            || w <= 0.0
+            || self.tx_owner() == Some(TxOwner::Tune)
+            || self.settings.amp_configured()
+            || !self.settings.po_watts_scale_is_known()
+        {
+            return;
+        }
+        let now = now_unix_secs();
+        match &mut self.measured_over {
+            Some(over)
+                if over.open && now.saturating_sub(over.last_unix) <= MEASURED_OVER_GAP_SECS =>
+            {
+                over.peak_w = over.peak_w.max(w);
+                over.last_unix = now;
+            }
+            _ => {
+                self.measured_over = Some(MeasuredOver {
+                    peak_w: w,
+                    last_unix: now,
+                    open: true,
+                })
+            }
+        }
+        // A running contest stamps its rows from the same answer.
+        if matches!(self.mode, Mode::FieldDay { .. }) {
+            let power = self.fd_row_power();
+            if let Mode::FieldDay { station, .. } = &mut self.mode {
+                station.log.tx_power = power;
+            }
+        }
     }
 
     /// Where the radio's own ALC zone ends on the bar of the ALC reading just observed, as the
@@ -16033,14 +16114,40 @@ impl Engine {
         (!rig.is_empty() && !rig.to_ascii_lowercase().starts_with("none")).then(|| rig.to_string())
     }
 
-    /// The power to stamp on a contact (ADIF `TX_PWR`): the watts the operator gave Settings ▸
-    /// Station power — what WSJT-X logs, from the Tx power its Log QSO dialog keeps between
-    /// contacts — and nothing when none is set. Never derived from the rig's power slider: that
-    /// is a fraction of a rated output nobody may have entered.
-    fn log_power_now(&self) -> Option<f64> {
-        self.settings
-            .station_power_w
-            .filter(|w| w.is_finite() && *w > 0.0)
+    /// The power to stamp on a contact that started at `start_unix` (ADIF `TX_PWR`), in watts.
+    ///
+    /// ⭐ WHAT THE RADIO MEASURED FIRST. The forward power the radio reported during its latest
+    /// over ([`Self::note_measured_power`]), when that over ran after the contact started (less
+    /// [`MEASURED_OVER_SLACK_SECS`], for a reply sent before its call was typed): the power that
+    /// was actually on the air for this contact, whatever the slider or Settings say. `None` for
+    /// `start_unix` takes the latest over whenever it was (a contest row, logged as it is worked).
+    ///
+    /// Otherwise the watts the operator gave Settings ▸ Station power, and nothing when none is
+    /// set: a radio that reports no forward power, or no over Nexus saw. Never derived from the
+    /// rig's power slider: that is a fraction of a rated output nobody may have entered.
+    fn log_power_now(&self, start_unix: Option<u64>) -> Option<f64> {
+        let measured = self
+            .measured_over
+            .as_ref()
+            .filter(|over| {
+                start_unix.is_none_or(|start| {
+                    over.last_unix.saturating_add(MEASURED_OVER_SLACK_SECS) >= start
+                })
+            })
+            .map(|over| watts_for_log(over.peak_w));
+        measured.or_else(|| {
+            self.settings
+                .station_power_w
+                .filter(|w| w.is_finite() && *w > 0.0)
+        })
+    }
+
+    /// The power a contest row records (`LoggedQso::tx_power`): [`Self::log_power_now`] as the
+    /// text the row keeps, `""` for none.
+    fn fd_row_power(&self) -> String {
+        self.log_power_now(None)
+            .map(|w| w.to_string())
+            .unwrap_or_default()
     }
 
     /// The grid to stamp on a contact (ADIF `MY_GRIDSQUARE`): Settings ▸ Station's grid,
@@ -16384,7 +16491,7 @@ impl Engine {
         // THE POWER IT WAS MADE AT (ADIF `TX_PWR`), on the same terms
         // ([`Self::log_power_now`]).
         if rec.tx_power.is_none() {
-            rec.tx_power = self.log_power_now();
+            rec.tx_power = self.log_power_now(Some(rec.when_unix));
         }
         // WHERE IT WAS MADE FROM (ADIF `MY_GRIDSQUARE`): the grid in Settings ▸ Station, which is
         // the grid Nexus sends on the air and a GPS feeder keeps current. A record arriving with
@@ -46912,6 +47019,114 @@ mod tests {
             tempo_core::logbook::adif_record(log.iter().find(|r| r.call == "W9XYZ").unwrap())
                 .contains("<TX_PWR:3>100"),
             "and the ADIF every upload sends carries it"
+        );
+    }
+
+    /// One over as the radio loop reports it: a Po reading per watt figure, then the unkey.
+    fn an_over(e: &mut Engine, watts: &[f32]) {
+        for w in watts {
+            e.observe_rig_tx_meters(None, None, Some(*w), None);
+        }
+        e.clear_rig_tx_meters();
+    }
+
+    /// The operator's report: the log said 100 W, the figure in Settings, while the radio was
+    /// turned down. A contact carries the forward power the RADIO measured on its over — the
+    /// over's peak, in whole watts (tenths under 10 W) — ahead of Settings ▸ Station power; the
+    /// next over is measured afresh, not folded into the last; and a record's own power still wins.
+    #[test]
+    fn a_logged_contact_carries_the_power_the_radio_measured_on_its_over() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = Some(100.0);
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        an_over(&mut e, &[0.0, 38.6, 40.2, 39.9]);
+        e.log_qso(rec);
+        let qrp = e.qso_record("K9QRP".into(), None, None);
+        an_over(&mut e, &[0.46, 0.5]);
+        e.log_qso(qrp);
+        let mut own = e.qso_record("K9AAA".into(), None, None);
+        own.tx_power = Some(5.0);
+        e.log_qso(own);
+        let log = e.stored_log();
+        let power = |call: &str| log.iter().find(|r| r.call == call).and_then(|r| r.tx_power);
+        assert_eq!(
+            power("W9XYZ"),
+            Some(40.0),
+            "the radio's figure, not Settings' 100"
+        );
+        assert_eq!(
+            power("K9QRP"),
+            Some(0.5),
+            "a new over: not the last one's 40 W"
+        );
+        assert_eq!(power("K9AAA"), Some(5.0), "the record's own power wins");
+    }
+
+    /// Where the radio's figure is not this contact's power, the log falls back to Settings ▸
+    /// Station power and never writes the reading: a tune carrier, an over that ended well before
+    /// the contact started, an amplifier on the radio (the radio's power is its drive), and an
+    /// IC-705 on Nexus's own CI-V daemon, whose meter is converted on a 100 W radio's curve. The
+    /// same over on an IC-7300 is taken — the positive control for the last.
+    #[test]
+    fn the_radios_figure_is_not_logged_where_it_is_not_this_contacts_power() {
+        let logged = |setup: &dyn Fn(&mut Engine), over: &dyn Fn(&mut Engine)| {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.station_power_w = Some(100.0);
+            setup(&mut e);
+            let rec = e.qso_record("W9XYZ".into(), None, None);
+            over(&mut e);
+            e.log_qso(rec);
+            e.stored_log()[0].tx_power
+        };
+        let plain = |e: &mut Engine| an_over(e, &[25.0]);
+        assert_eq!(logged(&|_| {}, &plain), Some(25.0), "PREMISE");
+        let tune = |e: &mut Engine| {
+            e.tuning = true;
+            an_over(e, &[25.0]);
+            e.tuning = false;
+        };
+        assert_eq!(
+            logged(&|_| {}, &tune),
+            Some(100.0),
+            "a tune-up is not the contact's power"
+        );
+        let long_ago = |e: &mut Engine| {
+            an_over(e, &[25.0]);
+            e.measured_over.as_mut().unwrap().last_unix -= MEASURED_OVER_SLACK_SECS + 60;
+        };
+        assert_eq!(
+            logged(&|_| {}, &long_ago),
+            Some(100.0),
+            "an earlier contact's over"
+        );
+        let amp = |e: &mut Engine| {
+            e.settings.ensure_radio_profiles();
+            e.settings.sync_active_from_flat();
+            let id = e.settings.active_radio;
+            let p = e.settings.radios.iter_mut().find(|p| p.id == id).unwrap();
+            p.amp_model = "spe".into();
+            p.amp_port = "COM7".into();
+        };
+        assert_eq!(
+            logged(&amp, &plain),
+            Some(100.0),
+            "with an amplifier the radio's is drive"
+        );
+        let icom = |model: u32| {
+            move |e: &mut Engine| {
+                e.settings.rig_model = model;
+                e.settings.icom_native_cat = true;
+            }
+        };
+        assert_eq!(
+            logged(&icom(3085), &plain),
+            Some(100.0),
+            "an IC-705 on the 100 W curve"
+        );
+        assert_eq!(
+            logged(&icom(3073), &plain),
+            Some(25.0),
+            "an IC-7300 on its own curve"
         );
     }
 

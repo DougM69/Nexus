@@ -1364,6 +1364,31 @@ fn a_contest_contact_reaches_the_logbook_with_its_own_radio_power_and_end_time()
     }
 }
 
+/// **A contest contact carries the power the radio measured on its over**, ahead of Settings ▸
+/// Station power, into the Logbook: the operator turned the radio down between the two contacts
+/// and never touched Settings.
+#[test]
+fn a_contest_contact_reaches_the_logbook_with_the_power_the_radio_measured() {
+    let d = Dir::new("contest-merge-measured-power");
+    let mut s = field_day_settings();
+    s.station_power_w = Some(100.0);
+    let mut e = launch(&d, &s);
+    let over = |e: &mut Engine, w: f32| {
+        e.observe_rig_tx_meters(None, None, Some(w), None);
+        e.clear_rig_tx_meters();
+    };
+    over(&mut e, 40.0);
+    assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+    over(&mut e, 5.0);
+    assert!(e.fd_log_manual("W1AW", "1D", "CT", "CW").unwrap());
+    let s = quit(e);
+
+    let mut e = launch(&d, &s);
+    assert_eq!(merge(&mut e), (2, 0));
+    assert_eq!(copy_of(&e, "K1ABC").tx_power, Some(40.0));
+    assert_eq!(copy_of(&e, "W1AW").tx_power, Some(5.0));
+}
+
 /// **Each contest contact keeps the grid it was made from, through the journal and a restart,
 /// into the Logbook — marked as Nexus's own, so the LoTW upload leaves it out**, as an ordinary
 /// contact's Settings grid is. The operator moved between the two contacts; each merged copy
