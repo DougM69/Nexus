@@ -31,7 +31,7 @@ use crate::log_queries::LogQueries;
 use crate::{durable_command, SharedEngine};
 
 /// A malformed id names no contact: an id is only ever one the station handed out.
-fn id_of(id: &str) -> Result<RecordId, String> {
+pub(crate) fn id_of(id: &str) -> Result<RecordId, String> {
     id.parse()
         .map_err(|()| format!("'{id}' is not a contact id."))
 }
@@ -61,7 +61,7 @@ pub struct ToolRunDto {
     pub distinct: usize,
 }
 
-fn run_dto(r: ToolRun) -> ToolRunDto {
+pub(crate) fn run_dto(r: ToolRun) -> ToolRunDto {
     let count = |why: &str| r.refused.iter().filter(|(_, w)| *w == why).count();
     ToolRunDto {
         changed: r.changed,
@@ -227,7 +227,7 @@ pub struct BulkTarget {
     pub query: Option<LogQuery>,
 }
 
-fn target_ids(
+pub(crate) fn target_ids(
     engine: &SharedEngine,
     queries: &LogQueries,
     target: &BulkTarget,

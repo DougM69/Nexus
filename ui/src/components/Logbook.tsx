@@ -13,6 +13,7 @@ import type { ImportStats, LogExport, LoggedActivation, LoggedQso } from '../typ
 import { QsoDetail } from './QsoDetail'
 import { RecentlyDeleted } from './RecentlyDeleted'
 import { LogTools, type LogTool } from './LogTools'
+import { useCallbookUpdateEnd } from './LogCallbookUpdate'
 import { sayUndone } from './QsoHistory'
 import { gpuCapableForGlobe } from '../gpu'
 import { GlobeGuard } from './GlobeGuard'
@@ -556,6 +557,8 @@ export function Logbook({
   const load = useCallback(() => {
     logSource().refresh()
   }, [])
+  // An update from the callbook reports its end here, whether its dialog is still open or not.
+  const followCallbookUpdate = useCallbookUpdateEnd(load)
 
   // Import an external ADIF logbook → real "needs" + B4. Read the file in the
   // browser/WebView (no fs plugin), hand the text to the engine.
@@ -2330,6 +2333,9 @@ export function Logbook({
           <button type="button" className="export-btn" onClick={() => setTools('dupes')}>
             {t('logbook.tools.button')}
           </button>
+          <button type="button" className="export-btn" onClick={() => setTools('callbook')}>
+            {t('logbook.tools.callbook.button')}
+          </button>
           <button
             type="button"
             className="export-btn danger"
@@ -3497,6 +3503,7 @@ export function Logbook({
         onTool={setTools}
         onClose={() => setTools(null)}
         onChanged={load}
+        onCallbookStarted={followCallbookUpdate}
         picked={picked}
         query={query}
         shown={listTotal}

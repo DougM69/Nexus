@@ -1683,3 +1683,494 @@ fn a_merge_of_copies_a_portable_p_apart_sends_nothing_again() {
     assert_eq!(kept[0].upload.lotw.as_ref().map(|s| s.when_unix), Some(100));
     assert!(owed_to_lotw(&engine).is_empty(), "nothing owed to LoTW");
 }
+
+// ── update from the callbook ───────────────────────────────────────────────────────────────────
+
+/// W1AW's callbook answer: its own record, with a name, a place and zones.
+fn qrz_answer(call: &str) -> CallbookAnswer {
+    CallbookAnswer {
+        call: call.into(),
+        name: Some("Hiram".into()),
+        qth: Some("Newington".into()),
+        grid: Some("FN31pr".into()),
+        state: Some("CT".into()),
+        county: Some("Hartford".into()),
+        cq_zone: Some(5),
+        itu_zone: Some(8),
+        ..CallbookAnswer::default()
+    }
+}
+
+/// 2 January 2026, 00:00 UTC: a day after the `adif` contacts, well inside the 12 months the
+/// update gives a contact the station's location.
+const JAN_2026: u64 = 1_767_225_600 + 86_400;
+
+fn answers(calls: &[&str]) -> HashMap<String, CallbookAnswer> {
+    calls
+        .iter()
+        .map(|c| (c.to_string(), qrz_answer(c)))
+        .collect()
+}
+
+/// [`callbook_fill`] that never waits for the radio, answered as the other tools answer.
+fn fill(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    expect: usize,
+    answers: &HashMap<String, CallbookAnswer>,
+    now_unix: u64,
+) -> (Result<ToolRun, String>, Durability) {
+    let (made, why, dur) = callbook_fill(engine, ids, expect, answers, now_unix, &mut || false);
+    (why.map_or(Ok(made), Err), dur)
+}
+
+/// The fields a fill could touch, as the stored contact holds them.
+fn callbook_fields(r: &QsoRecord) -> Vec<(&'static str, Option<String>)> {
+    let extra = |t: &str| r.extra.iter().find(|(k, _)| k == t).map(|(_, v)| v.clone());
+    vec![
+        ("NAME", r.name.clone()),
+        ("QTH", r.qth.clone()),
+        ("GRIDSQUARE", r.grid.clone()),
+        ("STATE", r.state.clone()),
+        ("CNTY", extra("CNTY")),
+        ("CQZ", extra("CQZ")),
+        ("ITUZ", extra("ITUZ")),
+    ]
+}
+
+/// ★ THE UPDATE, END TO END. Only EMPTY fields are filled from the answer — a field the contact
+/// holds keeps its value, however the callbook disagrees; the call, the country, the DXCC number,
+/// every upload stamp and every confirmation stay as they were; nothing is queued to any service;
+/// a contact whose call has no answer is not touched. The whole change is ONE run, and a single
+/// undo of it puts every contact back exactly.
+#[test]
+fn an_update_fills_only_empty_fields_keeps_stamps_and_undoes_whole() {
+    let d = Dir::new("tools-callbook");
+    let engine = shared(
+        &d,
+        &[
+            // Empty: every field fills.
+            adif("W1AW", "120000", "<COUNTRY:13>United States<DXCC:3>291"),
+            // Holds a name, a grid and a zone of its own, and is confirmed and uploaded.
+            adif(
+                "W1AW",
+                "130000",
+                "<COUNTRY:13>United States<DXCC:3>291<NAME:3>Bob<GRIDSQUARE:4>EM10\
+                 <CQZ:1>4<LOTW_QSL_RCVD:1>Y<QSL_RCVD:1>Y",
+            ),
+            // A call the callbook did not know: no answer, left alone.
+            adif("Q9QQQ", "140000", ""),
+        ],
+    );
+    let w = by_call(&engine, "W1AW");
+    stamp(&engine, &w[1], UploadService::Qrz, 300);
+    stamp(&engine, &w[1], UploadService::Lotw, 400);
+    engine_lock(&engine).take_pending_uploads();
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+
+    let (made, dur) = fill(&engine, &ids, ids.len(), &answers(&["W1AW"]), JAN_2026);
+    let made = made.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(made.changed, 2, "both W1AW contacts gained a field");
+    let after = rows(&engine);
+
+    let empty = &after[0];
+    assert_eq!(
+        callbook_fields(empty),
+        vec![
+            ("NAME", Some("Hiram".into())),
+            ("QTH", Some("Newington".into())),
+            ("GRIDSQUARE", Some("FN31pr".into())),
+            ("STATE", Some("CT".into())),
+            ("CNTY", Some("CT,Hartford".into())),
+            ("CQZ", Some("5".into())),
+            ("ITUZ", Some("8".into())),
+        ]
+    );
+    let held = &after[1];
+    assert_eq!(
+        callbook_fields(held),
+        vec![
+            ("NAME", Some("Bob".into())),
+            ("QTH", Some("Newington".into())),
+            ("GRIDSQUARE", Some("EM10".into())),
+            ("STATE", Some("CT".into())),
+            ("CNTY", Some("CT,Hartford".into())),
+            ("CQZ", Some("4".into())),
+            ("ITUZ", Some("8".into())),
+        ],
+        "a held field keeps its value; only the empty ones fill"
+    );
+    for (was, now) in before.iter().zip(&after) {
+        assert_eq!(
+            (&now.call, &now.country, now.dxcc),
+            (&was.call, &was.country, was.dxcc),
+            "never the call, the country or the DXCC number"
+        );
+        assert_eq!(
+            now.upload, was.upload,
+            "{}: every upload stamp kept",
+            now.call
+        );
+        assert_eq!(
+            now.qsl_rcvd, was.qsl_rcvd,
+            "{}: every confirmation kept",
+            now.call
+        );
+        assert_eq!(now.confirmed, was.confirmed);
+        assert_eq!(now.award_confirmed, was.award_confirmed);
+    }
+    assert_eq!(after[2], before[2], "the unknown call is not touched");
+    assert!(
+        engine_lock(&engine).take_pending_uploads().is_empty(),
+        "an update queues nothing"
+    );
+
+    // Run again: every field it could fill is filled, so nothing changes and no run is made.
+    let (again, _) = fill(&engine, &ids, ids.len(), &answers(&["W1AW"]), JAN_2026);
+    let again = again.unwrap();
+    assert_eq!((again.changed, again.run), (0, None));
+
+    let (undone, dur) = undo_run(&engine, &made.run.unwrap());
+    assert_eq!(undone.unwrap().changed, 2);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(
+        rows(&engine),
+        before,
+        "one undo puts every contact back, whole"
+    );
+}
+
+/// A contest contact's exchange is never replaced: the zone and state it carries stay the
+/// exchange's, whatever the callbook says; an empty field beside them still fills.
+#[test]
+fn an_update_never_overrides_a_contest_exchange() {
+    let d = Dir::new("tools-callbook-contest");
+    let engine = shared(
+        &d,
+        &[adif(
+            "W1AW",
+            "120000",
+            "<COUNTRY:13>United States<CONTEST_ID:6>CQ-WPX<SRX_STRING:1>4<CQZ:1>4<STATE:2>MA",
+        )],
+    );
+    let before = rows(&engine);
+    let ids = [before[0].id.unwrap()];
+    let (made, dur) = fill(&engine, &ids, 1, &answers(&["W1AW"]), JAN_2026);
+    assert_eq!(made.unwrap().changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let r = &rows(&engine)[0];
+    let fields = callbook_fields(r);
+    assert_eq!(fields[5], ("CQZ", Some("4".into())));
+    assert_eq!(fields[3], ("STATE", Some("MA".into())));
+    assert_eq!(fields[4], ("CNTY", None), "no Connecticut county under MA");
+    assert_eq!(fields[0], ("NAME", Some("Hiram".into())));
+    assert_eq!(r.contest, before[0].contest, "the exchange is as it was");
+}
+
+/// The preview: the distinct calls once each, those the cache answers, and per field how many
+/// contacts the fill could give it — exact for a kept answer, at most for a call still to look
+/// up. It changes nothing.
+#[test]
+fn the_update_preview_counts_calls_and_fields() {
+    let d = Dir::new("tools-callbook-preview");
+    let engine = shared(
+        &d,
+        &[
+            adif("W1AW", "120000", "<COUNTRY:13>United States"),
+            adif("w1aw", "121000", "<COUNTRY:13>United States<NAME:3>Bob"),
+            adif("K1ABC", "122000", "<COUNTRY:13>United States"),
+        ],
+    );
+    let before = rows(&engine);
+    let mut ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    ids.push(ids[0]);
+    let mut asked = Vec::new();
+    let p = callbook_preview(&engine, &ids, JAN_2026, &mut |call| {
+        asked.push(call.to_string());
+        (call == "W1AW").then(|| qrz_answer("W1AW"))
+    })
+    .unwrap();
+    assert_eq!(
+        asked,
+        ["W1AW", "K1ABC"],
+        "each call asked of the cache once"
+    );
+    assert_eq!(p.selected, 3);
+    assert_eq!(p.missing, 0);
+    assert_eq!(p.calls, ["W1AW", "K1ABC"]);
+    assert_eq!(p.kept, 1);
+    assert_eq!(p.could_change, 3);
+    // W1AW's answer: NAME on one contact (the other holds Bob); the rest on both. K1ABC, still to
+    // be looked up: at most every field the rule fills.
+    assert_eq!(p.fields.get("NAME"), Some(&2));
+    assert_eq!(p.fields.get("GRIDSQUARE"), Some(&3));
+    assert_eq!(p.fields.get("CQZ"), Some(&3));
+    assert_eq!(p.fields.get("EMAIL"), Some(&1), "W1AW's answer has none");
+    assert_eq!(rows(&engine), before, "a preview changes nothing");
+}
+
+/// The update is made only on the contacts the operator confirmed.
+#[test]
+fn an_update_acts_only_on_the_count_confirmed() {
+    let d = Dir::new("tools-callbook-count");
+    let engine = shared(&d, &[adif("W1AW", "120000", "")]);
+    let before = rows(&engine);
+    let ids = [before[0].id.unwrap()];
+    let (refused, _) = fill(&engine, &ids, 2, &answers(&["W1AW"]), JAN_2026);
+    assert_eq!(refused, Err(NOT_AS_PREVIEWED.to_string()));
+    assert_eq!(rows(&engine), before);
+}
+
+/// One ADIF record like [`adif`]'s, on `date` (`YYYYMMDD`).
+fn adif_on(call: &str, date: &str, more: &str) -> String {
+    format!(
+        "<CALL:{}>{call}<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>{date}<TIME_ON:6>120000\
+         {more}<EOR>\n",
+        call.len()
+    )
+}
+
+/// ★ THE 12-MONTH LOCATION GATE (operator ruling). A callbook says where a station is NOW: the
+/// bulk update gives a contact from the last 12 months the whole answer, and an older one only who
+/// the operator is: the name (and e-mail, QSL route, habits), never the grid, QTH, state, county,
+/// zones, position or UTC offset. By value, on the stored contacts.
+#[test]
+fn an_update_gives_the_location_only_to_contacts_from_the_last_12_months() {
+    let d = Dir::new("tools-callbook-age");
+    let engine = shared(
+        &d,
+        &[
+            // Two years before "now": the name only.
+            adif_on("W1AW", "20240101", "<COUNTRY:13>United States"),
+            // Three months before "now": everything.
+            adif_on("W1AW", "20251001", "<COUNTRY:13>United States"),
+        ],
+    );
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let mut full = qrz_answer("W1AW");
+    full.position = Some((41.7, -72.7));
+    full.utc_offset = Some(-5.0);
+    full.iota = Some("NA-001".into());
+    full.email = Some("w1aw@example.org".into());
+    let answers = HashMap::from([("W1AW".to_string(), full)]);
+
+    // The preview first: the old contact is counted as left without its location.
+    let p = callbook_preview(&engine, &ids, JAN_2026, &mut |_| {
+        Some(answers["W1AW"].clone())
+    })
+    .unwrap();
+    assert_eq!(p.location_too_old, 1);
+    assert_eq!(p.fields.get("NAME"), Some(&2));
+    assert_eq!(
+        p.fields.get("GRIDSQUARE"),
+        Some(&1),
+        "the recent contact only"
+    );
+    assert_eq!(p.fields.get("EMAIL"), Some(&2));
+
+    let (made, dur) = fill(&engine, &ids, ids.len(), &answers, JAN_2026);
+    assert_eq!(made.unwrap().changed, 2);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let after = rows(&engine);
+    let extra =
+        |r: &QsoRecord, t: &str| r.extra.iter().find(|(k, _)| k == t).map(|(_, v)| v.clone());
+
+    let old = &after[0];
+    assert_eq!(
+        old.when_unix,
+        1_704_067_200 + 12 * 3600,
+        "premise: the 2024 contact"
+    );
+    assert_eq!(
+        callbook_fields(old),
+        vec![
+            ("NAME", Some("Hiram".into())),
+            ("QTH", None),
+            ("GRIDSQUARE", None),
+            ("STATE", None),
+            ("CNTY", None),
+            ("CQZ", None),
+            ("ITUZ", None),
+        ]
+    );
+    assert_eq!(extra(old, "EMAIL").as_deref(), Some("w1aw@example.org"));
+    for tag in ["LAT", "LON", callbook::UTC_OFFSET_FIELD] {
+        assert_eq!(
+            extra(old, tag),
+            None,
+            "{tag}: no location on a 2-year-old contact"
+        );
+    }
+
+    let recent = &after[1];
+    assert_eq!(
+        callbook_fields(recent),
+        vec![
+            ("NAME", Some("Hiram".into())),
+            ("QTH", Some("Newington".into())),
+            ("GRIDSQUARE", Some("FN31pr".into())),
+            ("STATE", Some("CT".into())),
+            ("CNTY", Some("CT,Hartford".into())),
+            ("CQZ", Some("5".into())),
+            ("ITUZ", Some("8".into())),
+        ]
+    );
+    assert_eq!(extra(recent, "EMAIL").as_deref(), Some("w1aw@example.org"));
+    for tag in ["LAT", "LON", callbook::UTC_OFFSET_FIELD] {
+        assert!(
+            extra(recent, tag).is_some(),
+            "{tag}: a 3-month-old contact takes it"
+        );
+    }
+
+    // Every location field, by its ADIF name: none on the old contact, each on the recent one.
+    let location = |r: &QsoRecord, t: &str| match t {
+        "GRIDSQUARE" => r.grid.clone(),
+        "QTH" => r.qth.clone(),
+        "STATE" => r.state.clone(),
+        "IOTA" => r.ota.iota.clone(),
+        _ => extra(r, t),
+    };
+    assert_eq!(recent.ota.iota.as_deref(), Some("NA-001"));
+    for tag in LOCATION_FIELDS {
+        assert_eq!(
+            location(old, tag),
+            None,
+            "{tag}: not on the 2-year-old contact"
+        );
+        assert!(
+            location(recent, tag).is_some(),
+            "{tag}: on the recent contact"
+        );
+    }
+}
+
+/// A log of `n` contacts, each its own call, and the answer for every call.
+fn callbook_log(d: &Dir, n: usize) -> (Arc<Mutex<Engine>>, HashMap<String, CallbookAnswer>) {
+    let records: Vec<String> = (0..n)
+        .map(|i| {
+            adif(
+                &format!("K{i}ABC"),
+                &format!("{:02}{:02}{:02}", i / 3600, i / 60 % 60, i % 60),
+                "",
+            )
+        })
+        .collect();
+    let answers = (0..n)
+        .map(|i| {
+            let call = format!("K{i}ABC");
+            (call.clone(), qrz_answer(&call))
+        })
+        .collect();
+    (shared(d, &records), answers)
+}
+
+/// ★ A LARGE UPDATE WAITS FOR THE RADIO. The FT sequencer is armed after the first part is made:
+/// the next part is refused, the fill waits (with the Engine lock released) until transmit is
+/// off, then makes the rest — every contact, in ONE run that one undo takes back.
+#[test]
+fn a_large_update_waits_for_transmit_to_end_and_is_one_run() {
+    let n = CHUNK + 6;
+    let d = Dir::new("tools-callbook-tx-wait");
+    let (engine, answers) = callbook_log(&d, n);
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let arm = Arc::clone(&engine);
+    let mut plans = 0;
+    let mut waits = 0;
+    let (made, why, dur) = racing(
+        move || {
+            plans += 1;
+            if plans == 2 {
+                engine_lock(&arm).set_tx_enabled(true);
+            }
+        },
+        || {
+            callbook_fill(&engine, &ids, n, &answers, JAN_2026, &mut || {
+                waits += 1;
+                let mut e = engine_lock(&engine);
+                assert!(e.transmit_needs_the_lock(), "premise: armed for FT");
+                e.set_tx_enabled(false);
+                true
+            })
+        },
+    );
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(why, None);
+    assert_eq!(waits, 1);
+    assert_eq!(
+        made.changed, n,
+        "every contact, the parts after the wait too"
+    );
+    assert!(rows(&engine)
+        .iter()
+        .all(|r| r.name.as_deref() == Some("Hiram")));
+    let (undone, dur) = undo_run(&engine, &made.run.unwrap());
+    assert_eq!(undone.unwrap().changed, n, "one run: both parts");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(rows(&engine), before);
+}
+
+/// ★ STOPPED PART-WAY, STILL UNDONE WHOLE. The radio transmits from the second part on and the
+/// operator stops the wait: the first part stands, and the fill answers it WITH its run — the
+/// toast's Undo takes it back — and says how far it got.
+#[test]
+fn an_update_stopped_while_waiting_for_transmit_answers_its_run() {
+    let n = CHUNK + 6;
+    let d = Dir::new("tools-callbook-tx-stop");
+    let (engine, answers) = callbook_log(&d, n);
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let arm = Arc::clone(&engine);
+    let mut plans = 0;
+    let (made, why, dur) = racing(
+        move || {
+            plans += 1;
+            if plans == 2 {
+                engine_lock(&arm).set_tx_enabled(true);
+            }
+        },
+        || callbook_fill(&engine, &ids, n, &answers, JAN_2026, &mut || false),
+    );
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(made.changed, CHUNK, "the first part stands");
+    assert_eq!(why, Some(stopped(&made, MUST_WAIT_FOR_TX)));
+    assert!(why
+        .unwrap()
+        .starts_with(&format!("{CHUNK} contacts were changed")));
+    // A large undo waits for transmit too.
+    engine_lock(&engine).set_tx_enabled(false);
+    let (undone, dur) = undo_run(&engine, &made.run.expect("the run of the part made"));
+    assert_eq!(undone.unwrap().changed, CHUNK);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(rows(&engine), before);
+}
+
+/// The control: the single-contact rule the callsign card and the log time use
+/// ([`callbook::fill_from_callbook`]) has no age gate. The same 2-year-old contact, filled by it,
+/// takes the whole answer.
+#[test]
+fn the_single_contact_fill_has_no_age_gate() {
+    let d = Dir::new("tools-callbook-age-control");
+    let engine = shared(
+        &d,
+        &[adif_on("W1AW", "20240101", "<COUNTRY:13>United States")],
+    );
+    let mut r = QsoRecord::clone(&rows(&engine)[0]);
+    callbook::fill_from_callbook(&mut r, &qrz_answer("W1AW"));
+    assert_eq!(
+        callbook_fields(&r),
+        vec![
+            ("NAME", Some("Hiram".into())),
+            ("QTH", Some("Newington".into())),
+            ("GRIDSQUARE", Some("FN31pr".into())),
+            ("STATE", Some("CT".into())),
+            ("CNTY", Some("CT,Hartford".into())),
+            ("CQZ", Some("5".into())),
+            ("ITUZ", Some("8".into())),
+        ]
+    );
+}

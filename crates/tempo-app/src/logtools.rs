@@ -50,6 +50,9 @@
 //!   ([`station::push_target`]).
 //! - **a fix** changes a grid, a band, a DXCC number, a reference or an end time, never a call:
 //!   every stamp stays.
+//! - **an update from the callbook** ([`callbook_fill`]) fills empty fields only, by the log's own
+//!   callbook rule, never a call, a stamp or a confirmation: every stamp stays. Where the station
+//!   is ([`LOCATION_FIELDS`]) goes only on contacts from the last 12 months.
 //!
 //! An undo of any of them sends nothing either ([`crate::loghistory`]). A stamp is never history:
 //! the undo of a merge leaves the kept contact the stamps it had before the merge, because the
@@ -69,6 +72,7 @@ use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use tempo_core::logbook::callbook::{self, CallbookAnswer};
 use tempo_core::logbook::cleanup::{self, Change, Conflict, DupeKey, Field};
 use tempo_core::logbook::history::{content_key, Source};
 use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
@@ -128,11 +132,31 @@ fn run_in_parts(
     engine: &Mutex<Engine>,
     parts: &[Vec<RecordId>],
     context: &str,
-    mut plan_part: impl FnMut(
+    plan_part: impl FnMut(
         usize,
         &HashMap<RecordId, Arc<QsoRecord>>,
     ) -> (Vec<MadeRow>, Vec<(RecordId, &'static str)>),
 ) -> (Result<ToolRun, String>, Durability) {
+    let (made, end, durability) = make_in_parts(engine, parts, context, &mut || false, plan_part);
+    match end {
+        Ok(()) => (Ok(made), durability),
+        Err(why) => (Err(stopped(&made, &why)), durability),
+    }
+}
+
+/// [`run_in_parts`]'s work, answering what it made even when it stopped part-way, and why it
+/// stopped. Refused while the radio transmits ([`MUST_WAIT_FOR_TX`]), it asks `wait_tx`, with the
+/// Engine lock released, and makes the same part again when that answers `true`.
+fn make_in_parts(
+    engine: &Mutex<Engine>,
+    parts: &[Vec<RecordId>],
+    context: &str,
+    wait_tx: &mut dyn FnMut() -> bool,
+    mut plan_part: impl FnMut(
+        usize,
+        &HashMap<RecordId, Arc<QsoRecord>>,
+    ) -> (Vec<MadeRow>, Vec<(RecordId, &'static str)>),
+) -> (ToolRun, Result<(), String>, Durability) {
     let total: usize = parts.iter().map(Vec::len).sum();
     let large = total > tempo_core::logbook::writer::CHUNK_ROWS;
     let run = new_run();
@@ -140,11 +164,13 @@ fn run_in_parts(
     let mut durability = Durability::default();
     for (k, part) in parts.iter().enumerate() {
         let mut done = false;
-        for _ in 0..PLANS {
+        let mut plans = 0;
+        while plans < PLANS {
+            plans += 1;
             let plan = crate::engine::log_plan(engine);
             let rows = match plan.rows(part) {
                 Ok(rows) => rows,
-                Err(e) => return (Err(stopped(&made, &e)), durability),
+                Err(e) => return (made, Err(e), durability),
             };
             #[cfg(test)]
             tests::race();
@@ -179,7 +205,9 @@ fn run_in_parts(
             drop(guard);
             made.longest_hold = made.longest_hold.max(held.elapsed());
             match ok {
-                Err(why) => return (Err(stopped(&made, why)), durability),
+                // Waited out, the same part is planned again: a wait is not a plan gone stale.
+                Err(MUST_WAIT_FOR_TX) if wait_tx() => plans -= 1,
+                Err(why) => return (made, Err(why.to_string()), durability),
                 Ok(false) => continue,
                 // Turned back by the store: another window changed a row it read before the
                 // store wrote it. Planned again on the rows as they now stand.
@@ -194,7 +222,7 @@ fn run_in_parts(
                     let stored = d.wait_stored(DURABLE_WAIT);
                     durability = durability.and(d);
                     if let Err(why) = stored {
-                        return (Err(stopped(&made, &why)), durability);
+                        return (made, Err(why), durability);
                     }
                     done = true;
                     break;
@@ -202,10 +230,10 @@ fn run_in_parts(
             }
         }
         if !done {
-            return (Err(stopped(&made, station::LOG_BUSY)), durability);
+            return (made, Err(station::LOG_BUSY.to_string()), durability);
         }
     }
-    (Ok(made), durability)
+    (made, Ok(()), durability)
 }
 
 /// The station's country rule for a DXCC number, taken with the lock held for a moment: the name
@@ -613,6 +641,261 @@ pub fn bulk_edit(
         }
         (pairs, refused)
     })
+}
+
+// ── update from the callbook ───────────────────────────────────────────────────────────────────
+
+/// How recent a contact must be for "Update from callbook" to give it where the station is: 12
+/// months (365 days). A callbook says where a station is NOW; a contact from years ago was made
+/// wherever the station was then, so an older contact takes only who the operator is.
+pub const LOCATION_MAX_AGE_SECS: u64 = 365 * 86_400;
+
+/// The fields the callbook rule ([`callbook::fill_from_callbook`]) derives from where the station
+/// is now — its "location fields", by ADIF name: the grid, QTH, state, county, IOTA, the CQ and ITU
+/// zones, the position and the UTC offset. "Update from callbook" fills them only on a contact
+/// from the last [`LOCATION_MAX_AGE_SECS`]; the name, e-mail, web page, QSL route and the
+/// LoTW/eQSL/paper-QSL habits go on any contact.
+pub const LOCATION_FIELDS: [&str; 10] = [
+    "GRIDSQUARE",
+    "QTH",
+    "STATE",
+    "CNTY",
+    "IOTA",
+    "CQZ",
+    "ITUZ",
+    "LAT",
+    "LON",
+    callbook::UTC_OFFSET_FIELD,
+];
+
+/// Whether "Update from callbook" may give `r` the station's location: logged within the last
+/// [`LOCATION_MAX_AGE_SECS`] of `now_unix` (or after it).
+fn location_current(r: &QsoRecord, now_unix: u64) -> bool {
+    r.when_unix.saturating_add(LOCATION_MAX_AGE_SECS) >= now_unix
+}
+
+/// `a` with where the station is taken out ([`LOCATION_FIELDS`]): who the operator is, and nothing
+/// that places them. Destructured whole, so a field added to the answer must be sorted here.
+fn without_location(a: &CallbookAnswer) -> CallbookAnswer {
+    let CallbookAnswer {
+        call,
+        name,
+        qth: _,
+        grid: _,
+        state: _,
+        county: _,
+        iota: _,
+        cq_zone: _,
+        itu_zone: _,
+        position: _,
+        email,
+        web,
+        qsl_via,
+        lotw,
+        eqsl,
+        paper_qsl,
+        utc_offset: _,
+    } = a.clone();
+    CallbookAnswer {
+        call,
+        name,
+        email,
+        web,
+        qsl_via,
+        lotw,
+        eqsl,
+        paper_qsl,
+        ..CallbookAnswer::default()
+    }
+}
+
+/// The bulk update's fill of one contact: the log's own callbook rule
+/// ([`callbook::fill_from_callbook`]), unchanged, given the whole answer for a contact from the
+/// last 12 months and the answer without its location for an older one.
+fn fill_bulk(rec: &mut QsoRecord, a: &CallbookAnswer, now_unix: u64) {
+    if location_current(rec, now_unix) {
+        callbook::fill_from_callbook(rec, a);
+    } else {
+        callbook::fill_from_callbook(rec, &without_location(a));
+    }
+}
+
+/// What "Update from callbook" would do with the contacts it was handed: read with the Engine lock
+/// released, changing nothing and asking no callbook.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallbookPreview {
+    /// The contacts named.
+    pub selected: usize,
+    /// Those no longer in the log.
+    pub missing: usize,
+    /// The distinct calls to look up, each once by [`cleanup::call_key`], in the order the
+    /// contacts were named. A contact with no call names none.
+    pub calls: Vec<String>,
+    /// Of those, the calls the lookup cache answers while fresh: no network lookup.
+    pub kept: usize,
+    /// The contacts with at least one field the callbook could fill.
+    pub could_change: usize,
+    /// By ADIF field name, how many contacts the fill could give it: exactly, for a call the cache
+    /// answers; at most, for a call still to be looked up (every empty field the rule would fill
+    /// from a complete answer).
+    pub fields: std::collections::BTreeMap<String, usize>,
+    /// The contacts older than 12 months the answer would have given a location field
+    /// ([`LOCATION_FIELDS`]) and the update leaves it blank on: exactly for a kept answer, at most
+    /// for a call still to be looked up.
+    pub location_too_old: usize,
+}
+
+/// A complete answer for `r`'s own call: every field the rule fills, each a well-formed value,
+/// the state the contact holds where it holds one (so a county is counted only where it could go).
+/// What a preview counts the fields a lookup still to come could fill against.
+fn every_field(r: &QsoRecord) -> CallbookAnswer {
+    let some = |v: &str| Some(v.to_string());
+    CallbookAnswer {
+        call: r.call.clone(),
+        name: some("-"),
+        qth: some("-"),
+        grid: some("AA00"),
+        state: r
+            .state
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| some("XX")),
+        county: some("-"),
+        iota: some("NA-001"),
+        cq_zone: Some(1),
+        itu_zone: Some(1),
+        position: Some((0.0, 0.0)),
+        email: some("-"),
+        web: some("-"),
+        qsl_via: some("-"),
+        lotw: Some(true),
+        eqsl: Some(true),
+        paper_qsl: Some(true),
+        utc_offset: Some(0.0),
+    }
+}
+
+/// The fields the fill gave `after` that `before` did not have from the callbook.
+fn newly_filled(before: &QsoRecord, after: &QsoRecord) -> Vec<String> {
+    let had = callbook::callbook_filled(before);
+    callbook::callbook_filled(after)
+        .into_iter()
+        .filter(|t| !had.contains(t))
+        .map(str::to_string)
+        .collect()
+}
+
+/// ★ What [`callbook_fill`] could make of `ids` at `now_unix`: the calls to look up, those `kept`
+/// (the lookup cache, fresh) already answers, the fields the fill could give, by the fill's own
+/// rule and its 12-month location gate, and the older contacts the gate leaves a location field
+/// blank on. Changes nothing; asks no callbook.
+pub fn callbook_preview(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    now_unix: u64,
+    kept: &mut dyn FnMut(&str) -> Option<CallbookAnswer>,
+) -> Result<CallbookPreview, String> {
+    let mut seen = HashSet::new();
+    let ids: Vec<RecordId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+    let mut out = CallbookPreview {
+        selected: ids.len(),
+        ..CallbookPreview::default()
+    };
+    let mut answers: HashMap<String, Option<CallbookAnswer>> = HashMap::new();
+    for part in ids.chunks(CHUNK) {
+        let plan = crate::engine::log_plan(engine);
+        let rows = plan.rows(part)?;
+        out.missing += part.len() - rows.len();
+        for id in part {
+            let Some(row) = rows.get(id) else { continue };
+            let key = cleanup::call_key(&row.call);
+            if key.is_empty() {
+                continue;
+            }
+            let answer = answers.entry(key.clone()).or_insert_with(|| {
+                out.calls.push(key.clone());
+                let hit = kept(&key);
+                out.kept += usize::from(hit.is_some());
+                hit
+            });
+            let answer = answer.clone().unwrap_or_else(|| every_field(row));
+            let mut after = QsoRecord::clone(row);
+            fill_bulk(&mut after, &answer, now_unix);
+            let filled = newly_filled(row, &after);
+            if !location_current(row, now_unix) {
+                let mut whole = QsoRecord::clone(row);
+                callbook::fill_from_callbook(&mut whole, &answer);
+                let lost = newly_filled(row, &whole)
+                    .iter()
+                    .any(|t| LOCATION_FIELDS.contains(&t.as_str()));
+                out.location_too_old += usize::from(lost);
+            }
+            out.could_change += usize::from(!filled.is_empty());
+            for tag in filled {
+                *out.fields.entry(tag).or_default() += 1;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// ★ Fill each contact `ids` names from the callbook's answer for its call, by the log's own rule
+/// ([`callbook::fill_from_callbook`]): **only empty fields**, never one a contest exchange
+/// carries, the location only from the station's own record and never over a park; never the
+/// call, the country or the DXCC number, never an upload stamp or a confirmation, and nothing
+/// queued to any service. **Where the station is ([`LOCATION_FIELDS`]) only on a contact from the
+/// 12 months before `now_unix`**: an older one takes the rest of the answer and no location. ONE
+/// run of the history, undone whole. `answers` are by [`cleanup::call_key`]; a contact whose call
+/// has none is left as it is. Refused, changing nothing, unless `ids` are the `expect` contacts
+/// the operator confirmed.
+///
+/// **It waits for the radio, not the operator.** A fill runs at the end of a long run of lookups,
+/// whenever they end, and a large one is refused while the radio transmits
+/// ([`MUST_WAIT_FOR_TX`]): `wait_tx` is asked, with the Engine lock released, and the fill goes on
+/// when it answers `true` (it waited until transmit was off) or stops when `false` (the operator
+/// stopped it). **What it made is answered whatever stopped it**, with its run, so the toast's
+/// Undo takes back a fill stopped part-way too; the second value is why it stopped, as the
+/// operator reads it.
+pub fn callbook_fill(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    expect: usize,
+    answers: &HashMap<String, CallbookAnswer>,
+    now_unix: u64,
+    wait_tx: &mut dyn FnMut() -> bool,
+) -> (ToolRun, Option<String>, Durability) {
+    let mut seen = HashSet::new();
+    let ids: Vec<RecordId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+    if ids.len() != expect {
+        return (
+            ToolRun::default(),
+            Some(NOT_AS_PREVIEWED.into()),
+            Durability::default(),
+        );
+    }
+    let parts: Vec<Vec<RecordId>> = ids.chunks(CHUNK).map(<[RecordId]>::to_vec).collect();
+    let (made, end, durability) =
+        make_in_parts(engine, &parts, "callbook_update", wait_tx, |k, rows| {
+            let mut pairs = Vec::new();
+            let mut refused = Vec::new();
+            for id in &parts[k] {
+                let Some(row) = rows.get(id) else {
+                    refused.push((*id, "gone"));
+                    continue;
+                };
+                let Some(answer) = answers.get(&cleanup::call_key(&row.call)) else {
+                    continue;
+                };
+                let mut after = QsoRecord::clone(row);
+                fill_bulk(&mut after, answer, now_unix);
+                if after != **row {
+                    pairs.push((Arc::clone(row), Some(Arc::new(after))));
+                }
+            }
+            (pairs, refused)
+        });
+    let why = end.err().map(|why| stopped(&made, &why));
+    (made, why, durability)
 }
 
 // ── the check ──────────────────────────────────────────────────────────────────────────────────

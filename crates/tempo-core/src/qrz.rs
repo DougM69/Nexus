@@ -79,6 +79,27 @@ impl QrzSession {
                 .is_some_and(|e| e.to_ascii_lowercase().contains("session"))
     }
 
+    /// True iff QRZ refused service to the account: its spec's `Connection refused` error, after
+    /// which "successful login will not be possible for at least 24 hours".
+    ///
+    /// ⚠️ This reads QRZ's wording, which the note below says not to do for a missing record. The
+    /// difference: that note is about two answers QRZ words alike; this is one literal the spec
+    /// names for exactly one meaning, and it is matched as that literal (the whole error, any
+    /// case), never as a phrase inside a longer one.
+    pub fn refuses_service(&self) -> bool {
+        self.error
+            .as_deref()
+            .is_some_and(|e| e.trim().eq_ignore_ascii_case("connection refused"))
+    }
+
+    /// True iff the account has no XML subscription: `<SubExp>` is the spec's literal
+    /// `non-subscriber`.
+    pub fn non_subscriber(&self) -> bool {
+        self.sub_exp
+            .as_deref()
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case("non-subscriber"))
+    }
+
     // ⛔ THERE IS DELIBERATELY NO `holds_no_record` HERE, AND THERE CANNOT BE ONE.
     //
     // QRZ delivers an authoritative miss and a REFUSAL in the same shape: an `<Error>`
@@ -188,12 +209,14 @@ pub fn build_login_url(l: &QrzLogin) -> String {
     )
 }
 
-/// Build a lookup URL (carries the session key — secret).
-pub fn build_lookup_url(session_key: &str, callsign: &str) -> String {
+/// Build a lookup URL (carries the session key — secret). `agent` is the product identifier the
+/// login sends too: QRZ's spec "strongly recommended" it, to help its support tell programs apart.
+pub fn build_lookup_url(session_key: &str, callsign: &str, agent: &str) -> String {
     format!(
-        "{QRZ_XML_URL}?s={}&callsign={}",
+        "{QRZ_XML_URL}?s={}&callsign={}&agent={}",
         pct(session_key.trim()),
         pct(callsign.trim()),
+        pct(agent.trim()),
     )
 }
 
@@ -1213,11 +1236,41 @@ mod tests {
 
     #[test]
     fn lookup_url_encodes_key_and_call() {
-        let url = build_lookup_url("KEY 123", "dl1abc");
+        let url = build_lookup_url("KEY 123", "dl1abc", "Nexus-1.2.3");
         assert_eq!(
             url,
-            "https://xmldata.qrz.com/xml/current/?s=KEY%20123&callsign=dl1abc"
+            "https://xmldata.qrz.com/xml/current/?s=KEY%20123&callsign=dl1abc&agent=Nexus-1.2.3"
         );
+    }
+
+    /// The spec's `Connection refused`, as the whole error in any case, and nothing else.
+    #[test]
+    fn connection_refused_is_the_specs_literal_only() {
+        let refused = |e: &str| QrzSession {
+            error: Some(e.into()),
+            ..QrzSession::default()
+        };
+        assert!(parse_session(
+            "<QRZDatabase><Session><Error>Connection refused</Error></Session></QRZDatabase>"
+        )
+        .refuses_service());
+        assert!(refused(" connection REFUSED ").refuses_service());
+        assert!(!refused("Not found: connection refused").refuses_service());
+        assert!(!refused("Session Timeout").refuses_service());
+        assert!(!QrzSession::default().refuses_service());
+    }
+
+    /// `<SubExp>non-subscriber</SubExp>` is a non-subscriber; an expiry date is not.
+    #[test]
+    fn a_non_subscriber_is_the_specs_literal() {
+        let s = |x: &str| {
+            parse_session(&format!(
+                "<QRZDatabase><Session><Key>k</Key><SubExp>{x}</SubExp></Session></QRZDatabase>"
+            ))
+        };
+        assert!(s("non-subscriber").non_subscriber());
+        assert!(!s("Wed Jan 1 12:34:03 2027").non_subscriber());
+        assert!(!QrzSession::default().non_subscriber());
     }
 
     #[test]

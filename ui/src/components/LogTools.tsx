@@ -1,10 +1,13 @@
 // CLEAN UP — the Logbook's three clean-up tools in one dialog: Duplicates (find contacts logged
 // more than once, merge each into one), Bulk edit (set or clear fields on many contacts at once)
-// and Check (list problems, each with a proposed fix, and make only the ones ticked).
+// and Check (list problems, each with a proposed fix, and make only the ones ticked) — and Update
+// from callbook, which fills the empty fields of many contacts from callbook lookups
+// (LogCallbookUpdate.tsx).
 //
 // Every change a tool makes is ONE change in the log's history: the toast's Undo takes the whole
-// of it back, and so does Recently deleted for a merge's deleted copies. No tool sends anything to
-// a service, and none changes the worked call, so every confirmation stays. The changes are
+// of it back, and so does Recently deleted for a merge's deleted copies. No tool uploads or sends a
+// contact anywhere (Update from callbook only looks calls up), and none changes the worked call,
+// so every confirmation stays. The changes are
 // the station's own, as a purge is: driving the station from another computer the tools read and
 // preview, and their buttons that change the log are off.
 //
@@ -17,8 +20,9 @@ import { Dialog } from './ui/Dialog'
 import { LogDupes } from './LogDupes'
 import { LogBulkEdit } from './LogBulkEdit'
 import { LogCheck } from './LogCheck'
+import { LogCallbookUpdate } from './LogCallbookUpdate'
 
-export type LogTool = 'dupes' | 'bulk' | 'check'
+export type LogTool = 'dupes' | 'bulk' | 'check' | 'callbook'
 
 export function LogTools({
   open,
@@ -26,6 +30,7 @@ export function LogTools({
   onTool,
   onClose,
   onChanged,
+  onCallbookStarted,
   picked,
   query,
   shown,
@@ -36,6 +41,8 @@ export function LogTools({
   onClose: () => void
   /** The log changed: the list reloads. */
   onChanged: () => void
+  /** An update from the callbook started: the Logbook reports its end, open or closed. */
+  onCallbookStarted: () => void
   /** The contacts ticked in the list, by id. */
   picked: ReadonlySet<string>
   /** The Logbook's search, filters and order: what "the contacts the list shows" means. */
@@ -53,7 +60,7 @@ export function LogTools({
       className="log-tools-dialog"
     >
       <div className="log-tools-tabs" role="tablist" aria-label={t('logbook.tools.title')}>
-        {(['dupes', 'bulk', 'check'] as const).map((id) => (
+        {(['dupes', 'bulk', 'check', 'callbook'] as const).map((id) => (
           <button
             key={id}
             type="button"
@@ -64,7 +71,8 @@ export function LogTools({
           >
             {id === 'dupes' ? t('logbook.tools.tab.dupes')
               : id === 'bulk' ? t('logbook.tools.tab.bulk')
-              : t('logbook.tools.tab.check')}
+              : id === 'check' ? t('logbook.tools.tab.check')
+              : t('logbook.tools.tab.callbook')}
           </button>
         ))}
       </div>
@@ -74,6 +82,9 @@ export function LogTools({
         <LogBulkEdit onChanged={onChanged} afar={afar} picked={picked} query={query} shown={shown} />
       )}
       {open && tool === 'check' && <LogCheck onChanged={onChanged} afar={afar} />}
+      {open && tool === 'callbook' && (
+        <LogCallbookUpdate onStarted={onCallbookStarted} afar={afar} picked={picked} query={query} shown={shown} />
+      )}
     </Dialog>
   )
 }

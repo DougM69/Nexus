@@ -3478,6 +3478,13 @@ pub struct Settings {
     /// again (`tempo_core::callbook_cache`). Offline, a kept answer is used at any age. Read
     /// through [`Self::callbook_cache_max_age_secs`], which clamps it.
     pub callbook_cache_days: u32,
+    /// The Logbook's "Update from callbook": the least time between two of its network lookups, in
+    /// seconds. Read through [`Self::callbook_update_pace`], which holds it to
+    /// [`CALLBOOK_UPDATE_PACE_SECS_MIN`] … [`CALLBOOK_UPDATE_PACE_SECS_MAX`].
+    pub callbook_update_pace_secs: u32,
+    /// The most network lookups "Update from callbook" makes in 24 hours, across its runs. Read
+    /// through [`Self::callbook_update_daily_cap`].
+    pub callbook_update_daily_cap: u32,
     /// Ask callook.info, the free US-only licence lookup (no account), when QRZ and HamQTH have
     /// no answer or are not set up. Only US-shaped calls are sent (`tempo_core::callook`).
     pub callook_lookup: bool,
@@ -3902,6 +3909,18 @@ pub const RTTY_AUTO_REPEATS_MAX: u32 = 10;
 /// The callbook cache's expiry: 30 days unless the operator sets another, at most ten years.
 pub const CALLBOOK_CACHE_DAYS_DEFAULT: u32 = 30;
 pub const CALLBOOK_CACHE_DAYS_MAX: u32 = 3_650;
+
+/// "Update from callbook"'s pace: a lookup every 2 seconds unless the operator sets another, never
+/// faster than one a second. QRZ publishes no rate; the floor keeps a long run from looking like
+/// a flood (`tempo_app::callbook_update`).
+pub const CALLBOOK_UPDATE_PACE_SECS_DEFAULT: u32 = 2;
+pub const CALLBOOK_UPDATE_PACE_SECS_MIN: u32 = 1;
+pub const CALLBOOK_UPDATE_PACE_SECS_MAX: u32 = 60;
+
+/// "Update from callbook"'s cap on network lookups in 24 hours. QRZ publishes no number, so the
+/// default is a conservative 250 the operator can change.
+pub const CALLBOOK_UPDATE_DAILY_CAP_DEFAULT: u32 = 250;
+pub const CALLBOOK_UPDATE_DAILY_CAP_MAX: u32 = 10_000;
 
 /// ⚠️ **Both of these are the sequencer's own shipped constants, deliberately.** They are
 /// read off [`tempo_core::rtty::SeqConfig::default`] rather than written out again, so the
@@ -6100,6 +6119,8 @@ impl Default for Settings {
             qrz_username: String::new(),
             hamqth_username: String::new(),
             callbook_cache_days: CALLBOOK_CACHE_DAYS_DEFAULT,
+            callbook_update_pace_secs: CALLBOOK_UPDATE_PACE_SECS_DEFAULT,
+            callbook_update_daily_cap: CALLBOOK_UPDATE_DAILY_CAP_DEFAULT,
             callook_lookup: true,
             qrz_logbook_upload: false,
             qrz_auto_sync: false,
@@ -7659,6 +7680,23 @@ impl Settings {
     /// network one and a huge value cannot overflow.
     pub fn callbook_cache_max_age_secs(&self) -> i64 {
         i64::from(self.callbook_cache_days.clamp(1, CALLBOOK_CACHE_DAYS_MAX)) * 86_400
+    }
+
+    /// "Update from callbook"'s least time between two network lookups:
+    /// [`Self::callbook_update_pace_secs`] held to its bounds, so a hand-edited `0` cannot make it
+    /// a flood.
+    pub fn callbook_update_pace(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(
+            self.callbook_update_pace_secs
+                .clamp(CALLBOOK_UPDATE_PACE_SECS_MIN, CALLBOOK_UPDATE_PACE_SECS_MAX),
+        ))
+    }
+
+    /// "Update from callbook"'s cap on network lookups in 24 hours, held to 1 …
+    /// [`CALLBOOK_UPDATE_DAILY_CAP_MAX`]: a hand-edited `0` or a huge value cannot lift it.
+    pub fn callbook_update_daily_cap(&self) -> usize {
+        self.callbook_update_daily_cap
+            .clamp(1, CALLBOOK_UPDATE_DAILY_CAP_MAX) as usize
     }
 
     pub fn rig_mode(&self) -> String {
@@ -11612,6 +11650,36 @@ mod tests {
     /// compiles clean on both sides, never matches, and the control silently does
     /// nothing while the backend keeps the default. Literal strings, therefore, and
     /// `ui/src/types.ts` + `defaultSettings.json` are copy-pasted from here.
+    /// "Update from callbook"'s pace and daily cap: the defaults, the wire keys `ui/src/types.ts`
+    /// carries, and the bounds a hand-edited value is held to.
+    #[test]
+    fn callbook_update_pace_and_cap_defaults_wire_keys_and_bounds() {
+        let mut s = Settings::default();
+        assert_eq!(s.callbook_update_pace(), std::time::Duration::from_secs(2));
+        assert_eq!(s.callbook_update_daily_cap(), 250);
+        let json = serde_json::to_string(&s).unwrap();
+        for key in [
+            "\"callbookUpdatePaceSecs\":2",
+            "\"callbookUpdateDailyCap\":250",
+        ] {
+            assert!(json.contains(key), "missing wire key {key}");
+        }
+        s.callbook_update_pace_secs = 0;
+        s.callbook_update_daily_cap = 0;
+        assert_eq!(s.callbook_update_pace(), std::time::Duration::from_secs(1));
+        assert_eq!(s.callbook_update_daily_cap(), 1);
+        s.callbook_update_pace_secs = 9_999;
+        s.callbook_update_daily_cap = u32::MAX;
+        assert_eq!(s.callbook_update_pace(), std::time::Duration::from_secs(60));
+        assert_eq!(s.callbook_update_daily_cap(), 10_000);
+        // A settings file from before these existed takes the defaults.
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            (old.callbook_update_pace_secs, old.callbook_update_daily_cap),
+            (2, 250)
+        );
+    }
+
     #[test]
     fn sstv_settings_defaults_and_wire_keys() {
         let s = Settings::default();

@@ -43,6 +43,9 @@ mod bench_road_switch;
 /// WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P print, Ctrl+F find…) off in every Nexus
 /// window, set on each webview as Tauri makes it.
 mod browser_keys;
+/// The Logbook's "Update from callbook": many calls looked up slowly, their answers filled into empty
+/// fields as one run.
+mod callbook_update;
 /// Window → radio-chain addressing: the `(panel, instance)` token grammar, the window-label
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
@@ -29116,6 +29119,9 @@ enum QrzOutcome {
 struct QrzFailure {
     detail: ConnDetail,
     message: ScreenReason,
+    /// QRZ refused service to the account ([`tempo_core::qrz::QrzSession::refuses_service`]):
+    /// not to be asked again for a day.
+    refused: bool,
 }
 
 impl QrzFailure {
@@ -29129,6 +29135,21 @@ impl QrzFailure {
                  this session's connection log has the exact message."
             ),
             message: ScreenReason::new(message),
+            refused: false,
+        }
+    }
+
+    /// QRZ answered "Connection refused": service is refused for the account, and by QRZ's spec
+    /// "successful login will not be possible for at least 24 hours".
+    fn refused(message: String) -> Self {
+        Self {
+            detail: conn_detail!(
+                "QRZ refused service for this account, so the lookup never ran. By QRZ's \
+                 own rules a sign-in will not work for at least 24 hours, and Nexus does not \
+                 ask QRZ again until then. QRZ's own wording is in this session's connection log."
+            ),
+            message: ScreenReason::new(message),
+            refused: true,
         }
     }
 
@@ -29142,6 +29163,7 @@ impl QrzFailure {
                  this session's connection log."
             ),
             message: ScreenReason::new(message),
+            refused: false,
         }
     }
 }
@@ -29158,11 +29180,34 @@ impl QrzFailure {
 /// ⚠️ Nor is the other side automatic: a record that came back is a record, not proof the XML
 /// subscription is entitled — QRZ serves a free or lapsed account a `<Callsign>` too. The
 /// [`QrzEntitlement`] beside the record is what the health stamp reads.
-fn qrz_try_lookup(session_key: &str, callsign: &str) -> Result<QrzOutcome, QrzFailure> {
-    let url = tempo_core::qrz::build_lookup_url(session_key, callsign);
-    let body = propagation::live::qrz::fetch(&url, env!("CARGO_PKG_VERSION"))
-        .map_err(QrzFailure::unreachable)?;
+fn qrz_try_lookup(
+    fetch: QrzFetch<'_>,
+    session_key: &str,
+    callsign: &str,
+) -> Result<QrzOutcome, QrzFailure> {
+    let url = tempo_core::qrz::build_lookup_url(session_key, callsign, &qrz_agent());
+    callbook_update::note_counted_request();
+    let body = fetch(&url).map_err(QrzFailure::unreachable)?;
+    // QRZ's count, its words and the subscription: the Logbook's update holds its daily cap to
+    // the count, shows the words, and leaves QRZ out for a non-subscriber.
+    if tempo_core::qrz::is_qrz_xml(&body) {
+        callbook_update::note_qrz_session(&tempo_core::qrz::parse_session(&body));
+    }
     qrz_outcome_from_body(&body)
+}
+
+/// How a QRZ request reaches QRZ: the HTTPS transport, or a test's script.
+type QrzFetch<'a> = &'a (dyn Fn(&str) -> Result<String, String> + Sync);
+
+/// The transport QRZ requests go out on.
+fn qrz_fetch(url: &str) -> Result<String, String> {
+    propagation::live::qrz::fetch(url, env!("CARGO_PKG_VERSION"))
+}
+
+/// The `agent` every QRZ XML request carries: a prefix of the product's own and its version, short
+/// and simple, as QRZ's spec asks ("maintain a unique prefix for your product").
+fn qrz_agent() -> String {
+    format!("Nexus-{}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Which of the four outcomes one QRZ lookup response describes. Pure, so the decision that
@@ -29175,6 +29220,14 @@ fn qrz_outcome_from_body(body: &str) -> Result<QrzOutcome, QrzFailure> {
         ));
     }
     let session = tempo_core::qrz::parse_session(body);
+    // Before the session check: a refusal carries no key, and another sign-in would only be
+    // refused too.
+    if session.refuses_service() {
+        return Err(QrzFailure::refused(format!(
+            "QRZ refused service for this account: {}",
+            session.error.unwrap_or_default()
+        )));
+    }
     if session.needs_login() {
         return Ok(QrzOutcome::NeedLogin);
     }
@@ -29201,20 +29254,28 @@ fn qrz_outcome_from_body(body: &str) -> Result<QrzOutcome, QrzFailure> {
 /// ⚠️ The two ways this fails are classified apart, not folded into one string: never
 /// reaching QRZ and QRZ turning the credentials down want opposite things from the operator,
 /// and the Connections row persists the class — see [`QrzFailure`].
-fn qrz_login(username: &str, password: &str) -> Result<String, QrzFailure> {
+fn qrz_login(fetch: QrzFetch<'_>, username: &str, password: &str) -> Result<String, QrzFailure> {
+    // A request like any lookup: the Logbook's update counts it against its daily cap.
+    callbook_update::note_login();
     let url = tempo_core::qrz::build_login_url(&tempo_core::qrz::QrzLogin {
         username: username.to_string(),
         password: password.to_string(),
-        agent: "nexus/0.1".to_string(),
+        agent: qrz_agent(),
     });
-    let body = propagation::live::qrz::fetch(&url, env!("CARGO_PKG_VERSION"))
-        .map_err(QrzFailure::unreachable)?;
+    let body = fetch(&url).map_err(QrzFailure::unreachable)?;
     if !tempo_core::qrz::is_qrz_xml(&body) {
         return Err(QrzFailure::unreachable(
             "QRZ returned an unexpected response — check your credentials.".to_string(),
         ));
     }
     let session = tempo_core::qrz::parse_session(&body);
+    callbook_update::note_qrz_session(&session);
+    if session.refuses_service() {
+        return Err(QrzFailure::refused(format!(
+            "QRZ refused service for this account: {}",
+            session.error.unwrap_or_default()
+        )));
+    }
     session.key.ok_or_else(|| {
         // QRZ's <Error> on a bad login (e.g. "Username/password incorrect") carries
         // no secret — surface it; else a generic message.
@@ -29232,6 +29293,7 @@ fn qrz_login(username: &str, password: &str) -> Result<String, QrzFailure> {
 fn hamqth_try_lookup(session_id: &str, callsign: &str) -> Result<QrzOutcome, String> {
     let url =
         tempo_core::hamqth::build_lookup_url(session_id, callsign, tempo_core::hamqth::HAMQTH_PRG);
+    callbook_update::note_counted_request();
     let body = propagation::live::hamqth::fetch(&url)?;
     if !tempo_core::hamqth::is_hamqth_xml(&body) {
         return Err("HamQTH returned an unexpected response.".to_string());
@@ -29253,6 +29315,8 @@ fn hamqth_try_lookup(session_id: &str, callsign: &str) -> Result<QrzOutcome, Str
 /// the URL carries the password but is local (dropped here); errors redacted by the
 /// transport. On a login response with no id, HamQTH's `<error>` says why.
 fn hamqth_login(username: &str, password: &str) -> Result<String, String> {
+    // A request like any lookup: the Logbook's update counts it against its daily cap.
+    callbook_update::note_login();
     let url = tempo_core::hamqth::build_login_url(&tempo_core::hamqth::HamQthLogin {
         username: username.to_string(),
         password: password.to_string(),
@@ -29288,11 +29352,13 @@ fn qrz_lookup_attempt(
     username: &str,
     password: &str,
     qrz_session: &SharedQrzSession,
+    fetch: QrzFetch<'_>,
 ) -> Result<QrzOutcome, QrzFailure> {
-    // 1) Try the cached key, if any.
+    // 1) Try the cached key, if any. ONE sign-in per session, as QRZ's spec asks: the key is
+    //    kept and reused until QRZ says it has expired.
     let cached = qrz_session.lock().ok().and_then(|g| g.clone());
     if let Some(key) = cached {
-        match qrz_try_lookup(&key, call)? {
+        match qrz_try_lookup(fetch, &key, call)? {
             // Only an expired key is worth a re-login. A record and a record-less answer are
             // both final answers from a live session, whatever they say and whatever they
             // prove — the health stamp reads the difference, this retry does not.
@@ -29301,14 +29367,19 @@ fn qrz_lookup_attempt(
         }
     }
     // 2) Log in once, cache the new key, retry the lookup once (bounded).
-    let key = qrz_login(username, password)?;
+    let key = qrz_login(fetch, username, password)?;
     if let Ok(mut g) = qrz_session.lock() {
         *g = Some(key.clone());
     }
     // A fresh key STILL reporting expiry is anomalous: QRZ refused a session it had just
     // issued. Passed straight back — the caller falls through to HamQTH either way, and the
-    // health stamp needs to know which it was.
-    qrz_try_lookup(&key, call)
+    // health stamp needs to know which it was. The Logbook's update stops on it: each call
+    // after would sign in again.
+    let again = qrz_try_lookup(fetch, &key, call);
+    if matches!(again, Ok(QrzOutcome::NeedLogin)) {
+        callbook_update::note_qrz_fresh_key_refused();
+    }
+    again
 }
 
 /// One complete HamQTH lookup pass — the free fallback. `Ok(Some(dto))` = a hit;
@@ -29347,8 +29418,12 @@ fn hamqth_lookup_attempt(
     match hamqth_try_lookup(&id, call)? {
         QrzOutcome::Found(dto, _) => Ok(Some(*dto)),
         QrzOutcome::NoRecord(_) => Ok(None),
-        // A fresh id still reporting expiry is anomalous — give up.
-        QrzOutcome::NeedLogin => Ok(None),
+        // A fresh id still reporting expiry is anomalous — give up. The Logbook's update stops on
+        // it: the cached id stays the refused one, so each call after would sign in again.
+        QrzOutcome::NeedLogin => {
+            callbook_update::note_hamqth_refused();
+            Ok(None)
+        }
     }
 }
 
@@ -29449,6 +29524,20 @@ fn note_lookup_answer(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::Q
     engine_lock(engine).note_callbook_answer(call, callbook_answer(dto));
 }
 
+/// What [`callbook_lookup_live`] answers when every callbook it asked holds no such call — the one
+/// failure the Logbook's update tells apart from the rest (`callbook_update`): a call nobody knows
+/// is reported and the run goes on, any other failure stops it.
+fn callbook_not_found(call: &str) -> String {
+    format!("{} is not in the callbook.", call.to_uppercase())
+}
+
+/// Whether `e` is [`callbook_lookup_live`]'s "not in the callbook" for `call`, with or without
+/// QRZ's words after it.
+fn is_callbook_not_found(e: &str, call: &str) -> bool {
+    e.strip_prefix(&callbook_not_found(call))
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(" QRZ: "))
+}
+
 /// Look up a callsign, enriching with name / grid / QTH / state. QRZ is tried first
 /// (its paid tier carries grid/state); when QRZ is **unconfigured** (no username or
 /// no stored password) or has **no match**, the lookup falls through to the FREE
@@ -29459,13 +29548,29 @@ fn note_lookup_answer(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::Q
 /// callook.info is asked last ([`tempo_core::callook`]), for a US-shaped call only and only with
 /// the setting on; it needs no account. This asks the network every time: the cache in front of
 /// it is [`callbook_lookup`]'s, and the answer is handed to the engine there too.
+///
+/// **QRZ refusing service** ("Connection refused") is kept in the cache file with the time it may
+/// be asked again, a day later, and QRZ is not asked until then, by this lookup or any other; the
+/// other callbooks still are. `ask_qrz: false` leaves QRZ out (the Logbook's update, on an account
+/// without the XML subscription).
 async fn callbook_lookup_live(
     call: &str,
     state: &SharedEngine,
     qrz_session: &SharedQrzSession,
     hamqth_session: &SharedHamQthSession,
+    cache: &SharedCallbookCache,
+    ask_qrz: bool,
 ) -> Result<tempo_app::dto::QrzLookupDto, String> {
     let call = call.to_string();
+    let now = now_unix();
+    // Refused before: QRZ is not asked until the day is out.
+    let mut qrz_refused = if ask_qrz {
+        cache.qrz_refused_until(now)
+    } else {
+        None
+    };
+    // QRZ's words when it answered with no record, for the operator.
+    let mut qrz_words: Option<String> = None;
     let (qrz_username, hamqth_username, callook_on) = {
         let eng = engine_lock(state);
         let s = eng.settings();
@@ -29476,7 +29581,7 @@ async fn callbook_lookup_live(
         )
     };
 
-    let not_found = || format!("{} is not in the callbook.", call.to_uppercase());
+    let not_found = || callbook_not_found(&call);
     // Did any callbook actually RUN? A username set with no stored password means
     // the query is silently skipped — without this flag that lands on `not_found()`
     // below and misreports a *missing credential* as "not in the callbook" (the
@@ -29492,7 +29597,7 @@ async fn callbook_lookup_live(
     for cand in &candidates {
         // 1) QRZ first, when configured (username + stored password). A missing username,
         //    a missing password, or a QRZ "not found" all fall through to HamQTH below.
-        if !qrz_username.is_empty() {
+        if ask_qrz && qrz_refused.is_none() && !qrz_username.is_empty() {
             if let Ok(password) = qrz_keychain()?.get_password() {
                 queried_any = true;
                 // Blocking HTTP: on the blocking pool (see `get_aurora`).
@@ -29500,7 +29605,7 @@ async fn callbook_lookup_live(
                     let (cand, user, session) =
                         (cand.clone(), qrz_username.clone(), qrz_session.clone());
                     tauri::async_runtime::spawn_blocking(move || {
-                        qrz_lookup_attempt(&cand, &user, &password, &session)
+                        qrz_lookup_attempt(&cand, &user, &password, &session, &qrz_fetch)
                     })
                     .await
                     .map_err(|e| e.to_string())?
@@ -29514,19 +29619,38 @@ async fn callbook_lookup_live(
                 // hold a service's words at all (see `note_conn_health`). Without this the
                 // refusal would be invisible — the lookup falls through to HamQTH and the
                 // operator is told "not in the callbook".
+                // What QRZ answered, for the Logbook's update: a run of answers with no record
+                // is how QRZ refuses lookups (see `callbook_update`).
+                if let Ok(outcome) = &attempt {
+                    callbook_update::note_qrz_answer(matches!(outcome, QrzOutcome::Found(..)));
+                }
                 match &attempt {
-                    Ok(QrzOutcome::NoRecord(why)) => conn_log(
-                        "QRZ",
-                        "error",
-                        format!("{cand}: QRZ returned no record — {why}"),
-                    ),
+                    Ok(QrzOutcome::NoRecord(why)) => {
+                        conn_log(
+                            "QRZ",
+                            "error",
+                            format!("{cand}: QRZ returned no record — {why}"),
+                        );
+                        qrz_words = Some(why.clone());
+                    }
                     Err(f) => {
                         conn_log("QRZ", "error", format!("{cand}: {}", f.message.on_screen()))
                     }
                     _ => {}
                 }
-                if let QrzOutcome::Found(dto, _) = attempt.map_err(|f| f.message.into_string())? {
-                    return Ok(*dto);
+                // Refused: kept for a day, and the other callbooks asked as for a QRZ miss.
+                if let Err(f) = &attempt {
+                    if f.refused {
+                        let until = now + 86_400;
+                        cache.note_qrz_refused(until);
+                        qrz_refused = Some(until);
+                    }
+                }
+                match attempt {
+                    Err(f) if f.refused => {}
+                    Err(f) => return Err(f.message.into_string()),
+                    Ok(QrzOutcome::Found(dto, _)) => return Ok(*dto),
+                    Ok(_) => {}
                 }
             }
         }
@@ -29567,7 +29691,15 @@ async fn callbook_lookup_live(
                 propagation::live::callook::fetch(&url)
             })
             .await
-            .map_err(|e| e.to_string())??;
+            .map_err(|e| e.to_string())?;
+            // Not answering (its few minutes offline each day): try later, never "unknown".
+            let body = match body {
+                Ok(body) if tempo_core::callook::answered(&body) => body,
+                _ => {
+                    callbook_update::note_callook_unavailable();
+                    return Err(CALLOOK_LATER.to_string());
+                }
+            };
             if let Some(rec) = tempo_core::callook::parse_callsign(&body) {
                 return Ok(rec.into());
             }
@@ -29575,7 +29707,10 @@ async fn callbook_lookup_live(
     }
 
     // No callbook produced a record.
-    if !queried_any && qrz_username.is_empty() && hamqth_username.is_empty() {
+    if let Some(until) = qrz_refused {
+        callbook_update::note_qrz_refused();
+        Err(qrz_refused_until_words(until, now))
+    } else if !queried_any && qrz_username.is_empty() && hamqth_username.is_empty() {
         Err("Set your QRZ or HamQTH username in Settings first.".to_string())
     } else if !queried_any {
         // A username IS set but no password is stored, so no lookup actually ran.
@@ -29595,8 +29730,30 @@ async fn callbook_lookup_live(
             which.join(" or ")
         ))
     } else {
-        Err(not_found())
+        // QRZ's own words, as its spec asks they be shown.
+        Err(match qrz_words {
+            Some(why) => format!(
+                "{} QRZ: {}",
+                not_found(),
+                callbook_update::screen_words(&why)
+            ),
+            None => not_found(),
+        })
     }
+}
+
+/// What a lookup says when callook.info does not answer.
+const CALLOOK_LATER: &str = "callook.info is not answering just now (it is offline for a few \
+                             minutes each day). Try again later.";
+
+/// What a lookup says while QRZ's refusal of service holds.
+fn qrz_refused_until_words(until: i64, now: i64) -> String {
+    let hours = ((until - now).max(0) + 3_599) / 3_600;
+    format!(
+        "QRZ refused service for this account (\"Connection refused\"). By QRZ's own rules a \
+         sign-in will not work for at least 24 hours, so Nexus will not ask QRZ for about \
+         {hours} more hours. Check the account at QRZ."
+    )
 }
 
 /// The on-disk callbook cache ([`tempo_core::callbook_cache`]), opened on first use beside
@@ -29642,6 +29799,19 @@ impl SharedCallbookCache {
         let hit = store.get(call).ok()??;
         let dto = serde_json::from_str(&hit.answer).ok()?;
         Some((dto, hit.fetched_at))
+    }
+
+    /// When QRZ may be asked again after refusing service, while that is after `now`.
+    fn qrz_refused_until(&self, now: i64) -> Option<i64> {
+        let store = self.store()?.lock().ok()?;
+        store.qrz_refused_until(now).ok()?
+    }
+
+    /// QRZ refused service: not asked until `until`.
+    fn note_qrz_refused(&self, until: i64) {
+        if let Some(Ok(store)) = self.store().map(Mutex::lock) {
+            let _ = store.note_qrz_refused(until);
+        }
     }
 
     /// Keep `dto` as the answer for `call`. Only the parsed public answer is stored: never the
@@ -29708,7 +29878,7 @@ async fn callbook_lookup(
     }
     let max_age = engine_lock(state).settings().callbook_cache_max_age_secs();
     let dto = cached_callbook_lookup(cache, &call, max_age, now_unix(), refresh, || {
-        callbook_lookup_live(&call, state, qrz_session, hamqth_session)
+        callbook_lookup_live(&call, state, qrz_session, hamqth_session, cache, true)
     })
     .await?;
     note_lookup_name(state, &call, &dto);
@@ -39804,6 +39974,11 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_tools::bulk_edit_apply,
         log_tools::check_logbook,
         log_tools::apply_log_fixes,
+        callbook_update::callbook_update_preview,
+        callbook_update::callbook_update_start,
+        callbook_update::callbook_update_status,
+        callbook_update::callbook_update_cancel,
+        callbook_update::callbook_update_take_end,
         log_queries::ask_log,
         purge_log,
         get_awards,
@@ -40008,6 +40183,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .manage(SharedCallbookCache::default())
+        .manage(callbook_update::CallbookUpdate::default())
         .manage(BetaUpdateState::default())
         // The Logbook's award-need filter reads the award fold the Awards view keeps.
         .manage(log_queries::LogQueries::with_tallies(log_tallies))

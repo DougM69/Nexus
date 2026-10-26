@@ -1878,6 +1878,13 @@ log it. QRZ is asked first, then HamQTH, then callook.info.
 - **Keep answers for (days)** — a call looked up within this many days is answered
   from this computer without asking the callbook again (30 by default). Offline, a
   kept answer is used at any age.
+- **Update from callbook: seconds between lookups** — the Logbook's **Update from
+  callbook** waits at least this long before each call it looks up (2 by default, 1 to
+  60). HamQTH and callook.info, asked only when QRZ has no record, go in the same turn.
+- **Update from callbook: lookups per day** — the most lookups it makes in 24 hours,
+  across runs (250 by default). QRZ publishes no daily number, so the default is a
+  cautious one. Answers from the cache do not count; a sign-in to QRZ or HamQTH does, and
+  so does the count QRZ itself last reported for your account in the past day.
 - **Refresh this call** — type a callsign and **Refresh** to look it up again now.
 - **Clear cache** — forgets every kept callbook answer. Your log is not touched, and
   passwords are never kept here.
