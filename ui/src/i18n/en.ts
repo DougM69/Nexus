@@ -6756,6 +6756,13 @@ export const EN = {
     other: 'Deleted {{count}} memories',
   },
   'memories.select.undo': 'Undo',
+  // #360: the selection bar's group picker. `{{group}}` is the operator's own group name.
+  'memories.select.group.label': 'Add to group…',
+  'memories.select.group.aria': 'Add the selected memories to a group',
+  'memories.select.grouped': {
+    one: 'Added {{count}} memory to {{group}}',
+    other: 'Added {{count}} memories to {{group}}',
+  },
   'memories.select.restored': {
     one: 'Restored {{count}} memory',
     other: 'Restored {{count}} memories',
