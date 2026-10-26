@@ -3,7 +3,7 @@
  * absent. The operator finds activators on the air now, clicks Hunt to QSY and
  * tag the next logged QSO with the park/summit reference.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { TreePine, Mountain, RefreshCw, X } from 'lucide-react'
 import type { AppSnapshot, OtaSpot, Activation } from '../types'
 import {
@@ -13,7 +13,9 @@ import {
   setHuntTarget,
   setActivation,
   setActivationState,
+  setActivationGrid,
   clearActivation,
+  resumeActivation,
   getActivation,
   parksCount,
   huntedParksCount,
@@ -23,10 +25,23 @@ import {
   selfSpot,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { announceSelfSpot, confirmSelfSpot } from '../selfSpot'
+import {
+  DEFAULT_SPOT_COMMENT,
+  QRT_COMMENT,
+  SPOT_COMMENT_MAX,
+  announceSelfSpot,
+  confirmSelfSpot,
+  respotStep,
+  respotThresholdHz,
+  respotWatch,
+  spotComment,
+  type RespotWatch,
+  type ActivationSpotReport,
+} from '../selfSpot'
 import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
 import { bandLabelForMhz } from '../band'
 import { placeCode, placeLabel, placeName } from '../features/otaStates'
+import { activationParks, isLegacyUsRef, parkProgress } from '../features/potaActivation'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { POTA_SPOTS, SOTA_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../features/connectFeeds'
 import { t } from '../i18n'
@@ -49,6 +64,11 @@ const SOURCES: Record<Program, string> = {
   POTA: 'pota.app',
   SOTA: 'SOTAwatch',
   Both: 'pota.app + SOTAwatch',
+}
+
+/** A spot stands on the air after a press when either target took it now or had it already. */
+function spotStands(report: ActivationSpotReport): boolean {
+  return report.parks.some((p) => p.pota === 'posted' || p.pota === 'throttled') || report.cluster === 'queued' || report.cluster === 'throttled'
 }
 
 /** kHz → "14.0740 MHz" display string (4 decimal places = 10 Hz resolution). */
@@ -189,6 +209,8 @@ export type OtaRemote = {
   clearHunt?: () => void
   startActivation?: (program: string, reference: string) => void
   stopActivation?: () => void
+  /** "Still activating" for an activation the station took up paused at launch. */
+  resumeActivation?: () => void
   /** Public: the parent confirms on every click before anything is sent. */
   selfSpot?: () => void
 }
@@ -382,9 +404,12 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     huntedRowRef.current?.scrollIntoView?.({ block: 'nearest' })
   }, [huntedRowKey])
 
-  // My-side activation: the backend stamps my park ref onto every QSO I log while active.
+  // My-side activation: the backend stamps my park ref onto every QSO I log while active. The
+  // snapshot carries it live (today's counts move as contacts are logged, and roll at 0000Z), so
+  // it wins whenever the station sends it; the command answers stand in for a station that
+  // does not.
   const [nativeAct, setAct] = useState<Activation | null>(null)
-  const act = observation ? observation.activation : nativeAct
+  const act = observation ? observation.activation : snap.activation !== undefined ? snap.activation : nativeAct
   const [actRef, setActRef] = useState('')
   const [actProg, setActProg] = useState('POTA')
   useEffect(() => {
@@ -394,6 +419,17 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       .catch(() => {})
   }, [observed])
   const activating = act != null && act.reference != null
+  // Taken up at launch and not yet confirmed: PAUSED, nothing tagged, keyed or spotted, until
+  // "Still activating".
+  const paused = activating && act?.restored === true
+  const handleResumeActivation = async () => {
+    if (observed) {
+      remote?.resumeActivation?.()
+      return
+    }
+    const a = await withErrorToast(() => resumeActivation(), t('ota.activation.resumeFailed'))
+    if (a) setAct(a)
+  }
 
   const handleStartActivation = async () => {
     const ref = actRef.trim().toUpperCase()
@@ -413,18 +449,51 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
         t('ota.activation.started', { program: a.program ?? '', reference: a.reference ?? '' }),
         'success',
       )
+      // A K- park is accepted: whether POTA's upload still takes the pre-2024 prefix is not
+      // known, so it is said, never refused or rewritten.
+      for (const park of activationParks(a).filter(isLegacyUsRef)) {
+        pushToast(t('ota.activation.legacyRef', { reference: park }), 'info', 12_000)
+      }
     }
+  }
+  // The grid the contacts carry as MY_GRIDSQUARE while activating: the park's, or a more precise
+  // one typed here. Never Settings'. Sent on Enter or when the box is left, only when changed.
+  const [gridDraft, setGridDraft] = useState<string | null>(null)
+  const gridNoteId = useId()
+  // With no grid known the contacts carry none (never the home one), so the strip says so.
+  const gridMissing = !act?.grid
+  const handleGrid = async () => {
+    if (gridDraft == null) return
+    const typed = gridDraft.trim().toUpperCase()
+    setGridDraft(null)
+    if (typed === (act?.grid ?? '')) return
+    const a = await withErrorToast(() => setActivationGrid(typed), t('ota.activation.grid.failed'))
+    if (a) setAct(a)
   }
   // The state you are activating from, of a park on a state line: never guessed, so asked.
   const handlePickState = async (code: string) => {
     const a = await withErrorToast(() => setActivationState(code), t('ota.activation.state.failed'))
     if (a) setAct(a)
   }
+  // The spot's comment (QRV when blank), the frequency this activation was last spotted on from
+  // here (null: not spotted), and the QRT offer at Stop, which starts unticked every activation.
+  const [spotText, setSpotText] = useState(DEFAULT_SPOT_COMMENT)
+  const [spottedHz, setSpottedHz] = useState<number | null>(null)
+  const [postQrt, setPostQrt] = useState(false)
+  useEffect(() => {
+    setSpottedHz(null)
+    setPostQrt(false)
+    setSpotText(DEFAULT_SPOT_COMMENT)
+  }, [act?.reference])
   const handleStopActivation = async () => {
     if (observed) {
       remote?.stopActivation?.()
       return
     }
+    // Ticked, the QRT goes first — the station posts only for an activation still running — and
+    // through Spot me's own confirm, on the frequency the spot it ends stands on. Declined or
+    // refused, the activation still ends.
+    if (postQrt) await handleSelfSpot(QRT_COMMENT, spottedHz)
     const a = await withErrorToast(() => clearActivation(), t('ota.activation.stopFailed'))
     if (a) {
       setAct(a)
@@ -432,31 +501,61 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       pushToast(t('ota.activation.ended'), 'info', 2000)
     }
   }
-  // "Spot me" — pota.app and the DX cluster, only on this press. Sends the park and dial the
-  // confirm showed; the backend refuses if either has moved.
-  const handleSelfSpot = async () => {
+  // "Spot me" — pota.app and the DX cluster, only on this press. Sends the park, dial and comment
+  // the confirm showed; the backend refuses if the park or dial has moved. Read through refs, so
+  // the re-spot prompt's button, pressed later, sends what is current then.
+  const dialMhzRef = useRef(snap.radio.dialMhz)
+  dialMhzRef.current = snap.radio.dialMhz
+  // `atHz`: the QRT's frequency, the last spot's; every other spot goes on the dial.
+  const handleSelfSpot = async (comment: string = spotText, atHz: number | null = null) => {
     if (observed) {
       remote?.selfSpot?.()
       return
     }
     const reference = act?.reference
     if (!reference) return
-    const dialHz = Math.round(snap.radio.dialMhz * 1e6)
-    if (!(await confirmSelfSpot(reference, dialHz))) return
+    const dialHz = atHz ?? Math.round(dialMhzRef.current * 1e6)
+    if (!(await confirmSelfSpot(reference, dialHz, comment))) return
     try {
-      announceSelfSpot(await selfSpot(reference, dialHz))
+      const report = await selfSpot(reference, dialHz, comment)
+      announceSelfSpot(report)
+      if (spotStands(report)) setSpottedHz(spotComment(comment) === QRT_COMMENT ? null : dialHz)
     } catch (e) {
       pushToast(
         e === 'contextChanged'
           ? t('ota.selfSpot.moved')
           : e === 'spotRfOnly'
             ? t('ota.selfSpot.rfOnly')
-            : t('ota.selfSpot.failed'),
+            : e === 'invalidComment'
+              ? t('ota.selfSpot.badComment', { max: SPOT_COMMENT_MAX })
+              : t('ota.selfSpot.failed'),
         'error',
         6000,
       )
     }
   }
+  const respotRef = useRef(handleSelfSpot)
+  respotRef.current = handleSelfSpot
+  // THE QSY PROMPT: once the dial has settled off the spotted frequency, one button that is Spot
+  // me. It never posts by itself. Looked at each second, so a dial that sits still is seen too.
+  const modeRef = useRef(snap.radio.operatingMode)
+  modeRef.current = snap.radio.operatingMode
+  useEffect(() => {
+    if (observed || spottedHz === null) return
+    let watch: RespotWatch = respotWatch(spottedHz)
+    const id = window.setInterval(() => {
+      const dialHz = Math.round(dialMhzRef.current * 1e6)
+      const step = respotStep(watch, dialHz, Date.now(), respotThresholdHz(modeRef.current))
+      watch = step.watch
+      if (step.prompt) {
+        pushToast(t('ota.respot.prompt', { freq: (dialHz / 1e6).toFixed(3) }), 'info', 30_000, {
+          action: () => void respotRef.current(),
+          actionLabel: t('ota.respot.button'),
+        })
+      }
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [observed, spottedHz])
 
   // Local park directory — download once / import a CSV, then search it offline in the log form.
   const [nativeParkN, setParkN] = useState(0)
@@ -618,16 +717,66 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
         {activating ? (
           <>
             <span className="pota-act-text">
-              <T
+              {paused ? t('ota.activation.paused', { reference: activationParks(act).join(', ') }) : <T
                 k="ota.activation.active"
                 tags={{ b: <strong />, note: <span className="pota-act-sub" /> }}
                 vals={{
                   program: act?.program ?? '',
-                  reference: act?.reference ?? '',
-                  count: act?.qsoCount ?? 0,
+                  // A two-fer's parks, as an operator writes them: "US-1234, US-5678".
+                  reference: activationParks(act).join(', '),
                 }}
-              />
+              />}
             </span>
+            {/* Today's count per park, POTA's way: each call, band, mode and their park once,
+                since 0000Z. A two-fer shows each park; ten in one UTC day is valid. */}
+            {(act?.parks ?? []).map((p) => {
+              const g = parkProgress(p.count)
+              return (
+                <span
+                  key={p.reference}
+                  className={`pota-act-progress${g.valid ? ' valid' : ''}`}
+                  title={t('ota.activation.progress.title', { reference: p.reference })}
+                >
+                  {t('ota.activation.progress', { reference: p.reference, count: p.count })}
+                  {' · '}
+                  {g.valid ? t('ota.activation.valid') : t('ota.activation.toGo', { count: g.toGo })}
+                </span>
+              )
+            })}
+            {/* Park to park, each park's: each of YOUR parks of a two-fer; a hunter's two-fer is one contact. */}
+            {(act?.parks ?? []).some((p) => p.p2p > 0) && (
+              <span className="pota-act-progress p2p" title={t('ota.activation.p2p.title')}>
+                {(act?.parks?.length ?? 0) > 1
+                  ? t('ota.activation.p2p.parks', {
+                      parks: (act?.parks ?? []).map((p) => `${p.reference} ${p.p2p}`).join(' · '),
+                    })
+                  : t('ota.activation.p2p', { count: act?.parks?.[0]?.p2p ?? 0 })}
+              </span>
+            )}
+            {!observed && (
+              <label className="pota-act-grid" title={t('ota.activation.grid.title')}>
+                <span>{t('ota.activation.grid.label')}</span>
+                <input
+                  className="settings-input mono pota-act-grid-input"
+                  aria-describedby={gridMissing ? gridNoteId : undefined}
+                  value={gridDraft ?? act?.grid ?? ''}
+                  onChange={(e) => setGridDraft(e.target.value.toUpperCase())}
+                  onBlur={() => void handleGrid()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void handleGrid()
+                  }}
+                  maxLength={6}
+                  size={6}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+            )}
+            {!observed && gridMissing && (
+              <span id={gridNoteId} className="pota-act-grid-none">
+                {act?.program === 'SOTA' ? t('ota.activation.grid.noSummit') : t('ota.activation.grid.noPark')}
+              </span>
+            )}
             {/* The state your contacts carry as MY_STATE: the park's own, or, on a state line,
                 the one you pick here. Never guessed. LoTW credits the state of the TQSL Station
                 Location you sign with, which the tooltip says. */}
@@ -652,10 +801,34 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 ))}
               </span>
             )}
-            {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
-            {(!observed || remote?.selfSpot) && <button type="button" className="pota-hunt-clear" onClick={() => void handleSelfSpot()}>
+            {paused && (!observed || remote?.resumeActivation) && (
+              <button type="button" className="pota-hunt-clear" onClick={() => void handleResumeActivation()} title={t('ota.activation.resume.title')}>
+                {t('ota.activation.resume.label')}
+              </button>
+            )}
+            {!paused && (!observed || remote?.selfSpot) && <button type="button" className="pota-hunt-clear" onClick={() => void handleSelfSpot()}>
               {t('ota.selfSpot.button')}
             </button>}
+            {!observed && !paused && (
+              <input
+                className="settings-input mono pota-spot-comment"
+                value={spotText}
+                maxLength={SPOT_COMMENT_MAX}
+                onChange={(e) => setSpotText(e.target.value.toUpperCase())}
+                placeholder={DEFAULT_SPOT_COMMENT}
+                aria-label={t('ota.selfSpot.comment.label')}
+                title={t('ota.selfSpot.comment.label')}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            )}
+            {!observed && !paused && spottedHz !== null && (
+              <label className="pota-spot-qrt" title={t('ota.selfSpot.qrt.title')}>
+                <input type="checkbox" checked={postQrt} onChange={(e) => setPostQrt(e.target.checked)} />
+                {t('ota.selfSpot.qrt.label')}
+              </label>
+            )}
+            {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
             {(!observed || remote?.stopActivation) && <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
               <X size={13} aria-hidden="true" /> {t('ota.activation.stop.label')}
             </button>}
@@ -965,6 +1138,14 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                           title={t('ota.badge.newPark.title')}
                         >
                           {t('ota.badge.newPark')}
+                        </span>
+                      )}
+                      {/* While you activate, every POTA activator on the board is a park-to-park
+                          contact: both parks go on it (the hunt tags theirs, the activation
+                          yours). */}
+                      {activating && act?.program === 'POTA' && s.program === 'POTA' && (
+                        <span className="pota-badge pota-badge-p2p" title={t('ota.badge.p2p.title')}>
+                          {t('ota.badge.p2p')}
                         </span>
                       )}
                       {s.bandOpen && (

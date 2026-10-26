@@ -455,6 +455,23 @@ fn the_ft_buttons_are_admitted_and_every_other_start_is_refused_by_name() {
     }
 }
 
+/// "Still activating" from afar goes to the shack as Stop does: the activation is the shack's,
+/// taken up there paused at launch, and the operator may be at the park driving it from a laptop.
+/// It keys nothing, so it is never a start.
+#[test]
+fn still_activating_from_afar_reaches_the_shack_as_stop_does() {
+    let shack = shack();
+    assert_eq!(class_of("clear_activation"), Some(Class::RunsAtShack));
+    assert_eq!(class_of("resume_activation"), class_of("clear_activation"));
+    for (id, name) in [(1, "clear_activation"), (2, "resume_activation")] {
+        assert_eq!(route(name, &json!({})), Route::Shack, "{name}");
+        match shack.admit(&controller(), call(id, name, json!({}))) {
+            Admission::Run { .. } => {}
+            other => panic!("{name}: {}", kind(&other)),
+        }
+    }
+}
+
 /// Skip Tx1 from afar is the station's own setting: the other computer sends the change on to the
 /// shack, and the shack runs it with the value the operator picked, on and off alike, so the box
 /// the client draws from the station's snapshot follows the click. It keys nothing, so it is never a

@@ -404,6 +404,20 @@ const DEFAULT_MACROS: CwMacro[] = [
   { key: 'F8', label: '?', text: '? ' },
 ]
 
+/** THE POTA SET — the built-in keys while a park activation runs and no contest does. {MYPARK} is
+ *  every park of the activation, space-separated as a two-fer sends them; the report is the
+ *  activator's fixed 5NN, sent twice. On-air shorthand, invariant; the operator's to change. */
+export const CW_POTA_SET: CwMacro[] = [
+  { key: 'F1', label: 'CQ', text: 'CQ POTA DE {MYCALL} {MYCALL} K' },
+  { key: 'F2', labelKey: 'cw.macro.reply.label', text: '! UR 5NN 5NN {MYSTATE} {MYPARK} BK' },
+  { key: 'F3', label: 'TU', text: 'TU 73 {MYCALL} POTA' },
+  { key: 'F4', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
+  { key: 'F5', labelKey: 'cw.macro.hisCall.label', text: '! ' },
+  { key: 'F6', labelKey: 'cw.macro.myPark.label', text: '{MYPARK} {MYPARK}' },
+  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
+  { key: 'F8', label: '?', text: '? ' },
+]
+
 /** The built-in sets the cockpit's F-keys send in a contest: Field Day's, and the contest sets
  *  with and without a report — the signed contest layout (`features/esmRoles.ts`): F1 CQ · F2 his
  *  call and my exchange · F3 TU · F4 my call · F5 his call · F6 my S&P exchange · F7 QSO B4 · F8
@@ -793,6 +807,11 @@ export function CwCockpit({
     { name: string; macros: { key: string; label: string; text: string }[]; esmRoles?: EsmRoleMap }[]
   >([])
   const [activeProfile, setActiveProfile] = useState(0)
+  // A park activation running: the built-in keys are the POTA set's. Read from the snapshot, so an
+  // activation started or stopped with the cockpit open changes the keys at once. A paused one
+  // (taken up at launch, not yet confirmed) tags nothing, so it keys the home set.
+  const parkActivation =
+    snap.activation?.program === 'POTA' && !!snap.activation.reference && snap.activation.restored !== true
   useEffect(() => {
     if (!active) return
     let alive = true
@@ -826,7 +845,9 @@ export function CwCockpit({
       : fieldDay.receives?.some((f) => f.kind === 'rst')
         ? CW_CONTEST_SETS.report
         : CW_CONTEST_SETS.noReport
-    : DEFAULT_MACROS
+    : parkActivation
+      ? CW_POTA_SET
+      : DEFAULT_MACROS
   const macros: CwMacro[] = profileMacros && profileMacros.length ? profileMacros : builtIn
   // Switch the active macro profile from the cockpit (optimistic) and persist it — the index
   // alone, over the live settings. Saving the view's copy with the index merged in wrote every

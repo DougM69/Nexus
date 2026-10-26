@@ -435,10 +435,12 @@ impl Engine {
         if self.pending_log().is_some() {
             return CurrentQsoLogOutcome::PendingExists;
         }
-        let Some(held) = self.take_current_qso_record() else {
+        let Some(mut held) = self.take_current_qso_record() else {
             return CurrentQsoLogOutcome::NoEligibleContact;
         };
         if self.settings.prompt_to_log {
+            // Stamped as the desktop's hold stamps it: the confirm logs the park it was made from.
+            self.stamp_hold(&mut held.record);
             self.replace_pending_log(Some(held));
             CurrentQsoLogOutcome::Pending(PendingJournalWrite {
                 pending: self.pending_log_identity().expect("hold just installed"),
@@ -510,7 +512,14 @@ impl Engine {
         // the busted call's COUNTRY, NAME or looked-up GRID into the log, whichever client the
         // operator confirmed from.
         self.rederive_after_edits(&mut record, pending.record(), pending.grid_source);
-        let outcome = self.log_qso_for_sync(record);
+        // Its park was decided when it was held.
+        let outcome = self.log_qso_inner(
+            record,
+            true,
+            crate::engine::StateSource::Operator,
+            Vec::new(),
+            true,
+        );
         Ok(PendingLogConfirmation { pending, outcome })
     }
 

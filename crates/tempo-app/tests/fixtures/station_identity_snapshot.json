@@ -1,4 +1,22 @@
 {
+  "activation": {
+    "grid": null,
+    "myState": null,
+    "parks": [
+      {
+        "count": 0,
+        "p2p": 0,
+        "reference": "K-1234"
+      }
+    ],
+    "program": "POTA",
+    "qsoCount": 0,
+    "reference": "K-1234",
+    "restored": false,
+    "startedAt": null,
+    "states": [],
+    "utcDay": null
+  },
   "activePeer": null,
   "activeRadioId": 0,
   "aiCw": {

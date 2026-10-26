@@ -19,6 +19,7 @@ import {
 import { t } from '../i18n'
 import { clearHuntTarget, contestEntryReset, contestIMoved, contestLogManual, contestLogManualRows, contestLogSatellite, contestRemoveLast, contestLoggedQth, contestPlace, contestWorking, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, setLogFormGrid, type Park, type StateSource } from '../api'
 import { bandKey, modeKey } from '../features/callHistory'
+import { potaDupe } from '../features/potaActivation'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDateTimeToUnix } from '../features/utcLog'
@@ -1983,6 +1984,21 @@ export function LogEntry({
   const effBand = overrideOpen ? ovBand : draftContext?.band ?? snap.radio.band
   const effFreqMhz = overrideOpen ? ovFreqNum : draftContext?.freqMhz ?? liveFreqMhz
   const effMode = overrideOpen ? ovMode : draftContext?.mode ?? mode
+  // ⭐ While activating, the POTA dupe — warn only, never a refusal: this call already worked
+  // today from the activation's park on the band and mode this contact will log on (and the park
+  // in the box, if any). The "worked ever on this band" badge is hidden meanwhile: last week's
+  // contact is no dupe for today's activation.
+  // A paused activation (taken up at launch, not yet confirmed) tags nothing, so it is not one.
+  const activating = snap.activation?.reference != null && snap.activation.restored !== true
+  const potaDupeNow = potaDupe(hist.qsos, snap.activation, {
+    call: logCall,
+    band: effBand,
+    mode: effMode,
+    theirProgram: logParkProgram,
+    theirRef: logParkRef,
+    // The day the contact will log on: the hand-entered UTC time of a back-dated one, else now.
+    whenUnix: ovWhen ?? Math.floor(Date.now() / 1000),
+  })
 
   useEffect(() => {
     if (remoteMode && remote?.resetKey) reset()
@@ -3714,6 +3730,8 @@ export function LogEntry({
         image={logImage}
         myGrid={snap.mygrid}
         hist={hist}
+        activating={activating}
+        potaDupe={potaDupeNow}
         newEntity={newEntity}
         newBandSlot={newBandSlot}
         newModeSlot={newModeSlot}
