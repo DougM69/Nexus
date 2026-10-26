@@ -838,8 +838,13 @@ fn every_over_of_nexus_goes_out_on_its_own_audio_and_none_on_the_sdr_microphone(
     for (what, setup) in overs {
         let mut s = TciScene::new([], waits(), setup).on_a_made_up_clock();
         s.routed(what);
+        // A step a tick, as `run` paces them: the made-up clock never runs ahead of the real one.
+        // Unpaced, 50 steps took about 20 ms, and the APRS frame (0.49 s and its tail) had ended
+        // and its audio gone with the unkey before the program pulled its first frame, when it
+        // was slow to.
         for _ in 0..50 {
             s.step();
+            std::thread::sleep(Duration::from_millis(20));
         }
         s.audio_reached(what);
         assert_eq!(
