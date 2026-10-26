@@ -82,7 +82,7 @@ try {
     console.error('jtty-probe: CONTROL FAILED — a covered part came back on screen (or an uncovered one did not); the check cannot be trusted')
     code = code || 1
   }
-  if (code === 0) console.log(`jtty-probe: PASS — Messages, Edit keys, the eight F-keys and the Log QSO prompt (its words, Log QSO, Not now) on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the eight key boxes and Defaults too while editing; the control's covered parts seen as covered`)
+  if (code === 0) console.log(`jtty-probe: PASS — Messages, Edit keys, the eight F-keys and the Log QSO prompt (its words, the replaced note, Log QSO, Not now) on screen at ${SIZES.map((s) => `${s.w}×${s.h}`).join(', ')}; the eight key boxes and Defaults too while editing; the control's covered parts seen as covered`)
   process.exitCode = code
 } finally {
   await browser.stop()

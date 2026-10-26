@@ -367,12 +367,14 @@ interface Props {
    * against a second screen logging the same contact) and on true the strip logs exactly as its
    * own Log does. Otherwise it logs nothing: an empty strip is filled with `call` for the operator
    * to check and press again, and a strip holding another call is left as it is. An empty `call`
-   * names no station, so the strip's own is logged. The outcome is reported to `onLogRequest`.
+   * names no station, so the strip's own is logged. The outcome is reported to `onLogRequest`;
+   * after `logging`, `refused` follows when the log then logged nothing (the logger window's entry
+   * moved on, the log refused it), so the host can give its claim back.
    */
   logRequest?: { id: number; call: string; claim: () => Promise<boolean> } | null
   onLogRequest?: (
     id: number,
-    outcome: { kind: 'logging' | 'filled' | 'not-ready' | 'taken' } | { kind: 'other-call'; held: string },
+    outcome: { kind: 'logging' | 'filled' | 'not-ready' | 'taken' | 'refused' } | { kind: 'other-call'; held: string },
   ) => void
   /** Called with the snapshot `clearHuntTarget` answered, after the hunt tag's ✕ ended the hunt, so
    *  the host applies it at once: the POTA / SOTA view's `onSnap`, for its banner ✕. */
@@ -2024,20 +2026,21 @@ export function LogEntry({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remote?.resetKey])
 
-  const logIt = async () => {
-    if (remote && (!remote.canSubmit || remote.busy || remote.pending || fdActive)) return
+  // True when the contact reached the log; every refusal, said or not, is false.
+  const logIt = async (): Promise<boolean> => {
+    if (remote && (!remote.canSubmit || remote.busy || remote.pending || fdActive)) return false
     const call = logCall.trim().toUpperCase()
-    if (!call) return
+    if (!call) return false
     if (overrideBlocked) {
       pushToast(
         ovFreqBlocked ? t('logEntry.override.blocked') : t('logEntry.override.timeBlocked', { date: UTC_DATE_FORMAT, ...UTC_TIME_FORMATS }),
         'error',
       )
-      return
+      return false
     }
     if (gridBlocked) {
       pushToast(t('logEntry.grid.blockedToast', { grid: logGrid.trim() }), 'error')
-      return
+      return false
     }
 
     if (fdActive) {
@@ -2045,7 +2048,7 @@ export function LogEntry({
       // is mandatory — never log
       // a blank as the literal '?' (it would inflate the section multiplier), so bail until the
       // exchange is complete and the section is a real ARRL/RAC code.
-      if (!fdExchangeOk || !sentRstGood) return
+      if (!fdExchangeOk || !sentRstGood) return false
       // ⭐ THE TRANSPORT IS THE FIELD VECTOR — `contest_log_manual(call, fields, …)`,
       // one pair per box the strip actually rendered, in the session's own receive
       // order. It replaced `fd_log_manual`'s two positional slots, which could carry
@@ -2139,9 +2142,10 @@ export function LogEntry({
             endFill(true)
             setFdFields((prev) => afterLogged(prev, fdReceives, loggedRow))
             reset()
+            return true
           }
         }
-        return
+        return false
       }
       // ⭐ THE SATELLITE EXCHANGE TAKES ITS BAND OFF THE PASS, NOT THE DIAL. The
       // ordinary command stamps the band the radio is on at the moment you type, which
@@ -2182,8 +2186,9 @@ export function LogEntry({
         endFill(true)
         setFdFields((prev) => afterLogged(prev, fdReceives, loggedRow))
         reset()
+        return true
       }
-      return
+      return false
     }
 
     // Standard logbook path.
@@ -2247,9 +2252,9 @@ export function LogEntry({
           : undefined,
     }
     if (remote) {
-      try { await remote.submit(rec, overrideOpen ? 'explicit' : 'station'); reset() }
+      try { await remote.submit(rec, overrideOpen ? 'explicit' : 'station'); reset(); return true }
       catch { /* The adapter keeps a visible outcome and the draft. */ }
-      return
+      return false
     }
     // The draft lets go of the contact as its log starts (see the draft effect); one that fails is
     // still on screen, and kept again from the next render on.
@@ -2260,7 +2265,9 @@ export function LogEntry({
     if (r) {
       pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
       reset()
+      return true
     }
+    return false
   }
 
   // A host's "log it" (`logRequest`): this strip's own Log, for the station the request names and
@@ -2301,7 +2308,12 @@ export function LogEntry({
           return
         }
         report(id, { kind: 'logging' })
+        // Claimed, but the log can still refuse it: said, so the host gives the claim back.
         void logIt()
+          .catch(() => false)
+          .then((landed) => {
+            if (!landed) report(id, { kind: 'refused' })
+          })
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logRequest?.id])

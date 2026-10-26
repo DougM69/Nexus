@@ -51,6 +51,7 @@ import type {
   Js8Filter,
   Js8Freq,
   Js8State,
+  JttyLogPromptAnswer,
   JttySent,
   JttyState,
   Js8Typeahead,
@@ -4132,10 +4133,17 @@ export async function jttyDecodeAgain(atUtcMs: number | null = null): Promise<Jt
   return invoke<JttyState>('jtty_decode_again', { atUtcMs })
 }
 
-/** Answer the JTTY Log QSO prompt `id` (Log QSO or Not now). True for the first answer of the
- * prompt still asked, which takes it for every screen; log the contact only on true. */
-export async function jttyLogPromptAnswer(id: number): Promise<boolean> {
-  return invoke<boolean>('jtty_log_prompt_answer', { id })
+/** Answer the JTTY Log QSO prompt `id` (Log QSO or Not now). `taken` for the first answer of the
+ * prompt still asked, which takes it for every screen; log the contact only on `taken`. Any other
+ * answer says why it took nothing. */
+export async function jttyLogPromptAnswer(id: number): Promise<JttyLogPromptAnswer> {
+  return invoke<JttyLogPromptAnswer>('jtty_log_prompt_answer', { id })
+}
+
+/** Give back JTTY Log QSO prompt `id`, taken by a Log QSO that then logged nothing: every screen
+ * asks it again. Logs and sends nothing. */
+export async function jttyLogPromptRelease(id: number): Promise<void> {
+  return invoke<void>('jtty_log_prompt_release', { id })
 }
 
 /** Send typed text (WSJT-X's Send): all of it, its macros expanded, ending the message (and a live

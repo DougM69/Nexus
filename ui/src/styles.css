@@ -28377,6 +28377,10 @@ button.sat-chip:disabled {
   border-radius: var(--radius-sm);
   font-size: var(--fs-label);
 }
+/* Under the question, when it replaced one never answered: whose that was, quieter than the question. */
+.jtty-log-prompt-note {
+  color: var(--text-dim);
+}
 /* WSJT-X's "Frames: sent/total" before Send: a quiet count, its digits steady as they change. */
 .jtty-frames {
   flex: 0 0 auto;

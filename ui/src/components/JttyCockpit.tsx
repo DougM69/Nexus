@@ -5,7 +5,7 @@
 // written), the decoded lines, which are the station's text in WSJT-X's columns, and the engine's
 // own words.
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import type { AppSnapshot, BandChannel, JttyLine, JttyMessageStyle, JttySent, JttyState, Settings } from '../types'
+import type { AppSnapshot, BandChannel, JttyLine, JttyLogPromptAnswer, JttyMessageStyle, JttySent, JttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -32,6 +32,7 @@ import {
   jttyLiveCommit,
   jttyLiveStart,
   jttyLogPromptAnswer,
+  jttyLogPromptRelease,
   jttySend,
   jttySetBand,
   jttySetRx,
@@ -115,6 +116,20 @@ const FKEY_SETTING: Record<JttyMessageStyle, 'jttyFkeys' | 'jttyFt8Fkeys'> = {
   ft8: 'jttyFt8Fkeys',
 }
 const FKEY_NAMES = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8']
+/** What the cockpit says when Log QSO's answer took nothing, by the engine's reason. No answer at
+ *  all (the command failed) says what an expired prompt says: nothing was logged. */
+function whyNot(answer: JttyLogPromptAnswer | null): string {
+  switch (answer) {
+    case 'answered':
+      return t('jtty.logPrompt.taken')
+    case 'logged':
+      return t('jtty.logPrompt.logged')
+    case 'replaced':
+      return t('jtty.logPrompt.replaced')
+    default:
+      return t('jtty.logPrompt.expired')
+  }
+}
 /** WSJT-X's typing pause after which a live entry sends what is typed (`kJttyAutoAdvanceIdleMs`). */
 const LIVE_IDLE_MS = 1500
 /** WSJT-X's F Tol choices for JTTY (`sbFtol_2->values`, on_actionJTTY_triggered). */
@@ -377,7 +392,16 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     if (!draftRef.current.trim()) return
     sendWith(() => (draftRef.current.trim() ? jttySend(draftRef.current, hisCall, hisSnr) : Promise.resolve(null)), true)
   }
-  const sendFkey = (n: number) => sendWith(() => jttyFkey(n, hisCall, hisSnr), false)
+  // WHILE THE KEYS ARE OPEN FOR EDITING, F1–F8 SEND NOTHING (pressed or clicked): a refusal is
+  // said, and sending comes back when editing closes. What a key would send is being changed.
+  const editingRef = useRef(false)
+  const sendFkey = (n: number) => {
+    if (editingRef.current) {
+      pushToast(t('jtty.fkeys.editing.refused'), 'info')
+      return
+    }
+    sendWith(() => jttyFkey(n, hisCall, hisSnr), false)
+  }
   // Live (WSJT-X's Alt+J), and its sign-off (Alt+K): `DE <call> K`, and the session ends.
   const toggleLive = () =>
     sendWith(
@@ -480,6 +504,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const style: JttyMessageStyle = tx?.style ?? 'contest'
   const fkeys = tx?.fkeys ?? FKEY_DEFAULTS[style]
   const [editingKeys, setEditingKeys] = useState(false)
+  editingRef.current = editingKeys
   const [keyDrafts, setKeyDrafts] = useState<Record<number, string>>({})
   // THE LOG QSO PROMPT. When a send starting "TU " goes out, WSJT-X opens its Log QSO dialog
   // (`handleJttyContestSerial` starts `logQSOTimer`, 3.3.0-beta4 `widgets/mainwindow_jtty.cpp`
@@ -490,27 +515,53 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // again; another call is left alone and nothing is logged). The engine takes the first answer
   // (Log QSO or Not now) for every screen, so a reload or a Remote client does not ask again and
   // the contact is never logged twice; it stops asking after two minutes.
+  // An answer that takes nothing says why (WHY_NOT): another screen answered it, the contact is in
+  // the log already, a newer TU replaced it, or it is too old. A Log QSO the strip then could not
+  // log gives the prompt back, so it can still be answered.
   const logPrompt = tx?.logPrompt ?? null
   const [promptDone, setPromptDone] = useState<number | null>(null)
   const askToLog = logPrompt && logPrompt.id !== promptDone ? logPrompt : null
   const [logRequest, setLogRequest] = useState<{ id: number; call: string; claim: () => Promise<boolean> } | null>(null)
+  // The request handed to the strip, with the prompt it answers and the engine's answer once asked:
+  // an outcome is matched to it by id, and one for an earlier request changes nothing.
+  const requested = useRef<{ id: number; promptId: number; call: string; answer: JttyLogPromptAnswer | null } | null>(null)
+  const requests = useRef(0)
   const logPrompted = () => {
     if (!askToLog) return
-    const promptId = askToLog.id
-    setLogRequest((r) => ({ id: (r?.id ?? 0) + 1, call: askToLog.call, claim: () => jttyLogPromptAnswer(promptId) }))
+    const req = { id: ++requests.current, promptId: askToLog.id, call: askToLog.call, answer: null as JttyLogPromptAnswer | null }
+    requested.current = req
+    setLogRequest({
+      id: req.id,
+      call: req.call,
+      claim: () =>
+        jttyLogPromptAnswer(req.promptId).then((a) => {
+          req.answer = a
+          return a === 'taken'
+        }),
+    })
   }
   const onLogRequest = (
-    _id: number,
-    outcome: { kind: 'logging' | 'filled' | 'not-ready' | 'taken' } | { kind: 'other-call'; held: string },
+    id: number,
+    outcome: { kind: 'logging' | 'filled' | 'not-ready' | 'taken' | 'refused' } | { kind: 'other-call'; held: string },
   ) => {
-    const call = askToLog?.call ?? ''
+    const req = requested.current
+    if (!req || req.id !== id) return
+    // Handled: the strip is asked nothing more by this request.
+    setLogRequest(null)
+    const call = req.call
     switch (outcome.kind) {
       case 'logging':
-        if (askToLog) setPromptDone(askToLog.id)
+        setPromptDone(req.promptId)
+        return
+      case 'refused':
+        // Taken, but nothing logged (the strip said why): asked again, here and on every screen.
+        requested.current = null
+        setPromptDone((d) => (d === req.promptId ? null : d))
+        void jttyLogPromptRelease(req.promptId).catch(() => {})
         return
       case 'taken':
-        if (askToLog) setPromptDone(askToLog.id)
-        pushToast(t('jtty.logPrompt.taken'), 'info')
+        setPromptDone(req.promptId)
+        pushToast(whyNot(req.answer), 'info')
         return
       case 'filled':
         pushToast(t('jtty.logPrompt.filled', { call }), 'info')
@@ -691,6 +742,9 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               ? t('jtty.logPrompt.text', { call: askToLog.call })
               : t('jtty.logPrompt.textNoCall')}
           </span>
+          {askToLog.replaced && (
+            <span className="jtty-log-prompt-note">{t('jtty.logPrompt.replacedNote', { call: askToLog.replaced })}</span>
+          )}
           <button type="button" className="le-qrz jtty-log-prompt-log" onClick={logPrompted}>
             {t('jtty.logPrompt.log')}
           </button>

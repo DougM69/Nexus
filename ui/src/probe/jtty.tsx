@@ -57,7 +57,7 @@ const STATE: JttyState = {
     notice: null,
     framesSent: 0,
     framesTotal: 0,
-    logPrompt: { id: 1, call: 'W1AW', serial: 7, atUtcMs: NOW },
+    logPrompt: { id: 1, call: 'W1AW', serial: 7, atUtcMs: NOW, replaced: 'K1ABC' },
     style: 'contest',
     fkeys: ['CQ %M CQ', '%H %E', '%H TU CQ %M CQ', '%M', '%H', 'TU NOW %Q %E', '%H AGN?', '%E'],
   },
@@ -77,7 +77,7 @@ const answers: Record<string, () => unknown> = {
   jtty_set_band: () => STATE,
   get_licensed_band_plan: () => [],
   get_settings: () => settings,
-  jtty_log_prompt_answer: () => true,
+  jtty_log_prompt_answer: () => 'taken',
 }
 const refused = new Set<string>()
 window.__TAURI_INTERNALS__ = {
@@ -114,6 +114,7 @@ function measure() {
     editKeys: dock?.querySelector('.jtty-fkeys-edit') ?? null,
     keys: [...(dock?.querySelectorAll(edit ? '.jtty-fkey-edit input' : '.jtty-macros .cw-macro') ?? [])],
     promptText: prompt?.querySelector('[role="status"]') ?? null,
+    promptNote: prompt?.querySelector('.jtty-log-prompt-note') ?? null,
     logQso: byText(prompt, t('jtty.logPrompt.log')),
     notNow: byText(prompt, t('jtty.logPrompt.dismiss')),
     ...(edit ? { defaults: byText(dock, t('jtty.fkeys.reset.label')) } : {}),

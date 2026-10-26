@@ -118,4 +118,30 @@ describe('a host’s log request logs only the station it names', () => {
     expect(claim).not.toHaveBeenCalled()
     expect(api.contestLogManual).not.toHaveBeenCalled()
   })
+
+  it('claimed, then refused by the log itself: the strip says it logged nothing, so the host can ask again', async () => {
+    const s = strip(null)
+    vi.mocked(api.logQso).mockRejectedValueOnce(new Error('the log refused it'))
+    fireEvent.change(screen.getByPlaceholderText('Call'), { target: { value: 'W1AW' } })
+    s.ask(1, 'W1AW')
+    await waitFor(() => expect(s.outcomes).toEqual([{ kind: 'logging' }, { kind: 'refused' }]))
+    expect((screen.getByPlaceholderText('Call') as HTMLInputElement).value, 'the contact is still on the strip').toBe('W1AW')
+    // CONTROL: the same press, logged, reports nothing after logging.
+    s.ask(2, 'W1AW')
+    await waitFor(() => expect(api.logQso).toHaveBeenCalledTimes(2))
+    await flush()
+    expect(s.outcomes.slice(2)).toEqual([{ kind: 'logging' }])
+  })
+
+  it('Field Day: a contest log that refuses after the claim is reported the same way', async () => {
+    const s = strip(fieldDay)
+    vi.mocked(api.contestLogManual).mockRejectedValueOnce(new Error('the entry moved on'))
+    fireEvent.change(screen.getByLabelText(/^Call/, { selector: 'input.le-fd-input-call' }), { target: { value: 'W1AW' } })
+    fireEvent.change(screen.getByLabelText(/^Class/), { target: { value: '2A' } })
+    fireEvent.change(screen.getByLabelText(/^Section/), { target: { value: 'EMA' } })
+    expect((document.querySelector('.le-fd-log-btn') as HTMLButtonElement).disabled, 'CONTROL: ready to log').toBe(false)
+    s.ask(1, 'W1AW')
+    await waitFor(() => expect(s.outcomes).toEqual([{ kind: 'logging' }, { kind: 'refused' }]))
+    expect(api.contestLogManual).toHaveBeenCalledTimes(1)
+  })
 })

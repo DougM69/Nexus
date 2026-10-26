@@ -18682,12 +18682,23 @@ fn jtty_decode_again(
     Ok(eng.jtty_state())
 }
 
-/// Answer the JTTY Log QSO prompt `id` (Log QSO or Not now): true for the first answer of the
-/// prompt still asked, which takes it for every screen, shack and Remote alike; a screen logs the
-/// contact only on true, so one TU is never logged twice. Logs and sends nothing itself.
+/// Answer the JTTY Log QSO prompt `id` (Log QSO or Not now): `taken` for the first answer of the
+/// prompt still asked, which takes it for every screen, shack and Remote alike; otherwise why it
+/// took nothing. A screen logs the contact only on `taken`, so one TU is never logged twice. Logs
+/// and sends nothing itself.
 #[tauri::command(async)]
-fn jtty_log_prompt_answer(state: State<'_, SharedEngine>, id: u64) -> bool {
+fn jtty_log_prompt_answer(
+    state: State<'_, SharedEngine>,
+    id: u64,
+) -> tempo_app::dto::JttyLogPromptAnswer {
     engine_lock(&state).jtty_log_prompt_answer(id)
+}
+
+/// Give back JTTY Log QSO prompt `id`, taken by a Log QSO that then logged nothing (the log strip
+/// refused it): every screen asks it again. Logs and sends nothing.
+#[tauri::command(async)]
+fn jtty_log_prompt_release(state: State<'_, SharedEngine>, id: u64) {
+    engine_lock(&state).jtty_log_prompt_release(id)
 }
 
 // ---- JTTY transmit (`tempo_app::engine::jtty_tx`). Every send passes the engine's JTTY TX gate
@@ -40110,6 +40121,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         jtty_clear,
         jtty_decode_again,
         jtty_log_prompt_answer,
+        jtty_log_prompt_release,
         jtty_send,
         jtty_fkey,
         jtty_live_start,

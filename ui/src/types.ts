@@ -2073,7 +2073,14 @@ export interface JttyLogPrompt {
   /** The serial number the exchange sent, before it moved on. */
   serial: number
   atUtcMs: number
+  /** The station whose prompt this one replaced while it was still unanswered: that contact is
+   *  logged from the log strip. Absent in an older engine's answer. */
+  replaced?: string | null
 }
+
+/** How an answer of a JTTY Log QSO prompt went (`tempo_app::dto::JttyLogPromptAnswer`): `taken`
+ *  lets this screen log; the rest say why not. */
+export type JttyLogPromptAnswer = 'taken' | 'answered' | 'logged' | 'replaced' | 'expired'
 
 /** WSJT-X's two JTTY F-key sets (`Jtty::MessageStyle`): Contest, and FT8 style. */
 export type JttyMessageStyle = 'contest' | 'ft8'

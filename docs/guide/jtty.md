@@ -89,7 +89,8 @@ The dock at the bottom of the screen is WSJT-X's JTTY transmitter.
   for a chat-style contact (`%H %M %G`, `%H %M %R`, `%H %M R%R`, `%H %M RRR`, `%H %M 73` and
   `CQ %M %G`, F7 and F8 empty). Click one or press its key. **Edit keys** turns the eight keys
   into their messages to edit, as WSJT-X's message boxes; each set keeps its own, and
-  **Defaults** puts the set back to WSJT-X's. A message in one of WSJT-X's contest forms (the
+  **Defaults** puts the set back to WSJT-X's. While you edit, F1 to F8 send nothing and say so;
+  they send again once you finish. A message in one of WSJT-X's contest forms (the
   defaults, `%H %G`, `599 %G`, `%H 599 %N`, `TU NOW %Q 599 %N`, `599 %N`, `%G`, and a request
   such as `AGN?`, `NR?` or `QSL TU`) goes in JTTY's compact form; a call in it must be a standard
   callsign, and a key whose call is not one is refused, never sent as text. Any other message
@@ -139,15 +140,21 @@ includes the grid, as WSJT-X's does.
 
 When a message starting `TU` goes out (F6's `TU NOW`, or `TU` typed), WSJT-X opens its Log QSO
 window. Nexus asks instead, at the top of the log pane: "Log the contact with W1AW?", naming
-the station the TU thanked. F6 thanks one station while it calls the next, whose call is in the
-Call box by then, so the question names the station before it. Asking changes nothing: the Call
+the station the TU thanked: the one your messages before it went to, even when they carried no
+call (F4's `%M` and F8's `%E` in search and pounce). F6 thanks one station while it calls the
+next, whose call is in the Call box by then, so the question names the station before it. A CQ
+goes to nobody, whatever the Call box holds. Asking changes nothing: the Call
 box and the log strip stay as you have them. **Log QSO** logs through the strip's own Log, with
 every check it makes, and only when the strip holds that call. With the strip empty, the press
 puts the call in it for you to check, and the next press logs it; with another call in it,
 nothing is logged and Nexus says so. **Not now** closes the question. The first answer, from
 this screen or a Remote one, closes it everywhere, so a contact cannot be logged twice from two
-screens, and a question nobody answered is dropped after two minutes. Nothing is logged unless you
-press it.
+screens. Logging that contact any other way (the strip's own Log, the logbook, a Remote screen)
+closes the question too. If the strip cannot log it after all, the question comes back. A TU to
+another station before you answer replaces the question and names the one it replaced, for you
+to log from the strip; a question nobody answered is dropped after two minutes. When Log QSO finds
+the question already closed, Nexus says why: answered elsewhere, already in the log, replaced or
+too old. Nothing is logged unless you press it.
 
 The log strip logs a JTTY contact as **JTTY**, and an ADIF export writes it as
 `MODE=MFSK SUBMODE=JTTY`, as ADIF 3.1.8 registers it. A log that holds a bare `MODE=JTTY`

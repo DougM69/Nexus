@@ -194,12 +194,16 @@ pub struct JttyTx {
     pub(super) gen: u64,
     /// The newest Log QSO prompt, raised when a send starting "TU " goes out (WSJT-X's
     /// `logQSOTimer`), and its number: the cockpit asks the operator once per prompt. It logs
-    /// nothing; the operator does, from the log strip.
+    /// nothing; the operator does, from the log strip. Kept once it is closed, to tell a later
+    /// answer why it took nothing.
     log_prompt: Option<crate::dto::JttyLogPrompt>,
     log_prompts: u64,
-    /// The station the last send that named the Call box's call went to: the one a later TU
-    /// thanks. F6 (`TU NOW %Q %E`) goes out with the NEXT station in the Call box, so the station
-    /// it closes is this one, not the Call box's.
+    /// How `log_prompt` was closed: `None` while it is still asked (until it is too old),
+    /// `Answered` once an answer took it, `Logged` once its contact reached the log by any route.
+    log_prompt_end: Option<crate::dto::JttyLogPromptAnswer>,
+    /// The station the last send made with a call in the Call box went to (a CQ goes to nobody):
+    /// the one a later TU thanks. F6 (`TU NOW %Q %E`) goes out with the NEXT station in the Call
+    /// box, so the station it closes is this one, not the Call box's.
     addressed: String,
     /// Frames of what was sent (not the filler) this over has put on the air: WSJT-X's "Frames:
     /// sent/total" (`updateJttyLiveEntryFrameLabel`), from the first send of an over to the next.
@@ -226,6 +230,7 @@ impl JttyTx {
             gen: 0,
             log_prompt: None,
             log_prompts: 0,
+            log_prompt_end: None,
             addressed: String::new(),
             over_frames_sent: 0,
         }
@@ -1384,6 +1389,7 @@ impl Engine {
         self.jtty_drop(LEFT_SCREEN);
         // The question about the last contact ends with the screen, and so does whom it was with.
         self.jtty_tx.log_prompt = None;
+        self.jtty_tx.log_prompt_end = None;
         self.jtty_tx.addressed.clear();
     }
 
@@ -1711,30 +1717,54 @@ impl Engine {
             self.jtty_tx.serial = next;
             self.settings.jtty_serial = next;
             //
-            // The prompt names the station the TU THANKED: the one the last send naming its
-            // station went to (F6 thanks it while calling the next), else the Call box's.
+            // The prompt names the station the TU THANKED: the one the sends before it went to
+            // (F6 thanks it while calling the next), else the Call box's. It is worked out before
+            // this send moves `addressed` on, below.
             let thanked = if self.jtty_tx.addressed.is_empty() {
                 seg.his_call.clone()
             } else {
                 self.jtty_tx.addressed.clone()
             };
+            // A prompt for another station still asked is replaced, and this one says so: that
+            // contact is logged from the strip now.
+            let replaced = self
+                .jtty_open_log_prompt(at_ms)
+                .filter(|p| !p.call.is_empty() && !p.call.eq_ignore_ascii_case(&thanked))
+                .map(|p| p.call.clone());
             self.jtty_tx.log_prompts += 1;
             self.jtty_tx.log_prompt = Some(crate::dto::JttyLogPrompt {
                 id: self.jtty_tx.log_prompts,
                 call: thanked,
                 serial: sent,
                 at_utc_ms: at_ms,
+                replaced,
             });
+            self.jtty_tx.log_prompt_end = None;
         }
-        // Whom this send went to, for the next TU: the Call box's station, when the message
-        // names it (a CQ sent with a call in the box names nobody).
-        if !seg.his_call.is_empty()
-            && seg
-                .text
-                .split_whitespace()
-                .any(|w| w.eq_ignore_ascii_case(&seg.his_call))
-        {
+        // Whom this send went to, for the next TU: the Call box's station, whether or not the
+        // message names it (WSJT-X's search-and-pounce keys F4 `%M` and F8 `%E` name nobody), but
+        // not for a CQ, which goes to nobody whatever the box holds.
+        let cq = seg
+            .text
+            .get(..3)
+            .is_some_and(|t| t.eq_ignore_ascii_case("CQ "));
+        if !seg.his_call.is_empty() && !cq {
             self.jtty_tx.addressed = seg.his_call.clone();
+        }
+    }
+
+    /// A contact with `call` reached the log, by any route (the log strip's own Log, the
+    /// logbook, a Remote client, the contest log): a prompt asking to log it is closed for every
+    /// screen, so Log QSO cannot log it again. Another station's contact leaves it open.
+    pub(super) fn jtty_contact_logged(&mut self, call: &str) {
+        let call = call.trim();
+        if self
+            .jtty_tx
+            .log_prompt
+            .as_ref()
+            .is_some_and(|p| !p.call.is_empty() && p.call.eq_ignore_ascii_case(call))
+        {
+            self.jtty_tx.log_prompt_end = Some(crate::dto::JttyLogPromptAnswer::Logged);
         }
     }
 
@@ -1744,21 +1774,49 @@ impl Engine {
         self.jtty_tx
             .log_prompt
             .as_ref()
+            .filter(|_| self.jtty_tx.log_prompt_end.is_none())
             .filter(|p| now_ms - p.at_utc_ms <= JTTY_LOG_PROMPT_MS)
     }
 
-    /// Answer Log QSO prompt `id` (Log QSO or Not now, from any screen): true for the first answer
-    /// of the prompt still asked, which takes it, so no screen asks again; false for anything else
-    /// (answered already, superseded, too old). A screen logs only on true, so one TU is never
-    /// logged twice from two screens. Logs and sends nothing itself.
-    pub fn jtty_log_prompt_answer(&mut self, id: u64) -> bool {
-        let open = self
-            .jtty_open_log_prompt(now_unix_millis() as i64)
-            .is_some_and(|p| p.id == id);
-        if open {
-            self.jtty_tx.log_prompt = None;
+    /// Answer Log QSO prompt `id` (Log QSO or Not now, from any screen): `Taken` for the first
+    /// answer of the prompt still asked, which takes it, so no screen asks again; for anything else
+    /// why it took nothing (answered already, its contact logged, replaced by a newer TU, too old).
+    /// A screen logs only on `Taken`, so one TU is never logged twice from two screens. Logs and
+    /// sends nothing itself.
+    pub fn jtty_log_prompt_answer(&mut self, id: u64) -> crate::dto::JttyLogPromptAnswer {
+        use crate::dto::JttyLogPromptAnswer as A;
+        let Some(newest) = self.jtty_tx.log_prompt.as_ref() else {
+            return A::Expired;
+        };
+        if id < newest.id {
+            return A::Replaced;
         }
-        open
+        if id > newest.id {
+            return A::Expired;
+        }
+        if let Some(end) = self.jtty_tx.log_prompt_end {
+            return end;
+        }
+        if self
+            .jtty_open_log_prompt(now_unix_millis() as i64)
+            .is_none()
+        {
+            return A::Expired;
+        }
+        self.jtty_tx.log_prompt_end = Some(A::Answered);
+        A::Taken
+    }
+
+    /// Give back prompt `id`, taken by a Log QSO whose log then logged nothing (the strip refused
+    /// it after the claim): it is asked again, on every screen, as it was. Only while it is the
+    /// newest prompt and was closed by an answer, not by its contact reaching the log. Logs and
+    /// sends nothing.
+    pub fn jtty_log_prompt_release(&mut self, id: u64) {
+        if self.jtty_tx.log_prompt.as_ref().is_some_and(|p| p.id == id)
+            && self.jtty_tx.log_prompt_end == Some(crate::dto::JttyLogPromptAnswer::Answered)
+        {
+            self.jtty_tx.log_prompt_end = None;
+        }
     }
 
     /// The cockpit's view of the transmitter.
@@ -2513,24 +2571,28 @@ mod tests {
     #[test]
     fn a_prompt_is_answered_once_for_every_screen() {
         let e = jtty_engine();
+        use crate::dto::JttyLogPromptAnswer as A;
         let shown = || engine_lock(&e).jtty_tx_state().log_prompt.map(|p| p.id);
         send_text(&e, "TU 73", "W1AW").unwrap();
         drain(&e);
         send_text(&e, "TU 73", "W1AW").unwrap();
         drain(&e);
         assert_eq!(shown(), Some(2));
-        assert!(
-            !engine_lock(&e).jtty_log_prompt_answer(1),
+        assert_eq!(
+            engine_lock(&e).jtty_log_prompt_answer(1),
+            A::Replaced,
             "an older prompt"
         );
         assert_eq!(shown(), Some(2), "is no answer to this one");
-        assert!(
+        assert_eq!(
             engine_lock(&e).jtty_log_prompt_answer(2),
+            A::Taken,
             "the first answer takes it"
         );
         assert_eq!(shown(), None, "and no screen asks again");
-        assert!(
-            !engine_lock(&e).jtty_log_prompt_answer(2),
+        assert_eq!(
+            engine_lock(&e).jtty_log_prompt_answer(2),
+            A::Answered,
             "a second screen's answer takes nothing"
         );
         // Two minutes on, a prompt nobody answered is not asked, nor can it be taken.
@@ -2544,13 +2606,237 @@ mod tests {
             .unwrap()
             .at_utc_ms -= JTTY_LOG_PROMPT_MS + 1_000;
         assert_eq!(shown(), None, "too old to ask");
-        assert!(!engine_lock(&e).jtty_log_prompt_answer(3));
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(3), A::Expired);
         // Leaving the screen ends the question.
         send_text(&e, "TU 73", "W1AW").unwrap();
         drain(&e);
         assert_eq!(shown(), Some(4));
         engine_lock(&e).jtty_left();
         assert_eq!(shown(), None, "left the screen");
+    }
+
+    /// THE TU THANKS THE STATION THE LAST SENDS WENT TO, even when they never named it.
+    /// WSJT-X's search-and-pounce keys F4 (`%M`) and F8 (`%E`) carry no call: with K1ABC in the
+    /// Call box, the TU after them thanks K1ABC, not the station before. F6 still thanks the
+    /// station worked while calling the next, and a typed TU with the Call box emptied thanks
+    /// the station last sent to.
+    #[test]
+    fn the_prompt_names_the_station_worked_with_keys_that_name_nobody() {
+        let e = jtty_engine();
+        let prompt_call = || {
+            engine_lock(&e)
+                .jtty_tx_state()
+                .log_prompt
+                .map(|p| p.call)
+                .unwrap_or_default()
+        };
+        // The contact before: F2 to W1AW, a typed TU.
+        send_fkey(&e, 2, "W1AW").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "W1AW", "control: the contact before");
+        // Search and pounce on K1ABC with the keys that name nobody.
+        send_fkey(&e, 4, "K1ABC").unwrap();
+        drain(&e);
+        send_fkey(&e, 8, "K1ABC").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "K1ABC").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "K1ABC", "the TU thanked K1ABC");
+        // A run: F6 thanks N0XX while calling W2BB, whose call is in the box by then.
+        send_fkey(&e, 2, "N0XX").unwrap();
+        drain(&e);
+        send_fkey(&e, 6, "W2BB").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "N0XX", "F6 thanked N0XX");
+        // A typed TU with the Call box emptied thanks the station last sent to: W2BB.
+        send_text(&e, "TU 73", "").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "W2BB", "the station F6 called");
+        // A CQ with a call left in the box sends to nobody.
+        send_fkey(&e, 1, "W9ZZZ").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "W2BB", "a CQ moved nothing");
+    }
+
+    /// A CONTACT LOGGED BY ANY ROUTE CLOSES ITS PROMPT, for every screen. Logged with the strip's
+    /// own Log (the logbook, a Remote client, the contest log), the contact is in the log: Log QSO
+    /// must not log it again, so the prompt is no longer asked and an answer of it says why.
+    /// Another station's contact leaves it open.
+    #[test]
+    fn a_contact_logged_by_any_route_closes_its_prompt() {
+        use crate::dto::JttyLogPromptAnswer as A;
+        let contact = |call: &str| {
+            tempo_core::logbook::parse_adif(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:4>JTTY<FREQ:6>14.090<QSO_DATE:8>20261026\
+                 <TIME_ON:6>120000<EOR>",
+                call.len()
+            ))
+            .pop()
+            .expect("one record")
+        };
+        let e = jtty_engine();
+        let shown = || engine_lock(&e).jtty_tx_state().log_prompt.map(|p| p.id);
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(shown(), Some(1));
+        engine_lock(&e).log_qso(contact("K1ABC"));
+        assert_eq!(shown(), Some(1), "control: another station's contact");
+        engine_lock(&e).log_qso(contact("w1aw"));
+        assert_eq!(shown(), None, "W1AW is in the log: nothing to ask");
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(1), A::Logged);
+        // The contest log, as the strip logs in a contest session.
+        let e = jtty_in_contest("arrlfd", "3A");
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        let id = engine_lock(&e)
+            .jtty_tx_state()
+            .log_prompt
+            .expect("asked")
+            .id;
+        assert!(engine_lock(&e)
+            .contest_log_manual_sent(
+                "W1AW",
+                &[
+                    ("CLASS".into(), "2A".into()),
+                    ("SECTION".into(), "EMA".into())
+                ],
+                "DIG",
+                Some("JTTY"),
+                None,
+            )
+            .unwrap());
+        assert_eq!(engine_lock(&e).jtty_tx_state().log_prompt, None);
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(id), A::Logged);
+        // The class-and-section door the Field Day strip used before the field vector.
+        send_fkey(&e, 2, "N0XX").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "N0XX").unwrap();
+        drain(&e);
+        assert!(engine_lock(&e).jtty_tx_state().log_prompt.is_some());
+        assert!(engine_lock(&e)
+            .fd_log_manual_submode("N0XX", "2A", "EMA", "DIG", "JTTY")
+            .unwrap());
+        assert_eq!(engine_lock(&e).jtty_tx_state().log_prompt, None);
+    }
+
+    /// WHY AN ANSWER TOOK NOTHING. The first answer takes the prompt; any other is told whether
+    /// it was answered already, replaced by a newer TU, or too old, so the cockpit never says
+    /// "answered on another screen" when nobody answered it.
+    #[test]
+    fn an_answer_that_takes_nothing_says_why() {
+        use crate::dto::JttyLogPromptAnswer as A;
+        let e = jtty_engine();
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "K1ABC").unwrap();
+        drain(&e);
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(1), A::Replaced);
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(2), A::Taken);
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(2), A::Answered);
+        send_text(&e, "TU 73", "N0XX").unwrap();
+        drain(&e);
+        engine_lock(&e)
+            .jtty_tx
+            .log_prompt
+            .as_mut()
+            .unwrap()
+            .at_utc_ms -= JTTY_LOG_PROMPT_MS + 1_000;
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(3), A::Expired);
+    }
+
+    /// A SECOND TU REPLACING AN UNANSWERED PROMPT SAYS SO: the new prompt names the station whose
+    /// question it replaced, for the operator to log from the strip. Not after an answer, not for
+    /// the same station, and not once the old one was too old to ask.
+    #[test]
+    fn a_tu_that_replaces_an_unanswered_prompt_names_it() {
+        let e = jtty_engine();
+        let replaced = || {
+            engine_lock(&e)
+                .jtty_tx_state()
+                .log_prompt
+                .and_then(|p| p.replaced)
+        };
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(replaced(), None, "the first replaces nothing");
+        send_fkey(&e, 2, "K1ABC").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "K1ABC").unwrap();
+        drain(&e);
+        assert_eq!(
+            replaced().as_deref(),
+            Some("W1AW"),
+            "W1AW was never answered"
+        );
+        send_text(&e, "TU 73", "K1ABC").unwrap();
+        drain(&e);
+        assert_eq!(replaced(), None, "the same station: nothing lost");
+        let id = engine_lock(&e).jtty_tx_state().log_prompt.unwrap().id;
+        engine_lock(&e).jtty_log_prompt_answer(id);
+        send_fkey(&e, 2, "N0XX").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "N0XX").unwrap();
+        drain(&e);
+        assert_eq!(replaced(), None, "K1ABC was answered");
+        engine_lock(&e)
+            .jtty_tx
+            .log_prompt
+            .as_mut()
+            .unwrap()
+            .at_utc_ms -= JTTY_LOG_PROMPT_MS + 1_000;
+        send_fkey(&e, 2, "W2BB").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "W2BB").unwrap();
+        drain(&e);
+        assert_eq!(replaced(), None, "N0XX's was too old to ask");
+    }
+
+    /// A PROMPT TAKEN BY A LOG QSO THAT LOGGED NOTHING IS GIVEN BACK. The strip can still refuse
+    /// after the claim (the logger window's entry moved on, the log refused): the prompt is asked
+    /// again for every screen, as it was. Given back only while nothing newer replaced it and the
+    /// contact is not in the log.
+    #[test]
+    fn a_taken_prompt_that_logged_nothing_is_asked_again() {
+        use crate::dto::JttyLogPromptAnswer as A;
+        let e = jtty_engine();
+        let shown = || engine_lock(&e).jtty_tx_state().log_prompt.map(|p| p.id);
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(1), A::Taken);
+        assert_eq!(shown(), None);
+        engine_lock(&e).jtty_log_prompt_release(1);
+        assert_eq!(shown(), Some(1), "asked again");
+        assert_eq!(
+            engine_lock(&e).jtty_log_prompt_answer(1),
+            A::Taken,
+            "and can be answered"
+        );
+        // Replaced since: the newer one stays as it is.
+        send_fkey(&e, 2, "K1ABC").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "K1ABC").unwrap();
+        drain(&e);
+        engine_lock(&e).jtty_log_prompt_release(1);
+        assert_eq!(shown(), Some(2));
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(2), A::Taken);
+        engine_lock(&e).jtty_log_prompt_release(1);
+        assert_eq!(shown(), None, "an older id gives back nothing");
+        // Taken, then logged by another route: it is in the log, so it is not asked again.
+        engine_lock(&e).log_qso(
+            tempo_core::logbook::parse_adif(
+                "<CALL:5>K1ABC<BAND:3>20m<MODE:4>JTTY<FREQ:6>14.090<QSO_DATE:8>20261026\
+                 <TIME_ON:6>120000<EOR>",
+            )
+            .pop()
+            .expect("one record"),
+        );
+        engine_lock(&e).jtty_log_prompt_release(2);
+        assert_eq!(shown(), None, "logged: nothing to give back");
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(2), A::Logged);
     }
 
     /// The JTTY screen in a contest session: `event` ("" is ARRL Field Day), class `class`,

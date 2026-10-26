@@ -882,6 +882,27 @@ pub struct JttyLogPrompt {
     pub serial: u32,
     /// When the send started on the air, UTC milliseconds.
     pub at_utc_ms: i64,
+    /// The station whose prompt this one replaced while it was still unanswered (a second TU to
+    /// another station): that contact is logged from the log strip, not from here.
+    #[serde(default)]
+    pub replaced: Option<String>,
+}
+
+/// How an answer of a Log QSO prompt went (`jtty_log_prompt_answer`): `Taken` is the first answer
+/// of the prompt still asked, and the only one that lets a screen log; every other says why not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum JttyLogPromptAnswer {
+    /// This answer took it: Log QSO may log the contact.
+    Taken,
+    /// Another answer (Log QSO or Not now, on any screen) took it first.
+    Answered,
+    /// The contact is in the log already, logged by another route.
+    Logged,
+    /// A newer TU raised a prompt of its own in its place.
+    Replaced,
+    /// Too old to ask, or the screen was left.
+    Expired,
 }
 
 /// One message in the JTTY receive window.
