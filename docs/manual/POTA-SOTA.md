@@ -136,6 +136,16 @@ Clicking **Work** on one of these rows records a pending hunt for that park befo
 
 Your **first logged POTA hunter contact** fires the *First POTA Contact* milestone. Beyond that, two ladders count what you have hunted, and each appears only once you have hunted one: **Park Hunter** (distinct POTA references, from First Park at 10 to Park Legend at 250) and **Summit Chaser** (distinct SOTA summits, First Summits at 5 to Summit Legend at 100). Both count a reference once, however many times you work it.
 
+## Activator achievements
+
+Awards ▸ **POTA activator** counts your activations from the log by the activation strip's rule: ten different contacts (call, band and mode) from a park in one UTC day is a valid activation. It shows valid activations and days that fell short, **parks activated** with the next achievement (10, 20, 30, 40, 50, 75, then 100, 200 … 1000, then every 500), **Repeat Offender** (valid activations at one park; a tier every 20), **Kilo** (1000 contacts from one park, short days included) and **Rover** (parks validly activated in one UTC day: Warthog 5, Rhino 10, Cheetah 15, Ostrich 20, Leopard 25, Lion 30), with a table of your parks. The definitions are POTA's (docs.pota.app, Achievements and Rules). Each call you activated under is counted on its own, as POTA counts each account; a portable `/P` counts as the plain call (`KD9TAW/P` is `KD9TAW`), while `/M` or any other suffix stays a call of its own. POTA has no "N-fer" achievement: each park of a two-fer is an activation of its own. Early/Late Shift, the 6-pack, N1CC and the DX-entity achievements are not counted. pota.app awards from the logs you upload there, so its numbers can differ from these until every log is uploaded.
+
+With the map's **Parks on the air** layer on, the park you are activating is a filled diamond with its reference, and parks you have activated are outlined diamonds, placed by the park list's own position (download the park list in the POTA/SOTA view first).
+
+## Fixing the park on contacts already logged
+
+Logged contacts without pressing Start, or under the wrong park? In the Logbook, tick them (or filter to them), open Clean up ▸ **Bulk edit**, and set **MY_POTA_REF** to the park, or to both parks of a two-fer separated by a comma; Clear takes it off. The preview counts what changes and says which contacts were already sent to LoTW, eQSL, QRZ or Club Log (they keep the park they were sent with; nothing is sent again) and which are in an activation file you already exported, naming each file to export again and upload again at pota.app. The whole change is one Undo.
+
 ## Limits / not yet
 
 - **SOTA 30-spot cap.** The SOTAwatch fetch is hard-coded to 30 spots. Busy summit days may omit older activators.

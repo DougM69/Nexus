@@ -252,6 +252,8 @@ struct LogTallies {
     stats: Arc<Tally<String, propagation::LogStats>>,
     /// The upload health the Settings panel polls.
     upload_health: Arc<Tally<(), tempo_core::logbook::UploadHealth>>,
+    /// The POTA activator standing per callsign.
+    pota_activator: Arc<Tally<(), Vec<tempo_core::pota_awards::ActivatorStats>>>,
     /// The custom awards' standing, per their definitions.
     custom: Arc<
         Tally<Vec<propagation::custom::CustomAward>, Vec<propagation::custom::CustomAwardProgress>>,
@@ -15104,14 +15106,22 @@ async fn export_log_for_activation(
     callsign: Option<String>,
 ) -> Result<tempo_app::dto::LogExportDto, String> {
     let source = tempo_app::logexport::Source::of(&engine_lock(&state));
+    let engine = state.inner().clone();
     log_folds::off_the_runtime(move || {
-        tempo_app::logexport::export_for_activation(
+        let file = tempo_app::logexport::export_for_activation(
             &source,
             &reference,
             day_start_unix,
             callsign.as_deref(),
-        )
-        .map(Into::into)
+        )?;
+        // Remembered, so a later change to these contacts can say this file no longer matches
+        // the log (`tempo_app::pota_exports`).
+        engine_lock(&engine).note_activation_exported(
+            &reference,
+            day_start_unix,
+            callsign.as_deref(),
+        );
+        Ok(file.into())
     })
     .await
 }
@@ -32686,6 +32696,183 @@ fn place_ota(sp: &propagation::OtaSpot) -> Option<(f64, f64, bool)> {
     }
 }
 
+/// One park's activator standing under one callsign (`tempo_core::pota_awards::ParkStanding`),
+/// with its name from the park directory.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParkStandingDto {
+    reference: String,
+    /// From the park directory; empty when it has none.
+    name: String,
+    activations: u32,
+    attempts: u32,
+    qsos: u32,
+    /// The last UTC day with contacts there, `YYYY-MM-DD`.
+    last_date: String,
+}
+
+/// One callsign's POTA activator standing (`tempo_core::pota_awards::ActivatorStats`).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivatorStatsDto {
+    callsign: Option<String>,
+    activations: u32,
+    attempts: u32,
+    qsos: u32,
+    parks_activated: u32,
+    /// The next "different parks" threshold; `None` past the last.
+    next_park_tier: Option<u32>,
+    rover_best: u32,
+    /// The first UTC day that reached `rover_best`, `YYYY-MM-DD`.
+    rover_best_date: Option<String>,
+    /// UTC days reaching 5, 10, 15, 20, 25 and 30 parks.
+    rover_days: [u32; 6],
+    parks: Vec<ParkStandingDto>,
+}
+
+/// A park of yours for the map: one the running activation names, or one you have activated.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MyParkDto {
+    reference: String,
+    name: String,
+    lat: f64,
+    lon: f64,
+    /// Placed by a grid square, not the park's own pin.
+    approx: bool,
+    /// The running activation names it.
+    activating: bool,
+    /// Valid activations there, under any of your calls.
+    activations: u32,
+}
+
+/// `get_pota_activator`'s answer.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PotaActivatorDto {
+    calls: Vec<ActivatorStatsDto>,
+    /// Your parks that can be placed: the activation's, then those activated, each once.
+    parks: Vec<MyParkDto>,
+}
+
+fn utc_ymd(day_unix: u64) -> String {
+    let (y, m, d, ..) = tempo_core::logbook::datetime_utc(day_unix);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Where `reference` is: the directory's pin, else its grid's square, else `fallback_grid`'s
+/// (the running activation's own grid). `(lat, lon, approx)`.
+fn park_place(
+    park: Option<&tempo_core::pota::Park>,
+    fallback_grid: Option<&str>,
+) -> Option<(f64, f64, bool)> {
+    if let Some((lat, lon)) = park.and_then(|p| p.latitude.zip(p.longitude)) {
+        return Some((lat, lon, false));
+    }
+    park.map(|p| p.grid.as_str())
+        .filter(|g| !g.is_empty())
+        .or(fallback_grid)
+        .and_then(propagation::geo::maidenhead_to_latlon)
+        .map(|(lat, lon)| (lat, lon, true))
+}
+
+/// ★ The operator's POTA activator standing — valid activations, parks activated, Repeat
+/// Offender, Kilo and Rover counts per callsign — counted from the log by the activation
+/// counter's own rule (`tempo_core::pota_awards`), and the parks of theirs the map shows. From
+/// the store, off the engine lock; kept until the log changes.
+#[tauri::command]
+async fn get_pota_activator(
+    state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
+    parks: State<'_, SharedParks>,
+) -> Result<PotaActivatorDto, String> {
+    let (engine, tallies, parks) = (
+        state.inner().clone(),
+        tallies.inner().clone(),
+        parks.inner().clone(),
+    );
+    log_folds::off_the_runtime(move || {
+        let stats = log_folds::pota_activator_kept(&engine, &tallies)?;
+        let running = engine_lock(&engine)
+            .activation_record()
+            .filter(|a| !a.restored && a.program.eq_ignore_ascii_case("POTA"))
+            .map(|a| (a.refs.clone(), a.grid.clone()));
+        let dir = parks.lock().unwrap_or_else(|e| e.into_inner());
+        let calls = stats
+            .iter()
+            .map(|s| ActivatorStatsDto {
+                callsign: s.callsign.clone(),
+                activations: s.activations,
+                attempts: s.attempts,
+                qsos: s.qsos,
+                parks_activated: s.parks_activated,
+                next_park_tier: s.next_park_tier(),
+                rover_best: s.rover_best,
+                rover_best_date: s.rover_best_day_unix.map(utc_ymd),
+                rover_days: s.rover_days,
+                parks: s
+                    .parks
+                    .iter()
+                    .map(|p| ParkStandingDto {
+                        reference: p.reference.clone(),
+                        name: dir.lookup(&p.reference).map(|d| d.name).unwrap_or_default(),
+                        activations: p.activations,
+                        attempts: p.attempts,
+                        qsos: p.qsos,
+                        last_date: utc_ymd(p.last_day_unix),
+                    })
+                    .collect(),
+            })
+            .collect();
+        // Valid activations per park, every call together, in the order first seen.
+        let mut activated: Vec<(String, u32)> = Vec::new();
+        for p in stats.iter().flat_map(|s| s.parks.iter()) {
+            match activated.iter_mut().find(|(r, _)| *r == p.reference) {
+                Some((_, n)) => *n += p.activations,
+                None => activated.push((p.reference.clone(), p.activations)),
+            }
+        }
+        let mut map = Vec::new();
+        let (now_refs, now_grid) = running.unwrap_or_default();
+        for r in &now_refs {
+            let park = dir.lookup(r);
+            if let Some((lat, lon, approx)) = park_place(park.as_ref(), now_grid.as_deref()) {
+                map.push(MyParkDto {
+                    reference: r.clone(),
+                    name: park.map(|p| p.name).unwrap_or_default(),
+                    lat,
+                    lon,
+                    approx,
+                    activating: true,
+                    activations: activated
+                        .iter()
+                        .find(|(a, _)| a == r)
+                        .map_or(0, |(_, n)| *n),
+                });
+            }
+        }
+        for (r, n) in activated.iter().filter(|(_, n)| *n > 0) {
+            if now_refs.contains(r) {
+                continue;
+            }
+            let park = dir.lookup(r);
+            if let Some((lat, lon, approx)) = park_place(park.as_ref(), None) {
+                map.push(MyParkDto {
+                    reference: r.clone(),
+                    name: park.map(|p| p.name).unwrap_or_default(),
+                    lat,
+                    lon,
+                    approx,
+                    activating: false,
+                    activations: *n,
+                });
+            }
+        }
+        Ok(PotaActivatorDto { calls, parks: map })
+    })
+    .await
+}
+
 /// Activators for the map layer. Serves the shared cache when it is fresh and
 /// fetches only when it is not, so this can be polled from a view without adding
 /// load to the POTA feed.
@@ -33889,7 +34076,8 @@ struct ParkDto {
     /// on a state line), read by the hunter feed's own rule: the log form places a park's
     /// contact by them.
     states: Vec<String>,
-    /// Coordinates — only the LIVE lookup carries these; the local CSV index doesn't.
+    /// The park's pin, from the live lookup or the directory's own columns; `None` when neither
+    /// has one.
     latitude: Option<f64>,
     longitude: Option<f64>,
 }
@@ -33902,8 +34090,8 @@ impl From<tempo_core::pota::Park> for ParkDto {
             grid: p.grid,
             states: propagation::pota::location_states(&p.location),
             location: p.location,
-            latitude: None,
-            longitude: None,
+            latitude: p.latitude,
+            longitude: p.longitude,
         }
     }
 }
@@ -38100,6 +38288,7 @@ fn start_on_the_logbook(
         // whether it is still on.
         eng.set_activation_path(activation_path());
         eng.restore_activation();
+        eng.set_pota_exports_path(settings_path().with_file_name("pota_exports.json"));
         // The uploads contest mode held when the app last closed: still held while it is on, sent
         // once, paced, when it goes off. One this build cannot read is kept aside, and the screen
         // says where.
@@ -39617,6 +39806,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_operators,
         log_activations,
         export_log_for_activation,
+        get_pota_activator,
         export_settings_bundle,
         import_settings_bundle,
         export_log_for_operator,
@@ -51099,6 +51289,8 @@ mod tests {
             name: "Line".into(),
             grid: String::new(),
             location: "US-MT,US-ND".into(),
+            latitude: None,
+            longitude: None,
         });
         assert_eq!(dto.states, codes(&["US-MT", "US-ND"]));
         let abroad = crate::ParkDto::from(tempo_core::pota::Park {
@@ -51106,8 +51298,61 @@ mod tests {
             name: "Wald".into(),
             grid: String::new(),
             location: "DE-BY".into(),
+            latitude: None,
+            longitude: None,
         });
         assert_eq!(abroad.states, codes(&[]));
+    }
+
+    /// A park of yours is placed by the park list's own pin; with none, by its grid square, or the
+    /// running activation's grid; with neither, not at all.
+    #[test]
+    fn a_park_of_yours_is_placed_by_its_pin_then_its_grid() {
+        let park = |grid: &str, pin: Option<(f64, f64)>| tempo_core::pota::Park {
+            reference: "US-0001".into(),
+            name: "A".into(),
+            grid: grid.into(),
+            location: String::new(),
+            latitude: pin.map(|p| p.0),
+            longitude: pin.map(|p| p.1),
+        };
+        assert_eq!(
+            crate::park_place(Some(&park("FN54", Some((44.35, -68.21)))), None),
+            Some((44.35, -68.21, false))
+        );
+        let (_, _, approx) = crate::park_place(Some(&park("FN54", None)), None).unwrap();
+        assert!(approx, "placed by its square");
+        assert!(crate::park_place(None, Some("EN52")).is_some_and(|p| p.2));
+        assert_eq!(crate::park_place(Some(&park("", None)), None), None);
+    }
+
+    /// ★ The activator fold counts the log's activations by the counter's rule — ten distinct
+    /// contacts make one, a dupe adds nothing — and an unchanged log is not folded again.
+    #[test]
+    fn the_pota_activator_fold_counts_the_logs_activations() {
+        let engine = fresh_engine();
+        let mut adif = String::new();
+        for i in 0..10 {
+            adif += &format!(
+                "<CALL:4>K{i}AA<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>0101{i:02}\
+                 <STATION_CALLSIGN:6>KD9TAW<MY_SIG:4>POTA<MY_SIG_INFO:7>US-0001<EOR>\n"
+            );
+        }
+        // The first again: a dupe.
+        adif +=
+            "<CALL:4>K0AA<BAND:3>20m<FREQ:6>14.285<MODE:3>SSB<QSO_DATE:8>20260102<TIME_ON:6>020000\
+                 <STATION_CALLSIGN:6>KD9TAW<MY_SIG:4>POTA<MY_SIG_INFO:7>US-0001<EOR>\n";
+        engine.lock().unwrap().import_adif(&adif);
+        let tallies = crate::LogTallies::default();
+        let stats = crate::log_folds::pota_activator_kept(&engine, &tallies).unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].callsign.as_deref(), Some("KD9TAW"));
+        assert_eq!((stats[0].activations, stats[0].qsos), (1, 10));
+        let again = crate::log_folds::pota_activator_kept(&engine, &tallies).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&stats, &again),
+            "kept while the log is unchanged"
+        );
     }
 
     /// ★ "Check park states" lists only the hunted contacts whose park or summit names ONE state

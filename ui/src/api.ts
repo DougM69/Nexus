@@ -1842,6 +1842,14 @@ export interface BulkPreview {
   moves: number
   moveTo: string | null
   moveFrom: string[]
+  /** Those it moves into or out of an activation (a park or summit of yours, or the call it was
+   *  worked under); of those, the ones already sent to a service (their marks stay, nothing is sent
+   *  again) and the ones in an activation file already exported — `activationFiles` names those
+   *  files ("US-1234 2026-10-20 KD9TAW"), which no longer match the log. */
+  activationChanges: number
+  activationUploaded: number
+  activationExported: number
+  activationFiles: string[]
 }
 
 export async function bulkEditPreview(target: BulkTarget, changes: FieldChange[]): Promise<BulkPreview> {
@@ -4735,6 +4743,58 @@ export async function getSolarIndices(): Promise<DailySolarIndices> {
  *  because a SOTA spot carries no position to plot. */
 export async function getOtaMapSpots(): Promise<OtaMapSpot[]> {
   return invoke<OtaMapSpot[]>('get_ota_map_spots')
+}
+
+/** One park's activator standing under one callsign. */
+export interface ParkStanding {
+  reference: string
+  /** From the park directory; empty when it has none. */
+  name: string
+  /** UTC days with ten or more distinct contacts there. */
+  activations: number
+  /** UTC days that fell short of ten. */
+  attempts: number
+  /** Distinct contacts there, every day's (Kilo's count). */
+  qsos: number
+  lastDate: string
+}
+
+/** One callsign's POTA activator standing, counted from the log by the activation counter's rule. */
+export interface ActivatorStats {
+  callsign: string | null
+  activations: number
+  attempts: number
+  qsos: number
+  parksActivated: number
+  /** The next "different parks" achievement; null past the last. */
+  nextParkTier: number | null
+  roverBest: number
+  roverBestDate: string | null
+  /** UTC days reaching 5, 10, 15, 20, 25 and 30 parks. */
+  roverDays: number[]
+  parks: ParkStanding[]
+}
+
+/** A park of yours for the map: the running activation's, or one you have activated. */
+export interface MyPark {
+  reference: string
+  name: string
+  lat: number
+  lon: number
+  /** Placed by a grid square rather than the park's own pin. */
+  approx: boolean
+  activating: boolean
+  activations: number
+}
+
+export interface PotaActivator {
+  calls: ActivatorStats[]
+  parks: MyPark[]
+}
+
+/** The operator's POTA activator standing per callsign, and the parks of theirs the map shows. */
+export async function getPotaActivator(): Promise<PotaActivator> {
+  return invoke<PotaActivator>('get_pota_activator')
 }
 
 /** The street-map packs installed in the maps folder. Empty until the operator downloads one. */

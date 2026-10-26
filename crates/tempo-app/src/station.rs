@@ -2275,6 +2275,9 @@ pub struct StationCore {
     /// whole of what it loaded, and an activation started or stopped since would be written back
     /// over.
     pub(crate) activation_path: Option<PathBuf>,
+    /// The activation files already exported ([`crate::pota_exports`]), which the bulk edit's
+    /// preview names when a change would put one out of date.
+    pub(crate) pota_exports: crate::pota_exports::ExportedActivations,
     /// Session gallery of saved SSTV images, newest last. Seeded from the
     /// persisted `gallery.json` at startup; the decode thread appends on each
     /// completed image. Capped at [`SSTV_GALLERY_CAP`].
@@ -2423,6 +2426,7 @@ impl StationCore {
             last_qrz_reconcile: None,
             activation: None,
             activation_path: None,
+            pota_exports: Default::default(),
             sstv_gallery: Vec::new(),
         }
     }

@@ -30,6 +30,7 @@ vi.mock('../api', async (importOriginal) => ({
   getSatellites: vi.fn(async () => null),
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
   getContests: vi.fn(async () => []),
   // NOAA's daily indices, which the dashboard bar asks for itself (Frame + bar draws it).
   getSolarIndices: vi.fn(async () => ({ days: [] })),

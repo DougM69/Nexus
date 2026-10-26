@@ -15,6 +15,11 @@
 // confirmed and the moves ticked for, which the station checks), and a change of the contacts chosen, the filter or a field
 // makes the preview stale. The change is one change the toast's Undo takes back.
 //
+// A park re-tag (MY_POTA_REF set or cleared — a forgotten Start, the wrong park, a two-fer as a
+// comma list) is this same edit. Its preview also names the contacts already sent to a service,
+// which keep the park they were sent with, and the activation files already exported that the
+// change puts out of date: nothing changes a stamp, and nothing is sent.
+//
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Field names are ADIF
 // tokens, shown as they are.
 import { useEffect, useRef, useState } from 'react'
@@ -201,6 +206,21 @@ export function LogBulkEdit({
           )}
           {preview.unconfirm > 0 && (
             <p className="qso-detail-bare">{t('logbook.tools.bulk.unconfirm', { count: preview.unconfirm })}</p>
+          )}
+          {preview.activationUploaded > 0 && (
+            <p className="qso-detail-bare">
+              {t('logbook.tools.bulk.activationUploaded', { count: preview.activationUploaded })}
+            </p>
+          )}
+          {preview.activationExported > 0 && (
+            <p className="qso-detail-bare">
+              <strong>
+                {t('logbook.tools.bulk.activationExported', {
+                  count: preview.activationExported,
+                  files: preview.activationFiles.join(', '),
+                })}
+              </strong>
+            </p>
           )}
           <div className="log-tools-row">
             <button
