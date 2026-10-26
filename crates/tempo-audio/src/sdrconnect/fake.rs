@@ -223,6 +223,7 @@ fn connection(
         match ws.read() {
             Ok(Message::Text(text)) => {
                 if !answer(&mut ws, text.as_str(), config, world) {
+                    drain(&mut ws, world);
                     return;
                 }
             }
@@ -238,9 +239,11 @@ fn connection(
                 ) => {}
             Err(_) => return,
         }
+
         let injected: Vec<Message> = lock(world).inject.drain(..).collect();
         for m in injected {
             if ws.send(m).is_err() {
+                drain(&mut ws, world);
                 return;
             }
         }
@@ -264,9 +267,23 @@ fn connection(
                 None => block(config, centre, *sent, per),
             };
             if ws.send(Message::binary(bytes)).is_err() {
+                drain(&mut ws, world);
                 return;
             }
             *sent += per as u64;
+        }
+    }
+}
+
+/// A send failed: the client has gone. Keep the text it sent before going, which is already here
+/// but unread: a client that stops its IQ and closes while the fake is busy sending would
+/// otherwise lose its last messages from [`World::received`].
+fn drain(ws: &mut WebSocket<TcpStream>, world: &Mutex<World>) {
+    loop {
+        match ws.read() {
+            Ok(Message::Text(text)) => lock(world).received.push(text.as_str().to_string()),
+            Ok(Message::Close(_)) | Err(_) => return,
+            Ok(_) => {}
         }
     }
 }
