@@ -41,7 +41,7 @@ import {
 import { bandFromKhz, spotModeClass, type ObservedOta } from '../otaHunt'
 import { bandLabelForMhz } from '../band'
 import { placeCode, placeLabel, placeName } from '../features/otaStates'
-import { activationParks, isLegacyUsRef, parkProgress } from '../features/potaActivation'
+import { activationParks, isLegacyUsRef, mixedCallsNote, parkProgress } from '../features/potaActivation'
 import { ActivationOverDialog } from './ActivationOverDialog'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { POTA_SPOTS, SOTA_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../features/connectFeeds'
@@ -747,6 +747,15 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                   {g.valid ? t('ota.activation.valid') : t('ota.activation.toGo', { count: g.toGo })}
                 </span>
               )
+            })}
+            {/* A park's day under more than one call: POTA counts each call's file on its own. */}
+            {(act?.parks ?? []).map((p) => {
+              const note = mixedCallsNote(p)
+              return note ? (
+                <span key={`calls-${p.reference}`} className="pota-act-calls">
+                  {note}
+                </span>
+              ) : null
             })}
             {/* Park to park, each park's: each of YOUR parks of a two-fer; a hunter's two-fer is one contact. */}
             {(act?.parks ?? []).some((p) => p.p2p > 0) && (

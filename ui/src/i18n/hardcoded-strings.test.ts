@@ -319,6 +319,7 @@ const MIGRATED = [
   'components/ActivationPane.tsx',
   'components/ActivationOverDialog.tsx',
   'features/activationExport.ts',
+  'features/potaActivation.ts',
   // The contest logger window (2026-10-10): born migrated — its one string is a catalog key; the
   // modes it logs under are ADIF mode names, tokens.
   'components/ContestLogger.tsx',

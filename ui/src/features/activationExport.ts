@@ -4,7 +4,7 @@
 // toasts.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts).
-import { exportLogForActivation, saveTextToDownloads } from '../api'
+import { exportLogForActivation, noteActivationExported, saveTextToDownloads } from '../api'
 import { t } from '../i18n'
 import { pushToast } from '../toast'
 import type { LogExport, LoggedActivation } from '../types'
@@ -60,6 +60,9 @@ export async function exportActivation(a: LoggedActivation): Promise<LogExport> 
   // Count what the file actually holds, as the ranged export does.
   const n = (text.match(/<eor>/gi) ?? []).length
   const path = await saveTextToDownloads(activationFilename(a), text)
+  // Recorded only now the file is on disk, so a later change to these contacts can say it no longer
+  // matches the log. A failure to record loses only that warning, never the file: it is not thrown.
+  await noteActivationExported(a.reference, a.dayStartUnix, a.callsign ?? null).catch(() => {})
   pushToast(t('logbook.export.done', { count: n, path }), 'success')
   // A K- park exports as it was logged; whether POTA's upload still takes the pre-2024 prefix is
   // not known, so the file is written and that is said.

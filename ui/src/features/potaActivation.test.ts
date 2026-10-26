@@ -5,6 +5,7 @@ import {
   activationFilter,
   activationParks,
   isLegacyUsRef,
+  mixedCallsNote,
   parkProgress,
   potaDupe,
   potaKeys,
@@ -184,5 +185,24 @@ describe('this activation, as the Logbook and the export see it', () => {
     expect(spanLabel(3_900)).toBe('1 h 05 m')
     expect(toUtcMidnight(T0)).toBe(48_000)
     expect(toUtcMidnight(MIDNIGHT)).toBe(DAY)
+  })
+})
+
+describe('mixedCallsNote', () => {
+  it('names each call with its count when a park’s day holds more than one, and nothing for one', () => {
+    expect(
+      mixedCallsNote({
+        reference: 'US-1234',
+        count: 10,
+        p2p: 0,
+        calls: [
+          { callsign: 'KD9TAW', count: 6 },
+          { callsign: 'KD9TAW/M', count: 4 },
+          { callsign: null, count: 1 },
+        ],
+      }),
+    ).toBe('US-1234: contacts under 3 calls (KD9TAW 6, KD9TAW/M 4, no call 1) — POTA counts each call separately')
+    expect(mixedCallsNote({ reference: 'US-1234', count: 6, p2p: 0, calls: [{ callsign: 'KD9TAW', count: 6 }] })).toBeNull()
+    expect(mixedCallsNote({ reference: 'US-1234', count: 6, p2p: 0 })).toBeNull()
   })
 })

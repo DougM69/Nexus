@@ -262,8 +262,9 @@ pub struct BulkPreviewDto {
     pub move_from: Vec<String>,
     /// Of those it changes, the ones it moves into or out of an activation (a park or summit of
     /// yours, or the call it was worked under); of those, the ones already sent to a service
-    /// (their stamps stay, nothing is sent again) and the ones in an activation file already
-    /// exported, which `activation_files` names: those files no longer match the log.
+    /// (their stamps stay, nothing is sent again). Of every one it changes, moved or not, the ones
+    /// in an activation file already exported, which `activation_files` names: those files no
+    /// longer match the log.
     pub activation_changes: usize,
     pub activation_uploaded: usize,
     pub activation_exported: usize,

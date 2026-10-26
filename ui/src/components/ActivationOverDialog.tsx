@@ -11,7 +11,8 @@
 //     a log only through its own site.
 //   · Post QRT: offered only once a spot from here stands, and it goes through Spot me's own confirm.
 //     Nothing reaches pota.app or the cluster without that second press.
-//   · Reminders, nothing to tick: a K- park, a contact set carrying no grid, a state line with no
+//   · Reminders, nothing to tick: a park's day under more than one call (POTA counts each call's
+//     file on its own, and the file list shows each), a K- park, a contact set carrying no grid, a state line with no
 //     state picked, and that the upload is the operator's to make.
 //
 // ⚠️ IT OPENS BEFORE THE ACTIVATION ENDS: the QRT is refused by the station once it has, and the files
@@ -30,7 +31,7 @@ import type { Activation, LoggedActivation } from '../types'
 import { logActivations } from '../api'
 import { isStreamInput } from '../remote-native/stream-input'
 import { POTA_MIN_QSOS, activationFilename, exportActivation } from '../features/activationExport'
-import { activationFiles, activationParks, isLegacyUsRef, parkProgress } from '../features/potaActivation'
+import { activationFiles, activationParks, isLegacyUsRef, mixedCallsNote, parkProgress } from '../features/potaActivation'
 
 type Tick = 'export' | 'qrt'
 
@@ -50,26 +51,31 @@ export function ActivationOverDialog({
   onEnd: (opts: { qrt: boolean }) => Promise<void>
 }) {
   const [ticked, setTicked] = useState<Set<Tick>>(new Set())
-  const [files, setFiles] = useState<LoggedActivation[] | null>(null)
+  // `'unreadable'`: the log's activations could not be read — said so, never shown as "none".
+  const [files, setFiles] = useState<LoggedActivation[] | 'unreadable' | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const open = act != null
-  // Every opening starts with nothing ticked, and reads the files the log holds now.
+  // Every opening starts with nothing ticked.
   useEffect(() => {
     setTicked(new Set())
     setError(null)
+  }, [open])
+  // And reads the files the log holds now: once per opening, and again when the UTC day turns
+  // while it is open, so the new day's file is listed (each file is read whole at export anyway).
+  const utcDay = act?.utcDay
+  useEffect(() => {
     setFiles(null)
     if (!open) return
     let live = true
     logActivations()
       .then((list) => live && setFiles(activationFiles(list, act)))
-      .catch(() => live && setFiles([]))
+      .catch(() => live && setFiles('unreadable'))
     return () => {
       live = false
     }
-    // Read once per opening: the counts do not move while the operator decides.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, utcDay])
   if (!act) return null
 
   const tick = (k: Tick) =>
@@ -95,7 +101,7 @@ export function ActivationOverDialog({
     setError(null)
     try {
       if (ticked.has('export')) {
-        for (const f of files ?? []) await exportActivation(f)
+        for (const f of Array.isArray(files) ? files : []) await exportActivation(f)
       }
       await onEnd({ qrt: ticked.has('qrt') && canQrt })
     } catch (e) {
@@ -133,17 +139,19 @@ export function ActivationOverDialog({
             type="checkbox"
             checked={ticked.has('export')}
             onChange={() => tick('export')}
-            disabled={busy || !files || files.length === 0}
+            disabled={busy || !Array.isArray(files) || files.length === 0}
           />
           <span>
             {files == null
               ? t('activationOver.export.reading')
-              : files.length === 0
-                ? t('activationOver.export.none')
-                : t('activationOver.export.label', { count: files.length })}
+              : files === 'unreadable'
+                ? t('activationOver.export.unreadable')
+                : files.length === 0
+                  ? t('activationOver.export.none')
+                  : t('activationOver.export.label', { count: files.length })}
           </span>
         </label>
-        {files && files.length > 0 && (
+        {Array.isArray(files) && files.length > 0 && (
           <ul className="activation-over-files">
             {files.map((f) => (
               <li key={activationFilename(f)} className="mono">
@@ -162,6 +170,10 @@ export function ActivationOverDialog({
           </label>
         )}
         <ul className="activation-over-notes">
+          {(act.parks ?? []).map((p) => {
+            const note = mixedCallsNote(p)
+            return note ? <li key={`calls-${p.reference}`}>{note}</li> : null
+          })}
           {legacy.map((ref) => (
             <li key={ref}>{t('ota.activation.legacyRef', { reference: ref })}</li>
           ))}

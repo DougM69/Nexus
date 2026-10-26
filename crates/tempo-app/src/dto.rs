@@ -176,6 +176,21 @@ pub struct ActivationParkDto {
     pub count: usize,
     /// Of those, park to park.
     pub p2p: usize,
+    /// The calls those contacts were worked under, each with its own distinct contacts — one
+    /// activation file each, as signed (`hot::activation_day_calls`), most first. More than one is
+    /// a day POTA counts per call, not as `count`.
+    #[serde(default)]
+    pub calls: Vec<ActivationCallDto>,
+}
+
+/// One call a park's contacts today were worked under ([`ActivationParkDto::calls`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivationCallDto {
+    /// `STATION_CALLSIGN`, else `OPERATOR`, upper-cased; null for neither.
+    pub callsign: Option<String>,
+    /// Distinct contacts under it.
+    pub count: usize,
 }
 
 /// The park or summit a worked Needed row is an activation of ([`AppSnapshot::work_park`]). Not a

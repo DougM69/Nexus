@@ -23139,7 +23139,8 @@ button.cq-skiptx1.on {
 }
 /* No grid known: the contacts carry none, so the strip says it beside the box — the state ask's
    warning frame, the text in the body colour. */
-.pota-act-grid-none {
+.pota-act-grid-none,
+.pota-act-calls {
   padding: 1px 6px;
   border-radius: var(--radius-sm);
   color: var(--text);
@@ -32794,7 +32795,8 @@ tr.sel .aprs-sym {
 .act-pane-time,
 .act-pane-rate,
 .act-pane-more,
-.act-pane-paused {
+.act-pane-paused,
+.act-pane-calls {
   margin: 0;
   color: var(--text-dim);
   font-size: var(--fs-micro);

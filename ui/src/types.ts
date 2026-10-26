@@ -1063,6 +1063,10 @@ export interface ActivationPark {
   reference: string
   count: number
   p2p: number
+  /** The calls this park's contacts today were worked under (STATION_CALLSIGN, else OPERATOR;
+   *  null for neither), each with its own distinct contacts — one activation file each, as
+   *  signed — most first. More than one: POTA counts each call separately, not as `count`. */
+  calls?: { callsign: string | null; count: number }[]
 }
 
 /** A zero-config auto-detected USB radio (from `detect_rigs`). */

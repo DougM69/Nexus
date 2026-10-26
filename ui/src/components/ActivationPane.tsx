@@ -3,6 +3,7 @@
 //   · each park's contacts today, "7 of 10", with how many to go or "valid", and park to park — the
 //     strip's own words over the station's own count (`Activation.parks`), so the two can never
 //     disagree: nothing here counts a contact;
+//   · a park's day under more than one call, said plainly: POTA counts each call separately;
 //   · how long the activation has run, and how long until 0000Z starts the counts again;
 //   · the rate, read as the contest meter reads it (features/contestRate) over this activation's
 //     contacts;
@@ -29,6 +30,7 @@ import { contestRate } from '../features/contestRate'
 import {
   activationFilter,
   activationParks,
+  mixedCallsNote,
   parkProgress,
   parkRefs,
   spanLabel,
@@ -106,6 +108,14 @@ export function ActivationPane({ act, logTick, nowUnix }: ActivationBoard & { no
           },
         )}
       </ul>
+      {(act.parks ?? []).map((p) => {
+        const note = mixedCallsNote(p)
+        return note ? (
+          <p key={p.reference} className="act-pane-calls">
+            {note}
+          </p>
+        ) : null
+      })}
       <div className="act-pane-head">
         <span className="act-pane-ref mono">{[act.program, act.reference].filter(Boolean).join(' ')}</span>
         {act.startedAt ? (

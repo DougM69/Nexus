@@ -1844,8 +1844,9 @@ export interface BulkPreview {
   moveFrom: string[]
   /** Those it moves into or out of an activation (a park or summit of yours, or the call it was
    *  worked under); of those, the ones already sent to a service (their marks stay, nothing is sent
-   *  again) and the ones in an activation file already exported — `activationFiles` names those
-   *  files ("US-1234 2026-10-20 KD9TAW"), which no longer match the log. */
+   *  again). Of every one it changes, moved or not, the ones in an activation file already exported
+   *  — `activationFiles` names those files ("US-1234 2026-10-20 KD9TAW"), which no longer match the
+   *  log. */
   activationChanges: number
   activationUploaded: number
   activationExported: number
@@ -5376,6 +5377,17 @@ export async function exportLogForActivation(
   callsign: string | null,
 ): Promise<LogExport> {
   return invoke<LogExport>('export_log_for_activation', { reference, dayStartUnix, callsign })
+}
+
+/** The activation file `exportLogForActivation` made was saved: the station remembers it, so a later
+ *  change to those contacts can say the file no longer matches the log. Asked only once the save
+ *  succeeded. */
+export async function noteActivationExported(
+  reference: string,
+  dayStartUnix: number,
+  callsign: string | null,
+): Promise<void> {
+  return invoke<void>('note_activation_exported', { reference, dayStartUnix, callsign })
 }
 
 /** Everything that makes this station THIS station, as one JSON file (#28) — settings plus the

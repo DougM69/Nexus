@@ -477,6 +477,105 @@ fn a_park_re_tag_previews_exports_applies_and_one_undo_restores_byte_identical()
     );
 }
 
+/// A bulk edit that changes contacts in an exported activation file without moving them out of
+/// it — a grid or a power set on them — still names the file: its contents no longer match the
+/// log. A contact in no exported file names none.
+#[test]
+fn a_bulk_edit_of_contacts_in_an_exported_file_names_it_though_none_moves() {
+    let d = Dir::new("tools-bulk-exported-stay");
+    let me = "<STATION_CALLSIGN:6>KD9TAW";
+    let engine = shared(
+        &d,
+        &[
+            adif("W1AW", "120000", me),
+            adif(
+                "K1ABC",
+                "120100",
+                &format!("{me}<MY_SIG:4>POTA<MY_SIG_INFO:7>US-0001"),
+            ),
+            adif(
+                "N0XYZ",
+                "120200",
+                &format!("{me}<MY_SIG:4>POTA<MY_SIG_INFO:7>US-0001"),
+            ),
+        ],
+    );
+    let rows0 = rows(&engine);
+    engine_lock(&engine).set_pota_exports_path(d.log().with_file_name("pota_exports.json"));
+    engine_lock(&engine).note_activation_exported("US-0001", rows0[1].when_unix, Some("KD9TAW"));
+    let ids: Vec<RecordId> = rows0.iter().map(|r| r.id.unwrap()).collect();
+    for change in [
+        Change {
+            field: Field::MyGridsquare,
+            value: Some("EN52".into()),
+        },
+        Change {
+            field: Field::TxPwr,
+            value: Some("5".into()),
+        },
+    ] {
+        let p = bulk_preview(&engine, &ids, std::slice::from_ref(&change)).unwrap();
+        assert_eq!(p.change, 3, "{:?}", change.field);
+        assert_eq!(p.activation_changes, 0, "nothing moves: {:?}", change.field);
+        assert_eq!(
+            (p.activation_exported, p.activation_files.clone()),
+            (2, vec!["US-0001 2026-01-01 KD9TAW".to_string()]),
+            "K1ABC and N0XYZ are in the exported US-0001 file: {:?}",
+            change.field
+        );
+    }
+    // Only W1AW, in no file: nothing to name.
+    let p = bulk_preview(
+        &engine,
+        &ids[..1],
+        &[Change {
+            field: Field::MyGridsquare,
+            value: Some("EN52".into()),
+        }],
+    )
+    .unwrap();
+    assert_eq!((p.change, p.activation_exported), (1, 0));
+    assert!(p.activation_files.is_empty());
+}
+
+/// A two-fer re-spelled in another order is the same activation and the same files (each file
+/// names one park): the preview neither counts it as moved nor names an exported file. Another
+/// park, as a positive control, does both.
+#[test]
+fn a_two_fer_re_ordered_is_no_activation_change() {
+    let d = Dir::new("tools-bulk-two-fer-order");
+    let engine = shared(
+        &d,
+        &[adif(
+            "K1ABC",
+            "120100",
+            "<STATION_CALLSIGN:6>KD9TAW<MY_SIG:4>POTA<MY_SIG_INFO:15>US-0001,US-0002",
+        )],
+    );
+    let rows0 = rows(&engine);
+    engine_lock(&engine).set_pota_exports_path(d.log().with_file_name("pota_exports.json"));
+    engine_lock(&engine).note_activation_exported("US-0001", rows0[0].when_unix, Some("KD9TAW"));
+    let ids = [rows0[0].id.unwrap()];
+    let retag = |v: &str| {
+        let p = bulk_preview(
+            &engine,
+            &ids,
+            &[Change {
+                field: Field::MyPotaRef,
+                value: Some(v.into()),
+            }],
+        )
+        .unwrap();
+        (p.change, p.activation_changes, p.activation_exported)
+    };
+    assert_eq!(retag("US-0002,US-0001"), (1, 0, 0), "the same two parks");
+    assert_eq!(
+        retag("US-0002,US-0003"),
+        (1, 1, 1),
+        "US-0001 left: its file named"
+    );
+}
+
 /// ★ THE CHECK. Each kind of problem is found with its proposed fix; only the fixes ticked are
 /// made, as one run; a fix whose field changed since the check is left out; the run's undo puts
 /// the contacts back.

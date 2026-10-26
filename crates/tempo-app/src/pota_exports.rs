@@ -28,28 +28,48 @@ pub struct ExportedActivations {
 
 impl ExportedActivations {
     /// Keep the record in `path`, taking up what it already holds. A missing file is an empty
-    /// record; one this build cannot read is left as it is and said in the diagnostic log.
+    /// record. One this build cannot parse is never written over: it is renamed aside
+    /// (`pota_exports.json.corrupt-<unix time>`), said in the diagnostic log, and the record
+    /// starts empty. One that cannot be read at all, or moved aside, is left as it is and nothing
+    /// is written to it this session.
     pub fn open(path: PathBuf) -> Self {
-        let keys = match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                serde_json::from_str::<BTreeSet<ActivationKey>>(&text).unwrap_or_else(|e| {
-                    tempo_core::applog::warn(
-                        "pota exports",
-                        &format!("{} could not be read: {e}", path.display()),
-                    );
-                    BTreeSet::new()
-                })
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeSet::new(),
+        let warn = |what: String| tempo_core::applog::warn("pota exports", &what);
+        let (keys, path) = match std::fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<BTreeSet<ActivationKey>>(&text) {
+                Ok(keys) => (keys, Some(path)),
+                Err(e) => {
+                    let secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs());
+                    let mut aside = path.clone().into_os_string();
+                    aside.push(format!(".corrupt-{secs}"));
+                    let aside = PathBuf::from(aside);
+                    match std::fs::rename(&path, &aside) {
+                        Ok(()) => {
+                            warn(format!(
+                                "{} could not be read ({e}); kept as {} and started again",
+                                path.display(),
+                                aside.display()
+                            ));
+                            (BTreeSet::new(), Some(path))
+                        }
+                        Err(re) => {
+                            warn(format!(
+                                "{} could not be read ({e}) nor kept aside ({re}); left as it is",
+                                path.display()
+                            ));
+                            (BTreeSet::new(), None)
+                        }
+                    }
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (BTreeSet::new(), Some(path)),
             Err(e) => {
-                tempo_core::applog::warn("pota exports", &format!("{}: {e}", path.display()));
-                BTreeSet::new()
+                warn(format!("{}: {e}; left as it is", path.display()));
+                (BTreeSet::new(), None)
             }
         };
-        ExportedActivations {
-            path: Some(path),
-            keys,
-        }
+        ExportedActivations { path, keys }
     }
 
     /// The file for `reference` (upper-cased), the UTC day holding `day_unix` and `callsign` was
@@ -113,6 +133,33 @@ mod tests {
         let key = ("US-1234".to_string(), day, Some("KD9TAW".to_string()));
         assert!(again.contains(&key));
         assert!(!again.contains(&("US-1234".to_string(), day + 86_400, Some("KD9TAW".into()))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A record this build cannot read is never written over: it is kept aside, whole, and the
+    /// record starts again from the next export.
+    #[test]
+    fn an_unreadable_record_is_kept_aside_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("pota-exports-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pota_exports.json");
+        std::fs::write(&path, "{ not the record").unwrap();
+        let day = 1_767_225_600;
+        let mut rec = ExportedActivations::open(path.clone());
+        rec.note("US-1234", day, Some("KD9TAW"));
+        let aside: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.starts_with("pota_exports.json.corrupt-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "kept aside once: {aside:?}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(&aside[0])).unwrap(),
+            "{ not the record"
+        );
+        let again = ExportedActivations::open(path);
+        assert!(again.contains(&("US-1234".to_string(), day, Some("KD9TAW".into()))));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

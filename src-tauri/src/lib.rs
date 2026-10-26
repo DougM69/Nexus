@@ -15106,24 +15106,30 @@ async fn export_log_for_activation(
     callsign: Option<String>,
 ) -> Result<tempo_app::dto::LogExportDto, String> {
     let source = tempo_app::logexport::Source::of(&engine_lock(&state));
-    let engine = state.inner().clone();
     log_folds::off_the_runtime(move || {
-        let file = tempo_app::logexport::export_for_activation(
+        tempo_app::logexport::export_for_activation(
             &source,
             &reference,
             day_start_unix,
             callsign.as_deref(),
-        )?;
-        // Remembered, so a later change to these contacts can say this file no longer matches
-        // the log (`tempo_app::pota_exports`).
-        engine_lock(&engine).note_activation_exported(
-            &reference,
-            day_start_unix,
-            callsign.as_deref(),
-        );
-        Ok(file.into())
+        )
+        .map(Into::into)
     })
     .await
+}
+
+/// The activation file [`export_log_for_activation`] made was saved: remembered, so a later change
+/// to these contacts can say this file no longer matches the log (`tempo_app::pota_exports`).
+/// Asked by the UI only once the save succeeded — a file that never reached the disk is not
+/// recorded.
+#[tauri::command(async)]
+fn note_activation_exported(
+    state: State<'_, SharedEngine>,
+    reference: String,
+    day_start_unix: u64,
+    callsign: Option<String>,
+) {
+    engine_lock(&state).note_activation_exported(&reference, day_start_unix, callsign.as_deref());
 }
 
 /// Write export text to a file in the operator's Downloads folder and return the FULL saved path.
@@ -39807,6 +39813,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_operators,
         log_activations,
         export_log_for_activation,
+        note_activation_exported,
         get_pota_activator,
         export_settings_bundle,
         import_settings_bundle,

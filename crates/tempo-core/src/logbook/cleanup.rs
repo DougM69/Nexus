@@ -1128,7 +1128,10 @@ fn checked_value(field: Field, value: &str) -> Result<String, String> {
         }
         Field::Dxcc if v.parse::<u32>().is_err() => bad("a DXCC entity number"),
         Field::TimeOff if v.parse::<u64>().is_err() => bad("a time"),
-        Field::MyPotaRef | Field::PotaRef if !valid_pota(&v.to_ascii_uppercase()) => {
+        // A two-fer may be typed with ';' between its parks; it is stored with ','.
+        Field::MyPotaRef | Field::PotaRef
+            if !valid_pota(&v.replace(';', ",").to_ascii_uppercase()) =>
+        {
             bad("a POTA park reference")
         }
         Field::MySotaRef | Field::SotaRef if !valid_sota(&v.to_ascii_uppercase()) => {
@@ -1142,7 +1145,7 @@ fn checked_value(field: Field, value: &str) -> Result<String, String> {
         // spaces, each once.
         Field::MyPotaRef | Field::PotaRef => {
             let mut parks: Vec<String> = Vec::new();
-            for park in v.split(',').map(|p| p.trim().to_ascii_uppercase()) {
+            for park in v.split([',', ';']).map(|p| p.trim().to_ascii_uppercase()) {
                 if !parks.contains(&park) {
                     parks.push(park);
                 }

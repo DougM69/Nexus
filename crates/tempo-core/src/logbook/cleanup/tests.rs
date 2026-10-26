@@ -373,6 +373,25 @@ fn a_bulk_two_fer_is_spelled_as_the_activation_stamps_it() {
     .is_err());
 }
 
+/// A two-fer typed with ';' between its parks, as some logs write one, is stored in the
+/// activation's own form: comma-separated.
+#[test]
+fn a_bulk_two_fer_typed_with_semicolons_is_stored_with_commas() {
+    for field in [Field::MyPotaRef, Field::PotaRef] {
+        let c = checked(&[Change {
+            field,
+            value: Some("us-0002; US-0003;US-0002".into()),
+        }])
+        .unwrap();
+        assert_eq!(c[0].value.as_deref(), Some("US-0002,US-0003"), "{field:?}");
+    }
+    assert!(checked(&[Change {
+        field: Field::MyPotaRef,
+        value: Some("US-0002;nonsense".into()),
+    }])
+    .is_err());
+}
+
 #[test]
 fn the_formats_a_check_holds_references_to() {
     for g in ["FN", "FN31", "fn31pr", "FN31PR45"] {

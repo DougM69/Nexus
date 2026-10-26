@@ -117,6 +117,43 @@ it('shows each park’s count exactly as the strip does — the station’s coun
   await waitFor(() => expect(document.querySelectorAll('.act-pane-row:not(.empty)')).toHaveLength(12))
 })
 
+it('a park’s day under two calls: the strip and the pane both say POTA counts each call separately', () => {
+  const act = twoFer({
+    parks: [
+      {
+        reference: 'US-1234',
+        count: 10,
+        p2p: 0,
+        calls: [
+          { callsign: 'KD9TAW', count: 6 },
+          { callsign: 'KD9TAW/M', count: 4 },
+        ],
+      },
+      { reference: 'US-5678', count: 10, p2p: 0, calls: [{ callsign: 'KD9TAW', count: 10 }] },
+    ],
+  })
+  const snap = { hunt: null, radio: { dialMhz: 14.285 }, activation: act } as unknown as AppSnapshot
+  render(
+    <>
+      <PotaSotaView snap={snap} />
+      <ActivationPane act={act} nowUnix={NOW} />
+    </>,
+  )
+  const note = 'US-1234: contacts under 2 calls (KD9TAW 6, KD9TAW/M 4) — POTA counts each call separately'
+  expect([...document.querySelectorAll('.pota-act-calls')].map((el) => el.textContent)).toEqual([note])
+  expect([...document.querySelectorAll('.act-pane-calls')].map((el) => el.textContent)).toEqual([note])
+  // One call at every park: no note anywhere.
+  cleanup()
+  const one = twoFer()
+  render(
+    <>
+      <PotaSotaView snap={{ ...snap, activation: one } as unknown as AppSnapshot} />
+      <ActivationPane act={one} nowUnix={NOW} />
+    </>,
+  )
+  expect(document.querySelectorAll('.pota-act-calls, .act-pane-calls')).toHaveLength(0)
+})
+
 it('lists the activation’s own contacts: the Logbook asked for its first park from 0000Z of the start day', async () => {
   rows = [qso('K2NEW', NOW - 60, 'US-0001,US-0002'), qso('K1OLD', START + 60)]
   render(<ActivationPane act={twoFer()} nowUnix={NOW} />)

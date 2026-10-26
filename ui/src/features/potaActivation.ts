@@ -1,5 +1,7 @@
 // The activator's side of POTA, as the screen reads it — no React, no IO, fully node-testable.
 //
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts).
+//
 // What the station counts lives in the hot index (`tempo_core::logbook::hot::pota_key`): the
 // contacts of one park on one UTC day, each `(call, band, mode)` once — a hunter's two-fer, or the
 // same hunter again from another park, is one contact toward the ten. The warn-only dupe badge in
@@ -8,7 +10,8 @@
 // (`hot::their_pota_parks`, one export row each). So a hunter calling again from a NEW park of
 // theirs is no dupe here though it adds nothing to the count: they need it for their own P2P.
 
-import type { Activation, LoggedActivation, LoggedQso } from '../types'
+import { t } from '../i18n'
+import type { Activation, ActivationPark, LoggedActivation, LoggedQso } from '../types'
 import { modeKey } from './callHistory'
 import type { LogFilter } from './logFilter'
 
@@ -99,6 +102,21 @@ export function potaDupe(
  *  is valid. */
 export function parkProgress(count: number): { count: number; toGo: number; valid: boolean } {
   return { count, toGo: Math.max(0, POTA_VALID_QSOS - count), valid: count >= POTA_VALID_QSOS }
+}
+
+/** ⭐ A park's day under more than one call — KD9TAW and KD9TAW/M, say — as a plain note:
+ *  "US-1234: contacts under 2 calls (KD9TAW 6, KD9TAW/M 4) — POTA counts each call separately".
+ *  The park's count is every call's, but POTA credits each call's file on its own, so a "valid"
+ *  park may be two short files. `null` with one call (or none). Shown by the strip, the
+ *  Activation pane and the checklist alike. */
+export function mixedCallsNote(p: ActivationPark): string | null {
+  const calls = p.calls ?? []
+  if (calls.length < 2) return null
+  return t('ota.activation.calls', {
+    reference: p.reference,
+    count: calls.length,
+    calls: calls.map((c) => `${c.callsign ?? t('ota.activation.calls.none')} ${c.count}`).join(', '),
+  })
 }
 
 /** A legacy US park reference ("K-1234"): POTA renamed US parks to "US-" in 2024, and whether

@@ -25,6 +25,12 @@ beforeAll(() => {
 })
 
 const engineLog = vi.hoisted(() => vi.fn())
+/** Whether the press being handled came through a Remote stream, as `isStreamInput` answers it. */
+const stream = vi.hoisted(() => ({ on: false }))
+vi.mock('../remote-native/stream-input', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isStreamInput: () => stream.on,
+}))
 vi.mock('../api', () => {
   const noop = () => vi.fn()
   return {
@@ -34,6 +40,7 @@ vi.mock('../api', () => {
     deleteQsoById: noop(), importAdif: noop(), editQsoById: vi.fn(async () => ({})),
     logOperators: vi.fn(async () => [] as string[]), exportLogForOperator: vi.fn(),
     logActivations: vi.fn(async () => []), exportLogForActivation: vi.fn(),
+    noteActivationExported: vi.fn(async () => {}),
     lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: vi.fn(async () => ({})), purgeLog: noop(), qrzLookup: noop(),
     markQslSentById: noop(), markQslCardById: noop(),
@@ -103,6 +110,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  stream.on = false
 })
 
 function checklist(over: Partial<Parameters<typeof ActivationOverDialog>[0]> = {}) {
@@ -209,4 +217,94 @@ it('reminds of the K- prefix, a missing grid and an unpicked state, and that the
   await screen.findByText(t('activationOver.note.upload'))
   expect(screen.queryByText(t('activationOver.note.noGrid'))).toBeNull()
   expect(screen.queryByText(t('activationOver.note.noState'))).toBeNull()
+})
+
+it('through the Remote stream, a ticked export is refused: no file, no record, and the activation keeps running', async () => {
+  const { onEnd } = checklist()
+  fireEvent.click(await screen.findByRole('checkbox', { name: t('activationOver.export.label', { count: 4 }) }))
+  stream.on = true
+  fireEvent.click(screen.getByRole('button', { name: t('activationOver.end') }))
+  expect((await screen.findByRole('alert')).textContent).toBe(t('activationOver.export.remote'))
+  expect(api.exportLogForActivation).not.toHaveBeenCalled()
+  expect(api.saveTextToDownloads).not.toHaveBeenCalled()
+  expect(api.noteActivationExported).not.toHaveBeenCalled()
+  expect(onEnd).not.toHaveBeenCalled()
+})
+
+it('records each file as exported only once it is saved', async () => {
+  const { onEnd } = checklist()
+  fireEvent.click(await screen.findByRole('checkbox', { name: t('activationOver.export.label', { count: 4 }) }))
+  fireEvent.click(screen.getByRole('button', { name: t('activationOver.end') }))
+  await waitFor(() => expect(onEnd).toHaveBeenCalled())
+  expect(vi.mocked(api.noteActivationExported).mock.calls).toEqual([
+    ['US-1234', DAY1, 'KD9TAW/P'],
+    ['US-5678', DAY1, 'KD9TAW/P'],
+    ['US-1234', DAY2, 'KD9TAW/P'],
+    ['US-5678', DAY2, 'KD9TAW/P'],
+  ])
+  const saved = vi.mocked(api.saveTextToDownloads).mock.invocationCallOrder
+  const noted = vi.mocked(api.noteActivationExported).mock.invocationCallOrder
+  noted.forEach((n, i) => expect(n).toBeGreaterThan(saved[i]))
+})
+
+it('a file that fails to save is not recorded as exported, and stops the end', async () => {
+  vi.mocked(api.saveTextToDownloads).mockRejectedValueOnce('Downloads is not writable')
+  const { onEnd } = checklist()
+  fireEvent.click(await screen.findByRole('checkbox', { name: t('activationOver.export.label', { count: 4 }) }))
+  fireEvent.click(screen.getByRole('button', { name: t('activationOver.end') }))
+  expect((await screen.findByRole('alert')).textContent).toBe('Downloads is not writable')
+  expect(api.exportLogForActivation).toHaveBeenCalledTimes(1)
+  expect(api.noteActivationExported).not.toHaveBeenCalled()
+  expect(onEnd).not.toHaveBeenCalled()
+})
+
+it('says when the activation\u2019s files could not be read, rather than that there are none', async () => {
+  vi.mocked(api.logActivations).mockRejectedValueOnce('the log is busy')
+  checklist()
+  await screen.findByText(t('activationOver.export.unreadable'))
+  expect(screen.queryByText(t('activationOver.export.none'))).toBeNull()
+  const tick = screen.getByRole('checkbox') as HTMLInputElement
+  expect(tick.disabled).toBe(true)
+  // Positive control: an activation with no files says none.
+  cleanup()
+  vi.mocked(api.logActivations).mockResolvedValueOnce([])
+  checklist()
+  await screen.findByText(t('activationOver.export.none'))
+  expect(screen.queryByText(t('activationOver.export.unreadable'))).toBeNull()
+})
+
+it('a park’s day under two calls: says POTA counts each call separately, and lists each call’s file with its count', async () => {
+  const mixed: Activation = {
+    ...act,
+    reference: 'US-1234',
+    parks: [
+      {
+        reference: 'US-1234',
+        count: 10,
+        p2p: 0,
+        calls: [
+          { callsign: 'KD9TAW', count: 6 },
+          { callsign: 'KD9TAW/M', count: 4 },
+        ],
+      },
+    ],
+  }
+  vi.mocked(api.logActivations).mockResolvedValue([bucket('US-1234', DAY2, 6, 'KD9TAW'), bucket('US-1234', DAY2, 4, 'KD9TAW/M')])
+  checklist({ act: mixed })
+  await screen.findByText('US-1234: contacts under 2 calls (KD9TAW 6, KD9TAW/M 4) — POTA counts each call separately')
+  const files = [...document.querySelectorAll('.activation-over-files li')].map((li) => li.textContent)
+  expect(files).toEqual([
+    `KD9TAW@US-1234-20261027.adi — ${t('activationOver.export.file', { count: 6 })}${t('logbook.export.activation.short', { min: 10 })}`,
+    `KD9TAW-M@US-1234-20261027.adi — ${t('activationOver.export.file', { count: 4 })}${t('logbook.export.activation.short', { min: 10 })}`,
+  ])
+})
+
+it('reads the files again when the UTC day turns while it is open, so the new day’s file is listed', async () => {
+  vi.mocked(api.logActivations).mockResolvedValue(LOG_BUCKETS.slice(0, 2))
+  const onEnd = vi.fn(async () => {})
+  const { rerender } = render(<ActivationOverDialog act={{ ...act, utcDay: DAY1 / DAY }} canQrt={false} onKeep={vi.fn()} onEnd={onEnd} />)
+  await screen.findByRole('checkbox', { name: t('activationOver.export.label', { count: 2 }) })
+  vi.mocked(api.logActivations).mockResolvedValue(LOG_BUCKETS)
+  rerender(<ActivationOverDialog act={{ ...act, utcDay: DAY2 / DAY }} canQrt={false} onKeep={vi.fn()} onEnd={onEnd} />)
+  await screen.findByRole('checkbox', { name: t('activationOver.export.label', { count: 4 }) })
 })
