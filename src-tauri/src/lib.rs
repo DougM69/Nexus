@@ -9400,6 +9400,21 @@ struct FdRulesetDto {
     event_start_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     event_end_unix: Option<u64>,
+    /// ⭐ **The settings this contest's exchange sends from** (`fd_class`, `contest_qth_county`…,
+    /// Rust names), for the contest setup to ask for this contest's and no other's
+    /// ([`tempo_core::fd_rules::FdRuleset::sent_settings`]). Filled by the PREVIEW only and absent
+    /// when empty, for `entry_classes`' reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sent_settings: Vec<String>,
+    /// ⭐ **The optional Cabrillo header lines the sponsor's template writes** (its `headers` and
+    /// `entry_headers`: `CATEGORY-POWER`, `EMAIL`, `CLUB`…), so the setup asks only for the entry
+    /// declarations this contest's log carries. Filled by the PREVIEW only and absent when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    cabrillo_headers: Vec<String>,
+    /// The only `CATEGORY-POWER` values the sponsor takes, when it names some (Winter Field Day's
+    /// `QRP` and `LOW`). Filled by the PREVIEW only and absent when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    power_categories: Vec<String>,
 }
 
 fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
@@ -9436,6 +9451,9 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         cabrillo_missing: Vec::new(),
         event_start_unix: None,
         event_end_unix: None,
+        sent_settings: Vec::new(),
+        cabrillo_headers: Vec::new(),
+        power_categories: Vec::new(),
     }
 }
 
@@ -9448,10 +9466,75 @@ fn get_fd_ruleset(state: State<'_, SharedEngine>) -> Result<FdRulesetDto, String
     Ok(fd_ruleset_preview(&eng))
 }
 
+/// ⭐ **The same preview for settings not saved yet**: the saved settings with `patch`'s fields
+/// over them, as a save of that patch would leave them. The contest setup asks this while the
+/// operator answers its steps, so it can name the engine's own blocker before anything is saved,
+/// and Back or Cancel leaves Settings as they were. Read-only: nothing is applied or written.
+#[tauri::command(async)]
+fn preview_fd_ruleset(
+    state: State<'_, SharedEngine>,
+    patch: serde_json::Map<String, serde_json::Value>,
+) -> Result<FdRulesetDto, String> {
+    let saved = engine_lock(&state).settings().clone();
+    Ok(fd_ruleset_preview_of(&settings_with_patch(&saved, patch)?))
+}
+
+/// `saved` with `patch`'s fields over it, the way `patchSettings` builds the struct it saves.
+fn settings_with_patch(
+    saved: &Settings,
+    patch: serde_json::Map<String, serde_json::Value>,
+) -> Result<Settings, String> {
+    let mut whole = serde_json::to_value(saved).map_err(|e| e.to_string())?;
+    if let Some(fields) = whole.as_object_mut() {
+        fields.extend(patch);
+    }
+    serde_json::from_value(whole).map_err(|e| e.to_string())
+}
+
+/// One contest's running-or-next window, for the contest setup's "this week first" list.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContestWindowDto {
+    /// The rules-file event id (`settings.fd_event`).
+    id: String,
+    start_unix: u64,
+    end_unix: u64,
+}
+
+/// ⭐ **When every contest the rules data holds runs**: each one's running-or-next window, by the
+/// same `next_or_running` the session's banner reads. Read-only.
+#[tauri::command]
+fn contest_windows() -> Vec<ContestWindowDto> {
+    contest_windows_at(now_unix().max(0) as u64)
+}
+
+fn contest_windows_at(now: u64) -> Vec<ContestWindowDto> {
+    tempo_core::fd_rules::ruleset_ids()
+        .into_iter()
+        .filter_map(|id| {
+            tempo_core::fd_rules::ruleset_by_id(id, tempo_core::fd_rules::CURRENT_RULES_YEAR)
+        })
+        .map(|rs| {
+            let w = rs.next_or_running(now);
+            ContestWindowDto {
+                id: rs.event.to_string(),
+                start_unix: w.start_unix,
+                end_unix: w.end_unix,
+            }
+        })
+        .collect()
+}
+
 /// [`get_fd_ruleset`]'s answer for one engine: the ruleset facts plus the role, exchange,
 /// refusal or warning the saved settings would start the contest with.
 fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
-    let mut dto = fd_ruleset_dto(&eng.settings().fd_event);
+    fd_ruleset_preview_of(eng.settings())
+}
+
+/// [`fd_ruleset_preview`] for any settings, saved or not.
+fn fd_ruleset_preview_of(settings: &Settings) -> FdRulesetDto {
+    use tempo_app::engine::Engine;
+    let mut dto = fd_ruleset_dto(&settings.fd_event);
     // ⭐ THE ROLE PREVIEW. It is built by the SAME constructor mode entry uses, on the
     // same station data, so what Settings shows is what will go on the air — a second
     // derivation here is exactly how the preview would come to reassure an operator
@@ -9469,12 +9552,23 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
         dto.address_headers = owned(rs.cabrillo_address_headers);
         dto.soapbox = rs.cabrillo_soapbox;
         dto.band_categories = owned(rs.cabrillo_band_categories);
+        dto.sent_settings = owned(&rs.sent_settings());
+        dto.cabrillo_headers = rs
+            .cabrillo_headers
+            .iter()
+            .chain(rs.cabrillo_entry_headers)
+            .map(|h| h.to_string())
+            .collect();
+        dto.power_categories = owned(rs.cabrillo_power_categories);
         // When it runs, by the computation the session's banner reads — so the contest screen
         // says the same thing before the session exists as during it.
         let window = rs.next_or_running(now_unix().max(0) as u64);
         dto.event_start_unix = Some(window.start_unix);
         dto.event_end_unix = Some(window.end_unix);
-        match tempo_core::contest::ContestSession::for_ruleset(rs, &eng.contest_station_data()) {
+        match tempo_core::contest::ContestSession::for_ruleset(
+            rs,
+            &Engine::contest_station_data_of(settings),
+        ) {
             Ok(s) => {
                 dto.role = s.role().id.to_string();
                 dto.exchange = s.my_exchange.iter().map(|v| v.raw.clone()).collect();
@@ -9483,8 +9577,7 @@ fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
                     .as_ref()
                     .map(tempo_app::dto::LocationWarningDto::from);
                 // …and what its Cabrillo file would leave out, named before the session starts.
-                dto.cabrillo_missing = eng
-                    .cabrillo_missing_at_start(s)
+                dto.cabrillo_missing = Engine::cabrillo_missing_at_start_of(settings, s)
                     .into_iter()
                     .map(str::to_string)
                     .collect();
@@ -40156,6 +40249,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_fd_rules_status,
         fetch_fd_rules,
         get_fd_ruleset,
+        preview_fd_ruleset,
+        contest_windows,
         get_tle_status,
         fetch_tles_now,
         import_tles,
@@ -43117,6 +43212,88 @@ mod tests {
             .entry_classes
             .is_empty()
         );
+    }
+
+    /// ⭐ **The contest setup previews a pick that is not saved**: the engine's own refusal for the
+    /// answers so far, then its exchange once they are complete — and the saved settings are
+    /// untouched by either. By value, against the saved pick (Field Day) as the control.
+    #[test]
+    fn the_preview_of_an_unsaved_pick_names_the_engines_blocker_then_its_exchange() {
+        let saved = tempo_app::settings::Settings {
+            fd_event: "arrlfd".into(),
+            fd_class: "1D".into(),
+            fd_section: "WI".into(),
+            ..Default::default()
+        };
+        let patch = |v: serde_json::Value| v.as_object().unwrap().clone();
+        // The Illinois QSO Party, in state, with no county yet: the constructor's own sentence.
+        let blank = super::settings_with_patch(
+            &saved,
+            patch(serde_json::json!({ "fdEvent": "ilqp", "contestQthState": "IL" })),
+        )
+        .unwrap();
+        let refused = super::fd_ruleset_preview_of(&blank);
+        assert_eq!(refused.event, "ilqp");
+        assert!(
+            refused.problem.contains("QTH is empty"),
+            "{}",
+            refused.problem
+        );
+        assert!(refused.exchange.is_empty(), "{:?}", refused.exchange);
+        assert_eq!(
+            refused.sent_settings,
+            ["contest_qth_county", "contest_qth_state"]
+        );
+        assert!(
+            refused.cabrillo_headers.iter().any(|h| h == "ENTRY-CLASS"),
+            "{:?}",
+            refused.cabrillo_headers
+        );
+        // …the county typed: no refusal, and the exchange it would send.
+        let typed = super::settings_with_patch(
+            &saved,
+            patch(serde_json::json!({
+                "fdEvent": "ilqp",
+                "contestQthState": "IL",
+                "contestQthCounty": "COOK",
+            })),
+        )
+        .unwrap();
+        let ok = super::fd_ruleset_preview_of(&typed);
+        assert_eq!(ok.problem, "");
+        assert_eq!(ok.exchange.last().map(String::as_str), Some("COOK"));
+        // CONTROL: the saved settings still preview Field Day's own exchange.
+        let control = super::fd_ruleset_preview_of(&saved);
+        assert_eq!(control.event, "arrlfd");
+        assert_eq!(control.exchange, ["1D", "WI"]);
+        // A key the settings do not carry is ignored, as a save ignores it; a wrong type refuses.
+        assert!(
+            super::settings_with_patch(&saved, patch(serde_json::json!({ "notASetting": 1 })))
+                .is_ok()
+        );
+        assert!(super::settings_with_patch(
+            &saved,
+            patch(serde_json::json!({ "contestCqZone": "five" }))
+        )
+        .is_err());
+    }
+
+    /// Every contest the rules data holds, each with a window that has not ended — the running one
+    /// while it runs, then the next year's.
+    #[test]
+    fn contest_windows_lists_every_contest_running_or_next() {
+        let rs = tempo_core::fd_rules::ruleset_by_id("ilqp", 2026).unwrap();
+        let w = rs.event_window(2026);
+        let at = |now: u64| {
+            super::contest_windows_at(now)
+                .into_iter()
+                .find(|c| c.id == "ilqp")
+                .map(|c| (c.start_unix, c.end_unix))
+        };
+        assert_eq!(super::contest_windows_at(w.start_unix).len(), 18);
+        assert_eq!(at(w.start_unix + 60), Some((w.start_unix, w.end_unix)));
+        let next = rs.event_window(2027);
+        assert_eq!(at(w.end_unix), Some((next.start_unix, next.end_unix)));
     }
 
     /// ⭐ **Settings is offered the entry declarations the picked contest's sponsor names**, by

@@ -14156,31 +14156,37 @@ impl Engine {
     /// entrant, and the catch-all role they fall to is the ruleset's own answer for
     /// "none of the above", not an inference this makes on their behalf.
     pub fn contest_station_data(&self) -> tempo_core::contest::StationData {
-        let st = self.settings.contest_qth_state.trim();
+        Self::contest_station_data_of(&self.settings)
+    }
+
+    /// [`Self::contest_station_data`] for settings the engine does not hold yet: what a setup
+    /// screen's unsaved answers would send, read the same way.
+    pub fn contest_station_data_of(settings: &Settings) -> tempo_core::contest::StationData {
+        let st = settings.contest_qth_state.trim();
         tempo_core::contest::StationData {
-            fd_class: self.settings.fd_class.clone(),
-            fd_section: self.settings.fd_section.clone(),
-            contest_qth_county: self.settings.contest_qth_county.clone(),
+            fd_class: settings.fd_class.clone(),
+            fd_section: settings.fd_section.clone(),
+            contest_qth_county: settings.contest_qth_county.clone(),
             contest_qth_state: st.to_string(),
-            contest_check: self.settings.contest_check.clone(),
-            contest_cq_zone: match self.settings.contest_cq_zone {
+            contest_check: settings.contest_check.clone(),
+            contest_cq_zone: match settings.contest_cq_zone {
                 0 => String::new(),
                 z => z.to_string(),
             },
-            contest_itu_zone: match self.settings.contest_itu_zone {
+            contest_itu_zone: match settings.contest_itu_zone {
                 0 => String::new(),
                 z => z.to_string(),
             },
-            contest_power: self.settings.contest_power.clone(),
+            contest_power: settings.contest_power.clone(),
             // Sweepstakes sends the operator's own call INSIDE the exchange (§4.3) and
             // its precedence letter is the entry's declared category (§4.2), so both
             // are sent-slot sources like any other.
-            mycall: self.settings.mycall.clone(),
-            contest_category_operator: self.settings.contest_category_operator.clone(),
-            contest_category_power: self.settings.contest_category_power.clone(),
-            contest_category_assisted: self.settings.contest_category_assisted.clone(),
-            contest_category_station: self.settings.contest_category_station.clone(),
-            mygrid: self.settings.mygrid.clone(),
+            mycall: settings.mycall.clone(),
+            contest_category_operator: settings.contest_category_operator.clone(),
+            contest_category_power: settings.contest_category_power.clone(),
+            contest_category_assisted: settings.contest_category_assisted.clone(),
+            contest_category_station: settings.contest_category_station.clone(),
+            mygrid: settings.mygrid.clone(),
             dxcc: st.eq_ignore_ascii_case("DX"),
         }
     }
@@ -14524,7 +14530,10 @@ impl Engine {
     ///
     /// [`FieldDayStatus::cabrillo_missing`]: crate::dto::FieldDayStatus::cabrillo_missing
     fn contest_entrant(&self) -> tempo_core::contest::CabrilloEntrant {
-        let s = &self.settings;
+        Self::contest_entrant_of(&self.settings)
+    }
+
+    fn contest_entrant_of(s: &Settings) -> tempo_core::contest::CabrilloEntrant {
         tempo_core::contest::CabrilloEntrant {
             name: s.op_name.trim().to_string(),
             email: s.contest_email.trim().to_string(),
@@ -14555,9 +14564,19 @@ impl Engine {
     ///
     /// [`FieldDayStatus::cabrillo_missing`]: crate::dto::FieldDayStatus::cabrillo_missing
     pub fn cabrillo_missing_at_start(&self, session: ContestSession) -> Vec<&'static str> {
-        let mut entrant = self.contest_entrant();
-        entrant.operators = format!("{} {}", entrant.operators, self.fd_row_operator());
-        tempo_core::fieldday::FieldDayLog::new(&self.settings.mycall, session, &self.settings.band)
+        Self::cabrillo_missing_at_start_of(&self.settings, session)
+    }
+
+    /// [`Self::cabrillo_missing_at_start`] for settings the engine does not hold yet.
+    pub fn cabrillo_missing_at_start_of(
+        settings: &Settings,
+        session: ContestSession,
+    ) -> Vec<&'static str> {
+        let mut entrant = Self::contest_entrant_of(settings);
+        // The operator at the key, as `fd_row_operator` reads it.
+        let at_key = settings.fd_operator.trim().to_ascii_uppercase();
+        entrant.operators = format!("{} {}", entrant.operators, at_key);
+        tempo_core::fieldday::FieldDayLog::new(&settings.mycall, session, &settings.band)
             .cabrillo_missing(&entrant)
     }
 
