@@ -652,7 +652,7 @@ export function LanApp({ open = openSocket, page = typeof location === 'undefine
             const signed = account.find(entry => entry.stationId === station.id)
             const settled = forgetting !== station.id && operating !== station.id
             // With the road added, this computer's key for it: the station shows the same one when it
-            // asks to approve this computer, and under Remote access ▸ Your computers.
+            // asks to approve this computer, and under Remote access ▸ Devices.
             const computerKey = internetKey !== undefined
               && <p className="remote-site-status">{t('lanWindow.internet.computerKey', { key: shortFingerprint(internetKey) })}</p>
             // Added with the account: until when the station takes this computer on its network, and

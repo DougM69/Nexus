@@ -450,7 +450,7 @@ real hardware and on the air.
 - The FT8 decode change and the one-over fix for a call made during the other station's period need a check on the
   air.
 - Activation files exported before this version are not known to the re-tag warning.
-- Two Remote messages on the computer you operate from still say to remove it under Remote access ▸ Your computers;
-  it is on the Devices list.
+- Nexus Remote's internet road from a second PC still runs on a test service during the beta. When the regular
+  service starts, the beta accounts and their stations are deleted, and each shack signs in or pairs again.
 
 **118 changes since 1.20.0.** The full list is in the CHANGELOG.

@@ -10,7 +10,7 @@ import { LanApp, type PageSocket } from './LanApp'
 import { CLOSED_REASONS, CONNECT_REASONS, PAIR_REASONS, SIGN_IN_REASONS, WHERE_REASONS } from './protocol'
 import { EN } from '../i18n/en'
 import { harness, last } from '../remote-web/stream-link.testkit'
-// The shack's own form for a key (its approval question and Remote access ▸ Your computers use it), so
+// The shack's own form for a key (its approval question and Remote access ▸ Devices uses it), so
 // the window shows each key exactly as the station does, for the operator to compare by eye.
 import { shortFingerprint } from '../remote-web/stream-protocol'
 
