@@ -9120,25 +9120,29 @@ fn contest_place_call(call: &str) -> Option<tempo_core::contest::CallLocation> {
     })
 }
 
-/// Where the contest places a callsign, for the entry strip: the entity its scorer counts
-/// the call under and the CQ zone the country file gives it.
+/// Where the contest places a callsign, for the entry strip: the country its scorer counts
+/// the call as and the CQ zone the country file gives it.
 #[derive(Debug, serde::Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct ContestPlace {
-    /// As the scorer counts it: a WAE area is its own (IT9 is Sicily), where the callsign
-    /// card's [`resolve_entity`] folds it into its DXCC entity (Italy).
+    /// As this contest's scorer counts it ([`tempo_core::contest::counted_country`]): in CQ
+    /// WW a WAE area is its own (IT9 is Sicily); in every other contest it is its DXCC
+    /// entity (Italy), as on the callsign card.
     entity: &'static str,
     /// The zone HINT (the zone box's placeholder, never its value).
     cq_zone: Option<u8>,
 }
 
 /// The contest strip's country line and zone hint, out of ONE resolve: read through
-/// [`contest_place_call`], the adapter the scorer places a call with, so the strip cannot
-/// name a country or a zone the scorer does not count. Read-only, and per keystroke.
+/// [`contest_place_call`], the adapter the scorer places a call with, and named by the
+/// country list `event`'s scorer counts, so the strip cannot name a country or a zone the
+/// scorer does not count. Read-only, and per keystroke.
 #[tauri::command]
-fn contest_place(call: String) -> Option<ContestPlace> {
+fn contest_place(call: String, event: String) -> Option<ContestPlace> {
+    let wae = tempo_core::fd_rules::ruleset_by_id(&event, tempo_core::fd_rules::CURRENT_RULES_YEAR)
+        .is_some_and(|rs| rs.scoring.counts_wae_areas());
     contest_place_call(&call).map(|l| ContestPlace {
-        entity: l.entity,
+        entity: tempo_core::contest::counted_country(l.entity, wae),
         cq_zone: l.cq_zone,
     })
 }
@@ -9147,7 +9151,11 @@ fn contest_place(call: String) -> Option<ContestPlace> {
 /// an ordering regression rather than a state to accept, exactly as for cty and the rules
 /// table.
 fn contest_call_resolver_install() {
-    match tempo_core::contest::install_call_resolver(contest_place_call) {
+    // Both installed whatever the first answers (`and`, not `and_then`): the WAE fold is
+    // the same country file's, and the scorer reads it beside the resolver.
+    match tempo_core::contest::install_call_resolver(contest_place_call).and(
+        tempo_core::contest::install_wae_parent(propagation::dxcc::wae_parent),
+    ) {
         Ok(()) => tempo_core::applog::info(
             "startup",
             "contest: cty.dat country file wired to the contest scorer",
@@ -41631,37 +41639,54 @@ mod tests {
                 "{call} places in zone {zone}"
             );
             assert_eq!(
-                super::contest_place(call.into()).and_then(|p| p.cq_zone),
+                super::contest_place(call.into(), "cqww_cw".into()).and_then(|p| p.cq_zone),
                 Some(zone),
                 "{call}"
             );
         }
         // NEGATIVE CONTROL: nothing to place, nothing to hint — never a made-up zone.
-        assert_eq!(super::contest_place(String::new()), None);
-        assert_eq!(super::contest_place("...".into()), None);
+        assert_eq!(super::contest_place(String::new(), "cqww_cw".into()), None);
+        assert_eq!(super::contest_place("...".into(), "cqww_cw".into()), None);
     }
 
-    /// ⭐ **The strip names the entity the contest counts.** CQ WW counts a WAE area as a
-    /// country of its own, so IT9XYZ is Sicily on the strip, as the scorer counts it, while
-    /// the callsign card's entity folds it into Italy. A call outside the WAE areas is the
-    /// same entity both ways.
+    /// ⭐ **The strip names the country the contest counts.** Only CQ WW (and WAE DX) counts a
+    /// WAE area as a country of its own, so IT9XYZ is Sicily on CQ WW's strip and Italy on every
+    /// other contest's — TNQP's, TXQP's and ILQP's DX multiplier, and a contest with no country
+    /// multiplier at all — the entity the callsign card names. A call outside the WAE areas is
+    /// the same entity everywhere.
     #[test]
-    fn the_contest_place_is_the_scorers_entity_and_zone_from_one_resolve() {
-        let sicily = super::contest_place("IT9XYZ".into()).expect("IT9XYZ places");
-        assert_eq!(sicily.entity, "Sicily");
+    fn the_contest_place_is_the_scorers_country_and_zone_from_one_resolve() {
+        // Installed exactly as startup installs it (a second install is refused, and is the
+        // same fold).
+        let _ = tempo_core::contest::install_wae_parent(propagation::dxcc::wae_parent);
+        let country = |call: &str, event: &str| {
+            super::contest_place(call.into(), event.into()).map(|p| p.entity)
+        };
+        for event in ["cqww_cw", "cqww_ssb", "cqww_rtty"] {
+            assert_eq!(country("IT9XYZ", event), Some("Sicily"), "{event}");
+            assert_eq!(country("I1ABC", event), Some("Italy"), "{event}");
+        }
+        for event in ["tnqp", "txqp", "ilqp", "cqwpx_cw", "arrlss_cw"] {
+            assert_eq!(country("IT9XYZ", event), Some("Italy"), "{event}");
+            assert_eq!(country("GB3LER", event), Some("Scotland"), "{event}");
+        }
+        assert_eq!(country("GB3LER", "cqww_cw"), Some("Shetland Islands"));
+        let sicily =
+            super::contest_place("IT9XYZ".into(), "cqww_cw".into()).expect("IT9XYZ places");
         assert_eq!(
             Some(sicily.entity),
             super::contest_place_call("IT9XYZ").map(|l| l.entity)
         );
         assert_eq!(sicily.cq_zone, Some(15));
-        // The card's entity, which the strip used to show, is the DXCC entity.
+        // The card's entity is the DXCC entity — what every contest but CQ WW names.
         assert_eq!(
             super::resolve_entity("IT9XYZ".into()).as_deref(),
-            Some("Italy")
+            country("IT9XYZ", "tnqp")
         );
         // CONTROL: a plain DXCC call is the same entity both ways.
-        let dl = super::contest_place("DL1ABC".into()).expect("DL1ABC places");
+        let dl = super::contest_place("DL1ABC".into(), "cqww_cw".into()).expect("DL1ABC places");
         assert_eq!(dl.entity, "Fed. Rep. of Germany");
+        assert_eq!(country("DL1ABC", "tnqp"), Some(dl.entity));
         assert_eq!(
             super::resolve_entity("DL1ABC".into()).as_deref(),
             Some(dl.entity)

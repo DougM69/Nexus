@@ -1531,12 +1531,13 @@ export async function resolveEntity(call: string): Promise<string | null> {
   return invoke<string | null>('resolve_entity', { call })
 }
 
-/** Where the contest places a callsign, or null: the entity its scorer counts the call under
- *  (a WAE area is its own, IT9 is Sicily) and the CQ zone the country file gives it, out of ONE
- *  resolve, the scorer's. The zone is a HINT for the contest strip's zone box (its placeholder),
- *  never a logged value: a station outside its prefix's zone sends its own. */
-export async function contestPlace(call: string): Promise<{ entity: string; cqZone: number | null } | null> {
-  return invoke<{ entity: string; cqZone: number | null } | null>('contest_place', { call })
+/** Where the contest `event` places a callsign, or null: the country its scorer counts the call
+ *  as (a WAE area is its own only in CQ WW, where IT9 is Sicily; in every other contest IT9 is
+ *  Italy) and the CQ zone the country file gives it, out of ONE resolve, the scorer's. The zone is
+ *  a HINT for the contest strip's zone box (its placeholder), never a logged value: a station
+ *  outside its prefix's zone sends its own. */
+export async function contestPlace(call: string, event: string): Promise<{ entity: string; cqZone: number | null } | null> {
+  return invoke<{ entity: string; cqZone: number | null } | null>('contest_place', { call, event })
 }
 
 /** What the log last said of `call`'s county or state, for the contest entry's box receiving

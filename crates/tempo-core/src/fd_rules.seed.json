@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "generated": "2026-10-19T16:00:00Z",
+  "generated": "2026-10-25T12:00:00Z",
   "_provenance": {
     "qso_parties": "The four state QSO parties (TNQP, OhQP, CQP, TXQP) were written from each sponsor's own current page or PDF, all read 2026-09-09. TNQP: https://tnqp.org/rules/ renders only navigation (an EmbedPress wrapper), so the source is the PDF that page embeds, https://tnqp.org/wp-content/uploads/2026/08/Tennessee-QSO-Party-2026-Rules.pdf, \"Tennessee QSO Party 2026 Rules\". OhQP: https://www.ohqp.org/index.php/rules/ plus /official-list-of-mults-for-ohio-stations/ and /official-list-of-mults-for-non-ohio-stations/. CQP: https://www.cqp.org/Rules.html (Last Update 19-July-2026, 61st running) plus https://www.cqp.org/cqp_multipliers.html. TXQP: https://www.txqp.net/?page_id=23 plus https://www.txqp.net/?page_id=90 (the previously-cited https://www.txqp.net/index.php/rules/operating-rules is DEAD, HTTP 404 — the sponsor rebuilt the site). Each county list was PARSED off the sponsor's own table and its size counted, never read off a stated total: 95 TN, 88 OH (+62 non-county codes = 150), 58 CA (+63 state/province codes), 254 TX.",
     "txqp_county_codes": "⚠️ THE SPONSOR'S PROSE AND THE SPONSOR'S LIST DISAGREE, AND THE LIST WINS. txqp.net/?page_id=23 says \"Log submissions must use the approved four-letter county abbreviation for the exchange.\" The official list on ?page_id=90 has 254 entries, of which TWO ARE THREE LETTERS: BEE (Bee) and LEE (Lee). A domain or validator written to the prose (len == 4) rejects two real Texas counties, and a Texas mobile operating in either one produces an unsubmittable log for every QSO made from it. The domain below is the sponsor's 254 codes verbatim. Do not normalise, pad or \"fix\" BEE and LEE, and do not generate codes from county names — the scheme is irregular (Brazoria=BZIA, Brazos=BZOS, Cameron=CMRN, Collin=COLN, Collingsworth=COLW, Comal=COML, Comanche=COMA, Dallam=DALM, Dallas=DALS).",
@@ -6627,7 +6627,8 @@
           {
             "id": "country",
             "source": {
-              "type": "dxcc_entity"
+              "type": "dxcc_entity",
+              "wae": true
             },
             "scope": "per_band",
             "excluding": [],
@@ -6810,7 +6811,8 @@
           {
             "id": "country",
             "source": {
-              "type": "dxcc_entity"
+              "type": "dxcc_entity",
+              "wae": true
             },
             "scope": "per_band",
             "excluding": [],
@@ -6993,7 +6995,8 @@
           {
             "id": "country",
             "source": {
-              "type": "dxcc_entity"
+              "type": "dxcc_entity",
+              "wae": true
             },
             "scope": "per_band",
             "excluding": [],
