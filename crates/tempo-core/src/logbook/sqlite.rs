@@ -1402,6 +1402,11 @@ impl LogDb {
         super::history::changed_after(&self.conn, run)
     }
 
+    /// The entries of `run` that stand undone now ([`super::history::undone_in`]).
+    pub fn history_undone_in(&self, run: &str) -> Result<HashSet<i64>> {
+        super::history::undone_in(&self.conn, run)
+    }
+
     /// The contacts added after the change `after_seq`, not by an undo, each with the latest such
     /// entry ([`super::history::created_after`]).
     pub fn history_created_after(&self, after_seq: i64) -> Result<HashMap<RecordId, i64>> {

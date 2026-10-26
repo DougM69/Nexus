@@ -1454,3 +1454,127 @@ fn a_launch_trims_old_deleted_contacts_and_keeps_every_edit() {
     );
     assert_eq!(edit[0].changes().len(), 1);
 }
+
+/// The log, by id, to compare whole.
+fn log_by_id(engine: &Mutex<Engine>) -> Vec<QsoRecord> {
+    let mut log: Vec<QsoRecord> = engine.stored_log().iter().map(|r| (**r).clone()).collect();
+    log.sort_by_key(|r| r.id.map(|id| id.to_string()));
+    log
+}
+
+/// The fill job's run over the three contacts of a fresh log: three edits in one run.
+fn fill_three(engine: &Mutex<Engine>) -> String {
+    let fills: Vec<LogFill> = engine
+        .stored_log()
+        .iter()
+        .map(|r| LogFill {
+            id: r.id.unwrap(),
+            country: Some("Filled".into()),
+            state: None,
+        })
+        .collect();
+    assert_eq!(logwrite::fill(engine, &fills, 1).expect("the fill"), 3);
+    settle(engine);
+    latest_run(engine, Some(Source::Fill))
+        .unwrap()
+        .expect("the run")
+        .run
+}
+
+/// Undo `id`'s latest change on its own, as its History panel does: the undo's run.
+fn undo_latest_of(engine: &Mutex<Engine>, id: RecordId) -> String {
+    let seq = history_of(engine, id).unwrap().last().unwrap().seq;
+    let (undone, dur) = undo_entry(engine, seq);
+    let undone = undone.expect("undone");
+    assert_eq!((undone.changed, undone.refused), (1, vec![]));
+    dur.wait(DURABLE_WAIT).unwrap();
+    undone.run.expect("the undo's run")
+}
+
+/// ★ A whole run's undo after one of its contacts was undone on its own reverts the rest and does
+/// not name that contact as changed since: the operator already took it back.
+#[test]
+fn a_runs_undo_skips_a_contact_already_undone_on_its_own() {
+    let d = Dir::new("history-run-after-single");
+    let engine = shared(&d, 3);
+    let before = log_by_id(&engine);
+    let run = fill_three(&engine);
+    undo_latest_of(&engine, id_at(&*engine, 1));
+
+    let (undone, dur) = undo_run(&engine, &run);
+    let undone = undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!((undone.changed, undone.refused), (2, vec![]));
+    assert_eq!(log_by_id(&engine), before, "the log as the run found it");
+}
+
+/// ★ Redone since, the contact's change stands again: the whole run's undo reverts all three.
+#[test]
+fn a_runs_undo_reverts_a_contact_whose_own_undo_was_redone() {
+    let d = Dir::new("history-run-after-redo");
+    let engine = shared(&d, 3);
+    let before = log_by_id(&engine);
+    let run = fill_three(&engine);
+    let id = id_at(&*engine, 1);
+    let undo = undo_latest_of(&engine, id);
+    let (redone, dur) = undo_contact_run(&engine, &undo);
+    assert_eq!(redone.expect("redone").changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(
+        row_of(&engine, id).unwrap().country.as_deref(),
+        Some("Filled")
+    );
+
+    let (undone, dur) = undo_run(&engine, &run);
+    let undone = undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!((undone.changed, undone.refused), (3, vec![]));
+    assert_eq!(log_by_id(&engine), before, "the log as the run found it");
+}
+
+/// ★ An import's undo after one contact it added was taken out on its own takes out the rest, and
+/// does not name the one already gone.
+#[test]
+fn an_imports_undo_skips_a_contact_already_taken_out_on_its_own() {
+    let d = Dir::new("history-import-after-single");
+    let engine = shared(&d, 3);
+    let before = log_by_id(&engine);
+    let mut text = adif_header();
+    for i in 0..3u64 {
+        text.push_str(&record(&format!("N{i}IMP"), 1_789_000_000 + i * 600));
+    }
+    let run = new_run();
+    let (made, dur) = until_written(|| logwrite::import_adif_in_run(&engine, &text, &run));
+    assert_eq!(made.expect("the import").0, 3);
+    dur.wait(DURABLE_WAIT).unwrap();
+    undo_latest_of(&engine, id_of(&engine, "N1IMP"));
+
+    let (undone, dur) = undo_run(&engine, &run);
+    let undone = undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!((undone.changed, undone.refused), (2, vec![]));
+    assert_eq!(log_by_id(&engine), before, "the log as the import found it");
+}
+
+/// ★ A purge's undo after one contact was restored on its own puts back the rest, and does not
+/// name the one already back.
+#[test]
+fn a_purges_undo_skips_a_contact_already_restored_on_its_own() {
+    let d = Dir::new("history-purge-after-single");
+    let engine = shared(&d, 3);
+    let before = log_by_id(&engine);
+    let run = new_run();
+    let (removed, dur) = engine_lock(&engine).with_log_tickets(|e| e.clear_logbook_in_run(&run));
+    assert_eq!(removed, 3);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let id = before[0].id.unwrap();
+    let (back, dur) = restore_deleted(&engine, id);
+    assert_eq!(back.expect("restored").changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+
+    let (undone, dur) = undo_run(&engine, &run);
+    let undone = undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!((undone.changed, undone.refused), (2, vec![]));
+    assert_eq!(log_by_id(&engine), before, "the log as the purge found it");
+}

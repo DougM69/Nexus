@@ -42,6 +42,8 @@
 //!   contacts a second apart holds both. The operator can restore one anyway
 //!   ([`restore_deleted_anyway`]);
 //! - an entry of a kind a later build recorded ([`CannotUndo::UnknownKind`]);
+//! - an entry the operator already undid on its own (an undo linked to it, not redone since,
+//!   [`history::undone_in`]): left out, neither changed again nor named as refused.
 //! - a blank station call it would put back where the call in Settings is another call than the
 //!   one the contact names: the contact would be owed to every service under a call it was not
 //!   made under, so the call stays, with its stamps ([`Undone::held`], [`history::undo`]).
@@ -365,6 +367,7 @@ struct Planned {
 /// ([`tempo_core::logbook::sqlite::LogDb::history_changed_after`]): such a contact is kept, not
 /// taken out, as is one uploaded since ([`Entry::uploaded_since`]). `settings_call`: the call in
 /// Settings, the one a contact naming no station call is uploaded under ([`history::undo`]).
+/// `undone`: the entries already undone on their own, left out (a whole run's undo only).
 ///
 /// Linear in the entries: each contact's are found through one index of them, built once.
 fn plan_undo(
@@ -372,6 +375,7 @@ fn plan_undo(
     ids: &[RecordId],
     rows: &HashMap<RecordId, Arc<QsoRecord>>,
     later: &HashMap<RecordId, i64>,
+    undone: &HashSet<i64>,
     settings_call: &str,
 ) -> Planned {
     let mut by_id: HashMap<RecordId, Vec<&Entry>> = HashMap::with_capacity(ids.len());
@@ -391,6 +395,9 @@ fn plan_undo(
         let mut restored_from = None;
         // Latest first: the run's changes to one contact come off in the order they went on.
         for e in by_id.get(id).into_iter().flatten().rev() {
+            if undone.contains(&e.seq) {
+                continue;
+            }
             let undo = match (e.kind, now.as_ref()) {
                 // Added by the entry and changed or uploaded since: it stays.
                 (Kind::Create, Some(cur))
@@ -493,6 +500,12 @@ fn undo_entries(
         .filter(|e| e.kind == Kind::Create)
         .map(|e| e.run.as_str())
         .collect();
+    // A whole run's own: what the operator undid of it one entry at a time is left out.
+    let whole_runs: BTreeSet<&str> = if whole {
+        entries.iter().map(|e| e.run.as_str()).collect()
+    } else {
+        BTreeSet::new()
+    };
     let run = new_run();
     let settings_call = crate::logwrite::settings_call(engine);
     for _ in 0..PLANS {
@@ -514,6 +527,15 @@ fn undo_entries(
                 Err(e) => return (Err(e), Durability::default()),
             }
         }
+        // Then, for a whole run, the entries the operator already undid one at a time.
+        let mut undone = HashSet::new();
+        for run in &whole_runs {
+            match read_current(engine, |db| db.history_undone_in(run)) {
+                Ok(Some(found)) => undone.extend(found),
+                Ok(None) => behind = true,
+                Err(e) => return (Err(e), Durability::default()),
+            }
+        }
         if behind {
             continue;
         }
@@ -523,7 +545,7 @@ fn undo_entries(
             undoes,
             deleted_at,
             mut answer,
-        } = plan_undo(entries, &ids, &rows, &later, &settings_call);
+        } = plan_undo(entries, &ids, &rows, &later, &undone, &settings_call);
         if pairs.is_empty() {
             return (Ok(answer), Durability::default());
         }
