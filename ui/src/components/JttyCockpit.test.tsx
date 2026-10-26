@@ -269,7 +269,7 @@ describe('the JTTY cockpit drives the engine’s receive controls, and nothing t
     fireEvent.change(compose(), { target: { value: 'CQ TEST' } })
     fireEvent.keyDown(compose(), { key: 'Enter' })
     await flush()
-    expect(m('jttySend')).toHaveBeenCalledWith('CQ TEST', '')
+    expect(m('jttySend')).toHaveBeenCalledWith('CQ TEST', '', null)
     expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith('TX is off — enable TX first', 'error')
     expect(compose().value, 'the refused text stays in the box').toBe('CQ TEST')
   })
@@ -299,7 +299,7 @@ describe('the JTTY dock, wired to the engine (a state saying the transmitter is 
     fireEvent.change(compose(), { target: { value: 'cq cq de %M' } })
     fireEvent.keyDown(compose(), { key: 'Enter' })
     await flush()
-    expect(m('jttySend')).toHaveBeenCalledWith('cq cq de %M', 'W1AW')
+    expect(m('jttySend')).toHaveBeenCalledWith('cq cq de %M', 'W1AW', null)
     expect(compose().value).toBe('')
     expect(document.querySelector('.jtty-committed')?.textContent).toBe('CQ CQ DE KD9TAW')
     expect(screen.getByRole('button', { name: t('jtty.compose.send.left', { n: 1 }) })).toBeTruthy()
@@ -329,10 +329,10 @@ describe('the JTTY dock, wired to the engine (a state saying the transmitter is 
     fireEvent.change(screen.getByRole('textbox', { name: t('jtty.hisCall.aria') }), { target: { value: 'W1AW' } })
     fireEvent.click(screen.getByRole('button', { name: /^F2/ }))
     await flush()
-    expect(m('jttyFkey')).toHaveBeenLastCalledWith(2, 'W1AW')
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(2, 'W1AW', null)
     fireEvent.keyDown(window, { key: 'F6' })
     await flush()
-    expect(m('jttyFkey')).toHaveBeenLastCalledWith(6, 'W1AW')
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(6, 'W1AW', null)
     m('jttyFkey').mockClear()
     fireEvent.keyDown(window, { key: 'F1', altKey: true })
     fireEvent.keyDown(window, { key: 'F1', ctrlKey: true })
@@ -353,24 +353,24 @@ describe('the JTTY dock, wired to the engine (a state saying the transmitter is 
       fireEvent.change(compose(), { target: { value: 'HELLO ' } })
       fireEvent.click(liveKey())
       await flush()
-      expect(m('jttyLiveStart')).toHaveBeenCalledWith('HELLO ', '')
+      expect(m('jttyLiveStart')).toHaveBeenCalledWith('HELLO ', '', null)
       expect(compose().value).toBe('')
       m('jttyLiveCommit').mockResolvedValue(sent(0, '', liveOn))
       fireEvent.change(compose(), { target: { value: 'HOW ARE' } })
       await flush()
-      expect(m('jttyLiveCommit')).toHaveBeenLastCalledWith('HOW ARE', '', false)
+      expect(m('jttyLiveCommit')).toHaveBeenLastCalledWith('HOW ARE', '', false, null)
       m('jttyLiveCommit').mockResolvedValue(sent(7, 'HOW ARE', liveOn))
       await act(async () => {
         vi.advanceTimersByTime(1_500)
       })
       await flush()
-      expect(m('jttyLiveCommit')).toHaveBeenLastCalledWith('HOW ARE', '', true)
+      expect(m('jttyLiveCommit')).toHaveBeenLastCalledWith('HOW ARE', '', true, null)
       expect(compose().value).toBe('')
       expect(document.querySelector('.jtty-committed')?.textContent).toBe('HELLO HOW ARE')
       m('jttySignOff').mockResolvedValue(sent(0, 'DE KD9TAW K', state({ tx: txState({ left: 1, sending: true }) })))
       fireEvent.click(liveKey())
       await flush()
-      expect(m('jttySignOff')).toHaveBeenCalledWith('', '')
+      expect(m('jttySignOff')).toHaveBeenCalledWith('', '', null)
     } finally {
       vi.useRealTimers()
     }
@@ -404,6 +404,75 @@ describe('the JTTY dock, wired to the engine (a state saying the transmitter is 
     cleanup()
     await mount(state({ tx: txState({ notice: 'JTTY transmission complete.' }) }))
     expect(document.querySelector('.cockpit-txdock [role="status"]')?.textContent).toBe('JTTY transmission complete.')
+  })
+
+  it('%R: a call picked from a decode carries that decode’s SNR to every send, and typing in the Call box drops it (WSJT-X’s -10)', async () => {
+    const lines = [
+      line({ id: 3, snr: -15, text: 'CQ W1AW CQ', line: '1500 -15  CQ W1AW CQ', confirmedCalls: ['W1AW'] }),
+      line({ id: -1, startUtcMs: T0 + 5_000, text: 'W1AW TU', line: '1500      W1AW TU', tx: true, snr: 0, confirmedCalls: ['W1AW'] }),
+    ]
+    await mount(state({ lines, tx: txState() }))
+    m('jttyFkey').mockResolvedValue(sent(0, 'W1AW KD9TAW -15', state({ lines, tx: txState() })))
+    await waitFor(() => expect(within(pane('all')).getByRole('button', { name: 'W1AW' })).toBeTruthy())
+    fireEvent.click(within(pane('all')).getByRole('button', { name: 'W1AW' }))
+    fireEvent.click(screen.getByRole('button', { name: /^F2/ }))
+    await flush()
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(2, 'W1AW', -15)
+    m('jttySend').mockResolvedValue(sent(5, 'W1AW -15', state({ lines, tx: txState() })))
+    fireEvent.change(compose(), { target: { value: '%H %R' } })
+    fireEvent.keyDown(compose(), { key: 'Enter' })
+    await flush()
+    expect(m('jttySend')).toHaveBeenLastCalledWith('%H %R', 'W1AW', -15)
+    // Picked from our own line: no decode, no SNR.
+    const own = [...pane('rx').querySelectorAll('.jtty-line')].find((el) => el.textContent?.includes('TU'))!
+    fireEvent.click(within(own as HTMLElement).getByRole('button', { name: 'W1AW' }))
+    fireEvent.click(screen.getByRole('button', { name: /^F2/ }))
+    await flush()
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(2, 'W1AW', null)
+    fireEvent.click(within(pane('all')).getByRole('button', { name: 'W1AW' }))
+    fireEvent.change(screen.getByRole('textbox', { name: t('jtty.hisCall.aria') }), { target: { value: 'K1ABC' } })
+    fireEvent.click(screen.getByRole('button', { name: /^F2/ }))
+    await flush()
+    expect(m('jttyFkey')).toHaveBeenLastCalledWith(2, 'K1ABC', null)
+  })
+
+  it('F1–F8 show the set the engine sends; an empty key is shown empty and sends nothing', async () => {
+    const fkeys = ['%H %M %G', '%H %M %R', '%H %M R%R', '%H %M RRR', '%H %M 73', 'CQ %M %G', '', '']
+    await mount(state({ tx: txState({ style: 'ft8', fkeys }) }))
+    expect(screen.getByRole('button', { name: /^F2/ }).textContent).toBe('F2%H %M %R')
+    const f7 = screen.getByRole('button', { name: /^F7/ }) as HTMLButtonElement
+    expect(f7.textContent).toBe(`F7${t('jtty.fkey.empty.label')}`)
+    expect(f7.disabled).toBe(true)
+    expect((screen.getByRole('combobox', { name: t('jtty.style.aria') }) as HTMLSelectElement).value).toBe('ft8')
+  })
+
+  it('the message style and the keys’ messages are Settings, written through the patch seam over the live settings; editing never sends', async () => {
+    await mount(state({ tx: txState() }))
+    const live = { mycall: 'KD9TAW', jttyFkeys: ['CQ %M CQ', 'MINE %H', '%H TU CQ %M CQ', '%M', '%H', 'TU NOW %Q %E', '%H AGN?', '%E'] }
+    m('getSettings').mockResolvedValue(live)
+    m('setSettings').mockResolvedValue(snap)
+    fireEvent.change(screen.getByRole('combobox', { name: t('jtty.style.aria') }), { target: { value: 'ft8' } })
+    await flush()
+    expect(m('setSettings')).toHaveBeenLastCalledWith({ ...live, jttyMessageStyle: 'ft8' })
+    fireEvent.click(screen.getByRole('button', { name: t('jtty.fkeys.edit.label') }))
+    const f1 = screen.getByRole('textbox', { name: t('jtty.fkeys.edit.aria', { key: 'F1' }) }) as HTMLInputElement
+    expect(f1.value).toBe('CQ %M CQ')
+    fireEvent.change(f1, { target: { value: 'CQ TEST %M' } })
+    fireEvent.keyDown(f1, { key: 'Enter' })
+    await flush()
+    // F2 keeps what the live settings hold, not what this screen showed when it opened.
+    expect(m('setSettings')).toHaveBeenLastCalledWith({
+      ...live,
+      jttyFkeys: ['CQ TEST %M', 'MINE %H', '%H TU CQ %M CQ', '%M', '%H', 'TU NOW %Q %E', '%H AGN?', '%E'],
+    })
+    fireEvent.keyDown(window, { key: 'F9' })
+    expect(m('jttyFkey'), 'editing sends nothing').not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: t('jtty.fkeys.reset.label') }))
+    await flush()
+    expect(m('setSettings')).toHaveBeenLastCalledWith({
+      ...live,
+      jttyFkeys: ['CQ %M CQ', '%H %E', '%H TU CQ %M CQ', '%M', '%H', 'TU NOW %Q %E', '%H AGN?', '%E'],
+    })
   })
 
   it('what this station sent shows in the QSO frequency pane only', async () => {

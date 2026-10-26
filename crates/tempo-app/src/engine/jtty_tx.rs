@@ -507,7 +507,8 @@ pub fn is_native_call(raw: &str) -> bool {
     call[area + 1..].iter().all(|c| c.is_ascii_uppercase()) && call.len() - area - 1 <= 3
 }
 
-/// WSJT-X's eight JTTY Contest templates (`Jtty::nativeMacroTemplate`), F1 to F8.
+/// WSJT-X's eight JTTY Contest templates (`Jtty::nativeMacroTemplate`), F1 to F8: the keys'
+/// defaults in its Contest style (3.3.0-beta4 `widgets/JttyMessages.hpp` 200-215).
 pub const FKEY_TEMPLATES: [&str; 8] = [
     "CQ %M CQ",
     "%H %E",
@@ -519,12 +520,34 @@ pub const FKEY_TEMPLATES: [&str; 8] = [
     "%E",
 ];
 
+/// WSJT-X's eight JTTY FT8-style templates (`Jtty::ft8StyleMacroTemplate`, 3.3.0-beta4
+/// `widgets/JttyMessages.hpp` 217-233): F7 and F8 left blank. None of them is a native form, so
+/// each goes as text, its macros expanded.
+pub const FT8_FKEY_TEMPLATES: [&str; 8] = [
+    "%H %M %G",
+    "%H %M %R",
+    "%H %M R%R",
+    "%H %M RRR",
+    "%H %M 73",
+    "CQ %M %G",
+    "",
+    "",
+];
+
 /// `Jtty::CallAction`, the call atom's subtype.
 const CQ: i8 = 0;
 const CALL: i8 = 1;
 const CALL_TU: i8 = 3;
 const CALL_AGN: i8 = 4;
 const TU_NOW_CALL: i8 = 5;
+
+/// `Jtty::NativeAtomKind` (3.3.0-beta4 `lib/jtty/JttyTransmit.hpp` 14-24) for the atoms a
+/// template compiles to beyond calls and serials.
+const KIND_CONTROL: i8 = 5;
+const KIND_GRID: i8 = 6;
+/// `Jtty::ExchangeRole`: the field alone, or with its report.
+const ROLE_FIELD_ONLY: i8 = 0;
+const ROLE_FULL: i8 = 1;
 
 fn call_atom(action: i8, call: &str) -> jtty::AtomDescriptor {
     jtty::atom(0, action, 0, 0, &call.trim().to_uppercase())
@@ -536,11 +559,130 @@ fn serial_atom(serial: u32) -> jtty::AtomDescriptor {
     jtty::atom(1, 0, 1, serial as i32, "").expect("no text")
 }
 
-/// F-key `n` (1..=8) compiled as WSJT-X compiles its Contest template (`Jtty::compileNativeMacro`):
-/// the atoms and the text they read as, the exchange in the context's profile
-/// ([`native_exchange`]). A call the template needs that is not a native one, or an exchange the
-/// atom cannot carry, REFUSES the key — never literal text in its place.
-fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>, String), String> {
+/// `Jtty::controlPhrase` (3.3.0-beta4 `lib/jtty/JttyTransmit.cpp` 533-557): the 18 phrases a
+/// control atom carries, by its subtype.
+const CONTROL_PHRASES: [&str; 18] = [
+    "AGN?", "CALL?", "AGN CALL", "NR?", "AGN NR", "EXCH?", "STATE?", "SECTION?", "ZONE?", "GRID?",
+    "RPRT?", "QSL TU", "TU", "QRZ?", "QSO B4", "WAIT", "NIL?", "OK?",
+];
+
+/// `Jtty::Encoder::NativeForm`: the templates WSJT-X compiles into atoms rather than text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeForm {
+    Cq,
+    CallExchange,
+    CallSerial,
+    CallGrid,
+    CallTuCq,
+    MyCall,
+    HisCall,
+    TuNowExchange,
+    TuNowSerial,
+    TuNowGrid,
+    CallAgn,
+    Exchange,
+    Serial,
+    Grid,
+    ReportGrid,
+}
+
+/// WSJT-X's form table (3.3.0-beta4 `lib/jtty/JttyTransmit.cpp` 57-73), in its order: the form,
+/// its template, and whether the template must match exactly (otherwise it is compared upper-cased
+/// with its spaces collapsed).
+const NATIVE_FORMS: [(NativeForm, &str, bool); 15] = [
+    (NativeForm::Cq, "CQ %M CQ", false),
+    (NativeForm::CallExchange, "%H %E", false),
+    (NativeForm::CallSerial, "%H 599 %N", true),
+    (NativeForm::CallGrid, "%H %G", false),
+    (NativeForm::CallTuCq, "%H TU CQ %M CQ", false),
+    (NativeForm::MyCall, "%M", false),
+    (NativeForm::HisCall, "%H", false),
+    (NativeForm::TuNowExchange, "TU NOW %Q %E", false),
+    (NativeForm::TuNowSerial, "TU NOW %Q 599 %N", true),
+    (NativeForm::TuNowGrid, "TU NOW %Q %G", false),
+    (NativeForm::CallAgn, "%H AGN?", false),
+    (NativeForm::Exchange, "%E", false),
+    (NativeForm::Serial, "599 %N", true),
+    (NativeForm::Grid, "%G", false),
+    (NativeForm::ReportGrid, "599 %G", false),
+];
+
+/// `normalizedMacroTemplate`: upper case, the spaces collapsed (`QString::simplified`).
+fn normalized_template(template: &str) -> String {
+    template
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_uppercase()
+}
+
+/// `nativeForm`: the form `template` is, if any.
+fn native_form(template: &str) -> Option<NativeForm> {
+    let normalized = normalized_template(template);
+    NATIVE_FORMS
+        .iter()
+        .find(|(_, text, exact)| (if *exact { template } else { &normalized }) == *text)
+        .map(|(form, _, _)| *form)
+}
+
+/// `isLocator`: a four-, six- or eight-character Maidenhead locator.
+fn is_locator(l: &str) -> bool {
+    let b = l.as_bytes();
+    let within = |i: usize, lo: u8, hi: u8| (lo..=hi).contains(&b[i]);
+    matches!(b.len(), 4 | 6 | 8)
+        && within(0, b'A', b'R')
+        && within(1, b'A', b'R')
+        && within(2, b'0', b'9')
+        && within(3, b'0', b'9')
+        && (b.len() < 6 || (within(4, b'A', b'X') && within(5, b'A', b'X')))
+        && (b.len() < 8 || (within(6, b'0', b'9') && within(7, b'0', b'9')))
+}
+
+/// `nativeGridExchange`: my grid's first four characters as a grid atom, with its report when
+/// `full`. WSJT-X's reason when the grid is not a locator.
+fn native_grid(ctx: &MacroContext, full: bool) -> Result<(jtty::AtomDescriptor, String), String> {
+    let locator = ctx.grid.trim().to_uppercase();
+    if !is_locator(&locator) {
+        return Err("a grid: your grid must be a four-, six- or eight-character locator".into());
+    }
+    let grid = &locator[..4];
+    let role = if full { ROLE_FULL } else { ROLE_FIELD_ONLY };
+    let atom = jtty::atom(KIND_GRID, 0, role, 0, grid).expect("four characters");
+    let text = if full {
+        format!("599 {grid}")
+    } else {
+        grid.to_string()
+    };
+    Ok((atom, text))
+}
+
+/// A template compiled as WSJT-X compiles it (`Jtty::compileNativeMacro`).
+#[derive(Debug, Clone)]
+enum Compiled {
+    /// Call and exchange atoms, and the text they read as.
+    Native(Vec<jtty::AtomDescriptor>, String),
+    /// Not a native form: the template's text, its macros expanded, sent as typed text is.
+    Literal(String),
+}
+
+/// Compile the template on F-key `n` as WSJT-X 3.3.0-beta4 compiles it
+/// (`Jtty::compileNativeMacro`, `lib/jtty/JttyTransmit.cpp` 673-800): a control phrase
+/// (`AGN?`, `QSL TU`, …) is its control atom; a native form (`CQ %M CQ`, `%H %E`, …) is its
+/// call and exchange atoms, the exchange in the context's profile ([`native_exchange`]); anything
+/// else is literal text with its macros expanded. A native form whose call is not a standard one,
+/// or whose exchange the atom cannot carry, REFUSES the key — never literal text in its place.
+fn compile_macro(n: u8, template: &str, ctx: &MacroContext) -> Result<Compiled, String> {
+    let normalized = normalized_template(template);
+    if let Some(id) = CONTROL_PHRASES.iter().position(|p| *p == normalized) {
+        let atom = jtty::atom(KIND_CONTROL, id as i8, 0, 0, "").expect("no text");
+        return Ok(Compiled::Native(
+            vec![atom],
+            CONTROL_PHRASES[id].to_string(),
+        ));
+    }
+    let Some(form) = native_form(template) else {
+        return Ok(Compiled::Literal(expand_literal(template, ctx)));
+    };
     let my = ctx.my_call.trim().to_uppercase();
     let his = ctx.his_call.trim().to_uppercase();
     let need_my = || -> Result<(), String> {
@@ -568,19 +710,40 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
             ))
         }
     };
-    let exchange =
-        || native_exchange(ctx).map_err(|why| format!("F{n} cannot send {why}. Nothing was sent."));
-    Ok(match n {
-        1 => {
+    let refused = |why: String| format!("F{n} cannot send {why}. Nothing was sent.");
+    // `appendExchange`: the grid when the template names one (with its report only as
+    // `599 %G`), else the exchange of the profile in force.
+    let exchange = || {
+        if normalized.contains("%G") {
+            native_grid(ctx, normalized == "599 %G")
+        } else {
+            native_exchange(ctx)
+        }
+        .map_err(refused)
+    };
+    let serial = || {
+        (
+            serial_atom(ctx.serial),
+            format!("599 {}", serial_text(ctx.serial)),
+        )
+    };
+    use NativeForm as F;
+    let (atoms, text) = match form {
+        F::Cq => {
             need_my()?;
             (vec![call_atom(CQ, &my)], format!("CQ {my} CQ"))
         }
-        2 => {
+        F::CallSerial => {
+            need_his()?;
+            let (atom, text) = serial();
+            (vec![call_atom(CALL, &his), atom], format!("{his} {text}"))
+        }
+        F::CallExchange | F::CallGrid => {
             need_his()?;
             let (atom, text) = exchange()?;
             (vec![call_atom(CALL, &his), atom], format!("{his} {text}"))
         }
-        3 => {
+        F::CallTuCq => {
             need_his()?;
             need_my()?;
             (
@@ -588,15 +751,23 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
                 format!("{his} TU CQ {my} CQ"),
             )
         }
-        4 => {
+        F::MyCall => {
             need_my()?;
             (vec![call_atom(CALL, &my)], my.clone())
         }
-        5 => {
+        F::HisCall => {
             need_his()?;
             (vec![call_atom(CALL, &his)], his.clone())
         }
-        6 => {
+        F::TuNowSerial => {
+            need_his()?;
+            let (atom, text) = serial();
+            (
+                vec![call_atom(TU_NOW_CALL, &his), atom],
+                format!("TU NOW {his} {text}"),
+            )
+        }
+        F::TuNowExchange | F::TuNowGrid => {
             need_his()?;
             let (atom, text) = exchange()?;
             (
@@ -604,16 +775,20 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
                 format!("TU NOW {his} {text}"),
             )
         }
-        7 => {
+        F::CallAgn => {
             need_his()?;
             (vec![call_atom(CALL_AGN, &his)], format!("{his} AGN?"))
         }
-        8 => {
+        F::Serial => {
+            let (atom, text) = serial();
+            (vec![atom], text)
+        }
+        F::Exchange | F::Grid | F::ReportGrid => {
             let (atom, text) = exchange()?;
             (vec![atom], text)
         }
-        _ => return Err(format!("There is no F{n}: JTTY has F1 to F8.")),
-    })
+    };
+    Ok(Compiled::Native(atoms, text))
 }
 
 /// Render `text` as WSJT-X's `Jtty::encodeTransmitText` does: line by line, each line in segments
@@ -783,9 +958,11 @@ impl Engine {
         }
     }
 
-    /// What the macros read. `%R` sends WSJT-X's -10 until the cockpit can say which line the DX
-    /// call came from (WSJT-X takes the SNR of the decoded word the operator picked).
-    fn jtty_macro_context(&self, his_call: &str) -> MacroContext {
+    /// What the macros read. `%R` is the SNR of the decode the operator picked the DX call from,
+    /// as WSJT-X takes it (`m_jttyHisCallSnr`, 3.3.0-beta4 `widgets/mainwindow.cpp` 9276-9283),
+    /// and WSJT-X's -10 when there is none: a call typed, or none picked
+    /// (`ReceiveResultController::snrForSelectedWord`, `mainwindow.cpp` 10565).
+    fn jtty_macro_context(&self, his_call: &str, his_snr: Option<i32>) -> MacroContext {
         let (profile, exchange) = self.jtty_exchange();
         MacroContext {
             my_call: self.settings.mycall.trim().to_uppercase(),
@@ -794,7 +971,7 @@ impl Engine {
             profile,
             exchange,
             grid: self.settings.mygrid.clone(),
-            snr: -10,
+            snr: his_snr.unwrap_or(-10),
         }
     }
 
@@ -814,9 +991,14 @@ impl Engine {
 
     /// Plan a one-shot send of typed text — WSJT-X's Send (Ctrl+K): all of it, the macros in it
     /// expanded, ending the message (and a live session, if one is running).
-    pub fn jtty_plan_send(&mut self, text: &str, his_call: &str) -> Result<JttyPlan, String> {
+    pub fn jtty_plan_send(
+        &mut self,
+        text: &str,
+        his_call: &str,
+        his_snr: Option<i32>,
+    ) -> Result<JttyPlan, String> {
         self.jtty_tx_gate()?;
-        let ctx = self.jtty_macro_context(his_call);
+        let ctx = self.jtty_macro_context(his_call, his_snr);
         let expanded = expand_literal(text, &ctx);
         let prepared = crate::keyboard::kb_filter(crate::keyboard::JTTY, &expanded);
         if prepared.trim().is_empty() {
@@ -834,18 +1016,75 @@ impl Engine {
         Ok(plan)
     }
 
-    /// Plan F-key `n` (1..=8) with `his_call` (the log strip's Call), compiled as WSJT-X compiles
-    /// its Contest templates ([`FKEY_TEMPLATES`]): one message, ending there.
-    pub fn jtty_plan_fkey(&mut self, n: u8, his_call: &str) -> Result<JttyPlan, String> {
+    /// The template on F-key `n` (1..=8) in the message style in force (WSJT-X's `msg1`..`msg8`,
+    /// `sendJttyFunctionKey`): the operator's own, or WSJT-X's default for a set that has none.
+    pub fn jtty_fkey_template(&self, n: u8) -> Option<String> {
+        if !(1..=8).contains(&n) {
+            return None;
+        }
+        let (set, defaults) = match self.settings.jtty_message_style {
+            crate::settings::JttyMessageStyle::Contest => {
+                (&self.settings.jtty_fkeys, FKEY_TEMPLATES)
+            }
+            crate::settings::JttyMessageStyle::Ft8 => {
+                (&self.settings.jtty_ft8_fkeys, FT8_FKEY_TEMPLATES)
+            }
+        };
+        let i = usize::from(n - 1);
+        Some(
+            set.get(i)
+                .cloned()
+                .unwrap_or_else(|| defaults[i].to_string()),
+        )
+    }
+
+    /// Plan F-key `n` (1..=8) with `his_call` (the log strip's Call), as WSJT-X's
+    /// `sendJttyFunctionKey` sends it (3.3.0-beta4 `widgets/mainwindow_jtty.cpp` 973-1015): its
+    /// template compiled ([`compile_macro`]), a native form into atoms as one message, anything
+    /// else as text the way Send sends it, ending the message. An empty key sends nothing.
+    pub fn jtty_plan_fkey(
+        &mut self,
+        n: u8,
+        his_call: &str,
+        his_snr: Option<i32>,
+    ) -> Result<JttyPlan, String> {
         self.jtty_tx_gate()?;
-        let ctx = self.jtty_macro_context(his_call);
-        let (atoms, text) = compile_fkey(n, &ctx)?;
-        let mut plan = self.jtty_new_plan(Planned::Atoms {
-            atoms,
-            text: text.clone(),
-        });
-        plan.sent = text;
-        Ok(plan)
+        let template = self
+            .jtty_fkey_template(n)
+            .ok_or_else(|| format!("There is no F{n}: JTTY has F1 to F8."))?;
+        if template.trim().is_empty() {
+            return Err(format!(
+                "F{n} is empty: give it a message first. Nothing was sent."
+            ));
+        }
+        let ctx = self.jtty_macro_context(his_call, his_snr);
+        match compile_macro(n, &template, &ctx)? {
+            Compiled::Native(atoms, text) => {
+                let mut plan = self.jtty_new_plan(Planned::Atoms {
+                    atoms,
+                    text: text.clone(),
+                });
+                plan.sent = text;
+                Ok(plan)
+            }
+            Compiled::Literal(expanded) => {
+                // `jtty_tx(compiled.text)`: the expanded text, sent as Send sends text.
+                let prepared = crate::keyboard::kb_filter(crate::keyboard::JTTY, &expanded);
+                if prepared.trim().is_empty() {
+                    return Err(format!(
+                        "F{n} has nothing to send once its macros are filled."
+                    ));
+                }
+                let substituted = prepared != expanded.replace('\r', "\n");
+                let mut plan = self.jtty_new_plan(Planned::Text {
+                    text: prepared.clone(),
+                    last: true,
+                });
+                plan.sent = prepared;
+                plan.substituted = substituted;
+                Ok(plan)
+            }
+        }
     }
 
     /// Plan the start of a live session (WSJT-X's Alt+J): what is typed so far goes out with
@@ -854,9 +1093,10 @@ impl Engine {
         &mut self,
         typed: &str,
         his_call: &str,
+        his_snr: Option<i32>,
     ) -> Result<JttyPlan, String> {
         self.jtty_tx_gate()?;
-        let mut plan = self.jtty_plan_typed(typed, his_call, true, false)?;
+        let mut plan = self.jtty_plan_typed(typed, his_call, his_snr, true, false)?;
         plan.start_live = !self.jtty_tx.latched;
         Ok(plan)
     }
@@ -867,6 +1107,7 @@ impl Engine {
         &mut self,
         typed: &str,
         his_call: &str,
+        his_snr: Option<i32>,
         how: JttyCommit,
     ) -> Result<JttyPlan, String> {
         self.jtty_tx_gate()?;
@@ -878,22 +1119,27 @@ impl Engine {
                 if complete_words(typed).saturating_sub(HOLDBACK_WORDS) < BATCH_WORDS {
                     return Ok(self.jtty_new_plan(Planned::Nothing));
                 }
-                self.jtty_plan_typed(typed, his_call, false, false)
+                self.jtty_plan_typed(typed, his_call, his_snr, false, false)
             }
-            JttyCommit::Flush => self.jtty_plan_typed(typed, his_call, true, false),
+            JttyCommit::Flush => self.jtty_plan_typed(typed, his_call, his_snr, true, false),
         }
     }
 
     /// Plan the sign-off (WSJT-X's Alt+K): `DE %M K ` added where the typing ends — no space put
     /// before it, as WSJT-X inserts it at the cursor — and all of it sent, ending the message;
     /// the live session ends once it has gone.
-    pub fn jtty_plan_sign_off(&mut self, typed: &str, his_call: &str) -> Result<JttyPlan, String> {
+    pub fn jtty_plan_sign_off(
+        &mut self,
+        typed: &str,
+        his_call: &str,
+        his_snr: Option<i32>,
+    ) -> Result<JttyPlan, String> {
         self.jtty_tx_gate()?;
         if !self.jtty_tx.latched {
             return Err("Live entry is off — there is nothing to sign off".to_string());
         }
         let with = format!("{typed}DE %M K ");
-        let mut plan = self.jtty_plan_typed(&with, his_call, true, true)?;
+        let mut plan = self.jtty_plan_typed(&with, his_call, his_snr, true, true)?;
         plan.consumed = typed.encode_utf16().count();
         plan.end_live = true;
         Ok(plan)
@@ -905,6 +1151,7 @@ impl Engine {
         &mut self,
         typed: &str,
         his_call: &str,
+        his_snr: Option<i32>,
         force: bool,
         last: bool,
     ) -> Result<JttyPlan, String> {
@@ -915,7 +1162,7 @@ impl Engine {
             plan.consumed = 0;
             return Ok(plan);
         }
-        let ctx = self.jtty_macro_context(his_call);
+        let ctx = self.jtty_macro_context(his_call, his_snr);
         let expanded = expand_literal(part, &ctx);
         let prepared = crate::keyboard::kb_filter(crate::keyboard::JTTY, &expanded);
         let substituted = prepared != expanded.replace('\r', "\n");
@@ -1396,6 +1643,10 @@ impl Engine {
             left,
             pending,
             notice: self.jtty_tx.notice.clone(),
+            style: self.settings.jtty_message_style,
+            fkeys: (1..=8)
+                .map(|n| self.jtty_fkey_template(n).unwrap_or_default())
+                .collect(),
         }
     }
 }
@@ -1452,17 +1703,17 @@ pub fn run_bound(
 
 /// Send typed text (WSJT-X's Send): see [`Engine::jtty_plan_send`].
 pub fn send_text(engine: &Mutex<Engine>, text: &str, his_call: &str) -> Result<JttySent, String> {
-    run(engine, |e| e.jtty_plan_send(text, his_call))
+    run(engine, |e| e.jtty_plan_send(text, his_call, None))
 }
 
 /// Send F-key `n`: see [`Engine::jtty_plan_fkey`].
 pub fn send_fkey(engine: &Mutex<Engine>, n: u8, his_call: &str) -> Result<JttySent, String> {
-    run(engine, |e| e.jtty_plan_fkey(n, his_call))
+    run(engine, |e| e.jtty_plan_fkey(n, his_call, None))
 }
 
 /// Start live entry with what is typed so far: see [`Engine::jtty_plan_live_start`].
 pub fn live_start(engine: &Mutex<Engine>, typed: &str, his_call: &str) -> Result<JttySent, String> {
-    run(engine, |e| e.jtty_plan_live_start(typed, his_call))
+    run(engine, |e| e.jtty_plan_live_start(typed, his_call, None))
 }
 
 /// Commit live typing: see [`Engine::jtty_plan_live`].
@@ -1472,12 +1723,12 @@ pub fn live_commit(
     his_call: &str,
     how: JttyCommit,
 ) -> Result<JttySent, String> {
-    run(engine, |e| e.jtty_plan_live(typed, his_call, how))
+    run(engine, |e| e.jtty_plan_live(typed, his_call, None, how))
 }
 
 /// Sign off: see [`Engine::jtty_plan_sign_off`].
 pub fn sign_off(engine: &Mutex<Engine>, typed: &str, his_call: &str) -> Result<JttySent, String> {
-    run(engine, |e| e.jtty_plan_sign_off(typed, his_call))
+    run(engine, |e| e.jtty_plan_sign_off(typed, his_call, None))
 }
 
 #[cfg(test)]
@@ -1592,7 +1843,7 @@ mod tests {
                 &e,
                 |g| {
                     planned.store(true, Ordering::SeqCst);
-                    let plan = g.jtty_plan_send("CQ W9XYZ", "");
+                    let plan = g.jtty_plan_send("CQ W9XYZ", "", None);
                     if lapse == "while it renders" {
                         transmit.revoke();
                     }
@@ -1765,7 +2016,7 @@ mod tests {
     fn a_line_that_will_not_encode_refuses_the_whole_send() {
         let roundup = |text: &'static str| {
             move |g: &mut Engine| {
-                let mut plan = g.jtty_plan_send(text, "")?;
+                let mut plan = g.jtty_plan_send(text, "", None)?;
                 plan.profile = jtty::Profile::RttyRoundup;
                 Ok(plan)
             }
@@ -1875,6 +2126,89 @@ mod tests {
             assert!(err.contains("your callsign"), "F{n}: {err}");
         }
         assert!(send_fkey(&e, 9, "W1AW").is_err());
+    }
+
+    /// EDITED F-KEYS compile as WSJT-X 3.3.0-beta4 compiles them (`Jtty::compileNativeMacro`,
+    /// `lib/jtty/JttyTransmit.cpp` 673-800): a control phrase is one control atom, the native forms
+    /// beyond the eight defaults (a grid, the exact `599 %N` serial forms) their atoms, and
+    /// anything else literal text with its macros expanded, which a receiver reads back as sent.
+    /// An empty key sends nothing; a grid that is not a locator refuses a grid form.
+    #[test]
+    fn edited_f_keys_compile_as_wsjtx_compiles_them() {
+        let e = jtty_engine();
+        engine_lock(&e).settings.jtty_fkeys = [
+            "agn?",
+            "%H %G",
+            "599 %G",
+            "TU NOW %Q 599 %N",
+            "HELLO %H DE %M",
+            "",
+            "%h  agn?",
+        ]
+        .map(String::from)
+        .to_vec();
+        let want = [
+            (1, "AGN?", Some(1)),
+            (2, "W1AW EN37", Some(2)),
+            (3, "599 EN37", Some(1)),
+            (4, "TU NOW W1AW 599 007", Some(2)),
+            (5, "HELLO W1AW DE W9XYZ", None),
+            (7, "W1AW AGN?", Some(1)),
+        ];
+        for (n, text, atoms) in want {
+            engine_lock(&e).set_jtty_serial(7).unwrap();
+            let done = send_fkey(&e, n, "w1aw").unwrap();
+            assert_eq!(done.sent, text, "F{n}");
+            let air = drain(&e);
+            if let Some(frames) = atoms {
+                assert_eq!(air.len(), frames * FRAME_SAMPLES, "F{n}: one frame an atom");
+            }
+            assert_eq!(complete(&receive(&air)), vec![text], "F{n}");
+        }
+        let err = send_fkey(&e, 6, "W1AW").unwrap_err();
+        assert!(err.contains("F6 is empty"), "{err}");
+        // A set shorter than eight: the rest are WSJT-X's defaults.
+        assert_eq!(engine_lock(&e).jtty_fkey_template(8).as_deref(), Some("%E"));
+        engine_lock(&e).settings.mygrid = "XX".into();
+        let err = send_fkey(&e, 2, "W1AW").unwrap_err();
+        assert!(err.contains("locator"), "{err}");
+        assert_eq!(
+            engine_lock(&e).tx_owner(),
+            None,
+            "a refused or empty key queued nothing"
+        );
+    }
+
+    /// WSJT-X's FT8 MESSAGE STYLE (`Jtty::ft8StyleMacroTemplate`): its six chat templates go as
+    /// text, and `%R` is the SNR of the decode the DX call was picked from, WSJT-X's -10 when
+    /// there is none (`m_jttyHisCallSnr`); F7 and F8 are blank and send nothing.
+    #[test]
+    fn the_ft8_message_style_sends_the_picked_snr() {
+        let e = jtty_engine();
+        engine_lock(&e).settings.jtty_message_style = crate::settings::JttyMessageStyle::Ft8;
+        let fkey = |n: u8, snr: Option<i32>| run(&e, |g| g.jtty_plan_fkey(n, "W1AW", snr));
+        for (n, snr, text) in [
+            (1, Some(-15), "W1AW W9XYZ EN37"),
+            (2, Some(-15), "W1AW W9XYZ -15"),
+            (3, Some(3), "W1AW W9XYZ R+03"),
+            (2, None, "W1AW W9XYZ -10"),
+            (4, None, "W1AW W9XYZ RRR"),
+            (5, None, "W1AW W9XYZ 73"),
+            (6, None, "CQ W9XYZ EN37"),
+        ] {
+            assert_eq!(fkey(n, snr).unwrap().sent, text, "F{n} {snr:?}");
+            assert_eq!(complete(&receive(&drain(&e))), vec![text], "F{n}");
+        }
+        for n in [7, 8] {
+            assert!(fkey(n, None).unwrap_err().contains("is empty"), "F{n}");
+        }
+        // The style picks the set: the Contest set is untouched by the FT8 one.
+        engine_lock(&e).settings.jtty_message_style = crate::settings::JttyMessageStyle::Contest;
+        assert_eq!(fkey(2, Some(-15)).unwrap().sent, "W1AW 599 001");
+        drain(&e);
+        // `%R` in typed text is the same SNR.
+        let typed = run(&e, |g| g.jtty_plan_send("%H %R", "W1AW", Some(-7))).unwrap();
+        assert_eq!(typed.sent, "W1AW -07");
     }
 
     /// THE SERIAL, as WSJT-X moves it (`handleJttyContestSerial`): on after a send whose first
@@ -2464,14 +2798,18 @@ mod tests {
     #[test]
     fn a_send_planned_before_a_stop_is_not_committed() {
         let e = jtty_engine();
-        let plan = engine_lock(&e).jtty_plan_send("CQ W9XYZ", "").unwrap();
+        let plan = engine_lock(&e)
+            .jtty_plan_send("CQ W9XYZ", "", None)
+            .unwrap();
         let rendered = render(&plan).unwrap();
         engine_lock(&e).jtty_stop();
         assert_eq!(
             engine_lock(&e).jtty_commit(plan, rendered),
             Err(STOPPED_FOR_PREP.to_string())
         );
-        let plan = engine_lock(&e).jtty_plan_send("CQ W9XYZ", "").unwrap();
+        let plan = engine_lock(&e)
+            .jtty_plan_send("CQ W9XYZ", "", None)
+            .unwrap();
         let rendered = render(&plan).unwrap();
         engine_lock(&e).set_jtty_tx(1600.0).unwrap();
         assert!(engine_lock(&e).jtty_commit(plan, rendered).is_err());

@@ -857,6 +857,10 @@ pub struct JttyTxState {
     pub pending: String,
     /// WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped.
     pub notice: Option<String>,
+    /// WSJT-X's "Message style": which of the two F-key sets F1-F8 send.
+    pub style: crate::settings::JttyMessageStyle,
+    /// The eight templates F1-F8 send in that style (the keys' captions).
+    pub fkeys: Vec<String>,
 }
 
 /// One message in the JTTY receive window.

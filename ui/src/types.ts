@@ -2047,7 +2047,15 @@ export interface JttyTxState {
   pending: string
   /** WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped. */
   notice: string | null
+  /** WSJT-X's "Message style": which of the two F-key sets F1-F8 send. Absent in an older
+   *  fixture, which reads as Contest. */
+  style?: JttyMessageStyle
+  /** The eight templates F1-F8 send in that style: the keys' captions. */
+  fkeys?: string[]
 }
+
+/** WSJT-X's two JTTY F-key sets (`Jtty::MessageStyle`): Contest, and FT8 style. */
+export type JttyMessageStyle = 'contest' | 'ft8'
 
 /** What a JTTY send did: how much of the typed text it took (UTF-16 units), what goes in its
  *  place (the macros expanded), and the state after it. */
@@ -5386,6 +5394,12 @@ export interface Settings {
   /** JTTY's F Tol, Hz (`jtty_ftol_hz`, WSJT-X's `JTTY_FTol`). The JTTY cockpit is its one
    *  writer, through `jtty_set_rx`; a form save keeps the live value. */
   jttyFtolHz?: number
+  /** JTTY's F1-F8 templates in WSJT-X's Contest style (`jtty_fkeys`, WSJT-X's `JTTY_msg1..8`) and
+   *  in its FT8 style (`jtty_ft8_fkeys`, `JTTY_FT8_msg1..8`), and which set the keys send
+   *  (`jtty_message_style`). The JTTY cockpit edits them, through the patch seam. */
+  jttyFkeys?: string[]
+  jttyFt8Fkeys?: string[]
+  jttyMessageStyle?: JttyMessageStyle
   /** The Keyboard section's modem (`keyboard_modem`): written by entering the PSK or JTTY
    *  cockpit, never by the form. */
   keyboardModem?: 'psk' | 'jtty'

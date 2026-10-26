@@ -51,6 +51,17 @@ pub enum KeyboardModem {
     Jtty,
 }
 
+/// Which of WSJT-X's two JTTY F-key sets the keys send: its "Message style" box
+/// (`comboBoxJttyStyle`, `Jtty::MessageStyle`, WSJT-X 3.3.0-beta4 `widgets/JttyMessages.hpp`
+/// 235). Contest is its default; each set keeps its own eight templates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum JttyMessageStyle {
+    #[default]
+    Contest,
+    Ft8,
+}
+
 /// Which VFO carries the uplink and which the downlink during a satellite pass.
 ///
 /// ⚠️ **A WRONG MAPPING TRANSMITS ON YOUR OWN DOWNLINK.** That is why this is an
@@ -3225,6 +3236,19 @@ pub struct Settings {
     /// `apply_settings`), as it does F Tol's.
     #[serde(default = "default_jtty_serial")]
     pub jtty_serial: u32,
+    /// JTTY's F1-F8 templates in WSJT-X's Contest style, the operator's own once edited: what
+    /// each key sends, WSJT-X's macros in it (`%M %H %Q %N %E %G %R`). WSJT-X keeps each as
+    /// `JTTY_msg1`..`JTTY_msg8`, its defaults `Jtty::nativeMacroTemplate` (3.3.0-beta4
+    /// `widgets/JttyMessages.hpp` 216-250). An empty template is a key that sends nothing.
+    #[serde(default = "default_jtty_fkeys")]
+    pub jtty_fkeys: Vec<String>,
+    /// The same eight in WSJT-X's FT8 style (`JTTY_FT8_msg1`..`8`, `Jtty::ft8StyleMacroTemplate`),
+    /// kept apart from the Contest set as WSJT-X keeps them.
+    #[serde(default = "default_jtty_ft8_fkeys")]
+    pub jtty_ft8_fkeys: Vec<String>,
+    /// Which of the two sets F1-F8 send (WSJT-X's "Message style").
+    #[serde(default)]
+    pub jtty_message_style: JttyMessageStyle,
     /// RTTY **Auto call**: how long the sequencer listens before it repeats itself, in
     /// seconds (#304). This is the whole of the "CQ, listen, CQ" cadence the reporter
     /// asked for — the window between two CQs when nobody comes back, and equally the
@@ -3978,6 +4002,22 @@ fn default_jtty_ftol_hz() -> u32 {
 /// WSJT-X's first JTTY serial number, the transmitter's own constant.
 fn default_jtty_serial() -> u32 {
     crate::engine::jtty_tx::JTTY_SERIAL_MIN
+}
+
+/// WSJT-X's JTTY Contest templates, the transmitter's own constant.
+fn default_jtty_fkeys() -> Vec<String> {
+    crate::engine::jtty_tx::FKEY_TEMPLATES
+        .iter()
+        .map(|t| t.to_string())
+        .collect()
+}
+
+/// WSJT-X's JTTY FT8-style templates, the transmitter's own constant.
+fn default_jtty_ft8_fkeys() -> Vec<String> {
+    crate::engine::jtty_tx::FT8_FKEY_TEMPLATES
+        .iter()
+        .map(|t| t.to_string())
+        .collect()
 }
 
 /// "auto" = the SSTV screen's band-aware pick, which is what it does today.
@@ -6107,6 +6147,9 @@ impl Default for Settings {
             jtty_rx_auto_arm: true,
             jtty_ftol_hz: default_jtty_ftol_hz(),
             jtty_serial: default_jtty_serial(),
+            jtty_fkeys: default_jtty_fkeys(),
+            jtty_ft8_fkeys: default_jtty_ft8_fkeys(),
+            jtty_message_style: JttyMessageStyle::Contest,
             rtty_auto_listen_secs: default_rtty_auto_listen_secs(),
             rtty_auto_repeats: default_rtty_auto_repeats(),
             alert_my_call: true,
@@ -11856,6 +11899,68 @@ mod tests {
             ),
             (false, 150, 42, KeyboardModem::Jtty)
         );
+        let again: Settings = serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
+        assert_eq!(again, set, "round trip");
+    }
+
+    /// JTTY's two F-key sets and the style that picks between them, on the wire keys the cockpit
+    /// writes: WSJT-X's two default sets (3.3.0-beta4 `widgets/JttyMessages.hpp` 216-250) in a
+    /// file that has none, the Contest style by default, and the operator's own templates and
+    /// style surviving the round trip.
+    #[test]
+    fn jtty_fkey_sets_default_and_round_trip() {
+        let s = Settings::default();
+        assert_eq!(
+            s.jtty_fkeys,
+            [
+                "CQ %M CQ",
+                "%H %E",
+                "%H TU CQ %M CQ",
+                "%M",
+                "%H",
+                "TU NOW %Q %E",
+                "%H AGN?",
+                "%E"
+            ]
+        );
+        assert_eq!(
+            s.jtty_ft8_fkeys,
+            [
+                "%H %M %G",
+                "%H %M %R",
+                "%H %M R%R",
+                "%H %M RRR",
+                "%H %M 73",
+                "CQ %M %G",
+                "",
+                ""
+            ]
+        );
+        assert_eq!(s.jtty_message_style, JttyMessageStyle::Contest);
+        let json = serde_json::to_string(&s).unwrap();
+        for key in [
+            "\"jttyFkeys\":[\"CQ %M CQ\"",
+            "\"jttyFt8Fkeys\":[\"%H %M %G\"",
+            "\"jttyMessageStyle\":\"contest\"",
+        ] {
+            assert!(json.contains(key), "missing {key} in {json}");
+        }
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            (old.jtty_fkeys, old.jtty_ft8_fkeys, old.jtty_message_style),
+            (
+                s.jtty_fkeys.clone(),
+                s.jtty_ft8_fkeys.clone(),
+                s.jtty_message_style
+            )
+        );
+        let set: Settings = serde_json::from_str(
+            r#"{"jttyFkeys":["CQ TEST %M","","","","","","",""],"jttyFt8Fkeys":["%H %M %G"],"jttyMessageStyle":"ft8"}"#,
+        )
+        .unwrap();
+        assert_eq!(set.jtty_fkeys[0], "CQ TEST %M");
+        assert_eq!(set.jtty_ft8_fkeys, ["%H %M %G"]);
+        assert_eq!(set.jtty_message_style, JttyMessageStyle::Ft8);
         let again: Settings = serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
         assert_eq!(again, set, "round trip");
     }

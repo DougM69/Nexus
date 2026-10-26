@@ -74,11 +74,18 @@ The dock at the bottom of the screen is WSJT-X's JTTY transmitter.
   sends it: a line longer than 80 characters goes in pieces, and a line break ends a message.
   While a message is still going, Send shows how many pieces are left; another Send queues behind
   it and goes on the same transmission. `%M` is your call, `%H` the call in the Call box, `%E`
-  your exchange, `%N` the serial and `%G` your grid.
-- **F1 to F8** — WSJT-X's contest messages: `CQ %M CQ`, `%H %E`, `%H TU CQ %M CQ`, `%M`, `%H`,
-  `TU NOW %Q %E`, `%H AGN?` and `%E`. Click one or press its key. A call in them must be a
-  standard callsign, which JTTY sends in a compact form; a key whose call is not one is refused,
-  never sent as text.
+  your exchange, `%N` the serial, `%G` your grid and `%R` the SNR of the decode you clicked the
+  call in (-10 when you typed the call).
+- **F1 to F8** — WSJT-X's two sets of messages, picked with **Messages**: **Contest** (`CQ %M CQ`,
+  `%H %E`, `%H TU CQ %M CQ`, `%M`, `%H`, `TU NOW %Q %E`, `%H AGN?` and `%E`) and **FT8 style**
+  for a chat-style contact (`%H %M %G`, `%H %M %R`, `%H %M R%R`, `%H %M RRR`, `%H %M 73` and
+  `CQ %M %G`, F7 and F8 empty). Click one or press its key. **Edit keys** turns the eight keys
+  into their messages to edit, as WSJT-X's message boxes; each set keeps its own, and
+  **Defaults** puts the set back to WSJT-X's. A message in one of WSJT-X's contest forms (the
+  defaults, `%H %G`, `599 %G`, `%H 599 %N`, `TU NOW %Q 599 %N`, `599 %N`, `%G`, and a request
+  such as `AGN?`, `NR?` or `QSL TU`) goes in JTTY's compact form; a call in it must be a standard
+  callsign, and a key whose call is not one is refused, never sent as text. Any other message
+  goes as text, as typed text does.
 - **The Call box** — the other station. Clicking a confirmed call in a pane fills it.
 - **The serial number** — what `%E` and `%N` send outside a contest, `001` and up. It moves on
   by one when a message starting `TU` goes out, as in WSJT-X, and is kept between sessions.

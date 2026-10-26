@@ -205,7 +205,7 @@ pub(crate) fn key_locally(e: &mut tempo_app::engine::Engine, kind: &str) {
             e.set_operating_mode("jtty", false);
             e.set_frequency(14.090, "20m", "USB");
             e.set_tx_enabled(true);
-            let plan = e.jtty_plan_send("CQ TEST", "").unwrap();
+            let plan = e.jtty_plan_send("CQ TEST", "", None).unwrap();
             let rendered = tempo_app::engine::jtty_tx::render(&plan).unwrap();
             e.jtty_commit(plan, rendered).unwrap();
         }

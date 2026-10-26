@@ -18725,21 +18725,30 @@ async fn jtty_send(
     state: State<'_, SharedEngine>,
     text: String,
     his_call: String,
+    his_snr: Option<i32>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
-    jtty_send_with(&state, afar, move |e| e.jtty_plan_send(&text, &his_call)).await
+    jtty_send_with(&state, afar, move |e| {
+        e.jtty_plan_send(&text, &his_call, his_snr)
+    })
+    .await
 }
 
-/// F-key `n` (1..8): WSJT-X's Contest template, compiled into JTTY's atoms. `afar`: as
-/// [`jtty_send_with`]'s.
+/// F-key `n` (1..8): its template in the message style in force, compiled as WSJT-X compiles it
+/// (a native form into JTTY's atoms, anything else as text). `his_snr` is the SNR of the decode
+/// the DX call was picked from (`%R`; none = WSJT-X's -10). `afar`: as [`jtty_send_with`]'s.
 #[tauri::command]
 async fn jtty_fkey(
     state: State<'_, SharedEngine>,
     n: u8,
     his_call: String,
+    his_snr: Option<i32>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
-    jtty_send_with(&state, afar, move |e| e.jtty_plan_fkey(n, &his_call)).await
+    jtty_send_with(&state, afar, move |e| {
+        e.jtty_plan_fkey(n, &his_call, his_snr)
+    })
+    .await
 }
 
 /// Start live entry with what is typed so far (WSJT-X's Alt+J). `afar`: as [`jtty_send_with`]'s.
@@ -18748,10 +18757,11 @@ async fn jtty_live_start(
     state: State<'_, SharedEngine>,
     typed: String,
     his_call: String,
+    his_snr: Option<i32>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
     jtty_send_with(&state, afar, move |e| {
-        e.jtty_plan_live_start(&typed, &his_call)
+        e.jtty_plan_live_start(&typed, &his_call, his_snr)
     })
     .await
 }
@@ -18763,6 +18773,7 @@ async fn jtty_live_commit(
     state: State<'_, SharedEngine>,
     typed: String,
     his_call: String,
+    his_snr: Option<i32>,
     flush: bool,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
@@ -18772,7 +18783,7 @@ async fn jtty_live_commit(
         tempo_app::engine::jtty_tx::JttyCommit::Advance
     };
     jtty_send_with(&state, afar, move |e| {
-        e.jtty_plan_live(&typed, &his_call, how)
+        e.jtty_plan_live(&typed, &his_call, his_snr, how)
     })
     .await
 }
@@ -18784,10 +18795,11 @@ async fn jtty_sign_off(
     state: State<'_, SharedEngine>,
     typed: String,
     his_call: String,
+    his_snr: Option<i32>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
     jtty_send_with(&state, afar, move |e| {
-        e.jtty_plan_sign_off(&typed, &his_call)
+        e.jtty_plan_sign_off(&typed, &his_call, his_snr)
     })
     .await
 }

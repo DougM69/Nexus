@@ -4127,30 +4127,36 @@ export async function jttyClear(): Promise<JttyState> {
 }
 
 /** Send typed text (WSJT-X's Send): all of it, its macros expanded, ending the message (and a live
- * session). `hisCall` is the dock's Call (`%H`). */
-export async function jttySend(text: string, hisCall: string): Promise<JttySent> {
-  return invoke<JttySent>('jtty_send', { text, hisCall })
+ * session). `hisCall` is the dock's Call (`%H`); `hisSnr` the SNR of the decode it was picked
+ * from (`%R`), null when it was typed (WSJT-X's -10). */
+export async function jttySend(text: string, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_send', { text, hisCall, hisSnr })
 }
 
-/** F-key `n` (1–8): WSJT-X's Contest template, compiled into JTTY's atoms. */
-export async function jttyFkey(n: number, hisCall: string): Promise<JttySent> {
-  return invoke<JttySent>('jtty_fkey', { n, hisCall })
+/** F-key `n` (1–8): its template in the message style in force, compiled as WSJT-X compiles it. */
+export async function jttyFkey(n: number, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_fkey', { n, hisCall, hisSnr })
 }
 
 /** Start live entry with what is typed so far (WSJT-X's Alt+J). */
-export async function jttyLiveStart(typed: string, hisCall: string): Promise<JttySent> {
-  return invoke<JttySent>('jtty_live_start', { typed, hisCall })
+export async function jttyLiveStart(typed: string, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_live_start', { typed, hisCall, hisSnr })
 }
 
 /** Commit live typing: `flush` after a pause (all of it), otherwise once five words are complete
  * beyond the three WSJT-X holds back. */
-export async function jttyLiveCommit(typed: string, hisCall: string, flush: boolean): Promise<JttySent> {
-  return invoke<JttySent>('jtty_live_commit', { typed, hisCall, flush })
+export async function jttyLiveCommit(
+  typed: string,
+  hisCall: string,
+  flush: boolean,
+  hisSnr: number | null = null,
+): Promise<JttySent> {
+  return invoke<JttySent>('jtty_live_commit', { typed, hisCall, flush, hisSnr })
 }
 
 /** Sign off (WSJT-X's Alt+K): `DE <my call> K` after what is typed; the session ends. */
-export async function jttySignOff(typed: string, hisCall: string): Promise<JttySent> {
-  return invoke<JttySent>('jtty_sign_off', { typed, hisCall })
+export async function jttySignOff(typed: string, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_sign_off', { typed, hisCall, hisSnr })
 }
 
 /** Stop JTTY now: everything queued dropped, a live session ended, what is on the air cut. */

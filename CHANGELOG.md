@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Tx panel's dot follows the FT8/FT4 contact.** In Classic, the dot beside the next message sometimes stayed put while the contact went on normally: when the report Nexus sends (from the decode it answered) differed from the station's latest one in the list, when Tx5 was edited, or when another decode was clicked mid-contact. The dot now follows the message actually going out.
 
 ### Added
+- **JTTY: your own F1 to F8, and WSJT-X's FT8-style set.** Edit keys turns the JTTY F-keys into their messages to edit, as in WSJT-X, and Messages picks WSJT-X's Contest set or its FT8-style set (`%H %M %G`, `%H %M %R`, `%H %M R%R`, `%H %M RRR`, `%H %M 73`, `CQ %M %G`); each set keeps its own messages between sessions and Defaults puts a set back. A message in one of WSJT-X's contest forms goes in JTTY's compact form, as WSJT-X sends it, and any other goes as text. `%R` is now the SNR of the decode you clicked the call in, as in WSJT-X, rather than always -10.
 - **A note about DAX for a Flex over SmartSDR CAT.** In SSB a Flex transmits from its own mic unless DAX is on for voice, so a voice-keyer message keys the radio with no RF. The first time a voice message plays on a Flex controlled through SmartSDR CAT, a note in the voice keyer says to turn on DAX in SmartSDR's P/CW panel; Got it hides it for good. It never holds up the message. The Flex page of the manual says the same.
 
 ## [1.21.0] — 2026-10-26

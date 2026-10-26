@@ -28344,6 +28344,26 @@ button.sat-chip:disabled {
 .jtty-call:focus-visible {
   color: var(--accent);
 }
+/* JTTY's F-keys while ✎ Edit keys is on: each key is its template's line edit (WSJT-X's msg1..msg8),
+   in the key's own grid track so nothing in the dock moves; the input ellipsizes inside it. */
+.jtty-fkey-edit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.jtty-fkey-edit > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* The message style beside the Call box and the serial: a label and WSJT-X's two choices. */
+.jtty-style {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
 /* Rx and F Tol in the header's control cluster: WSJT-X's two spin boxes, side by side. */
 .jtty-rx-controls {
   display: inline-flex;

@@ -1,10 +1,11 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog under `jtty.*`. What does not: the mode's own name, the RX/TX
 // plates, `Rx`, `Tx`, `F Tol` and `Hz` (WSJT-X's own control names and a unit), the key names
-// (`F1`…`F8`, `Esc`), WSJT-X's own F-key templates (its message text, sent as written), the
-// decoded lines, which are the station's text in WSJT-X's columns, and the engine's own words.
+// (`F1`…`F8`, `Esc`), WSJT-X's own F-key templates and the operator's (message text, sent as
+// written), the decoded lines, which are the station's text in WSJT-X's columns, and the engine's
+// own words.
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import type { AppSnapshot, BandChannel, JttyLine, JttySent, JttyState } from '../types'
+import type { AppSnapshot, BandChannel, JttyLine, JttyMessageStyle, JttySent, JttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -47,6 +48,7 @@ import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { jttyAllPane, jttyPaneText, jttyRxPane, jttySegments, type JttyLineOptions } from '../features/jttyLines'
 import { useRegionCols, type RegionCols } from '../useRegionCols'
 import { upperTyped } from '../typedInput'
+import { patchSettings } from '../settings/patch'
 
 interface Props {
   /** Open the Logbook filtered to a callsign — handed to the log strip's recall card. */
@@ -90,10 +92,21 @@ const TX_MAX_HZ = 5000
 /** WSJT-X's serial number spin box for JTTY (`sbSerialNumber_2`). */
 const SERIAL_MIN = 1
 const SERIAL_MAX = 5000
-/** WSJT-X's eight JTTY Contest templates, F1 to F8 (`Jtty::nativeMacroTemplate`): its own message
- *  text with its macro tokens (`%M` my call, `%H`/`%Q` the Call box, `%E` the serial). The engine
- *  compiles each as WSJT-X does; these are the keys' captions. */
-const FKEY_TEMPLATES = ['CQ %M CQ', '%H %E', '%H TU CQ %M CQ', '%M', '%H', 'TU NOW %Q %E', '%H AGN?', '%E']
+/** WSJT-X's two JTTY F-key sets, F1 to F8 (3.3.0-beta4 `widgets/JttyMessages.hpp` 200-233): its
+ *  Contest templates (`Jtty::nativeMacroTemplate`) and its FT8-style ones
+ *  (`Jtty::ft8StyleMacroTemplate`, F7 and F8 blank), message text with its macro tokens (`%M` my
+ *  call, `%H`/`%Q` the Call box, `%E` the exchange, `%N` the serial, `%G` my grid, `%R` the picked
+ *  decode's SNR). The engine compiles each as WSJT-X does; these are the defaults a key goes back
+ *  to, and the captions before the engine has answered. */
+const FKEY_DEFAULTS: Record<JttyMessageStyle, string[]> = {
+  contest: ['CQ %M CQ', '%H %E', '%H TU CQ %M CQ', '%M', '%H', 'TU NOW %Q %E', '%H AGN?', '%E'],
+  ft8: ['%H %M %G', '%H %M %R', '%H %M R%R', '%H %M RRR', '%H %M 73', 'CQ %M %G', '', ''],
+}
+/** Where each set is kept in Settings (WSJT-X's `JTTY_msgN` / `JTTY_FT8_msgN`). */
+const FKEY_SETTING: Record<JttyMessageStyle, 'jttyFkeys' | 'jttyFt8Fkeys'> = {
+  contest: 'jttyFkeys',
+  ft8: 'jttyFt8Fkeys',
+}
 const FKEY_NAMES = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8']
 /** WSJT-X's typing pause after which a live entry sends what is typed (`kJttyAutoAdvanceIdleMs`). */
 const LIVE_IDLE_MS = 1500
@@ -121,7 +134,7 @@ function JttyPaneLines({
 }: {
   lines: JttyLine[]
   options: JttyLineOptions
-  onCall: (call: string) => void
+  onCall: (call: string, line: JttyLine) => void
 }) {
   return (
     <>
@@ -133,7 +146,7 @@ function JttyPaneLines({
                 key={i}
                 type="button"
                 className="jtty-call"
-                onClick={() => onCall(seg.call!)}
+                onClick={() => onCall(seg.call!, l)}
                 title={t('jtty.call.title', { call: seg.call })}
               >
                 {seg.text}
@@ -290,6 +303,14 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   useEffect(() => {
     if (grabbed) setHisCall(grabbed)
   }, [grabbed])
+  // `%R`: the SNR of the decode the DX call was picked from, as WSJT-X captures it
+  // (`m_jttyHisCallSnr`, 3.3.0-beta4 `widgets/mainwindow.cpp` 9276-9283); null — WSJT-X's -10 —
+  // once the Call box is typed in (`mainwindow.cpp` 10565) or for a call picked from our own line.
+  const [hisSnr, setHisSnr] = useState<number | null>(null)
+  const pickCall = (call: string, line: JttyLine) => {
+    setGrabbed(call)
+    setHisSnr(line.tx ? null : line.snr)
+  }
   // The compose box holds what is not yet sent; `committed` is what this transmission has sent of
   // it (WSJT-X's locked, painted prefix), shown before it until the transmission is over.
   const [draft, setDraft] = useState('')
@@ -323,12 +344,15 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // Send (WSJT-X's Ctrl+K): all of it, ending the message, and a live session with it.
   const sendTyped = () => {
     if (!draftRef.current.trim()) return
-    sendWith(() => (draftRef.current.trim() ? jttySend(draftRef.current, hisCall) : Promise.resolve(null)), true)
+    sendWith(() => (draftRef.current.trim() ? jttySend(draftRef.current, hisCall, hisSnr) : Promise.resolve(null)), true)
   }
-  const sendFkey = (n: number) => sendWith(() => jttyFkey(n, hisCall), false)
+  const sendFkey = (n: number) => sendWith(() => jttyFkey(n, hisCall, hisSnr), false)
   // Live (WSJT-X's Alt+J), and its sign-off (Alt+K): `DE <call> K`, and the session ends.
   const toggleLive = () =>
-    sendWith(() => (live ? jttySignOff(draftRef.current, hisCall) : jttyLiveStart(draftRef.current, hisCall)), true)
+    sendWith(
+      () => (live ? jttySignOff(draftRef.current, hisCall, hisSnr) : jttyLiveStart(draftRef.current, hisCall, hisSnr)),
+      true,
+    )
   // While live: what is typed goes as WSJT-X sends it — a batch once five words are complete beyond
   // the three it holds back, and everything after a pause of LIVE_IDLE_MS.
   const commitLive = (flush: boolean) => {
@@ -337,7 +361,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     pendingCommit.current[kind] = true
     sendWith(() => {
       pendingCommit.current[kind] = false
-      return draftRef.current ? jttyLiveCommit(draftRef.current, hisCall, flush) : Promise.resolve(null)
+      return draftRef.current ? jttyLiveCommit(draftRef.current, hisCall, flush, hisSnr) : Promise.resolve(null)
     }, true)
   }
   const onDraft = (v: string) => {
@@ -400,6 +424,51 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [active])
+  // WSJT-X'S TWO F-KEY SETS, EDITABLE (its `msg1`..`msg8` line edits and "Message style" box,
+  // `on_comboBoxJttyStyle_currentIndexChanged`, 3.3.0-beta4 `widgets/mainwindow_jtty.cpp`
+  // 1037-1060): the style picks the set the keys send, each set keeps its own eight, and ✎ turns
+  // the keys into their templates to edit. Both are Settings fields, written through the patch
+  // seam (one field over the live settings, never a held copy); the engine reads them at each
+  // press, so a key sends what it shows. Editing never sends.
+  const style: JttyMessageStyle = tx?.style ?? 'contest'
+  const fkeys = tx?.fkeys ?? FKEY_DEFAULTS[style]
+  const [editingKeys, setEditingKeys] = useState(false)
+  const [keyDrafts, setKeyDrafts] = useState<Record<number, string>>({})
+  const refreshAfterSave = (s: AppSnapshot) => {
+    onSnap?.(s)
+    return getJttyState().then(setJtty)
+  }
+  const setStyle = (next: JttyMessageStyle) => {
+    if (next === style) return
+    void patchSettings(() => ({ jttyMessageStyle: next }))
+      .then(refreshAfterSave)
+      .catch(() => pushToast(t('jtty.fkeys.saveFailed'), 'error'))
+  }
+  const saveKey = (i: number) => {
+    const text = keyDrafts[i]
+    setKeyDrafts((d) => {
+      const rest = { ...d }
+      delete rest[i]
+      return rest
+    })
+    if (text == null || text === fkeys[i]) return
+    const field = FKEY_SETTING[style]
+    const defaults = FKEY_DEFAULTS[style]
+    void patchSettings((cur: Settings) => {
+      const list = defaults.map((d, k) => cur[field]?.[k] ?? d)
+      list[i] = text
+      return { [field]: list }
+    })
+      .then(refreshAfterSave)
+      .catch(() => pushToast(t('jtty.fkeys.saveFailed'), 'error'))
+  }
+  const resetKeys = () => {
+    setKeyDrafts({})
+    void patchSettings(() => ({ [FKEY_SETTING[style]]: [...FKEY_DEFAULTS[style]] }))
+      .then(refreshAfterSave)
+      .catch(() => pushToast(t('jtty.fkeys.saveFailed'), 'error'))
+  }
+
   // The line under the dock: the transmitter's notice, else why a send would be refused right now
   // (the engine's words), else how to send.
   const dockHint = tx?.notice ?? tx?.refusal ?? t('jtty.compose.hint')
@@ -474,7 +543,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
         <div className="cw-decode-text jtty-lines" ref={allPin.ref} onScroll={allPin.onScroll}>
           {allLines.length > 0 ? (
-            <JttyPaneLines lines={allLines} options={options} onCall={setGrabbed} />
+            <JttyPaneLines lines={allLines} options={options} onCall={pickCall} />
           ) : (
             <span className="cw-decode-idle">{armed ? t('jtty.all.listening') : t('jtty.all.idle')}</span>
           )}
@@ -489,7 +558,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       <div className="cw-decode jtty-pane" title={t('jtty.pane.rx.hint')}>
         <div className="cw-decode-text jtty-lines" ref={rxPin.ref} onScroll={rxPin.onScroll}>
           {rxLines.length > 0 ? (
-            <JttyPaneLines lines={rxLines} options={options} onCall={setGrabbed} />
+            <JttyPaneLines lines={rxLines} options={options} onCall={pickCall} />
           ) : (
             <span className="cw-decode-idle">{t('jtty.rx.empty')}</span>
           )}
@@ -746,24 +815,50 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       <div className="cockpit-txdock">
         <div className="rtty-dock-keys jtty-dock-keys">
           <div className="cw-macros rtty-macros jtty-macros" role="group" aria-label={t('jtty.macros.aria')}>
-            {FKEY_TEMPLATES.map((template, i) => (
-              <button
-                key={FKEY_NAMES[i]}
-                type="button"
-                className="cw-macro"
-                onClick={() => sendFkey(i + 1)}
-                title={t('jtty.fkey.title', { key: FKEY_NAMES[i], template })}
-              >
-                <span className="cw-macro-key">{FKEY_NAMES[i]}</span>
-                <span className="cw-macro-label">{template}</span>
-              </button>
-            ))}
+            {FKEY_NAMES.map((name, i) => {
+              const template = fkeys[i] ?? ''
+              return editingKeys ? (
+                <label key={name} className="jtty-fkey-edit">
+                  <span className="cw-macro-key">{name}</span>
+                  <input
+                    className="settings-input mono"
+                    value={keyDrafts[i] ?? template}
+                    onChange={(e) => setKeyDrafts((d) => ({ ...d, [i]: e.target.value }))}
+                    onBlur={() => saveKey(i)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        saveKey(i)
+                      }
+                    }}
+                    aria-label={t('jtty.fkeys.edit.aria', { key: name })}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </label>
+              ) : (
+                <button
+                  key={name}
+                  type="button"
+                  className={`cw-macro${template.trim() ? '' : ' rtty-macro-empty'}`}
+                  onClick={() => sendFkey(i + 1)}
+                  disabled={!template.trim()}
+                  title={template.trim() ? t('jtty.fkey.title', { key: name, template }) : t('jtty.fkey.empty.title', { key: name })}
+                >
+                  <span className="cw-macro-key">{name}</span>
+                  <span className="cw-macro-label">{template.trim() ? template : t('jtty.fkey.empty.label')}</span>
+                </button>
+              )
+            })}
           </div>
           <div className="rtty-dock-row jtty-dock-row">
             <input
               className="settings-input rtty-hiscall"
               value={hisCall}
-              onChange={(e) => setHisCall(upperTyped(e.target))}
+              onChange={(e) => {
+                setHisCall(upperTyped(e.target))
+                setHisSnr(null)
+              }}
               placeholder={t('jtty.hisCall.placeholder')}
               aria-label={t('jtty.hisCall.aria')}
               autoComplete="off"
@@ -790,6 +885,32 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                 }}
               />
             </label>
+            <label className="jtty-style" title={t('jtty.style.title')}>
+              <span>{t('jtty.style.label')}</span>
+              <select
+                className="settings-input"
+                aria-label={t('jtty.style.aria')}
+                value={style}
+                onChange={(e) => setStyle(e.target.value as JttyMessageStyle)}
+              >
+                <option value="contest">{t('jtty.style.contest')}</option>
+                <option value="ft8">{t('jtty.style.ft8')}</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className={`le-qrz jtty-fkeys-edit${editingKeys ? ' on' : ''}`}
+              aria-pressed={editingKeys}
+              onClick={() => setEditingKeys(!editingKeys)}
+              title={editingKeys ? t('jtty.fkeys.done.title') : t('jtty.fkeys.edit.title')}
+            >
+              {editingKeys ? t('jtty.fkeys.done.label') : t('jtty.fkeys.edit.label')}
+            </button>
+            {editingKeys && (
+              <button type="button" className="le-qrz" onClick={resetKeys} title={t('jtty.fkeys.reset.title')}>
+                {t('jtty.fkeys.reset.label')}
+              </button>
+            )}
             {/* A SENDER, not a stop: clicking it off signs off and lets what is queued go out. */}
             <button
               type="button"
