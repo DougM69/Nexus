@@ -4410,10 +4410,17 @@ impl StationCore {
         edit.iota()?;
         let card = edit.qsl_card_change(stored);
         let mut rec = edit.record(stored);
-        // Keep country populated on edits, as `update_qso` does: the form does not carry it. It
-        // follows the DXCC number the contact keeps — the edit leaves the stored one, and a
-        // corrected call drops both — and else the call.
-        rec.country = self.country_for(&rec.call, rec.dxcc.or(stored.dxcc));
+        // Keep country populated on edits, as `update_qso` does: the form does not carry it. It is
+        // resolved again only where the stored one cannot stand — a corrected call, or a contact
+        // that holds none. Otherwise the edit leaves it empty and the edit policy (`edited`) writes
+        // the stored one back exactly: an imported "Germany" is not respelled by an edit of the
+        // name. (On a corrected call that policy clears the country whatever the edit carries.) It
+        // follows the DXCC number the contact keeps, and else the call.
+        let call_changed = !rec.call.trim().eq_ignore_ascii_case(stored.call.trim());
+        let no_country = stored.country.as_deref().is_none_or(|c| c.trim().is_empty());
+        if call_changed || no_country {
+            rec.country = self.country_for(&rec.call, rec.dxcc.or(stored.dxcc));
+        }
         let mut ops = vec![LogOp::Edit {
             id,
             rec: Box::new(rec),
@@ -6320,5 +6327,97 @@ mod park_state_tests {
             now.contest.as_deref().unwrap().adif,
             [("STATE".to_string(), "PA".to_string())]
         );
+    }
+}
+
+#[cfg(test)]
+mod edit_ops_tests {
+    use super::*;
+    use tempo_core::logbook::RecordId;
+
+    /// A station whose resolver names every call's entity "United States".
+    fn station() -> StationCore {
+        let mut sc = StationCore::new();
+        sc.set_dxcc_resolver(|_| Some("United States".to_string()));
+        sc
+    }
+
+    /// K1ABC, stored with `country` (as an import or a callbook left it).
+    fn stored(country: Option<&str>) -> Arc<QsoRecord> {
+        let mut r = tempo_core::logbook::parse_adif(
+            "<CALL:5>K1ABC<QSO_DATE:8>20240101<TIME_ON:4>1200<BAND:3>20m<MODE:2>CW<EOR>",
+        )
+        .remove(0);
+        r.id = Some(RecordId::Provisional {
+            hash: 9,
+            ordinal: 0,
+        });
+        r.country = country.map(str::to_string);
+        Arc::new(r)
+    }
+
+    /// The contact as `edit` (with the card's `fields`) leaves it, through the edit's own ops.
+    fn edited(
+        sc: &StationCore,
+        row: &Arc<QsoRecord>,
+        edit: &QsoEdit,
+        fields: &[FieldEdit],
+    ) -> Result<QsoRecord, String> {
+        let id = row.id.unwrap();
+        let key = QsoEdit::project(row).key();
+        let ops = sc
+            .edit_ops(id, &key, edit, fields, row)?
+            .unwrap_or_else(|r| panic!("refused: {r:?}"));
+        Ok(ops_on(row, &ops).expect("a change").1.expect("a row"))
+    }
+
+    fn cnty(new: &str) -> FieldEdit {
+        FieldEdit {
+            tag: "CNTY".into(),
+            old: None,
+            new: Some(new.into()),
+        }
+    }
+
+    /// ★ An edit that leaves the call alone writes the stored country back exactly — the edit
+    /// form's and the contact card's alike — even where the resolver would name it otherwise. It
+    /// is resolved again where the contact holds none, and a corrected call never keeps it.
+    #[test]
+    fn country_is_resolved_again_only_for_a_new_call_or_an_empty_one() {
+        let sc = station();
+        let germany = stored(Some("Germany"));
+        let mut name = QsoEdit::project(&germany);
+        name.name = Some("Hans".into());
+        for fields in [&[][..], &[cnty("MA,ESSEX")][..]] {
+            let after = edited(&sc, &germany, &name, fields).unwrap();
+            assert_eq!(after.name.as_deref(), Some("Hans"));
+            assert_eq!(
+                after.country.as_deref(),
+                Some("Germany"),
+                "an unrelated edit leaves the stored country ({} card fields)",
+                fields.len()
+            );
+        }
+
+        let mut call = QsoEdit::project(&germany);
+        call.call = "K2XYZ".into();
+        // The edit policy (`edited`) clears a corrected call's country whatever the edit carries —
+        // it describes the busted call — so the stored one is gone, never written back.
+        assert_ne!(
+            edited(&sc, &germany, &call, &[]).unwrap().country.as_deref(),
+            Some("Germany"),
+            "a corrected call does not keep the old call's country"
+        );
+
+        for empty in [None, Some("")] {
+            let none = stored(empty);
+            let mut name = QsoEdit::project(&none);
+            name.name = Some("Hans".into());
+            assert_eq!(
+                edited(&sc, &none, &name, &[]).unwrap().country.as_deref(),
+                Some("United States"),
+                "an empty country ({empty:?}) is filled"
+            );
+        }
     }
 }

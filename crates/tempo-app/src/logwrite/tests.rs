@@ -3904,3 +3904,60 @@ fn check_confirmations_counts_a_portable_call_as_its_base_call() {
         .into();
     assert_eq!((found.gains.len(), gains), (2, own));
 }
+
+/// ★ The stored `COUNTRY` is written back exactly by an edit that leaves the call alone — through
+/// the edit form's save and the contact card's (with a field kept as written) alike — even where
+/// the resolver names the entity otherwise; one the contact does not hold is filled.
+#[test]
+fn an_edit_writes_an_imported_country_back_exactly() {
+    let d = Dir::new("edit-keeps-country");
+    let engine = holding(
+        &d,
+        &contacts(&[
+            adif_row("K1ABC", "20m", "FT8", "100000", "<COUNTRY:7>Germany"),
+            adif_row("K2ABC", "20m", "FT8", "110000", ""),
+        ]),
+    );
+    let row = |call: &str| contact_at(&engine, call, if call == "K1ABC" { "100000" } else { "110000" });
+    let named = |r: &QsoRecord| {
+        let mut edit = QsoEdit::project(r);
+        edit.name = Some("Hans".into());
+        edit
+    };
+    let germany = row("K1ABC");
+    assert_eq!(germany.country.as_deref(), Some("Germany"), "precondition");
+    let id = germany.id.unwrap();
+    let (made, dur) = edit_row(&engine, id, &QsoEdit::project(&germany).key(), &named(&germany));
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let after = row("K1ABC");
+    assert_eq!(after.name.as_deref(), Some("Hans"));
+    assert_eq!(after.country.as_deref(), Some("Germany"), "the edit form's save");
+
+    let card = [FieldEdit {
+        tag: "CNTY".into(),
+        old: None,
+        new: Some("MA,ESSEX".into()),
+    }];
+    let mut edit = named(&after);
+    edit.qth = Some("Boston".into());
+    let (made, dur) =
+        edit_row_with_fields(&engine, id, &QsoEdit::project(&after).key(), &edit, &card);
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let after = row("K1ABC");
+    assert_eq!(after.qth.as_deref(), Some("Boston"));
+    assert_eq!(after.country.as_deref(), Some("Germany"), "the contact card's save");
+
+    let none = row("K2ABC");
+    assert_eq!(none.country, None, "precondition");
+    let (made, dur) = edit_row(
+        &engine,
+        none.id.unwrap(),
+        &QsoEdit::project(&none).key(),
+        &named(&none),
+    );
+    made.expect("reads").expect("made");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(row("K2ABC").country.as_deref(), Some("United States"), "filled where empty");
+}
