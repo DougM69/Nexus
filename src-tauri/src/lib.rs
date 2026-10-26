@@ -29110,6 +29110,8 @@ fn qrz_outcome_from_body(body: &str) -> Result<QrzOutcome, QrzFailure> {
 /// reaching QRZ and QRZ turning the credentials down want opposite things from the operator,
 /// and the Connections row persists the class — see [`QrzFailure`].
 fn qrz_login(username: &str, password: &str) -> Result<String, QrzFailure> {
+    // A request like any lookup: the Logbook's update counts it against its daily cap.
+    callbook_update::note_login();
     let url = tempo_core::qrz::build_login_url(&tempo_core::qrz::QrzLogin {
         username: username.to_string(),
         password: password.to_string(),
@@ -29161,6 +29163,8 @@ fn hamqth_try_lookup(session_id: &str, callsign: &str) -> Result<QrzOutcome, Str
 /// the URL carries the password but is local (dropped here); errors redacted by the
 /// transport. On a login response with no id, HamQTH's `<error>` says why.
 fn hamqth_login(username: &str, password: &str) -> Result<String, String> {
+    // A request like any lookup: the Logbook's update counts it against its daily cap.
+    callbook_update::note_login();
     let url = tempo_core::hamqth::build_login_url(&tempo_core::hamqth::HamQthLogin {
         username: username.to_string(),
         password: password.to_string(),
@@ -29255,8 +29259,12 @@ fn hamqth_lookup_attempt(
     match hamqth_try_lookup(&id, call)? {
         QrzOutcome::Found(dto, _) => Ok(Some(*dto)),
         QrzOutcome::NoRecord(_) => Ok(None),
-        // A fresh id still reporting expiry is anomalous — give up.
-        QrzOutcome::NeedLogin => Ok(None),
+        // A fresh id still reporting expiry is anomalous — give up. The Logbook's update stops on
+        // it: the cached id stays the refused one, so each call after would sign in again.
+        QrzOutcome::NeedLogin => {
+            callbook_update::note_hamqth_refused();
+            Ok(None)
+        }
     }
 }
 
@@ -29429,6 +29437,11 @@ async fn callbook_lookup_live(
                 // hold a service's words at all (see `note_conn_health`). Without this the
                 // refusal would be invisible — the lookup falls through to HamQTH and the
                 // operator is told "not in the callbook".
+                // What QRZ answered, for the Logbook's update: a run of answers with no record
+                // is how QRZ refuses lookups (see `callbook_update`).
+                if let Ok(outcome) = &attempt {
+                    callbook_update::note_qrz_answer(matches!(outcome, QrzOutcome::Found(..)));
+                }
                 match &attempt {
                     Ok(QrzOutcome::NoRecord(why)) => conn_log(
                         "QRZ",
@@ -39722,6 +39735,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         callbook_update::callbook_update_start,
         callbook_update::callbook_update_status,
         callbook_update::callbook_update_cancel,
+        callbook_update::callbook_update_take_end,
         log_queries::ask_log,
         purge_log,
         get_awards,

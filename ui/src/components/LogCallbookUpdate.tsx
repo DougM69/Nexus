@@ -14,18 +14,24 @@
 // time the rest take, the day's lookups against the cap, per field how many contacts it could fill,
 // and how many older contacts keep their location blank. The button
 // then asks once more before it starts. Progress shows while it runs, with Cancel; whatever stops
-// it (done, cancelled, the day's cap, a failed lookup), what it found is ONE change the toast's
-// Undo takes back, and a later run picks up the rest from the cache at no cost.
+// it (done, cancelled, the day's cap, QRZ refusing, a failed lookup), what it found is ONE change
+// the toast's Undo takes back, and a later run picks up the rest from the cache at no cost.
+//
+// The end is the Logbook's to report (useCallbookUpdateEnd), not this pane's: the operator may
+// close the dialog and keep operating for the minutes a run takes, and the toast, its Undo and the
+// list's reload must come all the same. The pane shows the progress, and the end when it is open.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Field names and calls are
 // invariant tokens, shown as they are.
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   callbookUpdateCancel,
   callbookUpdatePreview,
   callbookUpdateStart,
   callbookUpdateStatus,
+  callbookUpdateTakeEnd,
   type BulkTarget,
+  type CallbookUpdateEnd,
   type CallbookUpdatePreview,
   type CallbookUpdateStatus,
 } from '../api'
@@ -44,14 +50,65 @@ function serviceName(s: CallbookUpdatePreview['services'][number]): string {
 /** How often the progress is asked while an update runs. */
 export const POLL_MS = 1000
 
+/** Tell the operator how an update ended: the toast whose Undo takes its fill back (a fill stopped
+ *  part-way too), why it stopped when it did not finish, and the list reloaded. */
+function reportEnd(end: CallbookUpdateEnd, onChanged: () => void): void {
+  const why = end.error ?? (end.stop === 'refused' ? t('logbook.tools.callbook.end.refused') : null)
+  if (why) pushToast(why, 'error', 12_000)
+  if (end.made) sayRun(end.made, t('logbook.tools.callbook.done', { count: end.made.changed }), onChanged)
+  else if (!why) pushToast(t('logbook.tools.nothing'), 'info', 8000)
+  if (end.made && end.made.changed > 0) onChanged()
+}
+
+/** The Logbook's half: reports an update's end once, with the dialog open or not. Answers the
+ *  function to call when an update starts; one already running when the Logbook mounts is followed,
+ *  and one that ended unreported is reported. */
+export function useCallbookUpdateEnd(onChanged: () => void): () => void {
+  const [following, setFollowing] = useState(false)
+  // Reported once, even when two takes overlap.
+  const live = useRef(false)
+  const changed = useRef(onChanged)
+  useEffect(() => { changed.current = onChanged })
+
+  const take = useCallback(async () => {
+    const end = await callbookUpdateTakeEnd()
+    if (!end || !live.current) return
+    live.current = false
+    setFollowing(false)
+    reportEnd(end, () => changed.current())
+  }, [])
+
+  useEffect(() => {
+    const check = async () => {
+      const s = await callbookUpdateStatus()
+      live.current = true
+      if (s.running) setFollowing(true)
+      else await take()
+    }
+    check().catch(() => {})
+  }, [take])
+
+  useEffect(() => {
+    if (!following) return
+    const timer = setInterval(() => { take().catch(() => {}) }, POLL_MS)
+    return () => clearInterval(timer)
+  }, [following, take])
+
+  return useCallback(() => {
+    live.current = true
+    setFollowing(true)
+  }, [])
+}
+
 export function LogCallbookUpdate({
-  onChanged,
+  onStarted,
   afar,
   picked,
   query,
   shown,
 }: {
-  onChanged: () => void
+  /** An update started: the Logbook follows it to its end (useCallbookUpdateEnd). */
+  onStarted: () => void
   afar: boolean
   picked: ReadonlySet<string>
   query: LogQuery
@@ -63,21 +120,17 @@ export function LogCallbookUpdate({
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<CallbookUpdateStatus | null>(null)
   const inFlight = useRef(false)
-  // The update this pane follows, whose end it reports: once, even when two polls overlap.
-  const watching = useRef(false)
 
   const target = (): BulkTarget => (which === 'picked' ? { ids: [...picked] } : { query })
   const queryKey = JSON.stringify(query)
   const pickedKey = [...picked].join(' ')
   useEffect(() => { setPreview(null); setAsking(false) }, [queryKey, pickedKey])
 
-  // One already running (started before this dialog opened): show its progress.
+  // One running, or the last one's end: its progress, or how it ended.
   useEffect(() => {
     let live = true
     callbookUpdateStatus().then((s) => {
-      if (!live || !s.running) return
-      watching.current = true
-      setStatus(s)
+      if (live) setStatus(s)
     }).catch(() => {})
     return () => { live = false }
   }, [])
@@ -86,20 +139,10 @@ export function LogCallbookUpdate({
   useEffect(() => {
     if (!running) return
     const timer = setInterval(() => {
-      callbookUpdateStatus().then((s) => {
-        setStatus(s)
-        if (!s.running && s.ended && watching.current) {
-          watching.current = false
-          const end = s.ended
-          if (end.error) pushToast(end.error, 'error', 12_000)
-          if (end.made) sayRun(end.made, t('logbook.tools.callbook.done', { count: end.made.changed }), onChanged)
-          else if (!end.error) pushToast(t('logbook.tools.nothing'), 'info', 8000)
-          if (end.made && end.made.changed > 0) onChanged()
-        }
-      }).catch(() => {})
+      callbookUpdateStatus().then(setStatus).catch(() => {})
     }, POLL_MS)
     return () => clearInterval(timer)
-  }, [running, onChanged])
+  }, [running])
 
   const onPreview = async () => {
     setBusy(true)
@@ -121,15 +164,17 @@ export function LogCallbookUpdate({
     inFlight.current = false
     setBusy(false)
     if (!started) return
-    watching.current = true
+    onStarted()
     setPreview(null)
     setStatus({
       running: true, done: 0, total: preview.calls, fromCache: 0, lookedUp: 0,
-      spent: preview.spent, cap: preview.cap, ended: null,
+      spent: preview.spent, cap: preview.cap, waitingForTx: false, ended: null,
     })
   }
 
   const left = preview ? Math.max(0, preview.cap - preview.spent) : 0
+  // At most: a call still to look up is counted as if it filled every field it could.
+  const upTo = preview ? preview.toLookUp > 0 : false
   const minutes = preview ? Math.max(1, Math.ceil(preview.estimateSecs / 60)) : 0
   const ended = status && !status.running ? status.ended : null
 
@@ -188,9 +233,15 @@ export function LogCallbookUpdate({
           <p className="qso-detail-bare">
             {t('logbook.tools.callbook.today', { spent: preview.spent, cap: preview.cap })}
           </p>
-          {preview.toLookUp > left && (
+          {preview.lookupsNeeded > left && (
             <p className="qso-detail-bare">
               <strong>{t('logbook.tools.callbook.overCap', { count: left })}</strong>
+              {preview.lookupsNeeded > preview.toLookUp && (
+                <> {t('logbook.tools.callbook.stroked', { count: preview.lookupsNeeded })}</>
+              )}
+              {preview.qrzCount !== null && (
+                <> {t('logbook.tools.callbook.qrzCount', { count: preview.qrzCount })}</>
+              )}
             </p>
           )}
           {!preview.configured && (
@@ -217,7 +268,9 @@ export function LogCallbookUpdate({
               disabled={busy || afar || preview.couldChange === 0 || !preview.configured}
               onClick={() => setAsking(true)}
             >
-              {t('logbook.tools.callbook.apply', { count: preview.couldChange })}
+              {upTo
+                ? t('logbook.tools.callbook.applyUpTo', { count: preview.couldChange })
+                : t('logbook.tools.callbook.apply', { count: preview.couldChange })}
             </button>
             {asking && (
               <span className="log-tools-confirm">
@@ -236,13 +289,14 @@ export function LogCallbookUpdate({
       {status && running && (
         <div className="log-tools-row" role="status">
           <span>
-            {t('logbook.tools.callbook.progress', {
-              done: status.done,
-              total: status.total,
-              fromCache: status.fromCache,
-              spent: status.spent,
-              cap: status.cap,
-            })}
+            {status.waitingForTx ? t('logbook.tools.callbook.waitingForTx')
+              : t('logbook.tools.callbook.progress', {
+                done: status.done,
+                total: status.total,
+                fromCache: status.fromCache,
+                spent: status.spent,
+                cap: status.cap,
+              })}
           </span>
           <button type="button" className="export-btn" onClick={() => void callbookUpdateCancel().catch(() => {})}>
             {t('logbook.tools.callbook.stop')}
@@ -255,6 +309,7 @@ export function LogCallbookUpdate({
             {ended.stop === 'done' ? t('logbook.tools.callbook.end.done')
               : ended.stop === 'cancelled' ? t('logbook.tools.callbook.end.cancelled')
               : ended.stop === 'limit' ? t('logbook.tools.callbook.end.limit', { cap: status?.cap ?? 0 })
+              : ended.stop === 'refused' ? t('logbook.tools.callbook.end.refused')
               : t('logbook.tools.callbook.end.failed')}
           </p>
           {ended.notLookedUp > 0 && (

@@ -1876,10 +1876,14 @@ export interface CallbookUpdatePreview {
   calls: number
   kept: number
   toLookUp: number
+  /** What those may cost against the cap: a stroked call is asked again for its base. */
+  lookupsNeeded: number
   paceSecs: number
   estimateSecs: number
   spent: number
   cap: number
+  /** QRZ's own count of the account's lookups, from its last answer in the last day. */
+  qrzCount: number | null
   couldChange: number
   fields: [string, number][]
   configured: boolean
@@ -1889,11 +1893,12 @@ export interface CallbookUpdatePreview {
   locationTooOld: number
 }
 
-/** How an update ended: `done`, `cancelled`, `limit` (the day's cap) or `failed` (`error` says
- *  why). `made`: the fill's change, undone whole by its run. `notLookedUp`: calls a later run picks
- *  up. */
+/** How an update ended: `done`, `cancelled`, `limit` (the day's cap), `refused` (QRZ answering
+ *  call after call with no record: refusing lookups) or `failed` (`error` says why). `made`: the
+ *  fill's change, undone whole by its run — a fill stopped part-way has one too. `notLookedUp`:
+ *  calls a later run picks up. */
 export interface CallbookUpdateEnd {
-  stop: 'done' | 'cancelled' | 'limit' | 'failed'
+  stop: 'done' | 'cancelled' | 'limit' | 'refused' | 'failed'
   error: string | null
   unknown: string[]
   notLookedUp: number
@@ -1908,6 +1913,8 @@ export interface CallbookUpdateStatus {
   lookedUp: number
   spent: number
   cap: number
+  /** The lookups are done, and the fill waits for the radio to stop transmitting. */
+  waitingForTx: boolean
   ended: CallbookUpdateEnd | null
 }
 
@@ -1928,6 +1935,11 @@ export async function callbookUpdateStatus(): Promise<CallbookUpdateStatus> {
 /** Stop after the lookup in hand: what was found is filled as one change. */
 export async function callbookUpdateCancel(): Promise<void> {
   return invoke<void>('callbook_update_cancel')
+}
+
+/** The last update's end, if it has not been reported yet: answered once. */
+export async function callbookUpdateTakeEnd(): Promise<CallbookUpdateEnd | null> {
+  return invoke<CallbookUpdateEnd | null>('callbook_update_take_end')
 }
 
 /** One problem the check found. `fix`: the proposed change (`value: null` clears the field), or

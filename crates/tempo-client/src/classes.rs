@@ -67,6 +67,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("callbook_update_preview",        RunsAtShack, "Counts what an update from the callbook would fill in the shack's logbook; changes nothing, looks nothing up."),
     ("callbook_update_start",          RefusedHere, "Fills fields on many contacts of the shack's logbook at once, as a bulk edit does; its lookups run at the shack."),
     ("callbook_update_status",         RunsAtShack, "How the shack's update from the callbook is getting on."),
+    ("callbook_update_take_end",       RunsHere,    "The end of an update this computer ran, reported once by its own Logbook; an update runs only from the shack."),
     ("cancel_confirmation_check",      RunsAtShack, "Drops the confirmation check the shack holds; changes nothing."),
     ("cancel_voice_recording",         RunsHere,    "Drops a voice message being recorded on this computer's microphone."),
     ("check_beta_update",              RunsHere,    "This computer's own updater."),

@@ -28,6 +28,8 @@
 //! lookup it makes is noted here with its time, so its daily cap holds across runs and restarts.
 //! Only a time: never the call, the answer or anything else. "Clear" forgets the answers, not
 //! this tally, which would otherwise let a clear reset the cap.
+//! QRZ's own count of the account's lookups, from the last answer that carried one, is kept the
+//! same way ([`CallbookCache::note_qrz_count`]): the count and its time, nothing else.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -84,7 +86,8 @@ impl CallbookCache {
              );
              CREATE INDEX IF NOT EXISTS callbook_answer_last_used
                  ON callbook_answer (last_used);
-             CREATE TABLE IF NOT EXISTS lookup_spent (at INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS lookup_spent (at INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS qrz_count (at INTEGER NOT NULL, count INTEGER NOT NULL);",
         )?;
         Ok(Self { conn, capacity })
     }
@@ -208,6 +211,30 @@ impl CallbookCache {
                 |r| r.get::<_, i64>(0),
             )
             .map(|n| n as usize)
+    }
+
+    /// Keep `count`, QRZ's own count of the account's lookups in the 24 hours before `at`, in
+    /// place of the one kept before. See the module header.
+    pub fn note_qrz_count(&self, count: usize, at: i64) -> rusqlite::Result<()> {
+        self.conn.execute("DELETE FROM qrz_count", [])?;
+        self.conn.execute(
+            "INSERT INTO qrz_count (at, count) VALUES (?1, ?2)",
+            params![at, count as i64],
+        )?;
+        Ok(())
+    }
+
+    /// QRZ's count as [`Self::note_qrz_count`] kept it, while it is less than a day old at `now`.
+    /// One kept after `now` (the clock stepped back) still counts, as for the tally.
+    pub fn qrz_count(&self, now: i64) -> rusqlite::Result<Option<usize>> {
+        self.conn
+            .query_row(
+                "SELECT count FROM qrz_count WHERE at > ?1",
+                params![now - 86_400],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .map(|n| n.map(|n| n.max(0) as usize))
     }
 
     /// Every stored answer's text, for the tests that check what reached the disk.
@@ -355,6 +382,38 @@ mod tests {
             c.stored_text().unwrap().is_empty(),
             "the tally holds no call and no answer"
         );
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// QRZ's last count is kept with its time across a restart and a clear, the newest only,
+    /// for a day; and it is a number and a time, nothing else.
+    #[test]
+    fn qrzs_count_is_kept_for_a_day_and_survives_a_restart() {
+        let dir = scratch("qrz-count");
+        let path = dir.join(FILE_NAME);
+        {
+            let c = CallbookCache::open(&path).unwrap();
+            assert_eq!(c.qrz_count(1_000).unwrap(), None);
+            c.note_qrz_count(240, 1_000).unwrap();
+            c.note_qrz_count(245, 2_000).unwrap();
+            c.clear().unwrap();
+        }
+        let c = CallbookCache::open(&path).unwrap();
+        assert_eq!(
+            c.qrz_count(2_000).unwrap(),
+            Some(245),
+            "the newest, after a restart"
+        );
+        assert_eq!(c.qrz_count(2_000 + DAY - 1).unwrap(), Some(245));
+        assert_eq!(c.qrz_count(2_000 + DAY).unwrap(), None, "a day old: gone");
+        assert_eq!(c.qrz_count(0).unwrap(), Some(245), "a clock stepped back");
+        let rows: i64 = c
+            .conn
+            .query_row("SELECT COUNT(*) FROM qrz_count", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+        assert!(c.stored_text().unwrap().is_empty());
         drop(c);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -30,6 +30,7 @@ export function LogTools({
   onTool,
   onClose,
   onChanged,
+  onCallbookStarted,
   picked,
   query,
   shown,
@@ -40,6 +41,8 @@ export function LogTools({
   onClose: () => void
   /** The log changed: the list reloads. */
   onChanged: () => void
+  /** An update from the callbook started: the Logbook reports its end, open or closed. */
+  onCallbookStarted: () => void
   /** The contacts ticked in the list, by id. */
   picked: ReadonlySet<string>
   /** The Logbook's search, filters and order: what "the contacts the list shows" means. */
@@ -80,7 +83,7 @@ export function LogTools({
       )}
       {open && tool === 'check' && <LogCheck onChanged={onChanged} afar={afar} />}
       {open && tool === 'callbook' && (
-        <LogCallbookUpdate onChanged={onChanged} afar={afar} picked={picked} query={query} shown={shown} />
+        <LogCallbookUpdate onStarted={onCallbookStarted} afar={afar} picked={picked} query={query} shown={shown} />
       )}
     </Dialog>
   )

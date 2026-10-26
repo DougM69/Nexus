@@ -132,11 +132,31 @@ fn run_in_parts(
     engine: &Mutex<Engine>,
     parts: &[Vec<RecordId>],
     context: &str,
-    mut plan_part: impl FnMut(
+    plan_part: impl FnMut(
         usize,
         &HashMap<RecordId, Arc<QsoRecord>>,
     ) -> (Vec<MadeRow>, Vec<(RecordId, &'static str)>),
 ) -> (Result<ToolRun, String>, Durability) {
+    let (made, end, durability) = make_in_parts(engine, parts, context, &mut || false, plan_part);
+    match end {
+        Ok(()) => (Ok(made), durability),
+        Err(why) => (Err(stopped(&made, &why)), durability),
+    }
+}
+
+/// [`run_in_parts`]'s work, answering what it made even when it stopped part-way, and why it
+/// stopped. Refused while the radio transmits ([`MUST_WAIT_FOR_TX`]), it asks `wait_tx`, with the
+/// Engine lock released, and makes the same part again when that answers `true`.
+fn make_in_parts(
+    engine: &Mutex<Engine>,
+    parts: &[Vec<RecordId>],
+    context: &str,
+    wait_tx: &mut dyn FnMut() -> bool,
+    mut plan_part: impl FnMut(
+        usize,
+        &HashMap<RecordId, Arc<QsoRecord>>,
+    ) -> (Vec<MadeRow>, Vec<(RecordId, &'static str)>),
+) -> (ToolRun, Result<(), String>, Durability) {
     let total: usize = parts.iter().map(Vec::len).sum();
     let large = total > tempo_core::logbook::writer::CHUNK_ROWS;
     let run = new_run();
@@ -144,11 +164,13 @@ fn run_in_parts(
     let mut durability = Durability::default();
     for (k, part) in parts.iter().enumerate() {
         let mut done = false;
-        for _ in 0..PLANS {
+        let mut plans = 0;
+        while plans < PLANS {
+            plans += 1;
             let plan = crate::engine::log_plan(engine);
             let rows = match plan.rows(part) {
                 Ok(rows) => rows,
-                Err(e) => return (Err(stopped(&made, &e)), durability),
+                Err(e) => return (made, Err(e), durability),
             };
             #[cfg(test)]
             tests::race();
@@ -183,7 +205,9 @@ fn run_in_parts(
             drop(guard);
             made.longest_hold = made.longest_hold.max(held.elapsed());
             match ok {
-                Err(why) => return (Err(stopped(&made, why)), durability),
+                // Waited out, the same part is planned again: a wait is not a plan gone stale.
+                Err(MUST_WAIT_FOR_TX) if wait_tx() => plans -= 1,
+                Err(why) => return (made, Err(why.to_string()), durability),
                 Ok(false) => continue,
                 // Turned back by the store: another window changed a row it read before the
                 // store wrote it. Planned again on the rows as they now stand.
@@ -198,7 +222,7 @@ fn run_in_parts(
                     let stored = d.wait_stored(DURABLE_WAIT);
                     durability = durability.and(d);
                     if let Err(why) = stored {
-                        return (Err(stopped(&made, &why)), durability);
+                        return (made, Err(why), durability);
                     }
                     done = true;
                     break;
@@ -206,10 +230,10 @@ fn run_in_parts(
             }
         }
         if !done {
-            return (Err(stopped(&made, station::LOG_BUSY)), durability);
+            return (made, Err(station::LOG_BUSY.to_string()), durability);
         }
     }
-    (Ok(made), durability)
+    (made, Ok(()), durability)
 }
 
 /// The station's country rule for a DXCC number, taken with the lock held for a moment: the name
@@ -824,38 +848,54 @@ pub fn callbook_preview(
 /// run of the history, undone whole. `answers` are by [`cleanup::call_key`]; a contact whose call
 /// has none is left as it is. Refused, changing nothing, unless `ids` are the `expect` contacts
 /// the operator confirmed.
+///
+/// **It waits for the radio, not the operator.** A fill runs at the end of a long run of lookups,
+/// whenever they end, and a large one is refused while the radio transmits
+/// ([`MUST_WAIT_FOR_TX`]): `wait_tx` is asked, with the Engine lock released, and the fill goes on
+/// when it answers `true` (it waited until transmit was off) or stops when `false` (the operator
+/// stopped it). **What it made is answered whatever stopped it**, with its run, so the toast's
+/// Undo takes back a fill stopped part-way too; the second value is why it stopped, as the
+/// operator reads it.
 pub fn callbook_fill(
     engine: &Mutex<Engine>,
     ids: &[RecordId],
     expect: usize,
     answers: &HashMap<String, CallbookAnswer>,
     now_unix: u64,
-) -> (Result<ToolRun, String>, Durability) {
+    wait_tx: &mut dyn FnMut() -> bool,
+) -> (ToolRun, Option<String>, Durability) {
     let mut seen = HashSet::new();
     let ids: Vec<RecordId> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
     if ids.len() != expect {
-        return (Err(NOT_AS_PREVIEWED.into()), Durability::default());
+        return (
+            ToolRun::default(),
+            Some(NOT_AS_PREVIEWED.into()),
+            Durability::default(),
+        );
     }
     let parts: Vec<Vec<RecordId>> = ids.chunks(CHUNK).map(<[RecordId]>::to_vec).collect();
-    run_in_parts(engine, &parts, "callbook_update", |k, rows| {
-        let mut pairs = Vec::new();
-        let mut refused = Vec::new();
-        for id in &parts[k] {
-            let Some(row) = rows.get(id) else {
-                refused.push((*id, "gone"));
-                continue;
-            };
-            let Some(answer) = answers.get(&cleanup::call_key(&row.call)) else {
-                continue;
-            };
-            let mut after = QsoRecord::clone(row);
-            fill_bulk(&mut after, answer, now_unix);
-            if after != **row {
-                pairs.push((Arc::clone(row), Some(Arc::new(after))));
+    let (made, end, durability) =
+        make_in_parts(engine, &parts, "callbook_update", wait_tx, |k, rows| {
+            let mut pairs = Vec::new();
+            let mut refused = Vec::new();
+            for id in &parts[k] {
+                let Some(row) = rows.get(id) else {
+                    refused.push((*id, "gone"));
+                    continue;
+                };
+                let Some(answer) = answers.get(&cleanup::call_key(&row.call)) else {
+                    continue;
+                };
+                let mut after = QsoRecord::clone(row);
+                fill_bulk(&mut after, answer, now_unix);
+                if after != **row {
+                    pairs.push((Arc::clone(row), Some(Arc::new(after))));
+                }
             }
-        }
-        (pairs, refused)
-    })
+            (pairs, refused)
+        });
+    let why = end.err().map(|why| stopped(&made, &why));
+    (made, why, durability)
 }
 
 // ── the check ──────────────────────────────────────────────────────────────────────────────────

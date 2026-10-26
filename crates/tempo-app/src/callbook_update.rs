@@ -20,9 +20,19 @@
 //!   disk) and QRZ's own count of the account's lookups, when an answer this run carried one — and
 //!   a lookup that would pass the cap is not made: the run stops, [`Stop::Limit`]. QRZ publishes
 //!   no daily number, so the cap is the operator's setting, 250 by default.
+//! - **A sign-in counts too**: a lookup that had to sign in again ([`Asked::logins`]) notes each
+//!   sign-in against the cap once it is made, so the next lookup is held to it. Whether a lookup
+//!   will sign in is not known before it is made, so the last lookup's sign-in can take the tally
+//!   one past the cap; a session lasts hours, so that is one sign-in a run at most.
 //! - **A call the callbook does not know** is reported ([`Lookups::unknown`]) and its contacts left
 //!   alone. **A lookup that fails** (no sign-in, the network down) stops the run, [`Stop::Failed`]:
 //!   the next lookup would only fail the same way, and each failure is still a request to QRZ.
+//! - **QRZ refusing** stops the run, [`Stop::Refused`]. QRZ answers an unknown call and a refused
+//!   lookup (its daily limit, a lapsed subscription, a suspended account) the same way, with no
+//!   record, and only its wording differs, which Nexus does not read. One such answer is an
+//!   unknown call. [`REFUSALS`] in a row, with no record from QRZ between them, is read as QRZ
+//!   refusing: the run stops rather than go on asking, and the calls of that streak are left for
+//!   another run instead of being listed as unknown.
 //!
 //! Whatever stops the run, the answers already in hand are the run's: the caller fills them as
 //! ONE change, and a later run picks the rest up from the lookup cache at no cost.
@@ -51,6 +61,33 @@ pub enum Looked {
     Failed(String),
 }
 
+/// What one network lookup of a call answered, and what it says about the services.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Asked {
+    pub looked: Looked,
+    /// QRZ's own count of the account's lookups in the last 24 hours, when its answer carried one.
+    pub qrz_count: Option<usize>,
+    /// QRZ was asked for the call and gave no record for it: an unknown call, or a refusal.
+    pub qrz_without_record: bool,
+    /// The sign-ins the lookup made, beyond the lookups [`Callbook::cost`] counted.
+    pub logins: usize,
+}
+
+impl Asked {
+    /// An answer with nothing more to say about the services.
+    pub fn plain(looked: Looked) -> Self {
+        Self {
+            looked,
+            qrz_count: None,
+            qrz_without_record: false,
+            logins: 0,
+        }
+    }
+}
+
+/// QRZ answers with no record this many calls in a row: read as QRZ refusing lookups.
+pub const REFUSALS: usize = 3;
+
 /// The callbook as the loop uses it. The shell's is the cached lookup the callsign card makes;
 /// the tests' a script with a fake clock.
 pub trait Callbook {
@@ -66,9 +103,8 @@ pub trait Callbook {
     fn spent(&mut self) -> usize;
     /// Note `n` network lookups, made now.
     fn note_spent(&mut self, n: usize);
-    /// Look `call` up over the network, and QRZ's own count of the account's lookups in the last
-    /// 24 hours when its answer carried one.
-    fn live(&mut self, call: &str) -> (Looked, Option<usize>);
+    /// Look `call` up over the network.
+    fn live(&mut self, call: &str) -> Asked;
     /// Wait `d`. `false`: the run was cancelled while it waited.
     fn wait(&mut self, d: Duration) -> bool;
     /// Whether the operator cancelled the run.
@@ -85,6 +121,8 @@ pub enum Stop {
     Limit,
     /// A lookup failed: the reason.
     Failed(String),
+    /// QRZ answered [`REFUSALS`] calls in a row with no record: read as a refusal.
+    Refused,
 }
 
 /// How far a run has got.
@@ -134,6 +172,9 @@ pub fn look_up(
     };
     // QRZ's own count, once an answer this run carried one.
     let mut qrz_count: Option<usize> = None;
+    // The calls QRZ answered with no record, in a row, and of those the ones listed as unknown.
+    let mut streak = 0;
+    let mut streak_unknown: Vec<String> = Vec::new();
     for call in calls {
         if callbook.cancelled() {
             out.stop = Stop::Cancelled;
@@ -159,23 +200,45 @@ pub fn look_up(
         }
         // Noted before it is made: a lookup that fails was still a request.
         callbook.note_spent(cost);
-        let (looked, count) = callbook.live(call);
+        let asked = callbook.live(call);
         out.progress.looked_up += 1;
-        if count.is_some() {
-            qrz_count = count;
+        if asked.logins > 0 {
+            callbook.note_spent(asked.logins);
+        }
+        if asked.qrz_count.is_some() {
+            qrz_count = asked.qrz_count;
         }
         out.progress.spent = callbook.spent().max(qrz_count.unwrap_or(0));
-        match looked {
+        if asked.qrz_without_record {
+            streak += 1;
+        } else {
+            streak = 0;
+            streak_unknown.clear();
+        }
+        match asked.looked {
             Looked::Found(answer) => {
                 out.answers.insert(call.clone(), *answer);
             }
-            Looked::Unknown => out.unknown.push(call.clone()),
+            Looked::Unknown => {
+                out.unknown.push(call.clone());
+                if asked.qrz_without_record {
+                    streak_unknown.push(call.clone());
+                }
+            }
             Looked::Failed(why) => {
                 out.stop = Stop::Failed(why);
                 break;
             }
         }
         out.progress.done += 1;
+        if streak >= REFUSALS {
+            // Refused, not unknown: those calls are left for another run.
+            out.unknown.retain(|c| !streak_unknown.contains(c));
+            out.progress.done -= streak_unknown.len();
+            out.stop = Stop::Refused;
+            progress(&out.progress);
+            break;
+        }
         progress(&out.progress);
     }
     out
@@ -205,6 +268,10 @@ mod tests {
         qrz_base: Option<usize>,
         /// Cancel once this many network lookups have been made.
         cancel_after: Option<usize>,
+        /// Calls another service answered after QRZ gave no record.
+        elsewhere: Vec<&'static str>,
+        /// Sign-ins each lookup makes.
+        logins: usize,
         cancelled: Cell<bool>,
     }
 
@@ -235,7 +302,7 @@ mod tests {
                 self.tally.push(self.now_ms);
             }
         }
-        fn live(&mut self, call: &str) -> (Looked, Option<usize>) {
+        fn live(&mut self, call: &str) -> Asked {
             self.lookups.push((call.to_string(), self.now_ms));
             if self.cancel_after.is_some_and(|n| self.lookups.len() >= n) {
                 self.cancelled.set(true);
@@ -243,12 +310,17 @@ mod tests {
             let count = self.qrz_base.map(|b| b + self.lookups.len());
             let looked = if self.failing.contains(&call) {
                 Looked::Failed("QRZ could not be reached".into())
-            } else if self.known.contains(&call) {
+            } else if self.known.contains(&call) || self.elsewhere.contains(&call) {
                 Looked::Found(Box::new(answer(call)))
             } else {
                 Looked::Unknown
             };
-            (looked, count)
+            Asked {
+                qrz_without_record: !self.known.contains(&call) && !self.failing.contains(&call),
+                looked,
+                qrz_count: count,
+                logins: self.logins,
+            }
         }
         fn wait(&mut self, d: Duration) -> bool {
             if self.cancelled.get() {
@@ -438,5 +510,77 @@ mod tests {
         assert_eq!(cb.spent(), 2);
         assert_eq!(run.answers.len(), 1);
         assert_eq!(seen, [1], "progress after each call answered");
+    }
+
+    /// ★ QRZ REFUSING. QRZ answering [`REFUSALS`] calls in a row with no record stops the run,
+    /// [`Stop::Refused`]: the next call is never asked. Those calls are left for another run, not
+    /// listed as unknown; what was found stands, a record from another service among them too.
+    #[test]
+    fn qrz_answering_no_record_calls_in_a_row_stops_the_run() {
+        let mut cb = Script {
+            known: vec!["A1A", "F1F"],
+            elsewhere: vec!["C1C"],
+            ..Script::default()
+        };
+        let run = look_up(
+            &calls(&["A1A", "B1B", "C1C", "D1D", "F1F"]),
+            limits(250),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Refused);
+        let asked: Vec<&str> = cb.lookups.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(asked, ["A1A", "B1B", "C1C", "D1D"], "F1F never asked");
+        assert!(
+            run.unknown.is_empty(),
+            "refused, not unknown: {:?}",
+            run.unknown
+        );
+        let mut got: Vec<&String> = run.answers.keys().collect();
+        got.sort();
+        assert_eq!(got, ["A1A", "C1C"]);
+        assert_eq!(run.progress.done, 2, "B1B and D1D are left for another run");
+    }
+
+    /// ★ The control: a call QRZ does not know, between calls it answers, is listed and the run
+    /// goes on — however many there are, while QRZ answers a call between them.
+    #[test]
+    fn unknown_calls_between_records_are_listed_and_the_run_goes_on() {
+        let mut cb = Script {
+            known: vec!["A1A", "D1D", "G1G"],
+            ..Script::default()
+        };
+        let run = look_up(
+            &calls(&["A1A", "B1B", "C1C", "D1D", "E1E", "F1F", "G1G"]),
+            limits(250),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Done);
+        assert_eq!(run.unknown, ["B1B", "C1C", "E1E", "F1F"]);
+        assert_eq!(run.progress.done, 7);
+    }
+
+    /// A lookup's sign-ins count against the cap: the next lookup is held to it.
+    #[test]
+    fn sign_ins_count_against_the_cap() {
+        let mut cb = Script {
+            known: vec!["A1A", "B1B", "C1C"],
+            logins: 1,
+            ..Script::default()
+        };
+        let run = look_up(
+            &calls(&["A1A", "B1B", "C1C"]),
+            limits(4),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Limit);
+        assert_eq!(
+            cb.lookups.len(),
+            2,
+            "1 + 1 sign-in each: the third would pass 4"
+        );
+        assert_eq!(cb.spent(), 4);
     }
 }

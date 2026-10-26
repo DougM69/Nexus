@@ -1,12 +1,17 @@
 //! The Logbook's "Update from callbook" as the UI asks for it: a preview, a start, the progress, and a
 //! cancel ([`tempo_app::callbook_update`], [`tempo_app::logtools::callbook_fill`]).
 //!
-//! **The same lookup the callsign card makes.** Each call goes through the lookup cache
-//! ([`crate::cached_callbook_lookup`]) in front of the callbooks ([`crate::callbook_lookup_live`]):
-//! QRZ with the account and stored password the card uses, then HamQTH and callook.info as the
-//! card falls through to them. Nothing here reads, stores or asks for a credential. Unlike the
-//! card it does not hand its answers to the engine's in-memory list for the contacts being logged
-//! now: a few hundred old calls would push out the ones the operator just looked up.
+//! **The same lookup the callsign card makes.** A call the lookup cache answers fresh is taken from
+//! it; any other is asked of the callbooks ([`crate::callbook_lookup_live`]) — QRZ with the account
+//! and stored password the card uses, then HamQTH and callook.info as the card falls through to
+//! them — and the answer kept in the cache. Nothing here reads, stores or asks for a credential.
+//! Unlike the card it does not hand its answers to the engine's in-memory list for the contacts
+//! being logged now: a few hundred old calls would push out the ones the operator just looked up.
+//!
+//! ⚠️ **A failed lookup is a failure, never an older answer** ([`ask`]). The card answers from an
+//! expired kept answer when the network fails; the update must not, or a QRZ that turns the
+//! sign-in down would be asked (and turn it down) for every call to the cap, each "found" in data
+//! older than the operator's expiry.
 //!
 //! **Paced and capped** by the operator's settings (`callbook_update_pace_secs`,
 //! `callbook_update_daily_cap`). The fallbacks are paced the same: each call is ONE paced turn, in
@@ -15,12 +20,24 @@
 //! base for a stroked call, which the cap counts as two). The cap counts every turn's lookups,
 //! whichever service answered. The station's own tally of the day's network lookups lives in the
 //! cache file ([`tempo_core::callbook_cache::CallbookCache::note_lookups`]), and QRZ's own count of
-//! the account's lookups ([`note_qrz_count`]) holds the cap too when an answer carries it.
+//! the account's lookups ([`note_qrz_count`]) holds the cap too when an answer carries it; the
+//! last one is kept in the same file with its time, so the next preview and run start from it. A
+//! sign-in to QRZ or HamQTH is a request too ([`note_login`]), and counts.
+//!
+//! **What the services said** is noted by the lookups themselves ([`note_qrz_answer`],
+//! [`note_login`], [`note_hamqth_refused`]) and taken after each of the update's lookups, as
+//! QRZ's count is. They are the station's own account's, so a card lookup made at the same time
+//! says the same about it.
 //!
 //! **One run.** The lookups run on a thread of their own; when they stop — every call answered,
-//! cancelled, the cap reached or a lookup failed — the answers in hand are filled as ONE run of
-//! the history, which the toast's Undo takes back. A later run takes the calls already answered
-//! from the cache at no cost.
+//! cancelled, the cap reached, QRZ refusing or a lookup failed — the answers in hand are filled as
+//! ONE run of the history, which the toast's Undo takes back. A later run takes the calls already
+//! answered from the cache at no cost. A large fill waits while the radio transmits (shown as
+//! waiting, and Stop ends the wait), and a fill stopped part-way still hands back its run.
+//!
+//! **Its end is reported once, wherever the operator is.** The end is kept until the Logbook takes
+//! it ([`callbook_update_take_end`]): the dialog may have been closed long before the run ended,
+//! and the Logbook, always there, shows the toast and its Undo and reloads the list.
 //!
 //! **Where the station is, only on the last 12 months' contacts** (operator ruling): the fill
 //! gives an older contact the answer without its location ([`logtools::LOCATION_FIELDS`]), and the
@@ -36,7 +53,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
-use tempo_app::callbook_update::{self, Callbook, Limits, Looked, Progress, Stop};
+use tempo_app::callbook_update::{self, Asked, Callbook, Limits, Looked, Progress, Stop};
 use tempo_app::engine::engine_lock;
 use tempo_app::logtools;
 use tempo_core::logbook::callbook::CallbookAnswer;
@@ -46,25 +63,78 @@ use crate::log_queries::LogQueries;
 use crate::log_tools::{id_of, run_dto, target_ids, BulkTarget, ToolRunDto};
 use crate::{SharedCallbookCache, SharedEngine, SharedHamQthSession, SharedQrzSession};
 
-/// QRZ's own count of the account's lookups in the last 24 hours, from the last lookup answer
-/// that carried one (`<Session><Count>`). Taken by the update after each of its lookups.
-static QRZ_COUNT: Mutex<Option<u32>> = Mutex::new(None);
+/// What the callbooks said since it was last taken: noted by the lookups, taken by the update after
+/// each of its lookups.
+#[derive(Debug, Default, PartialEq)]
+struct Heard {
+    /// QRZ's own count of the account's lookups in the last 24 hours, from the last answer that
+    /// carried one (`<Session><Count>`).
+    qrz_count: Option<u32>,
+    /// QRZ answered with a record.
+    qrz_record: bool,
+    /// QRZ answered with none: an unknown call, or a refusal.
+    qrz_no_record: bool,
+    /// Sign-ins to QRZ or HamQTH.
+    logins: usize,
+    /// HamQTH would not take a session it had just issued.
+    hamqth_refused: bool,
+}
+
+static HEARD: Mutex<Heard> = Mutex::new(Heard {
+    qrz_count: None,
+    qrz_record: false,
+    qrz_no_record: false,
+    logins: 0,
+    hamqth_refused: false,
+});
+
+fn heard() -> std::sync::MutexGuard<'static, Heard> {
+    lock(&HEARD)
+}
 
 /// Note the count a QRZ lookup answer carried ([`crate::qrz_try_lookup`]).
 pub(crate) fn note_qrz_count(count: Option<u32>) {
-    if let (Some(c), Ok(mut held)) = (count, QRZ_COUNT.lock()) {
-        *held = Some(c);
+    if let Some(c) = count {
+        heard().qrz_count = Some(c);
     }
 }
 
-fn take_qrz_count() -> Option<usize> {
-    QRZ_COUNT.lock().ok()?.take().map(|c| c as usize)
+/// Note what QRZ answered a lookup on a live session: a record, or none.
+pub(crate) fn note_qrz_answer(record: bool) {
+    let mut h = heard();
+    if record {
+        h.qrz_record = true;
+    } else {
+        h.qrz_no_record = true;
+    }
 }
+
+/// Note a sign-in request to QRZ or HamQTH.
+pub(crate) fn note_login() {
+    heard().logins += 1;
+}
+
+/// Note HamQTH turning down a session it had just issued.
+pub(crate) fn note_hamqth_refused() {
+    heard().hamqth_refused = true;
+}
+
+fn take_heard() -> Heard {
+    std::mem::take(&mut *heard())
+}
+
+/// What the update says when HamQTH turns down its own session: asked again, it would sign in
+/// again for every call.
+const HAMQTH_REFUSED: &str =
+    "HamQTH would not accept a session it had just issued. Check the HamQTH username and password.";
 
 /// The update in progress, or the last one's outcome. Managed state.
 #[derive(Default)]
 pub struct CallbookUpdate {
     status: Mutex<UpdateStatusDto>,
+    /// The last update's end until the Logbook takes it ([`callbook_update_take_end`]): reported
+    /// once.
+    unreported: Mutex<Option<UpdateEndDto>>,
     cancel: AtomicBool,
     /// The day's network lookups, when the cache file cannot be opened: kept for the session.
     fallback_tally: Mutex<Vec<i64>>,
@@ -74,7 +144,7 @@ pub struct CallbookUpdate {
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateEndDto {
-    /// `done`, `cancelled`, `limit` or `failed`.
+    /// `done`, `cancelled`, `limit`, `refused` (QRZ refusing lookups) or `failed`.
     pub stop: String,
     /// Why a lookup failed, or why the fill could not be made.
     pub error: Option<String>,
@@ -97,6 +167,8 @@ pub struct UpdateStatusDto {
     /// Network lookups in the last 24 hours, as the cap reads them, and the cap.
     pub spent: usize,
     pub cap: usize,
+    /// The lookups are done, and the fill waits for the radio to stop transmitting.
+    pub waiting_for_tx: bool,
     /// The last update's outcome, once it has ended.
     pub ended: Option<UpdateEndDto>,
 }
@@ -116,19 +188,57 @@ fn kept(cache: &SharedCallbookCache, call: &str, max_age: i64) -> Option<Callboo
     .then(|| crate::callbook_answer(&dto))
 }
 
-/// The day's network lookups as the cap reads them: the cache file's tally, or the session's.
+/// The day's network lookups as the cap reads them: the cache file's tally, or the session's —
+/// or QRZ's own count when it kept a larger one in the last day.
 fn spent(app: &AppHandle) -> usize {
     let now = crate::now_unix();
     let cache = app.state::<SharedCallbookCache>();
+    let qrz = cache
+        .store()
+        .and_then(|s| s.lock().ok().and_then(|s| s.qrz_count(now).ok().flatten()))
+        .unwrap_or(0);
     if let Some(n) = cache
         .store()
         .and_then(|s| s.lock().ok().and_then(|s| s.lookups_spent(now).ok()))
     {
-        return n;
+        return n.max(qrz);
     }
     let job = app.state::<CallbookUpdate>();
     let tally = lock(&job.fallback_tally);
     tally.iter().filter(|&&at| at > now - 86_400).count()
+}
+
+/// ★ One network lookup of `call` for the update: asked of the callbooks (`live`) whatever the
+/// cache holds, and the answer kept in the cache. Any failure but "not in the callbook" is the
+/// failure: an older kept answer never stands in for it (see the module header).
+async fn ask<F, Fut>(cache: &SharedCallbookCache, call: &str, now: i64, live: F) -> Looked
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<tempo_app::dto::QrzLookupDto, String>>,
+{
+    match live().await {
+        Ok(dto) => {
+            cache.put(call, &dto, now);
+            Looked::Found(Box::new(crate::callbook_answer(&dto)))
+        }
+        Err(e) if e == crate::callbook_not_found(call) => Looked::Unknown,
+        Err(e) => Looked::Failed(e),
+    }
+}
+
+/// One lookup's answer with what the services said while it was made: HamQTH turning down its own
+/// session stops the run, as it would sign in again for every call.
+fn asked(looked: Looked, heard: Heard) -> Asked {
+    Asked {
+        looked: if heard.hamqth_refused {
+            Looked::Failed(HAMQTH_REFUSED.into())
+        } else {
+            looked
+        },
+        qrz_count: heard.qrz_count.map(|c| c as usize),
+        qrz_without_record: heard.qrz_no_record && !heard.qrz_record,
+        logins: heard.logins,
+    }
 }
 
 /// The station's callbook as the update's loop asks it.
@@ -164,26 +274,23 @@ impl Callbook for StationCallbook {
         }
     }
 
-    fn live(&mut self, call: &str) -> (Looked, Option<usize>) {
-        let _ = take_qrz_count();
+    fn live(&mut self, call: &str) -> Asked {
+        let _ = take_heard();
         let engine = self.app.state::<SharedEngine>().inner().clone();
         let qrz = self.app.state::<SharedQrzSession>().inner().clone();
         let hamqth = SharedHamQthSession(self.app.state::<SharedHamQthSession>().0.clone());
         let cache = self.app.state::<SharedCallbookCache>();
-        let answer = tauri::async_runtime::block_on(crate::cached_callbook_lookup(
-            &cache,
-            call,
-            self.max_age,
-            crate::now_unix(),
-            false,
-            || crate::callbook_lookup_live(call, &engine, &qrz, &hamqth),
-        ));
-        let looked = match answer {
-            Ok(dto) => Looked::Found(Box::new(crate::callbook_answer(&dto))),
-            Err(e) if e == crate::callbook_not_found(call) => Looked::Unknown,
-            Err(e) => Looked::Failed(e),
-        };
-        (looked, take_qrz_count())
+        let now = crate::now_unix();
+        let looked = tauri::async_runtime::block_on(ask(&cache, call, now, || {
+            crate::callbook_lookup_live(call, &engine, &qrz, &hamqth)
+        }));
+        let heard = take_heard();
+        if let (Some(store), Some(count)) = (cache.store(), heard.qrz_count) {
+            if let Ok(store) = store.lock() {
+                let _ = store.note_qrz_count(count as usize, now);
+            }
+        }
+        asked(looked, heard)
     }
 
     fn wait(&mut self, d: Duration) -> bool {
@@ -223,11 +330,15 @@ pub struct UpdatePreviewDto {
     pub kept: usize,
     /// Calls the cache does not answer: each a network lookup.
     pub to_look_up: usize,
+    /// What those may cost against the cap: a stroked call is asked again for its base.
+    pub lookups_needed: usize,
     pub pace_secs: u64,
     /// The least time the lookups take at the pace, in seconds.
     pub estimate_secs: u64,
     pub spent: usize,
     pub cap: usize,
+    /// QRZ's own count of the account's lookups, from its last answer in the last day.
+    pub qrz_count: Option<usize>,
     pub could_change: usize,
     /// `[ADIF field, contacts]`, most first: exact for kept answers, at most for the rest.
     pub fields: Vec<(String, usize)>,
@@ -282,9 +393,19 @@ pub async fn callbook_update_preview(
             )
         };
         let cache = app.state::<SharedCallbookCache>();
+        let mut lookups_needed = 0;
         let p = logtools::callbook_preview(&engine, &ids, now_secs(), &mut |call| {
-            kept(&cache, call, max_age)
+            let hit = kept(&cache, call, max_age);
+            if hit.is_none() {
+                lookups_needed += crate::callbook_candidates(call).len();
+            }
+            hit
         })?;
+        let qrz_count = cache.store().and_then(|s| {
+            s.lock()
+                .ok()
+                .and_then(|s| s.qrz_count(crate::now_unix()).ok().flatten())
+        });
         let to_look_up = p.calls.len() - p.kept;
         let mut fields: Vec<(String, usize)> = p.fields.into_iter().collect();
         fields.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -295,10 +416,12 @@ pub async fn callbook_update_preview(
             calls: p.calls.len(),
             kept: p.kept,
             to_look_up,
+            lookups_needed,
             pace_secs: pace.as_secs(),
             estimate_secs: pace.as_secs() * to_look_up as u64,
             spent: spent(&app),
             cap,
+            qrz_count,
             could_change: p.could_change,
             fields,
             configured: !services.is_empty(),
@@ -316,6 +439,7 @@ fn stop_word(stop: &Stop) -> (&'static str, Option<String>) {
         Stop::Done => ("done", None),
         Stop::Cancelled => ("cancelled", None),
         Stop::Limit => ("limit", None),
+        Stop::Refused => ("refused", None),
         Stop::Failed(why) => ("failed", Some(why.clone())),
     }
 }
@@ -370,10 +494,7 @@ pub async fn callbook_update_start(
         .name("callbook-update".into())
         .spawn(move || {
             let ended = run(&app, &engine, &ids, expect_count, max_age, limits);
-            let job = app.state::<CallbookUpdate>();
-            let mut status = lock(&job.status);
-            status.running = false;
-            status.ended = Some(ended);
+            app.state::<CallbookUpdate>().end(ended);
         })
         .map(|_| ())
         .map_err(|e| {
@@ -431,25 +552,67 @@ fn run(
     if found.answers.is_empty() {
         return end;
     }
-    let (made, durability) =
-        logtools::callbook_fill(engine, ids, expect, &found.answers, now_secs());
-    match made {
-        Ok(made) => {
-            let wait = if durability.turned_back(tempo_app::logstore::DURABLE_WAIT) {
-                Err(tempo_app::station::LOG_BUSY.to_string())
-            } else {
-                durability
-                    .wait(tempo_app::logstore::DURABLE_WAIT)
-                    .map_err(crate::durability_failed)
-            };
-            if let Err(why) = wait {
-                end.error = Some(why);
-            }
-            end.made = Some(run_dto(made));
+    let (made, why, durability) =
+        logtools::callbook_fill(engine, ids, expect, &found.answers, now_secs(), &mut || {
+            wait_for_tx(&job, engine)
+        });
+    // A fill stopped part-way hands back its run too: the toast's Undo takes what it made.
+    if why.is_none() || made.run.is_some() {
+        let wait = if durability.turned_back(tempo_app::logstore::DURABLE_WAIT) {
+            Err(tempo_app::station::LOG_BUSY.to_string())
+        } else {
+            durability
+                .wait(tempo_app::logstore::DURABLE_WAIT)
+                .map_err(crate::durability_failed)
+        };
+        if let Err(why) = wait {
+            end.error = Some(why);
         }
-        Err(why) => end.error = Some(why),
+        end.made = Some(run_dto(made));
+    }
+    if why.is_some() {
+        end.error = why;
     }
     end
+}
+
+/// The fill's wait while the radio transmits: until transmit is off (`true`), or the operator
+/// stops the update (`false`). The status says it waits.
+fn wait_for_tx(job: &CallbookUpdate, engine: &SharedEngine) -> bool {
+    lock(&job.status).waiting_for_tx = true;
+    let off = loop {
+        if job.cancel.load(Ordering::SeqCst) {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+        if !engine_lock(engine).transmit_needs_the_lock() {
+            break true;
+        }
+    };
+    lock(&job.status).waiting_for_tx = false;
+    off
+}
+
+impl CallbookUpdate {
+    /// The update has ended: its status says so, and the end is kept until the Logbook takes it.
+    fn end(&self, ended: UpdateEndDto) {
+        *lock(&self.unreported) = Some(ended.clone());
+        let mut status = lock(&self.status);
+        status.running = false;
+        status.waiting_for_tx = false;
+        status.ended = Some(ended);
+    }
+
+    /// The end not reported yet, once: a second take has none.
+    fn take_end(&self) -> Option<UpdateEndDto> {
+        lock(&self.unreported).take()
+    }
+}
+
+/// The last update's end, if the Logbook has not reported it yet; once.
+#[tauri::command]
+pub fn callbook_update_take_end(job: State<'_, CallbookUpdate>) -> Option<UpdateEndDto> {
+    job.take_end()
 }
 
 /// How the update is getting on, or how the last one ended.
@@ -492,18 +655,191 @@ mod tests {
         assert_eq!(kept(&cache, "K1ABC", 1_000), None);
     }
 
-    /// QRZ's count is taken once: a later take without a new answer has none.
+    /// What the lookups note is taken once: a later take without a new lookup has nothing.
     #[test]
-    fn qrzs_count_is_taken_once() {
-        let _ = take_qrz_count();
+    fn what_the_lookups_note_is_taken_once() {
+        let _ = take_heard();
         note_qrz_count(Some(42));
         note_qrz_count(None);
+        note_qrz_answer(false);
+        note_login();
+        note_login();
+        note_hamqth_refused();
         assert_eq!(
-            take_qrz_count(),
-            Some(42),
+            take_heard(),
+            Heard {
+                qrz_count: Some(42),
+                qrz_record: false,
+                qrz_no_record: true,
+                logins: 2,
+                hamqth_refused: true,
+            },
             "an answer with no count keeps the last"
         );
-        assert_eq!(take_qrz_count(), None);
+        assert_eq!(take_heard(), Heard::default());
+    }
+
+    /// The update's callbook over a real cache, its network a script: `answer` is what every
+    /// lookup of the callbooks answers.
+    struct OverCache {
+        cache: SharedCallbookCache,
+        max_age: i64,
+        answer: Result<tempo_app::dto::QrzLookupDto, String>,
+        asked: Vec<String>,
+        tally: usize,
+    }
+
+    impl Callbook for OverCache {
+        fn kept(&mut self, call: &str) -> Option<CallbookAnswer> {
+            kept(&self.cache, call, self.max_age)
+        }
+        fn spent(&mut self) -> usize {
+            self.tally
+        }
+        fn note_spent(&mut self, n: usize) {
+            self.tally += n;
+        }
+        fn live(&mut self, call: &str) -> Asked {
+            self.asked.push(call.to_string());
+            let answer = self.answer.clone();
+            Asked::plain(tauri::async_runtime::block_on(ask(
+                &self.cache,
+                call,
+                crate::now_unix(),
+                || async move { answer },
+            )))
+        }
+        fn wait(&mut self, _: Duration) -> bool {
+            true
+        }
+        fn cancelled(&self) -> bool {
+            false
+        }
+    }
+
+    fn over_cache(answer: Result<tempo_app::dto::QrzLookupDto, String>) -> OverCache {
+        OverCache {
+            cache: SharedCallbookCache::with(
+                tempo_core::callbook_cache::CallbookCache::open_in_memory(10).unwrap(),
+            ),
+            max_age: 1_000,
+            answer,
+            asked: Vec::new(),
+            tally: 0,
+        }
+    }
+
+    fn limits() -> Limits {
+        Limits {
+            pace: Duration::ZERO,
+            daily_cap: 250,
+        }
+    }
+
+    /// ★ AN EXPIRED ANSWER NEVER HIDES A FAILED LOOKUP. W1AW's kept answer is past the expiry, so
+    /// it is asked of the callbooks, and the sign-in is turned down: the run stops on that first
+    /// failure (K1ABC is never asked, so QRZ is not asked to sign in again), and nothing is
+    /// filled from the expired answer.
+    #[test]
+    fn an_expired_answer_never_stands_in_for_a_failed_lookup() {
+        let refused = "QRZ login failed: incorrect password".to_string();
+        let mut cb = over_cache(Err(refused.clone()));
+        let dto = tempo_app::dto::QrzLookupDto {
+            call: "W1AW".into(),
+            name: Some("Hiram Maxim".into()),
+            ..Default::default()
+        };
+        cb.cache.put("W1AW", &dto, crate::now_unix() - 10_000);
+        let run = callbook_update::look_up(
+            &["W1AW".to_string(), "K1ABC".to_string()],
+            limits(),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!(run.stop, Stop::Failed(refused));
+        assert_eq!(cb.asked, ["W1AW"], "stopped at the first failure");
+        assert!(run.answers.is_empty(), "nothing from the expired answer");
+        assert_eq!(cb.tally, 1);
+    }
+
+    /// The control: a lookup that answers is kept in the cache, fresh, and "not in the callbook"
+    /// is an unknown call, not a failure.
+    #[test]
+    fn an_answer_is_kept_and_not_found_is_unknown() {
+        let dto = tempo_app::dto::QrzLookupDto {
+            call: "W1AW".into(),
+            name: Some("Hiram Maxim".into()),
+            ..Default::default()
+        };
+        let mut cb = over_cache(Ok(dto));
+        let run = callbook_update::look_up(&["W1AW".to_string()], limits(), &mut cb, &mut |_| {});
+        assert_eq!(run.stop, Stop::Done);
+        assert_eq!(run.answers["W1AW"].name.as_deref(), Some("Hiram Maxim"));
+        assert!(kept(&cb.cache, "W1AW", 1_000).is_some(), "kept, fresh");
+
+        let mut cb = over_cache(Err(crate::callbook_not_found("Q9QQQ")));
+        let run = callbook_update::look_up(&["Q9QQQ".to_string()], limits(), &mut cb, &mut |_| {});
+        assert_eq!(
+            (run.stop, run.unknown),
+            (Stop::Done, vec!["Q9QQQ".to_string()])
+        );
+    }
+
+    /// What the services said, as the loop reads it: QRZ with no record for the call (and none
+    /// for its base) is a no-record answer, a record for either is not; HamQTH turning down its
+    /// own session fails the lookup; the sign-ins are counted.
+    #[test]
+    fn what_the_services_said_reaches_the_loop() {
+        let no_record = Heard {
+            qrz_no_record: true,
+            logins: 1,
+            ..Heard::default()
+        };
+        let a = asked(Looked::Unknown, no_record);
+        assert_eq!(a.looked, Looked::Unknown);
+        assert!(a.qrz_without_record);
+        assert_eq!(a.logins, 1);
+
+        let base_found = Heard {
+            qrz_no_record: true,
+            qrz_record: true,
+            ..Heard::default()
+        };
+        assert!(!asked(Looked::Unknown, base_found).qrz_without_record);
+        assert!(
+            !asked(Looked::Unknown, Heard::default()).qrz_without_record,
+            "QRZ not asked"
+        );
+
+        let hamqth = Heard {
+            hamqth_refused: true,
+            ..Heard::default()
+        };
+        assert_eq!(
+            asked(Looked::Unknown, hamqth).looked,
+            Looked::Failed(HAMQTH_REFUSED.into())
+        );
+    }
+
+    /// ★ THE END IS REPORTED ONCE, WHENEVER IT IS ASKED. The run ends with no one watching: the
+    /// end is kept, the first take has it and the second has nothing, and the status still
+    /// shows it for the dialog opened again.
+    #[test]
+    fn the_end_is_taken_once() {
+        let job = CallbookUpdate::default();
+        lock(&job.status).running = true;
+        assert_eq!(job.take_end(), None, "nothing ended yet");
+        let end = UpdateEndDto {
+            stop: "limit".into(),
+            not_looked_up: 4,
+            ..UpdateEndDto::default()
+        };
+        job.end(end.clone());
+        assert_eq!(job.take_end(), Some(end.clone()));
+        assert_eq!(job.take_end(), None, "once");
+        let status = lock(&job.status).clone();
+        assert!(!status.running);
+        assert_eq!(status.ended, Some(end));
     }
 
     /// The one failure the update goes on after is the lookup's own "not in the callbook", word

@@ -56,6 +56,7 @@ function open(tool: LogTool, picked: string[] = []) {
       onTool={() => {}}
       onClose={() => {}}
       onChanged={onChanged}
+      onCallbookStarted={() => {}}
       picked={new Set(picked)}
       query={DEFAULT_LOG_QUERY}
       shown={42}

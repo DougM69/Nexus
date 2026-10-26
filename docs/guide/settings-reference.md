@@ -1883,7 +1883,8 @@ log it. QRZ is asked first, then HamQTH, then callook.info.
   60). HamQTH and callook.info, asked only when QRZ has no record, go in the same turn.
 - **Update from callbook: lookups per day** — the most lookups it makes in 24 hours,
   across runs (250 by default). QRZ publishes no daily number, so the default is a
-  cautious one. Answers from the cache do not count.
+  cautious one. Answers from the cache do not count; a sign-in to QRZ or HamQTH does, and
+  so does the count QRZ itself last reported for your account in the past day.
 - **Refresh this call** — type a callsign and **Refresh** to look it up again now.
 - **Clear cache** — forgets every kept callbook answer. Your log is not touched, and
   passwords are never kept here.

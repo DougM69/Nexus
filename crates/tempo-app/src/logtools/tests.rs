@@ -1712,6 +1712,18 @@ fn answers(calls: &[&str]) -> HashMap<String, CallbookAnswer> {
         .collect()
 }
 
+/// [`callbook_fill`] that never waits for the radio, answered as the other tools answer.
+fn fill(
+    engine: &Mutex<Engine>,
+    ids: &[RecordId],
+    expect: usize,
+    answers: &HashMap<String, CallbookAnswer>,
+    now_unix: u64,
+) -> (Result<ToolRun, String>, Durability) {
+    let (made, why, dur) = callbook_fill(engine, ids, expect, answers, now_unix, &mut || false);
+    (why.map_or(Ok(made), Err), dur)
+}
+
 /// The fields a fill could touch, as the stored contact holds them.
 fn callbook_fields(r: &QsoRecord) -> Vec<(&'static str, Option<String>)> {
     let extra = |t: &str| r.extra.iter().find(|(k, _)| k == t).map(|(_, v)| v.clone());
@@ -1757,7 +1769,7 @@ fn an_update_fills_only_empty_fields_keeps_stamps_and_undoes_whole() {
     let before = rows(&engine);
     let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
 
-    let (made, dur) = callbook_fill(&engine, &ids, ids.len(), &answers(&["W1AW"]), JAN_2026);
+    let (made, dur) = fill(&engine, &ids, ids.len(), &answers(&["W1AW"]), JAN_2026);
     let made = made.unwrap();
     dur.wait(DURABLE_WAIT).unwrap();
     assert_eq!(made.changed, 2, "both W1AW contacts gained a field");
@@ -1816,7 +1828,7 @@ fn an_update_fills_only_empty_fields_keeps_stamps_and_undoes_whole() {
     );
 
     // Run again: every field it could fill is filled, so nothing changes and no run is made.
-    let (again, _) = callbook_fill(&engine, &ids, ids.len(), &answers(&["W1AW"]), JAN_2026);
+    let (again, _) = fill(&engine, &ids, ids.len(), &answers(&["W1AW"]), JAN_2026);
     let again = again.unwrap();
     assert_eq!((again.changed, again.run), (0, None));
 
@@ -1845,7 +1857,7 @@ fn an_update_never_overrides_a_contest_exchange() {
     );
     let before = rows(&engine);
     let ids = [before[0].id.unwrap()];
-    let (made, dur) = callbook_fill(&engine, &ids, 1, &answers(&["W1AW"]), JAN_2026);
+    let (made, dur) = fill(&engine, &ids, 1, &answers(&["W1AW"]), JAN_2026);
     assert_eq!(made.unwrap().changed, 1);
     dur.wait(DURABLE_WAIT).unwrap();
     let r = &rows(&engine)[0];
@@ -1906,7 +1918,7 @@ fn an_update_acts_only_on_the_count_confirmed() {
     let engine = shared(&d, &[adif("W1AW", "120000", "")]);
     let before = rows(&engine);
     let ids = [before[0].id.unwrap()];
-    let (refused, _) = callbook_fill(&engine, &ids, 2, &answers(&["W1AW"]), JAN_2026);
+    let (refused, _) = fill(&engine, &ids, 2, &answers(&["W1AW"]), JAN_2026);
     assert_eq!(refused, Err(NOT_AS_PREVIEWED.to_string()));
     assert_eq!(rows(&engine), before);
 }
@@ -1941,6 +1953,7 @@ fn an_update_gives_the_location_only_to_contacts_from_the_last_12_months() {
     let mut full = qrz_answer("W1AW");
     full.position = Some((41.7, -72.7));
     full.utc_offset = Some(-5.0);
+    full.iota = Some("NA-001".into());
     full.email = Some("w1aw@example.org".into());
     let answers = HashMap::from([("W1AW".to_string(), full)]);
 
@@ -1958,7 +1971,7 @@ fn an_update_gives_the_location_only_to_contacts_from_the_last_12_months() {
     );
     assert_eq!(p.fields.get("EMAIL"), Some(&2));
 
-    let (made, dur) = callbook_fill(&engine, &ids, ids.len(), &answers, JAN_2026);
+    let (made, dur) = fill(&engine, &ids, ids.len(), &answers, JAN_2026);
     assert_eq!(made.unwrap().changed, 2);
     dur.wait(DURABLE_WAIT).unwrap();
     let after = rows(&engine);
@@ -2012,6 +2025,128 @@ fn an_update_gives_the_location_only_to_contacts_from_the_last_12_months() {
             "{tag}: a 3-month-old contact takes it"
         );
     }
+
+    // Every location field, by its ADIF name: none on the old contact, each on the recent one.
+    let location = |r: &QsoRecord, t: &str| match t {
+        "GRIDSQUARE" => r.grid.clone(),
+        "QTH" => r.qth.clone(),
+        "STATE" => r.state.clone(),
+        "IOTA" => r.ota.iota.clone(),
+        _ => extra(r, t),
+    };
+    assert_eq!(recent.ota.iota.as_deref(), Some("NA-001"));
+    for tag in LOCATION_FIELDS {
+        assert_eq!(
+            location(old, tag),
+            None,
+            "{tag}: not on the 2-year-old contact"
+        );
+        assert!(
+            location(recent, tag).is_some(),
+            "{tag}: on the recent contact"
+        );
+    }
+}
+
+/// A log of `n` contacts, each its own call, and the answer for every call.
+fn callbook_log(d: &Dir, n: usize) -> (Arc<Mutex<Engine>>, HashMap<String, CallbookAnswer>) {
+    let records: Vec<String> = (0..n)
+        .map(|i| {
+            adif(
+                &format!("K{i}ABC"),
+                &format!("{:02}{:02}{:02}", i / 3600, i / 60 % 60, i % 60),
+                "",
+            )
+        })
+        .collect();
+    let answers = (0..n)
+        .map(|i| {
+            let call = format!("K{i}ABC");
+            (call.clone(), qrz_answer(&call))
+        })
+        .collect();
+    (shared(d, &records), answers)
+}
+
+/// ★ A LARGE UPDATE WAITS FOR THE RADIO. The FT sequencer is armed after the first part is made:
+/// the next part is refused, the fill waits (with the Engine lock released) until transmit is
+/// off, then makes the rest — every contact, in ONE run that one undo takes back.
+#[test]
+fn a_large_update_waits_for_transmit_to_end_and_is_one_run() {
+    let n = CHUNK + 6;
+    let d = Dir::new("tools-callbook-tx-wait");
+    let (engine, answers) = callbook_log(&d, n);
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let arm = Arc::clone(&engine);
+    let mut plans = 0;
+    let mut waits = 0;
+    let (made, why, dur) = racing(
+        move || {
+            plans += 1;
+            if plans == 2 {
+                engine_lock(&arm).set_tx_enabled(true);
+            }
+        },
+        || {
+            callbook_fill(&engine, &ids, n, &answers, JAN_2026, &mut || {
+                waits += 1;
+                let mut e = engine_lock(&engine);
+                assert!(e.transmit_needs_the_lock(), "premise: armed for FT");
+                e.set_tx_enabled(false);
+                true
+            })
+        },
+    );
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(why, None);
+    assert_eq!(waits, 1);
+    assert_eq!(
+        made.changed, n,
+        "every contact, the parts after the wait too"
+    );
+    assert!(rows(&engine)
+        .iter()
+        .all(|r| r.name.as_deref() == Some("Hiram")));
+    let (undone, dur) = undo_run(&engine, &made.run.unwrap());
+    assert_eq!(undone.unwrap().changed, n, "one run: both parts");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(rows(&engine), before);
+}
+
+/// ★ STOPPED PART-WAY, STILL UNDONE WHOLE. The radio transmits from the second part on and the
+/// operator stops the wait: the first part stands, and the fill answers it WITH its run — the
+/// toast's Undo takes it back — and says how far it got.
+#[test]
+fn an_update_stopped_while_waiting_for_transmit_answers_its_run() {
+    let n = CHUNK + 6;
+    let d = Dir::new("tools-callbook-tx-stop");
+    let (engine, answers) = callbook_log(&d, n);
+    let before = rows(&engine);
+    let ids: Vec<RecordId> = before.iter().map(|r| r.id.unwrap()).collect();
+    let arm = Arc::clone(&engine);
+    let mut plans = 0;
+    let (made, why, dur) = racing(
+        move || {
+            plans += 1;
+            if plans == 2 {
+                engine_lock(&arm).set_tx_enabled(true);
+            }
+        },
+        || callbook_fill(&engine, &ids, n, &answers, JAN_2026, &mut || false),
+    );
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(made.changed, CHUNK, "the first part stands");
+    assert_eq!(why, Some(stopped(&made, MUST_WAIT_FOR_TX)));
+    assert!(why
+        .unwrap()
+        .starts_with(&format!("{CHUNK} contacts were changed")));
+    // A large undo waits for transmit too.
+    engine_lock(&engine).set_tx_enabled(false);
+    let (undone, dur) = undo_run(&engine, &made.run.expect("the run of the part made"));
+    assert_eq!(undone.unwrap().changed, CHUNK);
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(rows(&engine), before);
 }
 
 /// The control: the single-contact rule the callsign card and the log time use
