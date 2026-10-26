@@ -14,6 +14,7 @@ import {
   stdMessageList,
   toggleIgnored,
   txGrid4,
+  txRowIndex,
 } from './txMessages'
 
 describe('report formatting (WSJT-X sign + two digits)', () => {
@@ -466,5 +467,52 @@ describe('cqSuggestionFromText — the valid form to offer a refused Tx6', () =>
       expect(cqDirFromText(ok, MY), `control: ${ok} is accepted`).not.toBeUndefined()
       expect(cqSuggestionFromText(ok, MY), ok).toBeNull()
     }
+  })
+})
+
+describe('txRowIndex — the row the station\'s queued over stands for (the next-dot)', () => {
+  const rows = stdMessageList(genStdMessages({ dxCall: 'W1ABC', myCall: 'KD9TAW', myGrid: 'EN61', snr: -9 }))
+
+  it('picks the row showing the exact text', () => {
+    rows.forEach((text, i) => expect(txRowIndex(rows, text), text).toBe(i))
+    const edited = [...rows.slice(0, 4), 'TNX 73 GL', 'CQ DX KD9TAW EN61']
+    expect(txRowIndex(edited, 'TNX 73 GL'), 'an edited Tx5').toBe(4)
+    expect(txRowIndex(edited, 'CQ DX KD9TAW EN61'), 'a directed Tx6').toBe(5)
+  })
+
+  it('reads the step from the over when the rows carry another report', () => {
+    expect(txRowIndex(rows, 'W1ABC KD9TAW -12'), 'Tx2').toBe(1)
+    expect(txRowIndex(rows, 'W1ABC KD9TAW R+03'), 'Tx3').toBe(2)
+  })
+
+  it('reads the step from the over when the DX box holds another call', () => {
+    for (const [text, row] of [
+      ['K2DEF KD9TAW EN61', 0],
+      ['K2DEF KD9TAW -05', 1],
+      ['K2DEF KD9TAW R-05', 2],
+      ['K2DEF KD9TAW RR73', 3],
+      ['K2DEF KD9TAW RRR', 3],
+      ['K2DEF KD9TAW 73', 4],
+      ['CQ KD9TAW EN61', 5],
+    ] as const) {
+      expect(txRowIndex(rows, text), text).toBe(row)
+    }
+  })
+
+  it('reads the hashed forms a nonstandard pair sends', () => {
+    expect(txRowIndex(rows, '<PJ4/K1ABC> KD9TAW EN61')).toBe(0)
+    expect(txRowIndex(rows, '<PJ4/K1ABC> KD9TAW')).toBe(0)
+    expect(txRowIndex(rows, 'PA0A <OE/PD1SCO> R-01')).toBe(2)
+    expect(txRowIndex(rows, 'PJ4/K1ABC <KD9TAW> RR73')).toBe(3)
+    expect(txRowIndex(rows, 'PJ4/K1ABC <KD9TAW> 73')).toBe(4)
+    expect(txRowIndex(rows, 'CQ KD9TAW/QRP')).toBe(5)
+  })
+
+  it('puts the dot nowhere for no over, free text, or an exchange that is none of the six', () => {
+    expect(txRowIndex(rows, null)).toBeNull()
+    expect(txRowIndex(rows, '')).toBeNull()
+    expect(txRowIndex(rows, 'TNX BOB 73 GL')).toBeNull()
+    expect(txRowIndex(rows, 'W1ABC KD9TAW R 3A WI'), 'a Field Day exchange').toBeNull()
+    expect(txRowIndex(rows, 'W1ABC KD9TAW RR73X')).toBeNull()
   })
 })

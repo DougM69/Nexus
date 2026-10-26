@@ -182,6 +182,37 @@ export function stdMessageList(m: StdMessages): string[] {
 }
 
 /**
+ * The panel row (0-based) the station's queued over stands for — the "next" dot.
+ *
+ * `txNow` is the station's own text for the over it sends next. A row showing that exact text
+ * wins, which is what places an edited Tx5 or a directed Tx6. Otherwise the row is read from the
+ * over's FORM, the step it is in WSJT-X's Tx1–Tx6 sequence, because the rows here are regenerated
+ * and can differ from the station's over in everything but the step: the report (the rows take
+ * the DX's latest heard SNR, the station keeps the one it answered), the call in the DX box, the
+ * operator's Tx5 text. Matching on text alone left the dot where it was while the QSO went on.
+ * Null when there is no over or its form is none of the six.
+ */
+export function txRowIndex(rowTexts: readonly string[], txNow: string | null | undefined): number | null {
+  const text = (txNow ?? '').trim()
+  if (!text) return null
+  const exact = rowTexts.indexOf(text)
+  if (exact >= 0) return exact
+  const parts = text.toUpperCase().split(/\s+/)
+  if (parts[0] === 'CQ') return 5
+  const last = parts[parts.length - 1]
+  if (parts.length === 3) {
+    if (last === 'RR73' || last === 'RRR') return 3
+    if (last === '73') return 4
+    if (/^R[+-]\d\d$/.test(last)) return 2
+    if (/^[+-]\d\d$/.test(last)) return 1
+    if (GRID4_RE.test(last)) return 0
+  }
+  // `<DX> MY`: the grid-less answer a nonstandard pair sends as Tx1.
+  if (parts.length === 2) return 0
+  return null
+}
+
+/**
  * Pull the DX grid out of a decoded message when it ENDS in a 4-char grid
  * (WSJT-X single-click populate). RR73 matches the grid shape but is the
  * roger-73 token (a reserved "grid" in the Bering Sea) — never a locator here.
